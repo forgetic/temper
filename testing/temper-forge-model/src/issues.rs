@@ -11,6 +11,7 @@ use temper_lib::{Env, Id, Map, Set};
 
 use crate::api::{Answer, Change, Error, Kind, Permission, State, What};
 use crate::ci;
+use crate::hooks::Hook;
 use crate::model::{self, Config, Model};
 use crate::observe::Observation;
 use crate::store::{Comment, Item, Repository, fit_names, fits, names};
@@ -62,9 +63,10 @@ pub(crate) fn create(
         title: copy_of(&item.title),
         body: copy_of(&item.body),
         labels: names(&item.labels),
+        branches: None,
         by: user,
     };
-    model::changed(model, env, id, observation, Change::Issue, Some(number));
+    model::changed(model, env, id, observation, Hook::item(Change::Issue, number));
     Ok(Answer::Created(number))
 }
 
@@ -95,7 +97,7 @@ pub(crate) fn comment(
     model.comments = comment;
     let observation =
         Observation::Commented { repository: copy_of(&repository.name), number, id: comment, body: observed, by: user };
-    model::changed(model, env, id, observation, Change::Comment, Some(number));
+    model::changed(model, env, id, observation, Hook::item(Change::Comment, number));
     Ok(Answer::Commented(comment))
 }
 
@@ -130,7 +132,7 @@ pub(crate) fn edit(
     }
     let observation =
         Observation::Edited { repository: copy_of(&repository.name), number, id: comment, body: observed, by: user };
-    model::changed(model, env, id, observation, Change::Comment, Some(number));
+    model::changed(model, env, id, observation, Hook::item(Change::Comment, number));
     Ok(Answer::Done)
 }
 
@@ -158,7 +160,7 @@ pub(crate) fn remove(
         repository.touch(number, model::clock(env));
     }
     let observation = Observation::Removed { repository: copy_of(&repository.name), number, id: comment, by: user };
-    model::changed(model, env, id, observation, Change::Comment, Some(number));
+    model::changed(model, env, id, observation, Hook::item(Change::Comment, number));
     Ok(Answer::Done)
 }
 
@@ -184,7 +186,7 @@ pub(crate) fn label(
     repository.touch(number, model::clock(env));
     let observation =
         Observation::Labelled { repository: copy_of(&repository.name), number, labels: observed, by: user };
-    model::changed(model, env, id, observation, change, Some(number));
+    model::changed(model, env, id, observation, Hook::item(change, number));
     Ok(Answer::Done)
 }
 
@@ -237,7 +239,7 @@ pub(crate) fn shut(model: &mut Model, env: &Env<Config>, id: Id<Repository>, num
     let change = change(item.kind());
     repository.touch(number, model::clock(env));
     let observation = Observation::Closed { repository: copy_of(&repository.name), number, by };
-    model::changed(model, env, id, observation, change, Some(number));
+    model::changed(model, env, id, observation, Hook::item(change, number));
 }
 
 /// Reopens the item `number`: the user's own, or any with write permission.
@@ -281,7 +283,7 @@ pub(crate) fn reopen(
     let change = change(item.kind());
     repository.touch(number, model::clock(env));
     let observation = Observation::Reopened { repository: copy_of(&repository.name), number, by: user };
-    model::changed(model, env, id, observation, change, Some(number));
+    model::changed(model, env, id, observation, Hook::item(change, number));
     if let Some(head) = head {
         ci::start(model, env, id, head);
     }

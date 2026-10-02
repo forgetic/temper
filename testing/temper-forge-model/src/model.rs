@@ -8,16 +8,17 @@
 use alloc::boxed::Box;
 use core::mem;
 
+use temper_lib::bytes::copy_of;
 use temper_lib::{Deadlines, Duration, Env, Id, Map, Queue, ReplyTo, Rng, Slab, Time};
 
 use crate::boundary::{Event, Request};
 
-use crate::api::{Answer, Change, Error, Op, Permission, Read, What, Write};
+use crate::api::{Answer, Error, Op, Permission, Read, What, Write};
 use crate::faults::{self, Window};
 use crate::git::{self, Object};
-use crate::hooks::{self, Delivery};
+use crate::hooks::{self, Delivery, Hook};
 use crate::limits::{self, Limits};
-use crate::observe::{Observation, Observations};
+use crate::observe::{self, Observation, Observations, Operation};
 use crate::store::Repository;
 use crate::{ci, issues, pulls, reads, wiki};
 
@@ -318,7 +319,13 @@ fn call(
     let result = match faults::admit(model, env, user) {
         Err(error) => Err(error),
         Ok(()) => {
+            let subject = observe::subject(&op);
             let result = execute(model, env, user, repository, op);
+            if let Err(error) = result
+                && let Some((what, number, commit)) = subject
+            {
+                refused(model, repository, what, number, commit, error, user);
+            }
             faults::finish(model, env, result)
         }
     };
@@ -359,6 +366,25 @@ fn execute(model: &mut Model, env: &Env<Config>, user: u64, repository: &[u8], o
     }
 }
 
+/// A write or a git call on `repository` was refused: observed, if the
+/// forge has the repository.
+fn refused(
+    model: &mut Model,
+    repository: &[u8],
+    what: Operation,
+    number: Option<u64>,
+    commit: Option<u64>,
+    error: Error,
+    by: u64,
+) {
+    let Some(&id) = model.names.get(repository) else {
+        return;
+    };
+    let name = copy_of(&model.repositories.get(id).expect("a named repository").name);
+    let observation = Observation::Refused { repository: name, what, number, commit, error, by };
+    model.observations.push(observation);
+}
+
 /// A call's timer: its answer goes out.
 fn answer(model: &mut Model, id: Id<Call>, out: &mut Queue<Request>) {
     let call = model.calls.get_mut(id).expect("a call lives until its timer fires");
@@ -395,9 +421,8 @@ pub(crate) fn changed(
     env: &Env<Config>,
     repository: Id<Repository>,
     observation: Observation,
-    change: Change,
-    number: Option<u64>,
+    hook: Hook,
 ) {
     model.observations.push(observation);
-    hooks::notify(model, env, repository, change, number);
+    hooks::notify(model, env, repository, hook);
 }

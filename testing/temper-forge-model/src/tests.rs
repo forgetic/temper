@@ -9,7 +9,7 @@ use crate::api::{
     Answer, Change, Check, Checks, Comment, Created, Cue, Error, File, Git, Head, Kind, Op, Page, PageName, Permission,
     Protection, Pull, Pushed, Read, Setup, State, Summary, Verdict, Want, What, Write,
 };
-use crate::{Config, Event, Limits, MAX_OUT, Model, Observation, Request, fire, step, worst_case};
+use crate::{Branches, Config, Event, Limits, MAX_OUT, Model, Observation, Operation, Request, fire, step, worst_case};
 
 const LIMITS: Limits = Limits {
     repositories: 2,
@@ -171,13 +171,16 @@ fn checks(pull: &Pull) -> List<Check> {
     states
 }
 
+/// A webhook: what changed, the item, the branch and the commit it names.
+type Heard = (Change, Option<u64>, Option<Box<[u8]>>, Option<u64>);
+
 /// The forge, its environment, room for one step's output, and the webhooks
 /// heard so far.
 struct Harness {
     model: Model,
     env: Env<Config>,
     out: Queue<Request>,
-    hooks: Queue<(Change, Option<u64>)>,
+    hooks: Queue<Heard>,
     /// The calls answered while settling.
     answered: Queue<Token>,
     calls: u64,
@@ -235,7 +238,9 @@ impl Harness {
                         self.model.reclaim();
                         return result;
                     }
-                    Request::Hook { repository: _, change, number } => self.hooks.push((change, number)),
+                    Request::Hook { repository: _, change, number, branch, commit } => {
+                        self.hooks.push((change, number, branch, commit));
+                    }
                 }
                 continue;
             }
@@ -260,7 +265,9 @@ impl Harness {
             fire(&mut self.model, &self.env, &mut self.out);
             if let Some(request) = self.out.pop() {
                 match request {
-                    Request::Hook { repository: _, change, number } => self.hooks.push((change, number)),
+                    Request::Hook { repository: _, change, number, branch, commit } => {
+                        self.hooks.push((change, number, branch, commit));
+                    }
                     Request::Reply { to, result: _ } => self.answered.push(to.into_token()),
                 }
             }
@@ -367,8 +374,17 @@ impl Harness {
         observations
     }
 
-    /// The webhooks heard so far.
+    /// The webhooks heard so far: what changed, and about which item.
     fn heard(&mut self) -> List<(Change, Option<u64>)> {
+        let mut hooks = List::with_capacity(64);
+        while let Some((change, number, _, _)) = self.hooks.pop() {
+            hooks.push((change, number)).expect("room");
+        }
+        hooks
+    }
+
+    /// The webhooks heard so far, all they say.
+    fn heard_all(&mut self) -> List<Heard> {
         let mut hooks = List::with_capacity(64);
         while let Some(hook) = self.hooks.pop() {
             hooks.push(hook).expect("room");
@@ -1307,6 +1323,7 @@ fn observations_say_what_happened_content_and_all() {
             title: copy_of(b"crash"),
             body: copy_of(b"body"),
             labels: names(&[]),
+            branches: None,
             by: PERSON,
         },
         Observation::Commented { repository: repository(), number: 1, id, body: copy_of(b"looking"), by: ENGINE },
@@ -1403,6 +1420,7 @@ fn observations_and_webhooks_follow_branches_pull_requests_and_the_wiki() {
             title: copy_of(b"change"),
             body: copy_of(b"body"),
             labels: names(&[]),
+            branches: Some(Branches { head: copy_of(b"work"), base: copy_of(MAIN), commit: work }),
             by: ENGINE,
         },
         moved(b"work", Some(work), more),
@@ -1415,7 +1433,14 @@ fn observations_and_webhooks_follow_branches_pull_requests_and_the_wiki() {
             body: copy_of(b"looked"),
             by: MAINTAINER,
         },
-        Observation::Merged { repository: repository(), number: 1, head: more, commit: merged, by: ENGINE },
+        Observation::Merged {
+            repository: repository(),
+            number: 1,
+            base: copy_of(MAIN),
+            head: more,
+            commit: merged,
+            by: ENGINE,
+        },
         moved(MAIN, Some(FIRST), merged),
         pending(merged),
         Observation::Deleted { repository: repository(), branch: copy_of(b"work"), at: more, by: ENGINE },
@@ -1461,4 +1486,61 @@ fn observations_and_webhooks_follow_branches_pull_requests_and_the_wiki() {
         }
         assert_eq!(count, times, "each change heard once, a pull request's new head too");
     }
+}
+
+#[test]
+fn webhooks_name_the_branch_and_commit_a_push_or_status_is_about() {
+    let mut h = Harness::new(CALM);
+    let work = h.commit(FIRST, &[(b"src", b"one")]);
+    h.push(ENGINE, b"work", work).expect("pushed");
+    h.settle();
+    h.ok(ENGINE, delete_branch(b"work"));
+    h.settle();
+    let heard = h.heard_all();
+    let expected = [
+        (Change::Push, None, Some(copy_of(b"work")), Some(work)),
+        (Change::Status, None, None, Some(work)),
+        (Change::Status, None, None, Some(work)),
+        (Change::Push, None, Some(copy_of(b"work")), None),
+    ];
+    assert_eq!(heard.as_slice(), expected);
+}
+
+#[test]
+fn refused_writes_and_rejected_pushes_are_observed() {
+    let mut setup = setup();
+    setup.protection =
+        Some(Protection { branch: copy_of(MAIN), contexts: names(&[b"ci"]), approvals: 0, dismiss_stale: false });
+    setup.checks.silent = 1000;
+    let mut h = Harness::with(CALM, setup);
+    let work = h.commit(FIRST, &[(b"src", b"one")]);
+    let aside = h.commit(FIRST, &[(b"src", b"else")]);
+    h.push(ENGINE, b"work", work).expect("pushed");
+    h.open(b"work").expect("opened");
+    h.observations();
+    assert_eq!(h.call(ENGINE, merge(1, work)), Err(Error::Protected));
+    assert_eq!(h.push(ENGINE, b"work", aside), Ok(Answer::Pushed(Pushed::Rejected)));
+    assert_eq!(h.call(PERSON, set_labels(1, &[b"bug"])), Err(Error::Forbidden));
+    h.call(PERSON, read(Read::Item { number: 9, after: 0 })).expect_err("missing");
+    h.call_on(b"ai/nowhere", ENGINE, delete_branch(b"work")).expect_err("no such repository");
+    let expected = [
+        Observation::Refused {
+            repository: repository(),
+            what: Operation::Merge,
+            number: Some(1),
+            commit: Some(work),
+            error: Error::Protected,
+            by: ENGINE,
+        },
+        Observation::Rejected { repository: repository(), branch: copy_of(b"work"), commit: aside, by: ENGINE },
+        Observation::Refused {
+            repository: repository(),
+            what: Operation::SetLabels,
+            number: Some(1),
+            commit: None,
+            error: Error::Forbidden,
+            by: PERSON,
+        },
+    ];
+    assert_eq!(h.observations().as_slice(), expected, "reads and unknown repositories aside");
 }

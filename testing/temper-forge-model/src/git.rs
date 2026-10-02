@@ -18,6 +18,7 @@ use temper_lib::bytes::copy_of;
 use temper_lib::{Env, Id, List, Map, Set};
 
 use crate::api::{Answer, Change, Created, Error, File, Git, Head, Permission, Pushed, Want, What};
+use crate::hooks::{self, Hook};
 use crate::limits::Limits;
 use crate::model::{self, Config, Model};
 use crate::observe::Observation;
@@ -183,6 +184,13 @@ fn push(
     match tip {
         Some(tip) => {
             if !is_ancestor(model, tip, commit) {
+                let observation = Observation::Rejected {
+                    repository: copy_of(&repository.name),
+                    branch: copy_of(branch),
+                    commit,
+                    by: user,
+                };
+                model.observations.push(observation);
                 return Ok(Answer::Pushed(Pushed::Rejected));
             }
             if tip == commit {
@@ -264,7 +272,7 @@ pub(crate) fn delete(
     let closing = repository.on_branch(branch);
     let observation =
         Observation::Deleted { repository: copy_of(&repository.name), branch: copy_of(branch), at, by: user };
-    model::changed(model, env, id, observation, Change::Push, None);
+    model::changed(model, env, id, observation, Hook::push(branch, None));
     // As Forgejo does, the open pull requests from or into it close.
     for &number in &closing {
         issues::shut(model, env, id, number, user);
@@ -293,9 +301,9 @@ pub(crate) fn moved(
         pull.commit = to;
         repository.touch(number, model::clock(env));
     }
-    model::changed(model, env, id, observation, Change::Push, None);
+    model::changed(model, env, id, observation, Hook::push(branch, Some(to)));
     for &number in &following {
-        crate::hooks::notify(model, env, id, Change::Pull, Some(number));
+        hooks::notify(model, env, id, Hook::item(Change::Pull, number));
     }
     ci::start(model, env, id, to);
 }

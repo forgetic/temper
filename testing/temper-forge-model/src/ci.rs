@@ -14,8 +14,9 @@ use alloc::boxed::Box;
 use temper_lib::bytes::{copy_of, find};
 use temper_lib::{Env, Id, Map};
 
-use crate::api::{Answer, Change, Check, Error, Permission, What};
+use crate::api::{Answer, Check, Error, Permission, What};
 use crate::faults;
+use crate::hooks::Hook;
 use crate::model::{self, Alarm, Config, Model};
 use crate::observe::Observation;
 use crate::store::{Repository, Status, fits};
@@ -162,5 +163,5 @@ fn reported(
         }
     }
     let observation = Observation::Reported { repository: copy_of(&repository.name), commit, context, state, by };
-    model::changed(model, env, id, observation, Change::Status, None);
+    model::changed(model, env, id, observation, Hook::status(commit));
 }

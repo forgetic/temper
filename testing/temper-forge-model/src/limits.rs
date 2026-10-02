@@ -88,7 +88,9 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_add(times(limits.repositories, repository(limits)?)?)?;
     let commits = Map::<u64, Object>::worst_case(limits.commits)?.checked_add(times(limits.commits, tree(limits)?)?)?;
     let calls = Slab::<Call>::worst_case(limits.calls)?.checked_add(times(limits.calls, answer(limits)?)?)?;
-    let hooks = Slab::<Delivery>::worst_case(limits.hooks)?;
+    // A webhook about a push names its branch.
+    let hooks =
+        Slab::<Delivery>::worst_case(limits.hooks)?.checked_add(times(limits.hooks, u64::from(limits.name_bytes))?)?;
     let windows = Map::<u64, Window>::worst_case(limits.users)?;
     let timers = Deadlines::<Alarm>::worst_case(timers(limits)?)?;
     let observations = Queue::<Observation>::worst_case(limits.observations)?
@@ -198,7 +200,8 @@ fn summary(limits: &Limits) -> Option<u64> {
 fn observation(limits: &Limits) -> Option<u64> {
     let name = u64::from(limits.name_bytes);
     let body = u64::from(limits.body_bytes);
-    let opened = name.checked_add(summary(limits)?)?;
+    // A pull request opened names its repository, head and base.
+    let opened = name.checked_mul(3)?.checked_add(summary(limits)?)?;
     let posted = name.checked_add(body)?;
     let labelled = name.checked_add(names(limits.labels, limits)?)?;
     let wiki = name.checked_mul(2)?.checked_add(u64::from(limits.content_bytes))?;

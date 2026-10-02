@@ -35,6 +35,8 @@ pub enum Request {
     /// Terminal for `Call`: its answer, exactly one per call.
     Reply { to: ReplyTo, result: Result<Answer, Error> },
     /// A webhook to `repository`'s subscriber: something of `change` changed,
-    /// about the item `number` if it names one. No event answers it.
-    Hook { repository: Box<[u8]>, change: Change, number: Option<u64> },
+    /// about the item `number` if it names one; a push names its `branch`
+    /// and the `commit` it moved to (none if it was deleted), and a status
+    /// its `commit`. No event answers it.
+    Hook { repository: Box<[u8]>, change: Change, number: Option<u64>, branch: Option<Box<[u8]>>, commit: Option<u64> },
 }

@@ -19,9 +19,10 @@ use crate::api::{
 };
 use crate::ci;
 use crate::git::{self, Object, Tree};
+use crate::hooks::Hook;
 use crate::limits::Limits;
 use crate::model::{self, Config, Model};
-use crate::observe::Observation;
+use crate::observe::{Branches, Observation};
 use crate::store::{Item, Pull, Repository, fits};
 
 /// Opens a pull request to merge `head` into `base`.
@@ -72,6 +73,7 @@ pub(crate) fn open(
     let repository = model.repositories.get_mut(id).expect("a repository of the forge");
     let number = repository.number(item);
     let item = repository.items.get(&number).expect("the pull request just opened");
+    let pull = item.pull.as_ref().expect("a pull request");
     let observation = Observation::Opened {
         repository: copy_of(&repository.name),
         number,
@@ -79,9 +81,10 @@ pub(crate) fn open(
         title: copy_of(&item.title),
         body: copy_of(&item.body),
         labels: Box::new([]),
+        branches: Some(Branches { head: copy_of(&pull.head), base: copy_of(&pull.base), commit }),
         by: user,
     };
-    model::changed(model, env, id, observation, Change::Pull, Some(number));
+    model::changed(model, env, id, observation, Hook::item(Change::Pull, number));
     ci::start(model, env, id, commit);
     Ok(Answer::Created(number))
 }
@@ -129,7 +132,7 @@ pub(crate) fn review(
         body: observed,
         by: user,
     };
-    model::changed(model, env, id, observation, Change::Review, Some(number));
+    model::changed(model, env, id, observation, Hook::item(Change::Review, number));
     Ok(Answer::Done)
 }
 
@@ -177,8 +180,15 @@ pub(crate) fn merge(
     item.state = State::Closed;
     item.pull.as_mut().expect("a pull request").merged = Some(commit);
     repository.touch(number, model::clock(env));
-    let observation = Observation::Merged { repository: copy_of(&repository.name), number, head, commit, by: user };
-    model::changed(model, env, id, observation, Change::Pull, Some(number));
+    let observation = Observation::Merged {
+        repository: copy_of(&repository.name),
+        number,
+        base: copy_of(&base),
+        head,
+        commit,
+        by: user,
+    };
+    model::changed(model, env, id, observation, Hook::item(Change::Pull, number));
     git::moved(model, env, id, &base, Some(onto), commit, user);
     Ok(Answer::Merged(commit))
 }

@@ -8,7 +8,8 @@ use alloc::boxed::Box;
 use temper_lib::bytes::copy_of;
 use temper_lib::{Env, Id, List};
 
-use crate::api::{Answer, Change, Error, Page as PageView, PageName, Permission, What};
+use crate::api::{Answer, Error, Page as PageView, PageName, Permission, What};
+use crate::hooks::Hook;
 use crate::limits::Limits;
 use crate::model::{self, Config, Model};
 use crate::observe::Observation;
@@ -41,7 +42,7 @@ pub(crate) fn put(
         return Err(Error::Full);
     }
     repository.revisions = revision;
-    model::changed(model, env, id, observation, Change::Wiki, None);
+    model::changed(model, env, id, observation, Hook::wiki());
     Ok(Answer::Revision(revision))
 }
 
@@ -67,7 +68,7 @@ pub(crate) fn delete(
         revision,
         by: user,
     };
-    model::changed(model, env, id, observation, Change::Wiki, None);
+    model::changed(model, env, id, observation, Hook::wiki());
     Ok(Answer::Done)
 }
 
