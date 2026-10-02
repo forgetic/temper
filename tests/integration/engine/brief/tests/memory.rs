@@ -39,6 +39,7 @@ const LIMITS: Limits = Limits {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Asked {
     Answer,
+    Room,
     Read(Token),
 }
 
@@ -87,6 +88,7 @@ impl Measured {
         while let Some(request) = self.out.pop() {
             asked.push(match request {
                 Request::Rendered { .. } | Request::Failed { .. } | Request::Refused { .. } => Asked::Answer,
+                Request::Room => Asked::Room,
                 Request::Read { owner, .. } => Asked::Read(owner),
             });
         }
@@ -117,7 +119,7 @@ fn reads(asked: &[Asked]) -> Vec<Token> {
         .iter()
         .map(|asked| match asked {
             Asked::Read(owner) => *owner,
-            Asked::Answer => panic!("a read per section: {asked:?}"),
+            Asked::Answer | Asked::Room => panic!("a read per section: {asked:?}"),
         })
         .collect()
 }
@@ -159,10 +161,13 @@ fn fill(limits: Limits) {
     // The first briefs rendered by their last read, the last by its
     // deadline.
     let (late, rest) = last.split_last().expect("a brief at least");
+    let mut answered = Vec::new();
     for owner in rest {
-        assert_eq!(brief.full(*owner), [Asked::Answer]);
+        answered.extend(brief.full(*owner));
     }
-    assert_eq!(brief.fire(Time::ZERO.saturating_add(limits.gather)), [Asked::Answer]);
+    answered.extend(brief.fire(Time::ZERO.saturating_add(limits.gather)));
+    let rooms = answered.iter().filter(|asked| **asked == Asked::Room).count();
+    assert_eq!((answered.len(), rooms), (last.len() + 1, 1), "an answer each, and room told once: {answered:?}");
     assert!(brief.full(*late).is_empty(), "a late read is dropped");
     assert_eq!((brief.model.briefs(), brief.model.reads()), (0, 0));
 }

@@ -24,7 +24,7 @@ fn a_calm_world_renders_every_brief_and_settles() {
     let stats = world.stats();
     assert_eq!(count(&stats, "rendered"), stats.briefs, "every brief rendered: {stats:?}");
     assert!(count(&stats, "cut") > 0, "some sections are cut to their budgets: {stats:?}");
-    for ending in ["missing", "failed", "expired", "busy", "oversized", "source cut", "late"] {
+    for ending in ["missing", "failed", "expired", "busy", "oversized", "late"] {
         assert_eq!(count(&stats, ending), 0, "{ending}: {stats:?}");
     }
     let (sections, cuts) = world.judged();

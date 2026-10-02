@@ -41,7 +41,7 @@ impl Decimal {
 #[cfg(test)]
 mod tests {
     use super::Decimal;
-    use crate::Writer;
+    use crate::{Rng, Writer};
 
     #[test]
     fn a_number_is_its_digits_without_leading_zeros() {
@@ -78,5 +78,16 @@ mod tests {
             writer.put(piece).unwrap();
         }
         assert_eq!(&*writer.finish(), b"[1234 bytes cut]");
+    }
+
+    #[test]
+    #[expect(clippy::disallowed_macros, reason = "the digits are checked against the standard library's")]
+    fn numbers_drawn_at_every_width_match_the_standard_library() {
+        let mut rng = Rng::new(0x0DEC_1A11);
+        for _ in 0..10_000_u32 {
+            let width = u32::try_from(rng.below(64)).unwrap();
+            let n = rng.next_u64().checked_shr(width).unwrap();
+            assert_eq!(Decimal::of(n).as_bytes(), format!("{n}").as_bytes());
+        }
     }
 }

@@ -94,7 +94,6 @@ pub struct Briefs {
 #[derive(Debug)]
 struct Asked {
     sections: Vec<(Kind, bool)>,
-    items: usize,
     /// What each section's read brought before the brief answered.
     served: BTreeMap<u32, Served>,
 }
@@ -109,7 +108,6 @@ impl Briefs {
 
     fn oversized(&self, asked: &Asked) -> bool {
         asked.sections.len() > usize::try_from(self.limits.sections).expect("small")
-            || asked.items > usize::try_from(self.limits.items).expect("small")
     }
 
     fn rendered(&mut self, brief: u64, asked: &Asked, sections: &[Section], judge: &mut Judge<Expected, Stimulus>) {
@@ -126,7 +124,7 @@ impl Briefs {
             let text =
                 match &section.body {
                     Body::Text(text) => text,
-                    Body::Missing => {
+                    Body::Missing(_) => {
                         match content {
                             Some(_) => judge
                                 .fail(format_args!("brief {brief}: section {index} was read in time but is missing")),
@@ -160,7 +158,7 @@ impl Briefs {
         for (index, section) in sections.iter().enumerate() {
             let text = match &section.body {
                 Body::Text(text) => text,
-                Body::Missing => continue,
+                Body::Missing(_) => continue,
             };
             let Some(parts) = content(asked.served.get(&u32::try_from(index).expect("small"))) else {
                 continue;
@@ -212,7 +210,7 @@ impl Briefs {
         };
         let last = pieces.last().expect("there is a first piece");
         match kind {
-            Kind::Item | Kind::Pull | Kind::Plan | Kind::Notes | Kind::Template => judge.check(
+            Kind::Item | Kind::Pull | Kind::Plan | Kind::Template => judge.check(
                 content.starts_with(first),
                 format_args!("brief {brief}: section {index} of {kind:?} keeps its content's start"),
             ),
@@ -220,7 +218,7 @@ impl Briefs {
                 content.ends_with(last),
                 format_args!("brief {brief}: section {index} of {kind:?} keeps its content's end"),
             ),
-            Kind::Dependencies | Kind::Ci | Kind::Reviews => {}
+            Kind::Dependencies | Kind::Ci | Kind::Reviews | Kind::Notes => {}
         }
     }
 }
@@ -232,8 +230,8 @@ impl Expectations for Briefs {
 
     fn observe(&mut self, seen: Seen, judge: &mut Judge<Expected, Stimulus>) {
         match seen {
-            Seen::Asked { brief, sections, items } => {
-                self.asked.insert(brief, Asked { sections, items, served: BTreeMap::new() });
+            Seen::Asked { brief, sections, items: _ } => {
+                self.asked.insert(brief, Asked { sections, served: BTreeMap::new() });
                 judge.expect(Expected::Answer(brief), self.within);
             }
             Seen::Served { brief, index, read } => {

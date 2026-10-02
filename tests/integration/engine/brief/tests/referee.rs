@@ -1,7 +1,7 @@
 //! The referee of the brief's world, fed observations by hand as the world
 //! would feed them, fails a run that breaks an expectation, and says why.
 
-use temper_engine_model_brief::{Body, Kind, Part, Refusal, Section};
+use temper_engine_model_brief::{Body, Kind, Part, Refusal, Section, Unread};
 use temper_engine_model_brief_tests::LIMITS;
 use temper_engine_model_brief_tests::referee::{Briefs, Seen, Served};
 use temper_lib::{Duration, Time};
@@ -111,7 +111,7 @@ fn a_section_over_its_budget_fails_the_run() {
 fn a_required_section_missing_from_a_rendered_brief_fails_the_run() {
     let mut referee = asked(vec![part(b"item", 0)]);
     referee.observe(at(1), Seen::Served { brief: 1, index: 1, read: Served::Failed }, &mut Vec::new());
-    let missing = Section { kind: Kind::Comments, body: Body::Missing };
+    let missing = Section { kind: Kind::Comments, body: Body::Missing(Unread::Failed) };
     rendered(&mut referee, text(Kind::Item, b"item"), missing);
     assert_eq!(why(&referee), "brief 1: a required section is never missing");
 }
@@ -124,7 +124,7 @@ fn a_section_read_in_time_but_missing_fails_the_run() {
         Seen::Served { brief: 1, index: 1, read: Served::Content(vec![part(b"hi", 0)]) },
         &mut Vec::new(),
     );
-    let missing = Section { kind: Kind::Item, body: Body::Missing };
+    let missing = Section { kind: Kind::Item, body: Body::Missing(Unread::Failed) };
     rendered(&mut referee, missing, text(Kind::Comments, b"hi"));
     assert_eq!(why(&referee), "brief 1: section 0 was read in time but is missing");
 }

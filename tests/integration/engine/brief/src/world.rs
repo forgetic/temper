@@ -194,12 +194,12 @@ pub struct World {
     /// their reads brought in time; and the reads in flight, by owner, with
     /// the brief and section each is for.
     briefs: Ledger<u64, usize>,
-    reads: Ledger<u64, (u64, u32)>,
+    reads: Ledger<u64, (u64, u32, u32)>,
     /// The reads of each brief seen so far.
     indexes: BTreeMap<u64, u32>,
     /// Reads whose terminal is on its way to the brief: their brief and
     /// section.
-    answering: BTreeMap<u64, (u64, u32)>,
+    answering: BTreeMap<u64, (u64, u32, u32)>,
     briefs_left: u32,
 
     referee: Referee<Briefs>,
@@ -347,8 +347,8 @@ impl World {
         match delivery {
             Delivery::Ask => self.ask(),
             Delivery::Answer { owner, read } => {
-                let (brief, index) = self.reads.end(owner);
-                self.answering.insert(owner, (brief, index));
+                let asked = self.reads.end(owner);
+                self.answering.insert(owner, asked);
                 self.stage.push(Event::Read { owner: Token::new(owner), read });
             }
         }
@@ -366,17 +366,14 @@ impl World {
         let brief = self.wire.name();
         let limits = self.settings.limits;
         let oversized = self.rng.chance(self.settings.oversized);
-        let too_many = oversized && self.rng.chance(500);
-        let count = if too_many { limits.sections + 1 } else { self.below(limits.sections + 1) };
+        let count = if oversized { limits.sections + 1 } else { self.below(limits.sections + 1) };
         let mut wanted = Vec::new();
         let mut sections = Vec::new();
         let mut most = 0;
-        for index in 0..count {
-            let mut kind = KINDS[self.pick(KINDS.len())];
-            let mut items = 1 + self.below(limits.items);
-            if oversized && !too_many && index == 0 {
-                (kind, items) = (Kind::Dependencies, limits.items + 1);
-            }
+        for _ in 0..count {
+            let kind = KINDS[self.pick(KINDS.len())];
+            let items = 1 + self.below(limits.items);
+
             let required = self.rng.chance(self.settings.required);
             let source = self.source(kind, items);
             most = most.max(match &source {
@@ -418,7 +415,7 @@ impl World {
             Kind::Pull => Source::Pull { item, head },
             Kind::Attempts => Source::Attempts(item),
             Kind::Plan => Source::Plan { goal: item },
-            Kind::Notes => Source::Notes { repository: item.repository, goal: self.rng.chance(500).then_some(7) },
+            Kind::Notes => Source::Notes { repository: item.repository, goal: self.rng.chance(500).then_some(item) },
             Kind::Template => Source::Template(self.below(4)),
         }
     }
@@ -426,13 +423,12 @@ impl World {
     /// A read's terminal reaches the brief: the referee sees what it
     /// brought.
     fn served(&mut self, owner: u64, read: &Read) {
-        let (brief, index) = self.answering.remove(&owner).expect("a terminal on its way names its read");
+        let (brief, index, most) = self.answering.remove(&owner).expect("a terminal on its way names its read");
         let limits = self.settings.limits;
         let read = match read {
             Read::Got(parts) => {
                 let bytes: usize = parts.iter().map(|part| part.bytes.len()).sum();
-                let within =
-                    parts.len() <= usize::try_from(limits.parts).expect("small") && bytes <= limits.read_bytes as usize;
+                let within = parts.len() <= usize::try_from(limits.parts).expect("small") && bytes <= most as usize;
                 if within {
                     if let Some(gathered) = self.briefs.get_mut(brief) {
                         *gathered += bytes;
@@ -458,7 +454,7 @@ impl World {
                 self.rendered(&sections, gathered);
                 self.observe(Seen::Rendered { brief, sections: sections.into_vec() });
             }
-            Request::Failed { reply_to, missing } => {
+            Request::Failed { reply_to, missing, why: _ } => {
                 let brief = reply_to.into_token().raw();
                 self.briefs.end(brief);
                 self.indexes.remove(&brief);
@@ -474,12 +470,13 @@ impl World {
                 });
                 self.observe(Seen::Refused { brief, refusal });
             }
-            Request::Read { owner, source: _, keep, parts, bytes } => {
+            Request::Room => {}
+            Request::Read { owner, source: _, keep, fit: _, parts, bytes } => {
                 let brief = label.expect("a read is asked by a render");
                 let index = self.indexes.entry(brief).or_insert(0);
                 let section = *index;
                 *index += 1;
-                self.reads.open(owner.raw(), (brief, section));
+                self.reads.open(owner.raw(), (brief, section, bytes));
                 self.serve(owner.raw(), keep, parts, bytes);
             }
         }
@@ -501,7 +498,7 @@ impl World {
                         self.end("cut");
                     }
                 }
-                Body::Missing => self.end("missing"),
+                Body::Missing(_) => self.end("missing"),
             }
         }
     }
@@ -688,13 +685,14 @@ fn describe_request(request: &Request) -> String {
             for section in sections {
                 let written = match &section.body {
                     Body::Text(text) => write!(line, " {:?}:{}", section.kind, text.len()),
-                    Body::Missing => write!(line, " {:?}:missing", section.kind),
+                    Body::Missing(why) => write!(line, " {:?}:missing {why:?}", section.kind),
                 };
                 written.expect("a string takes what is written");
             }
             line
         }
-        Request::Failed { reply_to, missing } => format!("failed {reply_to:?} {missing:?}"),
+        Request::Failed { reply_to, missing, why } => format!("failed {reply_to:?} {missing:?} {why:?}"),
+        Request::Room => "room".to_owned(),
         Request::Refused { reply_to, refusal } => format!("refused {reply_to:?} {refusal:?}"),
         Request::Read { owner, source, keep, .. } => format!("read {} {:?} {keep:?}", owner.raw(), source.kind()),
     }

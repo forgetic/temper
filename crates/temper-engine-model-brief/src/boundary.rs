@@ -10,8 +10,14 @@
 //! the entrance. And reads out: a [`Request::Read`] is ended by exactly one
 //! [`Event::Read`] that echoes its `owner`, whether or not its brief is still
 //! gathering: one that ends after its brief has answered is dropped. The
-//! parent bounds each read's time and says when it failed; the brief bounds
-//! its own gathering, and answers with what it has when that runs out.
+//! brief bounds its own gathering, and answers with what it has when that
+//! runs out; the parent bounds each read's time, at most the brief's time to
+//! gather (`Limits::gather`), and says when it failed, so that a read
+//! outliving its brief holds its room no longer than that.
+//!
+//! A brief refused as busy is not asked again by the brief: it tells its
+//! parent once when there is room again ([`Request::Room`]), which carries
+//! no answer.
 //!
 //! The brief knows nothing of plans, the forge's API or the workers: the
 //! parent describes where a section comes from in the brief's own terms
@@ -66,7 +72,9 @@ pub enum Source {
     Comments { item: Item, since: u64 },
     /// The outcomes of these items' runs, a part each, in this order: how
     /// results flow through a plan (5.2). Each keeps an even share, and its
-    /// start.
+    /// start. A list longer than a source may name is cut to its first
+    /// items at the entrance, and the section ends with a line saying how
+    /// many were left out, `[N items cut]`.
     Dependencies(Box<[Item]>),
     /// The CI failures on exactly `head` of the item's pull request, a part
     /// per failed check with its output. Each keeps an even share, and the
@@ -84,10 +92,12 @@ pub enum Source {
     /// The status of the plan under the goal `goal`. Its tail is cut first.
     Plan { goal: Item },
     /// The index of the notes in a run's scopes (engine-model.md, section
-    /// 10): the deployment's, the repository's, and the goal's if it has
-    /// one. Its tail is cut first; the notes say how many entries did not
-    /// fit, within the index.
-    Notes { repository: u32, goal: Option<u64> },
+    /// 10): the deployment's, the repository's, and its goal's if it has
+    /// one, in the goal's repository. A part per line, narrowest scope
+    /// first, and last a part saying how many entries did not fit (empty if
+    /// none). It is cut by whole lines, from its last, and keeps its last
+    /// part.
+    Notes { repository: u32, goal: Option<Item> },
     /// The template at this index of the configuration. Its tail is cut
     /// first.
     Template(u32),
@@ -130,11 +140,31 @@ pub enum Keep {
     End,
 }
 
+/// How a source with more than a read may bring cuts it to the read's
+/// bounds, keeping what the section keeps longest, and never splitting a
+/// UTF-8 sequence. Whole parts it leaves out are told in the `left` of the
+/// part next to them, or of an empty part in their place.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Fit {
+    /// Its content as one run of bytes from the end [`Keep`] names: the
+    /// first parts and the start of the last one kept, or the last parts
+    /// and the end of the first one kept.
+    Run,
+    /// Each part to an even share of the read's bytes (its bytes over the
+    /// number of parts it brings), keeping the end [`Keep`] names; past the
+    /// read's parts, those farthest from that end are left out.
+    Each,
+    /// Whole parts from the start, and the last part, which tells what did
+    /// not fit and is kept: the notes' index, a part per line.
+    Lines,
+}
+
 /// A part of a section's content as its source has it: a comment, a
-/// dependency's outcome, a failed check's output. `left` counts the bytes
-/// the source left out at the end of it the read's [`Keep`] does not keep,
-/// to keep within the read's bounds: of this part, and of the parts beyond
-/// that end it left out whole. A part may be left with no bytes.
+/// dependency's outcome, a failed check's output, a line of an index.
+/// `left` counts the bytes the source left out at the end of it the read's
+/// [`Keep`] does not keep, to keep within the read's bounds: of this part,
+/// and of the parts beyond that end it left out whole. A part may be left
+/// with no bytes.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Part {
     pub bytes: Box<[u8]>,
@@ -145,7 +175,7 @@ pub struct Part {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Read {
     /// The section's content, in parts, within the read's bounds. An answer
-    /// past them counts as failed.
+    /// past them counts as unread, oversized.
     Got(Box<[Part]>),
     Failed,
 }
@@ -166,17 +196,28 @@ pub enum Body {
     /// bytes cut]`, where the bytes were; adjacent cuts are one line. A cut
     /// never splits a UTF-8 sequence.
     Text(Box<[u8]>),
-    /// Its content could not be read before the brief had to answer.
-    Missing,
+    /// Its content could not be read before the brief answered, and why.
+    Missing(Unread),
+}
+
+/// Why a section was not read.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Unread {
+    /// Its read failed.
+    Failed,
+    /// Its read had not ended by the brief's deadline.
+    Late,
+    /// Its read brought more than a read may.
+    Oversized,
 }
 
 /// Why a brief was refused at the entrance.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Refusal {
-    /// No room for one more brief.
+    /// No room for one more brief, or for the reads of one: a
+    /// [`Request::Room`] says when there is again.
     Busy,
-    /// More sections than a brief may have, or a list of more items than a
-    /// source may name.
+    /// More sections than a brief may have.
     Oversized,
 }
 
@@ -198,15 +239,15 @@ pub enum Request {
     /// a section that could not be read in time is missing.
     Rendered { reply_to: ReplyTo, sections: Box<[Section]> },
     /// The `Render` of `reply_to` failed: the required section of this kind
-    /// could not be read in time.
-    Failed { reply_to: ReplyTo, missing: Kind },
+    /// could not be read, and why.
+    Failed { reply_to: ReplyTo, missing: Kind, why: Unread },
     /// The `Render` of `reply_to` was refused at the entrance.
     Refused { reply_to: ReplyTo, refusal: Refusal },
+    /// There is room for a brief again, after one or more were refused as
+    /// busy: once, as soon as there is.
+    Room,
     /// Read the content of `source`: at most `parts` parts and `bytes`
-    /// bytes in all. A source with more keeps its content from the end
-    /// `keep` names, as one run of bytes (the first parts and the start of
-    /// the last one kept, or the last parts and the end of the first one
-    /// kept, never splitting a UTF-8 sequence), and says how much it left
-    /// out in the `left` of the part next to what it left out.
-    Read { owner: Token, source: Source, keep: Keep, parts: u32, bytes: u32 },
+    /// bytes in all, a source with more cutting it as `fit` says, keeping
+    /// the end `keep` names.
+    Read { owner: Token, source: Source, keep: Keep, fit: Fit, parts: u32, bytes: u32 },
 }

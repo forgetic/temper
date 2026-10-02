@@ -20,10 +20,31 @@
 //! where it cut and how many bytes it left out.
 //!
 //! The answer is the brief as typed sections ([`Section`]: a kind, and its
-//! bytes or that it is missing), in the order they were asked for, which the
-//! parent puts in the charter apart from the instructions the plan writes:
-//! what the run needs to know reaches it as sections, never folded into
-//! prose.
+//! bytes or that it is missing and why), in the order they were asked for,
+//! which the parent puts in the charter apart from the instructions the plan
+//! writes: what the run needs to know reaches it as sections, never folded
+//! into prose.
+//!
+//! Which sections a run's brief has follows from why it runs, as the plan
+//! says when a run is due (engine-model.md, 5.3; the plan's `Sections`), and
+//! the parent marks as required the sections the run is for:
+//!
+//! ```text
+//! the run                         its sections                            required
+//! any                             item, comments, attempts, notes;        item
+//!                                 dependencies, if it has any;
+//!                                 template, if it follows one
+//! an agent step that may grow     and plan
+//! a session's turn, supervising   and plan
+//! a repair: CI failed             and ci                                  ci
+//! a repair: changes asked for     and reviews                             reviews
+//! a repair: base moved, conflict  and pull                                pull
+//! a review at a head              and reviews
+//! ```
+//!
+//! A brief that fails says which required section it lacked and why (its
+//! read failed, brought more than a read may, or had not ended in time):
+//! the parent decides whether the run waits for another try.
 //!
 //! Sans-io: [`step`] and [`fire`] turn events into requests and change
 //! nothing but the [`Model`] they are given. Every effect is a [`Request`]
@@ -57,7 +78,9 @@ mod model;
 #[cfg(test)]
 mod tests;
 
-pub use boundary::{Body, Commit, Event, Item, Keep, Kind, Part, Read, Refusal, Request, Section, Source, Wanted};
+pub use boundary::{
+    Body, Commit, Event, Fit, Item, Keep, Kind, Part, Read, Refusal, Request, Section, Source, Unread, Wanted,
+};
 pub use facts::{Fact, Gathered};
 pub use limits::{Budgets, Limits, worst_case};
 pub use model::{Model, fire, max_out, step};

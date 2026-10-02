@@ -12,10 +12,18 @@ use crate::limits::{self, Limits};
 #[derive(Debug)]
 pub struct Model {
     pub(crate) briefs: Slab<Brief>,
-    /// The reads in flight, each for a section of a brief.
+    /// The reads in flight, each for a section of a brief, or orphaned once
+    /// its brief has answered.
     pub(crate) reads: Slab<Reading>,
     /// Each gathering brief's deadline.
     pub(crate) alarms: Deadlines<Id<Brief>>,
+    /// The briefs gathering and the reads in flight, which the slabs hold
+    /// until the reclaim point after they end: what admission counts.
+    pub(crate) gathering: u32,
+    pub(crate) reading: u32,
+    /// Whether a render was refused as busy since the parent last heard
+    /// there is room.
+    pub(crate) owed: bool,
     pub(crate) facts: Facts,
 }
 
@@ -25,21 +33,24 @@ impl Model {
     pub fn new(limits: &Limits) -> Model {
         let reads = limits::reads(limits).expect("worst_case accepted the limits");
         Model {
-            briefs: Slab::with_capacity(limits.briefs),
-            reads: Slab::with_capacity(reads),
+            briefs: Slab::with_capacity(limits::slots(limits.briefs).expect("worst_case accepted the limits")),
+            reads: Slab::with_capacity(limits::slots(reads).expect("worst_case accepted the limits")),
             alarms: Deadlines::with_capacity(limits.briefs),
+            gathering: 0,
+            reading: 0,
+            owed: false,
             facts: Facts::with_capacity(limits.facts),
         }
     }
 
-    /// Briefs present, gathering or settling, closed ones included until
-    /// they are reclaimed.
+    /// Briefs present, answered ones included until they are reclaimed.
     #[must_use]
     pub fn briefs(&self) -> u32 {
         self.briefs.len()
     }
 
-    /// Reads in flight, ended ones included until they are reclaimed.
+    /// Reads in flight, orphaned ones included, and ended ones until they
+    /// are reclaimed.
     #[must_use]
     pub fn reads(&self) -> u32 {
         self.reads.len()
@@ -81,11 +92,11 @@ impl Model {
 }
 
 /// The most requests one step or alarm emits under `limits`: a render's
-/// reads, one per section; or one answer. The parent reserves this much room
-/// in `out`.
+/// reads, one per section; or an answer and a room notice. The parent
+/// reserves this much room in `out`.
 #[must_use]
 pub const fn max_out(limits: &Limits) -> u32 {
-    if limits.sections > 1 { limits.sections } else { 1 }
+    if limits.sections > 2 { limits.sections } else { 2 }
 }
 
 /// Handles one event, emitting at most [`max_out`] requests.
