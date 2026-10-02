@@ -132,9 +132,9 @@ pub enum Keep {
 
 /// A part of a section's content as its source has it: a comment, a
 /// dependency's outcome, a failed check's output. `left` counts the bytes
-/// the source left out of it to keep within the read's bounds, cut at the
-/// end the read's [`Keep`] does not keep; a part left out whole has no
-/// bytes.
+/// the source left out at the end of it the read's [`Keep`] does not keep,
+/// to keep within the read's bounds: of this part, and of the parts beyond
+/// that end it left out whole. A part may be left with no bytes.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Part {
     pub bytes: Box<[u8]>,
@@ -203,7 +203,10 @@ pub enum Request {
     /// The `Render` of `reply_to` was refused at the entrance.
     Refused { reply_to: ReplyTo, refusal: Refusal },
     /// Read the content of `source`: at most `parts` parts and `bytes`
-    /// bytes in all, a source with more cutting its parts at the end `keep`
-    /// does not keep, and saying how much it left out of each.
+    /// bytes in all. A source with more keeps its content from the end
+    /// `keep` names, as one run of bytes (the first parts and the start of
+    /// the last one kept, or the last parts and the end of the first one
+    /// kept, never splitting a UTF-8 sequence), and says how much it left
+    /// out in the `left` of the part next to what it left out.
     Read { owner: Token, source: Source, keep: Keep, parts: u32, bytes: u32 },
 }
