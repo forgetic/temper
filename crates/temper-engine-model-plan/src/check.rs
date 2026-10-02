@@ -114,7 +114,6 @@ pub(crate) enum Among {
     /// They join a plan, after the steps it has, if any.
     Plan,
     /// They are tasks, each an item on its own, after nothing.
-    #[expect(dead_code, reason = "an outcome's tasks are checked once outcomes are applied")]
     Alone,
 }
 

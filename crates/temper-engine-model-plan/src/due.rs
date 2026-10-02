@@ -98,6 +98,9 @@ pub enum Hold {
     Repairs,
     /// Its pull request was closed without being merged.
     PullClosed,
+    /// Its run escalated: it asks for a decision it cannot make, of its
+    /// goal's session first (section 6), or of a person.
+    Escalated,
 }
 
 /// A run that is due: the parts of its charter the plan decides

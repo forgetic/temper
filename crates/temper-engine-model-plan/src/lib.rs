@@ -6,7 +6,8 @@
 //! accepting it makes, and what growing it does to its envelope. It says
 //! what is due for an item, from its step and the facts about it: a run and
 //! the parts of its charter, an engine action, or nothing yet; and whether
-//! the events in an item's inbox wake it.
+//! the events in an item's inbox wake it; and what a run's outcome writes,
+//! or why it does not fit.
 //!
 //! It knows nothing of the forge's API, the workers, the record's encoding or
 //! the mechanics of an item's lifecycle, and it never checks the rules: it
@@ -28,6 +29,7 @@
 extern crate alloc;
 
 mod accept;
+mod apply;
 mod check;
 mod config;
 mod due;
@@ -41,6 +43,7 @@ mod wake;
 mod write;
 
 pub use accept::{Growing, accept, grow};
+pub use apply::{Accept, Applied, Outcome, Stale, Then, apply};
 pub use check::{Problem, Problems, check};
 pub use config::{Config, Repo, Template};
 pub use due::{Action, Due, Finish, Hold, Repair, Run, Sections, Waits, Why, due};

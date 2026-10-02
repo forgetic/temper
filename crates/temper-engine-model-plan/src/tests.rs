@@ -6,11 +6,11 @@ use core::mem::size_of;
 use temper_lib::{Duration, Env, List, Queue, Time};
 
 use crate::{
-    Action, AgentSpec, Batch, Budget, ChangeSpec, Charter, Ci, Commit, Config, Decision, Due, Envelope, Facts, Finish,
-    Gate, Goal, Grants, Growing, Growth, Hold, Inbound, Key, Limits, Mergeable, Plan, Problem, Problems, Progress,
-    Pull, PullState, Record, Relations, Repair, Repo, Repository, Resume, Review, Reviewed, Run, Sections, SessionSpec,
-    Source, Sources, Step, Target, Template, Verdict, WaitSpec, Waits, Wake, Why, Woken, Work, Write, accept, check,
-    due, grow, max_out, wake, worst_case,
+    Accept, Action, AgentSpec, Applied, Batch, Budget, ChangeSpec, Charter, Ci, Commit, Config, Decision, Due,
+    Envelope, Facts, Finish, Gate, Goal, Grants, Growing, Growth, Hold, Inbound, Key, Limits, Mergeable, Outcome, Plan,
+    Problem, Problems, Progress, Pull, PullState, Record, Relations, Repair, Repo, Repository, Resume, Review,
+    Reviewed, Run, Sections, SessionSpec, Source, Sources, Stale, Step, Target, Template, Then, Verdict, WaitSpec,
+    Waits, Wake, Why, Woken, Work, Write, accept, apply, check, due, grow, max_out, wake, worst_case,
 };
 
 /// The most a run may ask for.
@@ -855,6 +855,189 @@ fn only_as_many_events_as_the_limits_say_are_read() {
     assert_eq!(wake(&env(), &WAKE, &inbox, LAST), Woken::No);
     inbox[7] = inbound(Source::Own, 990);
     assert_eq!(wake(&env(), &WAKE, &inbox, LAST), Woken::Now);
+}
+
+// What outcomes write.
+
+/// What `outcome` writes for `record`, under `goal`, and the writes.
+fn apply_to(record: &Record, goal: Option<&Goal>, facts: &Facts, outcome: &Outcome) -> (Applied, Box<[Write]>) {
+    let mut out = out();
+    let applied = apply(&config(), &env(), record, goal, facts, outcome, &mut out);
+    (applied, writes(&mut out))
+}
+
+const WRITES: Applied = Applied::Writes { accept: Accept::Rules, then: Then::Wait };
+
+fn invalid(problem: Problem) -> (Applied, Box<[Write]>) {
+    (Applied::Invalid(Problems { listed: Box::new([problem]), more: 0 }), Box::new([]))
+}
+
+fn stale(stale: Stale) -> (Applied, Box<[Write]>) {
+    (Applied::Stale(stale), Box::new([]))
+}
+
+fn grower(name: &str) -> Step {
+    step(name, Work::Agent(AgentSpec { charter: charter(100), grows: true }), &[])
+}
+
+#[test]
+fn a_pushed_change_counts_as_a_repair_once_its_pull_request_is_open() {
+    let change = record(change("a", &[]));
+    let pushed = Facts { branch: Some(head(1)), ..facts() };
+    assert_eq!(apply_to(&change, None, &pushed, &Outcome::Change { head: head(1) }), (WRITES, Box::from([])));
+    let open = pulled(Pull { ci: Ci::Failed, ..ready(head(2)) });
+    assert_eq!(
+        apply_to(&change, None, &open, &Outcome::Change { head: head(2) }),
+        (WRITES, Box::from([Write::Progress(Progress { repairs: 1, ..Progress::NEW })]))
+    );
+}
+
+#[test]
+fn a_change_the_item_moved_on_from_is_stale() {
+    let change = record(change("a", &[]));
+    let outcome = Outcome::Change { head: head(1) };
+    assert_eq!(apply_to(&change, None, &Facts { branch: Some(head(2)), ..facts() }, &outcome), stale(Stale::Moved));
+    assert_eq!(apply_to(&change, None, &facts(), &outcome), stale(Stale::Moved));
+    let merged = pulled(Pull { state: PullState::Merged, ..ready(head(1)) });
+    assert_eq!(apply_to(&change, None, &merged, &outcome), stale(Stale::Landed));
+    let closed = pulled(Pull { state: PullState::Closed, ..ready(head(1)) });
+    assert_eq!(apply_to(&change, None, &closed, &outcome), stale(Stale::Closed));
+}
+
+#[test]
+fn an_agents_verdict_is_kept_for_the_head_it_reviewed() {
+    let spec = ChangeSpec { review: Review::Agent(charter(30)), ..change_spec() };
+    let change = record(change_with("a", spec));
+    let verdict = Outcome::Verdict { head: head(2), verdict: Verdict::Changes };
+    let reviewed = Progress { review: Some(Reviewed { head: head(2), verdict: Verdict::Changes }), ..Progress::NEW };
+    assert_eq!(
+        apply_to(&change, None, &pulled(ready(head(2))), &verdict),
+        (WRITES, Box::from([Write::Progress(reviewed)]))
+    );
+    assert_eq!(apply_to(&change, None, &pulled(ready(head(3))), &verdict), stale(Stale::Moved));
+    assert_eq!(apply_to(&change, None, &facts(), &verdict), stale(Stale::Moved));
+    let merged = pulled(Pull { state: PullState::Merged, ..ready(head(2)) });
+    assert_eq!(apply_to(&change, None, &merged, &verdict), stale(Stale::Landed));
+    let closed = pulled(Pull { state: PullState::Closed, ..ready(head(2)) });
+    assert_eq!(apply_to(&change, None, &closed, &verdict), stale(Stale::Closed));
+}
+
+#[test]
+fn a_report_finishes_an_agent_step_once() {
+    let agent = record(agent("a", &[]));
+    assert_eq!(
+        apply_to(&agent, None, &facts(), &Outcome::Report),
+        (WRITES, Box::from([Write::Progress(Progress { finished: true, ..Progress::NEW })]))
+    );
+    let finished = Record { progress: Progress { finished: true, ..Progress::NEW }, ..agent };
+    assert_eq!(apply_to(&finished, None, &facts(), &Outcome::Report), stale(Stale::Finished));
+}
+
+#[test]
+fn a_chatting_session_proposes_a_plan_and_becomes_its_goal() {
+    let chatting = record(session("chat"));
+    let proposed = plan(Box::new([agent("a", &[]), change("b", &["a"])]));
+    let (applied, writes) = apply_to(&chatting, None, &facts(), &Outcome::Plan(proposed.clone()));
+    assert_eq!(applied, WRITES);
+    assert_eq!(*writes, [created(&proposed.steps[0]), created(&proposed.steps[1]), Write::Goal(goal())]);
+    let cyclic = Outcome::Plan(plan(Box::new([agent("a", &["a"])])));
+    assert_eq!(apply_to(&chatting, None, &facts(), &cyclic), invalid(Problem::Cycle { step: 0 }));
+    let supervising = Record { goal: Some(goal()), ..chatting };
+    let again = Outcome::Plan(proposed);
+    assert_eq!(apply_to(&supervising, Some(&goal()), &facts(), &again), invalid(Problem::NotAllowed));
+}
+
+#[test]
+fn a_growing_agent_step_adds_steps_and_finishes() {
+    let build = record(grower("build"));
+    let within = Outcome::Steps(Box::new([agent("c", &["a"])]));
+    let (applied, writes) = apply_to(&build, Some(&goal()), &facts(), &within);
+    assert_eq!(applied, WRITES);
+    assert_eq!(writes.len(), 3, "{writes:?}");
+    assert_eq!(writes[2], Write::Progress(Progress { finished: true, ..Progress::NEW }));
+    let beyond = Outcome::Steps(Box::new([change("c", &[])]));
+    let (applied, writes) = apply_to(&build, Some(&goal()), &facts(), &beyond);
+    assert_eq!(applied, Applied::Writes { accept: Accept::Person, then: Then::Wait });
+    assert_eq!(writes.len(), 3, "{writes:?}");
+    assert_eq!(apply_to(&build, None, &facts(), &within), invalid(Problem::NoGoal));
+    let finished = Record { progress: Progress { finished: true, ..Progress::NEW }, ..build };
+    assert_eq!(apply_to(&finished, Some(&goal()), &facts(), &within), stale(Stale::Finished));
+    let refused = Outcome::Steps(Box::new([agent("a", &[])]));
+    let (applied, writes) = apply_to(&record(grower("build")), Some(&goal()), &facts(), &refused);
+    assert_eq!(applied, Applied::Invalid(Problems { listed: Box::new([Problem::NameTaken { step: 0 }]), more: 0 }));
+    assert!(writes.is_empty());
+}
+
+#[test]
+fn a_supervising_session_grows_its_goals_plan() {
+    let supervising = Record { goal: Some(goal()), ..record(session("chat")) };
+    let steps = Outcome::Steps(Box::new([agent("c", &["a"])]));
+    let (applied, writes) = apply_to(&supervising, Some(&goal()), &facts(), &steps);
+    assert_eq!(applied, WRITES);
+    assert_eq!(writes.len(), 2, "an item and the goal: {writes:?}");
+    let chatting = record(session("chat"));
+    assert_eq!(apply_to(&chatting, None, &facts(), &steps), invalid(Problem::NotAllowed));
+}
+
+#[test]
+fn only_a_growing_agent_step_or_a_supervising_session_adds_steps() {
+    let steps = Outcome::Steps(Box::new([agent("c", &[])]));
+    for step in [agent("a", &[]), change("b", &[]), wait("c", WaitSpec::Steps, &[])] {
+        assert_eq!(apply_to(&record(step), Some(&goal()), &facts(), &steps), invalid(Problem::NotAllowed));
+    }
+}
+
+#[test]
+fn a_session_makes_tasks_keyed_by_their_place() {
+    let chatting = record(session("chat"));
+    let tasks = Outcome::Tasks(Box::new([agent("a", &[]), change("b", &[])]));
+    let (applied, writes) = apply_to(&chatting, None, &facts(), &tasks);
+    assert_eq!(applied, WRITES);
+    assert_eq!(
+        *writes,
+        [
+            Write::Create { key: Key::Task(0), record: Box::new(record(agent("a", &[]))) },
+            Write::Create { key: Key::Task(1), record: Box::new(record(change("b", &[]))) },
+        ]
+    );
+    let after = Outcome::Tasks(Box::new([agent("a", &[]), agent("b", &["a"])]));
+    assert_eq!(
+        apply_to(&chatting, None, &facts(), &after),
+        invalid(Problem::UnknownDependency { step: 1, dependency: 0 })
+    );
+    let many = Outcome::Tasks(nameless(LIMITS.tasks + 1, &[]));
+    assert_eq!(apply_to(&chatting, None, &facts(), &many), invalid(Problem::TooManyTasks { max: LIMITS.tasks }));
+    assert_eq!(apply_to(&chatting, None, &facts(), &Outcome::Tasks(Box::new([]))), invalid(Problem::NoSteps));
+    assert_eq!(apply_to(&record(agent("a", &[])), None, &facts(), &tasks), invalid(Problem::NotAllowed));
+}
+
+#[test]
+fn a_session_replies_and_any_run_escalates() {
+    assert_eq!(apply_to(&record(session("chat")), None, &facts(), &Outcome::Reply), (WRITES, Box::from([])));
+    assert_eq!(apply_to(&record(agent("a", &[])), None, &facts(), &Outcome::Reply), invalid(Problem::NotAllowed));
+    let held = Applied::Writes { accept: Accept::Rules, then: Then::Hold(Hold::Escalated) };
+    for step in [agent("a", &[]), change("b", &[]), session("c")] {
+        assert_eq!(apply_to(&record(step), None, &facts(), &Outcome::Escalation), (held.clone(), Box::from([])));
+    }
+}
+
+#[test]
+fn an_outcome_of_another_primitives_is_invalid() {
+    let wait = record(wait("a", WaitSpec::Steps, &[]));
+    let person = record(change("b", &[]));
+    let verdict = Outcome::Verdict { head: head(1), verdict: Verdict::Approve };
+    let cases = [
+        (record(agent("a", &[])), Outcome::Change { head: head(1) }),
+        (record(agent("a", &[])), verdict.clone()),
+        (person, verdict),
+        (record(session("c")), Outcome::Report),
+        (wait.clone(), Outcome::Report),
+        (record(agent("a", &[])), Outcome::Plan(plan(Box::new([agent("x", &[])])))),
+        (wait, Outcome::Reply),
+    ];
+    for (record, outcome) in cases {
+        assert_eq!(apply_to(&record, None, &facts(), &outcome), invalid(Problem::NotAllowed), "{outcome:?}");
+    }
 }
 
 // Limits.
