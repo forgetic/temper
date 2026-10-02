@@ -693,8 +693,12 @@ impl World {
     /// The referee observes `seen`, which ends the test if it breaks an
     /// expectation.
     fn observe(&mut self, seen: Seen) {
-        self.referee.observe(self.now, seen);
+        let mut stimuli = Vec::new();
+        self.referee.observe(self.now, seen, &mut stimuli);
         self.referee.assert_holding(self.settings.seed);
+        for stimulus in &stimuli {
+            inject(stimulus);
+        }
     }
 
     fn pick(&mut self, len: usize) -> usize {

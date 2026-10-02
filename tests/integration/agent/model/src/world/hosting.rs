@@ -478,21 +478,8 @@ impl World {
             | Op::CheckOut { .. }
             | Op::Commit { .. } => None,
         };
-        let before = self.forge.moves().len();
         let done = io::perform(&mut self.forge, &mut self.disk, op);
-        let moved = self.forge.moves()[before..].to_vec();
-        for Move { remote, branch, from, to } in moved {
-            if let Some(from) = from {
-                assert!(
-                    self.forge.is_ancestor(from, to),
-                    "{}: {} moved only by a fast-forward",
-                    String::from_utf8_lossy(&remote),
-                    String::from_utf8_lossy(&branch)
-                );
-            }
-            let tree = self.forge.object(to).tree.clone();
-            self.observe(Seen::Moved { remote, branch, commit: to, tree });
-        }
+        self.observe_moves();
         if let Some(repository) = committed
             && let Done::Committed { commit } = &done
         {
@@ -524,7 +511,36 @@ impl World {
         self.stats.advanced += 1;
         let content = format!("another party, {}\n", self.stats.advanced);
         self.forge.advance(remote, branch, b"OTHER.md", content.as_bytes());
+        self.observe_moves();
         self.log(&format!("another party moves {}", String::from_utf8_lossy(branch)));
+    }
+
+    /// The referee sees every move of the forge's branches since it last
+    /// looked, the worker's and another party's, each a fast-forward, with
+    /// the commits it brings onto its branch.
+    pub(super) fn observe_moves(&mut self) {
+        let moved = self.forge.moves()[self.moves..].to_vec();
+        self.moves = self.forge.moves().len();
+        for Move { remote, branch, from, to } in moved {
+            if let Some(from) = from {
+                assert!(
+                    self.forge.is_ancestor(from, to),
+                    "{}: {} moved only by a fast-forward",
+                    String::from_utf8_lossy(&remote),
+                    String::from_utf8_lossy(&branch)
+                );
+            }
+            let mut brought = Vec::new();
+            let mut next = Some(to);
+            while let Some(commit) = next
+                && Some(commit) != from
+            {
+                brought.push(commit);
+                next = self.forge.object(commit).parent;
+            }
+            let tree = self.forge.object(to).tree.clone();
+            self.observe(Seen::Moved { remote, branch, tip: to, brought, tree });
+        }
     }
 
     /// The worker answers the engine for `attempt`: the engine hears it, and

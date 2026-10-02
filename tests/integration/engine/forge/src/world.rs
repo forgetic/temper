@@ -854,10 +854,17 @@ impl World {
     }
 
     /// The referee observes `seen`, which ends the test if it breaks an
-    /// expectation.
+    /// expectation; what it injects at once is injected before the world
+    /// goes on.
     fn observe(&mut self, seen: Seen) {
-        self.referee.observe(self.now, seen);
+        let mut stimuli = Vec::new();
+        self.referee.observe(self.now, seen, &mut stimuli);
         self.referee.assert_holding(self.settings.seed);
+        for stimulus in stimuli {
+            match stimulus {
+                Stimulus::Restart => self.restart(),
+            }
+        }
     }
 
     fn has_work_now(&self) -> bool {

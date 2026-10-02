@@ -664,7 +664,11 @@ impl World {
     }
 
     pub(crate) fn observe(&mut self, seen: Seen) {
-        self.referee.observe(self.now, seen);
+        let mut stimuli = Vec::new();
+        self.referee.observe(self.now, seen, &mut stimuli);
+        for stimulus in stimuli {
+            self.inject(stimulus);
+        }
     }
 
     pub(crate) fn end(&mut self, ending: &'static str) {

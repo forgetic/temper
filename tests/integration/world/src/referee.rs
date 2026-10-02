@@ -29,7 +29,14 @@ pub trait Expectations {
 /// (testing-pyramid.md, 5.2): observations in, stimuli out, and a deadline
 /// table of its own, whose earliest deadline the loop covers as it covers
 /// every model's. It steps only on what it observes and on its own
-/// deadlines, and its [`Verdict`] ends the test.
+/// deadlines, and its [`Verdict`] ends the test: passed, failed, or stopped
+/// early by the scenario.
+///
+/// A stimulus comes out at a moment of the scenario, from [`Referee::fire`]
+/// once it is due; or at once, from the [`Referee::observe`] whose
+/// observation called for it, so that a world can inject it between two
+/// things it does (the engine restarting after a write and before the
+/// next). A world handles what comes out of either before it goes on.
 ///
 /// The harness keeps the boundary contracts and the invariants once a world
 /// settles (section 6); the referee keeps what the scenario expects of the
@@ -58,10 +65,12 @@ impl<X: Expectations> Referee<X> {
         self.judge.inject(at, stimulus);
     }
 
-    /// The referee observes `seen` at `now`.
-    pub fn observe(&mut self, now: Time, seen: X::Seen) {
+    /// The referee observes `seen` at `now`; what it injects at once goes
+    /// to `out`.
+    pub fn observe(&mut self, now: Time, seen: X::Seen, out: &mut Vec<X::Stimulus>) {
         self.judge.now = now;
         self.expectations.observe(seen, &mut self.judge);
+        out.append(&mut self.judge.now_out);
     }
 
     /// The referee's earliest deadline: a liveness expectation's, or a
@@ -79,8 +88,8 @@ impl<X: Expectations> Referee<X> {
     }
 
     /// Fires what is due by `now`: a liveness expectation still pending past
-    /// its deadline fails the test, and the stimuli due go to `out`, in the
-    /// order they were injected.
+    /// its deadline fails the test, and is no longer pending; the stimuli due
+    /// go to `out`, in the order they were injected.
     pub fn fire(&mut self, now: Time, out: &mut Vec<X::Stimulus>) {
         self.judge.now = now;
         while let Some((at, name)) = self.judge.deadlines.first().cloned() {
@@ -88,8 +97,8 @@ impl<X: Expectations> Referee<X> {
                 break;
             }
             self.judge.deadlines.pop_first();
-            let why = format!("{name:?} was not met by {}", Moment(at));
-            self.judge.fail(why);
+            self.judge.pending.remove(&name);
+            self.judge.fail(format_args!("{name:?} was not met by {}", Moment(at)));
         }
         while let Some(stimulus) = self.judge.stimuli.next(now) {
             out.push(stimulus);
@@ -101,6 +110,9 @@ impl<X: Expectations> Referee<X> {
     pub fn verdict(&self) -> Verdict {
         if let Some(failure) = &self.judge.failure {
             return Verdict::Failed(failure.clone());
+        }
+        if self.judge.stopped {
+            return Verdict::Stopped { pending: self.judge.pending_list() };
         }
         if self.judge.pending.is_empty() && self.judge.stimuli.is_empty() {
             Verdict::Passed
@@ -117,18 +129,26 @@ impl<X: Expectations> Referee<X> {
         }
     }
 
+    /// Whether the scenario has stopped the test: the world ends its run
+    /// there, whatever is still in flight.
+    #[must_use]
+    pub fn is_stopped(&self) -> bool {
+        self.judge.stopped && self.judge.failure.is_none()
+    }
+
     /// Ends the test: panics unless every expectation was met and nothing is
-    /// left to inject.
+    /// left to inject, or the scenario stopped it.
     pub fn assert_passed(&self, seed: u64) {
         match self.verdict() {
-            Verdict::Passed => {}
+            Verdict::Passed | Verdict::Stopped { .. } => {}
             Verdict::Open { pending } => panic!("seed {seed}: the referee still expects {}", List(&pending)),
             Verdict::Failed(failure) => panic!("seed {seed}: {failure}"),
         }
     }
 
     /// How many safety checks the referee made, and how many liveness
-    /// expectations it saw met: that it judged something.
+    /// expectations it saw met (not those withdrawn, nor those whose
+    /// deadline passed): that it judged something.
     #[must_use]
     pub fn judged(&self) -> (u64, u64) {
         (self.judge.checks, self.judge.met)
@@ -144,9 +164,14 @@ pub struct Judge<N, S> {
     /// by deadline.
     pending: BTreeMap<N, Time>,
     deadlines: BTreeSet<(Time, N)>,
+    /// The stimuli to inject at their moments, and those to inject at once,
+    /// with the observation being judged.
     stimuli: Schedule<S>,
-    /// The first expectation broken.
+    now_out: Vec<S>,
+    /// The first expectation broken, and whether the scenario stopped the
+    /// test.
     failure: Option<Failure>,
+    stopped: bool,
     checks: u64,
     met: u64,
 }
@@ -158,7 +183,9 @@ impl<N: Ord + Clone + Debug, S> Judge<N, S> {
             pending: BTreeMap::new(),
             deadlines: BTreeSet::new(),
             stimuli: Schedule::new(),
+            now_out: Vec::new(),
             failure: None,
+            stopped: false,
             checks: 0,
             met: 0,
         }
@@ -198,6 +225,27 @@ impl<N: Ord + Clone + Debug, S> Judge<N, S> {
         self.deadlines.insert((at, name));
     }
 
+    /// Arms the liveness expectation `name` again, to be met within `within`
+    /// of now, whether or not it is pending: after a restart, say, the work
+    /// it waits for starts over.
+    pub fn rearm(&mut self, name: N, within: Duration) {
+        if let Some(at) = self.pending.remove(&name) {
+            self.deadlines.remove(&(at, name.clone()));
+        }
+        self.expect(name, within);
+    }
+
+    /// Withdraws the liveness expectation `name`, if it is pending, and says
+    /// whether it was: what it waited for will not happen, as the scenario
+    /// meant (work cancelled). It is not counted as met.
+    pub fn withdraw(&mut self, name: &N) -> bool {
+        let Some(at) = self.pending.remove(name) else {
+            return false;
+        };
+        self.deadlines.remove(&(at, name.clone()));
+        true
+    }
+
     /// Meets the liveness expectation `name`, if it is pending, and says
     /// whether it was.
     pub fn meet(&mut self, name: &N) -> bool {
@@ -215,9 +263,23 @@ impl<N: Ord + Clone + Debug, S> Judge<N, S> {
         self.pending.contains_key(name)
     }
 
-    /// Injects `stimulus` at `at`, after those injected for then already.
+    /// Injects `stimulus` at `at`, after those injected for then already: it
+    /// comes out of the referee's `fire` once due.
     pub fn inject(&mut self, at: Time, stimulus: S) {
         self.stimuli.send(at, stimulus);
+    }
+
+    /// Injects `stimulus` at once: it comes out of the `observe` judging
+    /// this observation, before the world goes on.
+    pub fn inject_now(&mut self, stimulus: S) {
+        self.now_out.push(stimulus);
+    }
+
+    /// Stops the test: the scenario has seen what it wanted, and the world
+    /// ends its run here. What is still pending is listed, not failed; a
+    /// failure, before or after, still fails the test.
+    pub fn stop(&mut self) {
+        self.stopped = true;
     }
 
     /// The liveness expectations pending, by deadline.
@@ -233,6 +295,9 @@ pub enum Verdict {
     Passed,
     /// Liveness expectations are pending, or stimuli are still to come.
     Open { pending: Vec<String> },
+    /// The scenario stopped the test, with these liveness expectations still
+    /// pending.
+    Stopped { pending: Vec<String> },
     /// An expectation was broken.
     Failed(Failure),
 }

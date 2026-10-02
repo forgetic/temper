@@ -10,13 +10,15 @@
 //!   agent went: the outcome it accepted, or how it failed, a cancel being
 //!   the worker's to report; a run ends, and lands a change, only once its
 //!   agent started;
-//! - what landed is on the forge: on its branch, exactly the tree its agent
-//!   left when it asked to push.
+//! - what landed is on the forge: an ancestor of its branch's tip, whoever
+//!   moved the branch since, exactly the tree its agent left when it asked
+//!   to push.
 //!
 //! And liveness: every assignment is answered within a bound the world
 //! sets.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::{self, Display};
 
 use temper_agent_model::run::{self, outcome::Declared};
 use temper_checkout_fake::git::Tree as Files;
@@ -48,7 +50,10 @@ pub enum Seen {
     /// spawned in last.
     Committed { process: u64, repository: Vec<u8>, tree: Files },
     /// The forge moves `branch` of `remote` to `commit`, which holds `tree`.
-    Moved { remote: Vec<u8>, branch: Vec<u8>, commit: u64, tree: Files },
+    /// The forge moves `branch` of `remote` to `tip`, which holds `tree`, a
+    /// push of the worker's or another party's: `brought` are the commits
+    /// the move brings onto the branch, from its new tip back to its old.
+    Moved { remote: Vec<u8>, branch: Vec<u8>, tip: u64, brought: Vec<u64>, tree: Files },
     /// The engine hears the worker's answer for `attempt`, of `kind`, and the
     /// commits it says landed, by the repository's place in the assignment.
     Reported { attempt: Token, kind: &'static str, report: Report, landed: Vec<(usize, u64)> },
@@ -107,10 +112,19 @@ pub struct Meeting {
     within: Duration,
     attempts: BTreeMap<Token, Attempt>,
     processes: BTreeMap<u64, Process>,
-    /// The commits the forge's branches moved to, by remote and branch, and
-    /// the trees they hold.
-    moved: BTreeSet<(Vec<u8>, Vec<u8>, u64)>,
+    /// Each branch of the forge seen to move, by remote and branch: its tip
+    /// and the commits of its history; and the trees of the commits moved
+    /// to.
+    branches: BTreeMap<(Vec<u8>, Vec<u8>), Branch>,
     trees: BTreeMap<u64, Files>,
+}
+
+/// A branch of the forge, as the referee saw it move.
+#[derive(Debug)]
+struct Branch {
+    tip: u64,
+    /// The tip and its ancestors, as far as moves brought them.
+    history: BTreeSet<u64>,
 }
 
 /// An assignment, as the referee saw it.
@@ -143,7 +157,7 @@ impl Meeting {
             within,
             attempts: BTreeMap::new(),
             processes: BTreeMap::new(),
-            moved: BTreeSet::new(),
+            branches: BTreeMap::new(),
             trees: BTreeMap::new(),
         }
     }
@@ -157,8 +171,15 @@ impl Meeting {
     /// left once it has gone.
     fn committed(&mut self, process: u64, repository: &[u8], tree: &Files, judge: &mut Judge<Expected, Stimulus>) {
         let process = self.process(process);
-        let left = process.left.as_ref().unwrap_or(&process.asked);
-        judge.check(left.get(repository) == Some(tree), "the worker commits exactly the tree its agent left");
+        let left = process.left.as_ref().unwrap_or(&process.asked).get(repository);
+        judge.check(
+            left == Some(tree),
+            format_args!(
+                "the worker commits exactly the tree its agent left: {} committed, {} left",
+                Show(Some(tree)),
+                Show(left)
+            ),
+        );
     }
 
     /// The engine hears the worker's `report` for `attempt`: it records what
@@ -200,7 +221,14 @@ impl Meeting {
                 match report {
                     Report::Ended { outcome: reported } => {
                         let accepted = channel::outcome(outcome);
-                        judge.check(*reported == accepted, "the engine records the outcome the run accepted");
+                        judge.check(
+                            *reported == accepted,
+                            format_args!(
+                                "the engine records the outcome the run accepted: {:?} recorded, {:?} accepted",
+                                String::from_utf8_lossy(reported),
+                                String::from_utf8_lossy(&accepted)
+                            ),
+                        );
                     }
                     Report::Refused | Report::Parked | Report::Failed(_) => {
                         judge.fail(format_args!("a run that accepted its outcome ends with it, not {kind}"));
@@ -228,7 +256,10 @@ impl Meeting {
                 Report::Failed(failure) => Some(*failure),
                 Report::Refused | Report::Ended { .. } | Report::Parked => None,
             };
-            judge.check(failed == Some(expected), format_args!("the engine records how the run failed: {kind}"));
+            judge.check(
+                failed == Some(expected),
+                format_args!("the engine records how the run failed: {kind} recorded, {expected:?} expected"),
+            );
         }
         for (index, commit) in landed {
             let repository = &record.repositories[*index];
@@ -236,12 +267,22 @@ impl Meeting {
                 judge.fail("a change lands in a repository that may be written");
                 continue;
             };
-            let on_branch = self.moved.contains(&(repository.remote.clone(), branch.clone(), *commit));
-            judge.check(on_branch, "what landed is on its branch");
-            let tree = self.trees.get(commit);
+            // On its branch: an ancestor of the branch's tip, now.
+            let seen = self.branches.get(&(repository.remote.clone(), branch.clone()));
+            let tip = seen.map(|branch| branch.tip);
+            let on_branch = seen.is_some_and(|branch| branch.history.contains(commit));
             judge.check(
-                tree.is_some() && tree == process.asked.get(&repository.name),
-                "what landed is the tree its agent left",
+                on_branch,
+                format_args!(
+                    "what landed is on its branch: {commit} is not an ancestor of {}'s tip, {tip:?}",
+                    String::from_utf8_lossy(branch)
+                ),
+            );
+            let tree = self.trees.get(commit);
+            let asked = process.asked.get(&repository.name);
+            judge.check(
+                tree.is_some() && tree == asked,
+                format_args!("what landed is the tree its agent left: {} landed, {} left", Show(tree), Show(asked)),
             );
         }
     }
@@ -268,9 +309,12 @@ impl Expectations for Meeting {
             Seen::Stopped { process } => self.process(process).stopped = true,
             Seen::Gone { process, left } => self.process(process).left = Some(left),
             Seen::Committed { process, repository, tree } => self.committed(process, &repository, &tree, judge),
-            Seen::Moved { remote, branch, commit, tree } => {
-                self.moved.insert((remote, branch, commit));
-                self.trees.insert(commit, tree);
+            Seen::Moved { remote, branch, tip, brought, tree } => {
+                let branch =
+                    self.branches.entry((remote, branch)).or_insert_with(|| Branch { tip, history: BTreeSet::new() });
+                branch.tip = tip;
+                branch.history.extend(brought);
+                self.trees.insert(tip, tree);
             }
             Seen::Reported { attempt, kind, report, landed } => self.reported(attempt, kind, &report, &landed, judge),
         }
@@ -285,5 +329,21 @@ fn run_failure(failure: run::Failure) -> host::RunFailure {
         run::Failure::Policy(_) => host::RunFailure::Policy,
         run::Failure::Cancelled => host::RunFailure::Cancelled,
         run::Failure::Stale => host::RunFailure::Stale,
+    }
+}
+
+/// A tree, or none, as a failure shows it: each path, with its content.
+struct Show<'a>(Option<&'a Files>);
+
+impl Display for Show<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Some(files) = self.0 else {
+            return f.write_str("nothing");
+        };
+        f.write_str("{")?;
+        for (path, content) in files {
+            write!(f, " {:?}: {:?}", String::from_utf8_lossy(path), String::from_utf8_lossy(content))?;
+        }
+        f.write_str(" }")
     }
 }

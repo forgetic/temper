@@ -879,6 +879,8 @@ pub struct World {
     /// roots the agents' tools work in.
     forge: Forge,
     disk: Checkout,
+    /// The forge's moves the referee has seen.
+    moves: usize,
     /// The workspaces io holds, the git operations in flight, and the process
     /// of each root io named for an agent.
     spaces: BTreeMap<Token, Space>,
@@ -932,7 +934,7 @@ impl World {
         let mut disk = Checkout::new();
         fixture::script(&mut disk);
         let worker_max = worker::max_out(&settings.worker);
-        World {
+        let mut world = World {
             now: Time::ZERO,
             rng,
             agent_rng: Rng::new(agent_seed),
@@ -953,6 +955,7 @@ impl World {
             save_branches: BTreeSet::new(),
             forge,
             disk,
+            moves: 0,
             spaces: BTreeMap::new(),
             git: Ledger::new("git operation"),
             roots: BTreeMap::new(),
@@ -973,7 +976,10 @@ impl World {
             told: Told::default(),
             trace: Trace::default(),
             settings,
-        }
+        };
+        // The branches the fixture made.
+        world.observe_moves();
+        world
     }
 
     #[must_use]
@@ -1322,8 +1328,12 @@ impl World {
     /// The referee observes `seen`, which ends the test if it breaks an
     /// expectation.
     fn observe(&mut self, seen: Seen) {
-        self.referee.observe(self.now, seen);
+        let mut stimuli = Vec::new();
+        self.referee.observe(self.now, seen, &mut stimuli);
         self.referee.assert_holding(self.settings.seed);
+        for stimulus in &stimuli {
+            inject(stimulus);
+        }
     }
 
     fn log(&mut self, line: &str) {
