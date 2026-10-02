@@ -15,9 +15,8 @@
 //!   verdict. An ask may want more than the asker has, or an LLM the charter
 //!   does not list, and may ask for a small share. A sub-agent may not
 //!   finish: where main would, it yields its answer.
-//! - It keeps to its share of the budget as a session keeps to its ceilings
-//!   (seams.md B): it starts a turn only while turns, input and output each
-//!   have some left; after a turn that went past any part of its share, it
+//! - It keeps to its share of the budget as a session keeps to its ceilings:
+//!   it starts a turn only while turns, input and output each have some left; after a turn that went past any part of its share, it
 //!   settles that turn's call, if it made one, and ends out of budget. It
 //!   expires, out of time, when its time runs out.
 //! - A finish in flight past its deadline is withdrawn, and the LLM carries

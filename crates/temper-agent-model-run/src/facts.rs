@@ -1,7 +1,7 @@
-//! What the runs tell whoever watches the agent (agent-model.md, section 7;
-//! seams.md D): a fact for each thing that happened, content-free (tokens,
-//! counts and classifications, never what an LLM, the charter or the worker
-//! said), in a bounded queue the parent drains at its own pace.
+//! What the runs tell whoever watches the agent (agent-model.md, section 7):
+//! a fact for each thing that happened, content-free (tokens, counts and
+//! classifications, never what an LLM, the charter or the worker said), in a
+//! bounded queue the parent drains at its own pace.
 //!
 //! Facts are outside the boundary's flow control: they are not requests, take
 //! no room in `out`, and when the queue is full they are dropped and counted.

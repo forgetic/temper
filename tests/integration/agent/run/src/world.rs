@@ -1317,8 +1317,8 @@ impl RunView {
 /// race with the close. A conversation keeps to its own share, but main's
 /// share was the whole budget when it opened, and its sub-agents spend from
 /// the same budget; so their spending may make the run cross while main has
-/// room left in its share, main keeps the turn it has in flight (seams.md B),
-/// and is closed at its next. The partner starts a turn the moment one ends,
+/// room left in its share, main keeps the turn it has in flight, as a session
+/// does, and is closed at its next. The partner starts a turn the moment one ends,
 /// so the close finds one in flight; a session would run the calls of its
 /// completion first. (Only one conversation of a run takes turns at a time
 /// here: an asker waits on its sub-agent.)
