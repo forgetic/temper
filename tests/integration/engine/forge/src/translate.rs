@@ -358,60 +358,104 @@ pub fn answer(
 ) -> Result<engine::Answer, engine::Error> {
     let answer = result.map_err(|failed| error(failed, now))?;
     let page = usize::try_from(limits.page).expect("a page fits a usize");
-    let answer = match (asked, answer) {
-        (Asked::Items, forge::Answer::Items { items, more, now }) => {
+    let answer = match asked {
+        Asked::Items => {
+            let forge::Answer::Items { items, more, now } = answer else { unasked(asked, &answer) };
             engine::Answer::Items { items: items.iter().map(|item| summary(item, limits)).collect(), more, now }
         }
-        (Asked::Item, forge::Answer::Item { item, comments, more }) => {
+        Asked::Item => {
+            let forge::Answer::Item { item, comments, more } = answer else { unasked(asked, &answer) };
             let cut = comments.len() > page;
             let comments = comments.iter().take(page).map(|found| comment(found, limits)).collect();
             engine::Answer::Item { item: summary(&item, limits), comments, more: more || cut }
         }
-        (Asked::Comment { number }, forge::Answer::Comment { number: on, comment: found }) => {
+        Asked::Comment { number } => {
+            let forge::Answer::Comment { number: on, comment: found } = answer else { unasked(asked, &answer) };
             if on != number {
                 return Err(engine::Error::Missing);
             }
             engine::Answer::Comment(comment(&found, limits))
         }
-        (Asked::Pull, forge::Answer::Pull(found)) => engine::Answer::Pull(pull(&found)),
-        (Asked::Reviews { page: number }, forge::Answer::Pull(found)) => {
+        Asked::Pull => {
+            let forge::Answer::Pull(found) = answer else { unasked(asked, &answer) };
+            engine::Answer::Pull(pull(&found))
+        }
+        Asked::Reviews { page: number } => {
+            let forge::Answer::Pull(found) = answer else { unasked(asked, &answer) };
             let (reviews, more) = page_of(&found.reviews, number, page);
             engine::Answer::Reviews { reviews: reviews.iter().map(|found| review(found, limits)).collect(), more }
         }
-        (Asked::Statuses { page: number }, forge::Answer::Statuses(statuses)) => {
+        Asked::Statuses { page: number } => {
+            let forge::Answer::Statuses(statuses) = answer else { unasked(asked, &answer) };
             let (shown, more) = page_of(&statuses, number, page);
             engine::Answer::Statuses { ci: combined(&statuses), statuses: shown.iter().map(status).collect(), more }
         }
-        (Asked::Permission, forge::Answer::Permission(permission)) => engine::Answer::Permission(match permission {
-            forge::Permission::None => engine::Permission::None,
-            forge::Permission::Read => engine::Permission::Read,
-            forge::Permission::Write => engine::Permission::Write,
-            forge::Permission::Admin => engine::Permission::Admin,
-        }),
-        (Asked::Branch, forge::Answer::Commit(found)) => engine::Answer::Commit(commit(found)),
-        (Asked::Pages, forge::Answer::Pages { pages, next }) => engine::Answer::Pages {
-            pages: pages
+        Asked::Remarks => {
+            let forge::Answer::Pull(_) = answer else { unasked(asked, &answer) };
+            engine::Answer::Remarks { remarks: Box::new([]), more: false }
+        }
+        Asked::Permission => {
+            let forge::Answer::Permission(permission) = answer else { unasked(asked, &answer) };
+            engine::Answer::Permission(match permission {
+                forge::Permission::None => engine::Permission::None,
+                forge::Permission::Read => engine::Permission::Read,
+                forge::Permission::Write => engine::Permission::Write,
+                forge::Permission::Admin => engine::Permission::Admin,
+            })
+        }
+        Asked::Branch => {
+            let forge::Answer::Commit(found) = answer else { unasked(asked, &answer) };
+            engine::Answer::Commit(commit(found))
+        }
+        Asked::Pages => {
+            let forge::Answer::Pages { pages, next } = answer else { unasked(asked, &answer) };
+            let pages = pages
                 .iter()
                 .map(|name| engine::PageName { name: name.name.clone(), revision: name.revision })
-                .collect(),
-            next,
-        },
-        (Asked::Page, forge::Answer::Page(found)) => {
+                .collect();
+            engine::Answer::Pages { pages, next }
+        }
+        Asked::Page => {
+            let forge::Answer::Page(found) = answer else { unasked(asked, &answer) };
             let nonce = nonce_of(&found.content);
             let content = cut(&found.content, limits.body_bytes);
             engine::Answer::Page(engine::Page { name: found.name, content, revision: found.revision, nonce })
         }
-        (Asked::Create, forge::Answer::Created(number)) => engine::Answer::Created(number),
-        (Asked::Post { revision }, forge::Answer::Commented(id)) => engine::Answer::Commented { id, revision },
-        (Asked::Edit { revision }, forge::Answer::Done) => engine::Answer::Edited { revision },
-        (Asked::Merge, forge::Answer::Merged(made)) => engine::Answer::Merged(commit(made)),
-        (Asked::Review, forge::Answer::Reviewed(id)) => engine::Answer::Reviewed(id),
-        (Asked::Remarks, forge::Answer::Pull(_)) => engine::Answer::Remarks { remarks: Box::new([]), more: false },
-        (Asked::Revision, forge::Answer::Revision(revision)) => engine::Answer::Revision(revision),
-        (Asked::Done, forge::Answer::Done) => engine::Answer::Done,
-        (asked, answer) => panic!("the fake answers {asked:?} as asked: {answer:?}"),
+        Asked::Create => {
+            let forge::Answer::Created(number) = answer else { unasked(asked, &answer) };
+            engine::Answer::Created(number)
+        }
+        Asked::Post { revision } => {
+            let forge::Answer::Commented(id) = answer else { unasked(asked, &answer) };
+            engine::Answer::Commented { id, revision }
+        }
+        Asked::Edit { revision } => {
+            let forge::Answer::Done = answer else { unasked(asked, &answer) };
+            engine::Answer::Edited { revision }
+        }
+        Asked::Merge => {
+            let forge::Answer::Merged(made) = answer else { unasked(asked, &answer) };
+            engine::Answer::Merged(commit(made))
+        }
+        Asked::Review => {
+            let forge::Answer::Reviewed(id) = answer else { unasked(asked, &answer) };
+            engine::Answer::Reviewed(id)
+        }
+        Asked::Revision => {
+            let forge::Answer::Revision(revision) = answer else { unasked(asked, &answer) };
+            engine::Answer::Revision(revision)
+        }
+        Asked::Done => {
+            let forge::Answer::Done = answer else { unasked(asked, &answer) };
+            engine::Answer::Done
+        }
     };
     Ok(answer)
+}
+
+/// The fake answered otherwise than asked: the world's bug.
+fn unasked(asked: Asked, answer: &forge::Answer) -> ! {
+    panic!("the fake answers {asked:?} as asked: {answer:?}")
 }
 
 /// The sub-model's error for the fake's, answered at its time `now`.

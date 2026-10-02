@@ -97,7 +97,12 @@ fn asked(op: &Op) -> Asked {
         Op::EditComment { .. } => Asked::Edited,
         Op::Merge { .. } => Asked::Merged,
         Op::Review { .. } => Asked::Reviewed,
-        Op::PutPage { content, .. } => Asked::Revision { put: matches!(content, Body::Payload(_)) },
+        Op::PutPage { content, .. } => Asked::Revision {
+            put: match content {
+                Body::Payload(_) => true,
+                Body::Text(_) | Body::Record { .. } => false,
+            },
+        },
         Op::AddLabels { .. }
         | Op::RemoveLabels { .. }
         | Op::SetReviewers { .. }
@@ -162,8 +167,19 @@ impl Measured {
         let measured = self.meter.end();
         let mut calls = Vec::new();
         while let Some(request) = self.out.pop() {
-            if let Request::Call { call, repository: _, op } = request {
-                calls.push(Call { call, op: asked(&op) });
+            match request {
+                Request::Call { call, repository: _, op } => calls.push(Call { call, op: asked(&op) }),
+                Request::Read { .. }
+                | Request::Wrote { .. }
+                | Request::Full { .. }
+                | Request::Room
+                | Request::Announced { .. }
+                | Request::Offered { .. }
+                | Request::Inbox { .. }
+                | Request::Changed { .. }
+                | Request::Left { .. }
+                | Request::Forbidden { .. }
+                | Request::Loaded => {}
             }
         }
         self.meter.check(measured, self.bound, self.env.limits);
@@ -495,6 +511,6 @@ fn bodies_of_payloads_are_named_not_held() {
     let calls = model.step(Event::Answered { call: check.call, result: Err(Error::Missing) });
     assert!(calls.is_empty(), "calls go out on resume");
     let calls = model.turn();
-    let put = calls.iter().find(|call| matches!(call.op, Asked::Revision { .. })).expect("the write went out");
-    assert_eq!(put.op, Asked::Revision { put: true }, "a payload named by its token");
+    let put = calls.iter().find(|call| call.op == Asked::Revision { put: true });
+    assert!(put.is_some(), "the write went out, its payload named by its token: {calls:?}");
 }

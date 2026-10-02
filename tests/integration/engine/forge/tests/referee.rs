@@ -2,7 +2,8 @@
 //! would feed them, fails a run that breaks an expectation, and says why.
 
 use temper_engine_model_forge::Item;
-use temper_engine_model_forge_tests::referee::{Forge, Planned, Seen};
+use temper_engine_model_forge::{Ci, News};
+use temper_engine_model_forge_tests::referee::{Bounds, Forge, Planned, Seen};
 use temper_engine_model_forge_tests::{ENGINE, REPOSITORIES, TRACKING, WAITING, WORKING, translate};
 use temper_forge_model::Observation;
 use temper_forge_model::api::Kind;
@@ -17,7 +18,13 @@ fn at(secs: u64) -> Time {
 }
 
 fn referee() -> Referee<Forge> {
-    Referee::new(Forge::new(Duration::from_secs(60)))
+    let bounds = Bounds {
+        within: Duration::from_secs(60),
+        slow: Duration::from_secs(600),
+        lifetime: Duration::from_secs(5),
+        room: 16,
+    };
+    Referee::new(Forge::new(bounds))
 }
 
 fn why(referee: &Referee<Forge>) -> String {
@@ -61,7 +68,7 @@ fn set(plan: u64, labels: &[&[u8]]) -> Seen {
 }
 
 fn announced() -> Seen {
-    Seen::Announced { item: ITEM, labels: vec![TRACKING.to_vec()] }
+    Seen::Announced { item: ITEM, labels: vec![TRACKING.to_vec()], head: None, ci: Ci::None }
 }
 
 #[test]
@@ -80,7 +87,7 @@ fn a_creation_made_twice_for_one_key_fails_the_run() {
         &mut Vec::new(),
     );
     referee.observe(at(1), opened(b"task-1", ENGINE), &mut Vec::new());
-    assert!(matches!(referee.verdict(), Verdict::Passed), "once is the plan");
+    assert_eq!(referee.verdict(), Verdict::Passed, "once is the plan");
     referee.observe(at(2), opened(b"task-1", ENGINE), &mut Vec::new());
     assert_eq!(why(&referee), "one issue per key: task-1");
 }
@@ -111,7 +118,7 @@ fn an_engine_label_change_of_a_label_it_does_not_own_fails_the_run() {
     referee.observe(at(0), labelled(&[b"bug"], PERSON), &mut Vec::new());
     referee.observe(at(0), set(1, &[TRACKING]), &mut Vec::new());
     referee.observe(at(1), labelled(&[b"bug", TRACKING], ENGINE), &mut Vec::new());
-    assert!(matches!(referee.verdict(), Verdict::Passed), "a person's label left alone: {:?}", referee.verdict());
+    assert_eq!(referee.verdict(), Verdict::Passed, "a person's label left alone: {:?}", referee.verdict());
     referee.observe(at(2), labelled(&[TRACKING], ENGINE), &mut Vec::new());
     assert!(why(&referee).starts_with("the engine changes only labels it owns"), "{:?}", referee.verdict());
 }
@@ -134,7 +141,11 @@ fn a_persons_comment_on_a_tracked_item_must_reach_its_inbox_in_time() {
     referee.observe(at(0), announced(), &mut Vec::new());
     referee.observe(at(1), commented(3, b"hello", PERSON), &mut Vec::new());
     referee.observe(at(2), commented(4, b"again", PERSON), &mut Vec::new());
-    referee.observe(at(30), Seen::News { item: ITEM, comment: Some(3) }, &mut Vec::new());
+    referee.observe(
+        at(30),
+        Seen::News { item: ITEM, news: News::Comment { on: ITEM.number, id: 3, author: PERSON } },
+        &mut Vec::new(),
+    );
     let mut stimuli = Vec::new();
     referee.fire(at(62), &mut stimuli);
     assert_eq!(
@@ -149,7 +160,7 @@ fn a_comment_on_an_item_that_leaves_is_moot_and_a_label_change_must_be_told() {
     referee.observe(at(0), announced(), &mut Vec::new());
     referee.observe(at(1), commented(3, b"hello", PERSON), &mut Vec::new());
     referee.observe(at(2), Seen::Left { item: ITEM }, &mut Vec::new());
-    assert!(matches!(referee.verdict(), Verdict::Passed), "{:?}", referee.verdict());
+    assert_eq!(referee.verdict(), Verdict::Passed, "{:?}", referee.verdict());
     referee.observe(at(3), announced(), &mut Vec::new());
     referee.observe(at(4), labelled(&[TRACKING, b"bug"], PERSON), &mut Vec::new());
     let mut stimuli = Vec::new();
@@ -162,7 +173,7 @@ fn a_call_before_the_reset_a_refusal_named_fails_the_run() {
     let mut referee = referee();
     referee.observe(at(1), Seen::Limited { reset: at(10) }, &mut Vec::new());
     referee.observe(at(10), Seen::Sent, &mut Vec::new());
-    assert!(matches!(referee.verdict(), Verdict::Passed), "at the reset is in time");
+    assert_eq!(referee.verdict(), Verdict::Passed, "at the reset is in time");
     referee.observe(at(11), Seen::Limited { reset: at(20) }, &mut Vec::new());
     referee.observe(at(15), Seen::Sent, &mut Vec::new());
     assert!(why(&referee).starts_with("no call goes out before the reset"), "{:?}", referee.verdict());
@@ -185,7 +196,7 @@ fn a_record_held_as_edited_that_nobody_else_edited_fails_the_run() {
     assert_eq!(why(&referee), "a record held as edited was edited by someone else: Item { repository: 0, number: 5 }");
     let mut referee = super_referee();
     referee.observe(at(1), Seen::Wrote { plan: 1, written: false, edited: true }, &mut Vec::new());
-    assert!(matches!(referee.verdict(), Verdict::Passed), "{:?}", referee.verdict());
+    assert_eq!(referee.verdict(), Verdict::Passed, "{:?}", referee.verdict());
 }
 
 /// A referee that has seen a person edit the record of `ITEM`, and a record

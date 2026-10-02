@@ -18,6 +18,10 @@ use crate::world::{ENGINE, HAND_IN, LABELS, REPOSITORIES, TRACKING};
 /// The people, by their forge users: the first is an admin.
 pub const PEOPLE: [u64; 3] = [10, 11, 12];
 
+/// A person who acts only on the web: the engine writes their messages for
+/// them.
+pub const ON_THE_WEB: u64 = 13;
+
 /// What people do, by weight.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Weights {

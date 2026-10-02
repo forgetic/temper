@@ -283,7 +283,7 @@ pub fn fire(model: &mut Model, env: &Env<Limits>, out: &mut Queue<Request>) {
         Alarm::Slow(repository) => scans::slow(model, repository),
         Alarm::Item(id) => items::retry(model, env, id),
         Alarm::Read(id) => reads::retry(model, env, id),
-        Alarm::Write(id) => writes::retry(model, env, id),
+        Alarm::Write(id) => writes::retry(model, env, id, out),
     }
     loaded(model, out);
     roomy(model, out);

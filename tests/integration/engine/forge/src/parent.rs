@@ -5,30 +5,35 @@
 //! projects its labels (the tracking label on, the hand-in label off). Each
 //! item's news starts a run, which answers after a while: the parent takes
 //! the news and writes the record, the commit point, and now and then
-//! replies on the item, projects its labels (only those the engine owns),
-//! creates a task (keyed, tracked once made), starts a change (a worker
-//! pushes its branch, and the parent opens its pull request, keyed by the
-//! branch, and links it), writes a note in the wiki at the revision it reads
-//! first, reads the item afresh, or closes it. A change whose CI
-//! passes is read afresh and merged at its head, then its item closed and
-//! its branch deleted. A record that someone else changed holds its item
-//! until a person releases it, after a while, and the record is written
-//! over.
+//! projects its labels (only those the engine owns), starts a change (a
+//! worker pushes its branch, and the parent opens its pull request, keyed by
+//! the branch, and links it), asks a person to review it, writes a note in
+//! the wiki at the revision it reads first, reads the item afresh, or closes
+//! it. What a run creates (a reply, some of them a person's message written
+//! for them; a task, which the item then depends on; a verdict on its
+//! change) is applied as an outcome is: the outcome is posted on the item
+//! first, keyed, read back for when the forge says it was posted, and named
+//! as the cause of every creation, which is asked for again after its cause
+//! if it timed out. A change whose CI passes is read afresh and merged at its
+//! head, then its item closed and its branch deleted. A record that someone
+//! else changed holds its item until a person releases it, after a while,
+//! and the record is written over.
 //!
 //! When the engine restarts, so does the parent: what it held in memory is
 //! gone, save what its record would say (each item's change and its pull
 //! request), and the creations it had asked for and not heard of, which it
-//! asks for again, resumed, once the cold start ends.
+//! asks for again, resumed, after their causes, once the cold start ends.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use temper_engine_model_forge::api::{Answer, Error, State};
+use temper_engine_model_forge::api::{Answer, Error, State, Verdict};
 use temper_engine_model_forge::{
     Cause, Ci, Content, Event, Failure, Item, News, Read, Record, Request, View, Write, Written,
 };
 use temper_lib::{Duration, Rng, Time, Token};
 use temper_world::Span;
 
+use crate::people::{ON_THE_WEB, PEOPLE};
 use crate::referee::Planned;
 use crate::translate::{self, Fill};
 use crate::world::{MAIN, OWNED, TRACKING, WAITING, WORKING};
@@ -43,6 +48,8 @@ pub struct Script {
     pub projections: u32,
     pub tasks: u32,
     pub changes: u32,
+    pub verdicts: u32,
+    pub requests: u32,
     pub notes: u32,
     pub reads: u32,
     pub closes: u32,
@@ -76,21 +83,104 @@ pub struct Tally {
     pub takes: u32,
     pub holds: u32,
     pub merges: u32,
+    /// Creations asked for again after their causes; outcomes posted.
     pub resumed: u32,
+    pub outcomes: u32,
 }
 
 /// A write the parent asked for, as it knows it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 enum Intent {
-    Record { item: Item },
-    Labels { item: Item, labels: Vec<Vec<u8>> },
-    Comment { item: Item, key: Vec<u8> },
-    Task { repository: u32, key: Vec<u8> },
-    Open { item: Item, branch: Vec<u8> },
-    Merge { item: Item, pull: u64, head: [u8; 32] },
-    Close { item: Item },
-    DeleteBranch { repository: u32, branch: Vec<u8> },
-    PutPage { repository: u32, name: Vec<u8>, revision: Option<u64> },
+    Record {
+        item: Item,
+    },
+    Labels {
+        item: Item,
+        labels: Vec<Vec<u8>>,
+    },
+    /// A comment on `item`: a reply, a person's message written for them,
+    /// or a run's outcome, which causes the creations `then`.
+    Comment {
+        item: Item,
+        key: Vec<u8>,
+        person: Option<u64>,
+    },
+    Outcome {
+        item: Item,
+        key: Vec<u8>,
+        then: Vec<Intent>,
+    },
+    /// A task made from `from`, which then depends on it.
+    Task {
+        from: Item,
+        key: Vec<u8>,
+    },
+    Open {
+        item: Item,
+        branch: Vec<u8>,
+    },
+    /// A verdict on the pull request `pull` of `item`'s change.
+    Verdict {
+        item: Item,
+        pull: u64,
+        key: Vec<u8>,
+    },
+    Reviewers {
+        item: Item,
+        pull: u64,
+    },
+    Depends {
+        item: Item,
+        on: Vec<u64>,
+    },
+    Merge {
+        item: Item,
+        pull: u64,
+        head: [u8; 32],
+    },
+    Close {
+        item: Item,
+    },
+    DeleteBranch {
+        repository: u32,
+        branch: Vec<u8>,
+    },
+    PutPage {
+        repository: u32,
+        name: Vec<u8>,
+        revision: Option<u64>,
+    },
+}
+
+impl Intent {
+    /// Whether it creates something an earlier attempt may have made, which
+    /// is asked for again after its cause.
+    fn creates(&self) -> bool {
+        match self {
+            Intent::Comment { .. }
+            | Intent::Outcome { .. }
+            | Intent::Task { .. }
+            | Intent::Open { .. }
+            | Intent::Verdict { .. } => true,
+            Intent::Record { .. }
+            | Intent::Labels { .. }
+            | Intent::Reviewers { .. }
+            | Intent::Depends { .. }
+            | Intent::Merge { .. }
+            | Intent::Close { .. }
+            | Intent::DeleteBranch { .. }
+            | Intent::PutPage { .. } => false,
+        }
+    }
+}
+
+/// A write in flight: what it is, what caused it, and whether it was asked
+/// for after its cause.
+#[derive(Clone, Debug)]
+struct Asked {
+    intent: Intent,
+    cause: Cause,
+    resumed: bool,
 }
 
 /// What a fresh read of the parent's is for.
@@ -100,6 +190,9 @@ enum Reading {
     Pull(Item),
     /// A note, to write it at the revision read.
     Note { repository: u32, name: Vec<u8> },
+    /// The outcome `comment` posted on an item, for when it was posted: the
+    /// cause of `then`.
+    Outcome { comment: u64, then: Vec<Intent> },
     /// Nothing but the read.
     Other,
 }
@@ -123,6 +216,9 @@ struct Change {
     pull: Option<u64>,
 }
 
+/// A cause no earlier than anything: looked for from the first.
+const FIRST: Cause = Cause { comment: 0, at: Time::ZERO };
+
 pub struct Parent {
     script: Script,
     rng: Rng,
@@ -134,13 +230,13 @@ pub struct Parent {
     fill: Fill,
     /// Names reads, writes and payloads.
     tokens: u64,
-    /// The writes in flight, by owner: what each is, and whether it was asked
-    /// for again, after its cause.
-    writes: BTreeMap<u64, (Intent, Option<Cause>)>,
+    writes: BTreeMap<u64, Asked>,
     /// The fresh reads in flight, by owner, and what each is for.
     reads: BTreeMap<u64, Reading>,
-    resume: Vec<Intent>,
+    resume: Vec<Asked>,
     changes: BTreeMap<Item, Change>,
+    /// The tasks each item depends on.
+    tasks: BTreeMap<Item, Vec<u64>>,
     runs: u32,
     takes: u32,
     tally: Tally,
@@ -161,6 +257,7 @@ impl Parent {
             reads: BTreeMap::new(),
             resume: Vec::new(),
             changes: BTreeMap::new(),
+            tasks: BTreeMap::new(),
             runs: script.runs,
             takes: script.takes,
             tally: Tally::default(),
@@ -184,21 +281,16 @@ impl Parent {
         !self.writes.is_empty() || !self.reads.is_empty() || !self.resume.is_empty()
     }
 
-    /// The engine restarted: what the parent held in memory is gone.
+    /// The engine restarted: what the parent held in memory is gone, save the
+    /// creations it asked for, which it asks for again after their causes.
     pub fn restart(&mut self) {
         self.items.clear();
         self.taking.clear();
         self.refused.clear();
         self.reads.clear();
-        for (intent, _) in std::mem::take(&mut self.writes).into_values() {
-            match intent {
-                Intent::Comment { .. } | Intent::Task { .. } | Intent::Open { .. } => self.resume.push(intent),
-                Intent::Record { .. }
-                | Intent::Labels { .. }
-                | Intent::Merge { .. }
-                | Intent::Close { .. }
-                | Intent::DeleteBranch { .. }
-                | Intent::PutPage { .. } => {}
+        for asked in std::mem::take(&mut self.writes).into_values() {
+            if asked.intent.creates() {
+                self.resume.push(asked);
             }
         }
     }
@@ -241,41 +333,60 @@ impl Parent {
                 self.changes.remove(item);
             }
             Request::Loaded => {
-                for intent in std::mem::take(&mut self.resume) {
+                for asked in std::mem::take(&mut self.resume) {
                     self.tally.resumed += 1;
-                    // Nothing in the world's parent records what caused it:
-                    // looked for from the first.
-                    let write = self.write(intent, Some(Cause { comment: 0, at: Time::ZERO }));
+                    let write = self.ask(asked.intent, asked.cause, true);
                     actions.push((Duration::ZERO, write));
                 }
             }
-            Request::Read { owner, result } => match self.reads.remove(&owner.raw()) {
-                Some(Reading::Pull(item)) => {
-                    if let Ok(Answer::Pull(pull)) = result {
-                        let green = pull.ci == Ci::Passed;
-                        let open = pull.state == State::Open && pull.mergeable && pull.merged.is_none();
-                        if green && open && self.items.contains_key(&item) {
-                            let intent = Intent::Merge { item, pull: pull.number, head: pull.commit };
-                            actions.push((Duration::ZERO, self.write(intent, None)));
-                        }
-                    }
+            Request::Read { owner, result } => {
+                if let Some(reading) = self.reads.remove(&owner.raw()) {
+                    self.read(reading, result, &mut actions);
                 }
-                Some(Reading::Note { repository, name }) => {
-                    let revision = match result {
-                        Ok(Answer::Page(page)) => Some(Some(page.revision)),
-                        Err(Failure::Forge(Error::Missing)) => Some(None),
-                        Ok(_) | Err(_) => None,
-                    };
-                    if let Some(revision) = revision {
-                        let intent = Intent::PutPage { repository, name, revision };
-                        actions.push((Duration::ZERO, self.write(intent, None)));
-                    }
-                }
-                Some(Reading::Other) | None => {}
-            },
+            }
             Request::Wrote { owner, result } => self.wrote(owner.raw(), result, &mut actions),
         }
         actions
+    }
+
+    /// A fresh read of the parent's answered.
+    fn read(&mut self, reading: Reading, result: &Result<Answer, Failure>, actions: &mut Vec<(Duration, Action)>) {
+        match reading {
+            Reading::Pull(item) => {
+                let Ok(Answer::Pull(pull)) = result else {
+                    return;
+                };
+                let green = pull.ci == Ci::Passed;
+                let open = pull.state == State::Open && pull.mergeable && pull.merged.is_none();
+                if green && open && self.items.contains_key(&item) {
+                    let intent = Intent::Merge { item, pull: pull.number, head: pull.commit };
+                    actions.push((Duration::ZERO, self.write(intent)));
+                }
+            }
+            Reading::Note { repository, name } => {
+                let revision = match result {
+                    Ok(Answer::Page(page)) => Some(page.revision),
+                    Err(Failure::Forge(Error::Missing)) => None,
+                    Ok(_) | Err(_) => return,
+                };
+                actions.push((Duration::ZERO, self.write(Intent::PutPage { repository, name, revision })));
+            }
+            Reading::Outcome { comment, then } => {
+                // When the forge says the outcome was posted: what it causes
+                // is made after it.
+                let Ok(Answer::Item { comments, .. }) = result else {
+                    return;
+                };
+                let Some(found) = comments.iter().find(|found| found.id == comment) else {
+                    return;
+                };
+                let cause = Cause { comment, at: found.created };
+                for intent in then {
+                    actions.push((self.soon(), self.ask(intent, cause, false)));
+                }
+            }
+            Reading::Other => {}
+        }
     }
 
     fn announced(&mut self, item: Item, view: &View, actions: &mut Vec<(Duration, Action)>) {
@@ -286,11 +397,11 @@ impl Parent {
             actions.push((Duration::ZERO, Action::Model(Event::Link { item, pull: Some(pull) })));
         }
         match view.record {
-            Record::Missing => actions.push((Duration::ZERO, self.write(Intent::Record { item }, None))),
+            Record::Missing => actions.push((Duration::ZERO, self.write(Intent::Record { item }))),
             Record::Mangled { .. } => self.hold(item, actions),
             Record::Found { .. } => {
                 if let Some(intent) = self.projection(item, false) {
-                    actions.push((Duration::ZERO, self.write(intent, None)));
+                    actions.push((Duration::ZERO, self.write(intent)));
                 }
             }
         }
@@ -306,10 +417,13 @@ impl Parent {
             held.running = true;
             actions.push((run, Action::Run(item)));
         }
-        if let News::Pull { ci: Ci::Passed, open: true, merged: None, mergeable: true, .. } = news
-            && let Some(Change { pull: Some(pull), .. }) = self.changes.get(&item)
-        {
-            let pull = Item { repository: item.repository, number: *pull };
+        let mergeable = match news {
+            News::Pull { ci, open, merged, mergeable, .. } => ci == Ci::Passed && open && merged.is_none() && mergeable,
+            News::Comment { .. } | News::Reviews { .. } => false,
+        };
+        let pull = self.changes.get(&item).and_then(|change| change.pull);
+        if mergeable && let Some(pull) = pull {
+            let pull = Item { repository: item.repository, number: pull };
             let owner = self.token();
             self.reads.insert(owner, Reading::Pull(item));
             actions.push((
@@ -320,27 +434,38 @@ impl Parent {
     }
 
     fn wrote(&mut self, owner: u64, result: &Result<Written, Failure>, actions: &mut Vec<(Duration, Action)>) {
-        let Some((intent, resumed)) = self.writes.remove(&owner) else {
+        let Some(asked) = self.writes.remove(&owner) else {
             return;
         };
-        match result {
+        let written = match result {
+            Ok(written) => *written,
             Err(Failure::Busy) => {
                 // No room: asked again in a while, as it was.
-                let later = Duration::from_secs(5);
-                let write = self.write(intent, resumed);
-                actions.push((later, write));
+                let write = self.ask(asked.intent, asked.cause, asked.resumed);
+                actions.push((Duration::from_secs(5), write));
                 return;
             }
             Err(Failure::Forge(Error::Timeout)) => {
-                // It may have been made: asked again, to be looked for.
-                match intent {
-                    Intent::Comment { .. } | Intent::Task { .. } | Intent::Open { .. } => {
-                        self.tally.resumed += 1;
-                        let write = self.write(intent, Some(Cause { comment: 0, at: Time::ZERO }));
-                        actions.push((Duration::from_secs(5), write));
-                    }
-                    Intent::Record { .. }
-                    | Intent::Labels { .. }
+                // It may have been made: asked again, to be looked for after
+                // its cause.
+                if asked.intent.creates() {
+                    self.tally.resumed += 1;
+                    let write = self.ask(asked.intent, asked.cause, true);
+                    actions.push((Duration::from_secs(5), write));
+                }
+                return;
+            }
+            Err(Failure::Edited { .. }) => {
+                match asked.intent {
+                    Intent::Record { item } => self.hold(item, actions),
+                    Intent::Labels { .. }
+                    | Intent::Comment { .. }
+                    | Intent::Outcome { .. }
+                    | Intent::Task { .. }
+                    | Intent::Open { .. }
+                    | Intent::Verdict { .. }
+                    | Intent::Reviewers { .. }
+                    | Intent::Depends { .. }
                     | Intent::Merge { .. }
                     | Intent::Close { .. }
                     | Intent::DeleteBranch { .. }
@@ -348,56 +473,76 @@ impl Parent {
                 }
                 return;
             }
-            Err(Failure::Edited { .. }) => {
-                if let Intent::Record { item } = intent {
-                    self.hold(item, actions);
-                }
-                return;
-            }
             Err(Failure::Invalid | Failure::Unknown | Failure::Revised { .. } | Failure::Forge(_)) => return,
-            Ok(_) => {}
-        }
-        match (intent, *result) {
-            (Intent::Record { item }, _) => {
+        };
+        self.made(asked.intent, written, actions);
+    }
+
+    /// A write of `intent` made: what follows it.
+    fn made(&mut self, intent: Intent, written: Written, actions: &mut Vec<(Duration, Action)>) {
+        match intent {
+            Intent::Record { item } => {
                 if let Some(intent) = self.projection(item, false) {
-                    actions.push((Duration::ZERO, self.write(intent, None)));
+                    actions.push((Duration::ZERO, self.write(intent)));
                 }
             }
-            (Intent::Task { repository, .. }, Ok(Written::Created(number))) => {
-                let item = Item { repository, number };
+            Intent::Outcome { item, then, .. } => {
+                let Written::Commented(comment) = written else {
+                    return;
+                };
+                let owner = self.token();
+                self.reads.insert(owner, Reading::Outcome { comment, then });
+                let read = Read::Item { item, after: comment.saturating_sub(1) };
+                actions.push((Duration::ZERO, Action::Model(Event::Read { owner: Token::new(owner), read })));
+            }
+            Intent::Task { from, .. } => {
+                let Written::Created(number) = written else {
+                    return;
+                };
+                let item = Item { repository: from.repository, number };
                 if self.taking.insert(item) {
                     actions.push((self.soon(), Action::Model(Event::Track { item })));
                 }
+                // The item it was made from waits on it.
+                let tasks = self.tasks.entry(from).or_default();
+                if tasks.len() < 4 {
+                    tasks.push(number);
+                }
+                let on = tasks.clone();
+                if self.items.contains_key(&from) {
+                    actions.push((self.soon(), self.write(Intent::Depends { item: from, on })));
+                }
             }
-            (Intent::Open { item, branch }, Ok(Written::Created(pull))) => {
+            Intent::Open { item, branch } => {
+                let Written::Created(pull) = written else {
+                    return;
+                };
                 self.changes.insert(item, Change { branch, pull: Some(pull) });
                 actions.push((Duration::ZERO, Action::Model(Event::Link { item, pull: Some(pull) })));
             }
-            (Intent::Merge { item, .. }, Ok(Written::Merged(_))) => {
+            Intent::Merge { item, .. } => {
                 self.tally.merges += 1;
-                actions.push((Duration::ZERO, self.write(Intent::Close { item }, None)));
+                actions.push((Duration::ZERO, self.write(Intent::Close { item })));
                 if let Some(change) = self.changes.get(&item) {
                     let branch = change.branch.clone();
                     let intent = Intent::DeleteBranch { repository: item.repository, branch };
-                    actions.push((Duration::ZERO, self.write(intent, None)));
+                    actions.push((Duration::ZERO, self.write(intent)));
                 }
             }
-            (
-                Intent::Labels { .. }
-                | Intent::Comment { .. }
-                | Intent::Task { .. }
-                | Intent::Open { .. }
-                | Intent::Merge { .. }
-                | Intent::Close { .. }
-                | Intent::DeleteBranch { .. }
-                | Intent::PutPage { .. },
-                _,
-            ) => {}
+            Intent::Labels { .. }
+            | Intent::Comment { .. }
+            | Intent::Verdict { .. }
+            | Intent::Reviewers { .. }
+            | Intent::Depends { .. }
+            | Intent::Close { .. }
+            | Intent::DeleteBranch { .. }
+            | Intent::PutPage { .. } => {}
         }
     }
 
     /// An item's run answers: its news taken, its record written, and,
-    /// while runs are left, what else the answer does.
+    /// while runs are left, what else the answer does: what it creates
+    /// through an outcome posted first.
     pub fn run(&mut self, item: Item) -> Vec<(Duration, Action)> {
         let mut actions = Vec::new();
         let Some(held) = self.items.get_mut(&item) else {
@@ -410,24 +555,42 @@ impl Parent {
         self.tally.runs += 1;
         actions.push((Duration::ZERO, Action::Model(Event::Took { item, through })));
         if !held.on_hold {
-            actions.push((Duration::ZERO, self.write(Intent::Record { item }, None)));
+            actions.push((Duration::ZERO, self.write(Intent::Record { item })));
         }
         if self.runs == 0 {
             return actions;
         }
         self.runs -= 1;
+        let mut then = Vec::new();
         if self.rng.chance(self.script.replies) {
             let key = self.key(b"reply", item);
-            actions.push((self.soon(), self.write(Intent::Comment { item, key }, None)));
+            // Some replies are a person's message from the web.
+            let person = if self.rng.chance(300) { Some(ON_THE_WEB) } else { None };
+            then.push(Intent::Comment { item, key, person });
+        }
+        if self.rng.chance(self.script.tasks) {
+            let key = self.key(b"task", item);
+            then.push(Intent::Task { from: item, key });
+        }
+        let pull = self.changes.get(&item).and_then(|change| change.pull);
+        if let Some(pull) = pull {
+            if self.rng.chance(self.script.verdicts) {
+                let key = self.key(b"verdict", item);
+                then.push(Intent::Verdict { item, pull, key });
+            }
+            if self.rng.chance(self.script.requests) {
+                actions.push((self.soon(), self.write(Intent::Reviewers { item, pull })));
+            }
+        }
+        if !then.is_empty() {
+            self.tally.outcomes += 1;
+            let key = self.key(b"outcome", item);
+            actions.push((Duration::ZERO, self.write(Intent::Outcome { item, key, then })));
         }
         if self.rng.chance(self.script.projections)
             && let Some(intent) = self.projection(item, true)
         {
-            actions.push((self.soon(), self.write(intent, None)));
-        }
-        if self.rng.chance(self.script.tasks) {
-            let key = self.key(b"task", item);
-            actions.push((self.soon(), self.write(Intent::Task { repository: item.repository, key }, None)));
+            actions.push((self.soon(), self.write(intent)));
         }
         if self.rng.chance(self.script.changes) && !self.changes.contains_key(&item) {
             let branch = format!("change-{}", item.number).into_bytes();
@@ -444,17 +607,21 @@ impl Parent {
         if self.rng.chance(self.script.reads) {
             let owner = self.token();
             self.reads.insert(owner, Reading::Other);
-            // The item afresh, or a note that may not be there.
-            let read = if self.rng.chance(500) {
-                Read::Item { item, after: 0 }
-            } else {
-                let name = format!("note-{}", self.rng.below(8)).into_bytes().into_boxed_slice();
-                Read::Page { repository: item.repository, name }
+            // The item afresh, a note that may not be there, the statuses on
+            // its change's head, or a verdict's inline comments.
+            let read = match self.rng.below(4) {
+                0 => Read::Item { item, after: 0 },
+                1 => {
+                    let name = format!("note-{}", self.rng.below(8)).into_bytes().into_boxed_slice();
+                    Read::Page { repository: item.repository, name }
+                }
+                2 => Read::Statuses { repository: item.repository, commit: translate::commit(1), page: 1 },
+                _ => Read::Remarks { item, review: 1, page: 1 },
             };
             actions.push((self.soon(), Action::Model(Event::Read { owner: Token::new(owner), read })));
         }
         if self.rng.chance(self.script.closes) {
-            actions.push((self.soon(), self.write(Intent::Close { item }, None)));
+            actions.push((self.soon(), self.write(Intent::Close { item })));
         }
         actions
     }
@@ -464,7 +631,7 @@ impl Parent {
         if !self.items.contains_key(&item) {
             return Vec::new();
         }
-        vec![(Duration::ZERO, self.write(Intent::Open { item, branch }, None))]
+        vec![(Duration::ZERO, self.write(Intent::Open { item, branch }))]
     }
 
     /// A person released `item`: its record is written over.
@@ -476,7 +643,7 @@ impl Parent {
             return Vec::new();
         }
         held.on_hold = false;
-        vec![(Duration::ZERO, self.write(Intent::Record { item }, None))]
+        vec![(Duration::ZERO, self.write(Intent::Record { item }))]
     }
 
     /// Holds `item` for a person, who releases it after a while.
@@ -511,24 +678,43 @@ impl Parent {
         Some(Intent::Labels { item, labels })
     }
 
-    /// The write `intent`, named by a new owner, and what the referee hears
-    /// of it.
-    fn write(&mut self, intent: Intent, resumed: Option<Cause>) -> Action {
+    /// The write `intent`, caused by nothing on the forge.
+    fn write(&mut self, intent: Intent) -> Action {
+        self.ask(intent, FIRST, false)
+    }
+
+    /// The write `intent`, caused by `cause`, asked for again after it if
+    /// `resumed`, named by a new owner; and what the referee hears of it.
+    fn ask(&mut self, intent: Intent, cause: Cause, resumed: bool) -> Action {
         let owner = self.token();
-        let write = match &intent {
+        let write = self.operation(&intent);
+        let plan = planned(&intent);
+        self.writes.insert(owner, Asked { intent, cause, resumed });
+        Action::Write { owner, write, resumed: if resumed { Some(cause) } else { None }, plan }
+    }
+
+    /// The sub-model's write for `intent`.
+    fn operation(&mut self, intent: &Intent) -> Write {
+        match intent {
             Intent::Record { item } => {
                 let payload = self.payload(format!("the record of #{}", item.number));
                 Write::Record { item: *item, payload }
             }
             Intent::Labels { item, labels } => Write::SetLabels { item: *item, labels: boxed(labels) },
-            Intent::Comment { item, key } => Write::Comment {
+            Intent::Comment { item, key, person } => Write::Comment {
+                item: *item,
+                key: key.clone().into_boxed_slice(),
+                person: *person,
+                body: Content::Text(format!("a reply on #{}", item.number).into_bytes().into_boxed_slice()),
+            },
+            Intent::Outcome { item, key, .. } => Write::Comment {
                 item: *item,
                 key: key.clone().into_boxed_slice(),
                 person: None,
-                body: Content::Text(format!("a reply on #{}", item.number).into_bytes().into_boxed_slice()),
+                body: Content::Payload(self.payload(format!("the outcome of a run of #{}", item.number))),
             },
-            Intent::Task { repository, key } => Write::CreateIssue {
-                repository: *repository,
+            Intent::Task { from, key } => Write::CreateIssue {
+                repository: from.repository,
                 key: key.clone().into_boxed_slice(),
                 title: b"a task".to_vec().into_boxed_slice(),
                 body: Content::Payload(self.payload("what the task is".to_owned())),
@@ -541,6 +727,20 @@ impl Parent {
                 head: branch.clone().into_boxed_slice(),
                 base: MAIN.to_vec().into_boxed_slice(),
             },
+            // The engine opened the pull request: it may only comment on it.
+            Intent::Verdict { item, pull, key } => Write::Review {
+                item: Item { repository: item.repository, number: *pull },
+                key: key.clone().into_boxed_slice(),
+                verdict: Verdict::Comment,
+                body: Content::Text(b"looked at it".to_vec().into_boxed_slice()),
+            },
+            Intent::Reviewers { item, pull } => Write::SetReviewers {
+                item: Item { repository: item.repository, number: *pull },
+                reviewers: Box::new([PEOPLE[1]]),
+            },
+            Intent::Depends { item, on } => {
+                Write::SetDependencies { item: *item, dependencies: on.clone().into_boxed_slice() }
+            }
             Intent::Merge { pull, head, item } => {
                 Write::Merge { item: Item { repository: item.repository, number: *pull }, head: *head }
             }
@@ -554,27 +754,7 @@ impl Parent {
                 content: Content::Text(b"what was learnt".to_vec().into_boxed_slice()),
                 revision: *revision,
             },
-        };
-        let plan = match &intent {
-            Intent::Record { item } => Planned::Record { item: *item },
-            Intent::Labels { item, labels } => Planned::SetLabels { item: *item, labels: labels.clone() },
-            Intent::Comment { item, key } => Planned::Comment { item: *item, key: key.clone() },
-            Intent::Task { repository, key } => Planned::CreateIssue { repository: *repository, key: key.clone() },
-            Intent::Open { item, branch } => Planned::OpenPull { repository: item.repository, head: branch.clone() },
-            Intent::Merge { item, pull, head } => Planned::Merge {
-                item: Item { repository: item.repository, number: *pull },
-                head: translate::count(*head),
-            },
-            Intent::Close { item } => Planned::Close { item: *item },
-            Intent::DeleteBranch { repository, branch } => {
-                Planned::DeleteBranch { repository: *repository, branch: branch.clone() }
-            }
-            Intent::PutPage { repository, name, .. } => {
-                Planned::PutPage { repository: *repository, name: name.clone() }
-            }
-        };
-        self.writes.insert(owner, (intent, resumed));
-        Action::Write { owner, write, resumed, plan }
+        }
     }
 
     fn payload(&mut self, text: String) -> Token {
@@ -598,6 +778,34 @@ impl Parent {
     /// A moment soon after now.
     fn soon(&mut self) -> Duration {
         Duration::from_millis(self.rng.below(2_000))
+    }
+}
+
+/// What the referee hears is planned for `intent`.
+fn planned(intent: &Intent) -> Planned {
+    match intent {
+        Intent::Record { item } => Planned::Record { item: *item },
+        Intent::Labels { item, labels } => Planned::SetLabels { item: *item, labels: labels.clone() },
+        Intent::Comment { item, key, .. } | Intent::Outcome { item, key, .. } => {
+            Planned::Comment { item: *item, key: key.clone() }
+        }
+        Intent::Task { from, key } => Planned::CreateIssue { repository: from.repository, key: key.clone() },
+        Intent::Open { item, branch } => Planned::OpenPull { repository: item.repository, head: branch.clone() },
+        Intent::Verdict { item, pull, key } => {
+            Planned::Review { item: Item { repository: item.repository, number: *pull }, key: key.clone() }
+        }
+        Intent::Reviewers { item, pull } => {
+            Planned::SetReviewers { item: Item { repository: item.repository, number: *pull } }
+        }
+        Intent::Depends { item, .. } => Planned::SetDependencies { item: *item },
+        Intent::Merge { item, pull, head } => {
+            Planned::Merge { item: Item { repository: item.repository, number: *pull }, head: translate::count(*head) }
+        }
+        Intent::Close { item } => Planned::Close { item: *item },
+        Intent::DeleteBranch { repository, branch } => {
+            Planned::DeleteBranch { repository: *repository, branch: branch.clone() }
+        }
+        Intent::PutPage { repository, name, .. } => Planned::PutPage { repository: *repository, name: name.clone() },
     }
 }
 

@@ -63,6 +63,8 @@
 //!          write, its lane busy           Queued
 //!          write, otherwise               Due       (its first call)
 //! Queued   the lane's last write closes   Due
+//!          a record to post, found since  Closed    wrote: edited (and the
+//!            it was asked for                         lane's next is due)
 //! Check    a record or page as last read  Make
 //!          one this write made            Done      wrote
 //!          a record an earlier write of   Make
@@ -255,14 +257,14 @@ pub(crate) fn write(
         }
         None => {
             model.lanes.insert(lane, id).expect("a lane per write");
-            start(model, env, id);
+            begin(model, env, id, out);
         }
     }
 }
 
 /// The write `id` has its lane: it reads what it needs of the working set as
 /// it is now, and asks for its first call.
-fn start(model: &mut Model, env: &Env<Limits>, id: Id<Writing>) {
+fn start(model: &mut Model, env: &Env<Limits>, id: Id<Writing>, out: &mut Queue<Request>) -> Started {
     let writing = model.writes.get(id).expect("a write lives until it closes");
     // Where what it makes would be found: after its cause, if the parent
     // names one; otherwise after what the forge had shown before it began.
@@ -304,11 +306,28 @@ fn start(model: &mut Model, env: &Env<Limits>, id: Id<Writing>) {
         writing.position = position;
     }
     let resumed = writing.resumed.is_some();
+    // A record to post that the working set has found since it was asked
+    // for, someone else's or mangled, is not posted over: it fails as the
+    // write before it that found it did.
+    let found = match known {
+        Some((record @ (Record::Found { .. } | Record::Mangled { .. }), _, None)) if !resumed => Some(record),
+        Some((Record::Found { .. } | Record::Mangled { .. } | Record::Missing, _, _)) | None => None,
+    };
     let phase = match &writing.write {
         Write::Record { .. } => match writing.target {
             Some(_) => Phase::Check,
             None if resumed || writing.uncertain.is_some() => find(writing),
-            None => Phase::Make,
+            None => match found {
+                Some(record) => {
+                    report(model, env, id, Err(Failure::Edited { record }), Some(record), out);
+                    let writing = model.writes.get_mut(id).expect("a write lives until it closes");
+                    let (lane, next) = (writing.lane, writing.next);
+                    writing.state = State::Closed;
+                    model.writes.retire(id);
+                    return Started::Closed { lane, next };
+                }
+                None => Phase::Make,
+            },
         },
         Write::CreateIssue { .. } | Write::Comment { .. } | Write::OpenPull { .. } | Write::Review { .. } => {
             if resumed { find(writing) } else { Phase::Make }
@@ -337,6 +356,35 @@ fn start(model: &mut Model, env: &Env<Limits>, id: Id<Writing>) {
     };
     writing.state = State::Due { phase };
     ask(model, id);
+    Started::Asked
+}
+
+/// What starting a write came to: it asked for its first call; or it was
+/// answered at once, and closed, and the next of its lane, if any, starts.
+enum Started {
+    Asked,
+    Closed { lane: Lane, next: Option<Id<Writing>> },
+}
+
+/// Starts the write `id`, which has its lane, and those after it in its lane
+/// that are answered at once, until one asks for a call.
+fn begin(model: &mut Model, env: &Env<Limits>, id: Id<Writing>, out: &mut Queue<Request>) {
+    let mut next = Some(id);
+    for _ in 0..env.limits.writes {
+        let Some(id) = next else {
+            return;
+        };
+        match start(model, env, id, out) {
+            Started::Asked => return,
+            Started::Closed { lane, next: after } => {
+                if after.is_none() {
+                    let last = model.lanes.remove(&lane);
+                    assert!(last == Some(id), "a lane's last write is the one closing with none after it");
+                }
+                next = after;
+            }
+        }
+    }
 }
 
 /// The first page of looking for what an earlier attempt made: a record
@@ -369,7 +417,7 @@ pub(crate) fn sent(model: &mut Model, id: Id<Writing>, now: Time) {
 
 /// A write's alarm: a backoff ended, and the call is tried again; or the
 /// lane it held is free.
-pub(crate) fn retry(model: &mut Model, env: &Env<Limits>, id: Id<Writing>) {
+pub(crate) fn retry(model: &mut Model, env: &Env<Limits>, id: Id<Writing>, out: &mut Queue<Request>) {
     let writing = model.writes.get_mut(id).expect("an alarm is cancelled as its write closes");
     match mem::replace(&mut writing.state, State::Closed) {
         State::Waiting { phase, until: _ } => {
@@ -378,7 +426,7 @@ pub(crate) fn retry(model: &mut Model, env: &Env<Limits>, id: Id<Writing>) {
         }
         State::Holding { until } => {
             assert!(env.now >= until, "the hold's alarm is armed for its end");
-            close(model, env, id);
+            close(model, env, id, out);
         }
         State::Queued | State::Due { .. } | State::Busy { .. } | State::Done { .. } | State::Closed => {
             unreachable!("a write's alarm runs while it waits or holds its lane")
@@ -1034,9 +1082,8 @@ fn conclude(model: &mut Model, env: &Env<Limits>, id: Id<Writing>, out: &mut Que
     }
 }
 
-/// A write done: the working set hears what it found of its item's record,
-/// and so do the record writes queued after it; the parent hears how it went;
-/// and it closes, or holds its lane while its last call may still land.
+/// A write done: it reports how it went, and closes, or holds its lane
+/// while its last call may still land.
 fn answer(
     model: &mut Model,
     env: &Env<Limits>,
@@ -1045,6 +1092,22 @@ fn answer(
     record: Option<Record>,
     out: &mut Queue<Request>,
 ) {
+    if !report(model, env, id, result, record, out) {
+        close(model, env, id, out);
+    }
+}
+
+/// A write done: the working set hears what it found of its item's record,
+/// and so do the record writes queued after it; the parent hears how it went.
+/// Says whether it holds its lane while its last call may still land.
+fn report(
+    model: &mut Model,
+    env: &Env<Limits>,
+    id: Id<Writing>,
+    result: Result<Written, Failure>,
+    record: Option<Record>,
+    out: &mut Queue<Request>,
+) -> bool {
     let writing = model.writes.get(id).expect("a write lives until it closes");
     let (owner, found, next, nonce, sent) = (writing.owner, writing.found, writing.next, writing.nonce, writing.sent);
     // Given up after a write call that may have been made.
@@ -1109,9 +1172,9 @@ fn answer(
         let writing = model.writes.get_mut(id).expect("a write lives until it closes");
         writing.state = State::Holding { until };
         model.alarms.arm(Alarm::Write(id), until).expect("an alarm per write fits");
-        return;
+        return true;
     }
-    close(model, env, id);
+    false
 }
 
 /// Queues the call a write is due.
@@ -1136,14 +1199,14 @@ fn ask(model: &mut Model, id: Id<Writing>) {
 }
 
 /// The write `id` is done: it is retired, and the next of its lane starts.
-fn close(model: &mut Model, env: &Env<Limits>, id: Id<Writing>) {
+fn close(model: &mut Model, env: &Env<Limits>, id: Id<Writing>, out: &mut Queue<Request>) {
     let writing = model.writes.get_mut(id).expect("a write lives until it closes");
     let (lane, next) = (writing.lane, writing.next);
     writing.state = State::Closed;
     model.alarms.cancel(Alarm::Write(id));
     model.writes.retire(id);
     match next {
-        Some(next) => start(model, env, next),
+        Some(next) => begin(model, env, next, out),
         None => {
             let last = model.lanes.remove(&lane);
             assert!(last == Some(id), "a lane's last write is the one closing with none after it");

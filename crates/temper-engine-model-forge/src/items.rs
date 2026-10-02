@@ -950,17 +950,21 @@ fn tell_level(entry: &mut Entry, out: &mut Queue<Request>) {
     if !entry.reviewed {
         return;
     }
-    let digest = digest(entry.reviews.as_slice());
+    let digest = digest(level.commit, entry.reviews.as_slice());
     if entry.announced.reviews != digest && entry.inbox.room() > 0 {
         let position = Position { reviews: digest, ..entry.announced };
         tell(entry, News::Reviews { commit: level.commit }, position, out);
     }
 }
 
-/// A digest of verdicts, whatever their order: the position of what was
-/// taken of them.
-fn digest(verdicts: &[Reviewed]) -> u64 {
-    let mut digest: u64 = 0;
+/// A digest of the verdicts on the head `commit`, whatever their order: the
+/// position of what was taken of them. None is none, on any head; the same
+/// verdicts on another head are others.
+fn digest(commit: [u8; 32], verdicts: &[Reviewed]) -> u64 {
+    if verdicts.is_empty() {
+        return 0;
+    }
+    let mut digest: u64 = fnv(&commit);
     for kept in verdicts {
         let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
         let verdict: u8 = match kept.verdict {
@@ -977,6 +981,16 @@ fn digest(verdicts: &[Reviewed]) -> u64 {
         digest = digest.wrapping_add(hash);
     }
     digest
+}
+
+/// The FNV-1a hash of `bytes`.
+fn fnv(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
+    }
+    hash
 }
 
 /// Holds `news`, which takes the inbox to `position`, and tells it.
@@ -1131,7 +1145,8 @@ fn conclude(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, out: &mut Queue
 
 /// Queues the read an entry is due, or owed while it is idle: its comments
 /// and its pull request's while its inbox has room for them, its pull
-/// request's state and verdicts whatever room it has.
+/// request's state and verdicts whatever room it has; each owed read in turn,
+/// so that none waits on another made owed again and again.
 fn kick(entries: &mut Slab<Entry>, calls: &mut Calls, id: Id<Entry>) {
     let entry = entries.get_mut(id).expect("an entry lives until it is retired");
     let room = has_room_for_comments(entry);
@@ -1165,7 +1180,10 @@ fn owed(entry: &mut Entry, room: bool) -> Option<Phase> {
         entry.stale = Stale { pull: false, reviews: false, remarks: false, ..entry.stale };
         return None;
     };
-    if entry.stale.pull || (entry.stale.reviews && entry.level.is_none()) {
+    // Its state first, if it is not known; then its verdicts and comments,
+    // before its state is read again: webhooks can make that owed again and
+    // again, and nothing else of it must wait for them.
+    if entry.level.is_none() && (entry.stale.pull || entry.stale.reviews) {
         return Some(Phase::Pulling { number });
     }
     if entry.stale.reviews {
@@ -1173,6 +1191,9 @@ fn owed(entry: &mut Entry, room: bool) -> Option<Phase> {
     }
     if entry.stale.remarks && room && number != entry.item.number {
         return Some(Phase::Remarking { number });
+    }
+    if entry.stale.pull {
+        return Some(Phase::Pulling { number });
     }
     entry.stale.remarks = entry.stale.remarks && number != entry.item.number;
     None

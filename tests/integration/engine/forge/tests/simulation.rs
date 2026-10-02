@@ -4,8 +4,9 @@
 use std::collections::BTreeSet;
 
 use temper_engine_model_forge::Limits;
-use temper_engine_model_forge_tests::{ENDINGS, Settings, Stats, World, people};
-use temper_forge_model::Config;
+use temper_engine_model_forge_tests::{ENDINGS, Settings, Stats, World, parent, people};
+use temper_forge_model::{Config, Skew};
+use temper_lib::Duration;
 use temper_world::assert_replays;
 
 const ITERATIONS: u32 = 2_000_000;
@@ -130,6 +131,78 @@ fn a_record_a_person_mangled_holds_its_item_until_released() {
         held += stats.parent.holds;
     }
     assert!(held > 0, "items were held for a person");
+}
+
+#[test]
+fn creations_asked_for_again_are_found_after_their_causes_whatever_the_clocks_and_late_landings() {
+    let (mut resumed, mut found, mut outcomes, mut landed) = (0, 0, 0, 0);
+    for seed in 0..10 {
+        let calm = Settings::calm(seed);
+        let skew =
+            if seed % 2 == 0 { Skew::Behind(Duration::from_secs(40)) } else { Skew::Ahead(Duration::from_secs(40)) };
+        let settings = Settings {
+            forge: Config { timeouts: 150, landing: 100, skew, ..calm.forge },
+            parent: parent::Script { tasks: 500, replies: 600, verdicts: 500, ..calm.parent },
+            restarts: 3,
+            restart_at: temper_engine_model_forge_tests::Span::millis(30_000, 500_000),
+            ..calm
+        };
+        let stats = run(&settings).stats();
+        resumed += stats.parent.resumed;
+        outcomes += stats.parent.outcomes;
+        found += count(&stats, "found");
+        landed += stats.forge.expect("counted").landed;
+    }
+    assert!(outcomes > 0 && resumed > 0, "creations were asked for again, after their causes: {outcomes}, {resumed}");
+    assert!(found > 0, "and found made: {found}");
+    assert!(landed > 0, "calls landed after they timed out: {landed}");
+}
+
+#[test]
+fn pending_reviews_and_ci_run_again_reach_the_inbox() {
+    let (mut pending, mut submitted, mut reviews) = (0, 0, 0);
+    for seed in 0..10 {
+        let calm = Settings::calm(seed);
+        let weights = people::Weights { reviews: 16, pushes: 4, ..calm.people.weights };
+        let settings = Settings { people: people::Script { weights, ..calm.people }, reruns: 600, ..calm };
+        let stats = run(&settings).stats();
+        pending += stats.people.pending;
+        submitted += stats.people.submits;
+        reviews += count(&stats, "news: review");
+        assert!(count(&stats, "news: pull") > 0, "seed {seed}: {stats:?}");
+    }
+    assert!(pending > 0 && submitted > 0, "reviews were started pending and submitted: {pending}, {submitted}");
+    assert!(reviews > 0, "verdicts reached the inbox: {reviews}");
+}
+
+#[test]
+fn a_record_a_person_deleted_holds_its_item_and_is_posted_again() {
+    let (mut deleted, mut held) = (0, 0);
+    for seed in 0..10 {
+        let calm = Settings::calm(seed);
+        let weights = people::Weights { deletes: 6, ..calm.people.weights };
+        let stats = run(&Settings { people: people::Script { weights, ..calm.people }, ..calm }).stats();
+        deleted += stats.people.deletes;
+        held += stats.parent.holds;
+    }
+    assert!(deleted > 0 && held > 0, "records were deleted, and their items held: {deleted}, {held}");
+}
+
+#[test]
+fn an_item_no_label_finds_is_found_again_by_the_slow_pass_after_a_restart() {
+    let mut refound = 0;
+    for seed in 0..10 {
+        let calm = Settings::calm(seed);
+        let weights = people::Weights { removals: 8, ..calm.people.weights };
+        let settings = Settings {
+            people: people::Script { weights, ..calm.people },
+            restarts: 2,
+            restart_at: temper_engine_model_forge_tests::Span::millis(200_000, 600_000),
+            ..calm
+        };
+        refound += count(&run(&settings).stats(), "announced: unlabelled");
+    }
+    assert!(refound > 0, "items carrying neither label were found again");
 }
 
 #[test]

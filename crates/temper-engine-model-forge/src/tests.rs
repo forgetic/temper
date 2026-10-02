@@ -884,6 +884,10 @@ fn a_persons_comment_on_the_linked_pull_request_is_news_with_a_position_of_its_o
     let page = comments(&[comment(201, ENGINE), comment(202, PERSON)]);
     let told = h.answer(&remarks, item_page(summary(9, Kind::Pull, State::Open, &[], 25), page, false));
     assert_eq!(*told, [news(5, 2, News::Comment { on: 9, id: 202, author: PERSON })], "news for the item");
+    // Its state, owed again by the listing as it was read, is read last.
+    let sent = h.send();
+    let (_, others) = pull_reads(&mut h, sent, HEAD, Ci::Passed);
+    assert!(others.is_empty(), "nothing else owed");
     h.step(Event::Took { item: item(5), through: 2 });
     let owner = Token::new(1);
     h.step(Event::Write { owner, write: Write::Record { item: item(5), payload: Token::new(2) }, resumed: None });
@@ -1637,6 +1641,42 @@ fn a_record_write_that_gave_up_after_its_edit_timed_out_leaves_it_its_own_whatev
     let edit = h.send_one();
     let body = Body::Record { payload, position: Position::START, nonce: nonce(&edit.op) };
     assert_eq!(edit.op, Op::EditComment { number: 5, id: 100, body }, "edited, not held");
+}
+
+#[test]
+fn a_record_post_queued_behind_one_that_found_a_record_changed_is_not_posted() {
+    let mut h = Harness::started(LIMITS);
+    h.step(Event::Track { item: item(9) });
+    let read = h.send_one();
+    h.answer(&read, item_page(issue(9, &[TRACKING], 4), Box::new([]), false));
+    let first = Token::new(1);
+    let second = Token::new(2);
+    h.step(Event::Write {
+        owner: first,
+        write: Write::Record { item: item(9), payload: Token::new(5) },
+        resumed: None,
+    });
+    h.step(Event::Write {
+        owner: second,
+        write: Write::Record { item: item(9), payload: Token::new(6) },
+        resumed: None,
+    });
+    let post = h.send_one();
+    h.answer(&post, Err(Error::Timeout));
+    h.at(3);
+    h.fire();
+    let find = h.send_one();
+    // It landed, and a person mangled it since.
+    let mangled =
+        Comment { id: 2, author: ENGINE, created: Time::ZERO, revision: 20, mark: Mark::Mangled, body: bytes(b"?") };
+    let told = h.answer(&find, item_page(issue(9, &[TRACKING], 4), comments(&[mangled]), false));
+    let record = Record::Mangled { comment: 2, revision: 20 };
+    let expected = [
+        Request::Wrote { owner: first, result: Err(Failure::Edited { record }) },
+        Request::Wrote { owner: second, result: Err(Failure::Edited { record }) },
+    ];
+    assert_eq!(*told, expected, "the one behind it is not posted over it");
+    assert!(h.send().is_empty(), "nothing posted");
 }
 
 #[test]

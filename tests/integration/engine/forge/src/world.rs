@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 
 use temper_engine_model_forge::{
-    self as sub, Config as Deployment, Event, Fact, Failure, Item, Limits, Model, News, Record, Request, Why, Written,
+    self as sub, Ci, Config as Deployment, Event, Fact, Failure, Item, Limits, Model, News, Record, Request, Why,
+    Written,
 };
 use temper_forge_model::api::{self as forge_api, Checks, File, Git, Permission, Protection, Setup};
 use temper_forge_model::{self as forge, Config, Skew};
@@ -9,8 +10,8 @@ use temper_lib::{Duration, Env, Queue, ReplyTo, Rng, Time, Token};
 use temper_world::{Key, Ledger, Referee, Schedule, Span, Stage, Trace};
 
 use crate::parent::{self, Action, Parent};
-use crate::people::{self, Act, PEOPLE, People};
-use crate::referee::{Forge, Seen, Stimulus};
+use crate::people::{self, Act, ON_THE_WEB, PEOPLE, People};
+use crate::referee::{Bounds, Forge, Seen, Stimulus};
 use crate::translate::{self, Asked};
 
 /// The engine's forge user, CI's, and the workers'.
@@ -41,14 +42,17 @@ const TRACE: usize = 400_000;
 const DELIVERIES: u32 = 20_000;
 
 /// What the sub-model told, by kind: each must be reached by the sweep.
-pub const ENDINGS: [&str; 23] = [
+pub const ENDINGS: [&str; 27] = [
     "announced: found",
     "announced: missing",
     "announced: mangled",
     "announced: unlabelled",
     "offered",
     "full",
+    "room",
     "news: comment",
+    "news: message",
+    "news: pull comment",
     "news: review",
     "news: pull",
     "changed",
@@ -60,6 +64,7 @@ pub const ENDINGS: [&str; 23] = [
     "wrote: created",
     "wrote: commented",
     "wrote: merged",
+    "wrote: reviewed",
     "wrote: edited",
     "wrote: failed",
     "found",
@@ -93,7 +98,9 @@ const CALM: Limits = Limits {
     backoff: Duration::from_millis(500),
     backoff_max: Duration::from_secs(10),
     attempts: 5,
-    lifetime: Duration::from_secs(12),
+    // The protocol layer's deadline, the fake's latest answer and its latest
+    // landing after it, and room to spare.
+    lifetime: Duration::from_secs(30),
     facts: 64,
 };
 
@@ -110,8 +117,12 @@ pub struct Settings {
     /// Restarts of the engine, each at a moment drawn from `restart_at`.
     pub restarts: u32,
     pub restart_at: Span,
-    /// The bound within which a change reaches the working set.
+    /// The chance per mille that CI runs a context again after it settled.
+    pub reruns: u32,
+    /// The bound within which a change reaches the working set; and within
+    /// which the slow pass finds again an item no label finds.
     pub within: Duration,
+    pub slow_within: Duration,
 }
 
 impl Settings {
@@ -135,7 +146,7 @@ impl Settings {
                     commits: 1024,
                     files: 8,
                     statuses: 128,
-                    contexts: 1,
+                    contexts: 2,
                     pages: 8,
                     name_bytes: 48,
                     title_bytes: 64,
@@ -155,7 +166,7 @@ impl Settings {
                 timeouts: 0,
                 landing: 0,
                 land_min: Duration::from_millis(100),
-                land_max: Duration::from_secs(1),
+                land_max: Duration::from_secs(8),
                 rate_limit: 0,
                 rate_window: Duration::from_secs(60),
                 ci: CI,
@@ -174,6 +185,8 @@ impl Settings {
                 projections: 300,
                 tasks: 150,
                 changes: 250,
+                verdicts: 300,
+                requests: 200,
                 notes: 150,
                 reads: 150,
                 closes: 80,
@@ -200,7 +213,9 @@ impl Settings {
             timeout: Duration::from_secs(10),
             restarts: 0,
             restart_at: Span::millis(10_000, 600_000),
-            within: Duration::from_secs(150),
+            reruns: 0,
+            within: Duration::from_secs(200),
+            slow_within: Duration::from_secs(3_600),
         }
     }
 
@@ -225,16 +240,19 @@ impl Settings {
                 late: 60,
                 unavailable: 40,
                 timeouts: 40,
+                landing: 30,
                 rate_limit: 50,
                 hooks_late: 200,
                 hooks_lost: 300,
+                skew: Skew::Behind(Duration::from_secs(20)),
                 ..calm.forge
             },
             people: people::Script {
-                weights: people::Weights { removals: 2, closes: 2, mangles: 1, ..calm.people.weights },
+                weights: people::Weights { removals: 2, closes: 2, mangles: 1, deletes: 1, ..calm.people.weights },
                 ..calm.people
             },
             restarts: 2,
+            reruns: 300,
             within: Duration::from_secs(240),
             ..calm
         }
@@ -248,18 +266,26 @@ impl Settings {
         let calm = Settings::calm(seed);
         let pick = |rng: &mut Rng, chance: u32| rng.chance(chance);
         let limits = if pick(&mut rng, 500) { rough.limits } else { calm.limits };
+        let skew = match rng.below(3) {
+            0 => Skew::None,
+            1 => Skew::Ahead(Duration::from_millis(rng.below(60_000))),
+            _ => Skew::Behind(Duration::from_millis(rng.below(60_000))),
+        };
         let forge = Config {
             late: u32::try_from(rng.below(80)).expect("small"),
             unavailable: u32::try_from(rng.below(60)).expect("small"),
             timeouts: u32::try_from(rng.below(60)).expect("small"),
+            landing: u32::try_from(rng.below(40)).expect("small"),
             rate_limit: if pick(&mut rng, 400) { 40 } else { 0 },
             hooks_late: u32::try_from(rng.below(400)).expect("small"),
             hooks_lost: u32::try_from(rng.below(1001)).expect("small"),
+            skew,
             ..calm.forge
         };
         let people = if pick(&mut rng, 500) { rough.people } else { calm.people };
         let restarts = u32::try_from(rng.below(3)).expect("small");
-        Settings { limits, forge, people, restarts, within: rough.within, ..calm }
+        let reruns = u32::try_from(rng.below(400)).expect("small");
+        Settings { limits, forge, people, restarts, reruns, within: rough.within, ..calm }
     }
 }
 
@@ -372,12 +398,12 @@ impl World {
                 tree: Box::new([File { path: b"README".as_slice().into(), content: b"hello".as_slice().into() }]),
                 labels: LABELS.iter().map(|label| (*label).into()).collect(),
                 checks: Checks {
-                    contexts: Box::new([b"ci".as_slice().into()]),
+                    contexts: Box::new([b"ci".as_slice().into(), b"lint".as_slice().into()]),
                     latency_min: Duration::from_secs(1),
                     latency_max: Duration::from_secs(40),
                     silent: 20,
                     passes: 850,
-                    reruns: 0,
+                    reruns: settings.reruns,
                     cue: None,
                 },
                 protection: Some(Protection {
@@ -397,7 +423,13 @@ impl World {
                 forge::grant(&mut forge, name, *user, Permission::Write);
             }
         }
-        let mut referee = Referee::new(Forge::new(settings.within));
+        let bounds = Bounds {
+            within: settings.within,
+            slow: settings.slow_within,
+            lifetime: settings.limits.lifetime,
+            room: settings.limits.items,
+        };
+        let mut referee = Referee::new(Forge::new(bounds));
         for _ in 0..settings.restarts {
             referee.inject(Time::ZERO.saturating_add(settings.restart_at.draw(&mut rng)), Stimulus::Restart);
         }
@@ -580,8 +612,8 @@ impl World {
                 match &event {
                     Event::Read { owner, .. } => self.reads.open(owner.raw(), ()),
                     Event::Untrack { item } => self.observe(Seen::Untracked { item: *item }),
+                    Event::Link { item, pull } => self.observe(Seen::Linked { item: *item, pull: *pull }),
                     Event::Track { .. }
-                    | Event::Link { .. }
                     | Event::Took { .. }
                     | Event::Hint { .. }
                     | Event::Write { .. }
@@ -702,7 +734,7 @@ impl World {
             self.withdraw(out.deadline);
             let now = forge::time(&self.settings.forge, self.now);
             let result = translate::answer(out.asked, result, &self.settings.limits, now);
-            if let Err(sub::api::Error::RateLimited { after }) = result {
+            if let Some(after) = limited(&result) {
                 self.end("limited");
                 self.observe(Seen::Limited { reset: self.now.saturating_add(after) });
             }
@@ -712,12 +744,12 @@ impl World {
         match self.theirs.end(name) {
             Theirs::Person => {}
             Theirs::Start { user, repository, number } => {
-                if let Ok(forge_api::Answer::Reviewed(review)) = result {
+                if let Some(review) = made(result).0 {
                     self.people.started(user, repository, number, review);
                 }
             }
             Theirs::Push { item, branch } => {
-                if let Ok(forge_api::Answer::Pushed(forge_api::Pushed::Pushed)) = result {
+                if made(result).1 {
                     let actions = self.parent.pushed(item, branch);
                     self.schedule(actions);
                 }
@@ -777,7 +809,17 @@ impl World {
             }
             Request::Wrote { owner, result } => {
                 self.writes.end(owner.raw());
-                let edited = matches!(result, Err(Failure::Edited { .. }));
+                let edited = match result {
+                    Err(Failure::Edited { .. }) => true,
+                    Ok(_)
+                    | Err(
+                        Failure::Busy
+                        | Failure::Invalid
+                        | Failure::Unknown
+                        | Failure::Revised { .. }
+                        | Failure::Forge(_),
+                    ) => false,
+                };
                 self.observe(Seen::Wrote { plan: owner.raw(), written: result.is_ok(), edited });
                 let ending = match result {
                     Ok(Written::Created(_)) => "wrote: created",
@@ -808,17 +850,26 @@ impl World {
                     self.end("announced: unlabelled");
                 }
                 let labels = view.labels.iter().map(|label| label.to_vec()).collect();
-                self.observe(Seen::Announced { item: *item, labels });
+                let (head, ci) = match view.record {
+                    Record::Found { position, .. } => (position.head.map(translate::count), position.ci),
+                    Record::Missing | Record::Mangled { .. } => (None, Ci::None),
+                };
+                self.observe(Seen::Announced { item: *item, labels, head, ci });
             }
-            Request::Offered { .. } => self.end("offered"),
+            Request::Offered { item } => {
+                self.end("offered");
+                self.observe(Seen::Offered { item: *item });
+            }
             Request::Inbox { item, seq: _, news } => {
-                let (ending, comment) = match news {
-                    News::Comment { id, .. } => ("news: comment", Some(*id)),
-                    News::Reviews { .. } => ("news: review", None),
-                    News::Pull { .. } => ("news: pull", None),
+                let ending = match news {
+                    News::Comment { on, .. } if *on != item.number => "news: pull comment",
+                    News::Comment { author: ON_THE_WEB, .. } => "news: message",
+                    News::Comment { .. } => "news: comment",
+                    News::Reviews { .. } => "news: review",
+                    News::Pull { .. } => "news: pull",
                 };
                 self.end(ending);
-                self.observe(Seen::News { item: *item, comment });
+                self.observe(Seen::News { item: *item, news: *news });
             }
             Request::Changed { item, labels } => {
                 self.end("changed");
@@ -937,7 +988,12 @@ impl World {
             && self.model.writes() == 0
             && self.forge.calls() == 0
             && self.forge.deliveries() == 0
-            && !matches!(self.referee.verdict(), temper_world::Verdict::Open { .. })
+            && match self.referee.verdict() {
+                temper_world::Verdict::Open { .. } => false,
+                temper_world::Verdict::Passed
+                | temper_world::Verdict::Stopped { .. }
+                | temper_world::Verdict::Failed(_) => true,
+            }
     }
 
     /// The invariants of a settled world.
@@ -953,6 +1009,67 @@ impl World {
         assert_eq!(tally.forgotten, 0, "seed {seed}: the forge kept every call it took: {tally:?}");
         self.observe(Seen::Settled);
         self.referee.assert_passed(seed);
+    }
+}
+
+/// How long a refusal for the rate says to wait, if the call was one.
+fn limited(result: &Result<sub::api::Answer, sub::api::Error>) -> Option<Duration> {
+    use sub::api::Error;
+    match result {
+        Err(Error::RateLimited { after }) => Some(*after),
+        Ok(_)
+        | Err(
+            Error::Unavailable
+            | Error::Timeout
+            | Error::Forbidden
+            | Error::Missing
+            | Error::TooLarge
+            | Error::Empty
+            | Error::Full
+            | Error::Exists
+            | Error::NothingToMerge
+            | Error::Closed
+            | Error::Stale
+            | Error::Conflict
+            | Error::Protected
+            | Error::Circular,
+        ) => None,
+    }
+}
+
+/// What a person's or a worker's call made: the review it started, and
+/// whether it pushed.
+fn made(result: Result<forge_api::Answer, forge_api::Error>) -> (Option<u64>, bool) {
+    use forge_api::Answer;
+    let Ok(answer) = result else {
+        return (None, false);
+    };
+    match answer {
+        Answer::Reviewed(review) => (Some(review), false),
+        Answer::Pushed(pushed) => match pushed {
+            forge_api::Pushed::Pushed => (None, true),
+            forge_api::Pushed::Rejected => (None, false),
+        },
+        Answer::Items { .. }
+        | Answer::Item { .. }
+        | Answer::Pull(_)
+        | Answer::Statuses(_)
+        | Answer::Permission(_)
+        | Answer::Comment { .. }
+        | Answer::Dependencies(_)
+        | Answer::Labels(_)
+        | Answer::Commit(_)
+        | Answer::Tree(_)
+        | Answer::File(_)
+        | Answer::Pages { .. }
+        | Answer::Page(_)
+        | Answer::Created(_)
+        | Answer::Commented(_)
+        | Answer::Merged(_)
+        | Answer::Revision(_)
+        | Answer::Done
+        | Answer::Cloned { .. }
+        | Answer::Branch(_) => (None, false),
     }
 }
 
