@@ -305,9 +305,18 @@ fn session(
     }
     // Its first turn needs no wake, and nor does a turn claimed whose
     // outcome was never applied (its run failed, or the engine restarted):
-    // the retry takes the same events.
+    // the retry takes the same events. A person's release since its last
+    // turn wakes it too: what held it (its runs failing) is lifted, and the
+    // turn it never had is due.
     let retry = record.progress.running.is_some();
-    if record.progress.last_run.is_some() && !retry && !facts.woken {
+    let released = match record.progress.released {
+        Some(released) => match record.progress.last_run {
+            Some(last) => released >= last,
+            None => false,
+        },
+        None => false,
+    };
+    if record.progress.last_run.is_some() && !retry && !released && !facts.woken {
         return nothing(Waits::Wake);
     }
     let resume = facts.snapshot

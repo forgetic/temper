@@ -30,7 +30,7 @@ use temper_engine_model_rules as rules;
 use temper_engine_model_views as views;
 use temper_engine_model_work as work;
 use temper_lib::bytes::copy_of;
-use temper_lib::{Env, Id, List, Queue, ReplyTo, Token};
+use temper_lib::{Env, Id, List, Queue, ReplyTo, Time, Token};
 
 use crate::boundary::{Ask, Inbound, Item, Phase, Refusal, Reply, Request, Watched};
 use crate::items::{self, Entry};
@@ -184,7 +184,10 @@ fn permitted(model: &mut Model, env: &Env<Limits>, to: ReplyTo, person: u64, ask
     }
 }
 
-/// Asks the forge to write what a person's call makes.
+/// Asks the forge to write what a person's call makes, keyed by their
+/// request. The same request may have been asked of an earlier life, which
+/// may have made it: what it makes is looked for first, anywhere, as
+/// nothing says when that was.
 fn writing(model: &mut Model, env: &Env<Limits>, to: ReplyTo, person: u64, ask: Ask, write: forge::Write) {
     let wait = Wait::Person { to, person, ask };
     let wait = match model.waits.insert(wait) {
@@ -192,7 +195,8 @@ fn writing(model: &mut Model, env: &Env<Limits>, to: ReplyTo, person: u64, ask: 
         Err(Wait::Person { to, .. }) => return reply(model, to, Reply::Refused(Refusal::Busy)),
         Err(_) => unreachable!("a person's call is refused as it was asked"),
     };
-    route::forge_step(model, env, forge::Event::Write { owner: wait.token(), write, resumed: None });
+    let resumed = Some(forge::Cause { comment: 0, at: Time::ZERO });
+    route::forge_step(model, env, forge::Event::Write { owner: wait.token(), write, resumed });
 }
 
 /// A wait for the hub's answer to a person's call.
@@ -291,8 +295,7 @@ pub(crate) fn wrote(
                 return reply(model, to, Reply::Refused(Refusal::Failed));
             };
             let item = Item { repository, number };
-            session(model, env, item);
-            reply(model, to, Reply::Opened { item });
+            opened(model, env, to, item);
         }
         Ask::Message { .. } => match result {
             Ok(_) => reply(model, to, Reply::Done),
@@ -304,12 +307,26 @@ pub(crate) fn wrote(
     }
 }
 
+/// The session a person opened is made: it is held, and the person
+/// answered once its first record is written (at once, if the engine took
+/// it in already).
+fn opened(model: &mut Model, env: &Env<Limits>, to: ReplyTo, item: Item) {
+    let Some(id) = session(model, env, item) else { return reply(model, to, Reply::Refused(Refusal::Busy)) };
+    let Some(entry) = model.items.get_mut(id) else { return reply(model, to, Reply::Refused(Refusal::Busy)) };
+    if entry.taking == items::Taking::Taken {
+        return reply(model, to, Reply::Opened { item });
+    }
+    if let Some(earlier) = entry.opened.replace(to) {
+        reply(model, earlier, Reply::Refused(Refusal::Busy));
+    }
+}
+
 /// Holds `item` as a session (section 6): the step configured for one.
-fn session(model: &mut Model, env: &Env<Limits>, item: Item) {
-    let Some(id) = items::hold(model, env, item) else { return };
-    let Some(entry) = model.items.get_mut(id) else { return };
+fn session(model: &mut Model, env: &Env<Limits>, item: Item) -> Option<Id<Entry>> {
+    let id = items::hold(model, env, item)?;
+    let entry = model.items.get_mut(id)?;
     if entry.step.is_some() {
-        return;
+        return Some(id);
     }
     let step = plan::Step {
         name: copy_of(b"session"),
@@ -319,6 +336,7 @@ fn session(model: &mut Model, env: &Env<Limits>, item: Item) {
         gates: Box::new([]),
     };
     entry.step = Some(plan::Record { step, progress: plan::Progress::NEW, goal: None });
+    Some(id)
 }
 
 /// An issue handed in, by its label (4.6): taken in as a session.
@@ -350,7 +368,7 @@ pub(crate) fn room(model: &mut Model, env: &Env<Limits>) {
 pub(crate) fn hub_answered(model: &mut Model, env: &Env<Limits>, to: ReplyTo, result: Result<(), work::Refusal>) {
     let Some(wait) = serve::take(model, to.into_token()) else { return };
     match wait {
-        Wait::Take { entry } => items::taken(model, env, entry, result.is_ok()),
+        Wait::Take { entry, written } => items::taken(model, env, entry, written, result.is_ok()),
         Wait::Person { to, .. } => {
             let answer = match result {
                 Ok(()) => Reply::Done,

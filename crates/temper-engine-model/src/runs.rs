@@ -40,7 +40,7 @@ use crate::limits::Limits;
 use crate::model::{self, Model};
 use crate::route;
 use crate::translate;
-use crate::waits::{Carried, Wait};
+use crate::waits::{Carried, Relayed, Wait};
 
 /// The hub starts the item's attempt `attempt`, on the run it was told is
 /// due, its claim written.
@@ -51,6 +51,8 @@ pub(crate) fn start(model: &mut Model, env: &Env<Limits>, item: Item, attempt: u
     let Some(due) = entry.due.take() else { unreachable!("the hub starts the run it was told is due") };
     let start = entry.next.saturating_sub(1);
     entry.live = Some(Live { attempt, start, started: false, bounced: false });
+    entry.grants = Some(due.grants);
+    entry.resumed = None;
     match rule(model, env, id, &due) {
         rules::Decision::Allow => {}
         rules::Decision::Wait => return end(model, env, id, attempt, work::Answer::Refused),
@@ -352,12 +354,32 @@ fn place(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) {
     route::fleet_step(model, env, fleet::Event::Start { reply_to, run, attempt: Token::new(attempt), workstream });
 }
 
+/// The forge sub-model's cold read is done: every item it found is
+/// announced, and taken into the hub, or did not fit.
+pub(crate) fn read(model: &mut Model) {
+    model.read = true;
+}
+
+/// Whether the cold start is done, and not yet told: the cold read is, and
+/// every item it announced is in the hub, which asked the fleet to adopt
+/// each claim it read, and the fleet has heard it.
+pub(crate) fn is_loaded(model: &Model) -> bool {
+    if model.loaded.is_some() || !model.read || !model.work_out.is_empty() {
+        return false;
+    }
+    for (_, id) in &model.names {
+        if let Some(entry) = model.items.get(*id)
+            && entry.taking == items::Taking::Asked
+        {
+            return false;
+        }
+    }
+    true
+}
+
 /// The cold start is done: every claim the records hold is adopted. The
 /// fleet starts the strays' graces, and the runs prepared meanwhile start.
 pub(crate) fn loaded(model: &mut Model, env: &Env<Limits>) {
-    if model.loaded.is_some() {
-        return;
-    }
     model.loaded = Some(env.now);
     model::keep(model, Fact::Loaded);
     route::fleet_step(model, env, fleet::Event::Loaded);
@@ -375,10 +397,38 @@ pub(crate) fn adopt(model: &mut Model, env: &Env<Limits>, item: Item, attempt: u
     let Some(id) = items::find(model, item) else { unreachable!("the hub adopts only items the top level holds") };
     let entry = get_mut(model, id);
     let start = entry.next.saturating_sub(1);
-    entry.live = Some(Live { attempt, start, started: true, bounced: false });
+    // What it took before the restart is what its claim's record says: of
+    // what this life's inbox holds, it takes nothing, and the next run has
+    // it all again.
+    entry.live = Some(Live { attempt, start, started: true, bounced: true });
+    // Its grants are what its claim gave it, which the record's step says;
+    // what an earlier life made for it comes after its claim's position.
+    entry.grants = match entry.step.as_ref() {
+        Some(record) => translate::grants_of(record),
+        None => None,
+    };
+    entry.resumed = Some(items::Resumed { attempt, since: entry.since });
     let run = translate::run_of(item);
     let reply_to = ReplyTo::new(run);
     route::fleet_step(model, env, fleet::Event::Adopt { reply_to, run, attempt: Token::new(attempt) });
+}
+
+/// A worker's hello: a run it lists as ending or answered takes no inbox
+/// event passed to it from now on, whatever crosses its answer.
+pub(crate) fn hello(model: &mut Model, hello: &crate::boundary::Hello) {
+    for hosted in &hello.hosting {
+        let ending = match hosted.phase {
+            fleet::Phase::Ending | fleet::Phase::Answered => true,
+            fleet::Phase::Preparing | fleet::Phase::Starting | fleet::Phase::Active | fleet::Phase::Waiting => false,
+        };
+        let Some(id) = items::find(model, hosted.item) else { continue };
+        if let Some(live) = get_mut(model, id).live.as_mut()
+            && live.attempt == hosted.attempt
+            && ending
+        {
+            live.bounced = true;
+        }
+    }
 }
 
 /// The hub cancels the item's attempt `attempt`: the fleet cancels it, or, if
@@ -396,6 +446,7 @@ pub(crate) fn cancel(model: &mut Model, env: &Env<Limits>, item: Item, attempt: 
     }
     entry.job = Job::Idle;
     entry.assignment = None;
+    entry.grants = None;
     end(model, env, id, attempt, work::Answer::Refused);
 }
 
@@ -405,6 +456,7 @@ fn end(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, attempt: u64, answer
     let entry = get_mut(model, id);
     entry.live = None;
     entry.assignment = None;
+    entry.grants = None;
     let item = entry.item;
     route::work_step(model, env, work::Event::Answered { item, attempt, answer });
 }
@@ -538,7 +590,7 @@ pub(crate) fn answered(model: &mut Model, env: &Env<Limits>, to: ReplyTo, run: T
     let attempt = attempt.raw();
     let answer = match model.carried.get(Id::from_token(payload)) {
         Some(Carried::Answer { answer, .. }) => answer,
-        Some(Carried::Call { .. } | Carried::Served { .. } | Carried::Report { .. }) | None => {
+        Some(Carried::Call { .. } | Carried::Served { .. } | Carried::Report { .. } | Carried::Done) | None => {
             unreachable!("an answer handed on is the one carried")
         }
     };
@@ -587,6 +639,7 @@ pub(crate) fn answered(model: &mut Model, env: &Env<Limits>, to: ReplyTo, run: T
                 }
                 entry.live = None;
                 entry.assignment = None;
+                entry.grants = None;
             }
         }
     }
@@ -614,6 +667,7 @@ pub(crate) fn ended(
         {
             entry.live = None;
             entry.assignment = None;
+            entry.grants = None;
         }
     }
     route::work_step(model, env, work::Event::Answered { item, attempt, answer });
@@ -623,7 +677,7 @@ pub(crate) fn ended(
 pub(crate) fn attempt_of(model: &Model, outcome: Token) -> u64 {
     match model.carried.get(Id::from_token(outcome)) {
         Some(Carried::Answer { attempt, .. }) => *attempt,
-        Some(Carried::Call { .. } | Carried::Served { .. } | Carried::Report { .. }) | None => 0,
+        Some(Carried::Call { .. } | Carried::Served { .. } | Carried::Report { .. } | Carried::Done) | None => 0,
     }
 }
 
@@ -643,19 +697,55 @@ pub(crate) fn posted(model: &Model, outcome: Token) -> Option<Box<Posted>> {
     Some(Box::new(Posted { attempt, outcome: outcome.clone(), head }))
 }
 
-/// Forgets what the top level carried for the fleet as `payload`.
+/// Forgets what the top level carried for the fleet as `payload`, which
+/// the fleet drops. A run's call it could not pass up is answered at once,
+/// unserved, on the channel it came on (never silently): busy if its
+/// attempt may yet be the live claim (the cold start is not done, or the
+/// fleet had no room for it), failed if it is fenced off.
 pub(crate) fn forget(model: &mut Model, payload: Token) {
-    let id = Id::from_token(payload);
-    if model.carried.get(id).is_some() {
-        model.carried.retire(id);
-    }
+    let Some(taken) = take_carried(model, Id::from_token(payload)) else { return };
+    let Some(relayed) = taken.call() else { return };
+    let live = match items::find(model, relayed.item) {
+        Some(id) => match get(model, id).live {
+            Some(live) => live.attempt == relayed.attempt,
+            None => false,
+        },
+        None => false,
+    };
+    let why = if live || model.loaded.is_none() { Unserved::Busy } else { Unserved::Failed };
+    unrouted(model, &relayed, why);
+}
+
+/// Answers a run's call at once, on the channel it came on.
+fn unrouted(model: &mut Model, relayed: &Relayed, why: Unserved) {
+    let Relayed { channel, item, attempt, call, .. } = *relayed;
+    model.requests.push(Request::Relayed { channel, item, attempt, call, served: Served::Unserved(why) });
 }
 
 /// A worker relays a call of the item's run: carried to the fleet, which
 /// passes it up if the attempt is live.
-pub(crate) fn relay(model: &mut Model, env: &Env<Limits>, item: Item, attempt: u64, call: Token, body: Call) {
-    let Some(run) = translate::run(item) else { return };
-    let Ok(payload) = model.carried.insert(Carried::Call { body: Box::new(body) }) else { return };
+pub(crate) fn relay(
+    model: &mut Model,
+    env: &Env<Limits>,
+    channel: Token,
+    item: Item,
+    attempt: u64,
+    call: Token,
+    body: Call,
+) {
+    let Some(run) = translate::run(item) else {
+        let relayed = Relayed { channel, item, attempt, call, body: Box::new(body) };
+        return unrouted(model, &relayed, Unserved::Invalid);
+    };
+    let payload = match model.carried.insert(Carried::Call { channel, item, attempt, call, body: Box::new(body) }) {
+        Ok(payload) => payload,
+        Err(carried) => {
+            if let Some(relayed) = carried.call() {
+                unrouted(model, &relayed, Unserved::Busy);
+            }
+            return;
+        }
+    };
     let event = fleet::Event::Relay { run, attempt: Token::new(attempt), call, body: payload.token() };
     route::fleet_step(model, env, event);
 }
@@ -666,19 +756,24 @@ pub(crate) fn call(model: &mut Model, env: &Env<Limits>, to: ReplyTo, run: Token
     let attempt = attempt.raw();
     let id = Id::from_token(body);
     let Some(taken) = take_carried(model, id) else { unreachable!("a call passed up is the one carried") };
-    let Some(body) = taken.call() else { unreachable!("a call passed up is the one carried") };
+    let Some(relayed) = taken.call() else { unreachable!("a call passed up is the one carried") };
     let Ok(wait) = model.waits.insert(Wait::Relay { to }) else {
         unreachable!("the waits have room for every run's call")
     };
-    crate::serve::serve(model, env, wait, item, attempt, *body);
+    crate::serve::serve(model, env, wait, item, attempt, relayed.call, *relayed.body);
 }
 
 /// Takes what is carried as `id`, which goes at the reclaim point.
 fn take_carried(model: &mut Model, id: Id<Carried>) -> Option<Carried> {
     let carried = model.carried.get_mut(id)?;
-    let taken = mem::replace(carried, Carried::Report { kind: views::Kind::Progress, content: Box::new([]) });
-    model.carried.retire(id);
-    Some(taken)
+    let taken = mem::replace(carried, Carried::Done);
+    match taken {
+        Carried::Done => None,
+        Carried::Answer { .. } | Carried::Call { .. } | Carried::Served { .. } | Carried::Report { .. } => {
+            model.carried.retire(id);
+            Some(taken)
+        }
+    }
 }
 
 /// The fleet passes the answer to a run's call down to its worker.

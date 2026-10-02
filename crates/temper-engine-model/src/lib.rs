@@ -40,9 +40,28 @@
 //!
 //! Decisions the sub-models left to it, settled here:
 //!
-//! - **Starting cold:** every item announced is taken into the hub as its
-//!   record says, claims adopted at once; nothing new starts until the
-//!   forge's cold read is done, when the fleet hears `Loaded`.
+//! - **Starting cold** (the restart contract): a restart rebuilds from the
+//!   forge and the store everything a decision reads, and nothing is made
+//!   twice. Every item announced is taken into the hub as its record says,
+//!   once the record is found sound (within the limits, its goal's plan one
+//!   the plan could have made); one that is not is held as mangled. Its
+//!   claim is adopted at once, with the grants its step's charter gives the
+//!   run its record says is running; the pull request its record names is
+//!   linked in the working set, so the plan reads it again. The fleet hears
+//!   `Loaded` only once the cold read is done and every claim it read has
+//!   reached the fleet; nothing new starts before (an item that did not fit
+//!   the working set is not waited for: a worker still hosting its run
+//!   keeps it as a stray, past the grace it is retried). Every item read
+//!   waiting is asked what is due afresh: a relation found done is news
+//!   again. What an earlier life may have made is looked for before it is
+//!   made: an adopted attempt's outcome and comments after its claim's
+//!   inbox position, an outcome read back after its comment, an engine
+//!   action's creations and a person's keyed request anywhere. An adopted
+//!   attempt takes nothing of the new life's inbox, so what it may not have
+//!   seen goes again to the next run; nor does a run its worker lists as
+//!   ending. A person who opened a session hears so only once its first
+//!   record is written. A run's call that reaches no live claim is answered
+//!   at once, unserved: busy before the cold start is done, failed after.
 //! - **Hold reasons** are the plan's, coded as small integers that keep
 //!   their meaning across restarts (zero: the record carries no step).
 //! - **Relations** (dependencies, children, the goal, the pull request) are

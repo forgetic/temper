@@ -746,6 +746,14 @@ fn a_session_whose_claimed_turn_failed_runs_again_unwoken() {
     let failed = claimed(session("a"), Why::Turn);
     let failed = Record { progress: Progress { last_run: Some(Time::from_nanos(200)), ..failed.progress }, ..failed };
     assert_eq!(ran(&failed, &facts()).why, Why::Turn);
+    // Held once its retries failed too, and released, which clears the
+    // claim: the release wakes it, and a turn before the release does not.
+    let released = Progress { running: None, released: Some(Time::from_nanos(300)), ..failed.progress };
+    let released = Record { progress: released, ..failed.clone() };
+    assert_eq!(ran(&released, &facts()).why, Why::Turn);
+    let turned =
+        Record { progress: Progress { last_run: Some(Time::from_nanos(400)), ..released.progress }, ..released };
+    assert_eq!(decided(&turned, &facts()), waiting(Waits::Wake));
 }
 
 #[test]

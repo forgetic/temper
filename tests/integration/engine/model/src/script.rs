@@ -98,7 +98,10 @@ fn session(item: Item, cue: &[u8], supervising: bool, snapshot: Option<&[u8]>, m
         }
         b"#note" => note(item, mirror, acts),
         b"#plan" | b"#grow" | b"#reject" => {
-            let rejected = record.as_ref().is_some_and(|record| record.step.progress.rejections > 0);
+            // Rejected, as its record counts until a release, or as its
+            // person said after.
+            let rejected = record.as_ref().is_some_and(|record| record.step.progress.rejections > 0)
+                || (cue == b"#reject" && messages > 0);
             if supervising {
                 // The goal's supervisor: done once its plan's steps are.
                 if !children.is_empty() && children.iter().all(|child| child.done.is_some()) {

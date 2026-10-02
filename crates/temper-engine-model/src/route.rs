@@ -73,11 +73,14 @@ pub(crate) fn event(model: &mut Model, env: &Env<Limits>, event: Event, out: &mu
             forge_step(model, env, forge::Event::Hint { repository, item, commit, branch });
         }
         Event::Hello { channel, hello } => {
+            runs::hello(model, &hello);
             fleet_step(model, env, fleet::Event::Hello { channel, hello: translate::hello(hello) });
         }
         Event::Lost { channel } => fleet_step(model, env, fleet::Event::Lost { channel }),
         Event::Answer { channel, item, attempt, answer } => runs::answer(model, env, channel, item, attempt, answer),
-        Event::Relay { item, attempt, call, body } => runs::relay(model, env, item, attempt, call, body),
+        Event::Relay { channel, item, attempt, call, body } => {
+            runs::relay(model, env, channel, item, attempt, call, body);
+        }
         Event::Bounced { item, attempt, bounce } => runs::bounced(model, env, item, attempt, bounce),
         Event::Told { item, attempt, kind, content } => runs::told(model, env, item, attempt, kind, content),
         Event::Ask { reply_to, person, ask } => people::ask(model, env, reply_to, person, ask, out),
@@ -90,7 +93,8 @@ pub(crate) fn event(model: &mut Model, env: &Env<Limits>, event: Event, out: &mu
 /// Routes what the sub-models emitted, and what that leads to, until all of
 /// them have emitted all they will in this entry point.
 pub(crate) fn hand_off(model: &mut Model, env: &Env<Limits>, out: &mut Queue<Request>) {
-    let bound = limits::routed(&env.limits);
+    // Every request routed, and once the cold start is done, its end.
+    let bound = limits::routed(&env.limits).saturating_add(1);
     for _ in 0..bound {
         if let Some(request) = model.views_out.pop() {
             from_views(model, env, request, out);
@@ -104,6 +108,8 @@ pub(crate) fn hand_off(model: &mut Model, env: &Env<Limits>, out: &mut Queue<Req
             from_forge(model, env, request, out);
         } else if let Some(request) = model.work_out.pop() {
             from_work(model, env, request);
+        } else if runs::is_loaded(model) {
+            runs::loaded(model, env);
         } else {
             return;
         }
@@ -250,7 +256,7 @@ fn from_forge(model: &mut Model, env: &Env<Limits>, request: forge::Request, out
         // the engine decides follows labels.
         forge::Request::Changed { item: _, labels: _ } | forge::Request::Forbidden { item: _ } => {}
         forge::Request::Left { item, why: _ } => items::left(model, env, item),
-        forge::Request::Loaded => runs::loaded(model, env),
+        forge::Request::Loaded => runs::read(model),
     }
 }
 

@@ -188,7 +188,7 @@ impl World {
                     return;
                 };
                 let (item, attempt) = (protocol::item(run), attempt.raw());
-                self.send_up(move |_| engine::Event::Relay { item, attempt, call, body });
+                self.send_up(move |channel| engine::Event::Relay { channel, item, attempt, call, body });
             }
             Request::Bounced { run, attempt, bounce } => {
                 assert!(self.up, "a bounce goes on a channel open");

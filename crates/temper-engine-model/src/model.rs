@@ -60,6 +60,8 @@ pub struct Model {
     /// Items handed in that the working set had no room for: tracked again
     /// once it has.
     pub(crate) roomless: Queue<Item>,
+    /// Whether the forge sub-model's cold read is done.
+    pub(crate) read: bool,
     /// When the cold start was done, every claim its records hold adopted.
     pub(crate) loaded: Option<Time>,
     /// The payloads decoded in the forge's answer being routed.
@@ -129,6 +131,7 @@ impl Model {
             handed: Map::with_capacity(limits.fleet.attempts),
             held: Queue::with_capacity(items),
             roomless: Queue::with_capacity(items),
+            read: false,
             loaded: None,
             decoded: Box::new([]),
             watchers: 0,

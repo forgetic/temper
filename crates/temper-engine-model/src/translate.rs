@@ -348,3 +348,36 @@ pub(crate) fn concat(parts: &[&[u8]]) -> Box<[u8]> {
 pub(crate) fn branch(prefix: &[u8], item: Item) -> Box<[u8]> {
     concat(&[prefix, &decimal(item.number)])
 }
+
+/// The charter a step's runs work under, a change's reviews apart: an
+/// agent's, a session's, or what produces and repairs a change. A wait has
+/// none.
+pub(crate) const fn charter_of(work: &plan::Work) -> Option<&plan::Charter> {
+    match work {
+        plan::Work::Agent(spec) => Some(&spec.charter),
+        plan::Work::Session(spec) => Some(&spec.charter),
+        plan::Work::Change(spec) => Some(&spec.produce),
+        plan::Work::Wait(_) => None,
+    }
+}
+
+/// The grants of the run claimed for the step `record` carries, as the
+/// record says why it runs: what a run adopted after a restart was given.
+pub(crate) fn grants_of(record: &plan::Record) -> Option<plan::Grants> {
+    let review = match record.progress.running {
+        Some(why) => match why {
+            plan::Why::Review { .. } => true,
+            plan::Why::Work | plan::Why::Produce | plan::Why::Repair(_) | plan::Why::Turn => false,
+        },
+        None => false,
+    };
+    match &record.step.work {
+        plan::Work::Change(spec) if review => match &spec.review {
+            plan::Review::Agent(charter) => Some(charter.grants),
+            plan::Review::Person => None,
+        },
+        plan::Work::Agent(_) | plan::Work::Change(_) | plan::Work::Session(_) | plan::Work::Wait(_) => {
+            Some(charter_of(&record.step.work)?.grants)
+        }
+    }
+}

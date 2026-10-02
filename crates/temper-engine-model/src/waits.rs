@@ -26,8 +26,9 @@ use crate::items::Entry;
 pub(crate) enum Wait {
     /// A step of the item's job, whose state says which.
     Job { entry: Id<Entry> },
-    /// The hub's answer to taking the item in.
-    Take { entry: Id<Entry> },
+    /// The hub's answer to taking the item in, its record `written` already
+    /// or not.
+    Take { entry: Id<Entry>, written: bool },
     /// A record written on the side, as an item's relations change, or a
     /// write whose outcome changes nothing (the labels of an item handed
     /// in, a pull request opened again on a release).
@@ -85,12 +86,25 @@ pub(crate) enum Wiki {
 pub(crate) enum Carried {
     /// A run's answer, until the hub has it durably or does not want it.
     Answer { item: Item, attempt: u64, answer: Box<Answer> },
-    /// A run's call.
-    Call { body: Box<Call> },
+    /// A run's call, which the worker names `call`, from the channel it came
+    /// on: answered there at once if the fleet cannot pass it up.
+    Call { channel: Token, item: Item, attempt: u64, call: Token, body: Box<Call> },
     /// The answer to a run's call.
     Served { served: Box<Served> },
     /// A run's report, for the views.
     Report { kind: Kind, content: Box<[u8]> },
+    /// Passed on: it goes at the reclaim point.
+    Done,
+}
+
+/// A run's call, as it was carried.
+#[derive(Debug)]
+pub(crate) struct Relayed {
+    pub(crate) channel: Token,
+    pub(crate) item: Item,
+    pub(crate) attempt: u64,
+    pub(crate) call: Token,
+    pub(crate) body: Box<Call>,
 }
 
 impl Wait {
@@ -145,35 +159,37 @@ impl Carried {
     pub(crate) fn answer(&self) -> Option<(Item, u64, &Answer)> {
         match self {
             Carried::Answer { item, attempt, answer } => Some((*item, *attempt, answer)),
-            Carried::Call { .. } | Carried::Served { .. } | Carried::Report { .. } => None,
+            Carried::Call { .. } | Carried::Served { .. } | Carried::Report { .. } | Carried::Done => None,
         }
     }
 
     pub(crate) fn answer_mut(&mut self) -> Option<&mut Answer> {
         match self {
             Carried::Answer { answer, .. } => Some(answer),
-            Carried::Call { .. } | Carried::Served { .. } | Carried::Report { .. } => None,
+            Carried::Call { .. } | Carried::Served { .. } | Carried::Report { .. } | Carried::Done => None,
         }
     }
 
-    pub(crate) fn call(self) -> Option<Box<Call>> {
+    pub(crate) fn call(self) -> Option<Relayed> {
         match self {
-            Carried::Call { body } => Some(body),
-            Carried::Answer { .. } | Carried::Served { .. } | Carried::Report { .. } => None,
+            Carried::Call { channel, item, attempt, call, body } => {
+                Some(Relayed { channel, item, attempt, call, body })
+            }
+            Carried::Answer { .. } | Carried::Served { .. } | Carried::Report { .. } | Carried::Done => None,
         }
     }
 
     pub(crate) fn served(self) -> Option<Box<Served>> {
         match self {
             Carried::Served { served } => Some(served),
-            Carried::Answer { .. } | Carried::Call { .. } | Carried::Report { .. } => None,
+            Carried::Answer { .. } | Carried::Call { .. } | Carried::Report { .. } | Carried::Done => None,
         }
     }
 
     pub(crate) fn report(self) -> Option<(Kind, Box<[u8]>)> {
         match self {
             Carried::Report { kind, content } => Some((kind, content)),
-            Carried::Answer { .. } | Carried::Call { .. } | Carried::Served { .. } => None,
+            Carried::Answer { .. } | Carried::Call { .. } | Carried::Served { .. } | Carried::Done => None,
         }
     }
 }

@@ -22,8 +22,11 @@
 //!   worker sends again after every hello until [`Request::Acknowledge`]; a
 //!   refusal goes once. [`Request::Inbound`], [`Request::Cancel`] and
 //!   [`Request::Relayed`] are notices; an [`Event::Relay`] is a run's call,
-//!   answered by at most one [`Request::Relayed`] (none if its attempt is
-//!   fenced off first); [`Event::Bounced`] and [`Event::Told`] are notices.
+//!   answered by at most one [`Request::Relayed`]: on the channel it came
+//!   on, at once and unserved, if its attempt is not the live claim or
+//!   there is no room for it; else once served, on the channel hosting the
+//!   attempt then, unless the attempt is fenced off or out of contact by
+//!   then. [`Event::Bounced`] and [`Event::Told`] are notices.
 //!   [`Request::Refuse`] turns a worker away at its hello: its channel is to
 //!   be closed.
 //! - People, through the web (engine-model.md, sections 2, 6 and 11): an
@@ -79,9 +82,9 @@ pub enum Event {
     /// `attempt`: sent at once, and again after every hello until it is
     /// acknowledged.
     Answer { channel: Token, item: Item, attempt: u64, answer: Answer },
-    /// From a worker, a call of the item's run, at its attempt `attempt`,
-    /// which the worker names `call`.
-    Relay { item: Item, attempt: u64, call: Token, body: Call },
+    /// From a worker, on its channel `channel`, a call of the item's run, at
+    /// its attempt `attempt`, which the worker names `call`.
+    Relay { channel: Token, item: Item, attempt: u64, call: Token, body: Call },
     /// From a worker: an inbound event for the item's attempt `attempt` was
     /// not passed on, for `bounce`.
     Bounced { item: Item, attempt: u64, bounce: Bounce },

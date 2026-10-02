@@ -100,9 +100,15 @@ fn related(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, result: Result<a
     };
     if done {
         let entry = get_mut(model, id);
-        items::mark(&mut entry.relations.dependencies, item, env.now);
-        items::mark(&mut entry.relations.children, item, env.now);
+        let dependency = items::mark(&mut entry.relations.dependencies, item, env.now);
+        let child = items::mark(&mut entry.relations.children, item, env.now);
         items::aside(model, env, id);
+        // Its end may have been noticed by a life that did not live to write
+        // it: it is news again, as the plan's wake rule reads news.
+        if dependency || child {
+            let source = if child { plan::Source::Child } else { plan::Source::Dependency };
+            items::notice(model, env, id, Inbound::Finished { item }, source);
+        }
     }
     ask(model, env, id, index.saturating_add(1));
 }
@@ -302,10 +308,12 @@ pub(crate) fn write(model: &mut Model, env: &Env<Limits>, owner: Token, item: It
     route::views_step(model, env, notice);
     if closed {
         // The forge shows the item closed: its record is done with it.
+        items::recorded(model, id, true);
         let wrote = work::Wrote::Done;
         return route::work_step(model, env, work::Event::Written { owner, wrote });
     }
     if !known {
+        items::recorded(model, id, false);
         let wrote = work::Wrote::Failed;
         return route::work_step(model, env, work::Event::Written { owner, wrote });
     }
@@ -334,12 +342,20 @@ pub(crate) fn record(model: &mut Model, env: &Env<Limits>, owner: Token, item: I
     post(model, env, id, wait, attempt, false);
 }
 
-fn post(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, wait: Id<Wait>, attempt: u64, resumed: bool) {
-    let item = translate::forge_item(get(model, id).item);
+/// Posts the outcome, keyed by its attempt. One of an attempt adopted after
+/// a restart may have been posted by the earlier life, after its claim's
+/// position; one that timed out, by this one: each is looked for first.
+fn post(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, wait: Id<Wait>, attempt: u64, retried: bool) {
+    let entry = get(model, id);
+    let item = translate::forge_item(entry.item);
+    let resumed = match items::Resumed::cause(entry.resumed, attempt) {
+        Some(cause) => Some(cause),
+        None if retried => Some(forge::Cause { comment: entry.since, at: Time::ZERO }),
+        None => None,
+    };
     let owner = wait.token();
     let key = translate::concat(&[b"outcome/", &translate::decimal(attempt)]);
     let write = forge::Write::Comment { item, key, person: None, body: forge::Content::Payload(owner) };
-    let resumed = if resumed { Some(forge::Cause { comment: 0, at: Time::ZERO }) } else { None };
     route::forge_step(model, env, forge::Event::Write { owner, write, resumed });
 }
 
@@ -355,7 +371,8 @@ pub(crate) fn apply(model: &mut Model, env: &Env<Limits>, owner: Token, item: It
     let of = Of::Outcome { attempt, comment };
     let doing = if kept { Doing::Fresh } else { Doing::Outcome };
     entry.staged = entry.step.clone();
-    entry.job = Job::Applying(Box::new(Applying { owner, of, doing, wait: None, resumed: !kept }));
+    let news = entry.next;
+    entry.job = Job::Applying(Box::new(Applying { owner, of, doing, wait: None, resumed: !kept, news }));
     go(model, env, id);
 }
 
@@ -376,7 +393,8 @@ pub(crate) fn act(model: &mut Model, env: &Env<Limits>, owner: Token, item: Item
         reading: None,
     };
     let doing = Doing::Writes(Box::new(writes));
-    entry.job = Job::Applying(Box::new(Applying { owner, of, doing, wait: None, resumed: false }));
+    let news = entry.next;
+    entry.job = Job::Applying(Box::new(Applying { owner, of, doing, wait: None, resumed: false, news }));
     go(model, env, id);
 }
 
@@ -642,14 +660,20 @@ fn ruled(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, decision: rules::D
     let item = get(model, id).item;
     let refused = decision == rules::Decision::Refuse;
     model::keep(model, Fact::Ruled { item, refused });
-    let action = match &get(model, id).job {
-        Job::Applying(applying) => applying.of == Of::Action || applying.of == Of::Done,
-        Job::Idle | Job::Asking { .. } | Job::Writing { .. } | Job::Recording { .. } | Job::Starting(_) => false,
+    let entry = get(model, id);
+    let (action, news) = match &entry.job {
+        Job::Applying(applying) => (applying.of == Of::Action || applying.of == Of::Done, applying.news),
+        Job::Idle | Job::Asking { .. } | Job::Writing { .. } | Job::Recording { .. } | Job::Starting(_) => (false, 0),
     };
+    // What the rules wait for may have come while the action was made: the
+    // item waits for news only if none came since it began.
+    let unchanged = entry.next == news;
     match decision {
         rules::Decision::Allow => unreachable!("an allowed write is made"),
         rules::Decision::Wait if action => {
-            get_mut(model, id).blocked = true;
+            if unchanged {
+                get_mut(model, id).blocked = true;
+            }
             finish(model, env, id, Finish::Stale);
         }
         rules::Decision::Accept { .. } if !action && rejected(get(model, id)) => reject(model, env, id),
@@ -864,9 +888,13 @@ fn make(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) -> Made {
             return Made::Done;
         }
     };
+    // What an outcome read back may have been made by the life that read it
+    // first, after its comment; an action's by an earlier life, decided
+    // again after a restart, when nothing says: each is looked for first.
     let resumed = match of {
         Of::Outcome { comment, .. } if resumed || retried => Some(forge::Cause { comment, at: Time::ZERO }),
-        Of::Outcome { .. } | Of::Action | Of::Done => None,
+        Of::Outcome { .. } => None,
+        Of::Action | Of::Done => Some(forge::Cause { comment: 0, at: Time::ZERO }),
     };
     let Ok(wait) = model.waits.insert(Wait::Job { entry: id }) else {
         unreachable!("the waits have room for every item's job")
@@ -1133,6 +1161,7 @@ pub(crate) fn wrote(
                 Err(forge::Failure::Busy) => return stall(model, id),
                 Err(_) => work::Wrote::Failed,
             };
+            items::recorded(model, id, wrote == work::Wrote::Done);
             get_mut(model, id).job = Job::Idle;
             route::work_step(model, env, work::Event::Written { owner, wrote });
         }

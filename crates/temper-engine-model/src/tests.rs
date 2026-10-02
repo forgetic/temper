@@ -1179,9 +1179,9 @@ fn a_runs_calls_are_served_once_each() {
     let (mut world, item) = World::session();
     let from = world.seen.len();
     let read = crate::boundary::Call::Read(forge::Read::Item { item: translate::forge_item(item), after: 0 });
-    world.deliver(Event::Relay { item, attempt: 1, call: Token::new(1), body: read });
+    world.deliver(Event::Relay { channel: Token::new(1), item, attempt: 1, call: Token::new(1), body: read });
     let comment = crate::boundary::Call::Comment { text: copy_of(b"working on it") };
-    world.deliver(Event::Relay { item, attempt: 1, call: Token::new(2), body: comment });
+    world.deliver(Event::Relay { channel: Token::new(1), item, attempt: 1, call: Token::new(2), body: comment });
     let mut read_served = 0_u32;
     let mut posted = 0_u32;
     for request in world.since(from) {
@@ -1390,9 +1390,15 @@ fn a_run_notes_what_it_learnt_and_recalls_it() {
         name: copy_of(b"flaky"),
         change: notes::Change::New(page),
     };
-    world.deliver(Event::Relay { item, attempt: 1, call: Token::new(1), body: note });
+    world.deliver(Event::Relay { channel: Token::new(1), item, attempt: 1, call: Token::new(1), body: note });
     let recall = notes::Recall::Name { scope: notes::Scope::Repository(0), name: copy_of(b"flaky") };
-    world.deliver(Event::Relay { item, attempt: 1, call: Token::new(2), body: crate::boundary::Call::Recall(recall) });
+    world.deliver(Event::Relay {
+        channel: Token::new(1),
+        item,
+        attempt: 1,
+        call: Token::new(2),
+        body: crate::boundary::Call::Recall(recall),
+    });
     let mut noted = None;
     let mut recalled = None;
     for request in &world.seen {
@@ -1411,4 +1417,104 @@ fn a_run_notes_what_it_learnt_and_recalls_it() {
     }
     assert_eq!(noted, Some(notes::Noted::Done), "the note is written: {:?}", world.seen.as_slice());
     assert_eq!(recalled, Some(1), "the note is recalled");
+}
+
+/// The answers the workers were sent to their calls, by the calls' names.
+fn served(seen: &[Request], call: Token) -> List<crate::boundary::Served> {
+    let mut found = List::with_capacity(8);
+    for request in seen {
+        if let Request::Relayed { call: of, served, .. } = request
+            && *of == call
+        {
+            let copy = match served {
+                crate::boundary::Served::Unserved(why) => crate::boundary::Served::Unserved(*why),
+                crate::boundary::Served::Posted { comment } => crate::boundary::Served::Posted { comment: *comment },
+                crate::boundary::Served::Read(_)
+                | crate::boundary::Served::Recalled { .. }
+                | crate::boundary::Served::Noted(_) => crate::boundary::Served::Posted { comment: 0 },
+            };
+            found.push(copy).unwrap();
+        }
+    }
+    found
+}
+
+/// The outcomes posted on `item`.
+fn outcomes(world: &mut World, item: Item) -> u32 {
+    let issue = world.forge.issue(item).unwrap();
+    let mut outcomes = 0_u32;
+    for note in &issue.comments {
+        if let Some(crate::boundary::Decoded::Outcome { .. }) = note.decoded {
+            outcomes += 1;
+        }
+    }
+    outcomes
+}
+
+#[test]
+fn an_adopted_runs_calls_are_served_within_its_steps_grants() {
+    let (mut world, item) = World::session();
+    world.restart();
+    let hosted = crate::boundary::Hosted { item, attempt: 1, phase: fleet::Phase::Active };
+    let hello = Hello { slots: 2, workstreams: Box::new([]), hosting: Box::new([hosted]) };
+    world.deliver(Event::Hello { channel: Token::new(2), hello });
+    let comment = crate::boundary::Call::Comment { text: copy_of(b"still here") };
+    world.deliver(Event::Relay { channel: Token::new(2), item, attempt: 1, call: Token::new(5), body: comment });
+    let answers = served(world.seen.as_slice(), Token::new(5));
+    assert!(
+        matches_posted(answers.as_slice()),
+        "the adopted run's call is served as its claim granted: {:?}",
+        answers.as_slice()
+    );
+}
+
+fn matches_posted(answers: &[crate::boundary::Served]) -> bool {
+    match answers {
+        [crate::boundary::Served::Posted { .. }] => true,
+        [] | [_, ..] => false,
+    }
+}
+
+#[test]
+fn a_call_that_reaches_no_live_claim_is_answered_at_once_on_its_channel() {
+    let (mut world, item) = World::session();
+    // Before the cold start is done, a call may yet be adopted: busy.
+    world.model = model();
+    world.calls = Some(0);
+    world.settle();
+    let comment = crate::boundary::Call::Comment { text: copy_of(b"anyone?") };
+    world.deliver(Event::Relay { channel: Token::new(3), item, attempt: 1, call: Token::new(6), body: comment });
+    let busy = crate::boundary::Served::Unserved(crate::boundary::Unserved::Busy);
+    assert_eq!(served(world.seen.as_slice(), Token::new(6)).as_slice(), [busy], "a call made too early may come again");
+    // Once it is done, an attempt that is not the live claim is fenced off.
+    world.restart();
+    let comment = crate::boundary::Call::Comment { text: copy_of(b"stale") };
+    world.deliver(Event::Relay { channel: Token::new(3), item, attempt: 7, call: Token::new(7), body: comment });
+    let failed = crate::boundary::Served::Unserved(crate::boundary::Unserved::Failed);
+    let answers = served(world.seen.as_slice(), Token::new(7));
+    assert_eq!(answers.as_slice(), [failed], "a fenced-off call is told so");
+    for request in &world.seen {
+        if let Request::Relayed { channel, call, .. } = request
+            && *call == Token::new(7)
+        {
+            assert_eq!(*channel, Token::new(3), "on the channel it came on");
+        }
+    }
+}
+
+#[test]
+fn an_adopted_runs_outcome_posted_before_a_restart_is_found_not_posted_again() {
+    let (mut world, item) = World::session();
+    // The forge takes the outcome's post, then answers nothing more: the
+    // record never says it is being applied.
+    world.calls = Some(1);
+    world.deliver(Event::Answer { channel: Token::new(1), item, attempt: 1, answer: replied_answer() });
+    assert_eq!(outcomes(&mut world, item), 1, "the outcome is posted");
+    world.restart();
+    let hosted = crate::boundary::Hosted { item, attempt: 1, phase: fleet::Phase::Answered };
+    let hello = Hello { slots: 2, workstreams: Box::new([]), hosting: Box::new([hosted]) };
+    world.deliver(Event::Hello { channel: Token::new(2), hello });
+    world.deliver(Event::Answer { channel: Token::new(2), item, attempt: 1, answer: replied_answer() });
+    assert!(acknowledged(&world.seen, item, 1), "the answer is applied: {:?}", world.seen.as_slice());
+    assert_eq!(outcomes(&mut world, item), 1, "the outcome an earlier life posted is found, not posted again");
 }

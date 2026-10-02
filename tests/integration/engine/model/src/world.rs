@@ -748,7 +748,7 @@ impl World {
                 hello: Hello { slots, workstreams: workstreams.into(), hosting: hosting.into() },
             },
             Up::Answer { item, attempt, said } => Event::Answer { channel, item, attempt, answer: answer_of(said) },
-            Up::Relay { item, attempt, call, body } => Event::Relay { item, attempt, call, body },
+            Up::Relay { item, attempt, call, body } => Event::Relay { channel, item, attempt, call, body },
             Up::Bounced { item, attempt, bounce } => Event::Bounced { item, attempt, bounce },
             Up::Told { item, attempt, kind, content } => Event::Told { item, attempt, kind, content: content.into() },
         }

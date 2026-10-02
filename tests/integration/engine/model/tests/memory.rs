@@ -405,11 +405,11 @@ impl Driver {
             }
             7 | 8 => {
                 let at = self.index(self.assigned.len());
-                let &(_, item, attempt) = self.assigned.get(at)?;
+                let &(channel, item, attempt) = self.assigned.get(at)?;
                 self.calls += 1;
                 let call = Token::new(self.calls);
                 let body = self.call(item);
-                Some(Event::Relay { item, attempt, call, body })
+                Some(Event::Relay { channel, item, attempt, call, body })
             }
             9 => {
                 let at = self.index(self.assigned.len());

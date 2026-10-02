@@ -115,7 +115,7 @@ fn named(op: &api::Op) -> Option<Token> {
 /// for, the outcome it posts, or the page it writes.
 fn payload(model: &Model, token: Token) -> Option<Payload> {
     match model.waits.get(Id::from_token(token))? {
-        Wait::Job { entry } | Wait::Aside { entry: Some(entry) } | Wait::Take { entry } => {
+        Wait::Job { entry } | Wait::Aside { entry: Some(entry) } | Wait::Take { entry, .. } => {
             let entry = model.items.get(*entry)?;
             match &entry.job {
                 Job::Recording { outcome, .. } => Some(Payload::Outcome(runs::posted(model, *outcome)?)),
@@ -618,8 +618,16 @@ pub(crate) fn notes_refused(model: &mut Model, env: &Env<Limits>, reply_to: Repl
     }
 }
 
-/// A run's call, served.
-pub(crate) fn serve(model: &mut Model, env: &Env<Limits>, wait: Id<Wait>, item: Item, attempt: u64, call: Call) {
+/// A run's call, which its worker names `named`, served.
+pub(crate) fn serve(
+    model: &mut Model,
+    env: &Env<Limits>,
+    wait: Id<Wait>,
+    item: Item,
+    attempt: u64,
+    named: Token,
+    call: Call,
+) {
     let Some(grants) = assigned(model, item) else {
         return runs::unserved(model, env, wait, Unserved::Ungranted);
     };
@@ -649,12 +657,12 @@ pub(crate) fn serve(model: &mut Model, env: &Env<Limits>, wait: Id<Wait>, item: 
             let reply_to = ReplyTo::new(owner);
             route::notes_step(model, env, notes::Event::Note { reply_to, scope, name, change });
         }
-        Call::Comment { text } => comment(model, env, owner, item, attempt, text),
+        Call::Comment { text } => comment(model, env, owner, item, attempt, named, text),
         Call::Escalate { text } => {
             if let Some(goal) = goal_of(model, item) {
                 items::notice(model, env, goal, Inbound::Held { item }, plan::Source::Child);
             }
-            comment(model, env, owner, item, attempt, text);
+            comment(model, env, owner, item, attempt, named, text);
         }
     }
 }
@@ -665,11 +673,9 @@ fn goal_of(model: &Model, item: Item) -> Option<Id<items::Entry>> {
     items::find(model, entry.relations.goal?)
 }
 
-/// The grants of the attempt the item's assignment carries.
+/// The grants of the item's attempt in flight, started or adopted.
 fn assigned(model: &Model, item: Item) -> Option<plan::Grants> {
-    let entry = model.items.get(items::find(model, item)?)?;
-    let assignment = entry.assignment.as_ref()?;
-    Some(assignment.charter.grants)
+    model.items.get(items::find(model, item)?)?.grants
 }
 
 /// Whether a run of `item` may note in `scope`: the deployment's, its
@@ -699,16 +705,33 @@ const fn rules_scope(scope: notes::Scope) -> rules::Scope {
     }
 }
 
-/// A run's comment on its item, keyed by its attempt and its call.
-fn comment(model: &mut Model, env: &Env<Limits>, owner: Token, item: Item, attempt: u64, text: Box<[u8]>) {
-    let key = translate::concat(&[b"call/", &translate::decimal(attempt), b"/", &translate::decimal(owner.raw())]);
+/// A run's comment on its item, keyed by its attempt and its worker's name
+/// for the call, so a call made again is found: one of an attempt adopted
+/// after a restart is looked for first, from its claim's position.
+fn comment(
+    model: &mut Model,
+    env: &Env<Limits>,
+    owner: Token,
+    item: Item,
+    attempt: u64,
+    named: Token,
+    text: Box<[u8]>,
+) {
+    let key = translate::concat(&[b"call/", &translate::decimal(attempt), b"/", &translate::decimal(named.raw())]);
+    let resumed = match items::find(model, item) {
+        Some(id) => match model.items.get(id) {
+            Some(entry) => items::Resumed::cause(entry.resumed, attempt),
+            None => None,
+        },
+        None => None,
+    };
     let write = forge::Write::Comment {
         item: translate::forge_item(item),
         key,
         person: None,
         body: forge::Content::Text(text),
     };
-    route::forge_step(model, env, forge::Event::Write { owner, write, resumed: None });
+    route::forge_step(model, env, forge::Event::Write { owner, write, resumed });
 }
 
 /// Where a scope's page `name` is: its repository's wiki, and its path.

@@ -32,7 +32,7 @@ use temper_engine_model_rules::Permission;
 use temper_engine_model_work::{self as work, Lifecycle};
 use temper_lib::{Env, Id, List, Map, ReplyTo, Time, Token};
 
-use crate::boundary::{Assignment, Inbound, Item, Posted, Record, Related, Relations};
+use crate::boundary::{Assignment, Inbound, Item, Posted, Record, Refusal, Related, Relations, Reply, Request};
 use crate::facts::Fact;
 use crate::limits::{self, Limits};
 use crate::model::{self, Model};
@@ -67,6 +67,12 @@ pub(crate) struct Entry {
     /// The assignment of the attempt in flight, while the fleet may assign
     /// it.
     pub(crate) assignment: Option<Box<Assignment>>,
+    /// The grants of the attempt in flight, started or adopted: what its
+    /// calls are served within.
+    pub(crate) grants: Option<plan::Grants>,
+    /// The attempt adopted after a restart, if the item's last claim was:
+    /// what an earlier life may have made for it is looked for first.
+    pub(crate) resumed: Option<Resumed>,
     /// The outcome posted and not wholly applied, by its comment.
     pub(crate) outcome: Option<(u64, Box<Posted>)>,
     pub(crate) inbox: Map<u64, Noted>,
@@ -87,6 +93,10 @@ pub(crate) struct Entry {
     pub(crate) merged: Option<[u8; 32]>,
     /// The permission the rules want of whoever accepts what it holds.
     pub(crate) wants: Option<Permission>,
+    /// The person's call that opened it as a session, answered once its
+    /// first record is written: a restart before then leaves it unanswered,
+    /// and the call made again finds the issue by its key.
+    pub(crate) opened: Option<ReplyTo>,
 }
 
 /// How far an entry is taken in.
@@ -140,6 +150,8 @@ pub(crate) struct Applying {
     /// The outcome was read from the forge rather than kept: what it creates
     /// may have been made before.
     pub(crate) resumed: bool,
+    /// The number the item's next inbox event was to get as it began.
+    pub(crate) news: u64,
 }
 
 /// What is applied.
@@ -203,6 +215,28 @@ pub(crate) struct Live {
     pub(crate) bounced: bool,
 }
 
+/// An attempt adopted after a restart, and the inbox position its claim's
+/// record carried: what an earlier life made for it (its outcome's comment,
+/// its runs' comments) came after it.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) struct Resumed {
+    pub(crate) attempt: u64,
+    pub(crate) since: u64,
+}
+
+impl Resumed {
+    /// The cause of a creation the attempt `attempt` asks for again, if it
+    /// is the one adopted.
+    pub(crate) const fn cause(resumed: Option<Resumed>, attempt: u64) -> Option<forge::Cause> {
+        match resumed {
+            Some(resumed) if resumed.attempt == attempt => {
+                Some(forge::Cause { comment: resumed.since, at: Time::ZERO })
+            }
+            Some(_) | None => None,
+        }
+    }
+}
+
 /// An inbox event.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct Noted {
@@ -240,6 +274,8 @@ impl Entry {
             asking: 0,
             live: None,
             assignment: None,
+            grants: None,
+            resumed: None,
             outcome: None,
             inbox: Map::with_capacity(inbox),
             next: 1,
@@ -249,6 +285,7 @@ impl Entry {
             blocked: false,
             merged: None,
             wants: None,
+            opened: None,
         }
     }
 
@@ -325,18 +362,53 @@ pub(crate) fn announced(model: &mut Model, env: &Env<Limits>, item: forge::Item,
         forge::Record::Found { comment, position, .. } => {
             entry.since = position.comment;
             match decoded_record(model, comment) {
-                Some(record) => {
+                Some(record) if sound(&record, env) => {
                     let Record { lifecycle, step, relations } = record;
+                    let pull = relations.pull;
                     let Some(entry) = model.items.get_mut(id) else { unreachable!("an entry named is held") };
                     entry.lifecycle = lifecycle;
                     entry.step = Some(step);
                     entry.relations = relations;
+                    // The working set follows the pull request the record
+                    // names, so the plan reads it as it did before the restart.
+                    if let Some(pull) = pull {
+                        let item = translate::forge_item(item);
+                        route::forge_step(model, env, forge::Event::Link { item, pull: Some(pull) });
+                    }
                     take(model, env, id, work::Read::Record(lifecycle));
                 }
-                None => mangled(model, env, id),
+                Some(_) | None => mangled(model, env, id),
             }
         }
     }
+}
+
+/// Whether a record read is one the engine could have written: its parts
+/// within the limits, and its goal's plan one the plan could have made
+/// (`plan::check_goal`). One that is not is held for a person, as a record
+/// that does not decode is.
+fn sound(record: &Record, env: &Env<Limits>) -> bool {
+    let plan = &env.limits.plan;
+    let step = &record.step.step;
+    let mut fits = limits::within(step.name.len(), plan.name_bytes)
+        && limits::within(step.after.len(), plan.dependencies)
+        && limits::within(step.gates.len(), plan.gates)
+        && limits::within(record.relations.dependencies.len(), plan.steps)
+        && limits::within(record.relations.children.len(), plan.steps);
+    for after in &step.after {
+        fits = fits && limits::within(after.len(), plan.name_bytes);
+    }
+    for related in record.relations.dependencies.iter().chain(record.relations.children.iter()) {
+        fits = fits && limits::within(related.name.len(), plan.name_bytes);
+    }
+    if let Some(charter) = translate::charter_of(&step.work) {
+        fits = fits && limits::within(charter.instructions.len(), plan.instruction_bytes);
+    }
+    let goal = match &record.step.goal {
+        Some(goal) => plan::check_goal(&route::plan_env(env), goal).is_ok(),
+        None => true,
+    };
+    fits && goal
 }
 
 /// An entry for an item the forge sub-model announced that the top level did
@@ -388,18 +460,28 @@ pub(crate) fn take(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, read: wo
     let Some(entry) = model.items.get_mut(id) else { unreachable!("an entry named is held") };
     entry.taking = Taking::Asked;
     let item = entry.item;
-    let Ok(wait) = model.waits.insert(Wait::Take { entry: id }) else {
+    // An item read with a record has one written already; a new one's first
+    // is written next.
+    let written = match read {
+        work::Read::New => false,
+        work::Read::Record(_) | work::Read::Mangled { .. } => true,
+    };
+    let Ok(wait) = model.waits.insert(Wait::Take { entry: id, written }) else {
         unreachable!("the waits have room for every item's call")
     };
     let reply_to = ReplyTo::new(wait.token());
     route::work_step(model, env, work::Event::Take { reply_to, item, read });
 }
 
-/// The hub's answer to a `Take` the top level made.
-pub(crate) fn taken(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, taken: bool) {
+/// The hub's answer to a `Take` the top level made, of an item whose record
+/// is `written` already, or not.
+pub(crate) fn taken(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, written: bool, taken: bool) {
     let Some(entry) = model.items.get_mut(id) else { return };
     if taken {
         entry.taking = Taking::Taken;
+        if written {
+            recorded(model, id, true);
+        }
         return;
     }
     // The hub refused it: full, or done already. The forge sub-model lets it
@@ -417,8 +499,22 @@ pub(crate) fn drop_entry(model: &mut Model, id: Id<Entry>) {
     }
     entry.taking = Taking::Gone;
     let item = entry.item;
+    let opened = entry.opened.take();
     model.names.remove(&item);
     model.items.retire(id);
+    if let Some(to) = opened {
+        model.requests.push(Request::Reply { to, reply: Reply::Refused(Refusal::Failed) });
+    }
+}
+
+/// The item's record was written, or could not be: the person's call that
+/// opened it is answered.
+pub(crate) fn recorded(model: &mut Model, id: Id<Entry>, written: bool) {
+    let Some(entry) = model.items.get_mut(id) else { return };
+    let item = entry.item;
+    let Some(to) = entry.opened.take() else { return };
+    let reply = if written { Reply::Opened { item } } else { Reply::Refused(Refusal::Failed) };
+    model.requests.push(Request::Reply { to, reply });
 }
 
 fn untrack(model: &mut Model, env: &Env<Limits>, item: Item) {
