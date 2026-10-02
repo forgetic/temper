@@ -214,13 +214,28 @@ fn a_push_the_forge_refuses_is_told_to_the_llm_which_finishes_again() {
 
 #[test]
 fn people_stopping_runs_at_random_moments_close_the_whole_tree() {
-    let (mut cancelled, mut deep, mut early) = (0, 0, 0);
+    let (mut cancelled, mut deep, mut early, mut done) = (0, 0, 0, 0);
     for seed in 0..40 {
         let calm = Settings::calm(600 + seed).doing(Job::Delegating, CHANGE);
         let settings = Settings { stops: 1000, stop_after: Span::millis(0, 12_000), ..calm };
         let mut world = World::new(settings);
         world.run(ITERATIONS);
-        assert_eq!(world.stats().stops, 1, "seed {seed}: a person stopped the item's first run");
+        let stats = world.stats();
+        assert_eq!(stats.stops, 1, "seed {seed}: a person stopped the item's first run");
+        // The engine stopped it, and holds the item for the person; unless
+        // its run had finished and the item closed, and the stop was refused.
+        let item = world.items()[0];
+        let repository = deployment::name(item.repository);
+        let closed = world.mirror().issue(repository, item.number).is_some_and(|issue| !issue.open);
+        let phase = world.mirror().record(repository, item.number).map(|record| record.lifecycle.phase);
+        let held = phase == Some(Phase::Held { why: Hold::Stopped, outcome: None });
+        assert_eq!(
+            (stats.stopped, held),
+            (u32::from(!closed), !closed),
+            "seed {seed}: the engine stopped the item and holds it, or it had closed: {phase:?}\n{}",
+            trace(&world)
+        );
+        done += u32::from(closed);
         let Some(run) = world.runs().next() else {
             // The stop came while the worker prepared the run's checkout.
             early += 1;
@@ -232,13 +247,17 @@ fn people_stopping_runs_at_random_moments_close_the_whole_tree() {
                 cancelled += 1;
                 deep += u32::from(run.widest > 1);
             }
-            Some(Answer::Accepted { .. }) => assert_eq!(run.reported, Some("ended"), "seed {seed}"),
+            Some(Answer::Accepted { .. }) => {
+                assert_eq!(run.reported, Some("ended"), "seed {seed}");
+                assert!(closed, "seed {seed}: a run done before its stop closed its item");
+            }
             _ => panic!("seed {seed}: expected the run cancelled or done, got {:?}", run.answer),
         }
     }
     assert!(
-        cancelled >= 20 && deep >= 10,
-        "stops came at every depth: {cancelled} cancelled, {deep} with sub-agents, {early} before their runs"
+        cancelled >= 20 && deep >= 10 && done > 0,
+        "stops came at every depth: {cancelled} cancelled, {deep} with sub-agents, {early} before their runs, \
+         {done} after"
     );
 }
 
