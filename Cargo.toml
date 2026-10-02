@@ -21,6 +21,7 @@ members = [
     "tests/integration/agent/session",
     "tests/integration/agent/tools",
     "tests/integration/checkout",
+    "tests/integration/engine/plan",
     "tests/integration/worker/agent",
     "tests/integration/worker/checkout",
     "tests/integration/worker/host",
