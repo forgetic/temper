@@ -160,9 +160,7 @@ impl World {
                 if stored == engine::Stored::Failed {
                     self.stats.store_failed += 1;
                 }
-                self.stores.end(owner);
-                let event = Event::Stored { owner, stored };
-                self.send_at(self.now.saturating_add(after), Delivery::Engine { channel: None, event });
+                self.send_at(self.now.saturating_add(after), Delivery::Stored { owner, stored });
             }
         }
     }

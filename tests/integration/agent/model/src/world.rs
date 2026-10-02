@@ -784,6 +784,8 @@ enum Delivery {
     Worker(worker::Event),
     /// The engine's protocol layer's deadline for its forge call `name`.
     Timeout(u64),
+    /// The store ends the engine's operation `owner` so.
+    Stored { owner: Token, stored: engine::Stored },
     /// A person hands in the issue `hands[at]`.
     Hand(usize),
     /// The reviewer looks at the forge.
@@ -1338,6 +1340,10 @@ impl World {
                 }
                 Delivery::Worker(event) => self.worker_stage.push(event),
                 Delivery::Timeout(name) => self.timed_out(name),
+                Delivery::Stored { owner, stored } => {
+                    self.stores.end(owner);
+                    self.engine_stage.push(engine::Event::Stored { owner, stored });
+                }
                 Delivery::Hand(at) => self.hand_in(at),
                 Delivery::Look => self.review(),
                 Delivery::Stop(item) => self.stop(item),
