@@ -32,14 +32,16 @@ pub struct Item {
     /// The head of its branch, once a run pushed to it, and the head of the
     /// branch it lands into that the push was made on.
     pub branch: Option<Pushed>,
-    /// A person's latest decision on it: accepted, or not.
-    pub decision: Option<bool>,
+    /// A person's latest decision on it, accepted or not, and when they made
+    /// it.
+    pub decision: Option<(bool, Time)>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Pushed {
     pub head: u64,
     pub on: u64,
+    pub at: Time,
 }
 
 /// An item's pull request.

@@ -5,6 +5,9 @@
 
 use alloc::boxed::Box;
 
+use temper_lib::Time;
+
+use crate::due::Why;
 use crate::plan::{Commit, Envelope, Growth, Step};
 
 /// The plan's part of an item's record.
@@ -17,24 +20,52 @@ pub struct Record {
     pub goal: Option<Goal>,
 }
 
-/// What a step has done that the forge does not show: what the outcomes
-/// applied to it so far changed.
+/// What a step has done that the forge does not show, and what its decisions
+/// need to survive a restart: the run claimed for it, what the outcomes
+/// applied to it changed, and a person's last release of it.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Progress {
-    /// An agent step's run has finished: its report, or the steps it added,
-    /// applied.
+    /// Its runs are done: an agent step's report or growth, or a session's
+    /// last turn, applied.
     pub finished: bool,
+    /// Why the run claimed for it runs, while one is: [`due`](crate::due)
+    /// writes it with the claim, and applying the run's outcome clears it.
+    pub running: Option<Why>,
+    /// When its last run was claimed: a session's last turn, which its wake
+    /// rule's timer counts from.
+    pub last_run: Option<Time>,
+    /// The runs claimed for it so far, each claim counting itself: what
+    /// tells the steps its runs added to its goal apart.
+    pub runs: u32,
     /// Runs that repaired a change for a failure (CI failed, changes asked
-    /// for, a conflict), their outcomes applied. Rebasing onto a base that
-    /// moved is not counted.
+    /// for), their outcomes applied, since it was made or last released.
     pub repairs: u32,
+    /// Runs that rebased a change onto a base that moved (conflicting with it
+    /// or not), their outcomes applied, since it was made or last released.
+    pub rebases: u32,
+    /// Its proposals a person rejected (growth beyond its goal's envelope, a
+    /// plan), since it was made or last released.
+    pub rejections: u32,
     /// A change's last review by an agent.
     pub review: Option<Reviewed>,
+    /// When a person last released it: decisions on it made before then
+    /// count for nothing, and its waits on the forge count from then.
+    pub released: Option<Time>,
 }
 
 impl Progress {
     /// A step's, as its item is made.
-    pub const NEW: Progress = Progress { finished: false, repairs: 0, review: None };
+    pub const NEW: Progress = Progress {
+        finished: false,
+        running: None,
+        last_run: None,
+        runs: 0,
+        repairs: 0,
+        rebases: 0,
+        rejections: 0,
+        review: None,
+        released: None,
+    };
 }
 
 /// An agent's verdict on a change, and the exact head it was given on.
@@ -75,4 +106,8 @@ pub struct Entry {
     /// The step that added it, by its place among the goal's steps, if a step
     /// did: that step is done only once this one is.
     pub parent: Option<u32>,
+    /// The run of the step, or of the goal's session, whose outcome added it,
+    /// by the count of runs claimed for it: what finds a growth already
+    /// applied, when it is applied again.
+    pub run: u32,
 }

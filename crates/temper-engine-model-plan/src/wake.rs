@@ -1,4 +1,4 @@
-//! Whether an item without a live run is woken by what is in its inbox
+//! Whether a session without a live run is woken by what is in its inbox
 //! (engine-model.md, 4.3 and 5.4): now, later (at a time its batch or its
 //! timer says, unless more events come first), or not until something else
 //! comes. A wake rule lets through the events of the sources it names, once
@@ -6,10 +6,14 @@
 //! its batch allows; a person's message it names is let through at once,
 //! since a person waits for the answer. Its timer wakes it on its own, a
 //! while after its last turn.
+//!
+//! Only sessions have wake rules: every other step is asked what is due
+//! whenever what it reads changes. Every event given is read, however many
+//! come from sources the rule does not name, so no message is lost behind
+//! them; the parent bounds the inbox it keeps.
 
 use temper_lib::{Env, Time};
 
-use crate::check::place;
 use crate::limits::Limits;
 use crate::plan::Wake;
 
@@ -45,38 +49,33 @@ pub enum Woken {
     No,
 }
 
-/// Whether `inbox`, the events since the item's inbox position, oldest
-/// first, wakes an item whose wake rule is `rule` and whose last turn was at
-/// `last` (or which was made then). It reads at most
-/// [`Limits::events`] of them.
+/// Whether `inbox`, the events since the item's inbox position, wakes a
+/// session whose wake rule is `rule` and whose last turn was at `last` (or
+/// which was made then). It stops reading once it knows the session wakes
+/// now.
 #[must_use]
 pub fn wake(env: &Env<Limits>, rule: &Wake, inbox: &[Inbound], last: Time) -> Woken {
+    let on = rule.on;
     let mut count: u32 = 0;
     let mut oldest: Option<Time> = None;
-    let mut message = false;
-    let read = inbox.get(..place(env.limits.events)).unwrap_or(inbox);
-    for event in read {
-        let on = rule.on;
-        let wakes = match event.source {
-            Source::Own => on.own,
-            Source::Dependency | Source::Child => on.related,
-            Source::Subscribed => on.subscribed,
-            Source::Message => {
-                message = message || on.messages;
-                on.messages
-            }
+    for event in inbox {
+        let (wakes, message) = match event.source {
+            Source::Own => (on.own, false),
+            Source::Dependency | Source::Child => (on.related, false),
+            Source::Subscribed => (on.subscribed, false),
+            Source::Message => (on.messages, true),
         };
         if !wakes {
             continue;
         }
         count = count.saturating_add(1);
+        if message || count >= rule.batch.count {
+            return Woken::Now;
+        }
         oldest = Some(match oldest {
             Some(earlier) => earlier.min(event.at),
             None => event.at,
         });
-    }
-    if message || (count > 0 && count >= rule.batch.count) {
-        return Woken::Now;
     }
     let mut at: Option<Time> = None;
     if let Some(oldest) = oldest

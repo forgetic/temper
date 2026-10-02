@@ -94,13 +94,6 @@ pub const BUDGET: Budget = Budget { tokens: 1_000, turns: 20, time: Duration::fr
 
 const GRANTS: Grants = Grants { modify: true, shell: true, forge: true, subagents: false, note: false };
 
-/// Woken by its own changes, its relations and messages, one at a time.
-const STEP_WAKE: Wake = Wake {
-    on: Sources { own: true, related: true, subscribed: false, messages: true },
-    every: None,
-    batch: Batch { count: 1, age: None },
-};
-
 /// A session wakes on a person's message at once, and on its steps
 /// finishing two at a time, or half an hour after the first.
 pub const SESSION_WAKE: Wake = Wake {
@@ -131,10 +124,9 @@ pub fn session(number: u64) -> Step {
     Step {
         name: format!("session-{number}").into_bytes().into_boxed_slice(),
         repository: Repository(0),
-        work: Work::Session(SessionSpec { charter, resume: Resume::Default }),
+        work: Work::Session(SessionSpec { charter, resume: Resume::Default, wake: SESSION_WAKE }),
         after: Box::new([]),
         gates: Box::new([]),
-        wake: SESSION_WAKE,
     }
 }
 
@@ -169,6 +161,7 @@ pub fn plan(rng: &mut Rng, script: &Script, steps_most: u32, dependencies: u32, 
             changes: 2,
             waits: 1,
             sessions: 0,
+            repositories: Box::new([Repository(0)]),
             into: Box::new([Target { repository: Repository(0), base: bytes("feat") }]),
         },
         budget,
@@ -207,7 +200,6 @@ fn drawn(rng: &mut Rng, script: &Script, name: Box<[u8]>, after: Vec<Box<[u8]>>,
         work,
         after: after.into_boxed_slice(),
         gates: gates.into_boxed_slice(),
-        wake: STEP_WAKE,
     }
 }
 

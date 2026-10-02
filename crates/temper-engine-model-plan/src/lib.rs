@@ -10,9 +10,13 @@
 //! - what is due for an item, from its step and the facts about it: nothing
 //!   yet, a run and the parts of its charter, an engine action, done, or a
 //!   hold for a person ([`due`], 5.3 and 4.5);
-//! - whether the events in an item's inbox wake it ([`wake`], 5.4);
+//! - whether the events in a session's inbox wake it ([`wake`], 5.4);
 //! - what a run's outcome writes, or that it is stale or invalid
-//!   ([`apply`], 4.4).
+//!   ([`apply`], 4.4);
+//! - what a person's release of a held item writes ([`release`]), and their
+//!   rejection of one of its proposals ([`rejected`]);
+//! - whether a goal's record, as read, is one it could have written
+//!   ([`check_goal`]): records are forge data, and a person may edit them.
 //!
 //! It knows nothing of the forge's API, the workers, the record's encoding or
 //! the mechanics of an item's lifecycle, and it never checks the rules: it
@@ -47,12 +51,12 @@ mod tests;
 mod wake;
 mod write;
 
-pub use accept::{Growing, accept, grow};
-pub use apply::{Accept, Applied, Outcome, Stale, Then, apply};
-pub use check::{Problem, Problems, check};
+pub use accept::{Growing, Grown, accept, grow};
+pub use apply::{Accept, Applied, Outcome, Stale, Then, apply, rejected, release};
+pub use check::{Problem, Problems, check, check_goal};
 pub use config::{Config, Repo, Template};
 pub use due::{Action, Due, Finish, Hold, Repair, Run, Sections, Waits, Why, due};
-pub use facts::{Ci, Decision, Facts, Mergeable, Pull, PullState, Relations};
+pub use facts::{Ci, Decided, Decision, Facts, Mergeable, Pull, PullState, Relations};
 pub use limits::{Limits, max_out, worst_case};
 pub use plan::{
     AgentSpec, Batch, Budget, ChangeSpec, Charter, Commit, Envelope, Gate, Grants, Growth, Plan, Repository, Resume,

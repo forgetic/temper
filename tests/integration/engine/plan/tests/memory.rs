@@ -28,6 +28,9 @@ const LIMITS: Limits = Limits {
     tasks: 4,
     events: 32,
     repairs: 3,
+    rebases: 6,
+    rejections: 3,
+    stall: Duration::from_secs(600),
     budget: BUDGET,
 };
 
@@ -85,7 +88,6 @@ fn step(limits: &Limits, index: u32) -> Step {
         }),
         after: after.into_boxed_slice(),
         gates: gates.into_boxed_slice(),
-        wake: WAKE,
     }
 }
 
@@ -102,7 +104,14 @@ fn envelope(limits: &Limits) -> Envelope {
     for _ in 0..limits.targets {
         into.push(Target { repository: Repository(0), base: name(limits, 0) });
     }
-    Envelope { agents: 0, changes: limits.steps, waits: 0, sessions: 0, into: into.into_boxed_slice() }
+    Envelope {
+        agents: 0,
+        changes: limits.steps,
+        waits: 0,
+        sessions: 0,
+        repositories: Box::new([Repository(0)]),
+        into: into.into_boxed_slice(),
+    }
 }
 
 fn plan(limits: &Limits) -> Plan {
@@ -115,7 +124,7 @@ fn goal(limits: &Limits, count: u32) -> Goal {
     for index in 0..count {
         let step = step(limits, index);
         let parent = if index > 0 && index + 1 == count { Some(0) } else { None };
-        entries.push(Entry { name: step.name, after: step.after, parent });
+        entries.push(Entry { name: step.name, after: step.after, parent, run: 1 });
     }
     Goal {
         steps: entries.into_boxed_slice(),
@@ -134,6 +143,7 @@ fn facts() -> Facts {
         branch: None,
         pull: None,
         decision: None,
+        closed: false,
         snapshot: false,
         woken: true,
     }
@@ -180,7 +190,10 @@ fn record(step: Step) -> Record {
 }
 
 fn session(limits: &Limits) -> Step {
-    Step { work: Work::Session(SessionSpec { charter: charter(limits), resume: Resume::Default }), ..step(limits, 0) }
+    Step {
+        work: Work::Session(SessionSpec { charter: charter(limits), resume: Resume::Default, wake: WAKE }),
+        ..step(limits, 0)
+    }
 }
 
 fn paths(limits: Limits) {
@@ -194,7 +207,7 @@ fn paths(limits: Limits) {
         checked
     });
     plan_.measure("accept", |config, env, out| {
-        let accepted = accept(config, env, &full, out);
+        let accepted = accept(config, env, &full, 0, out);
         assert_eq!(out.len(), limits.steps + 1, "an item for each step, and the goal");
         accepted
     });
@@ -215,7 +228,7 @@ fn paths(limits: Limits) {
     let started = goal(&limits, 1);
     let added = steps(&limits, 1, limits.steps);
     plan_.measure("grow", |config, env, out| {
-        let grown = grow(config, env, &started, None, &added, out);
+        let grown = grow(config, env, &started, None, 1, &added, out);
         assert!(grown.is_ok(), "{grown:?}");
         grown
     });
@@ -246,6 +259,7 @@ fn paths(limits: Limits) {
     plan_.measure("due, an action", |config, env, out| due(config, env, &change, &pushed, out));
     let pull = Pull {
         head: commit(1),
+        pushed: Time::ZERO,
         state: PullState::Open,
         ci: Ci::Passed,
         approvals: 0,

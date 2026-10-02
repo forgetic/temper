@@ -53,6 +53,9 @@ impl Settings {
                 tasks: 2,
                 events: 16,
                 repairs: 3,
+                rebases: 6,
+                rejections: 3,
+                stall: Duration::from_secs(3 * 86_400),
                 budget: script::BUDGET,
             },
             goals: 2,
@@ -177,8 +180,6 @@ struct Life {
     snapshot: bool,
     /// Whether a person was asked to decide on it.
     asked: bool,
-    /// Proposals of its a person rejected.
-    rejected: u32,
     /// Whether its last outcome was invalid: its next run takes the feedback.
     fixing: bool,
 }
@@ -195,7 +196,6 @@ impl Life {
             retry: None,
             snapshot: false,
             asked: false,
-            rejected: 0,
             fixing: false,
         }
     }
@@ -226,6 +226,8 @@ enum Delivery {
     PushBranch { item: u64 },
     /// An item's alarm.
     Alarm { item: u64 },
+    /// A person writes to a chatting session.
+    Message { item: u64 },
 }
 
 /// What a write comes from: an engine action, or an outcome.
@@ -395,11 +397,16 @@ impl World {
         let due = plan::due(&self.config, &self.env, &self.forge.item(number).record, &facts, &mut out);
         let writes = drain(&mut out);
         match due {
-            Due::Nothing(waits) => {
+            Due::Nothing { waits, until } => {
+                if let Some(at) = until {
+                    self.alarm(number, at);
+                }
                 self.waiting(number, waits);
                 false
             }
             Due::Run(run) => {
+                // The claim records the run in the step's progress.
+                self.write(number, Origin::Action, writes);
                 self.start(number, run.why, run.resume);
                 true
             }
@@ -427,8 +434,12 @@ impl World {
         for (heard, at) in &life.inbox {
             inbox.push(translate::inbound(*heard, *at));
         }
-        let rule = self.forge.item(number).record.step.wake;
-        match plan::wake(&self.env, &rule, &inbox, life.last_turn) {
+        let item = self.forge.item(number);
+        let Work::Session(spec) = &item.record.step.work else {
+            panic!("item {number} is woken, and is not a session");
+        };
+        let last = item.record.progress.last_run.unwrap_or(item.created);
+        match plan::wake(&self.env, &spec.wake, &inbox, last) {
             Woken::Now => true,
             Woken::At(at) => {
                 self.alarm(number, at);
@@ -442,7 +453,6 @@ impl World {
     /// asked once; on anything else, which comes by itself.
     fn waiting(&mut self, number: u64, waits: Waits) {
         match waits {
-            Waits::Time(at) => self.alarm(number, at),
             Waits::Acceptance | Waits::Decision => {
                 if !self.lives[&number].asked {
                     self.life(number).asked = true;
@@ -450,7 +460,8 @@ impl World {
                     self.wire.send(at, Delivery::Decide { item: number });
                 }
             }
-            Waits::Dependencies
+            Waits::Time
+            | Waits::Dependencies
             | Waits::Children
             | Waits::Ci
             | Waits::Review
@@ -516,7 +527,7 @@ impl World {
                     return;
                 }
                 let accepted = !self.rng.chance(self.settings.script.rejects);
-                self.forge.item_mut(item).decision = Some(accepted);
+                self.forge.item_mut(item).decision = Some((accepted, self.now));
                 self.log(format_args!("item {item}: a person decides, accepting: {accepted}"));
                 self.path(if accepted { "decision: accepted" } else { "decision: rejected" });
             }
@@ -534,12 +545,18 @@ impl World {
                 self.path("base moved by a person");
                 self.base_moved(repository, &base, head);
             }
+            Delivery::Message { item } => {
+                if !self.forge.is_closed(item) {
+                    self.heard(item, Heard::Message);
+                    self.log(format_args!("item {item}: a person writes"));
+                }
+            }
             Delivery::PushBranch { item } => {
                 let repository = self.forge.item(item).repository;
                 let base = self.forge.pulls[&item].base.clone();
                 let on = self.forge.base(repository, &base);
                 let head = self.forge.commit();
-                self.forge.item_mut(item).branch = Some(Pushed { head, on });
+                self.forge.item_mut(item).branch = Some(Pushed { head, on, at: self.now });
                 self.log(format_args!("item {item}: a person pushes {head}"));
                 self.path("branch pushed by a person");
                 self.watch(item, false);
@@ -603,7 +620,7 @@ impl World {
         self.life(number).fixing = false;
         let (applied, writes) = self.apply(number, &outcome);
         match applied {
-            Applied::Writes { accept, then } => {
+            Applied::Writes { accept, then, .. } => {
                 let proposal = match &outcome {
                     Outcome::Plan(_) => true,
                     Outcome::Change { .. }
@@ -612,6 +629,8 @@ impl World {
                     | Outcome::Steps(_)
                     | Outcome::Tasks(_)
                     | Outcome::Reply
+                    | Outcome::Finished
+                    | Outcome::Release { .. }
                     | Outcome::Escalation => accept == Accept::Person,
                 };
                 if proposal {
@@ -686,17 +705,13 @@ impl World {
                 };
                 let on = self.forge.base(item.repository, &spec.base);
                 let head = self.forge.commit();
-                self.forge.item_mut(number).branch = Some(Pushed { head, on });
+                self.forge.item_mut(number).branch = Some(Pushed { head, on, at: self.now });
                 self.log(format_args!("item {number}: pushed {head} on {on}"));
                 if self.forge.pulls.get(&number).is_some_and(|pull| pull.state == State::Open) {
                     self.watch(number, false);
                     self.heard(number, Heard::Own);
                 }
-                let repair = match why {
-                    Why::Repair(repair) => Some(repair),
-                    Why::Produce | Why::Work | Why::Review { .. } | Why::Turn => None,
-                };
-                Outcome::Change { head: commit(head), repair }
+                Outcome::Change { head: commit(head) }
             }
             Why::Review { head } => {
                 let verdict = if self.rng.chance(script.verdicts) { Verdict::Changes } else { Verdict::Approve };
@@ -704,11 +719,24 @@ impl World {
             }
             Why::Turn => {
                 if item.record.goal.is_none() {
+                    if self.tasks < self.settings.tasks && self.rng.chance(script.tasks) {
+                        self.tasks += 1;
+                        self.serial += 1;
+                        // The person answers, and the conversation goes on.
+                        let at = self.later(script.people);
+                        self.wire.send(at, Delivery::Message { item: number });
+                        return Outcome::Tasks(Box::new([script::task(&mut self.rng, &script, self.serial)]));
+                    }
                     let invalid = !self.lives[&number].fixing && self.rng.chance(script.invalid);
                     let limits = self.settings.limits;
                     let plan = script::plan(&mut self.rng, &script, limits.steps, limits.dependencies, invalid);
                     return Outcome::Plan(plan);
                 }
+                // A supervising session's tasks join its goal's plan: they need room.
+                let room = match &item.record.goal {
+                    Some(goal) => goal.steps.len() < usize::try_from(self.settings.limits.steps).expect("fits"),
+                    None => false,
+                };
                 if escalates {
                     return Outcome::Escalation;
                 }
@@ -717,7 +745,7 @@ impl World {
                 {
                     return Outcome::Steps(steps);
                 }
-                if self.tasks < self.settings.tasks && self.rng.chance(script.tasks) {
+                if room && self.tasks < self.settings.tasks && self.rng.chance(script.tasks) {
                     self.tasks += 1;
                     self.serial += 1;
                     return Outcome::Tasks(Box::new([script::task(&mut self.rng, &script, self.serial)]));
@@ -780,9 +808,11 @@ impl World {
                     Write::Progress(_) | Write::Goal(_) => {}
                     Write::Create { .. }
                     | Write::OpenPull { .. }
+                    | Write::ReopenPull
                     | Write::Merge { .. }
                     | Write::Close
-                    | Write::DeleteBranch => forge_writes.push(write.clone()),
+                    | Write::DeleteBranch
+                    | Write::Release { .. } => forge_writes.push(write.clone()),
                 }
             }
             self.write(number, origin, forge_writes);
@@ -814,12 +844,18 @@ impl World {
             panic!("item {number}'s proposal waits for a person");
         };
         assert_eq!(proposed, attempt, "item {number}'s proposal is the one decided");
-        let accepts = life.rejected >= 2 || !self.rng.chance(self.settings.script.proposals);
+        let accepts = !self.rng.chance(self.settings.script.proposals);
         if !accepts {
-            self.life(number).rejected += 1;
             self.heard(number, Heard::Message);
             self.path("proposal rejected");
             self.log(format_args!("item {number}: a person rejects its proposal"));
+            let mut out = Queue::with_capacity(plan::max_out(&self.settings.limits));
+            let then = plan::rejected(&self.env, &self.forge.item(number).record, &mut out);
+            let writes = drain(&mut out);
+            self.write(number, Origin::Action, writes);
+            if let Then::Hold(hold) = then {
+                self.hold(number, hold_name(hold));
+            }
             return;
         }
         self.path("proposal accepted");
@@ -849,6 +885,15 @@ impl World {
                     added.push(made);
                 }
                 Write::OpenPull { base } => self.open_pull(number, &base),
+                Write::ReopenPull => {
+                    let pull = self.forge.pulls.get_mut(&number).expect("a pull request opened");
+                    if pull.state == State::Closed {
+                        pull.state = State::Open;
+                        self.path("pull request reopened");
+                        self.watch(number, false);
+                    }
+                }
+                Write::Release { step } => self.release_step(number, &step),
                 Write::Merge { head } => self.merge(number, count(head)),
                 Write::Close => self.close(number),
                 Write::DeleteBranch => self.path("branch deleted"),
@@ -862,7 +907,7 @@ impl World {
                         Kind::Steps | Kind::Tasks | Kind::Other => self.forge.item(number).goal.unwrap_or(number),
                     };
                     self.forge.item_mut(target).record.goal = Some(goal);
-                    if kind == Kind::Steps {
+                    if kind == Kind::Steps || kind == Kind::Tasks {
                         self.path(if accepted { "growth: accepted beyond" } else { "growth: within" });
                         self.observe(&Seen::Grown { goal: target, added: added.clone(), accepted });
                     }
@@ -876,10 +921,16 @@ impl World {
         let Origin::Outcome { attempt, kind, .. } = origin else {
             panic!("item {number}'s creations come from an outcome");
         };
-        let (goal, parent) = match kind {
-            Kind::Plan => (Some(number), Some(number)),
-            Kind::Steps => (Some(self.forge.item(number).goal.unwrap_or(number)), Some(number)),
-            Kind::Tasks | Kind::Other => (None, None),
+        // A task on its own is keyed by its place; steps, a supervising
+        // session's tasks among them, join a goal.
+        let (goal, parent) = match &key {
+            Key::Task(_) => (None, None),
+            Key::Step(_) => match kind {
+                Kind::Plan => (Some(number), Some(number)),
+                Kind::Steps | Kind::Tasks | Kind::Other => {
+                    (Some(self.forge.item(number).goal.unwrap_or(number)), Some(number))
+                }
+            },
         };
         let key = match key {
             Key::Step(name) => Made::Step(name.into_vec()),
@@ -1010,6 +1061,27 @@ impl World {
         }
     }
 
+    /// The goal of item `number` releases its step named `step`, if it is
+    /// held: the plan says what the release writes.
+    fn release_step(&mut self, number: u64, step: &[u8]) {
+        let goal = self.forge.item(number).goal.unwrap_or(number);
+        let Some(held) = translate::named(&self.forge, goal, step) else {
+            return;
+        };
+        if self.forge.item(held).held.is_none() {
+            return;
+        }
+        let facts = translate::facts(&self.forge, held, self.lives[&held].snapshot, false);
+        let mut out = Queue::with_capacity(plan::max_out(&self.settings.limits));
+        plan::release(&self.env, &self.forge.item(held).record, &facts, &mut out);
+        let writes = drain(&mut out);
+        self.forge.item_mut(held).held = None;
+        self.life(held).phase = Phase::Idle;
+        self.path("released");
+        self.log(format_args!("item {held}: released"));
+        self.write(held, Origin::Action, writes);
+    }
+
     /// Closes item `number`: its step is done. Its parent and the steps after
     /// it hear of it.
     fn close(&mut self, number: u64) {
@@ -1113,15 +1185,21 @@ fn kind(outcome: &Outcome) -> Kind {
         Outcome::Plan(_) => Kind::Plan,
         Outcome::Steps(_) => Kind::Steps,
         Outcome::Tasks(_) => Kind::Tasks,
-        Outcome::Change { .. } | Outcome::Verdict { .. } | Outcome::Report | Outcome::Reply | Outcome::Escalation => {
-            Kind::Other
-        }
+        Outcome::Change { .. }
+        | Outcome::Verdict { .. }
+        | Outcome::Report
+        | Outcome::Reply
+        | Outcome::Finished
+        | Outcome::Release { .. }
+        | Outcome::Escalation => Kind::Other,
     }
 }
 
 fn hold_name(hold: Hold) -> &'static str {
     match hold {
         Hold::Rejected => "rejected",
+        Hold::Rebases => "rebases",
+        Hold::Stalled => "stalled",
         Hold::Repairs => "repairs",
         Hold::PullClosed => "pull request closed",
         Hold::Escalated => "escalated",
@@ -1151,6 +1229,8 @@ fn outcome_name(outcome: &Outcome) -> &'static str {
         Outcome::Steps(_) => "steps",
         Outcome::Tasks(_) => "tasks",
         Outcome::Reply => "reply",
+        Outcome::Finished => "finished",
+        Outcome::Release { .. } => "release",
         Outcome::Escalation => "escalation",
     }
 }

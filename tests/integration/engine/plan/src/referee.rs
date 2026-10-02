@@ -191,7 +191,11 @@ impl Referee {
                 Gate::Approvals(people) => {
                     assert!(approvals >= *people, "item {number} is merged with {people} approvals of {head}");
                 }
-                Gate::Accepted => assert_eq!(item.decision, Some(true), "item {number} is merged once accepted"),
+                Gate::Accepted => assert_eq!(
+                    item.decision.map(|(accepted, _)| accepted),
+                    Some(true),
+                    "item {number} is merged once accepted"
+                ),
             }
         }
         done_before(forge, number);
@@ -227,7 +231,11 @@ fn ran(forge: &Forge, number: u64) {
         Work::Agent(_) | Work::Wait(_) | Work::Session(_) => true,
     };
     if starts_gated && item.record.step.gates.contains(&Gate::Accepted) {
-        assert_eq!(item.decision, Some(true), "item {number} runs once a person accepts it");
+        assert_eq!(
+            item.decision.map(|(accepted, _)| accepted),
+            Some(true),
+            "item {number} runs once a person accepts it"
+        );
     }
 }
 

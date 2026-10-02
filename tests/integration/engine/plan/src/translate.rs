@@ -3,7 +3,7 @@
 //! and inbox events to the plan.
 
 use temper_engine_model_plan::{
-    Ci, Commit, Decision, Facts, Inbound, Mergeable, Pull, PullState, Relations, Source, Step,
+    Ci, Commit, Decided, Decision, Facts, Inbound, Mergeable, Pull, PullState, Relations, Source, Step,
 };
 use temper_lib::Time;
 
@@ -63,7 +63,11 @@ pub fn facts(forge: &Forge, number: u64, snapshot: bool, woken: bool) -> Facts {
         children: relations(forge, &children(forge, number)),
         branch: item.branch.map(|pushed| commit(pushed.head)),
         pull: pull(forge, number),
-        decision: item.decision.map(|accepted| if accepted { Decision::Accepted } else { Decision::Rejected }),
+        decision: item.decision.map(|(accepted, at)| Decided {
+            decision: if accepted { Decision::Accepted } else { Decision::Rejected },
+            at,
+        }),
+        closed: item.closed.is_some(),
         snapshot,
         woken,
     }
@@ -128,6 +132,7 @@ fn pull(forge: &Forge, number: u64) -> Option<Pull> {
     let base = forge.base(pull.repository, &pull.base);
     Some(Pull {
         head: commit(head),
+        pushed: pushed.at,
         state: match pull.state {
             State::Open => PullState::Open,
             State::Merged => PullState::Merged,

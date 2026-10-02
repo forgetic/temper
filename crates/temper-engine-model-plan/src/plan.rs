@@ -1,7 +1,7 @@
 //! What a plan is made of (engine-model.md, 5.1 and 5.2): steps of a few
-//! primitives, their dependencies, the gates they add and what wakes them, and
-//! the envelope an accepted plan grows within. Names are labels, compared byte
-//! for byte and never interpreted.
+//! primitives, their dependencies, the gates they add, what wakes a session,
+//! and the envelope an accepted plan grows within. Names are labels, compared
+//! byte for byte and never interpreted.
 
 use alloc::boxed::Box;
 
@@ -41,7 +41,6 @@ pub struct Step {
     pub after: Box<[Box<[u8]>]>,
     /// What it adds to the rules' conditions, never taking from them.
     pub gates: Box<[Gate]>,
-    pub wake: Wake,
 }
 
 /// A step's primitive, with its spec (5.1).
@@ -107,6 +106,10 @@ pub enum WaitSpec {
 pub struct SessionSpec {
     pub charter: Charter,
     pub resume: Resume,
+    /// What wakes it for a turn, after its first. Only sessions have wake
+    /// rules: every other step is asked what is due whenever what it reads
+    /// changes.
+    pub wake: Wake,
 }
 
 /// Which of a session's wakes resume its parked snapshot, when the engine
@@ -176,7 +179,7 @@ pub enum Gate {
     Accepted,
 }
 
-/// What wakes an item that has no live run (5.4).
+/// What wakes a session that has no live run (5.4).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Wake {
     pub on: Sources,
@@ -209,14 +212,17 @@ pub struct Batch {
 }
 
 /// How far an accepted plan may grow without a person accepting it again:
-/// how many steps of each primitive, and where changes may land.
+/// how many steps of each primitive, in which repositories, and where
+/// changes may land. Growth a person accepts beyond it widens it.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Envelope {
     pub agents: u32,
     pub changes: u32,
     pub waits: u32,
     pub sessions: u32,
-    /// The repositories and branches changes added to the plan may land into.
+    /// The repositories the items of steps added to the plan may be in.
+    pub repositories: Box<[Repository]>,
+    /// The branches changes added to the plan may land into.
     pub into: Box<[Target]>,
 }
 

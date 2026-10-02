@@ -19,6 +19,8 @@ pub enum Write {
     /// Open the pull request of the item's change, from the item's branch
     /// into `base`. It is keyed by the branch.
     OpenPull { base: Box<[u8]> },
+    /// Open again the item's pull request, which was closed unmerged.
+    ReopenPull,
     /// Merge the item's pull request at exactly `head`, or not at all.
     Merge { head: Commit },
     /// Close the item: its step is done.
@@ -31,6 +33,9 @@ pub enum Write {
     /// when its outcome proposed the plan, on the goal's item when a step under
     /// it grew it.
     Goal(Goal),
+    /// Release the step of the item's goal named `step`, as a person would:
+    /// its parent asks [`release`](crate::release) what that writes.
+    Release { step: Box<[u8]> },
 }
 
 /// What a creation is keyed by, after the outcome that causes it: its parent
