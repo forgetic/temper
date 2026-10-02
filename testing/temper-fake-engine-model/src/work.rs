@@ -5,10 +5,11 @@
 //!
 //! ```text
 //! state    event or alarm              next     emits
-//! Waiting  its alarm                   Due      (on the due queue; on a wake, the snapshot kept or dropped)
+//! Waiting  its alarm                   Due      (on the due queue)
 //!                                      Placed   assign (overbooked: no worker has a free slot)
 //! Due      resume, a free slot         Placed   assign (a stale event for the attempt it replaces, later)
 //! Placed   answered: busy              Waiting  (a retry) or Closed (no attempts left)
+//!          answered: invalid snapshot  Waiting  (a retry, fresh) or Closed (no attempts left)
 //!          answered: invalid           Closed
 //!          answered: ended             Closed
 //!          answered: parked            Waiting  (a wake) or Closed (no wakes or attempts left)
@@ -42,8 +43,16 @@
 //! is a bug.
 //!
 //! A failure is retried by the `transient` chance when a retry may get past
-//! it, and by the `permanent` chance when it may not; a busy refusal always
-//! is. Either way only while the item has attempts left, and after a backoff.
+//! it, and by the `permanent` chance when it may not; a busy refusal, and a
+//! refusal of the snapshot, always are. Either way only while the item has
+//! attempts left, and after a backoff.
+//!
+//! A parked run's snapshot is kept, by the `resumes` chance, for the attempt
+//! that wakes it, and for the next ones until a run starts from it: an
+//! attempt refused, unprepared or whose agent did not start leaves it for the
+//! next. One that started spends it, and so does one that may have (it was
+//! cancelled, or lost with its worker's contact): starting fresh always works
+//! (engine-model.md, section 6). A snapshot the worker refuses is dropped.
 //! A run's saved work is where its item's next attempt starts, in each
 //! repository whose save landed.
 
@@ -53,8 +62,8 @@ use core::mem;
 use temper_lib::{Duration, Env, Id, Queue, Time, Token};
 
 use crate::api::{
-    Access, AgentFailure, Answer, Assignment, Cause, Failure, Landing, Preparation, Refusal, RunFailure, Start, Work,
-    Workspace,
+    Access, AgentFailure, Answer, Assignment, Cause, Failure, Invalid, Landing, Preparation, Refusal, RunFailure,
+    Start, Work, Workspace,
 };
 use crate::fleet;
 use crate::model::{Alarm, Config, Model, Request};
@@ -164,13 +173,6 @@ pub(crate) fn state(model: &Model, worker: Token, run: Token, attempt: Token) ->
 pub(crate) fn due(model: &mut Model, env: &Env<Config>, id: Id<Item>, out: &mut Queue<Request>) {
     let config = &env.limits;
     let item = model.items.get_mut(id).expect("an item lives until it closes");
-    if item.snapshot.is_some() {
-        if model.rng.chance(config.resumes) {
-            model.tally.resumed = model.tally.resumed.saturating_add(1);
-        } else {
-            item.snapshot = None;
-        }
-    }
     let full = fleet::free(&model.workers).is_none();
     let overbooked = if full && model.rng.chance(config.overbook) { fleet::up(&model.workers) } else { None };
     match overbooked {
@@ -218,7 +220,7 @@ pub(crate) fn place(model: &mut Model, env: &Env<Config>, id: Id<Item>, worker: 
         workspace: item.workspace.clone(),
         save: item.save.clone(),
         charter: item.charter.clone(),
-        snapshot: item.snapshot.take(),
+        snapshot: item.snapshot.clone(),
     };
     let fresh = attempts.insert(attempt, Attempt { item: id, worker, sent: 0, state: Attempted::Live });
     assert!(fresh.expect("room for every attempt").is_none(), "attempts are named apart");
@@ -256,6 +258,7 @@ pub(crate) fn answered(
         Attempted::Cancelled => true,
         Attempted::Lost => {
             model.tally.late = model.tally.late.saturating_add(1);
+            late(model, record.item, answer);
             return;
         }
     };
@@ -271,15 +274,26 @@ pub(crate) fn answered(
         State::Placed { attempt: placed } => assert!(placed == attempt, "an item waits on its last attempt"),
         State::Waiting | State::Due | State::Closed => unreachable!("an item waits on its attempt"),
     }
+    if started(&answer) {
+        item.snapshot = None;
+    }
     let tally = &mut model.tally;
     match answer {
         Answer::Refused(Refusal::Busy) => {
             tally.busy = tally.busy.saturating_add(1);
             if cancelled { close(model, id, Ending::Cancelled) } else { retry(model, env, id) }
         }
-        Answer::Refused(Refusal::Invalid) => {
+        Answer::Refused(Refusal::Invalid(invalid)) => {
             tally.invalid = tally.invalid.saturating_add(1);
-            close(model, id, Ending::Rejected);
+            match invalid {
+                Invalid::Snapshot => {
+                    item.snapshot = None;
+                    if cancelled { close(model, id, Ending::Cancelled) } else { retry(model, env, id) }
+                }
+                Invalid::Repositories | Invalid::Duplicate | Invalid::Name | Invalid::Charter => {
+                    close(model, id, Ending::Rejected);
+                }
+            }
         }
         Answer::Ended { outcome: _, work } => {
             tally.ended = tally.ended.saturating_add(1);
@@ -319,6 +333,7 @@ pub(crate) fn lose(model: &mut Model, env: &Env<Config>, attempt: Token) {
     };
     record.state = Attempted::Lost;
     let id = record.item;
+    model.items.get_mut(id).expect("an item lives while its attempt is out").snapshot = None;
     model.timers.cancel(Alarm::Inbound(attempt));
     model.timers.cancel(Alarm::Cancel(attempt));
     model.tally.lost = model.tally.lost.saturating_add(1);
@@ -328,6 +343,40 @@ pub(crate) fn lose(model: &mut Model, env: &Env<Config>, attempt: Token) {
         retry(model, env, id);
     } else {
         close(model, id, Ending::Held);
+    }
+}
+
+/// The answer of an attempt presumed lost, its item having moved on: what it
+/// saved is where the item's next attempt starts, while the item is open.
+fn late(model: &mut Model, id: Id<Item>, answer: Answer) {
+    let work = match answer {
+        Answer::Refused(_) => return,
+        Answer::Ended { outcome: _, work }
+        | Answer::Parked { snapshot: _, work }
+        | Answer::Failed { failure: _, work } => work,
+    };
+    let Some(item) = model.items.get(id) else {
+        return;
+    };
+    match item.state {
+        State::Waiting | State::Due | State::Placed { .. } => record_work(model, id, work),
+        State::Closed => {}
+    }
+}
+
+/// Whether the attempt's run started, or may have, as its answer shows.
+fn started(answer: &Answer) -> bool {
+    match answer {
+        Answer::Refused(_) => false,
+        Answer::Ended { .. } | Answer::Parked { .. } => true,
+        Answer::Failed { failure, work: _ } => match failure {
+            Failure::Unprepared(_) | Failure::Agent(AgentFailure::Unstarted) => false,
+            Failure::Run(_)
+            | Failure::Agent(
+                AgentFailure::Exited | AgentFailure::Rules | AgentFailure::NoProgress | AgentFailure::WallTime,
+            )
+            | Failure::Cancelled(_) => true,
+        },
     }
 }
 
@@ -409,7 +458,7 @@ fn retry(model: &mut Model, env: &Env<Config>, id: Id<Item>) {
 }
 
 /// The item parked, with `snapshot`: it is woken later, if it has wakes and
-/// attempts left.
+/// attempts left, resumed from the snapshot or started fresh, as drawn now.
 fn wake(model: &mut Model, env: &Env<Config>, id: Id<Item>, snapshot: Option<Box<[u8]>>) {
     let config = &env.limits;
     let item = model.items.get_mut(id).expect("an item lives until it closes");
@@ -418,7 +467,13 @@ fn wake(model: &mut Model, env: &Env<Config>, id: Id<Item>, snapshot: Option<Box
         return;
     }
     item.wakes = item.wakes.saturating_add(1);
-    item.snapshot = snapshot;
+    item.snapshot = match snapshot {
+        Some(snapshot) if model.rng.chance(config.resumes) => {
+            model.tally.resumed = model.tally.resumed.saturating_add(1);
+            Some(snapshot)
+        }
+        Some(_) | None => None,
+    };
     item.state = waiting(&mut item.state);
     let at = after(env, model.rng.between(config.wake_min.as_nanos(), config.wake_max.as_nanos()));
     model.timers.arm(Alarm::Item(id), at).expect("a timer per item");

@@ -154,7 +154,23 @@ pub enum Refusal {
     /// The worker has no room for it now.
     Busy,
     /// It does not fit the worker's limits.
-    Invalid,
+    Invalid(Invalid),
+}
+
+/// What about an assignment does not fit a worker's limits.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Invalid {
+    /// The workspace lists more repositories than a run may hold.
+    Repositories,
+    /// The workspace lists one repository name twice.
+    Duplicate,
+    /// A key, name, remote, branch, commit or identity is empty or too long,
+    /// or a repository name is not one safe path component.
+    Name,
+    /// The charter holds more bytes than a run may.
+    Charter,
+    /// The snapshot holds more bytes than a run may.
+    Snapshot,
 }
 
 /// Why a run failed (worker-model.md, 4.3): what the engine acts on.

@@ -187,7 +187,7 @@ pub struct Tally {
     pub lost: u32,
     pub late: u32,
     /// Items due again after a refusal, a failure or a loss; items woken after
-    /// a park, and the wakes that resumed a run from its snapshot.
+    /// a park, and the wakes drawn to resume a run from its snapshot.
     pub retries: u32,
     pub wakes: u32,
     pub resumed: u32,

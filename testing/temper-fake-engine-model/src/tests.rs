@@ -6,8 +6,8 @@ use temper_lib::bytes::copy_of;
 use temper_lib::{Duration, Env, List, Queue, Rng, Time, Token};
 
 use crate::api::{
-    Access, AgentFailure, Answer, Assignment, Bounce, Budget, Cause, Charter, Failure, Hello, Hosted, Landing, Outcome,
-    Phase, Preparation, Refusal, RunFailure, Start, Tools, Verdict, Work, Workspace,
+    Access, AgentFailure, Answer, Assignment, Bounce, Budget, Cause, Charter, Failure, Hello, Hosted, Invalid, Landing,
+    Outcome, Phase, Preparation, Refusal, RunFailure, Start, Tools, Verdict, Work, Workspace,
 };
 use crate::{Config, Event, MAX_OUT, Model, Origin, Request, charter, fire, resume, step, workspace};
 
@@ -238,7 +238,7 @@ fn a_busy_refusal_is_retried_with_a_new_attempt_until_no_attempts_are_left() {
 fn an_invalid_refusal_closes_the_item() {
     let mut h = Harness::new(config());
     let assignment = h.assign_first();
-    h.answer(&assignment, Answer::Refused(Refusal::Invalid));
+    h.answer(&assignment, Answer::Refused(Refusal::Invalid(Invalid::Name)));
     assert_eq!(h.model.tally().endings.rejected, 1);
     assert_eq!(h.model.next_deadline(), None);
 }
@@ -295,6 +295,57 @@ fn a_wake_may_start_the_run_fresh_from_its_saved_work() {
     let saved = Start::Saved { branch: copy_of(b"saved/parser/0") };
     assert_eq!(starts.as_slice(), &[saved, Start::Base { branch: copy_of(b"main") }]);
     assert_eq!((h.model.tally().saved, h.model.tally().resumed), (1, 0));
+}
+
+#[test]
+fn a_snapshot_survives_a_refused_or_unprepared_resume_until_a_run_starts() {
+    let mut h = Harness::new(Config { attempts: 8, ..config() });
+    let first = h.assign_first();
+    h.answer(&first, Answer::Parked { snapshot: Some(copy_of(b"state")), work: nothing() });
+    let woken = h.assign_next();
+    h.answer(&woken, Answer::Refused(Refusal::Busy));
+    let again = h.assign_next();
+    assert_eq!(again.snapshot.as_deref(), Some(&b"state"[..]), "kept past a busy refusal");
+    h.answer(&again, failed(Failure::Unprepared(Preparation::Transient)));
+    let unstarted = h.assign_next();
+    assert_eq!(unstarted.snapshot.as_deref(), Some(&b"state"[..]), "kept past an unprepared workspace");
+    h.answer(&unstarted, failed(Failure::Agent(AgentFailure::Unstarted)));
+    let exiting = h.assign_next();
+    assert_eq!(exiting.snapshot.as_deref(), Some(&b"state"[..]), "kept past an agent that did not start");
+    h.answer(&exiting, failed(Failure::Agent(AgentFailure::Exited)));
+    let fresh = h.assign_next();
+    assert_eq!(fresh.snapshot, None, "spent once a run started from it");
+}
+
+#[test]
+fn a_snapshot_the_worker_refuses_is_dropped_and_the_run_started_fresh() {
+    let mut h = Harness::new(config());
+    let first = h.assign_first();
+    h.answer(&first, Answer::Parked { snapshot: Some(copy_of(b"state")), work: nothing() });
+    let woken = h.assign_next();
+    assert!(woken.snapshot.is_some(), "resumed from its snapshot");
+    h.answer(&woken, Answer::Refused(Refusal::Invalid(Invalid::Snapshot)));
+    let fresh = h.assign_next();
+    assert_eq!(fresh.snapshot, None);
+    let tally = h.model.tally();
+    assert_eq!((tally.invalid, tally.retries, tally.endings.rejected), (1, 1, 0));
+}
+
+#[test]
+fn the_late_answer_of_a_lost_attempt_leaves_its_saved_work_to_the_next() {
+    let mut h = Harness::new(Config { saves: 1000, ..config() });
+    let first = h.assign_first();
+    h.step(Event::Lost { worker: WORKER });
+    assert_eq!(h.next(), None, "the grace runs out");
+    let work = Work { landed: Box::new([]), saved: Some(Box::new([Landing::Landed, Landing::Unchanged])) };
+    h.answer(&first, Answer::Failed { failure: Failure::Cancelled(Cause::Contact), work });
+    h.hello(WORKER, 1, &[]);
+    let second = h.assign_next();
+    let saved = Start::Saved { branch: copy_of(b"saved/parser/0") };
+    let first_repository = second.workspace.repositories.first().expect("two repositories");
+    assert_eq!(first_repository.start, saved);
+    let tally = h.model.tally();
+    assert_eq!((tally.late, tally.saved, tally.failed), (1, 1, 0));
 }
 
 #[test]
@@ -512,8 +563,8 @@ fn facts_are_only_counted() {
 fn an_attempt_answered_twice_is_a_bug() {
     let mut h = Harness::new(config());
     let assignment = h.assign_first();
-    h.answer(&assignment, Answer::Refused(Refusal::Invalid));
-    h.answer(&assignment, Answer::Refused(Refusal::Invalid));
+    h.answer(&assignment, Answer::Refused(Refusal::Invalid(Invalid::Name)));
+    h.answer(&assignment, Answer::Refused(Refusal::Invalid(Invalid::Name)));
 }
 
 #[test]
