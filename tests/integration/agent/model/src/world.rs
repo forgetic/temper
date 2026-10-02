@@ -373,13 +373,13 @@ impl Settings {
             .flat_map(|job| [fixture::origin(fixture::name(job)), fixture::origin(fixture::DOCS)])
             .collect();
         let engine = Config {
-            items: 2 + chance(6),
+            items: 4 + chance(8),
             window: Duration::from_millis(1 + u64::from(chance(30_000))),
             workstreams: Box::new([b"parser".as_slice().into(), b"lexer".as_slice().into(), b"site".as_slice().into()]),
             repositories: repositories.into(),
             spread_max: 2,
             branches: chance(300),
-            writable: 800,
+            writable: 900,
             saves: chance(800),
             invalid: chance(50),
             brief_min: 16,
@@ -392,7 +392,7 @@ impl Settings {
             time_min: Duration::from_secs(10),
             time_max: Duration::from_secs(600),
             max_tokens: 256 + chance(768),
-            changes: 700,
+            changes: 800,
             checks: 700,
             verdicts: 500,
             agents: 700,
@@ -400,7 +400,7 @@ impl Settings {
             transient: 500,
             permanent: 200,
             overbook: chance(300),
-            cancels: chance(500),
+            cancels: chance(300),
             late_cancels: chance(500),
             cancel_min: Duration::ZERO,
             cancel_max: Duration::from_secs(30),
@@ -417,7 +417,7 @@ impl Settings {
             } else {
                 WORKER.agent.no_progress
             },
-            wall_time: if watched { Duration::from_secs(30 + u64::from(chance(270))) } else { WORKER.agent.wall_time },
+            wall_time: if watched { Duration::from_secs(20 + u64::from(chance(180))) } else { WORKER.agent.wall_time },
             ..WORKER.agent
         };
         let worker = worker::Limits { agent, ..WORKER };
@@ -439,9 +439,9 @@ impl Settings {
             io_errors: chance(30),
             check: Span::millis(100, 1000 + u64::from(chance(89_000))),
             cancels_lost: chance(300),
-            moved: chance(300),
-            move_after: Span::millis(0, 20_000),
-            refusing: chance(300),
+            moved: chance(500),
+            move_after: Span::millis(0, 5_000),
+            refusing: chance(200),
             granule,
             ..calm
         }
