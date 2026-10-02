@@ -19,12 +19,15 @@ pub struct Limits {
     pub reviews: u32,
     /// Gates a plan may add to a step.
     pub gates: u32,
+    /// Branches a plan's changes may land on.
+    pub lands: u32,
 }
 
 /// Findings beyond those a grant or a gate makes: the most a check writes of
-/// its own (a landing's repository, read-only, CI and review; a run's three
+/// its own (a plan's repository, size, estimate, protected landing and goal
+/// bound; a landing's repository, read-only, CI and review; a run's three
 /// spending bounds and read-only).
-const OWN: u32 = 4;
+const OWN: u32 = 5;
 
 /// The most findings one check writes under `limits`: the room its caller
 /// provides.

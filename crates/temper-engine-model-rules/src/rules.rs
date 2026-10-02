@@ -20,7 +20,7 @@ pub struct Rules {
     pub engine: u64,
     /// The permission a review on a protected branch counts at: an approval
     /// by a person with less is no approval, and their request for changes
-    /// holds nothing back.
+    /// holds nothing back. Write at least: a reader's review never counts.
     pub reviewer: Permission,
     /// The largest plan, in steps and in its estimate, that passes unasked,
     /// and who may accept a larger one.
@@ -68,6 +68,9 @@ impl Rules {
     #[must_use]
     pub fn fits(&self, limits: &Limits) -> bool {
         if self.repositories > limits.repositories || self.protected.capacity() > limits.protected {
+            return false;
+        }
+        if self.reviewer < Permission::Write {
             return false;
         }
         for branch in &self.protected {
