@@ -4,8 +4,10 @@
 //! [`Event::Call`], and each is answered with exactly one [`Request::Reply`]
 //! after a latency drawn from the configuration. What it answers follows a
 //! script (see the `respond` module): configured chances of failing, a
-//! configured number of tool rounds, then a final answer. It rejects
-//! conversations a real provider would reject, so it also checks its clients.
+//! configured number of tool rounds, then a final answer; or, for a
+//! conversation a world scripted ([`api::Script`]), the answers it wrote,
+//! one after another. It rejects conversations a real provider would reject,
+//! so it also checks its clients.
 //!
 //! Its vocabulary ([`api`]) is its own: it shares nothing with the agent's
 //! model. Between the two sits a protocol layer on each side, or a simulator

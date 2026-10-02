@@ -1,10 +1,11 @@
 //! The fake provider's state and its entry points.
 
+use alloc::boxed::Box;
 use core::mem;
 
 use temper_lib::{Deadlines, Duration, Env, Id, Queue, ReplyTo, Rng, Slab, Time};
 
-use crate::api::{Answer, Error, Query};
+use crate::api::{Answer, Error, Query, Script};
 use crate::respond;
 
 /// The most requests an entry point emits per call.
@@ -72,6 +73,8 @@ pub struct Model {
     rng: Rng,
     /// Tool call ids issued.
     minted: u64,
+    /// The conversations it plays from a script.
+    scripts: Box<[Script]>,
 }
 
 /// A call being answered.
@@ -91,11 +94,19 @@ enum State {
 impl Model {
     #[must_use]
     pub fn new(config: &Config, seed: u64) -> Model {
+        Model::scripted(config, seed, Box::new([]))
+    }
+
+    /// A provider that plays the conversations `scripts` cue from them, and
+    /// the others at random.
+    #[must_use]
+    pub fn scripted(config: &Config, seed: u64, scripts: Box<[Script]>) -> Model {
         Model {
             calls: Slab::with_capacity(config.calls),
             timers: Deadlines::with_capacity(config.calls),
             rng: Rng::new(seed),
             minted: 0,
+            scripts,
         }
     }
 
@@ -150,7 +161,7 @@ fn call(model: &mut Model, env: &Env<Config>, reply_to: ReplyTo, query: &Query, 
         return;
     }
     let config = &env.limits;
-    let result = respond::respond(&mut model.rng, &mut model.minted, config, query);
+    let result = respond::respond(&mut model.rng, &mut model.minted, config, &model.scripts, query);
     let latency = model.rng.between(config.latency_min.as_nanos(), config.latency_max.as_nanos());
     let call = Call { state: State::Thinking { reply_to, result } };
     let id = model.calls.insert(call).expect("checked for room above");

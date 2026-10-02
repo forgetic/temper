@@ -93,3 +93,37 @@ pub enum Error {
     Unauthorized,
     InvalidRequest,
 }
+
+/// A conversation the fake plays from a script rather than at random: one
+/// whose system text holds `cue`.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct Script {
+    pub cue: Box<[u8]>,
+    /// The answers, in order: the first answers a conversation with no
+    /// assistant message yet, the next one with one, and so on.
+    pub turns: Box<[Turn]>,
+}
+
+/// One scripted answer: what it says, why it stops, and the tokens it takes
+/// to say.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct Turn {
+    pub lines: Box<[Line]>,
+    pub finish: Finish,
+    pub tokens: u64,
+}
+
+/// A piece of a scripted answer. The fake names its calls.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum Line {
+    Text {
+        text: Box<[u8]>,
+    },
+    /// A call to the tool `name` with `arguments`, which may be anything: a
+    /// script may call a tool that was not offered, or write what is not an
+    /// object.
+    Call {
+        name: Box<[u8]>,
+        arguments: Box<[u8]>,
+    },
+}

@@ -10,6 +10,7 @@ members = [
     "crates/temper-agent-model-tools",
     "testing/temper-fake-worker-model",
     "testing/temper-llm-model",
+    "tests/integration/agent/model",
     "tests/integration/agent/run",
     "tests/integration/agent/session",
     "tests/integration/agent/tools",
