@@ -15,7 +15,9 @@
 //! run names no session type: siblings share none (4.5).
 //!
 //! What a run is given is policy as data ([`charter`]): the run interprets no
-//! workflow vocabulary, and compares the labels in it byte for byte.
+//! workflow vocabulary, and compares the labels in it byte for byte. So is what
+//! it may finish with ([`outcome`]), which [`outcome::judge`] checks a declared
+//! outcome against.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
