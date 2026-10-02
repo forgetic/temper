@@ -7,9 +7,9 @@
 //! | Busy | Event | Becomes | Does |
 //! |---|---|---|---|
 //! | idle | a note waits to be written | writing | asks for the write |
-//! | idle | a listing is wanted (a new scope, `Refresh`, a `Changed` with no room) | listing | asks for the list |
 //! | idle | a page is lacking | fetching | asks for the page |
-//! | idle | nothing to do | idle | ends its first pass: the calls waiting for it go on |
+//! | idle | in a pass, a listing taken in and no page lacking | idle, follows | ends the pass: the calls waiting for it go on |
+//! | idle | a listing is wanted (a new scope, `Refresh`, a `Changed` with no room) | listing | asks for the list |
 //! | listing | `Listed`, pages | idle, follows | marks the entries listed, wants the pages it does not know at their revision, forgets the entries no longer listed |
 //! | listing | `Listed`, none | idle, follows | keeps what it knew |
 //! | fetching | `Fetched`, a page | idle, follows | learns its line; one past the limits is left out, and forgotten |
@@ -37,9 +37,9 @@ use crate::model::{self, Model, Op};
 #[derive(Debug)]
 pub(crate) struct Kept {
     pub(crate) scope: Scope,
-    /// Whether its first pass, a listing and the reads it wanted, has ended:
-    /// until then the calls that need it wait.
-    pub(crate) passed: bool,
+    /// Where its pass stands: its first, or another for a scope that could
+    /// never be listed. Until it has ended, the calls that need it wait.
+    pub(crate) pass: Pass,
     /// Whether its pages have been listed once: until then its index is not
     /// known.
     pub(crate) listed: bool,
@@ -72,6 +72,16 @@ pub(crate) struct Known {
     pub(crate) listing: u64,
 }
 
+/// A kept scope's pass: a listing, then the reads it wanted.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum Pass {
+    /// Until a listing is taken in, or fails.
+    Listing,
+    /// Reading the pages the listing wanted.
+    Reading,
+    Ended,
+}
+
 /// The wiki operation a kept scope has in flight.
 #[derive(Debug)]
 pub(crate) enum Busy {
@@ -90,7 +100,7 @@ impl Kept {
     fn new(scope: Scope, limits: &Limits, used: u64) -> Kept {
         Kept {
             scope,
-            passed: false,
+            pass: Pass::Listing,
             listed: false,
             listings: 0,
             entries: Map::with_capacity(limits.entries),
@@ -149,8 +159,12 @@ pub(crate) fn keep(
             let kept = model.kept.get_mut(id).expect("a scope kept is in the slab");
             kept.pins = kept.pins.saturating_add(1);
             kept.used = model.uses;
-            if !kept.listed && kept.passed {
-                kept.passed = false;
+            let ended = match kept.pass {
+                Pass::Ended => true,
+                Pass::Listing | Pass::Reading => false,
+            };
+            if !kept.listed && ended {
+                kept.pass = Pass::Listing;
                 kept.relist = true;
                 follow(model, id, out);
             }
@@ -204,7 +218,9 @@ pub(crate) fn unpin(model: &mut Model, scope: Scope) {
 }
 
 /// Starts what the kept scope `id` is to do next, if it is idle: a write, a
-/// listing, a page's read; or, with nothing left, ends its first pass.
+/// page's read, a listing; and ends its pass once a listing has been taken
+/// in and no page is lacking, so that listings asked for meanwhile do not
+/// hold the calls waiting back.
 pub(crate) fn follow(model: &mut Model, id: Id<Kept>, out: &mut Queue<Request>) {
     let kept = model.kept.get_mut(id).expect("a scope kept is in the slab");
     match kept.busy {
@@ -218,29 +234,32 @@ pub(crate) fn follow(model: &mut Model, id: Id<Kept>, out: &mut Queue<Request>) 
         call::send(model, note, op, out);
         return;
     }
-    if kept.relist {
-        kept.relist = false;
-        kept.busy = Busy::Listing;
-        let op = model::start(model, Op::Scope(id));
-        out.push(Request::List { owner: op.token(), scope });
-        return;
-    }
     if let Some(name) = kept.lacking.pop_first() {
         kept.busy = Busy::Fetching { name: name.clone() };
         let op = model::start(model, Op::Scope(id));
         out.push(Request::Fetch { owner: op.token(), scope, name });
         return;
     }
-    if kept.passed {
-        return;
+    let reading = match kept.pass {
+        Pass::Reading => true,
+        Pass::Listing | Pass::Ended => false,
+    };
+    if reading {
+        kept.pass = Pass::Ended;
+        for _ in 0..kept.waiting.len() {
+            let kept = model.kept.get_mut(id).expect("a scope kept is in the slab");
+            let Some(waiting) = kept.waiting.pop() else {
+                break;
+            };
+            call::wake(model, waiting);
+        }
     }
-    kept.passed = true;
-    for _ in 0..kept.waiting.len() {
-        let kept = model.kept.get_mut(id).expect("a scope kept is in the slab");
-        let Some(waiting) = kept.waiting.pop() else {
-            break;
-        };
-        call::wake(model, waiting);
+    let kept = model.kept.get_mut(id).expect("a scope kept is in the slab");
+    if kept.relist {
+        kept.relist = false;
+        kept.busy = Busy::Listing;
+        let op = model::start(model, Op::Scope(id));
+        out.push(Request::List { owner: op.token(), scope });
     }
 }
 
@@ -284,6 +303,10 @@ pub(crate) fn listed(
         Busy::Listing => kept.busy = Busy::Idle,
         Busy::Idle | Busy::Fetching { .. } | Busy::Writing { .. } => unreachable!("a list ends a listing"),
     }
+    kept.pass = match kept.pass {
+        Pass::Listing | Pass::Reading => Pass::Reading,
+        Pass::Ended => Pass::Ended,
+    };
     let Some(pages) = pages else {
         model.facts.push(Fact::Unlisted);
         follow(model, id, out);

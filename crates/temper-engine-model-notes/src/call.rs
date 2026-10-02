@@ -21,7 +21,7 @@ use crate::boundary::{
     Author, Change, Entry, Fetched, Line, Noted, Page, Recall, Reference, Refusal, Request, Scope, Scopes, Wrote,
 };
 use crate::facts::Fact;
-use crate::kept::{self, Known};
+use crate::kept::{self, Known, Pass};
 use crate::limits::Limits;
 use crate::model::{self, Model, Op};
 
@@ -224,7 +224,11 @@ fn admit(model: &mut Model, env: &Env<Limits>, scopes: Scopes, kind: Kind, out: 
     for scope in order {
         let kept_id = *model.scopes.get(scope).expect("kept above");
         let kept = model.kept.get_mut(kept_id).expect("a scope kept is in the slab");
-        if !kept.passed {
+        let waiting = match kept.pass {
+            Pass::Listing | Pass::Reading => true,
+            Pass::Ended => false,
+        };
+        if waiting {
             kept.waiting.push(id);
             waits = waits.saturating_add(1);
         }

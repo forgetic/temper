@@ -295,10 +295,24 @@ fn a_scope_runs_one_wiki_operation_at_a_time_and_hints_wait_their_turn() {
     assert!(h.step(Event::Refresh { scope: REPO }).is_empty(), "the read is in flight");
     assert!(h.step(Event::Changed { scope: REPO, name: Box::from(*b"bb") }).is_empty());
     let asked = h.read(fetch, b"aa", 2);
-    let [Request::List { owner: list, scope: REPO }] = &*asked else { panic!("then the listing: {asked:?}") };
-    let asked = h.list(*list, &[(b"aa", 2)]);
-    let [Request::Fetch { name, .. }] = &*asked else { panic!("then the page hinted: {asked:?}") };
+    let [Request::Fetch { owner: fetch, name, .. }] = &*asked else { panic!("then the page hinted: {asked:?}") };
     assert_eq!(&**name, b"bb");
+    let asked = h.read(*fetch, b"bb", 1);
+    let [Request::List { owner: list, scope: REPO }] = &*asked else { panic!("then the listing: {asked:?}") };
+    assert!(h.list(*list, &[(b"aa", 2), (b"bb", 1)]).is_empty(), "nothing it does not know");
+}
+
+#[test]
+fn listings_asked_for_meanwhile_do_not_hold_a_first_pass_back() {
+    let mut h = Harness::new(LIMITS);
+    let asked = h.step(Event::Index { reply_to: reply(1), scopes: RUN, budget: 1000 });
+    assert!(h.list(listing(&asked, DEPLOYMENT), &[]).is_empty());
+    let asked = h.list(listing(&asked, REPO), &[(b"aa", 1)]);
+    assert!(h.step(Event::Refresh { scope: REPO }).is_empty(), "the read is in flight");
+    let asked = h.read(owner(&asked), b"aa", 1);
+    let [Request::List { scope: REPO, .. }] = &*asked else { panic!("listed again: {asked:?}") };
+    let [Request::Indexed { lines, .. }] = &*h.resume() else { panic!("the pass ended all the same") };
+    assert_eq!(**lines, [line(REPO, b"aa")]);
 }
 
 #[test]

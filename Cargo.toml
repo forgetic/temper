@@ -23,6 +23,7 @@ members = [
     "tests/integration/agent/session",
     "tests/integration/agent/tools",
     "tests/integration/checkout",
+    "tests/integration/engine/notes",
     "tests/integration/engine/plan",
     "tests/integration/worker/agent",
     "tests/integration/worker/checkout",
@@ -43,6 +44,7 @@ temper-agent-model = { path = "crates/temper-agent-model" }
 temper-agent-model-run = { path = "crates/temper-agent-model-run" }
 temper-agent-model-session = { path = "crates/temper-agent-model-session" }
 temper-agent-model-tools = { path = "crates/temper-agent-model-tools" }
+temper-engine-model-notes = { path = "crates/temper-engine-model-notes" }
 temper-engine-model-plan = { path = "crates/temper-engine-model-plan" }
 temper-worker-model = { path = "crates/temper-worker-model" }
 temper-worker-model-agent = { path = "crates/temper-worker-model-agent" }
