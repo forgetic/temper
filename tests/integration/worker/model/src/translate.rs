@@ -113,6 +113,7 @@ pub fn down(request: engine::Request, commit: Commit, places: &mut BTreeMap<Toke
         engine::Request::Relayed { worker: _, run, attempt, call, answer } => {
             Event::Relayed { run, attempt, call, answer }
         }
+        engine::Request::Acknowledge { worker: _, run, attempt } => Event::Acknowledged { run, attempt },
     }
 }
 
@@ -172,24 +173,30 @@ fn refusal(refusal: host::Refusal) -> api::Refusal {
 
 fn work(work: host::Work) -> api::Work {
     let host::Work { landed, saved } = work;
+    let landed = landed.iter().map(|landed| landed.repository).collect();
     let saved = saved.map(|saved| saved.iter().map(|&landing| self::landing(landing)).collect());
     api::Work { landed, saved }
 }
 
+/// The engine's landing for the worker's: it has no word for a commit landed,
+/// nor for a push the forge refused, which failed as far as it knows.
 fn landing(landing: host::Landing) -> api::Landing {
     match landing {
-        host::Landing::Landed => api::Landing::Landed,
+        host::Landing::Landed { commit: _ } => api::Landing::Landed,
         host::Landing::Moved => api::Landing::Moved,
-        host::Landing::Failed => api::Landing::Failed,
+        host::Landing::Failed | host::Landing::Refused => api::Landing::Failed,
         host::Landing::Unchanged => api::Landing::Unchanged,
     }
 }
 
+/// The engine's failure for the worker's: what it has no word for, a
+/// preparation that failed for a repository the forge does not have or that
+/// refused its identity, is permanent as far as it knows.
 fn failure(failure: host::Failure) -> api::Failure {
     match failure {
         host::Failure::Unprepared(preparation) => api::Failure::Unprepared(match preparation {
             host::Preparation::Transient => api::Preparation::Transient,
-            host::Preparation::Permanent => api::Preparation::Permanent,
+            host::Preparation::Missing { .. } | host::Preparation::Refused { .. } => api::Preparation::Permanent,
         }),
         host::Failure::Run(run) => api::Failure::Run(match run {
             host::RunFailure::Model => api::RunFailure::Model,
@@ -241,7 +248,8 @@ pub fn answer_kind(answer: &host::Answer) -> &'static str {
 pub fn failure_kind(failure: host::Failure) -> &'static str {
     match failure {
         host::Failure::Unprepared(host::Preparation::Transient) => "unprepared transient",
-        host::Failure::Unprepared(host::Preparation::Permanent) => "unprepared permanent",
+        host::Failure::Unprepared(host::Preparation::Missing { .. }) => "unprepared missing",
+        host::Failure::Unprepared(host::Preparation::Refused { .. }) => "unprepared refused",
         host::Failure::Run(host::RunFailure::Model) => "run model",
         host::Failure::Run(host::RunFailure::Budget) => "run budget",
         host::Failure::Run(host::RunFailure::Policy) => "run policy",
@@ -259,13 +267,14 @@ pub fn failure_kind(failure: host::Failure) -> &'static str {
 }
 
 /// Every kind [`answer_kind`] names, for a sweep to check it reached them.
-pub const ANSWER_KINDS: [&str; 19] = [
+pub const ANSWER_KINDS: [&str; 20] = [
     "refused busy",
     "refused invalid",
     "ended",
     "parked",
     "unprepared transient",
-    "unprepared permanent",
+    "unprepared missing",
+    "unprepared refused",
     "run model",
     "run budget",
     "run policy",

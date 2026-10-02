@@ -258,7 +258,7 @@ pub const LIMITS: Limits = Limits {
     redial: Duration::from_secs(1),
     redial_max: Duration::from_secs(8),
     told: 16,
-    stalled: 4,
+    stalled: 8,
 };
 
 /// The calm engine: six items over a minute, in three workstreams over four
@@ -417,6 +417,10 @@ pub struct Stats {
     pub answers_taken: u32,
     pub answers_lost: u32,
     pub held: u32,
+    /// Answers sent again, the engine's acknowledgement not heard, and the
+    /// acknowledgements the worker heard.
+    pub resent: u32,
+    pub acknowledgements: u32,
     pub abandoned: u64,
     /// Dials, those that opened a channel and those that failed; channels
     /// dropped; hellos; and what the engine sent that was lost in flight, and
@@ -546,7 +550,8 @@ struct Attempt {
     repositories: Vec<Repository>,
     snapshot: Option<Box<[u8]>>,
     agent: Option<Token>,
-    answered: bool,
+    /// Its answer, as the worker first sent it.
+    answer: Option<String>,
 }
 
 #[derive(Debug)]
@@ -645,6 +650,8 @@ pub struct World {
     /// answers it gave up.
     open: BTreeSet<Token>,
     given_up: BTreeSet<Token>,
+    /// Attempts whose answers reached the engine.
+    reached: BTreeSet<Token>,
     /// Attempts a hello listed as answered, whose answers follow it.
     following: BTreeSet<Token>,
     /// Attempts the engine's cancel reached the worker for, by the place among
@@ -712,6 +719,7 @@ impl World {
             attempts: BTreeMap::new(),
             open: BTreeSet::new(),
             given_up: BTreeSet::new(),
+            reached: BTreeSet::new(),
             following: BTreeSet::new(),
             cancelled: BTreeMap::new(),
             routed: 0,
@@ -887,13 +895,20 @@ impl World {
                     repositories: repositories.collect(),
                     snapshot: assignment.snapshot.clone(),
                     agent: None,
-                    answered: false,
+                    answer: None,
                 };
                 assert!(self.attempts.insert(attempt, record).is_none(), "the engine assigns an attempt once");
                 self.open.insert(attempt);
             }
+            Event::Acknowledged { attempt, .. } => {
+                // The worker forgets the answer: no hello lists it again.
+                if self.attempts.get(attempt).is_some_and(|record| record.answer.is_some()) {
+                    self.open.remove(attempt);
+                }
+                self.stats.acknowledgements += 1;
+            }
             Event::Cancel { attempt, .. } => {
-                let live = self.attempts.get(attempt).is_some_and(|record| !record.answered);
+                let live = self.attempts.get(attempt).is_some_and(|record| record.answer.is_none());
                 if live && !self.cancelled.contains_key(attempt) {
                     let first = self.routed + u64::from(self.stage.out.len());
                     self.cancelled.insert(*attempt, first);
@@ -963,7 +978,8 @@ impl World {
     /// followed by them.
     fn hello(&mut self, hello: &Hello) {
         assert!(self.up, "a hello goes on a channel open");
-        assert_eq!(hello.slots, self.settings.worker.host.slots, "the hello says the worker's slots");
+        let slots = if self.shut { 0 } else { self.settings.worker.host.slots };
+        assert_eq!(hello.slots, slots, "the hello says the worker's slots, none once it is shutting down");
         let listed: BTreeSet<Token> = hello.hosting.iter().map(|hosted| hosted.attempt).collect();
         assert_eq!(listed.len(), hello.hosting.len(), "a hello lists each run once");
         // Of the runs it was given and has not answered, it lists all but those
@@ -1002,14 +1018,20 @@ impl World {
         assert!(self.up, "an answer goes on a channel open");
         let record = self.attempts.get_mut(&attempt).expect("an answer is for an attempt the worker was given");
         assert_eq!(record.run, run, "an answer names its run");
-        assert!(!record.answered && !self.given_up.contains(&attempt), "an attempt is answered once, unless given up");
-        record.answered = true;
+        assert!(self.open.contains(&attempt), "an answer is for a run neither acknowledged nor given up");
+        self.following.remove(&attempt);
+        self.stats.answers_sent += 1;
+        let said = format!("{answer:?}");
+        if let Some(first) = &record.answer {
+            // Sent again after a hello, the engine's acknowledgement not heard.
+            assert_eq!(*first, said, "an answer sent again is the same answer");
+            self.stats.resent += 1;
+            return;
+        }
+        record.answer = Some(said);
         let assigned = record.at;
         let agent = record.agent;
-        self.open.remove(&attempt);
-        self.following.remove(&attempt);
         *self.stats.answers.entry(translate::answer_kind(answer)).or_default() += 1;
-        self.stats.answers_sent += 1;
         match answer {
             host::Answer::Failed { failure: host::Failure::Cancelled(reason), .. } => match reason {
                 host::Reason::Engine => {
@@ -1024,10 +1046,11 @@ impl World {
                 ),
                 host::Reason::Shutdown => assert!(self.shut, "a run is cancelled for a shutdown once told to"),
             },
-            host::Answer::Refused(_)
-            | host::Answer::Ended { .. }
-            | host::Answer::Parked { .. }
-            | host::Answer::Failed { .. } => {}
+            // A refusal goes once, and holds no slot: the worker forgets it.
+            host::Answer::Refused(_) => {
+                self.open.remove(&attempt);
+            }
+            host::Answer::Ended { .. } | host::Answer::Parked { .. } | host::Answer::Failed { .. } => {}
         }
         let Some(owner) = agent else {
             return;
@@ -1108,7 +1131,7 @@ impl World {
         agent.attempt = Some(attempt);
         let workspace = agent.workspace;
         let record = self.attempts.get_mut(&attempt).expect("an agent starts for an attempt the worker was given");
-        assert!(!record.answered, "no agent starts for a run answered");
+        assert!(record.answer.is_none(), "no agent starts for a run answered");
         assert_eq!(record.agent, None, "an attempt starts one agent");
         record.agent = Some(owner);
         assert_eq!(snapshot, record.snapshot.as_deref(), "an agent starts from its attempt's snapshot");
@@ -1343,8 +1366,9 @@ impl World {
             Channel::Open { epoch: open, hello } if open == epoch => {
                 let hello = match &event {
                     engine::Event::Hello { .. } => true,
-                    engine::Event::Answered { .. } => {
+                    engine::Event::Answered { attempt, .. } => {
                         self.stats.answers_taken += 1;
+                        self.reached.insert(*attempt);
                         hello
                     }
                     engine::Event::Relay { .. }
@@ -1400,7 +1424,8 @@ impl World {
             engine::Request::Assign { worker, .. }
             | engine::Request::Inbound { worker, .. }
             | engine::Request::Cancel { worker, .. }
-            | engine::Request::Relayed { worker, .. } => *worker,
+            | engine::Request::Relayed { worker, .. }
+            | engine::Request::Acknowledge { worker, .. } => *worker,
         };
         assert_eq!(worker, WORKER, "the engine sends to the one worker there is");
         match self.channel {
@@ -1716,11 +1741,24 @@ impl World {
         for (owner, agent) in &self.agents {
             assert!(gone(&self.tree, agent), "agent {owner:?} has gone");
         }
-        let taken = {
-            let tally = self.engine.tally();
-            tally.busy + tally.invalid + tally.ended + tally.parked + tally.failed + tally.late
-        };
-        assert_eq!(taken, self.stats.answers_taken, "the engine took every answer that reached it");
+        // The engine takes each attempt's answer once, however often it came.
+        let tally = self.engine.tally();
+        let taken = tally.busy + tally.invalid + tally.ended + tally.parked + tally.failed + tally.late;
+        assert_eq!(taken + tally.duplicates, self.stats.answers_taken, "the engine took every answer that reached it");
+        let reached = u32::try_from(self.reached.len()).expect("fits");
+        assert_eq!(taken, reached, "the engine took one answer for each attempt answered");
+        for (attempt, record) in &self.attempts {
+            // A refusal goes once: lost in flight, its attempt is presumed lost.
+            let refused = record.answer.as_ref().is_some_and(|answer| answer.starts_with("Refused"));
+            assert!(
+                self.reached.contains(attempt)
+                    || self.given_up.contains(attempt)
+                    || self.open.contains(attempt)
+                    || refused,
+                "the answer for {attempt:?} reached the engine, unless the worker gave it up: {:?}",
+                record.answer
+            );
+        }
         assert_eq!(
             self.stats.answers_sent,
             self.stats.answers_taken + self.stats.answers_lost,
