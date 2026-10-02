@@ -15,6 +15,7 @@ use crate::{
     Authority, Call, Done, Effect, Entry, Event, Exit, Expect, Fault, Grants, Hit, Kind, Limits, Model, Name, Op,
     Outcome, Part, Path, Place, Refusal, Repo, Request, Root, Var, Version, effect, max_out, step, worst_case,
 };
+use crate::{Fact, Tool, Verdict};
 
 const LIMITS: Limits = Limits {
     kits: 2,
@@ -35,6 +36,7 @@ const LIMITS: Limits = Limits {
     search_hits: 8,
     search_bytes: 256,
     search_timeout: Duration::from_secs(30),
+    facts: 64,
 };
 
 const ALL: Grants = Grants { inspect: true, modify: true, shell: true };
@@ -1088,4 +1090,53 @@ fn a_search_asks_io_for_bounded_hits_and_answers_with_them() {
     }
     let outside = Call::Search { path: path(b"/etc"), pattern: bytes(b"root"), glob: None };
     assert_eq!(h.call(kit, outside), Outcome::Outside);
+}
+
+/// Drains the facts told so far.
+fn told(h: &mut Harness) -> List<Fact> {
+    let mut facts = List::with_capacity(LIMITS.facts);
+    for _ in 0..LIMITS.facts {
+        if let Some(fact) = h.model.pop_fact() {
+            facts.push(fact).expect("room for every fact");
+        }
+    }
+    facts
+}
+
+#[test]
+fn a_kit_tells_what_happens_as_facts() {
+    let mut h = Harness::new(LIMITS);
+    let kit = h.open(5, authority(ALL));
+    let session = Token::new(5);
+    assert_eq!(h.call(kit, read(b"/etc/passwd")), Outcome::Outside);
+    let (owner, _) = h.start(kit, 1, read(b"src/lib.rs"));
+    drop(h.end(owner, Done::Loaded { content: bytes(b"one\ntwo\n"), version: version(1) }));
+    let (_, _) = h.start(kit, 2, Call::List { path: path(b"src") });
+    drop(h.emit(Event::Close { kit }));
+    let expected = [
+        Fact::Opened { session },
+        // Refused at the entrance: answered without having started.
+        Fact::Answered { session, tool: Tool::Read, verdict: Verdict::Outside, bytes: 0 },
+        Fact::Started { session, tool: Tool::Read },
+        Fact::Answered { session, tool: Tool::Read, verdict: Verdict::Read, bytes: 8 },
+        Fact::Started { session, tool: Tool::List },
+        Fact::Closing { session, running: 1 },
+    ];
+    assert_eq!(told(&mut h).as_slice(), &expected);
+    let mut bad = authority(ALL);
+    bad.env = Box::new([var(b"A=B", b"")]);
+    drop(h.step(Event::Open { session: Token::new(6), authority: bad }));
+    let refused = Fact::Refused { session: Token::new(6), refusal: Refusal::Invalid };
+    assert_eq!(told(&mut h).as_slice(), &[refused]);
+}
+
+#[test]
+fn facts_that_do_not_fit_are_counted_and_change_nothing() {
+    let mut h = Harness::new(Limits { facts: 1, ..LIMITS });
+    let kit = h.open(5, authority(ALL));
+    assert_eq!(h.call(kit, read(b"/etc/passwd")), Outcome::Outside, "a lost fact changes no answer");
+    assert_eq!(h.step(Event::Close { kit }), Some(Request::Closed { session: Token::new(5) }));
+    assert_eq!(h.model.pop_fact(), Some(Fact::Opened { session: Token::new(5) }));
+    assert_eq!(h.model.pop_fact(), None);
+    assert_eq!(h.model.facts_lost(), 2);
 }

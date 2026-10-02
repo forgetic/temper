@@ -1,7 +1,8 @@
-use temper_lib::{Duration, Id, List, Map, Set, Slab};
+use temper_lib::{Duration, Id, List, Map, Queue, Set, Slab};
 
 use crate::authority::{Mount, Var};
 use crate::boundary::Root;
+use crate::facts::Fact;
 use crate::job::{self, Job};
 use crate::kit::Kit;
 use crate::knowledge::Seen;
@@ -48,6 +49,9 @@ pub struct Limits {
     pub search_bytes: u32,
     /// How long a search may take, within its call's deadline.
     pub search_timeout: Duration,
+    /// Facts kept until the parent drains them. Beyond them, facts are
+    /// dropped and counted.
+    pub facts: u32,
 }
 
 /// The most memory the model holds under `limits`, in bytes (6.4), or `None`
@@ -64,7 +68,9 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     // slots, for the jobs answered in an iteration.
     let running = u64::from(limits.kits).checked_mul(u64::from(limits.calls))?;
     let jobs = Slab::<Job>::worst_case(job::slots(limits)?)?.checked_add(running.checked_mul(job::held(limits)?)?)?;
-    kits.checked_add(jobs)
+    // Facts own nothing beyond their queue.
+    let facts = Queue::<Fact>::worst_case(limits.facts)?;
+    kits.checked_add(jobs)?.checked_add(facts)
 }
 
 /// What one kit holds beyond its slot: its authority, each path in it at most

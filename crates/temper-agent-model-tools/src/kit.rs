@@ -30,8 +30,9 @@ use temper_lib::{Env, Id, Queue, ReplyTo, Set, Slab, Time, Token};
 
 use crate::authority::{self, Authority, Checkout, Located};
 use crate::boundary::{Expect, Refusal, Request};
-use crate::call::{Call, Outcome};
+use crate::call::{self, Call, Outcome};
 use crate::edit::Edit;
+use crate::facts::{self, Fact, Facts};
 use crate::job::{self, Job, Work};
 use crate::knowledge::Knowledge;
 use crate::limits::Limits;
@@ -67,11 +68,11 @@ pub(crate) fn open(
     out: &mut Queue<Request>,
 ) {
     if model.kits.is_full() {
-        out.push(Request::Refused { session, refusal: Refusal::Busy });
+        refuse(model, session, Refusal::Busy, out);
         return;
     }
     let Some(checkout) = authority::admit(authority, &env.limits) else {
-        out.push(Request::Refused { session, refusal: Refusal::Invalid });
+        refuse(model, session, Refusal::Invalid, out);
         return;
     };
     let kit = Kit {
@@ -82,7 +83,13 @@ pub(crate) fn open(
         state: State::Open,
     };
     let id = model.kits.insert(kit).expect("checked for room above");
+    model.facts.push(Fact::Opened { session });
     out.push(Request::Opened { session, kit: id.token() });
+}
+
+fn refuse(model: &mut Model, session: Token, refusal: Refusal, out: &mut Queue<Request>) {
+    model.facts.push(Fact::Refused { session, refusal });
+    out.push(Request::Refused { session, refusal });
 }
 
 pub(crate) fn call(
@@ -94,17 +101,22 @@ pub(crate) fn call(
     deadline: Time,
     out: &mut Queue<Request>,
 ) {
-    let Model { kits, jobs } = model;
+    let Model { kits, jobs, facts } = model;
     let id = Id::from_token(kit);
     let kit = kits.get_mut(id).expect("a kit lives until its session closes it");
     assert!(kit.state == State::Open, "no call follows a close");
+    let tool = call::tool(&call);
     match admit(kit, call, deadline, env) {
         Ok(work) => {
+            facts.push(Fact::Started { session: kit.session, tool });
             let job = job::start(jobs, id, reply_to, work, deadline, env, out);
             let fresh = kit.jobs.insert(job).expect("checked for room at the entrance");
             assert!(fresh, "a job is new to its kit");
         }
-        Err(outcome) => out.push(Request::Answer { to: reply_to, outcome }),
+        Err(outcome) => {
+            facts.push(facts::answered(kit.session, tool, &outcome));
+            out.push(Request::Answer { to: reply_to, outcome });
+        }
     }
 }
 
@@ -113,13 +125,19 @@ pub(crate) fn close(model: &mut Model, kit: Token, out: &mut Queue<Request>) {
     let kit = model.kits.get_mut(id).expect("a kit lives until its session closes it");
     assert!(kit.state == State::Open, "a kit is closed once");
     if kit.jobs.is_empty() {
-        end(&mut model.kits, id, out);
+        end(&mut model.kits, &mut model.facts, id, out);
         return;
     }
     kit.state = State::Closing;
+    model.facts.push(Fact::Closing { session: kit.session, running: kit.jobs.len() });
     for job in &kit.jobs {
         job::cancel(*job, out);
     }
+}
+
+/// The token of the kit's session.
+pub(crate) fn session(kit: &Kit) -> Token {
+    kit.session
 }
 
 /// Whether the kit is closing, its jobs cancelled.
@@ -133,7 +151,7 @@ pub(crate) fn closing(kit: &Kit) -> bool {
 
 /// The job `job` of the kit `id` has answered: it leaves the kit, which ends
 /// with it if it was the last of a closing kit.
-pub(crate) fn finished(kits: &mut Slab<Kit>, id: Id<Kit>, job: Id<Job>, out: &mut Queue<Request>) {
+pub(crate) fn finished(kits: &mut Slab<Kit>, facts: &mut Facts, id: Id<Kit>, job: Id<Job>, out: &mut Queue<Request>) {
     let kit = kits.get_mut(id).expect("a kit lives until its jobs have ended");
     let running = kit.jobs.remove(&job);
     assert!(running, "a job is its kit's until it ends");
@@ -141,7 +159,7 @@ pub(crate) fn finished(kits: &mut Slab<Kit>, id: Id<Kit>, job: Id<Job>, out: &mu
         State::Open => {}
         State::Closing => {
             if kit.jobs.is_empty() {
-                end(kits, id, out);
+                end(kits, facts, id, out);
             }
         }
         State::Closed => unreachable!("a closed kit runs no job"),
@@ -149,9 +167,10 @@ pub(crate) fn finished(kits: &mut Slab<Kit>, id: Id<Kit>, job: Id<Job>, out: &mu
 }
 
 /// Ends the kit `id`, which runs nothing: its session learns it has closed.
-fn end(kits: &mut Slab<Kit>, id: Id<Kit>, out: &mut Queue<Request>) {
+fn end(kits: &mut Slab<Kit>, facts: &mut Facts, id: Id<Kit>, out: &mut Queue<Request>) {
     let kit = kits.get_mut(id).expect("a kit lives until it is retired");
     kit.state = State::Closed;
+    facts.push(Fact::Closed { session: kit.session });
     out.push(Request::Closed { session: kit.session });
     kits.retire(id);
 }

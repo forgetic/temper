@@ -486,6 +486,7 @@ fn noisy_world(seed: u64) -> World {
             file_bytes: pick(64, 8192),
             read_bytes: pick(16, 2048),
             list_entries: pick(1, 12),
+            facts: pick(1, 64),
             file_timeout,
             ..calm.tools
         },
@@ -1158,4 +1159,32 @@ fn a_search_is_bounded_and_says_when_it_cannot_run() {
     let modify = Grants { inspect: false, modify: true, shell: true };
     let (answers, world) = run(Settings::calm(72), modify, vec![Step::Calls(vec![search(b".", b"fn", None)])]);
     assert_eq!((answers, world.stats().ops), (vec![Outcome::NotGranted], 0));
+}
+
+#[test]
+fn a_world_with_no_room_for_facts_runs_as_one_with_room() {
+    let run_with = |facts| {
+        let calm = Settings::calm(80);
+        let settings = Settings { tools: Limits { facts, ..calm.tools }, ..calm };
+        let script = vec![
+            Step::Calls(vec![read(b"src/lib.rs"), list(b"src"), read(b"/etc/passwd")]),
+            Step::Calls(vec![edit(b"src/lib.rs", b"fn one", b"fn uno", false), shell(b"cargo test", None)]),
+        ];
+        let (answers, world) = run(settings, ALL, script);
+        (
+            answers,
+            world
+                .checkout()
+                .files()
+                .into_iter()
+                .map(|(path, content)| (path.to_vec(), content.to_vec()))
+                .collect::<Vec<_>>(),
+            world.stats().facts_lost,
+        )
+    };
+    let (answers, files, lost) = run_with(64);
+    assert_eq!(lost, 0);
+    let (lossy_answers, lossy_files, lossy_lost) = run_with(1);
+    assert!(lossy_lost > 0, "facts were dropped");
+    assert_eq!((lossy_answers, lossy_files), (answers, files), "nothing decided depends on a fact");
 }

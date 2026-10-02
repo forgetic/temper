@@ -35,6 +35,30 @@ pub enum Call {
     Shell { command: Box<[u8]>, timeout: Option<Duration> },
 }
 
+/// Which tool a call is for, without its arguments.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Tool {
+    Read,
+    List,
+    Search,
+    Write,
+    Edit,
+    Shell,
+}
+
+/// The tool `call` is for.
+#[must_use]
+pub const fn tool(call: &Call) -> Tool {
+    match call {
+        Call::Read { .. } => Tool::Read,
+        Call::List { .. } => Tool::List,
+        Call::Search { .. } => Tool::Search,
+        Call::Write { .. } => Tool::Write,
+        Call::Edit { .. } => Tool::Edit,
+        Call::Shell { .. } => Tool::Shell,
+    }
+}
+
 /// What a call does to the checkout. Calls that only read may run side by
 /// side; a call that writes runs alone.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]

@@ -69,6 +69,7 @@ impl Settings {
                 search_hits: 8,
                 search_bytes: 256,
                 search_timeout: Duration::from_secs(30),
+                facts: 64,
             },
             io: Span::millis(1, 20),
             faults: 0,
@@ -99,6 +100,8 @@ pub enum Step {
 pub struct Stats {
     /// Calls the sessions made.
     pub calls: u32,
+    /// Facts the tools dropped for want of room.
+    pub facts_lost: u64,
     /// Operations the tools asked of io, and the commands among them.
     pub ops: u32,
     pub commands: u32,
@@ -198,6 +201,8 @@ pub struct World {
     /// The versions io has told the tools of, for each place: the only ones a
     /// store may expect there.
     versions: BTreeSet<(u64, Vec<u8>, u64)>,
+    /// The facts the tools told, by session.
+    facts: BTreeMap<u64, Vec<tools::Fact>>,
     /// Whether some kit may write each root: those none may write change only
     /// by the world's own changes, which `untouched` follows.
     writable: BTreeMap<u64, bool>,
@@ -229,6 +234,7 @@ impl World {
             calls: BTreeMap::new(),
             ops: BTreeMap::new(),
             versions: BTreeSet::new(),
+            facts: BTreeMap::new(),
             writable: BTreeMap::new(),
             untouched: None,
             stats: Stats::default(),
@@ -243,7 +249,7 @@ impl World {
 
     #[must_use]
     pub fn stats(&self) -> Stats {
-        self.stats
+        Stats { facts_lost: self.tools.facts_lost(), ..self.stats }
     }
 
     #[must_use]
@@ -332,6 +338,12 @@ impl World {
         while let Some(request) = self.tools_out.pop() {
             self.log(&format!("tools -> {request:?}"));
             self.request(request);
+        }
+
+        // Facts, at the world's own pace.
+        while let Some(fact) = self.tools.pop_fact() {
+            self.log(&format!("tools tell {fact:?}"));
+            self.facts.entry(session_of(&fact).raw()).or_default().push(fact);
         }
 
         // The reclaim point.
@@ -632,6 +644,42 @@ impl World {
         for (call, (_, answer)) in &self.calls {
             assert!(answer.is_some(), "call {call} was answered");
         }
+        self.assert_told();
+    }
+
+    /// The facts tell what happened, as the world saw it: each session's kit
+    /// opened or was refused, closed once if it opened, and every call was
+    /// answered once, having started or not. Facts may be lost: then at most
+    /// as many were told.
+    fn assert_told(&self) {
+        let lossless = self.tools.facts_lost() == 0;
+        for (name, session) in &self.sessions {
+            let mut told = Told::default();
+            for fact in self.facts.get(name).map_or(&[][..], Vec::as_slice) {
+                match fact {
+                    tools::Fact::Opened { .. } => told.opened += 1,
+                    tools::Fact::Refused { .. } => told.refused += 1,
+                    tools::Fact::Started { .. } => told.started += 1,
+                    tools::Fact::Answered { .. } => told.answered += 1,
+                    tools::Fact::Closing { .. } => {}
+                    tools::Fact::Closed { .. } => told.closed += 1,
+                }
+            }
+            let calls = session.calls.len();
+            let refused = match session.state {
+                State::Refused(_) => 1,
+                State::Opening | State::Running { .. } | State::Waiting { .. } | State::Closing | State::Closed => 0,
+            };
+            if lossless {
+                let opened = 1 - refused;
+                let expected = Told { opened, refused, started: told.started, answered: calls, closed: opened };
+                assert_eq!(told, expected, "session {name}: the facts tell what the world saw");
+                assert!(told.started <= calls, "session {name}: a call starts at most once");
+            } else {
+                assert!(told.opened + told.refused <= 1 && told.closed <= 1, "session {name}: {told:?}");
+                assert!(told.started <= calls && told.answered <= calls, "session {name}: {told:?}");
+            }
+        }
     }
 
     /// The files of the repositories no kit may write.
@@ -687,6 +735,28 @@ impl World {
 
     fn log(&mut self, line: &str) {
         self.trace.push(format!("{:>16} {line}", self.now.as_nanos()));
+    }
+}
+
+/// How many facts of each kind a session was told about.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+struct Told {
+    opened: usize,
+    refused: usize,
+    started: usize,
+    answered: usize,
+    closed: usize,
+}
+
+/// The session a fact is about.
+fn session_of(fact: &tools::Fact) -> Token {
+    match fact {
+        tools::Fact::Opened { session }
+        | tools::Fact::Refused { session, .. }
+        | tools::Fact::Started { session, .. }
+        | tools::Fact::Answered { session, .. }
+        | tools::Fact::Closing { session, .. }
+        | tools::Fact::Closed { session } => *session,
     }
 }
 

@@ -3,6 +3,7 @@
 use temper_lib::{Env, Queue, Slab};
 
 use crate::boundary::{Event, Request};
+use crate::facts::{Fact, Facts};
 use crate::job::{self, Job};
 use crate::kit::{self, Kit};
 use crate::limits::Limits;
@@ -21,6 +22,7 @@ pub const fn max_out(limits: &Limits) -> u32 {
 pub struct Model {
     pub(crate) kits: Slab<Kit>,
     pub(crate) jobs: Slab<Job>,
+    pub(crate) facts: Facts,
 }
 
 impl Model {
@@ -28,7 +30,11 @@ impl Model {
     #[must_use]
     pub fn new(limits: &Limits) -> Model {
         let jobs = job::slots(limits).expect("worst_case accepted the limits");
-        Model { kits: Slab::with_capacity(limits.kits), jobs: Slab::with_capacity(jobs) }
+        Model {
+            kits: Slab::with_capacity(limits.kits),
+            jobs: Slab::with_capacity(jobs),
+            facts: Facts::with_capacity(limits.facts),
+        }
     }
 
     /// Kits present, closed ones included until they are reclaimed.
@@ -41,6 +47,19 @@ impl Model {
     #[must_use]
     pub fn jobs(&self) -> u32 {
         self.jobs.len()
+    }
+
+    /// The oldest fact not yet drained. The parent drains them at its own
+    /// pace; what does not fit meanwhile is dropped and counted.
+    pub fn pop_fact(&mut self) -> Option<Fact> {
+        self.facts.pop()
+    }
+
+    /// How many facts were dropped for want of room, since the model was
+    /// made.
+    #[must_use]
+    pub fn facts_lost(&self) -> u64 {
+        self.facts.lost()
     }
 
     /// The reclaim point: frees what closed in this iteration.

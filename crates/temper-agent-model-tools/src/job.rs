@@ -13,47 +13,49 @@
 //! io compares that with the real file just before it stores, so a change
 //! made since, by another kit or by anything else, is caught: as `Stale` if
 //! the LLM had read the file, and as `NotRead` if it had not and the write
-//! would have created it. A store follows no symbolic link, so a change
-//! lands only in the repository its path names. A write that
-//! may or may not have happened (timed out, failed) leaves the knowledge as
-//! it was, and the next write's check settles it.
-//!
-//! The transition table. Every other cell is unreachable by the boundary's
-//! contract: an operation ends only in its own terminals.
-//!
-//! ```text
-//! state      terminal                    next   answer
-//! Reading    loaded                      Done   the window; the version is known
-//!            missing                     Done   not found; nothing is known there
-//!            any other                   Done   what it says
-//! Listing    scanned                     Done   the entries
-//!            any other                   Done   what it says
-//! Editing    loaded, as known, edited    Storing   (store the edited file)
-//!            loaded, otherwise           Done      stale, no match, ambiguous, too large,
-//!                                                  or cancelled if the kit is closing
-//!            missing                     Done      not found; nothing is known there
-//!            any other                   Done      what it says
-//! Running    exited                      Done      how it ended, and its output
-//!            any other                   Done      what it says
-//! Searching  found                       Done      the lines found
-//!            exited                      Done      how rg failed
-//!            any other                   Done      what it says
-//! Storing    stored                      Done      written or edited; the new version is known
-//!            conflict, creating          Done      not read
-//!            conflict, replacing         Done      stale; a file now absent is forgotten
-//!            any other                   Done      what it says
-//! ```
+//! would have created it. A store follows no symbolic link, so a change lands
+//! only in the repository its path names. A write that may or may not have
+//! happened (timed out, failed) leaves the knowledge as it was, and the next
+//! write's check settles it.
 //!
 //! A command runs until it exits or its deadline, the call's or the tools'
 //! own limit for commands, whichever is sooner. It may change any file the kit
 //! may write; what the kit knows stays as it was, and the version check of
 //! the next write or edit catches what the command changed.
 //!
+//! The transition table. Every other cell is unreachable by the boundary's
+//! contract: an operation ends only in its own terminals.
+//!
+//! ```text
+//! state      terminal                    next      answer
+//! Reading    loaded                      Done      the window; the version is known
+//!            missing                     Done      not found; nothing is known there
+//!            any other                   Done      what it says
+//! Listing    scanned                     Done      the entries
+//!            any other                   Done      what it says
+//! Searching  found                       Done      the lines found
+//!            exited                      Done      how rg failed
+//!            any other                   Done      what it says
+//! Editing    loaded, as known, edited    Storing   (store the edited file)
+//!            loaded, otherwise           Done      stale, no match, ambiguous, too large,
+//!                                                  or cancelled if the kit is closing
+//!            missing                     Done      not found; nothing is known there
+//!            any other                   Done      what it says
+//! Storing    stored                      Done      written or edited; the new version is known
+//!            conflict, creating          Done      not read
+//!            conflict, replacing         Done      stale; a file now absent is forgotten
+//!            any other                   Done      what it says
+//! Running    exited                      Done      how it ended, and its output
+//!            any other                   Done      what it says
+//! ```
+//!
 //! A kit that closes while an edit loads stores nothing: whichever way the
 //! load's race with its cancel went, the edit answers `Cancelled`.
 //!
-//! A job is retired once it is Done ([`follow`]), which also ends a closing
-//! kit with its last job.
+//! A cell either moves to its next state or answers the call; answering, and
+//! telling it as a fact, is done in one place ([`settle`]). A job is retired
+//! once it is Done ([`follow`]), which also ends a closing kit with its last
+//! job.
 
 use alloc::boxed::Box;
 use core::mem;
@@ -62,8 +64,9 @@ use temper_lib::{Duration, Env, Id, Queue, ReplyTo, Slab, Time, Token};
 
 use crate::authority::Var;
 use crate::boundary::{Done, Expect, Op, Request, Root};
-use crate::call::Outcome;
+use crate::call::{Outcome, Tool};
 use crate::edit::{self, Edit};
+use crate::facts::{self, Facts};
 use crate::kit::{self, Kit};
 use crate::knowledge::Knowledge;
 use crate::limits::Limits;
@@ -75,7 +78,15 @@ use crate::window::{self, Span};
 pub(crate) struct Job {
     /// The kit whose call it runs.
     kit: Id<Kit>,
+    /// The tool the call is for, to tell of it.
+    tool: Tool,
     state: State,
+}
+
+/// What a cell does: go on in another state, or answer the call.
+enum Next {
+    Wait(State),
+    Answer { reply_to: ReplyTo, outcome: Outcome },
 }
 
 #[derive(Debug)]
@@ -165,11 +176,15 @@ pub(crate) fn start(
 ) -> Id<Job> {
     let limits = &env.limits;
     let call_deadline = deadline;
-    // A command has a limit of its own; any other call is a file operation.
-    let limit = match &work {
-        Work::Shell { timeout, .. } => *timeout,
-        Work::Search { .. } => limits.search_timeout,
-        Work::Read { .. } | Work::List { .. } | Work::Write { .. } | Work::Edit { .. } => limits.file_timeout,
+    // A command and a search have limits of their own; any other call is a
+    // file operation.
+    let (tool, limit) = match &work {
+        Work::Read { .. } => (Tool::Read, limits.file_timeout),
+        Work::List { .. } => (Tool::List, limits.file_timeout),
+        Work::Search { .. } => (Tool::Search, limits.search_timeout),
+        Work::Write { .. } => (Tool::Write, limits.file_timeout),
+        Work::Edit { .. } => (Tool::Edit, limits.file_timeout),
+        Work::Shell { timeout, .. } => (Tool::Shell, *timeout),
     };
     let deadline = deadline.min(env.now.saturating_add(limit));
     // The place goes to io and stays with the job: copy at emission.
@@ -203,7 +218,7 @@ pub(crate) fn start(
     // Room: a kit has at most `calls` jobs, and the slab twice that many slots
     // per kit, for the jobs retired in this iteration, which are at most those
     // running when it began.
-    let id = jobs.insert(Job { kit, state }).expect("the job slab has room for every kit's jobs");
+    let id = jobs.insert(Job { kit, tool, state }).expect("the job slab has room for every kit's jobs");
     out.push(Request::Io { owner: id.token(), op, deadline });
     id
 }
@@ -218,57 +233,62 @@ pub(crate) fn cancel(id: Id<Job>, out: &mut Queue<Request>) {
 // cell's handler, follow the new state.
 
 pub(crate) fn done(model: &mut Model, env: &Env<Limits>, owner: Token, done: Done, out: &mut Queue<Request>) {
-    let Model { kits, jobs } = model;
+    let Model { kits, jobs, facts } = model;
     let id = Id::from_token(owner);
     let job = jobs.get_mut(id).expect("a job lives until its operation has ended");
-    let kit_id = job.kit;
-    let kit = kits.get_mut(kit_id).expect("a kit lives until its jobs have ended");
+    let kit = kits.get_mut(job.kit).expect("a kit lives until its jobs have ended");
     let state = mem::replace(&mut job.state, State::Done);
-    job.state = match state {
+    let next = match state {
         State::Reading { reply_to, place, span } => {
-            loaded(&mut kit.knowledge, reply_to, place, span, done, &env.limits, out)
+            loaded(&mut kit.knowledge, reply_to, place, span, done, &env.limits)
         }
-        State::Listing { reply_to } => scanned(reply_to, done, out),
+        State::Listing { reply_to } => scanned(reply_to, done),
+        State::Searching { reply_to } => found(reply_to, done),
         State::Editing { reply_to, editing } => to_edit(kit, id, reply_to, editing, done, env, out),
-        State::Storing { reply_to, place, change } => stored(&mut kit.knowledge, reply_to, place, change, done, out),
-        State::Running { reply_to } => exited(reply_to, done, out),
-        State::Searching { reply_to } => found(reply_to, done, out),
+        State::Storing { reply_to, place, change } => stored(&mut kit.knowledge, reply_to, place, change, done),
+        State::Running { reply_to } => exited(reply_to, done),
         State::Done => unreachable!("a job that has answered has nothing in flight"),
     };
-    follow(kits, jobs, id, out);
+    job.state = settle(next, kit::session(kit), job.tool, facts, out);
+    follow(kits, jobs, facts, id, out);
+}
+
+/// The state a cell leads to: the one it moves to, or Done once it has
+/// answered the call, which is told as a fact.
+fn settle(next: Next, session: Token, tool: Tool, facts: &mut Facts, out: &mut Queue<Request>) -> State {
+    match next {
+        Next::Wait(state) => state,
+        Next::Answer { reply_to, outcome } => {
+            facts.push(facts::answered(session, tool, &outcome));
+            out.push(Request::Answer { to: reply_to, outcome });
+            State::Done
+        }
+    }
 }
 
 /// What a job's state implies, applied after every transition: a job that is
 /// Done is retired, and leaves its kit.
-fn follow(kits: &mut Slab<Kit>, jobs: &mut Slab<Job>, id: Id<Job>, out: &mut Queue<Request>) {
+fn follow(kits: &mut Slab<Kit>, jobs: &mut Slab<Job>, facts: &mut Facts, id: Id<Job>, out: &mut Queue<Request>) {
     let job = jobs.get(id).expect("a job lives until it is retired");
     match job.state {
         State::Reading { .. }
         | State::Listing { .. }
+        | State::Searching { .. }
         | State::Editing { .. }
         | State::Storing { .. }
-        | State::Running { .. }
-        | State::Searching { .. } => {}
+        | State::Running { .. } => {}
         State::Done => {
-            kit::finished(kits, job.kit, id, out);
+            kit::finished(kits, facts, job.kit, id, out);
             jobs.retire(id);
         }
     }
 }
 
-// Cell handlers: each takes the source state's data by value and returns the
-// target state.
+// Cell handlers: each takes the source state's data by value and says what
+// comes next.
 
 /// Reading, ended: answer with the window, and know the version read.
-fn loaded(
-    knowledge: &mut Knowledge,
-    reply_to: ReplyTo,
-    place: Place,
-    span: Span,
-    done: Done,
-    limits: &Limits,
-    out: &mut Queue<Request>,
-) -> State {
+fn loaded(knowledge: &mut Knowledge, reply_to: ReplyTo, place: Place, span: Span, done: Done, limits: &Limits) -> Next {
     let outcome = match done {
         Done::Loaded { content, version } => {
             knowledge.record(place, version);
@@ -290,15 +310,13 @@ fn loaded(
         | Done::Conflict { .. }
         | Done::Linked
         | Done::Exited { .. }
-        | Done::Found { .. } => {
-            unreachable!("io ends a load with a load's terminal")
-        }
+        | Done::Found { .. } => unreachable!("io ends a load with a load's terminal"),
     };
-    answer(reply_to, outcome, out)
+    Next::Answer { reply_to, outcome }
 }
 
 /// Listing, ended: answer with the entries.
-fn scanned(reply_to: ReplyTo, done: Done, out: &mut Queue<Request>) -> State {
+fn scanned(reply_to: ReplyTo, done: Done) -> Next {
     let outcome = match done {
         Done::Scanned { entries, more } => Outcome::Listed { entries, more },
         Done::Missing => Outcome::NotFound,
@@ -316,7 +334,29 @@ fn scanned(reply_to: ReplyTo, done: Done, out: &mut Queue<Request>) -> State {
         | Done::Exited { .. }
         | Done::Found { .. } => unreachable!("io ends a scan with a scan's terminal"),
     };
-    answer(reply_to, outcome, out)
+    Next::Answer { reply_to, outcome }
+}
+
+/// Searching, ended: answer with the lines found, or how rg failed.
+fn found(reply_to: ReplyTo, done: Done) -> Next {
+    let outcome = match done {
+        Done::Found { hits, more } => Outcome::Found { hits, more },
+        Done::Exited { exit, head, tail, dropped } => Outcome::Exited { exit, head, tail, dropped },
+        Done::Missing => Outcome::NotFound,
+        Done::NotDirectory => Outcome::NotDirectory,
+        Done::Escapes => Outcome::Outside,
+        Done::Failed { fault } => Outcome::Failed { fault },
+        Done::TimedOut => Outcome::TimedOut,
+        Done::Cancelled => Outcome::Cancelled,
+        Done::Loaded { .. }
+        | Done::Scanned { .. }
+        | Done::Stored { .. }
+        | Done::Conflict { .. }
+        | Done::NotFile
+        | Done::Linked
+        | Done::TooLarge { .. } => unreachable!("io ends a search with a search's terminal"),
+    };
+    Next::Answer { reply_to, outcome }
 }
 
 /// Editing, loaded: make the edit and store it, if the file is as its LLM
@@ -329,25 +369,25 @@ fn to_edit(
     done: Done,
     env: &Env<Limits>,
     out: &mut Queue<Request>,
-) -> State {
+) -> Next {
     let Editing { place, edit, deadline } = editing;
     let outcome = match done {
         Done::Loaded { content, version } => {
             if kit::closing(kit) {
-                return answer(reply_to, Outcome::Cancelled, out);
+                return Next::Answer { reply_to, outcome: Outcome::Cancelled };
             }
             if kit.knowledge.version(&place) != Some(version) {
-                return answer(reply_to, Outcome::Stale, out);
+                return Next::Answer { reply_to, outcome: Outcome::Stale };
             }
             if deadline <= env.now {
-                return answer(reply_to, Outcome::TimedOut, out);
+                return Next::Answer { reply_to, outcome: Outcome::TimedOut };
             }
             match edit::apply(&content, &edit, &env.limits) {
                 Ok((content, replaced)) => {
                     let deadline = deadline.min(env.now.saturating_add(env.limits.file_timeout));
                     let op = Op::Store { at: place.clone(), content, expect: Expect::Is { version } };
                     out.push(Request::Io { owner: id.token(), op, deadline });
-                    return State::Storing { reply_to, place, change: Change::Edit { replaced } };
+                    return Next::Wait(State::Storing { reply_to, place, change: Change::Edit { replaced } });
                 }
                 Err(outcome) => outcome,
             }
@@ -368,22 +408,13 @@ fn to_edit(
         | Done::Conflict { .. }
         | Done::Linked
         | Done::Exited { .. }
-        | Done::Found { .. } => {
-            unreachable!("io ends a load with a load's terminal")
-        }
+        | Done::Found { .. } => unreachable!("io ends a load with a load's terminal"),
     };
-    answer(reply_to, outcome, out)
+    Next::Answer { reply_to, outcome }
 }
 
 /// Storing, ended: answer, and know the version written.
-fn stored(
-    knowledge: &mut Knowledge,
-    reply_to: ReplyTo,
-    place: Place,
-    change: Change,
-    done: Done,
-    out: &mut Queue<Request>,
-) -> State {
+fn stored(knowledge: &mut Knowledge, reply_to: ReplyTo, place: Place, change: Change, done: Done) -> Next {
     let creating = change == Change::Create;
     let outcome = match done {
         Done::Stored { version } => {
@@ -414,37 +445,13 @@ fn stored(
         | Done::Missing
         | Done::TooLarge { .. }
         | Done::Exited { .. }
-        | Done::Found { .. } => {
-            unreachable!("io ends a store with a store's terminal")
-        }
+        | Done::Found { .. } => unreachable!("io ends a store with a store's terminal"),
     };
-    answer(reply_to, outcome, out)
-}
-
-/// Searching, ended: answer with the lines found, or how rg failed.
-fn found(reply_to: ReplyTo, done: Done, out: &mut Queue<Request>) -> State {
-    let outcome = match done {
-        Done::Found { hits, more } => Outcome::Found { hits, more },
-        Done::Exited { exit, head, tail, dropped } => Outcome::Exited { exit, head, tail, dropped },
-        Done::Missing => Outcome::NotFound,
-        Done::NotDirectory => Outcome::NotDirectory,
-        Done::Escapes => Outcome::Outside,
-        Done::Failed { fault } => Outcome::Failed { fault },
-        Done::TimedOut => Outcome::TimedOut,
-        Done::Cancelled => Outcome::Cancelled,
-        Done::Loaded { .. }
-        | Done::Scanned { .. }
-        | Done::Stored { .. }
-        | Done::Conflict { .. }
-        | Done::NotFile
-        | Done::Linked
-        | Done::TooLarge { .. } => unreachable!("io ends a search with a search's terminal"),
-    };
-    answer(reply_to, outcome, out)
+    Next::Answer { reply_to, outcome }
 }
 
 /// Running, ended: answer with how the command ended and what it wrote.
-fn exited(reply_to: ReplyTo, done: Done, out: &mut Queue<Request>) -> State {
+fn exited(reply_to: ReplyTo, done: Done) -> Next {
     let outcome = match done {
         Done::Exited { exit, head, tail, dropped } => Outcome::Exited { exit, head, tail, dropped },
         // The working directory.
@@ -463,12 +470,7 @@ fn exited(reply_to: ReplyTo, done: Done, out: &mut Queue<Request>) -> State {
         | Done::TooLarge { .. }
         | Done::Found { .. } => unreachable!("io ends a spawn with a spawn's terminal"),
     };
-    answer(reply_to, outcome, out)
-}
-
-fn answer(reply_to: ReplyTo, outcome: Outcome, out: &mut Queue<Request>) -> State {
-    out.push(Request::Answer { to: reply_to, outcome });
-    State::Done
+    Next::Answer { reply_to, outcome }
 }
 
 /// The slots the job slab needs under `limits`, or `None` past a `u32`.

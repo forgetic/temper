@@ -80,6 +80,7 @@ const LIMITS: Limits = Limits {
     search_hits: 8,
     search_bytes: 256,
     search_timeout: Duration::from_secs(30),
+    facts: 64,
 };
 
 const GRANTS: Grants = Grants { inspect: true, modify: true, shell: true };

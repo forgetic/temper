@@ -15,6 +15,9 @@
 //! [`Outcome`] goes back for the protocol layer to render as the text the LLM
 //! reads.
 //!
+//! What happens is also told as content-free [`Fact`]s, kept in a bounded
+//! queue the parent drains ([`Model::pop_fact`]).
+//!
 //! The checkout is shared, knowledge is not. Files are world state, reached
 //! through io and shared by every session; what a session's LLM has read, and
 //! at which version, belongs to its kit, along with the [`Authority`] the
@@ -30,6 +33,7 @@ mod authority;
 mod boundary;
 mod call;
 mod edit;
+mod facts;
 mod job;
 mod kit;
 mod knowledge;
@@ -42,7 +46,8 @@ mod window;
 
 pub use authority::{Authority, Grants, Repo, Var};
 pub use boundary::{Done, Event, Expect, Op, Refusal, Request, Root, Version};
-pub use call::{Call, Effect, Entry, Exit, Fault, Hit, Kind, Outcome, effect};
+pub use call::{Call, Effect, Entry, Exit, Fault, Hit, Kind, Outcome, Tool, effect, tool};
+pub use facts::{Fact, Verdict};
 pub use limits::{Limits, worst_case};
 pub use model::{Model, max_out, step};
 pub use path::{Name, Part, Path, Place};
