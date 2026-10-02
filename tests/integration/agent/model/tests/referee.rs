@@ -42,7 +42,7 @@ fn change() -> Declared {
 /// A referee that has seen the run of `ATTEMPT` start in `PROCESS`, on a
 /// repository it may write, ask to push `pushed`, and accept a change.
 fn started(pushed: &[u8]) -> Referee<Meeting> {
-    let mut referee = Referee::new(Meeting::new(Duration::from_secs(60), false, false));
+    let mut referee = Referee::new(Meeting::new(Duration::from_secs(60), false));
     let repository = Repository { name: b"app".to_vec(), remote: b"forge/app".to_vec(), push: Some(b"fix".to_vec()) };
     referee.observe(at(0), Seen::Assigned { attempt: ATTEMPT, repositories: vec![repository] }, &mut Vec::new());
     referee.observe(at(1), Seen::Started { process: PROCESS, attempt: ATTEMPT }, &mut Vec::new());
@@ -247,7 +247,7 @@ fn held(why: Hold) -> Seen {
 /// A referee that has seen `ITEM` handed in, the forge or the store failing
 /// if `faults`.
 fn handed(faults: bool) -> Referee<Meeting> {
-    let mut referee = Referee::new(Meeting::new(Duration::from_secs(60), faults, false));
+    let mut referee = Referee::new(Meeting::new(Duration::from_secs(60), faults));
     referee.observe(at(0), Seen::Handed { item: ITEM }, &mut Vec::new());
     referee
 }

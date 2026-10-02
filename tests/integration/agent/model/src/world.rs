@@ -311,10 +311,6 @@ pub struct Settings {
     /// The chance, per mille, that CI passes a commit; none for CI cued by
     /// the file it reads, which the runs leave green.
     pub ci: Option<u32>,
-    /// Whether the engine may hold an item for its writes once the forge
-    /// refused one of its merges for a conflict, as it does today, where the
-    /// change is its run's to repair (engine-model.md, 5.1).
-    pub conflicts_held: bool,
 }
 
 impl Settings {
@@ -399,7 +395,6 @@ impl Settings {
             refusing: 0,
             granule: Duration::ZERO,
             ci: None,
-            conflicts_held: false,
         }
     }
 
@@ -516,7 +511,6 @@ impl Settings {
             move_after: Span::millis(0, 5_000),
             refusing: chance(&mut rng, 150),
             granule,
-            conflicts_held: true,
             ..calm
         };
         // In some worlds the forge and the store never fail, so that nothing
@@ -1126,11 +1120,7 @@ impl World {
             abort_lost: BTreeSet::new(),
             passed: BTreeSet::new(),
             pushes: Ledger::new("push"),
-            referee: Referee::new(Meeting::new(
-                answered_within(&settings.worker),
-                settings.faults(),
-                settings.conflicts_held,
-            )),
+            referee: Referee::new(Meeting::new(answered_within(&settings.worker), settings.faults())),
             engine_referee: Referee::new(engine_referee::Engine::new(bounds, 0)),
             stats: Stats::default(),
             told: Told::default(),

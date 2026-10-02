@@ -57,24 +57,17 @@ const REPORTED: [&str; 8] = [
     "cancelled engine",
 ];
 
+/// Random worlds settle with every invariant held, and nothing is held for
+/// its writes where the forge never fails, a merge refused for a conflict
+/// included: the change is its run's to repair (engine-model.md, 5.3).
 #[test]
-fn random_worlds_settle_with_every_invariant_held() {
-    sweep(true);
-}
-
-/// The sweep, in worlds where nothing is held for its writes where the
-/// forge never fails, a merge refused for a conflict included: the change
-/// is its run's to repair (engine-model.md, 5.1).
-#[test]
-#[ignore = "until merges refused for a conflict go to repair"]
 fn random_worlds_hold_items_for_their_writes_only_where_the_forge_fails() {
-    sweep(false);
+    sweep();
 }
 
-/// Settles many random worlds, an item held for its writes once a merge was
-/// refused for a conflict if `conflicts_held`, and checks how their runs and
-/// their issues ended.
-fn sweep(conflicts_held: bool) {
+/// Settles many random worlds, and checks how their runs and their issues
+/// ended.
+fn sweep() {
     let mut ends = Ends::default();
     let mut reported = BTreeMap::new();
     let (mut lost, mut unprepared, mut invalid, mut landed, mut saves) = (0, 0, 0, 0, 0);
@@ -82,7 +75,7 @@ fn sweep(conflicts_held: bool) {
     let mut items = Items::default();
     let (mut editors, mut ci_repairs) = (0, 0);
     for seed in 0..120 {
-        let settings = Settings { conflicts_held, ..Settings::random(seed) };
+        let settings = Settings::random(seed);
         let faults = settings.faults();
         let mut world = World::new(settings);
         world.run(ITERATIONS);
@@ -99,9 +92,8 @@ fn sweep(conflicts_held: bool) {
         items.count(&stats, faults);
         ci_repairs += stats.ci_repairs;
         if !faults {
-            let writes = if conflicts_held && stats.conflicts > 0 { 0 } else { stats.held_writes };
             assert_eq!(
-                (writes, stats.held_record),
+                (stats.held_writes, stats.held_record),
                 (0, 0),
                 "seed {seed}: nothing is held for its writes or its record where the forge and the store never fail"
             );

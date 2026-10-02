@@ -42,8 +42,6 @@ use temper_engine_model::{Decoded, Item, Outcome};
 use temper_engine_model_tests::codec;
 use temper_engine_model_tests::deployment::{self, ENGINE};
 use temper_forge_model::Observation;
-use temper_forge_model::Operation;
-use temper_forge_model::api::Error;
 use temper_lib::{Duration, Token};
 use temper_worker_model::host;
 use temper_world::{Expectations, Judge};
@@ -155,12 +153,8 @@ pub struct Meeting {
     /// How long the worker may take to answer an assignment.
     within: Duration,
     /// Whether the forge or the store were scripted to fail, so that a
-    /// write, or a record, may fail for good; whether an item may be held
-    /// for its writes once a merge was refused for a conflict, and whether
-    /// one was.
+    /// write, or a record, may fail for good.
     faults: bool,
-    conflicts_held: bool,
-    conflicted: bool,
     attempts: BTreeMap<Token, Attempt>,
     processes: BTreeMap<u64, Process>,
     /// Each branch of the forge seen to move, by remote and branch: its tip
@@ -207,16 +201,12 @@ struct Process {
 
 impl Meeting {
     /// Expectations under which the worker answers each assignment `within`
-    /// its assignment, the forge or the store fail if `faults`, and an item
-    /// may be held for its writes once a merge was refused for a conflict if
-    /// `conflicts_held`.
+    /// its assignment, and the forge or the store fail if `faults`.
     #[must_use]
-    pub fn new(within: Duration, faults: bool, conflicts_held: bool) -> Meeting {
+    pub fn new(within: Duration, faults: bool) -> Meeting {
         Meeting {
             within,
             faults,
-            conflicts_held,
-            conflicted: false,
             attempts: BTreeMap::new(),
             processes: BTreeMap::new(),
             branches: BTreeMap::new(),
@@ -390,9 +380,6 @@ impl Meeting {
                     judge.meet(&Expected::Story(Item { repository: index, number: *number }));
                 }
             }
-            Observation::Refused { what: Operation::Merge, error: Error::Conflict, by, .. } if *by == ENGINE => {
-                self.conflicted = true;
-            }
             Observation::Commented { .. }
             | Observation::Edited { .. }
             | Observation::Refused { .. }
@@ -428,8 +415,7 @@ impl Meeting {
         };
         let allowed = match why {
             Hold::Failures(_) | Hold::Stopped | Hold::Plan { .. } => true,
-            Hold::Writes => self.faults || (self.conflicts_held && self.conflicted),
-            Hold::Record => self.faults,
+            Hold::Writes | Hold::Record => self.faults,
             Hold::Acceptance => false,
         };
         judge.check(
