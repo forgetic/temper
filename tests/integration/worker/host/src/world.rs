@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use temper_lib::{Duration, Rng, Time, Token};
-use temper_worker_model_host::{self as host, Event, Fact, Limits, Reason, Reply, Request};
+use temper_lib::{Duration, ReplyTo, Rng, Time, Token};
+use temper_worker_model_host::{
+    self as host, AgentFailure, Event, Fact, Failure, Finish, Limits, Reason, Reply, Request, RunFailure,
+};
 use temper_world::{Ledger, Schedule, Span, Stage, Trace};
 
 use crate::engine::{self, Act, Engine, Plan};
@@ -28,6 +30,9 @@ pub struct Settings {
     pub outage: Option<Outage>,
     /// When the worker shuts down, if it does.
     pub shutdown: Option<Span>,
+    /// The chance, per mille, at the end of an iteration, that the engine's
+    /// assignment of a run hosted is sent again: the host drops it.
+    pub duplicates: u32,
 }
 
 /// A spell without contact with the engine: when it starts, how long it
@@ -108,6 +113,7 @@ impl Settings {
                 wind: Span::millis(100, 3_000),
                 watchdog: Span::millis(10_000, 60_000),
                 late: 0,
+                words: 0,
                 push: Span::millis(100, 3_000),
                 changes: 600,
                 moved: 0,
@@ -117,6 +123,7 @@ impl Settings {
             hop: Span::millis(0, 2),
             outage: None,
             shutdown: None,
+            duplicates: 0,
         }
     }
 
@@ -156,6 +163,7 @@ impl Settings {
                     oversized: 1,
                 },
                 late: 300,
+                words: 400,
                 moved: 150,
                 failed: 150,
                 ..calm.parent
@@ -166,6 +174,7 @@ impl Settings {
                 grace: Duration::from_secs(30),
             }),
             shutdown: None,
+            duplicates: 2,
             ..calm
         }
     }
@@ -190,6 +199,8 @@ pub struct Stats {
     pub cancel_alls: u32,
     /// The most runs hosted at once.
     pub peak: u32,
+    /// The less common paths runs took, by name, and how many times.
+    pub paths: BTreeMap<&'static str, u32>,
 }
 
 /// Something on its way, delivered at its time.
@@ -210,11 +221,14 @@ enum Delivery {
     Shutdown,
 }
 
-/// An event on its way into the host, with what the world knows of it.
+/// An event on its way into the host, with what the world knows of it:
+/// `stale` when it names an attempt never assigned, `duplicate` when it
+/// assigns the attempt hosted again. Either must change nothing.
 #[derive(Debug)]
 struct Arrival {
     event: Event,
     stale: bool,
+    duplicate: bool,
 }
 
 /// The three one-way channels whose order matters, each delivering in the
@@ -233,6 +247,10 @@ enum Lane {
 enum Taken {
     Assign { run: Token, attempt: Token },
     Stale,
+    Duplicate,
+    Prepared { owner: Token, prepared: bool },
+    Finished { owner: Token, word: Word },
+    Shutdown,
     Started { owner: Token, agent: Token },
     Called { owner: Token, call: Token, push: bool },
     Gone { owner: Token },
@@ -255,6 +273,35 @@ struct Hosted {
     agent: Option<Token>,
     /// The place of the last inbound event delivered to it.
     delivered: Option<u64>,
+    /// Whether its prepare was taken, and how it went; how its agent's start
+    /// went.
+    prepared: Option<bool>,
+    launch: Launch,
+    /// How its run first said it finishes, and whether it had been stopped
+    /// by then.
+    word: Option<Word>,
+    stopped_first: bool,
+}
+
+/// How a run's agent's start went, as far as the world has seen.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Launch {
+    Unasked,
+    Asked,
+    /// It could not be started.
+    Unstarted,
+    /// It was stopped in the step that took its start.
+    Stopped,
+}
+
+/// How a run said it finishes, as the host must judge it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Word {
+    Ended,
+    Parked,
+    /// It said more than the limits allow.
+    Rules,
+    Failed(RunFailure),
 }
 
 pub struct World {
@@ -284,6 +331,8 @@ pub struct World {
     calls: Ledger<(Token, Token), Open>,
     /// Pushes in flight as their runs left live: answered with how they went.
     kept: BTreeSet<(Token, Token)>,
+    /// Whether the host has taken a shutdown.
+    shut: bool,
 
     stats: Stats,
     trace: Trace,
@@ -315,6 +364,7 @@ impl World {
             left: BTreeSet::new(),
             calls: Ledger::new("host call"),
             kept: BTreeSet::new(),
+            shut: false,
             stats: Stats::default(),
             trace: Trace::default(),
         };
@@ -390,9 +440,9 @@ impl World {
             host::resume(&mut self.host, &self.stage.env, &mut self.stage.out);
             made.push((Taken::Other, self.stage.out.len() - before));
         }
-        while let Some(Arrival { event, stale }) = self.stage.next_event() {
+        while let Some(Arrival { event, stale, duplicate }) = self.stage.next_event() {
             self.trace.log(self.now, format!("host <- {event:?}"));
-            let taken = self.take(&event, stale);
+            let taken = if duplicate { Taken::Duplicate } else { self.take(&event, stale) };
             let before = self.stage.out.len();
             host::step(&mut self.host, &self.stage.env, event, &mut self.stage.out);
             made.push((taken, self.stage.out.len() - before));
@@ -402,6 +452,10 @@ impl World {
                 Taken::Stale => {
                     assert_eq!(count, 0, "a stale attempt never acts");
                     self.stats.stale += 1;
+                }
+                Taken::Duplicate => {
+                    assert_eq!(count, 0, "the attempt hosted, assigned again, is dropped");
+                    self.path("duplicate assignments");
                 }
                 Taken::Assign { run, attempt } => {
                     assert_eq!(count, 1, "an assignment is refused or prepared");
@@ -414,6 +468,9 @@ impl World {
                 | Taken::Gone { .. }
                 | Taken::Pushed { .. }
                 | Taken::Saved { .. }
+                | Taken::Prepared { .. }
+                | Taken::Finished { .. }
+                | Taken::Shutdown
                 | Taken::Other => {
                     let leaving = self.note(taken);
                     let mut requests = Vec::new();
@@ -427,6 +484,12 @@ impl World {
                         if let Request::Stop { agent } = request {
                             self.leave(*agent);
                             left.push(*agent);
+                            if let Taken::Started { owner, agent: started } = taken
+                                && started == *agent
+                            {
+                                self.hosted.get_mut(&owner).expect("a start is of a hosted run").launch =
+                                    Launch::Stopped;
+                            }
                         }
                     }
                     for request in requests {
@@ -452,6 +515,27 @@ impl World {
         let hosted = u32::try_from(self.admitted.len()).expect("fits");
         assert_eq!(self.host.hosted(), hosted, "a slot is taken from admission until its run has answered");
         self.stats.peak = self.stats.peak.max(hosted);
+        // The engine sends the assignment of a run hosted again: it is the
+        // next thing the host takes, so the run is still hosted then.
+        let hosted: Vec<(Token, Token)> = self.admitted.keys().copied().collect();
+        for (run, attempt) in hosted {
+            if self.rng.chance(self.settings.duplicates) {
+                let assignment = host::Assignment {
+                    run,
+                    attempt,
+                    workspace: host::Workspace { key: Box::from(&b"again"[..]), repositories: Box::new([]) },
+                    save: None,
+                    charter: Box::from(&b"again"[..]),
+                    snapshot: None,
+                };
+                let event = Event::Assign { reply_to: ReplyTo::new(run), assignment };
+                self.stage.inbox.push_front(Arrival { event, stale: false, duplicate: true });
+            }
+        }
+    }
+
+    fn path(&mut self, path: &'static str) {
+        *self.stats.paths.entry(path).or_default() += 1;
     }
 
     /// What the host takes as `event`, for the world to note.
@@ -474,9 +558,28 @@ impl World {
             Event::Gone { owner, detail: _ } => Taken::Gone { owner: *owner },
             Event::Pushed { owner, push: _ } => Taken::Pushed { call: *owner },
             Event::Saved { owner, save: _ } => Taken::Saved { owner: *owner },
-            Event::CancelAll { reason: _ } => {
+            Event::Prepared { owner, workspace: _ } => Taken::Prepared { owner: *owner, prepared: true },
+            Event::Unprepared { owner, .. } => Taken::Prepared { owner: *owner, prepared: false },
+            Event::Finished { owner, finish } => {
+                let limits = &self.settings.host;
+                let word = match finish {
+                    Finish::Ended { outcome } if len(outcome) > limits.outcome_bytes => Word::Rules,
+                    Finish::Ended { .. } => Word::Ended,
+                    Finish::Parked { snapshot: Some(snapshot) } if len(snapshot) > limits.snapshot_bytes => {
+                        self.path("oversized snapshots");
+                        Word::Rules
+                    }
+                    Finish::Parked { .. } => Word::Parked,
+                    Finish::Failed { failure } => Word::Failed(*failure),
+                };
+                Taken::Finished { owner: *owner, word }
+            }
+            Event::CancelAll { reason } => {
                 self.stats.cancel_alls += 1;
-                Taken::Other
+                match reason {
+                    Reason::Shutdown => Taken::Shutdown,
+                    Reason::Engine | Reason::Contact => Taken::Other,
+                }
             }
             Event::Report => {
                 self.stats.reports += 1;
@@ -485,10 +588,7 @@ impl World {
             Event::Inbound { .. }
             | Event::Cancel { .. }
             | Event::Relayed { .. }
-            | Event::Prepared { .. }
-            | Event::Unprepared { .. }
             | Event::Yielded { .. }
-            | Event::Finished { .. }
             | Event::Faulted { .. } => Taken::Other,
         }
     }
@@ -522,15 +622,34 @@ impl World {
             // Its run leaves live, if it was: what it had in flight is
             // answered now.
             Taken::Gone { owner } => {
-                let agent = self.hosted.get(&owner).expect("a gone agent is of a hosted run").agent;
-                if let Some(agent) = agent {
-                    self.leave(agent);
+                let hosted = self.hosted.get_mut(&owner).expect("a gone agent is of a hosted run");
+                let agent = hosted.agent;
+                match agent {
+                    Some(agent) => self.leave(agent),
+                    None => hosted.launch = Launch::Unstarted,
                 }
                 return agent;
             }
             Taken::Pushed { call } => self.parent.pushed(call),
             Taken::Saved { owner } => self.parent.saved(owner),
-            Taken::Assign { .. } | Taken::Stale | Taken::Other => {}
+            Taken::Prepared { owner, prepared } => {
+                self.hosted.get_mut(&owner).expect("a prepare is of a hosted run").prepared = Some(prepared);
+                self.parent.prepared(owner);
+            }
+            Taken::Finished { owner, word } => {
+                let hosted = self.hosted.get_mut(&owner).expect("a finish is of a hosted run");
+                let agent = hosted.agent.expect("a run that finishes was started");
+                // Only its first word counts: the host ignores the rest.
+                if hosted.word.is_none() {
+                    hosted.word = Some(word);
+                    hosted.stopped_first = self.left.contains(&agent);
+                    if hosted.stopped_first {
+                        self.path("endings said during a stop");
+                    }
+                }
+            }
+            Taken::Shutdown => self.shut = true,
+            Taken::Assign { .. } | Taken::Stale | Taken::Duplicate | Taken::Other => {}
         }
         None
     }
@@ -549,7 +668,14 @@ impl World {
                 }
             }
             Request::Prepare { owner, workspace: _ } => {
-                let entry = Hosted { agent: None, delivered: None };
+                let entry = Hosted {
+                    agent: None,
+                    delivered: None,
+                    prepared: None,
+                    launch: Launch::Unasked,
+                    word: None,
+                    stopped_first: false,
+                };
                 assert!(self.hosted.insert(*owner, entry).is_none(), "a hosted run's token is its own");
                 assert!(self.admitted.insert((run, attempt), *owner).is_none(), "an attempt is admitted once");
             }
@@ -576,6 +702,10 @@ impl World {
                     let hosted = self.hosted.get(&owner).expect("admitted runs are hosted");
                     if let Some(agent) = hosted.agent {
                         assert!(self.left.contains(&agent), "a run answers once it has left live");
+                    }
+                    check_word(hosted, &answer);
+                    if let Some(path) = cancel_path(hosted, &answer) {
+                        self.path(path);
                     }
                 }
                 self.send_engine(Request::Answer { to, run, attempt, answer });
@@ -605,6 +735,7 @@ impl World {
             Request::Reply { agent, call, reply } => {
                 self.calls.end((agent, call));
                 if self.kept.remove(&(agent, call)) {
+                    self.path("pushes settled during a stop");
                     match reply {
                         Reply::Pushed(_) => {}
                         Reply::Relayed { .. } | Reply::Unavailable | Reply::Busy => {
@@ -625,11 +756,15 @@ impl World {
                 assert!(self.left.contains(&agent), "a stop is of a run that leaves live");
                 self.parcel(Request::Stop { agent });
             }
-            Request::Prepare { .. }
-            | Request::Start { .. }
-            | Request::Push { .. }
-            | Request::Save { .. }
-            | Request::Release { .. } => self.parcel(request),
+            Request::Prepare { .. } => {
+                assert!(!self.shut, "a worker shutting down admits no more runs");
+                self.parcel(request);
+            }
+            Request::Start { owner, .. } => {
+                self.hosted.get_mut(&owner).expect("a start is of a hosted run").launch = Launch::Asked;
+                self.parcel(request);
+            }
+            Request::Push { .. } | Request::Save { .. } | Request::Release { .. } => self.parcel(request),
         }
     }
 
@@ -676,7 +811,7 @@ impl World {
     fn deliver(&mut self) {
         while let Some(delivery) = self.wire.next(self.now) {
             match delivery {
-                Delivery::Host { event, stale } => self.stage.push(Arrival { event, stale }),
+                Delivery::Host { event, stale } => self.stage.push(Arrival { event, stale, duplicate: false }),
                 Delivery::Engine(request) => {
                     let acts = self.engine.take(request);
                     self.acts(acts);
@@ -689,10 +824,10 @@ impl World {
                     let outs = self.parent.wake(agent, wake);
                     self.outs(outs);
                 }
-                Delivery::Back => self.stage.push(Arrival { event: Event::Report, stale: false }),
+                Delivery::Back => self.stage.push(Arrival { event: Event::Report, stale: false, duplicate: false }),
                 Delivery::Shutdown => {
-                    self.engine.shut();
-                    self.stage.push(Arrival { event: Event::CancelAll { reason: Reason::Shutdown }, stale: false });
+                    let event = Event::CancelAll { reason: Reason::Shutdown };
+                    self.stage.push(Arrival { event, stale: false, duplicate: false });
                 }
             }
         }
@@ -758,4 +893,72 @@ fn fact_kind(fact: Fact) -> &'static str {
         Fact::Ended { .. } => "ended",
         Fact::Failed { .. } => "failed",
     }
+}
+
+/// Checks that a run is answered as it first said it finishes: its own ending
+/// stands even after a stop, a cancel it reports after a stop being the
+/// worker's; a run that said nothing is answered as failed.
+fn check_word(hosted: &Hosted, answer: &host::Answer) {
+    let failure = match answer {
+        host::Answer::Failed { failure, .. } => Some(*failure),
+        host::Answer::Refused(_) | host::Answer::Ended { .. } | host::Answer::Parked { .. } => None,
+    };
+    match hosted.word {
+        Some(Word::Ended) => assert!(matches_ended(answer), "a run that said it ended is answered so: {answer:?}"),
+        Some(Word::Parked) => assert!(matches_parked(answer), "a run that said it parked is answered so: {answer:?}"),
+        Some(Word::Rules) => {
+            assert_eq!(failure, Some(Failure::Agent(AgentFailure::Rules)), "saying too much breaks the rules");
+        }
+        Some(Word::Failed(RunFailure::Cancelled)) if hosted.stopped_first => match failure {
+            Some(Failure::Cancelled(_) | Failure::Agent(_)) => {}
+            Some(Failure::Run(_) | Failure::Unprepared(_)) | None => {
+                panic!("a cancel a stopped run reports is the worker's: {answer:?}")
+            }
+        },
+        Some(Word::Failed(reported)) => {
+            assert_eq!(failure, Some(Failure::Run(reported)), "a run's failure is as it reports it");
+        }
+        None => assert!(failure.is_some(), "a run that said nothing is answered as failed: {answer:?}"),
+    }
+}
+
+fn matches_ended(answer: &host::Answer) -> bool {
+    match answer {
+        host::Answer::Ended { .. } => true,
+        host::Answer::Refused(_) | host::Answer::Parked { .. } | host::Answer::Failed { .. } => false,
+    }
+}
+
+fn matches_parked(answer: &host::Answer) -> bool {
+    match answer {
+        host::Answer::Parked { .. } => true,
+        host::Answer::Refused(_) | host::Answer::Ended { .. } | host::Answer::Failed { .. } => false,
+    }
+}
+
+/// Where a cancelled run was when its cancel came, if before it was live.
+fn cancel_path(hosted: &Hosted, answer: &host::Answer) -> Option<&'static str> {
+    match answer {
+        host::Answer::Failed { failure: Failure::Cancelled(_), .. } => {}
+        host::Answer::Refused(_)
+        | host::Answer::Ended { .. }
+        | host::Answer::Parked { .. }
+        | host::Answer::Failed { .. } => {
+            return None;
+        }
+    }
+    match hosted.launch {
+        Launch::Unasked => match hosted.prepared {
+            Some(true) => Some("cancels as a workspace was prepared"),
+            Some(false) => Some("cancels as a workspace failed to prepare"),
+            None => unreachable!("a run answers once its prepare has ended"),
+        },
+        Launch::Unstarted => Some("cancels as an agent failed to start"),
+        Launch::Stopped => Some("cancels as an agent started"),
+        Launch::Asked => None,
+    }
+}
+
+fn len(bytes: &[u8]) -> u64 {
+    u64::try_from(bytes.len()).expect("fits")
 }

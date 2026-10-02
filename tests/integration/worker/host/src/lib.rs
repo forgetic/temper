@@ -15,13 +15,16 @@
 //! the limits refused for what is beyond them; nothing is saved or released
 //! while the run's agent may still be running or a push is in flight; a slot
 //! is taken from admission until the run has answered, and the run answers
-//! only once it has left live and all of it is released; a stale attempt never
-//! acts; inbound events reach a run once each, in the order sent; every host
-//! call is answered once, and every call of a run that has left live (a
-//! cancelled one among them) as unavailable, those in flight as it leaves; and
-//! the report on coming back lists exactly the runs admitted and not
-//! answered. Once it settles: nothing in flight, every slot free, no call
-//! open, every workspace released and every agent gone.
+//! only once it has left live and all of it is released; a stale attempt, or
+//! the attempt hosted assigned again, never acts; a worker shutting down
+//! admits nothing more; inbound events reach a run once each, in the order
+//! sent; every host call is answered once, every call of a run that has left
+//! live (a cancelled one among them) as unavailable, those relayed in flight
+//! as it leaves, and a push in flight then with how it went; a run is
+//! answered as it first said it finishes, also when it says so winding down
+//! after a stop; and the report on coming back lists exactly the runs
+//! admitted and not answered. Once it settles: nothing in flight, every slot
+//! free, no call open, every workspace released and every agent gone.
 
 pub mod engine;
 pub mod parent;

@@ -302,6 +302,8 @@ fn a_host_with_every_slot_full_stays_within_its_worst_case() {
     fill(Limits { slots: 16, repositories: 8, held: 8, run_calls: 4, ..LIMITS });
     fill(Limits { slots: 200, charter_bytes: 65_536, snapshot_bytes: 16_384, event_bytes: 4096, ..LIMITS });
     fill(Limits { run_calls: 1, held: 0, ..LIMITS });
+    // The outcome dominates what a run holds: the ending's side of the max.
+    fill(Limits { charter_bytes: 16, snapshot_bytes: 16, held: 0, outcome_bytes: 4096, run_calls: 4, ..LIMITS });
 }
 
 #[test]

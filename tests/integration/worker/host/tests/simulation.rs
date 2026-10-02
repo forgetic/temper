@@ -141,15 +141,17 @@ fn shutdown_cancels_every_run_and_takes_no_more() {
     let stats = run(&settings).stats();
     assert_eq!(stats.cancel_alls, 1, "{stats:?}");
     assert!(count(&stats, "failed: cancelled, shutdown") > 0, "{stats:?}");
-    assert!(stats.engine.assignments < 8, "no assignment after shutdown: {stats:?}");
+    assert!(count(&stats, "refused: busy") > 0, "assignments after shutdown are refused: {stats:?}");
 }
 
 /// A rough world, varied by seed: some shut down, some lose contact for
-/// longer than the grace.
+/// longer than the grace, some let runs make several calls at once and hold
+/// several inbound events.
 fn rough(seed: u64) -> Settings {
     let rough = Settings::rough(seed);
     let shutdown = if seed.is_multiple_of(4) { Some(Span::millis(20_000, 120_000)) } else { None };
-    Settings { shutdown, ..rough }
+    let host = if seed.is_multiple_of(2) { rough.host } else { Limits { run_calls: 3, held: 3, ..rough.host } };
+    Settings { shutdown, host, ..rough }
 }
 
 #[test]
@@ -192,14 +194,31 @@ fn random_worlds_settle_and_reach_every_ending() {
             ("cancels of every run", stats.cancel_alls),
             ("runs forgotten on reconnecting", stats.engine.forgotten),
             ("requests to agents gone", stats.parent.dropped),
+            ("saves with a branch moved", stats.parent.saves_moved),
+            ("saves with a push failed", stats.parent.saves_failed),
         ];
         for (path, count) in paths {
             if count > 0 {
                 seen.insert(path);
             }
         }
+        for path in stats.paths.keys() {
+            seen.insert(path);
+        }
     }
     let missing: Vec<&str> = ENDINGS.iter().copied().filter(|ending| !reached.contains(ending)).collect();
     assert!(missing.is_empty(), "every ending is reached: {missing:?} are not");
-    assert_eq!(seen.len(), 12, "every path is taken: only {seen:?} are");
+    let paths = [
+        "duplicate assignments",
+        "oversized snapshots",
+        "endings said during a stop",
+        "pushes settled during a stop",
+        "cancels as a workspace was prepared",
+        "cancels as a workspace failed to prepare",
+        "cancels as an agent failed to start",
+        "cancels as an agent started",
+    ];
+    let missing: Vec<&str> = paths.iter().copied().filter(|path| !seen.contains(path)).collect();
+    assert!(missing.is_empty(), "every path is taken: {missing:?} are not");
+    assert_eq!(seen.len(), 14 + paths.len(), "every path is taken: only {seen:?} are");
 }

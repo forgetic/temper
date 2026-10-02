@@ -14,10 +14,12 @@
 //!   a push, a yield (then waiting for an inbound event, and parking past its
 //!   idle time) or some work, then its fate: it ends, parks or fails as it
 //!   says, exits without a word, hangs or overruns until the watchdog faults
-//!   it, breaks the rules, or says more than the limits allow. It does not
+//!   it, breaks the rules, or says more than the limits allow (an outcome or a
+//!   snapshot). It does not
 //!   wait for its calls' replies, so it may finish with calls in flight.
 //! - A stop before its word winds it down, maybe with one late call, and it
-//!   goes after a while. After its word or a fault, it goes after a while
+//!   goes after a while, sometimes saying how its run finishes first (ended,
+//!   parked, or cancelled). After its word or a fault, it goes after a while
 //!   whatever it is told. `Gone` is its last event. What comes for an agent
 //!   that has gone (deliveries, replies, stops) is dropped, as a stale handle
 //!   is.
@@ -65,8 +67,10 @@ pub struct Script {
     pub wind: Span,
     /// How long a hung or overrunning run lasts until the watchdog faults it.
     pub watchdog: Span,
-    /// The chance, per mille, that a stopped agent makes one more call.
+    /// The chance, per mille, that a stopped agent makes one more call, and
+    /// that its run says how it finishes as it winds down.
     pub late: u32,
+    pub words: u32,
     /// How long a push or a save takes, and the chance, per mille, for each
     /// writable repository, that it has a change, that its branch moved, and
     /// that the push fails.
@@ -113,6 +117,11 @@ pub struct Tally {
     pub deliveries: u32,
     pub stops: u32,
     pub late_calls: u32,
+    /// Runs that said how they finish as they wound down after a stop.
+    pub words: u32,
+    /// Saves that came back with a branch moved, or a push failed.
+    pub saves_moved: u32,
+    pub saves_failed: u32,
     /// Deliveries, replies and stops that found their agent gone.
     pub dropped: u32,
 }
@@ -143,8 +152,11 @@ enum Phase {
     Stuck {
         fault: AgentFailure,
     },
-    /// Stopped before its word: it goes at its wake.
-    Stopping,
+    /// Stopped before its word: it goes at its wake, saying how its run
+    /// finishes first if `word`.
+    Stopping {
+        word: bool,
+    },
     /// It said its word, or was faulted: it goes at its wake.
     Exiting,
     Gone,
@@ -283,7 +295,18 @@ impl Parent {
                 out.push(self.exit(agent, after));
                 out
             }
-            Phase::Stopping | Phase::Exiting => self.goes(agent, b"exited"),
+            Phase::Stopping { word: true } => {
+                self.tally.words += 1;
+                let finish = match self.rng.below(3) {
+                    0 => Finish::Ended { outcome: bytes(self.rng.between(1, self.limits.outcome_bytes)) },
+                    1 => Finish::Parked { snapshot: None },
+                    _ => Finish::Failed { failure: RunFailure::Cancelled },
+                };
+                let mut out = vec![host(Duration::ZERO, Event::Finished { owner: self.owner(agent), finish })];
+                out.extend(self.goes(agent, b"cancelled"));
+                out
+            }
+            Phase::Stopping { word: false } | Phase::Exiting => self.goes(agent, b"exited"),
             Phase::Gone => unreachable!("no wake is armed"),
         }
     }
@@ -304,7 +327,7 @@ impl Parent {
         } else if self.rng.chance(self.script.permanent) {
             self.unprepared(owner, Preparation::Permanent)
         } else {
-            let writable = self.preparing.remove(&owner).expect("inserted above");
+            let writable = self.preparing.get(&owner).expect("inserted above").clone();
             let workspace = self.name();
             let space = Space { owner, writable, agent: None, pushes: 0, saving: false, released: false };
             self.spaces.insert(workspace, space);
@@ -315,7 +338,6 @@ impl Parent {
 
     fn unprepared(&mut self, owner: Token, failure: Preparation) -> Event {
         self.tally.unprepared += 1;
-        self.preparing.remove(&owner);
         Event::Unprepared { owner, failure, detail: Box::from(&b"fatal: could not read from remote repository"[..]) }
     }
 
@@ -379,7 +401,14 @@ impl Parent {
                 self.say(agent, Finish::Parked { snapshot })
             }
             Fate::Failed(failure) => self.say(agent, Finish::Failed { failure }),
-            Fate::Oversized => self.say(agent, Finish::Ended { outcome: bytes(self.limits.outcome_bytes + 1) }),
+            Fate::Oversized => {
+                let finish = if self.rng.chance(500) {
+                    Finish::Ended { outcome: bytes(self.limits.outcome_bytes + 1) }
+                } else {
+                    Finish::Parked { snapshot: Some(bytes(self.limits.snapshot_bytes + 1)) }
+                };
+                self.say(agent, finish)
+            }
             Fate::Exited => self.goes(agent, b"panicked at 'index out of bounds'"),
             Fate::Hung => self.stuck(agent, AgentFailure::NoProgress),
             Fate::Overrun => self.stuck(agent, AgentFailure::WallTime),
@@ -434,7 +463,7 @@ impl Parent {
                 let step = self.script.step.draw(&mut self.rng);
                 vec![self.rearm(agent, step)]
             }
-            Phase::Working { .. } | Phase::Stuck { .. } | Phase::Stopping | Phase::Exiting => {
+            Phase::Working { .. } | Phase::Stuck { .. } | Phase::Stopping { .. } | Phase::Exiting => {
                 self.tally.deliveries += 1;
                 Vec::new()
             }
@@ -463,12 +492,13 @@ impl Parent {
                     self.tally.late_calls += 1;
                     out.push(self.call(agent, Ask::Relay { body: Box::from(&b"one more"[..]) }));
                 }
-                self.set(agent, Phase::Stopping);
+                let word = self.rng.chance(self.script.words);
+                self.set(agent, Phase::Stopping { word });
                 let after = self.script.wind.draw(&mut self.rng);
                 out.push(self.rearm(agent, after));
                 out
             }
-            Phase::Stopping | Phase::Exiting => Vec::new(),
+            Phase::Stopping { .. } | Phase::Exiting => Vec::new(),
             Phase::Gone => {
                 self.tally.dropped += 1;
                 Vec::new()
@@ -493,6 +523,12 @@ impl Parent {
         assert!(space.owner == owner && !space.saving, "a run saves once, in its own workspace");
         space.saving = true;
         let save = self.landings(workspace);
+        if save.contains(&Landing::Moved) {
+            self.tally.saves_moved += 1;
+        }
+        if save.contains(&Landing::Failed) {
+            self.tally.saves_failed += 1;
+        }
         let after = self.script.push.draw(&mut self.rng);
         vec![host(after, Event::Saved { owner, save })]
     }
@@ -535,6 +571,11 @@ impl Parent {
             });
         }
         landings.into_boxed_slice()
+    }
+
+    /// The prepare of `owner` has ended, as the host takes its terminal.
+    pub fn prepared(&mut self, owner: Token) {
+        assert!(self.preparing.remove(&owner).is_some(), "a prepare ends once");
     }
 
     /// The push `call` has ended, as the world delivers its `Pushed`.

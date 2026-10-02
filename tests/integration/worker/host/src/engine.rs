@@ -4,8 +4,8 @@
 //!
 //! - It sends assignments, spaced out: within the limits, beyond them (the
 //!   kind of refusal it expects noted), or naming a run it has in flight
-//!   under a new attempt. Repositories, writability, saving and snapshots are
-//!   drawn.
+//!   under a new attempt; also to a worker shutting down, which refuses
+//!   them. Repositories, writability, saving and snapshots are drawn.
 //! - For each assignment it sends inbound events while the run is in flight,
 //!   each carrying its place in the run's sequence, some too large; may
 //!   cancel it; and may send messages for an attempt it never assigned,
@@ -119,7 +119,6 @@ pub struct Engine {
     rng: Rng,
     names: u64,
     sent: u32,
-    shut: bool,
     /// Assignments in flight: sent and not answered.
     open: BTreeMap<(Token, Token), Assigned>,
     /// Endings, by kind.
@@ -136,7 +135,6 @@ impl Engine {
             rng: Rng::new(seed),
             names: 0,
             sent: 0,
-            shut: false,
             open: BTreeMap::new(),
             endings: BTreeMap::new(),
             tally: Tally::default(),
@@ -162,11 +160,6 @@ impl Engine {
     pub fn assert_settled(&self) {
         let open: Vec<_> = self.open.keys().collect();
         assert!(open.is_empty(), "every assignment has been answered: {open:?} have not");
-    }
-
-    /// The worker shuts down: no more assignments.
-    pub fn shut(&mut self) {
-        self.shut = true;
     }
 
     /// What the engine does first.
@@ -238,7 +231,7 @@ impl Engine {
     }
 
     fn assign(&mut self) -> Vec<Act> {
-        if self.shut || self.sent == self.script.assignments {
+        if self.sent == self.script.assignments {
             return Vec::new();
         }
         self.sent += 1;
