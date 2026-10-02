@@ -1261,18 +1261,19 @@ impl World {
             self.drain_forge();
         }
         self.observe_forge();
-        // The referees fire what is due: a deadline that passes fails the
+        // Each referee fires what is due: a deadline that passes fails the
         // test.
-        for due in [self.referee.is_due(now), self.engine_referee.is_due(now)] {
-            if due {
-                let mut stimuli = Vec::new();
-                self.referee.fire(now, &mut stimuli);
-                self.referee.assert_holding(self.settings.seed);
-                let mut injected = Vec::new();
-                self.engine_referee.fire(now, &mut injected);
-                self.engine_referee.assert_holding(self.settings.seed);
-                assert!(stimuli.is_empty() && injected.is_empty(), "the referees inject nothing in this world");
-            }
+        if self.referee.is_due(now) {
+            let mut stimuli = Vec::new();
+            self.referee.fire(now, &mut stimuli);
+            self.referee.assert_holding(self.settings.seed);
+            assert!(stimuli.is_empty(), "the referee injects nothing in this world");
+        }
+        if self.engine_referee.is_due(now) {
+            let mut stimuli = Vec::new();
+            self.engine_referee.fire(now, &mut stimuli);
+            self.engine_referee.assert_holding(self.settings.seed);
+            assert!(stimuli.is_empty(), "the engine's referee injects nothing in this world");
         }
 
         // Each stage resumes what is ready, then takes its events, then fires

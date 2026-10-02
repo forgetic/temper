@@ -207,9 +207,27 @@ impl World {
             let limits = &self.settings.engine.forge;
             let mut answer = temper_engine_model_forge_tests::translate::answer(out.asked, result, limits, now);
             let decoded = translate::decode(&mut answer, &bodies, page);
-            if let Err(engine_api::Error::RateLimited { .. }) = &answer {
-                self.stats.limited += 1;
-            }
+            let limited = match &answer {
+                Err(error) => match error {
+                    engine_api::Error::RateLimited { .. } => true,
+                    engine_api::Error::Unavailable
+                    | engine_api::Error::Timeout
+                    | engine_api::Error::Forbidden
+                    | engine_api::Error::Missing
+                    | engine_api::Error::TooLarge
+                    | engine_api::Error::Empty
+                    | engine_api::Error::Full
+                    | engine_api::Error::Exists
+                    | engine_api::Error::NothingToMerge
+                    | engine_api::Error::Closed
+                    | engine_api::Error::Stale
+                    | engine_api::Error::Conflict
+                    | engine_api::Error::Protected
+                    | engine_api::Error::Circular => false,
+                },
+                Ok(_) => false,
+            };
+            self.stats.limited += u32::from(limited);
             self.answer_engine(out.call, answer, decoded);
             return;
         }
