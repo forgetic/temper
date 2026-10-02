@@ -14,12 +14,16 @@
 //! shutdown) or a fault of the agent takes the same tail.
 //!
 //! The first ending decided wins, but for the run's own: a run the worker
-//! stopped (a cancel, or a fault of its agent) may still say how it finishes
-//! as it winds down, and what it says before its agent has gone is the answer.
-//! A push that lands as it winds down is its outcome (agent-model.md, 4.4). A
-//! cancel it reports is then the worker's: the cancel's reason, or the
-//! agent's fault. Only a run that says nothing before its agent has gone is
-//! answered as the worker stopped it.
+//! cancelled (the engine, lost contact, shutdown) may still say how it
+//! finishes as it winds down, and what it says before its agent has gone is
+//! the answer. A push that lands as it winds down is its outcome
+//! (agent-model.md, 4.4). A cancel it reports is then the worker's, for the
+//! cancel's reason. A run whose agent was faulted is not heard after the fault
+//! (the agent sub-model tells at most one of the two), but for its wall time,
+//! which is told only once the grace is up: until then the run may still say
+//! how it finishes, and a cancel it reports is told as the wall time's fault.
+//! Only a run that says nothing before its agent has gone is answered as the
+//! worker stopped it.
 //!
 //! A run's transition table:
 //!

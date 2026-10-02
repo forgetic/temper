@@ -24,8 +24,8 @@ pub struct Limits {
     /// How long an operation that reaches the forge may take: a clone, a
     /// fetch, a branch's creation, a push.
     pub remote_timeout: Duration,
-    /// How long one on the worker's disk may take: making or removing a
-    /// workspace, checking out, committing.
+    /// How long one on the worker's disk may take: making a workspace,
+    /// checking out, committing.
     pub local_timeout: Duration,
     /// Facts kept until the parent drains them. Beyond them, facts are dropped
     /// and counted.
