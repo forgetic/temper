@@ -115,9 +115,11 @@ fn facts_change_nothing() {
 }
 
 /// Seeds that find what the engine does not do yet, run by
-/// `the_engine_findings_replay` until it does: an item claimed whose run is
-/// never assigned, once a read of its brief failed (248, 267).
-const FINDINGS: [u64; 2] = [248, 267];
+/// `the_engine_findings_replay` until it does: a change approved on its
+/// head that the engine never reads again, and waits for news that never
+/// comes (60); an item claimed whose run is never assigned, once a read of
+/// its brief failed (248, 267).
+const FINDINGS: [u64; 3] = [60, 248, 267];
 
 #[test]
 fn random_worlds_settle_with_every_ending_reached() {
@@ -148,7 +150,7 @@ fn restarting_worlds_settle() {
 }
 
 #[test]
-#[ignore = "the engine does not yet assign every run it claims when a read of its brief fails"]
+#[ignore = "the engine does not yet read again an approval it missed, nor assign every run it claims"]
 fn the_engine_findings_replay() {
     for seed in FINDINGS {
         run(Settings::random(seed));

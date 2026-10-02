@@ -75,6 +75,7 @@ pub enum Expected {
 pub enum Stimulus {
     Restart,
     Drop { worker: usize },
+    Vanish { worker: usize },
 }
 
 /// The bounds the scenario sets.

@@ -53,6 +53,9 @@ pub struct Settings {
     pub restart_at: Span,
     pub drops: u32,
     pub drop_at: Span,
+    /// Workers whose channel drops and who never come back: their runs and
+    /// the answers they kept go with them.
+    pub vanishes: u32,
     pub bounds: Bounds,
 }
 
@@ -127,6 +130,7 @@ impl Settings {
             restart_at: Span::millis(5_000, 200_000),
             drops: 0,
             drop_at: Span::millis(5_000, 200_000),
+            vanishes: 0,
             bounds: Bounds { story: Duration::from_secs(4 * 3_600), message: Duration::from_secs(3_600) },
         }
     }
@@ -185,14 +189,11 @@ impl Settings {
             }
         }
         let store = store::Script { latency: Span::millis(1, 2_000), failures: small(&mut rng, 80), done_anyway: 300 };
-        Settings {
-            forge,
-            stories,
-            workers: 1 + usize::try_from(rng.below(3)).expect("few"),
-            store,
-            drops: small(&mut rng, 4),
-            ..calm
-        }
+        let workers = 1 + usize::try_from(rng.below(3)).expect("few");
+        // Some come back past their grace, and one of several may never.
+        let redial = if rng.chance(300) { Span::millis(1_000, 60_000) } else { calm.redial };
+        let vanishes = u32::from(workers > 1 && rng.chance(300));
+        Settings { forge, stories, workers, redial, store, drops: small(&mut rng, 4), vanishes, ..calm }
     }
 
     /// A random world whose engine restarts once or twice, at drawn moments.
@@ -210,7 +211,7 @@ impl Settings {
 }
 
 /// What the world counted, by name, that the sweep must reach.
-pub const ENDINGS: [&str; 15] = [
+pub const ENDINGS: [&str; 16] = [
     "acknowledged",
     "answer: ended",
     "answer: parked",
@@ -226,6 +227,7 @@ pub const ENDINGS: [&str; 15] = [
     "reviewed",
     "store: failed",
     "timed out",
+    "vanished",
 ];
 
 /// What the world counted.
@@ -327,6 +329,8 @@ pub struct World {
     stores: Ledger<(u64, Token), ()>,
 
     workers: Vec<Worker>,
+    /// The workers that vanished.
+    gone: Vec<bool>,
     people: People,
     store: Store,
     mirror: Mirror,
@@ -352,6 +356,9 @@ impl World {
             let worker = usize::try_from(rng.below(settings.workers as u64)).expect("few");
             referee.inject(Time::ZERO.saturating_add(settings.drop_at.draw(&mut rng)), Stimulus::Drop { worker });
         }
+        for worker in 0..usize::try_from(settings.vanishes).expect("few") {
+            referee.inject(Time::ZERO.saturating_add(settings.drop_at.draw(&mut rng)), Stimulus::Vanish { worker });
+        }
         let max_out = engine::max_out(&settings.limits);
         let model = Model::new(deployment::config(), &settings.limits, rng.next_u64(), Time::ZERO);
         let workers =
@@ -374,6 +381,7 @@ impl World {
             theirs: Ledger::new("person's or worker's call"),
             asks: Ledger::new("person's ask"),
             stores: Ledger::new("store operation"),
+            gone: vec![false; workers.len()],
             workers,
             people: People::new(&settings.stories),
             store: Store::new(settings.store, rng.next_u64(), TRACES),
@@ -649,7 +657,7 @@ impl World {
 
     /// A worker dials in: a channel of its own, and its hello.
     fn dial(&mut self, worker: usize) {
-        if self.workers[worker].channel().is_some() {
+        if self.workers[worker].channel().is_some() || self.gone[worker] {
             return;
         }
         let channel = Token::new(self.wire.name());
@@ -676,6 +684,20 @@ impl World {
         self.send(self.now.saturating_add(grace), Delivery::Grace(worker));
         let at = self.settings.redial.draw(&mut self.rng);
         self.send(self.now.saturating_add(at), Delivery::Dial(worker));
+    }
+
+    /// The worker `worker` goes, its channel with it, and never comes back:
+    /// what it hosted and kept is lost.
+    fn vanish(&mut self, worker: usize) {
+        self.end("vanished");
+        self.log(format!("worker {worker} vanishes"));
+        if let Some(channel) = self.workers[worker].channel()
+            && self.open.remove(&channel.raw()).is_some()
+        {
+            self.stage.push(Event::Lost { channel });
+        }
+        self.gone[worker] = true;
+        self.workers[worker] = Worker::new(self.settings.worker, 0);
     }
 
     /// What a worker asked of the world.
@@ -996,6 +1018,7 @@ impl World {
         match stimulus {
             Stimulus::Restart => self.restart(),
             Stimulus::Drop { worker } => self.hang_up(worker),
+            Stimulus::Vanish { worker } => self.vanish(worker),
         }
     }
 
