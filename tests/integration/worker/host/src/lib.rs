@@ -1,0 +1,31 @@
+//! A simulated world for the worker's host sub-model (programming-model.md,
+//! 4.5 and 11; worker-model.md, sections 4 and 9): the host, with the world as
+//! its parent, a scripted engine assigning it runs ([`engine`]), and the
+//! parent's capabilities scripted ([`parent`]): workspaces that prepare,
+//! push and save, and agents whose runs make host calls, yield, park, end,
+//! fail, hang and get stopped. One loop drives them, deterministically from a
+//! seed.
+//!
+//! The world owns the clock and the seeds, and stands in for everything around
+//! the host: the top level that will route between it, the engine link and
+//! its siblings (its grace on losing contact, the report on coming back, and
+//! shutdown included), the checkout and agent sub-models, and the protocol
+//! layers below. It checks the contracts as it goes: every assignment is
+//! answered exactly once, a refused one at once and never admitted, one beyond
+//! the limits refused for what is beyond them; nothing is saved or released
+//! while the run's agent may still be running or a push is in flight; a slot
+//! is taken from admission until the run has answered, and the run answers
+//! only once it has left live and all of it is released; a stale attempt never
+//! acts; inbound events reach a run once each, in the order sent; every host
+//! call is answered once, and every call of a run that has left live (a
+//! cancelled one among them) as unavailable, those in flight as it leaves; and
+//! the report on coming back lists exactly the runs admitted and not
+//! answered. Once it settles: nothing in flight, every slot free, no call
+//! open, every workspace released and every agent gone.
+
+pub mod engine;
+pub mod parent;
+mod world;
+
+pub use temper_world::Span;
+pub use world::{Outage, Settings, Stats, World};
