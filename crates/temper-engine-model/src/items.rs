@@ -620,3 +620,49 @@ pub(crate) fn took(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) {
         route::forge_step(model, env, forge::Event::Took { item, through });
     }
 }
+
+/// The application in hand, if the item's job is one.
+pub(crate) const fn applying(job: &Job) -> Option<&Applying> {
+    match job {
+        Job::Applying(applying) => Some(applying),
+        Job::Idle | Job::Asking { .. } | Job::Writing { .. } | Job::Recording { .. } | Job::Starting(_) => None,
+    }
+}
+
+pub(crate) const fn applying_mut(job: &mut Job) -> Option<&mut Applying> {
+    match job {
+        Job::Applying(applying) => Some(applying),
+        Job::Idle | Job::Asking { .. } | Job::Writing { .. } | Job::Recording { .. } | Job::Starting(_) => None,
+    }
+}
+
+/// The run being prepared, if the item's job is one.
+pub(crate) const fn starting_mut(job: &mut Job) -> Option<&mut Starting> {
+    match job {
+        Job::Starting(starting) => Some(starting),
+        Job::Idle | Job::Asking { .. } | Job::Writing { .. } | Job::Recording { .. } | Job::Applying(_) => None,
+    }
+}
+
+/// The writes of an application, once it makes them.
+pub(crate) const fn writes(doing: &Doing) -> Option<&Writes> {
+    match doing {
+        Doing::Writes(writes) => Some(writes),
+        Doing::Outcome | Doing::Fresh => None,
+    }
+}
+
+pub(crate) const fn writes_mut(doing: &mut Doing) -> Option<&mut Writes> {
+    match doing {
+        Doing::Writes(writes) => Some(writes),
+        Doing::Outcome | Doing::Fresh => None,
+    }
+}
+
+/// The comment of the outcome an application applies, if it applies one.
+pub(crate) const fn comment_of(of: Of) -> Option<u64> {
+    match of {
+        Of::Outcome { comment, .. } => Some(comment),
+        Of::Action | Of::Done => None,
+    }
+}

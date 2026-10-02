@@ -486,7 +486,7 @@ fn cut(found: &[&[u8]], keep: brief::Keep, parts: u32, bytes: u32) -> brief::Rea
 /// The notes answered an index, for a brief, or a search.
 pub(crate) fn indexed(model: &mut Model, env: &Env<Limits>, reply_to: ReplyTo, lines: Box<[notes::Line]>) {
     let Some(wait) = take(model, reply_to.into_token()) else { return };
-    let Wait::Brief { owner, keep, parts, bytes, .. } = wait else { return };
+    let Some((owner, keep, parts, bytes)) = wait.brief() else { return };
     let mut found: List<Box<[u8]>> = List::with_capacity(u32::try_from(lines.len()).unwrap_or(0));
     for line in &lines {
         found.push(translate::concat(&[&line.name, b": ", &line.description])).expect("room for each of them");
@@ -498,7 +498,8 @@ pub(crate) fn indexed(model: &mut Model, env: &Env<Limits>, reply_to: ReplyTo, l
 
 /// The notes answered a run's call.
 pub(crate) fn relay_served(model: &mut Model, env: &Env<Limits>, reply_to: ReplyTo, served: Served) {
-    let Some(Wait::Relay { to, .. }) = take(model, reply_to.into_token()) else { return };
+    let Some(taken) = take(model, reply_to.into_token()) else { return };
+    let Some(to) = taken.relay() else { return };
     runs::serve_answer(model, env, to, served);
 }
 

@@ -83,3 +83,88 @@ pub(crate) enum Carried {
     /// A run's report, for the views.
     Report { kind: Kind, content: Box<[u8]> },
 }
+
+impl Wait {
+    /// The item whose job the wait is a step of.
+    pub(crate) const fn job(&self) -> Option<Id<Entry>> {
+        match self {
+            Wait::Job { entry } => Some(*entry),
+            Wait::Take { .. }
+            | Wait::Aside { .. }
+            | Wait::Brief { .. }
+            | Wait::Wiki { .. }
+            | Wait::Relay { .. }
+            | Wait::Person { .. }
+            | Wait::Views { .. }
+            | Wait::Done => None,
+        }
+    }
+
+    /// The fleet's `to` of the run's call the wait answers.
+    pub(crate) fn relay(self) -> Option<ReplyTo> {
+        match self {
+            Wait::Relay { to } => Some(to),
+            Wait::Job { .. }
+            | Wait::Take { .. }
+            | Wait::Aside { .. }
+            | Wait::Brief { .. }
+            | Wait::Wiki { .. }
+            | Wait::Person { .. }
+            | Wait::Views { .. }
+            | Wait::Done => None,
+        }
+    }
+
+    /// The brief's read the wait answers: its owner and bounds.
+    pub(crate) const fn brief(&self) -> Option<(Token, brief::Keep, u32, u32)> {
+        match self {
+            Wait::Brief { owner, keep, parts, bytes, .. } => Some((*owner, *keep, *parts, *bytes)),
+            Wait::Job { .. }
+            | Wait::Take { .. }
+            | Wait::Aside { .. }
+            | Wait::Wiki { .. }
+            | Wait::Relay { .. }
+            | Wait::Person { .. }
+            | Wait::Views { .. }
+            | Wait::Done => None,
+        }
+    }
+}
+
+impl Carried {
+    /// The run's answer carried, with its item and attempt.
+    pub(crate) fn answer(&self) -> Option<(Item, u64, &Answer)> {
+        match self {
+            Carried::Answer { item, attempt, answer } => Some((*item, *attempt, answer)),
+            Carried::Call { .. } | Carried::Served { .. } | Carried::Report { .. } => None,
+        }
+    }
+
+    pub(crate) fn answer_mut(&mut self) -> Option<&mut Answer> {
+        match self {
+            Carried::Answer { answer, .. } => Some(answer),
+            Carried::Call { .. } | Carried::Served { .. } | Carried::Report { .. } => None,
+        }
+    }
+
+    pub(crate) fn call(self) -> Option<Box<Call>> {
+        match self {
+            Carried::Call { body } => Some(body),
+            Carried::Answer { .. } | Carried::Served { .. } | Carried::Report { .. } => None,
+        }
+    }
+
+    pub(crate) fn served(self) -> Option<Box<Served>> {
+        match self {
+            Carried::Served { served } => Some(served),
+            Carried::Answer { .. } | Carried::Call { .. } | Carried::Report { .. } => None,
+        }
+    }
+
+    pub(crate) fn report(self) -> Option<(Kind, Box<[u8]>)> {
+        match self {
+            Carried::Report { kind, content } => Some((kind, content)),
+            Carried::Answer { .. } | Carried::Call { .. } | Carried::Served { .. } => None,
+        }
+    }
+}

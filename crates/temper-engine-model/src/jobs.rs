@@ -122,8 +122,11 @@ fn nth(entry: &Entry, index: u32) -> Option<&Related> {
 /// Asks the plan what is due, and tells the hub.
 fn decide(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) {
     let entry = get_mut(model, id);
-    let Job::Asking { owner, .. } = mem::replace(&mut entry.job, Job::Idle) else {
-        unreachable!("an item asking decides")
+    let owner = match mem::replace(&mut entry.job, Job::Idle) {
+        Job::Asking { owner } => owner,
+        Job::Idle | Job::Writing { .. } | Job::Recording { .. } | Job::Applying(_) | Job::Starting(_) => {
+            unreachable!("an item asking decides")
+        }
     };
     if entry.blocked {
         let due = work::Due::Nothing { until: None };
@@ -372,10 +375,10 @@ pub(crate) fn act(model: &mut Model, env: &Env<Limits>, owner: Token, item: Item
 /// Goes on with an application from where it is: what it reads next, or the
 /// writes from the next.
 fn go(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) {
-    let Job::Applying(applying) = &get(model, id).job else { unreachable!("an item applying goes on") };
+    let Some(applying) = items::applying(&get(model, id).job) else { unreachable!("an item applying goes on") };
     match &applying.doing {
         Doing::Outcome => {
-            let Of::Outcome { comment, .. } = applying.of else { unreachable!("only an outcome is read") };
+            let Some(comment) = items::comment_of(applying.of) else { unreachable!("only an outcome is read") };
             let item = translate::forge_item(get(model, id).item);
             let read = forge::Read::Item { item, after: comment.saturating_sub(1) };
             read_for(model, env, id, read);
@@ -394,7 +397,7 @@ fn read_for(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, read: forge::Re
     let Ok(wait) = model.waits.insert(Wait::Job { entry: id }) else {
         unreachable!("the waits have room for every item's job")
     };
-    if let Job::Applying(applying) = &mut get_mut(model, id).job {
+    if let Some(applying) = items::applying_mut(&mut get_mut(model, id).job) {
         applying.wait = Some(wait);
     }
     route::forge_step(model, env, forge::Event::Read { owner: wait.token(), read });
@@ -404,8 +407,8 @@ fn read_for(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, read: forge::Re
 /// outcome writes.
 fn applied(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, fresh: Option<plan::Pull>) {
     let entry = get(model, id);
-    let Job::Applying(applying) = &entry.job else { unreachable!("an item applying asks the plan") };
-    let Of::Outcome { .. } = applying.of else { unreachable!("an action's writes are decided already") };
+    let Some(applying) = items::applying(&entry.job) else { unreachable!("an item applying asks the plan") };
+    assert!(items::comment_of(applying.of).is_some(), "an action's writes are decided already");
     let (Some(record), Some((_, posted))) = (entry.staged.as_ref(), entry.outcome.as_ref()) else {
         return finish(model, env, id, Finish::Failed);
     };
@@ -467,7 +470,7 @@ fn applied(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, fresh: Option<pl
                 pull: fresh,
                 reading: None,
             };
-            if let Job::Applying(applying) = &mut get_mut(model, id).job {
+            if let Some(applying) = items::applying_mut(&mut get_mut(model, id).job) {
                 applying.doing = Doing::Writes(Box::new(writes));
             }
             next(model, env, id);
@@ -500,7 +503,7 @@ fn reject(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) {
         pull: None,
         reading: None,
     };
-    if let Job::Applying(applying) = &mut entry.job {
+    if let Some(applying) = items::applying_mut(&mut entry.job) {
         applying.doing = Doing::Writes(Box::new(writes));
     }
     finish(model, env, id, Finish::Made);
@@ -592,8 +595,8 @@ fn next(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) {
     let bound = plan::max_out(&env.limits.plan).saturating_add(1);
     for _ in 0..bound {
         let entry = get(model, id);
-        let Job::Applying(applying) = &entry.job else { unreachable!("an item applying makes its writes") };
-        let Doing::Writes(writes) = &applying.doing else { unreachable!("an item making writes has them") };
+        let Some(applying) = items::applying(&entry.job) else { unreachable!("an item applying makes its writes") };
+        let Some(writes) = items::writes(&applying.doing) else { unreachable!("an item making writes has them") };
         let Some(write) = writes.list.get(usize::try_from(writes.next).unwrap_or(usize::MAX)) else {
             return finish(model, env, id, Finish::Made);
         };
@@ -699,8 +702,8 @@ fn landing(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, head: plan::Comm
         },
         None => Box::new([]),
     };
-    let Job::Applying(applying) = &entry.job else { unreachable!("an item applying lands") };
-    let Doing::Writes(writes) = &applying.doing else { unreachable!("an item making writes lands") };
+    let Some(applying) = items::applying(&entry.job) else { unreachable!("an item applying lands") };
+    let Some(writes) = items::writes(&applying.doing) else { unreachable!("an item making writes lands") };
     let (ci, ci_head) = match writes.pull {
         Some(pull) => (pull.ci, pull.head.0),
         None => match model.forge.pull(item) {
@@ -751,9 +754,9 @@ fn permission_read(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, reposito
     let Ok(wait) = model.waits.insert(Wait::Job { entry: id }) else {
         unreachable!("the waits have room for every item's job")
     };
-    if let Job::Applying(applying) = &mut get_mut(model, id).job {
+    if let Some(applying) = items::applying_mut(&mut get_mut(model, id).job) {
         applying.wait = Some(wait);
-        if let Doing::Writes(writes) = &mut applying.doing {
+        if let Some(writes) = items::writes_mut(&mut applying.doing) {
             let unread = rules::Review {
                 person: user,
                 permission: rules::Permission::None,
@@ -780,10 +783,10 @@ enum Made {
 fn make(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) -> Made {
     let entry = get(model, id);
     let item = entry.item;
-    let Job::Applying(applying) = &entry.job else { unreachable!("an item applying makes its writes") };
+    let Some(applying) = items::applying(&entry.job) else { unreachable!("an item applying makes its writes") };
     let resumed = applying.resumed;
     let of = applying.of;
-    let Doing::Writes(writes) = &applying.doing else { unreachable!("an item making writes has them") };
+    let Some(writes) = items::writes(&applying.doing) else { unreachable!("an item making writes has them") };
     let retried = writes.retried;
     let Some(write) = writes.list.get(usize::try_from(writes.next).unwrap_or(usize::MAX)) else {
         unreachable!("a write in hand is among the writes")
@@ -858,7 +861,7 @@ fn make(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) -> Made {
     let Ok(wait) = model.waits.insert(Wait::Job { entry: id }) else {
         unreachable!("the waits have room for every item's job")
     };
-    if let Job::Applying(applying) = &mut get_mut(model, id).job {
+    if let Some(applying) = items::applying_mut(&mut get_mut(model, id).job) {
         applying.wait = Some(wait);
     }
     route::forge_step(model, env, forge::Event::Write { owner: wait.token(), write: made, resumed });
@@ -954,9 +957,9 @@ fn release_step(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, step: &[u8]
 
 /// Moves on past the write in hand.
 fn advance(model: &mut Model, id: Id<Entry>) {
-    if let Job::Applying(applying) = &mut get_mut(model, id).job {
+    if let Some(applying) = items::applying_mut(&mut get_mut(model, id).job) {
         applying.wait = None;
-        if let Doing::Writes(writes) = &mut applying.doing {
+        if let Some(writes) = items::writes_mut(&mut applying.doing) {
             writes.next = writes.next.saturating_add(1);
             writes.retried = false;
         }
@@ -967,8 +970,11 @@ fn advance(model: &mut Model, id: Id<Entry>) {
 /// plan's parts it staged are committed.
 fn finish(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, finish: Finish) {
     let entry = get_mut(model, id);
-    let Job::Applying(applying) = mem::replace(&mut entry.job, Job::Idle) else {
-        unreachable!("an item applying finishes")
+    let applying = match mem::replace(&mut entry.job, Job::Idle) {
+        Job::Applying(applying) => applying,
+        Job::Idle | Job::Asking { .. } | Job::Writing { .. } | Job::Recording { .. } | Job::Starting(_) => {
+            unreachable!("an item applying finishes")
+        }
     };
     let staged = entry.staged.take();
     let then = match &applying.doing {
@@ -1036,8 +1042,10 @@ fn outcome_read(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, result: Res
         Err(forge::Failure::Busy) => return stall(model, id),
         Err(_) => return finish(model, env, id, Finish::Failed),
     }
-    let Job::Applying(applying) = &get(model, id).job else { unreachable!("an item applying reads its outcome") };
-    let Of::Outcome { comment, .. } = applying.of else { unreachable!("only an outcome is read") };
+    let Some(applying) = items::applying(&get(model, id).job) else {
+        unreachable!("an item applying reads its outcome")
+    };
+    let Some(comment) = items::comment_of(applying.of) else { unreachable!("only an outcome is read") };
     let mut found = None;
     for decoded in &model.decoded {
         match decoded {
@@ -1052,7 +1060,7 @@ fn outcome_read(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, result: Res
     let Some(posted) = found else { return finish(model, env, id, Finish::Failed) };
     let entry = get_mut(model, id);
     entry.outcome = Some((comment, posted));
-    if let Job::Applying(applying) = &mut entry.job {
+    if let Some(applying) = items::applying_mut(&mut entry.job) {
         applying.doing = Doing::Fresh;
     }
     go(model, env, id);
@@ -1087,9 +1095,9 @@ fn permission_answer(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, result
         Err(forge::Failure::Busy) => return stall(model, id),
         Ok(_) | Err(_) => rules::Permission::None,
     };
-    if let Job::Applying(applying) = &mut get_mut(model, id).job {
+    if let Some(applying) = items::applying_mut(&mut get_mut(model, id).job) {
         applying.wait = None;
-        if let Doing::Writes(writes) = &mut applying.doing
+        if let Some(writes) = items::writes_mut(&mut applying.doing)
             && let Some(person) = writes.reading.take()
         {
             let review = rules::Review { person, permission, head: [0; 32], stance: rules::Stance::Approve };
@@ -1161,8 +1169,8 @@ fn written(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, result: Result<f
         Ok(written) => written,
         Err(forge::Failure::Busy) => return stall(model, id),
         Err(forge::Failure::Forge(api::Error::Timeout)) if !retried => {
-            if let Job::Applying(applying) = &mut get_mut(model, id).job
-                && let Doing::Writes(writes) = &mut applying.doing
+            if let Some(applying) = items::applying_mut(&mut get_mut(model, id).job)
+                && let Some(writes) = items::writes_mut(&mut applying.doing)
             {
                 writes.retried = true;
             }
@@ -1194,8 +1202,8 @@ fn deleting(model: &Model, id: Id<Entry>) -> bool {
 }
 
 fn in_hand(model: &Model, id: Id<Entry>) -> Option<&plan::Write> {
-    let Job::Applying(applying) = &model.items.get(id)?.job else { return None };
-    let Doing::Writes(writes) = &applying.doing else { return None };
+    let applying = items::applying(&model.items.get(id)?.job)?;
+    let writes = items::writes(&applying.doing)?;
     writes.list.get(usize::try_from(writes.next).ok()?)
 }
 
@@ -1330,8 +1338,8 @@ pub(crate) fn again(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) {
             Doing::Outcome | Doing::Fresh => go(model, env, id),
             Doing::Writes(writes) => {
                 if writes.reading.is_some()
-                    && let Job::Applying(applying) = &mut get_mut(model, id).job
-                    && let Doing::Writes(writes) = &mut applying.doing
+                    && let Some(applying) = items::applying_mut(&mut get_mut(model, id).job)
+                    && let Some(writes) = items::writes_mut(&mut applying.doing)
                 {
                     writes.reading = None;
                 }

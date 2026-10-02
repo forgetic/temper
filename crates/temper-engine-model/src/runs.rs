@@ -209,9 +209,10 @@ pub(crate) fn rendered(
     sections: Option<Box<[brief::Section]>>,
 ) {
     let token = reply_to.into_token();
-    let Some(Wait::Job { entry: id }) = crate::serve::take(model, token) else { return };
+    let Some(answered) = crate::serve::take(model, token) else { return };
+    let Some(id) = answered.job() else { return };
     let Some(entry) = model.items.get_mut(id) else { return };
-    let Job::Starting(starting) = &mut entry.job else { return };
+    let Some(starting) = items::starting_mut(&mut entry.job) else { return };
     if starting.rendering != Some(Id::from_token(token)) {
         return;
     }
@@ -238,7 +239,7 @@ pub(crate) fn fetched(
     snapshot: Option<Box<[u8]>>,
 ) {
     let Some(entry) = model.items.get_mut(id) else { return };
-    let Job::Starting(starting) = &mut entry.job else { return };
+    let Some(starting) = items::starting_mut(&mut entry.job) else { return };
     if starting.fetching != Some(wait) {
         return;
     }
@@ -251,11 +252,16 @@ pub(crate) fn fetched(
 /// is composed, and the fleet places it, unless the cold start is not done.
 fn ready(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) {
     let entry = get_mut(model, id);
-    let Job::Starting(starting) = &entry.job else { return };
+    let Some(starting) = items::starting_mut(&mut entry.job) else { return };
     if starting.rendering.is_some() || starting.fetching.is_some() {
         return;
     }
-    let Job::Starting(starting) = mem::replace(&mut entry.job, Job::Idle) else { unreachable!("an item starting") };
+    let starting = match mem::replace(&mut entry.job, Job::Idle) {
+        Job::Starting(starting) => starting,
+        Job::Idle | Job::Asking { .. } | Job::Writing { .. } | Job::Recording { .. } | Job::Applying(_) => {
+            unreachable!("an item starting is ready")
+        }
+    };
     let Starting { attempt, run, brief, snapshot, .. } = *starting;
     let brief = match brief {
         Some(brief) => brief,
@@ -470,9 +476,13 @@ pub(crate) fn news(model: &mut Model, env: &Env<Limits>, item: forge::Item, seq:
 
 /// The hub keeps the snapshot its attempt parked with: to the store.
 pub(crate) fn keep(model: &mut Model, item: Item, snapshot: Token) {
-    let Some(Carried::Answer { answer, .. }) = model.carried.get_mut(Id::from_token(snapshot)) else { return };
-    let Answer::Parked { snapshot: kept, .. } = answer.as_mut() else { return };
-    let Some(bytes) = kept.take() else { return };
+    let Some(carried) = model.carried.get_mut(Id::from_token(snapshot)) else { return };
+    let Some(answer) = carried.answer_mut() else { return };
+    let kept = match answer {
+        Answer::Parked { snapshot, .. } => snapshot.take(),
+        Answer::Busy | Answer::Invalid | Answer::Ended { .. } | Answer::Failed { .. } => None,
+    };
+    let Some(bytes) = kept else { return };
     let Some(id) = items::find(model, item) else { return };
     get_mut(model, id).relations.snapshot = true;
     let Ok(wait) = model.waits.insert(Wait::Aside { entry: Some(id) }) else {
@@ -615,17 +625,18 @@ pub(crate) fn attempt_of(model: &Model, outcome: Token) -> u64 {
 
 /// The outcome the answer `outcome` carries, as it is posted.
 pub(crate) fn posted(model: &Model, outcome: Token) -> Option<Box<Posted>> {
-    let Some(Carried::Answer { item, attempt, answer }) = model.carried.get(Id::from_token(outcome)) else {
-        return None;
+    let (item, attempt, answer) = model.carried.get(Id::from_token(outcome))?.answer()?;
+    let (outcome, work) = match answer {
+        Answer::Ended { outcome, work } => (outcome, work),
+        Answer::Busy | Answer::Invalid | Answer::Parked { .. } | Answer::Failed { .. } => return None,
     };
-    let Answer::Ended { outcome, work } = answer.as_ref() else { return None };
     let mut head = None;
     for landed in &work.landed {
         if landed.repository == item.repository {
             head = Some(landed.commit);
         }
     }
-    Some(Box::new(Posted { attempt: *attempt, outcome: outcome.clone(), head }))
+    Some(Box::new(Posted { attempt, outcome: outcome.clone(), head }))
 }
 
 /// Forgets what the top level carried for the fleet as `payload`.
@@ -650,9 +661,8 @@ pub(crate) fn call(model: &mut Model, env: &Env<Limits>, to: ReplyTo, run: Token
     let item = translate::item(run);
     let attempt = attempt.raw();
     let id = Id::from_token(body);
-    let Some(Carried::Call { body, .. }) = take_carried(model, id) else {
-        unreachable!("a call passed up is the one carried")
-    };
+    let Some(taken) = take_carried(model, id) else { unreachable!("a call passed up is the one carried") };
+    let Some(body) = taken.call() else { unreachable!("a call passed up is the one carried") };
     let Ok(wait) = model.waits.insert(Wait::Relay { to }) else {
         unreachable!("the waits have room for every run's call")
     };
@@ -678,7 +688,8 @@ pub(crate) fn relayed(
     out: &mut Queue<Request>,
 ) {
     let id = Id::from_token(answer);
-    let Some(Carried::Served { served }) = take_carried(model, id) else { return };
+    let Some(taken) = take_carried(model, id) else { return };
+    let Some(served) = taken.served() else { return };
     let item = translate::item(run);
     out.push(Request::Relayed { channel, item, attempt: attempt.raw(), call, served: *served });
 }
@@ -727,12 +738,14 @@ pub(crate) fn told(
 /// The fleet passes a run's report up: to the views.
 pub(crate) fn report(model: &mut Model, env: &Env<Limits>, run: Token, fact: Token) {
     let id = Id::from_token(fact);
-    let Some(Carried::Report { kind, content }) = take_carried(model, id) else { return };
+    let Some(taken) = take_carried(model, id) else { return };
+    let Some((kind, content)) = taken.report() else { return };
     route::views_step(model, env, views::Event::Reported { run, kind, content });
 }
 
 /// A run's call that cannot be served: answered at once.
 pub(crate) fn unserved(model: &mut Model, env: &Env<Limits>, wait: Id<Wait>, why: Unserved) {
-    let Some(Wait::Relay { to, .. }) = crate::serve::take(model, wait.token()) else { return };
+    let Some(taken) = crate::serve::take(model, wait.token()) else { return };
+    let Some(to) = taken.relay() else { return };
     serve_answer(model, env, to, Served::Unserved(why));
 }
