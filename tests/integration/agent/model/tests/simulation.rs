@@ -437,7 +437,7 @@ fn sweep(conflicts_held: bool) {
     let (mut lost, mut unprepared, mut invalid, mut landed, mut saves) = (0, 0, 0, 0, 0);
     let (mut merged, mut stopped, mut checks) = (0, 0, 0);
     let mut items = Items::default();
-    let mut editors = 0;
+    let (mut editors, mut ci_repairs) = (0, 0);
     for seed in 0..120 {
         let settings = Settings { conflicts_held, ..Settings::random(seed) };
         let faults = settings.faults();
@@ -454,6 +454,7 @@ fn sweep(conflicts_held: bool) {
             "seed {seed}: the referee saw every assignment answered, every outcome posted and every issue end"
         );
         items.count(&stats, faults);
+        ci_repairs += stats.ci_repairs;
         if !faults {
             let writes = if conflicts_held && stats.conflicts > 0 { 0 } else { stats.held_writes };
             assert_eq!(
@@ -490,6 +491,7 @@ fn sweep(conflicts_held: bool) {
     assert!(merged > 0 && stopped > 0, "changes were merged, and runs stopped: {merged}, {stopped}");
     assert!(checks > 0, "the referees checked what the engine, the worker and the agents did");
     assert!(editors > 0, "some runs finished with a verdict in a checkout they could write");
+    assert!(ci_repairs > 0, "some changes went back for repair once their CI failed");
     let Items { closed, failures, stopped, sound, .. } = items;
     assert!(
         closed > 0 && failures > 0 && stopped > 0 && sound > 0,

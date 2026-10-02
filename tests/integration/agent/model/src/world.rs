@@ -308,6 +308,9 @@ pub struct Settings {
     /// The grid every delivery is rounded up to, so that some come at the
     /// same instant; zero for none.
     pub granule: Duration,
+    /// The chance, per mille, that CI passes a commit; none for CI cued by
+    /// the file it reads, which the runs leave green.
+    pub ci: Option<u32>,
     /// Whether the engine may hold an item for its writes once the forge
     /// refused one of its merges for a conflict, as it does today, where the
     /// change is its run's to repair (engine-model.md, 5.1).
@@ -395,6 +398,7 @@ impl Settings {
             move_after: Span::millis(0, 1000),
             refusing: 0,
             granule: Duration::ZERO,
+            ci: None,
             conflicts_held: false,
         }
     }
@@ -417,11 +421,12 @@ impl Settings {
     /// A world of its own for `seed`: issues handed in over a window, in both
     /// repositories, of every job, as agent steps and as changes reviewed by
     /// people and by agents, some of whose checkouts they may write, on
-    /// charters of every kind and budgets some of
-    /// which are beyond an agent's, in tight limits; with people who stop
-    /// runs, a forge that is slow, fails the engine's calls, loses webhooks,
-    /// refuses pushes and whose branches move, an LLM provider that fails,
-    /// and io that fails and races, at chances drawn from the seed.
+    /// charters of every kind and budgets some of which are beyond an
+    /// agent's, in tight limits; with people who stop runs, a forge that is
+    /// slow, fails the engine's calls, loses webhooks, fails CI, refuses
+    /// pushes and whose branches move (or, in some worlds, fails nothing the
+    /// engine asks), an LLM provider that fails, and io that fails and races,
+    /// at chances drawn from the seed.
     #[must_use]
     pub fn random(seed: u64) -> Settings {
         let mut rng = Rng::new(seed ^ 0x5EED_0F0A_0B0D_D1CE);
@@ -522,6 +527,11 @@ impl Settings {
             settings.forge = forge;
             settings.store.failures = 0;
         }
+        // In some worlds CI fails commits at random, whatever they hold, so
+        // that changes go back for repair.
+        if rng.chance(300) {
+            settings.ci = Some(500 + chance(&mut rng, 450));
+        }
         settings
     }
 
@@ -607,8 +617,10 @@ pub struct Stats {
     pub held_acceptance: u32,
     pub held_writes: u32,
     pub held_record: u32,
-    /// The engine's merges the forge refused for a conflict.
+    /// The engine's merges the forge refused for a conflict, and the runs
+    /// it assigned to repair a change whose CI failed.
     pub conflicts: u32,
+    pub ci_repairs: u32,
     /// The engine's calls of the forge, those past the protocol layer's
     /// deadline, and those the forge limited; webhooks; the store's
     /// operations that failed; the engine's facts.
@@ -1053,7 +1065,7 @@ impl World {
         let [engine_seed, worker_seed, provider_seed, agent_seed] = seeds(settings.seed);
         let mut rng = Rng::new(settings.seed.rotate_left(32));
         let mut forge = forge::Model::new(&settings.forge, rng.next_u64());
-        shared::setup(&mut forge, &settings.forge);
+        shared::setup(&mut forge, &settings.forge, settings.ci);
         for name in REPOSITORIES {
             if rng.chance(settings.refusing) {
                 forge::set_refusing(&mut forge, name, true);

@@ -41,9 +41,10 @@ pub const OTHER: u64 = 20;
 const FIRES: u32 = 10_000;
 
 /// Sets up every repository of the deployment on `model`: its default branch
-/// holding the fixture's tree, CI cued by the file it reads, the default
-/// branch protected, and its users.
-pub fn setup(model: &mut Model, config: &Config) {
+/// holding the fixture's tree, CI cued by the file it reads, or passing each
+/// commit at the chance per mille `passes` if it is given, the default branch
+/// protected, and its users.
+pub fn setup(model: &mut Model, config: &Config, passes: Option<u32>) {
     for name in REPOSITORIES {
         let tree =
             fixture::tree().into_iter().map(|(path, content)| File { path: path.into(), content: content.into() });
@@ -57,12 +58,15 @@ pub fn setup(model: &mut Model, config: &Config) {
                 latency_min: Duration::from_secs(1),
                 latency_max: Duration::from_secs(40),
                 silent: 0,
-                passes: 1_000,
+                passes: passes.unwrap_or(1_000),
                 reruns: 0,
-                cue: Some(Cue {
-                    path: temper_engine_model_tests::deployment::CUE.into(),
-                    green: temper_engine_model_tests::deployment::GREEN.into(),
-                }),
+                cue: match passes {
+                    Some(_) => None,
+                    None => Some(Cue {
+                        path: temper_engine_model_tests::deployment::CUE.into(),
+                        green: temper_engine_model_tests::deployment::GREEN.into(),
+                    }),
+                },
             },
             protection: Some(Protection {
                 branch: MAIN.into(),

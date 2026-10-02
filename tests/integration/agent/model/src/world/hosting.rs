@@ -38,6 +38,8 @@ impl World {
     /// translates it, and the world keeps what it follows of it.
     pub(super) fn assign(&mut self, assignment: engine::Assignment) {
         let (item, count) = (assignment.item, assignment.attempt);
+        let repair = engine::plan::Why::Repair(engine::plan::Repair::CiFailed);
+        self.stats.ci_repairs += u32::from(assignment.charter.why == repair);
         // A review's run plays the review's script; any other, its step's.
         let job = match assignment.charter.finish {
             engine::plan::Finish::Verdict => Job::Review,
