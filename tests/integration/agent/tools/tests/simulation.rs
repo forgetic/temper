@@ -273,7 +273,7 @@ fn slow_io_times_out_and_faulty_io_says_why() {
     let faulty = Settings { faults: 1000, ..calm };
     let (answers, _) = run(faulty, INSPECT, vec![Step::Calls(vec![read(b"src/lib.rs"), list(b".")])]);
     for answer in answers {
-        assert!(matches!(answer, Outcome::Failed { .. }), "{answer:?}");
+        assert_eq!(kind(&answer), "failed", "{answer:?}");
     }
 }
 

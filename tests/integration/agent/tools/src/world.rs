@@ -198,9 +198,12 @@ pub struct World {
     calls: BTreeMap<u64, (u64, Option<Outcome>)>,
     /// io's operations in flight.
     ops: BTreeMap<Token, Pending>,
-    /// The versions io has told the tools of, for each place: the only ones a
-    /// store may expect there.
-    versions: BTreeSet<(u64, Vec<u8>, u64)>,
+    /// The session whose kit each operation, and each kit, is for.
+    owners: BTreeMap<Token, u64>,
+    kits: BTreeMap<Token, u64>,
+    /// The versions io has told each session's kit of, for each place (root,
+    /// path): the only ones a store of that kit may expect there.
+    versions: BTreeSet<(u64, u64, Vec<u8>, u64)>,
     /// The facts the tools told, by session.
     facts: BTreeMap<u64, Vec<tools::Fact>>,
     /// Whether some kit may write each root: those none may write change only
@@ -233,6 +236,8 @@ impl World {
             sessions: BTreeMap::new(),
             calls: BTreeMap::new(),
             ops: BTreeMap::new(),
+            owners: BTreeMap::new(),
+            kits: BTreeMap::new(),
             versions: BTreeSet::new(),
             facts: BTreeMap::new(),
             writable: BTreeMap::new(),
@@ -331,7 +336,27 @@ impl World {
         while self.tools_out.room() >= max_out {
             let Some(event) = self.tools_in.pop_front() else { break };
             self.log(&format!("tools <- {event:?}"));
+            // The operations a step asks for are for the kit of the call, or
+            // of the operation, the event is about.
+            let whose = match &event {
+                tools::Event::Call { kit, .. } => Some(*self.kits.get(kit).expect("a kit that opened")),
+                tools::Event::Done { owner, .. } => Some(*self.owners.get(owner).expect("an operation io ran")),
+                tools::Event::Open { .. } | tools::Event::Close { .. } => None,
+            };
+            let before = self.tools_out.len();
             tools::step(&mut self.tools, &self.env, event, &mut self.tools_out);
+            if let Some(session) = whose {
+                for request in self.tools_out.iter().skip(usize::try_from(before).expect("a small queue")) {
+                    match request {
+                        tools::Request::Io { owner, .. } => drop(self.owners.insert(*owner, session)),
+                        tools::Request::Opened { .. }
+                        | tools::Request::Refused { .. }
+                        | tools::Request::Answer { .. }
+                        | tools::Request::Closed { .. }
+                        | tools::Request::CancelIo { .. } => {}
+                    }
+                }
+            }
         }
 
         // What they asked for, carried out at the end of the iteration.
@@ -346,11 +371,12 @@ impl World {
             self.facts.entry(session_of(&fact).raw()).or_default().push(fact);
         }
 
-        // The reclaim point.
-        self.tools.reclaim();
+        // Before the reclaim point, what was retired in this iteration still
+        // takes its slot.
         let limits = &self.settings.tools;
         assert!(self.tools.kits() <= limits.kits, "kits stay within their slots");
         assert!(self.tools.jobs() <= limits.kits * limits.calls * 2, "jobs stay within their slots");
+        self.tools.reclaim();
     }
 
     /// The tools' requests, answered the way the session and io would.
@@ -360,6 +386,7 @@ impl World {
                 let entry = self.session_mut(session.raw());
                 assert_eq!(entry.state, State::Opening, "a kit opens once");
                 entry.state = State::Running { kit };
+                self.kits.insert(kit, session.raw());
                 self.next(session.raw());
             }
             tools::Request::Refused { session, refusal } => {
@@ -375,11 +402,17 @@ impl World {
                 let session = *session;
                 let entry = self.session_mut(session);
                 entry.awaited.remove(&call);
-                if let State::Waiting { kit } = entry.state
-                    && entry.awaited.is_empty()
-                {
-                    entry.state = State::Running { kit };
-                    self.next(session);
+                match entry.state {
+                    State::Waiting { kit } if entry.awaited.is_empty() => {
+                        entry.state = State::Running { kit };
+                        self.next(session);
+                    }
+                    State::Waiting { .. }
+                    | State::Opening
+                    | State::Running { .. }
+                    | State::Closing
+                    | State::Closed
+                    | State::Refused(_) => {}
                 }
             }
             tools::Request::Closed { session } => {
@@ -391,11 +424,7 @@ impl World {
                 self.session_mut(session.raw()).state = State::Closed;
             }
             tools::Request::Io { owner, op, deadline } => {
-                if let Op::Store { at, expect: Expect::Is { version }, .. } = &op {
-                    let known = (at.root.raw(), at.path.to_vec(), version.raw()[0]);
-                    assert!(self.versions.contains(&known), "a store expects a version io gave for its place");
-                }
-                let (work, ran) = self.start(op);
+                let (work, ran) = self.start(owner, op);
                 let ran = self.schedule(ran, Delivery::Ran { owner });
                 let deadline = self.schedule(deadline, Delivery::Deadline { owner });
                 let pending = Pending { work, ran, deadline };
@@ -443,7 +472,7 @@ impl World {
                             self.stats.faults += 1;
                             Done::Failed { fault: self.fault() }
                         }
-                        Work::File(op) => self.perform(op),
+                        Work::File(op) => self.perform(owner, op),
                         Work::Command { started, since: _ } => {
                             self.checkout.finish(&started.process);
                             self.assert_untouched();
@@ -481,8 +510,8 @@ impl World {
         }
     }
 
-    /// Starts `op`, and says when it ends.
-    fn start(&mut self, op: Op) -> (Work, Time) {
+    /// Starts `op` for `owner`, and says when it ends.
+    fn start(&mut self, owner: Token, op: Op) -> (Work, Time) {
         let latency = self.now.saturating_add(self.draw(self.settings.io));
         match op {
             Op::Spawn { cwd, command, env, roots, head, tail } => {
@@ -502,13 +531,18 @@ impl World {
                     Err(done) => (Work::Ending(done), latency),
                 }
             }
-            op @ (Op::Load { .. } | Op::Scan { .. } | Op::Store { .. } | Op::Search { .. }) => {
-                if let Op::Store { at, expect: Expect::Is { version }, .. } = &op {
-                    let known = (at.root.raw(), at.path.to_vec(), version.raw()[0]);
-                    assert!(self.versions.contains(&known), "a store expects a version io gave for its place");
+            Op::Store { at, content, expect } => {
+                match expect {
+                    Expect::Is { version } => {
+                        let session = *self.owners.get(&owner).expect("an operation of a kit");
+                        let known = (session, at.root.raw(), at.path.to_vec(), version.raw()[0]);
+                        assert!(self.versions.contains(&known), "a kit's store expects a version io gave it there");
+                    }
+                    Expect::Absent => {}
                 }
-                (Work::File(op), latency)
+                (Work::File(Op::Store { at, content, expect }), latency)
             }
+            op @ (Op::Load { .. } | Op::Scan { .. } | Op::Search { .. }) => (Work::File(op), latency),
         }
     }
 
@@ -528,8 +562,9 @@ impl World {
         self.stats.late_effects += 1;
     }
 
-    /// Runs `op` on the checkout, and notes the version it tells of.
-    fn perform(&mut self, op: Op) -> Done {
+    /// Runs `op` on the checkout for `owner`, and notes the version it tells
+    /// that kit of.
+    fn perform(&mut self, owner: Token, op: Op) -> Done {
         let at = match &op {
             Op::Load { at, .. } | Op::Scan { at, .. } | Op::Store { at, .. } | Op::Search { at, .. } => at.clone(),
             Op::Spawn { .. } => unreachable!("a spawn is started, not run"),
@@ -538,7 +573,8 @@ impl World {
         self.assert_untouched();
         match &done {
             Done::Loaded { version, .. } | Done::Stored { version } => {
-                self.versions.insert((at.root.raw(), at.path.to_vec(), version.raw()[0]));
+                let session = *self.owners.get(&owner).expect("an operation of a kit");
+                self.versions.insert((session, at.root.raw(), at.path.to_vec(), version.raw()[0]));
             }
             Done::Scanned { .. }
             | Done::Conflict { .. }
@@ -561,8 +597,11 @@ impl World {
     /// it has run out.
     fn step(&mut self, session: u64) {
         let entry = self.session_mut(session);
-        let State::Running { kit } = entry.state else {
-            unreachable!("a session steps while it runs");
+        let kit = match entry.state {
+            State::Running { kit } => kit,
+            State::Opening | State::Waiting { .. } | State::Closing | State::Closed | State::Refused(_) => {
+                unreachable!("a session steps while it runs")
+            }
         };
         let Some(step) = entry.script.pop_front() else {
             entry.state = State::Closing;
@@ -638,8 +677,12 @@ impl World {
         assert!(self.ops.is_empty(), "no operation is in flight");
         assert!(self.wire.is_empty() && self.tools_in.is_empty(), "nothing is on its way");
         for (name, session) in &self.sessions {
-            let ended = matches!(session.state, State::Closed | State::Refused(_));
-            assert!(ended, "session {name} ended, not {:?}", session.state);
+            match session.state {
+                State::Closed | State::Refused(_) => {}
+                State::Opening | State::Running { .. } | State::Waiting { .. } | State::Closing => {
+                    panic!("session {name} ended, not {:?}", session.state)
+                }
+            }
         }
         for (call, (_, answer)) in &self.calls {
             assert!(answer.is_some(), "call {call} was answered");

@@ -355,8 +355,9 @@ impl Checkout {
     pub fn files(&self) -> BTreeMap<&[u8], &[u8]> {
         let mut files = BTreeMap::new();
         for (path, node) in &self.nodes {
-            if let Node::File { content, .. } = node {
-                files.insert(path.as_slice(), content.as_slice());
+            match node {
+                Node::File { content, .. } => drop(files.insert(path.as_slice(), content.as_slice())),
+                Node::Directory | Node::Link { .. } | Node::Special => {}
             }
         }
         files
