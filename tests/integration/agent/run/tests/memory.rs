@@ -105,10 +105,12 @@ enum Asked {
 /// byte limit and a guide of exactly its limit too, and has each one's main
 /// conversation start, spend, yield, be nudged, ask for a sub-agent that
 /// answers with more than the answer limit, and finish with a change of
-/// exactly the outcome limit, which is checked and pushed: each run ends
-/// winding down with the change, while the calls that returned still hold
-/// their copies until the reclaim point. The peak of the heap in every step is
-/// checked against the worst case.
+/// exactly the outcome limit, which is checked and pushed. A sub-agent's call
+/// holds the answer, cut at the limit, while the child is being closed, and
+/// moves it into its return once the child has ended. Each run ends winding
+/// down with the change, while its landing, returned, still holds its copy
+/// until the reclaim point. The peak of the heap in every step is checked
+/// against the worst case.
 fn fill(limits: Limits) {
     let bound = worst_case(&limits).expect("the test limits fit");
     let env = Env { now: Time::ZERO, limits };
@@ -189,7 +191,8 @@ fn fill(limits: Limits) {
     }
     let held = meter.held();
     let charters = limits.run_bytes + u64::from(limits.guide_bytes);
-    let full = u64::from(limits.runs) * (charters + 2 * limits.outcome_bytes + u64::from(limits.answer_bytes));
+    // Each run's ending and its landing hold a copy of the change.
+    let full = u64::from(limits.runs) * (charters + 2 * limits.outcome_bytes);
     assert!(held >= full, "{limits:?}: every run holds its byte limit");
 
     // A byte more is refused.

@@ -366,7 +366,8 @@ pub enum Invalid {
     /// output or time.
     Budget,
     /// The LLM's `max_tokens`, or a sub-agent LLM's, is zero or beyond the
-    /// limits, or there are more sub-agent LLMs than a run may hold.
+    /// limits, or there are more sub-agent LLMs than a run may hold, or two of
+    /// one model.
     Llm,
     /// The main conversation was refused: its opening does not fit the
     /// conversations' limits.

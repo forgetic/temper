@@ -279,6 +279,8 @@ fn charters_beyond_the_limits_are_refused_as_invalid() {
     let three = Box::new([repository(b"a"), repository(b"b"), repository(b"c")]);
     let twins = Box::new([repository(b"a"), repository(b"a")]);
     let outlets = Box::new([Outlet { name: bytes(b"reply") }, Outlet { name: bytes(b"reply") }]);
+    let llm = Llm { endpoint: Endpoint(2), model: bytes(b"model-b"), max_tokens: 512 };
+    let models = Box::new([llm.clone(), Llm { endpoint: Endpoint(3), ..llm }]);
     let cases = [
         (Charter { budget: Budget { turns: 101, ..BUDGET }, ..charter() }, Invalid::Budget),
         (Charter { budget: Budget { time: Duration::from_secs(3601), ..BUDGET }, ..charter() }, Invalid::Budget),
@@ -286,6 +288,7 @@ fn charters_beyond_the_limits_are_refused_as_invalid() {
         (Charter { budget: Budget { output: 0, ..BUDGET }, ..charter() }, Invalid::Budget),
         (Charter { llm: Llm { max_tokens: 0, ..charter().llm }, ..charter() }, Invalid::Llm),
         (Charter { llm: Llm { max_tokens: 4097, ..charter().llm }, ..charter() }, Invalid::Llm),
+        (Charter { models, ..charter() }, Invalid::Llm),
         (Charter { brief: Box::from([b'x'; 4096].as_slice()), ..charter() }, Invalid::TooLarge),
         (Charter { checkout: Checkout { repositories: three }, ..charter() }, Invalid::Checkout),
         (Charter { checkout: Checkout { repositories: twins }, ..charter() }, Invalid::Checkout),

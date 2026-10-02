@@ -29,7 +29,8 @@ pub struct Charter {
     pub budget: Budget,
     /// The LLM the main conversation starts with.
     pub llm: Llm,
-    /// The LLMs a sub-agent may be opened on, each named by its model.
+    /// The LLMs a sub-agent may be opened on, each named by its model, which
+    /// it lists once.
     pub models: Box<[Llm]>,
 }
 
@@ -131,7 +132,7 @@ pub(crate) fn check(charter: &Charter, limits: &Limits) -> Result<(), Invalid> {
     if !budget.is_workable() || !budget.within(&limits.budget) {
         return Err(Invalid::Budget);
     }
-    if !fits(llm, limits) || count(models.len()) > limits.models {
+    if !fits(llm, limits) || count(models.len()) > limits.models || repeated_model(models) {
         return Err(Invalid::Llm);
     }
     for model in models {
@@ -177,6 +178,17 @@ pub(crate) fn cost(charter: &Charter) -> Option<u64> {
 /// Whether an LLM asks for an answer that fits the limits.
 fn fits(llm: &Llm, limits: &Limits) -> bool {
     llm.max_tokens > 0 && llm.max_tokens <= limits.max_tokens
+}
+
+fn repeated_model(models: &[Llm]) -> bool {
+    for (index, llm) in models.iter().enumerate() {
+        for other in models.get(index.saturating_add(1)..).unwrap_or_default() {
+            if other.model == llm.model {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn repeated_repository(repositories: &[Repository]) -> bool {
