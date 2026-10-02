@@ -5,10 +5,10 @@ use temper_engine_model_plan::{
     Verdict, Waits, Why, Woken, Work, Write,
 };
 use temper_lib::{Duration, Env, Queue, Rng, Time};
-use temper_world::{Ledger, Schedule, Span, Trace};
+use temper_world::{Ledger, Referee, Schedule, Span, Trace};
 
 use crate::forge::{Forge, Item, Keyed, Made, Pull, Pushed, State};
-use crate::referee::{Referee, Seen};
+use crate::referee::{Proposal, Scenario, Seen, Stimulus};
 use crate::script::{self, Script};
 use crate::translate::{self, Heard, approvals_needed, commit, count};
 
@@ -157,7 +157,7 @@ pub struct Stats {
     /// Items made.
     pub items: u32,
     /// Observations the referee checked.
-    pub checked: u32,
+    pub checked: u64,
 }
 
 /// What an item is doing, as the engine keeps it in memory.
@@ -280,7 +280,7 @@ pub struct World {
     wire: Schedule<Delivery>,
     /// Runs out, each ending once.
     runs: Ledger<(u64, u64), Why>,
-    referee: Referee,
+    referee: Referee<Scenario>,
 
     /// Names growth and tasks.
     serial: u64,
@@ -303,7 +303,9 @@ impl World {
     pub fn new(settings: Settings) -> World {
         assert!(plan::worst_case(&settings.limits).is_some(), "the shell refuses limits it cannot provision");
         let mut rng = Rng::new(settings.seed);
-        let referee = Referee::new(script::config(), rng.next_u64(), settings.restarts, settings.bound);
+        let limits = (settings.limits.repairs, settings.limits.rebases);
+        let scenario = Scenario::new(script::deployment(), limits, settings.bound, rng.next_u64(), settings.restarts);
+        let referee = Referee::new(scenario);
         let mut world = World {
             now: Time::ZERO,
             rng,
@@ -339,7 +341,8 @@ impl World {
 
     #[must_use]
     pub fn stats(&self) -> Stats {
-        Stats { checked: self.referee.checked, ..self.stats.clone() }
+        let (checked, _met) = self.referee.judged();
+        Stats { checked, ..self.stats.clone() }
     }
 
     /// What crossed between the plan and the world, in order, with times.
@@ -379,7 +382,12 @@ impl World {
             self.in_flight -= 1;
             self.deliver(delivery);
         }
-        self.referee.fire(self.now, &self.forge);
+        if self.referee.is_due(self.now) {
+            let mut stimuli = Vec::new();
+            self.referee.fire(self.now, &mut stimuli);
+            self.referee.assert_holding(self.settings.seed);
+            assert!(stimuli.is_empty(), "the referee injects only at once");
+        }
         self.acted = false;
         let live: Vec<u64> = self.lives.keys().copied().collect();
         for number in live {
@@ -404,8 +412,33 @@ impl World {
         self.wire.send(at, delivery);
     }
 
-    fn observe(&mut self, seen: &Seen) {
-        self.referee.observe(self.now, &self.forge, seen);
+    /// The referee observes `seen`; what it injects at once comes back.
+    fn observe(&mut self, seen: Seen) -> Vec<Stimulus> {
+        let mut stimuli = Vec::new();
+        self.referee.observe(self.now, seen, &mut stimuli);
+        self.referee.assert_holding(self.settings.seed);
+        stimuli
+    }
+
+    /// The referee observes `seen`, which calls for nothing to be injected.
+    fn see(&mut self, seen: Seen) {
+        let stimuli = self.observe(seen);
+        assert!(stimuli.is_empty(), "the referee injects only as the engine applies");
+    }
+
+    /// The engine is about to make `writes`: how many land before it
+    /// restarts, if the referee restarts it.
+    fn restarting(&mut self, number: u64, writes: &[Write]) -> Option<usize> {
+        if writes.is_empty() {
+            return None;
+        }
+        let mut landed = None;
+        for stimulus in self.observe(Seen::Applying { item: number, writes: writes.len() }) {
+            match stimulus {
+                Stimulus::Restart { landed: count } => landed = Some(count),
+            }
+        }
+        landed
     }
 
     fn life(&mut self, number: u64) -> &mut Life {
@@ -531,7 +564,7 @@ impl World {
         let attempt = life.attempts;
         life.phase = Phase::Running { attempt, relayed: life.inbox.len() };
         self.runs.open((number, attempt), why);
-        self.observe(&Seen::Ran(number));
+        self.see(Seen::Ran { item: number, run: translate::run_seen(why) });
         self.path(format!("run: {}", why_name(why)));
         if resume {
             self.path("run: resumes a snapshot");
@@ -572,6 +605,7 @@ impl World {
                 }
                 let accepted = !self.rng.chance(self.settings.script.rejects);
                 self.forge.item_mut(item).decision = Some((accepted, self.now));
+                self.see(Seen::Decided { item, accepted });
                 self.log(format_args!("item {item}: a person decides, accepting: {accepted}"));
                 self.path(if accepted { "decision: accepted" } else { "decision: rejected" });
             }
@@ -603,6 +637,7 @@ impl World {
                     let (repository, base) = (pull.repository, pull.base.clone());
                     let head = self.forge.move_base(repository, &base);
                     self.path("merged by a person");
+                    self.see(Seen::MergedByHand { item });
                     self.log(format_args!("item {item}: a person merges it by hand"));
                     self.base_moved(repository, &base, head);
                 }
@@ -646,7 +681,7 @@ impl World {
         life.inbox.push((Heard::Message, self.now));
         self.lives.insert(number, life);
         self.stats.items += 1;
-        self.observe(&Seen::Began(number));
+        self.see(Seen::Began { item: number });
         self.log(format_args!("item {number}: a person opens a session"));
     }
 
@@ -670,6 +705,7 @@ impl World {
             self.life(number).snapshot = parks;
         }
         let outcome = self.outcome(number, why);
+        self.proposed(number, &outcome);
         self.log(format_args!("item {number}: run {attempt} ends: {}", outcome_name(&outcome)));
         self.path(format!("outcome: {}", outcome_name(&outcome)));
         let fixing = self.lives[&number].fixing;
@@ -712,6 +748,32 @@ impl World {
                 life.phase = Phase::Idle;
             }
         }
+    }
+
+    /// The referee sees what a run's outcome proposes, and the verdicts it
+    /// gives.
+    fn proposed(&mut self, number: u64, outcome: &Outcome) {
+        let (kind, steps, envelope) = match outcome {
+            Outcome::Plan(plan) => (Proposal::Plan, &plan.steps, Some(translate::envelope_seen(&plan.envelope))),
+            Outcome::Steps(steps) => (Proposal::Steps, steps, None),
+            Outcome::Tasks(tasks) => (Proposal::Tasks, tasks, None),
+            Outcome::Verdict { head, verdict } => {
+                let approve = match verdict {
+                    Verdict::Approve => true,
+                    Verdict::Changes => false,
+                };
+                self.see(Seen::Verdict { item: number, head: count(*head), approve });
+                return;
+            }
+            Outcome::Change { .. }
+            | Outcome::Report
+            | Outcome::Reply
+            | Outcome::Finished
+            | Outcome::Release { .. }
+            | Outcome::Escalation => return,
+        };
+        let steps = steps.iter().map(translate::step_seen).collect();
+        self.see(Seen::Proposed { item: number, kind, steps, envelope });
     }
 
     /// A run failed: tried again after a backoff, or, past its attempts, held.
@@ -762,6 +824,7 @@ impl World {
                 let on = self.forge.base(item.repository, &spec.base);
                 let head = self.forge.commit();
                 self.forge.item_mut(number).branch = Some(Pushed { head, on, at: self.now });
+                self.see(Seen::Pushed { item: number, head, run: translate::run_seen(why) });
                 self.log(format_args!("item {number}: pushed {head} on {on}"));
                 if self.forge.pulls.get(&number).is_some_and(|pull| pull.state == State::Open) {
                     self.watch(number, false);
@@ -883,20 +946,12 @@ impl World {
     /// after some of them: the plan is asked again what is due, from the
     /// forge as it is.
     fn act(&mut self, number: u64, writes: Vec<Write>) {
-        if self.referee.restarts() && !writes.is_empty() {
-            let landed = self.landed(&writes);
-            self.write(number, Origin::Action, landed);
+        if let Some(landed) = self.restarting(number, &writes) {
+            self.write(number, Origin::Action, writes[..landed].to_vec());
             self.restart(number);
             return;
         }
         self.write(number, Origin::Action, writes);
-    }
-
-    /// The writes that land before a restart: those before a drawn one.
-    fn landed(&mut self, writes: &[Write]) -> Vec<Write> {
-        let count = u64::try_from(writes.len()).expect("fits");
-        let landed = usize::try_from(self.rng.below(count)).expect("fits");
-        writes[..landed].to_vec()
     }
 
     /// The engine restarts: what it kept in memory and not on the forge is
@@ -929,11 +984,9 @@ impl World {
     ) {
         let origin = Origin::Outcome { attempt, kind, accepted };
         let mut writes = writes;
-        if self.referee.restarts() && !writes.is_empty() {
-            // Every write may have landed, and the engine not have noted the
-            // application done.
-            let count = u64::try_from(writes.len()).expect("fits");
-            let landed = usize::try_from(self.rng.below(count + 1)).expect("fits");
+        // Every write may have landed, and the engine not have noted the
+        // application done.
+        if let Some(landed) = self.restarting(number, &writes) {
             let all = landed == writes.len();
             let landed = writes[..landed].to_vec();
             let goal_landed = landed.iter().any(is_goal);
@@ -989,6 +1042,7 @@ impl World {
             return;
         }
         self.path("proposal accepted");
+        self.see(Seen::Accepted { item: number });
         self.log(format_args!("item {number}: a person accepts its proposal"));
         let (applied, writes) = self.apply(number, &outcome);
         match applied {
@@ -1007,12 +1061,10 @@ impl World {
 
     /// Makes `writes` for item `number`, in order.
     fn write(&mut self, number: u64, origin: Origin, writes: Vec<Write>) {
-        let mut added = Vec::new();
         for write in writes {
             match write {
                 Write::Create { key, record } => {
-                    let made = self.create(number, origin, key, *record);
-                    added.push(made);
+                    self.create(number, origin, key, *record);
                 }
                 Write::OpenPull { base } => self.open_pull(number, &base),
                 Write::ReopenPull => {
@@ -1039,7 +1091,6 @@ impl World {
                     self.forge.item_mut(target).record.goal = Some(goal);
                     if kind == Kind::Steps || kind == Kind::Tasks {
                         self.path(if accepted { "growth: accepted beyond" } else { "growth: within" });
-                        self.observe(&Seen::Grown { goal: target, added: added.clone(), accepted });
                     }
                 }
             }
@@ -1084,10 +1135,9 @@ impl World {
         }
         self.lives.insert(made, Life::new());
         self.stats.items += 1;
-        self.observe(&Seen::Made(made));
-        if goal.is_none() {
-            self.observe(&Seen::Began(made));
-        }
+        let made_item = self.forge.item(made);
+        let (name, repository) = (made_item.record.step.name.to_vec(), made_item.repository);
+        self.see(Seen::Made { item: made, by: number, goal, parent, name, repository });
         let name = String::from_utf8_lossy(&self.forge.item(made).record.step.name).into_owned();
         self.log(format_args!("item {number}: makes item {made}, {name}"));
         made
@@ -1111,7 +1161,7 @@ impl World {
         };
         self.forge.pulls.insert(number, pull);
         self.path("pull request opened");
-        self.observe(&Seen::PullOpened(number));
+        self.see(Seen::PullOpened { item: number, repository, base: base.to_vec() });
         self.watch(number, true);
     }
 
@@ -1148,6 +1198,7 @@ impl World {
         let passed = !self.rng.chance(self.settings.script.ci_fails);
         let pull = self.forge.pulls.get_mut(&number).expect("a pull request opened");
         pull.ci.insert(head, passed);
+        self.see(Seen::Ci { item: number, head, passed });
         self.path(if passed { "ci: passed" } else { "ci: failed" });
         let needed = approvals_needed(&self.forge.item(number).record.step);
         let drive_by = self.rng.chance(self.settings.script.changes_asked);
@@ -1173,6 +1224,7 @@ impl World {
             pull.approvals.insert(head, needed);
             self.path("review: approved");
         }
+        self.see(Seen::Reviewed { item: number, head, approvals: needed, changes: asks });
     }
 
     fn merge(&mut self, number: u64, head: u64) {
@@ -1189,7 +1241,7 @@ impl World {
         let moved = self.forge.move_base(repository, &base_name);
         self.path("merged");
         self.log(format_args!("item {number}: merged at {head}"));
-        self.observe(&Seen::Merged { item: number, head });
+        self.see(Seen::Merged { item: number, head });
         self.base_moved(repository, &base_name, moved);
     }
 
@@ -1225,7 +1277,12 @@ impl World {
         plan::release(&self.env, &self.forge.item(held).record, &facts, &mut out);
         let writes = drain(&mut out);
         self.forge.item_mut(held).held = None;
-        self.life(held).phase = Phase::Idle;
+        // A decision made before the release counts for nothing: the person
+        // is asked again.
+        let life = self.life(held);
+        life.phase = Phase::Idle;
+        life.asked = false;
+        self.see(Seen::Released { item: held });
         self.path(format!("released by {by}"));
         self.log(format_args!("item {held}: released by {by}"));
         self.write(held, Origin::Action, writes);
@@ -1240,7 +1297,7 @@ impl World {
     fn close(&mut self, number: u64) {
         self.forge.item_mut(number).closed = Some(self.now);
         self.life(number).phase = Phase::Closed;
-        self.observe(&Seen::Ended(number));
+        self.see(Seen::Closed { item: number });
         self.relations_hear(number);
     }
 
@@ -1251,7 +1308,7 @@ impl World {
         self.held.push((number, why));
         self.path(format!("held: {why}"));
         self.log(format_args!("item {number}: held, {why}"));
-        self.observe(&Seen::Ended(number));
+        self.see(Seen::Held { item: number });
         if let Some(parent) = self.forge.item(number).parent {
             self.heard(parent, Heard::Child);
         }
@@ -1302,7 +1359,7 @@ impl World {
                 Phase::Running { .. } | Phase::Proposed { .. } => panic!("item {number} is still busy"),
             }
         }
-        self.referee.verdict(&self.forge);
+        self.referee.assert_passed(self.settings.seed);
         let mut endings = BTreeMap::new();
         for (number, item) in &self.forge.items {
             if item.goal.is_some() {

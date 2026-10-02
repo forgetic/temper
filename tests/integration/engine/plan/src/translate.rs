@@ -3,11 +3,13 @@
 //! and inbox events to the plan.
 
 use temper_engine_model_plan::{
-    Ci, Commit, Decided, Decision, Facts, Inbound, Mergeable, Pull, PullState, Relations, Source, Step,
+    Ci, Commit, Decided, Decision, Envelope, Facts, Inbound, Mergeable, Pull, PullState, Relations, Repair, Source,
+    Step, Why,
 };
 use temper_lib::Time;
 
 use crate::forge::{Forge, State};
+use crate::referee::{EnvelopeSeen, Primitive, RunSeen, StepSeen};
 
 /// A commit the forge names by `count`: the count in its first 8 bytes,
 /// big-endian, as the worker's worlds name them.
@@ -155,6 +157,63 @@ fn pull(forge: &Forge, number: u64) -> Option<Pull> {
         },
         base_moved: pushed.on != base,
     })
+}
+
+/// A step as the referee sees it proposed.
+#[must_use]
+pub fn step_seen(step: &Step) -> StepSeen {
+    use temper_engine_model_plan::{Gate, Review, Work};
+    let primitive = match &step.work {
+        Work::Agent(_) => Primitive::Agent,
+        Work::Change(spec) => Primitive::Change {
+            base: spec.base.to_vec(),
+            agent: match spec.review {
+                Review::Agent(_) => true,
+                Review::Person => false,
+            },
+        },
+        Work::Wait(_) => Primitive::Wait,
+        Work::Session(_) => Primitive::Session,
+    };
+    let mut approvals = 0;
+    let mut accepted = false;
+    for gate in &step.gates {
+        match gate {
+            Gate::Approvals(people) => approvals = approvals.max(*people),
+            Gate::Accepted => accepted = true,
+        }
+    }
+    StepSeen {
+        name: step.name.to_vec(),
+        repository: step.repository.0,
+        after: step.after.iter().map(|name| name.to_vec()).collect(),
+        primitive,
+        approvals,
+        accepted,
+    }
+}
+
+/// An envelope as the referee sees it proposed.
+#[must_use]
+pub fn envelope_seen(envelope: &Envelope) -> EnvelopeSeen {
+    EnvelopeSeen {
+        counts: [envelope.agents, envelope.changes, envelope.waits, envelope.sessions],
+        repositories: envelope.repositories.iter().map(|repository| repository.0).collect(),
+        into: envelope.into.iter().map(|target| (target.repository.0, target.base.to_vec())).collect(),
+    }
+}
+
+/// Why a run runs, as the referee sees it.
+#[must_use]
+pub fn run_seen(why: Why) -> RunSeen {
+    match why {
+        Why::Work => RunSeen::Work,
+        Why::Produce => RunSeen::Produce,
+        Why::Repair(Repair::CiFailed | Repair::ChangesRequested) => RunSeen::Repair,
+        Why::Repair(Repair::BaseMoved | Repair::Conflicts) => RunSeen::Rebase,
+        Why::Review { .. } => RunSeen::Review,
+        Why::Turn => RunSeen::Turn,
+    }
 }
 
 /// The people a change's head needs to approve it: one if a person reviews

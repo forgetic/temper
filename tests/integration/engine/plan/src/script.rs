@@ -95,6 +95,13 @@ pub fn config() -> Config {
     }
 }
 
+/// The deployment, as the referee sees it: for each repository, the
+/// branches changes land into.
+#[must_use]
+pub fn deployment() -> Vec<Vec<Vec<u8>>> {
+    vec![vec![b"main".to_vec(), b"feat".to_vec()], vec![b"main".to_vec()]]
+}
+
 /// The branches changes land into, by repository.
 pub const BASES: [(u32, &[u8]); 3] = [(0, b"main"), (0, b"feat"), (1, b"main")];
 
