@@ -17,8 +17,9 @@ in section 14.
 - **The forge is the truth, and the engine keeps only caches.** What must
   outlive the engine's process is written to the forge: each item's
   record, the outcomes being applied, the transcripts. The engine's own
-  store holds a mirror of the forge, snapshots of parked runs and traces,
-  all of them rebuildable or expendable. A restart is a rescan.
+  store holds a cache of the live work it tracks, snapshots of parked runs
+  and traces, all of them rebuildable or expendable. A restart is a
+  rescan of live work, never of the forge's history.
 - **Everything is an item.** An item is an issue or pull request the
   engine tracks, with a record of its own, an inbox, and at most one live
   run. Chat sessions, tasks, goals and the steps of a plan are all items;
@@ -75,7 +76,7 @@ temper-engine-model                  the engine loop's entry point: forge, worke
 ├── temper-engine-model-work         items: waiting, due, claimed, running, applying, held, done
 ├── temper-engine-model-plan         plans: steps, dependencies, gates, wakes, envelopes
 ├── temper-engine-model-rules        the deployment's rules, which every run and write must satisfy
-├── temper-engine-model-forge        the mirror and the client: sync, reads, keyed writes, request budget
+├── temper-engine-model-forge        the working set and the client: live work, reads, keyed writes, request budget
 ├── temper-engine-model-fleet        workers: slots, placement, attempts, contact, relaying
 ├── temper-engine-model-brief        a run's brief, from typed sections within a byte budget
 └── temper-engine-model-views        facts in; live streams and retained traces out
@@ -110,7 +111,9 @@ store.
 - **Labels are a projection.** The engine writes labels from the record,
   so the forge's lists and filters show where things stand, and reads only
   the labels a plan declares as inputs. Editing any other label changes
-  nothing the engine relies on.
+  nothing the engine relies on. One label marks every item the engine
+  tracks, which makes it the index the engine finds live work by
+  (section 11).
 - **One live run at most.** An item's work is one run at a time: a
   supervisor never races itself, and two runs never write the same
   branch.
@@ -266,8 +269,8 @@ review, because the rules say so, whatever the plan says.
 
 ### 5.3 What is due
 
-The `plan` sub-model is pure. Given an item's record and what the mirror
-holds about it and its relations, it says what is due now, whether an
+The `plan` sub-model is pure. Given an item's record and what the
+working set holds about it and its relations, it says what is due now, whether an
 inbox event wakes the item, what a run's charter is, and what an outcome
 writes. Everything it needs is in the record and the forge, so a restart
 loses nothing it knew.
@@ -377,21 +380,39 @@ Nothing the engine decides depends on a fact arriving.
 ## 11. The forge
 
 The forge sub-model is the engine's knowledge of the forge and its only
-way to change it.
+way to change it. It knows live work, not the forge: what it holds, and
+what it costs to start, grow with the work in progress, never with the
+forge's history.
 
-- **A mirror** of what the engine tracks and what its plans observe:
-  items, their comments and records, pull requests and their heads, CI,
-  reviews, dependencies. Bounded by count.
-- **Sync:** a full read at start, then incremental reads of what changed
-  since the last one, sooner when a webhook hints at a change. Polling is
-  the backstop, so a lost webhook costs only latency, and the cost of
-  keeping up follows the rate of change, not the number of items.
+- **A working set, not a copy.** It holds what the engine's decisions
+  need about the items that are not done: their records, their pull
+  requests' heads, CI and reviews on those heads, whether their
+  dependencies have finished. An item enters when the engine creates it
+  or takes it in, and leaves once it is done, which on the forge means
+  closed. Closed issues and pull requests are never loaded, whether the
+  engine never tracked them or has finished with them.
+- **Bounded, and refused at the entrance.** The working set's capacity is
+  a limit. When it is full, new work waits to be taken in; nothing already
+  taken in is dropped.
+- **Everything else on demand.** Long comment threads, an item's history,
+  a finished dependency's outcome, whatever a run asks to read: fetched
+  when a brief or a run needs it, within a budget, and not kept.
+- **Starting** reads what is live. The engine lists the open items that
+  carry its label, and those that carry the label handing work to it
+  (4.6), and reads the records of the ones that changed since its cache
+  last saw them: with a warm cache, a list per repository and the
+  changes; with a cold one, every live record. A slow pass over all open
+  items catches one whose label a person removed.
+- **Keeping up:** incremental reads of what changed since the last one,
+  sooner when a webhook hints at a change. Polling is the backstop, so a
+  lost webhook costs only latency, and the cost of keeping up follows the
+  rate of change, not the number of items.
 - **Fresh reads** before every write, and for the forge reads runs ask
   for.
 - **Writes** are typed operations, serialised per item, retried when the
   failure is transient, with keys that make every creation findable.
 - **A request budget** keeps the engine within the forge's rate limits,
-  with reads for writes ahead of background sync.
+  with reads for writes ahead of keeping up.
 
 ## 12. Below the model
 
@@ -403,7 +424,8 @@ What the protocol and io layers owe the model, to be designed after it:
 - **Workers:** the authenticated, framed channel of worker-model.md.
 - **People:** the web: HTTP, live streams, and signing in through the
   forge.
-- **The store:** snapshots, traces, and a cache of the mirror, on disk.
+- **The store:** snapshots, traces, and a cache of the working set, on
+  disk.
 - **Configuration:** a deployment's repositories, rules, templates and
   limits.
 
