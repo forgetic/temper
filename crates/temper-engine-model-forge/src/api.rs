@@ -387,6 +387,9 @@ pub struct Summary {
 pub struct Comment {
     pub id: u64,
     pub author: u64,
+    /// When it was posted, the forge's time: what a write it causes names
+    /// ([`crate::Cause`]).
+    pub created: Time,
     /// Changes whenever the body does.
     pub revision: u64,
     pub mark: Mark,

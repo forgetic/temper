@@ -194,6 +194,7 @@ impl Settings {
                     pushes: 2,
                     closes: 1,
                     mangles: 0,
+                    deletes: 0,
                 },
             },
             timeout: Duration::from_secs(10),
@@ -307,6 +308,12 @@ struct Out {
 #[derive(Debug)]
 enum Theirs {
     Person,
+    /// A person starting a pending review of the pull request `number`.
+    Start {
+        user: u64,
+        repository: usize,
+        number: u64,
+    },
     /// A worker pushing `item`'s branch.
     Push {
         item: Item,
@@ -612,6 +619,11 @@ impl World {
     fn person(&mut self, act: Act) {
         match act {
             Act::Call { user, repository, op } => self.call(user, repository, op, Theirs::Person),
+            Act::Start { user, repository, number } => {
+                let body = b"thinking".as_slice().into();
+                let op = forge_api::Op::Write(forge_api::Write::Review { number, verdict: None, body });
+                self.call(user, repository, op, Theirs::Start { user, repository, number });
+            }
             Act::Push { user, repository, branch } => {
                 let path = format!("work-{}", self.rng.below(1_000)).into_bytes();
                 let pushed = forge::advance(
@@ -699,6 +711,11 @@ impl World {
         }
         match self.theirs.end(name) {
             Theirs::Person => {}
+            Theirs::Start { user, repository, number } => {
+                if let Ok(forge_api::Answer::Reviewed(review)) = result {
+                    self.people.started(user, repository, number, review);
+                }
+            }
             Theirs::Push { item, branch } => {
                 if let Ok(forge_api::Answer::Pushed(forge_api::Pushed::Pushed)) = result {
                     let actions = self.parent.pushed(item, branch);

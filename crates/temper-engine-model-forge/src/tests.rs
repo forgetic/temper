@@ -349,14 +349,21 @@ fn labels_of(summary: &Summary) -> Box<[Box<[u8]>]> {
 }
 
 fn comment(id: u64, author: u64) -> Comment {
-    Comment { id, author, revision: id, mark: Mark::None, body: bytes(b"text") }
+    Comment { id, author, created: Time::ZERO, revision: id, mark: Mark::None, body: bytes(b"text") }
 }
 
 /// The engine's record as the comment `id`, saying `position`. Its revision
 /// is the comment's id and the item's number.
 fn record(id: u64, number: u64, position: Position) -> Comment {
     let revision = id.saturating_add(number);
-    Comment { id, author: ENGINE, revision, mark: Mark::Record { position, nonce: 0 }, body: bytes(b"record") }
+    Comment {
+        id,
+        author: ENGINE,
+        created: Time::ZERO,
+        revision,
+        mark: Mark::Record { position, nonce: 0 },
+        body: bytes(b"record"),
+    }
 }
 
 fn comments(list: &[Comment]) -> Box<[Comment]> {
@@ -525,7 +532,8 @@ fn a_mangled_record_is_announced_as_such_and_news_starts_after_it() {
     let mut h = Harness::started(LIMITS);
     h.step(Event::Track { item: item(9) });
     let read = h.send_one();
-    let mangled = Comment { id: 2, author: ENGINE, revision: 20, mark: Mark::Mangled, body: bytes(b"?") };
+    let mangled =
+        Comment { id: 2, author: ENGINE, created: Time::ZERO, revision: 20, mark: Mark::Mangled, body: bytes(b"?") };
     let page = comments(&[comment(1, PERSON), mangled, comment(3, PERSON)]);
     let told = h.answer(&read, item_page(issue(9, &[TRACKING], 4), page, false));
     let view =
@@ -545,6 +553,7 @@ fn a_record_of_someone_else_is_not_the_engines() {
     let forged = Comment {
         id: 2,
         author: PERSON,
+        created: Time::ZERO,
         revision: 2,
         mark: Mark::Record { position: Position::START, nonce: 0 },
         body: bytes(b"!"),
@@ -1232,7 +1241,14 @@ fn nonce(op: &Op) -> u64 {
 /// The engine's record as the comment `id` on the item `number`, saying
 /// `position`, made by the write of `nonce`, at `revision`.
 fn written(id: u64, revision: u64, position: Position, nonce: u64) -> Comment {
-    Comment { id, author: ENGINE, revision, mark: Mark::Record { position, nonce }, body: bytes(b"record") }
+    Comment {
+        id,
+        author: ENGINE,
+        created: Time::ZERO,
+        revision,
+        mark: Mark::Record { position, nonce },
+        body: bytes(b"record"),
+    }
 }
 
 #[test]
@@ -1360,6 +1376,7 @@ fn a_resumed_creation_is_looked_for_after_its_cause_not_where_the_working_set_is
     let keyed = Comment {
         id: 60,
         author: ENGINE,
+        created: Time::ZERO,
         revision: 1,
         mark: Mark::Key { key: bytes(b"reply"), person: None },
         body: bytes(b"x"),
@@ -1387,6 +1404,7 @@ fn a_comment_not_found_after_a_timeout_is_posted_again() {
     let keyed = Comment {
         id: 102,
         author: PERSON,
+        created: Time::ZERO,
         revision: 1,
         mark: Mark::Key { key: bytes(b"reply"), person: None },
         body: bytes(b"x"),
@@ -1630,7 +1648,8 @@ fn a_record_someone_else_changed_is_not_written_over() {
     h.step(Event::Write { owner, write, resumed: None });
     let check = h.send_one();
     assert_eq!(check.op, Op::Comment { number: 5, id: 100 }, "read afresh");
-    let mangled = Comment { id: 100, author: ENGINE, revision: 999, mark: Mark::Mangled, body: bytes(b"?") };
+    let mangled =
+        Comment { id: 100, author: ENGINE, created: Time::ZERO, revision: 999, mark: Mark::Mangled, body: bytes(b"?") };
     let told = h.answer(&check, Ok(Answer::Comment(mangled)));
     let record = Record::Mangled { comment: 100, revision: 999 };
     assert_eq!(*told, [Request::Wrote { owner, result: Err(Failure::Edited { record }) }], "held for a person");
@@ -1638,7 +1657,8 @@ fn a_record_someone_else_changed_is_not_written_over() {
     // The parent, released by a person, writes over the record as it now is.
     h.step(Event::Write { owner, write: Write::Record { item: item(5), payload: Token::new(3) }, resumed: None });
     let check = h.send_one();
-    let mangled = Comment { id: 100, author: ENGINE, revision: 999, mark: Mark::Mangled, body: bytes(b"?") };
+    let mangled =
+        Comment { id: 100, author: ENGINE, created: Time::ZERO, revision: 999, mark: Mark::Mangled, body: bytes(b"?") };
     h.answer(&check, Ok(Answer::Comment(mangled)));
     let edit = h.send_one();
     let body = Body::Record { payload: Token::new(3), position: Position::START, nonce: nonce(&edit.op) };
@@ -1814,6 +1834,7 @@ fn a_persons_message_the_engine_writes_is_their_news() {
     let theirs = Comment {
         id: 101,
         author: ENGINE,
+        created: Time::ZERO,
         revision: 1,
         mark: Mark::Key { key: bytes(b"web-1"), person: Some(PERSON) },
         body: bytes(b"please"),
@@ -1821,6 +1842,7 @@ fn a_persons_message_the_engine_writes_is_their_news() {
     let ours = Comment {
         id: 102,
         author: ENGINE,
+        created: Time::ZERO,
         revision: 1,
         mark: Mark::Key { key: bytes(b"r"), person: None },
         body: bytes(b"x"),

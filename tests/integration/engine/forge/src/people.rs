@@ -1,9 +1,11 @@
 //! People acting on the fake forge as forge users (testing-pyramid.md, 4.4),
 //! scripted: they open issues, some handed to temper, comment, label and
-//! unlabel (the tracking label among them), review pull requests, push to
-//! their branches, close items, and now and then one with admin permission
-//! edits the engine's record by hand, mangling it. Each picks what to act on
-//! from the forge as it is, read without faults.
+//! unlabel (the tracking label among them), review pull requests (some
+//! reviews started pending and submitted later, landing before those
+//! submitted meanwhile), push to their branches, close items, and now and
+//! then one with admin permission edits the engine's record by hand,
+//! mangling it, or deletes it. Each picks what to act on from the forge as
+//! it is, read without faults.
 
 use temper_forge_model::api::{Kind, Op, Read, State, Verdict, Write};
 use temper_forge_model::{Config, Model};
@@ -28,6 +30,7 @@ pub struct Weights {
     pub pushes: u32,
     pub closes: u32,
     pub mangles: u32,
+    pub deletes: u32,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -45,6 +48,9 @@ pub enum Act {
     Call { user: u64, repository: usize, op: Op },
     /// `user` pushes a commit onto `branch`, as another party does.
     Push { user: u64, repository: usize, branch: Vec<u8> },
+    /// `user` starts a pending review of the pull request `number`, whose
+    /// id the forge answers.
+    Start { user: u64, repository: usize, number: u64 },
 }
 
 /// What people did.
@@ -59,6 +65,18 @@ pub struct Tally {
     pub pushes: u32,
     pub closes: u32,
     pub mangles: u32,
+    pub deletes: u32,
+    pub pending: u32,
+    pub submits: u32,
+}
+
+/// A review a person started pending: by whom, of which pull request, its id.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct Pending {
+    user: u64,
+    repository: usize,
+    number: u64,
+    review: u64,
 }
 
 pub struct People {
@@ -66,12 +84,13 @@ pub struct People {
     rng: Rng,
     left: u32,
     tally: Tally,
+    pending: Vec<Pending>,
 }
 
 impl People {
     #[must_use]
     pub fn new(script: Script, seed: u64) -> People {
-        People { script, rng: Rng::new(seed), left: script.actions, tally: Tally::default() }
+        People { script, rng: Rng::new(seed), left: script.actions, tally: Tally::default(), pending: Vec::new() }
     }
 
     #[must_use]
@@ -83,6 +102,12 @@ impl People {
     #[must_use]
     pub fn is_done(&self) -> bool {
         self.left == 0
+    }
+
+    /// `user` started the pending review `review` of the pull request
+    /// `number`: they submit it now and then.
+    pub fn started(&mut self, user: u64, repository: usize, number: u64, review: u64) {
+        self.pending.push(Pending { user, repository, number, review });
     }
 
     /// The time to the next action.
@@ -106,6 +131,7 @@ impl People {
             weights.pushes,
             weights.closes,
             weights.mangles,
+            weights.deletes,
         ];
         let total: u32 = choices.iter().sum();
         let mut pick = u32::try_from(self.rng.below(u64::from(total.max(1)))).expect("below a u32");
@@ -180,10 +206,22 @@ impl People {
                 Act::Call { user, repository, op: Op::Write(Write::SetLabels { number, labels: boxed(&labels) }) }
             }
             5 => {
+                let verdict = if self.rng.chance(700) { Verdict::Approve } else { Verdict::RequestChanges };
+                if !self.pending.is_empty() && self.rng.chance(500) {
+                    // A pending review is submitted, with its earlier id.
+                    let at = usize::try_from(self.rng.below(self.pending.len() as u64)).expect("few");
+                    let Pending { user, repository, number, review } = self.pending.remove(at);
+                    self.tally.submits += 1;
+                    let write = Write::Submit { number, review, verdict };
+                    return Some(Act::Call { user, repository, op: Op::Write(write) });
+                }
                 let pulls: Vec<_> = open.iter().filter(|(_, kind, _)| *kind == Kind::Pull).cloned().collect();
                 let (number, _, _) = self.pick(&pulls)?;
+                if self.rng.chance(300) {
+                    self.tally.pending += 1;
+                    return Some(Act::Start { user, repository, number });
+                }
                 self.tally.reviews += 1;
-                let verdict = if self.rng.chance(700) { Verdict::Approve } else { Verdict::RequestChanges };
                 let write = Write::Review { number, verdict: Some(verdict), body: b"looked".as_slice().into() };
                 Act::Call { user, repository, op: Op::Write(write) }
             }
@@ -203,12 +241,18 @@ impl People {
                 self.tally.closes += 1;
                 Act::Call { user, repository, op: Op::Write(Write::Close { number }) }
             }
-            _ => {
+            8 => {
                 let records = records(forge, config, repository, &open);
                 let id = *records.get(usize::try_from(self.rng.below(records.len().max(1) as u64)).expect("few"))?;
                 self.tally.mangles += 1;
                 let body = b"<!-- temper:record this is mine now".as_slice().into();
                 Act::Call { user: PEOPLE[0], repository, op: Op::Write(Write::EditComment { id, body }) }
+            }
+            _ => {
+                let records = records(forge, config, repository, &open);
+                let id = *records.get(usize::try_from(self.rng.below(records.len().max(1) as u64)).expect("few"))?;
+                self.tally.deletes += 1;
+                Act::Call { user: PEOPLE[0], repository, op: Op::Write(Write::DeleteComment { id }) }
             }
         };
         Some(act)

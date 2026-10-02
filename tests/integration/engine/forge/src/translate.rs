@@ -485,6 +485,7 @@ fn comment(comment: &forge::Comment, limits: &Limits) -> engine::Comment {
     engine::Comment {
         id: comment.id,
         author: comment.author,
+        created: comment.created,
         revision: digest(&comment.body),
         mark: mark(&comment.body),
         body: cut(&comment.body, limits.body_bytes),

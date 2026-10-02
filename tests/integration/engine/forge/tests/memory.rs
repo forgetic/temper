@@ -233,7 +233,7 @@ fn comments(limits: &Limits, after: u64, record: bool) -> Box<[Comment]> {
                 let person = if nth.is_multiple_of(2) { Some(8) } else { None };
                 (ENGINE, Mark::Key { key: name(limits, b'k'), person })
             };
-            Comment { id, author, revision: id, mark, body: bytes(limits.body_bytes, b'c') }
+            Comment { id, author, created: Time::ZERO, revision: id, mark, body: bytes(limits.body_bytes, b'c') }
         })
         .collect()
 }
