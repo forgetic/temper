@@ -105,13 +105,13 @@ fn end(order: Order) -> Keep {
 /// or, for an even share, what a read may bring.
 pub(crate) fn read(owner: Token, source: Source, limits: &Limits) -> Request {
     let kind = source.kind();
-    let order = order(kind);
-    let fit = match order {
+    let how = order(kind);
+    let fit = match how {
         Order::First | Order::Last => Fit::Run,
         Order::Even(_) => Fit::Each,
         Order::Lines => Fit::Lines,
     };
-    Request::Read { owner, source, keep: end(order), fit, parts: limits.parts, bytes: most(kind, limits) }
+    Request::Read { owner, source, keep: end(how), fit, parts: limits.parts, bytes: most(kind, limits) }
 }
 
 /// The most bytes a read for a section of `kind` may bring.
@@ -189,13 +189,13 @@ fn share(slots: &[Slot], limits: &Limits, total: usize) -> usize {
 fn asked(slots: &[Slot], limits: &Limits, bound: usize) -> usize {
     let mut sum: usize = 0;
     for slot in slots {
-        let length = match &slot.content {
+        let span = match &slot.content {
             Content::Got(parts) => {
                 uncut(slot.kind, parts, slot.items).min(size(budget(&limits.budgets, slot.kind))).min(bound)
             }
             Content::Asked(_) | Content::Missing(_) => 0,
         };
-        sum = sum.saturating_add(length);
+        sum = sum.saturating_add(span);
     }
     sum
 }
@@ -204,19 +204,19 @@ fn asked(slots: &[Slot], limits: &Limits, bound: usize) -> usize {
 /// bytes: its parts, a line for each cut their source made, and a line for
 /// the `items` cut at the entrance.
 pub(crate) fn uncut(kind: Kind, parts: &[Part], items: u32) -> usize {
-    let order = order(kind);
-    measure(order, whole(order, parts), parts, items)
+    let how = order(kind);
+    measure(how, whole(how, parts), parts, items)
 }
 
 /// A section of `kind` holding `parts`, less `items` items cut at the
 /// entrance, within `room` bytes; and whether it is whole: nothing cut,
 /// by the brief, its source or the entrance.
 pub(crate) fn section(kind: Kind, parts: &[Part], items: u32, room: usize) -> (Box<[u8]>, bool) {
-    let order = order(kind);
-    let all = whole(order, parts);
-    let kept = fit(order, parts, items, room);
-    let mut text = Text::writing(measure(order, kept, parts, items));
-    put(&mut text, order, kept, parts, items);
+    let how = order(kind);
+    let all = whole(how, parts);
+    let kept = fit(how, parts, items, room);
+    let mut text = Text::writing(measure(how, kept, parts, items));
+    put(&mut text, how, kept, parts, items);
     let mut left = 0_u64;
     for part in parts {
         left = left.saturating_add(part.left);
@@ -468,8 +468,8 @@ pub(crate) mod probe {
     /// The measure kept for `parts` of `kind` within `budget`, the whole
     /// one, and how long the text is at any measure.
     pub(crate) fn kept(kind: Kind, parts: &[Part], budget: usize) -> (u64, u64) {
-        let order = order(kind);
-        (fit(order, parts, 0, budget), whole(order, parts))
+        let how = order(kind);
+        (fit(how, parts, 0, budget), whole(how, parts))
     }
 
     pub(crate) fn length(kind: Kind, parts: &[Part], kept: u64) -> usize {

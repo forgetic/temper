@@ -174,7 +174,7 @@ fn bounded(source: Source, most: u32) -> (Source, u32) {
 
 /// A read's terminal: its content fills its slot, or, if its brief has
 /// answered, it is dropped.
-pub(crate) fn read(model: &mut Model, env: &Env<Limits>, owner: Token, read: Read, out: &mut Queue<Request>) {
+pub(crate) fn read(model: &mut Model, env: &Env<Limits>, owner: Token, answer: Read, out: &mut Queue<Request>) {
     let reading = Id::from_token(owner);
     let Reading { brief, index } = *model.reads.get(reading).expect("a read's terminal names a read in flight");
     model.reads.retire(reading);
@@ -188,7 +188,7 @@ pub(crate) fn read(model: &mut Model, env: &Env<Limits>, owner: Token, read: Rea
     brief.state = match state {
         State::Gathering { reply_to, slots, waiting, until } => {
             let gathering = Gathering { reply_to, slots, waiting, until };
-            filled(gathering, index, read, &env.limits, &mut model.reads, &mut model.facts, out)
+            filled(gathering, index, answer, &env.limits, &mut model.reads, &mut model.facts, out)
         }
         State::Closed => unreachable!("a closed brief names no read"),
     };
@@ -225,7 +225,7 @@ struct Gathering {
 fn filled(
     gathering: Gathering,
     index: u32,
-    read: Read,
+    answer: Read,
     limits: &Limits,
     reads: &mut Slab<Reading>,
     facts: &mut Facts,
@@ -235,7 +235,7 @@ fn filled(
     let slot = slots.get_mut(index).expect("a read fills a section of its brief");
     let kind = slot.kind;
     let required = slot.required;
-    let (content, gathered) = take(kind, limits, read);
+    let (content, gathered) = take(kind, limits, answer);
     facts.push(Fact::Read { read: gathered });
     slot.content = content;
     let waiting = waiting.checked_sub(1).expect("a brief waits for each read in flight");
@@ -288,8 +288,8 @@ fn expired(
 
 /// What a read brought for a section of `kind`: content within what the
 /// read may bring, or a missing section.
-fn take(kind: Kind, limits: &Limits, read: Read) -> (Content, Gathered) {
-    match read {
+fn take(kind: Kind, limits: &Limits, answer: Read) -> (Content, Gathered) {
+    match answer {
         Read::Got(parts) => {
             if within(kind, limits, &parts) {
                 (Content::Got(parts), Gathered::Got)

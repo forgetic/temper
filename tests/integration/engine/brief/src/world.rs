@@ -2,13 +2,14 @@ use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Write;
 
 use temper_engine_model_brief::{
-    self as brief, Body, Budgets, Commit, Event, Fact, Gathered, Item, Keep, Kind, Limits, Model, Part, Read, Request,
-    Section, Source, Wanted,
+    self as brief, Body, Budgets, Commit, Event, Fact, Fit, Gathered, Item, Keep, Kind, Limits, Model, Part, Read,
+    Refusal, Request, Source, Unread, Wanted,
 };
+use temper_lib::bytes::find;
 use temper_lib::{Duration, ReplyTo, Rng, Time, Token};
 use temper_world::{Ledger, Referee, Schedule, Span, Stage, Trace};
 
-use crate::referee::{Briefs, Seen, Served, Stimulus, read_back};
+use crate::referee::{Briefs, FLOOR, Seen, Served, Stimulus};
 
 /// Room in the brief's output queue beyond what one step may emit. Small, so
 /// the loop's flow control is exercised.
@@ -64,15 +65,19 @@ pub const LIMITS: Limits = Limits {
 };
 
 /// How a world's briefs, sections and reads ended, by kind, for the sweep.
-pub const ENDINGS: [&str; 13] = [
+pub const ENDINGS: [&str; 17] = [
     "rendered",
     "empty",
     "cut",
+    "items cut",
     "over total",
     "missing",
-    "failed",
+    "failed by read",
+    "failed by deadline",
+    "tie",
     "expired",
     "busy",
+    "room",
     "oversized",
     "source cut",
     "read failed",
@@ -86,26 +91,30 @@ pub struct Settings {
     pub seed: u64,
     pub limits: Limits,
     /// The briefs the parent asks for, and the time between them; per mille
-    /// those past the limits, and the sections that are required.
+    /// those past the limits, the sections that are required, and the lists
+    /// of dependencies longer than a source may name.
     pub briefs: u32,
     pub brief_gap: Span,
     pub oversized: u32,
     pub required: u32,
+    pub long: u32,
     /// The most parts a source has, and characters in a part.
     pub parts: u32,
     pub part_chars: u32,
     /// How long a read takes; per mille those answered late, and how much
-    /// later; those that fail; and those answered past the read's bounds.
+    /// later; those that fail; those answered past the read's bounds; and
+    /// those answered exactly as their brief's time runs out.
     pub latency: Span,
     pub late: u32,
     pub lateness: Span,
     pub failures: u32,
     pub overreach: u32,
+    pub ties: u32,
 }
 
 impl Settings {
     /// A world where nothing goes wrong: briefs of every kind of section,
-    /// content that a read brings whole, sources that answer in time.
+    /// content a read mostly brings whole, sources that answer in time.
     #[must_use]
     pub fn calm(seed: u64) -> Settings {
         Settings {
@@ -115,6 +124,7 @@ impl Settings {
             brief_gap: Span::millis(200, 3000),
             oversized: 0,
             required: 250,
+            long: 0,
             parts: 4,
             part_chars: 40,
             latency: Span::millis(5, 200),
@@ -122,23 +132,54 @@ impl Settings {
             lateness: Span::millis(0, 0),
             failures: 0,
             overreach: 0,
+            ties: 0,
         }
     }
 
-    /// A world of its own for `seed`: briefs some of which are past the
-    /// limits, asked faster than they are answered; content more than a
-    /// read may bring; sources that are slow, late past a brief's deadline,
-    /// failing and overreaching, at chances drawn from the seed.
+    /// A world of its own for `seed`: limits drawn, to tight corners now
+    /// and then; briefs some of which are past the limits, asked faster than
+    /// they are answered; content more than a read may bring; sources that
+    /// are slow, late past a brief's deadline or just at it, failing and
+    /// overreaching, at chances drawn from the seed.
     #[must_use]
     pub fn random(seed: u64) -> Settings {
         let mut rng = Rng::new(seed ^ 0xB1EF_0000_0000_5EED);
         let mut chance = |most: u64| u32::try_from(rng.below(most + 1)).expect("a chance per mille");
-        let calm = Settings::calm(seed);
+        let floor = u32::try_from(FLOOR).expect("small");
+        let sections = 1 + chance(5);
+        let tight = chance(1000) < 150;
+        let mut budget = || if tight || chance(1000) < 100 { floor } else { floor + chance(300) };
+        let budgets = Budgets {
+            item: budget(),
+            comments: budget(),
+            dependencies: budget(),
+            ci: budget(),
+            reviews: budget(),
+            pull: budget(),
+            attempts: budget(),
+            plan: budget(),
+            notes: budget(),
+            template: budget(),
+        };
+        let limits = Limits {
+            briefs: 1 + chance(3),
+            sections,
+            items: 1 + chance(4),
+            parts: 1 + chance(7),
+            read_bytes: 64 + chance(1500),
+            budgets,
+            brief_bytes: sections * floor + if tight { chance(20) } else { chance(1200) },
+            gather: Duration::from_millis(1000 + u64::from(chance(40_000))),
+            facts: 64,
+        };
         Settings {
+            seed,
+            limits,
             briefs: 20 + chance(40),
             brief_gap: Span::millis(1, 100 + u64::from(chance(5000))),
             oversized: chance(100),
             required: chance(600),
+            long: chance(300),
             parts: 1 + chance(10),
             part_chars: 1 + chance(300),
             latency: Span::millis(1, 10 + u64::from(chance(5000))),
@@ -146,8 +187,7 @@ impl Settings {
             lateness: Span::millis(0, u64::from(chance(60_000))),
             failures: chance(150),
             overreach: chance(50),
-            limits: Limits { briefs: 1 + chance(4), ..LIMITS },
-            ..calm
+            ties: chance(100),
         }
     }
 }
@@ -174,6 +214,24 @@ enum Delivery {
     Answer { owner: u64, read: Read },
 }
 
+/// What the world keeps of a brief asked for, until it is answered: when its
+/// time runs out, once it is taken in, and the bytes of content its reads
+/// brought in time.
+#[derive(Debug)]
+struct Asked {
+    deadline: Option<Time>,
+    gathered: usize,
+}
+
+/// What the world keeps of a read: its brief, its section, and the most
+/// bytes it may bring.
+#[derive(Clone, Copy, Debug)]
+struct Reading {
+    brief: u64,
+    index: u32,
+    bytes: u32,
+}
+
 pub struct World {
     now: Time,
     rng: Rng,
@@ -181,25 +239,20 @@ pub struct World {
 
     model: Model,
     stage: Stage<Limits, Event, Request>,
-    /// The brief each request in the stage's queue was emitted for, if a
-    /// render emitted it, in step with the queue; and the briefs of the
-    /// renders on their way to the brief, in order.
-    labels: VecDeque<Option<u64>>,
-    renders: VecDeque<u64>,
+    /// The renders on their way to the brief, in order: their brief, and
+    /// their sections' sources.
+    renders: VecDeque<(u64, Vec<(Source, bool)>)>,
 
     /// Deliveries in flight, and their count; the count names briefs too.
     wire: Schedule<Delivery>,
     in_flight: usize,
-    /// The briefs asked for and not answered, with the bytes of content
-    /// their reads brought in time; and the reads in flight, by owner, with
-    /// the brief and section each is for.
-    briefs: Ledger<u64, usize>,
-    reads: Ledger<u64, (u64, u32, u32)>,
-    /// The reads of each brief seen so far.
-    indexes: BTreeMap<u64, u32>,
-    /// Reads whose terminal is on its way to the brief: their brief and
-    /// section.
-    answering: BTreeMap<u64, (u64, u32, u32)>,
+    /// The briefs asked for and not answered; the reads asked for and not
+    /// served, by owner, as the step that asked for them saw them; the reads
+    /// in flight; and those whose terminal is on its way to the brief.
+    briefs: Ledger<u64, Asked>,
+    asked: BTreeMap<u64, Reading>,
+    reads: Ledger<u64, Reading>,
+    answering: BTreeMap<u64, Reading>,
     briefs_left: u32,
 
     referee: Referee<Briefs>,
@@ -212,22 +265,20 @@ impl World {
     pub fn new(settings: Settings) -> World {
         assert!(brief::worst_case(&settings.limits).is_some(), "the shell refuses limits it cannot provision");
         let max_out = brief::max_out(&settings.limits);
-        let within = settings.limits.gather.saturating_add(Duration::from_millis(1));
         let mut world = World {
             now: Time::ZERO,
             rng: Rng::new(settings.seed),
             model: Model::new(&settings.limits),
             stage: Stage::new(settings.limits, max_out, max_out + SLACK),
-            labels: VecDeque::new(),
             renders: VecDeque::new(),
             wire: Schedule::new(),
             in_flight: 0,
             briefs: Ledger::new("brief"),
+            asked: BTreeMap::new(),
             reads: Ledger::new("read"),
-            indexes: BTreeMap::new(),
             answering: BTreeMap::new(),
             briefs_left: settings.briefs,
-            referee: Referee::new(Briefs::new(settings.limits, within)),
+            referee: Referee::new(Briefs::new(settings.limits, Duration::from_millis(1))),
             stats: Stats::default(),
             trace: Trace::default(),
             settings,
@@ -297,8 +348,12 @@ impl World {
             }
         }
         while let Some(event) = self.stage.next_event() {
-            let label = match &event {
-                Event::Render { .. } => Some(self.renders.pop_front().expect("a render on its way names its brief")),
+            let render = match &event {
+                Event::Render { .. } => {
+                    let (brief, sections) = self.renders.pop_front().expect("a render on its way names its brief");
+                    self.observe(Seen::Asked { brief, sections });
+                    Some(brief)
+                }
                 Event::Read { owner, read } => {
                     self.served(owner.raw(), read);
                     None
@@ -307,17 +362,16 @@ impl World {
             self.log(format!("brief <- {}", describe(&event)));
             let before = self.stage.out.len();
             brief::step(&mut self.model, &self.stage.env, event, &mut self.stage.out);
-            self.label(before, label);
+            self.stepped(before, render);
         }
         while self.stage.has_room() && self.model.is_due(now) {
             let before = self.stage.out.len();
             brief::fire(&mut self.model, &self.stage.env, &mut self.stage.out);
-            self.label(before, None);
+            self.stepped(before, None);
         }
         // What the steps asked for, at the end of the iteration.
         while let Some(request) = self.stage.out.pop() {
-            let label = self.labels.pop_front().expect("a label for each request");
-            self.request(request, label);
+            self.request(request);
         }
         while let Some(fact) = self.model.pop_fact() {
             self.stats.facts += 1;
@@ -335,11 +389,48 @@ impl World {
         self.model.reclaim();
     }
 
-    /// Labels what a step emitted since `before` with the brief it is for.
-    fn label(&mut self, before: u32, label: Option<u64>) {
-        for _ in before..self.stage.out.len() {
-            self.labels.push_back(label);
+    /// A step, or an alarm, has ended: the referee sees what it emitted,
+    /// from `before` on, as it was emitted; a render's reads are for
+    /// `render`'s sections, in order.
+    fn stepped(&mut self, before: u32, render: Option<u64>) {
+        let mut seen = Vec::new();
+        let mut index = 0;
+        for request in self.stage.out.iter().skip(usize::try_from(before).expect("small")) {
+            seen.push(match request {
+                Request::Read { owner, source, keep, fit, parts, bytes } => {
+                    let brief = render.expect("a read is asked by a render");
+                    self.asked.insert(owner.raw(), Reading { brief, index, bytes: *bytes });
+                    index += 1;
+                    let source = source.clone();
+                    Seen::Read { brief, index: index - 1, source, keep: *keep, fit: *fit, parts: *parts, bytes: *bytes }
+                }
+                Request::Rendered { reply_to, sections } => {
+                    Seen::Rendered { brief: self.whose(reply_to), sections: sections.to_vec() }
+                }
+                Request::Failed { reply_to, missing, why } => {
+                    Seen::Failed { brief: self.whose(reply_to), missing: *missing, why: *why }
+                }
+                Request::Refused { reply_to, refusal } => {
+                    Seen::Refused { brief: self.whose(reply_to), refusal: *refusal }
+                }
+                Request::Room => Seen::Room,
+            });
         }
+        if let Some(brief) = render
+            && index > 0
+        {
+            let deadline = self.now.saturating_add(self.settings.limits.gather);
+            self.briefs.get_mut(brief).expect("a brief taken in is asked for").deadline = Some(deadline);
+        }
+        for seen in seen {
+            self.observe(seen);
+        }
+        self.observe(Seen::Stepped);
+    }
+
+    /// The brief a reply is for, among those asked and not answered.
+    fn whose(&self, reply_to: &ReplyTo) -> u64 {
+        *self.briefs.keys().find(|brief| ReplyTo::new(Token::new(**brief)) == *reply_to).expect("a reply names a brief")
     }
 
     /// Hands `delivery` to its destination.
@@ -347,15 +438,15 @@ impl World {
         match delivery {
             Delivery::Ask => self.ask(),
             Delivery::Answer { owner, read } => {
-                let asked = self.reads.end(owner);
-                self.answering.insert(owner, asked);
+                let reading = self.reads.end(owner);
+                self.answering.insert(owner, reading);
                 self.stage.push(Event::Read { owner: Token::new(owner), read });
             }
         }
     }
 
     /// The parent asks for a brief of sections drawn, some required, past
-    /// the limits now and then.
+    /// the limits now and then, with lists longer than a source may name.
     fn ask(&mut self) {
         self.briefs_left -= 1;
         if self.briefs_left > 0 {
@@ -369,31 +460,20 @@ impl World {
         let count = if oversized { limits.sections + 1 } else { self.below(limits.sections + 1) };
         let mut wanted = Vec::new();
         let mut sections = Vec::new();
-        let mut most = 0;
         for _ in 0..count {
             let kind = KINDS[self.pick(KINDS.len())];
-            let items = 1 + self.below(limits.items);
-
+            let items = if self.rng.chance(self.settings.long) {
+                limits.items + 1 + self.below(3)
+            } else {
+                1 + self.below(limits.items)
+            };
             let required = self.rng.chance(self.settings.required);
             let source = self.source(kind, items);
-            most = most.max(match &source {
-                Source::Dependencies(items) => items.len(),
-                Source::Item(_)
-                | Source::Comments { .. }
-                | Source::Ci { .. }
-                | Source::Reviews { .. }
-                | Source::Pull { .. }
-                | Source::Attempts(_)
-                | Source::Plan { .. }
-                | Source::Notes { .. }
-                | Source::Template(_) => 0,
-            });
-            sections.push((kind, required));
+            sections.push((source.clone(), required));
             wanted.push(Wanted { source, required });
         }
-        self.observe(Seen::Asked { brief, sections, items: most });
-        self.briefs.open(brief, 0);
-        self.renders.push_back(brief);
+        self.briefs.open(brief, Asked { deadline: None, gathered: 0 });
+        self.renders.push_back((brief, sections));
         let event = Event::Render { reply_to: ReplyTo::new(Token::new(brief)), sections: wanted.into() };
         self.stage.push(event);
     }
@@ -415,132 +495,158 @@ impl World {
             Kind::Pull => Source::Pull { item, head },
             Kind::Attempts => Source::Attempts(item),
             Kind::Plan => Source::Plan { goal: item },
-            Kind::Notes => Source::Notes { repository: item.repository, goal: self.rng.chance(500).then_some(item) },
+            Kind::Notes => {
+                let goal = Item { repository: self.below(3), number: 7 };
+                Source::Notes { repository: item.repository, goal: self.rng.chance(500).then_some(goal) }
+            }
             Kind::Template => Source::Template(self.below(4)),
         }
     }
 
     /// A read's terminal reaches the brief: the referee sees what it
-    /// brought.
+    /// brought, and the world counts what it judges in time.
     fn served(&mut self, owner: u64, read: &Read) {
-        let (brief, index, most) = self.answering.remove(&owner).expect("a terminal on its way names its read");
-        let limits = self.settings.limits;
-        let read = match read {
-            Read::Got(parts) => {
-                let bytes: usize = parts.iter().map(|part| part.bytes.len()).sum();
-                let within = parts.len() <= usize::try_from(limits.parts).expect("small") && bytes <= most as usize;
-                if within {
-                    if let Some(gathered) = self.briefs.get_mut(brief) {
-                        *gathered += bytes;
+        let Reading { brief, index, bytes } =
+            self.answering.remove(&owner).expect("a terminal on its way names its read");
+        let parts = self.settings.limits.parts as usize;
+        let now = self.now;
+        let seen = match read {
+            Read::Got(content) => {
+                let length: usize = content.iter().map(|part| part.bytes.len()).sum();
+                if let Some(asked) = self.briefs.get_mut(brief)
+                    && content.len() <= parts
+                    && length <= bytes as usize
+                {
+                    asked.gathered += length;
+                    if asked.deadline == Some(now) {
+                        *self.stats.endings.entry("tie").or_default() += 1;
                     }
-                    Served::Content(parts.to_vec())
-                } else {
-                    Served::Oversized
                 }
+                Served::Content(content.to_vec())
             }
             Read::Failed => Served::Failed,
         };
-        self.observe(Seen::Served { brief, index, read });
+        self.observe(Seen::Served { brief, index, read: seen });
     }
 
     /// Takes `request` from the brief's queue: an answer, or a read to serve.
-    fn request(&mut self, request: Request, label: Option<u64>) {
+    fn request(&mut self, request: Request) {
         self.log(format!("brief -> {}", describe_request(&request)));
         match request {
             Request::Rendered { reply_to, sections } => {
-                let brief = reply_to.into_token().raw();
-                let gathered = self.briefs.end(brief);
-                self.indexes.remove(&brief);
-                self.rendered(&sections, gathered);
-                self.observe(Seen::Rendered { brief, sections: sections.into_vec() });
-            }
-            Request::Failed { reply_to, missing, why: _ } => {
-                let brief = reply_to.into_token().raw();
-                self.briefs.end(brief);
-                self.indexes.remove(&brief);
-                self.end("failed");
-                self.observe(Seen::Failed { brief, missing });
-            }
-            Request::Refused { reply_to, refusal } => {
-                let brief = reply_to.into_token().raw();
-                self.briefs.end(brief);
-                self.end(match refusal {
-                    temper_engine_model_brief::Refusal::Busy => "busy",
-                    temper_engine_model_brief::Refusal::Oversized => "oversized",
-                });
-                self.observe(Seen::Refused { brief, refusal });
-            }
-            Request::Room => {}
-            Request::Read { owner, source: _, keep, fit: _, parts, bytes } => {
-                let brief = label.expect("a read is asked by a render");
-                let index = self.indexes.entry(brief).or_insert(0);
-                let section = *index;
-                *index += 1;
-                self.reads.open(owner.raw(), (brief, section, bytes));
-                self.serve(owner.raw(), keep, parts, bytes);
-            }
-        }
-    }
-
-    /// Counts what a rendered brief shows.
-    fn rendered(&mut self, sections: &[Section], gathered: usize) {
-        self.end("rendered");
-        if sections.is_empty() {
-            self.end("empty");
-        }
-        if gathered > self.settings.limits.brief_bytes as usize {
-            self.end("over total");
-        }
-        for section in sections {
-            match &section.body {
-                Body::Text(text) => {
-                    if read_back(text).is_some_and(|(_, cut)| cut > 0) {
-                        self.end("cut");
+                let asked = self.briefs.end(reply_to.into_token().raw());
+                self.end("rendered");
+                if sections.is_empty() {
+                    self.end("empty");
+                }
+                if asked.gathered > self.settings.limits.brief_bytes as usize {
+                    self.end("over total");
+                }
+                for section in &sections {
+                    match &section.body {
+                        Body::Text(text) => {
+                            if find(text, b" bytes cut]").is_some() {
+                                self.end("cut");
+                            }
+                            if find(text, b" items cut]").is_some() {
+                                self.end("items cut");
+                            }
+                        }
+                        Body::Missing(_) => self.end("missing"),
                     }
                 }
-                Body::Missing(_) => self.end("missing"),
+            }
+            Request::Failed { reply_to, missing: _, why } => {
+                self.briefs.end(reply_to.into_token().raw());
+                self.end(match why {
+                    Unread::Late => "failed by deadline",
+                    Unread::Failed | Unread::Oversized => "failed by read",
+                });
+            }
+            Request::Refused { reply_to, refusal } => {
+                self.briefs.end(reply_to.into_token().raw());
+                self.end(match refusal {
+                    Refusal::Busy => "busy",
+                    Refusal::Oversized => "oversized",
+                });
+            }
+            Request::Room => self.end("room"),
+            Request::Read { owner, source, keep, fit, parts, bytes } => {
+                let reading = self.asked.remove(&owner.raw()).expect("a read was seen as it was asked for");
+                self.reads.open(owner.raw(), reading);
+                let notes = source.kind() == Kind::Notes;
+                self.serve(owner.raw(), reading, notes, keep, fit, parts, bytes);
             }
         }
     }
 
-    /// The source of a read answers after a latency: content drawn, cut to
-    /// the read's bounds from the end it keeps; or past them; or failing.
-    fn serve(&mut self, owner: u64, keep: Keep, most_parts: u32, most_bytes: u32) {
+    /// The source of a read answers after a latency, or just as its brief's
+    /// time runs out: content drawn, fitted to the read's bounds as it asks;
+    /// or past them; or failing.
+    #[expect(clippy::too_many_arguments, reason = "a read's every term")]
+    fn serve(&mut self, owner: u64, reading: Reading, notes: bool, keep: Keep, fit: Fit, parts: u32, bytes: u32) {
         self.stats.reads += 1;
         let mut back = self.settings.latency.draw(&mut self.rng);
         if self.rng.chance(self.settings.late) {
             self.stats.lates += 1;
             back = back.saturating_add(self.settings.lateness.draw(&mut self.rng));
         }
+        let deadline = self.briefs.get(reading.brief).and_then(|asked| asked.deadline);
+        let at = match deadline {
+            Some(deadline) if self.rng.chance(self.settings.ties) => deadline,
+            Some(_) | None => self.now.saturating_add(back),
+        };
+        let content = if notes { self.index() } else { self.content() };
         let read = if self.rng.chance(self.settings.failures) {
             self.end("read failed");
             Read::Failed
         } else if self.rng.chance(self.settings.overreach) {
             self.end("read oversized");
-            let mut parts = self.content();
-            parts.resize(most_parts as usize + 1, String::new());
-            Read::Got(parts.into_iter().map(|part| Part { bytes: part.into_bytes().into(), left: 0 }).collect())
+            let mut over = content;
+            over.resize(parts as usize + 1, String::new());
+            Read::Got(over.into_iter().map(|part| Part { bytes: part.into_bytes().into(), left: 0 }).collect())
         } else {
-            let parts = fit(self.content(), keep, most_parts as usize, most_bytes as usize);
-            if parts.iter().any(|part| part.left > 0) {
+            let fitted = match fit {
+                Fit::Run => run(content, keep, parts as usize, bytes as usize),
+                Fit::Each => each(content, keep, parts as usize, bytes as usize),
+                Fit::Lines => lines(content, parts as usize, bytes as usize),
+            };
+            if fitted.iter().any(|part| part.left > 0) {
                 self.end("source cut");
             }
-            Read::Got(parts.into())
+            Read::Got(fitted.into())
         };
-        self.send(self.now.saturating_add(back), Delivery::Answer { owner, read });
+        self.send(at, Delivery::Answer { owner, read });
     }
 
     /// A section's content as its source has it: parts of text drawn.
     fn content(&mut self) -> Vec<String> {
         let mut parts = Vec::new();
         for _ in 0..self.below(self.settings.parts + 1) {
-            let mut part = String::new();
-            for _ in 0..self.below(self.settings.part_chars + 1) {
-                part.push_str(ALPHABET[self.pick(ALPHABET.len())]);
-            }
-            parts.push(part);
+            parts.push(self.text(self.settings.part_chars));
         }
         parts
+    }
+
+    /// A notes index: a line per entry, and last how many did not fit, if
+    /// any did not.
+    fn index(&mut self) -> Vec<String> {
+        let mut parts = Vec::new();
+        for _ in 0..self.below(self.settings.parts + 1) {
+            let words = self.text(20).replace('\n', " ");
+            parts.push(format!("- {words}\n"));
+        }
+        let more = self.below(4);
+        parts.push(if more > 0 { format!("{more} more\n") } else { String::new() });
+        parts
+    }
+
+    fn text(&mut self, most: u32) -> String {
+        let mut text = String::new();
+        for _ in 0..self.below(most + 1) {
+            text.push_str(ALPHABET[self.pick(ALPHABET.len())]);
+        }
+        text
     }
 
     fn send(&mut self, at: Time, delivery: Delivery) {
@@ -599,7 +705,7 @@ impl World {
     /// The invariants of a world where nothing is left to happen.
     fn assert_settled(&self) {
         assert!(self.wire.is_empty() && !self.stage.has_events(), "nothing is on its way");
-        assert!(self.labels.is_empty() && self.renders.is_empty() && self.answering.is_empty(), "nothing is pending");
+        assert!(self.renders.is_empty() && self.asked.is_empty() && self.answering.is_empty(), "nothing is pending");
         self.briefs.assert_settled();
         self.reads.assert_settled();
         assert_eq!(self.model.briefs(), 0, "the brief holds no brief");
@@ -614,54 +720,110 @@ fn inject(stimulus: &Stimulus) {
     match *stimulus {}
 }
 
-/// `parts` cut to at most `most_parts` parts and `most_bytes` bytes, as a
-/// source does: its content kept from the end `keep` names, as one run of
-/// bytes, and what it left out told in the `left` of the part next to it.
-fn fit(parts: Vec<String>, keep: Keep, most_parts: usize, most_bytes: usize) -> Vec<Part> {
-    let count = parts.len();
-    let mut room = most_bytes;
-    let mut kept: Vec<Part> = Vec::new();
-    let mut dropped = 0;
-    let mut take = |part: String| {
-        let len = part.len();
-        let want = room.min(len);
-        let (start, end) = match keep {
-            Keep::Start => (0, (0..=want).rev().find(|at| part.is_char_boundary(*at)).expect("0 is a boundary")),
-            Keep::End => {
-                ((len - want..=len).find(|at| part.is_char_boundary(*at)).expect("the end is a boundary"), len)
-            }
-        };
-        room -= end - start;
-        Part { bytes: part.as_bytes()[start..end].into(), left: u64::try_from(len - (end - start)).expect("small") }
+/// The first `want` bytes of `part`, fewer so as not to split a character.
+fn head(part: &str, want: usize) -> usize {
+    (0..=want.min(part.len())).rev().find(|at| part.is_char_boundary(*at)).expect("0 is a boundary")
+}
+
+/// Where the last `want` bytes of `part` start, later so as not to split a
+/// character.
+fn tail(part: &str, want: usize) -> usize {
+    let len = part.len();
+    (len - want.min(len)..=len).find(|at| part.is_char_boundary(*at)).expect("the end is a boundary")
+}
+
+/// `part` cut to `want` bytes at the end `keep` does not keep.
+fn cut(part: &str, keep: Keep, want: usize) -> Part {
+    let (start, end) = match keep {
+        Keep::Start => (0, head(part, want)),
+        Keep::End => (tail(part, want), part.len()),
     };
-    match keep {
-        Keep::Start => {
-            for (index, part) in parts.into_iter().enumerate() {
-                if index < most_parts {
-                    kept.push(take(part));
-                } else {
-                    dropped += part.len();
-                }
-            }
-            if let Some(last) = kept.last_mut() {
-                last.left += u64::try_from(dropped).expect("small");
-            }
-        }
-        Keep::End => {
-            for (index, part) in parts.into_iter().enumerate().rev() {
-                if count - index <= most_parts {
-                    kept.push(take(part));
-                } else {
-                    dropped += part.len();
-                }
-            }
-            kept.reverse();
-            if let Some(first) = kept.first_mut() {
-                first.left += u64::try_from(dropped).expect("small");
-            }
+    Part { bytes: part.as_bytes()[start..end].into(), left: (part.len() - (end - start)) as u64 }
+}
+
+/// The parts of `parts` kept within `most` of them, from the end `keep`
+/// names, and the bytes of those left out whole, which go into the `left`
+/// of the part next to them.
+fn within(parts: Vec<String>, keep: Keep, most: usize) -> (Vec<String>, u64) {
+    let count = parts.len();
+    let mut dropped = 0;
+    let mut kept = Vec::new();
+    for (index, part) in parts.into_iter().enumerate() {
+        let keeps = match keep {
+            Keep::Start => index < most,
+            Keep::End => count - index <= most,
+        };
+        if keeps {
+            kept.push(part);
+        } else {
+            dropped += part.len() as u64;
         }
     }
-    kept
+    (kept, dropped)
+}
+
+/// Tells `dropped` bytes left out whole in the part next to them.
+fn tell(mut parts: Vec<Part>, keep: Keep, dropped: u64) -> Vec<Part> {
+    let next = match keep {
+        Keep::Start => parts.last_mut(),
+        Keep::End => parts.first_mut(),
+    };
+    if let Some(part) = next {
+        part.left += dropped;
+    }
+    parts
+}
+
+/// `parts` fitted as one run of bytes from the end `keep` names.
+fn run(parts: Vec<String>, keep: Keep, most_parts: usize, most_bytes: usize) -> Vec<Part> {
+    let (parts, dropped) = within(parts, keep, most_parts);
+    let mut room = most_bytes;
+    let mut fitted = Vec::new();
+    let order: Vec<String> = match keep {
+        Keep::Start => parts,
+        Keep::End => parts.into_iter().rev().collect(),
+    };
+    for part in order {
+        let piece = cut(&part, keep, room);
+        room -= piece.bytes.len();
+        fitted.push(piece);
+    }
+    if keep == Keep::End {
+        fitted.reverse();
+    }
+    tell(fitted, keep, dropped)
+}
+
+/// `parts` fitted each to an even share of the bytes, from the end `keep`
+/// names.
+fn each(parts: Vec<String>, keep: Keep, most_parts: usize, most_bytes: usize) -> Vec<Part> {
+    let (parts, dropped) = within(parts, keep, most_parts);
+    let share = most_bytes / parts.len().max(1);
+    let fitted = parts.iter().map(|part| cut(part, keep, share)).collect();
+    tell(fitted, keep, dropped)
+}
+
+/// A notes index fitted by whole lines from the first, keeping its last
+/// part, and the lines left out told in an empty part before it.
+fn lines(parts: Vec<String>, most_parts: usize, most_bytes: usize) -> Vec<Part> {
+    let mut parts = parts;
+    let trailer = parts.pop().unwrap_or_default();
+    let mut room = most_bytes.saturating_sub(trailer.len());
+    let mut fitted = Vec::new();
+    let mut dropped = 0;
+    for line in parts {
+        if dropped == 0 && fitted.len() + 2 < most_parts && line.len() <= room {
+            room -= line.len();
+            fitted.push(Part { bytes: line.into_bytes().into(), left: 0 });
+        } else {
+            dropped += line.len() as u64;
+        }
+    }
+    if dropped > 0 {
+        fitted.push(Part { bytes: Box::new([]), left: dropped });
+    }
+    fitted.push(Part { bytes: trailer.into_bytes().into(), left: 0 });
+    fitted
 }
 
 fn describe(event: &Event) -> String {
@@ -692,8 +854,10 @@ fn describe_request(request: &Request) -> String {
             line
         }
         Request::Failed { reply_to, missing, why } => format!("failed {reply_to:?} {missing:?} {why:?}"),
-        Request::Room => "room".to_owned(),
         Request::Refused { reply_to, refusal } => format!("refused {reply_to:?} {refusal:?}"),
-        Request::Read { owner, source, keep, .. } => format!("read {} {:?} {keep:?}", owner.raw(), source.kind()),
+        Request::Room => "room".to_owned(),
+        Request::Read { owner, source, keep, fit, parts, bytes } => {
+            format!("read {} {:?} {keep:?} {fit:?} {parts} {bytes}", owner.raw(), source.kind())
+        }
     }
 }

@@ -24,7 +24,7 @@ fn a_calm_world_renders_every_brief_and_settles() {
     let stats = world.stats();
     assert_eq!(count(&stats, "rendered"), stats.briefs, "every brief rendered: {stats:?}");
     assert!(count(&stats, "cut") > 0, "some sections are cut to their budgets: {stats:?}");
-    for ending in ["missing", "failed", "expired", "busy", "oversized", "late"] {
+    for ending in ["missing", "failed by read", "failed by deadline", "expired", "busy", "oversized", "late"] {
         assert_eq!(count(&stats, ending), 0, "{ending}: {stats:?}");
     }
     let (sections, cuts) = world.judged();
@@ -35,28 +35,40 @@ fn a_calm_world_renders_every_brief_and_settles() {
 fn content_past_what_a_read_brings_is_cut_by_its_source_and_told() {
     let settings = Settings { parts: 12, part_chars: 300, ..Settings::calm(2) };
     let stats = run(settings).stats();
-    assert!(count(&stats, "source cut") > 0 && count(&stats, "cut") > 0, "{stats:?}");
-    assert!(count(&stats, "over total") > 0, "briefs held to their total: {stats:?}");
+    for ending in ["source cut", "cut", "over total"] {
+        assert!(count(&stats, ending) > 0, "{ending}: {stats:?}");
+    }
     assert_eq!(count(&stats, "rendered"), stats.briefs, "{stats:?}");
 }
 
 #[test]
-fn reads_that_fail_or_come_late_leave_sections_missing_or_fail_the_brief() {
-    let settings =
-        Settings { failures: 200, late: 300, lateness: Span::millis(0, 40_000), required: 400, ..Settings::calm(3) };
+fn lists_longer_than_a_source_may_name_are_cut_and_told() {
+    let settings = Settings { long: 500, ..Settings::calm(5) };
     let stats = run(settings).stats();
-    for ending in ["missing", "failed", "expired", "late", "read failed"] {
-        assert!(count(&stats, ending) > 0, "{ending}: {stats:?}");
-    }
-    assert_eq!(
-        count(&stats, "rendered") + count(&stats, "failed") + count(&stats, "busy"),
-        stats.briefs,
-        "every brief answered once: {stats:?}"
-    );
+    assert!(count(&stats, "items cut") > 0, "{stats:?}");
+    assert_eq!(count(&stats, "oversized"), 0, "{stats:?}");
 }
 
 #[test]
-fn briefs_past_the_limits_or_asked_too_fast_are_refused_at_the_entrance() {
+fn reads_that_fail_or_come_late_leave_sections_missing_or_fail_the_brief() {
+    let settings = Settings {
+        failures: 200,
+        late: 300,
+        lateness: Span::millis(0, 40_000),
+        required: 400,
+        ties: 100,
+        ..Settings::calm(3)
+    };
+    let stats = run(settings).stats();
+    for ending in ["missing", "failed by read", "failed by deadline", "expired", "late", "read failed", "tie"] {
+        assert!(count(&stats, ending) > 0, "{ending}: {stats:?}");
+    }
+    let answered = count(&stats, "rendered") + count(&stats, "failed by read") + count(&stats, "failed by deadline");
+    assert_eq!(answered + count(&stats, "busy"), stats.briefs, "every brief answered once: {stats:?}");
+}
+
+#[test]
+fn briefs_past_the_limits_or_asked_too_fast_are_refused_and_told_of_room() {
     let settings = Settings {
         limits: Limits { briefs: 1, ..LIMITS },
         brief_gap: Span::millis(0, 50),
@@ -64,7 +76,27 @@ fn briefs_past_the_limits_or_asked_too_fast_are_refused_at_the_entrance() {
         ..Settings::calm(4)
     };
     let stats = run(settings).stats();
-    assert!(count(&stats, "busy") > 0 && count(&stats, "oversized") > 0, "{stats:?}");
+    for ending in ["busy", "room", "oversized"] {
+        assert!(count(&stats, ending) > 0, "{ending}: {stats:?}");
+    }
+}
+
+#[test]
+fn reads_that_outlive_their_briefs_hold_room_until_they_end() {
+    // One brief at a time, whose reads mostly come back long after its time
+    // has run out: their room is held until they do.
+    let settings = Settings {
+        limits: Limits { briefs: 1, sections: 3, ..LIMITS },
+        briefs: 80,
+        brief_gap: Span::millis(3000, 6000),
+        late: 900,
+        lateness: Span::millis(30_000, 60_000),
+        ..Settings::calm(6)
+    };
+    let stats = run(settings).stats();
+    for ending in ["expired", "late", "busy", "room"] {
+        assert!(count(&stats, ending) > 0, "{ending}: {stats:?}");
+    }
 }
 
 #[test]
@@ -91,7 +123,7 @@ fn facts_change_nothing() {
 fn random_worlds_settle_with_every_ending_reached() {
     let mut endings = BTreeSet::new();
     let (mut sections, mut cuts) = (0, 0);
-    for seed in 0..100 {
+    for seed in 0..200 {
         let world = run(Settings::random(seed));
         endings.extend(world.stats().endings.keys().copied());
         let judged = world.judged();
