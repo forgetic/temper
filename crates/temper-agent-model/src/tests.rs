@@ -5,10 +5,10 @@
 use alloc::boxed::Box;
 
 use temper_agent_model_session as session;
-use temper_lib::{Duration, Env, Queue, ReplyTo, Time, Token};
+use temper_lib::{Duration, Env, Queue, Time, Token};
 
 use crate::llm::{Block, Completion, Endpoint, Failure, Message, Role, Stop, Tool, Usage};
-use crate::{Event, Limits, MAX_OUT, Model, Outcome, Report, Request, Task, ToolCall, fire, step, worst_case};
+use crate::{End, Event, Limits, MAX_OUT, Model, Request, Spec, ToolCall, Yield, fire, step, worst_case};
 
 const LIMITS: Limits = Limits {
     session: session::Limits {
@@ -41,32 +41,53 @@ impl Harness {
         }
     }
 
+    /// Steps the model with `event`, which emits at most one request.
     fn step(&mut self, event: Event) -> Option<Request> {
         step(&mut self.model, &self.env, event, &mut self.out);
-        self.out.pop()
+        self.one()
     }
 
     fn fire(&mut self) -> Option<Request> {
         assert!(self.model.is_due(self.env.now), "an alarm is due");
         fire(&mut self.model, &self.env, &mut self.out);
-        self.out.pop()
+        self.one()
     }
 
-    /// Runs the task for call 1, returning the owner of the session's first
-    /// call.
-    fn run(&mut self) -> Token {
-        let Some(Request::Complete { owner, .. }) = self.step(Event::Run { reply_to: reply_to(), task: task() }) else {
+    fn one(&mut self) -> Option<Request> {
+        let request = self.out.pop();
+        assert!(self.out.is_empty(), "one request at most");
+        request
+    }
+
+    /// Opens a session for opener 1, returning the owner of its first call.
+    fn open(&mut self) -> Token {
+        step(&mut self.model, &self.env, Event::Open { opener: opener(), spec: spec() }, &mut self.out);
+        let Some(Request::Opened { opener: _, session }) = self.out.pop() else {
+            panic!("expected the session to open");
+        };
+        let Some(Request::Complete { owner, .. }) = self.one() else {
             panic!("expected a call");
+        };
+        assert_eq!(owner, session);
+        owner
+    }
+
+    /// Opens a session and has the LLM ask for `ls`, returning the session's
+    /// owner.
+    fn open_tool(&mut self) -> Token {
+        let owner = self.open();
+        let Some(Request::Tool { .. }) = self.step(Event::Completed { owner, completion: ls() }) else {
+            panic!("expected a tool run");
         };
         owner
     }
 
-    /// Runs the task for call 1 and has the LLM ask for `ls`, returning the
-    /// session's owner.
-    fn run_tool(&mut self) -> Token {
-        let owner = self.run();
-        let Some(Request::Tool { .. }) = self.step(Event::Completed { owner, completion: ls() }) else {
-            panic!("expected a tool run");
+    /// Opens a session and has the LLM finish its turn, returning the
+    /// session's name.
+    fn open_yielded(&mut self) -> Token {
+        let owner = self.open();
+        let Some(Request::Yielded { .. }) = self.step(Event::Completed { owner, completion: done() }) else {
+            panic!("expected a yield");
         };
         owner
     }
@@ -80,12 +101,12 @@ fn bytes(text: &[u8]) -> Box<[u8]> {
     Box::from(text)
 }
 
-fn reply_to() -> ReplyTo {
-    ReplyTo::new(Token::new(1))
+fn opener() -> Token {
+    Token::new(1)
 }
 
-fn task() -> Task {
-    Task {
+fn spec() -> Spec {
+    Spec {
         endpoint: Endpoint(0),
         model: bytes(b"model"),
         system: bytes(b"be brief"),
@@ -95,27 +116,39 @@ fn task() -> Task {
     }
 }
 
+fn usage() -> Usage {
+    Usage { input_tokens: 10, output_tokens: 5 }
+}
+
 /// The LLM asks for `ls`.
 fn ls() -> Completion {
     let content = Box::new([Block::ToolCall { id: bytes(b"c1"), name: bytes(b"ls"), input: bytes(b"{}") }]);
-    Completion { content, stop: Stop::ToolUse, usage: Usage { input_tokens: 10, output_tokens: 5 } }
+    Completion { content, stop: Stop::ToolUse, usage: usage() }
 }
 
-fn ended(outcome: Outcome, turns: u32) -> Request {
+/// The LLM finishes its turn.
+fn done() -> Completion {
+    Completion { content: Box::new([Block::Text { text: bytes(b"done") }]), stop: Stop::EndTurn, usage: usage() }
+}
+
+fn ended(end: End, turns: u32) -> Request {
     let usage =
         Usage { input_tokens: 10_u64.saturating_mul(turns.into()), output_tokens: 5_u64.saturating_mul(turns.into()) };
-    Request::Reply { to: reply_to(), report: Report::Ended { outcome, turns, usage } }
+    Request::Ended { opener: opener(), end, turns, usage }
 }
 
 #[test]
-fn a_run_reaches_the_session_and_its_call_comes_back_out() {
+fn an_open_reaches_the_session_and_its_opening_and_call_come_back_out() {
     let mut h = Harness::new();
-    let Some(Request::Complete { owner: _, prompt, timeout }) =
-        h.step(Event::Run { reply_to: reply_to(), task: task() })
-    else {
+    step(&mut h.model, &h.env, Event::Open { opener: opener(), spec: spec() }, &mut h.out);
+    let Some(Request::Opened { opener: to, session }) = h.out.pop() else {
+        panic!("expected the session to open");
+    };
+    assert_eq!(to, opener());
+    let Some(Request::Complete { owner, prompt, timeout }) = h.one() else {
         panic!("expected a call");
     };
-    assert_eq!(timeout, LIMITS.session.call_timeout);
+    assert_eq!((owner, timeout), (session, LIMITS.session.call_timeout));
     let first = Message { role: Role::User, content: Box::new([Block::Text { text: bytes(b"fix the bug") }]) };
     assert_eq!(&*prompt.messages, &[first]);
     assert_eq!(h.model.sessions(), 1);
@@ -125,7 +158,7 @@ fn a_run_reaches_the_session_and_its_call_comes_back_out() {
 #[test]
 fn a_completion_reaches_the_session_and_its_tool_run_comes_back_out() {
     let mut h = Harness::new();
-    let owner = h.run();
+    let owner = h.open();
     let request = h.step(Event::Completed { owner, completion: ls() });
     assert_eq!(request, Some(Request::Tool { owner, call: ToolCall { name: bytes(b"ls"), input: bytes(b"{}") } }));
 }
@@ -133,7 +166,7 @@ fn a_completion_reaches_the_session_and_its_tool_run_comes_back_out() {
 #[test]
 fn a_tool_result_reaches_the_session_and_its_next_call_comes_back_out() {
     let mut h = Harness::new();
-    let owner = h.run_tool();
+    let owner = h.open_tool();
     let Some(Request::Complete { owner: next, prompt, timeout: _ }) =
         h.step(Event::ToolDone { owner, output: bytes(b"main.rs"), error: false })
     else {
@@ -146,11 +179,35 @@ fn a_tool_result_reaches_the_session_and_its_next_call_comes_back_out() {
 }
 
 #[test]
-fn a_failure_reaches_the_session_and_its_reply_comes_back_out() {
+fn a_yield_comes_back_out_and_a_continue_reaches_the_session() {
     let mut h = Harness::new();
-    let owner = h.run();
-    let reply = h.step(Event::Failed { owner, failure: Failure::Invalid });
-    assert_eq!(reply, Some(ended(Outcome::Failed { failure: Failure::Invalid }, 0)));
+    let owner = h.open();
+    let request = h.step(Event::Completed { owner, completion: done() });
+    assert_eq!(request, Some(Request::Yielded { opener: opener(), stop: Yield::Done, text: bytes(b"done") }));
+    let Some(Request::Complete { owner: next, prompt, timeout: _ }) =
+        h.step(Event::Continue { session: owner, content: bytes(b"go on") })
+    else {
+        panic!("expected a call");
+    };
+    assert_eq!(next, owner);
+    assert_eq!(prompt.messages.len(), 3);
+}
+
+#[test]
+fn a_close_reaches_the_session_and_its_end_comes_back_out() {
+    let mut h = Harness::new();
+    let session = h.open_yielded();
+    assert_eq!(h.step(Event::Close { session }), Some(ended(End::Closed, 1)));
+    h.model.reclaim();
+    assert_eq!(h.model.sessions(), 0);
+}
+
+#[test]
+fn a_failure_reaches_the_session_and_its_end_comes_back_out() {
+    let mut h = Harness::new();
+    let owner = h.open();
+    let end = h.step(Event::Failed { owner, failure: Failure::Invalid });
+    assert_eq!(end, Some(ended(End::Failed { failure: Failure::Invalid }, 0)));
     assert_eq!(h.model.next_deadline(), None);
     h.model.reclaim();
     assert_eq!(h.model.sessions(), 0);
@@ -159,19 +216,19 @@ fn a_failure_reaches_the_session_and_its_reply_comes_back_out() {
 #[test]
 fn an_expired_call_is_cancelled_and_its_cancellation_reaches_the_session() {
     let mut h = Harness::new();
-    let owner = h.run();
+    let owner = h.open();
     h.expire();
     assert_eq!(h.fire(), Some(Request::Cancel { owner }));
-    assert_eq!(h.step(Event::Cancelled { owner }), Some(ended(Outcome::Expired, 0)));
+    assert_eq!(h.step(Event::Cancelled { owner }), Some(ended(End::Expired, 0)));
 }
 
 #[test]
 fn an_expired_tool_run_is_cancelled_and_its_cancellation_reaches_the_session() {
     let mut h = Harness::new();
-    let owner = h.run_tool();
+    let owner = h.open_tool();
     h.expire();
     assert_eq!(h.fire(), Some(Request::CancelTool { owner }));
-    assert_eq!(h.step(Event::ToolCancelled { owner }), Some(ended(Outcome::Expired, 1)));
+    assert_eq!(h.step(Event::ToolCancelled { owner }), Some(ended(End::Expired, 1)));
 }
 
 #[test]

@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use temper_agent_model_session as agent;
-use temper_agent_model_session::llm::{Endpoint, Failure, Tool};
+use temper_agent_model_session::llm::{Endpoint, Failure, Tool, Usage};
 use temper_lib::{Duration, Env, Queue, ReplyTo, Rng, Time, Token};
 use temper_llm_model as provider;
 
@@ -10,6 +10,9 @@ use crate::translate;
 /// Room in each model's output queue. Small, so the loop's flow control (take
 /// an event only while there is room for what it may produce) is exercised.
 const OUT: u32 = 4;
+
+/// What the fake opener says when it nudges a session on.
+const NUDGE: &[u8] = b"You have not finished: carry on.";
 
 /// Durations drawn uniformly from `min..=max`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -25,6 +28,13 @@ impl Span {
     }
 }
 
+/// Counts drawn uniformly from `min..=max`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Count {
+    pub min: u32,
+    pub max: u32,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Settings {
     /// Seeds the world, which seeds both models.
@@ -37,11 +47,22 @@ pub struct Settings {
     pub tool: Span,
     /// The chance, per mille, that a tool run fails.
     pub tool_errors: u32,
+    /// How many times the opener nudges a session that yields before it
+    /// closes it, drawn for each session.
+    pub nudges: Count,
+    /// How long the opener takes to answer a yield.
+    pub think: Span,
+    /// The chance, per mille, that the opener closes a session at a moment of
+    /// its own, whatever the session is doing then.
+    pub abandon: u32,
+    /// When such a close comes, after the session opens.
+    pub abandon_after: Span,
 }
 
 impl Settings {
     /// A world where nothing goes wrong: no failures, answers well within
-    /// every deadline, room for a few sessions.
+    /// every deadline, room for a few sessions, and an opener that closes a
+    /// session when it first yields.
     #[must_use]
     pub const fn calm(seed: u64) -> Settings {
         Settings {
@@ -65,24 +86,30 @@ impl Settings {
                 overloaded: 0,
                 rate_limited: 0,
                 retry_after: Duration::from_secs(1),
+                refused: 0,
+                no_calls: 0,
                 tool_rounds: 2,
             },
             network: Span::millis(1, 20),
             tool: Span::millis(10, 500),
             tool_errors: 0,
+            nudges: Count { min: 0, max: 0 },
+            think: Span::millis(0, 50),
+            abandon: 0,
+            abandon_after: Span::millis(0, 10_000),
         }
     }
 }
 
-/// A task with two tools for the LLM to call.
+/// A spec with two tools for the LLM to call.
 #[must_use]
-pub fn task(prompt: &[u8]) -> agent::Task {
+pub fn spec(prompt: &[u8]) -> agent::Spec {
     let tool = |name: &[u8], description: &[u8]| Tool {
         name: name.into(),
         description: description.into(),
         schema: br#"{"type":"object"}"#[..].into(),
     };
-    agent::Task {
+    agent::Spec {
         endpoint: Endpoint(0),
         model: b"fake-1"[..].into(),
         system: b"You are a coding agent."[..].into(),
@@ -109,12 +136,51 @@ pub struct Stats {
     pub tool_runs: u32,
     /// Tool runs the agent cancelled.
     pub tool_cancels: u32,
+    /// Times a session yielded.
+    pub yields: u32,
+    /// Messages the opener sent to yielded sessions.
+    pub continues: u32,
+    /// Closes the opener sent.
+    pub closes: u32,
+    /// Continues and closes that reached a session after it had ended.
+    pub stale: u32,
+}
+
+/// A session as its opener saw it.
+#[derive(Debug)]
+pub struct Session {
+    /// The session's name, once it opened.
+    pub session: Option<Token>,
+    /// Each time it yielded: why, and what the LLM said.
+    pub yields: Vec<(agent::Yield, Box<[u8]>)>,
+    /// How it ended, once it has.
+    pub ended: Option<Ended>,
+    /// Nudges the opener has left to give.
+    nudges: u32,
+    /// Whether the opener closes it at a moment of its own.
+    abandon: bool,
+    /// It yielded, and the opener has not continued it yet.
+    waiting: bool,
+    /// The opener has closed it.
+    closed: bool,
+}
+
+/// How a session ended.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Ended {
+    pub end: agent::End,
+    pub turns: u32,
+    pub usage: Usage,
 }
 
 /// Something on its way, delivered at its time.
 enum Delivery {
-    /// A run arrives at the agent from outside.
-    Run { run: u64, task: agent::Task },
+    /// The opener opens a session.
+    Open { opener: u64, spec: agent::Spec },
+    /// The opener continues a yielded session.
+    Continue { opener: u64, content: Box<[u8]> },
+    /// The opener closes a session.
+    Close { opener: u64 },
     /// A call arrives at the provider.
     Query { call: u64, query: provider::api::Query },
     /// The provider's answer arrives back at the agent's side.
@@ -149,7 +215,7 @@ pub struct World {
 
     /// Deliveries in flight, by time and then by the order they were sent.
     wire: BTreeMap<(Time, u64), Delivery>,
-    /// Names for runs, calls and deliveries.
+    /// Names for openers, calls and deliveries.
     serial: u64,
     /// The agent's calls in flight, and the call each session has in flight.
     calls: BTreeMap<u64, Call>,
@@ -158,8 +224,8 @@ pub struct World {
     tools: BTreeMap<Token, (Time, u64)>,
     /// Calls the provider has not answered yet.
     serving: BTreeSet<u64>,
-    /// Runs made, and their reports once answered.
-    runs: BTreeMap<u64, Option<agent::Report>>,
+    /// The sessions opened, by the opener's name for each.
+    sessions: BTreeMap<u64, Session>,
 
     stats: Stats,
     trace: Vec<String>,
@@ -190,7 +256,7 @@ impl World {
             calling: BTreeMap::new(),
             tools: BTreeMap::new(),
             serving: BTreeSet::new(),
-            runs: BTreeMap::new(),
+            sessions: BTreeMap::new(),
             stats: Stats::default(),
             trace: Vec::new(),
         }
@@ -212,23 +278,23 @@ impl World {
         &self.trace
     }
 
-    /// Sends a run of `task` to the agent, to arrive at `at`. Returns the
-    /// run's name.
-    pub fn submit(&mut self, at: Time, task: agent::Task) -> u64 {
-        let run = self.next_serial();
-        self.schedule(at, Delivery::Run { run, task });
-        run
+    /// Has the opener open a session for `spec` at `at`. Returns the opener's
+    /// name for it.
+    pub fn submit(&mut self, at: Time, spec: agent::Spec) -> u64 {
+        let opener = self.next_serial();
+        self.schedule(at, Delivery::Open { opener, spec });
+        opener
     }
 
-    /// The answer to `run`, once it has come.
+    /// The session the opener named `opener`, once the open has been sent.
     #[must_use]
-    pub fn report(&self, run: u64) -> Option<&agent::Report> {
-        self.runs.get(&run)?.as_ref()
+    pub fn session(&self, opener: u64) -> &Session {
+        self.sessions.get(&opener).expect("the session was submitted and its open sent")
     }
 
-    /// Every run made so far, with its answer once it has come.
-    pub fn reports(&self) -> impl Iterator<Item = (u64, Option<&agent::Report>)> {
-        self.runs.iter().map(|(run, report)| (*run, report.as_ref()))
+    /// Every session opened so far, by the opener's name for it.
+    pub fn sessions(&self) -> impl Iterator<Item = (u64, &Session)> {
+        self.sessions.iter().map(|(opener, session)| (*opener, session))
     }
 
     /// Runs until nothing is left to happen, then checks the invariants of a
@@ -289,16 +355,15 @@ impl World {
         assert!(self.provider.calls() <= self.settings.provider.calls, "calls stay within their slots");
     }
 
-    /// The agent's requests, carried out the way its protocol layer and the
-    /// tools would.
+    /// The agent's requests, carried out the way its opener, its protocol
+    /// layer and the tools would.
     fn agent_request(&mut self, request: agent::Request) {
         self.log(&format!("agent -> {}", describe_agent_request(&request)));
         match request {
-            agent::Request::Reply { to, report } => {
-                let run = to.into_token().raw();
-                let answer = self.runs.get_mut(&run).expect("a reply answers a run that was made");
-                assert!(answer.is_none(), "a run is answered once");
-                *answer = Some(report);
+            agent::Request::Opened { opener, session } => self.opened(opener.raw(), session),
+            agent::Request::Yielded { opener, stop, text } => self.yielded(opener.raw(), stop, text),
+            agent::Request::Ended { opener, end, turns, usage } => {
+                self.ended(opener.raw(), Ended { end, turns, usage });
             }
             agent::Request::Complete { owner, prompt, timeout } => {
                 let call = self.next_serial();
@@ -336,6 +401,71 @@ impl World {
         }
     }
 
+    /// The opener learns its session's name, and plans a close of its own if
+    /// it is to abandon the session.
+    fn opened(&mut self, opener: u64, name: Token) {
+        let session = self.sessions.get_mut(&opener).expect("a session opens for an open that was sent");
+        assert!(session.session.is_none() && session.ended.is_none(), "a session opens once, before it ends");
+        session.session = Some(name);
+        if session.abandon {
+            let at = self.now.saturating_add(self.draw(self.settings.abandon_after));
+            self.schedule(at, Delivery::Close { opener });
+        }
+    }
+
+    /// The opener answers a yield: it nudges the session on while it has
+    /// nudges left, and closes it after.
+    fn yielded(&mut self, opener: u64, stop: agent::Yield, text: Box<[u8]>) {
+        let session = self.sessions.get_mut(&opener).expect("a session yields to its opener");
+        let name = session.session.expect("a session yields once it has opened");
+        assert!(session.ended.is_none(), "a session yields before it ends");
+        assert!(!session.waiting, "a session yields once for each message");
+        session.yields.push((stop, text));
+        self.stats.yields += 1;
+        assert!(self.idle(name), "a session yields with nothing in flight");
+        let session = self.sessions.get_mut(&opener).expect("looked up above");
+        if session.closed {
+            // A close of the opener's own crossed the yield.
+            return;
+        }
+        let at = self.now.saturating_add(self.draw(self.settings.think));
+        let session = self.sessions.get_mut(&opener).expect("looked up above");
+        if session.nudges > 0 {
+            session.nudges -= 1;
+            session.waiting = true;
+            self.schedule(at, Delivery::Continue { opener, content: NUDGE.into() });
+        } else {
+            self.schedule(at, Delivery::Close { opener });
+        }
+    }
+
+    fn ended(&mut self, opener: u64, ended: Ended) {
+        let session = self.sessions.get(&opener).expect("a session ends for an open that was sent");
+        assert!(session.ended.is_none(), "a session ends once");
+        match ended.end {
+            agent::End::Busy | agent::End::Invalid => {
+                assert!(session.session.is_none(), "a session refused at the entrance never opened");
+            }
+            agent::End::Closed
+            | agent::End::Failed { .. }
+            | agent::End::TurnLimit
+            | agent::End::TranscriptFull
+            | agent::End::Expired => {
+                let name = session.session.expect("a session that ran had opened");
+                assert!(self.idle(name), "a session ends once nothing it asked for is in flight");
+            }
+        }
+        if ended.end == agent::End::Closed {
+            assert!(session.closed, "a session ends as closed only when its opener closed it");
+        }
+        self.sessions.get_mut(&opener).expect("looked up above").ended = Some(ended);
+    }
+
+    /// Whether the session `name` has nothing in flight.
+    fn idle(&self, name: Token) -> bool {
+        !self.calling.contains_key(&name) && !self.tools.contains_key(&name)
+    }
+
     /// The provider's requests, carried back the way its protocol layer would.
     fn provider_request(&mut self, request: provider::Request) {
         match request {
@@ -354,10 +484,31 @@ impl World {
                 break;
             }
             match entry.remove() {
-                Delivery::Run { run, task } => {
-                    assert!(self.runs.insert(run, None).is_none(), "runs have distinct names");
-                    let reply_to = ReplyTo::new(Token::new(run));
-                    self.agent_in.push_back(agent::Event::Run { reply_to, task });
+                Delivery::Open { opener, spec } => self.open(opener, spec),
+                Delivery::Continue { opener, content } => {
+                    let session = self.sessions.get_mut(&opener).expect("the opener continues what it opened");
+                    assert!(session.waiting, "the opener continues a session only while it is yielded");
+                    session.waiting = false;
+                    if session.closed {
+                        // It closed the session while it was making up its mind.
+                        continue;
+                    }
+                    let name = session.session.expect("a yielded session has opened");
+                    if session.ended.is_some() {
+                        self.stats.stale += 1;
+                    }
+                    self.agent_in.push_back(agent::Event::Continue { session: name, content });
+                    self.stats.continues += 1;
+                }
+                Delivery::Close { opener } => {
+                    let session = self.sessions.get_mut(&opener).expect("the opener closes what it opened");
+                    session.closed = true;
+                    let name = session.session.expect("the opener closes a session once it has opened");
+                    if session.ended.is_some() {
+                        self.stats.stale += 1;
+                    }
+                    self.agent_in.push_back(agent::Event::Close { session: name });
+                    self.stats.closes += 1;
                 }
                 Delivery::Query { call, query } => {
                     self.serving.insert(call);
@@ -384,6 +535,17 @@ impl World {
                 }
             }
         }
+    }
+
+    /// The opener opens a session, deciding how it will treat it.
+    fn open(&mut self, opener: u64, spec: agent::Spec) {
+        let Count { min, max } = self.settings.nudges;
+        let nudges = u32::try_from(self.rng.between(min.into(), max.into())).expect("drawn between two u32s");
+        let abandon = self.rng.chance(self.settings.abandon);
+        let session =
+            Session { session: None, yields: Vec::new(), ended: None, nudges, abandon, waiting: false, closed: false };
+        assert!(self.sessions.insert(opener, session).is_none(), "openers have distinct names");
+        self.agent_in.push_back(agent::Event::Open { opener: Token::new(opener), spec });
     }
 
     /// Ends the agent's call `call` if it is still in flight, withdrawing its
@@ -420,8 +582,8 @@ impl World {
             self.wire.is_empty() && self.agent_in.is_empty() && self.provider_in.is_empty(),
             "nothing is on its way"
         );
-        for (run, report) in &self.runs {
-            assert!(report.is_some(), "run {run} was answered");
+        for (opener, session) in &self.sessions {
+            assert!(session.ended.is_some(), "session {opener} has ended");
         }
     }
 
@@ -452,7 +614,13 @@ impl World {
 
 fn describe_agent_event(event: &agent::Event) -> String {
     match event {
-        agent::Event::Run { reply_to: _, task } => format!("run {:?}", String::from_utf8_lossy(&task.prompt)),
+        agent::Event::Open { opener, spec } => {
+            format!("open {} {:?}", opener.raw(), String::from_utf8_lossy(&spec.prompt))
+        }
+        agent::Event::Continue { session, content } => {
+            format!("continue {} {:?}", session.raw(), String::from_utf8_lossy(content))
+        }
+        agent::Event::Close { session } => format!("close {}", session.raw()),
         agent::Event::Completed { owner, completion } => {
             format!("completed {} {:?} with {} blocks", owner.raw(), completion.stop, completion.content.len())
         }
@@ -467,7 +635,13 @@ fn describe_agent_event(event: &agent::Event) -> String {
 
 fn describe_agent_request(request: &agent::Request) -> String {
     match request {
-        agent::Request::Reply { to, report } => format!("reply {to:?} {report:?}"),
+        agent::Request::Opened { opener, session } => format!("opened {} as {}", opener.raw(), session.raw()),
+        agent::Request::Yielded { opener, stop, text } => {
+            format!("yielded {} {stop:?} {:?}", opener.raw(), String::from_utf8_lossy(text))
+        }
+        agent::Request::Ended { opener, end, turns, usage } => {
+            format!("ended {} {end:?} after {turns} turns, {usage:?}", opener.raw())
+        }
         agent::Request::Complete { owner, prompt, timeout } => {
             format!("complete {} with {} messages within {timeout:?}", owner.raw(), prompt.messages.len())
         }

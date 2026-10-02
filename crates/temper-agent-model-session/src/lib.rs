@@ -1,13 +1,15 @@
 //! The session sub-model of the temper coding agent's model layer
 //! (programming-model.md, 4.5): one conversation with an LLM, driven turn by
-//! turn, running the tools the LLM asks for, until the LLM finishes, a limit
-//! ends it, or it expires.
+//! turn, running the tools the LLM asks for. When the LLM stops calling tools
+//! the session yields to its opener, which continues it with a new message or
+//! closes it; a limit, a failure or the session's expiry ends it on its own.
 //!
 //! Sans-io: [`step`] and [`fire`] turn events into requests and change nothing
 //! but the [`Model`] they are given. Time and randomness are inputs; every
-//! effect, from calling an LLM to answering a caller, is a [`Request`] that its
-//! parent, the top-level model (`temper-agent-model`), routes on, and its
-//! outcome comes back later through the parent as an [`Event`].
+//! effect, from calling an LLM to telling the opener the session has ended, is
+//! a [`Request`] that its parent, the top-level model (`temper-agent-model`),
+//! routes on, and its outcome comes back later through the parent as an
+//! [`Event`].
 //!
 //! The conversation is provider-neutral ([`llm`]): the protocol layer speaks
 //! each provider's wire format.
@@ -25,6 +27,6 @@ mod session;
 #[cfg(test)]
 mod tests;
 
-pub use boundary::{Event, Outcome, Report, Request, Task, ToolCall};
+pub use boundary::{End, Event, Request, Spec, ToolCall, Yield};
 pub use limits::{Limits, worst_case};
 pub use model::{MAX_OUT, Model, fire, step};

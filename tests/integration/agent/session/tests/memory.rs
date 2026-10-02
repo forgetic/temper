@@ -5,8 +5,8 @@
 use std::mem::size_of;
 
 use temper_agent_model_session::llm::{Block, Completion, Endpoint, Failure, Stop, Tool, Usage};
-use temper_agent_model_session::{Event, Limits, MAX_OUT, Model, Request, Task, worst_case};
-use temper_lib::{Deadlines, Duration, Env, List, Map, Queue, ReplyTo, Rng, Set, Slab, Time, Token};
+use temper_agent_model_session::{Event, Limits, MAX_OUT, Model, Request, Spec, worst_case};
+use temper_lib::{Deadlines, Duration, Env, List, Map, Queue, Rng, Set, Slab, Time, Token};
 
 /// Counts the heap each thread allocates, so that tests running side by side
 /// do not see each other's.
@@ -80,41 +80,59 @@ const LIMITS: Limits = Limits {
     session_timeout: Duration::from_secs(3600),
 };
 
-/// What a step asked for, without the payload.
+/// What a step asked for last, without the payload.
 enum Asked {
     Complete { owner: Token },
     Tool,
     Other,
 }
 
-/// Fills every session of a model under `limits` to exactly its byte limit and
-/// leaves it in backoff, the state that also holds both of its alarms, checking
-/// the heap against the worst case after every step.
-fn fill(limits: Limits) {
+/// How a session fills its bytes.
+#[derive(Clone, Copy, Debug)]
+enum Route {
+    /// The LLM calls a tool, whose output fills the rest.
+    Tool,
+    /// The LLM yields, and the opener's next message fills the rest.
+    Talk,
+}
+
+/// Fills every session of a model under `limits` to exactly its byte limit by
+/// `route` and leaves it in backoff, the state that also holds both of its
+/// alarms, checking the heap against the worst case after every step.
+fn fill(limits: Limits, route: Route) {
     let bound = worst_case(&limits).expect("the test limits fit");
     let env = Env { now: Time::ZERO, limits };
     let mut out = Queue::with_capacity(MAX_OUT);
     let base = heap::live();
     let mut model = Model::new(&limits, 1);
-    // The requests are the protocol layer's to hold and count: each is
-    // dropped, keeping only what it asked for, before the heap is measured.
+    // The requests are the protocol layer's and the opener's to hold and
+    // count: each is dropped, keeping only what it asked for, before the heap
+    // is measured.
     let mut step = |event: Event| -> Option<Asked> {
         temper_agent_model_session::step(&mut model, &env, event, &mut out);
-        let asked = match out.pop()? {
-            Request::Complete { owner, .. } => Asked::Complete { owner },
-            Request::Tool { .. } => Asked::Tool,
-            Request::Reply { .. } | Request::Cancel { .. } | Request::CancelTool { .. } => Asked::Other,
-        };
+        let mut asked = None;
+        while let Some(request) = out.pop() {
+            asked = Some(match request {
+                Request::Complete { owner, .. } => Asked::Complete { owner },
+                Request::Tool { .. } => Asked::Tool,
+                Request::Opened { .. }
+                | Request::Yielded { .. }
+                | Request::Ended { .. }
+                | Request::Cancel { .. }
+                | Request::CancelTool { .. } => Asked::Other,
+            });
+        }
         let held = held(base);
         assert!(held <= bound, "{limits:?}: the model holds {held} bytes, more than its worst case of {bound}");
-        Some(asked)
+        asked
     };
     let (block, tool) = (size(size_of::<Block>()), size(size_of::<Tool>()));
-    for run in 0..limits.sessions {
-        // What the model charges, as it charges it: the task's names, tools
-        // and prompt; then the assistant's message and room for its result;
-        // then the result's id and output.
-        let task = Task {
+    for opener in 0..limits.sessions {
+        // What the model charges, as it charges it: the spec's names, tools
+        // and prompt; then, by tool, the assistant's message and room for its
+        // result, then the result's id and output; or, by talk, the
+        // assistant's answer, then the opener's message.
+        let spec = Spec {
             endpoint: Endpoint(0),
             model: bytes(1),
             system: bytes(1),
@@ -122,22 +140,40 @@ fn fill(limits: Limits) {
             prompt: bytes(1),
             max_tokens: 1,
         };
-        let task_cost = 2 + (tool + 3) + (block + 1);
-        let tooling_cost = (block + 3) + block;
-        let output = limits.session_bytes - task_cost - tooling_cost - 1;
+        let spec_cost = 2 + (tool + 3) + (block + 1);
 
-        let reply_to = ReplyTo::new(Token::new(u64::from(run)));
-        let Some(Asked::Complete { owner }) = step(Event::Run { reply_to, task }) else {
-            panic!("the task fits the limits");
+        let opener = Token::new(u64::from(opener));
+        let Some(Asked::Complete { owner }) = step(Event::Open { opener, spec }) else {
+            panic!("the spec fits the limits");
         };
-        let content = Box::new([Block::ToolCall { id: bytes(1), name: bytes(1), input: bytes(1) }]);
-        let completion = Completion { content, stop: Stop::ToolUse, usage: Usage::ZERO };
-        let Some(Asked::Tool) = step(Event::Completed { owner, completion }) else {
-            panic!("the session runs the tool");
-        };
-        let Some(Asked::Complete { .. }) = step(Event::ToolDone { owner, output: bytes(output), error: false }) else {
-            panic!("a session filled exactly to its byte limit goes on");
-        };
+        match route {
+            Route::Tool => {
+                let tooling_cost = (block + 3) + block;
+                let output = limits.session_bytes - spec_cost - tooling_cost - 1;
+                let content = Box::new([Block::ToolCall { id: bytes(1), name: bytes(1), input: bytes(1) }]);
+                let completion = Completion { content, stop: Stop::ToolUse, usage: Usage::ZERO };
+                let Some(Asked::Tool) = step(Event::Completed { owner, completion }) else {
+                    panic!("the session runs the tool");
+                };
+                let done = Event::ToolDone { owner, output: bytes(output), error: false };
+                let Some(Asked::Complete { .. }) = step(done) else {
+                    panic!("a session filled exactly to its byte limit goes on");
+                };
+            }
+            Route::Talk => {
+                let answer_cost = block + 1;
+                let message = limits.session_bytes - spec_cost - answer_cost - block;
+                let content = Box::new([Block::Text { text: bytes(1) }]);
+                let completion = Completion { content, stop: Stop::EndTurn, usage: Usage::ZERO };
+                let Some(Asked::Other) = step(Event::Completed { owner, completion }) else {
+                    panic!("the session yields");
+                };
+                let Some(Asked::Complete { .. }) = step(Event::Continue { session: owner, content: bytes(message) })
+                else {
+                    panic!("a session filled exactly to its byte limit goes on");
+                };
+            }
+        }
         let backoff = step(Event::Failed { owner, failure: Failure::Overloaded });
         assert!(backoff.is_none(), "a transient failure backs off quietly");
     }
@@ -148,9 +184,11 @@ fn fill(limits: Limits) {
 
 #[test]
 fn a_model_with_every_session_full_stays_within_its_worst_case() {
-    fill(LIMITS);
-    fill(Limits { sessions: 64, session_bytes: 65_536, ..LIMITS });
-    fill(Limits { sessions: 1000, messages: 8, session_bytes: 600, ..LIMITS });
+    for route in [Route::Tool, Route::Talk] {
+        fill(LIMITS, route);
+        fill(Limits { sessions: 64, session_bytes: 65_536, ..LIMITS }, route);
+        fill(Limits { sessions: 1000, messages: 8, session_bytes: 600, ..LIMITS }, route);
+    }
 }
 
 /// Arms, re-arms, cancels and fires timers at random in a table of `capacity`,

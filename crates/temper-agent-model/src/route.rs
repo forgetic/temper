@@ -14,7 +14,9 @@ use crate::boundary::{Event, Request};
 /// The session's event for one of ours.
 pub(crate) fn event(event: Event) -> session::Event {
     match event {
-        Event::Run { reply_to, task } => session::Event::Run { reply_to, task },
+        Event::Open { opener, spec } => session::Event::Open { opener, spec },
+        Event::Continue { session, content } => session::Event::Continue { session, content },
+        Event::Close { session } => session::Event::Close { session },
         Event::Completed { owner, completion } => session::Event::Completed { owner, completion },
         Event::Failed { owner, failure } => session::Event::Failed { owner, failure },
         Event::Cancelled { owner } => session::Event::Cancelled { owner },
@@ -26,7 +28,9 @@ pub(crate) fn event(event: Event) -> session::Event {
 /// Our request for one of the session's.
 pub(crate) fn request(request: session::Request) -> Request {
     match request {
-        session::Request::Reply { to, report } => Request::Reply { to, report },
+        session::Request::Opened { opener, session } => Request::Opened { opener, session },
+        session::Request::Yielded { opener, stop, text } => Request::Yielded { opener, stop, text },
+        session::Request::Ended { opener, end, turns, usage } => Request::Ended { opener, end, turns, usage },
         session::Request::Complete { owner, prompt, timeout } => Request::Complete { owner, prompt, timeout },
         session::Request::Cancel { owner } => Request::Cancel { owner },
         session::Request::Tool { owner, call } => Request::Tool { owner, call },

@@ -2,26 +2,36 @@
 //! model defines them; the protocol crate depends on the model.
 //!
 //! For now the variants mirror the session sub-model's, and their payloads are
-//! the session's own types. The `route` module translates each variant to the
-//! session's vocabulary and back.
+//! the session's own types: until the run sub-model opens sessions, the
+//! protocol layer plays their opener. The `route` module translates each
+//! variant to the session's vocabulary and back.
 //!
-//! Two shapes cross it: calls up and replies down (a [`Event::Run`] is answered
-//! by exactly one [`Request::Reply`]), and requests down with exactly one
-//! terminal event up (a [`Request::Complete`] is ended by one of
-//! [`Event::Completed`], [`Event::Failed`] or [`Event::Cancelled`]). A request's
-//! `owner` is the session's token, echoed on its terminal event.
+//! Two shapes cross it: a session's lifecycle (an [`Event::Open`] is answered
+//! by exactly one [`Request::Ended`], after an [`Request::Opened`] that names
+//! the session if it was admitted, and any number of [`Request::Yielded`] in
+//! between), and requests down with exactly one terminal event up (a
+//! [`Request::Complete`] is ended by one of [`Event::Completed`],
+//! [`Event::Failed`] or [`Event::Cancelled`]). A request's `owner` is the
+//! session's token, echoed on its terminal event.
 
 use alloc::boxed::Box;
 
-use temper_agent_model_session::llm::{Completion, Failure, Prompt};
-use temper_agent_model_session::{Report, Task, ToolCall};
-use temper_lib::{Duration, ReplyTo, Token};
+use temper_agent_model_session::llm::{Completion, Failure, Prompt, Usage};
+use temper_agent_model_session::{End, Spec, ToolCall, Yield};
+use temper_lib::{Duration, Token};
 
 /// protocol -> model
 #[derive(PartialEq, Eq, Debug)]
 pub enum Event {
-    /// A call: run a session for `task`, and answer once it has ended.
-    Run { reply_to: ReplyTo, task: Task },
+    /// Open a session for `spec`, on behalf of `opener`. Answered by exactly one
+    /// `Ended`, after an `Opened` if the session was admitted.
+    Open { opener: Token, spec: Spec },
+    /// A new user message for a yielded session. A `session` that has ended
+    /// meanwhile is dropped.
+    Continue { session: Token, content: Box<[u8]> },
+    /// End the session, whatever its state. A `session` that has ended is
+    /// dropped.
+    Close { session: Token },
     /// Terminal for `Complete`: the LLM produced its next message.
     Completed { owner: Token, completion: Completion },
     /// Terminal for `Complete`: the call produced no message.
@@ -38,8 +48,14 @@ pub enum Event {
 /// model -> protocol
 #[derive(PartialEq, Eq, Debug)]
 pub enum Request {
-    /// The answer to a `Run`: exactly one per run.
-    Reply { to: ReplyTo, report: Report },
+    /// The session for `opener` was admitted, and `session` names it from now
+    /// on.
+    Opened { opener: Token, session: Token },
+    /// The LLM stopped calling tools, saying `text`. The session waits for
+    /// `Continue` or `Close`.
+    Yielded { opener: Token, stop: Yield, text: Box<[u8]> },
+    /// The session for `opener` has ended: exactly one per `Open`.
+    Ended { opener: Token, end: End, turns: u32, usage: Usage },
     /// Ask an LLM for the next assistant message, giving up after `timeout`.
     Complete { owner: Token, prompt: Prompt, timeout: Duration },
     /// Abandon the `Complete` in flight for `owner`. Its terminal event still

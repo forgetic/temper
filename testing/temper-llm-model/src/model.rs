@@ -24,7 +24,13 @@ pub struct Config {
     pub rate_limited: u32,
     /// What a rate-limit failure asks the client to wait.
     pub retry_after: Duration,
-    /// Rounds of tool calls in a conversation before the fake answers.
+    /// The chance, per mille, that an answer is refused by the content filter.
+    pub refused: u32,
+    /// The chance, per mille, that an answer says it calls tools and calls
+    /// none.
+    pub no_calls: u32,
+    /// Rounds of tool calls after each of the client's messages before the
+    /// fake answers it.
     pub tool_rounds: u32,
 }
 

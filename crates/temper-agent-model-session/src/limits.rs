@@ -7,16 +7,16 @@ use crate::session::{Alarm, Session};
 /// step read-only.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Limits {
-    /// Sessions at once. A run beyond them is refused as busy.
+    /// Sessions at once. An `Open` beyond them is refused as busy.
     pub sessions: u32,
-    /// Messages a session's transcript holds, the task's prompt included.
+    /// Messages a session's transcript holds, the spec's prompt included.
     pub messages: u32,
-    /// Bytes a session holds: its task, its transcript and the tool results
+    /// Bytes a session holds: its spec, its transcript and the tool results
     /// it is collecting, each block counted at its fixed size plus its payload.
     pub session_bytes: u64,
     /// Completions a session may receive.
     pub turns: u32,
-    /// The largest `max_tokens` a task may ask for.
+    /// The largest `max_tokens` a spec may ask for.
     pub max_tokens: u32,
     /// Retries of a call that failed transiently, after which the session
     /// fails.
@@ -28,7 +28,7 @@ pub struct Limits {
     pub backoff_max: Duration,
     /// How long the protocol layer gives each call.
     pub call_timeout: Duration,
-    /// How long a session may run.
+    /// How long a session may live, yielded or not.
     pub session_timeout: Duration,
 }
 

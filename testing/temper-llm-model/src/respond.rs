@@ -5,9 +5,11 @@
 //! - The query must end with a user message whose tool outputs answer exactly
 //!   the tool calls of the assistant message before it. Real providers reject
 //!   anything else, and so does the fake: the call fails as invalid.
+//! - With the configured chances, the answer is refused, or says it calls
+//!   tools and calls none.
 //! - While the conversation has had fewer rounds of tool calls than
-//!   configured, and the query offers tools, the answer calls one of them,
-//!   picked at random.
+//!   configured since the client last wrote, and the query offers tools, the
+//!   answer calls one of them, picked at random.
 //! - Otherwise the answer is the text "done".
 
 use alloc::boxed::Box;
@@ -31,6 +33,21 @@ pub(crate) fn respond(rng: &mut Rng, minted: &mut u64, config: &Config, query: &
         return Err(Error::InvalidRequest);
     }
     let prompt_tokens = tokens(query);
+    let roll = rng.below(1000);
+    let refused = u64::from(config.refused);
+    if roll < refused {
+        let usage = Usage { prompt_tokens, completion_tokens: 1 };
+        return Ok(Answer {
+            parts: Box::new([Part::Text { text: copy_of(b"no") }]),
+            finish: Finish::ContentFilter,
+            usage,
+        });
+    }
+    if roll < refused.saturating_add(u64::from(config.no_calls)) {
+        let usage = Usage { prompt_tokens, completion_tokens: 4 };
+        let parts = Box::new([Part::Text { text: copy_of(b"let me call a tool") }]);
+        return Ok(Answer { parts, finish: Finish::ToolCalls, usage });
+    }
     let tools = u64::try_from(query.tools.len()).expect("a usize fits in a u64");
     if tool_rounds(&query.messages) < config.tool_rounds && tools > 0 {
         let index = usize::try_from(rng.below(tools)).expect("an index below a usize fits in one");
@@ -112,19 +129,35 @@ fn outputs_for(parts: &[Part], wanted: &[u8]) -> bool {
     false
 }
 
-/// Assistant messages that call tools.
+/// Assistant messages that call tools, since the last user message that the
+/// client wrote (one with text, not only tool outputs).
 fn tool_rounds(messages: &[Message]) -> u32 {
     let mut rounds: u32 = 0;
     for message in messages {
-        let calls_tools = match message.role {
-            Role::Assistant => calls_any(&message.parts),
-            Role::User => false,
-        };
-        if calls_tools {
-            rounds = rounds.saturating_add(1);
+        match message.role {
+            Role::Assistant => {
+                if calls_any(&message.parts) {
+                    rounds = rounds.saturating_add(1);
+                }
+            }
+            Role::User => {
+                if says_any(&message.parts) {
+                    rounds = 0;
+                }
+            }
         }
     }
     rounds
+}
+
+fn says_any(parts: &[Part]) -> bool {
+    for part in parts {
+        match part {
+            Part::Text { .. } => return true,
+            Part::ToolCall { .. } | Part::ToolOutput { .. } => {}
+        }
+    }
+    false
 }
 
 fn calls_any(parts: &[Part]) -> bool {
@@ -188,6 +221,8 @@ mod tests {
         overloaded: 0,
         rate_limited: 0,
         retry_after: Duration::ZERO,
+        refused: 0,
+        no_calls: 0,
         tool_rounds: 1,
     };
 
@@ -236,13 +271,22 @@ mod tests {
         assert_eq!(answer.finish, Finish::ToolCalls);
         assert_eq!(&*answer.parts, &[call(b"call_0000000000000001")]);
 
-        let messages = Box::new([
-            user(Box::new([text()])),
-            assistant(answer.parts),
-            user(Box::new([output(b"call_0000000000000001")])),
-        ]);
+        let called = assistant(answer.parts);
+        let messages =
+            Box::new([user(Box::new([text()])), called.clone(), user(Box::new([output(b"call_0000000000000001")]))]);
         let answer = respond(&mut rng, &mut minted, &CONFIG, &query(messages)).expect("a valid query");
         assert_eq!(answer.finish, Finish::Stop);
+
+        // The client writes again: another round of tools, then the answer.
+        let messages = Box::new([
+            user(Box::new([text()])),
+            called,
+            user(Box::new([output(b"call_0000000000000001")])),
+            assistant(answer.parts),
+            user(Box::new([text()])),
+        ]);
+        let answer = respond(&mut rng, &mut minted, &CONFIG, &query(messages)).expect("a valid query");
+        assert_eq!(answer.finish, Finish::ToolCalls);
     }
 
     #[test]
@@ -252,6 +296,20 @@ mod tests {
         let config = Config { rate_limited: 1000, retry_after: Duration::from_secs(2), ..CONFIG };
         let result = respond(&mut rng, &mut minted, &config, &query(Box::new([user(Box::new([text()]))])));
         assert_eq!(result, Err(Error::RateLimited { retry_after: Duration::from_secs(2) }));
+    }
+
+    #[test]
+    fn the_script_refuses_or_names_no_tool_with_the_configured_chances() {
+        let mut rng = Rng::new(1);
+        let mut minted = 0;
+        let first = || query(Box::new([user(Box::new([text()]))]));
+        let config = Config { refused: 1000, ..CONFIG };
+        let answer = respond(&mut rng, &mut minted, &config, &first()).expect("a valid query");
+        assert_eq!(answer.finish, Finish::ContentFilter);
+        let config = Config { no_calls: 1000, ..CONFIG };
+        let answer = respond(&mut rng, &mut minted, &config, &first()).expect("a valid query");
+        assert_eq!(answer.finish, Finish::ToolCalls);
+        assert!(!super::calls_any(&answer.parts), "it names no tool");
     }
 
     #[test]

@@ -6,9 +6,10 @@ use crate::boundary::{Event, Request};
 use crate::limits::{self, Limits};
 use crate::session::{self, Alarm, Session};
 
-/// The most requests an entry point emits per call. The parent reserves this
-/// much room in `out` before calling it.
-pub const MAX_OUT: u32 = 1;
+/// The most requests an entry point emits per call: an admitted `Open` is
+/// answered with `Opened` and the session's first call. The parent reserves
+/// this much room in `out` before calling it.
+pub const MAX_OUT: u32 = 2;
 
 /// The session sub-model's state.
 #[derive(Debug)]
@@ -61,7 +62,9 @@ impl Model {
 /// Handles one event, emitting at most [`MAX_OUT`] requests.
 pub fn step(model: &mut Model, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     match event {
-        Event::Run { reply_to, task } => session::run(model, env, reply_to, task, out),
+        Event::Open { opener, spec } => session::open(model, env, opener, spec, out),
+        Event::Continue { session, content } => session::resume(model, env, session, content, out),
+        Event::Close { session } => session::close(model, session, out),
         Event::Completed { owner, completion } => session::completed(model, env, owner, completion, out),
         Event::Failed { owner, failure } => session::failed(model, env, owner, failure, out),
         Event::Cancelled { owner } => session::cancelled(model, owner, out),
