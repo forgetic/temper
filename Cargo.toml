@@ -8,6 +8,7 @@ members = [
     "crates/temper-agent-model-run",
     "crates/temper-agent-model-session",
     "crates/temper-agent-model-tools",
+    "crates/temper-engine-model",
     "crates/temper-engine-model-brief",
     "crates/temper-engine-model-fleet",
     "crates/temper-engine-model-forge",
@@ -55,11 +56,13 @@ temper-agent-model = { path = "crates/temper-agent-model" }
 temper-agent-model-run = { path = "crates/temper-agent-model-run" }
 temper-agent-model-session = { path = "crates/temper-agent-model-session" }
 temper-agent-model-tools = { path = "crates/temper-agent-model-tools" }
+temper-engine-model = { path = "crates/temper-engine-model" }
 temper-engine-model-brief = { path = "crates/temper-engine-model-brief" }
 temper-engine-model-fleet = { path = "crates/temper-engine-model-fleet" }
 temper-engine-model-forge = { path = "crates/temper-engine-model-forge" }
 temper-engine-model-notes = { path = "crates/temper-engine-model-notes" }
 temper-engine-model-plan = { path = "crates/temper-engine-model-plan" }
+temper-engine-model-rules = { path = "crates/temper-engine-model-rules" }
 temper-engine-model-views = { path = "crates/temper-engine-model-views" }
 temper-engine-model-work = { path = "crates/temper-engine-model-work" }
 temper-worker-model = { path = "crates/temper-worker-model" }

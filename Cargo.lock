@@ -88,6 +88,21 @@ name = "temper-checkout-fake"
 version = "0.0.0"
 
 [[package]]
+name = "temper-engine-model"
+version = "0.0.0"
+dependencies = [
+ "temper-engine-model-brief",
+ "temper-engine-model-fleet",
+ "temper-engine-model-forge",
+ "temper-engine-model-notes",
+ "temper-engine-model-plan",
+ "temper-engine-model-rules",
+ "temper-engine-model-views",
+ "temper-engine-model-work",
+ "temper-lib",
+]
+
+[[package]]
 name = "temper-engine-model-brief"
 version = "0.0.0"
 dependencies = [
