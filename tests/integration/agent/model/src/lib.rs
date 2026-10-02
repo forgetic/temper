@@ -83,8 +83,9 @@
 //! 5.2), which see only what the fakes see and end each run with their
 //! verdicts. Where the worker and the agent meet ([`referee`]): the worker
 //! commits exactly the tree the agent left; the engine hears the outcome the
-//! run accepted, or how it failed, a cancel being the worker's to report;
-//! what landed is on the forge; what the engine merges is what a run landed,
+//! run accepted, or how it failed, a cancel being the worker's to report, and
+//! posts on its item, within a bound, exactly the outcome a run ended with,
+//! and no other; what landed is on the forge; what the engine merges is what a run landed,
 //! keeping every file the run changed; and every assignment is answered
 //! within the wall time the worker's watchdog gives a run, and a margin. The
 //! engine's (`temper_engine_model_tests::referee`): nothing lands on a

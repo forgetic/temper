@@ -7,14 +7,20 @@ use std::collections::BTreeMap;
 
 use temper_agent_model::run::outcome::{Change, Declared};
 use temper_agent_model::run::{Answer, Spend};
-use temper_agent_model_tests::channel;
-use temper_agent_model_tests::referee::{Meeting, Report, Repository, Seen};
+use temper_agent_model_tests::referee::{Meeting, POSTED, Report, Repository, Seen};
+use temper_agent_model_tests::{channel, protocol};
 use temper_checkout_fake::git::Tree;
+use temper_engine_model::{Item, Outcome, Posted};
+use temper_engine_model_tests::codec;
+use temper_engine_model_tests::deployment::{ENGINE, REPOSITORIES};
+use temper_forge_model::Observation;
 use temper_lib::{Duration, Time, Token};
 use temper_worker_model::host::{Failure, RunFailure};
 use temper_world::{Referee, Verdict};
 
-const ATTEMPT: Token = Token::new(1);
+/// The first attempt of the issue #7 of the deployment's first repository.
+const ITEM: Item = Item { repository: 0, number: 7 };
+const ATTEMPT: Token = Token::new(7 << 32 | 1);
 const PROCESS: u64 = 4;
 
 fn at(secs: u64) -> Time {
@@ -61,6 +67,20 @@ fn ended(commit: u64) -> Seen {
     Seen::Reported { attempt: ATTEMPT, kind: "ended", report, landed: vec![(0, commit)] }
 }
 
+/// The engine posts `outcome` for the item's attempt `attempt`, as the
+/// comment `id`.
+fn posted(id: u64, attempt: u64, outcome: Outcome) -> Seen {
+    let posted = Posted { attempt, outcome, head: None };
+    let body = [b"<!-- temper:key outcome -->\n".as_slice(), &codec::posted_block(&posted)].concat();
+    let repository = REPOSITORIES[0].into();
+    Seen::Forge(Observation::Commented { repository, number: ITEM.number, id, body: body.into(), by: ENGINE })
+}
+
+/// The engine's outcome for the change the run accepted.
+fn the_change() -> Outcome {
+    channel::engine_outcome(&change())
+}
+
 fn why(referee: &Referee<Meeting>) -> String {
     let Verdict::Failed(failure) = referee.verdict() else { panic!("the referee failed the run") };
     failure.why
@@ -80,7 +100,44 @@ fn a_change_landed_on_its_branch_as_its_agent_left_it_passes() {
     // landed is still an ancestor of its tip.
     referee.observe(at(6), moved(b"fix", 10, &[10], b"43, and more"), &mut Vec::new());
     referee.observe(at(7), ended(9), &mut Vec::new());
+    referee.observe(at(8), posted(30, 1, the_change()), &mut Vec::new());
     assert_eq!(referee.verdict(), Verdict::Passed);
+}
+
+#[test]
+fn the_names_here_are_the_channels() {
+    assert_eq!(protocol::attempt(ITEM, 1), ATTEMPT);
+}
+
+#[test]
+fn an_outcome_the_run_ended_with_left_unposted_past_its_bound_fails_listing_it() {
+    let mut referee = started(b"43");
+    referee.observe(at(5), moved(b"fix", 9, &[9, 1], b"43"), &mut Vec::new());
+    referee.observe(at(7), ended(9), &mut Vec::new());
+    let due = at(7).saturating_add(POSTED);
+    assert_eq!(referee.next_deadline(), Some(due));
+    referee.fire(due, &mut Vec::new());
+    assert_eq!(why(&referee), format!("Posted({}) was not met by 3607.000000000s", ATTEMPT.raw()));
+}
+
+#[test]
+fn an_outcome_posted_for_an_attempt_not_answered_as_ended_fails_the_run() {
+    let mut referee = started(b"43");
+    referee.observe(at(5), posted(30, 1, the_change()), &mut Vec::new());
+    assert_eq!(
+        why(&referee),
+        "the engine posts an outcome only for an attempt answered as ended: Item { repository: 0, number: 7 }#1, \
+         Change { message: [70, 105, 120, 32, 116, 104, 101, 32, 97, 110, 115, 119, 101, 114] }"
+    );
+}
+
+#[test]
+fn an_outcome_posted_unlike_the_one_the_run_ended_with_fails_the_run() {
+    let mut referee = started(b"43");
+    referee.observe(at(5), moved(b"fix", 9, &[9, 1], b"43"), &mut Vec::new());
+    referee.observe(at(7), ended(9), &mut Vec::new());
+    referee.observe(at(8), posted(30, 1, Outcome::Report { text: Box::new([]) }), &mut Vec::new());
+    assert!(why(&referee).starts_with("the engine posts the outcome the run ended with: "), "{}", why(&referee));
 }
 
 #[test]
@@ -120,7 +177,7 @@ fn an_assignment_left_unanswered_past_its_bound_fails_listing_it() {
     let mut referee = started(b"43");
     assert_eq!(referee.next_deadline(), Some(at(60)), "the answer is due a minute after the assignment");
     referee.fire(at(60), &mut Vec::new());
-    assert_eq!(why(&referee), "Answer(1) was not met by 60.000000000s");
+    assert_eq!(why(&referee), format!("Answer({}) was not met by 60.000000000s", ATTEMPT.raw()));
 }
 
 /// The forge merges `head` into main, with `merged` where the head changed
@@ -141,6 +198,7 @@ fn a_merge_of_what_a_run_landed_keeping_its_change_passes() {
     referee.observe(at(5), moved(b"fix", 9, &[9, 1], b"43"), &mut Vec::new());
     referee.observe(at(6), ended(9), &mut Vec::new());
     referee.observe(at(7), merged(9, b"43"), &mut Vec::new());
+    referee.observe(at(8), posted(30, 1, the_change()), &mut Vec::new());
     assert_eq!(referee.verdict(), Verdict::Passed);
 }
 

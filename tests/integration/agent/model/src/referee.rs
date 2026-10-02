@@ -6,10 +6,13 @@
 //!
 //! - the worker commits exactly the tree its agent left: the tree it asked
 //!   to push while it runs, the tree it left once it has gone;
-//! - the engine records what the run said, if it said anything before its
+//! - the engine hears what the run said, if it said anything before its
 //!   agent went: the outcome it accepted, or how it failed, a cancel being
 //!   the worker's to report; a run ends, and lands a change, only once its
 //!   agent started;
+//! - the engine posts an outcome only for an attempt the worker answered as
+//!   ended, and the outcome it posts is the one the answer carried, as the
+//!   engine's codec reads it;
 //! - what landed is on the forge: an ancestor of its branch's tip, whoever
 //!   moved the branch since, exactly the tree its agent left when it asked
 //!   to push;
@@ -18,18 +21,28 @@
 //!   as the head has it.
 //!
 //! And liveness: every assignment is answered within a bound the world
-//! sets.
+//! sets, and every outcome a run ended with is posted on its item within
+//! [`POSTED`].
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Display};
 
 use temper_agent_model::run::{self, outcome::Declared};
 use temper_checkout_fake::git::Tree as Files;
+use temper_engine_model::{Decoded, Item, Outcome};
+use temper_engine_model_tests::codec;
+use temper_engine_model_tests::deployment::{self, ENGINE};
+use temper_forge_model::Observation;
 use temper_lib::{Duration, Token};
 use temper_worker_model::host;
 use temper_world::{Expectations, Judge};
 
-use crate::channel;
+use crate::{channel, protocol};
+
+/// Within which the engine posts the outcome a run ended with, once the
+/// worker answered with it: the engine's calls are retried past the forge's
+/// outages and rate limits.
+pub const POSTED: Duration = Duration::from_secs(3_600);
 
 /// What the referee observes.
 #[derive(Debug)]
@@ -64,6 +77,8 @@ pub enum Seen {
     /// The engine hears the worker's answer for `attempt`, of `kind`, and the
     /// commits it says landed, by the repository's place in the assignment.
     Reported { attempt: Token, kind: &'static str, report: Report, landed: Vec<(usize, u64)> },
+    /// The forge did this, as it observed it.
+    Forge(Observation),
 }
 
 /// A repository of an assignment's workspace.
@@ -105,6 +120,9 @@ impl Report {
 pub enum Expected {
     /// The worker answers the attempt the engine names so.
     Answer(u64),
+    /// The engine posts the outcome the worker's answer for the attempt so
+    /// named ended with.
+    Posted(u64),
 }
 
 /// This world injects nothing of its own: the channel to the engine never
@@ -127,6 +145,9 @@ pub struct Meeting {
     /// The commits runs landed, and those another party made.
     landed: BTreeSet<u64>,
     others: BTreeSet<u64>,
+    /// The outcome each answer that said its run ended carried, by attempt,
+    /// as the engine's codec reads it.
+    ended: BTreeMap<Token, Option<Outcome>>,
 }
 
 /// A branch of the forge, as the referee saw it move.
@@ -171,6 +192,7 @@ impl Meeting {
             trees: BTreeMap::new(),
             landed: BTreeSet::new(),
             others: BTreeSet::new(),
+            ended: BTreeMap::new(),
         }
     }
 
@@ -207,6 +229,15 @@ impl Meeting {
         judge: &mut Judge<Expected, Stimulus>,
     ) {
         judge.meet(&Expected::Answer(attempt.raw()));
+        match report {
+            Report::Ended { outcome } => {
+                let outcome = codec::outcome_of(outcome);
+                judge.check(outcome.is_some(), "an outcome the worker carries decodes as the engine's codec reads it");
+                self.ended.insert(attempt, outcome);
+                judge.expect(Expected::Posted(attempt.raw()), POSTED);
+            }
+            Report::Refused | Report::Parked | Report::Failed(_) => {}
+        }
         let record = self.attempts.get(&attempt).expect("the world observes an assignment before its answer");
         let ends = match report {
             Report::Ended { .. } => true,
@@ -236,7 +267,7 @@ impl Meeting {
                         judge.check(
                             *reported == accepted,
                             format_args!(
-                                "the engine records the outcome the run accepted: {:?} recorded, {:?} accepted",
+                                "the worker carries the outcome the run accepted: {:?} carried, {:?} accepted",
                                 String::from_utf8_lossy(reported),
                                 String::from_utf8_lossy(&accepted)
                             ),
@@ -301,6 +332,63 @@ impl Meeting {
     }
 }
 
+impl Meeting {
+    /// What the forge did: the engine's comments, each an outcome it posted
+    /// or its record.
+    fn forge(&mut self, observation: &Observation, judge: &mut Judge<Expected, Stimulus>) {
+        match observation {
+            Observation::Commented { repository, number, id, body, by } if *by == ENGINE => {
+                let Some(index) = deployment::index(repository) else { return };
+                let item = Item { repository: index, number: *number };
+                match codec::comment(*id, body) {
+                    Some(Decoded::Outcome { posted, .. }) => self.posted(item, posted.attempt, &posted.outcome, judge),
+                    Some(Decoded::Record { .. } | Decoded::Page { .. }) | None => {}
+                }
+            }
+            Observation::Commented { .. }
+            | Observation::Edited { .. }
+            | Observation::Closed { .. }
+            | Observation::Refused { .. }
+            | Observation::Moved { .. }
+            | Observation::Merged { .. }
+            | Observation::Wiki { .. }
+            | Observation::Deleted { .. }
+            | Observation::Opened { .. }
+            | Observation::Reopened { .. }
+            | Observation::Labelled { .. }
+            | Observation::Revised { .. }
+            | Observation::Depends { .. }
+            | Observation::Requested { .. }
+            | Observation::Defined { .. }
+            | Observation::Removed { .. }
+            | Observation::Reviewed { .. }
+            | Observation::Reported { .. }
+            | Observation::Rejected { .. } => {}
+        }
+    }
+
+    /// The engine posts `outcome` on `item` for its attempt `count`: only
+    /// for an attempt the worker answered as ended, and the outcome that
+    /// answer carried.
+    fn posted(&mut self, item: Item, count: u64, outcome: &Outcome, judge: &mut Judge<Expected, Stimulus>) {
+        let attempt = protocol::attempt(item, count);
+        let Some(carried) = self.ended.get(&attempt) else {
+            judge.fail(format_args!(
+                "the engine posts an outcome only for an attempt answered as ended: {item:?}#{count}, {outcome:?}"
+            ));
+            return;
+        };
+        judge.check(
+            carried.as_ref() == Some(outcome),
+            format_args!(
+                "the engine posts the outcome the run ended with: {item:?}#{count} posted {outcome:?}, ended with \
+                 {carried:?}"
+            ),
+        );
+        judge.meet(&Expected::Posted(attempt.raw()));
+    }
+}
+
 impl Expectations for Meeting {
     type Seen = Seen;
     type Name = Expected;
@@ -353,6 +441,7 @@ impl Expectations for Meeting {
                 }
             }
             Seen::Reported { attempt, kind, report, landed } => self.reported(attempt, kind, &report, &landed, judge),
+            Seen::Forge(observation) => self.forge(&observation, judge),
         }
     }
 }

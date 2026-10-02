@@ -372,9 +372,14 @@ fn random_worlds_settle_with_every_invariant_held() {
         let mut world = World::new(Settings::random(seed));
         world.run(ITERATIONS);
         // The referees passed the world, having seen every assignment
-        // answered in time.
+        // answered in time, and the outcome of every run that ended posted.
         let (checked, met) = world.judged();
-        assert_eq!(met, u64::from(world.stats().assigned), "seed {seed}: the referee saw every assignment answered");
+        let stats = world.stats();
+        assert_eq!(
+            met,
+            u64::from(stats.assigned + stats.ended),
+            "seed {seed}: the referee saw every assignment answered and every outcome posted"
+        );
         checks += checked;
         for run in world.runs() {
             ends.count(run);

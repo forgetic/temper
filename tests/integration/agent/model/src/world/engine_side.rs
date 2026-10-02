@@ -262,6 +262,7 @@ impl World {
                 | Observation::Refused { .. }
                 | Observation::Rejected { .. } => {}
             }
+            self.observe(Seen::Forge(observation.clone()));
             self.observe_engine(engine_referee::Seen::Forge(observation));
         }
         assert_eq!(self.forge.observations_lost(), 0, "the world drains the forge's observations as they come");
