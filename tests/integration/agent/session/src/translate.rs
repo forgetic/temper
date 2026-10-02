@@ -120,6 +120,9 @@ fn failure(error: provider::Error) -> agent::Failure {
     match error {
         provider::Error::Overloaded => agent::Failure::Overloaded,
         provider::Error::RateLimited { retry_after } => agent::Failure::RateLimited { retry_after },
+        provider::Error::Unavailable => agent::Failure::Unavailable,
+        provider::Error::ContextTooLong => agent::Failure::ContextTooLong,
+        provider::Error::Unauthorized => agent::Failure::Unauthorized,
         provider::Error::InvalidRequest => agent::Failure::Invalid,
     }
 }

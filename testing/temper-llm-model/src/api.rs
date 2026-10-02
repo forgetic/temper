@@ -82,6 +82,14 @@ pub struct Usage {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Error {
     Overloaded,
-    RateLimited { retry_after: Duration },
+    RateLimited {
+        retry_after: Duration,
+    },
+    /// The service failed, or could not be reached.
+    Unavailable,
+    /// The query does not fit the model's context window.
+    ContextTooLong,
+    /// The client's credentials were refused.
+    Unauthorized,
     InvalidRequest,
 }

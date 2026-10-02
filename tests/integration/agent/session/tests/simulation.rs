@@ -270,6 +270,40 @@ fn a_tool_call_that_runs_out_of_time_goes_back_to_the_llm_and_the_conversation_g
 }
 
 #[test]
+fn a_call_that_wins_its_race_with_a_cancel_still_ends_the_session_and_counts() {
+    let calm = Settings::calm(21);
+    let settings = Settings { abandon: 1000, abandon_after: Span::millis(0, 0), cancels_lost: 1000, ..calm };
+    let mut world = World::new(settings);
+    let opener = world.submit(Time::ZERO, spec(b"fix the build"));
+    world.run(ITERATIONS);
+
+    // The answer came all the same: its tokens count, and nothing yields.
+    assert_eq!((end(&world, opener), turns(&world, opener)), (End::Closed, 1));
+    assert!(yields(&world, opener).is_empty());
+    let stats = world.stats();
+    assert_eq!((stats.cancels_lost, stats.answered_after_cancel, stats.cancels), (1, 1, 0));
+}
+
+#[test]
+fn a_tool_run_that_wins_its_race_with_a_cancel_still_ends_the_session() {
+    let calm = Settings::calm(22);
+    let settings = Settings {
+        tool: Span::millis(30_000, 30_000),
+        abandon: 1000,
+        abandon_after: Span::millis(10_000, 10_000),
+        cancels_lost: 1000,
+        ..calm
+    };
+    let mut world = World::new(settings);
+    let opener = world.submit(Time::ZERO, spec(b"fix the build"));
+    world.run(ITERATIONS);
+
+    assert_eq!((end(&world, opener), turns(&world, opener)), (End::Closed, 1));
+    let stats = world.stats();
+    assert_eq!((stats.tool_cancels_lost, stats.ran_after_cancel, stats.tool_cancels), (1, 1, 0));
+}
+
+#[test]
 fn the_turn_budget_ends_a_session_that_keeps_calling_tools() {
     let calm = Settings::calm(12);
     let mut world = World::new(Settings { provider: Config { tool_rounds: 100, ..calm.provider }, ..calm });
@@ -370,6 +404,8 @@ fn random_worlds_settle_with_every_session_ended() {
     let mut ends = BTreeSet::new();
     let mut stops = BTreeSet::new();
     let (mut stale, mut invalid, mut not_run, mut parallel, mut tool_timeouts) = (0, 0, 0, 0, 0);
+    let mut failures = BTreeSet::new();
+    let mut races = [0; 4];
     for seed in 0..300 {
         let settings = noisy(seed);
         let mut world = World::new(settings);
@@ -380,7 +416,20 @@ fn random_worlds_settle_with_every_session_ended() {
         tool_timeouts += world.stats().tool_timeouts;
         invalid += world.told().0.invalid_calls;
         not_run += world.stats().not_run;
+        let stats = world.stats();
+        let won = [
+            stats.answered_after_cancel,
+            stats.failed_after_cancel,
+            stats.ran_after_cancel,
+            stats.closed_while_closing,
+        ];
+        for (race, count) in races.iter_mut().zip(won) {
+            *race += count;
+        }
         for (_, session) in world.sessions() {
+            if let Some(Ended { end: End::Failed { failure }, .. }) = session.ended {
+                failures.insert(format!("{failure:?}"));
+            }
             for (stop, _) in &session.yields {
                 stops.insert(format!("{stop:?}"));
             }
@@ -414,6 +463,13 @@ fn random_worlds_settle_with_every_session_ended() {
     assert_eq!(stops, ["Done", "Malformed", "Refused", "Truncated"].into_iter().map(String::from).collect());
     assert!(stale > 0, "some continues and closes reached sessions that had ended");
     assert!(parallel > 1, "some reads ran side by side");
+    assert!(
+        races.iter().all(|&count| count > 0),
+        "calls, failures and runs won races with cancels, and closes came twice: {races:?}"
+    );
+    for failure in ["Overloaded", "Unavailable", "ContextTooLong", "Unauthorized"] {
+        assert!(failures.contains(failure), "some session failed as {failure}: {failures:?}");
+    }
     assert!(tool_timeouts > 0, "some tool calls ran out of time");
     assert!(
         invalid > 0 && not_run > 0,
@@ -455,6 +511,9 @@ fn noisy(seed: u64) -> Settings {
             latency_max,
             overloaded: pick(0, 300),
             rate_limited: pick(0, 200),
+            unavailable: pick(0, 100),
+            too_long: pick(0, 20),
+            unauthorized: pick(0, 10),
             refused: pick(0, 100),
             no_calls: pick(0, 100),
             answer_tokens: pick(1, 40),
@@ -469,6 +528,8 @@ fn noisy(seed: u64) -> Settings {
         think: Span { min: Duration::ZERO, max: think },
         abandon: pick(0, 400),
         abandon_after: Span::millis(0, 30_000),
+        cancels_lost: pick(0, 600),
+        double_close: pick(0, 500),
         ..calm
     }
 }

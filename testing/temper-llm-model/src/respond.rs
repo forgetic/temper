@@ -1,7 +1,7 @@
 //! The fake's script: what it answers, from the query and its random state.
 //!
-//! - With the configured chances, the call fails as overloaded or
-//!   rate-limited.
+//! - With the configured chances, the call fails as overloaded, rate-limited,
+//!   unavailable, too long for the context window, or unauthorised.
 //! - The query must end with a user message, and every user message's tool
 //!   outputs must answer exactly the tool calls of the assistant message
 //!   before it. Real providers reject anything else, and so does the fake: the
@@ -29,12 +29,19 @@ use crate::model::Config;
 
 pub(crate) fn respond(rng: &mut Rng, minted: &mut u64, config: &Config, query: &Query) -> Result<Answer, Error> {
     let roll = rng.below(1000);
-    let overloaded = u64::from(config.overloaded);
-    if roll < overloaded {
-        return Err(Error::Overloaded);
-    }
-    if roll < overloaded.saturating_add(u64::from(config.rate_limited)) {
-        return Err(Error::RateLimited { retry_after: config.retry_after });
+    let failures = [
+        (config.overloaded, Error::Overloaded),
+        (config.rate_limited, Error::RateLimited { retry_after: config.retry_after }),
+        (config.unavailable, Error::Unavailable),
+        (config.too_long, Error::ContextTooLong),
+        (config.unauthorized, Error::Unauthorized),
+    ];
+    let mut below: u64 = 0;
+    for (chance, error) in failures {
+        below = below.saturating_add(u64::from(chance));
+        if roll < below {
+            return Err(error);
+        }
     }
     if !valid(&query.messages) {
         return Err(Error::InvalidRequest);
@@ -314,6 +321,9 @@ mod tests {
         overloaded: 0,
         rate_limited: 0,
         retry_after: Duration::ZERO,
+        unavailable: 0,
+        too_long: 0,
+        unauthorized: 0,
         refused: 0,
         no_calls: 0,
         answer_tokens: 1,
@@ -408,6 +418,17 @@ mod tests {
         let config = Config { rate_limited: 1000, retry_after: Duration::from_secs(2), ..CONFIG };
         let result = respond(&mut rng, &mut minted, &config, &query(Box::new([user(Box::new([text()]))])));
         assert_eq!(result, Err(Error::RateLimited { retry_after: Duration::from_secs(2) }));
+        let cases = [
+            (Config { unavailable: 1000, ..CONFIG }, Error::Unavailable),
+            (Config { too_long: 1000, ..CONFIG }, Error::ContextTooLong),
+        ];
+        for (config, error) in cases {
+            let result = respond(&mut rng, &mut minted, &config, &query(Box::new([user(Box::new([text()]))])));
+            assert_eq!(result, Err(error));
+        }
+        let config = Config { unauthorized: 1000, ..CONFIG };
+        let result = respond(&mut rng, &mut minted, &config, &query(Box::new([user(Box::new([text()]))])));
+        assert_eq!(result, Err(Error::Unauthorized));
     }
 
     #[test]

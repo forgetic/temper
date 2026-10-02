@@ -24,6 +24,11 @@ pub struct Config {
     pub rate_limited: u32,
     /// What a rate-limit failure asks the client to wait.
     pub retry_after: Duration,
+    /// The chances, per mille, that a call fails as unavailable, as too long
+    /// for the context window, or as unauthorised.
+    pub unavailable: u32,
+    pub too_long: u32,
+    pub unauthorized: u32,
     /// The chance, per mille, that an answer is refused by the content filter.
     pub refused: u32,
     /// The chance, per mille, that an answer says it calls tools and calls

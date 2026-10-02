@@ -69,6 +69,13 @@ pub struct Settings {
     pub abandon: u32,
     /// When such a close comes, after the session opens.
     pub abandon_after: Span,
+    /// The chance, per mille, that a cancel loses its race: the call or the
+    /// tool run it was for ends of itself, and that is its terminal event. A
+    /// cancel that wins is told after a network draw.
+    pub cancels_lost: u32,
+    /// The chance, per mille, that the opener sends a close twice, the second
+    /// a network draw after the first.
+    pub double_close: u32,
 }
 
 impl Settings {
@@ -100,6 +107,9 @@ impl Settings {
                 overloaded: 0,
                 rate_limited: 0,
                 retry_after: Duration::from_secs(1),
+                unavailable: 0,
+                too_long: 0,
+                unauthorized: 0,
                 refused: 0,
                 no_calls: 0,
                 answer_tokens: 1,
@@ -114,6 +124,8 @@ impl Settings {
             think: Span::millis(0, 50),
             abandon: 0,
             abandon_after: Span::millis(0, 10_000),
+            cancels_lost: 0,
+            double_close: 0,
         }
     }
 }
@@ -164,6 +176,16 @@ pub struct Stats {
     pub stale: u32,
     /// The most tool runs one session had in flight at once.
     pub most_parallel: u32,
+    /// Cancels of calls and of tool runs that lost their race.
+    pub cancels_lost: u32,
+    pub tool_cancels_lost: u32,
+    /// What ended a call or a run whose cancel lost: an answer, a failure (a
+    /// deadline included), a tool's result.
+    pub answered_after_cancel: u32,
+    pub failed_after_cancel: u32,
+    pub ran_after_cancel: u32,
+    /// Closes that reached a session already closing.
+    pub closed_while_closing: u32,
 }
 
 /// The facts the sessions told, by kind, as the loop drained them.
@@ -225,19 +247,45 @@ pub struct Ended {
 /// Something on its way, delivered at its time.
 enum Delivery {
     /// The opener opens a session.
-    Open { opener: u64, spec: agent::Spec },
+    Open {
+        opener: u64,
+        spec: agent::Spec,
+    },
     /// The opener continues a yielded session.
-    Continue { opener: u64, content: Box<[u8]> },
+    Continue {
+        opener: u64,
+        content: Box<[u8]>,
+    },
     /// The opener closes a session.
-    Close { opener: u64 },
+    Close {
+        opener: u64,
+    },
     /// A call arrives at the provider.
-    Query { call: u64, query: provider::api::Query },
+    Query {
+        call: u64,
+        query: provider::api::Query,
+    },
     /// The provider's answer arrives back at the agent's side.
-    Answer { call: u64, result: Result<provider::api::Answer, provider::api::Error> },
+    Answer {
+        call: u64,
+        result: Result<provider::api::Answer, provider::api::Error>,
+    },
     /// The agent's side gives up on a call.
-    Deadline { call: u64 },
+    Deadline {
+        call: u64,
+    },
+    /// A cancel that won its race is told.
+    Cancelled {
+        owner: Token,
+    },
+    ToolCancelled {
+        owner: Token,
+    },
     /// A tool run finishes.
-    ToolDone { owner: Token, outcome: Outcome },
+    ToolDone {
+        owner: Token,
+        outcome: Outcome,
+    },
 }
 
 /// A tool run of the agent in flight, as the tools would keep it.
@@ -283,6 +331,12 @@ pub struct World {
     /// the step that started it.
     tools: BTreeMap<Token, Running>,
     runs: BTreeMap<Token, Token>,
+    /// The sessions whose call, and the runs, whose cancel lost its race;
+    /// and the sessions the agent is closing, with a cancel sent and no end
+    /// yet.
+    cancel_lost: BTreeSet<Token>,
+    run_cancel_lost: BTreeSet<Token>,
+    closing: BTreeSet<Token>,
     /// Calls the provider has not answered yet.
     serving: BTreeSet<u64>,
     /// The sessions opened, by the opener's name for each, and the opener's
@@ -320,6 +374,9 @@ impl World {
             calling: BTreeMap::new(),
             tools: BTreeMap::new(),
             runs: BTreeMap::new(),
+            cancel_lost: BTreeSet::new(),
+            run_cancel_lost: BTreeSet::new(),
+            closing: BTreeSet::new(),
             serving: BTreeSet::new(),
             sessions: BTreeMap::new(),
             openers: BTreeMap::new(),
@@ -465,12 +522,19 @@ impl World {
                 self.stats.calls += 1;
             }
             agent::Request::Cancel { owner } => {
+                self.closing.insert(owner);
                 // A call that has already ended has its terminal event on the
-                // way: the cancel lost the race and changes nothing.
+                // way: the cancel lost the race and changes nothing. One still
+                // in flight may end of itself all the same.
                 if let Some(&call) = self.calling.get(&owner) {
-                    self.end_call(call);
-                    self.agent_in.push_back(agent::Event::Cancelled { owner });
-                    self.stats.cancels += 1;
+                    if self.rng.chance(self.settings.cancels_lost) {
+                        self.cancel_lost.insert(owner);
+                        self.stats.cancels_lost += 1;
+                    } else {
+                        self.end_call(call);
+                        self.send(Delivery::Cancelled { owner });
+                        self.stats.cancels += 1;
+                    }
                 }
             }
             agent::Request::Tool { owner, call, deadline } => {
@@ -491,9 +555,14 @@ impl World {
                 self.stats.tool_runs += 1;
             }
             agent::Request::CancelTool { owner } => {
-                if let Some(Running { delivery, .. }) = self.tools.remove(&owner) {
+                let session = *self.runs.get(&owner).expect("a run is cancelled while the agent waits for its end");
+                self.closing.insert(session);
+                if self.tools.contains_key(&owner) && self.rng.chance(self.settings.cancels_lost) {
+                    self.run_cancel_lost.insert(owner);
+                    self.stats.tool_cancels_lost += 1;
+                } else if let Some(Running { delivery, .. }) = self.tools.remove(&owner) {
                     self.wire.remove(&delivery).expect("a tool run in flight has its result on the way");
-                    self.agent_in.push_back(agent::Event::ToolCancelled { owner });
+                    self.send(Delivery::ToolCancelled { owner });
                     self.stats.tool_cancels += 1;
                 }
             }
@@ -589,6 +658,7 @@ impl World {
         assert_eq!((ended.turns, ended.usage), (session.turns, session.usage), "an end adds up what was used");
         if let Some(name) = session.session {
             self.openers.remove(&name);
+            self.closing.remove(&name);
         }
         self.sessions.get_mut(&opener).expect("looked up above").ended = Some(ended);
     }
@@ -708,13 +778,20 @@ impl World {
                 }
                 Delivery::Close { opener } => {
                     let session = self.sessions.get_mut(&opener).expect("the opener closes what it opened");
+                    let again = !session.closed && self.rng.chance(self.settings.double_close);
+                    let session = self.sessions.get_mut(&opener).expect("looked up above");
                     session.closed = true;
                     let name = session.session.expect("the opener closes a session once it has opened");
                     if session.ended.is_some() {
                         self.stats.stale += 1;
+                    } else if self.closing.contains(&name) {
+                        self.stats.closed_while_closing += 1;
                     }
                     self.agent_in.push_back(agent::Event::Close { session: name });
                     self.stats.closes += 1;
+                    if again {
+                        self.send(Delivery::Close { opener });
+                    }
                 }
                 Delivery::Query { call, query } => {
                     self.serving.insert(call);
@@ -727,6 +804,12 @@ impl World {
                     // a call without its result, a result without its call.
                     assert!(result != Err(provider::api::Error::InvalidRequest), "the agent sends well-formed queries");
                     if let Some(owner) = self.end_call(call) {
+                        if self.cancel_lost.remove(&owner) {
+                            match result {
+                                Ok(_) => self.stats.answered_after_cancel += 1,
+                                Err(_) => self.stats.failed_after_cancel += 1,
+                            }
+                        }
                         self.agent_in.push_back(translate::outcome(owner, result));
                     } else {
                         self.stats.late_answers += 1;
@@ -734,12 +817,20 @@ impl World {
                 }
                 Delivery::Deadline { call } => {
                     let owner = self.end_call(call).expect("a deadline is withdrawn when its call ends first");
+                    if self.cancel_lost.remove(&owner) {
+                        self.stats.failed_after_cancel += 1;
+                    }
                     self.agent_in.push_back(agent::Event::Failed { owner, failure: Failure::TimedOut });
                     self.stats.timeouts += 1;
                 }
+                Delivery::Cancelled { owner } => self.agent_in.push_back(agent::Event::Cancelled { owner }),
+                Delivery::ToolCancelled { owner } => self.agent_in.push_back(agent::Event::ToolCancelled { owner }),
                 Delivery::ToolDone { owner, outcome } => {
                     let run = self.tools.remove(&owner);
                     assert!(run.is_some(), "a cancelled tool run's result is withdrawn");
+                    if self.run_cancel_lost.remove(&owner) {
+                        self.stats.ran_after_cancel += 1;
+                    }
                     self.agent_in.push_back(agent::Event::ToolDone { owner, outcome });
                 }
             }
@@ -840,6 +931,7 @@ impl World {
         assert_eq!(self.provider.calls(), 0, "the provider holds no call");
         assert!(self.calls.is_empty() && self.calling.is_empty(), "no call is in flight");
         assert!(self.tools.is_empty() && self.runs.is_empty(), "no tool is running, and every run's end was heard");
+        assert!(self.cancel_lost.is_empty() && self.run_cancel_lost.is_empty(), "every lost cancel's race ended");
         assert!(self.serving.is_empty(), "the provider answered every call");
         assert!(
             self.wire.is_empty() && self.agent_in.is_empty() && self.provider_in.is_empty(),
