@@ -1,0 +1,448 @@
+//! The fake forge's state and its entry points.
+//!
+//! A call is decided when it arrives: refused for its user's rate, failed by
+//! chance, or made, its answer held until its latency is past, and then
+//! answered by [`fire`]. CI's verdicts and webhook deliveries go out the same
+//! way, as their timers fire.
+
+use alloc::boxed::Box;
+use core::mem;
+
+use temper_lib::bytes::copy_of;
+use temper_lib::{Deadlines, Duration, Env, Id, Map, Queue, ReplyTo, Rng, Slab, Time};
+
+use crate::api::{Answer, Change, Error, File, Op, Permission, Read, Setup, What, Write};
+use crate::faults::{self, Window};
+use crate::git::{self, Object};
+use crate::hooks::{self, Delivery};
+use crate::limits::{self, Limits};
+use crate::observe::{Observation, Observations};
+use crate::store::{self, Repository};
+use crate::{ci, issues, pulls, reads, wiki};
+
+/// The most requests an entry point emits per call.
+pub const MAX_OUT: u32 = 1;
+
+/// How the forge behaves, handed to every step read-only. Chances are per
+/// mille.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Config {
+    pub limits: Limits,
+    /// The time to answer a call is drawn from `latency_min..=latency_max`,
+    /// or, for the `late` chance of calls, from `late_min..=late_max`.
+    pub latency_min: Duration,
+    pub latency_max: Duration,
+    pub late: u32,
+    pub late_min: Duration,
+    pub late_max: Duration,
+    /// The chance that a call fails as unavailable, having done nothing.
+    pub unavailable: u32,
+    /// The chance that a call is made and then fails as timed out.
+    pub timeouts: u32,
+    /// The calls a user may make in a window of `rate_window`, which starts
+    /// with their first call after the last one ended. Zero: no limit.
+    pub rate_limit: u32,
+    pub rate_window: Duration,
+    /// The user CI reports as.
+    pub ci: u64,
+    /// The time to deliver a webhook is drawn from `hook_min..=hook_max`, or,
+    /// for the `hooks_late` chance of them, from `late_min..=late_max`; and
+    /// the `hooks_lost` chance of them is never delivered.
+    pub hook_min: Duration,
+    pub hook_max: Duration,
+    pub hooks_late: u32,
+    pub hooks_lost: u32,
+}
+
+/// protocol -> model
+#[derive(PartialEq, Eq, Debug)]
+pub enum Event {
+    /// A call by `user`: do `op` on `repository`, named in full.
+    Call { reply_to: ReplyTo, user: u64, repository: Box<[u8]>, op: Op },
+}
+
+/// model -> protocol
+#[derive(PartialEq, Eq, Debug)]
+pub enum Request {
+    /// The answer to a `Call`: exactly one per call.
+    Reply { to: ReplyTo, result: Result<Answer, Error> },
+    /// A webhook to `repository`'s subscriber: something of `change` changed,
+    /// about the item `number` if it names one.
+    Hook { repository: Box<[u8]>, change: Change, number: Option<u64> },
+}
+
+/// What the forge has done, for a world to check at settle.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Tally {
+    /// Calls answered, and those answered at once as unavailable for want of
+    /// room.
+    pub answered: u32,
+    pub busy: u32,
+    /// Calls failed by chance: unavailable, having done nothing; and timed
+    /// out, having been made.
+    pub unavailable: u32,
+    pub timeouts: u32,
+    /// Calls refused for their user's rate.
+    pub limited: u32,
+    /// Calls answered late.
+    pub late: u32,
+    /// Webhooks delivered, those of them late, those lost by chance, and those
+    /// dropped for want of room.
+    pub hooks: u32,
+    pub hooks_late: u32,
+    pub hooks_lost: u32,
+    pub hooks_dropped: u32,
+    /// CI verdicts reported, contexts left pending by chance, and commits CI
+    /// did not report on for want of room.
+    pub verdicts: u32,
+    pub silent: u32,
+    pub unreported: u32,
+}
+
+impl Tally {
+    const ZERO: Tally = Tally {
+        answered: 0,
+        busy: 0,
+        unavailable: 0,
+        timeouts: 0,
+        limited: 0,
+        late: 0,
+        hooks: 0,
+        hooks_late: 0,
+        hooks_lost: 0,
+        hooks_dropped: 0,
+        verdicts: 0,
+        silent: 0,
+        unreported: 0,
+    };
+}
+
+/// The fake forge's state.
+#[derive(Debug)]
+pub struct Model {
+    pub(crate) repositories: Slab<Repository>,
+    /// The repositories by their names.
+    pub(crate) names: Map<Box<[u8]>, Id<Repository>>,
+    /// Every commit there is, by its name, and the last name given.
+    pub(crate) commits: Map<u64, Object>,
+    pub(crate) made: u64,
+    /// The last id given to a comment.
+    pub(crate) comments: u64,
+    pub(crate) calls: Slab<Call>,
+    pub(crate) deliveries: Slab<Delivery>,
+    /// Each calling user's rate window.
+    pub(crate) windows: Map<u64, Window>,
+    pub(crate) timers: Deadlines<Alarm>,
+    pub(crate) observations: Observations,
+    pub(crate) rng: Rng,
+    pub(crate) tally: Tally,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub(crate) enum Alarm {
+    /// The call's answer goes out.
+    Call(Id<Call>),
+    /// CI reports the context `context` of the repository's checks on
+    /// `commit`.
+    Check { repository: Id<Repository>, commit: u64, context: u32 },
+    /// The webhook is delivered.
+    Hook(Id<Delivery>),
+}
+
+/// A call being answered.
+#[derive(Debug)]
+pub(crate) struct Call {
+    state: State,
+}
+
+#[derive(Debug)]
+enum State {
+    /// The answer is decided, and goes out when the call's timer fires.
+    Waiting { reply_to: ReplyTo, result: Result<Answer, Error> },
+    /// Terminal: holds nothing.
+    Closed,
+}
+
+impl Model {
+    /// An empty forge, drawing from `seed`.
+    #[must_use]
+    pub fn new(config: &Config, seed: u64) -> Model {
+        let limits = &config.limits;
+        Model {
+            repositories: Slab::with_capacity(limits.repositories),
+            names: Map::with_capacity(limits.repositories),
+            commits: Map::with_capacity(limits.commits),
+            made: 0,
+            comments: 0,
+            calls: Slab::with_capacity(limits.calls),
+            deliveries: Slab::with_capacity(limits.hooks),
+            windows: Map::with_capacity(limits.users),
+            timers: Deadlines::with_capacity(limits::timers(limits).unwrap_or(u32::MAX)),
+            observations: Observations::with_capacity(limits.observations),
+            rng: Rng::new(seed),
+            tally: Tally::ZERO,
+        }
+    }
+
+    /// Adds the repository `setup` describes, its default branch at a first
+    /// commit of its tree, and returns that commit. Setting up is not
+    /// observed, and starts no CI.
+    pub fn repository(&mut self, config: &Config, setup: Setup) -> u64 {
+        let limits = &config.limits;
+        let Setup { name, default, tree, labels, checks, protection, hooked } = setup;
+        assert!(!self.names.contains_key(&*name), "a repository is added once");
+        store::fits(&name, limits.name_bytes).expect("a repository's name within the limits");
+        store::fits(&default, limits.name_bytes).expect("a branch name within the limits");
+        store::fit_names(&labels, limits.labels, limits).expect("labels within the limits");
+        store::fit_names(&checks.contexts, limits.contexts, limits).expect("contexts within the limits");
+        if let Some(cue) = &checks.cue {
+            store::fits(&cue.path, limits.name_bytes).expect("a path within the limits");
+            store::fits(&cue.green, limits.content_bytes).expect("content within the limits");
+        }
+        if let Some(protection) = &protection {
+            store::fits(&protection.branch, limits.name_bytes).expect("a branch name within the limits");
+            store::fit_names(&protection.contexts, limits.contexts, limits).expect("contexts within the limits");
+        }
+        let tree = git::tree(limits, tree).expect("a first tree within the limits");
+        let first = git::store(self, Object { parent: None, tree }).expect("room for a first commit");
+        let mut repository = Repository::new(limits, copy_of(&name), default, first, checks, protection, hooked);
+        for label in labels {
+            repository.labels.insert(label).expect("a repository's labels are within the limits");
+        }
+        let id = self.repositories.insert(repository).expect("a repository's room");
+        self.names.insert(name, id).expect("as many names as repositories");
+        first
+    }
+
+    /// Gives `user` the permission `permission` on `repository`.
+    pub fn grant(&mut self, repository: &[u8], user: u64, permission: Permission) {
+        let id = self.id(repository);
+        let repository = self.repositories.get_mut(id).expect("a repository of the forge");
+        repository.permissions.insert(user, permission).expect("a repository's users are within the limits");
+    }
+
+    /// Makes `repository` reachable by git, or not.
+    pub fn set_reachable(&mut self, repository: &[u8], reachable: bool) {
+        let id = self.id(repository);
+        self.repositories.get_mut(id).expect("a repository of the forge").reachable = reachable;
+    }
+
+    /// Makes `repository` refuse what is pushed to it, branches created
+    /// included, or not.
+    pub fn set_refusing(&mut self, repository: &[u8], refusing: bool) {
+        let id = self.id(repository);
+        self.repositories.get_mut(id).expect("a repository of the forge").refusing = refusing;
+    }
+
+    /// What a working tree's git does when it commits: names a commit of
+    /// `tree` on `parent` in the forge's one store, where no repository has
+    /// it until it is pushed. Returns `None` if the tree is `parent`'s, and
+    /// refuses a tree past the limits, or a store that is full.
+    pub fn commit(&mut self, config: &Config, parent: u64, tree: Box<[File]>) -> Result<Option<u64>, Error> {
+        let tree = git::tree(&config.limits, tree)?;
+        let Some(object) = self.commits.get(&parent) else {
+            return Err(Error::Missing(What::Commit));
+        };
+        if git::same(&object.tree, &tree) {
+            return Ok(None);
+        }
+        let commit = git::store(self, Object { parent: Some(parent), tree })?;
+        Ok(Some(commit))
+    }
+
+    /// Where `branch` of `repository` is.
+    #[must_use]
+    pub fn branch(&self, repository: &[u8], branch: &[u8]) -> Option<u64> {
+        let repository = self.repositories.get(self.id(repository)).expect("a repository of the forge");
+        repository.branches.get(branch).copied()
+    }
+
+    /// The branches of `repository`, and where each is.
+    #[must_use]
+    pub fn branches(&self, repository: &[u8]) -> &Map<Box<[u8]>, u64> {
+        &self.repositories.get(self.id(repository)).expect("a repository of the forge").branches
+    }
+
+    /// The commit `commit`: its parent and its tree. A working tree's git
+    /// fetching it walks its parents here.
+    #[must_use]
+    pub fn object(&self, commit: u64) -> Option<&Object> {
+        self.commits.get(&commit)
+    }
+
+    /// Whether `ancestor` is `commit` or one of its ancestors.
+    #[must_use]
+    pub fn is_ancestor(&self, ancestor: u64, commit: u64) -> bool {
+        git::is_ancestor(self, ancestor, commit)
+    }
+
+    /// What `read` answers on `repository`, for whoever may read it, with no
+    /// faults: for a world inspecting the store.
+    pub fn inspect(&self, config: &Config, repository: &[u8], read: &Read) -> Result<Answer, Error> {
+        let Some(&id) = self.names.get(repository) else {
+            return Err(Error::Missing(What::Repository));
+        };
+        reads::read(self, &config.limits, id, read)
+    }
+
+    /// The next observation, oldest first.
+    pub fn pop_observation(&mut self) -> Option<Observation> {
+        self.observations.pop()
+    }
+
+    /// How many observations were dropped for want of room, since the forge
+    /// was made.
+    #[must_use]
+    pub fn observations_lost(&self) -> u64 {
+        self.observations.lost()
+    }
+
+    #[must_use]
+    pub fn tally(&self) -> Tally {
+        self.tally
+    }
+
+    /// Calls held, answered ones included until they are reclaimed.
+    #[must_use]
+    pub fn calls(&self) -> u32 {
+        self.calls.len()
+    }
+
+    /// Webhooks in flight, delivered ones included until they are reclaimed.
+    #[must_use]
+    pub fn deliveries(&self) -> u32 {
+        self.deliveries.len()
+    }
+
+    #[must_use]
+    pub fn next_deadline(&self) -> Option<Time> {
+        self.timers.next()
+    }
+
+    #[must_use]
+    pub fn is_due(&self, now: Time) -> bool {
+        match self.timers.next() {
+            Some(at) => at <= now,
+            None => false,
+        }
+    }
+
+    /// The reclaim point: frees the calls answered and the webhooks delivered.
+    pub fn reclaim(&mut self) {
+        self.calls.reclaim();
+        self.deliveries.reclaim();
+    }
+
+    pub(crate) fn id(&self, repository: &[u8]) -> Id<Repository> {
+        *self.names.get(repository).expect("a repository of the forge")
+    }
+}
+
+/// Handles one event, emitting at most [`MAX_OUT`] requests: a call refused
+/// at once for want of room.
+pub fn step(model: &mut Model, env: &Env<Config>, event: Event, out: &mut Queue<Request>) {
+    match event {
+        Event::Call { reply_to, user, repository, op } => call(model, env, reply_to, user, &repository, op, out),
+    }
+}
+
+/// Fires the earliest timer due at `env.now`, if there is one, emitting at
+/// most [`MAX_OUT`] requests: a call's answer, or a webhook.
+pub fn fire(model: &mut Model, env: &Env<Config>, out: &mut Queue<Request>) {
+    let Some(alarm) = model.timers.expire(env.now) else {
+        return;
+    };
+    match alarm {
+        Alarm::Call(id) => answer(model, id, out),
+        Alarm::Check { repository, commit, context } => ci::report(model, env, repository, commit, context),
+        Alarm::Hook(id) => hooks::deliver(model, id, out),
+    }
+}
+
+fn call(
+    model: &mut Model,
+    env: &Env<Config>,
+    reply_to: ReplyTo,
+    user: u64,
+    repository: &[u8],
+    op: Op,
+    out: &mut Queue<Request>,
+) {
+    if model.calls.is_full() {
+        model.tally.busy = model.tally.busy.saturating_add(1);
+        model.tally.answered = model.tally.answered.saturating_add(1);
+        out.push(Request::Reply { to: reply_to, result: Err(Error::Unavailable) });
+        return;
+    }
+    let result = match faults::admit(model, env, user) {
+        Err(error) => Err(error),
+        Ok(()) => {
+            let result = execute(model, env, user, repository, op);
+            faults::finish(model, env, result)
+        }
+    };
+    let at = faults::latency(model, env);
+    let id = model.calls.insert(Call { state: State::Waiting { reply_to, result } }).expect("checked for room above");
+    model.timers.arm(Alarm::Call(id), at).expect("a timer per call fits");
+}
+
+/// Makes the call, as `user`.
+fn execute(model: &mut Model, env: &Env<Config>, user: u64, repository: &[u8], op: Op) -> Result<Answer, Error> {
+    let Some(&id) = model.names.get(repository) else {
+        return Err(Error::Missing(What::Repository));
+    };
+    match op {
+        Op::Read(read) => {
+            let repository = model.repositories.get(id).expect("a named repository");
+            repository.require(user, Permission::Read)?;
+            reads::read(model, &env.limits.limits, id, &read)
+        }
+        Op::Write(write) => match write {
+            Write::CreateIssue { title, body, labels } => issues::create(model, env, id, user, title, body, labels),
+            Write::Comment { number, body } => issues::comment(model, env, id, user, number, body),
+            Write::EditComment { id: comment, body } => issues::edit(model, env, id, user, comment, body),
+            Write::DeleteComment { id: comment } => issues::remove(model, env, id, user, comment),
+            Write::SetLabels { number, labels } => issues::label(model, env, id, user, number, labels),
+            Write::DefineLabel { name } => issues::define(model, env, id, user, name),
+            Write::Close { number } => issues::close(model, env, id, user, number),
+            Write::Reopen { number } => issues::reopen(model, env, id, user, number),
+            Write::OpenPull { title, body, head, base } => pulls::open(model, env, id, user, title, body, head, base),
+            Write::Review { number, verdict, body } => pulls::review(model, env, id, user, number, verdict, body),
+            Write::Merge { number, head } => pulls::merge(model, env, id, user, number, head),
+            Write::DeleteBranch { branch } => git::delete(model, env, id, user, &branch),
+            Write::Status { commit, context, state } => ci::status(model, env, id, user, commit, context, state),
+            Write::PutPage { name, content } => wiki::put(model, env, id, user, name, content),
+            Write::DeletePage { name } => wiki::delete(model, env, id, user, &name),
+        },
+        Op::Git(git) => git::serve(model, env, id, user, git),
+    }
+}
+
+/// A call's timer: its answer goes out.
+fn answer(model: &mut Model, id: Id<Call>, out: &mut Queue<Request>) {
+    let call = model.calls.get_mut(id).expect("a call lives until its timer fires");
+    let state = mem::replace(&mut call.state, State::Closed);
+    call.state = match state {
+        State::Waiting { reply_to, result } => {
+            out.push(Request::Reply { to: reply_to, result });
+            State::Closed
+        }
+        State::Closed => unreachable!("a closed call has no timer"),
+    };
+    model.calls.retire(id);
+    model.tally.answered = model.tally.answered.saturating_add(1);
+}
+
+/// Something changed on `repository`: what a world sees, and what its
+/// subscriber hears.
+pub(crate) fn changed(
+    model: &mut Model,
+    env: &Env<Config>,
+    repository: Id<Repository>,
+    observation: Observation,
+    change: Change,
+    number: Option<u64>,
+) {
+    model.observations.push(observation);
+    hooks::notify(model, env, repository, change, number);
+}

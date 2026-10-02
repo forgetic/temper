@@ -13,6 +13,7 @@ members = [
     "crates/temper-worker-model-checkout",
     "crates/temper-worker-model-host",
     "testing/temper-fake-engine-model",
+    "testing/temper-forge-model",
     "testing/temper-llm-model",
     "tests/integration/agent/model",
     "tests/integration/agent/run",
@@ -43,6 +44,7 @@ temper-worker-model-agent = { path = "crates/temper-worker-model-agent" }
 temper-worker-model-checkout = { path = "crates/temper-worker-model-checkout" }
 temper-worker-model-host = { path = "crates/temper-worker-model-host" }
 temper-fake-engine-model = { path = "testing/temper-fake-engine-model" }
+temper-forge-model = { path = "testing/temper-forge-model" }
 temper-llm-model = { path = "testing/temper-llm-model" }
 temper-checkout-fake = { path = "tests/integration/checkout" }
 temper-agent-model-tools-tests = { path = "tests/integration/agent/tools" }
