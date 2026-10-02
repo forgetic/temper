@@ -1,52 +1,62 @@
 //! Watchers: a person's live stream of a run, an item or a board, from its
 //! watch to its end (engine-model.md, sections 2 and 11).
 //!
-//! A watcher has at most one delivery in flight. A chunk for a watcher that
-//! has none goes out at once; one for a watcher with a delivery in flight
-//! waits in its backlog, and the whole backlog goes out in one delivery once
-//! that one has ended. The backlog is bounded: a chunk that finds it full
-//! drops what waits, counted as missed, and waits in its place, so the
-//! watcher is told how much it missed right before the chunks it catches up
-//! from. Nothing a watcher does holds anything else up, and nothing grows.
+//! A watch begins with the snapshot the parent gave with it, delivered at
+//! once. A watcher has at most one delivery in flight. A chunk for a watcher
+//! that has none goes out at once; one for a watcher with a delivery in
+//! flight waits in its backlog, and the whole backlog goes out in one
+//! delivery once that one has ended. The backlog is bounded: a chunk that
+//! finds it full drops what waits, counted as missed, and waits in its
+//! place, so the watcher is told how much it missed right before the chunks
+//! it catches up from. What a delivery held that its stream did not take in
+//! time, and a report the watcher would have had that was dropped, are
+//! counted as missed too, and told with the next delivery. Nothing a watcher
+//! does holds anything else up, and nothing grows.
 //!
 //! A watch ends once the person stops watching, or once its run has finished
 //! and the watcher has had what waited for it; it ends only once its
 //! delivery in flight has, so the parent's token for it is free when it is
 //! told so.
 //!
-//! The transition table. Every other cell is unreachable by the boundary's
-//! contract: a delivery ends only while it is in flight, and a closed watcher
-//! is no longer named.
+//! The transition table. A miss counts a report the watcher would have had,
+//! dropped; the other cells are unreachable, as a closed watcher is no
+//! longer named.
 //!
 //! ```text
-//! state     event                                next      requests
-//! (none)    watch, admitted                      Idle      watching
-//!           watch, busy or of a run not followed (none)    refused
-//! Idle      chunk                                Sending   deliver it
-//!           unwatch                              Closed    ended, unwatched
-//!           its run finished                     Closed    ended, finished
-//! Sending   chunk, room in the backlog           Sending   (it waits)
-//!           chunk, the backlog full              Sending   (what waits is missed; it waits)
-//!           delivered, nothing waiting           Idle
-//!           delivered, chunks waiting            Sending   deliver them, and what was missed
-//!           unwatch                              Closing   (what waits is dropped)
-//!           its run finished                     Draining
-//! Draining  chunk                                Draining  (dropped: the watch is ending)
-//!           delivered, chunks waiting            Draining  deliver them, and what was missed
-//!           delivered, nothing waiting           Closed    ended, finished
-//!           unwatch                              Closing   (what waits is dropped)
-//!           its run finished                     Draining
-//! Closing   chunk, unwatch, its run finished     Closing   (dropped)
-//!           delivered                            Closed    ended, unwatched
+//! state     event                      next      requests
+//! (none)    watch, admitted            Sending   watching; its snapshot
+//!           watch, refused             (none)    refused
+//! Idle      chunk                      Sending   deliver it, and the missed
+//!           miss                       Idle      (one more missed)
+//!           delivered                  Idle      (dropped: none in flight)
+//!           unwatch                    Closed    ended, unwatched
+//!           its run finished           Closed    ended, finished
+//! Sending   chunk, room in the backlog Sending   (it waits)
+//!           chunk, the backlog full    Sending   (what waits is missed)
+//!           miss                       Sending   (one more missed)
+//!           delivered, none waiting    Idle      (missed what it held, if
+//!                                                 not taken)
+//!           delivered, chunks waiting  Sending   deliver them, and the missed
+//!           unwatch                    Closing   (what waits is dropped)
+//!           its run finished           Draining
+//! Draining  chunk, miss                Draining  (one more missed)
+//!           delivered, chunks waiting  Draining  deliver them, and the missed
+//!           delivered, none waiting    Closed    ended, finished
+//!           unwatch                    Closing   (what waits is dropped)
+//!           its run finished           Draining
+//! Closing   chunk, miss, unwatch, or
+//!             its run finished         Closing   (dropped)
+//!           delivered                  Closed    ended, unwatched
 //! ```
 
 use alloc::boxed::Box;
 use core::mem;
 
+use temper_lib::bytes::copy_of;
 use temper_lib::{Env, Id, List, Queue, Time, Token};
 
-use crate::boundary::{Chunk, End, Kind, Phase, Refusal, Request, Subject};
-use crate::facts::{Fact, Facts};
+use crate::boundary::{Chunk, End, Kind, Refusal, Request, Subject};
+use crate::facts::{Fact, Facts, Loss};
 use crate::limits::Limits;
 use crate::model::Model;
 
@@ -63,14 +73,14 @@ pub(crate) struct Watcher {
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum Stream {
-    /// Caught up: no delivery in flight, and nothing waits.
-    Idle,
-    /// A delivery is in flight, and `missed` chunks were dropped from the
-    /// backlog since it went.
-    Sending { missed: u64 },
+    /// No delivery in flight, and nothing waits; `missed` chunks were lost
+    /// since the last delivery the stream took, to tell with the next.
+    Idle { missed: u64 },
+    /// A delivery is in flight, and `missed` chunks were lost since it went.
+    Sending { missed: u64, flight: Flight },
     /// As `Sending`, and the watched run has finished: the watch ends once
     /// the backlog is out.
-    Draining { missed: u64 },
+    Draining { missed: u64, flight: Flight },
     /// The person stopped watching while a delivery was in flight: the watch
     /// ends once it has.
     Closing,
@@ -78,42 +88,71 @@ pub(crate) enum Stream {
     Closed,
 }
 
+/// The delivery in flight: what it told was missed, and the chunks it
+/// holds, all missed in turn if its stream does not take it.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) struct Flight {
+    told: u64,
+    chunks: u64,
+}
+
 /// A chunk less its content: what each watcher's copy is made from.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum Head {
-    Report { run: Token, kind: Kind, at: Time },
-    Phase { item: Token, phase: Phase, at: Time },
+    Report { run: Token, attempt: Token, kind: Kind, at: Time },
+    Phase { item: Token, phase: u32, at: Time },
 }
 
-/// A watch: refused at the entrance, or taken, caught up from now on.
-pub(crate) fn watch(model: &mut Model, env: &Env<Limits>, token: Token, subject: Subject, out: &mut Queue<Request>) {
+/// A watch: refused at the entrance, or taken, and delivered its snapshot.
+pub(crate) fn watch(
+    model: &mut Model,
+    env: &Env<Limits>,
+    token: Token,
+    subject: Subject,
+    snapshot: Box<[u8]>,
+    out: &mut Queue<Request>,
+) {
     assert!(!model.names.contains_key(&token), "the parent names each watch it has open once");
-    if let Some(refusal) = refusal(model, &env.limits, subject) {
+    if let Some(refusal) = refusal(model, &env.limits, subject, &snapshot) {
         model.facts.push(Fact::Refused { refusal });
         out.push(Request::Refused { watcher: token, refusal });
         return;
     }
     let backlog = Queue::with_capacity(env.limits.backlog);
-    let watcher = Watcher { token, subject, backlog, state: Stream::Idle };
+    let watcher = Watcher { token, subject, backlog, state: Stream::Closed };
     let id = model.watchers.insert(watcher).expect("room for a watcher, checked at the entrance");
     let named = model.names.insert(token, id);
     assert!(named == Ok(None), "a name for each watcher, and a watcher for each name");
     model.facts.push(Fact::Watching);
     out.push(Request::Watching { watcher: token });
+    let first = Chunk::Snapshot { at: env.now, content: snapshot };
+    let watcher = model.watchers.get_mut(id).expect("inserted above");
+    watcher.state = send(token, first, 0, &mut model.facts, out);
 }
 
 /// Why a watch is refused at the entrance, if it is: of a run not followed,
-/// or with no room for one more watcher.
-fn refusal(model: &Model, limits: &Limits, subject: Subject) -> Option<Refusal> {
+/// with a snapshot past the limits, or with no room for one more watcher,
+/// open or ended in this iteration.
+fn refusal(model: &Model, limits: &Limits, subject: Subject, snapshot: &[u8]) -> Option<Refusal> {
     match subject {
         Subject::Run(run) => {
+            if model.unfollowed.contains_key(&run) {
+                return Some(Refusal::Unfollowed);
+            }
             if !model.runs.contains_key(&run) {
                 return Some(Refusal::Unknown);
             }
         }
         Subject::Item(_) | Subject::Board(_) => {}
     }
-    if model.names.len() >= limits.watchers { Some(Refusal::Busy) } else { None }
+    let within = match u32::try_from(snapshot.len()) {
+        Ok(len) => len <= limits.snapshot_bytes,
+        Err(_) => false,
+    };
+    if !within {
+        return Some(Refusal::Oversized);
+    }
+    if model.names.len() >= limits.watchers || model.watchers.is_full() { Some(Refusal::Busy) } else { None }
 }
 
 /// The person stopped watching. A watch that has ended already is no longer
@@ -125,7 +164,7 @@ pub(crate) fn unwatch(model: &mut Model, token: Token, out: &mut Queue<Request>)
     let watcher = model.watchers.get_mut(id).expect("a named watcher is live");
     let state = mem::replace(&mut watcher.state, Stream::Closed);
     watcher.state = match state {
-        Stream::Idle => close(token, End::Unwatched, &mut model.facts, out),
+        Stream::Idle { .. } => close(token, End::Unwatched, &mut model.facts, out),
         Stream::Sending { .. } | Stream::Draining { .. } => abandon(&mut watcher.backlog),
         Stream::Closing => Stream::Closing,
         Stream::Closed => unreachable!("a closed watcher is no longer named"),
@@ -133,18 +172,25 @@ pub(crate) fn unwatch(model: &mut Model, token: Token, out: &mut Queue<Request>)
     conclude(model, id);
 }
 
-/// The delivery in flight to `token` has ended. One to a watch that is no
-/// longer named is dropped.
-pub(crate) fn delivered(model: &mut Model, token: Token, out: &mut Queue<Request>) {
+/// The delivery in flight to `token` has ended, taken by its stream if
+/// `done`. One to a watch that is no longer named, or that has none in
+/// flight, is dropped.
+pub(crate) fn delivered(model: &mut Model, token: Token, done: bool, out: &mut Queue<Request>) {
     let Some(&id) = model.names.get(&token) else {
         return;
     };
     let watcher = model.watchers.get_mut(id).expect("a named watcher is live");
     let state = mem::replace(&mut watcher.state, Stream::Closed);
     watcher.state = match state {
-        Stream::Idle => unreachable!("a delivery ends only while it is in flight"),
-        Stream::Sending { missed } => caught_up(token, &mut watcher.backlog, missed, &mut model.facts, out),
-        Stream::Draining { missed } => drained(token, &mut watcher.backlog, missed, &mut model.facts, out),
+        Stream::Idle { missed } => Stream::Idle { missed },
+        Stream::Sending { missed, flight } => {
+            let missed = landed(missed, flight, done, &mut model.facts);
+            caught_up(token, &mut watcher.backlog, missed, &mut model.facts, out)
+        }
+        Stream::Draining { missed, flight } => {
+            let missed = landed(missed, flight, done, &mut model.facts);
+            drained(token, &mut watcher.backlog, missed, &mut model.facts, out)
+        }
         Stream::Closing => close(token, End::Unwatched, &mut model.facts, out),
         Stream::Closed => unreachable!("a closed watcher is no longer named"),
     };
@@ -167,23 +213,41 @@ pub(crate) fn offer(
         if watcher.subject != first && watcher.subject != second {
             continue;
         }
-        let chunk = make(head, content);
         let state = mem::replace(&mut watcher.state, Stream::Closed);
         watcher.state = match state {
-            Stream::Idle => {
+            Stream::Idle { missed } => {
                 took = took.saturating_add(1);
-                send(watcher.token, chunk, &mut model.facts, out)
+                send(watcher.token, make(head, content), missed, &mut model.facts, out)
             }
-            Stream::Sending { missed } => {
+            Stream::Sending { missed, flight } => {
                 took = took.saturating_add(1);
-                Stream::Sending { missed: wait(&mut watcher.backlog, chunk, missed, &mut model.facts) }
+                let missed = wait(&mut watcher.backlog, head, content, missed, &mut model.facts);
+                Stream::Sending { missed, flight }
             }
-            Stream::Draining { missed } => Stream::Draining { missed },
+            Stream::Draining { missed, flight } => Stream::Draining { missed: lose(missed, &mut model.facts), flight },
             Stream::Closing => Stream::Closing,
             Stream::Closed => unreachable!("a closed watcher is no longer named"),
         };
     }
     took
+}
+
+/// A report that each watcher of `first` or of `second` would have had was
+/// dropped: they are told they missed it.
+pub(crate) fn miss(model: &mut Model, first: Subject, second: Subject) {
+    for (_, &id) in &model.names {
+        let watcher = model.watchers.get_mut(id).expect("a named watcher is live");
+        if watcher.subject != first && watcher.subject != second {
+            continue;
+        }
+        watcher.state = match watcher.state {
+            Stream::Idle { missed } => Stream::Idle { missed: lose(missed, &mut model.facts) },
+            Stream::Sending { missed, flight } => Stream::Sending { missed: lose(missed, &mut model.facts), flight },
+            Stream::Draining { missed, flight } => Stream::Draining { missed: lose(missed, &mut model.facts), flight },
+            Stream::Closing => Stream::Closing,
+            Stream::Closed => unreachable!("a closed watcher is no longer named"),
+        };
+    }
 }
 
 /// The run `run` has finished: its watchers end, once they have had what
@@ -202,8 +266,10 @@ pub(crate) fn finish(model: &mut Model, run: Token, out: &mut Queue<Request>) {
         let token = watcher.token;
         let state = mem::replace(&mut watcher.state, Stream::Closed);
         watcher.state = match state {
-            Stream::Idle => close(token, End::Finished, &mut model.facts, out),
-            Stream::Sending { missed } | Stream::Draining { missed } => Stream::Draining { missed },
+            Stream::Idle { .. } => close(token, End::Finished, &mut model.facts, out),
+            Stream::Sending { missed, flight } | Stream::Draining { missed, flight } => {
+                Stream::Draining { missed, flight }
+            }
             Stream::Closing => Stream::Closing,
             Stream::Closed => unreachable!("a closed watcher is no longer named"),
         };
@@ -214,30 +280,50 @@ pub(crate) fn finish(model: &mut Model, run: Token, out: &mut Queue<Request>) {
 /// A copy of the chunk `head` and `content` make, for one watcher.
 fn make(head: Head, content: &[u8]) -> Chunk {
     match head {
-        Head::Report { run, kind, at } => Chunk::Report { run, kind, at, content: temper_lib::bytes::copy_of(content) },
+        Head::Report { run, attempt, kind, at } => Chunk::Report { run, attempt, kind, at, content: copy_of(content) },
         Head::Phase { item, phase, at } => Chunk::Phase { item, phase, at },
     }
 }
 
-/// Idle, a chunk: it goes out at once.
-fn send(token: Token, chunk: Chunk, facts: &mut Facts, out: &mut Queue<Request>) -> Stream {
+/// One more chunk missed.
+fn lose(missed: u64, facts: &mut Facts) -> u64 {
+    facts.lose(Loss::Chunks, 1);
+    missed.saturating_add(1)
+}
+
+/// Nothing in flight, a chunk: it goes out at once, told what was missed.
+fn send(token: Token, chunk: Chunk, missed: u64, facts: &mut Facts, out: &mut Queue<Request>) -> Stream {
     let chunks: Box<[Chunk]> = Box::new([chunk]);
     facts.push(Fact::Delivered { chunks: 1 });
-    out.push(Request::Deliver { watcher: token, missed: 0, chunks });
-    Stream::Sending { missed: 0 }
+    out.push(Request::Deliver { watcher: token, missed, chunks });
+    Stream::Sending { missed: 0, flight: Flight { told: missed, chunks: 1 } }
 }
 
 /// A delivery in flight, a chunk: it waits, and if the backlog is full, what
-/// waits is missed. Returns what has been missed since the delivery went.
-fn wait(backlog: &mut Queue<Chunk>, chunk: Chunk, missed: u64, facts: &mut Facts) -> u64 {
-    let Err(chunk) = backlog.try_push(chunk) else {
+/// waits is missed first. Returns what has been missed since the delivery
+/// went.
+fn wait(backlog: &mut Queue<Chunk>, head: Head, content: &[u8], missed: u64, facts: &mut Facts) -> u64 {
+    let mut missed = missed;
+    if backlog.room() == 0 {
+        let dropped = backlog.len();
+        clear(backlog);
+        facts.push(Fact::Overflowed { missed: dropped });
+        facts.lose(Loss::Chunks, u64::from(dropped));
+        missed = missed.saturating_add(u64::from(dropped));
+    }
+    backlog.try_push(make(head, content)).expect("room in the backlog, made above");
+    missed
+}
+
+/// A delivery ended: what has been missed since it went, and, if its stream
+/// did not take it, all it held.
+fn landed(missed: u64, flight: Flight, done: bool, facts: &mut Facts) -> u64 {
+    if done {
         return missed;
-    };
-    let dropped = backlog.len();
-    clear(backlog);
-    facts.push(Fact::Overflowed { missed: dropped });
-    backlog.try_push(chunk).expect("a backlog has room for a chunk once it is cleared");
-    missed.saturating_add(u64::from(dropped))
+    }
+    facts.push(Fact::Undelivered { chunks: flight.chunks });
+    facts.lose(Loss::Chunks, flight.chunks);
+    missed.saturating_add(flight.told).saturating_add(flight.chunks)
 }
 
 /// Sending, delivered: what waits goes out, or the watcher is caught up.
@@ -249,10 +335,10 @@ fn caught_up(
     out: &mut Queue<Request>,
 ) -> Stream {
     if backlog.is_empty() {
-        return Stream::Idle;
+        return Stream::Idle { missed };
     }
-    deliver(token, backlog, missed, facts, out);
-    Stream::Sending { missed: 0 }
+    let flight = deliver(token, backlog, missed, facts, out);
+    Stream::Sending { missed: 0, flight }
 }
 
 /// Draining, delivered: what waits goes out, or the watch is over.
@@ -266,8 +352,8 @@ fn drained(
     if backlog.is_empty() {
         return close(token, End::Finished, facts, out);
     }
-    deliver(token, backlog, missed, facts, out);
-    Stream::Draining { missed: 0 }
+    let flight = deliver(token, backlog, missed, facts, out);
+    Stream::Draining { missed: 0, flight }
 }
 
 /// A delivery in flight, unwatched: what waits is dropped, and the watch
@@ -285,7 +371,13 @@ fn close(token: Token, end: End, facts: &mut Facts, out: &mut Queue<Request>) ->
 }
 
 /// Sends the whole backlog in one delivery, told what was missed before it.
-fn deliver(token: Token, backlog: &mut Queue<Chunk>, missed: u64, facts: &mut Facts, out: &mut Queue<Request>) {
+fn deliver(
+    token: Token,
+    backlog: &mut Queue<Chunk>,
+    missed: u64,
+    facts: &mut Facts,
+    out: &mut Queue<Request>,
+) -> Flight {
     let count = backlog.len();
     let mut chunks = List::with_capacity(count);
     for _ in 0..count {
@@ -295,6 +387,7 @@ fn deliver(token: Token, backlog: &mut Queue<Chunk>, missed: u64, facts: &mut Fa
     }
     facts.push(Fact::Delivered { chunks: count });
     out.push(Request::Deliver { watcher: token, missed, chunks: chunks.into_boxed() });
+    Flight { told: missed, chunks: u64::from(count) }
 }
 
 /// Drops what waits in `backlog`.
@@ -317,6 +410,6 @@ fn conclude(model: &mut Model, id: Id<Watcher>) {
             assert!(named == Some(id), "a watcher's name is its own");
             model.watchers.retire(id);
         }
-        Stream::Idle | Stream::Sending { .. } | Stream::Draining { .. } | Stream::Closing => {}
+        Stream::Idle { .. } | Stream::Sending { .. } | Stream::Draining { .. } | Stream::Closing => {}
     }
 }

@@ -11,7 +11,8 @@ use crate::watch::Watcher;
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Limits {
     /// Runs followed at once. A run started past them is not followed: what
-    /// it reports is dropped and counted, and a watch of it refused.
+    /// it reports is dropped and counted, and a watch of it refused. As many
+    /// runs turned away are remembered, with their items, to say so.
     pub runs: u32,
     /// Watches open at once. A watch past them is refused as busy.
     pub watchers: u32,
@@ -20,6 +21,8 @@ pub struct Limits {
     pub backlog: u32,
     /// The most bytes a report has. One past it is dropped and counted.
     pub report_bytes: u32,
+    /// The most bytes of a watch's snapshot. A watch past it is refused.
+    pub snapshot_bytes: u32,
     /// Records a batch holds, and bytes of their content in all: room for a
     /// report at least.
     pub records: u32,
@@ -58,10 +61,11 @@ pub(crate) fn ops(limits: &Limits) -> Option<u32> {
 /// between sweeps.
 ///
 /// It counts the containers, their bookkeeping included, and the payloads,
-/// not allocator overhead: the runs followed; each watch open with a full
-/// backlog, and as many ended in an iteration; the batch, with the next one made as it goes; the operations in
-/// flight; and what a step holds in hand: a report, a delivery being made of
-/// a backlog, and the watchers of a run that finished. What goes out in a
+/// not allocator overhead: the runs followed, and those turned away; each
+/// watch open with a full backlog, and as many ended in an iteration; the
+/// batch, with the next one made as it goes; the operations in flight; and
+/// what a step holds in hand: a report or a snapshot, a delivery being made
+/// of a backlog, and the watchers of a run that finished. What goes out in a
 /// request is moved out in the step that makes it, and is its receiver's to
 /// count.
 #[must_use]
@@ -74,7 +78,8 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         return None;
     }
     let report = u64::from(limits.report_bytes);
-    let runs = Map::<Token, Run>::worst_case(limits.runs)?;
+    let runs =
+        Map::<Token, Run>::worst_case(limits.runs)?.checked_add(Map::<Token, Token>::worst_case(limits.runs)?)?;
     // Each watcher held has its backlog, and those open fill theirs.
     let slots = slots(limits)?;
     let backlogs = u64::from(slots)
@@ -83,12 +88,15 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     let watchers = Slab::<Watcher>::worst_case(slots)?
         .checked_add(Map::<Token, Id<Watcher>>::worst_case(limits.watchers)?)?
         .checked_add(backlogs)?;
-    let batch =
-        List::<Record>::worst_case(limits.records)?.checked_mul(2)?.checked_add(u64::from(limits.batch_bytes))?;
+    // A batch holds no more content than its bytes, nor than its records
+    // full.
+    let content = u64::from(limits.batch_bytes).min(u64::from(limits.records).checked_mul(report)?);
+    let batch = List::<Record>::worst_case(limits.records)?.checked_mul(2)?.checked_add(content)?;
     let ops = Slab::<Op>::worst_case(ops(limits)?)?;
     let alarms = Deadlines::<Alarm>::worst_case(2)?;
     let facts = Queue::<Fact>::worst_case(limits.facts)?;
     let hand = report
+        .max(u64::from(limits.snapshot_bytes))
         .checked_add(List::<Chunk>::worst_case(limits.backlog)?)?
         .checked_add(List::<Id<Watcher>>::worst_case(limits.watchers)?)?;
     runs.checked_add(watchers)?

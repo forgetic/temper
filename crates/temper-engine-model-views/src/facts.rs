@@ -5,7 +5,8 @@
 //!
 //! Facts are outside the boundary's flow control: they are not requests, take
 //! no room in `out`, and when the queue is full they are dropped and counted.
-//! Nothing the views decide depends on whether a fact was kept.
+//! Nothing the views decide depends on whether a fact was kept. What the
+//! views lose is also counted in [`Lost`], which drops nothing.
 
 use temper_lib::Queue;
 
@@ -48,6 +49,11 @@ pub enum Fact {
     Delivered {
         chunks: u32,
     },
+    /// A watcher's stream did not take a delivery of `chunks` chunks, which
+    /// it is told it missed with its next.
+    Undelivered {
+        chunks: u64,
+    },
     /// A batch of `records` records went to the store, which kept them, or
     /// failed to.
     Appending {
@@ -84,22 +90,53 @@ pub enum Dropped {
     Oversized,
 }
 
-/// The facts not yet drained, and how many did not fit.
+/// What the views lost since the model was made, each count saturating.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Lost {
+    /// Runs not followed, for want of room.
+    pub runs: u64,
+    /// Reports dropped: past the limits, or of a run not followed.
+    pub reports: u64,
+    /// Chunks a watcher missed: dropped from its full backlog, in a delivery
+    /// its stream did not take, or of a report dropped.
+    pub chunks: u64,
+    /// Records a trace did not keep: for want of room in the batch, or in an
+    /// append that failed.
+    pub records: u64,
+    /// Facts dropped for want of room.
+    pub facts: u64,
+}
+
+impl Lost {
+    pub(crate) const NONE: Lost = Lost { runs: 0, reports: 0, chunks: 0, records: 0, facts: 0 };
+}
+
+/// What was lost, as [`Facts::lose`] counts it.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum Loss {
+    Runs,
+    Reports,
+    Chunks,
+    Records,
+}
+
+/// The facts not yet drained, and what was lost, facts that did not fit
+/// included.
 #[derive(Debug)]
 pub(crate) struct Facts {
     queue: Queue<Fact>,
-    lost: u64,
+    lost: Lost,
 }
 
 impl Facts {
     pub(crate) fn with_capacity(capacity: u32) -> Facts {
-        Facts { queue: Queue::with_capacity(capacity), lost: 0 }
+        Facts { queue: Queue::with_capacity(capacity), lost: Lost::NONE }
     }
 
     /// Keeps `fact` if there is room for it, and counts it otherwise.
     pub(crate) fn push(&mut self, fact: Fact) {
         if self.queue.try_push(fact).is_err() {
-            self.lost = self.lost.saturating_add(1);
+            self.lost.facts = self.lost.facts.saturating_add(1);
         }
     }
 
@@ -107,7 +144,18 @@ impl Facts {
         self.queue.pop()
     }
 
-    pub(crate) fn lost(&self) -> u64 {
+    /// Counts `count` more of `loss` lost.
+    pub(crate) fn lose(&mut self, loss: Loss, count: u64) {
+        let counter = match loss {
+            Loss::Runs => &mut self.lost.runs,
+            Loss::Reports => &mut self.lost.reports,
+            Loss::Chunks => &mut self.lost.chunks,
+            Loss::Records => &mut self.lost.records,
+        };
+        *counter = counter.saturating_add(count);
+    }
+
+    pub(crate) fn lost(&self) -> Lost {
         self.lost
     }
 }

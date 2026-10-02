@@ -2,11 +2,12 @@
 //! section 3).
 
 use alloc::boxed::Box;
+use core::mem;
 
 use temper_lib::{Deadlines, Env, Id, List, Map, Queue, Slab, Time, Token};
 
-use crate::boundary::{Event, Kind, Phase, Policy, Request, Subject};
-use crate::facts::{Dropped, Fact, Facts};
+use crate::boundary::{Event, Kind, Policy, Request, Subject};
+use crate::facts::{Dropped, Fact, Facts, Loss, Lost};
 use crate::limits::{self, Limits};
 use crate::trace::{self, Alarm, Batch, Store};
 use crate::watch::{self, Head, Watcher};
@@ -14,8 +15,11 @@ use crate::watch::{self, Head, Watcher};
 /// The views sub-model's state.
 #[derive(Debug)]
 pub struct Model {
-    /// The runs followed, by the parent's token for each.
+    /// The runs followed, by the parent's token for each; and those turned
+    /// away for want of room, with their items, as many as there is room
+    /// for, so that a watch of one, and their items' watchers, are told.
     pub(crate) runs: Map<Token, Run>,
+    pub(crate) unfollowed: Map<Token, Token>,
     /// The watchers, and the names of those whose watch is open: the
     /// parent's token for each.
     pub(crate) watchers: Slab<Watcher>,
@@ -32,34 +36,49 @@ pub struct Model {
     pub(crate) facts: Facts,
 }
 
-/// A run followed: the item it is for, and its capture policy.
+/// A run followed: the item it is for, its attempt, and its capture policy.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct Run {
     pub(crate) item: Token,
+    pub(crate) attempt: Token,
     pub(crate) policy: Policy,
 }
 
 /// A store operation in flight.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum Op {
-    Append,
+    /// An append of so many records.
+    Append {
+        records: u32,
+    },
     Expire,
+    /// Terminal: its terminal has come, and its slot is freed at the
+    /// reclaim point.
+    Ended,
 }
 
 impl Model {
-    /// A model with room for `limits`.
+    /// A model with room for `limits`, started at `now`. The store may hold
+    /// what an earlier engine kept, so the model starts sweeping it a period
+    /// from now, and goes on until an expire has covered what was reported
+    /// before it started.
     #[must_use]
-    pub fn new(limits: &Limits) -> Model {
+    pub fn new(limits: &Limits, now: Time) -> Model {
         let ops = limits::ops(limits).expect("worst_case accepted the limits");
+        let slots = limits::slots(limits).expect("worst_case accepted the limits");
+        let next = now.saturating_add(limits.sweep);
+        let mut alarms = Deadlines::with_capacity(2);
+        alarms.arm(Alarm::Sweep, next).expect("room for each alarm");
         Model {
             runs: Map::with_capacity(limits.runs),
-            watchers: Slab::with_capacity(limits::slots(limits).expect("worst_case accepted the limits")),
+            unfollowed: Map::with_capacity(limits.runs),
+            watchers: Slab::with_capacity(slots),
             names: Map::with_capacity(limits.watchers),
             batch: Batch { records: List::with_capacity(limits.records), bytes: 0 },
             appending: 0,
-            store: Store::Clean,
+            store: Store::Kept { newest: now, next },
             ops: Slab::with_capacity(ops),
-            alarms: Deadlines::with_capacity(2),
+            alarms,
             facts: Facts::with_capacity(limits.facts),
         }
     }
@@ -89,13 +108,20 @@ impl Model {
         self.ops.len()
     }
 
-    /// Whether records the views sent may still be in the store, to expire.
+    /// Whether records may still be in the store, to expire: those sent, or
+    /// those an earlier engine kept.
     #[must_use]
     pub fn is_sweeping(&self) -> bool {
         match self.store {
             Store::Clean => false,
             Store::Kept { .. } | Store::Expiring { .. } => true,
         }
+    }
+
+    /// What the views lost since the model was made.
+    #[must_use]
+    pub fn lost(&self) -> Lost {
+        self.facts.lost()
     }
 
     /// When the earliest deadline falls due.
@@ -123,7 +149,7 @@ impl Model {
     /// How many facts were dropped for want of room since the model was made.
     #[must_use]
     pub fn facts_lost(&self) -> u64 {
-        self.facts.lost()
+        self.facts.lost().facts
     }
 
     /// The reclaim point: frees what ended in this iteration.
@@ -144,23 +170,23 @@ pub const fn max_out(limits: &Limits) -> u32 {
 /// Handles one event, emitting at most [`max_out`] requests.
 pub fn step(model: &mut Model, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     match event {
-        Event::Started { run, item, policy } => started(model, run, item, policy),
+        Event::Started { run, attempt, item, policy } => started(model, run, Run { item, attempt, policy }),
         Event::Reported { run, kind, content } => reported(model, env, run, kind, content, out),
         Event::Finished { run } => finished(model, run, out),
         Event::Phase { item, repository, phase } => changed(model, env, item, repository, phase, out),
-        Event::Watch { watcher, subject } => watch::watch(model, env, watcher, subject, out),
+        Event::Watch { watcher, subject, snapshot } => watch::watch(model, env, watcher, subject, snapshot, out),
         Event::Unwatch { watcher } => watch::unwatch(model, watcher, out),
-        Event::Delivered { watcher } => watch::delivered(model, watcher, out),
-        // A terminal that names no operation in flight is dropped.
+        Event::Delivered { watcher, done } => watch::delivered(model, watcher, done, out),
+        // A terminal that names nothing in flight is dropped.
         Event::Appended { owner, done } => match end(model, owner) {
-            Some(Op::Append) => trace::appended(model, done),
+            Some(Op::Append { records }) => trace::appended(model, records, done),
             Some(Op::Expire) => unreachable!("an expire ends as expired"),
-            None => {}
+            Some(Op::Ended) | None => {}
         },
         Event::Expired { owner, done } => match end(model, owner) {
             Some(Op::Expire) => trace::expired(model, env, done),
-            Some(Op::Append) => unreachable!("an append ends as appended"),
-            None => {}
+            Some(Op::Append { .. }) => unreachable!("an append ends as appended"),
+            Some(Op::Ended) | None => {}
         },
     }
     trace::follow(model, env, out);
@@ -182,17 +208,25 @@ pub fn fire(model: &mut Model, env: &Env<Limits>, out: &mut Queue<Request>) {
     trace::follow(model, env, out);
 }
 
-/// A run was assigned: it is followed, unless there is no room for it.
-fn started(model: &mut Model, run: Token, item: Token, policy: Policy) {
-    let fact = match model.runs.insert(run, Run { item, policy }) {
-        Ok(_) => Fact::Followed,
-        Err(_) => Fact::Unfollowed,
-    };
-    model.facts.push(fact);
+/// A run's attempt was assigned: the run is followed, unless there is no
+/// room for it, and then remembered as turned away, if there is room for
+/// that.
+fn started(model: &mut Model, token: Token, run: Run) {
+    if model.runs.insert(token, run).is_ok() {
+        model.unfollowed.remove(&token);
+        model.facts.push(Fact::Followed);
+        return;
+    }
+    if model.unfollowed.contains_key(&token) || model.unfollowed.len() < model.unfollowed.capacity() {
+        model.unfollowed.insert(token, run.item).expect("room for a run turned away, checked above");
+    }
+    model.facts.lose(Loss::Runs, 1);
+    model.facts.push(Fact::Unfollowed);
 }
 
 /// A run reported: streamed to the watchers of the run and of its item, and
-/// traced as its policy says.
+/// traced as its policy says; or, past the limits or of a run not followed,
+/// dropped, and the watchers that would have had it told they missed it.
 fn reported(
     model: &mut Model,
     env: &Env<Limits>,
@@ -205,40 +239,51 @@ fn reported(
         Ok(len) => len <= env.limits.report_bytes,
         Err(_) => false,
     };
-    if !within {
-        model.facts.push(Fact::Dropped { dropped: Dropped::Oversized });
-        return;
+    if let Some(&Run { item, attempt, policy }) = model.runs.get(&run) {
+        if within {
+            let head = Head::Report { run, attempt, kind, at: env.now };
+            let watchers = watch::offer(model, Subject::Run(run), Subject::Item(item), head, &content, out);
+            let kept = trace::record(model, env, run, attempt, kind, content, policy.capture(kind), out);
+            model.facts.push(Fact::Reported { watchers, kept });
+            return;
+        }
+        watch::miss(model, Subject::Run(run), Subject::Item(item));
+    } else if let Some(&item) = model.unfollowed.get(&run) {
+        watch::miss(model, Subject::Item(item), Subject::Item(item));
     }
-    let Some(&Run { item, policy }) = model.runs.get(&run) else {
-        model.facts.push(Fact::Dropped { dropped: Dropped::Unfollowed });
-        return;
-    };
-    let head = Head::Report { run, kind, at: env.now };
-    let watchers = watch::offer(model, Subject::Run(run), Subject::Item(item), head, &content, out);
-    let kept = trace::record(model, env, run, kind, content, policy.capture(kind), out);
-    model.facts.push(Fact::Reported { watchers, kept });
+    let dropped = if within { Dropped::Unfollowed } else { Dropped::Oversized };
+    model.facts.lose(Loss::Reports, 1);
+    model.facts.push(Fact::Dropped { dropped });
 }
 
 /// A run ended: it is no longer followed, and its watchers end.
 fn finished(model: &mut Model, run: Token, out: &mut Queue<Request>) {
     if model.runs.remove(&run).is_some() {
         watch::finish(model, run, out);
+    } else {
+        model.unfollowed.remove(&run);
     }
 }
 
 /// An item's phase changed: streamed to the watchers of the item and of its
 /// board.
-fn changed(model: &mut Model, env: &Env<Limits>, item: Token, repository: u32, phase: Phase, out: &mut Queue<Request>) {
+fn changed(model: &mut Model, env: &Env<Limits>, item: Token, repository: u32, phase: u32, out: &mut Queue<Request>) {
     let head = Head::Phase { item, phase, at: env.now };
     let watchers = watch::offer(model, Subject::Item(item), Subject::Board(repository), head, &[], out);
     model.facts.push(Fact::Changed { watchers });
 }
 
 /// Ends the store operation `owner` names: what it was, or `None` if it
-/// names none in flight.
+/// names none in flight, as a duplicate terminal does.
 fn end(model: &mut Model, owner: Token) -> Option<Op> {
     let id = Id::from_token(owner);
-    let op = *model.ops.get(id)?;
-    model.ops.retire(id);
-    Some(op)
+    let op = model.ops.get_mut(id)?;
+    let ended = mem::replace(op, Op::Ended);
+    match ended {
+        Op::Append { .. } | Op::Expire => {
+            model.ops.retire(id);
+            Some(ended)
+        }
+        Op::Ended => None,
+    }
 }
