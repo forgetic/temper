@@ -8,7 +8,6 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use temper_agent_model::run::charter::{Checkout, Repository as Placed};
-use temper_agent_model::run::outcome::Declared;
 use temper_agent_model::run::{self, Spend};
 use temper_agent_model::{self as agent};
 use temper_checkout_fake::git::Move;
@@ -24,6 +23,7 @@ use temper_world::Stage;
 use super::{Allowed, Attempt, Delivery, Demands, NAME, Process, Repository, Run, SLACK, World, files};
 use crate::channel::{self, Link};
 use crate::fixture;
+use crate::referee::{Report, Seen};
 use crate::script::Job;
 
 impl World {
@@ -68,7 +68,9 @@ impl World {
         if let Some(save) = &assignment.save {
             self.save_branches.insert(save.to_vec());
         }
-        let attempt = Attempt { job, repositories: repositories.collect(), process: None, answered: false };
+        let repositories: Vec<Repository> = repositories.collect();
+        self.observe(Seen::Assigned { attempt: assignment.attempt, repositories: repositories.clone() });
+        let attempt = Attempt { job, repositories, process: None, answered: false };
         assert!(self.attempts.insert(assignment.attempt, attempt).is_none(), "the engine names its attempts apart");
         self.stats.assigned += 1;
         self.log(&format!("engine assigns {} as {job:?}", assignment.attempt.raw()));
@@ -112,8 +114,9 @@ impl World {
             }
             worker::Request::Signal { owner, process, signal: _ } => {
                 let id = self.process_of(owner, process);
-                let process = self.processes.get_mut(&id).expect("looked up above");
-                process.stopped_first |= !process.finish_read;
+                if !self.processes[&id].finish_read {
+                    self.observe(Seen::Stopped { process: id });
+                }
                 let at = self.now.saturating_add(self.draw(self.settings.pipe));
                 self.schedule(at, Delivery::Signal { process: id });
             }
@@ -174,15 +177,12 @@ impl World {
             written: VecDeque::new(),
             demands: Demands::default(),
             finish_read: false,
-            stopped_first: false,
             exited: None,
             told_exit: None,
             reaped: false,
             lost: 0,
             live: BTreeSet::new(),
             counted: BTreeMap::new(),
-            asked: BTreeMap::new(),
-            left: BTreeMap::new(),
         };
         self.processes.insert(id, process);
         self.spaces.entry(workspace).or_default().process = Some(id);
@@ -234,6 +234,7 @@ impl World {
             .repositories
             .iter()
             .find_map(|repository| Some((repository.remote.clone(), repository.push.clone()?)));
+        self.observe(Seen::Started { process: id, attempt });
         let workspace = self.processes[&id].workspace;
         let mut placed = Vec::new();
         for (name, writable) in named {
@@ -417,8 +418,7 @@ impl World {
             let files = files(&self.disk, workspace, &name);
             (name, files)
         });
-        let left = left.collect();
-        self.processes.get_mut(&id).expect("looked up above").left = left;
+        self.observe(Seen::Gone { process: id, left: left.collect() });
         self.log(&format!("agent {id} {}", if killed { "is killed" } else { "exits" }));
         self.serve_read(id);
         self.serve_exit(id);
@@ -478,28 +478,27 @@ impl World {
             | Op::CheckOut { .. }
             | Op::Commit { .. } => None,
         };
-        let moves = self.forge.moves().len();
+        let before = self.forge.moves().len();
         let done = io::perform(&mut self.forge, &mut self.disk, op);
-        for Move { remote, branch, from, to } in &self.forge.moves()[moves..] {
+        let moved = self.forge.moves()[before..].to_vec();
+        for Move { remote, branch, from, to } in moved {
             if let Some(from) = from {
                 assert!(
-                    self.forge.is_ancestor(*from, *to),
+                    self.forge.is_ancestor(from, to),
                     "{}: {} moved only by a fast-forward",
-                    String::from_utf8_lossy(remote),
-                    String::from_utf8_lossy(branch)
+                    String::from_utf8_lossy(&remote),
+                    String::from_utf8_lossy(&branch)
                 );
             }
+            let tree = self.forge.object(to).tree.clone();
+            self.observe(Seen::Moved { remote, branch, commit: to, tree });
         }
-        // The worker commits exactly what the agent left: the tree it asked to
-        // push while it runs, the tree it left once it has gone.
         if let Some(repository) = committed
             && let Done::Committed { commit } = &done
         {
             let id = self.spaces.get(&workspace).and_then(|space| space.process).expect("a change is an agent's");
-            let process = &self.processes[&id];
-            let left = if process.exited.is_none() { &process.asked } else { &process.left };
-            let tree = &self.forge.object(io::fake(*commit)).tree;
-            assert_eq!(Some(tree), left.get(&repository), "the worker commits exactly the tree its agent left");
+            let tree = self.forge.object(io::fake(*commit)).tree.clone();
+            self.observe(Seen::Committed { process: id, repository, tree });
         }
         if let Some(branch) = pushed
             && done == Done::Succeeded
@@ -528,17 +527,15 @@ impl World {
         self.log(&format!("another party moves {}", String::from_utf8_lossy(branch)));
     }
 
-    /// The worker answers the engine for `attempt`: where the worker and the
-    /// agent meet. The engine records what the run said, if it said anything
-    /// before its agent went: the outcome it accepted, or how it failed, a
-    /// cancel being the worker's to report; and what landed is on the forge,
-    /// exactly the trees its agent left when it asked to push.
+    /// The worker answers the engine for `attempt`: the engine hears it, and
+    /// the referee judges it where the worker and the agent meet.
     fn reported(&mut self, attempt: Token, answer: &host::Answer) {
         let kind = translate::answer_kind(answer);
         self.log(&format!("worker answers {}: {kind}", attempt.raw()));
         let record = self.attempts.get_mut(&attempt).expect("the worker answers attempts the engine made");
         assert!(!record.answered, "the worker answers each attempt once");
         record.answered = true;
+        let process = record.process;
         self.stats.reported += 1;
         let (landed, ends): (&[host::Landed], bool) = match answer {
             host::Answer::Refused(_) => (&[], false),
@@ -555,68 +552,21 @@ impl World {
             host::Answer::Refused(_) | host::Answer::Ended { .. } | host::Answer::Parked { .. } => false,
         };
         self.stats.unprepared += u32::from(unprepared);
-        let Some(id) = record.process else {
-            assert!(!ends && landed.is_empty(), "a run ends, and lands a change, only once its agent started");
-            return;
-        };
-        let process = &self.processes[&id];
-        let state = process.run.as_ref().expect("an agent started carries a run");
-        // Stopped before the worker read how the run finishes, the run is
-        // answered as the worker stopped it: its agent's fault, or a cancel.
-        let stopped = match answer {
-            host::Answer::Failed { failure, .. } => match failure {
-                host::Failure::Cancelled(_) | host::Failure::Agent(_) => true,
-                host::Failure::Unprepared(_) | host::Failure::Run(_) => false,
-            },
-            host::Answer::Refused(_) | host::Answer::Ended { .. } | host::Answer::Parked { .. } => false,
-        };
-        let own = !(process.stopped_first && stopped);
-        let expected = match &state.answer {
-            Some(_) if !own => None,
-            Some(run::Answer::Accepted { outcome, .. }) => {
-                let host::Answer::Ended { outcome: reported, work } = answer else {
-                    panic!("a run that accepted its outcome ends with it, not {kind}");
-                };
-                assert_eq!(**reported, *channel::outcome(outcome), "the engine records the outcome the run accepted");
-                match outcome {
-                    Declared::Change(_) => assert!(!work.landed.is_empty(), "a change accepted has landed"),
-                    Declared::Verdict(_) => assert!(work.landed.is_empty(), "a verdict lands nothing"),
-                }
-                None
-            }
-            Some(run::Answer::Failed { failure: run::Failure::Cancelled, .. }) => {
-                assert!(stopped, "a run cancelled is answered as the worker stopped it, not {kind}");
-                None
-            }
-            Some(run::Answer::Failed { failure, .. }) => Some(host::Failure::Run(run_failure(*failure))),
-            Some(run::Answer::Refused(_)) => Some(host::Failure::Run(host::RunFailure::Policy)),
-            None => {
-                assert!(!ends, "a run ends only as its agent says");
-                None
-            }
-        };
-        if let Some(expected) = expected {
-            let failed = match answer {
-                host::Answer::Failed { failure, .. } => Some(*failure),
-                host::Answer::Refused(_) | host::Answer::Ended { .. } | host::Answer::Parked { .. } => None,
-            };
-            assert_eq!(failed, Some(expected), "the engine records how the run failed");
+        let landed: Vec<(usize, u64)> = landed
+            .iter()
+            .map(|landed| {
+                let index = usize::try_from(landed.repository).expect("a small place");
+                (index, io::fake(Commit::new(landed.commit)))
+            })
+            .collect();
+        let commits = landed.iter().map(|(_, commit)| *commit).collect();
+        self.observe(Seen::Reported { attempt, kind, report: Report::of(answer), landed });
+        if let Some(id) = process {
+            let run = self.processes.get_mut(&id).and_then(|process| process.run.as_mut());
+            let run = run.expect("an agent started carries a run");
+            run.reported = Some(kind);
+            run.landed = commits;
         }
-        let mut commits = Vec::new();
-        for landed in landed {
-            let index = usize::try_from(landed.repository).expect("a small place");
-            let repository = &record.repositories[index];
-            let commit = io::fake(Commit::new(landed.commit));
-            let branch = repository.push.as_deref().expect("a change lands in a repository that may be written");
-            let tip = self.forge.branch(&repository.remote, branch).expect("a branch landed on is on the forge");
-            assert!(self.forge.is_ancestor(commit, tip), "what landed is on its branch");
-            let tree = &self.forge.object(commit).tree;
-            assert_eq!(Some(tree), process.asked.get(&repository.name), "what landed is the tree its agent left");
-            commits.push(commit);
-        }
-        let run = self.processes.get_mut(&id).and_then(|process| process.run.as_mut()).expect("looked up above");
-        run.reported = Some(kind);
-        run.landed = commits;
     }
 }
 
@@ -630,17 +580,6 @@ fn is_finish(message: &Up) -> bool {
         | Up::Long { .. }
         | Up::LongDone
         | Up::Waiting { .. } => false,
-    }
-}
-
-/// The worker's word for how a run failed, as it reports it.
-fn run_failure(failure: run::Failure) -> host::RunFailure {
-    match failure {
-        run::Failure::Model(_) => host::RunFailure::Model,
-        run::Failure::Budget(_) => host::RunFailure::Budget,
-        run::Failure::Policy(_) => host::RunFailure::Policy,
-        run::Failure::Cancelled => host::RunFailure::Cancelled,
-        run::Failure::Stale => host::RunFailure::Stale,
     }
 }
 

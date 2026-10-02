@@ -49,15 +49,20 @@
 //! worker's (an agent spawned in a workspace io has, one at a time; every
 //! git operation's deadline and identity, and none in a workspace while its
 //! agent runs but the push it asked for; a branch moved only by a
-//! fast-forward; each attempt answered once); and the meeting point's (the
-//! worker commits exactly the tree the agent left; the engine records the
-//! outcome the run accepted, or how it failed, a cancel being the worker's to
-//! report; and what landed is on the forge). And the invariants once it
+//! fast-forward; each attempt answered once). And the invariants once it
 //! settles: the engine took one answer for each attempt and has nothing out,
 //! the worker holds nothing, every agent process exited, was reaped and read
 //! to its end, each agent that exited of itself held nothing, nothing is in
 //! flight, and facts that add up to what crossed the boundary unless some
 //! were dropped or an agent was killed.
+//!
+//! What the scenarios expect of the worker and the agent together is held by
+//! a referee (testing-pyramid.md, 5.2; [`referee`]), which sees only what the
+//! fakes see and ends each run with its verdict: the worker commits exactly
+//! the tree the agent left; the engine records the outcome the run accepted,
+//! or how it failed, a cancel being the worker's to report; what landed is on
+//! the forge; and every assignment is answered within the wall time the
+//! worker's watchdog gives a run, and a margin.
 //!
 //! Not exercised, as the agent's side does not do it yet: inbound events and
 //! a run's waiting for them, parking and snapshots, and relayed calls (forge
@@ -65,6 +70,7 @@
 
 pub mod channel;
 pub mod fixture;
+pub mod referee;
 pub mod script;
 pub mod translate;
 mod world;

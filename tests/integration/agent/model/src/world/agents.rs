@@ -16,6 +16,7 @@ use temper_llm_model as provider;
 
 use super::{Call, Checking, Checks, Delivery, Owner, Pending, Process, Work, World, answer_kind, files};
 use crate::channel::{self, Toward};
+use crate::referee::Seen;
 use crate::script;
 use crate::{fixture, translate};
 
@@ -172,6 +173,7 @@ impl World {
             Request::Answer { to, answer } => {
                 assert_eq!(*to, ReplyTo::new(link), "the run answers whoever started it");
                 self.answered(id, answer);
+                self.observe(Seen::Answered { process: id, answer: copy(answer) });
                 let now = self.now;
                 let state = self.run_of(id);
                 (state.answer, state.answered) = (Some(copy(answer)), Some(now));
@@ -203,14 +205,14 @@ impl World {
                 let process = &self.processes[&id];
                 let workspace = process.workspace;
                 let link = process.link.as_ref().expect("checked above");
-                let asked: Vec<_> = link
+                let trees = link
                     .checkout
                     .repositories
                     .iter()
                     .filter(|repository| repository.writable)
                     .map(|repository| (repository.name.to_vec(), files(&self.disk, workspace, &repository.name)))
                     .collect();
-                self.process_mut(id).asked.extend(asked);
+                self.observe(Seen::Asked { process: id, trees });
             }
             Request::CancelHost { .. } => self.stats.host_cancels += 1,
             Request::Complete { .. }

@@ -317,9 +317,15 @@ fn random_worlds_settle_with_every_invariant_held() {
     let mut ends = Ends::default();
     let mut reported = BTreeMap::new();
     let (mut lost, mut unprepared, mut invalid, mut landed, mut saves) = (0, 0, 0, 0, 0);
+    let mut checks = 0;
     for seed in 0..120 {
         let mut world = World::new(Settings::random(seed));
         world.run(ITERATIONS);
+        // The referee passed the world, having seen every assignment
+        // answered in time.
+        let (checked, met) = world.judged();
+        assert_eq!(met, u64::from(world.stats().assigned), "the referee saw every assignment answered");
+        checks += checked;
         for run in world.runs() {
             ends.count(run);
             *reported.entry(run.reported.expect("every attempt is answered")).or_insert(0) += 1;
@@ -342,6 +348,7 @@ fn random_worlds_settle_with_every_invariant_held() {
     assert!(REPORTED.iter().all(|kind| reported.contains_key(kind)), "the worker answered every way: {reported:?}");
     assert!(unprepared > 0 && invalid > 0, "some runs never reached an agent: {unprepared}, {invalid}");
     assert!(landed > 0 && saves > 0, "changes landed, and unfinished work was saved: {landed}, {saves}");
+    assert!(checks > 0, "the referee checked what the worker and the agents did");
 }
 
 #[test]

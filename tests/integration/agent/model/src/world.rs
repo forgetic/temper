@@ -12,10 +12,11 @@ use temper_worker_model::agent::channel::{Down, Up};
 use temper_worker_model::checkout::git::{Commit, Op};
 use temper_worker_model::{self as worker, host};
 use temper_worker_model_checkout_tests::translate as io;
-use temper_world::{Key, Ledger, Schedule, Span, Stage, Trace};
+use temper_world::{Key, Ledger, Referee, Schedule, Span, Stage, Trace};
 
 use crate::channel::{self, Link};
 use crate::fixture;
+use crate::referee::{Meeting, Repository, Seen, Stimulus};
 use crate::script::{self, Job};
 
 mod agents;
@@ -748,15 +749,6 @@ struct Attempt {
     answered: bool,
 }
 
-/// A repository of an attempt's workspace.
-#[derive(Debug)]
-struct Repository {
-    name: Vec<u8>,
-    remote: Vec<u8>,
-    /// The branch a change is pushed to, if it may be written.
-    push: Option<Vec<u8>>,
-}
-
 /// An agent process, as io and the agent's protocol layer keep it, and what
 /// the world follows of its run.
 struct Process {
@@ -780,10 +772,8 @@ struct Process {
     /// each with when it is through the pipe; and what the worker waits for.
     written: VecDeque<(Time, Up)>,
     demands: Demands,
-    /// Whether the worker has read how the run finishes, and whether it
-    /// signalled the process before it had.
+    /// Whether the worker has read how the run finishes.
     finish_read: bool,
-    stopped_first: bool,
     /// When it exited; when io tells the worker so; and whether its tree has
     /// been reaped.
     exited: Option<Time>,
@@ -795,10 +785,6 @@ struct Process {
     /// messages of each session's prompts have had their results counted.
     live: BTreeSet<Token>,
     counted: BTreeMap<Token, usize>,
-    /// What its writable repositories held when it last asked to push, and
-    /// what every repository held when it exited.
-    asked: BTreeMap<Vec<u8>, Files>,
-    left: BTreeMap<Vec<u8>, Files>,
 }
 
 /// What the worker waits for of an agent process: to read the next message
@@ -920,6 +906,9 @@ pub struct World {
     /// The runs' pushes in flight.
     pushes: Ledger<Owner, ()>,
 
+    /// What the scenario expects of the worker and the agent together.
+    referee: Referee<Meeting>,
+
     stats: Stats,
     told: Told,
     trace: Trace,
@@ -979,6 +968,7 @@ impl World {
             abort_lost: BTreeSet::new(),
             passed: BTreeSet::new(),
             pushes: Ledger::new("push"),
+            referee: Referee::new(Meeting::new(answered_within(&settings.worker))),
             stats: Stats::default(),
             told: Told::default(),
             trace: Trace::default(),
@@ -1006,6 +996,13 @@ impl World {
     #[must_use]
     pub fn tally(&self) -> engine::Tally {
         self.engine.tally()
+    }
+
+    /// How many safety checks the referee made, and how many liveness
+    /// expectations it saw met.
+    #[must_use]
+    pub fn judged(&self) -> (u64, u64) {
+        self.referee.judged()
     }
 
     /// What crossed between the models and the world, in order, with times.
@@ -1056,6 +1053,16 @@ impl World {
             process.stage.tick(now);
         }
         self.deliver();
+        // The referee fires what is due: a deadline that passes fails the
+        // test, and the stimuli due are injected.
+        if self.referee.is_due(now) {
+            let mut stimuli = Vec::new();
+            self.referee.fire(now, &mut stimuli);
+            self.referee.assert_holding(self.settings.seed);
+            for stimulus in &stimuli {
+                inject(stimulus);
+            }
+        }
 
         // Each stage resumes what is ready, then takes its events, then fires
         // its alarms, while it has room for what one more may produce.
@@ -1255,6 +1262,7 @@ impl World {
         if self.stats.kills == 0 && self.facts_lost() == 0 {
             self.assert_told();
         }
+        self.referee.assert_passed(self.settings.seed);
     }
 
     fn has_work_now(&self) -> bool {
@@ -1267,6 +1275,7 @@ impl World {
             || self.worker.is_due(self.now)
             || self.provider.is_due(self.now)
             || self.wire.is_due(self.now)
+            || self.referee.is_due(self.now)
             || self.processes.values().any(|process| match &process.agent {
                 Some(agent) => {
                     process.stage.has_events()
@@ -1280,11 +1289,17 @@ impl World {
 
     fn next_time(&self) -> Option<Time> {
         let agents = self.processes.values().filter_map(|process| process.agent.as_ref()?.next_deadline());
-        [self.wire.next_time(), self.engine.next_deadline(), self.worker.next_deadline(), self.provider.next_deadline()]
-            .into_iter()
-            .flatten()
-            .chain(agents)
-            .min()
+        [
+            self.wire.next_time(),
+            self.engine.next_deadline(),
+            self.worker.next_deadline(),
+            self.provider.next_deadline(),
+            self.referee.next_deadline(),
+        ]
+        .into_iter()
+        .flatten()
+        .chain(agents)
+        .min()
     }
 
     fn send(&mut self, delivery: Delivery) {
@@ -1304,9 +1319,28 @@ impl World {
         span.draw(&mut self.rng)
     }
 
+    /// The referee observes `seen`, which ends the test if it breaks an
+    /// expectation.
+    fn observe(&mut self, seen: Seen) {
+        self.referee.observe(self.now, seen);
+        self.referee.assert_holding(self.settings.seed);
+    }
+
     fn log(&mut self, line: &str) {
         self.trace.log(self.now, line);
     }
+}
+
+/// What the referee injects: nothing, in this world.
+fn inject(stimulus: &Stimulus) {
+    match *stimulus {}
+}
+
+/// How long the worker may take to answer an assignment: the wall time its
+/// watchdog gives a run, and five minutes to prepare the run's workspace and
+/// to wind the run down.
+fn answered_within(worker: &worker::Limits) -> Duration {
+    worker.agent.wall_time.saturating_add(Duration::from_secs(300))
 }
 
 /// What a repository of `workspace` holds, less its git directory.
