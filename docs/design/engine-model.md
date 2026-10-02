@@ -350,6 +350,10 @@ The fleet sub-model knows the workers and the runs they host.
 - **Attempts are fenced.** Every assignment carries its attempt; once the
   engine has cancelled or replaced an attempt, whatever it still sends is
   dropped.
+- **Answers are acknowledged.** A worker keeps a run's answer until the
+  engine acknowledges it, and sends it again after every hello; the
+  engine drops a duplicate answer for an attempt it already has,
+  acknowledging it again.
 - **Losing contact.** A worker that drops its channel keeps its runs for a
   grace period; on reconnecting it says what it hosts, and the engine
   keeps or cancels each run. Past the grace, the runs are presumed lost
