@@ -8,10 +8,10 @@ members = [
     "crates/temper-agent-model-run",
     "crates/temper-agent-model-session",
     "crates/temper-agent-model-tools",
-    "crates/temper-worker-model-host",
-    "crates/temper-worker-model-checkout",
-    "testing/temper-fake-engine-model",
     "crates/temper-worker-model-agent",
+    "crates/temper-worker-model-checkout",
+    "crates/temper-worker-model-host",
+    "testing/temper-fake-engine-model",
     "testing/temper-fake-worker-model",
     "testing/temper-llm-model",
     "tests/integration/agent/model",
@@ -19,9 +19,9 @@ members = [
     "tests/integration/agent/session",
     "tests/integration/agent/tools",
     "tests/integration/checkout",
+    "tests/integration/worker/agent",
     "tests/integration/worker/checkout",
     "tests/integration/worker/host",
-    "tests/integration/worker/agent",
     "tests/integration/world",
 ]
 
@@ -37,10 +37,10 @@ temper-agent-model = { path = "crates/temper-agent-model" }
 temper-agent-model-run = { path = "crates/temper-agent-model-run" }
 temper-agent-model-session = { path = "crates/temper-agent-model-session" }
 temper-agent-model-tools = { path = "crates/temper-agent-model-tools" }
-temper-worker-model-host = { path = "crates/temper-worker-model-host" }
-temper-worker-model-checkout = { path = "crates/temper-worker-model-checkout" }
-temper-fake-engine-model = { path = "testing/temper-fake-engine-model" }
 temper-worker-model-agent = { path = "crates/temper-worker-model-agent" }
+temper-worker-model-checkout = { path = "crates/temper-worker-model-checkout" }
+temper-worker-model-host = { path = "crates/temper-worker-model-host" }
+temper-fake-engine-model = { path = "testing/temper-fake-engine-model" }
 temper-fake-worker-model = { path = "testing/temper-fake-worker-model" }
 temper-llm-model = { path = "testing/temper-llm-model" }
 temper-checkout-fake = { path = "tests/integration/checkout" }
