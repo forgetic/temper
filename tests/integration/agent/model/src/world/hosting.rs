@@ -263,6 +263,7 @@ impl World {
             change: change.is_some(),
             checks: change.is_some_and(|spec| spec.checks) && writable,
             verdicts: !decoded.outcome.verdicts.is_empty(),
+            writable,
         };
         let run = Run {
             item,

@@ -111,6 +111,31 @@ fn a_review_by_an_agent_asks_for_changes_after_a_verdict_the_run_rejects() {
 }
 
 #[test]
+fn a_review_by_an_agent_that_may_write_still_lands_only_its_verdict() {
+    let work = Work::Change { checks: true, reviewer: Reviewer::Editor };
+    let mut world = World::new(Settings::calm(2).doing(Job::Coding, work));
+    world.run(ITERATIONS);
+
+    // The review's checkout was writable, yet its charter allows only a
+    // verdict: nothing of it was pushed, and its verdict was posted.
+    let review = world.runs().find(|run| run.job == Job::Review);
+    let review = review.unwrap_or_else(|| panic!("a review ran\n{}", trace(&world)));
+    let allowed = review.allowed;
+    assert!(allowed.writable && allowed.verdicts && !allowed.change, "{allowed:?}");
+    assert!(
+        matches!(review.answer, Some(Answer::Accepted { outcome: Declared::Verdict(_), .. })),
+        "{:?}\n{}",
+        review.answer,
+        trace(&world)
+    );
+    assert!(review.pushes.is_empty() && review.checked.is_empty(), "a verdict is neither checked nor pushed");
+    assert_eq!((review.reported, &review.landed[..]), (Some("ended"), &[][..]), "a verdict lands nothing");
+    let item = world.items()[0];
+    let outcomes = world.mirror().outcomes(deployment::name(item.repository), item.number);
+    assert!(outcomes.iter().any(|posted| matches!(posted.outcome, Outcome::Verdict { .. })), "{outcomes:?}");
+}
+
+#[test]
 fn an_agent_step_reports_and_its_item_is_done() {
     let mut world = World::new(Settings::calm(10).doing(Job::Reporting, Work::Agent));
     world.run(ITERATIONS);
@@ -404,6 +429,7 @@ fn sweep(conflicts_held: bool) {
     let (mut lost, mut unprepared, mut invalid, mut landed, mut saves) = (0, 0, 0, 0, 0);
     let (mut merged, mut stopped, mut checks) = (0, 0, 0);
     let mut items = Items::default();
+    let mut editors = 0;
     for seed in 0..120 {
         let settings = Settings { conflicts_held, ..Settings::random(seed) };
         let faults = settings.faults();
@@ -431,6 +457,8 @@ fn sweep(conflicts_held: bool) {
         checks += checked;
         for run in world.runs() {
             ends.count(run);
+            let verdict = matches!(run.answer, Some(Answer::Accepted { outcome: Declared::Verdict(_), .. }));
+            editors += u32::from(verdict && run.allowed.writable);
             *reported.entry(run.reported.expect("every attempt is answered")).or_insert(0) += 1;
         }
         lost += u32::from(world.told().1 > 0);
@@ -453,6 +481,7 @@ fn sweep(conflicts_held: bool) {
     assert!(landed > 0 && saves > 0, "changes landed, and unfinished work was saved: {landed}, {saves}");
     assert!(merged > 0 && stopped > 0, "changes were merged, and runs stopped: {merged}, {stopped}");
     assert!(checks > 0, "the referees checked what the engine, the worker and the agents did");
+    assert!(editors > 0, "some runs finished with a verdict in a checkout they could write");
     let Items { closed, failures, stopped, sound, .. } = items;
     assert!(
         closed > 0 && failures > 0 && stopped > 0 && sound > 0,

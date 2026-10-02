@@ -77,10 +77,10 @@ fn run_charter() -> run::Charter {
         outcome: OutcomeSpec { change: Some(ChangeSpec { checks: true }), verdicts: Box::new([]) },
         budget: run::Budget {
             turns: 7,
-            input: 11,
-            output: 11,
-            cache_read: 11,
-            cache_write: 11,
+            input: 5,
+            output: 2,
+            cache_read: 1,
+            cache_write: 3,
             time: Duration::from_secs(23),
         },
         llm: llm(b"main"),
@@ -376,5 +376,15 @@ fn charters_the_engine_assigns_decode_into_ones_the_run_admits() {
         let admitted = out.iter().filter(|request| matches!(request, Request::Admitted { .. })).count();
         assert_eq!(admitted, 1, "the run admits the charter of {finish:?}");
         assert_eq!(channel::fact(agent.pop_fact().expect("a fact is told")), Up::Fact { fact: bytes(b"run.admitted") });
+    }
+}
+
+#[test]
+fn a_budgets_tokens_are_split_across_the_kinds_spending_no_more_than_given() {
+    for tokens in [0, 1, 7, 11, 2_000, 1 << 20] {
+        let budget = channel::split(plan::Budget { tokens, turns: 3, time: Duration::from_secs(1) });
+        assert_eq!(budget.input + budget.output + budget.cache_read + budget.cache_write, tokens, "{budget:?}");
+        assert!(budget.input >= budget.output && budget.output >= budget.cache_read, "{budget:?}");
+        assert_eq!((budget.turns, budget.time), (3, Duration::from_secs(1)));
     }
 }

@@ -57,8 +57,11 @@
 //!   the LLM reads as text: the plan's guidance first, then why the run is
 //!   due, then each section under a heading. Reading is always granted, and
 //!   writing and the shell are the run's modify and shell families; the
-//!   `note` grant is an outlet of that name. Its budget's tokens bound each
-//!   kind of token alike. Its models are the deployment's names, the first
+//!   `note` grant is an outlet of that name. Its budget's tokens are split
+//!   across the kinds the agent bounds ([`split`]): half for input, a quarter
+//!   for output, an eighth for cache reads and what is left for cache
+//!   writes, so that together they spend no more than the engine gave. Its
+//!   models are the deployment's names, the first
 //!   the main conversation's and the others a sub-agent's to pick, each on
 //!   one endpoint and offered [`MAX_TOKENS`]. What it may finish with is a
 //!   change, a review's verdicts ("approve", or "request-changes" with one
@@ -292,15 +295,7 @@ pub fn charter(bytes: &[u8], checkout: Checkout) -> run::Charter {
         plan::Finish::Verdict => OutcomeSpec { change: None, verdicts: verdicts() },
         plan::Finish::Turn { .. } => panic!("no session reaches an agent: people hand in agent steps and changes"),
     };
-    let tokens = budget.tokens;
-    let budget = Budget {
-        turns: budget.turns,
-        input: tokens,
-        output: tokens,
-        cache_read: tokens,
-        cache_write: tokens,
-        time: budget.time,
-    };
+    let budget = split(budget);
     let mut names = models.split(|byte| *byte == b' ').filter(|name| !name.is_empty());
     let llm =
         |model: &[u8]| charter::Llm { endpoint: charter::Endpoint(0), model: model.into(), max_tokens: MAX_TOKENS };
@@ -318,6 +313,23 @@ pub fn charter(bytes: &[u8], checkout: Checkout) -> run::Charter {
 
 /// The outlet of the engine's `note` grant.
 pub const NOTE: &[u8] = b"note";
+
+/// The agent's budget for the engine's: its tokens split across the kinds,
+/// half for input, a quarter for output, an eighth for cache reads and what
+/// is left for cache writes.
+#[must_use]
+pub fn split(budget: plan::Budget) -> Budget {
+    let tokens = budget.tokens;
+    let (input, output, cache_read) = (tokens / 2, tokens / 4, tokens / 8);
+    Budget {
+        turns: budget.turns,
+        input,
+        output,
+        cache_read,
+        cache_write: tokens - input - output - cache_read,
+        time: budget.time,
+    }
+}
 
 /// The verdicts a run may finish with: a report on an agent step's work,
 /// and on a change it reviews, approving it or asking for changes.

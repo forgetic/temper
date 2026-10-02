@@ -104,7 +104,11 @@
 //! events and a run's waiting for them, parking and snapshots, and relayed
 //! calls (forge reads and outlets). Nor, on this world's channel, a worker
 //! that loses its channel or an engine that restarts: the engine's and the
-//! whole worker's worlds drive those.
+//! whole worker's worlds drive those. Nor the engine's bounds on spend: what
+//! a run spent does not cross the channel, so the engine's rules over spend
+//! (per run, per goal, per deployment) are not enforced here; the agent
+//! bounds each run's spend by its charter's budget, its tokens split across
+//! the kinds ([`channel::split`]).
 
 pub mod channel;
 pub mod desk;

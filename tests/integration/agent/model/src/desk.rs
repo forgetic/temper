@@ -47,10 +47,14 @@ pub enum Work {
     Change { checks: bool, reviewer: Reviewer },
 }
 
+/// Who reviews a change: a person, or an agent's run that reads, or one
+/// that may also write and run commands, in a checkout of its own that it
+/// may push from, though it finishes only with a verdict.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Reviewer {
     Person,
     Agent,
+    Editor,
 }
 
 /// What a coding run may do: write, run commands, and ask for sub-agents.
@@ -58,6 +62,9 @@ pub const CODING: Grants = Grants { modify: true, shell: true, forge: false, sub
 
 /// What a reviewing run may do: read.
 pub const READING: Grants = Grants { modify: false, shell: false, forge: false, subagents: false, note: false };
+
+/// What a reviewing run that may write does: write, and run commands.
+pub const EDITING: Grants = Grants { modify: true, shell: true, forge: false, subagents: false, note: false };
 
 /// The issue's title.
 #[must_use]
@@ -76,6 +83,7 @@ pub fn record(hand: &Hand, created: Time) -> Record {
             let review = match reviewer {
                 Reviewer::Person => Review::Person,
                 Reviewer::Agent => Review::Agent(charter(guidance(Job::Review), READING, hand.budget)),
+                Reviewer::Editor => Review::Agent(charter(guidance(Job::Review), EDITING, hand.budget)),
             };
             plan::Work::Change(ChangeSpec { base: MAIN.into(), produce, checks, review })
         }

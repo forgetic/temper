@@ -415,7 +415,8 @@ impl Settings {
 
     /// A world of its own for `seed`: issues handed in over a window, in both
     /// repositories, of every job, as agent steps and as changes reviewed by
-    /// people and by agents, on charters of every kind and budgets some of
+    /// people and by agents, some of whose checkouts they may write, on
+    /// charters of every kind and budgets some of
     /// which are beyond an agent's, in tight limits; with people who stop
     /// runs, a forge that is slow, fails the engine's calls, loses webhooks,
     /// refuses pushes and whose branches move, an LLM provider that fails,
@@ -547,7 +548,11 @@ fn hand(rng: &mut Rng, window: u64) -> Hand {
         Job::Reporting | Job::Review => false,
         Job::Spending | Job::Wandering => rng.chance(300),
     };
-    let reviewer = if rng.chance(300) { Reviewer::Agent } else { Reviewer::Person };
+    let reviewer = match rng.below(6) {
+        0 => Reviewer::Agent,
+        1 => Reviewer::Editor,
+        _ => Reviewer::Person,
+    };
     let work = if change { desk::Work::Change { checks: rng.chance(700), reviewer } } else { desk::Work::Agent };
     let grants = engine::plan::Grants {
         modify: change || rng.chance(500),
@@ -763,12 +768,15 @@ pub struct Run {
 }
 
 /// What a run may finish with: a change, which must pass the checks its
-/// writable repositories have if `checks`; a verdict.
+/// writable repositories have if `checks`; a verdict. And whether any
+/// repository of its workspace is writable.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[expect(clippy::struct_excessive_bools, reason = "independent permissions of a charter, not states")]
 pub struct Allowed {
     pub change: bool,
     pub checks: bool,
     pub verdicts: bool,
+    pub writable: bool,
 }
 
 /// An agent model's token for something of its own, with the process it is
