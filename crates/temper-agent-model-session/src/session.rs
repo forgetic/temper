@@ -31,12 +31,16 @@
 //! ```text
 //! state     event or alarm             next      requests
 //! (none)    open, admitted, kit opened Calling   opened, complete
-//!           open, busy or invalid      (none)    ended: busy, invalid
+//!           open, busy or invalid, or  (none)    ended: busy, invalid
+//!             its kit refused
 //! Calling   completed, tool use        Tooling   used, the first batch's runs
-//!           ... all answered at once   Resting   used
+//!           ... all answered at once   Resting   used (on the ready list)
+//!           ... and no calls after it  Calling   used, complete
+//!           ... time up                Closing   used (its kit closes)
 //!           completed, only invalid    Calling   used, complete
 //!           completed, no calls        Yielded   used, yielded (malformed)
 //!           completed, otherwise       Yielded   used, yielded
+//!           completed, does not fit    Closing   used (its kit closes)
 //!           failed, transient          Backoff
 //!           failed, otherwise          Closing   (its kit closes)
 //!           close, expiry              Closing   cancel
@@ -44,13 +48,16 @@
 //!           close, expiry              Closing   (its kit closes)
 //! Tooling   a run done, batch running  Tooling
 //!           a run done, more calls     Tooling   the next batch's runs
-//!           ... all answered at once   Resting
+//!           ... all answered at once   Resting   (on the ready list)
+//!           ... and no calls after it  Calling   complete
+//!           ... time up                Closing   (its kit closes)
 //!           a run done, no more        Calling   complete
 //!           a result that does not fit Closing   a withdraw per delegated run
 //!           close, expiry              Closing   a withdraw per delegated run
-//! Resting   resume                     as from a run done
+//! Resting   resume                     as from a run done, more calls
 //!           close, expiry              Closing   (its kit closes)
 //! Yielded   continue                   Calling   complete
+//!           continue, does not fit     Closing   (its kit closes)
 //!           close, expiry              Closing   (its kit closes)
 //! Closing   its kit closed, nothing    Closed    ended
 //!             left to wait for
@@ -60,6 +67,11 @@
 //!           close                      Closing   (already closing)
 //! Closed    continue, close            Closed    (dropped: the handle is stale)
 //! ```
+//!
+//! "Time up" is the expiry the session checks itself before it starts a
+//! batch ([`advance`]), for a completion or a run's end that comes in the
+//! iteration its time runs out, before the alarm fires. "Does not fit" is a
+//! message the transcript has no room for (see below).
 //!
 //! A run is done when the tools answer it or the opener does (answered); it
 //! ends while closing when it is done all the same, or when the kit's cancel

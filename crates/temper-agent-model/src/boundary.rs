@@ -11,10 +11,18 @@
 //!   [`Request::CancelHost`] by [`Event::HostCancelled`] if the cancel won.
 //!   [`Request::Checking`] is a notice, with no terminal.
 //! - LLM providers, for the sessions: a [`Request::Complete`] is ended by one
-//!   of [`Event::Completed`], [`Event::Failed`] or [`Event::Cancelled`].
+//!   of [`Event::Completed`], [`Event::Failed`] or, after a
+//!   [`Request::Cancel`] that won its race, [`Event::Cancelled`]. Its prompt
+//!   and its completion are in the conversation vocabulary ([`crate::llm`]):
+//!   a prompt's messages hold text, tool calls sent back as the LLM wrote
+//!   them, and their results (the tools' outcome, the run's answer to a tool
+//!   it serves, the problem of a call that is none, or not run); a
+//!   completion holds text and tool calls, each decoded into a call to the
+//!   session's own tools, an ask of a tool the run serves, or a problem.
 //! - io, in two families of records for now: the file and process operations
 //!   of the sessions' tools, as the tools define them (a [`Request::Io`] is
-//!   ended by [`Event::Done`]), and the run's own looks in its checkout and
+//!   ended by [`Event::Done`], with `Cancelled` if a [`Request::CancelIo`]
+//!   won its race), and the run's own looks in its checkout and
 //!   its checks (a [`Request::Read`] by [`Event::Read`], a [`Request::Probe`]
 //!   by [`Event::Probed`], a [`Request::Check`] by [`Event::Checked`], or
 //!   after a [`Request::Abort`] by [`Event::Aborted`] if the abort won). They

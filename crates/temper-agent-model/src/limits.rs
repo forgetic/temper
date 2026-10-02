@@ -32,8 +32,9 @@ pub struct Limits {
 /// queues that hold what each sub-model emits in a step until it is routed,
 /// and the facts. A peer's asks hold at most its session's byte limit; its
 /// answers are charged to the session, and counted with it, but for those of
-/// the batch it waits for ([`uncharged`]). What the queued requests own is
-/// counted where they end up.
+/// the batch it waits for, which it has not charged: on the ready list, or
+/// reaching it once it is closing or has no room for them. What the queued
+/// requests own is counted where they end up.
 #[must_use]
 pub fn worst_case(limits: &Limits) -> Option<u64> {
     let Limits { run: run_limits, session: session_limits } = limits;
