@@ -5,9 +5,12 @@
 //! them (`prepare`).
 //!
 //! Checked is pushed: nothing may write to the checkout from the first check
-//! to the push. The finish call holds its conversation, which runs a write
-//! alone, and the run has no other conversation yet. (A run with sub-agents
-//! will have to close or hold the writable ones before it checks.)
+//! to the push, and nothing does, by construction. Only main may finish. A
+//! finish is a write, which a conversation runs alone, so when it comes, no
+//! other call of main is in flight; and a sub-agent lives only as long as the
+//! call that asked for it, so every sub-agent main asked for, and theirs in
+//! turn, has ended. The run asserts as much when a finish comes; while the
+//! change lands, main waits on its finish and asks for nothing.
 //!
 //! A failing check, or a push that finds the branch moved or fails, goes back
 //! to the LLM as feedback, and it carries on. The call is its conversation's:
@@ -37,29 +40,26 @@
 use core::mem;
 
 use temper_lib::bytes::copy_of;
-use temper_lib::{Env, Id, Queue, Slab, Token};
+use temper_lib::{Env, Id, Queue, Token};
 
 use crate::boundary::{Exit, Place, Push, Ran, Request, Returned};
+use crate::call::Call;
 use crate::charter::Repository;
 use crate::limits::Limits;
 use crate::outcome::Change;
 use crate::prepare;
-use crate::run::{Conversation, Run};
+use crate::run::Run;
 
-/// A finish call landing a change.
+/// A finish call's change, landing.
 #[derive(Debug)]
-pub(crate) struct Call {
-    run: Id<Run>,
-    conversation: Id<Conversation>,
-    /// The conversation's token for the call.
-    owner: Token,
+pub(crate) struct Landing {
     /// What is landing, kept for the outcome.
     change: Change,
-    state: Landing,
+    stage: Stage,
 }
 
 #[derive(Debug)]
-enum Landing {
+enum Stage {
     /// The checks at `check` among the run's are running.
     Checking { check: u32 },
     /// Withdrawn while its checks ran: they are being stopped.
@@ -85,172 +85,129 @@ pub(crate) enum Settled {
     Cancelled,
 }
 
-/// The run and the conversation a call is of.
-pub(crate) fn of(calls: &Slab<Call>, id: Id<Call>) -> (Id<Run>, Id<Conversation>) {
-    let call = calls.get(id).expect("a call lives until it returns");
-    (call.run, call.conversation)
+/// `change`, to land once its call has a name.
+pub(crate) fn landing(change: Change) -> Landing {
+    Landing { change, stage: Stage::Closed }
 }
 
-/// Lands `change` for the conversation's call `owner`: the first check, or the
-/// push. The call's slot is its conversation's.
-#[expect(clippy::too_many_arguments, reason = "a call starts from everything it is about")]
-pub(crate) fn begin(
-    calls: &mut Slab<Call>,
-    run: &Run,
-    run_id: Id<Run>,
-    conversation: Id<Conversation>,
-    owner: Token,
-    change: Change,
-    env: &Env<Limits>,
-    out: &mut Queue<Request>,
-) -> Id<Call> {
-    let call = Call { run: run_id, conversation, owner, change, state: Landing::Closed };
-    // A returned call is reclaimed before its conversation can call again,
-    // which takes another completion.
-    let id = calls.insert(call).expect("a slot for each conversation's call");
-    let call = calls.get_mut(id).expect("inserted above");
-    call.state = next(call, id, run, 0, env, out);
-    id
+/// Starts landing the change of the call `id`: its first check, or the push.
+pub(crate) fn begin(landing: &mut Landing, id: Id<Call>, run: &Run, env: &Env<Limits>, out: &mut Queue<Request>) {
+    landing.stage = next(landing, id, run, 0, env, out);
 }
 
-/// The checks of `id` ended as `ran`. `may_finish` says whether its run may
-/// still finish.
+/// The checks of the call `id`, which its conversation names `owner`, ended as
+/// `ran`. `may_finish` says whether its run may still finish.
+#[expect(clippy::too_many_arguments, reason = "a cell handler takes the fields it touches")]
 pub(crate) fn checked(
-    calls: &mut Slab<Call>,
+    landing: &mut Landing,
     id: Id<Call>,
+    owner: Token,
     run: &Run,
     may_finish: bool,
     ran: Ran,
     env: &Env<Limits>,
     out: &mut Queue<Request>,
 ) -> Settled {
-    let call = calls.get_mut(id).expect("a call lives until it returns");
-    let state = mem::replace(&mut call.state, Landing::Closed);
-    let settled = match state {
-        Landing::Checking { check } => match ran.exit {
+    let stage = mem::replace(&mut landing.stage, Stage::Closed);
+    match stage {
+        Stage::Checking { check } => match ran.exit {
             Exit::Code { code: 0 } if may_finish => {
-                call.state = next(call, id, run, check.saturating_add(1), env, out);
+                landing.stage = next(landing, id, run, check.saturating_add(1), env, out);
                 Settled::Going
             }
-            Exit::Code { code: 0 } => back(call, Returned::Cancelled, Settled::Cancelled, out),
+            Exit::Code { code: 0 } => back(owner, Returned::Cancelled, Settled::Cancelled, out),
             Exit::Code { .. } | Exit::Signalled | Exit::TimedOut | Exit::Unstarted => {
                 let repository = copy_of(&repository(run, check).name);
-                back(call, Returned::ChecksFailed { repository, ran }, Settled::Refused, out)
+                back(owner, Returned::ChecksFailed { repository, ran }, Settled::Refused, out)
             }
         },
-        Landing::Aborting => back(call, Returned::Cancelled, Settled::Cancelled, out),
-        Landing::Pushing | Landing::Unpushing | Landing::Closed => {
-            unreachable!("checks end only while they run")
-        }
-    };
-    retire(calls, id, &settled);
-    settled
+        Stage::Aborting => back(owner, Returned::Cancelled, Settled::Cancelled, out),
+        Stage::Pushing | Stage::Unpushing | Stage::Closed => unreachable!("checks end only while they run"),
+    }
 }
 
-pub(crate) fn aborted(calls: &mut Slab<Call>, id: Id<Call>, out: &mut Queue<Request>) -> Settled {
-    let call = calls.get_mut(id).expect("a call lives until it returns");
-    let state = mem::replace(&mut call.state, Landing::Closed);
-    let settled = match state {
-        Landing::Aborting => back(call, Returned::Cancelled, Settled::Cancelled, out),
-        Landing::Checking { .. } | Landing::Pushing | Landing::Unpushing | Landing::Closed => {
+pub(crate) fn aborted(landing: &mut Landing, owner: Token, out: &mut Queue<Request>) -> Settled {
+    let stage = mem::replace(&mut landing.stage, Stage::Closed);
+    match stage {
+        Stage::Aborting => back(owner, Returned::Cancelled, Settled::Cancelled, out),
+        Stage::Checking { .. } | Stage::Pushing | Stage::Unpushing | Stage::Closed => {
             unreachable!("an abort's terminal comes after the abort")
         }
-    };
-    retire(calls, id, &settled);
-    settled
+    }
 }
 
-/// The push of `id` ended as `push`. `may_finish` says whether its run may
-/// still finish.
+/// The push of a call its conversation names `owner` ended as `push`.
+/// `may_finish` says whether its run may still finish.
 pub(crate) fn pushed(
-    calls: &mut Slab<Call>,
-    id: Id<Call>,
+    landing: &mut Landing,
+    owner: Token,
     may_finish: bool,
     push: Push,
     out: &mut Queue<Request>,
 ) -> Settled {
-    let call = calls.get_mut(id).expect("a call lives until it returns");
-    let state = mem::replace(&mut call.state, Landing::Closed);
-    let settled = match state {
+    let stage = mem::replace(&mut landing.stage, Stage::Closed);
+    match stage {
         // A push that won the race with a withdraw has landed all the same.
-        Landing::Pushing | Landing::Unpushing => match push {
+        Stage::Pushing | Stage::Unpushing => match push {
             Push::Done if may_finish => {
-                let change = call.change.clone();
-                back(call, Returned::Accepted, Settled::Pushed(change), out)
+                let change = landing.change.clone();
+                back(owner, Returned::Accepted, Settled::Pushed(change), out)
             }
-            Push::Done => back(call, Returned::Cancelled, Settled::Cancelled, out),
-            Push::Moved => back(call, Returned::Moved, Settled::Refused, out),
-            Push::Failed => back(call, Returned::Unpushed, Settled::Refused, out),
+            Push::Done => back(owner, Returned::Cancelled, Settled::Cancelled, out),
+            Push::Moved => back(owner, Returned::Moved, Settled::Refused, out),
+            Push::Failed => back(owner, Returned::Unpushed, Settled::Refused, out),
         },
-        Landing::Checking { .. } | Landing::Aborting | Landing::Closed => {
+        Stage::Checking { .. } | Stage::Aborting | Stage::Closed => {
             unreachable!("a push ends only while it is in flight")
         }
-    };
-    retire(calls, id, &settled);
-    settled
+    }
 }
 
-pub(crate) fn host_cancelled(calls: &mut Slab<Call>, id: Id<Call>, out: &mut Queue<Request>) -> Settled {
-    let call = calls.get_mut(id).expect("a call lives until it returns");
-    let state = mem::replace(&mut call.state, Landing::Closed);
-    let settled = match state {
-        Landing::Unpushing => back(call, Returned::Cancelled, Settled::Cancelled, out),
-        Landing::Checking { .. } | Landing::Aborting | Landing::Pushing | Landing::Closed => {
+pub(crate) fn host_cancelled(landing: &mut Landing, owner: Token, out: &mut Queue<Request>) -> Settled {
+    let stage = mem::replace(&mut landing.stage, Stage::Closed);
+    match stage {
+        Stage::Unpushing => back(owner, Returned::Cancelled, Settled::Cancelled, out),
+        Stage::Checking { .. } | Stage::Aborting | Stage::Pushing | Stage::Closed => {
             unreachable!("a host call's cancel comes back only after the cancel")
         }
-    };
-    retire(calls, id, &settled);
-    settled
+    }
 }
 
-/// The conversation withdraws its call `owner`, which is `id` if it is still
-/// landing: stop what is in flight. A withdraw for a call that has already
-/// returned is stale, and changes nothing.
-pub(crate) fn withdraw(calls: &mut Slab<Call>, id: Id<Call>, owner: Token, out: &mut Queue<Request>) {
-    let call = calls.get_mut(id).expect("a conversation's landing call lives until it returns");
-    if call.owner != owner {
-        return;
-    }
-    let state = mem::replace(&mut call.state, Landing::Closed);
-    call.state = match state {
-        Landing::Checking { check: _ } => {
+/// The conversation withdraws the call `id`: stop what is in flight.
+pub(crate) fn withdraw(landing: &mut Landing, id: Id<Call>, out: &mut Queue<Request>) {
+    let stage = mem::replace(&mut landing.stage, Stage::Closed);
+    landing.stage = match stage {
+        Stage::Checking { check: _ } => {
             out.push(Request::Abort { owner: id.token() });
-            Landing::Aborting
+            Stage::Aborting
         }
-        Landing::Pushing => {
+        Stage::Pushing => {
             out.push(Request::CancelHost { owner: id.token() });
-            Landing::Unpushing
+            Stage::Unpushing
         }
-        Landing::Aborting | Landing::Unpushing | Landing::Closed => unreachable!("a call is withdrawn once"),
+        Stage::Aborting | Stage::Unpushing | Stage::Closed => unreachable!("a call is withdrawn once"),
     };
 }
 
 /// The checks at `check` among the run's, or the push once there are none
 /// left.
-fn next(call: &Call, id: Id<Call>, run: &Run, check: u32, env: &Env<Limits>, out: &mut Queue<Request>) -> Landing {
+fn next(landing: &Landing, id: Id<Call>, run: &Run, check: u32, env: &Env<Limits>, out: &mut Queue<Request>) -> Stage {
     let Some(&index) = run.found.checks.get(check) else {
-        out.push(Request::Push { worker: run.worker, owner: id.token(), change: call.change.clone() });
-        return Landing::Pushing;
+        out.push(Request::Push { worker: run.worker, owner: id.token(), change: landing.change.clone() });
+        return Stage::Pushing;
     };
     let root = repository_at(run, index).root;
     let deadline = env.now.saturating_add(env.limits.check_timeout);
     let program = Place { root, path: copy_of(prepare::CHECKS) };
     out.push(Request::Check { owner: id.token(), program, deadline, tail: env.limits.check_tail });
     out.push(Request::Checking { worker: run.worker, deadline });
-    Landing::Checking { check }
+    Stage::Checking { check }
 }
 
-/// Returns the call with `result`, closing it.
-fn back(call: &Call, result: Returned, settled: Settled, out: &mut Queue<Request>) -> Settled {
-    out.push(Request::Return { call: call.owner, result });
+/// Returns the call its conversation names `owner` with `result`.
+fn back(owner: Token, result: Returned, settled: Settled, out: &mut Queue<Request>) -> Settled {
+    out.push(Request::Return { call: owner, result });
     settled
-}
-
-fn retire(calls: &mut Slab<Call>, id: Id<Call>, settled: &Settled) {
-    match settled {
-        Settled::Going => {}
-        Settled::Pushed(_) | Settled::Refused | Settled::Cancelled => calls.retire(id),
-    }
 }
 
 /// The repository whose checks are at `check` among the run's.

@@ -1,7 +1,7 @@
 use temper_lib::{Deadlines, Duration, List, Slab};
 
 use crate::budget::Budget;
-use crate::land::Call;
+use crate::call::Calls;
 use crate::prepare::Guide;
 use crate::run::{Alarm, Conversation, Run};
 
@@ -23,6 +23,9 @@ pub struct Limits {
     pub outlets: u32,
     /// Verdicts an outcome spec may list.
     pub verdicts: u32,
+    /// Calls of conversations to the run in flight at once, across runs. A
+    /// call beyond them is answered as busy.
+    pub calls: u32,
     /// The largest budget a charter may ask for, part by part.
     pub budget: Budget,
     /// The largest `max_tokens` a charter's LLM may ask for.
@@ -63,8 +66,8 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     // A winding run holds the outcome it accepted.
     let run = limits.run_bytes.checked_add(guides)?.checked_add(checks)?.checked_add(limits.outcome_bytes)?;
     let held = u64::from(limits.runs).checked_mul(run)?;
-    // A landing holds its change.
-    let calls = Slab::<Call>::worst_case(limits.conversations)?
-        .checked_add(u64::from(limits.conversations).checked_mul(limits.outcome_bytes)?)?;
+    // A call landing a change holds it.
+    let calls =
+        Calls::worst_case(limits.calls)?.checked_add(u64::from(limits.calls).checked_mul(limits.outcome_bytes)?)?;
     runs.checked_add(conversations)?.checked_add(alarms)?.checked_add(held)?.checked_add(calls)
 }

@@ -94,8 +94,9 @@ use crate::boundary::{
     Answer, Ask, End, Failure, Fault, Invalid, Opening, Policy, Push, Ran, Read, Refusal, Request, Returned, Stop,
 };
 use crate::budget::{Exhausted, Spend};
+use crate::call::{Call, Calls, Work};
 use crate::charter::{self, Charter, count};
-use crate::land::{self, Call, Settled};
+use crate::land::{self, Settled};
 use crate::limits::Limits;
 use crate::model::Model;
 use crate::outcome::{self, Declared};
@@ -151,8 +152,8 @@ pub(crate) struct Conversation {
     run: Id<Run>,
     /// What it has spent, by its `Used` so far.
     spent: Spend,
-    /// Its finish call landing a change, while one is.
-    landing: Option<Id<Call>>,
+    /// Its calls to the run in flight.
+    calls: u32,
     phase: Phase,
 }
 
@@ -208,7 +209,7 @@ pub(crate) fn start(
     let run =
         Run { charter, found, worker, spent: Spend::ZERO, nudges: 0, rejected: 0, deadline, state: State::Closed };
     let id = runs.insert(run).expect("checked for room above");
-    let conversation = Conversation { run: id, spent: Spend::ZERO, landing: None, phase: Phase::Pending };
+    let conversation = Conversation { run: id, spent: Spend::ZERO, calls: 0, phase: Phase::Pending };
     let main = conversations.insert(conversation).expect("checked for room above");
     out.push(Request::Admitted { worker, run: id.token() });
     let run = runs.get_mut(id).expect("inserted above");
@@ -374,7 +375,6 @@ pub(crate) fn delegated(
             unreachable!("a conversation calls only between starting and ending")
         }
     }
-    assert!(conversation.landing.is_none(), "a finish is a write, which a conversation runs alone");
     let run_id = conversation.run;
     let run = runs.get_mut(run_id).expect("a run lives until its conversations have ended");
     let Ask::Finish { outcome } = ask;
@@ -400,49 +400,60 @@ pub(crate) fn delegated(
 }
 
 pub(crate) fn withdraw(model: &mut Model, conversation: Token, call: Token, out: &mut Queue<Request>) {
-    let id = Id::<Conversation>::from_token(conversation);
-    let conversation = model.conversations.get(id).expect("a conversation lives until it has ended");
+    let conversation = Id::<Conversation>::from_token(conversation);
     // A withdraw of a call that has returned is stale.
-    if let Some(landing) = conversation.landing {
-        land::withdraw(&mut model.calls, landing, call, out);
+    let Some(id) = model.calls.find(conversation, call) else {
+        return;
+    };
+    let call = model.calls.get_mut(id).expect("a named call lives");
+    match &mut call.work {
+        Work::Landing(landing) => land::withdraw(landing, id, out),
     }
 }
 
 pub(crate) fn checked(model: &mut Model, env: &Env<Limits>, owner: Token, ran: Ran, out: &mut Queue<Request>) {
     let id = Id::<Call>::from_token(owner);
-    let (run_id, conversation) = land::of(&model.calls, id);
-    let run = model.runs.get(run_id).expect("a run lives until its calls have returned");
-    let settled = land::checked(&mut model.calls, id, run, may_finish(&run.state), ran, env, out);
-    settle(model, run_id, conversation, settled, out);
+    let call = model.calls.get_mut(id).expect("a call lives until it returns");
+    let run = model.runs.get(call.run).expect("a run lives until its calls have returned");
+    let settled = match &mut call.work {
+        Work::Landing(landing) => land::checked(landing, id, call.owner, run, may_finish(&run.state), ran, env, out),
+    };
+    settle(model, id, settled, out);
 }
 
 pub(crate) fn aborted(model: &mut Model, owner: Token, out: &mut Queue<Request>) {
     let id = Id::<Call>::from_token(owner);
-    let (run_id, conversation) = land::of(&model.calls, id);
-    let settled = land::aborted(&mut model.calls, id, out);
-    settle(model, run_id, conversation, settled, out);
+    let call = model.calls.get_mut(id).expect("a call lives until it returns");
+    let settled = match &mut call.work {
+        Work::Landing(landing) => land::aborted(landing, call.owner, out),
+    };
+    settle(model, id, settled, out);
 }
 
 pub(crate) fn pushed(model: &mut Model, owner: Token, push: Push, out: &mut Queue<Request>) {
     let id = Id::<Call>::from_token(owner);
-    let (run_id, conversation) = land::of(&model.calls, id);
-    let run = model.runs.get(run_id).expect("a run lives until its calls have returned");
-    let settled = land::pushed(&mut model.calls, id, may_finish(&run.state), push, out);
-    settle(model, run_id, conversation, settled, out);
+    let call = model.calls.get_mut(id).expect("a call lives until it returns");
+    let run = model.runs.get(call.run).expect("a run lives until its calls have returned");
+    let settled = match &mut call.work {
+        Work::Landing(landing) => land::pushed(landing, call.owner, may_finish(&run.state), push, out),
+    };
+    settle(model, id, settled, out);
 }
 
 pub(crate) fn host_cancelled(model: &mut Model, owner: Token, out: &mut Queue<Request>) {
     let id = Id::<Call>::from_token(owner);
-    let (run_id, conversation) = land::of(&model.calls, id);
-    let settled = land::host_cancelled(&mut model.calls, id, out);
-    settle(model, run_id, conversation, settled, out);
+    let call = model.calls.get_mut(id).expect("a call lives until it returns");
+    let settled = match &mut call.work {
+        Work::Landing(landing) => land::host_cancelled(landing, call.owner, out),
+    };
+    settle(model, id, settled, out);
 }
 
 pub(crate) fn ended(model: &mut Model, conversation: Token, end: End, spend: Spend, out: &mut Queue<Request>) {
     let Model { runs, conversations, calls: _, alarms } = model;
     let id = Id::<Conversation>::from_token(conversation);
     let conversation = conversations.get_mut(id).expect("a conversation lives until it has ended");
-    assert!(conversation.landing.is_none(), "a conversation ends once its calls have returned");
+    assert!(conversation.calls == 0, "a conversation ends once its calls have returned");
     let phase = mem::replace(&mut conversation.phase, Phase::Closed);
     match phase {
         Phase::Opening | Phase::Unwanted | Phase::Running { .. } | Phase::Closing => {}
@@ -517,20 +528,18 @@ fn may_finish(state: &State) -> bool {
     }
 }
 
-/// A landing has settled, as `settled` says: the run goes on, or finishes.
-fn settle(
-    model: &mut Model,
-    run_id: Id<Run>,
-    conversation: Id<Conversation>,
-    settled: Settled,
-    out: &mut Queue<Request>,
-) {
-    let Model { runs, conversations, calls: _, alarms } = model;
+/// The landing of the call `id` has settled, as `settled` says: the run goes
+/// on, or finishes.
+fn settle(model: &mut Model, id: Id<Call>, settled: Settled, out: &mut Queue<Request>) {
+    let Model { runs, conversations, calls, alarms } = model;
     if settled == Settled::Going {
         return;
     }
-    let landing = &mut conversations.get_mut(conversation).expect("a conversation outlives its calls").landing;
-    *landing = None;
+    let call = calls.get(id).expect("a call lives until it returns");
+    let (run_id, conversation) = (call.run, call.conversation);
+    calls.retire(id);
+    let conversation = conversations.get_mut(conversation).expect("a conversation outlives its calls");
+    conversation.calls = conversation.calls.checked_sub(1).expect("a conversation counts its calls");
     let run = runs.get_mut(run_id).expect("a run lives until its calls have returned");
     let state = mem::replace(&mut run.state, State::Closed);
     run.state = match settled {
@@ -646,7 +655,7 @@ fn finish(
     run: &mut Run,
     run_id: Id<Run>,
     conversations: &mut Slab<Conversation>,
-    calls: &mut Slab<Call>,
+    calls: &mut Calls,
     reply_to: ReplyTo,
     main: Id<Conversation>,
     over: Option<Exhausted>,
@@ -655,6 +664,8 @@ fn finish(
     env: &Env<Limits>,
     out: &mut Queue<Request>,
 ) -> State {
+    let conversation = conversations.get(main).expect("main lives while its run works");
+    assert!(conversation.calls == 0, "a finish is a write, which a conversation runs alone");
     let max = env.limits.outcome_bytes;
     let judged = match outcome::declared_cost(&declared) {
         Some(cost) if cost <= max => outcome::judge(&run.charter.outcome, &declared),
@@ -676,9 +687,19 @@ fn finish(
             wind_down(conversations, reply_to, main, Ending::Accepted(Declared::Verdict(verdict)), out)
         }
         Declared::Change(change) => {
-            let landing = land::begin(calls, run, run_id, main, call, change, env, out);
+            if calls.is_full() {
+                out.push(Request::Return { call, result: Returned::Busy });
+                return match over {
+                    None => State::Working { reply_to, main },
+                    Some(exhausted) => State::Over { reply_to, main, exhausted },
+                };
+            }
+            let work = Work::Landing(land::landing(change));
+            let id = calls.insert(Call { run: run_id, conversation: main, owner: call, work });
+            let Work::Landing(landing) = &mut calls.get_mut(id).expect("inserted above").work;
+            land::begin(landing, id, run, env, out);
             let conversation = conversations.get_mut(main).expect("main lives while its run works");
-            conversation.landing = Some(landing);
+            conversation.calls = conversation.calls.saturating_add(1);
             match over {
                 None => State::Working { reply_to, main },
                 Some(exhausted) => State::Over { reply_to, main, exhausted },

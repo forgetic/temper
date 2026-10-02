@@ -98,6 +98,7 @@ pub struct Tally {
     pub moved: u32,
     pub unpushed: u32,
     pub cancelled: u32,
+    pub busy: u32,
     /// Finishes withdrawn: past their deadline, or as the conversation closed.
     pub withdrawn: u32,
     /// Conversations that ended at a ceiling of their share, or out of time.
@@ -273,6 +274,7 @@ impl Partner {
             Returned::Moved => self.tally.moved += 1,
             Returned::Unpushed => self.tally.unpushed += 1,
             Returned::Cancelled => self.tally.cancelled += 1,
+            Returned::Busy => self.tally.busy += 1,
         }
         let talk = self.talks.get_mut(&peer).expect("a conversation outlives its calls");
         let then = match talk.phase {

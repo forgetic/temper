@@ -431,7 +431,7 @@ fn cancels_find_runs_in_every_state() {
     // its budget.
     for seed in 21..24 {
         let landing = finishing(seed);
-        let run = Limits { runs: 16, conversations: 16, ..landing.run };
+        let run = Limits { runs: 16, conversations: 16, calls: 16, ..landing.run };
         let worker = Config {
             jobs: 16,
             cancels: 1000,

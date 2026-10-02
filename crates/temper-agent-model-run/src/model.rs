@@ -3,7 +3,7 @@
 use temper_lib::{Deadlines, Env, Queue, Slab, Time};
 
 use crate::boundary::{Event, Request};
-use crate::land::Call;
+use crate::call::Calls;
 use crate::limits::Limits;
 use crate::run::{self, Alarm, Conversation, Run};
 
@@ -18,8 +18,8 @@ pub const MAX_OUT: u32 = 2;
 pub struct Model {
     pub(crate) runs: Slab<Run>,
     pub(crate) conversations: Slab<Conversation>,
-    /// Finish calls landing a change: one at most per conversation.
-    pub(crate) calls: Slab<Call>,
+    /// Calls of conversations to the run.
+    pub(crate) calls: Calls,
     pub(crate) alarms: Deadlines<Alarm>,
 }
 
@@ -30,7 +30,7 @@ impl Model {
         Model {
             runs: Slab::with_capacity(limits.runs),
             conversations: Slab::with_capacity(limits.conversations),
-            calls: Slab::with_capacity(limits.conversations),
+            calls: Calls::with_capacity(limits.calls),
             alarms: Deadlines::with_capacity(limits.runs),
         }
     }
@@ -63,8 +63,8 @@ impl Model {
         }
     }
 
-    /// Finish calls landing a change, returned ones included until they are
-    /// reclaimed.
+    /// Calls of conversations to the run, returned ones included until they
+    /// are reclaimed.
     #[must_use]
     pub fn calls(&self) -> u32 {
         self.calls.len()

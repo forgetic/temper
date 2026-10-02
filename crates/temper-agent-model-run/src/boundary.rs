@@ -144,6 +144,8 @@ pub enum Returned {
     /// Nothing was decided: the call was withdrawn, or the run is ending
     /// otherwise.
     Cancelled,
+    /// The run has no room for another call now; it may have later.
+    Busy,
 }
 
 /// What a check's process did: how it ended, and the tail of what it wrote,

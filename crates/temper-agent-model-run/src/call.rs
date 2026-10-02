@@ -1,0 +1,96 @@
+//! The calls a conversation's LLM makes of the run, its delegated tools: each
+//! an entity from its `Delegated` to its one `Return`, under the `calls`
+//! limit, so that a call's slot never waits on the reclaim point.
+//!
+//! A call is named by its conversation's token for it, which the run cannot
+//! echo back (no record carries the run's name for it to the session), so a
+//! bounded map finds a call by its conversation and that name, for a
+//! `Withdraw`.
+
+use temper_lib::{Id, Map, Slab, Token};
+
+use crate::land::Landing;
+use crate::run::{Conversation, Run};
+
+/// A call in flight.
+#[derive(Debug)]
+pub(crate) struct Call {
+    pub(crate) run: Id<Run>,
+    /// The conversation that made it.
+    pub(crate) conversation: Id<Conversation>,
+    /// The conversation's token for it.
+    pub(crate) owner: Token,
+    pub(crate) work: Work,
+}
+
+/// What a call is doing.
+#[derive(Debug)]
+pub(crate) enum Work {
+    /// A finish, landing its change.
+    Landing(Landing),
+}
+
+/// The calls in flight, and the names their conversations know them by.
+#[derive(Debug)]
+pub(crate) struct Calls {
+    slab: Slab<Call>,
+    named: Map<(Id<Conversation>, Token), Id<Call>>,
+}
+
+impl Calls {
+    pub(crate) fn with_capacity(capacity: u32) -> Calls {
+        Calls { slab: Slab::with_capacity(capacity), named: Map::with_capacity(capacity) }
+    }
+
+    /// The most heap calls take under a capacity of `capacity`, or `None` past
+    /// a `u64`. What their work holds is theirs to count.
+    pub(crate) fn worst_case(capacity: u32) -> Option<u64> {
+        let named = Map::<(Id<Conversation>, Token), Id<Call>>::worst_case(capacity)?;
+        Slab::<Call>::worst_case(capacity)?.checked_add(named)
+    }
+
+    /// Calls present, returned ones included until they are reclaimed.
+    pub(crate) fn len(&self) -> u32 {
+        self.slab.len()
+    }
+
+    /// Whether another call would be refused.
+    pub(crate) fn is_full(&self) -> bool {
+        self.slab.is_full() || self.named.len() >= self.named.capacity()
+    }
+
+    /// Stores `call` and names it; there must be room.
+    pub(crate) fn insert(&mut self, call: Call) -> Id<Call> {
+        let name = (call.conversation, call.owner);
+        let id = self.slab.insert(call).expect("checked for room before a call is made");
+        let fresh = self.named.insert(name, id).expect("as much room for names as for calls");
+        assert!(fresh.is_none(), "a conversation names its calls apart");
+        id
+    }
+
+    pub(crate) fn get(&self, id: Id<Call>) -> Option<&Call> {
+        self.slab.get(id)
+    }
+
+    pub(crate) fn get_mut(&mut self, id: Id<Call>) -> Option<&mut Call> {
+        self.slab.get_mut(id)
+    }
+
+    /// The call `conversation` names `owner`, if it has not returned.
+    pub(crate) fn find(&self, conversation: Id<Conversation>, owner: Token) -> Option<Id<Call>> {
+        self.named.get(&(conversation, owner)).copied()
+    }
+
+    /// Retires a call that has returned: its name is forgotten at once, its
+    /// slot freed at the reclaim point.
+    pub(crate) fn retire(&mut self, id: Id<Call>) {
+        let call = self.slab.get(id).expect("a call lives until it returns");
+        let named = self.named.remove(&(call.conversation, call.owner));
+        assert!(named == Some(id), "a call is named until it returns");
+        self.slab.retire(id);
+    }
+
+    pub(crate) fn reclaim(&mut self) {
+        self.slab.reclaim();
+    }
+}

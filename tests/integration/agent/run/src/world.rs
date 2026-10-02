@@ -82,6 +82,7 @@ impl Settings {
                 repositories: 4,
                 outlets: 4,
                 verdicts: 4,
+                calls: 4,
                 budget: run::Budget {
                     turns: 1000,
                     input: 1 << 32,

@@ -87,6 +87,7 @@ const LIMITS: Limits = Limits {
     repositories: 1,
     outlets: 1,
     verdicts: 1,
+    calls: 1,
     budget: BUDGET,
     max_tokens: 1024,
     nudges: 1,
@@ -217,6 +218,6 @@ fn fill(limits: Limits) {
 #[test]
 fn a_model_with_every_run_full_stays_within_its_worst_case() {
     fill(LIMITS);
-    fill(Limits { runs: 64, conversations: 64, run_bytes: 65_536, guide_bytes: 32_768, ..LIMITS });
-    fill(Limits { runs: 1000, conversations: 1000, run_bytes: 2048, guide_bytes: 16, ..LIMITS });
+    fill(Limits { runs: 64, conversations: 64, calls: 64, run_bytes: 65_536, guide_bytes: 32_768, ..LIMITS });
+    fill(Limits { runs: 1000, conversations: 1000, calls: 1000, run_bytes: 2048, guide_bytes: 16, ..LIMITS });
 }

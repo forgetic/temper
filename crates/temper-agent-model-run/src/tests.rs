@@ -30,6 +30,7 @@ const LIMITS: Limits = Limits {
     repositories: 2,
     outlets: 2,
     verdicts: 2,
+    calls: 2,
     budget: Budget {
         turns: 100,
         input: 1_000_000,
@@ -792,4 +793,16 @@ fn a_cancel_of_a_run_that_has_answered_changes_nothing() {
     let (_, _) = h.running(2, 101);
     assert!(h.step(Event::Cancel { run }).is_empty(), "a stale name");
     assert_eq!(h.model.runs(), 1);
+}
+
+#[test]
+fn a_finish_with_no_room_for_its_call_is_busy_and_the_run_goes_on() {
+    let mut h = Harness::new(Limits { calls: 1, ..LIMITS });
+    let (_, first) = h.coding(1, 100);
+    let _: Token = h.land(first, 7);
+    let (_, second) = h.coding(2, 101);
+    let emitted = h.step(finish(second, 8, Declared::Change(change())));
+    assert_eq!(&*emitted, &[returned(8, Returned::Busy)]);
+    assert_eq!(h.model.calls(), 1);
+    assert_eq!(h.step(end_turn(second)).len(), 1, "the run goes on: a nudge");
 }
