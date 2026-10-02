@@ -191,6 +191,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-engine-model-tests"
+version = "0.0.0"
+dependencies = [
+ "temper-engine-model",
+ "temper-engine-model-forge-tests",
+ "temper-forge-model",
+ "temper-lib",
+ "temper-world",
+]
+
+[[package]]
 name = "temper-engine-model-views"
 version = "0.0.0"
 dependencies = [

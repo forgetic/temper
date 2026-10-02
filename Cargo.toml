@@ -32,6 +32,7 @@ members = [
     "tests/integration/engine/brief",
     "tests/integration/engine/fleet",
     "tests/integration/engine/forge",
+    "tests/integration/engine/model",
     "tests/integration/engine/notes",
     "tests/integration/engine/plan",
     "tests/integration/engine/views",
@@ -73,6 +74,7 @@ temper-fake-engine-model = { path = "testing/temper-fake-engine-model" }
 temper-forge-model = { path = "testing/temper-forge-model" }
 temper-llm-model = { path = "testing/temper-llm-model" }
 temper-checkout-fake = { path = "tests/integration/checkout" }
+temper-engine-model-forge-tests = { path = "tests/integration/engine/forge" }
 temper-agent-model-tools-tests = { path = "tests/integration/agent/tools" }
 temper-worker-model-agent-tests = { path = "tests/integration/worker/agent" }
 temper-worker-model-checkout-tests = { path = "tests/integration/worker/checkout" }
