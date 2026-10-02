@@ -28,6 +28,8 @@ pub struct Limits {
     pub read_bytes: u32,
     /// The most entries a listing answers with.
     pub list_entries: u32,
+    /// The most line numbers an ambiguous edit answers with.
+    pub match_lines: u32,
     /// How long a file operation may take, within its call's deadline.
     pub file_timeout: Duration,
 }
@@ -45,7 +47,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     // Only running jobs hold a place, at most `calls` a kit; the slab has more
     // slots, for the jobs answered in an iteration.
     let running = u64::from(limits.kits).checked_mul(u64::from(limits.calls))?;
-    let jobs = Slab::<Job>::worst_case(job::slots(limits)?)?.checked_add(running.checked_mul(job::held(limits))?)?;
+    let jobs = Slab::<Job>::worst_case(job::slots(limits)?)?.checked_add(running.checked_mul(job::held(limits)?)?)?;
     kits.checked_add(jobs)
 }
 

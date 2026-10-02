@@ -59,6 +59,7 @@ impl Settings {
                 file_bytes: 4096,
                 read_bytes: 1024,
                 list_entries: 16,
+                match_lines: 4,
                 file_timeout: Duration::from_secs(10),
             },
             io: Span::millis(1, 20),

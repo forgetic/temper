@@ -4,8 +4,9 @@
 //! A call is checked at the entrance, where refusing it costs nothing: the
 //! family of tools it belongs to must be granted, its path must lie in a
 //! repository of the checkout, and in a writable one for a change, what it
-//! would store must fit the limits, its deadline must not have passed, and the
-//! kit must have room for one more job. A call that passes becomes a job.
+//! would store must fit the limits, an edit must be of a file its LLM has read
+//! and must change something, its deadline must not have passed, and the kit
+//! must have room for one more job. A call that passes becomes a job.
 //!
 //! The transition table.
 //!
@@ -27,6 +28,7 @@ use temper_lib::{Env, Id, Queue, ReplyTo, Set, Slab, Time, Token};
 use crate::authority::{self, Authority, Checkout, Located};
 use crate::boundary::{Expect, Refusal, Request};
 use crate::call::{Call, Outcome};
+use crate::edit::Edit;
 use crate::job::{self, Job, Work};
 use crate::knowledge::Knowledge;
 use crate::limits::Limits;
@@ -117,6 +119,15 @@ pub(crate) fn close(model: &mut Model, kit: Token, out: &mut Queue<Request>) {
     }
 }
 
+/// Whether the kit is closing, its jobs cancelled.
+pub(crate) fn closing(kit: &Kit) -> bool {
+    match kit.state {
+        State::Open => false,
+        State::Closing => true,
+        State::Closed => unreachable!("a closed kit runs no job"),
+    }
+}
+
 /// The job `job` of the kit `id` has answered: it leaves the kit, which ends
 /// with it if it was the last of a closing kit.
 pub(crate) fn finished(kits: &mut Slab<Kit>, id: Id<Kit>, job: Id<Job>, out: &mut Queue<Request>) {
@@ -172,9 +183,21 @@ fn admit(kit: &Kit, call: Call, deadline: Time, env: &Env<Limits>) -> Result<Wor
             };
             Work::Write { place: located.place, content, expect }
         }
-        Call::Edit { path, .. } => {
-            drop(writable(&kit.checkout, &path, limits)?);
-            return Err(Outcome::Unsupported);
+        Call::Edit { path, old, new, all } => {
+            let located = writable(&kit.checkout, &path, limits)?;
+            fits(&old, limits)?;
+            fits(&new, limits)?;
+            if old.is_empty() {
+                return Err(Outcome::NoMatch);
+            }
+            if old == new {
+                return Err(Outcome::Unchanged);
+            }
+            // A change needs the current version read: the load checks it is.
+            if kit.knowledge.version(&located.place).is_none() {
+                return Err(Outcome::NotRead);
+            }
+            Work::Edit { place: located.place, edit: Edit { old, new, all } }
         }
         Call::Shell { .. } => return Err(Outcome::Unsupported),
     };

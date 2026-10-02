@@ -1,7 +1,7 @@
 //! Memory stays within the worst case (programming-model.md, 6.4), measured by
 //! a counting allocator: the tools sub-model with every kit holding the
 //! longest authority, knowing as many files as it may at the longest paths,
-//! and running as many reads and writes as it may.
+//! and running as many edits, writes and reads as it may.
 
 use temper_agent_model_tools::{
     Authority, Call, Done, Event, Grants, Limits, Model, Name, Part, Path, Repo, Request, Version, max_out, worst_case,
@@ -68,6 +68,7 @@ const LIMITS: Limits = Limits {
     file_bytes: 256,
     read_bytes: 64,
     list_entries: 4,
+    match_lines: 4,
     file_timeout: Duration::from_secs(10),
 };
 
@@ -105,10 +106,20 @@ fn read(limits: &Limits, file: u64) -> Call {
     Call::Read { path: path(limits, file), skip: 0, lines: None }
 }
 
+/// The most a file holds.
+fn full(limits: &Limits, byte: u8) -> Box<[u8]> {
+    vec![byte; usize::try_from(limits.file_bytes).expect("a small limit")].into()
+}
+
 /// A write of a file the kit read, so that it has a version to expect.
 fn write(limits: &Limits, file: u64) -> Call {
-    let content = vec![b'x'; usize::try_from(limits.file_bytes).expect("a small limit")].into();
-    Call::Write { path: path(limits, file), content }
+    Call::Write { path: path(limits, file), content: full(limits, b'x') }
+}
+
+/// An edit of a file the kit read, with snippets as long as they may be,
+/// which the job holds while it loads the file.
+fn edit(limits: &Limits, file: u64) -> Call {
+    Call::Edit { path: path(limits, file), old: full(limits, b'x'), new: full(limits, b'y'), all: true }
 }
 
 /// Fills every kit of a model under `limits` to its limits, checking the heap
@@ -158,7 +169,7 @@ fn fill(limits: Limits) {
         }
         for call in 0..u64::from(limits.calls) {
             let call = if call < u64::from(limits.known_files) {
-                write(&limits, file - call)
+                if call % 2 == 0 { edit(&limits, file - call) } else { write(&limits, file - call) }
             } else {
                 file += 1;
                 read(&limits, file)

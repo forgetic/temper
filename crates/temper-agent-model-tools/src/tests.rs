@@ -6,6 +6,7 @@ use alloc::boxed::Box;
 use temper_lib::{Duration, Env, Id, List, Queue, ReplyTo, Time, Token};
 
 use crate::authority::{self, Located};
+use crate::edit::{self, Edit};
 use crate::kit::Kit;
 use crate::knowledge::Knowledge;
 use crate::path;
@@ -24,6 +25,7 @@ const LIMITS: Limits = Limits {
     file_bytes: 1024,
     read_bytes: 256,
     list_entries: 16,
+    match_lines: 4,
     file_timeout: Duration::from_secs(10),
 };
 
@@ -90,6 +92,18 @@ impl Harness {
         match self.step(Event::Done { owner, done }) {
             Some(Request::Answer { to, outcome }) => (to.into_token().raw(), outcome),
             other => panic!("expected an answer, not {other:?}"),
+        }
+    }
+
+    /// Ends the operation of `owner` with `done`, and returns the operation
+    /// its job asks for next.
+    fn next(&mut self, owner: Token, done: Done) -> Op {
+        match self.step(Event::Done { owner, done }) {
+            Some(Request::Io { owner: again, op, .. }) => {
+                assert_eq!(again, owner, "a job asks for one operation at a time");
+                op
+            }
+            other => panic!("expected another operation, not {other:?}"),
         }
     }
 
@@ -380,7 +394,7 @@ fn calls_are_refused_at_the_entrance() {
         (modify, write(b"src/big.rs", 1025), Outcome::TooLarge { size: 1025 }),
         (inspect, read(b"a/very/long/path/that/does/not/fit/in/the/sixty/four/bytes/allowed"), Outcome::TooLong),
         // What passes the entrance does not run yet.
-        (ALL, edit(b"src/lib.rs"), Outcome::Unsupported),
+        (ALL, edit(b"src/lib.rs"), Outcome::NotRead),
         (ALL, Call::Search { path: path(b"src"), pattern: bytes(b"fn"), glob: None }, Outcome::Unsupported),
         (ALL, shell, Outcome::Unsupported),
     ];
@@ -703,4 +717,174 @@ fn a_kit_that_forgot_a_file_must_read_it_again_to_change_it() {
     }
     let (_, op) = h.start(kit, 3, write(b"a", 1));
     assert_eq!(op, store(place(1, b"a"), b"x", Expect::Absent), "a was forgotten for b");
+}
+
+fn snippet(old: &[u8], new: &[u8], all: bool) -> Edit {
+    Edit { old: Box::from(old), new: Box::from(new), all }
+}
+
+fn edited(content: &[u8], replaced: u32) -> (Box<[u8]>, u32) {
+    (Box::from(content), replaced)
+}
+
+/// What an edit makes of a file: its new content and how many occurrences it
+/// replaced, or the outcome that refuses it.
+type Applied = Result<(Box<[u8]>, u32), Outcome>;
+
+fn ambiguous(count: u32, lines: &[u32]) -> Applied {
+    Err(Outcome::Ambiguous { count, lines: Box::from(lines) })
+}
+
+#[test]
+fn an_edit_replaces_its_one_match_or_all_of_them() {
+    let small = Limits { file_bytes: 8, match_lines: 2, ..LIMITS };
+    let table: [(&[u8], Edit, &Limits, Applied); 10] = [
+        (b"a b a", snippet(b"b", b"c", false), &LIMITS, Ok(edited(b"a c a", 1))),
+        (b"a b a", snippet(b"a", b"c", false), &LIMITS, ambiguous(2, &[1, 1])),
+        (b"x\na\ny\na\na\n", snippet(b"a", b"b", false), &LIMITS, ambiguous(3, &[2, 4, 5])),
+        (b"x\na\ny\na\na\n", snippet(b"a", b"b", false), &small, ambiguous(3, &[2, 4])),
+        (b"x\na\ny\na\na\n", snippet(b"a", b"bb", true), &LIMITS, Ok(edited(b"x\nbb\ny\nbb\nbb\n", 3))),
+        (b"a b a", snippet(b"z", b"c", true), &LIMITS, Err(Outcome::NoMatch)),
+        // Matches do not overlap.
+        (b"aaa", snippet(b"aa", b"b", false), &LIMITS, Ok(edited(b"ba", 1))),
+        (b"abc", snippet(b"abc", b"", false), &LIMITS, Ok(edited(b"", 1))),
+        (b"abc", snippet(b"b", b"0123456789", false), &small, Err(Outcome::TooLarge { size: 12 })),
+        (b"abc", snippet(b"b", b"012345", false), &small, Ok(edited(b"a012345c", 1))),
+    ];
+    for (content, edit, limits, expected) in table {
+        assert_eq!(edit::apply(content, &edit, limits), expected, "{content:?} {edit:?}");
+    }
+}
+
+/// Reads `file` with `kit`, which finds it holding `content` at `version`.
+fn known(h: &mut Harness, kit: Token, file: &[u8], content: &[u8], at: u64) {
+    let (owner, _) = h.start(kit, 1, read(file));
+    drop(h.end(owner, Done::Loaded { content: bytes(content), version: version(at) }));
+}
+
+fn change(text: &[u8], old: &[u8], new: &[u8]) -> Call {
+    Call::Edit { path: path(text), old: bytes(old), new: bytes(new), all: false }
+}
+
+#[test]
+fn an_edit_loads_the_file_its_llm_read_and_stores_it_edited() {
+    let mut h = Harness::new(LIMITS);
+    let kit = h.open(1, authority(ALL));
+    known(&mut h, kit, b"src/lib.rs", b"fn one() {}\n", 3);
+    let (owner, op) = h.start(kit, 2, change(b"src/lib.rs", b"one", b"uno"));
+    assert_eq!(op, Op::Load { at: place(1, b"src/lib.rs"), max: LIMITS.file_bytes });
+    let op = h.next(owner, Done::Loaded { content: bytes(b"fn one() {}\n"), version: version(3) });
+    assert_eq!(op, store(place(1, b"src/lib.rs"), b"fn uno() {}\n", Expect::Is { version: version(3) }));
+    assert_eq!(h.end(owner, Done::Stored { version: version(4) }), (2, Outcome::Edited { replaced: 1 }));
+    assert_eq!(h.knowledge(kit).version(&place(1, b"src/lib.rs")), Some(version(4)));
+}
+
+#[test]
+fn an_edit_of_a_file_changed_since_it_was_read_is_stale() {
+    let mut h = Harness::new(LIMITS);
+    let kit = h.open(1, authority(ALL));
+    known(&mut h, kit, b"src/lib.rs", b"fn one() {}\n", 3);
+    // Changed before the load: nothing is stored.
+    let (owner, _) = h.start(kit, 2, change(b"src/lib.rs", b"one", b"uno"));
+    let loaded = Done::Loaded { content: bytes(b"fn two() {}\n"), version: version(5) };
+    assert_eq!(h.end(owner, loaded), (2, Outcome::Stale));
+    assert_eq!(h.knowledge(kit).version(&place(1, b"src/lib.rs")), Some(version(3)), "what the LLM read");
+    // Changed between the load and the store.
+    let (owner, _) = h.start(kit, 3, change(b"src/lib.rs", b"one", b"uno"));
+    let loaded = Done::Loaded { content: bytes(b"fn one() {}\n"), version: version(3) };
+    drop(h.next(owner, loaded));
+    assert_eq!(h.end(owner, Done::Conflict { now: Some(version(6)) }), (3, Outcome::Stale));
+    // Removed since: not found, and forgotten.
+    let (owner, _) = h.start(kit, 4, change(b"src/lib.rs", b"one", b"uno"));
+    assert_eq!(h.end(owner, Done::Missing), (4, Outcome::NotFound));
+    assert_eq!(h.call(kit, change(b"src/lib.rs", b"one", b"uno")), Outcome::NotRead);
+}
+
+#[test]
+fn an_edit_that_matches_nothing_or_too_much_stores_nothing() {
+    let mut h = Harness::new(LIMITS);
+    let kit = h.open(1, authority(ALL));
+    known(&mut h, kit, b"src/lib.rs", b"a\nb\na\n", 3);
+    let table = [
+        (change(b"src/lib.rs", b"zzz", b"y"), Outcome::NoMatch),
+        (change(b"src/lib.rs", b"a", b"y"), Outcome::Ambiguous { count: 2, lines: Box::new([1, 3]) }),
+    ];
+    for (call, expected) in table {
+        let (owner, _) = h.start(kit, 2, call);
+        let loaded = Done::Loaded { content: bytes(b"a\nb\na\n"), version: version(3) };
+        assert_eq!(h.end(owner, loaded), (2, expected));
+    }
+    let all = Call::Edit { path: path(b"src/lib.rs"), old: bytes(b"a"), new: bytes(b"y"), all: true };
+    let (owner, _) = h.start(kit, 3, all);
+    let loaded = Done::Loaded { content: bytes(b"a\nb\na\n"), version: version(3) };
+    match h.next(owner, loaded) {
+        Op::Store { content, .. } => assert_eq!(&*content, b"y\nb\ny\n"),
+        op @ (Op::Load { .. } | Op::Scan { .. }) => panic!("expected the store, not {op:?}"),
+    }
+}
+
+#[test]
+fn edits_are_refused_at_the_entrance_without_a_read_or_a_change() {
+    let mut h = Harness::new(LIMITS);
+    let kit = h.open(1, authority(ALL));
+    assert_eq!(h.call(kit, change(b"src/lib.rs", b"a", b"b")), Outcome::NotRead);
+    known(&mut h, kit, b"src/lib.rs", b"a\n", 3);
+    let big = Call::Edit { path: path(b"src/lib.rs"), old: bytes(b"a"), new: Box::from(&[b'x'; 1025][..]), all: false };
+    let table = [
+        (change(b"src/lib.rs", b"", b"b"), Outcome::NoMatch),
+        (change(b"src/lib.rs", b"a", b"a"), Outcome::Unchanged),
+        (big, Outcome::TooLarge { size: 1025 }),
+        (change(b"vendor/lib/x.rs", b"a", b"b"), Outcome::ReadOnly),
+    ];
+    h.model.reclaim();
+    for (call, expected) in table {
+        assert_eq!(h.call(kit, call.clone()), expected, "{call:?}");
+    }
+    assert_eq!(h.model.jobs(), 0, "nothing ran");
+}
+
+#[test]
+fn a_kit_closing_while_an_edit_loads_stores_nothing() {
+    let mut h = Harness::new(LIMITS);
+    let kit = h.open(9, authority(ALL));
+    known(&mut h, kit, b"src/lib.rs", b"a\n", 3);
+    let (owner, _) = h.start(kit, 2, change(b"src/lib.rs", b"a", b"b"));
+    assert_eq!(&*h.emit(Event::Close { kit }), &[Request::CancelIo { owner }]);
+    // The load won its race with the cancel; the edit is cancelled all the same.
+    let loaded = Done::Loaded { content: bytes(b"a\n"), version: version(3) };
+    let expected = [
+        Request::Answer { to: ReplyTo::new(Token::new(2)), outcome: Outcome::Cancelled },
+        Request::Closed { session: Token::new(9) },
+    ];
+    assert_eq!(&*h.emit(Event::Done { owner, done: loaded }), &expected);
+}
+
+#[test]
+fn a_kit_closing_while_an_edit_stores_answers_with_whichever_end_came() {
+    let mut h = Harness::new(LIMITS);
+    let kit = h.open(9, authority(ALL));
+    known(&mut h, kit, b"src/lib.rs", b"a\n", 3);
+    let (owner, _) = h.start(kit, 2, change(b"src/lib.rs", b"a", b"b"));
+    let loaded = Done::Loaded { content: bytes(b"a\n"), version: version(3) };
+    drop(h.next(owner, loaded));
+    assert_eq!(&*h.emit(Event::Close { kit }), &[Request::CancelIo { owner }]);
+    // The store won its race: it happened, and the kit knows it.
+    let ended = h.emit(Event::Done { owner, done: Done::Stored { version: version(4) } });
+    let expected = [
+        Request::Answer { to: ReplyTo::new(Token::new(2)), outcome: Outcome::Edited { replaced: 1 } },
+        Request::Closed { session: Token::new(9) },
+    ];
+    assert_eq!(&*ended, &expected);
+    assert_eq!(h.knowledge(kit).version(&place(1, b"src/lib.rs")), Some(version(4)));
+}
+
+#[test]
+fn an_edit_whose_deadline_passed_while_it_loaded_stores_nothing() {
+    let mut h = Harness::new(LIMITS);
+    let kit = h.open(1, authority(ALL));
+    known(&mut h, kit, b"src/lib.rs", b"a\n", 3);
+    let (owner, _) = h.start(kit, 2, change(b"src/lib.rs", b"a", b"b"));
+    h.env.now = Time::ZERO.saturating_add(Duration::from_secs(60));
+    let loaded = Done::Loaded { content: bytes(b"a\n"), version: version(3) };
+    assert_eq!(h.end(owner, loaded), (2, Outcome::TimedOut));
 }

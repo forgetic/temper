@@ -27,3 +27,10 @@ pub fn list(at: &[u8]) -> Call {
 pub fn write(at: &[u8], content: &[u8]) -> Call {
     Call::Write { path: path(at), content: content.into() }
 }
+
+/// Replaces `old` with `new` in the file at `at`: its one occurrence, or every
+/// one if `all`.
+#[must_use]
+pub fn edit(at: &[u8], old: &[u8], new: &[u8], all: bool) -> Call {
+    Call::Edit { path: path(at), old: old.into(), new: new.into(), all }
+}

@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 
 use temper_agent_model_tools::{Authority, Entry, Fault, Grants, Kind, Limits, Name, Outcome, Refusal, Repo};
-use temper_agent_model_tools_tests::calls::{list, read, read_lines, write};
+use temper_agent_model_tools_tests::calls::{edit, list, read, read_lines, write};
 use temper_agent_model_tools_tests::{Settings, Span, Step, World, authority, repo};
 use temper_checkout_fake::Checkout;
 use temper_lib::{Duration, Rng, Time};
@@ -316,10 +316,13 @@ fn random_worlds_settle_with_every_call_answered() {
         }
     }
     let expected = [
+        "ambiguous",
         "busy",
         "cancelled",
+        "edited",
         "failed",
         "listed",
+        "no match",
         "not a directory",
         "not a file",
         "not found",
@@ -332,6 +335,7 @@ fn random_worlds_settle_with_every_call_answered() {
         "stale",
         "timed out",
         "too large",
+        "unchanged",
         "written",
     ];
     assert_eq!(seen, expected.into_iter().collect());
@@ -342,6 +346,10 @@ fn kind(outcome: &Outcome) -> &'static str {
         Outcome::Read { .. } => "read",
         Outcome::Listed { .. } => "listed",
         Outcome::Written { .. } => "written",
+        Outcome::Edited { .. } => "edited",
+        Outcome::NoMatch => "no match",
+        Outcome::Ambiguous { .. } => "ambiguous",
+        Outcome::Unchanged => "unchanged",
         Outcome::NotGranted => "not granted",
         Outcome::Outside => "outside",
         Outcome::ReadOnly => "read only",
@@ -382,6 +390,9 @@ const PATHS: [&[u8]; 18] = [
 ];
 
 const HOT: [&[u8]; 3] = [b"src/lib.rs", b"Cargo.toml", b"src/new.rs"];
+
+/// What edits replace: in every file, in some, in one line of one, nowhere.
+const SNIPPETS: [&[u8]; 5] = [b"\n", b"pub", b"fn one", b"written", b"nowhere"];
 
 /// A world drawn from `seed`: small limits, faults, latencies that race the
 /// deadlines, and up to five sessions with random scripts, some changing the
@@ -455,10 +466,15 @@ fn noisy_calls(rng: &mut Rng) -> Vec<temper_agent_model_tools::Call> {
         // Half the calls are about a few files, so that kits and changes meet.
         let pool: &[&[u8]] = if rng.chance(500) { &HOT } else { &PATHS };
         let path = pool[usize::try_from(rng.below(pool.len() as u64)).expect("an index")];
-        let call = match rng.below(6) {
+        let call = match rng.below(8) {
             0 => list(path),
             1 => read_lines(path, u32::try_from(rng.below(5)).expect("small"), 2),
             2 | 3 => write(path, format!("written {}\n", rng.below(1000)).as_bytes()),
+            4 | 5 => {
+                let old = SNIPPETS[usize::try_from(rng.below(SNIPPETS.len() as u64)).expect("an index")];
+                let new: &[u8] = if rng.chance(50) { old } else { b"edited" };
+                edit(path, old, new, rng.chance(300))
+            }
             _ => read(path),
         };
         calls.push(call);
@@ -662,4 +678,144 @@ fn a_write_that_timed_out_may_have_happened_and_the_next_one_finds_out() {
     assert_eq!(answers, expected);
     assert_eq!(world.stats().late_effects, 1);
     assert_eq!(world.checkout().content(b"work/temper/src/lib.rs"), Some(&b"ours again\n"[..]));
+}
+
+#[test]
+fn a_kit_edits_a_file_its_llm_read() {
+    let script = vec![
+        Step::Calls(vec![read(b"src/lib.rs")]),
+        Step::Calls(vec![edit(b"src/lib.rs", b"fn one", b"fn uno", false)]),
+        // What its LLM edited, it knows: it may edit it again.
+        Step::Calls(vec![edit(b"src/lib.rs", b"pub fn", b"fn", true)]),
+        Step::Calls(vec![read(b"src/lib.rs")]),
+    ];
+    let (answers, world) = run(Settings::calm(30), MODIFY, script);
+    let edited = b"fn uno() {}\nfn two() {}\nfn three() {}\n";
+    let expected = vec![
+        read_of(LIB, 0, 3, 3),
+        Outcome::Edited { replaced: 1 },
+        Outcome::Edited { replaced: 3 },
+        read_of(edited, 0, 3, 3),
+    ];
+    assert_eq!(answers, expected);
+    assert_eq!(world.checkout().content(b"work/temper/src/lib.rs"), Some(&edited[..]));
+}
+
+#[test]
+fn an_edit_that_would_be_wrong_changes_nothing() {
+    let script = vec![
+        Step::Calls(vec![edit(b"src/lib.rs", b"fn one", b"fn uno", false)]),
+        Step::Calls(vec![read(b"src/lib.rs")]),
+        Step::Calls(vec![
+            edit(b"src/lib.rs", b"fn four", b"fn cuatro", false),
+            edit(b"src/lib.rs", b"pub fn", b"fn", false),
+            edit(b"src/lib.rs", b"fn one", b"fn one", false),
+            edit(b"src/lib.rs", b"", b"fn", false),
+            edit(b"src/lib.rs", b"{}", &[b'x'; 2000], true),
+            edit(b"../docs/guide.md", b"Guide", b"Manual", false),
+        ]),
+    ];
+    let (answers, world) = run(Settings::calm(31), MODIFY, script);
+    let expected = vec![
+        Outcome::NotRead,
+        read_of(LIB, 0, 3, 3),
+        Outcome::NoMatch,
+        Outcome::Ambiguous { count: 3, lines: Box::new([1, 2, 3]) },
+        Outcome::Unchanged,
+        Outcome::NoMatch,
+        Outcome::TooLarge { size: 6044 },
+        Outcome::ReadOnly,
+    ];
+    assert_eq!(answers, expected);
+    assert_eq!(world.checkout().files(), Fixture::new().checkout.files(), "nothing changed");
+}
+
+#[test]
+fn an_edit_catches_a_change_made_before_it_loads_or_before_it_stores() {
+    let fixture = Fixture::new();
+    let authorities = [fixture.authority(MODIFY), fixture.authority(MODIFY)];
+    let mut world = World::new(Settings::calm(32), fixture.checkout);
+    let [editor, other] = authorities;
+    let seconds = Duration::from_secs;
+    // Another kit edits the file between this one's read and its edit; then,
+    // with io slow, an outsider changes it between the edit's load (done by
+    // 6s) and its store (done by 11s).
+    let editor = world.session(
+        Time::ZERO,
+        editor,
+        vec![
+            Step::Calls(vec![read(b"src/lib.rs")]),
+            Step::Sleep(seconds(3)),
+            Step::Calls(vec![edit(b"src/lib.rs", b"fn one", b"fn uno", false)]),
+            Step::Calls(vec![read(b"src/lib.rs")]),
+            Step::Latency(Span::millis(5_000, 5_000)),
+            Step::Calls(vec![edit(b"src/lib.rs", b"fn two", b"fn dos", false)]),
+        ],
+    );
+    let other = world.session(
+        Time::ZERO,
+        other,
+        vec![
+            Step::Sleep(seconds(1)),
+            Step::Calls(vec![read(b"src/lib.rs")]),
+            Step::Calls(vec![edit(b"src/lib.rs", b"fn three", b"fn tres", false)]),
+            Step::Sleep(seconds(6)),
+            Step::Change(Box::new(|checkout: &mut Checkout| {
+                checkout.write(b"work/temper/src/lib.rs", b"theirs\n");
+            })),
+        ],
+    );
+    world.run(ITERATIONS);
+    let theirs = b"pub fn one() {}\npub fn two() {}\npub fn tres() {}\n";
+    let expected = [read_of(LIB, 0, 3, 3), Outcome::Stale, read_of(theirs, 0, 3, 3), Outcome::Stale];
+    assert_eq!(world.answers(editor), expected.iter().collect::<Vec<_>>());
+    assert_eq!(world.answers(other), vec![&read_of(LIB, 0, 3, 3), &Outcome::Edited { replaced: 1 }]);
+    assert_eq!(world.checkout().content(b"work/temper/src/lib.rs"), Some(&b"theirs\n"[..]));
+}
+
+#[test]
+fn a_kit_closing_while_an_edit_runs_stores_nothing_it_was_not_told_of() {
+    let calm = Settings::calm(33);
+    // The load wins its race with the cancel: the edit stores nothing.
+    let settings = Settings { late_cancels: 1000, ..calm };
+    let script = vec![
+        Step::Calls(vec![read(b"src/lib.rs")]),
+        Step::Latency(Span::millis(5_000, 5_000)),
+        Step::Send(vec![edit(b"src/lib.rs", b"fn one", b"fn uno", false)]),
+    ];
+    let (answers, world) = run(settings, MODIFY, script);
+    assert_eq!(answers, vec![read_of(LIB, 0, 3, 3), Outcome::Cancelled]);
+    assert_eq!(world.checkout().content(b"work/temper/src/lib.rs"), Some(LIB));
+    assert_eq!(world.stats().late_cancels, 1);
+}
+
+#[test]
+fn an_edit_that_timed_out_may_have_happened_and_the_next_one_finds_out() {
+    let calm = Settings::calm(34);
+    // Each phase takes two seconds and the call has three: the load is done
+    // in time, the store is abandoned at the call's deadline, and has taken
+    // effect all the same.
+    let settings = Settings { late_effects: 1000, call_timeout: Duration::from_secs(3), ..calm };
+    let script = vec![
+        Step::Calls(vec![read(b"src/lib.rs")]),
+        Step::Latency(Span::millis(2_000, 2_000)),
+        Step::Calls(vec![edit(b"src/lib.rs", b"fn one", b"fn uno", false)]),
+        Step::Latency(calm.io),
+        // The LLM cannot know whether its edit happened; the next one's load
+        // finds out.
+        Step::Calls(vec![edit(b"src/lib.rs", b"fn two", b"fn dos", false)]),
+        Step::Calls(vec![read(b"src/lib.rs")]),
+        Step::Calls(vec![edit(b"src/lib.rs", b"fn two", b"fn dos", false)]),
+    ];
+    let (answers, world) = run(settings, MODIFY, script);
+    let uno = b"pub fn uno() {}\npub fn two() {}\npub fn three() {}\n";
+    let expected = vec![
+        read_of(LIB, 0, 3, 3),
+        Outcome::TimedOut,
+        Outcome::Stale,
+        read_of(uno, 0, 3, 3),
+        Outcome::Edited { replaced: 1 },
+    ];
+    assert_eq!(answers, expected);
+    assert_eq!((world.stats().timeouts, world.stats().late_effects), (1, 1));
 }

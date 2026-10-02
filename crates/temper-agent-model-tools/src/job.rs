@@ -7,7 +7,9 @@
 //! with a cancel.
 //!
 //! A write stores the file if it is as the kit knows it: at the version its
-//! LLM read or wrote last, or absent if it knows none. io checks that against
+//! LLM read or wrote last, or absent if it knows none. An edit runs in two
+//! phases: it loads the file, which must be at the version the kit knows,
+//! makes the edit in memory, and stores the result expecting that version. io checks that against
 //! the real file as it stores, so a change made since, by another kit or by
 //! anything else, is caught: as `Stale` if the LLM had read the file, and as
 //! `NotRead` if it had not and the write would have created it. A write that
@@ -24,11 +26,19 @@
 //!            any other                   Done   what it says
 //! Listing    scanned                     Done   the entries
 //!            any other                   Done   what it says
-//! Writing    stored                      Done   written; the new version is known
-//!            conflict, creating          Done   not read
-//!            conflict, replacing         Done   stale; a file now absent is forgotten
-//!            any other                   Done   what it says
+//! Editing    loaded, as known, edited    Storing   (store the edited file)
+//!            loaded, otherwise           Done      stale, no match, ambiguous, too large,
+//!                                                  or cancelled if the kit is closing
+//!            missing                     Done      not found; nothing is known there
+//!            any other                   Done      what it says
+//! Storing    stored                      Done      written or edited; the new version is known
+//!            conflict, creating          Done      not read
+//!            conflict, replacing         Done      stale; a file now absent is forgotten
+//!            any other                   Done      what it says
 //! ```
+//!
+//! A kit that closes while an edit loads stores nothing: whichever way the
+//! load's race with its cancel went, the edit answers `Cancelled`.
 //!
 //! A job is retired once it is Done ([`follow`]), which also ends a closing
 //! kit with its last job.
@@ -40,6 +50,7 @@ use temper_lib::{Env, Id, Queue, ReplyTo, Slab, Time, Token};
 
 use crate::boundary::{Done, Expect, Op, Request};
 use crate::call::Outcome;
+use crate::edit::{self, Edit};
 use crate::kit::{self, Kit};
 use crate::knowledge::Knowledge;
 use crate::limits::Limits;
@@ -60,11 +71,32 @@ enum State {
     Reading { reply_to: ReplyTo, place: Place, span: Span },
     /// Scanning a directory.
     Listing { reply_to: ReplyTo },
-    /// Storing the file at `place`, which it creates if `creating`, and
-    /// replaces at the version the kit knows otherwise.
-    Writing { reply_to: ReplyTo, place: Place, creating: bool },
+    /// Loading the file to edit.
+    Editing { reply_to: ReplyTo, editing: Editing },
+    /// Storing the file at `place`, for `change`.
+    Storing { reply_to: ReplyTo, place: Place, change: Change },
     /// Terminal: answered, holds nothing.
     Done,
+}
+
+/// An edit while it loads the file.
+#[derive(Debug)]
+pub(crate) struct Editing {
+    place: Place,
+    edit: Edit,
+    /// The call's, which its store keeps too.
+    deadline: Time,
+}
+
+/// What a store does to the file, and so what it answers.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum Change {
+    /// Writes a file the kit knows nothing of.
+    Create,
+    /// Writes over the file at the version the kit knows.
+    Replace,
+    /// Writes the file edited, having `replaced` that many occurrences.
+    Edit { replaced: u32 },
 }
 
 /// What a call that passed its kit's entrance does.
@@ -73,6 +105,7 @@ pub(crate) enum Work {
     Read { place: Place, span: Span },
     List { place: Place },
     Write { place: Place, content: Box<[u8]>, expect: Expect },
+    Edit { place: Place, edit: Edit },
 }
 
 /// Starts a job for `work` in the kit `kit`, which has room for one, asking
@@ -88,6 +121,7 @@ pub(crate) fn start(
     out: &mut Queue<Request>,
 ) -> Id<Job> {
     let limits = &env.limits;
+    let call_deadline = deadline;
     let deadline = deadline.min(env.now.saturating_add(limits.file_timeout));
     // The place goes to io and stays with the job: copy at emission.
     let (state, op) = match work {
@@ -97,12 +131,16 @@ pub(crate) fn start(
         }
         Work::List { place } => (State::Listing { reply_to }, Op::Scan { at: place, max: limits.list_entries }),
         Work::Write { place, content, expect } => {
-            let creating = match expect {
-                Expect::Absent => true,
-                Expect::Is { .. } => false,
+            let change = match expect {
+                Expect::Absent => Change::Create,
+                Expect::Is { .. } => Change::Replace,
             };
             let op = Op::Store { at: place.clone(), content, expect };
-            (State::Writing { reply_to, place, creating }, op)
+            (State::Storing { reply_to, place, change }, op)
+        }
+        Work::Edit { place, edit } => {
+            let op = Op::Load { at: place.clone(), max: limits.file_bytes };
+            (State::Editing { reply_to, editing: Editing { place, edit, deadline: call_deadline } }, op)
         }
     };
     // Room: a kit has at most `calls` jobs, and the slab twice that many slots
@@ -134,9 +172,8 @@ pub(crate) fn done(model: &mut Model, env: &Env<Limits>, owner: Token, done: Don
             loaded(&mut kit.knowledge, reply_to, place, span, done, &env.limits, out)
         }
         State::Listing { reply_to } => scanned(reply_to, done, out),
-        State::Writing { reply_to, place, creating } => {
-            stored(&mut kit.knowledge, reply_to, place, creating, done, out)
-        }
+        State::Editing { reply_to, editing } => to_edit(kit, id, reply_to, editing, done, env, out),
+        State::Storing { reply_to, place, change } => stored(&mut kit.knowledge, reply_to, place, change, done, out),
         State::Done => unreachable!("a job that has answered has nothing in flight"),
     };
     follow(kits, jobs, id, out);
@@ -147,7 +184,7 @@ pub(crate) fn done(model: &mut Model, env: &Env<Limits>, owner: Token, done: Don
 fn follow(kits: &mut Slab<Kit>, jobs: &mut Slab<Job>, id: Id<Job>, out: &mut Queue<Request>) {
     let job = jobs.get(id).expect("a job lives until it is retired");
     match job.state {
-        State::Reading { .. } | State::Listing { .. } | State::Writing { .. } => {}
+        State::Reading { .. } | State::Listing { .. } | State::Editing { .. } | State::Storing { .. } => {}
         State::Done => {
             kit::finished(kits, job.kit, id, out);
             jobs.retire(id);
@@ -208,19 +245,75 @@ fn scanned(reply_to: ReplyTo, done: Done, out: &mut Queue<Request>) -> State {
     answer(reply_to, outcome, out)
 }
 
-/// Writing, ended: answer, and know the version written.
+/// Editing, loaded: make the edit and store it, if the file is as its LLM
+/// read it and the kit is not closing.
+fn to_edit(
+    kit: &mut Kit,
+    id: Id<Job>,
+    reply_to: ReplyTo,
+    editing: Editing,
+    done: Done,
+    env: &Env<Limits>,
+    out: &mut Queue<Request>,
+) -> State {
+    let Editing { place, edit, deadline } = editing;
+    let outcome = match done {
+        Done::Loaded { content, version } => {
+            if kit::closing(kit) {
+                return answer(reply_to, Outcome::Cancelled, out);
+            }
+            if kit.knowledge.version(&place) != Some(version) {
+                return answer(reply_to, Outcome::Stale, out);
+            }
+            if deadline <= env.now {
+                return answer(reply_to, Outcome::TimedOut, out);
+            }
+            match edit::apply(&content, &edit, &env.limits) {
+                Ok((content, replaced)) => {
+                    let deadline = deadline.min(env.now.saturating_add(env.limits.file_timeout));
+                    let op = Op::Store { at: place.clone(), content, expect: Expect::Is { version } };
+                    out.push(Request::Io { owner: id.token(), op, deadline });
+                    return State::Storing { reply_to, place, change: Change::Edit { replaced } };
+                }
+                Err(outcome) => outcome,
+            }
+        }
+        Done::Missing => {
+            kit.knowledge.forget(&place);
+            Outcome::NotFound
+        }
+        Done::NotFile => Outcome::NotFile,
+        Done::NotDirectory => Outcome::NotDirectory,
+        Done::TooLarge { size } => Outcome::TooLarge { size },
+        Done::Escapes => Outcome::Outside,
+        Done::Failed { fault } => Outcome::Failed { fault },
+        Done::TimedOut => Outcome::TimedOut,
+        Done::Cancelled => Outcome::Cancelled,
+        Done::Scanned { .. } | Done::Stored { .. } | Done::Conflict { .. } => {
+            unreachable!("io ends a load with a load's terminal")
+        }
+    };
+    answer(reply_to, outcome, out)
+}
+
+/// Storing, ended: answer, and know the version written.
 fn stored(
     knowledge: &mut Knowledge,
     reply_to: ReplyTo,
     place: Place,
-    creating: bool,
+    change: Change,
     done: Done,
     out: &mut Queue<Request>,
 ) -> State {
+    let creating = change == Change::Create;
     let outcome = match done {
         Done::Stored { version } => {
             knowledge.record(place, version);
-            Outcome::Written { created: creating }
+            match change {
+                Change::Create => Outcome::Written { created: true },
+                Change::Replace => Outcome::Written { created: false },
+                Change::Edit { replaced } => Outcome::Edited { replaced },
+            }
         }
         // Something is there that the LLM has not read.
         Done::Conflict { now: Some(_) } if creating => Outcome::NotRead,
@@ -253,7 +346,8 @@ pub(crate) fn slots(limits: &Limits) -> Option<u32> {
     limits.kits.checked_mul(limits.calls)?.checked_mul(2)
 }
 
-/// What a running job holds beyond its slot: at most a place.
-pub(crate) fn held(limits: &Limits) -> u64 {
-    u64::from(limits.path_bytes)
+/// What a running job holds beyond its slot, or `None` past a `u64`: at most
+/// a place, and an edit's snippets.
+pub(crate) fn held(limits: &Limits) -> Option<u64> {
+    u64::from(limits.file_bytes).checked_mul(2)?.checked_add(u64::from(limits.path_bytes))
 }

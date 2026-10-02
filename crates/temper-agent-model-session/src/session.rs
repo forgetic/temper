@@ -1023,7 +1023,7 @@ fn tally(content: &[Block]) -> (u32, u32) {
 /// Whether `outcome` is a success.
 const fn succeeded(outcome: &Outcome) -> bool {
     match outcome {
-        Outcome::Read { .. } | Outcome::Listed { .. } | Outcome::Written { .. } => true,
+        Outcome::Read { .. } | Outcome::Listed { .. } | Outcome::Written { .. } | Outcome::Edited { .. } => true,
         Outcome::NotGranted
         | Outcome::Outside
         | Outcome::ReadOnly
@@ -1034,6 +1034,9 @@ const fn succeeded(outcome: &Outcome) -> bool {
         | Outcome::TooLarge { .. }
         | Outcome::NotRead
         | Outcome::Stale
+        | Outcome::NoMatch
+        | Outcome::Ambiguous { .. }
+        | Outcome::Unchanged
         | Outcome::Failed { .. }
         | Outcome::TimedOut
         | Outcome::Cancelled
@@ -1185,7 +1188,13 @@ fn outcome_cost(outcome: &Outcome) -> Option<u64> {
             }
             Some(cost)
         }
+        Outcome::Ambiguous { count: _, lines } => {
+            u64::try_from(size_of::<u32>()).ok()?.checked_mul(u64::try_from(lines.len()).ok()?)
+        }
         Outcome::Written { .. }
+        | Outcome::Edited { .. }
+        | Outcome::NoMatch
+        | Outcome::Unchanged
         | Outcome::NotGranted
         | Outcome::Outside
         | Outcome::ReadOnly

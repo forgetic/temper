@@ -65,6 +65,8 @@ pub enum Outcome {
     Listed { entries: Box<[Entry]>, more: u64 },
     /// The file holds what was written; it was `created` if there was none.
     Written { created: bool },
+    /// The edit `replaced` that many occurrences.
+    Edited { replaced: u32 },
 
     /// The kit was not granted the call's family of tools.
     NotGranted,
@@ -91,6 +93,14 @@ pub enum Outcome {
     /// The file changed since the LLM read it, so it may not be changed
     /// until the LLM reads it again.
     Stale,
+    /// The snippet to replace is not in the file (an empty one never is).
+    NoMatch,
+    /// The snippet to replace is in the file `count` times, and the edit
+    /// was for one: `lines` are where the first few start, counting from 1.
+    Ambiguous { count: u32, lines: Box<[u32]> },
+    /// The edit would leave the file as it is: the snippet and its
+    /// replacement are the same.
+    Unchanged,
     /// io failed.
     Failed { fault: Fault },
     /// The call did not finish by its deadline.
@@ -99,7 +109,7 @@ pub enum Outcome {
     Cancelled,
     /// The kit has as many calls running as it may.
     Busy,
-    /// The tools do not run this call yet: edit, search and shell come next.
+    /// The tools do not run this call yet: search and shell come next.
     Unsupported,
 }
 

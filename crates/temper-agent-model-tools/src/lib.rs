@@ -1,7 +1,7 @@
 //! The tools sub-model of the temper coding agent's model layer
 //! (programming-model.md, 4.5; agent-model.md, 6): what a session does to the
-//! checkout. It reads, lists and writes files for the calls a session's LLM
-//! makes; editing, searching and running commands come next.
+//! checkout. It reads, lists, writes and edits files for the calls a session's
+//! LLM makes; searching and running commands come next.
 //!
 //! Sans-io: [`step`] turns events into requests and changes nothing but the
 //! [`Model`] it is given. Its parent is the session sub-model, which opens a
@@ -29,6 +29,7 @@ extern crate alloc;
 mod authority;
 mod boundary;
 mod call;
+mod edit;
 mod job;
 mod kit;
 mod knowledge;
