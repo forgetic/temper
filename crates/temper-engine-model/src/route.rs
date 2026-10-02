@@ -314,12 +314,27 @@ fn from_fleet(model: &mut Model, env: &Env<Limits>, request: fleet::Request, out
 /// section's source.
 fn from_brief(model: &mut Model, env: &Env<Limits>, request: brief::Request) {
     match request {
-        brief::Request::Rendered { reply_to, sections } => runs::rendered(model, env, reply_to, Some(sections)),
-        brief::Request::Failed { reply_to, missing: _ } | brief::Request::Refused { reply_to, refusal: _ } => {
-            runs::rendered(model, env, reply_to, None);
+        brief::Request::Rendered { reply_to, sections } => runs::rendered(model, env, reply_to, Ok(sections)),
+        // A brief without a section its run is for: the run failed for a
+        // while, and is tried again within its class's retries.
+        brief::Request::Failed { reply_to, missing: _, why: _ } => {
+            let failed = work::Answer::Failed(work::Class::Transient);
+            runs::rendered(model, env, reply_to, Err(failed));
         }
-        brief::Request::Read { owner, source, keep, parts, bytes } => {
-            serve::brief_read(model, env, owner, source, keep, parts, bytes);
+        brief::Request::Refused { reply_to, refusal } => {
+            let answer = match refusal {
+                // No room for the brief: nothing ran, and the hub claims again
+                // after a backoff.
+                brief::Refusal::Busy => work::Answer::Refused,
+                brief::Refusal::Oversized => work::Answer::Failed(work::Class::Permanent),
+            };
+            runs::rendered(model, env, reply_to, Err(answer));
+        }
+        // The hub claims again after its own backoff: room in the brief needs
+        // no notice.
+        brief::Request::Room => {}
+        brief::Request::Read { owner, source, keep, fit, parts, bytes } => {
+            serve::brief_read(model, env, owner, source, crate::waits::Bounds { keep, fit, parts, bytes });
         }
     }
 }
@@ -327,8 +342,10 @@ fn from_brief(model: &mut Model, env: &Env<Limits>, request: brief::Request) {
 /// One of the notes' requests: an answer to a call, or a wiki operation.
 fn from_notes(model: &mut Model, env: &Env<Limits>, request: notes::Request) {
     match request {
-        notes::Request::Indexed { reply_to, lines, more: _, unread: _ }
-        | notes::Request::Found { reply_to, lines, more: _, unread: _ } => serve::indexed(model, env, reply_to, lines),
+        notes::Request::Indexed { reply_to, lines, more, unread: _ }
+        | notes::Request::Found { reply_to, lines, more, unread: _ } => {
+            serve::indexed(model, env, reply_to, lines, more);
+        }
         notes::Request::Recalled { reply_to, entries, failed } => {
             serve::relay_served(model, env, reply_to, crate::boundary::Served::Recalled { entries, failed });
         }

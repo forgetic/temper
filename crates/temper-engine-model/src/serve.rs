@@ -41,7 +41,7 @@ use crate::people;
 use crate::route;
 use crate::runs;
 use crate::translate;
-use crate::waits::{Wait, Wiki};
+use crate::waits::{Bounds, Wait, Wiki};
 
 /// Takes the wait `token` names, which is answered: it goes at the reclaim
 /// point. `None` if it was answered already.
@@ -142,8 +142,8 @@ pub(crate) fn read(model: &mut Model, env: &Env<Limits>, owner: Token, result: R
     let Some(wait) = take(model, owner) else { return };
     match wait {
         Wait::Job { entry } => jobs::read(model, env, entry, result),
-        Wait::Brief { owner, keep, parts, bytes, source } => {
-            brief_got(model, env, owner, keep, parts, bytes, &source, result);
+        Wait::Brief { owner, bounds, source } => {
+            brief_got(model, env, owner, bounds, &source, result);
         }
         Wait::Wiki { owner, op } => wiki_read(model, env, owner, op, result),
         Wait::Relay { to, .. } => {
@@ -240,41 +240,33 @@ pub(crate) fn expire(model: &mut Model, owner: Token, before: Time, out: &mut Qu
 }
 
 /// The brief reads a section's source.
-pub(crate) fn brief_read(
-    model: &mut Model,
-    env: &Env<Limits>,
-    owner: Token,
-    source: brief::Source,
-    keep: brief::Keep,
-    parts: u32,
-    bytes: u32,
-) {
+pub(crate) fn brief_read(model: &mut Model, env: &Env<Limits>, owner: Token, source: brief::Source, bounds: Bounds) {
     let read = match &source {
         brief::Source::Template(index) => {
             let guidance = match model.config.plan.templates.get(usize::try_from(*index).unwrap_or(usize::MAX)) {
                 Some(template) => copy_of(&template.guidance),
                 None => return answer_brief(model, env, owner, brief::Read::Failed),
             };
-            let got = cut(&[&guidance], keep, parts, bytes);
+            let got = cut(&[&guidance], bounds);
             return answer_brief(model, env, owner, got);
         }
         brief::Source::Plan { goal } => {
-            let got = plan_status(model, translate::from_brief(*goal), keep, parts, bytes);
+            let got = plan_status(model, translate::from_brief(*goal), bounds);
             return answer_brief(model, env, owner, got);
         }
         brief::Source::Attempts(item) => {
-            let got = attempts(model, translate::from_brief(*item), keep, parts, bytes);
+            let got = attempts(model, translate::from_brief(*item), bounds);
             return answer_brief(model, env, owner, got);
         }
         brief::Source::Dependencies(_) => return answer_brief(model, env, owner, brief::Read::Failed),
         brief::Source::Notes { repository, goal } => {
-            let scopes = notes::Scopes { repository: *repository, goal: *goal };
-            let wait = Wait::Brief { owner, keep, parts, bytes, source: source.clone() };
+            let scopes = notes::Scopes { repository: *repository, goal: notes_item(*goal) };
+            let wait = Wait::Brief { owner, bounds, source: source.clone() };
             let Ok(wait) = model.waits.insert(wait) else {
                 return answer_brief(model, env, owner, brief::Read::Failed);
             };
             let reply_to = ReplyTo::new(wait.token());
-            return route::notes_step(model, env, notes::Event::Index { reply_to, scopes, budget: bytes });
+            return route::notes_step(model, env, notes::Event::Index { reply_to, scopes, budget: bounds.bytes });
         }
         brief::Source::Item(item) => {
             forge::Read::Item { item: translate::forge_item(translate::from_brief(*item)), after: u64::MAX }
@@ -303,10 +295,15 @@ pub(crate) fn brief_read(
             }
         }
     };
-    let Ok(wait) = model.waits.insert(Wait::Brief { owner, keep, parts, bytes, source }) else {
+    let Ok(wait) = model.waits.insert(Wait::Brief { owner, bounds, source }) else {
         return answer_brief(model, env, owner, brief::Read::Failed);
     };
     route::forge_step(model, env, forge::Event::Read { owner: wait.token(), read });
+}
+
+fn notes_item(item: Option<brief::Item>) -> Option<notes::Item> {
+    let item = item?;
+    Some(notes::Item { repository: item.repository, number: item.number })
 }
 
 fn pull_of(model: &Model, item: Item) -> Option<u64> {
@@ -323,20 +320,17 @@ fn answer_brief(model: &mut Model, env: &Env<Limits>, owner: Token, read: brief:
 }
 
 /// A brief's read of the forge ended: the parts it asked for, cut.
-#[expect(clippy::too_many_arguments, reason = "a brief's read names its bounds")]
 fn brief_got(
     model: &mut Model,
     env: &Env<Limits>,
     owner: Token,
-    keep: brief::Keep,
-    parts: u32,
-    bytes: u32,
+    bounds: Bounds,
     source: &brief::Source,
     result: Result<api::Answer, forge::Failure>,
 ) {
     let Ok(answer) = result else { return answer_brief(model, env, owner, brief::Read::Failed) };
     let engine = model.config.forge.engine;
-    let mut found: List<Box<[u8]>> = List::with_capacity(parts.max(1));
+    let mut found: List<Box<[u8]>> = List::with_capacity(bounds.parts.max(1));
     let fits = match source {
         brief::Source::Item(_) => {
             let api::Answer::Item { item, .. } = answer else { return failed(model, env, owner) };
@@ -393,7 +387,7 @@ fn brief_got(
         return failed(model, env, owner);
     }
     let slices = slices(&found);
-    let got = cut(slices.as_slice(), keep, parts, bytes);
+    let got = cut(slices.as_slice(), bounds);
     answer_brief(model, env, owner, got);
 }
 
@@ -406,7 +400,7 @@ fn slices(found: &List<Box<[u8]>>) -> List<&[u8]> {
 }
 
 /// The status of the plan under `goal`: its steps, each done or not.
-fn plan_status(model: &Model, goal: Item, keep: brief::Keep, parts: u32, bytes: u32) -> brief::Read {
+fn plan_status(model: &Model, goal: Item, bounds: Bounds) -> brief::Read {
     let Some(id) = items::find(model, goal) else { return brief::Read::Failed };
     let Some(entry) = model.items.get(id) else { return brief::Read::Failed };
     let mut lines: List<Box<[u8]>> = List::with_capacity(u32::try_from(entry.relations.children.len()).unwrap_or(0));
@@ -415,11 +409,11 @@ fn plan_status(model: &Model, goal: Item, keep: brief::Keep, parts: u32, bytes: 
         lines.push(translate::concat(&[&child.name, state])).expect("room for each of them");
     }
     let slices = slices(&lines);
-    cut(slices.as_slice(), keep, parts, bytes)
+    cut(slices.as_slice(), bounds)
 }
 
 /// The item's earlier attempts, and its failures by class.
-fn attempts(model: &Model, item: Item, keep: brief::Keep, parts: u32, bytes: u32) -> brief::Read {
+fn attempts(model: &Model, item: Item, bounds: Bounds) -> brief::Read {
     let Some(id) = items::find(model, item) else { return brief::Read::Failed };
     let Some(entry) = model.items.get(id) else { return brief::Read::Failed };
     let lifecycle = entry.lifecycle;
@@ -440,59 +434,165 @@ fn attempts(model: &Model, item: Item, keep: brief::Keep, parts: u32, bytes: u32
         b", invalid ",
         &translate::decimal(u64::from(failures.of(work::Class::Invalid))),
     ]);
-    cut(&[&line], keep, parts, bytes)
+    cut(&[&line], bounds)
 }
 
-/// `found`, cut to `parts` parts and `bytes` bytes, kept from the end `keep`
-/// names: whole parts while they fit, then as much of the next as fits, and
-/// what was left out counted in the part next to it.
-fn cut(found: &[&[u8]], keep: brief::Keep, parts: u32, bytes: u32) -> brief::Read {
-    let mut kept: List<brief::Part> = List::with_capacity(parts);
-    let mut room = u64::from(bytes);
+/// `found`, cut to the read's bounds as its fit says (see
+/// [`brief::Fit`]), never splitting a UTF-8 sequence: what is left out is
+/// counted in the `left` of the part next to it.
+pub(crate) fn cut(found: &[&[u8]], bounds: Bounds) -> brief::Read {
+    let parts = match bounds.fit {
+        brief::Fit::Run => run(found, bounds),
+        brief::Fit::Each => each(found, bounds),
+        brief::Fit::Lines => lines(found, bounds),
+    };
+    brief::Read::Got(parts)
+}
+
+/// One run of bytes from the end the read keeps.
+fn run(found: &[&[u8]], bounds: Bounds) -> Box<[brief::Part]> {
+    let mut kept: List<brief::Part> = List::with_capacity(bounds.parts);
+    let mut room = u64::from(bounds.bytes);
     let mut left: u64 = 0;
     let count = found.len();
     for index in 0..count {
-        let at = match keep {
-            brief::Keep::Start => index,
-            brief::Keep::End => count.saturating_sub(index).saturating_sub(1),
-        };
-        let Some(part) = found.get(at) else { break };
-        let len = u64::try_from(part.len()).unwrap_or(u64::MAX);
+        let Some(part) = found.get(nearest(index, count, bounds.keep)) else { break };
         if kept.room() == 0 || room == 0 {
-            left = left.saturating_add(len);
+            left = left.saturating_add(len(part));
             continue;
         }
-        let take = usize::try_from(len.min(room)).unwrap_or(0);
-        let piece = match keep {
-            brief::Keep::Start => part.get(..take),
-            brief::Keep::End => part.get(part.len().saturating_sub(take)..),
-        };
-        room = room.saturating_sub(u64::try_from(take).unwrap_or(0));
-        let rest = len.saturating_sub(u64::try_from(take).unwrap_or(0));
-        kept.push(brief::Part { bytes: copy_of(piece.unwrap_or(&[])), left: rest }).expect("room for each of them");
+        let piece = kept_of(part, room, bounds.keep);
+        room = room.saturating_sub(len(piece));
+        let rest = len(part).saturating_sub(len(piece));
+        kept.push(brief::Part { bytes: copy_of(piece), left: rest }).expect("room for each of them");
     }
+    told(&mut kept, left);
+    ordered(kept, bounds.keep)
+}
+
+/// Each part to an even share of the read's bytes, those nearest the end
+/// the read keeps first.
+fn each(found: &[&[u8]], bounds: Bounds) -> Box<[brief::Part]> {
+    let mut kept: List<brief::Part> = List::with_capacity(bounds.parts);
+    let count = found.len();
+    let shares = u64::try_from(count.min(usize::try_from(bounds.parts).unwrap_or(usize::MAX)).max(1)).unwrap_or(1);
+    let share = u64::from(bounds.bytes).checked_div(shares).unwrap_or(0);
+    let mut left: u64 = 0;
+    for index in 0..count {
+        let Some(part) = found.get(nearest(index, count, bounds.keep)) else { break };
+        if kept.room() == 0 {
+            left = left.saturating_add(len(part));
+            continue;
+        }
+        let piece = kept_of(part, share, bounds.keep);
+        let rest = len(part).saturating_sub(len(piece));
+        kept.push(brief::Part { bytes: copy_of(piece), left: rest }).expect("room for each of them");
+    }
+    told(&mut kept, left);
+    ordered(kept, bounds.keep)
+}
+
+/// Whole parts from the start, and the last part, always kept.
+fn lines(found: &[&[u8]], bounds: Bounds) -> Box<[brief::Part]> {
+    let mut kept: List<brief::Part> = List::with_capacity(bounds.parts.max(1));
+    let Some((last, before)) = found.split_last() else { return kept.into_boxed() };
+    let last = kept_of(last, u64::from(bounds.bytes), brief::Keep::Start);
+    let mut room = u64::from(bounds.bytes).saturating_sub(len(last));
+    let mut left: u64 = 0;
+    for part in before {
+        let fits = len(part) <= room && kept.len().saturating_add(1) < bounds.parts && left == 0;
+        if !fits {
+            left = left.saturating_add(len(part));
+            continue;
+        }
+        room = room.saturating_sub(len(part));
+        kept.push(brief::Part { bytes: copy_of(part), left: 0 }).expect("room for each of them");
+    }
+    kept.push(brief::Part { bytes: copy_of(last), left }).expect("room for the last part");
+    kept.into_boxed()
+}
+
+/// The `index`th part from the end the read keeps.
+const fn nearest(index: usize, count: usize, keep: brief::Keep) -> usize {
+    match keep {
+        brief::Keep::Start => index,
+        brief::Keep::End => count.saturating_sub(index).saturating_sub(1),
+    }
+}
+
+/// As much of `part` as `room` holds, from the end `keep` names, never
+/// splitting a UTF-8 sequence.
+fn kept_of(part: &[u8], room: u64, keep: brief::Keep) -> &[u8] {
+    let mut take = usize::try_from(room).unwrap_or(usize::MAX).min(part.len());
+    match keep {
+        brief::Keep::Start => {
+            for _ in 0..4 {
+                let continues = match part.get(take) {
+                    Some(byte) => *byte & 0xC0 == 0x80,
+                    None => false,
+                };
+                if !continues {
+                    break;
+                }
+                take = take.saturating_sub(1);
+            }
+            part.get(..take).unwrap_or(&[])
+        }
+        brief::Keep::End => {
+            let mut start = part.len().saturating_sub(take);
+            for _ in 0..4 {
+                let continues = match part.get(start) {
+                    Some(byte) => *byte & 0xC0 == 0x80,
+                    None => false,
+                };
+                if !continues {
+                    break;
+                }
+                start = start.saturating_add(1);
+            }
+            part.get(start..).unwrap_or(&[])
+        }
+    }
+}
+
+fn len(bytes: &[u8]) -> u64 {
+    u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+}
+
+/// Counts the whole parts left out in the last part kept, which is next to
+/// them.
+fn told(kept: &mut List<brief::Part>, left: u64) {
     if left > 0
         && let Some(last) = kept.get_mut(kept.len().saturating_sub(1))
     {
         last.left = last.left.saturating_add(left);
     }
+}
+
+/// The parts kept, in their source's order.
+fn ordered(kept: List<brief::Part>, keep: brief::Keep) -> Box<[brief::Part]> {
     let mut parts = kept.into_boxed();
     if keep == brief::Keep::End {
         parts.reverse();
     }
-    brief::Read::Got(parts)
+    parts
 }
 
 /// The notes answered an index, for a brief, or a search.
-pub(crate) fn indexed(model: &mut Model, env: &Env<Limits>, reply_to: ReplyTo, lines: Box<[notes::Line]>) {
+pub(crate) fn indexed(model: &mut Model, env: &Env<Limits>, reply_to: ReplyTo, lines: Box<[notes::Line]>, more: u32) {
     let Some(wait) = take(model, reply_to.into_token()) else { return };
-    let Some((owner, keep, parts, bytes)) = wait.brief() else { return };
-    let mut found: List<Box<[u8]>> = List::with_capacity(u32::try_from(lines.len()).unwrap_or(0));
+    let Some((owner, bounds)) = wait.brief() else { return };
+    let count = u32::try_from(lines.len()).unwrap_or(u32::MAX).saturating_add(1);
+    let mut found: List<Box<[u8]>> = List::with_capacity(count);
     for line in &lines {
         found.push(translate::concat(&[&line.name, b": ", &line.description])).expect("room for each of them");
     }
+    // The last part says how many entries did not fit: empty if none.
+    let rest =
+        if more > 0 { translate::concat(&[&translate::decimal(u64::from(more)), b" more"]) } else { Box::new([]) };
+    found.push(rest).expect("room for the count of the rest");
     let slices = slices(&found);
-    let got = cut(slices.as_slice(), keep, parts, bytes);
+    let got = cut(slices.as_slice(), bounds);
     answer_brief(model, env, owner, got);
 }
 

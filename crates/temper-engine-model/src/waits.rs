@@ -33,7 +33,7 @@ pub(crate) enum Wait {
     /// in, a pull request opened again on a release).
     Aside { entry: Option<Id<Entry>> },
     /// A brief's read of a section's source.
-    Brief { owner: Token, keep: brief::Keep, parts: u32, bytes: u32, source: brief::Source },
+    Brief { owner: Token, bounds: Bounds, source: brief::Source },
     /// A notes' wiki operation.
     Wiki { owner: Token, op: Wiki },
     /// A run's call, the fleet's `to`.
@@ -45,6 +45,15 @@ pub(crate) enum Wait {
     Views { owner: Token, expire: bool },
     /// Answered: the wait is retired.
     Done,
+}
+
+/// What a brief's read may bring, and how a source with more is cut.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) struct Bounds {
+    pub(crate) keep: brief::Keep,
+    pub(crate) fit: brief::Fit,
+    pub(crate) parts: u32,
+    pub(crate) bytes: u32,
 }
 
 /// A wiki operation of the notes', in the forge's terms.
@@ -116,9 +125,9 @@ impl Wait {
     }
 
     /// The brief's read the wait answers: its owner and bounds.
-    pub(crate) const fn brief(&self) -> Option<(Token, brief::Keep, u32, u32)> {
+    pub(crate) const fn brief(&self) -> Option<(Token, Bounds)> {
         match self {
-            Wait::Brief { owner, keep, parts, bytes, .. } => Some((*owner, *keep, *parts, *bytes)),
+            Wait::Brief { owner, bounds, .. } => Some((*owner, *bounds)),
             Wait::Job { .. }
             | Wait::Take { .. }
             | Wait::Aside { .. }

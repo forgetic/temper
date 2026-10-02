@@ -887,3 +887,35 @@ fn matches_applying(phase: Option<work::Phase>) -> bool {
         | None => false,
     }
 }
+
+fn got(read: brief::Read) -> Box<[brief::Part]> {
+    match read {
+        brief::Read::Got(parts) => parts,
+        brief::Read::Failed => panic!("a cut keeps what fits"),
+    }
+}
+
+fn part(bytes: &[u8], left: u64) -> brief::Part {
+    brief::Part { bytes: copy_of(bytes), left }
+}
+
+#[test]
+fn a_read_is_cut_as_its_fit_says() {
+    use crate::waits::Bounds;
+    let found: [&[u8]; 3] = [b"abc", b"defg", b"hi"];
+    let run = Bounds { keep: brief::Keep::Start, fit: brief::Fit::Run, parts: 4, bytes: 5 };
+    let cut = got(crate::serve::cut(&found, run));
+    assert_eq!(&cut[..], &[part(b"abc", 0), part(b"de", 4)][..], "one run from the start, the rest told");
+    let end = Bounds { keep: brief::Keep::End, ..run };
+    let cut = got(crate::serve::cut(&found, end));
+    assert_eq!(&cut[..], &[part(b"efg", 4), part(b"hi", 0)][..], "one run from the end");
+    let each = Bounds { keep: brief::Keep::Start, fit: brief::Fit::Each, parts: 2, bytes: 4 };
+    let cut = got(crate::serve::cut(&found, each));
+    assert_eq!(&cut[..], &[part(b"ab", 1), part(b"de", 4)][..], "each part its share, the farthest left out");
+    let lines = Bounds { keep: brief::Keep::Start, fit: brief::Fit::Lines, parts: 3, bytes: 6 };
+    let cut = got(crate::serve::cut(&found, lines));
+    assert_eq!(&cut[..], &[part(b"abc", 0), part(b"hi", 4)][..], "whole lines, and the last always");
+    let utf8 = Bounds { keep: brief::Keep::Start, fit: brief::Fit::Run, parts: 1, bytes: 2 };
+    let cut = got(crate::serve::cut(&["é!".as_bytes()][..], Bounds { bytes: 1, ..utf8 }));
+    assert_eq!(&cut[..], &[part(b"", 3)][..], "a UTF-8 sequence is never split");
+}

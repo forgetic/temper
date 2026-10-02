@@ -143,7 +143,8 @@ fn sections(model: &Model, env: &Env<Limits>, id: Id<Entry>, run: &plan::Run) ->
             want(&mut wanted, brief::Source::Ci { item, head }, required);
         }
         if chosen.reviews {
-            want(&mut wanted, brief::Source::Reviews { item, head }, false);
+            let required = repair == Some(plan::Repair::ChangesRequested);
+            want(&mut wanted, brief::Source::Reviews { item, head }, required);
         }
         if chosen.pull {
             let required = matches_rebase(repair);
@@ -166,10 +167,7 @@ fn sections(model: &Model, env: &Env<Limits>, id: Id<Entry>, run: &plan::Run) ->
         }
     }
     if chosen.notes {
-        let goal = match entry.relations.goal {
-            Some(goal) if goal.repository == entry.item.repository => Some(goal.number),
-            Some(_) | None => None,
-        };
+        let goal = goal_item(entry.relations.goal);
         want(&mut wanted, brief::Source::Notes { repository: entry.item.repository, goal }, false);
     }
     if chosen.template
@@ -184,6 +182,11 @@ fn sections(model: &Model, env: &Env<Limits>, id: Id<Entry>, run: &plan::Run) ->
 fn head_of(model: &Model, item: Item) -> Option<brief::Commit> {
     let level = model.forge.pull(translate::forge_item(item))?;
     Some(brief::Commit(level.commit))
+}
+
+fn goal_item(goal: Option<Item>) -> Option<brief::Item> {
+    let goal = goal?;
+    Some(translate::brief_item(goal))
 }
 
 fn want(wanted: &mut List<brief::Wanted>, source: brief::Source, required: bool) {
@@ -206,7 +209,7 @@ pub(crate) fn rendered(
     model: &mut Model,
     env: &Env<Limits>,
     reply_to: ReplyTo,
-    sections: Option<Box<[brief::Section]>>,
+    sections: Result<Box<[brief::Section]>, work::Answer>,
 ) {
     let token = reply_to.into_token();
     let Some(answered) = crate::serve::take(model, token) else { return };
@@ -219,13 +222,13 @@ pub(crate) fn rendered(
     starting.rendering = None;
     let attempt = starting.attempt;
     match sections {
-        Some(sections) => {
+        Ok(sections) => {
             starting.brief = Some(sections);
             ready(model, env, id);
         }
-        None => {
+        Err(answer) => {
             entry.job = Job::Idle;
-            end(model, env, id, attempt, work::Answer::Failed(work::Class::Transient));
+            end(model, env, id, attempt, answer);
         }
     }
 }
