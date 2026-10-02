@@ -118,10 +118,14 @@ pub enum Outcome {
     NotFile,
     /// The path of a write or an edit goes through a symbolic link, which
     /// they do not follow, so that a change lands only in the repository its
-    /// path names. Reads follow links inside the checkout.
+    /// path names. Reads follow links that stay inside the path's own
+    /// repository.
     Linked,
-    /// The path of a write or an edit is in a repository's `.git`, which the
-    /// tools do not change.
+    /// The path of a write or an edit is in a repository's git directory: it
+    /// has `.git`, in any ASCII case, among its names. The tools do not know
+    /// git directories under other names (a `.git` file pointing elsewhere, a
+    /// separate git directory, hooks configured to live in the tree), so the
+    /// worker must not trust a repository's own configuration either.
     Protected,
     /// What is at the path, or a directory on the way to it, is not a
     /// directory.

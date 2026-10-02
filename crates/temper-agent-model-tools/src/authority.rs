@@ -52,9 +52,11 @@ pub struct Repo {
 pub struct Grants {
     /// Read, list and search.
     pub inspect: bool,
-    /// Write and edit, in the writable repositories.
+    /// Write and edit, in the writable repositories. Without it, nothing the
+    /// kit does writes a file: its commands see every repository read-only.
     pub modify: bool,
-    /// Run commands.
+    /// Run commands. A command may write only where the kit may write, which
+    /// needs modify too, and never in a repository's git directory.
     pub shell: bool,
 }
 
@@ -114,7 +116,9 @@ pub(crate) fn admit(authority: Authority, limits: &Limits) -> Option<Checkout> {
         }
         let mount = Mount { at, root: repo.root, writable: repo.writable };
         mounts.push(mount).expect("room for every repository");
-        roots.push(Root { root: repo.root, writable: repo.writable }).expect("room for every repository");
+        // A command writes only where a write may.
+        let writable = repo.writable && authority.grants.modify;
+        roots.push(Root { root: repo.root, writable }).expect("room for every repository");
     }
     Some(Checkout {
         cwd: authority.cwd,

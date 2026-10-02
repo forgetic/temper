@@ -13,7 +13,7 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::{List, Token, Writer, bytes};
+use temper_lib::{List, Token, Writer};
 
 /// One component of a path: the name of a file or a directory. Never empty,
 /// `.` or `..`, and free of `/` and NUL, so names joined by `/` read back as
@@ -135,23 +135,27 @@ pub(crate) fn joined(names: &[&Name]) -> Option<usize> {
     Some(len.saturating_sub(1))
 }
 
-/// Whether `path`, names joined by `/`, has `.git` among its names.
+/// Whether `path`, names joined by `/`, has a git directory among its names:
+/// `.git`, in any ASCII case, for a file system that folds case would take
+/// `.GIT` for it.
 pub(crate) fn in_git(path: &[u8]) -> bool {
-    let mut from: usize = 0;
-    // Bounded: each match moves past the last.
-    for _ in 0..path.len() {
-        let Some(at) = bytes::find_from(path, b".git", from) else {
-            return false;
-        };
-        let end = at.saturating_add(4);
-        let starts = at == 0 || path.get(at.saturating_sub(1)) == Some(&b'/');
-        let ends = path.get(end).is_none() || path.get(end) == Some(&b'/');
-        if starts && ends {
-            return true;
+    let mut start: usize = 0;
+    for (index, byte) in path.iter().enumerate() {
+        if *byte == b'/' {
+            if is_git(path.get(start..index)) {
+                return true;
+            }
+            start = index.saturating_add(1);
         }
-        from = at.saturating_add(1);
     }
-    false
+    is_git(path.get(start..))
+}
+
+fn is_git(name: Option<&[u8]>) -> bool {
+    match name {
+        Some(name) => name.eq_ignore_ascii_case(b".git"),
+        None => false,
+    }
 }
 
 /// References to each of `names`, to join them.

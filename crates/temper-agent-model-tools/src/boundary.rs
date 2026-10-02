@@ -100,13 +100,21 @@ pub enum Op {
     /// common terminal.
     Store { at: Place, content: Box<[u8]>, expect: Expect },
     /// Run `command` with the shell, in the directory at `cwd`, as a process
-    /// tree contained by io. It sees the repositories in `roots`, and may
-    /// write only those marked writable: io mounts the rest read-only, a
-    /// repository mounted inside another over it, so that what a process may
-    /// write beneath a root is decided by the deepest root that holds it. Its
-    /// environment is `env` and nothing else. Its output,
-    /// standard output and standard error together, is captured: the first
-    /// `head` bytes, the last `tail`, and a count of those dropped between.
+    /// tree contained by io, which enforces what it may write (with
+    /// read-only bind mounts, say):
+    ///
+    /// - It sees the repositories in `roots`, and may write only those marked
+    ///   writable, which are the ones the kit may write, and only if it was
+    ///   granted modify. io mounts the rest read-only, a repository mounted
+    ///   inside another over it, so that what a process may write beneath a
+    ///   root is decided by the deepest root that holds it.
+    /// - In every root, writable or not, the git directory (`.git`, in any
+    ///   ASCII case) is read-only: the worker commits the tree the checks
+    ///   passed on, so the LLM never needs to write it.
+    ///
+    /// Its environment is `env` and nothing else. Its output, standard output
+    /// and standard error together, is captured: the first `head` bytes, the
+    /// last `tail`, and a count of those dropped between.
     /// At the deadline io kills the whole tree and ends it as `Exited`, timed
     /// out, with what it captured. Ends in `Exited`, `Missing` or
     /// `NotDirectory` (for `cwd`), `Escapes`, `Failed` (it could not start),
@@ -126,7 +134,7 @@ pub enum Op {
 }
 
 /// A repository a command sees: io's name for its root, and whether the
-/// command may write in it.
+/// command may write in it (but never in its git directory).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Root {
     pub root: Token,

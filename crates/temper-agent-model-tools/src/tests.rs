@@ -928,8 +928,11 @@ fn an_edit_whose_deadline_passed_while_it_loaded_stores_nothing() {
 
 #[test]
 fn a_path_is_in_git_when_one_of_its_names_is_dot_git() {
-    let table: [(&[u8], bool); 10] = [
+    let table: [(&[u8], bool); 13] = [
         (b".git", true),
+        (b".GIT/config", true),
+        (b"src/.Git", true),
+        (b"src/.gitx/.gIt/HEAD", true),
         (b".git/config", true),
         (b"src/.git", true),
         (b"vendor/lib/.git/hooks/post-checkout", true),
@@ -1152,4 +1155,22 @@ fn facts_that_do_not_fit_are_counted_and_change_nothing() {
     assert_eq!(h.model.pop_fact(), Some(Fact::Opened { session: Token::new(5) }));
     assert_eq!(h.model.pop_fact(), None);
     assert_eq!(h.model.facts_lost(), 2);
+}
+
+#[test]
+fn a_command_of_a_kit_without_modify_sees_every_repository_read_only() {
+    let mut h = Harness::new(LIMITS);
+    let kit = h.open(1, authority(Grants { inspect: true, modify: false, shell: true }));
+    let (_, op, _) = spawned(&mut h, kit, None);
+    match op {
+        Op::Spawn { roots, .. } => {
+            assert_eq!(roots.len(), 3);
+            for root in &roots {
+                assert!(!root.writable, "{root:?}");
+            }
+        }
+        op @ (Op::Load { .. } | Op::Scan { .. } | Op::Store { .. } | Op::Search { .. }) => {
+            panic!("expected a spawn, not {op:?}")
+        }
+    }
 }

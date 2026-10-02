@@ -201,8 +201,8 @@ impl Checkout {
     }
 
     /// The changes `process` made as it ran: those where the deepest root
-    /// that holds them is writable. Changes elsewhere fail, as on a read-only
-    /// file system.
+    /// that holds them is writable, outside any git directory (`.git` in any
+    /// case). Changes elsewhere fail, as on a read-only file system.
     pub fn finish(&mut self, process: &Process) {
         for (path, content) in &process.program.changes {
             let deepest = process
@@ -216,6 +216,9 @@ impl Checkout {
             let Some((_, true)) = deepest else {
                 continue;
             };
+            if in_git(path) {
+                continue;
+            }
             match content {
                 Some(content) => drop(self.write(path, content)),
                 None => self.remove(path),
@@ -516,6 +519,13 @@ fn kind(node: &Node) -> Kind {
         Node::Link { .. } => Kind::Link,
         Node::Special => Kind::Special,
     }
+}
+
+/// Whether `path` has a git directory, `.git` in any ASCII case, among its
+/// names.
+#[must_use]
+pub fn in_git(path: &[u8]) -> bool {
+    path.split(|byte| *byte == b'/').any(|name| name.eq_ignore_ascii_case(b".git"))
 }
 
 /// What is between the slashes of `path`.

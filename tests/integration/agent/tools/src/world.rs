@@ -271,8 +271,9 @@ impl World {
     /// A session that opens a kit with `authority` at `at`, runs `script`
     /// with it, and closes it. Returns the session's name.
     pub fn session(&mut self, at: Time, authority: Authority, script: Vec<Step>) -> u64 {
+        // A kit writes, and its commands write, only with modify.
         for repo in &authority.repos {
-            *self.writable.entry(repo.root.raw()).or_insert(false) |= repo.writable;
+            *self.writable.entry(repo.root.raw()).or_insert(false) |= repo.writable && authority.grants.modify;
         }
         let session = self.next_serial();
         let state = State::Opening;
@@ -726,8 +727,15 @@ impl World {
     }
 
     /// The files of the repositories no kit may write.
+    /// The files nothing but the world may change: those of the repositories
+    /// no kit may write, and those in any git directory.
     fn read_only(&self) -> BTreeMap<Vec<u8>, Vec<u8>> {
         let mut files = BTreeMap::new();
+        for (path, content) in self.checkout.files() {
+            if temper_checkout_fake::in_git(path) {
+                files.insert(path.to_vec(), content.to_vec());
+            }
+        }
         for (root, writable) in &self.writable {
             if *writable {
                 continue;
@@ -743,10 +751,11 @@ impl World {
         files
     }
 
-    /// Read-only repositories change only by the world's own changes.
+    /// Read-only repositories and git directories change only by the world's
+    /// own changes.
     fn assert_untouched(&self) {
         let untouched = self.untouched.as_ref().expect("taken at the first iteration");
-        assert_eq!(&self.read_only(), untouched, "a read-only repository changed");
+        assert_eq!(&self.read_only(), untouched, "a read-only repository or a git directory changed");
     }
 
     fn session_mut(&mut self, session: u64) -> &mut Session {
