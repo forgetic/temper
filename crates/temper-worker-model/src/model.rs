@@ -1,0 +1,309 @@
+//! The model's state and its entry points (section 3). Each hands what it is
+//! given to the sub-model or the link it is for, then completes the hand-offs
+//! between the sub-models (4.5) before it returns, routing what is for the
+//! protocol layer out.
+//!
+//! The host is the hub, and its capabilities answer it: a hand-off goes from a
+//! capability to the host, from the host to a capability, and at most once
+//! more back and forth, when a capability answers a request of the host at
+//! once (the agent sub-model bounces an event it cannot take, the checkout
+//! refuses a prepare, or ends a push or a save with nothing to do) and the host
+//! answers the engine, replies to the run or releases the workspace, which
+//! leads back to it no more. No hand-off waits on a ready list: an entry point
+//! completes them all, and [`max_out`] follows from the sub-models' along that
+//! chain (the `limits` module).
+
+use alloc::boxed::Box;
+
+use temper_lib::{Env, Id, Map, Queue, Slab, Time, Token};
+use temper_worker_model_agent as agent;
+use temper_worker_model_checkout as checkout;
+use temper_worker_model_host as host;
+
+use crate::boundary::{Event, Request, Told};
+use crate::facts::Fact;
+use crate::limits::{self, Limits};
+use crate::link::{Fired, Link};
+use crate::route;
+use crate::workspace::Workspace;
+
+/// The most requests an entry point emits per call under `limits`: what the
+/// sub-models emit in the most steps it takes of each (see the module), as
+/// each of their requests is one of ours or a hand-off; and, on connecting,
+/// the answers, relays and bounces held while the engine was out of reach.
+/// The loop reserves this much room in `out` before calling it.
+#[must_use]
+pub const fn max_out(limits: &Limits) -> u32 {
+    limits::routed(limits).saturating_add(limits.host.slots).saturating_add(limits.stalled)
+}
+
+/// The worker model's state: its sub-models', the engine link, what it keeps
+/// of each workspace between the host and the checkout, and room for what
+/// the sub-models emit within a step.
+#[derive(Debug)]
+pub struct Model {
+    pub(crate) host: host::Model,
+    pub(crate) checkout: checkout::Model,
+    pub(crate) agent: agent::Model,
+    pub(crate) link: Link,
+    /// The workspaces the host asked for, until the checkout has released
+    /// them.
+    pub(crate) workspaces: Slab<Workspace>,
+    /// Workspaces being prepared, by the host's token for their run.
+    pub(crate) preparing: Map<Token, Id<Workspace>>,
+    /// What each sub-model emits in a step, until it is routed. Empty between
+    /// steps.
+    pub(crate) host_out: Queue<host::Request>,
+    pub(crate) checkout_out: Queue<checkout::Request>,
+    pub(crate) agent_out: Queue<agent::Request>,
+    /// The run's facts for the engine, and how many did not fit.
+    told: Queue<Told>,
+    told_lost: u64,
+    facts: Queue<Fact>,
+    lost: u64,
+}
+
+impl Model {
+    /// A model with room for `limits`, which [`crate::worst_case`] accepts,
+    /// drawing randomness from `seed`. It dials the engine at once: its first
+    /// alarm is due from the start.
+    #[must_use]
+    pub fn new(limits: &Limits, seed: u64) -> Model {
+        let slots = limits.host.slots;
+        let facts = limits::facts(limits).expect("worst_case accepted the limits");
+        Model {
+            host: host::Model::new(&limits.host),
+            checkout: checkout::Model::new(&limits.checkout),
+            agent: agent::Model::new(&limits.agent),
+            link: Link::new(limits, seed),
+            workspaces: Slab::with_capacity(slots),
+            preparing: Map::with_capacity(slots),
+            host_out: Queue::with_capacity(limits::host_out(limits)),
+            checkout_out: Queue::with_capacity(limits::checkout_out(limits)),
+            agent_out: Queue::with_capacity(limits::agent_out(limits)),
+            told: Queue::with_capacity(limits.told),
+            told_lost: 0,
+            facts: Queue::with_capacity(facts),
+            lost: 0,
+        }
+    }
+
+    /// The host sub-model, for a world to look at.
+    #[must_use]
+    pub const fn host(&self) -> &host::Model {
+        &self.host
+    }
+
+    /// The checkout sub-model, for a world to look at.
+    #[must_use]
+    pub const fn checkout(&self) -> &checkout::Model {
+        &self.checkout
+    }
+
+    /// The agent sub-model, for a world to look at.
+    #[must_use]
+    pub const fn agent(&self) -> &agent::Model {
+        &self.agent
+    }
+
+    /// Workspaces the host asked for that the checkout has not released,
+    /// released ones included until they are reclaimed.
+    #[must_use]
+    pub const fn workspaces(&self) -> u32 {
+        self.workspaces.len()
+    }
+
+    /// Whether the channel to the engine is open.
+    #[must_use]
+    pub fn is_connected(&self) -> bool {
+        self.link.is_up()
+    }
+
+    /// Answers held for the engine while it is out of reach.
+    #[must_use]
+    pub fn held(&self) -> u32 {
+        self.link.held()
+    }
+
+    /// Relays and bounces held for the engine while it is out of reach.
+    #[must_use]
+    pub fn stalled(&self) -> u32 {
+        self.link.stalled()
+    }
+
+    /// Relays and bounces dropped for want of room while the engine was out
+    /// of reach, since the model was made.
+    #[must_use]
+    pub const fn stalled_lost(&self) -> u64 {
+        self.link.dropped()
+    }
+
+    /// Answers given up by a worker shutting down with the engine out of
+    /// reach past the grace, since the model was made.
+    #[must_use]
+    pub const fn abandoned(&self) -> u64 {
+        self.link.abandoned()
+    }
+
+    /// Whether the worker has shut down: told to, every run has answered, and
+    /// every answer has been delivered or given up. The shell stops then.
+    #[must_use]
+    pub fn is_done(&self) -> bool {
+        self.link.is_shut() && self.host.hosted() == 0 && self.link.held() == 0
+    }
+
+    /// When the earliest alarm falls due: the link's, or an agent's.
+    #[must_use]
+    pub fn next_deadline(&self) -> Option<Time> {
+        let agent = self.agent.next_deadline();
+        match self.link.next_deadline() {
+            Some(link) => match agent {
+                Some(agent) => Some(link.min(agent)),
+                None => Some(link),
+            },
+            None => agent,
+        }
+    }
+
+    /// Whether an alarm is due at `now`. The loop calls [`fire`] while one is.
+    #[must_use]
+    pub fn is_due(&self, now: Time) -> bool {
+        match self.next_deadline() {
+            Some(at) => at <= now,
+            None => false,
+        }
+    }
+
+    /// Whether the host has runs to cancel, one at a time. While it does, the
+    /// loop calls [`resume`] at the start of the model's stage, before its
+    /// input events.
+    #[must_use]
+    pub fn is_ready(&self) -> bool {
+        self.host.is_ready()
+    }
+
+    /// The oldest fact not drained yet, a sub-model's or the link's.
+    pub fn pop_fact(&mut self) -> Option<Fact> {
+        self.facts.pop()
+    }
+
+    /// How many facts were dropped for want of room, the sub-models' included.
+    #[must_use]
+    pub fn facts_lost(&self) -> u64 {
+        self.lost
+            .saturating_add(self.host.facts_lost())
+            .saturating_add(self.checkout.facts_lost())
+            .saturating_add(self.agent.facts_lost())
+    }
+
+    /// The oldest of the run's facts for the engine not taken yet, while the
+    /// channel is open: the protocol layer sends it best effort. While it is
+    /// down, they wait, and what does not fit is dropped and counted.
+    pub fn pop_told(&mut self) -> Option<Told> {
+        if !self.link.is_up() {
+            return None;
+        }
+        self.told.pop()
+    }
+
+    /// How many of the run's facts were dropped for want of room.
+    #[must_use]
+    pub const fn told_lost(&self) -> u64 {
+        self.told_lost
+    }
+
+    /// The reclaim point: frees what closed in this iteration.
+    pub fn reclaim(&mut self) {
+        self.host.reclaim();
+        self.checkout.reclaim();
+        self.agent.reclaim();
+        self.workspaces.reclaim();
+    }
+
+    /// Keeps `fact` if there is room for it, and counts it otherwise.
+    pub(crate) fn keep(&mut self, fact: Fact) {
+        if self.facts.try_push(fact).is_err() {
+            self.lost = self.lost.saturating_add(1);
+        }
+    }
+
+    /// A fact the agent of the hosted run `client` told, for the engine under
+    /// the run's names.
+    pub(crate) fn tell(&mut self, client: Token, fact: Box<[u8]>) {
+        let Some(hosting) = self.host.hosting(client) else { unreachable!("a run is hosted until its agent has gone") };
+        let told = Told { run: hosting.run, attempt: hosting.attempt, fact };
+        if self.told.try_push(told).is_err() {
+            self.told_lost = self.told_lost.saturating_add(1);
+        }
+    }
+}
+
+/// Handles one event, emitting at most [`max_out`] requests.
+pub fn step(model: &mut Model, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
+    route::event(model, env, event);
+    settle(model, env, out);
+}
+
+/// Fires the earliest alarm due at `env.now`, the link's or an agent's, if
+/// there is one, emitting at most [`max_out`] requests. On a tie, the link's
+/// goes first. A stage fires its alarms after its input events, so progress
+/// that arrived in the same iteration wins over a deadline that passed while
+/// the loop waited.
+pub fn fire(model: &mut Model, env: &Env<Limits>, out: &mut Queue<Request>) {
+    let link_due = match model.link.next_deadline() {
+        Some(at) => at <= env.now,
+        None => false,
+    };
+    let agent_due = model.agent.is_due(env.now);
+    if link_due && (!agent_due || model.link.next_deadline() <= model.agent.next_deadline()) {
+        match model.link.fire(env, out) {
+            Some(Fired::Dialled) | None => {}
+            Some(Fired::Grace) => {
+                model.keep(Fact::Grace);
+                let cancel = host::Event::CancelAll { reason: host::Reason::Contact };
+                route::host_step(model, env, cancel);
+            }
+        }
+    } else if agent_due {
+        assert!(model.agent_out.room() >= agent::MAX_OUT, "an entry point steps the agents no more than its bound");
+        agent::fire(&mut model.agent, &route::agent_env(env), &mut model.agent_out);
+    }
+    settle(model, env, out);
+}
+
+/// Cancels one run the host has on its ready list, if it has one, emitting at
+/// most [`max_out`] requests.
+pub fn resume(model: &mut Model, env: &Env<Limits>, out: &mut Queue<Request>) {
+    assert!(model.host_out.room() >= host::max_out(&env.limits.host), "an entry point steps the host within its bound");
+    host::resume(&mut model.host, &route::host_env(env), &mut model.host_out);
+    settle(model, env, out);
+}
+
+/// Completes the hand-offs, then gathers the facts.
+fn settle(model: &mut Model, env: &Env<Limits>, out: &mut Queue<Request>) {
+    route::hand_off(model, env, out);
+    gather(model, &env.limits);
+}
+
+/// Drains the sub-models' facts into the model's own queue, counting what does
+/// not fit.
+fn gather(model: &mut Model, limits: &Limits) {
+    for _ in 0..limits.host.facts {
+        let Some(fact) = model.host.pop_fact() else {
+            break;
+        };
+        model.keep(Fact::Host { fact });
+    }
+    for _ in 0..limits.checkout.facts {
+        let Some(fact) = model.checkout.pop_fact() else {
+            break;
+        };
+        model.keep(Fact::Checkout { fact });
+    }
+    for _ in 0..limits.agent.facts {
+        let Some(fact) = model.agent.pop_fact() else {
+            break;
+        };
+        model.keep(Fact::Agent { fact });
+    }
+}
