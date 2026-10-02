@@ -445,6 +445,7 @@ pub struct Stats {
     pub relayed: u32,
     pub pushed: BTreeMap<&'static str, u32>,
     pub unavailable: u32,
+    pub withdrawn: u32,
     pub busy: u32,
     pub bounces: u32,
     pub events: u32,
@@ -1091,7 +1092,8 @@ impl World {
                     Reply::Pushed(push) => *self.stats.pushed.entry(push_kind(*push)).or_default() += 1,
                     Reply::Unavailable => self.stats.unavailable += 1,
                     Reply::Busy => self.stats.busy += 1,
-                    Reply::Withdrawn | Reply::TooLarge => {}
+                    Reply::Withdrawn => self.stats.withdrawn += 1,
+                    Reply::TooLarge => {}
                 }
             }
             Down::Cancel => self.stats.cancels += 1,
