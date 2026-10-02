@@ -1,11 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use temper_agent_model_session as agent;
-use temper_agent_model_session::llm::{Answer, Block, Descriptor, Endpoint, Failure, Prompt, Returned, Usage};
-use temper_agent_model_tools::{self as tools, Effect, Entry, Fault, Grants, Kind, Name, Outcome};
+use temper_agent_model_session::llm::{Answer, Block, Decoded, Descriptor, Endpoint, Failure, Prompt, Returned, Usage};
+use temper_agent_model_tools::{self as tools, Authority, Done, Effect, Fault, Grants, Op, Repo};
+use temper_agent_model_tools_tests::translate as io;
+use temper_checkout_fake::Checkout;
 use temper_lib::{Duration, Env, Queue, ReplyTo, Rng, Time, Token};
 use temper_llm_model as provider;
 
+use crate::fixture;
 use crate::tickets::{SERVED, Ticketed, Tickets};
 use crate::translate;
 
@@ -25,6 +28,30 @@ pub const BUDGET: agent::Budget = agent::Budget {
     cache_read: 1 << 20,
     cache_write: 1 << 20,
     time: Duration::from_secs(1800),
+};
+
+/// The tools' limits in the calm world: a kit for each session, as many calls
+/// a kit as the session runs at once, and room for the fixture's files.
+pub const TOOLS: tools::Limits = tools::Limits {
+    kits: 4,
+    calls: 4,
+    repos: 1,
+    path_bytes: 256,
+    known_files: 16,
+    file_bytes: 1 << 16,
+    read_bytes: 4096,
+    list_entries: 64,
+    match_lines: 8,
+    file_timeout: Duration::from_secs(30),
+    env_bytes: 256,
+    shell_timeout: Duration::from_secs(30),
+    shell_timeout_max: Duration::from_secs(120),
+    shell_head: 256,
+    shell_tail: 256,
+    search_hits: 16,
+    search_bytes: 1024,
+    search_timeout: Duration::from_secs(30),
+    facts: 256,
 };
 
 /// Durations drawn uniformly from `min..=max`.
@@ -56,9 +83,10 @@ pub struct Settings {
     pub provider: provider::Config,
     /// One-way latency between the agent and the provider.
     pub network: Span,
-    /// How long a tool takes to run.
+    /// How long io takes over an operation of the tools, a command's
+    /// included.
     pub tool: Span,
-    /// The chance, per mille, that a tool run fails.
+    /// The chance, per mille, that io fails an operation of the tools.
     pub tool_errors: u32,
     /// How many times the opener nudges a session that yields before it
     /// closes it, drawn for each session.
@@ -70,9 +98,10 @@ pub struct Settings {
     pub abandon: u32,
     /// When such a close comes, after the session opens.
     pub abandon_after: Span,
-    /// The chance, per mille, that a cancel loses its race: the call or the
-    /// tool run it was for ends of itself, and that is its terminal event. A
-    /// cancel that wins is told after a network draw.
+    /// The chance, per mille, that a cancel loses its race: the call, the
+    /// tools' operation or the delegated call it was for ends of itself, and
+    /// that is its terminal event. A cancel that wins is told after a network
+    /// draw.
     pub cancels_lost: u32,
     /// The chance, per mille, that the opener sends a close twice, the second
     /// a network draw after the first.
@@ -109,6 +138,7 @@ impl Settings {
                 delegate_timeout: Duration::from_secs(120),
                 facts: 256,
                 parallel_tools: 4,
+                tools: TOOLS,
             },
             provider: provider::Config {
                 calls: 16,
@@ -143,14 +173,20 @@ impl Settings {
     }
 }
 
-/// A spec that grants every family of tools, with the calm budget.
+/// A spec that grants every family of tools, with the calm budget, in one
+/// writable repository at `/work`, also the working directory. The world
+/// gives each session a repository of its own, seeded with the fixture, and
+/// names it in the spec as io names its root.
 #[must_use]
 pub fn spec(prompt: &[u8]) -> agent::Spec {
+    let repo = Repo { mount: io::names(b"/work"), root: Token::new(0), writable: true };
+    let grants = Grants { inspect: true, modify: true, shell: true };
+    let authority = Authority { cwd: io::names(b"/work"), repos: Box::new([repo]), grants, env: Box::new([]) };
     agent::Spec {
         endpoint: Endpoint(0),
         model: b"fake-1"[..].into(),
         system: b"You are a coding agent."[..].into(),
-        tools: Grants { inspect: true, modify: true, shell: true },
+        authority,
         delegated: Box::new([]),
         prompt: prompt.into(),
         max_tokens: 1024,
@@ -171,12 +207,15 @@ pub struct Stats {
     pub cancels: u32,
     /// Answers that arrived after their call had ended, and were dropped.
     pub late_answers: u32,
-    /// Tool runs the agent asked for.
-    pub tool_runs: u32,
-    /// Tool runs the agent cancelled.
-    pub tool_cancels: u32,
-    /// Tool runs that ran out of time.
-    pub tool_timeouts: u32,
+    /// Operations the tools asked of io; those a cancel ended; those that ran
+    /// out of time; those io failed.
+    pub ops: u32,
+    pub op_cancels: u32,
+    pub op_timeouts: u32,
+    pub op_faults: u32,
+    /// Results of calls to the tools that went back to the LLM, each checked
+    /// against its call.
+    pub results: u32,
     /// Tool calls the session answered as not run, as the LLM stopped
     /// before it could use them.
     pub not_run: u32,
@@ -188,20 +227,21 @@ pub struct Stats {
     pub closes: u32,
     /// Continues and closes that reached a session after it had ended.
     pub stale: u32,
-    /// The most tool runs one session had in flight at once.
+    /// The most operations and delegated calls one session had in flight at
+    /// once.
     pub most_parallel: u32,
-    /// Cancels of calls and of tool runs that lost their race.
+    /// Cancels of calls and of operations that lost their race.
     pub cancels_lost: u32,
-    pub tool_cancels_lost: u32,
-    /// What ended a call or a run whose cancel lost: an answer, a failure (a
-    /// deadline included), a tool's result.
+    pub op_cancels_lost: u32,
+    /// What ended a call or an operation whose cancel lost: an answer, a
+    /// failure (a deadline included), the operation's own end.
     pub answered_after_cancel: u32,
     pub failed_after_cancel: u32,
-    pub ran_after_cancel: u32,
+    pub done_after_cancel: u32,
     /// Closes that reached a session already closing.
     pub closed_while_closing: u32,
-    /// Cancels and withdraws for runs that ended in the iteration they were
-    /// sent.
+    /// Cancels and withdraws for operations and delegated calls that ended in
+    /// the iteration they were sent.
     pub cancels_crossed: u32,
     /// Calls delegated to the opener; withdrawn, or whose answer won the race
     /// with the withdraw; answered as timed out by the opener itself.
@@ -224,9 +264,12 @@ pub struct Told {
     pub completions_failed: u32,
     pub completions_cancelled: u32,
     pub completions_retried: u32,
+    /// What the session's tools told: kits opened and closed, calls started
+    /// (those that asked io for something) and answered.
+    pub kits_opened: u32,
+    pub kits_closed: u32,
     pub tools_started: u32,
-    pub tools_finished: u32,
-    pub tools_cancelled: u32,
+    pub tools_answered: u32,
     pub yielded: u32,
     pub used: u32,
     pub ended: u32,
@@ -310,9 +353,6 @@ enum Delivery {
     Cancelled {
         owner: Token,
     },
-    ToolCancelled {
-        owner: Token,
-    },
     AnswerCancelled {
         owner: Token,
     },
@@ -321,24 +361,43 @@ enum Delivery {
         owner: Token,
         answer: Answer,
     },
-    /// A tool run finishes.
-    ToolDone {
+    /// An operation of the tools ends.
+    Ran {
         owner: Token,
-        outcome: Outcome,
     },
 }
 
-/// A tool run of the agent in flight, as the tools would keep it.
+/// A delegated call in flight, as the opener keeps it.
 struct Running {
-    /// The result's delivery, withdrawn if the run is cancelled.
+    /// The answer's delivery, withdrawn if the call is withdrawn.
     delivery: (Time, u64),
     /// The session that started it.
     session: Token,
     effect: Effect,
-    /// Run by the opener, which serves it, rather than the tools; and a
-    /// finish it accepts, after which it closes the session.
-    served: bool,
+    /// A finish the opener accepts, after which it closes the session.
     accepts: bool,
+}
+
+/// An operation of the tools in flight, as io keeps it.
+struct Pending {
+    /// Its end's delivery, moved up when a cancel wins the race.
+    delivery: (Time, u64),
+    /// The session whose tools asked for it, by the repository it is in.
+    session: Token,
+    /// A store or a command, which only a call that writes asks for.
+    writes: bool,
+    work: Work,
+}
+
+/// What an operation does when it ends.
+enum Work {
+    /// A file operation, run on the checkout then.
+    File(Op),
+    /// A command started, finished then.
+    Command(io::Started),
+    /// Nothing more: it ends so (it failed to start, timed out, or was
+    /// cancelled).
+    Ending(Done),
 }
 
 /// A call of the agent in flight, as its protocol layer would keep it.
@@ -373,16 +432,27 @@ pub struct World {
     /// The agent's calls in flight, and the call each session has in flight.
     calls: BTreeMap<u64, Call>,
     calling: BTreeMap<Token, u64>,
-    /// The tool runs in flight, by their tokens; and the session of each run
-    /// the agent has started or has yet to hear the end of, worked out from
-    /// the step that started it.
+    /// The delegated calls in flight, by their tokens; and the session of
+    /// each the agent has started or has yet to hear the end of.
     tools: BTreeMap<Token, Running>,
     runs: BTreeMap<Token, Token>,
-    /// The sessions whose call, and the runs, whose cancel lost its race;
-    /// and the sessions the agent is closing, with a cancel sent and no end
-    /// yet.
+    /// The checkout the sessions' tools work on, a repository for each
+    /// session, and the opener of each by io's name for its root.
+    checkout: Checkout,
+    roots: BTreeMap<u64, u64>,
+    /// The tools' operations in flight, by their tokens, and every token an
+    /// operation has had (a call's, for each operation it asks for).
+    ops: BTreeMap<Token, Pending>,
+    owners: BTreeSet<Token>,
+    /// How many messages of each session's transcript have had their results
+    /// counted.
+    counted: BTreeMap<Token, usize>,
+    /// The sessions whose call, and the delegated calls and operations, whose
+    /// cancel lost its race; and the sessions the agent is closing, with a
+    /// cancel sent and no end yet.
     cancel_lost: BTreeSet<Token>,
     run_cancel_lost: BTreeSet<Token>,
+    op_cancel_lost: BTreeSet<Token>,
     closing: BTreeSet<Token>,
     /// The opener's tickets, as the top level would keep them.
     tickets: Tickets,
@@ -405,6 +475,8 @@ impl World {
         let mut rng = Rng::new(settings.seed);
         let agent = agent::Model::new(&settings.agent, rng.next_u64());
         let provider = provider::Model::new(&settings.provider, rng.next_u64());
+        let mut checkout = Checkout::new();
+        fixture::script(&mut checkout);
         World {
             now: Time::ZERO,
             rng,
@@ -412,7 +484,7 @@ impl World {
             agent,
             agent_env: Env { now: Time::ZERO, limits: settings.agent },
             agent_in: VecDeque::new(),
-            agent_out: Queue::with_capacity(agent::MAX_OUT + SLACK),
+            agent_out: Queue::with_capacity(agent::max_out(&settings.agent) + SLACK),
             provider,
             provider_env: Env { now: Time::ZERO, limits: settings.provider },
             provider_in: VecDeque::new(),
@@ -423,8 +495,14 @@ impl World {
             calling: BTreeMap::new(),
             tools: BTreeMap::new(),
             runs: BTreeMap::new(),
+            checkout,
+            roots: BTreeMap::new(),
+            ops: BTreeMap::new(),
+            owners: BTreeSet::new(),
+            counted: BTreeMap::new(),
             cancel_lost: BTreeSet::new(),
             run_cancel_lost: BTreeSet::new(),
+            op_cancel_lost: BTreeSet::new(),
             closing: BTreeSet::new(),
             tickets: Tickets::default(),
             serving: BTreeSet::new(),
@@ -512,22 +590,19 @@ impl World {
 
         // Each stage takes its events, then fires its alarms, while it has room
         // for what one more may produce.
-        while self.agent_out.room() >= agent::MAX_OUT {
+        let most = agent::max_out(&self.settings.agent);
+        while self.agent_out.room() >= most {
             let Some(event) = self.agent_in.pop_front() else { break };
             self.log(&format!("agent <- {}", describe_agent_event(&event)));
-            let (session, ended) = self.session_of(&event);
-            let made = self.agent_out.len();
+            let ended = ended_run(&event);
             agent::step(&mut self.agent, &self.agent_env, event, &mut self.agent_out);
-            self.attribute(made, session);
             if let Some(run) = ended {
                 self.runs.remove(&run);
             }
         }
-        while self.agent_out.room() >= agent::MAX_OUT && self.agent.is_due(self.now) {
+        while self.agent_out.room() >= most && self.agent.is_due(self.now) {
             self.log("agent alarm");
-            let made = self.agent_out.len();
             agent::fire(&mut self.agent, &self.agent_env, &mut self.agent_out);
-            self.attribute(made, None);
         }
         // The facts, drained as the shell would write them out.
         while let Some(fact) = self.agent.pop_fact() {
@@ -555,6 +630,7 @@ impl World {
         assert!(self.agent.sessions() <= self.settings.agent.sessions, "sessions stay within their slots");
         let runs = self.settings.agent.sessions * self.settings.agent.parallel_tools * 2;
         assert!(self.agent.runs() <= runs, "runs stay within two batches a session");
+        assert!(self.agent.kits() <= self.settings.agent.sessions, "a kit at most for each session");
         assert!(self.provider.calls() <= self.settings.provider.calls, "calls stay within their slots");
     }
 
@@ -572,6 +648,7 @@ impl World {
             agent::Request::Complete { owner, prompt, timeout } => {
                 self.affordable(owner, &prompt);
                 in_call_order(&prompt);
+                self.check_results(owner, &prompt);
                 self.stats.not_run += not_run(&prompt);
                 let call = self.next_serial();
                 let deadline = self.schedule(self.now.saturating_add(timeout), Delivery::Deadline { call });
@@ -599,47 +676,12 @@ impl World {
                     }
                 }
             }
-            agent::Request::Tool { owner, call, deadline } => {
-                let session = *self.runs.get(&owner).expect("a run is worked out from the step that started it");
-                let effect = tools::effect(&call);
-                self.batched(session, effect);
-                assert!(deadline > self.now, "a run gets some time");
-                // The tools run the race with the deadline.
-                let mut outcome = self.run_tool(&call);
-                let mut at = self.now.saturating_add(self.draw(self.settings.tool));
-                if at > deadline {
-                    // The tools notice the deadline, and say so, a moment
-                    // after it passes.
-                    let noticed = deadline.saturating_add(self.draw(self.settings.network));
-                    (outcome, at) = (Outcome::TimedOut, noticed);
-                    self.stats.tool_timeouts += 1;
-                }
-                let delivery = self.schedule(at, Delivery::ToolDone { owner, outcome });
-                let running = Running { delivery, session, effect, served: false, accepts: false };
-                assert!(self.tools.insert(owner, running).is_none(), "each run has a token of its own");
-                self.stats.tool_runs += 1;
-            }
-            agent::Request::CancelTool { owner } => {
-                // A run that ended in this iteration, before the cancel went
-                // out: the cancel lost the race.
-                let Some(&session) = self.runs.get(&owner) else {
-                    self.stats.cancels_crossed += 1;
-                    return;
-                };
-                self.closing.insert(session);
-                if let Some(run) = self.tools.get(&owner) {
-                    assert!(!run.served, "the tools cancel only the runs they were asked for");
-                }
-                if self.tools.contains_key(&owner) && self.rng.chance(self.settings.cancels_lost) {
-                    self.run_cancel_lost.insert(owner);
-                    self.stats.tool_cancels_lost += 1;
-                } else if let Some(Running { delivery, .. }) = self.tools.remove(&owner) {
-                    self.wire.remove(&delivery).expect("a tool run in flight has its result on the way");
-                    self.send(Delivery::ToolCancelled { owner });
-                    self.stats.tool_cancels += 1;
-                }
-            }
+            agent::Request::Io { owner, op, deadline } => self.start_op(owner, op, deadline),
+            agent::Request::CancelIo { owner } => self.cancel_op(owner),
             agent::Request::Delegate { owner, opener, call, deadline } => {
+                let session = self.sessions.get(&opener.raw()).and_then(|session| session.session);
+                let session = session.expect("a session delegates once it has opened");
+                assert!(self.runs.insert(owner, session).is_none(), "each delegated call has a token of its own");
                 self.serve(owner, opener.raw(), call, deadline);
             }
             agent::Request::Withdraw { owner } => {
@@ -648,9 +690,6 @@ impl World {
                     return;
                 };
                 self.closing.insert(session);
-                if let Some(run) = self.tools.get(&owner) {
-                    assert!(run.served, "the opener withdraws only the calls it serves");
-                }
                 if self.tools.contains_key(&owner) && self.rng.chance(self.settings.cancels_lost) {
                     self.run_cancel_lost.insert(owner);
                     self.stats.withdraws_lost += 1;
@@ -782,7 +821,7 @@ impl World {
             panic!("a delegated call's ticket names a call");
         };
         let effect = SERVED.iter().find(|(name, ..)| *name == tool).expect("a call to a served tool").1;
-        self.batched(session, effect);
+        self.batched(session, effect == Effect::Write);
         let state = self.sessions.get_mut(&opener).expect("the opener serves the sessions it opened");
         let (mut text, mut error, mut accepts): (&[u8], bool, bool) = match tool {
             b"finish" => {
@@ -809,80 +848,149 @@ impl World {
         let ticket = self.tickets.issue(opener, Ticketed::Answer { text: text.into(), error });
         let answer = Answer { ticket, bytes: u64::try_from(text.len()).expect("a short answer"), error };
         let delivery = self.schedule(at, Delivery::Answered { owner, answer });
-        let running = Running { delivery, session, effect, served: true, accepts };
+        let running = Running { delivery, session, effect, accepts };
         assert!(self.tools.insert(owner, running).is_none(), "each run has a token of its own");
         self.stats.delegates += 1;
     }
 
-    /// What the fake tools make of `call`: what a checkout would answer, or,
-    /// with the configured chance, a failure.
-    fn run_tool(&mut self, call: &tools::Call) -> Outcome {
-        if self.rng.chance(self.settings.tool_errors) {
-            return if self.rng.chance(500) { Outcome::NotFound } else { Outcome::Failed { fault: Fault::Other } };
+    /// io starts the tools' operation `op` for `owner`, to end by
+    /// `deadline`: after a draw, or at the deadline if that comes first.
+    fn start_op(&mut self, owner: Token, op: Op, deadline: Time) {
+        // A call's operations, one after another, carry its token.
+        assert!(!self.ops.contains_key(&owner), "each operation in flight has a token of its own");
+        self.owners.insert(owner);
+        let at = match &op {
+            Op::Load { at, .. } | Op::Scan { at, .. } | Op::Store { at, .. } | Op::Search { at, .. } => at.root,
+            Op::Spawn { cwd, .. } => cwd.root,
+        };
+        let opener = *self.roots.get(&at.raw()).expect("an operation is in a session's repository");
+        let session = self.sessions.get(&opener).and_then(|session| session.session);
+        let session = session.expect("a session's tools ask io for something once it has opened");
+        let writes = matches!(op, Op::Store { .. } | Op::Spawn { .. });
+        self.batched(session, writes);
+        let mut ends = self.now.saturating_add(self.draw(self.settings.tool));
+        let mut work = if self.rng.chance(self.settings.tool_errors) {
+            self.stats.op_faults += 1;
+            Work::Ending(Done::Failed { fault: Fault::Other })
+        } else {
+            match op {
+                Op::Spawn { cwd, command, env, roots, head, tail } => {
+                    match io::spawn(&self.checkout, &cwd, &command, &env, &roots, (head, tail)) {
+                        Ok(started) => Work::Command(started),
+                        Err(done) => Work::Ending(done),
+                    }
+                }
+                op @ (Op::Load { .. } | Op::Scan { .. } | Op::Store { .. } | Op::Search { .. }) => Work::File(op),
+            }
+        };
+        // io runs the race with the deadline, and says it lost a moment
+        // after the deadline passes: a command killed then tells what it wrote
+        // by then (nothing, here).
+        if ends > deadline {
+            let done = match work {
+                Work::Command(started) => io::exited(None, &[], started.head, started.tail),
+                Work::File(_) | Work::Ending(_) => Done::TimedOut,
+            };
+            let noticed = deadline.saturating_add(self.draw(self.settings.network));
+            (work, ends) = (Work::Ending(done), noticed);
+            self.stats.op_timeouts += 1;
         }
-        match call {
-            tools::Call::Read { .. } => {
-                Outcome::Read { content: b"fn main() {}\n"[..].into(), skipped: 0, lines: 1, total: 1, cut: false }
+        let delivery = self.schedule(ends, Delivery::Ran { owner });
+        self.ops.insert(owner, Pending { delivery, session, writes, work });
+        self.stats.ops += 1;
+    }
+
+    /// io is asked to cancel the operation of `owner`: it ends cancelled
+    /// after a network draw, unless it ends of itself first.
+    fn cancel_op(&mut self, owner: Token) {
+        assert!(self.owners.contains(&owner), "a cancel names an operation io was asked for");
+        let Some(pending) = self.ops.get(&owner) else {
+            // It ended in the iteration the cancel was sent.
+            self.stats.cancels_crossed += 1;
+            return;
+        };
+        self.closing.insert(pending.session);
+        if self.rng.chance(self.settings.cancels_lost) {
+            self.op_cancel_lost.insert(owner);
+            self.stats.op_cancels_lost += 1;
+            return;
+        }
+        let at = self.now.saturating_add(self.draw(self.settings.network));
+        let delivery = self.schedule(at, Delivery::Ran { owner });
+        let pending = self.ops.get_mut(&owner).expect("looked up above");
+        self.wire.remove(&pending.delivery).expect("an operation in flight has its end on the way");
+        (pending.delivery, pending.work) = (delivery, Work::Ending(Done::Cancelled));
+        self.stats.op_cancels += 1;
+    }
+
+    /// The operation of `owner` ends, and io tells the tools how.
+    fn ran(&mut self, owner: Token) {
+        let pending = self.ops.remove(&owner).expect("an operation ends once");
+        let done = match pending.work {
+            Work::File(op) => io::perform(&mut self.checkout, op),
+            Work::Command(started) => {
+                self.checkout.finish(&started.process);
+                let program = &started.process.program;
+                io::exited(Some(program.exit), &program.output, started.head, started.tail)
             }
-            tools::Call::List { .. } => {
-                let name = Name::new(b"main.rs"[..].into()).expect("a name");
-                Outcome::Listed { entries: Box::new([Entry { name, kind: Kind::File }]), more: 0 }
+            Work::Ending(done) => done,
+        };
+        if self.op_cancel_lost.remove(&owner) {
+            self.stats.done_after_cancel += 1;
+        }
+        self.agent_in.push_back(agent::Event::Done { owner, done });
+    }
+
+    /// Checks every result of the session's own tools in `prompt` against
+    /// the call it answers, and counts those of its last message once.
+    fn check_results(&mut self, owner: Token, prompt: &Prompt) {
+        for pair in prompt.messages.windows(2) {
+            let calls = pair[0].content.iter().filter_map(|block| {
+                let Block::ToolCall { call: Decoded::Owned { call }, id, .. } = block else { return None };
+                Some((id, call))
+            });
+            for (id, call) in calls {
+                let result = pair[1].content.iter().find_map(|block| {
+                    let Block::ToolResult { id: answered, result: Returned::Owned { outcome } } = block else {
+                        return None;
+                    };
+                    (answered == id).then_some(outcome)
+                });
+                if let Some(outcome) = result {
+                    assert!(fixture::fits(call, outcome), "{outcome:?} is not what comes of {call:?}");
+                }
             }
-            tools::Call::Write { .. } => Outcome::Written { created: true },
-            tools::Call::Search { .. } => {
-                let hit = tools::Hit { path: b"main.rs"[..].into(), line: 1, text: b"fn main() {}"[..].into() };
-                Outcome::Found { hits: Box::new([hit]), more: 0, timed_out: false }
-            }
-            tools::Call::Edit { .. } => Outcome::Edited { replaced: 1 },
-            tools::Call::Shell { .. } => {
-                let exit = tools::Exit::Code { code: 0 };
-                Outcome::Exited { exit, head: b"ok\n"[..].into(), tail: Box::new([]), dropped: 0 }
-            }
+        }
+        let counted = self.counted.entry(owner).or_default();
+        if prompt.messages.len() > *counted {
+            *counted = prompt.messages.len();
+            let last = prompt.messages.last().expect("a prompt has a message");
+            let answers = last
+                .content
+                .iter()
+                .filter(|block| matches!(block, Block::ToolResult { result: Returned::Owned { .. }, .. }));
+            self.stats.results += u32::try_from(answers.count()).expect("a small message");
         }
     }
 
     /// Whether the session `name` has nothing in flight.
     fn idle(&self, name: Token) -> bool {
-        !self.calling.contains_key(&name) && self.tools.values().all(|run| run.session != name)
+        !self.calling.contains_key(&name)
+            && self.tools.values().all(|run| run.session != name)
+            && self.ops.values().all(|op| op.session != name)
     }
 
-    /// The session an event is for, as far as tool runs go, and the run whose
-    /// end it is.
-    fn session_of(&self, event: &agent::Event) -> (Option<Token>, Option<Token>) {
-        match event {
-            agent::Event::Completed { owner, .. }
-            | agent::Event::Failed { owner, .. }
-            | agent::Event::Cancelled { owner } => (Some(*owner), None),
-            agent::Event::ToolDone { owner, .. }
-            | agent::Event::ToolCancelled { owner }
-            | agent::Event::Answered { owner, .. }
-            | agent::Event::AnswerCancelled { owner } => {
-                (Some(*self.runs.get(owner).expect("a run's end is for a run the agent started")), Some(*owner))
-            }
-            agent::Event::Continue { session, .. } | agent::Event::Close { session } => (Some(*session), None),
-            agent::Event::Open { .. } => (None, None),
-        }
-    }
-
-    /// Notes the session of each tool run the step just made started, from
-    /// `made` in the output: a step works on one session.
-    fn attribute(&mut self, made: u32, session: Option<Token>) {
-        let skip = usize::try_from(made).expect("a small queue");
-        for request in self.agent_out.iter().skip(skip) {
-            if let agent::Request::Tool { owner, .. } | agent::Request::Delegate { owner, .. } = request {
-                let session = session.expect("tool runs start in a step for their session");
-                assert!(self.runs.insert(*owner, session).is_none(), "each run has a token of its own");
-            }
-        }
-    }
-
-    /// A run with `effect` starts for `session`: a write runs alone, and reads
-    /// run together, as many as the limits allow.
-    fn batched(&mut self, session: Token, effect: Effect) {
-        let others: Vec<&Running> = self.tools.values().filter(|run| run.session == session).collect();
-        let writing = others.iter().any(|run| run.effect == Effect::Write);
-        assert!(!writing, "nothing runs beside a write");
-        if effect == Effect::Write {
+    /// Something starts for `session`, an operation of its tools or a
+    /// delegated call, which `writes` or only reads: a write runs alone, and
+    /// reads run together, as many as the limits allow. (The tools ask io for
+    /// one operation at a time for each call, and only a call that writes
+    /// stores or runs a command.)
+    fn batched(&mut self, session: Token, writes: bool) {
+        let runs = self.tools.values().filter(|run| run.session == session).map(|run| run.effect == Effect::Write);
+        let ops = self.ops.values().filter(|op| op.session == session).map(|op| op.writes);
+        let others: Vec<bool> = runs.chain(ops).collect();
+        assert!(!others.contains(&true), "nothing runs beside a write");
+        if writes {
             assert!(others.is_empty(), "a write runs alone");
         }
         let running = u32::try_from(others.len()).expect("a small batch") + 1;
@@ -974,7 +1082,6 @@ impl World {
                     self.stats.timeouts += 1;
                 }
                 Delivery::Cancelled { owner } => self.agent_in.push_back(agent::Event::Cancelled { owner }),
-                Delivery::ToolCancelled { owner } => self.agent_in.push_back(agent::Event::ToolCancelled { owner }),
                 Delivery::AnswerCancelled { owner } => self.agent_in.push_back(agent::Event::AnswerCancelled { owner }),
                 Delivery::Answered { owner, answer } => {
                     let run = self.tools.remove(&owner).expect("a withdrawn call's answer is withdrawn");
@@ -989,14 +1096,7 @@ impl World {
                         self.send(Delivery::Close { opener });
                     }
                 }
-                Delivery::ToolDone { owner, outcome } => {
-                    let run = self.tools.remove(&owner);
-                    assert!(run.is_some(), "a cancelled tool run's result is withdrawn");
-                    if self.run_cancel_lost.remove(&owner) {
-                        self.stats.ran_after_cancel += 1;
-                    }
-                    self.agent_in.push_back(agent::Event::ToolDone { owner, outcome });
-                }
+                Delivery::Ran { owner } => self.ran(owner),
             }
         }
     }
@@ -1022,6 +1122,13 @@ impl World {
             finishes: 0,
         };
         assert!(self.sessions.insert(opener, session).is_none(), "openers have distinct names");
+        // A repository of its own, which io names as its root.
+        let root = fixture::seed(&mut self.checkout, format!("s{opener}").as_bytes());
+        self.roots.insert(root, opener);
+        let mut spec = spec;
+        for repo in &mut spec.authority.repos {
+            repo.root = io::token(root);
+        }
         self.agent_in.push_back(agent::Event::Open { opener: Token::new(opener), spec });
     }
 
@@ -1060,9 +1167,13 @@ impl World {
             agent::Fact::CompletionFailed { .. } => &mut told.completions_failed,
             agent::Fact::CompletionCancelled { .. } => &mut told.completions_cancelled,
             agent::Fact::CompletionRetried { .. } => &mut told.completions_retried,
-            agent::Fact::ToolStarted { .. } => &mut told.tools_started,
-            agent::Fact::ToolFinished { .. } => &mut told.tools_finished,
-            agent::Fact::ToolCancelled { .. } => &mut told.tools_cancelled,
+            agent::Fact::Tools { fact } => match fact {
+                tools::Fact::Opened { .. } => &mut told.kits_opened,
+                tools::Fact::Closed { .. } => &mut told.kits_closed,
+                tools::Fact::Started { .. } => &mut told.tools_started,
+                tools::Fact::Answered { .. } => &mut told.tools_answered,
+                tools::Fact::Refused { .. } | tools::Fact::Closing { .. } => return,
+            },
             agent::Fact::DelegateStarted { .. } => &mut told.delegates_started,
             agent::Fact::DelegateAnswered { .. } => &mut told.delegates_answered,
             agent::Fact::DelegateCancelled { .. } => &mut told.delegates_cancelled,
@@ -1086,9 +1197,10 @@ impl World {
         assert_eq!(ended, stats.calls, "a fact for the end of every call");
         assert_eq!(told.completions_cancelled, stats.cancels, "a fact for every cancelled call");
         assert_eq!(told.used, turns, "a fact for every completion's usage");
-        assert_eq!(told.tools_started, stats.tool_runs, "a fact for every tool run");
-        assert_eq!(told.tools_finished + told.tools_cancelled, stats.tool_runs, "a fact for the end of every run");
-        assert_eq!(told.tools_cancelled, stats.tool_cancels, "a fact for every cancelled run");
+        assert_eq!((told.kits_opened, told.kits_closed), (opened, opened), "a kit opened and closed per session");
+        assert!(told.tools_started <= stats.ops, "a call the tools start asks io for something");
+        assert!(told.tools_answered >= told.tools_started, "a fact for the answer to every call started");
+        assert!(told.tools_answered >= stats.results, "a fact for every result that went back");
         assert_eq!(told.yielded, stats.yields, "a fact for every yield");
         assert_eq!(told.delegates_started, stats.delegates, "a fact for every delegated call");
         let delegates_ended = told.delegates_answered + told.delegates_cancelled;
@@ -1100,6 +1212,8 @@ impl World {
     fn assert_settled(&self) {
         assert_eq!(self.agent.sessions(), 0, "every session has ended and been reclaimed");
         assert_eq!(self.agent.runs(), 0, "every run has ended and been reclaimed");
+        assert_eq!((self.agent.kits(), self.agent.jobs()), (0, 0), "every kit has closed, its calls answered");
+        assert!(self.ops.is_empty() && self.op_cancel_lost.is_empty(), "every operation has ended, once");
         assert_eq!(self.agent.next_deadline(), None, "no alarm outlives its session");
         assert_eq!(self.provider.calls(), 0, "the provider holds no call");
         assert!(self.calls.is_empty() && self.calling.is_empty(), "no call is in flight");
@@ -1148,6 +1262,20 @@ impl World {
     }
 }
 
+/// The delegated call whose end `event` is, if it is one.
+fn ended_run(event: &agent::Event) -> Option<Token> {
+    match event {
+        agent::Event::Answered { owner, .. } | agent::Event::AnswerCancelled { owner } => Some(*owner),
+        agent::Event::Open { .. }
+        | agent::Event::Continue { .. }
+        | agent::Event::Close { .. }
+        | agent::Event::Completed { .. }
+        | agent::Event::Failed { .. }
+        | agent::Event::Cancelled { .. }
+        | agent::Event::Done { .. } => None,
+    }
+}
+
 fn describe_agent_event(event: &agent::Event) -> String {
     match event {
         agent::Event::Open { opener, spec } => {
@@ -1162,10 +1290,7 @@ fn describe_agent_event(event: &agent::Event) -> String {
         }
         agent::Event::Failed { owner, failure } => format!("failed {} {failure:?}", owner.raw()),
         agent::Event::Cancelled { owner } => format!("cancelled {}", owner.raw()),
-        agent::Event::ToolDone { owner, outcome } => {
-            format!("tool done {} {outcome:?}", owner.raw())
-        }
-        agent::Event::ToolCancelled { owner } => format!("tool cancelled {}", owner.raw()),
+        agent::Event::Done { owner, done } => format!("done {} {done:?}", owner.raw()),
         agent::Event::Answered { owner, answer } => format!("answered {} {answer:?}", owner.raw()),
         agent::Event::AnswerCancelled { owner } => format!("answer cancelled {}", owner.raw()),
     }
@@ -1186,10 +1311,8 @@ fn describe_agent_request(request: &agent::Request) -> String {
             format!("complete {} with {messages} messages, at most {most} tokens, within {timeout:?}", owner.raw())
         }
         agent::Request::Cancel { owner } => format!("cancel {}", owner.raw()),
-        agent::Request::Tool { owner, call, deadline } => {
-            format!("tool {} {call:?} by {}", owner.raw(), deadline.as_nanos())
-        }
-        agent::Request::CancelTool { owner } => format!("cancel tool {}", owner.raw()),
+        agent::Request::Io { owner, op, deadline } => format!("io {} {op:?} by {}", owner.raw(), deadline.as_nanos()),
+        agent::Request::CancelIo { owner } => format!("cancel io {}", owner.raw()),
         agent::Request::Delegate { owner, opener, call, deadline } => {
             format!("delegate {} for {} {call:?} by {}", owner.raw(), opener.raw(), deadline.as_nanos())
         }

@@ -18,6 +18,6 @@ pub struct Limits {
 #[must_use]
 pub fn worst_case(limits: &Limits) -> Option<u64> {
     let session = session::worst_case(&limits.session)?;
-    let session_out = Queue::<session::Request>::worst_case(session::MAX_OUT)?;
+    let session_out = Queue::<session::Request>::worst_case(session::max_out(&limits.session))?;
     session.checked_add(session_out)
 }

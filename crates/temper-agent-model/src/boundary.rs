@@ -11,8 +11,9 @@
 //! the session if it was admitted, and any number of [`Request::Yielded`] and
 //! [`Request::Used`] in between), and requests down with exactly one terminal
 //! event up (a [`Request::Complete`] is ended by one of [`Event::Completed`],
-//! [`Event::Failed`] or [`Event::Cancelled`]). A request's `owner` is the
-//! session's token, echoed on its terminal event.
+//! [`Event::Failed`] or [`Event::Cancelled`]; a [`Request::Io`], the file and
+//! process operations of the session's tools, by [`Event::Done`]). A request's
+//! `owner` is the token of whoever asked, echoed on its terminal event.
 
 use alloc::boxed::Box;
 
@@ -39,10 +40,8 @@ pub enum Event {
     Failed { owner: Token, failure: Failure },
     /// Terminal for `Complete`, after `Cancel`: the call was abandoned.
     Cancelled { owner: Token },
-    /// Terminal for `Tool`: what came of the call, a success or a failure.
-    ToolDone { owner: Token, outcome: tools::Outcome },
-    /// Terminal for `Tool`, after `CancelTool`: the run was abandoned.
-    ToolCancelled { owner: Token },
+    /// Terminal for `Io`, for the session's tools.
+    Done { owner: Token, done: tools::Done },
     /// Terminal for `Delegate`: the opener's answer.
     Answered { owner: Token, answer: Answer },
     /// Terminal for `Delegate`, after `Withdraw`: the call was abandoned.
@@ -68,11 +67,12 @@ pub enum Request {
     /// Abandon the `Complete` in flight for `owner`. Its terminal event still
     /// comes: `Cancelled`, or whichever outcome won the race.
     Cancel { owner: Token },
-    /// Run a call of the tools the session owns, and answer it by `deadline`.
-    Tool { owner: Token, call: tools::Call, deadline: Time },
-    /// Abandon the `Tool` in flight for `owner`. Its terminal event still
-    /// comes: `ToolCancelled`, or `ToolDone` if the run won the race.
-    CancelTool { owner: Token },
+    /// Ask io for `op` for the session's tools, giving up at `deadline`: io runs
+    /// the race (5.3).
+    Io { owner: Token, op: tools::Op, deadline: Time },
+    /// Abandon the `Io` in flight for `owner`. Its terminal event still comes:
+    /// `Done` with `Cancelled`, or whichever outcome won the race.
+    CancelIo { owner: Token },
     /// Ask the opener to serve the delegated call `call`, by `deadline`.
     Delegate { owner: Token, opener: Token, call: Token, deadline: Time },
     /// Abandon the `Delegate` in flight for `owner`. Its terminal event still

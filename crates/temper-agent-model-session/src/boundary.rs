@@ -11,9 +11,10 @@
 //! (a [`Request::Complete`] is ended by one of [`Event::Completed`],
 //! [`Event::Failed`] or [`Event::Cancelled`]; a [`Request::Delegate`], to the
 //! opener, by [`Event::Answered`] or [`Event::AnswerCancelled`]; a
-//! [`Request::Tool`] by [`Event::ToolDone`] or [`Event::ToolCancelled`]). A
-//! request's `owner` is echoed on its terminal event: the session's token for
-//! a call to the LLM, and a tool run's own for a tool call or a delegated one.
+//! [`Request::Io`], the tools' file and process operations passed on as they
+//! are, by [`Event::Done`]). A request's `owner` is echoed on its terminal
+//! event: the session's token for a call to the LLM, a tool run's own for a
+//! delegated call, and the tools' own for an operation.
 
 use alloc::boxed::Box;
 
@@ -41,10 +42,8 @@ pub enum Event {
     Failed { owner: Token, failure: Failure },
     /// Terminal for `Complete`, after `Cancel`: the call was abandoned.
     Cancelled { owner: Token },
-    /// Terminal for `Tool`: what came of the call, a success or a failure.
-    ToolDone { owner: Token, outcome: tools::Outcome },
-    /// Terminal for `Tool`, after `CancelTool`: the run was abandoned.
-    ToolCancelled { owner: Token },
+    /// Terminal for `Io`, for the tools.
+    Done { owner: Token, done: tools::Done },
     /// Terminal for `Delegate`: the opener's answer, a success or a failure.
     Answered { owner: Token, answer: Answer },
     /// Terminal for `Delegate`, after `Withdraw`: the call was abandoned.
@@ -74,12 +73,12 @@ pub enum Request {
     /// Abandon the `Complete` in flight for `owner`. Its terminal event still
     /// comes: `Cancelled`, or whichever outcome won the race.
     Cancel { owner: Token },
-    /// Run a call of the tools the session owns, and answer it by `deadline`:
-    /// whoever runs it runs the race, and a call that loses ends `TimedOut`.
-    Tool { owner: Token, call: tools::Call, deadline: Time },
-    /// Abandon the `Tool` in flight for `owner`. Its terminal event still
-    /// comes: `ToolCancelled`, or `ToolDone` if the run won the race.
-    CancelTool { owner: Token },
+    /// Ask io for `op` for the tools, giving up at `deadline`: io runs the
+    /// race (5.3).
+    Io { owner: Token, op: tools::Op, deadline: Time },
+    /// Abandon the `Io` in flight for `owner`. Its terminal event still comes:
+    /// `Done` with `Cancelled`, or whichever outcome won the race.
+    CancelIo { owner: Token },
     /// Ask the opener to serve the delegated call `call`, a ticket, and to
     /// answer it by `deadline`: the opener runs the race, and answers a call
     /// that loses as a failure.
@@ -97,9 +96,10 @@ pub struct Spec {
     /// The provider's name for the model.
     pub model: Box<[u8]>,
     pub system: Box<[u8]>,
-    /// The families of the session's own tools the LLM may call, and the tools
-    /// its opener serves.
-    pub tools: tools::Grants,
+    /// What the session's own tools may do and where (the families the LLM
+    /// may call among them, the checkout's repositories, what commands run
+    /// with), copied into its kit; and the tools its opener serves.
+    pub authority: tools::Authority,
     pub delegated: Box<[Descriptor]>,
     /// The first user message.
     pub prompt: Box<[u8]>,

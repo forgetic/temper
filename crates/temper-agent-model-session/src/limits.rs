@@ -1,3 +1,4 @@
+use temper_agent_model_tools as tools;
 use temper_lib::{Deadlines, Duration, List, Queue, Slab};
 
 use crate::boundary::Budget;
@@ -46,40 +47,62 @@ pub struct Limits {
     pub tool_timeout: Duration,
     /// The same for a delegated call, which the opener serves.
     pub delegate_timeout: Duration,
-    /// Facts kept until the parent drains them. Beyond them, facts are
-    /// dropped and counted.
+    /// Facts kept until the parent drains them, the tools' passed on among
+    /// them. Beyond them, facts are dropped and counted.
     pub facts: u32,
+    /// The tools sub-model's, which the session owns: a kit for each session,
+    /// with room for its widest batch.
+    pub tools: tools::Limits,
 }
 
 /// The most memory the model holds under `limits`, in bytes (6.4), or `None`
-/// if it does not fit a `u64` or the limits cannot be honoured.
+/// if it does not fit a `u64` or the limits cannot be honoured: a parallel
+/// batch wider than [`MAX_PARALLEL`] or than the tools run for a kit at once
+/// (so that a read never meets `Busy`), fewer kits than sessions, or a
+/// transcript too short for a prompt and its answer.
 ///
-/// It counts the containers, their bookkeeping included, and the payloads, not
-/// allocator overhead. The prompts of calls in flight are copies held by the
-/// protocol layer, and the texts of yields copies held by the opener, which
-/// count them. Facts own nothing beyond their queue.
+/// It is the session's own, the tools' it owns, and the queue that holds what
+/// the tools emit in a step. It counts the containers, their bookkeeping
+/// included, and the payloads, not allocator overhead. The prompts of calls in
+/// flight are copies held by the protocol layer, and the texts of yields copies
+/// held by the opener, which count them. Facts own nothing beyond their queue.
 #[must_use]
 pub fn worst_case(limits: &Limits) -> Option<u64> {
-    if !(1..=MAX_PARALLEL).contains(&limits.parallel_tools) || limits.messages < 2 {
+    let parallel = limits.parallel_tools;
+    if !(1..=MAX_PARALLEL).contains(&parallel) || parallel > limits.tools.calls || limits.messages < 2 {
+        return None;
+    }
+    if limits.tools.kits < limits.sessions {
         return None;
     }
     let sessions = Slab::<Session>::worst_case(limits.sessions)?;
     let runs = Slab::<Run>::worst_case(runs(limits)?)?;
     let alarms = Deadlines::<Alarm>::worst_case(alarms(limits)?)?;
     let facts = Queue::<Fact>::worst_case(limits.facts)?;
+    let tools = tools::worst_case(&limits.tools)?;
+    let tools_out = Queue::<tools::Request>::worst_case(tools::max_out(&limits.tools))?;
     // Each session owns its transcript's list and up to its byte limit.
     let session = List::<Message>::worst_case(limits.messages)?.checked_add(limits.session_bytes)?;
     let held = u64::from(limits.sessions).checked_mul(session)?;
-    sessions.checked_add(runs)?.checked_add(alarms)?.checked_add(facts)?.checked_add(held)
+    sessions
+        .checked_add(runs)?
+        .checked_add(alarms)?
+        .checked_add(facts)?
+        .checked_add(tools)?
+        .checked_add(tools_out)?
+        .checked_add(held)
 }
 
-/// The run slab's capacity: every session may run a batch, and start the next
-/// in the iteration that retired the last, before its slots are reclaimed.
+/// The run slab's capacity: two batches a session. A session starts at most
+/// one batch in a step, and a batch the tools answered in the step that
+/// started it goes on at the next instant, after the reclaim point (see the
+/// session module). So in one iteration a session holds the runs of at most
+/// two batches: one ending, and the next it starts.
 pub(crate) fn runs(limits: &Limits) -> Option<u32> {
     limits.sessions.checked_mul(limits.parallel_tools)?.checked_mul(2)
 }
 
-/// The alarm table's capacity: every session may have two alarms armed.
+/// The alarm table's capacity: every session may have three alarms armed.
 pub(crate) fn alarms(limits: &Limits) -> Option<u32> {
-    limits.sessions.checked_mul(2)
+    limits.sessions.checked_mul(3)
 }

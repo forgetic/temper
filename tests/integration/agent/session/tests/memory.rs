@@ -7,8 +7,9 @@ use std::mem::size_of;
 use temper_agent_model_session::llm::{
     Block, Completion, Decoded, Descriptor, Endpoint, Failure, Problem, Stop, Usage,
 };
-use temper_agent_model_session::{Budget, Event, Limits, MAX_OUT, MAX_PARALLEL, Model, Request, Spec, worst_case};
-use temper_agent_model_tools::{Call, Effect, Grants, Name, Outcome, Part, Path};
+use temper_agent_model_session::{Budget, Event, Limits, MAX_PARALLEL, Model, Request, Spec, max_out, worst_case};
+use temper_agent_model_session_tests::TOOLS;
+use temper_agent_model_tools::{Authority, Call, Done, Effect, Grants, Name, Part, Path, Repo, Version};
 use temper_lib::{Deadlines, Duration, Env, List, Map, Queue, Rng, Set, Slab, Time, Token};
 
 /// Counts the heap each thread allocates, so that tests running side by side
@@ -66,6 +67,24 @@ fn bytes(len: u64) -> Box<[u8]> {
     vec![b'x'; usize::try_from(len).expect("a test length fits")].into_boxed_slice()
 }
 
+/// The one name the authority and the call use.
+fn name() -> Name {
+    Name::new(bytes(1)).expect("a name")
+}
+
+/// What the session's tools may do: inspect one repository, mounted at a
+/// one-byte name.
+fn authority() -> Authority {
+    Authority {
+        cwd: Box::new([name()]),
+        repos: Box::new([Repo { mount: Box::new([name()]), root: Token::new(1), writable: false }]),
+        grants: Grants { inspect: true, modify: false, shell: false },
+        env: Box::new([]),
+    }
+}
+
+const VERSION: Version = Version::new([1, 0, 0, 0]);
+
 fn size(of: usize) -> u64 {
     u64::try_from(of).expect("a size fits")
 }
@@ -91,12 +110,14 @@ const LIMITS: Limits = Limits {
     delegate_timeout: Duration::from_secs(40),
     facts: 64,
     parallel_tools: 1,
+    // Reads answer with the whole file loaded.
+    tools: temper_agent_model_tools::Limits { kits: 1, read_bytes: 1 << 20, file_bytes: 1 << 20, ..TOOLS },
 };
 
 /// What a step asked for last, without the payload.
 enum Asked {
     Complete { owner: Token },
-    Tool,
+    Io { owner: Token },
     Other,
 }
 
@@ -114,11 +135,18 @@ enum Route {
 
 /// Fills every session of a model under `limits` to exactly its byte limit by
 /// `route` and leaves it in backoff, the state that also holds both of its
-/// alarms, checking the heap against the worst case after every step.
+/// alarms, checking the heap against the worst case after every step. Its
+/// tools have a kit for each session, and room for its widest batch.
 fn fill(limits: Limits, route: Route) {
+    let tools = temper_agent_model_tools::Limits {
+        kits: limits.sessions,
+        calls: limits.parallel_tools.max(limits.tools.calls),
+        ..limits.tools
+    };
+    let limits = Limits { tools, ..limits };
     let bound = worst_case(&limits).expect("the test limits fit");
     let env = Env { now: Time::ZERO, limits };
-    let mut out = Queue::with_capacity(MAX_OUT);
+    let mut out = Queue::with_capacity(max_out(&limits));
     let base = heap::live();
     let mut model = Model::new(&limits, 1);
     // The requests are the protocol layer's and the opener's to hold and
@@ -130,13 +158,13 @@ fn fill(limits: Limits, route: Route) {
         while let Some(request) = out.pop() {
             asked = Some(match request {
                 Request::Complete { owner, .. } => Asked::Complete { owner },
-                Request::Tool { .. } => Asked::Tool,
+                Request::Io { owner, .. } => Asked::Io { owner },
                 Request::Opened { .. }
                 | Request::Yielded { .. }
                 | Request::Used { .. }
                 | Request::Ended { .. }
                 | Request::Cancel { .. }
-                | Request::CancelTool { .. }
+                | Request::CancelIo { .. }
                 | Request::Delegate { .. }
                 | Request::Withdraw { .. } => Asked::Other,
             });
@@ -157,7 +185,7 @@ fn fill(limits: Limits, route: Route) {
             endpoint: Endpoint(0),
             model: bytes(1),
             system: bytes(1),
-            tools: Grants { inspect: true, modify: false, shell: false },
+            authority: authority(),
             delegated: Box::new([
                 Descriptor { ticket: Token::new(1), effect: Effect::Write },
                 Descriptor { ticket: Token::new(2), effect: Effect::Read },
@@ -177,16 +205,14 @@ fn fill(limits: Limits, route: Route) {
                 // A call's slot for its result takes a block's room.
                 let tooling_cost = (block + 3 + (part + 1)) + block;
                 let output = limits.session_bytes - spec_cost - tooling_cost - 1;
-                let name = Name::new(bytes(1)).expect("a name");
-                let path = Path { absolute: false, parts: Box::new([Part::Name { name }]) };
+                let path = Path { absolute: false, parts: Box::new([Part::Name { name: name() }]) };
                 let call = Decoded::Owned { call: Call::Read { path, skip: 0, lines: None } };
                 let content = Box::new([Block::ToolCall { id: bytes(1), name: bytes(1), input: bytes(1), call }]);
                 let completion = Completion { content, stop: Stop::ToolUse, usage: Usage::ZERO };
-                let Some(Asked::Tool) = step(Event::Completed { owner, completion }) else {
-                    panic!("the session runs the tool");
+                let Some(Asked::Io { owner: op }) = step(Event::Completed { owner, completion }) else {
+                    panic!("the session's tools load the file");
                 };
-                let outcome = Outcome::Read { content: bytes(output), skipped: 0, lines: 1, total: 1, cut: false };
-                let done = Event::ToolDone { owner, outcome };
+                let done = Event::Done { owner: op, done: Done::Loaded { content: bytes(output), version: VERSION } };
                 let Some(Asked::Complete { .. }) = step(done) else {
                     panic!("a session filled exactly to its byte limit goes on");
                 };

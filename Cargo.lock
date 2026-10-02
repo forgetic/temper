@@ -41,6 +41,8 @@ version = "0.0.0"
 dependencies = [
  "temper-agent-model-session",
  "temper-agent-model-tools",
+ "temper-agent-model-tools-tests",
+ "temper-checkout-fake",
  "temper-lib",
  "temper-llm-model",
 ]

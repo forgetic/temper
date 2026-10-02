@@ -10,9 +10,9 @@ use temper_lib::{Duration, Env, Queue, Time, Token};
 use crate::llm::{
     Answer, Block, Completion, Decoded, Descriptor, Endpoint, Failure, Message, Returned, Role, Stop, Usage,
 };
-use crate::tools::{Call, Effect, Entry, Grants, Kind, Name, Outcome, Part, Path};
+use crate::tools::{self, Authority, Done, Effect, Entry, Grants, Kind, Name, Op, Outcome, Part, Path, Place, Repo};
 use crate::{
-    Budget, Dimension, End, Event, Fact, Limits, MAX_OUT, Model, Request, Spec, Yield, fire, step, worst_case,
+    Budget, Dimension, End, Event, Fact, Limits, Model, Request, Spec, Yield, fire, max_out, step, worst_case,
 };
 
 const BUDGET: Budget = Budget {
@@ -39,6 +39,27 @@ const LIMITS: Limits = Limits {
         delegate_timeout: Duration::from_secs(40),
         facts: 64,
         parallel_tools: 2,
+        tools: tools::Limits {
+            kits: 2,
+            calls: 4,
+            repos: 1,
+            path_bytes: 64,
+            known_files: 8,
+            file_bytes: 65_536,
+            read_bytes: 4096,
+            list_entries: 16,
+            match_lines: 4,
+            file_timeout: Duration::from_secs(60),
+            env_bytes: 64,
+            shell_timeout: Duration::from_secs(60),
+            shell_timeout_max: Duration::from_secs(600),
+            shell_head: 64,
+            shell_tail: 64,
+            search_hits: 8,
+            search_bytes: 256,
+            search_timeout: Duration::from_secs(30),
+            facts: 64,
+        },
     },
 };
 
@@ -54,7 +75,7 @@ impl Harness {
         Harness {
             model: Model::new(&LIMITS, 1),
             env: Env { now: Time::ZERO, limits: LIMITS },
-            out: Queue::with_capacity(MAX_OUT),
+            out: Queue::with_capacity(max_out(&LIMITS)),
         }
     }
 
@@ -98,13 +119,13 @@ impl Harness {
     }
 
     /// Opens a session and has the LLM ask for `ls`, returning the session's
-    /// owner and the run's.
+    /// owner and that of the operation its tools ask of io.
     fn open_tool(&mut self) -> (Token, Token) {
         let owner = self.open();
-        let Some(Request::Tool { owner: run, .. }) = self.complete(owner, ls()) else {
-            panic!("expected a tool run");
+        let Some(Request::Io { owner: op, .. }) = self.complete(owner, ls()) else {
+            panic!("expected an operation for the tools");
         };
-        (owner, run)
+        (owner, op)
     }
 
     /// Opens a session and has the LLM finish its turn, returning the
@@ -135,7 +156,7 @@ fn spec() -> Spec {
         endpoint: Endpoint(0),
         model: bytes(b"model"),
         system: bytes(b"be brief"),
-        tools: Grants { inspect: true, modify: false, shell: false },
+        authority: authority(),
         delegated: Box::new([Descriptor { ticket: Token::new(7), effect: Effect::Write }]),
         prompt: bytes(b"fix the bug"),
         max_tokens: 1024,
@@ -143,24 +164,42 @@ fn spec() -> Spec {
     }
 }
 
+/// io's name for the root of the checkout's one repository.
+const ROOT: Token = Token::new(70);
+
+/// What the session's tools may do: inspect the one repository, at `/work`.
+fn authority() -> Authority {
+    Authority {
+        cwd: Box::new([work()]),
+        repos: Box::new([Repo { mount: Box::new([work()]), root: ROOT, writable: false }]),
+        grants: Grants { inspect: true, modify: false, shell: false },
+        env: Box::new([]),
+    }
+}
+
+fn work() -> Name {
+    Name::new(bytes(b"work")).expect("a name")
+}
+
 fn usage() -> Usage {
     Usage { input_tokens: 10, output_tokens: 5, cache_read_tokens: 3, cache_write_tokens: 2 }
 }
 
-/// Lists the working directory.
-fn list() -> Call {
-    Call::List { path: Path { absolute: false, parts: Box::new([Part::Current]) } }
+/// The working directory's one entry.
+fn entries() -> Box<[Entry]> {
+    let name = Name::new(bytes(b"main.rs")).expect("a name");
+    Box::new([Entry { name, kind: Kind::File }])
 }
 
 /// A listing of one file.
 fn listed() -> Outcome {
-    let name = Name::new(bytes(b"main.rs")).expect("a name");
-    Outcome::Listed { entries: Box::new([Entry { name, kind: Kind::File }]), more: 0 }
+    Outcome::Listed { entries: entries(), more: 0 }
 }
 
 /// The LLM asks for `ls`.
 fn ls() -> Completion {
-    let call = Decoded::Owned { call: list() };
+    let call = tools::Call::List { path: Path { absolute: false, parts: Box::new([Part::Current]) } };
+    let call = Decoded::Owned { call };
     let content = Box::new([Block::ToolCall { id: bytes(b"c1"), name: bytes(b"ls"), input: bytes(b"{}"), call }]);
     Completion { content, stop: Stop::ToolUse, usage: usage() }
 }
@@ -199,21 +238,22 @@ fn an_open_reaches_the_session_and_its_opening_and_call_come_back_out() {
 }
 
 #[test]
-fn a_completion_reaches_the_session_and_its_tool_run_comes_back_out() {
+fn a_completion_reaches_the_session_and_its_tools_operation_comes_back_out() {
     let mut h = Harness::new();
     let owner = h.open();
-    let Some(Request::Tool { owner: _, call, deadline }) = h.complete(owner, ls()) else {
-        panic!("expected a tool run");
+    let Some(Request::Io { owner: _, op, deadline }) = h.complete(owner, ls()) else {
+        panic!("expected an operation for the tools");
     };
-    assert_eq!((call, deadline), (list(), Time::ZERO.saturating_add(LIMITS.session.tool_timeout)));
+    let scan = Op::Scan { at: Place { root: ROOT, path: bytes(b"") }, max: LIMITS.session.tools.list_entries };
+    assert_eq!((op, deadline), (scan, Time::ZERO.saturating_add(LIMITS.session.tool_timeout)));
 }
 
 #[test]
-fn a_tool_result_reaches_the_session_and_its_next_call_comes_back_out() {
+fn an_operations_end_reaches_the_session_and_its_next_call_comes_back_out() {
     let mut h = Harness::new();
-    let (owner, run) = h.open_tool();
+    let (owner, op) = h.open_tool();
     let Some(Request::Complete { owner: next, prompt, timeout: _ }) =
-        h.step(Event::ToolDone { owner: run, outcome: listed() })
+        h.step(Event::Done { owner: op, done: Done::Scanned { entries: entries(), more: 0 } })
     else {
         panic!("expected a call");
     };
@@ -270,10 +310,10 @@ fn an_expired_call_is_cancelled_and_its_cancellation_reaches_the_session() {
 #[test]
 fn an_expired_tool_run_is_cancelled_and_its_cancellation_reaches_the_session() {
     let mut h = Harness::new();
-    let (_, run) = h.open_tool();
+    let (_, op) = h.open_tool();
     h.expire();
-    assert_eq!(h.fire(), Some(Request::CancelTool { owner: run }));
-    assert_eq!(h.step(Event::ToolCancelled { owner: run }), Some(ended(OUT_OF_TIME, 1)));
+    assert_eq!(h.fire(), Some(Request::CancelIo { owner: op }));
+    assert_eq!(h.step(Event::Done { owner: op, done: Done::Cancelled }), Some(ended(OUT_OF_TIME, 1)));
 }
 
 #[test]
@@ -282,12 +322,14 @@ fn the_sessions_facts_pass_through_to_the_loop() {
     let session = h.open_yielded();
     assert_eq!(h.model.pop_fact(), Some(Fact::Opened { opener: opener() }));
     assert_eq!(h.step(Event::Close { session }), Some(ended(End::Closed, 1)));
-    let mut last = None;
+    let (mut before, mut last) = (None, None);
     for _ in 0..LIMITS.session.facts {
         let Some(fact) = h.model.pop_fact() else { break };
-        last = Some(fact);
+        before = last.replace(fact);
     }
-    assert_eq!(last, Some(Fact::Ended { opener: opener(), end: End::Closed, turns: 1, usage: usage() }));
+    assert_eq!(before, Some(Fact::Ended { opener: opener(), end: End::Closed, turns: 1, usage: usage() }));
+    // The session's tools tell of its kit, which closed with it.
+    assert_eq!(last, Some(Fact::Tools { fact: tools::Fact::Closed { session } }));
     assert_eq!(h.model.facts_lost(), 0);
 }
 
@@ -318,13 +360,13 @@ fn a_delegated_call_goes_out_and_its_answer_and_its_withdrawal_reach_the_session
 
 #[test]
 fn an_entry_point_emits_what_the_session_does() {
-    assert_eq!(MAX_OUT, session::MAX_OUT);
+    assert_eq!(max_out(&LIMITS), session::max_out(&LIMITS.session));
 }
 
 #[test]
 fn the_worst_case_is_the_sessions_and_the_routing_queues() {
     let sessions = session::worst_case(&LIMITS.session).expect("the test limits fit");
-    let queue = Queue::<session::Request>::worst_case(session::MAX_OUT).expect("one request fits");
+    let queue = Queue::<session::Request>::worst_case(session::max_out(&LIMITS.session)).expect("a step fits");
     assert!(queue > 0, "the routing queue takes room");
     assert_eq!(worst_case(&LIMITS), sessions.checked_add(queue));
     let huge = Limits { session: session::Limits { sessions: u32::MAX, session_bytes: u64::MAX, ..LIMITS.session } };

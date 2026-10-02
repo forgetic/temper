@@ -20,8 +20,7 @@ pub(crate) fn event(event: Event) -> session::Event {
         Event::Completed { owner, completion } => session::Event::Completed { owner, completion },
         Event::Failed { owner, failure } => session::Event::Failed { owner, failure },
         Event::Cancelled { owner } => session::Event::Cancelled { owner },
-        Event::ToolDone { owner, outcome } => session::Event::ToolDone { owner, outcome },
-        Event::ToolCancelled { owner } => session::Event::ToolCancelled { owner },
+        Event::Done { owner, done } => session::Event::Done { owner, done },
         Event::Answered { owner, answer } => session::Event::Answered { owner, answer },
         Event::AnswerCancelled { owner } => session::Event::AnswerCancelled { owner },
     }
@@ -36,8 +35,8 @@ pub(crate) fn request(request: session::Request) -> Request {
         session::Request::Ended { opener, end, turns, usage } => Request::Ended { opener, end, turns, usage },
         session::Request::Complete { owner, prompt, timeout } => Request::Complete { owner, prompt, timeout },
         session::Request::Cancel { owner } => Request::Cancel { owner },
-        session::Request::Tool { owner, call, deadline } => Request::Tool { owner, call, deadline },
-        session::Request::CancelTool { owner } => Request::CancelTool { owner },
+        session::Request::Io { owner, op, deadline } => Request::Io { owner, op, deadline },
+        session::Request::CancelIo { owner } => Request::CancelIo { owner },
         session::Request::Delegate { owner, opener, call, deadline } => {
             Request::Delegate { owner, opener, call, deadline }
         }

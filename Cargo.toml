@@ -31,6 +31,7 @@ temper-agent-model-tools = { path = "crates/temper-agent-model-tools" }
 temper-fake-worker-model = { path = "testing/temper-fake-worker-model" }
 temper-llm-model = { path = "testing/temper-llm-model" }
 temper-checkout-fake = { path = "tests/integration/checkout" }
+temper-agent-model-tools-tests = { path = "tests/integration/agent/tools" }
 
 # Panics are fail-stop and overflow traps, in every profile. (The test harness
 # needs unwinding, so cargo ignores `panic` for test targets.)

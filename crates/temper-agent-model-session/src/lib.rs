@@ -13,6 +13,11 @@
 //! routes on, and its outcome comes back later through the parent as an
 //! [`Event`].
 //!
+//! The session owns the tools sub-model (`temper-agent-model-tools`), which
+//! runs the LLM's calls to its own tools: it opens a kit for each session,
+//! hands it the calls within its own step, and passes the file and process
+//! operations the tools ask of io out as they are, and their ends back.
+//!
 //! The conversation is provider-neutral ([`llm`]): the protocol layer speaks
 //! each provider's wire format.
 //!
@@ -37,4 +42,4 @@ mod tests;
 pub use boundary::{Budget, Dimension, End, Event, Request, Spec, Yield};
 pub use facts::Fact;
 pub use limits::{Limits, MAX_PARALLEL, worst_case};
-pub use model::{MAX_OUT, Model, fire, step};
+pub use model::{Model, fire, max_out, step};

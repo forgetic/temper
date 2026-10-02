@@ -9,10 +9,14 @@ use crate::boundary::{Event, Request};
 use crate::limits::Limits;
 use crate::route;
 
-/// The most requests an entry point emits per call: the session's, since each
-/// of its requests routes to one of ours. The loop reserves this much room in
-/// `out` before calling it.
-pub const MAX_OUT: u32 = session::MAX_OUT;
+/// The most requests an entry point emits per call under `limits`: the
+/// session's, since each of its requests routes to one of ours, and the
+/// session's follows the chain down to its tools. The loop reserves this much
+/// room in `out` before calling it.
+#[must_use]
+pub const fn max_out(limits: &Limits) -> u32 {
+    session::max_out(&limits.session)
+}
 
 /// The agent model's state: its sub-models', and room for what they emit
 /// within a step.
@@ -30,7 +34,7 @@ impl Model {
     pub fn new(limits: &Limits, seed: u64) -> Model {
         Model {
             session: session::Model::new(&limits.session, seed),
-            session_out: Queue::with_capacity(session::MAX_OUT),
+            session_out: Queue::with_capacity(session::max_out(&limits.session)),
         }
     }
 
@@ -70,19 +74,19 @@ impl Model {
     }
 }
 
-/// Handles one event, emitting at most [`MAX_OUT`] requests.
+/// Handles one event, emitting at most [`max_out`] requests.
 pub fn step(model: &mut Model, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     session::step(&mut model.session, &session_env(env), route::event(event), &mut model.session_out);
-    route_out(model, out);
+    route_out(model, env, out);
 }
 
 /// Fires the earliest alarm due at `env.now`, if there is one, emitting at most
-/// [`MAX_OUT`] requests. A stage fires its alarms after its input events, so
+/// [`max_out`] requests. A stage fires its alarms after its input events, so
 /// progress that arrived in the same iteration wins over a deadline that passed
 /// while the loop waited.
 pub fn fire(model: &mut Model, env: &Env<Limits>, out: &mut Queue<Request>) {
     session::fire(&mut model.session, &session_env(env), &mut model.session_out);
-    route_out(model, out);
+    route_out(model, env, out);
 }
 
 /// What the session reads: this iteration's time, and its own limits.
@@ -92,10 +96,10 @@ fn session_env(env: &Env<Limits>) -> Env<session::Limits> {
 
 /// Routes what the session emitted into `out`, leaving the session's queue
 /// empty for the next step.
-fn route_out(model: &mut Model, out: &mut Queue<Request>) {
-    for _ in 0..session::MAX_OUT {
+fn route_out(model: &mut Model, env: &Env<Limits>, out: &mut Queue<Request>) {
+    for _ in 0..session::max_out(&env.limits.session) {
         let Some(request) = model.session_out.pop() else { break };
         out.push(route::request(request));
     }
-    assert!(model.session_out.is_empty(), "the session emits at most its MAX_OUT");
+    assert!(model.session_out.is_empty(), "the session emits at most its max_out");
 }

@@ -89,11 +89,16 @@ fn cut_text() -> Box<[Part]> {
 }
 
 /// What the fake writes as a call's arguments: a path, and what a tool that
-/// writes or runs a command needs too.
-const ARGUMENTS: [&[u8]; 3] = [
-    br#"{"path":"src/lib.rs","content":"hello","command":"cargo test"}"#,
-    br#"{"path":"./README.md","content":"hello","command":"ls"}"#,
-    br#"{"path":"../outside.txt","content":"hello","command":"true"}"#,
+/// writes, edits, searches or runs a command needs too. A world seeds its
+/// checkout to suit: each path names something different (a file, another, a
+/// directory, one outside, one missing), so that what comes of a call tells
+/// which it was.
+const ARGUMENTS: [&[u8]; 5] = [
+    br#"{"path":"src/lib.rs","content":"src/lib.rs: rewritten","command":"cargo test","old":"42","new":"43","pattern":"answer"}"#,
+    br#"{"path":"./README.md","content":"README.md: rewritten","command":"ls","old":"hello","new":"goodbye","pattern":"hello"}"#,
+    br#"{"path":"../outside.txt","content":"outside.txt: rewritten","command":"true","old":"a","new":"b","pattern":"outside"}"#,
+    br#"{"path":"docs","content":"docs: rewritten","command":"cat README.md","old":"guide","new":"manual","pattern":"guide"}"#,
+    br#"{"path":"notes.md","content":"notes.md: noted","command":"false","old":"noted","new":"kept","pattern":"noted"}"#,
 ];
 
 /// A call to one of the query's tools, picked at random, or a malformed one.
@@ -103,7 +108,8 @@ fn call(rng: &mut Rng, minted: &mut u64, config: &Config, query: &Query) -> Part
     let tool = query.tools.get(index).expect("picked below the tool count");
     *minted = minted.wrapping_add(1);
     let id = call_id(*minted);
-    let pick = usize::try_from(rng.below(3)).expect("below three");
+    let menu = u64::try_from(ARGUMENTS.len()).expect("a usize fits in a u64");
+    let pick = usize::try_from(rng.below(menu)).expect("below the menu's length");
     let arguments = *ARGUMENTS.get(pick).expect("picked below the menu's length");
     if !rng.chance(config.malformed) {
         return Part::ToolCall { id, name: tool.name.clone(), arguments: copy_of(arguments) };

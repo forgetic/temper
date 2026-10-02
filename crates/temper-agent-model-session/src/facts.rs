@@ -7,6 +7,7 @@
 //! no room in `out`, and when the queue is full they are dropped and counted.
 //! Nothing the session decides depends on whether a fact was kept.
 
+use temper_agent_model_tools as tools;
 use temper_lib::{Duration, Queue, Token};
 
 use crate::boundary::{End, Yield};
@@ -30,13 +31,9 @@ pub enum Fact {
     /// The completion that failed is tried again after `delay`, as retry
     /// `attempt`.
     CompletionRetried { opener: Token, attempt: u32, delay: Duration },
-    /// The tool call at `block` of the last message started.
-    ToolStarted { opener: Token, block: u32 },
-    /// The tool ran, and its outcome holds `output` bytes; `failed` marks one
-    /// that is not a success.
-    ToolFinished { opener: Token, output: u64, failed: bool },
-    /// The tool run was abandoned.
-    ToolCancelled { opener: Token },
+    /// What the session's own tools told, of the kit the session has: its
+    /// calls starting and being answered, and the kit opening and closing.
+    Tools { fact: tools::Fact },
     /// The tool call at `block` of the last message was delegated to the
     /// opener.
     DelegateStarted { opener: Token, block: u32 },

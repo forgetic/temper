@@ -9,16 +9,18 @@ use temper_agent_model_session::Event;
 use temper_agent_model_session::llm as agent;
 
 use crate::tickets::{Ticketed, Tickets};
-use temper_agent_model_tools::{Call, Effect, Grants, Name, Outcome, Part, Path};
+use temper_agent_model_tools::{Call, Effect, Exit, Grants, Name, Outcome, Part, Path};
 use temper_lib::Token;
 use temper_llm_model::api as provider;
 
 /// The tools the agent's side offers, by name: the family that grants each,
 /// and its schema.
-const TOOLS: [(&[u8], Family, &[u8]); 4] = [
+const TOOLS: [(&[u8], Family, &[u8]); 6] = [
     (b"read_file", Family::Inspect, br#"{"path":"string"}"#),
     (b"list_dir", Family::Inspect, br#"{"path":"string"}"#),
+    (b"search", Family::Inspect, br#"{"path":"string","pattern":"string"}"#),
     (b"write_file", Family::Modify, br#"{"path":"string","content":"string"}"#),
+    (b"edit_file", Family::Modify, br#"{"path":"string","old":"string","new":"string"}"#),
     (b"run_shell", Family::Shell, br#"{"command":"string"}"#),
 ];
 
@@ -191,7 +193,12 @@ fn call(name: &[u8], arguments: &[u8]) -> Result<Call, agent::Problem> {
     match name {
         b"read_file" => Ok(Call::Read { path: path(&field(b"path")?)?, skip: 0, lines: None }),
         b"list_dir" => Ok(Call::List { path: path(&field(b"path")?)? }),
+        b"search" => Ok(Call::Search { path: path(&field(b"path")?)?, pattern: field(b"pattern")?, glob: None }),
         b"write_file" => Ok(Call::Write { path: path(&field(b"path")?)?, content: field(b"content")? }),
+        b"edit_file" => {
+            let (old, new) = (field(b"old")?, field(b"new")?);
+            Ok(Call::Edit { path: path(&field(b"path")?)?, old, new, all: false })
+        }
         b"run_shell" => Ok(Call::Shell { command: field(b"command")?, timeout: None }),
         _ => Err(agent::Problem::UnknownTool),
     }
@@ -247,7 +254,15 @@ fn path(text: &[u8]) -> Result<Path, agent::Problem> {
 pub fn render(result: &agent::Returned) -> (Box<[u8]>, bool) {
     match result {
         agent::Returned::Owned { outcome } => {
-            let failed = !matches!(outcome, Outcome::Read { .. } | Outcome::Listed { .. } | Outcome::Written { .. });
+            let failed = !matches!(
+                outcome,
+                Outcome::Read { .. }
+                    | Outcome::Listed { .. }
+                    | Outcome::Found { .. }
+                    | Outcome::Written { .. }
+                    | Outcome::Edited { .. }
+                    | Outcome::Exited { exit: Exit::Code { code: 0 }, .. }
+            );
             let text = if let Outcome::Read { content, .. } = outcome {
                 content.clone()
             } else {
