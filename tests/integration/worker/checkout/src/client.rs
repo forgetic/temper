@@ -102,8 +102,6 @@ pub struct Repo {
     pub writable: bool,
     /// The commit its spec names, if it starts from one.
     pub commit: Option<u64>,
-    /// Whether it starts from its base branch, which is also its push branch.
-    pub base: bool,
 }
 
 /// A client, as the world runs it.
@@ -130,10 +128,6 @@ pub struct Client {
     pub start: Vec<Tree>,
     pub pushed: Vec<Tree>,
     pub left: Vec<Tree>,
-    /// For each repository that starts from its base branch, the commit the
-    /// branch is at as far as the client knows: where it started, or what it
-    /// last landed there.
-    pub known: Vec<Option<u64>>,
     /// What came of each push or save that was not refused: whether it was a
     /// save, and each repository's landing.
     pub landings: Vec<(bool, Box<[Landing]>)>,
@@ -156,7 +150,6 @@ impl Client {
             start: Vec::new(),
             pushed: Vec::new(),
             left: Vec::new(),
-            known: Vec::new(),
             landings: Vec::new(),
         }
     }

@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use temper_checkout_fake::Checkout;
 use temper_checkout_fake::git::{Forge, Move, Tree};
 use temper_lib::{Duration, Rng, Time, Token};
-use temper_worker_model_checkout::git::{Done, Fault, Kind, Missing, Op};
+use temper_worker_model_checkout::git::{Done, Fault, Kind, Missing, Op, Want};
 use temper_worker_model_checkout::{
     Cached, Event, Fact, Failure, Landing, Limits, MAX_OUT, Message, Model, Outcome, Prepared, Refusal, Repository,
     Request, Spec, Start, worst_case,
@@ -55,6 +55,12 @@ pub struct Settings {
     pub network: Span,
     /// The chance, per mille, that io fails an operation on the worker's side.
     pub broken: u32,
+    /// The chance, per mille, that io carries out an operation and then
+    /// reports that it ran out of time, which leaves what it did in doubt.
+    pub ambiguous: u32,
+    /// The chance, per mille, that a directory the worker's first workspaces
+    /// will have was left on the disk by an earlier worker.
+    pub leftovers: u32,
     /// The chance, per mille, that an operation that reaches the forge finds
     /// its repository unreachable.
     pub unreachable: u32,
@@ -95,6 +101,8 @@ impl Settings {
             think: Span::millis(0, 1_000),
             network: Span::millis(1, 20),
             broken: 0,
+            ambiguous: 0,
+            leftovers: 0,
             unreachable: 0,
             refusing: 0,
             missing: 0,
@@ -150,6 +158,12 @@ pub struct Stats {
     /// Operations that found their repository unreachable, or were refused.
     pub unreachable: u32,
     pub refusals: u32,
+    /// Operations io carried out and reported as run out of time; pushes
+    /// whose landing a verification found; workspaces made over something
+    /// already there.
+    pub ambiguous: u32,
+    pub verified: u32,
+    pub made_over: u32,
     /// Base branches created, and found created meanwhile.
     pub created: u32,
     pub exists: u32,
@@ -206,14 +220,38 @@ struct Hosted {
 struct Pending {
     delivery: Key,
     work: Work,
+    /// The repository whose push it verifies, by its remote, if it does.
+    verifies: Option<Vec<u8>>,
 }
 
 #[derive(Debug)]
 enum Work {
     /// It runs when it ends.
     Perform(Op),
+    /// It runs when it ends, and io reports that it ran out of time.
+    Ambiguous(Op),
     /// It ends so, having done nothing.
     Ending(Done),
+}
+
+/// A push a hold asked for: of which commit, to which branch, and how it was
+/// verified.
+#[derive(Debug)]
+struct Attempt {
+    commit: u64,
+    branch: Vec<u8>,
+    verified: Verified,
+}
+
+/// What the fetch that verified a push found.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Verified {
+    /// No fetch verified it.
+    Not,
+    /// The branch was at this commit.
+    At(u64),
+    /// The fetch failed.
+    Failed,
 }
 
 #[derive(Debug)]
@@ -239,6 +277,8 @@ pub struct World {
     workspaces: BTreeSet<Token>,
     /// The commit each hold checked each repository out at.
     checked_out: BTreeMap<(Token, Vec<u8>), u64>,
+    /// The pushes of each hold's push or save under way, by remote.
+    attempts: BTreeMap<(Token, Vec<u8>), Attempt>,
     ops: Ledger<Token, Pending>,
     cancel_lost: BTreeSet<Token>,
     stats: Stats,
@@ -265,6 +305,16 @@ impl World {
         for _ in 0..settings.workstreams {
             workstreams.push(draw_repositories(&mut rng, &settings));
         }
+        // What an earlier worker left where the first workspaces go: io names
+        // a new workspace by its slot, in the high half of its token.
+        let mut disk = Checkout::new();
+        for slot in 0..u64::from(settings.checkout.workspaces) {
+            if rng.chance(settings.leftovers) {
+                let dir = translate::dir(Token::new(slot << 32));
+                disk.write(&[dir.as_slice(), b"/r0/.git/HEAD"].concat(), b"stale");
+                disk.write(&[dir.as_slice(), b"/r0/half-written"].concat(), b"stale");
+            }
+        }
         World {
             now: Time::ZERO,
             rng,
@@ -272,7 +322,7 @@ impl World {
             model: Model::new(&settings.checkout),
             stage: Stage::new(settings.checkout, MAX_OUT, MAX_OUT + SLACK),
             wire: Schedule::new(),
-            disk: Checkout::new(),
+            disk,
             forge,
             repositories,
             workstreams,
@@ -281,6 +331,7 @@ impl World {
             held_by: BTreeMap::new(),
             workspaces: BTreeSet::new(),
             checked_out: BTreeMap::new(),
+            attempts: BTreeMap::new(),
             ops: Ledger::new("operation"),
             cancel_lost: BTreeSet::new(),
             stats: Stats::default(),
@@ -479,13 +530,9 @@ impl World {
             };
             let push = if writable { Some(base.clone().into()) } else { None };
             let identity = IDENTITY.into();
-            let base = match &start {
-                Start::Base { .. } => true,
-                Start::Branch { .. } | Start::Commit { .. } | Start::Saved { .. } => false,
-            };
             let spec = Repository { name: name.clone().into(), remote: remote.clone().into(), start, identity, push };
             repositories.push(spec);
-            repos.push(Repo { name, remote, writable, commit, base });
+            repos.push(Repo { name, remote, writable, commit });
         }
         // Another party may create or advance a base branch meanwhile.
         let first = repos.first().expect("a workstream has a repository");
@@ -495,7 +542,24 @@ impl World {
             let at = self.now.saturating_add(self.settings.remote.draw(&mut self.rng));
             self.schedule(at, delivery);
         }
-        let key = if plan.invalid { Vec::new() } else { format!("work-{workstream}").into_bytes() };
+        let mut key = format!("work-{workstream}").into_bytes();
+        if plan.invalid {
+            // Beyond the limits: no workstream, or a directory that is not one
+            // safe path component, or named twice.
+            let names: [&[u8]; 5] = [b"..", b".", b".GIT", b"a/b", b"a\0b"];
+            let first = repositories.first().expect("a workstream has a repository").name.clone();
+            match self.rng.below(7) {
+                0 => key = Vec::new(),
+                1 => repositories.push(Repository {
+                    name: first.clone(),
+                    remote: first,
+                    start: Start::Branch { branch: b"main".as_slice().into() },
+                    identity: IDENTITY.into(),
+                    push: None,
+                }),
+                way => repositories[0].name = names[usize::try_from(way - 2).expect("small")].into(),
+            }
+        }
         let spec = Spec { key: key.into(), repositories: repositories.into() };
         let client = self.clients.get_mut(&name).expect("a client submitted");
         client.repos = repos;
@@ -719,10 +783,9 @@ impl World {
     fn check_ready(&mut self, name: u64, workspace: Token) {
         let client = self.clients.get(&name).expect("a client submitted");
         let hold = client.hold.expect("a prepared client holds a workspace");
-        let (mut start, mut known) = (Vec::new(), Vec::new());
+        let mut start = Vec::new();
         for repo in &client.repos {
             let commit = *self.checked_out.get(&(hold, repo.name.clone())).expect("each repository was checked out");
-            known.push(if repo.base { Some(commit) } else { None });
             if let Some(named) = repo.commit {
                 assert_eq!(commit, named, "a repository starts at the commit its spec names");
             }
@@ -733,7 +796,6 @@ impl World {
         let client = self.clients.get_mut(&name).expect("a client submitted");
         client.pushed.clone_from(&start);
         client.start = start;
-        client.known = known;
         // Another party may advance a push branch meanwhile.
         if self.rng.chance(self.settings.advance) {
             let workstream = client.plan.workstream;
@@ -759,6 +821,7 @@ impl World {
         };
         let expected = if saved { Operation::Save } else { Operation::Push };
         assert_eq!(client.operation.take(), Some(expected), "a push or a save ends once");
+        let hold = client.hold.expect("a client pushes what it holds");
         assert_eq!(landings.len(), client.repos.len(), "a landing for each repository");
         let stats = &mut self.stats;
         if saved {
@@ -776,19 +839,24 @@ impl World {
                     assert_eq!(&object.tree, left, "what landed is exactly the tree the client left");
                     if !saved {
                         client.pushed[index] = left.clone();
-                        if repo.base {
-                            client.known[index] = Some(translate::fake(*commit));
+                    }
+                    let attempt = self.attempts.get(&(hold, repo.remote.clone())).expect("what landed was pushed");
+                    assert_eq!(attempt.commit, translate::fake(*commit), "what landed is what was pushed");
+                    match attempt.verified {
+                        Verified::Not => {}
+                        Verified::At(tip) => {
+                            assert_eq!(tip, attempt.commit, "a verified push landed");
+                            stats.verified += 1;
                         }
+                        Verified::Failed => panic!("a push whose verification failed did not land"),
                     }
                     stats.landed += 1;
                 }
                 Landing::Moved => {
                     assert!(repo.writable, "only a writable repository is pushed");
-                    if !saved && repo.base {
-                        let base = format!("base/{}", client.plan.workstream).into_bytes();
-                        let tip = self.forge.branch(&repo.remote, &base);
-                        assert!(tip != client.known[index], "a push is moved only if its branch moved: {tip:?}");
-                    }
+                    let attempt = self.attempts.get(&(hold, repo.remote.clone())).expect("what moved was pushed");
+                    let tip = self.forge.branch(&repo.remote, &attempt.branch).expect("a moved branch exists");
+                    assert!(!self.forge.is_ancestor(tip, attempt.commit), "a push is moved only if its branch moved");
                     stats.moved += 1;
                 }
                 Landing::Unchanged => {
@@ -798,12 +866,22 @@ impl World {
                     }
                     stats.unchanged += 1;
                 }
-                Landing::Failed => stats.failed += 1,
+                Landing::Failed => {
+                    // A push that landed is reported landed, unless the fetch
+                    // that would have told so failed too.
+                    if let Some(attempt) = self.attempts.get(&(hold, repo.remote.clone())) {
+                        let tip = self.forge.branch(&repo.remote, &attempt.branch);
+                        let unverified = attempt.verified == Verified::Failed;
+                        assert!(tip != Some(attempt.commit) || unverified, "a push that failed did not land");
+                    }
+                    stats.failed += 1;
+                }
                 Landing::Refused => stats.push_refused += 1,
                 Landing::Aborted => stats.landings_aborted += 1,
             }
         }
         client.landings.push((saved, landings));
+        self.attempts.retain(|(holder, _), _| *holder != hold);
         self.think(name);
     }
 
@@ -844,11 +922,15 @@ impl World {
             assert_eq!(holder, owner, "a workspace is held by one hold at a time, and evicted only when idle");
         }
         self.workspaces.insert(workspace);
+        let verifies = self.attempt(owner, client.operation, &op);
         let span = if op.is_remote() { self.settings.remote } else { self.settings.local };
         let mut ends = self.now.saturating_add(span.draw(&mut self.rng));
         let mut work = if self.rng.chance(self.settings.broken) {
             self.stats.op_broken += 1;
             Work::Ending(Done::Failed { fault: Fault::Broken })
+        } else if self.rng.chance(self.settings.ambiguous) {
+            self.stats.ambiguous += 1;
+            Work::Ambiguous(op)
         } else {
             Work::Perform(op)
         };
@@ -860,15 +942,44 @@ impl World {
             self.stats.op_timeouts += 1;
         }
         let delivery = self.schedule(ends, Delivery::Ran { owner });
-        self.ops.open(owner, Pending { delivery, work });
+        self.ops.open(owner, Pending { delivery, work, verifies });
         self.stats.ops += 1;
+    }
+
+    /// Notes a push `owner` asks for, while its client pushes or saves; and
+    /// whether `op` is the fetch that verifies one: returns its remote if so.
+    fn attempt(&mut self, owner: Token, operation: Option<Operation>, op: &Op) -> Option<Vec<u8>> {
+        match operation {
+            Some(Operation::Push | Operation::Save) => {}
+            Some(Operation::Prepare) | None => return None,
+        }
+        match op {
+            Op::Push { remote, commit, branch, .. } => {
+                let attempt =
+                    Attempt { commit: translate::fake(*commit), branch: branch.to_vec(), verified: Verified::Not };
+                self.attempts.insert((owner, remote.to_vec()), attempt);
+                None
+            }
+            Op::Fetch { remote, want: Want::Branch { branch }, .. } => {
+                let attempt = self.attempts.get(&(owner, remote.to_vec())).expect("a push is verified once asked for");
+                assert_eq!(&*attempt.branch, &**branch, "a push is verified on its branch");
+                assert_eq!(attempt.verified, Verified::Not, "a push is verified once");
+                Some(remote.to_vec())
+            }
+            Op::Fetch { .. } | Op::Make { .. } | Op::Clone { .. } | Op::Create { .. } | Op::CheckOut { .. } => {
+                panic!("a push or a save commits, pushes and verifies, nothing else: {op:?}")
+            }
+            Op::Commit { .. } => None,
+        }
     }
 
     /// io is asked to cancel the operation of `owner`: it ends cancelled
     /// after a network draw, having done nothing, unless it ends of itself
     /// first.
     fn cancel_op(&mut self, owner: Token) {
-        assert!(self.holds.contains_key(&owner), "a cancel names a hold's operation");
+        let name = self.holds.get(&owner).expect("a cancel names a hold's operation");
+        let client = self.clients.get(name).expect("a hold's client");
+        assert_eq!(client.operation, Some(Operation::Prepare), "only a prepare's operation is cancelled, not a push's");
         self.stats.cancels += 1;
         let Some(pending) = self.ops.get(owner) else {
             // It ended in the iteration the cancel was sent.
@@ -896,14 +1007,40 @@ impl World {
         self.cancel_lost.remove(&owner);
         let done = match pending.work {
             Work::Perform(op) => self.perform(owner, op),
+            Work::Ambiguous(op) => {
+                self.perform(owner, op);
+                Done::Failed { fault: Fault::TimedOut }
+            }
             Work::Ending(done) => done,
         };
+        if let Some(remote) = pending.verifies {
+            let attempt = self.attempts.get_mut(&(owner, remote)).expect("a push is verified once asked for");
+            attempt.verified = match done {
+                Done::Fetched { commit } => Verified::At(translate::fake(commit)),
+                Done::Succeeded
+                | Done::Committed { .. }
+                | Done::Unchanged
+                | Done::Exists
+                | Done::Rejected
+                | Done::Failed { .. } => Verified::Failed,
+            };
+        }
         self.stage.push(Event::Done { owner, done });
     }
 
     /// Runs `op` on the fakes, with the faults the world scripts, and checks
     /// what moved on the forge.
     fn perform(&mut self, owner: Token, op: Op) -> Done {
+        // As it takes effect: its hold still holds its workspace, and its
+        // client still waits for the operation it is part of.
+        let workspace = translate::workspace(&op);
+        assert_eq!(self.held_by.get(&workspace), Some(&owner), "an operation runs in a workspace its hold holds");
+        let client = self.clients.get(self.holds.get(&owner).expect("a hold's")).expect("a hold's client");
+        assert!(client.release != Release::Done, "nothing touches a workspace once its hold is released");
+        assert!(client.operation.is_some(), "nothing touches a workspace once its client has heard the end");
+        if op.kind() == Kind::Make && self.disk.exists(&translate::dir(workspace)) {
+            self.stats.made_over += 1;
+        }
         let remote = translate::remote(&op).map(<[u8]>::to_vec);
         let on_forge = remote.filter(|remote| self.repositories.iter().any(|hosted| hosted.remote == *remote));
         let writes = op.kind() == Kind::Create || op.kind() == Kind::Push;
@@ -932,12 +1069,12 @@ impl World {
             self.forge.set_refusing(name, false);
         }
         let new = &self.forge.moves()[moves..];
-        for Move { repository, branch, from, to } in new {
+        for Move { remote, branch, from, to } in new {
             if let Some(from) = from {
                 assert!(
                     self.forge.is_ancestor(*from, *to),
                     "{}: {} moved only by a fast-forward",
-                    String::from_utf8_lossy(repository),
+                    String::from_utf8_lossy(remote),
                     String::from_utf8_lossy(branch)
                 );
             }

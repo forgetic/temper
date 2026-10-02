@@ -196,6 +196,27 @@ fn a_push_sent_twice_is_refused_as_busy_and_the_first_goes_on() {
 }
 
 #[test]
+fn what_an_earlier_worker_left_does_not_fail_a_prepare() {
+    let mut world = World::new(Settings { leftovers: 1000, ..Settings::calm(9) });
+    let client = world.submit(Time::ZERO, Plan::simple(0));
+    world.run(ITERATIONS);
+    assert!(matches!(prepared(&world, client), Prepared::Ready { .. }));
+    assert_eq!(world.stats().made_over, 1, "the new workspace was made over what was left there");
+}
+
+#[test]
+fn a_push_io_reports_run_out_of_time_is_verified_and_reported_as_it_went() {
+    let mut verified = 0;
+    for seed in 0..40 {
+        let mut world = World::new(Settings { ambiguous: 200, ..Settings::calm(seed) });
+        world.submit(Time::ZERO, Plan { pushes: 3, ..Plan::simple(0) });
+        world.run(ITERATIONS);
+        verified += world.stats().verified;
+    }
+    assert!(verified > 0, "some pushes io reported run out of time had landed, and were reported landed");
+}
+
+#[test]
 fn a_seed_replays_to_the_same_run() {
     let trace = temper_world::assert_replays(13, 14, |seed| {
         let settings = noisy(seed);
@@ -239,7 +260,7 @@ fn facts_change_nothing_the_checkout_does() {
 fn random_worlds_settle_with_every_client_heard() {
     let mut prepares = BTreeSet::new();
     let mut lands = BTreeSet::new();
-    let (mut cached, mut races) = ([0; 4], [0; 6]);
+    let (mut cached, mut races) = ([0; 4], [0; 9]);
     for seed in 0..1000 {
         let settings = noisy(seed);
         let mut world = World::new(settings);
@@ -249,8 +270,17 @@ fn random_worlds_settle_with_every_client_heard() {
         for (count, more) in cached.iter_mut().zip([told.new, told.reused, told.rebuilt, told.evicted]) {
             *count += more;
         }
-        let won =
-            [stats.cancels_lost, stats.cancels_crossed, stats.op_timeouts, stats.stale, stats.exists, stats.op_broken];
+        let won = [
+            stats.cancels_lost,
+            stats.cancels_crossed,
+            stats.op_timeouts,
+            stats.stale,
+            stats.exists,
+            stats.op_broken,
+            stats.ambiguous,
+            stats.verified,
+            stats.made_over,
+        ];
         for (count, more) in races.iter_mut().zip(won) {
             *count += more;
         }
@@ -302,7 +332,8 @@ fn random_worlds_settle_with_every_client_heard() {
     assert!(cached.iter().all(|&count| count > 0), "workspaces new, reused, rebuilt and evicted: {cached:?}");
     assert!(
         races.iter().all(|&count| count > 0),
-        "cancels lost and crossed, deadlines passed, stale handles, base branches created meanwhile, io failed: {races:?}"
+        "cancels lost and crossed, deadlines passed, stale handles, base branches created meanwhile, io failed, \
+         io in doubt, pushes verified, workspaces made over something: {races:?}"
     );
 }
 
@@ -332,6 +363,8 @@ fn noisy(seed: u64) -> Settings {
         think: Span::millis(0, 3_000),
         network: Span::millis(1, 50),
         broken: pick(0, 40),
+        ambiguous: pick(0, 60),
+        leftovers: pick(0, 1000),
         unreachable: pick(0, 60),
         refusing: pick(0, 60),
         missing: pick(0, 60),

@@ -401,13 +401,22 @@ impl Checkout {
     }
 
     /// Makes what is beneath the directory `at` exactly `tree`, by paths from
-    /// `at`, as a checkout does: everything there is removed first, but for a
-    /// git directory right beneath it (`.git`, in any ASCII case), which stays
-    /// as it is.
+    /// `at`, as a checkout does: everything there is removed first, but for
+    /// git directories, at any depth, as [`in_git`] finds them, which stay as
+    /// they are with the directories on the way to them.
     pub fn replace_tree(&mut self, at: &[u8], tree: &BTreeMap<Vec<u8>, Vec<u8>>) {
         let beneath = [at, b"/"].concat();
+        let kept: Vec<Vec<u8>> = self
+            .nodes
+            .keys()
+            .filter_map(|path| path.strip_prefix(beneath.as_slice()))
+            .filter(|name| in_git(name))
+            .map(<[u8]>::to_vec)
+            .collect();
         self.nodes.retain(|path, _| match path.strip_prefix(beneath.as_slice()) {
-            Some(name) => name.split(|byte| *byte == b'/').next().is_some_and(|top| top.eq_ignore_ascii_case(b".git")),
+            Some(name) => {
+                in_git(name) || kept.iter().any(|git| git.starts_with(name) && git.get(name.len()) == Some(&b'/'))
+            }
             None => true,
         });
         for (path, content) in tree {

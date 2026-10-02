@@ -101,7 +101,7 @@ pub fn perform(forge: &mut Forge, disk: &mut Checkout, op: Op) -> Done {
                 Want::Commit { commit } => git::Want::Commit(fake(*commit)),
                 Want::Default => git::Want::Default,
             };
-            match forge.fetch(&remote, want) {
+            match forge.fetch(disk, &remote, &path(&at), want) {
                 Ok(fetched) => Done::Fetched { commit: commit(fetched) },
                 Err(fault) => failed(fault),
             }
@@ -116,20 +116,22 @@ pub fn perform(forge: &mut Forge, disk: &mut Checkout, op: Op) -> Done {
         }
         Op::CheckOut { at, commit } => {
             assert_cloned(disk, &at);
-            forge.check_out(disk, &path(&at), fake(commit));
+            let checked_out = forge.check_out(disk, &path(&at), fake(commit));
+            checked_out.expect("a checkout is of a commit fetched into the repository");
             Done::Succeeded
         }
         Op::Commit { at, parent, title, body: _, identity: _ } => {
             assert_cloned(disk, &at);
             assert!(!title.is_empty(), "a commit has a title");
-            match forge.commit(disk, &path(&at), fake(parent)) {
+            let committed = forge.commit(disk, &path(&at), fake(parent));
+            match committed.expect("a commit is on a commit the repository has") {
                 Some(committed) => Done::Committed { commit: commit(committed) },
                 None => Done::Unchanged,
             }
         }
         Op::Push { at, remote, commit, branch, identity: _ } => {
             assert_cloned(disk, &at);
-            match forge.push(&remote, fake(commit), &branch) {
+            match forge.push(disk, &remote, &path(&at), fake(commit), &branch) {
                 Ok(Pushed::Pushed) => Done::Succeeded,
                 Ok(Pushed::Rejected) => Done::Rejected,
                 Err(fault) => failed(fault),
