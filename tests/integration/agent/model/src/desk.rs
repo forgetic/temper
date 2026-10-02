@@ -108,6 +108,7 @@ pub fn record(hand: &Hand, created: Time) -> Record {
             children: Box::new([]),
             decision: None,
             accepted: None,
+            accepting: None,
             snapshot: false,
             spent: 0,
         },

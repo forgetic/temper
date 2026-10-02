@@ -164,9 +164,10 @@ fn wait_bytes(limits: &Limits) -> Option<u64> {
 }
 
 /// The inbox an entry keeps: as much news as the forge sub-model holds for
-/// an item, and a notice for each related item done.
+/// an item, and its notices, merged: one for each related item done (its
+/// dependencies and its children), one for each child held, and a decision.
 pub(crate) fn inbox(limits: &Limits) -> Option<u32> {
-    limits.forge.inbox.checked_add(limits.plan.steps.checked_mul(2)?)
+    limits.forge.inbox.checked_add(limits.plan.steps.checked_mul(3)?)?.checked_add(1)
 }
 
 /// What may wait for an answer at once: a step of each item's job, a read

@@ -899,6 +899,7 @@ fn put_relations(out: &mut Out, relations: &Relations) {
     out.list(&relations.children, put_related);
     out.option(relations.decision, put_decided);
     out.option(relations.accepted, put_permission);
+    out.option(relations.accepting, put_u64);
     out.bool(relations.snapshot);
     out.u64(relations.spent);
 }
@@ -914,6 +915,7 @@ fn get_relations(input: &mut In<'_>) -> Option<Relations> {
         children: input.list(get_related)?,
         decision: input.option(get_decided)?,
         accepted: input.option(get_permission)?,
+        accepting: input.option(get_u64)?,
         snapshot: input.bool()?,
         spent: input.u64()?,
     })

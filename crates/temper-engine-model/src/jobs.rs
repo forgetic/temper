@@ -152,12 +152,25 @@ fn decide(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) {
     let token = id.token();
     let due = match decided {
         plan::Due::Nothing { waits: _, until } => work::Due::Nothing { until },
-        plan::Due::Run(run) => {
-            let entry = get_mut(model, id);
-            commit(entry, &mut writes);
-            entry.due = Some(Box::new(run));
-            work::Due::Run { run: token }
-        }
+        // A run the rules want a person to accept, or refuse, is held before
+        // it is claimed (engine-model.md, section 7).
+        plan::Due::Run(run) => match crate::runs::rule(model, env, id, &run) {
+            rules::Decision::Accept { permission } => {
+                get_mut(model, id).wants = Some(permission);
+                model::keep(model, Fact::Ruled { item: get(model, id).item, refused: false });
+                work::Due::Hold { reason: translate::RUN_ACCEPTANCE }
+            }
+            rules::Decision::Refuse => {
+                model::keep(model, Fact::Ruled { item: get(model, id).item, refused: true });
+                work::Due::Hold { reason: translate::RUN_REFUSED }
+            }
+            rules::Decision::Allow | rules::Decision::Wait => {
+                let entry = get_mut(model, id);
+                commit(entry, &mut writes);
+                entry.due = Some(Box::new(run));
+                work::Due::Run { run: token }
+            }
+        },
         plan::Due::Act(_) => {
             get_mut(model, id).action = Some((Of::Action, drain(&mut writes, &env.limits)));
             work::Due::Act { action: token }
@@ -389,7 +402,7 @@ pub(crate) fn act(model: &mut Model, env: &Env<Limits>, owner: Token, item: Item
         then: plan::Then::Wait,
         reviews: List::with_capacity(env.limits.forge.reviewers),
         retried: false,
-        pull: None,
+        landing: None,
         reading: None,
     };
     let doing = Doing::Writes(Box::new(writes));
@@ -447,13 +460,18 @@ fn applied(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, fresh: Option<pl
     let goal = goal.as_ref();
     let mut writes = Queue::with_capacity(plan::max_out(&env.limits.plan));
     let decided = plan::apply(&model.config.plan, &route::plan_env(env), record, goal, &facts, &outcome, &mut writes);
-    let proposed = match &outcome {
-        plan::Outcome::Plan(proposed) => Some(plan::Plan::clone(proposed)),
+    // What the outcome makes, for the rules on plans: a plan proposed, the
+    // steps it grows its goal by, or the tasks it creates. Where a plan's
+    // changes land is accepted with it; growth lands within the envelope
+    // accepted, and a task's change lands only as the rules let a merge:
+    // their size and spend are checked, not where they land.
+    let made = match &outcome {
+        plan::Outcome::Plan(proposed) => Some((proposed.steps.clone(), true, rules::Goal::Outside)),
+        plan::Outcome::Steps(steps) => Some((steps.clone(), false, goal_spent(model, entry))),
+        plan::Outcome::Tasks(tasks) => Some((tasks.clone(), false, rules::Goal::Outside)),
         plan::Outcome::Change { .. }
         | plan::Outcome::Verdict { .. }
         | plan::Outcome::Report
-        | plan::Outcome::Steps(_)
-        | plan::Outcome::Tasks(_)
         | plan::Outcome::Reply
         | plan::Outcome::Finished
         | plan::Outcome::Release { .. }
@@ -461,10 +479,9 @@ fn applied(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, fresh: Option<pl
     };
     match decided {
         plan::Applied::Writes { accept, then, estimate } => {
-            let relations = &entry.relations;
             let rejected = rejected(entry);
             let person = match accept {
-                plan::Accept::Person => relations.accepted.is_none(),
+                plan::Accept::Person => items::accepted(entry, items::comment_of(applying.of)).is_none(),
                 plan::Accept::Rules => false,
             };
             if person && rejected {
@@ -474,8 +491,8 @@ fn applied(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, fresh: Option<pl
                 get_mut(model, id).wants = Some(model.config.rules.plan_acceptance);
                 return finish(model, env, id, Finish::Accepting);
             }
-            if let Some(proposed) = proposed {
-                match rule_plan(model, env, id, &proposed, estimate) {
+            if let Some((steps, lands, goal)) = made {
+                match rule_plan(model, env, id, &steps, lands, estimate, goal) {
                     rules::Decision::Allow => {}
                     rules::Decision::Accept { .. } if rejected => return reject(model, env, id),
                     rules::Decision::Accept { permission } => {
@@ -491,7 +508,7 @@ fn applied(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, fresh: Option<pl
                 then,
                 reviews: List::with_capacity(env.limits.forge.reviewers),
                 retried: false,
-                pull: fresh,
+                landing: None,
                 reading: None,
             };
             if let Some(applying) = items::applying_mut(&mut get_mut(model, id).job) {
@@ -526,13 +543,14 @@ fn reject(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) {
     entry.staged = staged;
     entry.relations.decision = None;
     entry.relations.accepted = None;
+    entry.relations.accepting = None;
     let writes = Writes {
         list: Box::new([]),
         next: 0,
         then,
         reviews: List::with_capacity(env.limits.forge.reviewers),
         retried: false,
-        pull: None,
+        landing: None,
         reading: None,
     };
     if let Some(applying) = items::applying_mut(&mut entry.job) {
@@ -571,11 +589,41 @@ fn goal_of(model: &Model, entry: &Entry) -> Option<plan::Goal> {
     Some(model.items.get(goal)?.step.as_ref()?.goal.as_ref()?.clone())
 }
 
-/// The rules on a plan proposed, before any of its items is made.
-fn rule_plan(model: &Model, env: &Env<Limits>, id: Id<Entry>, plan: &plan::Plan, estimate: u64) -> rules::Decision {
+/// What the runs of the goal the item's outcome grows have spent: its own,
+/// if it proposed the plan or supervises it, else its goal's.
+fn goal_spent(model: &Model, entry: &Entry) -> rules::Goal {
+    let own = match entry.staged.as_ref() {
+        Some(staged) => staged.goal.is_some() || proposes(entry),
+        None => false,
+    };
+    if own {
+        return rules::Goal::Spent(entry.relations.spent);
+    }
+    let Some(goal) = entry.relations.goal else { return rules::Goal::Outside };
+    match items::find(model, goal) {
+        Some(goal) => rules::Goal::Spent(get(model, goal).relations.spent),
+        None => rules::Goal::Spent(0),
+    }
+}
+
+/// The rules on the steps an outcome makes (a plan proposed, the steps it
+/// grows its goal by, the tasks it creates), before any of their items is
+/// made.
+fn rule_plan(
+    model: &Model,
+    env: &Env<Limits>,
+    id: Id<Entry>,
+    steps: &[plan::Step],
+    landing: bool,
+    estimate: u64,
+    goal: rules::Goal,
+) -> rules::Decision {
     let entry = get(model, id);
-    let mut lands = List::with_capacity(u32::try_from(plan.steps.len()).unwrap_or(0));
-    for step in &plan.steps {
+    let mut lands = List::with_capacity(u32::try_from(steps.len()).unwrap_or(0));
+    for step in steps {
+        if !landing {
+            break;
+        }
         let base = match &step.work {
             plan::Work::Change(change) => &change.base,
             plan::Work::Agent(_) | plan::Work::Wait(_) | plan::Work::Session(_) => continue,
@@ -585,24 +633,20 @@ fn rule_plan(model: &Model, env: &Env<Limits>, id: Id<Entry>, plan: &plan::Plan,
             break;
         }
     }
-    let steps = u32::try_from(plan.steps.len()).unwrap_or(u32::MAX);
     let write = rules::Write::Plan(rules::Plan {
         repository: translate::repository(entry.item.repository),
-        steps,
+        steps: u32::try_from(steps.len()).unwrap_or(u32::MAX),
         spend: estimate,
         lands: lands.into_boxed(),
-        goal: rules::Goal::Outside,
+        goal,
     });
     let gates = gates(entry);
+    let accepted = match items::applying(&entry.job) {
+        Some(applying) => items::accepted(entry, items::comment_of(applying.of)),
+        None => None,
+    };
     let mut findings = Queue::with_capacity(rules::max_out(&env.limits.rules));
-    rules::check_write(
-        &model.config.rules,
-        &env.limits.rules,
-        &write,
-        entry.relations.accepted,
-        gates.as_slice(),
-        &mut findings,
-    )
+    rules::check_write(&model.config.rules, &env.limits.rules, &write, accepted, gates.as_slice(), &mut findings)
 }
 
 fn gates(entry: &Entry) -> List<rules::Gate> {
@@ -701,7 +745,10 @@ fn rule(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, write: &plan::Write
             repository: translate::repository(repository),
             branch: translate::branch(&model.config.branches, entry.item),
         },
+        // A merge with no pull request to land fails as it is made.
+        plan::Write::Merge { .. } if entry.relations.pull.is_none() => return Ruled::Allow,
         plan::Write::Merge { head } => match landing(model, env, id, *head) {
+            Some(_) if !lands_as_planned(get(model, id)) => return Ruled::Decided(rules::Decision::Refuse),
             Some(landing) => rules::Write::Land(landing),
             None => return Ruled::Reading,
         },
@@ -713,15 +760,13 @@ fn rule(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, write: &plan::Write
     };
     let entry = get(model, id);
     let gates = gates(entry);
+    let accepted = match items::applying(&entry.job) {
+        Some(applying) => items::accepted(entry, items::comment_of(applying.of)),
+        None => None,
+    };
     let mut findings = Queue::with_capacity(rules::max_out(&env.limits.rules));
-    let decision = rules::check_write(
-        &model.config.rules,
-        &env.limits.rules,
-        &checked,
-        entry.relations.accepted,
-        gates.as_slice(),
-        &mut findings,
-    );
+    let decision =
+        rules::check_write(&model.config.rules, &env.limits.rules, &checked, accepted, gates.as_slice(), &mut findings);
     match decision {
         rules::Decision::Allow => Ruled::Allow,
         rules::Decision::Wait | rules::Decision::Accept { .. } | rules::Decision::Refuse => Ruled::Decided(decision),
@@ -729,26 +774,23 @@ fn rule(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, write: &plan::Write
 }
 
 /// The landing a merge of the item's pull request at `head` makes, for the
-/// rules: its base, CI and the reviews on its head, each with its reviewer's
-/// permission; `None` while a reviewer's permission is being read.
+/// rules: the base it lands on, CI on its head and the reviews on that
+/// head, each with its reviewer's permission, all as the pull request is
+/// read afresh; `None` while it, or a reviewer's permission, is being read.
+/// The reviews are the working set's, on the head it last read, which need
+/// not be the fresh one: the rules count only those on the head landed.
 fn landing(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, head: plan::Commit) -> Option<rules::Landing> {
     let entry = get(model, id);
     let item = translate::forge_item(entry.item);
-    let base = match entry.step.as_ref() {
-        Some(record) => match &record.step.work {
-            plan::Work::Change(change) => copy_of(&change.base),
-            plan::Work::Agent(_) | plan::Work::Wait(_) | plan::Work::Session(_) => Box::new([]),
-        },
-        None => Box::new([]),
-    };
     let Some(applying) = items::applying(&entry.job) else { unreachable!("an item applying lands") };
     let Some(writes) = items::writes(&applying.doing) else { unreachable!("an item making writes lands") };
-    let (ci, ci_head) = match writes.pull {
-        Some(pull) => (pull.ci, pull.head.0),
-        None => match model.forge.pull(item) {
-            Some(level) => (translate::plan_ci(level.ci), level.commit),
-            None => (plan::Ci::None, [0; 32]),
-        },
+    let Some(fresh) = writes.landing.as_ref() else {
+        fresh_pull(model, env, id);
+        return None;
+    };
+    let reviewed = match model.forge.pull(item) {
+        Some(level) => level.commit,
+        None => [0; 32],
     };
     let mut reviews = List::with_capacity(env.limits.forge.reviewers);
     for verdict in model.forge.reviews(item).unwrap_or(&[]) {
@@ -759,19 +801,34 @@ fn landing(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, head: plan::Comm
             permission_read(model, env, id, repository, user);
             return None;
         };
-        let review = rules::Review { person: verdict.author, permission, head: ci_head, stance };
+        let review = rules::Review { person: verdict.author, permission, head: reviewed, stance };
         if reviews.push(review).is_err() {
             break;
         }
     }
     Some(rules::Landing {
         repository: translate::repository(item.repository),
-        base,
+        base: copy_of(&fresh.base),
         head: head.0,
-        ci: translate::rules_ci(ci),
-        ci_head,
+        ci: translate::rules_ci(fresh.ci),
+        ci_head: fresh.head,
         reviews: reviews.into_boxed(),
     })
+}
+
+/// Whether a merge lands where the item's step says it does: a pull request
+/// retargeted since is not merged.
+fn lands_as_planned(entry: &Entry) -> bool {
+    let Some(applying) = items::applying(&entry.job) else { return true };
+    let Some(writes) = items::writes(&applying.doing) else { return true };
+    let Some(fresh) = writes.landing.as_ref() else { return true };
+    match entry.step.as_ref() {
+        Some(record) => match &record.step.work {
+            plan::Work::Change(change) => *change.base == *fresh.base,
+            plan::Work::Agent(_) | plan::Work::Wait(_) | plan::Work::Session(_) => false,
+        },
+        None => false,
+    }
 }
 
 /// The permission read of `person`, among those a merge read.
@@ -785,22 +842,28 @@ fn permission_of(writes: &Writes, person: u64) -> Option<rules::Permission> {
 }
 
 fn permission_read(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, repository: u32, user: u64) {
+    let read = forge::Read::Permission { repository, user };
+    landing_read(model, env, id, items::Reading::Permission { person: user }, read);
+}
+
+/// Reads the item's pull request afresh, for a merge.
+fn fresh_pull(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) {
+    let entry = get(model, id);
+    let Some(pull) = entry.relations.pull else { unreachable!("a merge names the pull request it lands") };
+    let read = forge::Read::Pull { item: forge::Item { repository: entry.item.repository, number: pull } };
+    landing_read(model, env, id, items::Reading::Pull, read);
+}
+
+fn landing_read(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, reading: items::Reading, read: forge::Read) {
     let Ok(wait) = model.waits.insert(Wait::Job { entry: id }) else {
         unreachable!("the waits have room for every item's job")
     };
     if let Some(applying) = items::applying_mut(&mut get_mut(model, id).job) {
         applying.wait = Some(wait);
         if let Some(writes) = items::writes_mut(&mut applying.doing) {
-            let unread = rules::Review {
-                person: user,
-                permission: rules::Permission::None,
-                head: [0; 32],
-                stance: rules::Stance::Approve,
-            };
-            writes.reading = Some(unread.person);
+            writes.reading = Some(reading);
         }
     }
-    let read = forge::Read::Permission { repository, user };
     route::forge_step(model, env, forge::Event::Read { owner: wait.token(), read });
 }
 
@@ -1019,19 +1082,23 @@ fn finish(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, finish: Finish) {
         Doing::Writes(writes) => writes.then,
         Doing::Outcome | Doing::Fresh => plan::Then::Wait,
     };
-    if finish == Finish::Made {
-        if staged.is_some() {
-            entry.step = staged;
-        }
-        match applying.of {
-            Of::Outcome { .. } => {
-                entry.outcome = None;
-                entry.relations.decision = None;
-                entry.relations.accepted = None;
-                entry.wants = None;
-            }
-            Of::Action | Of::Done => {}
-        }
+    if finish == Finish::Made && staged.is_some() {
+        entry.step = staged;
+    }
+    // A decision on the outcome counts for its application, however it
+    // ends; one on the step, until an outcome is made.
+    let decided = match applying.of {
+        Of::Outcome { comment, .. } => finish == Finish::Made || entry.relations.accepting == Some(comment),
+        Of::Action | Of::Done => false,
+    };
+    if decided {
+        entry.relations.decision = None;
+        entry.relations.accepted = None;
+        entry.relations.accepting = None;
+        entry.wants = None;
+    }
+    if finish == Finish::Made && items::comment_of(applying.of).is_some() {
+        entry.outcome = None;
     }
     let owner = applying.owner;
     let event = match applying.of {
@@ -1066,7 +1133,7 @@ pub(crate) fn read(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, result: 
         Job::Applying(applying) => match &applying.doing {
             Doing::Outcome => outcome_read(model, env, id, result),
             Doing::Fresh => fresh_read(model, env, id, result),
-            Doing::Writes(_) => permission_answer(model, env, id, result),
+            Doing::Writes(_) => landing_answer(model, env, id, result),
         },
         Job::Idle | Job::Writing { .. } | Job::Recording { .. } | Job::Starting(_) => {}
     }
@@ -1126,21 +1193,34 @@ fn fresh_read(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, result: Resul
     applied(model, env, id, Some(fresh));
 }
 
-/// A reviewer's permission read, for a merge.
-fn permission_answer(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, result: Result<api::Answer, forge::Failure>) {
-    let permission = match result {
-        Ok(api::Answer::Permission(permission)) => translate::permission(permission),
-        Err(forge::Failure::Busy) => return stall(model, id),
-        Ok(_) | Err(_) => rules::Permission::None,
+/// What a merge read before the rules decide ended: the pull request
+/// afresh, or a reviewer's permission.
+fn landing_answer(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, result: Result<api::Answer, forge::Failure>) {
+    if let Err(forge::Failure::Busy) = result {
+        return stall(model, id);
+    }
+    let Some(applying) = items::applying_mut(&mut get_mut(model, id).job) else {
+        unreachable!("an item applying reads for its merge")
     };
-    if let Some(applying) = items::applying_mut(&mut get_mut(model, id).job) {
-        applying.wait = None;
-        if let Some(writes) = items::writes_mut(&mut applying.doing)
-            && let Some(person) = writes.reading.take()
-        {
+    applying.wait = None;
+    let Some(writes) = items::writes_mut(&mut applying.doing) else {
+        unreachable!("an item making writes reads for its merge")
+    };
+    match writes.reading.take() {
+        Some(items::Reading::Pull) => {
+            let Ok(api::Answer::Pull(pull)) = result else { return finish(model, env, id, Finish::Failed) };
+            let ci = translate::plan_ci(pull.ci);
+            writes.landing = Some(items::Fresh { base: pull.base, head: pull.commit, ci });
+        }
+        Some(items::Reading::Permission { person }) => {
+            let permission = match result {
+                Ok(api::Answer::Permission(permission)) => translate::permission(permission),
+                Ok(_) | Err(_) => rules::Permission::None,
+            };
             let review = rules::Review { person, permission, head: [0; 32], stance: rules::Stance::Approve };
             writes.reviews.push(review).expect("room for each of them");
         }
+        None => {}
     }
     next(model, env, id);
 }

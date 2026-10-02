@@ -206,8 +206,11 @@ fn hub(model: &mut Model, to: ReplyTo, person: u64, ask: Ask) -> ReplyTo {
     ReplyTo::new(wait.token())
 }
 
-/// A person's decision on the item: kept in its record; an item held for
-/// their acceptance is released, to apply its outcome again with it.
+/// A person's decision on the item: kept in its record, with the outcome it
+/// is on; an item held for their acceptance is released, to apply its
+/// outcome again (or make its run or action) with it. A decision is taken
+/// only on what waits for one: an item held for acceptance, or a step that
+/// waits for a person's decision or acceptance.
 fn decide(
     model: &mut Model,
     env: &Env<Limits>,
@@ -218,19 +221,29 @@ fn decide(
 ) {
     let Some(id) = items::find(model, item) else { return reply(model, to, Reply::Refused(Refusal::Unknown)) };
     let Some(entry) = model.items.get_mut(id) else { return reply(model, to, Reply::Refused(Refusal::Unknown)) };
-    let decision = if accepted.is_some() { plan::Decision::Accepted } else { plan::Decision::Rejected };
-    entry.relations.decision = Some(plan::Decided { decision, at: env.now });
-    entry.relations.accepted = accepted;
     let held = match entry.lifecycle.phase {
-        work::Phase::Held { why, .. } => why == work::Hold::Acceptance,
-        work::Phase::Waiting
+        work::Phase::Held { why: work::Hold::Acceptance, outcome } => Some(outcome),
+        work::Phase::Held { why: work::Hold::Plan { reason }, .. } if reason == translate::RUN_ACCEPTANCE => Some(None),
+        work::Phase::Held { .. }
+        | work::Phase::Waiting
         | work::Phase::Parked
         | work::Phase::Retrying(_)
         | work::Phase::Claimed
         | work::Phase::Applying { .. }
-        | work::Phase::Done => false,
+        | work::Phase::Done => None,
     };
-    if held {
+    let waits = match entry.step.as_ref() {
+        Some(record) => waits_for_decision(&record.step),
+        None => false,
+    };
+    if held.is_none() && !waits {
+        return reply(model, to, Reply::Refused(Refusal::Unheld));
+    }
+    let decision = if accepted.is_some() { plan::Decision::Accepted } else { plan::Decision::Rejected };
+    entry.relations.decision = Some(plan::Decided { decision, at: env.now });
+    entry.relations.accepted = accepted;
+    entry.relations.accepting = held.flatten();
+    if held.is_some() {
         let ask = if accepted.is_some() { Ask::Accept { item } } else { Ask::Reject { item } };
         let reply_to = hub(model, to, person, ask);
         return route::work_step(model, env, work::Event::Release { reply_to, item });
@@ -238,6 +251,23 @@ fn decide(
     items::aside(model, env, id);
     items::notice(model, env, id, Inbound::Decided { accepted: accepted.is_some() }, plan::Source::Message);
     reply(model, to, Reply::Done);
+}
+
+/// Whether a step waits for a person's decision on its item: a wait for
+/// one, or a step gated on its acceptance.
+fn waits_for_decision(step: &plan::Step) -> bool {
+    let mut gated = false;
+    for gate in &step.gates {
+        match gate {
+            plan::Gate::Accepted => gated = true,
+            plan::Gate::Approvals(_) => {}
+        }
+    }
+    let waits = match step.work {
+        plan::Work::Wait(spec) => spec == plan::WaitSpec::Decision,
+        plan::Work::Agent(_) | plan::Work::Change(_) | plan::Work::Session(_) => false,
+    };
+    gated || waits
 }
 
 /// What a person's release writes into the item's step, as the plan says:

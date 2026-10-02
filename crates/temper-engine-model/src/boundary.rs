@@ -168,9 +168,14 @@ pub struct Relations {
     pub dependencies: Box<[Related]>,
     /// The items of the steps it added; on a goal's item, of its plan's.
     pub children: Box<[Related]>,
-    /// A person's latest decision on the step, and the permission they held.
+    /// A person's latest decision on the step, and the permission they held
+    /// if they accepted.
     pub decision: Option<Decided>,
     pub accepted: Option<Permission>,
+    /// The outcome the decision is on, by its comment: one held for a
+    /// person's acceptance. `None` for a decision on the step itself (a wait
+    /// for one, a gate, a run or an action the rules held).
+    pub accepting: Option<u64>,
     /// Whether the store holds the snapshot of a run that parked.
     pub snapshot: bool,
     /// The tokens its runs have spent.

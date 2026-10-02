@@ -128,6 +128,7 @@ fn record() -> Record {
             children: Box::new([]),
             decision: Some(Decided { decision: Decision::Rejected, at: Time::from_nanos(6) }),
             accepted: Some(Permission::Admin),
+            accepting: Some(12),
             snapshot: true,
             spent: 900,
         },

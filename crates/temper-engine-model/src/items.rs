@@ -78,6 +78,9 @@ pub(crate) struct Entry {
     pub(crate) inbox: Map<u64, Noted>,
     /// The number the next inbox event gets.
     pub(crate) next: u64,
+    /// The forge's number of the first news the inbox had no room for: the
+    /// inbox position stays before it.
+    pub(crate) unkept: Option<u64>,
     /// The last comment the item's runs have taken, for a brief's comments.
     pub(crate) since: u64,
     /// The head of its pull request as first seen, when, and where its base
@@ -184,10 +187,28 @@ pub(crate) struct Writes {
     pub(crate) reviews: List<temper_engine_model_rules::Review>,
     /// The write in flight was tried once already and timed out.
     pub(crate) retried: bool,
-    /// The fresh pull request read for the application.
-    pub(crate) pull: Option<plan::Pull>,
-    /// The reviewer whose permission is being read.
-    pub(crate) reading: Option<u64>,
+    /// The pull request as read afresh for a merge: where it lands, and
+    /// its head and CI then.
+    pub(crate) landing: Option<Fresh>,
+    /// What is being read for the write in hand.
+    pub(crate) reading: Option<Reading>,
+}
+
+/// A pull request read afresh before it is merged.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub(crate) struct Fresh {
+    pub(crate) base: Box<[u8]>,
+    pub(crate) head: [u8; 32],
+    pub(crate) ci: plan::Ci,
+}
+
+/// What a merge reads before the rules say whether it lands.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum Reading {
+    /// The pull request, afresh.
+    Pull,
+    /// A reviewer's permission.
+    Permission { person: u64 },
 }
 
 /// A run being prepared.
@@ -279,6 +300,7 @@ impl Entry {
             outcome: None,
             inbox: Map::with_capacity(inbox),
             next: 1,
+            unkept: None,
             since: 0,
             seen: None,
             closed: false,
@@ -296,6 +318,13 @@ impl Entry {
     }
 }
 
+/// The permission of the person who accepted what is applied now: the
+/// outcome posted as the comment `outcome`, or, if `None`, the step itself
+/// (its run, its action). An acceptance of anything else counts for nothing.
+pub(crate) fn accepted(entry: &Entry, outcome: Option<u64>) -> Option<Permission> {
+    if entry.relations.accepting == outcome { entry.relations.accepted } else { None }
+}
+
 /// Relations of an item taken in at `now`, with none yet.
 pub(crate) fn relations(now: Time) -> Relations {
     Relations {
@@ -308,6 +337,7 @@ pub(crate) fn relations(now: Time) -> Relations {
         children: Box::new([]),
         decision: None,
         accepted: None,
+        accepting: None,
         snapshot: false,
         spent: 0,
     }
@@ -624,13 +654,24 @@ pub(crate) fn inbox(
     source: plan::Source,
 ) {
     let Some(entry) = model.items.get_mut(id) else { return };
+    if news.is_none() && !noticed(entry, inbound) {
+        return;
+    }
     let seq = entry.next;
     entry.next = entry.next.saturating_add(1);
     entry.blocked = false;
     let noted = Noted { inbound, news, source, at: env.now, delivered: false };
     if entry.inbox.insert(seq, noted).is_err() {
-        // Past what the forge sub-model holds for an item, and every notice
-        // of its relations: the limits rule it out.
+        // The forge sub-model holds no more news of an item than the inbox
+        // has room for beside its notices, which are merged: the limits rule
+        // this out. Were it to happen, the news stays on the forge: the
+        // inbox position never passes it, and a restart reads it again.
+        if let Some(number) = news {
+            entry.unkept = Some(match entry.unkept {
+                Some(unkept) => unkept.min(number),
+                None => number,
+            });
+        }
         return;
     }
     if entry.taking != Taking::Taken {
@@ -639,6 +680,37 @@ pub(crate) fn inbox(
     let item = entry.item;
     let wake = wake(entry, env);
     route::work_step(model, env, work::Event::Inbox { item, event: Token::new(seq), wake });
+}
+
+/// Makes room for a notice of the item's relations among those no run has
+/// been given, merging it with one alike: whether it is to be put in. A
+/// related item done, or held, is noticed once until a run is given it; a
+/// decision replaces the one before.
+fn noticed(entry: &mut Entry, inbound: Inbound) -> bool {
+    let mut earlier: Option<u64> = None;
+    for (seq, noted) in &entry.inbox {
+        if noted.news.is_some() || noted.delivered {
+            continue;
+        }
+        let alike = match noted.inbound {
+            Inbound::Decided { .. } => match inbound {
+                Inbound::Decided { .. } => true,
+                Inbound::News(_) | Inbound::Finished { .. } | Inbound::Held { .. } => false,
+            },
+            Inbound::News(_) | Inbound::Finished { .. } | Inbound::Held { .. } => noted.inbound == inbound,
+        };
+        if alike {
+            earlier = Some(*seq);
+        }
+    }
+    let Some(seq) = earlier else { return true };
+    match inbound {
+        Inbound::Decided { .. } => {
+            entry.inbox.remove(&seq);
+            true
+        }
+        Inbound::News(_) | Inbound::Finished { .. } | Inbound::Held { .. } => false,
+    }
 }
 
 /// When the item's inbox wakes it: a session's wake rule says, from what its
@@ -703,7 +775,13 @@ pub(crate) fn took(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) {
         }
         let seq = *seq;
         if let Some(number) = noted.news {
-            news = Some(number);
+            let kept = match entry.unkept {
+                Some(unkept) => number < unkept,
+                None => true,
+            };
+            if kept {
+                news = Some(number);
+            }
         }
         match noted.inbound {
             Inbound::News(forge::News::Comment { id: taken, .. }) => comment = comment.max(taken),

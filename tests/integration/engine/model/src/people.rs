@@ -358,8 +358,10 @@ impl People {
         use temper_engine_model::plan::{WaitSpec, Work};
         use temper_engine_model::work::{Hold, Phase};
         let tale = &self.tales[at];
+        // Held for acceptance: of an outcome or an action, or of a run the
+        // rules want accepted (the engine's own hold, coded 7).
         let held = |record: &temper_engine_model::Record| match record.lifecycle.phase {
-            Phase::Held { why: Hold::Acceptance, .. } => true,
+            Phase::Held { why: Hold::Acceptance | Hold::Plan { reason: 7 }, .. } => true,
             Phase::Held { .. }
             | Phase::Waiting
             | Phase::Parked

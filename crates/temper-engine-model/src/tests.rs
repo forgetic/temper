@@ -1518,3 +1518,23 @@ fn an_adopted_runs_outcome_posted_before_a_restart_is_found_not_posted_again() {
     assert!(acknowledged(&world.seen, item, 1), "the answer is applied: {:?}", world.seen.as_slice());
     assert_eq!(outcomes(&mut world, item), 1, "the outcome an earlier life posted is found, not posted again");
 }
+
+#[test]
+fn a_decision_on_what_waits_for_none_is_refused() {
+    let (mut world, item) = World::session();
+    let from = world.seen.len();
+    world.deliver(Event::Ask { reply_to: ReplyTo::new(Token::new(20)), person: ALICE, ask: Ask::Accept { item } });
+    let refused = Reply::Refused(Refusal::Unheld);
+    assert!(replied(&world.seen, refused), "nothing waits for acceptance: {:?}", world.since(from));
+    let record = {
+        let issue = world.forge.issue(item).unwrap();
+        let mut found = None;
+        for note in &issue.comments {
+            if let Some(crate::boundary::Decoded::Record { record, .. }) = &note.decoded {
+                found = Some(record.relations.accepted);
+            }
+        }
+        found
+    };
+    assert_eq!(record, Some(None), "no acceptance is kept to count for a later proposal");
+}

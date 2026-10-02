@@ -129,6 +129,11 @@ pub(crate) const fn hold(hold: plan::Hold) -> u32 {
 /// The hold of no step: the item's record does not say what it carries.
 pub(crate) const NO_STEP: u32 = 0;
 
+/// The holds of the run due, which the rules want a person to accept first,
+/// or refuse: the top level's own, past the plan's.
+pub(crate) const RUN_ACCEPTANCE: u32 = 7;
+pub(crate) const RUN_REFUSED: u32 = 8;
+
 /// What the hub does once an outcome's writes are made.
 pub(crate) const fn then(then: plan::Then) -> work::Then {
     match then {

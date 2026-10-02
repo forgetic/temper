@@ -53,12 +53,13 @@ pub(crate) fn start(model: &mut Model, env: &Env<Limits>, item: Item, attempt: u
     entry.live = Some(Live { attempt, start, started: false, bounced: false });
     entry.grants = Some(due.grants);
     entry.resumed = None;
+    // The rules were asked as the run was decided; what was spent since may
+    // change their answer: then nothing runs, and the hub claims again,
+    // which asks them again.
     match rule(model, env, id, &due) {
         rules::Decision::Allow => {}
-        rules::Decision::Wait => return end(model, env, id, attempt, work::Answer::Refused),
-        rules::Decision::Accept { .. } | rules::Decision::Refuse => {
-            model::keep(model, Fact::Ruled { item, refused: true });
-            return end(model, env, id, attempt, work::Answer::Failed(work::Class::Permanent));
+        rules::Decision::Wait | rules::Decision::Accept { .. } | rules::Decision::Refuse => {
+            return end(model, env, id, attempt, work::Answer::Refused);
         }
     }
     let sections = sections(model, env, id, &due);
@@ -82,7 +83,7 @@ pub(crate) fn start(model: &mut Model, env: &Env<Limits>, item: Item, attempt: u
 
 /// The rules on a run: its budget against what was spent, by the item's
 /// goal and by the deployment, and what it may read and push.
-fn rule(model: &Model, env: &Env<Limits>, id: Id<Entry>, run: &plan::Run) -> rules::Decision {
+pub(crate) fn rule(model: &Model, env: &Env<Limits>, id: Id<Entry>, run: &plan::Run) -> rules::Decision {
     let entry = get(model, id);
     let goal = match entry.relations.goal {
         Some(goal) => match items::find(model, goal) {
@@ -107,7 +108,7 @@ fn rule(model: &Model, env: &Env<Limits>, id: Id<Entry>, run: &plan::Run) -> rul
         &model.config.rules,
         &env.limits.rules,
         &checked,
-        entry.relations.accepted,
+        items::accepted(entry, None),
         gates.as_slice(),
         &mut findings,
     )
