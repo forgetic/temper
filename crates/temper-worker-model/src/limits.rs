@@ -109,9 +109,9 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
 }
 
 /// What an answer's work holds for each repository: its place among those
-/// landed in, and its landing in the save.
+/// landed in, with the last commit landed there, and its landing in the save.
 fn work() -> Option<u64> {
-    u64::try_from(size_of::<u32>().checked_add(size_of::<host::Landing>())?).ok()
+    u64::try_from(size_of::<host::Landed>().checked_add(size_of::<host::Landing>())?).ok()
 }
 
 fn len(bytes: &[u8]) -> u64 {

@@ -47,8 +47,8 @@ mod model;
 mod tests;
 
 pub use boundary::{
-    Access, AgentFailure, Answer, Ask, Assignment, Bounce, Event, Failure, Finish, Hosting, Invalid, Landing, Phase,
-    Preparation, Push, Reason, Refusal, Reply, Repository, Request, RunFailure, Start, Work, Workspace,
+    Access, AgentFailure, Answer, Ask, Assignment, Bounce, Event, Failure, Finish, Hosting, Invalid, Landed, Landing,
+    Missing, Phase, Preparation, Push, Reason, Refusal, Reply, Repository, Request, RunFailure, Start, Work, Workspace,
 };
 pub use facts::Fact;
 pub use limits::{Limits, worst_case};

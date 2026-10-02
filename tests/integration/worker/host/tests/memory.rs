@@ -136,7 +136,8 @@ fn assignment(run: u64, limits: &Limits) -> Assignment {
 /// worst case.
 fn fill(limits: Limits) {
     let mut host = Measured::new(limits);
-    let landed = vec![Landing::Landed; usize::try_from(limits.repositories).expect("fits")].into_boxed_slice();
+    let landing = Landing::Landed { commit: [7; 32] };
+    let landed = vec![landing; usize::try_from(limits.repositories).expect("fits")].into_boxed_slice();
     let mut owners = Vec::new();
     for run in 0..u64::from(limits.slots) {
         let [Asked::Prepare { owner }] = host
@@ -264,7 +265,7 @@ fn paths(limits: Limits) {
     let first = owners[0];
     let unprepared = Event::Unprepared {
         owner: first,
-        failure: Preparation::Permanent,
+        failure: Preparation::Refused { repository: 0 },
         detail: bytes(u64::from(limits.detail_bytes) + 1),
     };
     assert_eq!(host.step(unprepared).len(), 1, "answered");

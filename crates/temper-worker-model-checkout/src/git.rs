@@ -23,9 +23,10 @@ use alloc::boxed::Box;
 
 use temper_lib::Token;
 
-/// A commit, as git names it: its hash, in a fixed-size value the protocol
-/// layer makes from git's output. The model compares commits and never looks
-/// inside.
+/// A commit, as git names it: its object id, in a fixed-size value the
+/// protocol layer makes from git's output, the full id in 32 bytes (a SHA-256
+/// id as it is, a SHA-1 id followed by twelve zero bytes). The model compares
+/// commits and never looks inside.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Commit([u8; 32]);
 

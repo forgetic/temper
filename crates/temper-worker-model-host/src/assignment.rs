@@ -23,7 +23,7 @@ pub(crate) fn check(assignment: &Assignment, limits: &Limits) -> Result<(), Inva
     let workspace = &assignment.workspace;
     name(&workspace.key, limits)?;
     let count = u64::try_from(workspace.repositories.len()).expect("a length fits in a u64");
-    if count > u64::from(limits.repositories) {
+    if count == 0 || count > u64::from(limits.repositories) {
         return Err(Invalid::Repositories);
     }
     for repository in &workspace.repositories {

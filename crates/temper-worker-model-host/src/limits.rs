@@ -72,8 +72,9 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     let starting = limits.charter_bytes.checked_add(limits.snapshot_bytes)?.checked_add(held)?;
     let ending = limits.outcome_bytes.max(limits.snapshot_bytes).max(u64::from(limits.detail_bytes));
     // Throughout, the saved-work branch, the repositories its pushes landed
-    // in, and its relayed calls in flight (its push is held inline).
-    let landed = Set::<u32>::worst_case(limits.repositories)?;
+    // in with the last commit landed in each, and its relayed calls in flight
+    // (its push is held inline).
+    let landed = Map::<u32, [u8; 32]>::worst_case(limits.repositories)?;
     let run_calls = Set::<Id<Call>>::worst_case(limits.run_calls)?;
     let run =
         starting.max(ending).checked_add(u64::from(limits.name_bytes))?.checked_add(landed)?.checked_add(run_calls)?;

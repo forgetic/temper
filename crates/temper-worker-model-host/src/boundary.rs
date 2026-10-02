@@ -194,8 +194,9 @@ pub enum Start {
     Branch {
         branch: Box<[u8]>,
     },
-    /// A commit, by the fixed-size value the protocol layer makes of its
-    /// hash: compared, never looked inside.
+    /// A commit, by its object id: the full id in 32 bytes, as the protocol
+    /// layer makes it of git's (a SHA-256 id as it is, a SHA-1 id followed by
+    /// twelve zero bytes), compared and never looked inside.
     Commit {
         commit: [u8; 32],
     },
@@ -246,7 +247,7 @@ pub enum Reply {
 }
 
 /// How a push went, as the run is told: done only if every repository with a
-/// change landed it.
+/// change landed it. A push the forge refused failed, as the run sees it.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Push {
     Done,
@@ -262,12 +263,16 @@ pub enum Push {
 /// What became of one repository in a push or a save.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Landing {
-    /// Its change is on the branch.
-    Landed,
+    /// Its change is on the branch, as `commit`, by its object id (as
+    /// [`Start::Commit`]'s).
+    Landed { commit: [u8; 32] },
     /// The branch moved since the run started: nothing was pushed.
     Moved,
-    /// The push failed.
+    /// The push failed, and did not land: a retry may succeed.
     Failed,
+    /// The forge refused the push: the identity's permissions, a protected
+    /// branch, a hook. A retry will not do better.
+    Refused,
     /// It had no change.
     Unchanged,
 }
@@ -331,12 +336,21 @@ pub enum Answer {
 }
 
 /// What a run left on the forge: the repositories its pushes landed in, by
-/// their place in the assignment, ascending; and its save, if one was made,
+/// their place in the assignment, ascending, each with the last commit landed
+/// there (the head a pull request is to show); and its save, if one was made,
 /// each repository's outcome in the assignment's order.
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub struct Work {
-    pub landed: Box<[u32]>,
+    pub landed: Box<[Landed]>,
     pub saved: Option<Box<[Landing]>>,
+}
+
+/// A repository a run's pushes landed in: its place in the assignment, and
+/// the last commit landed there.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Landed {
+    pub repository: u32,
+    pub commit: [u8; 32],
 }
 
 /// Why an assignment was refused.
@@ -353,7 +367,7 @@ pub enum Refusal {
 /// What about an assignment does not fit the limits.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Invalid {
-    /// The workspace lists more repositories than a run may hold.
+    /// The workspace lists no repository, or more than a run may hold.
     Repositories,
     /// The workspace lists one repository name twice.
     Duplicate,
@@ -384,10 +398,27 @@ pub enum Failure {
 /// Why a workspace could not be prepared.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Preparation {
-    /// The forge could not be reached: a retry may work.
+    /// The forge could not be reached, something failed on the worker's
+    /// side, an operation ran out of time, or the workspace is held by
+    /// another run of its workstream: a retry may work.
     Transient,
-    /// A repository, branch or commit does not exist.
-    Permanent,
+    /// The forge does not have what the assignment names for the repository
+    /// at `repository`, its place in the assignment: permanent until someone
+    /// makes it.
+    Missing { repository: u32, missing: Missing },
+    /// The forge refused the identity of the repository at `repository`:
+    /// permanent until the identity's credentials or permissions change.
+    Refused { repository: u32 },
+}
+
+/// What the forge does not have.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Missing {
+    Repository,
+    /// A branch to start from, or the default branch a base branch is to be
+    /// made from.
+    Branch,
+    Commit,
 }
 
 /// Why a run failed, as it reports it (agent-model.md, 4.2).

@@ -47,23 +47,34 @@ fn start(start: host::Start) -> checkout::Start {
     }
 }
 
-/// Why a prepare failed, as the host tells the engine: whether a retry may
-/// work. A forge that refused the identity will refuse it again.
+/// Why a prepare failed, as the host tells the engine: a retry may work, or
+/// what the forge lacks or refused, for which repository.
 pub(crate) const fn failure(failure: checkout::Failure) -> host::Preparation {
     match failure {
         checkout::Failure::Transient => host::Preparation::Transient,
-        checkout::Failure::Missing { .. } | checkout::Failure::Refused { .. } => host::Preparation::Permanent,
+        checkout::Failure::Missing { repository, missing } => {
+            host::Preparation::Missing { repository, missing: self::missing(missing) }
+        }
+        checkout::Failure::Refused { repository } => host::Preparation::Refused { repository },
+    }
+}
+
+const fn missing(missing: git::Missing) -> host::Missing {
+    match missing {
+        git::Missing::Repository => host::Missing::Repository,
+        git::Missing::Branch => host::Missing::Branch,
+        git::Missing::Commit => host::Missing::Commit,
     }
 }
 
 /// Why a prepare was refused at the checkout's entrance, as the host tells the
 /// engine: a workstream whose workspace another run holds, or a disk with
-/// every workspace held, may have room later; a spec the checkout cannot take
-/// never will.
-pub(crate) const fn refusal(refusal: checkout::Refusal) -> host::Preparation {
+/// every workspace held, may have room later. The host admits no workspace
+/// the checkout cannot take, as `worst_case` checks their limits agree.
+pub(crate) fn refusal(refusal: checkout::Refusal) -> host::Preparation {
     match refusal {
         checkout::Refusal::Busy | checkout::Refusal::Full => host::Preparation::Transient,
-        checkout::Refusal::Invalid => host::Preparation::Permanent,
+        checkout::Refusal::Invalid => unreachable!("the host admits only workspaces the checkout takes"),
     }
 }
 
@@ -78,8 +89,9 @@ pub(crate) fn saved() -> checkout::Message {
 }
 
 /// What became of each of the workspace's `repositories` in a push or a save,
-/// as the host hears it. One refused at the entrance pushed nothing, so failed
-/// everywhere; a repository the push did not reach, as it was aborted, failed.
+/// as the host hears it. One refused at the checkout's entrance pushed
+/// nothing, so failed everywhere; a repository the push did not reach, as it
+/// was aborted, failed.
 pub(crate) fn landings(outcome: checkout::Outcome, repositories: u32) -> Box<[host::Landing]> {
     let mut landings = List::with_capacity(repositories);
     match outcome {
@@ -99,10 +111,11 @@ pub(crate) fn landings(outcome: checkout::Outcome, repositories: u32) -> Box<[ho
 
 const fn landing(landing: checkout::Landing) -> host::Landing {
     match landing {
-        checkout::Landing::Landed { commit: _ } => host::Landing::Landed,
+        checkout::Landing::Landed { commit } => host::Landing::Landed { commit: commit.raw() },
         checkout::Landing::Moved => host::Landing::Moved,
         checkout::Landing::Unchanged => host::Landing::Unchanged,
-        checkout::Landing::Failed | checkout::Landing::Refused | checkout::Landing::Aborted => host::Landing::Failed,
+        checkout::Landing::Refused => host::Landing::Refused,
+        checkout::Landing::Failed | checkout::Landing::Aborted => host::Landing::Failed,
     }
 }
 

@@ -32,7 +32,7 @@ use std::collections::BTreeMap;
 
 use temper_lib::{Duration, Rng, Token};
 use temper_worker_model_host::{
-    Access, AgentFailure, Ask, Event, Finish, Landing, Limits, Preparation, Request, RunFailure, Workspace,
+    Access, AgentFailure, Ask, Event, Finish, Landing, Limits, Missing, Preparation, Request, RunFailure, Workspace,
 };
 use temper_world::Span;
 
@@ -334,7 +334,14 @@ impl Parent {
         let event = if self.rng.chance(self.script.transient) {
             self.unprepared(owner, Preparation::Transient)
         } else if self.rng.chance(self.script.permanent) {
-            self.unprepared(owner, Preparation::Permanent)
+            let count = u64::try_from(workspace.repositories.len()).expect("fits");
+            let repository = u32::try_from(self.rng.below(count)).expect("fits");
+            let permanent = if self.rng.chance(500) {
+                Preparation::Missing { repository, missing: Missing::Branch }
+            } else {
+                Preparation::Refused { repository }
+            };
+            self.unprepared(owner, permanent)
         } else {
             let writable = self.preparing.get(&owner).expect("inserted above").clone();
             let workspace = self.name();
@@ -535,7 +542,7 @@ impl Parent {
         if save.contains(&Landing::Moved) {
             self.tally.saves_moved += 1;
         }
-        if save.contains(&Landing::Failed) {
+        if save.contains(&Landing::Failed) || save.contains(&Landing::Refused) {
             self.tally.saves_failed += 1;
         }
         let after = self.script.push.draw(&mut self.rng);
@@ -574,9 +581,9 @@ impl Parent {
             } else if self.rng.chance(self.script.moved) {
                 Landing::Moved
             } else if self.rng.chance(self.script.failed) {
-                Landing::Failed
+                if self.rng.chance(500) { Landing::Failed } else { Landing::Refused }
             } else {
-                Landing::Landed
+                Landing::Landed { commit: [u8::try_from(self.rng.below(256)).expect("a byte"); 32] }
             });
         }
         landings.into_boxed_slice()

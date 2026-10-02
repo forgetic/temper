@@ -63,6 +63,9 @@ const LIMITS: Limits = Limits {
     stalled: 2,
 };
 
+/// What io's commits commit, when there is a change.
+const COMMITTED: [u8; 32] = [2; 32];
+
 /// The most a test lets io and the run go back and forth.
 const ROUNDS: u32 = 64;
 
@@ -237,7 +240,7 @@ fn done(op: &Op, changed: bool) -> git::Done {
             git::Done::Succeeded
         }
         Op::Fetch { .. } => git::Done::Fetched { commit: Commit::new([1; 32]) },
-        Op::Commit { .. } if changed => git::Done::Committed { commit: Commit::new([2; 32]) },
+        Op::Commit { .. } if changed => git::Done::Committed { commit: Commit::new(COMMITTED) },
         Op::Commit { .. } => git::Done::Unchanged,
     }
 }
@@ -298,7 +301,7 @@ fn answer(r: Names, answer: host::Answer) -> Request {
     Request::Answer { run: r.run, attempt: r.attempt, answer }
 }
 
-fn work(landed: &[u32], saved: Option<Box<[host::Landing]>>) -> host::Work {
+fn work(landed: &[host::Landed], saved: Option<Box<[host::Landing]>>) -> host::Work {
     host::Work { landed: Box::from(landed), saved }
 }
 
@@ -321,7 +324,10 @@ fn a_run_goes_from_its_assignment_to_its_answer_through_all_three_sub_models() {
     let emitted = h.say(r, Up::Finish { finish });
     assert_eq!(&*emitted, [read(r)], "the stop changes nothing: it exits next");
     let emitted = h.goes(r);
-    let ended = host::Answer::Ended { outcome: bytes(b"done"), work: work(&[0], None) };
+    let ended = host::Answer::Ended {
+        outcome: bytes(b"done"),
+        work: work(&[host::Landed { repository: 0, commit: COMMITTED }], None),
+    };
     assert_eq!(&*emitted, [answer(r, ended)], "it ended with its change landed: nothing to save; released");
     h.model.reclaim();
     assert_eq!(h.model.workspaces(), 0, "the workspace is back in the cache");
@@ -403,7 +409,7 @@ fn a_live_run_cancelled_winds_down_and_its_own_ending_is_the_answer() {
     let emitted = h.git(emitted, true);
     let parked = host::Answer::Parked {
         snapshot: Some(bytes(b"snap")),
-        work: work(&[], Some(Box::new([host::Landing::Landed]))),
+        work: work(&[], Some(Box::new([host::Landing::Landed { commit: COMMITTED }]))),
     };
     assert_eq!(&*emitted, [answer(r, parked)], "its unfinished work saved");
 }
@@ -424,7 +430,8 @@ fn a_workspace_that_cannot_be_prepared_is_released_and_the_run_fails() {
     let missing = git::Fault::Missing { missing: git::Missing::Repository };
     let emitted = h.step(Event::Done { owner, done: git::Done::Failed { fault: missing } });
     let r = Names { run: Token::new(1), attempt: attempt(1), agent: owner, process: owner };
-    let failure = host::Failure::Unprepared(host::Preparation::Permanent);
+    let missing = host::Preparation::Missing { repository: 0, missing: host::Missing::Repository };
+    let failure = host::Failure::Unprepared(missing);
     let failed = host::Answer::Failed { failure, detail: bytes(b""), work: work(&[], None) };
     assert_eq!(&*emitted, [answer(r, failed)]);
     h.model.reclaim();
@@ -502,6 +509,27 @@ fn a_withdrawn_push_goes_on_and_is_answered_with_how_it_went() {
     let emitted = h.git(emitted, true);
     let told = channel::Reply::Pushed(channel::Push::Done);
     assert_eq!(&*emitted, [send(r, Down::Answer { call: Token::new(7), reply: told })]);
+}
+
+#[test]
+fn a_push_the_forge_refuses_fails_and_the_run_is_told() {
+    let mut h = Harness::new(&LIMITS);
+    h.connect();
+    let r = h.live(1);
+    let ask = channel::Ask::Push { message: bytes(b"change") };
+    let emitted = h.say(r, Up::Call { call: Token::new(7), ask });
+    let [_, Request::Io { owner, op: Op::Commit { .. }, .. }] = &*emitted else {
+        panic!("expected a commit, got {emitted:?}");
+    };
+    let owner = *owner;
+    let emitted = h.step(Event::Done { owner, done: git::Done::Committed { commit: Commit::new(COMMITTED) } });
+    let [Request::Io { op: Op::Push { .. }, .. }] = &*emitted else {
+        panic!("expected a push, got {emitted:?}");
+    };
+    let refused = git::Done::Failed { fault: git::Fault::Refused };
+    let told = channel::Reply::Pushed(channel::Push::Failed);
+    let emitted = h.step(Event::Done { owner, done: refused });
+    assert_eq!(&*emitted, [send(r, Down::Answer { call: Token::new(7), reply: told })], "a protected branch, say");
 }
 
 #[test]

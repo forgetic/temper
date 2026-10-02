@@ -5,10 +5,15 @@ use alloc::boxed::Box;
 use temper_lib::{Env, List, Queue, ReplyTo, Time, Token};
 
 use crate::{
-    Access, AgentFailure, Answer, Ask, Assignment, Bounce, Event, Fact, Failure, Finish, Hosting, Invalid, Landing,
-    Limits, Model, Phase, Preparation, Push, Reason, Refusal, Reply, Repository, Request, RunFailure, Start, Work,
-    Workspace, max_out, resume, step, worst_case,
+    Access, AgentFailure, Answer, Ask, Assignment, Bounce, Event, Fact, Failure, Finish, Hosting, Invalid, Landed,
+    Landing, Limits, Missing, Model, Phase, Preparation, Push, Reason, Refusal, Reply, Repository, Request, RunFailure,
+    Start, Work, Workspace, max_out, resume, step, worst_case,
 };
+
+/// The commit the tests' pushes land.
+const COMMIT: [u8; 32] = [9; 32];
+
+const LANDED: Landing = Landing::Landed { commit: COMMIT };
 
 const LIMITS: Limits = Limits {
     slots: 2,
@@ -274,7 +279,7 @@ fn an_assignment_within_the_limits_is_admitted_and_its_workspace_prepared() {
 
 #[test]
 fn an_assignment_beyond_the_limits_is_refused_as_invalid() {
-    let cases: [(Assignment, Invalid); 8] = [
+    let cases: [(Assignment, Invalid); 9] = [
         (Assignment { charter: Box::from([0_u8; 65]), ..assignment(1) }, Invalid::Charter),
         (Assignment { snapshot: Some(Box::from([0_u8; 33])), ..assignment(1) }, Invalid::Snapshot),
         (Assignment { save: Some(bytes(b"")), ..assignment(1) }, Invalid::Name),
@@ -290,6 +295,10 @@ fn an_assignment_beyond_the_limits_is_refused_as_invalid() {
                 },
                 ..assignment(1)
             },
+            Invalid::Repositories,
+        ),
+        (
+            Assignment { workspace: Workspace { key: bytes(b"k"), repositories: Box::new([]) }, ..assignment(1) },
             Invalid::Repositories,
         ),
         (
@@ -418,10 +427,13 @@ fn a_charter_and_snapshot_of_exactly_the_limits_are_admitted_and_passed_on() {
 fn a_workspace_that_cannot_be_prepared_fails_the_run_with_nothing_to_release() {
     let mut h = Harness::new(LIMITS);
     let hosted = h.admit(1);
-    let unprepared =
-        Event::Unprepared { owner: hosted.owner, failure: Preparation::Permanent, detail: bytes(b"no such branch") };
+    let unprepared = Event::Unprepared {
+        owner: hosted.owner,
+        failure: Preparation::Missing { repository: 0, missing: Missing::Branch },
+        detail: bytes(b"no such branch"),
+    };
     let emitted = h.step(unprepared);
-    let failure = Failure::Unprepared(Preparation::Permanent);
+    let failure = Failure::Unprepared(Preparation::Missing { repository: 0, missing: Missing::Branch });
     assert_eq!(&*emitted, [answer(hosted, failed(failure, b"h branch", nothing()))], "the detail's tail");
     assert_eq!(h.model.hosted(), 1, "retired, and reclaimed at the reclaim point");
     h.model.reclaim();
@@ -496,8 +508,8 @@ fn a_cancel_as_the_agent_starts_stops_it_once_it_has_started() {
     let emitted = h.step(Event::Started { owner: hosted.owner, agent: hosted.agent });
     assert_eq!(&*emitted, [stop(hosted)], "what was held is dropped");
     saving(&mut h, hosted);
-    let saved = Event::Saved { owner: hosted.owner, save: Box::new([Landing::Landed, Landing::Unchanged]) };
-    let work = Work { landed: Box::new([]), saved: Some(Box::new([Landing::Landed, Landing::Unchanged])) };
+    let saved = Event::Saved { owner: hosted.owner, save: Box::new([LANDED, Landing::Unchanged]) };
+    let work = Work { landed: Box::new([]), saved: Some(Box::new([LANDED, Landing::Unchanged])) };
     let cancelled = failed(Failure::Cancelled(Reason::Engine), b"", work);
     assert_eq!(&*h.step(saved), [release(hosted), answer(hosted, cancelled)]);
 }
@@ -556,8 +568,8 @@ fn a_run_that_fails_answers_with_its_failure_and_the_tail_of_its_agents_output()
     let emitted = h.finish(hosted, Finish::Failed { failure: RunFailure::Budget });
     assert_eq!(&*emitted, [stop(hosted)]);
     assert_eq!(&*h.gone(hosted, b"budget exhausted"), [save(hosted)]);
-    let saved = Event::Saved { owner: hosted.owner, save: Box::new([Landing::Landed, Landing::Moved]) };
-    let work = Work { landed: Box::new([]), saved: Some(Box::new([Landing::Landed, Landing::Moved])) };
+    let saved = Event::Saved { owner: hosted.owner, save: Box::new([LANDED, Landing::Moved]) };
+    let work = Work { landed: Box::new([]), saved: Some(Box::new([LANDED, Landing::Moved])) };
     let budget = failed(Failure::Run(RunFailure::Budget), b"xhausted", work);
     assert_eq!(&*h.step(saved), [release(hosted), answer(hosted, budget)]);
 }
@@ -664,10 +676,11 @@ fn an_answer_for_a_call_of_another_run_is_dropped() {
 #[test]
 fn a_push_is_served_through_the_workspace_and_the_run_told_how_it_went() {
     let cases = [
-        ([Landing::Landed, Landing::Unchanged], Push::Done),
-        ([Landing::Landed, Landing::Moved], Push::Moved),
+        ([LANDED, Landing::Unchanged], Push::Done),
+        ([LANDED, Landing::Moved], Push::Moved),
         ([Landing::Failed, Landing::Moved], Push::Moved),
-        ([Landing::Failed, Landing::Landed], Push::Failed),
+        ([Landing::Failed, LANDED], Push::Failed),
+        ([Landing::Refused, LANDED], Push::Failed),
         ([Landing::Unchanged, Landing::Unchanged], Push::Nothing),
     ];
     for (push, told) in cases {
@@ -684,12 +697,28 @@ fn a_run_that_landed_a_change_has_nothing_to_save_and_says_what_landed() {
     let mut h = Harness::new(LIMITS);
     let hosted = h.live(1);
     let owner = h.push(hosted, 7);
-    let push = Event::Pushed { owner, push: Box::new([Landing::Unchanged, Landing::Landed]) };
+    let push = Event::Pushed { owner, push: Box::new([Landing::Unchanged, LANDED]) };
     assert_eq!(&*h.step(push), [reply(hosted, 7, Reply::Pushed(Push::Done))]);
     assert_eq!(&*h.finish(hosted, Finish::Ended { outcome: bytes(b"pr") }), [stop(hosted)]);
-    let work = Work { landed: Box::new([1]), saved: None };
+    let work = Work { landed: Box::new([Landed { repository: 1, commit: COMMIT }]), saved: None };
     let ended = Answer::Ended { outcome: bytes(b"pr"), work };
     assert_eq!(&*h.gone(hosted, b""), [release(hosted), answer(hosted, ended)], "it ended with a landed change");
+}
+
+#[test]
+fn the_work_of_a_run_says_the_last_commit_landed_in_each_repository() {
+    let mut h = Harness::new(LIMITS);
+    let hosted = h.live(1);
+    let first = h.push(hosted, 7);
+    let landed = Landing::Landed { commit: [1; 32] };
+    assert_eq!(h.step(Event::Pushed { owner: first, push: Box::new([landed, Landing::Unchanged]) }).len(), 1);
+    let second = h.push(hosted, 8);
+    let landed = Landing::Landed { commit: [2; 32] };
+    assert_eq!(h.step(Event::Pushed { owner: second, push: Box::new([landed, Landing::Refused]) }).len(), 1);
+    assert_eq!(&*h.finish(hosted, Finish::Ended { outcome: bytes(b"pr") }), [stop(hosted)]);
+    let work = Work { landed: Box::new([Landed { repository: 0, commit: [2; 32] }]), saved: None };
+    let ended = Answer::Ended { outcome: bytes(b"pr"), work };
+    assert_eq!(&*h.gone(hosted, b""), [release(hosted), answer(hosted, ended)]);
 }
 
 #[test]
@@ -755,7 +784,7 @@ fn a_withdrawn_push_goes_on_and_is_answered_with_how_it_went() {
     let hosted = h.live(1);
     let push = h.push(hosted, 7);
     assert!(h.step(Event::Withdrawn { owner: hosted.owner, call: Token::new(7) }).is_empty(), "a push goes on");
-    let pushed = Event::Pushed { owner: push, push: Box::new([Landing::Landed, Landing::Unchanged]) };
+    let pushed = Event::Pushed { owner: push, push: Box::new([LANDED, Landing::Unchanged]) };
     assert_eq!(&*h.step(pushed), [reply(hosted, 7, Reply::Pushed(Push::Done))]);
 }
 
@@ -812,11 +841,14 @@ fn a_cancelled_run_answers_its_relayed_calls_as_unavailable_and_waits_for_its_pu
     let late = Event::Relayed { run: hosted.run, attempt: hosted.attempt, call: relayed, answer: bytes(b"a") };
     assert!(h.step(late).is_empty());
     assert!(h.gone(hosted, b"").is_empty(), "the push in flight still touches the workspace");
-    let pushed = Event::Pushed { owner: push, push: Box::new([Landing::Landed, Landing::Unchanged]) };
+    let pushed = Event::Pushed { owner: push, push: Box::new([LANDED, Landing::Unchanged]) };
     let emitted = h.step(pushed);
     assert_eq!(&*emitted, [reply(hosted, 7, Reply::Pushed(Push::Done)), save(hosted)], "told how it went; saved");
     let saved = Event::Saved { owner: hosted.owner, save: Box::new([Landing::Unchanged, Landing::Unchanged]) };
-    let work = Work { landed: Box::new([0]), saved: Some(Box::new([Landing::Unchanged, Landing::Unchanged])) };
+    let work = Work {
+        landed: Box::new([Landed { repository: 0, commit: COMMIT }]),
+        saved: Some(Box::new([Landing::Unchanged, Landing::Unchanged])),
+    };
     let cancelled = failed(Failure::Cancelled(Reason::Engine), b"", work);
     assert_eq!(&*h.step(saved), [release(hosted), answer(hosted, cancelled)], "it did not end with its change");
 }
@@ -977,12 +1009,15 @@ fn a_run_that_landed_a_change_mid_run_and_parks_still_saves() {
     let mut h = Harness::new(LIMITS);
     let hosted = h.live(1);
     let owner = h.push(hosted, 7);
-    let push = Event::Pushed { owner, push: Box::new([Landing::Landed, Landing::Unchanged]) };
+    let push = Event::Pushed { owner, push: Box::new([LANDED, Landing::Unchanged]) };
     assert_eq!(h.step(push).len(), 1);
     assert_eq!(&*h.finish(hosted, Finish::Parked { snapshot: None }), [stop(hosted)]);
     assert_eq!(&*h.gone(hosted, b""), [save(hosted)], "it did not end with its change");
     let saved = Event::Saved { owner: hosted.owner, save: Box::new([Landing::Unchanged, Landing::Unchanged]) };
-    let work = Work { landed: Box::new([0]), saved: Some(Box::new([Landing::Unchanged, Landing::Unchanged])) };
+    let work = Work {
+        landed: Box::new([Landed { repository: 0, commit: COMMIT }]),
+        saved: Some(Box::new([Landing::Unchanged, Landing::Unchanged])),
+    };
     let parked = Answer::Parked { snapshot: None, work };
     assert_eq!(&*h.step(saved), [release(hosted), answer(hosted, parked)]);
 }
@@ -993,12 +1028,15 @@ fn a_cancelled_run_that_lands_its_change_as_it_winds_down_ends_with_it() {
     let hosted = h.live(1);
     let owner = h.push(hosted, 7);
     assert_eq!(&*h.cancel(hosted), [stop(hosted)]);
-    let push = Event::Pushed { owner, push: Box::new([Landing::Landed, Landing::Unchanged]) };
+    let push = Event::Pushed { owner, push: Box::new([LANDED, Landing::Unchanged]) };
     assert_eq!(&*h.step(push), [reply(hosted, 7, Reply::Pushed(Push::Done))]);
     assert!(h.finish(hosted, Finish::Ended { outcome: bytes(b"pr") }).is_empty(), "its own ending wins");
     assert!(h.finish(hosted, Finish::Parked { snapshot: None }).is_empty(), "said once");
     assert!(h.cancel(hosted).is_empty());
-    let ended = Answer::Ended { outcome: bytes(b"pr"), work: Work { landed: Box::new([0]), saved: None } };
+    let ended = Answer::Ended {
+        outcome: bytes(b"pr"),
+        work: Work { landed: Box::new([Landed { repository: 0, commit: COMMIT }]), saved: None },
+    };
     assert_eq!(&*h.gone(hosted, b"bye"), [release(hosted), answer(hosted, ended)], "nothing left to save");
 }
 

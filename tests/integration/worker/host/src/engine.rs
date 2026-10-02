@@ -413,11 +413,11 @@ impl Engine {
         };
         if let Some(work) = work {
             let mut last = None;
-            for index in &work.landed {
-                let place = usize::try_from(*index).expect("fits");
+            for landed in &work.landed {
+                let place = usize::try_from(landed.repository).expect("fits");
                 assert!(place < assigned.repositories, "a landing names a repository of the workspace");
-                assert!(last < Some(*index), "landings are ascending");
-                last = Some(*index);
+                assert!(last < Some(landed.repository), "landings are ascending");
+                last = Some(landed.repository);
             }
             if let Some(saved) = &work.saved {
                 assert_eq!(saved.len(), assigned.repositories, "a save says what became of each repository");
@@ -460,7 +460,8 @@ pub fn ending(answer: &Answer) -> &'static str {
 pub fn failure_kind(failure: Failure) -> &'static str {
     match failure {
         Failure::Unprepared(Preparation::Transient) => "failed: unprepared, transient",
-        Failure::Unprepared(Preparation::Permanent) => "failed: unprepared, permanent",
+        Failure::Unprepared(Preparation::Missing { .. }) => "failed: unprepared, missing",
+        Failure::Unprepared(Preparation::Refused { .. }) => "failed: unprepared, refused",
         Failure::Run(RunFailure::Model) => "failed: run, model",
         Failure::Run(RunFailure::Budget) => "failed: run, budget",
         Failure::Run(RunFailure::Policy) => "failed: run, policy",
@@ -478,13 +479,14 @@ pub fn failure_kind(failure: Failure) -> &'static str {
 }
 
 /// Every ending a hosted run can reach, refusals included.
-pub const ENDINGS: [&str; 19] = [
+pub const ENDINGS: [&str; 20] = [
     "refused: busy",
     "refused: invalid",
     "ended",
     "parked",
     "failed: unprepared, transient",
-    "failed: unprepared, permanent",
+    "failed: unprepared, missing",
+    "failed: unprepared, refused",
     "failed: run, model",
     "failed: run, budget",
     "failed: run, policy",

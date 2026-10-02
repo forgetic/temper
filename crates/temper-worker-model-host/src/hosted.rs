@@ -111,8 +111,8 @@ use temper_lib::{Env, Id, List, Map, Queue, ReplyTo, Set, Slab, Token};
 
 use crate::assignment::{self, len};
 use crate::boundary::{
-    AgentFailure, Answer, Ask, Assignment, Bounce, Failure, Finish, Hosting, Landing, Phase, Preparation, Push, Reason,
-    Refusal, Reply, Request, RunFailure, Work,
+    AgentFailure, Answer, Ask, Assignment, Bounce, Failure, Finish, Hosting, Landed, Landing, Phase, Preparation, Push,
+    Reason, Refusal, Reply, Request, RunFailure, Work,
 };
 use crate::call::{self, Call};
 use crate::facts::{Fact, Facts};
@@ -128,8 +128,9 @@ pub(crate) struct Hosted {
     repositories: u32,
     /// The saved-work branch, if its unfinished work is saved; taken as it is.
     save: Option<Box<[u8]>>,
-    /// The repositories its pushes landed in, by their place in the workspace.
-    landed: Set<u32>,
+    /// The repositories its pushes landed in, by their place in the workspace,
+    /// each with the last commit landed there.
+    landed: Map<u32, [u8; 32]>,
     /// Its relayed calls in flight, while it is live.
     relays: Set<Id<Call>>,
     /// Its push in flight, if it has one: a write, so one at a time, and
@@ -213,7 +214,7 @@ pub(crate) fn assign(
         attempt,
         repositories,
         save,
-        landed: Set::with_capacity(repositories),
+        landed: Map::with_capacity(repositories),
         relays: Set::with_capacity(env.limits.run_calls),
         push: None,
         state: State::Preparing { reply_to, charter, snapshot, held },
@@ -631,10 +632,10 @@ pub(crate) fn pushed(model: &mut Model, owner: Token, push: Box<[Landing]>, out:
     assert!(repositories == entry.repositories, "a push says what became of each repository");
     for (landing, index) in push.iter().zip(0..repositories) {
         match landing {
-            Landing::Landed => {
-                entry.landed.insert(index).expect("room for every repository");
+            Landing::Landed { commit } => {
+                entry.landed.insert(index, *commit).expect("room for every repository");
             }
-            Landing::Moved | Landing::Failed | Landing::Unchanged => {}
+            Landing::Moved | Landing::Failed | Landing::Refused | Landing::Unchanged => {}
         }
     }
     // Live or stopping, the run is told how it went; an agent that has gone
@@ -829,8 +830,9 @@ fn answer(
 ) -> State {
     let (run, attempt) = (entry.run, entry.attempt);
     let mut landed = List::with_capacity(entry.landed.len());
-    for index in &entry.landed {
-        landed.push(*index).expect("room for every repository landed in");
+    for (repository, commit) in &entry.landed {
+        let last = Landed { repository: *repository, commit: *commit };
+        landed.push(last).expect("room for every repository landed in");
     }
     let work = Work { landed: landed.into_boxed(), saved };
     let answer = match ending {
@@ -979,14 +981,15 @@ fn explained(ending: Ending, detail: Box<[u8]>) -> Ending {
 }
 
 /// What the run is told of a push: done only if every repository with a
-/// change landed it; moved if any branch moved.
+/// change landed it; moved if any branch moved; failed if the forge refused
+/// one, or one failed.
 fn told(push: &[Landing]) -> Push {
     let (mut landed, mut moved, mut failed) = (false, false, false);
     for landing in push {
         match landing {
-            Landing::Landed => landed = true,
+            Landing::Landed { .. } => landed = true,
             Landing::Moved => moved = true,
-            Landing::Failed => failed = true,
+            Landing::Failed | Landing::Refused => failed = true,
             Landing::Unchanged => {}
         }
     }
