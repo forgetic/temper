@@ -147,6 +147,27 @@ pub fn charter_of(bytes: &[u8]) -> Option<Charter> {
     whole(bytes, get_charter)
 }
 
+/// The text of every section a charter's brief carries, one after another:
+/// what its run is given to read.
+#[must_use]
+pub fn brief_of(charter: &Charter) -> Vec<u8> {
+    let mut text = Vec::new();
+    for section in &charter.brief {
+        match &section.body {
+            temper_engine_model::brief::Body::Text(bytes) => text.extend_from_slice(bytes),
+            temper_engine_model::brief::Body::Missing(_) => {}
+        }
+        text.push(b'\n');
+    }
+    text
+}
+
+/// [`brief_of`] a charter carried as bytes.
+#[must_use]
+pub fn brief_text(bytes: &[u8]) -> Vec<u8> {
+    charter_of(bytes).map(|charter| brief_of(&charter)).unwrap_or_default()
+}
+
 /// An outcome, as a run answers with it.
 #[must_use]
 pub fn outcome(outcome: &Outcome) -> Vec<u8> {

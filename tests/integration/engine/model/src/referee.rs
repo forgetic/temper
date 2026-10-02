@@ -23,7 +23,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use temper_engine_model::{Decoded, Item};
+use temper_engine_model::{Decoded, Item, Refusal, Reply};
 use temper_forge_model::Observation;
 use temper_forge_model::api::{Kind, Verdict};
 use temper_lib::Duration;
@@ -41,17 +41,20 @@ pub enum Seen {
     /// A worker was assigned the item's `attempt`; `live` says whether a
     /// worker in contact with the engine hosts another attempt of the item,
     /// not yet answered.
-    Assigned { item: Item, attempt: u64, live: bool },
-    /// A worker was told of news of the item's, for its live run.
-    Inbound { item: Item },
+    /// `brief` is the text its brief carries.
+    Assigned { item: Item, attempt: u64, live: bool, brief: Vec<u8> },
+    /// A worker was told of news of the item's, for its live run: the
+    /// comment `comment`, if it is one.
+    Inbound { item: Item, comment: Option<u64> },
     /// A worker answered the item's attempt.
     Answered { item: Item, attempt: u64 },
     /// The person of story `tale` knows its item.
     Story { tale: usize, item: Item },
-    /// A person's message for the item was taken, as the comment `comment`.
-    Messaged { item: Item },
-    /// A person accepted, or asked to accept, what the item waits for.
-    Accepting { item: Item },
+    /// A person's message for the item was taken: the engine writes `text`
+    /// on it, keyed by `key`.
+    Messaged { item: Item, key: Vec<u8>, text: Vec<u8> },
+    /// A person's acceptance of what the item waits for was answered so.
+    Accepted { item: Item, reply: Reply },
     /// The world starts.
     Start,
     /// The engine restarted.
@@ -107,7 +110,8 @@ pub struct Engine {
     /// reach a run.
     count: usize,
     stories: BTreeMap<Item, usize>,
-    messages: BTreeMap<Item, u32>,
+    messages: BTreeMap<Item, Vec<Pending>>,
+    asked: BTreeMap<Item, u32>,
     /// Goals a person accepted the proposal of.
     accepted: BTreeSet<Item>,
     pub restarts: u32,
@@ -128,6 +132,7 @@ impl Engine {
             count: stories,
             stories: BTreeMap::new(),
             messages: BTreeMap::new(),
+            asked: BTreeMap::new(),
             accepted: BTreeSet::new(),
             restarts: 0,
         }
@@ -183,24 +188,7 @@ impl Engine {
                 }
             },
             Observation::Commented { repository, number, id, body, by } if *by == ENGINE => {
-                let decoded = codec::comment(*id, body);
-                if let Some(Decoded::Record { record, .. }) = &decoded
-                    && let Some(goal) = record.relations.goal
-                    && let Some(index) = deployment::index(repository)
-                    && goal != (Item { repository: index, number: *number })
-                {
-                    judge.check(
-                        self.accepted.contains(&goal),
-                        format_args!("nothing of {goal:?}'s plan is made before a person accepts it: {number}"),
-                    );
-                }
-                if let Some(Decoded::Outcome { posted, .. }) = decoded {
-                    let first = self.outcomes.insert((repository.to_vec(), *number, posted.attempt), self.restarts);
-                    self.once(first, judge, format_args!("an attempt's outcome is posted once: {observation:?}"));
-                } else if let Some(key) = temper_engine_model_forge_tests::translate::key_of(body) {
-                    let first = self.comments.insert((repository.to_vec(), *number, key), self.restarts);
-                    self.once(first, judge, format_args!("a keyed comment is posted once: {observation:?}"));
-                }
+                self.commented(repository, *number, *id, body, observation, judge);
             }
             Observation::Closed { repository, number, .. } => {
                 let Some(index) = deployment::index(repository) else { return };
@@ -248,13 +236,88 @@ impl Engine {
     }
 
     /// Every message waiting for the item has reached it.
-    fn reached(&mut self, item: Item, judge: &mut Judge<Expected, Stimulus>) {
-        if let Some(count) = self.messages.remove(&item) {
-            for at in 0..count {
-                judge.meet(&Expected::Message(item, at));
+    /// The engine commented: a record, an outcome, or a keyed comment.
+    fn commented(
+        &mut self,
+        repository: &[u8],
+        number: u64,
+        id: u64,
+        body: &[u8],
+        observation: &Observation,
+        judge: &mut Judge<Expected, Stimulus>,
+    ) {
+        let decoded = codec::comment(id, body);
+        if let Some(Decoded::Record { record, .. }) = &decoded
+            && let Some(goal) = record.relations.goal
+            && let Some(index) = deployment::index(repository)
+            && goal != (Item { repository: index, number })
+        {
+            judge.check(
+                self.accepted.contains(&goal),
+                format_args!("nothing of {goal:?}'s plan is made before a person accepts it: {number}"),
+            );
+        }
+        // A goal grown past its envelope only once a person accepted
+        // something of it.
+        if let Some(Decoded::Record { record, .. }) = &decoded
+            && let Some(goal) = &record.step.goal
+            && let Some(index) = deployment::index(repository)
+        {
+            let (envelope, growth) = (&goal.envelope, goal.growth);
+            let beyond = growth.agents > envelope.agents
+                || growth.changes > envelope.changes
+                || growth.waits > envelope.waits
+                || growth.sessions > envelope.sessions;
+            let item = Item { repository: index, number };
+            judge.check(
+                !beyond || self.accepted.contains(&item),
+                format_args!("{item:?}'s plan grows past its envelope only once a person accepts it"),
+            );
+        }
+        if let Some(Decoded::Outcome { posted, .. }) = decoded {
+            let first = self.outcomes.insert((repository.to_vec(), number, posted.attempt), self.restarts);
+            self.once(first, judge, format_args!("an attempt's outcome is posted once: {observation:?}"));
+        } else if let Some(key) = temper_engine_model_forge_tests::translate::key_of(body) {
+            // A person's message, written: the comment it is.
+            if let Some(index) = deployment::index(repository) {
+                let item = Item { repository: index, number };
+                for pending in self.messages.get_mut(&item).into_iter().flatten() {
+                    if pending.key == key {
+                        pending.comment = Some(id);
+                    }
+                }
             }
+            let first = self.comments.insert((repository.to_vec(), number, key), self.restarts);
+            self.once(first, judge, format_args!("a keyed comment is posted once: {observation:?}"));
         }
     }
+
+    /// The item ended: every message for it has nothing left to reach.
+    fn reached(&mut self, item: Item, judge: &mut Judge<Expected, Stimulus>) {
+        for pending in self.messages.remove(&item).unwrap_or_default() {
+            judge.meet(&Expected::Message(item, pending.index));
+        }
+    }
+
+    /// The messages for `item` that `reaches` says a run was given.
+    fn delivered(&mut self, item: Item, judge: &mut Judge<Expected, Stimulus>, reaches: impl Fn(&Pending) -> bool) {
+        let Some(pending) = self.messages.get_mut(&item) else { return };
+        let (met, left): (Vec<Pending>, Vec<Pending>) = pending.drain(..).partition(|pending| reaches(pending));
+        *pending = left;
+        for pending in met {
+            judge.meet(&Expected::Message(item, pending.index));
+        }
+    }
+}
+
+/// A person's message waiting to reach a run: its place among the item's,
+/// its key and text, and the comment it was written as, once seen.
+#[derive(Debug)]
+struct Pending {
+    index: u32,
+    key: Vec<u8>,
+    text: Vec<u8>,
+    comment: Option<u64>,
 }
 
 impl Expectations for Engine {
@@ -265,11 +328,11 @@ impl Expectations for Engine {
     fn observe(&mut self, seen: Seen, judge: &mut Judge<Expected, Stimulus>) {
         match seen {
             Seen::Forge(observation) => self.forge(&observation, judge),
-            Seen::Assigned { item, attempt, live } => {
+            Seen::Assigned { item, attempt, live, brief } => {
                 let last = self.attempts.insert(item, attempt).unwrap_or(0);
                 judge.check(attempt > last, format_args!("attempts of {item:?} only grow: {attempt} after {last}"));
                 judge.check(!live, format_args!("one live run per item: {item:?} at {attempt}"));
-                self.reached(item, judge);
+                self.delivered(item, judge, |pending| contains(&brief, &pending.text));
                 if let Some(record) = self.mirror.record(deployment::name(item.repository), item.number) {
                     for dependency in &record.relations.dependencies {
                         let name = deployment::name(dependency.item.repository);
@@ -281,27 +344,50 @@ impl Expectations for Engine {
             Seen::Story { tale, item } => {
                 self.stories.insert(item, tale);
             }
-            Seen::Messaged { item } => {
+            Seen::Messaged { item, key, text } => {
                 let name = deployment::name(item.repository);
                 if self.mirror.issue(name, item.number).is_some_and(|issue| !issue.open) {
                     // Taken as its item closed: nothing is left to reach.
                     return;
                 }
-                let count = self.messages.entry(item).or_default();
-                judge.expect(Expected::Message(item, *count), self.bounds.message);
+                let count = self.asked.entry(item).or_default();
+                let index = *count;
                 *count += 1;
+                // The comment it was written as, if the forge showed it.
+                let comment = self.mirror.issue(name, item.number).and_then(|issue| {
+                    issue
+                        .comments
+                        .iter()
+                        .find(|comment| {
+                            temper_engine_model_forge_tests::translate::key_of(&comment.body).as_deref()
+                                == Some(&key[..])
+                        })
+                        .map(|comment| comment.id)
+                });
+                judge.expect(Expected::Message(item, index), self.bounds.message);
+                self.messages.entry(item).or_default().push(Pending { index, key, text, comment });
             }
-            Seen::Accepting { item } => {
-                self.accepted.insert(item);
-            }
+            Seen::Accepted { item, reply } => match reply {
+                Reply::Done => {
+                    self.accepted.insert(item);
+                }
+                // People accept only with the permission the rules want.
+                Reply::Refused(refusal) => judge.check(
+                    refusal != Refusal::Unpermitted,
+                    format_args!("a person who may accept {item:?} is let: {refusal:?}"),
+                ),
+                Reply::Opened { .. } | Reply::Watching { .. } => {}
+            },
             Seen::Start => {
                 for tale in 0..self.count {
                     judge.expect(Expected::Story(tale), self.bounds.story);
                 }
             }
             Seen::Restarted => self.restarts += 1,
-            Seen::Inbound { item } => self.reached(item, judge),
-            Seen::Answered { .. } | Seen::Settled => {}
+            Seen::Inbound { item, comment: Some(id) } => {
+                self.delivered(item, judge, |pending| pending.comment == Some(id));
+            }
+            Seen::Inbound { comment: None, .. } | Seen::Answered { .. } | Seen::Settled => {}
         }
     }
 }
@@ -333,4 +419,9 @@ fn whose(observation: &Observation) -> (&[u8], u64) {
         | Observation::Rejected { repository, by, .. }
         | Observation::Wiki { repository, by, .. } => (repository, *by),
     }
+}
+
+/// Whether `text` is found in `within`.
+fn contains(within: &[u8], text: &[u8]) -> bool {
+    text.is_empty() || within.windows(text.len()).any(|window| window == text)
 }

@@ -70,7 +70,7 @@ impl World {
         // An attempt the worker refused, which never ran, is placed again
         // under its count: the engine's referee sees it assigned once.
         if !self.attempts.contains_key(&name) {
-            self.observe_engine(engine_referee::Seen::Assigned { item, attempt: count, live });
+            self.observe_engine(engine_referee::Seen::Assigned { item, attempt: count, live, brief: Vec::new() });
         }
         let attempt = Attempt { item, job, repositories, places, process: None, answered: false, refused: false };
         if let Some(before) = self.attempts.insert(name, attempt) {

@@ -622,10 +622,11 @@ enum Theirs {
 }
 
 /// Who asked the engine through its web.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 enum Asking {
-    /// A story's person, or the caretaker, and the item a message was for.
-    People(Asker, Option<Item>),
+    /// A story's person, or the caretaker; the item a message was for, its
+    /// key and its text; and the item an acceptance was for.
+    People(Asker, Option<(Item, Vec<u8>, Vec<u8>)>, Option<Item>),
     /// A person stopping the item's run.
     Stopper(Item),
 }

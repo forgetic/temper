@@ -9,6 +9,7 @@ use temper_forge_model::{self as forge, Skew};
 use temper_lib::{Duration, Env, Queue, ReplyTo, Rng, Time, Token};
 use temper_world::{Key, Ledger, Referee, Schedule, Span, Stage, Trace};
 
+use crate::codec;
 use crate::deployment::{
     self, CI, CUE, ELSEWHERE, ENGINE, GREEN, LABELS, LIMITS, MAIN, PEOPLE, REPOSITORIES, REVIEWER, STRANGER, WORKER,
 };
@@ -74,7 +75,7 @@ impl Settings {
                     labels: 8,
                     items: 64,
                     comments: 64,
-                    reviews: 8,
+                    reviews: 32,
                     dependencies: 8,
                     branches: 32,
                     commits: 256,
@@ -299,6 +300,14 @@ enum Theirs {
     Push { worker: usize, item: Item, attempt: u64, repository: u32, branch: Box<[u8]>, commit: u64 },
 }
 
+/// A person's message, as they asked for it to be written.
+#[derive(Debug)]
+struct Message {
+    item: Item,
+    key: Vec<u8>,
+    text: Vec<u8>,
+}
+
 pub struct World {
     now: Time,
     rng: Rng,
@@ -325,7 +334,7 @@ pub struct World {
     theirs: Ledger<u64, Theirs>,
     /// People's asks, by their names: who asked, the life it went to, and
     /// the item a message was for.
-    asks: Ledger<u64, (Asker, u64, Option<Item>)>,
+    asks: Ledger<u64, (Asker, u64, Option<Message>, Option<Item>)>,
     stores: Ledger<(u64, Token), ()>,
 
     workers: Vec<Worker>,
@@ -620,14 +629,19 @@ impl World {
                     }
                     Down::Acknowledge { .. } => "acknowledged",
                 });
-                if let Down::Inbound { item, event: engine::Inbound::News(_), .. } = &down {
-                    self.observe(Seen::Inbound { item: *item });
+                if let Down::Inbound { item, event: engine::Inbound::News(news), .. } = &down {
+                    let comment = match news {
+                        engine::forge::News::Comment { id, .. } => Some(*id),
+                        engine::forge::News::Reviews { .. } | engine::forge::News::Pull { .. } => None,
+                    };
+                    self.observe(Seen::Inbound { item: *item, comment });
                 }
                 if let Down::Assign(assigned) = &down {
                     let item = assigned.item;
                     let attempt = assigned.attempt;
                     let live = self.live_elsewhere(worker, item, attempt);
-                    self.observe(Seen::Assigned { item, attempt, live });
+                    let brief = codec::brief_text(&assigned.charter);
+                    self.observe(Seen::Assigned { item, attempt, live, brief });
                 }
                 let mut effects = Vec::new();
                 self.workers[worker].down(down, self.now, &self.mirror, &mut effects);
@@ -835,7 +849,9 @@ impl World {
             people::Act::Ask { asker, person, ask } => {
                 let name = self.wire.name();
                 let message = match &ask {
-                    engine::Ask::Message { item, .. } => Some(*item),
+                    engine::Ask::Message { item, key, message } => {
+                        Some(Message { item: *item, key: key.to_vec(), text: message.to_vec() })
+                    }
                     engine::Ask::Open { .. }
                     | engine::Ask::Accept { .. }
                     | engine::Ask::Reject { .. }
@@ -843,11 +859,17 @@ impl World {
                     | engine::Ask::Release { .. }
                     | engine::Ask::Watch { .. } => None,
                 };
-                self.asks.open(name, (asker, self.life, message));
+                let accept = match &ask {
+                    engine::Ask::Accept { item } => Some(*item),
+                    engine::Ask::Open { .. }
+                    | engine::Ask::Message { .. }
+                    | engine::Ask::Reject { .. }
+                    | engine::Ask::Stop { .. }
+                    | engine::Ask::Release { .. }
+                    | engine::Ask::Watch { .. } => None,
+                };
+                self.asks.open(name, (asker, self.life, message, accept));
                 self.log(format!("person {person} asks {ask:?}"));
-                if let engine::Ask::Accept { item } = &ask {
-                    self.observe(Seen::Accepting { item: *item });
-                }
                 self.stage.push(Event::Ask { reply_to: ReplyTo::new(Token::new(name)), person, ask });
             }
             people::Act::Forge { tale, user, repository, op } => {
@@ -997,19 +1019,23 @@ impl World {
             }
             Request::Reply { to, reply } => {
                 let name = to.into_token().raw();
-                let (asker, life, message) = self.asks.end(name);
+                let (asker, life, message, accept) = self.asks.end(name);
+                let messaged = message.is_some();
+                if let Some(item) = accept {
+                    self.observe(Seen::Accepted { item, reply });
+                }
                 assert_eq!(life, self.life, "a person's ask is answered by the engine it went to");
                 if reply == engine::Reply::Done
-                    && let Some(item) = message
+                    && let Some(Message { item, key, text }) = message
                 {
-                    self.observe(Seen::Messaged { item });
+                    self.observe(Seen::Messaged { item, key, text });
                 }
                 if let Asker::Caretaker(_) = asker
                     && reply == engine::Reply::Done
                 {
                     self.end("released");
                 }
-                self.people.replied(asker, reply, message.is_some());
+                self.people.replied(asker, reply, messaged);
             }
             Request::Deliver { watcher, .. } => {
                 let at = self.now.saturating_add(self.settings.channel.draw(&mut self.rng));
@@ -1068,7 +1094,7 @@ impl World {
         }
         let asks: Vec<u64> = self.asks.keys().copied().collect();
         for name in asks {
-            let (asker, _, _) = self.asks.end(name);
+            let (asker, _, _, _) = self.asks.end(name);
             self.people.lost(asker);
         }
         self.open.clear();

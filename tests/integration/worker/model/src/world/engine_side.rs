@@ -7,6 +7,7 @@
 
 use temper_engine_model::forge::api as engine_api;
 use temper_engine_model::{self as engine, Ask, Fact, Item, Reply, Request};
+use temper_engine_model_tests::codec;
 use temper_engine_model_tests::deployment::{self, ENGINE, PEOPLE, REPOSITORIES};
 use temper_engine_model_tests::people::{self, Asker};
 use temper_engine_model_tests::referee::Seen as Told;
@@ -74,6 +75,7 @@ impl World {
             Request::Assign { channel, assignment } => {
                 let (item, attempt) = (assignment.item, assignment.attempt);
                 let names = World::names(item, attempt);
+                let brief = codec::brief_of(&assignment.charter);
                 let (assignment, repositories) = protocol::assignment(&assignment);
                 self.assigned.insert(names, repositories);
                 self.end("assigned");
@@ -82,7 +84,7 @@ impl World {
                         && self.attempts.iter().any(|(&(run, other), record)| {
                             run == names.0 && other != names.1 && !record.refused && record.answer.is_none()
                         });
-                    self.stories.observe(self.now, Told::Assigned { item, attempt, live }, &mut Vec::new());
+                    self.stories.observe(self.now, Told::Assigned { item, attempt, live, brief }, &mut Vec::new());
                     self.stories.assert_holding(self.settings.seed);
                     if self.is_change(item) && !self.stopping.contains(&item) && self.rng.chance(self.settings.stops) {
                         self.stopping.insert(item);
@@ -99,8 +101,12 @@ impl World {
                 let framed = protocol::framed_event(*place, names, &event);
                 *place += 1;
                 self.end("inbound");
-                if let engine::Inbound::News(_) = &event {
-                    self.stories.observe(self.now, Told::Inbound { item }, &mut Vec::new());
+                if let engine::Inbound::News(news) = &event {
+                    let comment = match news {
+                        engine::forge::News::Comment { id, .. } => Some(*id),
+                        engine::forge::News::Reviews { .. } | engine::forge::News::Pull { .. } => None,
+                    };
+                    self.stories.observe(self.now, Told::Inbound { item, comment }, &mut Vec::new());
                 }
                 self.send_down(channel, Event::Inbound { run: names.0, attempt: names.1, event: framed }, false);
             }
@@ -144,11 +150,15 @@ impl World {
     /// The engine answered the ask `name`.
     fn replied(&mut self, name: u64, reply: Reply) {
         match self.asks.end(name) {
-            Asking::People(asker, message) => {
+            Asking::People(asker, message, accept) => {
+                let messaged = message.is_some();
+                if let Some(item) = accept {
+                    self.stories.observe(self.now, Told::Accepted { item, reply }, &mut Vec::new());
+                }
                 if reply == Reply::Done
-                    && let Some(item) = message
+                    && let Some((item, key, text)) = message
                 {
-                    self.stories.observe(self.now, Told::Messaged { item }, &mut Vec::new());
+                    self.stories.observe(self.now, Told::Messaged { item, key, text }, &mut Vec::new());
                     self.stories.assert_holding(self.settings.seed);
                 }
                 if let Asker::Caretaker(_) = asker
@@ -156,7 +166,7 @@ impl World {
                 {
                     self.end("released");
                 }
-                self.people.replied(asker, reply, message.is_some());
+                self.people.replied(asker, reply, messaged);
             }
             Asking::Stopper(item) => {
                 self.stopping.remove(&item);
@@ -305,7 +315,7 @@ impl World {
         match act {
             people::Act::Ask { asker, person, ask } => {
                 let message = match &ask {
-                    Ask::Message { item, .. } => Some(*item),
+                    Ask::Message { item, key, message } => Some((*item, key.to_vec(), message.to_vec())),
                     Ask::Open { .. }
                     | Ask::Accept { .. }
                     | Ask::Reject { .. }
@@ -313,10 +323,16 @@ impl World {
                     | Ask::Release { .. }
                     | Ask::Watch { .. } => None,
                 };
-                if let Ask::Accept { item } = &ask {
-                    self.stories.observe(self.now, Told::Accepting { item: *item }, &mut Vec::new());
-                }
-                self.ask(Asking::People(asker, message), person, ask);
+                let accept = match &ask {
+                    Ask::Accept { item } => Some(*item),
+                    Ask::Open { .. }
+                    | Ask::Message { .. }
+                    | Ask::Reject { .. }
+                    | Ask::Stop { .. }
+                    | Ask::Release { .. }
+                    | Ask::Watch { .. } => None,
+                };
+                self.ask(Asking::People(asker, message, accept), person, ask);
             }
             people::Act::Forge { tale, user, repository, op } => {
                 self.log(format!("person {user} calls {op:?}"));

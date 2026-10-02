@@ -15,7 +15,7 @@ use temper_engine_model::{Ask, Item, Refusal, Reply};
 use temper_forge_model::api::{self as forge, Kind, Verdict, Write};
 
 use crate::codec;
-use crate::deployment::{self, ENGINE, HAND_IN, REPOSITORIES, REVIEWER};
+use crate::deployment::{self, ENGINE, HAND_IN, REPOSITORIES, REVIEWER, STRANGER};
 use crate::mirror::Mirror;
 use crate::script::NOTE;
 
@@ -422,11 +422,23 @@ impl People {
                 continue;
             }
             self.tally.reviews += 1;
+            // Someone who may only read approves first: the engine counts no
+            // approval of theirs.
             let op = forge::Op::Write(Write::Review {
                 number,
                 verdict: Some(Verdict::Approve),
-                body: b"looks good".as_slice().into(),
+                body: b"ship it".as_slice().into(),
             });
+            out.push(Act::Forge { tale: None, user: STRANGER, repository: at, op });
+            // The reviewer asks for changes on the first head of every third
+            // pull request, and approves the head that repairs it.
+            let first = !issue.reviews.iter().any(|review| review.by == REVIEWER);
+            let (verdict, body): (Verdict, &[u8]) = if first && number % 3 == 0 {
+                (Verdict::RequestChanges, b"please name it better")
+            } else {
+                (Verdict::Approve, b"looks good")
+            };
+            let op = forge::Op::Write(Write::Review { number, verdict: Some(verdict), body: body.into() });
             out.push(Act::Forge { tale: None, user: REVIEWER, repository: at, op });
         }
     }

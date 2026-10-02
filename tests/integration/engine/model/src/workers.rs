@@ -291,7 +291,20 @@ impl Worker {
                     return;
                 }
                 match served {
-                    Served::Unserved(_) => self.tally.unserved += 1,
+                    // A call its grants do not allow, or beyond the limits,
+                    // is the run's mistake: it fails.
+                    Served::Unserved(Unserved::Ungranted | Unserved::Invalid) => {
+                        self.tally.unserved += 1;
+                        if let Some(run) = self.runs.remove(&(item, attempt)) {
+                            let said = Said::Failed { failure: Failure::Run, landed: run.landed };
+                            self.answer(item, attempt, said, out);
+                        }
+                        return;
+                    }
+                    // Busy, refused or failed: it goes on without.
+                    Served::Unserved(Unserved::Busy | Unserved::Refused | Unserved::Failed) => {
+                        self.tally.unserved += 1;
+                    }
                     Served::Read(_) | Served::Recalled { .. } | Served::Noted(_) | Served::Posted { .. } => {
                         self.tally.served += 1;
                     }
