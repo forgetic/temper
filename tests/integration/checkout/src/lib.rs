@@ -62,10 +62,22 @@ pub enum Failure {
     TooLarge { size: u64 },
     /// A `..` or a link leads out of the root.
     Escapes,
+    /// To store: a part of the path is a link, which a store does not follow.
+    Linked,
     /// Too many links on the way.
     Loop,
     /// To store: the file is not as expected.
     Conflict { now: Option<u64> },
+}
+
+/// How an operation resolves its path.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Resolve {
+    /// Following links, as a load or a scan does.
+    Follow,
+    /// Following none, and making the directories missing on the way, as a
+    /// store does.
+    Store,
 }
 
 /// What a store expects to replace.
@@ -93,6 +105,12 @@ impl Checkout {
         let root = u64::try_from(self.roots.len()).expect("few roots") + 1;
         self.roots.insert(root, at.to_vec());
         root
+    }
+
+    /// Where the root `root` is.
+    #[must_use]
+    pub fn root_path(&self, root: u64) -> &[u8] {
+        self.roots.get(&root).expect("a root the checkout named")
     }
 
     // What anything else on the machine does: an outsider changing the
@@ -174,7 +192,7 @@ impl Checkout {
     /// The content and version of the file at `path` beneath `root`, if it
     /// holds at most `max` bytes.
     pub fn load(&self, root: u64, path: &[u8], max: u64) -> Result<(Vec<u8>, u64), Failure> {
-        let (at, _) = self.resolve(root, path, true, false)?;
+        let (at, _) = self.resolve(root, path, Resolve::Follow)?;
         match self.nodes.get(&at) {
             None => Err(Failure::Missing),
             Some(Node::File { content, version }) => {
@@ -192,7 +210,7 @@ impl Checkout {
     /// The entries of the directory at `path` beneath `root`: at most `max`,
     /// the first in name order.
     pub fn scan(&self, root: u64, path: &[u8], max: usize) -> Result<Listing, Failure> {
-        let (at, _) = self.resolve(root, path, true, false)?;
+        let (at, _) = self.resolve(root, path, Resolve::Follow)?;
         match self.nodes.get(&at) {
             None => return Err(Failure::Missing),
             Some(Node::Directory) => {}
@@ -218,18 +236,21 @@ impl Checkout {
 
     /// Makes the file at `path` beneath `root` hold `content` if it is as
     /// `expect` says, creating the directories on the way, and returns its
-    /// new version. A link at `path` is not written through.
+    /// new version. No part of `path` may be a link.
     pub fn store(&mut self, root: u64, path: &[u8], content: &[u8], expect: Expect) -> Result<u64, Failure> {
-        let (at, missing) = self.resolve(root, path, false, true)?;
+        let (at, missing) = self.resolve(root, path, Resolve::Store)?;
         let now = match self.nodes.get(&at) {
             None => None,
             Some(Node::File { version, .. }) => Some(*version),
-            Some(Node::Directory | Node::Link { .. } | Node::Special) => return Err(Failure::NotFile),
+            Some(Node::Directory | Node::Special) => return Err(Failure::NotFile),
+            Some(Node::Link { .. }) => unreachable!("a store refuses links"),
         };
-        match (expect, now) {
-            (Expect::Absent, None) => {}
-            (Expect::Is(expected), Some(now)) if expected == now => {}
-            (Expect::Absent | Expect::Is(_), now) => return Err(Failure::Conflict { now }),
+        let expected = match expect {
+            Expect::Absent => None,
+            Expect::Is(version) => Some(version),
+        };
+        if now != expected {
+            return Err(Failure::Conflict { now });
         }
         for directory in missing {
             self.nodes.insert(directory, Node::Directory);
@@ -239,11 +260,10 @@ impl Checkout {
         Ok(version)
     }
 
-    /// Where `path` beneath `root` leads: the absolute path of what is there,
-    /// following the links on the way, and one at the end too if `follow`;
-    /// and, if `create`, the directories missing on the way, which are taken
-    /// as there.
-    fn resolve(&self, root: u64, path: &[u8], follow: bool, create: bool) -> Result<(Vec<u8>, Vec<Vec<u8>>), Failure> {
+    /// Where `path` beneath `root` leads: the absolute path of what is there;
+    /// and, to store, the directories missing on the way, which are taken as
+    /// there.
+    fn resolve(&self, root: u64, path: &[u8], resolve: Resolve) -> Result<(Vec<u8>, Vec<Vec<u8>>), Failure> {
         let base = self.roots.get(&root).expect("a root the checkout named");
         let mut names: Vec<Vec<u8>> = Vec::new();
         let mut todo: VecDeque<Vec<u8>> = parts(path).into();
@@ -265,10 +285,10 @@ impl Checkout {
                     // What is missing at the end is what the operation is
                     // about; on the way, it is a directory to make.
                     if !last && !missing.contains(&at) {
-                        if !create {
-                            return Err(Failure::Missing);
+                        match resolve {
+                            Resolve::Follow => return Err(Failure::Missing),
+                            Resolve::Store => missing.push(at),
                         }
-                        missing.push(at);
                     }
                 }
                 Some(Node::Directory) => {}
@@ -278,11 +298,9 @@ impl Checkout {
                     }
                 }
                 Some(Node::Link { target }) => {
-                    // A link at the end, not followed: the operation is about
-                    // it.
-                    if last && !follow {
-                        names.push(name);
-                        continue;
+                    match resolve {
+                        Resolve::Follow => {}
+                        Resolve::Store => return Err(Failure::Linked),
                     }
                     links += 1;
                     if links > LINKS {

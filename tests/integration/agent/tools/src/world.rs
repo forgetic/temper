@@ -176,6 +176,10 @@ pub struct World {
     /// The versions io has told the tools of, for each place: the only ones a
     /// store may expect there.
     versions: BTreeSet<(u64, Vec<u8>, u64)>,
+    /// Whether some kit may write each root: those none may write change only
+    /// by the world's own changes, which `untouched` follows.
+    writable: BTreeMap<u64, bool>,
+    untouched: Option<BTreeMap<Vec<u8>, Vec<u8>>>,
 
     stats: Stats,
     trace: Vec<String>,
@@ -203,6 +207,8 @@ impl World {
             calls: BTreeMap::new(),
             ops: BTreeMap::new(),
             versions: BTreeSet::new(),
+            writable: BTreeMap::new(),
+            untouched: None,
             stats: Stats::default(),
             trace: Vec::new(),
         }
@@ -232,6 +238,9 @@ impl World {
     /// A session that opens a kit with `authority` at `at`, runs `script`
     /// with it, and closes it. Returns the session's name.
     pub fn session(&mut self, at: Time, authority: Authority, script: Vec<Step>) -> u64 {
+        for repo in &authority.repos {
+            *self.writable.entry(repo.root.raw()).or_insert(false) |= repo.writable;
+        }
         let session = self.next_serial();
         let state = State::Opening;
         let script = script.into();
@@ -282,6 +291,9 @@ impl World {
 
     /// One iteration of the loop, as the shell would run it.
     fn iterate(&mut self) {
+        if self.untouched.is_none() {
+            self.untouched = Some(self.read_only());
+        }
         self.env.now = self.now;
         self.deliver();
 
@@ -404,6 +416,7 @@ impl World {
                     self.wire.remove(&pending.ran);
                     if self.rng.chance(self.settings.late_effects) {
                         drop(translate::perform(&mut self.checkout, pending.op));
+                        self.assert_untouched();
                         self.stats.late_effects += 1;
                     }
                     self.tools_in.push_back(tools::Event::Done { owner, done: Done::TimedOut });
@@ -419,6 +432,7 @@ impl World {
             Op::Load { at, .. } | Op::Scan { at, .. } | Op::Store { at, .. } => at.clone(),
         };
         let done = translate::perform(&mut self.checkout, op);
+        self.assert_untouched();
         match &done {
             Done::Loaded { version, .. } | Done::Stored { version } => {
                 self.versions.insert((at.root.raw(), at.path.to_vec(), version.raw()[0]));
@@ -427,6 +441,7 @@ impl World {
             | Done::Conflict { .. }
             | Done::Missing
             | Done::NotFile
+            | Done::Linked
             | Done::NotDirectory
             | Done::TooLarge { .. }
             | Done::Escapes
@@ -466,6 +481,7 @@ impl World {
             }
             Step::Change(change) => {
                 change(&mut self.checkout);
+                self.untouched = Some(self.read_only());
                 self.log("checkout changed");
                 self.next(session);
             }
@@ -523,6 +539,30 @@ impl World {
         for (call, (_, answer)) in &self.calls {
             assert!(answer.is_some(), "call {call} was answered");
         }
+    }
+
+    /// The files of the repositories no kit may write.
+    fn read_only(&self) -> BTreeMap<Vec<u8>, Vec<u8>> {
+        let mut files = BTreeMap::new();
+        for (root, writable) in &self.writable {
+            if *writable {
+                continue;
+            }
+            let at = self.checkout.root_path(*root);
+            for (path, content) in self.checkout.files() {
+                let beneath = at.is_empty() || path == at || path.strip_prefix(at).is_some_and(|rest| rest[0] == b'/');
+                if beneath {
+                    files.insert(path.to_vec(), content.to_vec());
+                }
+            }
+        }
+        files
+    }
+
+    /// Read-only repositories change only by the world's own changes.
+    fn assert_untouched(&self) {
+        let untouched = self.untouched.as_ref().expect("taken at the first iteration");
+        assert_eq!(&self.read_only(), untouched, "a read-only repository changed");
     }
 
     fn session_mut(&mut self, session: u64) -> &mut Session {

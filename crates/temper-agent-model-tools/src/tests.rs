@@ -392,13 +392,18 @@ fn calls_are_refused_at_the_entrance() {
         (modify, write(b"../docs/guide.md", 1), Outcome::ReadOnly),
         (modify, edit(b"vendor/lib/x.rs"), Outcome::ReadOnly),
         (modify, write(b"src/big.rs", 1025), Outcome::TooLarge { size: 1025 }),
+        (modify, write(b".git/config", 1), Outcome::Protected),
+        (modify, write(b"src/../.git/hooks/pre-commit", 1), Outcome::Protected),
+        (modify, edit(b".git/HEAD"), Outcome::Protected),
+        // A repository mounted inside another has its own .git.
+        (modify, write(b"vendor/lib/.git/config", 1), Outcome::ReadOnly),
         (inspect, read(b"a/very/long/path/that/does/not/fit/in/the/sixty/four/bytes/allowed"), Outcome::TooLong),
         // What passes the entrance does not run yet.
         (ALL, edit(b"src/lib.rs"), Outcome::NotRead),
         (ALL, Call::Search { path: path(b"src"), pattern: bytes(b"fn"), glob: None }, Outcome::Unsupported),
         (ALL, shell, Outcome::Unsupported),
     ];
-    let mut h = Harness::new(Limits { kits: 16, ..LIMITS });
+    let mut h = Harness::new(Limits { kits: 32, ..LIMITS });
     for (index, (grants, call, expected)) in table.into_iter().enumerate() {
         let kit = h.open(u64::try_from(index).expect("a small index"), authority(grants));
         assert_eq!(h.call(kit, call.clone()), expected, "{call:?}");
@@ -664,9 +669,12 @@ fn a_write_replaces_a_file_at_the_version_its_llm_read() {
 fn a_write_that_conflicts_with_the_real_file_is_refused() {
     let mut h = Harness::new(LIMITS);
     let kit = h.open(1, authority(ALL));
-    // Creating over a file the LLM never read.
+    // Creating over a file the LLM never read, even one removed before io
+    // could tell its version.
     let (owner, _) = h.start(kit, 1, write(b"src/lib.rs", 1));
     assert_eq!(h.end(owner, Done::Conflict { now: Some(version(3)) }), (1, Outcome::NotRead));
+    let (owner, _) = h.start(kit, 1, write(b"src/lib.rs", 1));
+    assert_eq!(h.end(owner, Done::Conflict { now: None }), (1, Outcome::NotRead));
     assert_eq!(h.knowledge(kit).version(&place(1, b"src/lib.rs")), None, "the LLM still has not read it");
 
     // Replacing a file changed since the LLM read it.
@@ -688,6 +696,7 @@ fn a_write_that_conflicts_with_the_real_file_is_refused() {
 fn every_other_end_of_a_store_answers_for_itself() {
     let table = [
         (Done::NotFile, Outcome::NotFile),
+        (Done::Linked, Outcome::Linked),
         (Done::NotDirectory, Outcome::NotDirectory),
         (Done::Escapes, Outcome::Outside),
         (Done::Failed { fault: Fault::NoSpace }, Outcome::Failed { fault: Fault::NoSpace }),
@@ -887,4 +896,23 @@ fn an_edit_whose_deadline_passed_while_it_loaded_stores_nothing() {
     h.env.now = Time::ZERO.saturating_add(Duration::from_secs(60));
     let loaded = Done::Loaded { content: bytes(b"a\n"), version: version(3) };
     assert_eq!(h.end(owner, loaded), (2, Outcome::TimedOut));
+}
+
+#[test]
+fn a_path_is_in_git_when_one_of_its_names_is_dot_git() {
+    let table: [(&[u8], bool); 10] = [
+        (b".git", true),
+        (b".git/config", true),
+        (b"src/.git", true),
+        (b"vendor/lib/.git/hooks/post-checkout", true),
+        (b"", false),
+        (b"src/lib.rs", false),
+        (b".github/workflows/ci.yml", false),
+        (b"x.git", false),
+        (b"src/.gitignore", false),
+        (b"a.git/.gitx", false),
+    ];
+    for (path, expected) in table {
+        assert_eq!(path::in_git(path), expected, "{path:?}");
+    }
 }

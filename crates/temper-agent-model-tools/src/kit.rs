@@ -3,7 +3,8 @@
 //!
 //! A call is checked at the entrance, where refusing it costs nothing: the
 //! family of tools it belongs to must be granted, its path must lie in a
-//! repository of the checkout, and in a writable one for a change, what it
+//! repository of the checkout, and for a change in a writable one and outside
+//! its `.git`, what it
 //! would store must fit the limits, an edit must be of a file its LLM has read
 //! and must change something, its deadline must not have passed, and the kit
 //! must have room for one more job. A call that passes becomes a job.
@@ -33,7 +34,7 @@ use crate::job::{self, Job, Work};
 use crate::knowledge::Knowledge;
 use crate::limits::Limits;
 use crate::model::Model;
-use crate::path::Path;
+use crate::path::{self, Path};
 use crate::window::Span;
 
 #[derive(Debug)]
@@ -210,11 +211,15 @@ fn admit(kit: &Kit, call: Call, deadline: Time, env: &Env<Limits>) -> Result<Wor
     Ok(work)
 }
 
-/// Where `path` is, if the kit may write there.
+/// Where `path` is, if the kit may write there: in a writable repository, and
+/// not in its `.git`.
 fn writable(checkout: &Checkout, path: &Path, limits: &Limits) -> Result<Located, Outcome> {
     let located = authority::locate(checkout, path, limits.path_bytes)?;
     if !located.writable {
         return Err(Outcome::ReadOnly);
+    }
+    if path::in_git(&located.place.path) {
+        return Err(Outcome::Protected);
     }
     Ok(located)
 }

@@ -79,9 +79,15 @@ pub enum Outcome {
     TooLong,
     /// Nothing is at the path.
     NotFound,
-    /// What is at the path is not a regular file: a directory, a device, or,
-    /// for a write, a symbolic link.
+    /// What is at the path is not a regular file: a directory, a device.
     NotFile,
+    /// The path of a write or an edit goes through a symbolic link, which
+    /// they do not follow, so that a change lands only in the repository its
+    /// path names. Reads follow links inside the checkout.
+    Linked,
+    /// The path of a write or an edit is in a repository's `.git`, which the
+    /// tools do not change.
+    Protected,
     /// What is at the path, or a directory on the way to it, is not a
     /// directory.
     NotDirectory,

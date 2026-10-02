@@ -1030,6 +1030,8 @@ const fn succeeded(outcome: &Outcome) -> bool {
         | Outcome::TooLong
         | Outcome::NotFound
         | Outcome::NotFile
+        | Outcome::Linked
+        | Outcome::Protected
         | Outcome::NotDirectory
         | Outcome::TooLarge { .. }
         | Outcome::NotRead
@@ -1201,6 +1203,8 @@ fn outcome_cost(outcome: &Outcome) -> Option<u64> {
         | Outcome::TooLong
         | Outcome::NotFound
         | Outcome::NotFile
+        | Outcome::Linked
+        | Outcome::Protected
         | Outcome::NotDirectory
         | Outcome::TooLarge { .. }
         | Outcome::NotRead

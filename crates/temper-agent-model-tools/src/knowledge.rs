@@ -1,7 +1,7 @@
 //! What a kit's LLM knows of the checkout: each file it has read, at the
 //! version it read, or wrote last. A change needs the current version read,
-//! and io checks the version against the real file when it stores, so a file
-//! changed since by anyone is caught.
+//! and io compares the version with the real file just before it stores, so a
+//! file changed since by anyone is caught.
 //!
 //! It is bounded: past `Limits::known_files`, the file read longest ago is
 //! forgotten, and must be read again before it is changed.

@@ -9,10 +9,12 @@
 //! A write stores the file if it is as the kit knows it: at the version its
 //! LLM read or wrote last, or absent if it knows none. An edit runs in two
 //! phases: it loads the file, which must be at the version the kit knows,
-//! makes the edit in memory, and stores the result expecting that version. io checks that against
-//! the real file as it stores, so a change made since, by another kit or by
-//! anything else, is caught: as `Stale` if the LLM had read the file, and as
-//! `NotRead` if it had not and the write would have created it. A write that
+//! makes the edit in memory, and stores the result expecting that version.
+//! io compares that with the real file just before it stores, so a change
+//! made since, by another kit or by anything else, is caught: as `Stale` if
+//! the LLM had read the file, and as `NotRead` if it had not and the write
+//! would have created it. A store follows no symbolic link, so a change
+//! lands only in the repository its path names. A write that
 //! may or may not have happened (timed out, failed) leaves the knowledge as
 //! it was, and the next write's check settles it.
 //!
@@ -221,7 +223,7 @@ fn loaded(
         Done::Failed { fault } => Outcome::Failed { fault },
         Done::TimedOut => Outcome::TimedOut,
         Done::Cancelled => Outcome::Cancelled,
-        Done::Scanned { .. } | Done::Stored { .. } | Done::Conflict { .. } => {
+        Done::Scanned { .. } | Done::Stored { .. } | Done::Conflict { .. } | Done::Linked => {
             unreachable!("io ends a load with a load's terminal")
         }
     };
@@ -238,9 +240,12 @@ fn scanned(reply_to: ReplyTo, done: Done, out: &mut Queue<Request>) -> State {
         Done::Failed { fault } => Outcome::Failed { fault },
         Done::TimedOut => Outcome::TimedOut,
         Done::Cancelled => Outcome::Cancelled,
-        Done::Loaded { .. } | Done::Stored { .. } | Done::Conflict { .. } | Done::NotFile | Done::TooLarge { .. } => {
-            unreachable!("io ends a scan with a scan's terminal")
-        }
+        Done::Loaded { .. }
+        | Done::Stored { .. }
+        | Done::Conflict { .. }
+        | Done::NotFile
+        | Done::Linked
+        | Done::TooLarge { .. } => unreachable!("io ends a scan with a scan's terminal"),
     };
     answer(reply_to, outcome, out)
 }
@@ -289,7 +294,7 @@ fn to_edit(
         Done::Failed { fault } => Outcome::Failed { fault },
         Done::TimedOut => Outcome::TimedOut,
         Done::Cancelled => Outcome::Cancelled,
-        Done::Scanned { .. } | Done::Stored { .. } | Done::Conflict { .. } => {
+        Done::Scanned { .. } | Done::Stored { .. } | Done::Conflict { .. } | Done::Linked => {
             unreachable!("io ends a load with a load's terminal")
         }
     };
@@ -315,15 +320,16 @@ fn stored(
                 Change::Edit { replaced } => Outcome::Edited { replaced },
             }
         }
-        // Something is there that the LLM has not read.
-        Done::Conflict { now: Some(_) } if creating => Outcome::NotRead,
-        Done::Conflict { now: None } if creating => unreachable!("io refuses to create a file only over one"),
+        // Something was there that the LLM has not read, even if it is gone
+        // by the time io looked for its version.
+        Done::Conflict { .. } if creating => Outcome::NotRead,
         Done::Conflict { now: Some(_) } => Outcome::Stale,
         Done::Conflict { now: None } => {
             knowledge.forget(&place);
             Outcome::Stale
         }
         Done::NotFile => Outcome::NotFile,
+        Done::Linked => Outcome::Linked,
         Done::NotDirectory => Outcome::NotDirectory,
         Done::Escapes => Outcome::Outside,
         Done::Failed { fault } => Outcome::Failed { fault },

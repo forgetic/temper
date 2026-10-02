@@ -70,7 +70,8 @@ pub enum Refusal {
 }
 
 /// A file operation, asked of io. io resolves every place beneath its root
-/// and refuses one that a symbolic link leads out of (`Escapes`).
+/// and refuses one that a symbolic link leads out of (`Escapes`). A store
+/// follows no link at all.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Op {
     /// Read the regular file at `at`, following symbolic links, if it holds
@@ -82,10 +83,21 @@ pub enum Op {
     /// `Scanned`, `Missing`, `NotDirectory` or a common terminal.
     Scan { at: Place, max: u32 },
     /// Make the regular file at `at` hold `content`, if it is as `expect`
-    /// says: written beside it and renamed into place, so that it is replaced
-    /// whole or not at all, after creating the missing directories on the
-    /// way. A symbolic link at `at` is not written through. Ends in `Stored`,
-    /// `Conflict`, `NotFile`, `NotDirectory` or a common terminal.
+    /// says. No part of `at` may be a symbolic link (`Linked`): io resolves
+    /// it beneath the root following none (`RESOLVE_NO_SYMLINKS`), so a store
+    /// lands in the repository its place names and in no other mounted
+    /// beneath it. The content is written beside the file and renamed into
+    /// place, so that the file is replaced whole or not at all, after
+    /// creating the missing directories on the way.
+    ///
+    /// io compares the file's version with `expect` just before the rename. A
+    /// change made before that is caught; one made by a writer outside the
+    /// agent between the comparison and the rename is not, for the two are
+    /// not one atomic step. (io runs one store at a time per root, so the
+    /// agent's own kits do not race each other there.)
+    ///
+    /// Ends in `Stored`, `Conflict`, `Linked`, `NotFile`, `NotDirectory` or a
+    /// common terminal.
     Store { at: Place, content: Box<[u8]>, expect: Expect },
 }
 
@@ -114,9 +126,11 @@ pub enum Done {
     Conflict { now: Option<Version> },
     /// Load, Scan: nothing is at the place.
     Missing,
-    /// Load, Store: what is at the place is not a regular file (for Store,
-    /// a symbolic link is not one either).
+    /// Load, Store: what is at the place is not a regular file.
     NotFile,
+    /// Store: a part of the place is a symbolic link, which a store does not
+    /// follow.
+    Linked,
     /// Scan: what is at the place is not a directory. Any operation: a
     /// directory on the way to the place is not one.
     NotDirectory,

@@ -13,7 +13,7 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::{List, Token, Writer};
+use temper_lib::{List, Token, Writer, bytes};
 
 /// One component of a path: the name of a file or a directory. Never empty,
 /// `.` or `..`, and free of `/` and NUL, so names joined by `/` read back as
@@ -133,6 +133,25 @@ pub(crate) fn joined(names: &[&Name]) -> Option<usize> {
     }
     // No slash after the last.
     Some(len.saturating_sub(1))
+}
+
+/// Whether `path`, names joined by `/`, has `.git` among its names.
+pub(crate) fn in_git(path: &[u8]) -> bool {
+    let mut from: usize = 0;
+    // Bounded: each match moves past the last.
+    for _ in 0..path.len() {
+        let Some(at) = bytes::find_from(path, b".git", from) else {
+            return false;
+        };
+        let end = at.saturating_add(4);
+        let starts = at == 0 || path.get(at.saturating_sub(1)) == Some(&b'/');
+        let ends = path.get(end).is_none() || path.get(end) == Some(&b'/');
+        if starts && ends {
+            return true;
+        }
+        from = at.saturating_add(1);
+    }
+    false
 }
 
 /// References to each of `names`, to join them.

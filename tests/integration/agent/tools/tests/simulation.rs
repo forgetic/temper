@@ -18,8 +18,9 @@ const MODIFY: Grants = Grants { inspect: true, modify: true, shell: false };
 const LIB: &[u8] = b"pub fn one() {}\npub fn two() {}\npub fn three() {}\n";
 
 /// A checkout at /work: temper, where relative paths start and which may be
-/// written, a library vendored in it, which may not, and the docs beside it;
-/// and, outside it all, /etc.
+/// written, with its .git and links of every kind, a library vendored in it,
+/// which may not be written, and the docs beside it; and, outside it all,
+/// /etc.
 struct Fixture {
     checkout: Checkout,
     repos: Vec<Repo>,
@@ -44,6 +45,9 @@ impl Fixture {
         checkout.link(b"work/temper/absolute", b"/etc/passwd");
         checkout.link(b"work/temper/loop", b"loop");
         checkout.special(b"work/temper/dev");
+        // A way into the read-only repository mounted inside the writable one.
+        checkout.link(b"work/temper/third_party", b"vendor/lib");
+        checkout.write(b"work/temper/.git/config", b"[core]\n");
         checkout.write(b"work/temper/vendor/lib/lib.rs", b"// vendored\n");
         checkout.write(b"work/docs/guide.md", b"# Guide\n");
         checkout.write(b"etc/passwd", b"root:x:0:0\n");
@@ -107,6 +111,7 @@ fn a_kit_reads_and_lists_its_checkout() {
     let script = vec![Step::Calls(vec![list(b".")]), Step::Calls(vec![read(b"link")])];
     let (answers, _) = run(Settings::calm(2), INSPECT, script);
     let entries = [
+        entry(b".git", Kind::Directory),
         entry(b"Cargo.toml", Kind::File),
         entry(b"absolute", Kind::Link),
         entry(b"big.txt", Kind::File),
@@ -117,6 +122,7 @@ fn a_kit_reads_and_lists_its_checkout() {
         entry(b"loop", Kind::Link),
         entry(b"src", Kind::Directory),
         entry(b"srclink", Kind::Link),
+        entry(b"third_party", Kind::Link),
         entry(b"vendor", Kind::Directory),
     ];
     assert_eq!(answers, vec![Outcome::Listed { entries: entries.into(), more: 0 }, read_of(LIB, 0, 3, 3)]);
@@ -168,17 +174,17 @@ fn reads_and_listings_are_bounded() {
     let (answers, _) = run(settings, INSPECT, script);
     let long = long();
     let first = [
+        entry(b".git", Kind::Directory),
         entry(b"Cargo.toml", Kind::File),
         entry(b"absolute", Kind::Link),
         entry(b"big.txt", Kind::File),
-        entry(b"dev", Kind::Other),
     ];
     let expected = vec![
         Outcome::TooLarge { size: 5000 },
         // As many whole lines as fit the 1024 bytes a read answers with.
         read_of(&long[..1020], 0, 51, 100),
         read_of(&long[1900..], 95, 5, 100),
-        Outcome::Listed { entries: first.into(), more: 7 },
+        Outcome::Listed { entries: first.into(), more: 9 },
     ];
     assert_eq!(answers, expected);
 }
@@ -276,8 +282,9 @@ fn calls_and_kits_beyond_their_room_are_refused() {
     assert_eq!(world.refusal(refused), Some(Refusal::Busy));
 
     let fixture = Fixture::new();
-    let mut world = World::new(Settings { tools: Limits { repos: 2, ..calm.tools }, ..calm }, Checkout::new());
-    let invalid = world.session(Time::ZERO, fixture.authority(INSPECT), Vec::new());
+    let authority = fixture.authority(INSPECT);
+    let mut world = World::new(Settings { tools: Limits { repos: 2, ..calm.tools }, ..calm }, fixture.checkout);
+    let invalid = world.session(Time::ZERO, authority, Vec::new());
     world.run(ITERATIONS);
     assert_eq!(world.refusal(invalid), Some(Refusal::Invalid));
 }
@@ -321,6 +328,7 @@ fn random_worlds_settle_with_every_call_answered() {
         "cancelled",
         "edited",
         "failed",
+        "linked",
         "listed",
         "no match",
         "not a directory",
@@ -329,6 +337,7 @@ fn random_worlds_settle_with_every_call_answered() {
         "not granted",
         "not read",
         "outside",
+        "protected",
         "read",
         "read only",
         "refused",
@@ -356,6 +365,8 @@ fn kind(outcome: &Outcome) -> &'static str {
         Outcome::TooLong => "too long",
         Outcome::NotFound => "not found",
         Outcome::NotFile => "not a file",
+        Outcome::Linked => "linked",
+        Outcome::Protected => "protected",
         Outcome::NotDirectory => "not a directory",
         Outcome::TooLarge { .. } => "too large",
         Outcome::NotRead => "not read",
@@ -368,7 +379,9 @@ fn kind(outcome: &Outcome) -> &'static str {
     }
 }
 
-const PATHS: [&[u8]; 18] = [
+const PATHS: [&[u8]; 20] = [
+    b".git/config",
+    b"vendor/lib/lib.rs",
     b"src/lib.rs",
     b"src",
     b".",
@@ -389,7 +402,7 @@ const PATHS: [&[u8]; 18] = [
     b"Cargo.toml/x",
 ];
 
-const HOT: [&[u8]; 3] = [b"src/lib.rs", b"Cargo.toml", b"src/new.rs"];
+const HOT: [&[u8]; 5] = [b"src/lib.rs", b"Cargo.toml", b"src/new.rs", b"third_party/lib.rs", b"third_party/new.rs"];
 
 /// What edits replace: in every file, in some, in one line of one, nowhere.
 const SNIPPETS: [&[u8]; 5] = [b"\n", b"pub", b"fn one", b"written", b"nowhere"];
@@ -494,26 +507,14 @@ fn a_kit_creates_files_and_replaces_those_its_llm_read() {
         Step::Calls(vec![write(b"src/lib.rs", b"pub fn one() {}\n")]),
         // What its LLM wrote, it knows: no read is needed to write it again.
         Step::Calls(vec![write(b"src/lib.rs", b"pub fn uno() {}\n")]),
-        // A link on the way is followed, and the place is the one read.
-        Step::Calls(vec![read(b"srclink/main.rs")]),
-        Step::Calls(vec![write(b"srclink/main.rs", b"fn main() { run() }\n")]),
     ];
     let (answers, world) = run(Settings::calm(20), MODIFY, script);
-    let expected = vec![
-        written(true),
-        written(true),
-        read_of(LIB, 0, 3, 3),
-        written(false),
-        written(false),
-        read_of(b"fn main() {}\n", 0, 1, 1),
-        written(false),
-    ];
+    let expected = vec![written(true), written(true), read_of(LIB, 0, 3, 3), written(false), written(false)];
     assert_eq!(answers, expected);
     let checkout = world.checkout();
     assert_eq!(checkout.content(b"work/temper/src/new.rs"), Some(&b"pub fn new() {}\n"[..]));
     assert_eq!(checkout.content(b"work/temper/tests/deep/it.rs"), Some(&b"#[test]\n"[..]));
     assert_eq!(checkout.content(b"work/temper/src/lib.rs"), Some(&b"pub fn uno() {}\n"[..]));
-    assert_eq!(checkout.content(b"work/temper/src/main.rs"), Some(&b"fn main() { run() }\n"[..]));
 }
 
 #[test]
@@ -610,16 +611,27 @@ fn writes_stay_in_writable_repositories_of_granted_kits() {
             write(b"vendor/lib/lib.rs", b"x"),
             write(b"/etc/passwd", b"x"),
             write(b"../../etc/passwd", b"x"),
-            // A link on the way out of the repository.
-            write(b"escape/x", b"x"),
             write(b"big.txt", &[b'x'; 5000]),
             write(b"src", b"x"),
             write(b"dev", b"x"),
             write(b"Cargo.toml/x", b"x"),
+            // A repository's .git is not the LLM's to change.
+            write(b".git/config", b"[core]\n\tfsmonitor = evil\n"),
+            write(b".git/hooks/pre-commit", b"evil"),
+            write(b"vendor/lib/.git/config", b"x"),
         ]),
-        // A link is not written through, even once read.
-        Step::Calls(vec![read(b"link")]),
-        Step::Calls(vec![write(b"link", b"x")]),
+        // Writes follow no link, at the end of the path or on the way: not
+        // into a read-only repository mounted inside a writable one, not out
+        // of the checkout, not into a file of their own repository, even
+        // once read through the link.
+        Step::Calls(vec![write(b"third_party/new.rs", b"x"), write(b"escape/x", b"x"), write(b"srclink/new.rs", b"x")]),
+        Step::Calls(vec![read(b"third_party/lib.rs"), read(b"link"), read(b"srclink/main.rs")]),
+        Step::Calls(vec![
+            write(b"third_party/lib.rs", b"x"),
+            edit(b"third_party/lib.rs", b"vendored", b"mine", false),
+            write(b"link", b"x"),
+            edit(b"srclink/main.rs", b"main", b"start", false),
+        ]),
     ];
     let (answers, world) = run(Settings::calm(24), MODIFY, script);
     let expected = vec![
@@ -627,13 +639,23 @@ fn writes_stay_in_writable_repositories_of_granted_kits() {
         Outcome::ReadOnly,
         Outcome::Outside,
         Outcome::Outside,
-        Outcome::Outside,
         Outcome::TooLarge { size: 5000 },
         Outcome::NotFile,
         Outcome::NotFile,
         Outcome::NotDirectory,
+        Outcome::Protected,
+        Outcome::Protected,
+        Outcome::ReadOnly,
+        Outcome::Linked,
+        Outcome::Linked,
+        Outcome::Linked,
+        read_of(b"// vendored\n", 0, 1, 1),
         read_of(LIB, 0, 3, 3),
-        Outcome::NotFile,
+        read_of(b"fn main() {}\n", 0, 1, 1),
+        Outcome::Linked,
+        Outcome::Linked,
+        Outcome::Linked,
+        Outcome::Linked,
     ];
     assert_eq!(answers, expected);
     assert_eq!(world.checkout().files(), Fixture::new().checkout.files(), "nothing changed");
