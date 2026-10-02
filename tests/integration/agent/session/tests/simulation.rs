@@ -364,6 +364,32 @@ fn the_opener_answers_a_call_past_its_deadline_as_timed_out_and_the_conversation
     assert_eq!((stats.delegates, stats.delegate_timeouts, stats.withdraws), (2, 2, 0));
 }
 
+/// A close and a run's end that come at the same instant, the close first:
+/// the cancel the close sends goes out after the run has ended, and loses.
+#[test]
+fn a_cancel_sent_after_its_run_ended_in_the_same_iteration_is_a_lost_race() {
+    let mut crossed = 0;
+    for seed in 0..40 {
+        let calm = Settings::calm(seed);
+        let settings = Settings {
+            granule: Duration::from_secs(5),
+            tool: Span::millis(1, 10_000),
+            serve: 500,
+            serving: Span::millis(1, 10_000),
+            abandon: 1000,
+            abandon_after: Span::millis(0, 30_000),
+            ..calm
+        };
+        let mut world = World::new(settings);
+        for _ in 0..3 {
+            world.submit(Time::ZERO, spec(b"fix the build"));
+        }
+        world.run(ITERATIONS);
+        crossed += world.stats().cancels_crossed;
+    }
+    assert!(crossed > 0, "some cancels crossed the end of their run");
+}
+
 #[test]
 fn the_turn_budget_ends_a_session_that_keeps_calling_tools() {
     let calm = Settings::calm(12);
@@ -562,7 +588,7 @@ fn noisy(seed: u64) -> Settings {
     let mut millis = |low: u64, high: u64| Duration::from_millis(rng.between(low, high));
     let call_timeout = millis(500, 5_000);
     let tool_timeout = millis(500, 5_000);
-    let delegate_timeout = millis(500, 5_000);
+    let delegate_timeout = millis(500, 10_000);
     let session_timeout = millis(2_000, 120_000);
     let latency_max = millis(10, 4_000);
     let think = millis(0, 5_000);
@@ -610,7 +636,8 @@ fn noisy(seed: u64) -> Settings {
         cancels_lost: pick(0, 600),
         double_close: pick(0, 500),
         serve: pick(0, 800),
-        serving: Span::millis(10, 5_000),
+        granule: Duration::from_millis((pick(0, 1) * pick(100, 1_000)).into()),
+        serving: Span::millis(10, 3_000),
         ..calm
     }
 }

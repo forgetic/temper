@@ -46,6 +46,13 @@ impl Model {
         self.sessions.len()
     }
 
+    /// Tool runs present, the tools' and the opener's, ended ones included
+    /// until they are reclaimed.
+    #[must_use]
+    pub fn runs(&self) -> u32 {
+        self.runs.len()
+    }
+
     /// When the earliest alarm falls due.
     #[must_use]
     pub fn next_deadline(&self) -> Option<Time> {

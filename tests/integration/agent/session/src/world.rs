@@ -82,6 +82,9 @@ pub struct Settings {
     pub serve: u32,
     /// How long the opener takes to answer a call it serves.
     pub serving: Span,
+    /// The grid every delivery is rounded up to, so that some come at the
+    /// same instant; zero for none.
+    pub granule: Duration,
 }
 
 impl Settings {
@@ -135,6 +138,7 @@ impl Settings {
             double_close: 0,
             serve: 0,
             serving: Span::millis(10, 2_000),
+            granule: Duration::ZERO,
         }
     }
 }
@@ -196,6 +200,9 @@ pub struct Stats {
     pub ran_after_cancel: u32,
     /// Closes that reached a session already closing.
     pub closed_while_closing: u32,
+    /// Cancels and withdraws for runs that ended in the iteration they were
+    /// sent.
+    pub cancels_crossed: u32,
     /// Calls delegated to the opener; withdrawn, or whose answer won the race
     /// with the withdraw; answered as timed out by the opener itself.
     pub delegates: u32,
@@ -546,6 +553,8 @@ impl World {
         self.agent.reclaim();
         self.provider.reclaim();
         assert!(self.agent.sessions() <= self.settings.agent.sessions, "sessions stay within their slots");
+        let runs = self.settings.agent.sessions * self.settings.agent.parallel_tools * 2;
+        assert!(self.agent.runs() <= runs, "runs stay within two batches a session");
         assert!(self.provider.calls() <= self.settings.provider.calls, "calls stay within their slots");
     }
 
@@ -599,7 +608,10 @@ impl World {
                 let mut outcome = self.run_tool(&call);
                 let mut at = self.now.saturating_add(self.draw(self.settings.tool));
                 if at > deadline {
-                    (outcome, at) = (Outcome::TimedOut, deadline);
+                    // The tools notice the deadline, and say so, a moment
+                    // after it passes.
+                    let noticed = deadline.saturating_add(self.draw(self.settings.network));
+                    (outcome, at) = (Outcome::TimedOut, noticed);
                     self.stats.tool_timeouts += 1;
                 }
                 let delivery = self.schedule(at, Delivery::ToolDone { owner, outcome });
@@ -608,7 +620,12 @@ impl World {
                 self.stats.tool_runs += 1;
             }
             agent::Request::CancelTool { owner } => {
-                let session = *self.runs.get(&owner).expect("a run is cancelled while the agent waits for its end");
+                // A run that ended in this iteration, before the cancel went
+                // out: the cancel lost the race.
+                let Some(&session) = self.runs.get(&owner) else {
+                    self.stats.cancels_crossed += 1;
+                    return;
+                };
                 self.closing.insert(session);
                 if let Some(run) = self.tools.get(&owner) {
                     assert!(!run.served, "the tools cancel only the runs they were asked for");
@@ -626,7 +643,10 @@ impl World {
                 self.serve(owner, opener.raw(), call, deadline);
             }
             agent::Request::Withdraw { owner } => {
-                let session = *self.runs.get(&owner).expect("a call is withdrawn while the agent waits for its end");
+                let Some(&session) = self.runs.get(&owner) else {
+                    self.stats.cancels_crossed += 1;
+                    return;
+                };
                 self.closing.insert(session);
                 if let Some(run) = self.tools.get(&owner) {
                     assert!(run.served, "the opener withdraws only the calls it serves");
@@ -1079,6 +1099,7 @@ impl World {
     /// The invariants of a world where nothing is left to happen.
     fn assert_settled(&self) {
         assert_eq!(self.agent.sessions(), 0, "every session has ended and been reclaimed");
+        assert_eq!(self.agent.runs(), 0, "every run has ended and been reclaimed");
         assert_eq!(self.agent.next_deadline(), None, "no alarm outlives its session");
         assert_eq!(self.provider.calls(), 0, "the provider holds no call");
         assert!(self.calls.is_empty() && self.calling.is_empty(), "no call is in flight");
@@ -1104,6 +1125,10 @@ impl World {
     }
 
     fn schedule(&mut self, at: Time, delivery: Delivery) -> (Time, u64) {
+        // On a coarse grid, if the world has one, so that deliveries coincide.
+        let granule = self.settings.granule.as_nanos();
+        let at =
+            if granule > 0 { Time::from_nanos(at.as_nanos().div_ceil(granule).saturating_mul(granule)) } else { at };
         let key = (at, self.next_serial());
         self.wire.insert(key, delivery);
         key

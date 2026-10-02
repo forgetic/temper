@@ -28,6 +28,8 @@
 //! (none)    open, admitted             Calling   opened, complete
 //!           open, busy or invalid      (none)    ended: busy, invalid
 //! Calling   completed, tool use        Tooling   used, the first batch's runs
+//!           completed, only invalid    Calling   used, complete
+//!           completed, no calls        Yielded   used, yielded (malformed)
 //!           completed, otherwise       Yielded   used, yielded
 //!           failed, transient          Backoff
 //!           failed, otherwise          Closed    ended: failed
@@ -37,6 +39,7 @@
 //! Tooling   a run done, batch running  Tooling
 //!           a run done, more calls     Tooling   the next batch's runs
 //!           a run done, no more        Calling   complete
+//!           a result that does not fit Closing   a cancel or withdraw per run left
 //!           close, expiry              Closing   a cancel or withdraw per run
 //! Yielded   continue                   Calling   complete
 //!           close, expiry              Closed    ended: closed, budget (time)
@@ -627,6 +630,10 @@ fn advance(
     env: &Env<Limits>,
     out: &mut Queue<Request>,
 ) -> State {
+    // Time does not wait: no batch starts once it is up.
+    if env.now >= conversation.expires {
+        return finish(conversation, OUT_OF_TIME, out);
+    }
     let message = conversation.transcript.last().expect("the assistant message is last while tooling");
     let end = u32::try_from(message.content.len()).expect("a message whose calls were counted has its blocks counted");
     let mut batch: Option<Effect> = None;
@@ -643,7 +650,7 @@ fn advance(
                 }
                 let run = Run { session: id, slot: tools.slots.len(), block: index, by: By::Tools };
                 let run = runs.insert(run).expect("the run slab has room for every session's batches");
-                let deadline = env.now.saturating_add(env.limits.tool_timeout);
+                let deadline = env.now.saturating_add(env.limits.tool_timeout).min(conversation.expires);
                 out.push(Request::Tool { owner: run.token(), call: call.clone(), deadline });
                 tools.slots.push(Slot::Running { run }).expect("a slot for every call");
                 tools.running = tools.running.saturating_add(1);
@@ -656,7 +663,7 @@ fn advance(
                 }
                 let run = Run { session: id, slot: tools.slots.len(), block: index, by: By::Opener };
                 let run = runs.insert(run).expect("the run slab has room for every session's batches");
-                let deadline = env.now.saturating_add(env.limits.delegate_timeout);
+                let deadline = env.now.saturating_add(env.limits.delegate_timeout).min(conversation.expires);
                 let (opener, call) = (conversation.opener, *ticket);
                 out.push(Request::Delegate { owner: run.token(), opener, call, deadline });
                 tools.slots.push(Slot::Running { run }).expect("a slot for every call");
@@ -729,6 +736,10 @@ fn resumed(
     env: &Env<Limits>,
     out: &mut Queue<Request>,
 ) -> State {
+    // A budget the last answer took past its end comes before the room.
+    if let Some(spent) = spent(conversation, env.now) {
+        return finish(conversation, End::Budget { spent }, out);
+    }
     let content = unrun(conversation, text);
     if conversation.transcript.room() == 0 || !charge(conversation, content_cost(&content), &env.limits) {
         return finish(conversation, End::TranscriptFull, out);

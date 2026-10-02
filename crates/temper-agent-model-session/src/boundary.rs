@@ -10,9 +10,10 @@
 //! opener's token (4.2). And requests out with exactly one terminal event in
 //! (a [`Request::Complete`] is ended by one of [`Event::Completed`],
 //! [`Event::Failed`] or [`Event::Cancelled`]; a [`Request::Delegate`], to the
-//! opener, by [`Event::Answered`] or [`Event::AnswerCancelled`]). A request's
-//! `owner` is the session's token, or a tool run's own, echoed on its terminal
-//! event.
+//! opener, by [`Event::Answered`] or [`Event::AnswerCancelled`]; a
+//! [`Request::Tool`] by [`Event::ToolDone`] or [`Event::ToolCancelled`]). A
+//! request's `owner` is echoed on its terminal event: the session's token for
+//! a call to the LLM, and a tool run's own for a tool call or a delegated one.
 
 use alloc::boxed::Box;
 
