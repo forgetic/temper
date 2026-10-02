@@ -18,8 +18,13 @@ pub struct Limits {
 /// The most memory the model holds under `limits`, in bytes (6.4), or `None`
 /// if it does not fit a `u64` or the limits cannot be honoured: the
 /// sub-models' own, or limits under which a session would refuse what the run
-/// asks of it within its own limits (fewer sessions than the run's
-/// conversations, a smaller budget or answer, fewer repositories).
+/// asks of it within its own limits whatever the charter (fewer sessions than
+/// the run's conversations, a smaller budget or `max_tokens`, fewer
+/// repositories). How many bytes an opening holds is the charter's, and for a
+/// sub-agent its brief's, which only its asker's session bounds: a session
+/// refuses one larger than its byte limit at its entrance, which refuses a
+/// run as `Invalid(Conversation)` for main, and answers a sub-agent's call as
+/// unanswered.
 ///
 /// It is the sub-models', plus what the top level keeps: a peer for each
 /// conversation, with the asks and answers of its session's tickets, the maps

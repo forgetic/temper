@@ -112,10 +112,14 @@ struct Harness {
 
 impl Harness {
     fn new() -> Harness {
+        Harness::with(&LIMITS)
+    }
+
+    fn with(limits: &Limits) -> Harness {
         Harness {
-            model: Model::new(&LIMITS, 1),
-            env: Env { now: Time::ZERO, limits: LIMITS },
-            out: Queue::with_capacity(max_out(&LIMITS)),
+            model: Model::new(limits, 1),
+            env: Env { now: Time::ZERO, limits: *limits },
+            out: Queue::with_capacity(max_out(limits)),
         }
     }
 
@@ -333,6 +337,31 @@ fn a_checkout_the_tools_cannot_lay_out_refuses_main_as_invalid() {
     };
     assert_eq!(answer, &run::Answer::Refused(run::Refusal::Invalid(run::Invalid::Conversation)));
     assert_eq!(h.model.peers(), 0);
+}
+
+#[test]
+fn an_opening_larger_than_a_session_holds_refuses_main_as_invalid() {
+    // Limits a session honours whatever the charter, but not every opening:
+    // that is the charter's, and is refused at the sessions' entrance.
+    let limits = Limits { session: session::Limits { session_bytes: 2048, ..LIMITS.session }, ..LIMITS };
+    assert!(worst_case(&limits).is_some());
+    let mut h = Harness::with(&limits);
+    let brief = filler(2048);
+    let emitted = h.step(Event::Start {
+        reply_to: ReplyTo::new(Token::new(7)),
+        worker: Token::new(7),
+        charter: Charter { brief, ..charter() },
+    });
+    let [Request::Admitted { run, .. }, Request::Read { .. }] = &*emitted else {
+        panic!("expected an admitted run, got {emitted:?}");
+    };
+    let emitted = h.step(Event::Read { owner: *run, read: run::Read::Missing });
+    let [Request::Answer { to: _, answer }] = &*emitted else {
+        panic!("expected the run's answer, got {emitted:?}");
+    };
+    assert_eq!(answer, &run::Answer::Refused(run::Refusal::Invalid(run::Invalid::Conversation)));
+    h.model.reclaim();
+    assert_eq!((h.model.peers(), h.model.session().sessions()), (0, 0));
 }
 
 #[test]
