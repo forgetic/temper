@@ -236,13 +236,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "temper-fake-engine-model"
-version = "0.0.0"
-dependencies = [
- "temper-lib",
-]
-
-[[package]]
 name = "temper-forge-model"
 version = "0.0.0"
 dependencies = [
