@@ -3,7 +3,7 @@
 use temper_lib::{Env, Id, Map, Queue, Slab, Token};
 
 use crate::boundary::{Event, Hosting, Reason, Request};
-use crate::call::Call;
+use crate::call::{self, Call};
 use crate::facts::{Fact, Facts};
 use crate::hosted::{self, Hosted};
 use crate::limits::{self, Limits};
@@ -33,6 +33,9 @@ pub struct Model {
     pub(crate) facts: Facts,
     /// The worker is shutting down: it admits no more runs.
     pub(crate) shut: bool,
+    /// Answers the engine has yet to acknowledge, as the parent last said:
+    /// each keeps its run's slot.
+    pub(crate) unacknowledged: u32,
 }
 
 impl Model {
@@ -47,6 +50,7 @@ impl Model {
             ready: Map::with_capacity(limits.slots),
             facts: Facts::with_capacity(limits.facts),
             shut: false,
+            unacknowledged: 0,
         }
     }
 
@@ -70,6 +74,20 @@ impl Model {
     #[must_use]
     pub fn hosting(&self, owner: Token) -> Option<Hosting> {
         hosted::hosting(self, owner)
+    }
+
+    /// Whether the relayed call `call`, as the host names it, still waits for
+    /// the engine's answer: neither answered, withdrawn, nor answered as
+    /// unavailable as its run left live.
+    #[must_use]
+    pub fn is_relayed(&self, call: Token) -> bool {
+        match self.calls.get(Id::from_token(call)) {
+            Some(entry) => match entry.state {
+                call::State::Relayed { .. } => true,
+                call::State::Pushing { .. } | call::State::Closed => false,
+            },
+            None => false,
+        }
     }
 
     /// Whether a run is ready to be cancelled. While one is, the loop resumes
@@ -109,6 +127,7 @@ pub fn step(model: &mut Model, env: &Env<Limits>, event: Event, out: &mut Queue<
         Event::Relayed { run, attempt, call, answer } => hosted::relayed(model, run, attempt, call, answer, out),
         Event::CancelAll { reason } => hosted::cancel_all(model, reason),
         Event::Report => hosted::report(model, out),
+        Event::Unacknowledged { answers } => model.unacknowledged = answers,
         Event::Prepared { owner, workspace } => hosted::prepared(model, owner, workspace, out),
         Event::Unprepared { owner, failure, detail } => hosted::unprepared(model, env, owner, failure, detail, out),
         Event::Started { owner, agent } => hosted::started(model, env, owner, agent, out),

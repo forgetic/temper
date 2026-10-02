@@ -30,12 +30,12 @@
 //!
 //! It owns the engine link (worker-model.md, section 2): it dials the engine,
 //! says hello on every channel, with its slots, the workstreams its checkouts
-//! hold and the runs it hosts, and delivers each run's one answer, holding it
-//! while the channel is down and sending it right after the next hello, which
-//! lists the run as answered. Past a grace without a channel it cancels every
-//! run itself, which saves their work first. Told to shut down, it cancels
-//! every run and is done once every answer has gone, or been given up past
-//! the grace.
+//! hold and the runs it hosts, and delivers each run's one answer, keeping it
+//! until the engine acknowledges it and sending it again right after every
+//! hello, which lists the run as answered. Past a grace without a channel it
+//! cancels every run itself, which saves their work first. Told to shut down,
+//! it cancels every run and is done once the engine has every answer, or the
+//! answers were given up past the grace.
 //!
 //! Its records toward the protocol layer ([`Event`], [`Request`]) carry the
 //! children's types where the children meet the protocol as they are: the

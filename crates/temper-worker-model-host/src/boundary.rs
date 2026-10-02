@@ -64,6 +64,11 @@ pub enum Event {
     /// From the top level: say what the host hosts, for the engine to keep or
     /// cancel on reconnecting.
     Report,
+    /// From the top level: `answers` the host made have yet to be
+    /// acknowledged by the engine. Each keeps its run's slot until it is, so
+    /// that the engine, which frees a slot once it has the answer, never finds
+    /// a worker with more runs than slots.
+    Unacknowledged { answers: u32 },
     /// Terminal for `Prepare`: the workspace is ready, and `workspace` names it
     /// from now on.
     Prepared { owner: Token, workspace: Token },
@@ -356,9 +361,10 @@ pub struct Landed {
 /// Why an assignment was refused.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Refusal {
-    /// Every slot is taken, the run is hosted already under another attempt
-    /// that has not answered yet, or the worker is shutting down. A later
-    /// retry, on this worker or another, may find room.
+    /// Every slot is taken (by a run hosted, or one whose answer the engine
+    /// has yet to acknowledge), the run is hosted already under another
+    /// attempt that has not answered yet, or the worker is shutting down. A
+    /// later retry, on this worker or another, may find room.
     Busy,
     /// The assignment does not fit the limits.
     Invalid(Invalid),

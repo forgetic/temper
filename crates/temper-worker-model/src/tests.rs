@@ -60,7 +60,7 @@ const LIMITS: Limits = Limits {
     redial: Duration::from_secs(1),
     redial_max: Duration::from_secs(8),
     told: 2,
-    stalled: 2,
+    stalled: 4,
 };
 
 /// What io's commits commit, when there is a change.
@@ -616,6 +616,8 @@ fn the_link_dials_at_once_and_again_after_a_jittered_backoff() {
     let hello = Hello { slots: 2, workstreams: Box::new([]), hosting: Box::new([]) };
     assert_eq!(&*emitted, [Request::Hello { hello }], "hello, first");
     assert!(h.model.is_connected());
+    let proved = Event::Acknowledged { run: Token::new(9), attempt: Token::new(9) };
+    assert!(h.step(proved).is_empty(), "the engine speaks: the channel has proved itself");
     assert!(h.step(Event::Lost).is_empty());
     let at = h.model.next_deadline().expect("the grace, and a dial").as_nanos();
     let now = h.env.now.as_nanos();
@@ -646,7 +648,7 @@ fn an_answer_made_while_the_channel_is_down_follows_the_next_hello() {
     let saved = work(&[], Some(Box::new([host::Landing::Unchanged])));
     let failed = host::Answer::Failed { failure, detail: bytes(b"bye"), work: saved };
     assert_eq!(&*emitted, [Request::Hello { hello }, answer(first, failed)], "the answer follows the hello");
-    assert_eq!(h.model.held(), 0);
+    assert_eq!(h.model.held(), 1, "until the engine acknowledges it");
 }
 
 #[test]
@@ -681,25 +683,108 @@ fn past_the_grace_every_run_is_cancelled_and_the_answer_held_until_the_engine_is
 }
 
 #[test]
-fn relays_made_while_the_channel_is_down_follow_the_hello_while_they_fit() {
+fn relays_made_while_the_channel_is_down_follow_the_hello_while_their_calls_wait() {
     let mut h = Harness::new(&LIMITS);
     h.connect();
     let r = h.live(1);
     assert!(h.step(Event::Lost).is_empty());
-    for call in 1..=3 {
+    for call in 1..=5 {
         let ask = channel::Ask::Relay { body: bytes(b"read") };
-        assert_eq!(&*h.say(r, Up::Call { call: Token::new(call), ask }), [read(r)], "held");
-        let emitted = h.say(r, Up::Withdraw { call: Token::new(call) });
-        let withdrawn = Down::Answer { call: Token::new(call), reply: channel::Reply::Withdrawn };
-        assert_eq!(&*emitted, [read(r), send(r, withdrawn)]);
-        assert!(h.step(Event::Sent { owner: r.agent }).is_empty());
+        assert_eq!(&*h.say(r, Up::Call { call: Token::new(call), ask }), [read(r)], "kept");
+        if call <= 3 {
+            withdraw(&mut h, r, call);
+        }
     }
-    assert_eq!((h.model.stalled(), h.model.stalled_lost()), (2, 1));
+    assert_eq!(h.model.stalled(), 2, "room is made by dropping the relays withdrawn");
+    withdraw(&mut h, r, 5);
     h.at(5);
     let emitted = h.connect();
-    let [Request::Hello { .. }, Request::Relay { .. }, Request::Relay { .. }] = &*emitted else {
-        panic!("expected the relays held after the hello, got {emitted:?}");
+    let [Request::Hello { .. }, Request::Relay { .. }] = &*emitted else {
+        panic!("expected the one relay still waiting after the hello, got {emitted:?}");
     };
+    assert_eq!(h.model.stalled(), 0);
+}
+
+/// The run withdraws its relayed call `call`, which is answered at once.
+fn withdraw(h: &mut Harness, r: Names, call: u64) {
+    let emitted = h.say(r, Up::Withdraw { call: Token::new(call) });
+    let withdrawn = Down::Answer { call: Token::new(call), reply: channel::Reply::Withdrawn };
+    assert_eq!(&*emitted, [read(r), send(r, withdrawn)]);
+    assert!(h.step(Event::Sent { owner: r.agent }).is_empty());
+    // The iteration ends: the call's slot is free again.
+    h.model.reclaim();
+}
+
+#[test]
+fn an_answer_is_kept_and_sent_after_every_hello_until_the_engine_acknowledges_it() {
+    let mut h = Harness::new(&LIMITS);
+    h.connect();
+    let r = h.live(1);
+    let finish = channel::Finish::Ended { outcome: bytes(b"done") };
+    h.say(r, Up::Finish { finish });
+    let emitted = h.goes(r);
+    let emitted = h.git(emitted, false);
+    let saved = work(&[], Some(Box::new([host::Landing::Unchanged])));
+    let ended = host::Answer::Ended { outcome: bytes(b"done"), work: saved };
+    let [Request::Answer { .. }] = &*emitted else {
+        panic!("expected the answer, got {emitted:?}");
+    };
+    assert_eq!(h.model.held(), 1, "kept until the engine has it");
+    assert!(h.step(Event::Lost).is_empty(), "the answer may be lost with the channel");
+    h.at(5);
+    let emitted = h.connect();
+    let hosting = [Hosted { run: r.run, attempt: r.attempt, phase: Phase::Answered }];
+    let hello = Hello { slots: 2, workstreams: Box::new([key(1)]), hosting: Box::new(hosting) };
+    assert_eq!(&*emitted, [Request::Hello { hello }, answer(r, ended)], "sent again after the hello");
+    assert!(h.step(Event::Assign { assignment: assignment(1) }).is_empty(), "the attempt answered is dropped");
+    assert!(h.step(Event::Acknowledged { run: r.run, attempt: r.attempt }).is_empty());
+    assert!(h.step(Event::Acknowledged { run: r.run, attempt: r.attempt }).is_empty(), "again: nothing");
+    assert_eq!(h.model.held(), 0);
+    assert!(h.step(Event::Lost).is_empty());
+    h.at(10);
+    let emitted = h.connect();
+    let hello = Hello { slots: 2, workstreams: Box::new([key(1)]), hosting: Box::new([]) };
+    assert_eq!(&*emitted, [Request::Hello { hello }], "forgotten");
+}
+
+#[test]
+fn an_answer_the_engine_has_yet_to_acknowledge_keeps_its_slot() {
+    let mut h = Harness::new(&LIMITS);
+    h.connect();
+    let first = h.live(1);
+    h.live(2);
+    h.step(Event::Cancel { run: first.run, attempt: first.attempt });
+    h.step(Event::Sent { owner: first.agent });
+    let emitted = h.goes(first);
+    assert_eq!(h.git(emitted, false).len(), 1, "answered");
+    h.model.reclaim();
+    assert_eq!(h.model.host().hosted(), 1, "its host slot is back");
+    let third = Names { run: Token::new(3), attempt: attempt(3), ..first };
+    let busy = host::Answer::Refused(host::Refusal::Busy);
+    assert_eq!(&*h.step(Event::Assign { assignment: assignment(3) }), [answer(third, busy)], "not yet free");
+    assert_eq!(h.model.held(), 1, "a refusal is not kept");
+    assert!(h.step(Event::Acknowledged { run: first.run, attempt: first.attempt }).is_empty());
+    h.assign(3);
+}
+
+#[test]
+fn a_channel_that_opens_and_drops_unproved_keeps_the_backoff_growing() {
+    let mut h = Harness::new(&LIMITS);
+    h.connect();
+    assert!(h.step(Event::Lost).is_empty());
+    let first = h.model.next_deadline().expect("a dial").as_nanos();
+    assert!(first <= Duration::from_secs(1).as_nanos());
+    h.env.now = Time::from_nanos(first);
+    h.connect();
+    assert!(h.step(Event::Lost).is_empty(), "dropped before the engine said a word");
+    let second = h.model.next_deadline().expect("a dial").as_nanos() - first;
+    assert!(second >= Duration::from_secs(1).as_nanos(), "the backoff doubled: {second}");
+    h.env.now = Time::from_nanos(first + second);
+    h.connect();
+    assert!(h.step(Event::Acknowledged { run: Token::new(9), attempt: Token::new(9) }).is_empty(), "proved");
+    assert!(h.step(Event::Lost).is_empty());
+    let third = h.model.next_deadline().expect("a dial").as_nanos() - first - second;
+    assert!(third <= Duration::from_secs(1).as_nanos(), "the backoff starts over: {third}");
 }
 
 // Shutting down.
@@ -722,10 +807,25 @@ fn a_worker_shutting_down_cancels_every_run_and_is_done_once_every_answer_has_go
         panic!("expected the answer, got {emitted:?}");
     };
     assert_eq!(*run, r.run);
-    assert!(!h.model.is_done(), "until the reclaim point");
     h.model.reclaim();
+    assert!(!h.model.is_done(), "until the engine has the answer");
+    assert!(h.step(Event::Acknowledged { run: r.run, attempt: r.attempt }).is_empty());
     assert!(h.model.is_done());
     assert_eq!(h.model.abandoned(), 0, "every answer delivered");
+}
+
+#[test]
+fn a_worker_shutting_down_offers_no_slots() {
+    let mut h = Harness::new(&LIMITS);
+    h.connect();
+    let r = h.live(1);
+    assert!(h.step(Event::Shutdown).is_empty());
+    assert!(h.step(Event::Lost).is_empty());
+    h.at(5);
+    let emitted = h.connect();
+    let hosting = [Hosted { run: r.run, attempt: r.attempt, phase: Phase::Active }];
+    let hello = Hello { slots: 0, workstreams: Box::new([key(1)]), hosting: Box::new(hosting) };
+    assert_eq!(&*emitted, [Request::Hello { hello }], "it takes no more work");
 }
 
 #[test]
@@ -773,6 +873,7 @@ fn the_worst_case_is_bounded_or_refused() {
         Limits { host: host::Limits { outcome_bytes: 33, ..LIMITS.host }, ..LIMITS },
         Limits { host: host::Limits { event_bytes: 17, ..LIMITS.host }, ..LIMITS },
         Limits { host: host::Limits { held: 5, ..LIMITS.host }, ..LIMITS },
+        Limits { stalled: 3, ..LIMITS },
         Limits { agent: agent::Limits { call_bytes: 65, ..LIMITS.agent }, ..LIMITS },
         Limits {
             checkout: checkout::Limits { message_bytes: 8, ..LIMITS.checkout },
@@ -803,8 +904,9 @@ fn max_out_follows_the_longest_chain_of_hand_offs() {
     // host step whose 4 requests may each be answered at once, so an entry
     // point takes 2 * (1 + 4) host steps; 1 + 2 * 4 * 3 of each capability
     // (the first, those answering the first host steps, two for each that
-    // follows), and one more of the checkout. On connecting, 2 answers and 2
-    // relays follow the hello.
+    // follows), and one more of the checkout. On connecting, 2 answers, 4
+    // relays and the bounces of 2 runs' 2 held and 4 waiting events follow
+    // the hello.
     assert_eq!(host::max_out(&LIMITS.host), 4);
-    assert_eq!(max_out(&LIMITS), 10 * 4 + 26 * checkout::MAX_OUT + 25 * agent::MAX_OUT + 2 + 2);
+    assert_eq!(max_out(&LIMITS), 10 * 4 + 26 * checkout::MAX_OUT + 25 * agent::MAX_OUT + 2 + 4 + 2 * (2 + 4));
 }

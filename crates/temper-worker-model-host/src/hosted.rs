@@ -27,8 +27,10 @@
 //! state       event                         next        emits
 //! -           assign, of the attempt hosted -           (dropped)
 //!             assign, beyond the limits     -           answer: invalid
-//!             assign, no slot, hosted under
-//!               another attempt, or shut    -           answer: busy
+//!             assign, no slot (answers not
+//!               acknowledged take theirs),
+//!               hosted under another
+//!               attempt, or shut            -           answer: busy
 //!             assign                        Preparing   prepare
 //! Preparing   prepared                      Starting    start
 //!             unprepared                    Closed      answer: unprepared
@@ -195,14 +197,17 @@ pub(crate) fn assign(
     if fenced(&model.names, &model.hosted, assignment.run, assignment.attempt).is_some() {
         return;
     }
-    let Model { hosted, names, facts, shut, .. } = model;
+    let Model { hosted, names, facts, shut, unacknowledged, .. } = model;
     // An assignment that can never fit is invalid, room or not: busy invites a
     // retry.
     if let Err(invalid) = assignment::check(&assignment, &env.limits) {
         refuse(reply_to, &assignment, Refusal::Invalid(invalid), out);
         return;
     }
-    if *shut || hosted.is_full() || names.contains_key(&assignment.run) {
+    // A slot whose run has answered is not free until the engine has the
+    // answer.
+    let taken = hosted.len().saturating_add(*unacknowledged);
+    if *shut || taken >= env.limits.slots || names.contains_key(&assignment.run) {
         refuse(reply_to, &assignment, Refusal::Busy, out);
         return;
     }

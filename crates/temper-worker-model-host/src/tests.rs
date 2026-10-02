@@ -379,6 +379,21 @@ fn an_assignment_with_every_slot_taken_is_refused_as_busy_until_one_comes_back()
 }
 
 #[test]
+fn answers_the_engine_has_yet_to_acknowledge_keep_their_slots() {
+    let mut h = Harness::new(LIMITS);
+    let hosted = h.admit(1);
+    assert!(h.step(Event::Unacknowledged { answers: 1 }).is_empty());
+    let busy = Names { run: Token::new(2), attempt: token(2, 1000), ..hosted };
+    assert_eq!(&*h.assign(assignment(2)), [answer(busy, Answer::Refused(Refusal::Busy))], "no slot is free");
+    assert!(h.assign(assignment(1)).is_empty(), "the attempt hosted, sent again, is still dropped");
+    let invalid = Assignment { charter: Box::from([0_u8; 65]), ..assignment(2) };
+    let refused = Answer::Refused(Refusal::Invalid(Invalid::Charter));
+    assert_eq!(&*h.assign(invalid), [answer(busy, refused)], "invalid, room or not");
+    assert!(h.step(Event::Unacknowledged { answers: 0 }).is_empty());
+    h.admit(2);
+}
+
+#[test]
 fn an_assignment_for_a_run_hosted_already_under_another_attempt_is_refused_as_busy() {
     let mut h = Harness::new(LIMITS);
     h.admit(1);
@@ -776,6 +791,21 @@ fn a_withdrawn_relay_is_answered_at_once_and_the_engines_answer_dropped() {
     assert_eq!(h.model.calls(), 0, "the withdrawn call closed");
     h.relay(hosted, 9);
     h.relay(hosted, 10);
+}
+
+#[test]
+fn a_relayed_call_waits_for_the_engine_until_it_is_answered_or_withdrawn() {
+    let mut h = Harness::new(LIMITS);
+    let hosted = h.live(1);
+    let first = h.relay(hosted, 7);
+    let second = h.relay(hosted, 8);
+    assert!(h.model.is_relayed(first) && h.model.is_relayed(second));
+    let relayed = Event::Relayed { run: hosted.run, attempt: hosted.attempt, call: first, answer: bytes(b"page") };
+    assert_eq!(h.step(relayed).len(), 1);
+    assert!(h.step(Event::Withdrawn { owner: hosted.owner, call: Token::new(8) }).len() == 1);
+    assert!(!h.model.is_relayed(first) && !h.model.is_relayed(second), "answered, and withdrawn");
+    let push = h.push(hosted, 9);
+    assert!(!h.model.is_relayed(push), "a push is not relayed");
 }
 
 #[test]

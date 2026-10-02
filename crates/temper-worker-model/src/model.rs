@@ -31,11 +31,13 @@ use crate::workspace::Workspace;
 /// The most requests an entry point emits per call under `limits`: what the
 /// sub-models emit in the most steps it takes of each (see the module), as
 /// each of their requests is one of ours or a hand-off; and, on connecting,
-/// the answers, relays and bounces held while the engine was out of reach.
+/// the answers kept, one for each slot at most, and the relays and bounces
+/// kept while the engine was out of reach.
 /// The loop reserves this much room in `out` before calling it.
 #[must_use]
 pub const fn max_out(limits: &Limits) -> u32 {
-    limits::routed(limits).saturating_add(limits.host.slots).saturating_add(limits.stalled)
+    let bounces = limits.host.slots.saturating_mul(limits.host.held.saturating_add(limits.agent.events));
+    limits::routed(limits).saturating_add(limits.host.slots).saturating_add(limits.stalled).saturating_add(bounces)
 }
 
 /// The worker model's state: its sub-models', the engine link, what it keeps
@@ -120,23 +122,17 @@ impl Model {
         self.link.is_up()
     }
 
-    /// Answers held for the engine while it is out of reach.
+    /// Answers the engine has yet to acknowledge: sent, or waiting for a
+    /// channel. No more than the slots.
     #[must_use]
     pub fn held(&self) -> u32 {
         self.link.held()
     }
 
-    /// Relays and bounces held for the engine while it is out of reach.
+    /// Relays and bounces waiting for a channel to the engine.
     #[must_use]
     pub fn stalled(&self) -> u32 {
         self.link.stalled()
-    }
-
-    /// Relays and bounces dropped for want of room while the engine was out
-    /// of reach, since the model was made.
-    #[must_use]
-    pub const fn stalled_lost(&self) -> u64 {
-        self.link.dropped()
     }
 
     /// Answers given up by a worker shutting down with the engine out of
@@ -147,7 +143,7 @@ impl Model {
     }
 
     /// Whether the worker has shut down: told to, every run has answered, and
-    /// every answer has been delivered or given up. The shell stops then.
+    /// the engine has every answer, or it was given up. The shell stops then.
     #[must_use]
     pub fn is_done(&self) -> bool {
         self.link.is_shut() && self.host.hosted() == 0 && self.link.held() == 0
@@ -198,8 +194,10 @@ impl Model {
     }
 
     /// The oldest of the run's facts for the engine not taken yet, while the
-    /// channel is open: the protocol layer sends it best effort. While it is
-    /// down, they wait, and what does not fit is dropped and counted.
+    /// channel is open: the protocol layer sends it best effort, after what
+    /// the model emitted, so that nothing goes before the hello (the step the
+    /// channel opens in emits it). While the channel is down, facts wait, and
+    /// what does not fit is dropped and counted.
     pub fn pop_told(&mut self) -> Option<Told> {
         if !self.link.is_up() {
             return None;

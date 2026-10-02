@@ -587,6 +587,7 @@ impl World {
             }
             Event::Inbound { .. }
             | Event::Cancel { .. }
+            | Event::Unacknowledged { .. }
             | Event::Relayed { .. }
             | Event::Withdrawn { .. }
             | Event::Bounced { .. }

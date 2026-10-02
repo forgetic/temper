@@ -13,7 +13,7 @@ use temper_worker_model_host as host;
 use crate::boundary::{Event, Request};
 use crate::facts::Fact;
 use crate::limits::{self, Limits};
-use crate::link::Stalled;
+use crate::link::{Bounced, Relay};
 use crate::model::{self, Model};
 use crate::translate;
 use crate::workspace::{self, Write};
@@ -56,14 +56,31 @@ pub(crate) fn event(model: &mut Model, env: &Env<Limits>, event: Event) {
             return host_step(model, env, host::Event::CancelAll { reason: host::Reason::Shutdown });
         }
         Event::Assign { assignment } => {
+            model.link.heard();
+            // The attempt answered, assigned again, is dropped: its one answer
+            // is on its way.
+            if model.link.holds(assignment.run, assignment.attempt) {
+                return;
+            }
+            let answers = model.link.held();
+            host_step(model, env, host::Event::Unacknowledged { answers });
             let reply_to = ReplyTo::new(assignment.run);
             return host_step(model, env, host::Event::Assign { reply_to, assignment });
         }
+        Event::Acknowledged { run, attempt } => {
+            model.link.heard();
+            return model.link.acknowledged(run, attempt);
+        }
         Event::Inbound { run, attempt, event } => {
+            model.link.heard();
             return host_step(model, env, host::Event::Inbound { run, attempt, event });
         }
-        Event::Cancel { run, attempt } => return host_step(model, env, host::Event::Cancel { run, attempt }),
+        Event::Cancel { run, attempt } => {
+            model.link.heard();
+            return host_step(model, env, host::Event::Cancel { run, attempt });
+        }
         Event::Relayed { run, attempt, call, answer } => {
+            model.link.heard();
             return host_step(model, env, host::Event::Relayed { run, attempt, call, answer });
         }
         Event::Done { owner, done } => return checkout_step(model, env, checkout::Event::Done { owner, done }),
@@ -126,12 +143,14 @@ fn from_host(model: &mut Model, env: &Env<Limits>, request: host::Request, out: 
             return model.link.answer(run, attempt, answer, out);
         }
         host::Request::Relay { run, attempt, call, body } => {
-            return model.link.stall(Stalled::Relay { run, attempt, call, body }, out);
+            return model.link.relay(Relay { run, attempt, call, body }, &model.host, out);
         }
         host::Request::Bounced { run, attempt, bounce } => {
-            return model.link.stall(Stalled::Bounced { run, attempt, bounce }, out);
+            return model.link.bounce(Bounced { run, attempt, bounce }, out);
         }
-        host::Request::Hosting { runs } => return model.link.hello(&runs, &model.checkout, &env.limits, out),
+        host::Request::Hosting { runs } => {
+            return model.link.hello(&runs, &model.host, &model.checkout, &env.limits, out);
+        }
         host::Request::Prepare { owner, workspace } => return workspace::prepare(model, env, owner, workspace),
         host::Request::Abort { owner } => return workspace::abort(model, env, owner),
         host::Request::Start { owner, workspace, charter, snapshot } => {

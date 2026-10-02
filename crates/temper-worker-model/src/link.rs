@@ -1,52 +1,67 @@
 //! The engine link (worker-model.md, section 2): the one channel the worker
-//! keeps open to the engine, which the worker dials, and what crosses it while
-//! it is down.
+//! keeps open to the engine, which the worker dials, what crosses it while it
+//! is down, and the answers until the engine has them.
 //!
 //! The worker dials at once, and again whenever the channel is lost or a dial
-//! fails, after a backoff that doubles with each failed dial, from
-//! `Limits::redial` up to `Limits::redial_max`, each wait drawn between half
-//! the backoff and all of it, so that workers that lost the same engine do
-//! not all come back at once. On every channel it says hello first: its slots,
-//! the workstreams its checkouts hold, and the runs it hosts, which the host
-//! reports, with those whose answers it holds.
+//! fails, after a backoff that doubles with each dial that fails or each
+//! channel lost before it has proved itself, from `Limits::redial` up to
+//! `Limits::redial_max`, each wait drawn between half the backoff and all of
+//! it, so that workers that lost the same engine do not all come back at
+//! once. A channel proves itself, and the backoff starts over, once the engine
+//! says something on it after the hello. On every channel the worker says
+//! hello first: its slots (none once it is shutting down), the workstreams its
+//! checkouts hold, and the runs it hosts, which the host reports, with those
+//! whose answers the engine has yet to acknowledge.
+//!
+//! An answer is delivered exactly once, as far as the engine can tell: the
+//! worker keeps each until the engine acknowledges it, sends it at once if
+//! there is a channel, and again right after every hello, which lists its run
+//! as answered so the engine keeps it; the engine drops an answer it has
+//! already, acknowledging it again. An answer's slot is not free until the
+//! engine has it: the host counts the answers not acknowledged against its
+//! slots, so the worker keeps no more than its slots. A refusal holds no slot,
+//! and goes once: one lost with the channel reads to the engine as an attempt
+//! lost, which it retries as it would a refusal.
 //!
 //! Losing the channel is survivable. Runs go on for `Limits::grace`, and what
-//! they send the engine meanwhile waits: an answer is held, at most one for
-//! each slot (no run is admitted without a channel), and goes right after the
-//! next hello, which lists its run as answered so the engine keeps it; relays
-//! and bounces wait in a bounded queue and follow the answers, and what does
-//! not fit is dropped and counted (a relay dropped is withdrawn by its run
-//! once the run's own deadline for it passes, and answered then). Past the
-//! grace, the worker cancels every run itself, through the host, which saves
-//! their work first; their answers are held like any other. A channel that
+//! they send the engine meanwhile waits: relays in a queue as large as the
+//! relays that may wait for the engine at once, and bounces in one as large as
+//! the events that may bounce, so neither is dropped. A relay its run's call
+//! no longer waits for (withdrawn, or answered as unavailable as the run left
+//! live) is dropped from the queue, never sent: an outlet must not happen
+//! after its run was told it did not. Past the grace, the worker cancels every
+//! run itself, through the host, which saves their work first. A channel that
 //! opens again cancels the grace, and the engine keeps or cancels each run
 //! the hello lists.
 //!
 //! A worker shutting down cancels every run, and is done once each has
-//! answered and every answer has gone; while the channel is down past the
-//! grace, an answer it holds or makes is given up instead, and counted.
+//! answered and the engine has every answer; while the channel is down past
+//! the grace, an answer it keeps or makes is given up instead, and counted.
 //!
 //! The transition table. A dial is ended by one `lost`, after a `connected`
 //! if the channel opened; every other cell is unreachable by that contract.
 //!
 //! ```text
-//! state     event         next      emits
-//! Down      dial alarm    Dialling  dial
-//! Dialling  connected     Up        (the host reports) hello, the held answers,
-//!                                     relays and bounces; the grace cancelled
-//!           lost          Down      (the dial alarm, past the backoff)
-//! Up        lost          Down      (the dial alarm, past the backoff; the grace)
-//! any       grace alarm   (same)    (the host cancels every run: contact)
+//! state     event            next             emits
+//! Down      dial alarm       Dialling         dial
+//! Dialling  connected        Up, unproved     (the host reports) hello, the answers
+//!                                               kept, the relays and bounces; the
+//!                                               grace cancelled
+//!           lost             Down             (the dial alarm, past the backoff)
+//! Up        heard            Up, proved       (the backoff starts over)
+//!           lost             Down             (the dial alarm, past the backoff; the grace)
+//! any       grace alarm      (same)           (the host cancels every run: contact)
 //! ```
 
 use alloc::boxed::Box;
 
-use temper_lib::{Deadlines, Duration, Env, List, Queue, Rng, Time, Token};
+use temper_lib::bytes::copy_of;
+use temper_lib::{Deadlines, Duration, Env, List, Map, Queue, Rng, Time, Token};
 use temper_worker_model_checkout as checkout;
 use temper_worker_model_host as host;
 
 use crate::boundary::{Hello, Hosted, Phase, Request};
-use crate::limits::Limits;
+use crate::limits::{self, Limits};
 use crate::translate;
 
 #[derive(Debug)]
@@ -54,19 +69,21 @@ pub(crate) struct Link {
     state: State,
     alarms: Deadlines<Alarm>,
     rng: Rng,
-    /// Dials that failed since the channel was last open.
+    /// Dials that failed, and channels lost unproved, since a channel last
+    /// proved itself.
     failed: u32,
     /// The grace passed since the channel was last open: every run was
     /// cancelled.
     past: bool,
     /// The worker is shutting down.
     shut: bool,
-    /// Answers made while the channel was down, oldest first.
-    held: Queue<Held>,
+    /// The answers the engine has yet to acknowledge, by the names of their
+    /// runs and attempts: sent, or waiting for a channel.
+    answers: Map<Named, host::Answer>,
     /// Relays and bounces made while the channel was down, oldest first.
-    stalled: Queue<Stalled>,
-    /// Relays and bounces dropped for want of room, and answers given up.
-    dropped: u64,
+    relays: Queue<Relay>,
+    bounces: Queue<Bounced>,
+    /// Answers given up.
     abandoned: u64,
 }
 
@@ -76,8 +93,9 @@ enum State {
     Down,
     /// A dial is in flight.
     Dialling,
-    /// The channel is open, and the hello sent.
-    Up,
+    /// The channel is open, and the hello sent; `proved` once the engine has
+    /// said something on it.
+    Up { proved: bool },
 }
 
 /// The link's alarms.
@@ -89,19 +107,28 @@ pub(crate) enum Alarm {
     Grace,
 }
 
-/// An answer for the engine, held while the channel is down.
-#[derive(PartialEq, Eq, Hash, Debug)]
-pub(crate) struct Held {
+/// A run's attempt, by the engine's names.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub(crate) struct Named {
     run: Token,
     attempt: Token,
-    answer: host::Answer,
 }
 
-/// A relay or a bounce for the engine, held while the channel is down.
+/// A relay for the engine, held while the channel is down.
 #[derive(PartialEq, Eq, Hash, Debug)]
-pub(crate) enum Stalled {
-    Relay { run: Token, attempt: Token, call: Token, body: Box<[u8]> },
-    Bounced { run: Token, attempt: Token, bounce: host::Bounce },
+pub(crate) struct Relay {
+    pub(crate) run: Token,
+    pub(crate) attempt: Token,
+    pub(crate) call: Token,
+    pub(crate) body: Box<[u8]>,
+}
+
+/// A bounce for the engine, held while the channel is down.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) struct Bounced {
+    pub(crate) run: Token,
+    pub(crate) attempt: Token,
+    pub(crate) bounce: host::Bounce,
 }
 
 /// What the link's alarm, fired, asks of its parent.
@@ -118,6 +145,7 @@ impl Link {
     pub(crate) fn new(limits: &Limits, seed: u64) -> Link {
         let mut alarms = Deadlines::with_capacity(ALARMS);
         alarms.arm(Alarm::Dial, Time::ZERO).expect("room for the link's alarms");
+        let bounces = limits::bounces(limits).expect("worst_case accepted the limits");
         Link {
             state: State::Down,
             alarms,
@@ -125,16 +153,16 @@ impl Link {
             failed: 0,
             past: false,
             shut: false,
-            held: Queue::with_capacity(limits.host.slots),
-            stalled: Queue::with_capacity(limits.stalled),
-            dropped: 0,
+            answers: Map::with_capacity(limits.host.slots),
+            relays: Queue::with_capacity(limits.stalled),
+            bounces: Queue::with_capacity(bounces),
             abandoned: 0,
         }
     }
 
-    pub(crate) fn is_up(&self) -> bool {
+    pub(crate) const fn is_up(&self) -> bool {
         match self.state {
-            State::Up => true,
+            State::Up { .. } => true,
             State::Down | State::Dialling => false,
         }
     }
@@ -143,16 +171,14 @@ impl Link {
         self.alarms.next()
     }
 
+    /// Answers the engine has yet to acknowledge.
     pub(crate) fn held(&self) -> u32 {
-        self.held.len()
+        self.answers.len()
     }
 
+    /// Relays and bounces waiting for a channel.
     pub(crate) fn stalled(&self) -> u32 {
-        self.stalled.len()
-    }
-
-    pub(crate) const fn dropped(&self) -> u64 {
-        self.dropped
+        self.relays.len().saturating_add(self.bounces.len())
     }
 
     pub(crate) const fn abandoned(&self) -> u64 {
@@ -161,6 +187,11 @@ impl Link {
 
     pub(crate) const fn is_shut(&self) -> bool {
         self.shut
+    }
+
+    /// Whether the link keeps the answer of the run `run`'s attempt `attempt`.
+    pub(crate) fn holds(&self, run: Token, attempt: Token) -> bool {
+        self.answers.contains_key(&Named { run, attempt })
     }
 
     /// Fires the link's alarm due at `env.now`, if there is one.
@@ -184,17 +215,29 @@ impl Link {
     /// The channel opened: the hello is next, made once the host reports.
     pub(crate) fn connected(&mut self) {
         assert!(self.state == State::Dialling, "a channel opens once, for a dial in flight");
-        self.state = State::Up;
-        self.failed = 0;
+        self.state = State::Up { proved: false };
         self.past = false;
         self.alarms.cancel(Alarm::Grace);
+    }
+
+    /// The engine said something on the channel: it has proved itself, and the
+    /// backoff starts over.
+    pub(crate) fn heard(&mut self) {
+        match self.state {
+            State::Up { proved: false } => {
+                self.state = State::Up { proved: true };
+                self.failed = 0;
+            }
+            State::Up { proved: true } => {}
+            State::Down | State::Dialling => unreachable!("the engine speaks on an open channel"),
+        }
     }
 
     /// The channel closed, or never opened: the worker dials again past the
     /// backoff, and an open channel lost starts the grace.
     pub(crate) fn lost(&mut self, env: &Env<Limits>) {
         let open = match self.state {
-            State::Up => true,
+            State::Up { .. } => true,
             State::Dialling => false,
             State::Down => unreachable!("a dial is lost once, while it is in flight"),
         };
@@ -215,83 +258,135 @@ impl Link {
         self.give_up();
     }
 
-    /// The answer for the run `run`'s attempt `attempt`: to the engine now if
-    /// the channel is open, held until it is otherwise, or given up by a
-    /// worker shutting down past the grace.
+    /// The answer for the run `run`'s attempt `attempt`: kept until the engine
+    /// acknowledges it, and sent now if there is a channel; given up by a
+    /// worker shutting down past the grace. A refusal goes once, now.
     pub(crate) fn answer(&mut self, run: Token, attempt: Token, answer: host::Answer, out: &mut Queue<Request>) {
-        if self.is_up() {
+        let refused = match answer {
+            host::Answer::Refused(_) => true,
+            host::Answer::Ended { .. } | host::Answer::Parked { .. } | host::Answer::Failed { .. } => false,
+        };
+        if refused {
+            // An assignment comes on an open channel, and is refused in the
+            // step it comes in.
+            assert!(self.is_up(), "a refusal is made with the channel open");
             out.push(Request::Answer { run, attempt, answer });
-        } else if self.shut && self.past {
+            return;
+        }
+        if self.shut && self.past {
             self.abandoned = self.abandoned.saturating_add(1);
-        } else {
-            // No run is admitted without a channel: one answer at most for
-            // each slot.
-            self.held.try_push(Held { run, attempt, answer }).expect("room for an answer of every slot");
+            return;
         }
-    }
-
-    /// A relay or a bounce for the engine: now if the channel is open, held
-    /// otherwise while there is room, dropped and counted when there is none.
-    pub(crate) fn stall(&mut self, stalled: Stalled, out: &mut Queue<Request>) {
         if self.is_up() {
-            out.push(request(stalled));
-        } else if self.stalled.try_push(stalled).is_err() {
-            self.dropped = self.dropped.saturating_add(1);
+            out.push(Request::Answer { run, attempt, answer: copy(&answer) });
         }
+        // The host counts the answers kept against its slots: no more than
+        // those.
+        let fresh = self.answers.insert(Named { run, attempt }, answer).expect("room for an answer of every slot");
+        assert!(fresh.is_none(), "an attempt is answered once");
     }
 
-    /// The hello, from the host's report `runs`: then the answers held, and
-    /// the relays and bounces after them.
+    /// The engine has the answer for the run `run`'s attempt `attempt`. One
+    /// the link does not keep was acknowledged already, or was a refusal.
+    pub(crate) fn acknowledged(&mut self, run: Token, attempt: Token) {
+        self.answers.remove(&Named { run, attempt });
+    }
+
+    /// A relay for the engine: now if the channel is open, kept until it is
+    /// otherwise.
+    pub(crate) fn relay(&mut self, relay: Relay, host: &host::Model, out: &mut Queue<Request>) {
+        if self.is_up() {
+            return out.push(request(relay));
+        }
+        // Room is made by dropping the relays their calls no longer wait for:
+        // those that do are no more than the queue holds, as worst_case
+        // checks.
+        let relay = match self.relays.try_push(relay) {
+            Ok(()) => return,
+            Err(relay) => relay,
+        };
+        for _ in 0..self.relays.capacity() {
+            let Some(kept) = self.relays.pop() else {
+                break;
+            };
+            if host.is_relayed(kept.call) {
+                self.relays.push(kept);
+            }
+        }
+        self.relays.try_push(relay).expect("room for every relay that waits for the engine");
+    }
+
+    /// A bounce for the engine: now if the channel is open, kept until it is
+    /// otherwise.
+    pub(crate) fn bounce(&mut self, bounced: Bounced, out: &mut Queue<Request>) {
+        let Bounced { run, attempt, bounce } = bounced;
+        if self.is_up() {
+            return out.push(Request::Bounced { run, attempt, bounce });
+        }
+        self.bounces.try_push(bounced).expect("room for every event that may bounce");
+    }
+
+    /// The hello, from the host's report `runs`: then the answers kept, and the
+    /// relays their calls still wait for and the bounces after them.
     pub(crate) fn hello(
         &mut self,
         runs: &[host::Hosting],
+        host: &host::Model,
         checkout: &checkout::Model,
         limits: &Limits,
         out: &mut Queue<Request>,
     ) {
         let count = u32::try_from(runs.len()).expect("the host reports no more runs than its slots");
-        let mut hosting = List::with_capacity(count.saturating_add(self.held.len()));
+        let mut hosting = List::with_capacity(count.saturating_add(self.answers.len()));
         for run in runs {
             let hosted = Hosted { run: run.run, attempt: run.attempt, phase: translate::phase(run.phase) };
             hosting.push(hosted).expect("room for every run reported");
         }
-        for held in &self.held {
-            let hosted = Hosted { run: held.run, attempt: held.attempt, phase: Phase::Answered };
-            hosting.push(hosted).expect("room for every answer held");
+        for (named, _) in &self.answers {
+            let hosted = Hosted { run: named.run, attempt: named.attempt, phase: Phase::Answered };
+            hosting.push(hosted).expect("room for every answer kept");
         }
         let mut workstreams = List::with_capacity(checkout.workspaces());
         for nth in 0..checkout.workspaces() {
             let Some(key) = checkout.workstream(nth) else {
                 break;
             };
-            workstreams.push(Box::from(key)).expect("room for every workspace");
+            workstreams.push(copy_of(key)).expect("room for every workspace");
         }
-        let hello =
-            Hello { slots: limits.host.slots, workstreams: workstreams.into_boxed(), hosting: hosting.into_boxed() };
+        // A worker shutting down takes no more work.
+        let slots = if self.shut { 0 } else { limits.host.slots };
+        let hello = Hello { slots, workstreams: workstreams.into_boxed(), hosting: hosting.into_boxed() };
         out.push(Request::Hello { hello });
-        for _ in 0..self.held.capacity() {
-            let Some(Held { run, attempt, answer }) = self.held.pop() else {
-                break;
-            };
-            out.push(Request::Answer { run, attempt, answer });
+        for (named, answer) in &self.answers {
+            out.push(Request::Answer { run: named.run, attempt: named.attempt, answer: copy(answer) });
         }
-        for _ in 0..self.stalled.capacity() {
-            let Some(stalled) = self.stalled.pop() else {
+        for _ in 0..self.relays.capacity() {
+            let Some(relay) = self.relays.pop() else {
                 break;
             };
-            out.push(request(stalled));
+            if host.is_relayed(relay.call) {
+                out.push(request(relay));
+            }
+        }
+        for _ in 0..self.bounces.capacity() {
+            let Some(Bounced { run, attempt, bounce }) = self.bounces.pop() else {
+                break;
+            };
+            out.push(Request::Bounced { run, attempt, bounce });
         }
     }
 
-    /// A worker shutting down past the grace gives up the answers it holds.
+    /// A worker shutting down past the grace gives up the answers it keeps.
     fn give_up(&mut self) {
         if !(self.shut && self.past) {
             return;
         }
-        for _ in 0..self.held.capacity() {
-            if self.held.pop().is_none() {
+        for _ in 0..self.answers.capacity() {
+            let Some((named, _)) = self.answers.first() else {
                 break;
-            }
+            };
+            let named = *named;
+            self.answers.remove(&named);
             self.abandoned = self.abandoned.saturating_add(1);
         }
     }
@@ -308,9 +403,27 @@ impl Link {
 /// The link's alarms: the dial and the grace.
 pub(crate) const ALARMS: u32 = 2;
 
-fn request(stalled: Stalled) -> Request {
-    match stalled {
-        Stalled::Relay { run, attempt, call, body } => Request::Relay { run, attempt, call, body },
-        Stalled::Bounced { run, attempt, bounce } => Request::Bounced { run, attempt, bounce },
+fn request(relay: Relay) -> Request {
+    let Relay { run, attempt, call, body } = relay;
+    Request::Relay { run, attempt, call, body }
+}
+
+/// A copy of `answer`, to send while the link keeps it.
+fn copy(answer: &host::Answer) -> host::Answer {
+    match answer {
+        host::Answer::Refused(refusal) => host::Answer::Refused(*refusal),
+        host::Answer::Ended { outcome, work } => {
+            host::Answer::Ended { outcome: copy_of(outcome), work: copy_work(work) }
+        }
+        host::Answer::Parked { snapshot, work } => {
+            host::Answer::Parked { snapshot: snapshot.clone(), work: copy_work(work) }
+        }
+        host::Answer::Failed { failure, detail, work } => {
+            host::Answer::Failed { failure: *failure, detail: copy_of(detail), work: copy_work(work) }
+        }
     }
+}
+
+fn copy_work(work: &host::Work) -> host::Work {
+    host::Work { landed: work.landed.clone(), saved: work.saved.clone() }
 }

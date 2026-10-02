@@ -10,11 +10,13 @@
 //!   in flight.
 //! - The engine, over that channel: the host sub-model's face (worker-model.md,
 //!   section 2). [`Request::Hello`] goes first on every channel. An
-//!   [`Event::Assign`] is a call, answered by exactly one [`Request::Answer`]
-//!   under the run's and the attempt's names, on whatever channel is open
-//!   once the answer is made: an answer made while there is none is held
-//!   until the next hello, which lists its run as [`Phase::Answered`], and
-//!   follows it. The attempt hosted, assigned again, is dropped: its one
+//!   [`Event::Assign`] is a call, answered under the run's and the attempt's
+//!   names by a [`Request::Answer`] that the engine acknowledges
+//!   ([`Event::Acknowledged`]). Until it does, the worker keeps the answer,
+//!   and sends it again right after every hello, which lists its run as
+//!   [`Phase::Answered`]; the engine drops one it has already, acknowledging
+//!   it again. A refusal goes once, and holds no slot. The attempt hosted, or
+//!   answered and not acknowledged, assigned again, is dropped: its one
 //!   answer is the hosted run's. Everything else the engine sends names the
 //!   run and the attempt, and is dropped unless that attempt is hosted
 //!   (attempts are fenced). A [`Request::Relay`] is answered by at most one
@@ -67,6 +69,10 @@ pub enum Event {
     /// From the engine: the answer to the relayed call `call` of the run
     /// `run`'s attempt `attempt`.
     Relayed { run: Token, attempt: Token, call: Token, answer: Box<[u8]> },
+    /// From the engine: it has the answer for the run `run`'s attempt
+    /// `attempt`, which the worker forgets. One it has forgotten already, or
+    /// a refusal's, changes nothing.
+    Acknowledged { run: Token, attempt: Token },
     /// From the shell: cancel every run, admit no more, and be done once every
     /// answer is delivered.
     Shutdown,

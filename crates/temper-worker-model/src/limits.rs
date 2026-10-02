@@ -7,7 +7,7 @@ use temper_worker_model_host as host;
 
 use crate::boundary::Told;
 use crate::facts::Fact;
-use crate::link::{ALARMS, Alarm, Held, Stalled};
+use crate::link::{ALARMS, Alarm, Bounced, Named, Relay};
 use crate::translate::SAVED;
 use crate::workspace::Workspace;
 
@@ -29,8 +29,9 @@ pub struct Limits {
     /// The run's facts kept for the engine until the protocol layer takes
     /// them. Beyond them, facts are dropped and counted.
     pub told: u32,
-    /// Relays and bounces kept while the channel to the engine is down.
-    /// Beyond them, they are dropped and counted.
+    /// Relays kept while the channel to the engine is down: at least as many
+    /// as may wait for the engine at once (the host's slots times the calls a
+    /// run may have in flight), so that none is dropped.
     pub stalled: u32,
 }
 
@@ -47,13 +48,15 @@ pub struct Limits {
 /// and no more held for a run until it is live than may wait for it in its
 /// agent, so that those delivered as it starts never bounce); and a run's
 /// push message, as the agent sub-model bounds a call, and the
-/// save's must fit a commit message. A backoff must be a wait, and no longer
-/// than its ceiling.
+/// save's must fit a commit message. The relays kept while the engine is out
+/// of reach must have room for all those that may wait for it. A backoff must
+/// be a wait, and no longer than its ceiling.
 ///
 /// It is the sub-models', plus what the top level keeps: a record of each
 /// workspace and the map that finds those being prepared, the link's
-/// alarms, the answers it holds while the engine is out of reach and the
-/// relays and bounces with them, the run's facts for the engine, the queues
+/// alarms, the answers it keeps until the engine acknowledges them, one for
+/// each slot at most, and the relays and bounces it keeps while the engine
+/// is out of reach, the run's facts for the engine, the queues
 /// that hold what each sub-model emits in a step until it is routed, and the
 /// facts. What the queued requests own is counted where they end up, and what
 /// the hello holds goes out in the step that makes it.
@@ -69,6 +72,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         && host_limits.outcome_bytes == agent_limits.outcome_bytes
         && host_limits.event_bytes <= agent_limits.event_bytes
         && host_limits.held <= agent_limits.events
+        && u64::from(host_limits.slots).checked_mul(u64::from(host_limits.run_calls))? <= u64::from(limits.stalled)
         && agent_limits.call_bytes <= u64::from(checkout_limits.message_bytes)
         && len(SAVED) <= u64::from(checkout_limits.message_bytes)
         && Duration::ZERO < limits.redial
@@ -90,9 +94,10 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .max(host_limits.snapshot_bytes)
         .max(u64::from(host_limits.detail_bytes))
         .checked_add(u64::from(host_limits.repositories).checked_mul(work()?)?)?;
-    let held = Queue::<Held>::worst_case(slots)?.checked_add(u64::from(slots).checked_mul(answer)?)?;
-    let stalled = Queue::<Stalled>::worst_case(limits.stalled)?
+    let answers = Map::<Named, host::Answer>::worst_case(slots)?.checked_add(u64::from(slots).checked_mul(answer)?)?;
+    let relays = Queue::<Relay>::worst_case(limits.stalled)?
         .checked_add(u64::from(limits.stalled).checked_mul(agent_limits.call_bytes)?)?;
+    let bounces = Queue::<Bounced>::worst_case(bounces(limits)?)?;
     let told = Queue::<Told>::worst_case(limits.told)?
         .checked_add(u64::from(limits.told).checked_mul(agent_limits.fact_bytes)?)?;
     let host_out = Queue::<host::Request>::worst_case(host_out(limits))?;
@@ -102,8 +107,9 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     children
         .checked_add(workspaces)?
         .checked_add(alarms)?
-        .checked_add(held)?
-        .checked_add(stalled)?
+        .checked_add(answers)?
+        .checked_add(relays)?
+        .checked_add(bounces)?
         .checked_add(told)?
         .checked_add(host_out)?
         .checked_add(checkout_out)?
@@ -119,6 +125,14 @@ fn work() -> Option<u64> {
 
 fn len(bytes: &[u8]) -> u64 {
     u64::try_from(bytes.len()).expect("a length fits in a u64")
+}
+
+/// Bounces kept while the engine is out of reach: as many as the events that
+/// may bounce then, those that were already with the worker. No more come
+/// without a channel, and the events of a run are held until it is live, or
+/// wait for it in its agent.
+pub(crate) fn bounces(limits: &Limits) -> Option<u32> {
+    limits.host.slots.checked_mul(limits.host.held.checked_add(limits.agent.events)?)
 }
 
 /// Facts kept until the loop drains them: as many as the sub-models keep.
