@@ -38,7 +38,7 @@ use temper_agent_model_run::outcome::{Change, Child, Declared, Field, Verdict};
 use temper_agent_model_run::{Ask, Budget, End, Event, Exhausted, Fault, Opening, Returned, Spend, Stop};
 use temper_lib::{Duration, Rng, Time, Token};
 
-use crate::world::Span;
+use temper_world::Span;
 
 /// How the partner behaves.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -537,7 +537,7 @@ impl Partner {
     }
 
     fn draw(&mut self, span: Span) -> Duration {
-        Duration::from_nanos(self.rng.between(span.min.as_nanos(), span.max.as_nanos()))
+        span.draw(&mut self.rng)
     }
 }
 

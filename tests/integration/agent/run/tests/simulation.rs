@@ -263,14 +263,11 @@ fn a_finish_past_its_deadline_is_withdrawn_and_its_checks_aborted() {
 
 #[test]
 fn a_seed_replays_to_the_same_run() {
-    let replay = |seed| {
+    let trace = temper_world::assert_replays(12, 13, |seed| {
         let world = settled(&noisy(seed));
-        (world.trace().to_vec(), world.stats(), world.now())
-    };
-    let (trace, stats, end) = replay(12);
+        (world.trace().to_vec(), (world.stats(), world.now()))
+    });
     assert!(trace.len() > 50, "the runs did something");
-    assert_eq!(replay(12), (trace.clone(), stats, end));
-    assert_ne!(replay(13).0, trace);
 }
 
 /// Hundreds of worlds with random limits, scripts, faults and schedules: each

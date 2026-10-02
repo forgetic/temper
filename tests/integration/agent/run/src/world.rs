@@ -1,8 +1,9 @@
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 
 use temper_agent_model_run as run;
 use temper_fake_worker_model as worker;
-use temper_lib::{Duration, Env, Queue, ReplyTo, Rng, Time, Token};
+use temper_lib::{Duration, ReplyTo, Rng, Time, Token};
+use temper_world::{Key, Ledger, Schedule, Span, Stage, Trace};
 
 use crate::partner::{Out, Partner, Script, Tally};
 use crate::translate;
@@ -10,20 +11,6 @@ use crate::translate;
 /// Room in each model's output queue. Small, so the loop's flow control (take
 /// an event only while there is room for what it may produce) is exercised.
 const OUT: u32 = 4;
-
-/// Durations drawn uniformly from `min..=max`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Span {
-    pub min: Duration,
-    pub max: Duration,
-}
-
-impl Span {
-    #[must_use]
-    pub const fn millis(min: u64, max: u64) -> Span {
-        Span { min: Duration::from_millis(min), max: Duration::from_millis(max) }
-    }
-}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Settings {
@@ -329,20 +316,15 @@ pub struct World {
     settings: Settings,
 
     run: run::Model,
-    run_env: Env<run::Limits>,
-    run_in: VecDeque<run::Event>,
-    run_out: Queue<run::Request>,
+    run_stage: Stage<run::Limits, run::Event, run::Request>,
 
     worker: worker::Model,
-    worker_env: Env<worker::Config>,
-    worker_in: VecDeque<worker::Event>,
-    worker_out: Queue<worker::Request>,
+    worker_stage: Stage<worker::Config, worker::Event, worker::Request>,
 
     partner: Partner,
 
-    /// Deliveries in flight, by time and then by the order they were sent.
-    wire: BTreeMap<(Time, u64), Delivery>,
-    serial: u64,
+    /// Deliveries in flight, whose count names the checkouts' roots too.
+    wire: Schedule<Delivery>,
     /// When each lane delivers its latest, which the next may not overtake.
     lanes: [Time; 4],
     /// Every start, by the worker's name for it; every open, by the run's
@@ -361,10 +343,10 @@ pub struct World {
     /// the wire.
     looks: BTreeSet<Token>,
     checking: BTreeMap<Token, Token>,
-    checks: BTreeMap<Token, (Time, u64)>,
+    checks: BTreeMap<Token, Key>,
     /// Pushes in flight, by the run's owner; and the jobs whose runs pushed a
     /// change.
-    pushes: BTreeMap<Token, Pushing>,
+    pushes: Ledger<Token, Pushing>,
     pushed: BTreeSet<Token>,
     /// The roots whose checks passed, for each landing call, until it pushes
     /// or its run answers.
@@ -393,7 +375,7 @@ pub struct World {
     child_of_call: BTreeMap<Token, Token>,
 
     stats: Stats,
-    trace: Vec<String>,
+    trace: Trace,
 }
 
 impl World {
@@ -408,16 +390,11 @@ impl World {
             rng,
             settings,
             run: run::Model::new(&settings.run),
-            run_env: Env { now: Time::ZERO, limits: settings.run },
-            run_in: VecDeque::new(),
-            run_out: Queue::with_capacity(OUT),
+            run_stage: Stage::new(settings.run, run::MAX_OUT, OUT),
             worker,
-            worker_env: Env { now: Time::ZERO, limits: settings.worker },
-            worker_in: VecDeque::new(),
-            worker_out: Queue::with_capacity(OUT),
+            worker_stage: Stage::new(settings.worker, worker::MAX_OUT, OUT),
             partner,
-            wire: BTreeMap::new(),
-            serial: 0,
+            wire: Schedule::new(),
             lanes: [Time::ZERO; 4],
             starts: BTreeMap::new(),
             opens: BTreeMap::new(),
@@ -428,7 +405,7 @@ impl World {
             looks: BTreeSet::new(),
             checking: BTreeMap::new(),
             checks: BTreeMap::new(),
-            pushes: BTreeMap::new(),
+            pushes: Ledger::new("push"),
             pushed: BTreeSet::new(),
             passed: BTreeMap::new(),
             views: BTreeMap::new(),
@@ -445,7 +422,7 @@ impl World {
             asked: None,
             child_of_call: BTreeMap::new(),
             stats: Stats::default(),
-            trace: Vec::new(),
+            trace: Trace::default(),
         }
     }
 
@@ -462,7 +439,7 @@ impl World {
     /// What crossed between the models and the world, in order, with times.
     #[must_use]
     pub fn trace(&self) -> &[String] {
-        &self.trace
+        self.trace.lines()
     }
 
     /// The states cancels found runs in: preparing, stopping, opening,
@@ -504,16 +481,15 @@ impl World {
 
     /// One iteration of the loop, as the shell would run it.
     fn iterate(&mut self) {
-        self.run_env.now = self.now;
-        self.worker_env.now = self.now;
+        self.run_stage.tick(self.now);
+        self.worker_stage.tick(self.now);
         self.deliver();
 
         // Each stage takes its events, then fires its alarms, while it has room
         // for what one more may produce.
         self.iteration += 1;
         let mut made = Vec::new();
-        while self.run_out.room() >= run::MAX_OUT {
-            let Some(event) = self.run_in.pop_front() else { break };
+        while let Some(event) = self.run_stage.next_event() {
             self.log(&format!("run <- {event:?}"));
             let run = self.run_of(&event);
             let cancel = self.note(&event, run);
@@ -522,23 +498,22 @@ impl World {
             } else {
                 None
             };
-            let before = self.run_out.len();
-            run::step(&mut self.run, &self.run_env, event, &mut self.run_out);
-            made.push(Made { run, requests: self.run_out.len() - before, cancel, asked });
+            let before = self.run_stage.out.len();
+            run::step(&mut self.run, &self.run_stage.env, event, &mut self.run_stage.out);
+            made.push(Made { run, requests: self.run_stage.out.len() - before, cancel, asked });
         }
-        while self.run_out.room() >= run::MAX_OUT && self.run.is_due(self.now) {
+        while self.run_stage.has_room() && self.run.is_due(self.now) {
             self.log("run alarm");
             let run = self.deadline_due();
-            let before = self.run_out.len();
-            run::fire(&mut self.run, &self.run_env, &mut self.run_out);
-            made.push(Made { run, requests: self.run_out.len() - before, cancel: None, asked: None });
+            let before = self.run_stage.out.len();
+            run::fire(&mut self.run, &self.run_stage.env, &mut self.run_stage.out);
+            made.push(Made { run, requests: self.run_stage.out.len() - before, cancel: None, asked: None });
         }
-        while self.worker_out.room() >= worker::MAX_OUT {
-            let Some(event) = self.worker_in.pop_front() else { break };
-            worker::step(&mut self.worker, &self.worker_env, event, &mut self.worker_out);
+        while let Some(event) = self.worker_stage.next_event() {
+            worker::step(&mut self.worker, &self.worker_stage.env, event, &mut self.worker_stage.out);
         }
-        while self.worker_out.room() >= worker::MAX_OUT && self.worker.is_due(self.now) {
-            worker::fire(&mut self.worker, &self.worker_env, &mut self.worker_out);
+        while self.worker_stage.has_room() && self.worker.is_due(self.now) {
+            worker::fire(&mut self.worker, &self.worker_stage.env, &mut self.worker_stage.out);
         }
 
         // What the steps asked for, submitted at the end of the iteration, each
@@ -548,7 +523,7 @@ impl World {
             let mut current = made.run;
             self.asked = made.asked;
             for _ in 0..made.requests {
-                let request = self.run_out.pop().expect("a step's requests are queued");
+                let request = self.run_stage.out.pop().expect("a step's requests are queued");
                 current = self.run_request(request, current);
                 if let Some(run) = self.just_answered.take() {
                     answered.insert(run, index);
@@ -565,7 +540,7 @@ impl World {
                 *self.cancel_cells.entry(cell).or_insert(0) += 1;
             }
         }
-        while let Some(request) = self.worker_out.pop() {
+        while let Some(request) = self.worker_stage.out.pop() {
             self.worker_request(request);
         }
 
@@ -651,8 +626,7 @@ impl World {
             run::Request::Push { worker, owner, change } => {
                 self.run_of_call.insert(owner, current.expect("a push is made in a step about its run"));
                 self.landing.insert(owner);
-                let fresh = self.pushes.insert(owner, Pushing { job: worker }).is_none();
-                assert!(fresh, "a host call is in flight once");
+                self.pushes.open(owner, Pushing { job: worker });
                 // Checked is pushed: every repository whose checks the change
                 // must pass passed them, for this landing.
                 let passed = self.passed.remove(&owner).unwrap_or_default();
@@ -665,7 +639,7 @@ impl World {
                 self.stats.host_cancels += 1;
                 // A push the worker has answered already won the race; the
                 // worker decides the race for one still in flight.
-                if self.pushes.contains_key(&owner) {
+                if self.pushes.contains(owner) {
                     self.send(Lane::Worker, Delivery::CancelPush { owner });
                 }
             }
@@ -717,7 +691,7 @@ impl World {
                 if let Some(key) = self.checks.get(&owner).copied()
                     && !self.rng.chance(self.settings.races)
                 {
-                    self.wire.remove(&key).expect("a check in flight has its result on the wire");
+                    self.wire.withdraw(key).expect("a check in flight has its result on the wire");
                     self.checks.remove(&owner);
                     let at = self.now.saturating_add(self.draw(self.settings.checkout.io));
                     self.schedule(at, Delivery::Io(run::Event::Aborted { owner }));
@@ -927,8 +901,7 @@ impl World {
         let settings = self.settings.checkout;
         let mut roots = Vec::new();
         for _ in 0..repositories {
-            self.serial += 1;
-            let root = Token::new(self.serial);
+            let root = Token::new(self.wire.name());
             if self.rng.chance(settings.guides) {
                 let len = usize::try_from(self.rng.between(1, u64::from(settings.guide_max))).expect("small");
                 // Text with characters of more than one byte, so a cut may
@@ -971,7 +944,7 @@ impl World {
             }
             worker::Request::Pushed { to, pushed } => {
                 let owner = to.into_token();
-                let Pushing { job } = self.pushes.remove(&owner).expect("the worker answers a push made");
+                let Pushing { job } = self.pushes.end(owner);
                 let push = translate::push(pushed);
                 if push == run::Push::Done {
                     self.pushed.insert(job);
@@ -980,7 +953,7 @@ impl World {
             }
             worker::Request::PushCancelled { to } => {
                 let owner = to.into_token();
-                self.pushes.remove(&owner).expect("the worker answers a push made");
+                self.pushes.end(owner);
                 self.send(Lane::Agent, Delivery::Host(run::Event::HostCancelled { owner }));
             }
         }
@@ -988,11 +961,8 @@ impl World {
 
     /// Hands every delivery that is due to its destination.
     fn deliver(&mut self) {
-        while let Some(entry) = self.wire.first_entry() {
-            if entry.key().0 > self.now {
-                break;
-            }
-            match entry.remove() {
+        while let Some(delivery) = self.wire.next(self.now) {
+            match delivery {
                 Delivery::Start { owner, charter } => {
                     let roots = self.checkout(charter.repositories.len());
                     let charter = translate::charter(charter, &roots);
@@ -1005,21 +975,21 @@ impl World {
                         }
                     }
                     self.starts.get_mut(&owner).expect("a start is tracked").checks = checks;
-                    self.run_in.push_back(run::Event::Start { reply_to: ReplyTo::new(owner), worker: owner, charter });
+                    self.run_stage.push(run::Event::Start { reply_to: ReplyTo::new(owner), worker: owner, charter });
                 }
-                Delivery::Cancel { run } => self.run_in.push_back(run::Event::Cancel { run }),
+                Delivery::Cancel { run } => self.run_stage.push(run::Event::Cancel { run }),
                 Delivery::Host(event) => self.hand(event),
-                Delivery::Admitted { owner, run } => self.worker_in.push_back(worker::Event::Admitted { owner, run }),
+                Delivery::Admitted { owner, run } => self.worker_stage.push(worker::Event::Admitted { owner, run }),
                 Delivery::Answered { owner, answer } => {
-                    self.worker_in.push_back(worker::Event::Answered { owner, answer });
+                    self.worker_stage.push(worker::Event::Answered { owner, answer });
                 }
                 Delivery::Checking { job, deadline } => {
-                    self.worker_in.push_back(worker::Event::Checking { job, deadline });
+                    self.worker_stage.push(worker::Event::Checking { job, deadline });
                 }
                 Delivery::Push { owner, job, change } => {
-                    self.worker_in.push_back(worker::Event::Push { reply_to: ReplyTo::new(owner), owner, job, change });
+                    self.worker_stage.push(worker::Event::Push { reply_to: ReplyTo::new(owner), owner, job, change });
                 }
-                Delivery::CancelPush { owner } => self.worker_in.push_back(worker::Event::CancelPush { owner }),
+                Delivery::CancelPush { owner } => self.worker_stage.push(worker::Event::CancelPush { owner }),
                 Delivery::Open { conversation, opening } => {
                     let mut out = Vec::new();
                     self.partner.open(self.now, conversation, &opening, &mut out);
@@ -1121,11 +1091,11 @@ impl World {
         };
         let before = inject && self.rng.chance(500);
         if let Some(run) = run.filter(|_| before) {
-            self.run_in.push_back(run::Event::Cancel { run });
+            self.run_stage.push(run::Event::Cancel { run });
         }
-        self.run_in.push_back(event);
+        self.run_stage.push(event);
         if let Some(run) = run.filter(|_| inject && !before) {
-            self.run_in.push_back(run::Event::Cancel { run });
+            self.run_stage.push(run::Event::Cancel { run });
         }
     }
 
@@ -1191,16 +1161,15 @@ impl World {
     }
 
     fn has_work_now(&self) -> bool {
-        !self.run_in.is_empty()
-            || !self.worker_in.is_empty()
+        self.run_stage.has_events()
+            || self.worker_stage.has_events()
             || self.run.is_due(self.now)
             || self.worker.is_due(self.now)
-            || self.wire.first_key_value().is_some_and(|((at, _), _)| *at <= self.now)
+            || self.wire.is_due(self.now)
     }
 
     fn next_time(&self) -> Option<Time> {
-        let wire = self.wire.first_key_value().map(|((at, _), _)| *at);
-        [wire, self.run.next_deadline(), self.worker.next_deadline()].into_iter().flatten().min()
+        [self.wire.next_time(), self.run.next_deadline(), self.worker.next_deadline()].into_iter().flatten().min()
     }
 
     /// The invariants of a world where nothing is left to happen.
@@ -1220,7 +1189,8 @@ impl World {
         assert!(self.pushes.is_empty(), "every push was answered");
         assert!(self.passed.is_empty(), "every landing call returned");
         assert!(self.child_of_call.is_empty(), "every sub-agent's call returned");
-        assert!(self.wire.is_empty() && self.run_in.is_empty() && self.worker_in.is_empty(), "nothing is on its way");
+        let waiting = self.run_stage.has_events() || self.worker_stage.has_events();
+        assert!(self.wire.is_empty() && !waiting, "nothing is on its way");
         let mut answered = run::Spend::ZERO;
         for (owner, start) in &self.starts {
             let answer = start.answer.as_ref().unwrap_or_else(|| panic!("start {owner:?} was answered"));
@@ -1254,19 +1224,16 @@ impl World {
         self.schedule(at, delivery);
     }
 
-    fn schedule(&mut self, at: Time, delivery: Delivery) -> (Time, u64) {
-        self.serial += 1;
-        let key = (at, self.serial);
-        self.wire.insert(key, delivery);
-        key
+    fn schedule(&mut self, at: Time, delivery: Delivery) -> Key {
+        self.wire.send(at, delivery)
     }
 
     fn draw(&mut self, span: Span) -> Duration {
-        Duration::from_nanos(self.rng.between(span.min.as_nanos(), span.max.as_nanos()))
+        span.draw(&mut self.rng)
     }
 
     fn log(&mut self, line: &str) {
-        self.trace.push(format!("{:>16} {line}", self.now.as_nanos()));
+        self.trace.log(self.now, line);
     }
 }
 

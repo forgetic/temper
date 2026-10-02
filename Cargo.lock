@@ -25,6 +25,7 @@ dependencies = [
  "temper-agent-model-run",
  "temper-fake-worker-model",
  "temper-lib",
+ "temper-world",
 ]
 
 [[package]]

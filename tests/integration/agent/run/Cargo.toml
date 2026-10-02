@@ -10,6 +10,7 @@ publish.workspace = true
 temper-lib.workspace = true
 temper-agent-model-run.workspace = true
 temper-fake-worker-model.workspace = true
+temper-world.workspace = true
 
 # Ordinary Rust (programming-model.md, 10.2), so not the step crates' lints.
 # tests/integration/clippy.toml bans what would make a run unrepeatable.
