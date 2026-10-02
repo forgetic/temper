@@ -1,4 +1,4 @@
-//! Memory stays within the worst case (programming-model.md, 6.4), measured by
+//! Memory stays within the worst case (programming-style.md, 6.4), measured by
 //! a counting allocator: the whole worker, every entry point of it, with
 //! every slot holding a run of exactly its limits as it prepares, then the
 //! channel lost, the runs filling what the worker keeps for the engine

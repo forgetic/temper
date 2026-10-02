@@ -8,7 +8,7 @@
 //! answers at once, an answer that lets the session start its next batch, a
 //! close that withdraws a call whose sub-agent the run closes in turn. Two of
 //! the run's records therefore reach a session only from the ready list
-//! (programming-model.md, 2): a `Return`, which the peer's delegated call
+//! (programming-style.md, 2): a `Return`, which the peer's delegated call
 //! holds as its answer, and a `Close`, which the peer holds. The loop drains
 //! the list with [`resume`] at the start of the model's stage in a later
 //! iteration, after the reclaim point, so a session starts at most one batch

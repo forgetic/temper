@@ -1,4 +1,4 @@
-//! A simulated world for the agent's model (programming-model.md, 11;
+//! A simulated world for the agent's model (programming-style.md, 11;
 //! agent-model.md, section 3), where it meets the worker's (worker-model.md,
 //! section 9): the worker's top-level model hosting runs, each in an agent
 //! process that is a fresh agent model, with the run and the sessions beneath

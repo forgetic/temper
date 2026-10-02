@@ -37,7 +37,7 @@
 //! standing in for both. It stands in for the engine's model until that
 //! exists.
 //!
-//! It follows the same programming model as any other step crate.
+//! It follows the same programming style as any other step crate.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]

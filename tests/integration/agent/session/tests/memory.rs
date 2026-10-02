@@ -1,4 +1,4 @@
-//! Memory stays within the worst case (programming-model.md, 6.4), measured by
+//! Memory stays within the worst case (programming-style.md, 6.4), measured by
 //! a counting allocator: the session sub-model with every session filled to its
 //! limits, and lib's containers on their own.
 

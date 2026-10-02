@@ -9,7 +9,7 @@ publish.workspace = true
 [dependencies]
 temper-lib.workspace = true
 
-# Ordinary Rust (programming-model.md, 10.2), so not the step crates' lints.
+# Ordinary Rust (programming-style.md, 10.2), so not the step crates' lints.
 # tests/integration/clippy.toml bans what would make a run unrepeatable.
 [lints.rust]
 unsafe_code = "deny"                  # not forbid: heap's counting allocator expects it

@@ -2,10 +2,11 @@
 
 Provisional, 2026-10-02. What the temper engine does, as a model layer:
 its parts, what each is responsible for, and how they fit together. The
-mechanics are those of `programming-model.md`; the worker it drives is
+mechanics are those of `programming-style.md`; the worker it drives is
 described in `worker-model.md`, and the agent in `agent-model.md`. Each
 part's details are settled as it is built; what is still open is listed
-in section 15.
+in section 15. How the engine is tested, and the fakes around it, is in
+`testing-pyramid.md`.
 
 ## 1. In one page
 
@@ -39,7 +40,7 @@ in section 15.
 - **Every write is repeat-safe.** Creations are keyed, sets are written as
   sets, and an outcome is recorded before it is applied, so an application
   that was interrupted resumes where it stopped.
-- **The model is complete** (programming-model.md, section 4). A world of
+- **The model is complete** (programming-style.md, section 4). A world of
   models and fakes runs everything the engine does, with no protocol and
   no io (section 14).
 - **One engine per deployment.** Scaling out is a later problem with known
@@ -86,7 +87,7 @@ temper-engine-model                  the engine loop's entry point: forge, worke
 └── temper-engine-model-views        facts in; live streams and retained traces out
 ```
 
-The tree follows programming-model.md, 4.5: each sub-model has its own
+The tree follows programming-style.md, 4.5: each sub-model has its own
 vocabulary, limits and world; a parent owns its children's state and
 routes between them; siblings share no domain types. `work` is the hub,
 as `host` is in the worker: it knows an item's lifecycle and nothing of
@@ -481,7 +482,7 @@ What the protocol and io layers owe the model, to be designed after it:
 ## 14. The world
 
 The engine's world runs the model against fakes that share none of its
-types (programming-model.md, section 11):
+types (programming-style.md, section 11):
 
 - **a forge** with issues, pull requests, comments and labels; CI that
   passes, fails or never reports; reviews; merges that conflict; webhooks
@@ -492,8 +493,12 @@ types (programming-model.md, section 11):
 - **people** who chat, accept and reject plans, release held work, and
   write and correct notes.
 
-The engine, workers and agents meet in a larger world, with the fake LLM
-provider in place of a real one.
+The engine, workers and agents meet in a larger world, a system world
+(testing-pyramid.md, section 2.3), with the fake LLM provider in place of
+a real one. The fake forge and fake people are described in
+testing-pyramid.md, sections 4.2 and 4.4: the forge keeps the git that
+workers push to in one store with its API, and both fakes grow into
+services as the engine's protocol and io layers are built.
 
 ## 15. Open questions
 

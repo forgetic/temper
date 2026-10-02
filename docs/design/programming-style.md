@@ -1,4 +1,4 @@
-# Programming model (Rust)
+# Programming style (Rust)
 
 Provisional, 2026-10-01. The shape a network service on Linux io_uring
 should have when it is written in Rust.

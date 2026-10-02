@@ -1,4 +1,4 @@
-//! Memory stays within the worst case (programming-model.md, 6.4), measured by
+//! Memory stays within the worst case (programming-style.md, 6.4), measured by
 //! a counting allocator: the tools sub-model with every kit holding the
 //! longest authority, knowing as many files as it may at the longest paths,
 //! and running as many edits, writes and reads as it may; and the model driven

@@ -13,7 +13,7 @@
 //! model. Between the two sits a protocol layer on each side, or a simulator
 //! standing in for both.
 //!
-//! It follows the same programming model as any other step crate.
+//! It follows the same programming style as any other step crate.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]

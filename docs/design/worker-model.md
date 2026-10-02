@@ -2,10 +2,11 @@
 
 Provisional, 2026-10-02. What the temper worker does, as a model layer:
 its parts, what each is responsible for, and how they fit together. The
-mechanics are those of `programming-model.md`, and the agent it hosts is
+mechanics are those of `programming-style.md`, and the agent it hosts is
 described in `agent-model.md`. Each part's details are settled as it is
 built; what is still open is listed in section 10, and what is not built
-yet in section 11.
+yet in section 11. How the worker is tested, and the fakes around it, is
+in `testing-pyramid.md`.
 
 ## 1. In one page
 
@@ -33,7 +34,7 @@ yet in section 11.
 - **Every run is supervised.** A watchdog on progress, a bound on wall
   time, cancel that goes polite then kills, and a slot that comes back only
   once the run's process tree is gone.
-- **The model is complete** (programming-model.md, section 4). A world of
+- **The model is complete** (programming-style.md, section 4). A world of
   models and fakes runs everything the worker does, with no protocol and
   no io (section 9).
 
@@ -95,7 +96,7 @@ temper-worker-model                 the worker loop's entry point: the engine li
 └── temper-worker-model-agent       agent processes: spawn, channel, watchdog, cancel then kill
 ```
 
-The tree follows programming-model.md, 4.5: each sub-model is a step
+The tree follows programming-style.md, 4.5: each sub-model is a step
 machine with its own vocabulary, limits and world; a parent owns its
 children's state and routes between them; siblings share no domain types.
 `host` is the hub, as the run is in the agent: it knows a hosted run's
@@ -349,7 +350,7 @@ What the protocol and io layers owe the model, to be designed after it:
 ## 9. The world
 
 The worker's worlds run the model against fakes that share none of its
-types (programming-model.md, section 11):
+types (programming-style.md, section 11):
 
 - **an engine** that assigns, sends inbound events, cancels, answers
   relayed calls, acknowledges answers, and checks that every attempt is
@@ -379,6 +380,13 @@ longer use a fake worker: the run's world scripts its host itself.
 
 The fake engine is a step crate, as much of an engine as a worker meets,
 and temporary: the engine's model takes its place once it exists.
+
+testing-pyramid.md places these worlds among temper's tiers and tracks
+their fakes. Git and files are one fake today; the git is to move into
+the fake forge, in one store with its API, so that a branch the worker
+pushes is the head the engine reads, and the files are to become the
+machine, whose programs, git among them, grow command-line faces for the
+protocol layer to meet (testing-pyramid.md, sections 4.2 and 4.3).
 
 ## 10. Open questions
 

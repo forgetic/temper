@@ -1,5 +1,5 @@
 //! The session sub-model of the temper coding agent's model layer
-//! (programming-model.md, 4.5): one conversation with an LLM, driven turn by
+//! (programming-style.md, 4.5): one conversation with an LLM, driven turn by
 //! turn, running the tools the LLM asks for, its own or, delegated, those its
 //! opener serves. When the LLM stops calling tools the session yields to its
 //! opener, which continues it with a new message or closes it; a failure, a

@@ -1,4 +1,4 @@
-//! The agent sub-model of the temper worker's model layer (programming-model.md,
+//! The agent sub-model of the temper worker's model layer (programming-style.md,
 //! 4.5; worker-model.md, sections 3 and 6): the worker's agent processes, one
 //! per hosted run, each with one channel over its pipes. It spawns an agent in
 //! a contained process tree with what its run starts with; speaks the channel

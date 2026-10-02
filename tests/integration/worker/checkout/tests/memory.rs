@@ -1,4 +1,4 @@
-//! Memory stays within the worst case (programming-model.md, 6.4), measured by
+//! Memory stays within the worst case (programming-style.md, 6.4), measured by
 //! a counting allocator: the checkout with every workspace held for a spec at
 //! its limits, pushing and saving with a message and a branch at theirs; then
 //! every hold released and, before the reclaim point, every workspace held

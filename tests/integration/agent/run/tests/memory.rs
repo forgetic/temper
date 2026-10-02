@@ -1,4 +1,4 @@
-//! Memory stays within the worst case (programming-model.md, 6.4), measured by
+//! Memory stays within the worst case (programming-style.md, 6.4), measured by
 //! a counting allocator: the run sub-model with every run holding a charter of
 //! exactly its byte limit, and every conversation started and spending.
 

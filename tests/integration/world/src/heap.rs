@@ -1,4 +1,4 @@
-//! A counting allocator for the memory tests (programming-model.md, 11): it
+//! A counting allocator for the memory tests (programming-style.md, 11): it
 //! records the live heap of each thread and its peak, so that a test can check
 //! the most a model held at once in each step against its worst case (6.4).
 //! Each memory test binary declares it its global allocator:

@@ -1,4 +1,4 @@
-//! A simulated world for the whole worker (programming-model.md, 11;
+//! A simulated world for the whole worker (programming-style.md, 11;
 //! worker-model.md, section 9): the worker's top-level model
 //! (`temper_worker_model`) run against everything around it, with no protocol
 //! and no io. One loop drives it, deterministically from a seed.

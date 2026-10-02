@@ -1,4 +1,4 @@
-//! The model layer of the temper coding agent (programming-model.md, section 4;
+//! The model layer of the temper coding agent (programming-style.md, section 4;
 //! agent-model.md, section 3): the agent loop's entry point.
 //!
 //! Sans-io: [`step`], [`fire`] and [`resume`] turn events into requests and

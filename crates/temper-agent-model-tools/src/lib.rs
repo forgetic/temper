@@ -1,5 +1,5 @@
 //! The tools sub-model of the temper coding agent's model layer
-//! (programming-model.md, 4.5; agent-model.md, 6): what a session does to the
+//! (programming-style.md, 4.5; agent-model.md, 6): what a session does to the
 //! checkout. It reads, lists, searches, writes and edits files, and runs
 //! commands, for the calls a session's LLM makes.
 //!

@@ -15,7 +15,7 @@ temper-worker-model-agent-tests.workspace = true
 temper-worker-model-checkout-tests.workspace = true
 temper-world.workspace = true
 
-# Ordinary Rust (programming-model.md, 10.2), so not the step crates' lints.
+# Ordinary Rust (programming-style.md, 10.2), so not the step crates' lints.
 # tests/integration/clippy.toml bans what would make a run unrepeatable.
 [lints.rust]
 unsafe_code = "forbid"
