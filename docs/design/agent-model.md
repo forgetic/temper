@@ -177,9 +177,15 @@ outcome spec asks for them, and then asks the worker to push:
   the agent needs to know either way.
 - **Checked is pushed.** The checks run as contained processes with
   deadlines, while nothing else writes to the checkout, and the worker then
-  commits and pushes exactly that tree.
+  commits and pushes exactly that tree. Nothing else writes by
+  construction: a write runs alone in its session, and a sub-agent lives
+  only as long as the call that asked for it. A push that lands is the
+  outcome, even if the run was winding down meanwhile.
 - **Failures are feedback,** like any other: a failing check comes back
-  with its output, and a push that finds the branch moved says so.
+  with its output, and so does a push that fails. A push that finds the
+  branch moved is the exception: it ends the run as stale, since every
+  later push of the run would find the same (worker-model.md, section 5)
+  and the engine re-plans against fresh forge state.
 - **Not a security boundary.** An agent can change what a check runs; CI
   on the forge and the engine's rules guard landing. The checks catch
   failures early, inside the run that can fix them.
