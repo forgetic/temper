@@ -59,6 +59,7 @@ pub enum Verdict {
     TimedOut,
     Cancelled,
     Busy,
+    NulByte,
 }
 
 /// The fact of `outcome` answering a call of `tool` from `session`.
@@ -103,6 +104,7 @@ pub(crate) fn answered(session: Token, tool: Tool, outcome: &Outcome) -> Fact {
         Outcome::TimedOut => (Verdict::TimedOut, 0),
         Outcome::Cancelled => (Verdict::Cancelled, 0),
         Outcome::Busy => (Verdict::Busy, 0),
+        Outcome::NulByte => (Verdict::NulByte, 0),
     };
     Fact::Answered { session, tool, verdict, bytes }
 }

@@ -132,7 +132,9 @@ pub fn perform(checkout: &mut fake::Checkout, op: Op) -> Done {
         Op::Search { at, pattern, glob, hits, bytes } => {
             let limits = (usize::try_from(hits).expect("small"), usize::try_from(bytes).expect("small"));
             match checkout.search(root(at.root), &at.path, &pattern, glob.as_deref(), limits) {
-                Ok(found) => Done::Found { hits: found.hits.into_iter().map(hit).collect(), more: found.more },
+                Ok(found) => {
+                    Done::Found { hits: found.hits.into_iter().map(hit).collect(), more: found.more, timed_out: false }
+                }
                 // rg exits with 2 for a pattern it cannot read.
                 Err(fake::Searched::Unreadable(stderr)) => {
                     let head = usize::try_from(bytes).expect("small").min(stderr.len());
@@ -144,6 +146,36 @@ pub fn perform(checkout: &mut fake::Checkout, op: Op) -> Done {
             }
         }
         Op::Spawn { .. } => panic!("a spawn is started, not run"),
+    }
+}
+
+/// What a search that would have ended in `done` had found when it was
+/// killed, `ran` nanoseconds into the `whole` it would have taken: the share
+/// of its hits found by then, and no count of more.
+#[must_use]
+pub fn cut(done: Done, ran: u128, whole: u128) -> Done {
+    match done {
+        Done::Found { hits, more: _, timed_out: _ } => {
+            let kept = usize::try_from(hits.len() as u128 * ran / whole.max(1)).expect("no more than the hits");
+            let hits = hits.into_vec().into_iter().take(kept).collect();
+            Done::Found { hits, more: 0, timed_out: true }
+        }
+        // rg could not read the pattern, or the path is not there: that is
+        // said at once, before any deadline.
+        done @ (Done::Exited { .. }
+        | Done::Missing
+        | Done::NotDirectory
+        | Done::Escapes
+        | Done::Failed { .. }
+        | Done::Loaded { .. }
+        | Done::Scanned { .. }
+        | Done::Stored { .. }
+        | Done::Conflict { .. }
+        | Done::NotFile
+        | Done::Linked
+        | Done::TooLarge { .. }
+        | Done::TimedOut
+        | Done::Cancelled) => done,
     }
 }
 

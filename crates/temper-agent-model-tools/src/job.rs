@@ -340,7 +340,7 @@ fn scanned(reply_to: ReplyTo, done: Done) -> Next {
 /// Searching, ended: answer with the lines found, or how rg failed.
 fn found(reply_to: ReplyTo, done: Done) -> Next {
     let outcome = match done {
-        Done::Found { hits, more } => Outcome::Found { hits, more },
+        Done::Found { hits, more, timed_out } => Outcome::Found { hits, more, timed_out },
         Done::Exited { exit, head, tail, dropped } => Outcome::Exited { exit, head, tail, dropped },
         Done::Missing => Outcome::NotFound,
         Done::NotDirectory => Outcome::NotDirectory,

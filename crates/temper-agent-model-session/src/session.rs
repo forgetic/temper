@@ -1060,7 +1060,8 @@ const fn succeeded(outcome: &Outcome) -> bool {
         | Outcome::Failed { .. }
         | Outcome::TimedOut
         | Outcome::Cancelled
-        | Outcome::Busy => false,
+        | Outcome::Busy
+        | Outcome::NulByte => false,
     }
 }
 
@@ -1207,7 +1208,7 @@ fn outcome_cost(outcome: &Outcome) -> Option<u64> {
             }
             Some(cost)
         }
-        Outcome::Found { hits, more: _ } => {
+        Outcome::Found { hits, more: _, timed_out: _ } => {
             let mut cost = u64::try_from(size_of::<tools::Hit>()).ok()?.checked_mul(u64::try_from(hits.len()).ok()?)?;
             for hit in hits {
                 cost = cost.checked_add(len(&hit.path)?)?.checked_add(len(&hit.text)?)?;
@@ -1237,7 +1238,8 @@ fn outcome_cost(outcome: &Outcome) -> Option<u64> {
         | Outcome::Failed { .. }
         | Outcome::TimedOut
         | Outcome::Cancelled
-        | Outcome::Busy => Some(0),
+        | Outcome::Busy
+        | Outcome::NulByte => Some(0),
     }
 }
 

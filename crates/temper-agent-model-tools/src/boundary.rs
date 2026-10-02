@@ -122,14 +122,28 @@ pub enum Op {
     Spawn { cwd: Place, command: Box<[u8]>, env: Box<[Var]>, roots: Box<[Root]>, head: u32, tail: u32 },
     /// Search the files at and beneath `at` for lines matching `pattern`, in
     /// those whose names match `glob` if given, with rg run as a contained
-    /// process: it follows no link beneath `at`, and skips what rg skips by
-    /// default (hidden and ignored files, binary ones). The protocol layer
-    /// decodes its output into hits, in path order: at most `hits` of them,
-    /// with at most `bytes` of text between them, the last one cut to fit;
-    /// the hits beyond are counted. Ends in `Found`, `Exited` (rg failed, as
-    /// for a pattern it cannot read: its exit, and at most `bytes` of what it
-    /// wrote to standard error in `head`), `Missing`, `NotDirectory`,
-    /// `Escapes`, or a common terminal.
+    /// process, invoked as
+    ///
+    /// ```text
+    /// rg --no-config --json --regexp=PATTERN [--glob=GLOB] -- PATH
+    /// ```
+    ///
+    /// so that neither the pattern nor the glob can be read as an option, and
+    /// no configuration file is: with an empty environment, and every root
+    /// read-only. rg follows no link beneath `at`, and skips what it skips by
+    /// default (hidden and ignored files, binary ones).
+    ///
+    /// The protocol layer decodes rg's output into hits, in path order: at
+    /// most `hits` of them, with at most `bytes` between them of their paths
+    /// and their text, the last one's text cut to fit; the hits beyond are
+    /// counted. rg's exits: 0 is `Found`; 1, nothing found, is `Found` with no
+    /// hits; 2, an error, is `Found` if it found lines all the same (an
+    /// unreadable file among many hides nothing found in the others), and
+    /// otherwise `Exited`, with at most `bytes` of what it wrote to standard
+    /// error in `head` (as for a pattern it cannot read). At the deadline io
+    /// kills rg and ends the search as `Found`, timed out, with what it had
+    /// found. Ends in `Found`, `Exited`, `Missing`, `NotDirectory`, `Escapes`,
+    /// or a common terminal.
     Search { at: Place, pattern: Box<[u8]>, glob: Option<Box<[u8]>>, hits: u32, bytes: u32 },
 }
 
@@ -167,8 +181,9 @@ pub enum Done {
     /// Spawn: the command ended so, with the output captured. Search: rg
     /// failed so.
     Exited { exit: Exit, head: Box<[u8]>, tail: Box<[u8]>, dropped: u64 },
-    /// Search: the lines found, and how many more matched.
-    Found { hits: Box<[Hit]>, more: u64 },
+    /// Search: the lines found, and how many more matched; `timed_out` if
+    /// the deadline cut it short, and these are what it had found.
+    Found { hits: Box<[Hit]>, more: u64, timed_out: bool },
     /// Load, Scan: nothing is at the place.
     Missing,
     /// Load, Store: what is at the place is not a regular file.

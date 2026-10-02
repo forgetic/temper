@@ -435,6 +435,7 @@ fn kind(outcome: &Outcome) -> &'static str {
         Outcome::TimedOut => "timed out",
         Outcome::Cancelled => "cancelled",
         Outcome::Busy => "busy",
+        Outcome::NulByte => "nul byte",
     }
 }
 
@@ -1121,7 +1122,7 @@ fn a_search_finds_lines_in_path_order_without_following_links() {
         search(b"third_party", b"vendored", None),
     ])];
     let (answers, _) = run(Settings::calm(70), INSPECT, script);
-    let found = |hits: Vec<Hit>| Outcome::Found { hits: hits.into(), more: 0 };
+    let found = |hits: Vec<Hit>| Outcome::Found { hits: hits.into(), more: 0, timed_out: false };
     let expected = vec![
         found(vec![
             hit(b"lib.rs", 1, b"pub fn one() {}"),
@@ -1141,7 +1142,7 @@ fn a_search_finds_lines_in_path_order_without_following_links() {
 #[test]
 fn a_search_is_bounded_and_says_when_it_cannot_run() {
     let calm = Settings::calm(71);
-    let settings = Settings { tools: Limits { search_hits: 2, search_bytes: 20, ..calm.tools }, ..calm };
+    let settings = Settings { tools: Limits { search_hits: 2, search_bytes: 40, ..calm.tools }, ..calm };
     let script = vec![Step::Calls(vec![
         search(b"src", b"fn", None),
         search(b"long.txt", b"line", None),
@@ -1153,18 +1154,22 @@ fn a_search_is_bounded_and_says_when_it_cannot_run() {
     let (answers, _) = run(settings, INSPECT, script);
     let stderr = b"rg: regex parse error: unclosed group\n";
     let expected = vec![
-        // Two hits, and the second cut where twenty bytes of text ran out.
-        Outcome::Found { hits: [hit(b"lib.rs", 1, b"pub fn one() {}"), hit(b"lib.rs", 2, b"pub f")].into(), more: 2 },
-        Outcome::Found { hits: [hit(b"", 1, b"line 000 .........."), hit(b"", 2, b"l")].into(), more: 98 },
-        Outcome::Exited {
-            exit: tools::Exit::Code { code: 2 },
-            head: stderr[..20].into(),
-            tail: [].into(),
-            dropped: 18,
+        // Two hits, the second cut where forty bytes of paths and text ran
+        // out.
+        Outcome::Found {
+            hits: [hit(b"lib.rs", 1, b"pub fn one() {}"), hit(b"lib.rs", 2, b"pub fn two() ")].into(),
+            more: 2,
+            timed_out: false,
         },
+        Outcome::Found {
+            hits: [hit(b"", 1, b"line 000 .........."), hit(b"", 2, b"line 001 ..........")].into(),
+            more: 98,
+            timed_out: false,
+        },
+        Outcome::Exited { exit: tools::Exit::Code { code: 2 }, head: stderr[..].into(), tail: [].into(), dropped: 0 },
         Outcome::NotFound,
         Outcome::Outside,
-        Outcome::Found { hits: [hit(b"guide.md", 1, b"# Guide")].into(), more: 0 },
+        Outcome::Found { hits: [hit(b"guide.md", 1, b"# Guide")].into(), more: 0, timed_out: false },
     ];
     assert_eq!(answers, expected);
 
@@ -1214,4 +1219,15 @@ fn a_command_writes_neither_without_modify_nor_in_a_git_directory() {
     assert_eq!(checkout.content(b"work/temper/src/new.rs"), Some(&b"new\n"[..]), "a kit with modify writes its tree");
     assert_eq!(checkout.content(b"work/temper/.git/hooks/pre-commit"), None, "but never its git directory");
     assert_eq!(checkout.content(b"work/temper/.GIT/config"), None, "in any case");
+}
+
+#[test]
+fn a_search_past_its_deadline_answers_with_what_it_had_found() {
+    let calm = Settings::calm(92);
+    let settings = Settings { tools: Limits { search_timeout: Duration::from_secs(10), ..calm.tools }, ..calm };
+    let script = vec![Step::Latency(Span::millis(20_000, 20_000)), Step::Calls(vec![search(b"src", b"fn", None)])];
+    let (answers, _) = run(settings, INSPECT, script);
+    // Half way through the twenty seconds it needed, half the four lines.
+    let hits = [hit(b"lib.rs", 1, b"pub fn one() {}"), hit(b"lib.rs", 2, b"pub fn two() {}")];
+    assert_eq!(answers, vec![Outcome::Found { hits: hits.into(), more: 0, timed_out: true }]);
 }

@@ -133,7 +133,9 @@ enum Delivery {
 /// An operation in flight, as io keeps it.
 struct Pending {
     work: Work,
-    /// When it ends, and when its deadline passes, as deliveries.
+    /// When it started; when it ends, and when its deadline passes, as
+    /// deliveries.
+    since: Time,
     ran: (Time, u64),
     deadline: (Time, u64),
 }
@@ -428,7 +430,7 @@ impl World {
                 let (work, ran) = self.start(owner, op);
                 let ran = self.schedule(ran, Delivery::Ran { owner });
                 let deadline = self.schedule(deadline, Delivery::Deadline { owner });
-                let pending = Pending { work, ran, deadline };
+                let pending = Pending { work, since: self.now, ran, deadline };
                 assert!(self.ops.insert(owner, pending).is_none(), "an operation's owner has one in flight");
                 self.stats.ops += 1;
             }
@@ -500,6 +502,14 @@ impl World {
                             .expect("no more than the output")
                             .min(program.output.len());
                             translate::exited(None, &program.output[..written], started.head, started.tail)
+                        }
+                        // io kills rg at its deadline, and tells what it had
+                        // found by then: a share of what it would have.
+                        Work::File(op @ Op::Search { .. }) => {
+                            let found = translate::perform(&mut self.checkout, op.clone());
+                            let ran = u128::from(self.now.saturating_since(pending.since).as_nanos());
+                            let whole = u128::from(pending.ran.0.saturating_since(pending.since).as_nanos());
+                            translate::cut(found, ran, whole)
                         }
                         Work::File(_) | Work::Ending(_) => Done::TimedOut,
                     };

@@ -358,7 +358,7 @@ fn random_done(limits: &Limits, rng: &mut Rng, asked: Asked) -> Done {
                         text: vec![b'x'; usize::try_from(limits.search_bytes).expect("small")].into(),
                     })
                     .collect();
-                Done::Found { hits: hits.into(), more: rng.below(3) }
+                Done::Found { hits: hits.into(), more: rng.below(3), timed_out: rng.chance(200) }
             }
             Asked::Store { creating } => match rng.below(3) {
                 0 if creating => Done::Conflict { now: Some(version) },

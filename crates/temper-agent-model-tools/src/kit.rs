@@ -191,6 +191,10 @@ fn admit(kit: &Kit, call: Call, deadline: Time, env: &Env<Limits>) -> Result<Wor
             Work::List { place: located.place }
         }
         Call::Search { path, pattern, glob } => {
+            passable(&pattern)?;
+            if let Some(glob) = &glob {
+                passable(glob)?;
+            }
             let located = authority::locate(&kit.checkout, &path, limits.path_bytes)?;
             Work::Search { place: located.place, pattern, glob }
         }
@@ -222,6 +226,7 @@ fn admit(kit: &Kit, call: Call, deadline: Time, env: &Env<Limits>) -> Result<Wor
             Work::Edit { place: located.place, edit: Edit { old, new, all } }
         }
         Call::Shell { command, timeout } => {
+            passable(&command)?;
             // Commands run in the working directory, which must be in the
             // checkout.
             let here = Path { absolute: false, parts: Box::new([]) };
@@ -252,6 +257,16 @@ fn writable(checkout: &Checkout, path: &Path, limits: &Limits) -> Result<Located
         return Err(Outcome::Protected);
     }
     Ok(located)
+}
+
+/// Refuses `bytes` as an argument to a process if they hold a NUL.
+fn passable(bytes: &[u8]) -> Result<(), Outcome> {
+    for byte in bytes {
+        if *byte == 0 {
+            return Err(Outcome::NulByte);
+        }
+    }
+    Ok(())
 }
 
 /// Refuses `content` if it is larger than the tools store.

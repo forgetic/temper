@@ -91,8 +91,9 @@ pub enum Outcome {
     /// `more` it has.
     Listed { entries: Box<[Entry]>, more: u64 },
     /// A search: the first lines that matched, in path order, and how many
-    /// `more` did.
-    Found { hits: Box<[Hit]>, more: u64 },
+    /// `more` did; `timed_out` if the search ran out of time, and these are
+    /// what it had found by then.
+    Found { hits: Box<[Hit]>, more: u64, timed_out: bool },
     /// The file holds what was written; it was `created` if there was none.
     Written { created: bool },
     /// The edit `replaced` that many occurrences.
@@ -154,6 +155,9 @@ pub enum Outcome {
     Cancelled,
     /// The kit has as many calls running as it may.
     Busy,
+    /// The command, the pattern or the glob holds a NUL byte, which no
+    /// argument to a process can.
+    NulByte,
 }
 
 /// A line a search found.

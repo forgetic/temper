@@ -831,7 +831,7 @@ impl World {
             tools::Call::Write { .. } => Outcome::Written { created: true },
             tools::Call::Search { .. } => {
                 let hit = tools::Hit { path: b"main.rs"[..].into(), line: 1, text: b"fn main() {}"[..].into() };
-                Outcome::Found { hits: Box::new([hit]), more: 0 }
+                Outcome::Found { hits: Box::new([hit]), more: 0, timed_out: false }
             }
             tools::Call::Edit { .. } => Outcome::Edited { replaced: 1 },
             tools::Call::Shell { .. } => {

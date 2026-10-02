@@ -1075,8 +1075,8 @@ fn a_search_asks_io_for_bounded_hits_and_answers_with_them() {
     };
     assert_eq!((op, deadline), (expected, at(30)), "the tools' limit for a search");
     let hits: Box<[Hit]> = Box::new([Hit { path: bytes(b"lib.rs"), line: 3, text: bytes(b"pub fn three() {}") }]);
-    let (_, outcome) = h.end(owner, Done::Found { hits: hits.clone(), more: 4 });
-    assert_eq!(outcome, Outcome::Found { hits, more: 4 });
+    let (_, outcome) = h.end(owner, Done::Found { hits: hits.clone(), more: 4, timed_out: true });
+    assert_eq!(outcome, Outcome::Found { hits, more: 4, timed_out: true });
 
     let unreadable =
         Done::Exited { exit: Exit::Code { code: 2 }, head: bytes(b"regex parse error"), tail: bytes(b""), dropped: 0 };
@@ -1106,6 +1106,15 @@ fn a_search_asks_io_for_bounded_hits_and_answers_with_them() {
     }
     let outside = Call::Search { path: path(b"/etc"), pattern: bytes(b"root"), glob: None };
     assert_eq!(h.call(kit, outside), Outcome::Outside);
+    // No NUL can go in an argument.
+    let table = [
+        Call::Search { path: path(b"."), pattern: bytes(b"a\0b"), glob: None },
+        Call::Search { path: path(b"."), pattern: bytes(b"a"), glob: Some(bytes(b"*.rs\0")) },
+        Call::Shell { command: bytes(b"ls\0-la"), timeout: None },
+    ];
+    for call in table {
+        assert_eq!(h.call(kit, call.clone()), Outcome::NulByte, "{call:?}");
+    }
 }
 
 /// Drains the facts told so far.

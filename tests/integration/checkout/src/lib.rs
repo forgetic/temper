@@ -231,7 +231,8 @@ impl Checkout {
     /// characters: in path order, following no link beneath `path`, skipping
     /// hidden files and directories, in those whose names end as `glob` does
     /// after its `*` if given. At most `hits` lines, with at most `bytes` of
-    /// text between them, the last cut to fit; and how many more matched. A
+    /// paths and text between them, the last one's text cut to fit; and how
+    /// many more matched. A
     /// pattern with an unclosed `(` is one rg cannot read.
     pub fn search(
         &self,
@@ -279,10 +280,13 @@ impl Checkout {
                 if !line.windows(pattern.len().max(1)).any(|window| window == pattern) {
                     continue;
                 }
-                if found.hits.len() >= hits || left == 0 {
+                // A hit costs its path and its text.
+                if found.hits.len() >= hits || left <= beneath.len() {
                     found.more += 1;
+                    left = 0;
                     continue;
                 }
+                left -= beneath.len();
                 let text = line[..line.len().min(left)].to_vec();
                 left -= text.len();
                 found.hits.push((beneath.clone(), index + 1, text));
