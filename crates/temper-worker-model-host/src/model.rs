@@ -9,9 +9,9 @@ use crate::hosted::{self, Hosted};
 use crate::limits::{self, Limits};
 
 /// The most requests an entry point emits per call under `limits`: a run
-/// that leaves live answers each of its calls in flight, then stops its agent,
-/// or, its agent gone, saves or releases its workspace and answers; and an
-/// agent that starts is handed every inbound event held for it. The parent
+/// that leaves live answers each of its relayed calls in flight, then stops
+/// its agent, or, its agent gone, saves or releases its workspace and answers;
+/// and an agent that starts is handed every inbound event held for it. The parent
 /// reserves this much room in `out` before calling it.
 #[must_use]
 pub const fn max_out(limits: &Limits) -> u32 {
@@ -31,6 +31,8 @@ pub struct Model {
     /// Runs to cancel, each for its reason, one per resume.
     pub(crate) ready: Map<Id<Hosted>, Reason>,
     pub(crate) facts: Facts,
+    /// The worker is shutting down: it admits no more runs.
+    pub(crate) shut: bool,
 }
 
 impl Model {
@@ -44,6 +46,7 @@ impl Model {
             calls: Slab::with_capacity(calls),
             ready: Map::with_capacity(limits.slots),
             facts: Facts::with_capacity(limits.facts),
+            shut: false,
         }
     }
 

@@ -34,8 +34,8 @@ pub struct Limits {
     pub held: u32,
     /// The most bytes of an inbound event.
     pub event_bytes: u64,
-    /// Host calls a run may have in flight at once. A call beyond them is
-    /// answered as busy.
+    /// Host calls a run may have in flight at once, its push among them. A
+    /// call beyond them is answered as busy.
     pub run_calls: u32,
     /// Facts kept until the parent drains them. Beyond them, facts are
     /// dropped and counted.
@@ -72,7 +72,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     let starting = limits.charter_bytes.checked_add(limits.snapshot_bytes)?.checked_add(held)?;
     let ending = limits.outcome_bytes.max(limits.snapshot_bytes).max(u64::from(limits.detail_bytes));
     // Throughout, the saved-work branch, the repositories its pushes landed
-    // in, and its calls in flight.
+    // in, and its relayed calls in flight (its push is held inline).
     let landed = Set::<u32>::worst_case(limits.repositories)?;
     let run_calls = Set::<Id<Call>>::worst_case(limits.run_calls)?;
     let run =

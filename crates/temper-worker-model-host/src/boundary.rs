@@ -42,7 +42,8 @@ use temper_lib::{ReplyTo, Token};
 #[derive(PartialEq, Eq, Debug)]
 pub enum Event {
     /// From the engine, a call: host the run of `assignment`, and answer once
-    /// it has ended.
+    /// it has ended. The attempt hosted, assigned again, is dropped: its one
+    /// answer is the hosted run's.
     Assign { reply_to: ReplyTo, assignment: Assignment },
     /// From the engine: an inbound event for the run `run`'s attempt
     /// `attempt`, which goes down to the run as it arrives.
@@ -54,7 +55,8 @@ pub enum Event {
     Relayed { run: Token, attempt: Token, call: Token, answer: Box<[u8]> },
     /// From the top level: cancel every run hosted now, for `reason` (lost
     /// contact with the engine past its grace, or shutdown). The runs are
-    /// cancelled one at a time, from the ready list.
+    /// cancelled one at a time, from the ready list. A worker shutting down
+    /// admits no more runs: assignments after it are refused as busy.
     CancelAll { reason: Reason },
     /// From the top level: say what the host hosts, for the engine to keep or
     /// cancel on reconnecting.
@@ -72,7 +74,8 @@ pub enum Event {
     Called { owner: Token, call: Token, ask: Ask },
     /// The run yielded: it waits for its next inbound event.
     Yielded { owner: Token },
-    /// The run said how it finishes. Its agent exits next.
+    /// The run said how it finishes. Its agent exits next. Said as it winds
+    /// down after a stop, it is still the run's answer.
     Finished { owner: Token, finish: Finish },
     /// The agent sub-model is stopping the agent for `fault`.
     Faulted { owner: Token, fault: AgentFailure },
@@ -111,7 +114,10 @@ pub enum Request {
     /// The one answer to the host call `call` of the agent `agent`.
     Reply { agent: Token, call: Token, reply: Reply },
     /// Stop the agent `agent`: cancel its run, then kill what is left of it
-    /// past the grace. Its start's `Gone` comes once it has all gone.
+    /// past the grace. Its start's `Gone` comes once it has all gone. Sent
+    /// whenever its run leaves live, also once the run has said how it
+    /// finishes or the agent was faulted, when it changes nothing: the agent
+    /// sub-model winds the agent down then anyway.
     Stop { agent: Token },
     /// Commit what the writable repositories of `workspace` hold, with
     /// `message`, and push it: the run's call `owner`.
@@ -149,7 +155,13 @@ pub struct Workspace {
 /// A repository of a workspace. Names are compared byte for byte.
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub struct Repository {
+    /// The directory it sits in, side by side with the workspace's others
+    /// (worker-model.md, section 5), and what the agent calls it: one path
+    /// component, unique within the workspace.
     pub name: Box<[u8]>,
+    /// The forge's address of the repository, never interpreted: the
+    /// protocol layer maps it to a URL.
+    pub remote: Box<[u8]>,
     pub start: Start,
     pub access: Access,
 }
@@ -202,11 +214,13 @@ pub enum Reply {
     Relayed { answer: Box<[u8]> },
     /// How the push went.
     Pushed(Push),
-    /// The run is cancelled or ending: nothing was done, or what was done is
-    /// not the run's to hear of.
+    /// The run is cancelled or ending: nothing was done. A push in flight as
+    /// the run leaves live is waited for, and answered with how it went.
     Unavailable,
     /// The run has as many calls in flight as it may, or a push in flight
-    /// already: nothing was done.
+    /// already: nothing was done. Calls answered within the loop's current
+    /// iteration keep their slots until its reclaim point, so a busy call may
+    /// find room in the next.
     Busy,
 }
 
@@ -307,8 +321,9 @@ pub struct Work {
 /// Why an assignment was refused.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Refusal {
-    /// Every slot is taken, or the run is hosted already under an attempt
-    /// that has not answered yet. A later retry may find room.
+    /// Every slot is taken, the run is hosted already under another attempt
+    /// that has not answered yet, or the worker is shutting down. A later
+    /// retry, on this worker or another, may find room.
     Busy,
     /// The assignment does not fit the limits.
     Invalid(Invalid),
@@ -321,8 +336,10 @@ pub enum Invalid {
     Repositories,
     /// The workspace lists one repository name twice.
     Duplicate,
-    /// A workstream key, repository name, branch, commit or identity is empty
-    /// or longer than a name may be.
+    /// A workstream key, repository name, remote, branch, commit or identity
+    /// is empty or longer than a name may be; or a repository name is not one
+    /// safe path component: `.`, `..`, `.git` in any case, or holding `/` or
+    /// NUL.
     Name,
     /// The charter holds more bytes than a run may.
     Charter,

@@ -107,8 +107,10 @@ fn assignment(run: u64, limits: &Limits) -> Assignment {
     let name = |byte: u8| vec![byte; usize::try_from(limits.name_bytes).expect("fits")].into_boxed_slice();
     let mut repositories = Vec::new();
     for index in 0..limits.repositories {
+        let letter = b'a' + u8::try_from(index).expect("few repositories");
         repositories.push(Repository {
-            name: name(u8::try_from(index).expect("few repositories")),
+            name: name(letter),
+            remote: name(b'r'),
             start: Start::Branch { branch: name(b'b') },
             access: Access::Writable { push: name(b'p'), identity: name(b'i') },
         });
@@ -236,8 +238,8 @@ fn fill(limits: Limits) {
 /// A push still in flight as its run ended settles, and the run answers.
 fn owners_push(host: &mut Measured, push: Token, landed: &[Landing]) {
     let settled = host.step(Event::Pushed { owner: push, push: landed.into() });
-    let [Asked::Other, Asked::Answer { answer: Answer::Ended { .. } }] = &settled[..] else {
-        panic!("released and answered: {settled:?}");
+    let [Asked::Other, Asked::Other, Asked::Answer { answer: Answer::Ended { .. } }] = &settled[..] else {
+        panic!("told how it went, released and answered: {settled:?}");
     };
 }
 
@@ -267,7 +269,7 @@ fn paths(limits: Limits) {
         assert_eq!(host.step(Event::Prepared { owner: *owner, workspace: *owner }), [Asked::Start]);
         assert!(host.step(Event::Started { owner: *owner, agent: *owner }).is_empty());
     }
-    assert!(host.step(Event::CancelAll { reason: Reason::Shutdown }).is_empty());
+    assert!(host.step(Event::CancelAll { reason: Reason::Contact }).is_empty());
     while host.model.is_ready() {
         host.resume();
     }
@@ -278,7 +280,7 @@ fn paths(limits: Limits) {
         let [Asked::Save { owner: saving }] = host.step(Event::Gone { owner: *owner, detail: bytes(10) })[..] else {
             panic!("saved");
         };
-        let save = vec![Landing::Unchanged; 8].into_boxed_slice();
+        let save = vec![Landing::Unchanged; usize::try_from(limits.repositories).expect("fits")].into_boxed_slice();
         let saved = host.step(Event::Saved { owner: saving, save });
         assert_eq!(saved.len(), 2, "released and answered");
     }

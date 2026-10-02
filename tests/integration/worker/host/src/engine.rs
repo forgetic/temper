@@ -348,7 +348,8 @@ impl Engine {
         } else {
             Access::ReadOnly
         };
-        Repository { name, start, access }
+        let remote = format!("org/repo-{index}").into_bytes().into_boxed_slice();
+        Repository { name, remote, start, access }
     }
 
     fn inbound(&mut self, run: Token, attempt: Token) -> Vec<Act> {
@@ -426,7 +427,13 @@ impl Engine {
             }
             if let Some(saved) = &work.saved {
                 assert_eq!(saved.len(), assigned.repositories, "a save says what became of each repository");
-                assert!(work.landed.is_empty(), "a run that landed a change has nothing to save");
+            }
+            let ended = match answer {
+                Answer::Ended { .. } => true,
+                Answer::Refused(_) | Answer::Parked { .. } | Answer::Failed { .. } => false,
+            };
+            if ended && !work.landed.is_empty() {
+                assert!(work.saved.is_none(), "a run that ended with a landed change has nothing to save");
             }
         }
         *self.endings.entry(ending(answer)).or_default() += 1;

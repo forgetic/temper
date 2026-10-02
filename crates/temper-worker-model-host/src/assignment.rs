@@ -1,7 +1,8 @@
 //! An assignment's bounds, checked at the entrance (worker-model.md, 4.1):
-//! the host interprets none of it, but it holds the charter and the snapshot
-//! until the agent starts, and its parent relies on the workspace fitting the
-//! limits.
+//! the host interprets none of it but the repositories' names, each the
+//! directory a repository sits in, so one path component unique within its
+//! workspace. It holds the charter and the snapshot until the agent starts,
+//! and its parent relies on the workspace fitting the limits.
 
 use crate::boundary::{Access, Assignment, Invalid, Repository, Start};
 use crate::limits::Limits;
@@ -41,6 +42,8 @@ pub(crate) fn check(assignment: &Assignment, limits: &Limits) -> Result<(), Inva
 
 fn repository(repository: &Repository, limits: &Limits) -> Result<(), Invalid> {
     name(&repository.name, limits)?;
+    component(&repository.name)?;
+    name(&repository.remote, limits)?;
     match &repository.start {
         Start::Base { branch } | Start::Branch { branch } | Start::Saved { branch } => name(branch, limits)?,
         Start::Commit { commit } => name(commit, limits)?,
@@ -57,6 +60,16 @@ fn repository(repository: &Repository, limits: &Limits) -> Result<(), Invalid> {
 /// A name is at least a byte, and at most the limit.
 fn name(bytes: &[u8], limits: &Limits) -> Result<(), Invalid> {
     if bytes.is_empty() || len(bytes) > u64::from(limits.name_bytes) {
+        return Err(Invalid::Name);
+    }
+    Ok(())
+}
+
+/// A repository's name is the directory it sits in: one path component, which
+/// names nothing else.
+fn component(name: &[u8]) -> Result<(), Invalid> {
+    let special = name == b"." || name == b".." || name.eq_ignore_ascii_case(b".git");
+    if special || name.contains(&b'/') || name.contains(&0) {
         return Err(Invalid::Name);
     }
     Ok(())

@@ -234,11 +234,19 @@ enum Taken {
     Assign { run: Token, attempt: Token },
     Stale,
     Started { owner: Token, agent: Token },
-    Called { owner: Token, call: Token },
+    Called { owner: Token, call: Token, push: bool },
     Gone { owner: Token },
     Pushed { call: Token },
     Saved { owner: Token },
     Other,
+}
+
+/// A host call in flight, as the world keeps it.
+#[derive(Debug)]
+struct Open {
+    agent: Token,
+    call: Token,
+    push: bool,
 }
 
 /// A hosted run as the world sees it.
@@ -273,7 +281,9 @@ pub struct World {
     admitted: BTreeMap<(Token, Token), Token>,
     agents: BTreeMap<Token, Token>,
     left: BTreeSet<Token>,
-    calls: Ledger<(Token, Token), Token>,
+    calls: Ledger<(Token, Token), Open>,
+    /// Pushes in flight as their runs left live: answered with how they went.
+    kept: BTreeSet<(Token, Token)>,
 
     stats: Stats,
     trace: Trace,
@@ -304,6 +314,7 @@ impl World {
             agents: BTreeMap::new(),
             left: BTreeSet::new(),
             calls: Ledger::new("host call"),
+            kept: BTreeSet::new(),
             stats: Stats::default(),
             trace: Trace::default(),
         };
@@ -404,10 +415,31 @@ impl World {
                 | Taken::Pushed { .. }
                 | Taken::Saved { .. }
                 | Taken::Other => {
-                    self.note(taken);
+                    let leaving = self.note(taken);
+                    let mut requests = Vec::new();
                     for _ in 0..count {
-                        let request = self.stage.out.pop().expect("counted");
+                        requests.push(self.stage.out.pop().expect("counted"));
+                    }
+                    // A run whose agent this step stops leaves live in it: what
+                    // the step answers it is judged as such.
+                    let mut left = Vec::from_iter(leaving);
+                    for request in &requests {
+                        if let Request::Stop { agent } = request {
+                            self.leave(*agent);
+                            left.push(*agent);
+                        }
+                    }
+                    for request in requests {
                         self.route(request);
+                    }
+                    for agent in left {
+                        for open in self.calls.values() {
+                            let kept = self.kept.contains(&(open.agent, open.call));
+                            assert!(
+                                open.agent != agent || kept,
+                                "a run's relayed calls are answered as it leaves live"
+                            );
+                        }
                     }
                 }
             }
@@ -432,7 +464,13 @@ impl World {
                 Taken::Assign { run: assignment.run, attempt: assignment.attempt }
             }
             Event::Started { owner, agent } => Taken::Started { owner: *owner, agent: *agent },
-            Event::Called { owner, call, ask: _ } => Taken::Called { owner: *owner, call: *call },
+            Event::Called { owner, call, ask } => {
+                let push = match ask {
+                    host::Ask::Push { .. } => true,
+                    host::Ask::Relay { .. } => false,
+                };
+                Taken::Called { owner: *owner, call: *call, push }
+            }
             Event::Gone { owner, detail: _ } => Taken::Gone { owner: *owner },
             Event::Pushed { owner, push: _ } => Taken::Pushed { call: *owner },
             Event::Saved { owner, save: _ } => Taken::Saved { owner: *owner },
@@ -455,29 +493,46 @@ impl World {
         }
     }
 
-    /// Notes what a step took, before routing what it made.
-    fn note(&mut self, taken: Taken) {
+    /// The agent `agent`'s run leaves live: its push in flight, if it has
+    /// one, is kept through the stop.
+    fn leave(&mut self, agent: Token) {
+        if !self.left.insert(agent) {
+            return;
+        }
+        for open in self.calls.values() {
+            if open.agent == agent && open.push {
+                self.kept.insert((open.agent, open.call));
+            }
+        }
+    }
+
+    /// Notes what a step took, before routing what it made: the agent whose
+    /// run it makes leave live, if it does.
+    fn note(&mut self, taken: Taken) -> Option<Token> {
         match taken {
             Taken::Started { owner, agent } => {
                 self.hosted.get_mut(&owner).expect("a start is of a hosted run").agent = Some(agent);
                 self.agents.insert(agent, owner);
             }
-            Taken::Called { owner, call } => {
+            Taken::Called { owner, call, push } => {
                 let agent = self.hosted.get(&owner).expect("a call is of a hosted run").agent;
                 let agent = agent.expect("a call is made by a started agent");
-                self.calls.open((agent, call), agent);
+                self.calls.open((agent, call), Open { agent, call, push });
             }
             // Its run leaves live, if it was: what it had in flight is
             // answered now.
             Taken::Gone { owner } => {
-                if let Some(agent) = self.hosted.get(&owner).expect("a gone agent is of a hosted run").agent {
-                    self.left.insert(agent);
+                let agent = self.hosted.get(&owner).expect("a gone agent is of a hosted run").agent;
+                if let Some(agent) = agent {
+                    self.leave(agent);
                 }
+                return agent;
             }
             Taken::Pushed { call } => self.parent.pushed(call),
             Taken::Saved { owner } => self.parent.saved(owner),
             Taken::Assign { .. } | Taken::Stale | Taken::Other => {}
         }
+        None
     }
 
     /// The host's one request in the step that took the assignment for
@@ -549,7 +604,14 @@ impl World {
             }
             Request::Reply { agent, call, reply } => {
                 self.calls.end((agent, call));
-                if self.left.contains(&agent) {
+                if self.kept.remove(&(agent, call)) {
+                    match reply {
+                        Reply::Pushed(_) => {}
+                        Reply::Relayed { .. } | Reply::Unavailable | Reply::Busy => {
+                            panic!("a push kept through the stop says how it went: {reply:?}")
+                        }
+                    }
+                } else if self.left.contains(&agent) {
                     assert_eq!(reply, Reply::Unavailable, "a call of a run that has left live is unavailable");
                 }
                 match reply {
@@ -560,10 +622,7 @@ impl World {
                 self.parcel(Request::Reply { agent, call, reply });
             }
             Request::Stop { agent } => {
-                for of in self.calls.values() {
-                    assert!(*of != agent, "a run's calls in flight are answered as it leaves live");
-                }
-                self.left.insert(agent);
+                assert!(self.left.contains(&agent), "a stop is of a run that leaves live");
                 self.parcel(Request::Stop { agent });
             }
             Request::Prepare { .. }

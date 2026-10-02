@@ -8,17 +8,27 @@
 //! push is served through the workspace, a forge read or an outlet is relayed
 //! to the engine and its answer routed back. It parks or ends as it decides,
 //! or fails; then the tail: its agent is stopped, its unfinished work saved if
-//! the assignment asks and nothing of it landed, its workspace released, and
-//! the engine answered, which frees the slot. A cancel (from the engine, or
-//! from the top level for every run: lost contact, shutdown) or a fault of the
-//! agent takes the same tail. The first ending decided wins.
+//! the assignment asks and the run did not end with a landed change, its
+//! workspace released, and the engine answered, which frees the slot. A cancel
+//! (from the engine, or from the top level for every run: lost contact,
+//! shutdown) or a fault of the agent takes the same tail.
+//!
+//! The first ending decided wins, but for the run's own: a run the worker
+//! stopped (a cancel, or a fault of its agent) may still say how it finishes
+//! as it winds down, and what it says before its agent has gone is the answer.
+//! A push that lands as it winds down is its outcome (agent-model.md, 4.4). A
+//! cancel it reports is then the worker's: the cancel's reason, or the
+//! agent's fault. Only a run that says nothing before its agent has gone is
+//! answered as the worker stopped it.
 //!
 //! A run's transition table:
 //!
 //! ```text
 //! state       event                         next        emits
-//! -           assign, beyond the limits     -           answer: invalid
-//!             assign, no slot, or hosted    -           answer: busy
+//! -           assign, of the attempt hosted -           (dropped)
+//!             assign, beyond the limits     -           answer: invalid
+//!             assign, no slot, hosted under
+//!               another attempt, or shut    -           answer: busy
 //!             assign                        Preparing   prepare
 //! Preparing   prepared                      Starting    start
 //!             unprepared                    Closed      answer: unprepared
@@ -32,24 +42,25 @@
 //!             gone                          Closed      release, answer: unstarted
 //!             inbound                       Starting    (held), or bounced: full
 //!             cancel                        Unwanted
-//! Unwanted    started                       Stopping    stop
+//! Unwanted    started                       Stopping    stop (stopped)
 //!             gone                          Closed      release, answer: cancelled
 //!             inbound                       Unwanted    bounced: ending
 //!             cancel                        Unwanted
 //! Active      inbound                       Active      deliver
 //!             called                        Active      push, relay, or reply: busy
 //!             yielded                       Waiting
-//!             finished                      Stopping    replies: unavailable, stop
-//!             faulted                       Stopping    replies: unavailable, stop
-//!             cancel                        Stopping    replies: unavailable, stop
-//!             gone                          Stopping    replies: unavailable (exited)
+//!             finished                      Stopping    relays: unavailable, stop
+//!             faulted, cancel               Stopping    relays: unavailable, stop (stopped)
+//!             gone                          Stopping    relays: unavailable (exited)
 //! Waiting     inbound                       Active      deliver
 //!             called                        Active      push, relay, or reply: busy
 //!             yielded                       Waiting
 //!             finished, faulted, cancel     Stopping    as Active
 //!             gone                          Stopping    as Active
 //! Stopping    called                        Stopping    reply: unavailable
-//!             yielded, finished, faulted    Stopping
+//!             finished, stopped             Stopping    (the run's own ending)
+//!             finished, said, or exited     Stopping
+//!             yielded, faulted              Stopping
 //!             gone                          Stopping
 //!             inbound                       Stopping    bounced: ending
 //!             cancel                        Stopping
@@ -62,10 +73,14 @@
 //!
 //! A pushed or relayed event moves its call (the `call` module), and leaves
 //! the run where it is. A stopping run has settled once its agent has gone
-//! and no push of its is in flight; it then saves if the assignment asks and
-//! none of its pushes landed, and otherwise releases its workspace and
-//! answers. That follows from the state, in one place ([`conclude`]), which
-//! also retires a run once it is Closed.
+//! and its push in flight, if it has one, has settled; it then saves if the
+//! assignment asks, unless it ended with a landed change, and otherwise
+//! releases its workspace and answers. That follows from the state, in one
+//! place ([`conclude`]), which also retires a run once it is Closed.
+//!
+//! A stop is sent whenever a run leaves live with its agent there, also after
+//! the run has said how it finishes or its agent was faulted: the agent
+//! sub-model is winding it down then anyway, and a stop changes nothing.
 //!
 //! Every other cell is unreachable by the contracts: the workspace's (one
 //! terminal per request) and the agent's (`Started` first unless the agent
@@ -87,7 +102,7 @@ use temper_lib::{Env, Id, List, Map, Queue, ReplyTo, Set, Slab, Token};
 use crate::assignment::{self, len};
 use crate::boundary::{
     AgentFailure, Answer, Ask, Assignment, Bounce, Failure, Finish, Hosting, Landing, Phase, Preparation, Push, Reason,
-    Refusal, Reply, Request, Work,
+    Refusal, Reply, Request, RunFailure, Work,
 };
 use crate::call::{self, Call};
 use crate::facts::{Fact, Facts};
@@ -105,9 +120,11 @@ pub(crate) struct Hosted {
     save: Option<Box<[u8]>>,
     /// The repositories its pushes landed in, by their place in the workspace.
     landed: Set<u32>,
-    /// Its host calls in flight; once it has left live, the pushes still
-    /// settling.
-    calls: Set<Id<Call>>,
+    /// Its relayed calls in flight, while it is live.
+    relays: Set<Id<Call>>,
+    /// Its push in flight, if it has one: a write, so one at a time, and
+    /// waited for through the stop.
+    push: Option<Id<Call>>,
     state: State,
 }
 
@@ -128,8 +145,8 @@ enum State {
     Active { reply_to: ReplyTo, workspace: Token, agent: Token },
     /// It yielded, and waits for its next inbound event.
     Waiting { reply_to: ReplyTo, workspace: Token, agent: Token },
-    /// It ends with `ending` once its agent has gone (`gone`) and its pushes
-    /// in flight have settled.
+    /// It ends with `ending` once its agent has gone (`gone`) and its push in
+    /// flight has settled.
     Stopping { reply_to: ReplyTo, workspace: Token, agent: Token, ending: Ending, gone: bool },
     /// Its unfinished work is being saved; it ends with `ending` once it is.
     Saving { reply_to: ReplyTo, workspace: Token, ending: Ending },
@@ -140,9 +157,16 @@ enum State {
 /// How a run ends.
 #[derive(Debug)]
 enum Ending {
+    /// It ended with `outcome`, as it said.
     Ended { outcome: Box<[u8]> },
+    /// It parked, as it said.
     Parked { snapshot: Option<Box<[u8]>> },
+    /// It failed: as it said, or its agent broke the rules saying it, or
+    /// exited without a word.
     Failed { failure: Failure, detail: Box<[u8]> },
+    /// The worker stopped it, for `failure`: a cancel, or a fault of its
+    /// agent. What the run says before its agent has gone still wins.
+    Stopped { failure: Failure, detail: Box<[u8]> },
 }
 
 // Entry points, one per event: look the run up, take its state out, run the
@@ -155,14 +179,19 @@ pub(crate) fn assign(
     assignment: Assignment,
     out: &mut Queue<Request>,
 ) {
-    let Model { hosted, names, calls: _, ready: _, facts } = model;
+    // The attempt hosted, sent again: dropped. Its one answer is the hosted
+    // run's, and an answer under its names now would read as that one.
+    if fenced(&model.names, &model.hosted, assignment.run, assignment.attempt).is_some() {
+        return;
+    }
+    let Model { hosted, names, facts, shut, .. } = model;
     // An assignment that can never fit is invalid, room or not: busy invites a
     // retry.
     if let Err(invalid) = assignment::check(&assignment, &env.limits) {
         refuse(reply_to, &assignment, Refusal::Invalid(invalid), out);
         return;
     }
-    if hosted.is_full() || names.contains_key(&assignment.run) {
+    if *shut || hosted.is_full() || names.contains_key(&assignment.run) {
         refuse(reply_to, &assignment, Refusal::Busy, out);
         return;
     }
@@ -175,7 +204,8 @@ pub(crate) fn assign(
         repositories,
         save,
         landed: Set::with_capacity(repositories),
-        calls: Set::with_capacity(env.limits.run_calls),
+        relays: Set::with_capacity(env.limits.run_calls),
+        push: None,
         state: State::Preparing { reply_to, charter, snapshot, held },
     };
     let id = hosted.insert(entry).expect("checked for room above");
@@ -242,7 +272,7 @@ pub(crate) fn relayed(
     let Some(id) = fenced(&model.names, &model.hosted, run, attempt) else {
         return;
     };
-    let Model { hosted, names: _, calls, ready: _, facts: _ } = model;
+    let Model { hosted, calls, .. } = model;
     // The engine echoes the host's name for the call, which may be of a call
     // answered already, or not of this run.
     let call_id = Id::<Call>::from_token(call);
@@ -258,15 +288,20 @@ pub(crate) fn relayed(
             entry.state = call::State::Closed;
             calls.retire(call_id);
             let entry = hosted.get_mut(id).expect("a named run is hosted");
-            entry.calls.remove(&call_id);
+            entry.relays.remove(&call_id);
         }
         // Not a relayed call, or answered already: dropped.
-        call::State::Pushing { .. } | call::State::Orphaned | call::State::Closed => {}
+        call::State::Pushing { .. } | call::State::Closed => {}
     }
 }
 
 pub(crate) fn cancel_all(model: &mut Model, reason: Reason) {
-    let Model { hosted: _, names, calls: _, ready, facts: _ } = model;
+    let Model { names, ready, shut, .. } = model;
+    match reason {
+        // A worker shutting down takes no more work.
+        Reason::Shutdown => *shut = true,
+        Reason::Engine | Reason::Contact => {}
+    }
     for (_, id) in names.iter() {
         if !ready.contains_key(id) {
             let earlier = ready.insert(*id, reason).expect("room on the ready list for every run");
@@ -296,7 +331,7 @@ pub(crate) fn report(model: &Model, out: &mut Queue<Request>) {
 }
 
 pub(crate) fn prepared(model: &mut Model, owner: Token, workspace: Token, out: &mut Queue<Request>) {
-    let Model { hosted, names: _, calls: _, ready: _, facts } = model;
+    let Model { hosted, facts, .. } = model;
     let id = Id::<Hosted>::from_token(owner);
     let entry = hosted.get_mut(id).expect("a run lives until its prepare has settled");
     facts.push(Fact::Prepared { run: entry.run, attempt: entry.attempt });
@@ -307,7 +342,7 @@ pub(crate) fn prepared(model: &mut Model, owner: Token, workspace: Token, out: &
             State::Starting { reply_to, workspace, held }
         }
         State::Cancelling { reply_to, reason } => {
-            let ending = Ending::Failed { failure: Failure::Cancelled(reason), detail: Box::new([]) };
+            let ending = Ending::Stopped { failure: Failure::Cancelled(reason), detail: Box::new([]) };
             release(entry, facts, reply_to, workspace, ending, None, out)
         }
         State::Starting { .. }
@@ -329,19 +364,20 @@ pub(crate) fn unprepared(
     detail: Box<[u8]>,
     out: &mut Queue<Request>,
 ) {
-    let Model { hosted, names: _, calls: _, ready: _, facts } = model;
+    let Model { hosted, facts, .. } = model;
     let id = Id::<Hosted>::from_token(owner);
     let entry = hosted.get_mut(id).expect("a run lives until its prepare has settled");
-    let detail = tail(detail, &env.limits);
     let state = mem::replace(&mut entry.state, State::Closed);
     entry.state = match state {
         // Nothing of the workspace is held: nothing to release.
         State::Preparing { reply_to, .. } => {
+            let detail = tail(detail, &env.limits);
             let ending = Ending::Failed { failure: Failure::Unprepared(failure), detail };
             answer(entry, facts, reply_to, ending, None, out)
         }
+        // Cancelled first: the prepare's failure is not the answer's.
         State::Cancelling { reply_to, reason } => {
-            let ending = Ending::Failed { failure: Failure::Cancelled(reason), detail };
+            let ending = Ending::Stopped { failure: Failure::Cancelled(reason), detail: Box::new([]) };
             answer(entry, facts, reply_to, ending, None, out)
         }
         State::Starting { .. }
@@ -356,7 +392,7 @@ pub(crate) fn unprepared(
 }
 
 pub(crate) fn started(model: &mut Model, env: &Env<Limits>, owner: Token, agent: Token, out: &mut Queue<Request>) {
-    let Model { hosted, names: _, calls: _, ready: _, facts } = model;
+    let Model { hosted, facts, .. } = model;
     let id = Id::<Hosted>::from_token(owner);
     let entry = hosted.get_mut(id).expect("a run lives until its agent has gone");
     facts.push(Fact::Started { run: entry.run, attempt: entry.attempt });
@@ -374,7 +410,7 @@ pub(crate) fn started(model: &mut Model, env: &Env<Limits>, owner: Token, agent:
         }
         State::Unwanted { reply_to, workspace, reason } => {
             out.push(Request::Stop { agent });
-            let ending = Ending::Failed { failure: Failure::Cancelled(reason), detail: Box::new([]) };
+            let ending = Ending::Stopped { failure: Failure::Cancelled(reason), detail: Box::new([]) };
             State::Stopping { reply_to, workspace, agent, ending, gone: false }
         }
         State::Preparing { .. }
@@ -396,14 +432,14 @@ pub(crate) fn called(
     ask: Ask,
     out: &mut Queue<Request>,
 ) {
-    let Model { hosted, names: _, calls, ready: _, facts: _ } = model;
+    let Model { hosted, calls, .. } = model;
     let id = Id::<Hosted>::from_token(owner);
     let entry = hosted.get_mut(id).expect("a run lives until its agent has gone");
     let state = mem::replace(&mut entry.state, State::Closed);
     entry.state = match state {
         // A run that calls is at work, whatever it said before.
         State::Active { reply_to, workspace, agent } | State::Waiting { reply_to, workspace, agent } => {
-            serve(entry.run, entry.attempt, &mut entry.calls, calls, id, workspace, agent, call, ask, &env.limits, out);
+            serve(entry, calls, id, workspace, agent, call, ask, &env.limits, out);
             State::Active { reply_to, workspace, agent }
         }
         // Once a run is cancelled or ending, its calls are not served.
@@ -441,19 +477,27 @@ pub(crate) fn yielded(model: &mut Model, owner: Token, out: &mut Queue<Request>)
 }
 
 pub(crate) fn finished(model: &mut Model, env: &Env<Limits>, owner: Token, finish: Finish, out: &mut Queue<Request>) {
-    let Model { hosted, names: _, calls, ready: _, facts: _ } = model;
+    let Model { hosted, calls, .. } = model;
     let id = Id::<Hosted>::from_token(owner);
     let entry = hosted.get_mut(id).expect("a run lives until its agent has gone");
     let state = mem::replace(&mut entry.state, State::Closed);
     entry.state = match state {
         State::Active { reply_to, workspace, agent } | State::Waiting { reply_to, workspace, agent } => {
-            let ending = ending(finish, &env.limits);
-            leave(&mut entry.calls, calls, &env.limits, out);
+            let ending = said(finish, Failure::Run(RunFailure::Cancelled), &env.limits);
+            leave(&mut entry.relays, calls, &env.limits, out);
             out.push(Request::Stop { agent });
             State::Stopping { reply_to, workspace, agent, ending, gone: false }
         }
-        // How the run ends is decided already.
-        state @ State::Stopping { .. } => state,
+        State::Stopping { reply_to, workspace, agent, ending, gone } => {
+            let ending = match ending {
+                // Stopped by the worker, the run says how it finishes as it
+                // winds down: its own ending wins.
+                Ending::Stopped { failure, detail: _ } => said(finish, failure, &env.limits),
+                // It said how it finishes already, or its agent exited.
+                ending @ (Ending::Ended { .. } | Ending::Parked { .. } | Ending::Failed { .. }) => ending,
+            };
+            State::Stopping { reply_to, workspace, agent, ending, gone }
+        }
         State::Preparing { .. }
         | State::Cancelling { .. }
         | State::Starting { .. }
@@ -471,18 +515,18 @@ pub(crate) fn faulted(
     fault: AgentFailure,
     out: &mut Queue<Request>,
 ) {
-    let Model { hosted, names: _, calls, ready: _, facts: _ } = model;
+    let Model { hosted, calls, .. } = model;
     let id = Id::<Hosted>::from_token(owner);
     let entry = hosted.get_mut(id).expect("a run lives until its agent has gone");
     let state = mem::replace(&mut entry.state, State::Closed);
     entry.state = match state {
         State::Active { reply_to, workspace, agent } | State::Waiting { reply_to, workspace, agent } => {
-            let ending = Ending::Failed { failure: Failure::Agent(fault), detail: Box::new([]) };
-            leave(&mut entry.calls, calls, &env.limits, out);
+            let ending = Ending::Stopped { failure: Failure::Agent(fault), detail: Box::new([]) };
+            leave(&mut entry.relays, calls, &env.limits, out);
             out.push(Request::Stop { agent });
             State::Stopping { reply_to, workspace, agent, ending, gone: false }
         }
-        // How the run ends is decided already.
+        // How the run ends is decided already, or the worker stopped it first.
         state @ State::Stopping { .. } => state,
         State::Preparing { .. }
         | State::Cancelling { .. }
@@ -495,7 +539,7 @@ pub(crate) fn faulted(
 }
 
 pub(crate) fn gone(model: &mut Model, env: &Env<Limits>, owner: Token, detail: Box<[u8]>, out: &mut Queue<Request>) {
-    let Model { hosted, names: _, calls, ready: _, facts } = model;
+    let Model { hosted, calls, facts, .. } = model;
     let id = Id::<Hosted>::from_token(owner);
     let entry = hosted.get_mut(id).expect("a run lives until its agent has gone");
     let detail = tail(detail, &env.limits);
@@ -507,13 +551,13 @@ pub(crate) fn gone(model: &mut Model, env: &Env<Limits>, owner: Token, detail: B
             release(entry, facts, reply_to, workspace, ending, None, out)
         }
         State::Unwanted { reply_to, workspace, reason } => {
-            let ending = Ending::Failed { failure: Failure::Cancelled(reason), detail };
+            let ending = Ending::Stopped { failure: Failure::Cancelled(reason), detail };
             release(entry, facts, reply_to, workspace, ending, None, out)
         }
         // It exited without saying how its run finishes.
         State::Active { reply_to, workspace, agent } | State::Waiting { reply_to, workspace, agent } => {
             let ending = Ending::Failed { failure: Failure::Agent(AgentFailure::Exited), detail };
-            leave(&mut entry.calls, calls, &env.limits, out);
+            leave(&mut entry.relays, calls, &env.limits, out);
             State::Stopping { reply_to, workspace, agent, ending, gone: true }
         }
         State::Stopping { reply_to, workspace, agent, ending, gone } => {
@@ -529,24 +573,18 @@ pub(crate) fn gone(model: &mut Model, env: &Env<Limits>, owner: Token, detail: B
 }
 
 pub(crate) fn pushed(model: &mut Model, owner: Token, push: Box<[Landing]>, out: &mut Queue<Request>) {
-    let Model { hosted, names: _, calls, ready: _, facts: _ } = model;
+    let Model { hosted, calls, .. } = model;
     let call_id = Id::<Call>::from_token(owner);
     let call = calls.get_mut(call_id).expect("a push's call lives until the push has settled");
     let id = call.hosted;
     let state = mem::replace(&mut call.state, call::State::Closed);
-    match state {
-        call::State::Pushing { agent, call } => {
-            out.push(Request::Reply { agent, call, reply: Reply::Pushed(told(&push)) });
-        }
-        // Its run left live, and its call was answered then.
-        call::State::Orphaned => {}
-        call::State::Relayed { .. } | call::State::Closed => unreachable!("a push ends once, and only a push's call"),
-    }
     calls.retire(call_id);
-    let entry = hosted.get_mut(id).expect("a run lives until its pushes have settled");
-    entry.calls.remove(&call_id);
-    // Bounded: no more than the repositories the workspace lists.
-    for (landing, index) in push.iter().zip(0..entry.repositories) {
+    let entry = hosted.get_mut(id).expect("a run lives until its push has settled");
+    assert!(entry.push == Some(call_id), "a run's push is its one push in flight");
+    entry.push = None;
+    let repositories = u32::try_from(push.len()).expect("as many as the workspace lists");
+    assert!(repositories == entry.repositories, "a push says what became of each repository");
+    for (landing, index) in push.iter().zip(0..repositories) {
         match landing {
             Landing::Landed => {
                 entry.landed.insert(index).expect("room for every repository");
@@ -554,17 +592,26 @@ pub(crate) fn pushed(model: &mut Model, owner: Token, push: Box<[Landing]>, out:
             Landing::Moved | Landing::Failed | Landing::Unchanged => {}
         }
     }
+    // Live or stopping, the run is told how it went; an agent that has gone
+    // drops it.
+    match state {
+        call::State::Pushing { agent, call } => {
+            out.push(Request::Reply { agent, call, reply: Reply::Pushed(told(&push)) });
+        }
+        call::State::Relayed { .. } | call::State::Closed => unreachable!("a push ends once, and only a push's call"),
+    }
     conclude(model, id, out);
 }
 
 pub(crate) fn saved(model: &mut Model, owner: Token, save: Box<[Landing]>, out: &mut Queue<Request>) {
-    let Model { hosted, names: _, calls: _, ready: _, facts } = model;
+    let Model { hosted, facts, .. } = model;
     let id = Id::<Hosted>::from_token(owner);
     let entry = hosted.get_mut(id).expect("a run lives until its save has settled");
+    let repositories = u32::try_from(save.len()).expect("as many as the workspace lists");
+    assert!(repositories == entry.repositories, "a save says what became of each repository");
     let state = mem::replace(&mut entry.state, State::Closed);
     entry.state = match state {
         State::Saving { reply_to, workspace, ending } => {
-            let save = cut(save, entry.repositories);
             release(entry, facts, reply_to, workspace, ending, Some(save), out)
         }
         State::Preparing { .. }
@@ -588,7 +635,7 @@ fn fenced(names: &Map<Token, Id<Hosted>>, hosted: &Slab<Hosted>, run: Token, att
 
 /// Cancels the run `id` for `reason`: the cancel cells.
 fn stop(model: &mut Model, env: &Env<Limits>, id: Id<Hosted>, reason: Reason, out: &mut Queue<Request>) {
-    let Model { hosted, names: _, calls, ready: _, facts: _ } = model;
+    let Model { hosted, calls, .. } = model;
     let entry = hosted.get_mut(id).expect("a run on the names or the ready list is hosted");
     let state = mem::replace(&mut entry.state, State::Closed);
     entry.state = match state {
@@ -596,12 +643,12 @@ fn stop(model: &mut Model, env: &Env<Limits>, id: Id<Hosted>, reason: Reason, ou
         State::Preparing { reply_to, .. } => State::Cancelling { reply_to, reason },
         State::Starting { reply_to, workspace, held: _ } => State::Unwanted { reply_to, workspace, reason },
         State::Active { reply_to, workspace, agent } | State::Waiting { reply_to, workspace, agent } => {
-            let ending = Ending::Failed { failure: Failure::Cancelled(reason), detail: Box::new([]) };
-            leave(&mut entry.calls, calls, &env.limits, out);
+            let ending = Ending::Stopped { failure: Failure::Cancelled(reason), detail: Box::new([]) };
+            leave(&mut entry.relays, calls, &env.limits, out);
             out.push(Request::Stop { agent });
             State::Stopping { reply_to, workspace, agent, ending, gone: false }
         }
-        // How the run ends is decided already.
+        // How the run ends is decided already, or it is stopping.
         state @ (State::Cancelling { .. } | State::Unwanted { .. } | State::Stopping { .. } | State::Saving { .. }) => {
             state
         }
@@ -614,10 +661,10 @@ fn stop(model: &mut Model, env: &Env<Limits>, id: Id<Hosted>, reason: Reason, ou
 /// that has settled saves, or releases its workspace and answers; and a
 /// Closed run is retired, leaving the names and the ready list.
 fn conclude(model: &mut Model, id: Id<Hosted>, out: &mut Queue<Request>) {
-    let Model { hosted, names, calls: _, ready, facts } = model;
+    let Model { hosted, names, ready, facts, .. } = model;
     let entry = hosted.get_mut(id).expect("a run lives until it is retired");
     let settled = match &entry.state {
-        State::Stopping { gone, .. } => *gone && entry.calls.is_empty(),
+        State::Stopping { gone, .. } => *gone && entry.push.is_none(),
         State::Preparing { .. }
         | State::Cancelling { .. }
         | State::Starting { .. }
@@ -665,8 +712,10 @@ fn conclude(model: &mut Model, id: Id<Hosted>, out: &mut Queue<Request>) {
 // Cell handlers and what they share.
 
 /// Stopping, settled: nothing of the run is running and nothing it asked of
-/// the workspace is in flight. Its work is saved if the assignment asks and
-/// none of it landed; otherwise the run releases its workspace and answers.
+/// the workspace is in flight. Its work is saved if the assignment asks,
+/// unless it ended with a landed change, which leaves nothing to save; it
+/// releases its workspace and answers otherwise. A save of an unchanged tree
+/// pushes nothing.
 fn settle(
     entry: &mut Hosted,
     facts: &mut Facts,
@@ -676,7 +725,11 @@ fn settle(
     ending: Ending,
     out: &mut Queue<Request>,
 ) -> State {
-    let save = if entry.landed.is_empty() { entry.save.take() } else { None };
+    let landed = match &ending {
+        Ending::Ended { .. } => !entry.landed.is_empty(),
+        Ending::Parked { .. } | Ending::Failed { .. } | Ending::Stopped { .. } => false,
+    };
+    let save = if landed { None } else { entry.save.take() };
     match save {
         Some(branch) => {
             out.push(Request::Save { owner: id.token(), workspace, branch });
@@ -724,7 +777,7 @@ fn answer(
             facts.push(Fact::Parked { run, attempt });
             Answer::Parked { snapshot, work }
         }
-        Ending::Failed { failure, detail } => {
+        Ending::Failed { failure, detail } | Ending::Stopped { failure, detail } => {
             facts.push(Fact::Failed { run, attempt, failure });
             Answer::Failed { failure, detail, work }
         }
@@ -749,9 +802,7 @@ fn hold(held: &mut Queue<Box<[u8]>>, event: Box<[u8]>, run: Token, attempt: Toke
 /// or the engine, or answers it as busy.
 #[expect(clippy::too_many_arguments, reason = "a cell handler takes the fields it touches")]
 fn serve(
-    run: Token,
-    attempt: Token,
-    run_calls: &mut Set<Id<Call>>,
+    entry: &mut Hosted,
     calls: &mut Slab<Call>,
     id: Id<Hosted>,
     workspace: Token,
@@ -761,76 +812,66 @@ fn serve(
     limits: &Limits,
     out: &mut Queue<Request>,
 ) {
-    // A push is a write: one at a time.
-    let mut pushing = false;
-    for call_id in run_calls.iter() {
-        let entry = calls.get(*call_id).expect("a run's calls live until they close");
-        match entry.state {
-            call::State::Pushing { .. } | call::State::Orphaned => pushing = true,
-            call::State::Relayed { .. } | call::State::Closed => {}
-        }
-    }
-    let is_push = match &ask {
+    let in_flight = entry.relays.len().saturating_add(u32::from(entry.push.is_some()));
+    let push = match &ask {
         Ask::Push { .. } => true,
         Ask::Relay { .. } => false,
     };
-    if run_calls.len() >= limits.run_calls || (is_push && pushing) {
+    // A push is a write: one at a time.
+    if in_flight >= limits.run_calls || (push && entry.push.is_some()) {
         out.push(Request::Reply { agent, call, reply: Reply::Busy });
         return;
     }
-    let state = if is_push { call::State::Pushing { agent, call } } else { call::State::Relayed { agent, call } };
+    let state = if push { call::State::Pushing { agent, call } } else { call::State::Relayed { agent, call } };
     // Calls answered in this iteration keep their slots until the reclaim
     // point: a call may find none free even within its run's limit.
     let Ok(call_id) = calls.insert(Call { hosted: id, state }) else {
         out.push(Request::Reply { agent, call, reply: Reply::Busy });
         return;
     };
-    let added = run_calls.insert(call_id).expect("checked the run's calls for room above");
-    assert!(added, "a call is new to its run");
     match ask {
-        Ask::Push { message } => out.push(Request::Push { owner: call_id.token(), workspace, message }),
-        Ask::Relay { body } => out.push(Request::Relay { run, attempt, call: call_id.token(), body }),
-    }
-}
-
-/// The run leaves live: each of its calls in flight is answered as
-/// unavailable, a relayed one closing and a push becoming orphaned.
-fn leave(run_calls: &mut Set<Id<Call>>, calls: &mut Slab<Call>, limits: &Limits, out: &mut Queue<Request>) {
-    let mut orphaned = Set::with_capacity(limits.run_calls);
-    for call_id in run_calls.iter() {
-        let entry = calls.get_mut(*call_id).expect("a run's calls live until they close");
-        let state = mem::replace(&mut entry.state, call::State::Closed);
-        entry.state = match state {
-            call::State::Pushing { agent, call } => {
-                out.push(Request::Reply { agent, call, reply: Reply::Unavailable });
-                call::State::Orphaned
-            }
-            call::State::Relayed { agent, call } => {
-                out.push(Request::Reply { agent, call, reply: Reply::Unavailable });
-                call::State::Closed
-            }
-            call::State::Orphaned | call::State::Closed => unreachable!("a run leaves live once"),
-        };
-        match entry.state {
-            call::State::Orphaned => {
-                orphaned.insert(*call_id).expect("room for the run's calls");
-            }
-            call::State::Closed => calls.retire(*call_id),
-            call::State::Pushing { .. } | call::State::Relayed { .. } => unreachable!("set above"),
+        Ask::Push { message } => {
+            entry.push = Some(call_id);
+            out.push(Request::Push { owner: call_id.token(), workspace, message });
+        }
+        Ask::Relay { body } => {
+            let added = entry.relays.insert(call_id).expect("checked the run's calls for room above");
+            assert!(added, "a call is new to its run");
+            out.push(Request::Relay { run: entry.run, attempt: entry.attempt, call: call_id.token(), body });
         }
     }
-    *run_calls = orphaned;
 }
 
-/// How the run ends, as it says it finishes. Saying more than the limits allow
-/// breaks the rules.
-fn ending(finish: Finish, limits: &Limits) -> Ending {
+/// The run leaves live: each of its relayed calls in flight is answered as
+/// unavailable, and closes. Its push in flight, if it has one, is waited for.
+fn leave(relays: &mut Set<Id<Call>>, calls: &mut Slab<Call>, limits: &Limits, out: &mut Queue<Request>) {
+    for call_id in relays.iter() {
+        let entry = calls.get_mut(*call_id).expect("a run's calls live until they close");
+        let state = mem::replace(&mut entry.state, call::State::Closed);
+        match state {
+            call::State::Relayed { agent, call } => {
+                out.push(Request::Reply { agent, call, reply: Reply::Unavailable });
+            }
+            call::State::Pushing { .. } | call::State::Closed => unreachable!("a run's relays are relayed calls"),
+        }
+        calls.retire(*call_id);
+    }
+    // An empty set takes no heap.
+    *relays = Set::with_capacity(limits.run_calls);
+}
+
+/// How the run ends, as it says it finishes; a cancel it reports is
+/// `cancelled`. Saying more than the limits allow breaks the rules.
+fn said(finish: Finish, cancelled: Failure, limits: &Limits) -> Ending {
     let rules = Ending::Failed { failure: Failure::Agent(AgentFailure::Rules), detail: Box::new([]) };
     match finish {
         Finish::Ended { outcome } if len(&outcome) > limits.outcome_bytes => rules,
         Finish::Ended { outcome } => Ending::Ended { outcome },
         Finish::Parked { snapshot: Some(snapshot) } if len(&snapshot) > limits.snapshot_bytes => rules,
         Finish::Parked { snapshot } => Ending::Parked { snapshot },
+        Finish::Failed { failure: RunFailure::Cancelled } => {
+            Ending::Failed { failure: cancelled, detail: Box::new([]) }
+        }
         Finish::Failed { failure } => Ending::Failed { failure: Failure::Run(failure), detail: Box::new([]) },
     }
 }
@@ -839,6 +880,7 @@ fn ending(finish: Finish, limits: &Limits) -> Ending {
 fn explained(ending: Ending, detail: Box<[u8]>) -> Ending {
     match ending {
         Ending::Failed { failure, detail: _ } => Ending::Failed { failure, detail },
+        Ending::Stopped { failure, detail: _ } => Ending::Stopped { failure, detail },
         ending @ (Ending::Ended { .. } | Ending::Parked { .. }) => ending,
     }
 }
@@ -873,19 +915,6 @@ fn tail(detail: Box<[u8]>, limits: &Limits) -> Box<[u8]> {
         Some(cut) if cut > 0 => copy_of(detail.get(cut..).expect("cut within the detail")),
         Some(_) | None => detail,
     }
-}
-
-/// A save's outcome for the repositories the workspace lists, and no more.
-fn cut(save: Box<[Landing]>, repositories: u32) -> Box<[Landing]> {
-    let count = usize::try_from(repositories).expect("a u32 fits in a usize");
-    if save.len() <= count {
-        return save;
-    }
-    let mut kept = List::with_capacity(repositories);
-    for landing in save.iter().take(count) {
-        kept.push(*landing).expect("room for every repository");
-    }
-    kept.into_boxed()
 }
 
 fn phase(state: &State) -> Phase {

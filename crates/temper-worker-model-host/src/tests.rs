@@ -187,11 +187,13 @@ fn workspace() -> Workspace {
         repositories: Box::new([
             Repository {
                 name: bytes(b"app"),
+                remote: bytes(b"org/app"),
                 start: Start::Base { branch: bytes(b"main") },
                 access: Access::Writable { push: bytes(b"fix-7"), identity: bytes(b"bot") },
             },
             Repository {
                 name: bytes(b"lib"),
+                remote: bytes(b"org/lib"),
                 start: Start::Commit { commit: bytes(b"abc123") },
                 access: Access::ReadOnly,
             },
@@ -329,7 +331,12 @@ fn an_assignment_beyond_the_limits_is_refused_as_invalid() {
 }
 
 fn repository(name: &[u8]) -> Repository {
-    Repository { name: bytes(name), start: Start::Branch { branch: bytes(b"b") }, access: Access::ReadOnly }
+    Repository {
+        name: bytes(name),
+        remote: bytes(b"org/repo"),
+        start: Start::Branch { branch: bytes(b"b") },
+        access: Access::ReadOnly,
+    }
 }
 
 fn run_of(run: u64) -> Names {
@@ -359,13 +366,25 @@ fn an_assignment_with_every_slot_taken_is_refused_as_busy_until_one_comes_back()
 }
 
 #[test]
-fn an_assignment_for_a_run_hosted_already_is_refused_as_busy() {
+fn an_assignment_for_a_run_hosted_already_under_another_attempt_is_refused_as_busy() {
     let mut h = Harness::new(LIMITS);
     h.admit(1);
     let again = Assignment { attempt: Token::new(5000), ..assignment(1) };
     let emitted = h.assign(again);
     let hosted = Names { attempt: Token::new(5000), ..run_of(1) };
     assert_eq!(&*emitted, [answer(hosted, Answer::Refused(Refusal::Busy))]);
+}
+
+#[test]
+fn the_attempt_hosted_assigned_again_is_dropped() {
+    let mut h = Harness::new(LIMITS);
+    let hosted = h.admit(1);
+    assert!(h.assign(assignment(1)).is_empty(), "its one answer is the hosted run's");
+    let invalid = Assignment { charter: Box::from([0_u8; 65]), ..assignment(1) };
+    assert!(h.assign(invalid).is_empty(), "whatever it holds");
+    assert_eq!(h.model.hosted(), 1);
+    let unprepared = Event::Unprepared { owner: hosted.owner, failure: Preparation::Transient, detail: bytes(b"") };
+    assert_eq!(h.step(unprepared).len(), 1, "answered once");
 }
 
 #[test]
@@ -424,8 +443,8 @@ fn a_cancel_as_the_workspace_fails_to_prepare_answers_cancelled() {
     let hosted = h.admit(1);
     assert!(h.cancel(hosted).is_empty());
     let unprepared = Event::Unprepared { owner: hosted.owner, failure: Preparation::Transient, detail: bytes(b"x") };
-    let cancelled = failed(Failure::Cancelled(Reason::Engine), b"x", nothing());
-    assert_eq!(&*h.step(unprepared), [answer(hosted, cancelled)]);
+    let cancelled = failed(Failure::Cancelled(Reason::Engine), b"", nothing());
+    assert_eq!(&*h.step(unprepared), [answer(hosted, cancelled)], "the prepare's failure is not the answer's");
 }
 
 #[test]
@@ -533,11 +552,10 @@ fn a_run_that_fails_answers_with_its_failure_and_the_tail_of_its_agents_output()
     let emitted = h.finish(hosted, Finish::Failed { failure: RunFailure::Budget });
     assert_eq!(&*emitted, [stop(hosted)]);
     assert_eq!(&*h.gone(hosted, b"budget exhausted"), [save(hosted)]);
-    let saved =
-        Event::Saved { owner: hosted.owner, save: Box::new([Landing::Landed, Landing::Unchanged, Landing::Moved]) };
-    let work = Work { landed: Box::new([]), saved: Some(Box::new([Landing::Landed, Landing::Unchanged])) };
+    let saved = Event::Saved { owner: hosted.owner, save: Box::new([Landing::Landed, Landing::Moved]) };
+    let work = Work { landed: Box::new([]), saved: Some(Box::new([Landing::Landed, Landing::Moved])) };
     let budget = failed(Failure::Run(RunFailure::Budget), b"xhausted", work);
-    assert_eq!(&*h.step(saved), [release(hosted), answer(hosted, budget)], "the save cut to the repositories");
+    assert_eq!(&*h.step(saved), [release(hosted), answer(hosted, budget)]);
 }
 
 #[test]
@@ -549,9 +567,12 @@ fn a_run_that_says_more_than_the_limits_allow_has_broken_the_rules() {
         let hosted = h.live(1);
         assert_eq!(&*h.finish(hosted, finish), [stop(hosted)]);
         saving(&mut h, hosted);
-        let saved = Event::Saved { owner: hosted.owner, save: Box::new([]) };
-        let rules =
-            failed(Failure::Agent(AgentFailure::Rules), b"", Work { landed: Box::new([]), saved: Some(Box::new([])) });
+        let saved = Event::Saved { owner: hosted.owner, save: Box::new([Landing::Unchanged; 2]) };
+        let rules = failed(
+            Failure::Agent(AgentFailure::Rules),
+            b"",
+            Work { landed: Box::new([]), saved: Some(Box::new([Landing::Unchanged; 2])) },
+        );
         assert_eq!(&*h.step(saved), [release(hosted), answer(hosted, rules)]);
     }
 }
@@ -578,11 +599,10 @@ fn a_fault_of_the_agent_stops_it_and_fails_the_run() {
         let hosted = h.live(1);
         assert_eq!(&*h.step(Event::Faulted { owner: hosted.owner, fault }), [stop(hosted)]);
         assert!(h.step(Event::Faulted { owner: hosted.owner, fault: AgentFailure::WallTime }).is_empty());
-        assert!(h.finish(hosted, Finish::Ended { outcome: bytes(b"late") }).is_empty(), "decided already");
         assert!(h.step(Event::Yielded { owner: hosted.owner }).is_empty());
-        assert_eq!(&*h.gone(hosted, b"killed"), [save(hosted)]);
-        let saved = Event::Saved { owner: hosted.owner, save: Box::new([]) };
-        let work = Work { landed: Box::new([]), saved: Some(Box::new([])) };
+        assert_eq!(&*h.gone(hosted, b"killed"), [save(hosted)], "it said nothing: the fault is the answer");
+        let saved = Event::Saved { owner: hosted.owner, save: Box::new([Landing::Unchanged, Landing::Unchanged]) };
+        let work = Work { landed: Box::new([]), saved: Some(Box::new([Landing::Unchanged, Landing::Unchanged])) };
         assert_eq!(&*h.step(saved), [release(hosted), answer(hosted, failed(Failure::Agent(fault), b"killed", work))]);
     }
 }
@@ -660,12 +680,12 @@ fn a_run_that_landed_a_change_has_nothing_to_save_and_says_what_landed() {
     let mut h = Harness::new(LIMITS);
     let hosted = h.live(1);
     let owner = h.push(hosted, 7);
-    let push = Event::Pushed { owner, push: Box::new([Landing::Unchanged, Landing::Landed, Landing::Landed]) };
+    let push = Event::Pushed { owner, push: Box::new([Landing::Unchanged, Landing::Landed]) };
     assert_eq!(&*h.step(push), [reply(hosted, 7, Reply::Pushed(Push::Done))]);
     assert_eq!(&*h.finish(hosted, Finish::Ended { outcome: bytes(b"pr") }), [stop(hosted)]);
     let work = Work { landed: Box::new([1]), saved: None };
     let ended = Answer::Ended { outcome: bytes(b"pr"), work };
-    assert_eq!(&*h.gone(hosted, b""), [release(hosted), answer(hosted, ended)], "only the listed repositories");
+    assert_eq!(&*h.gone(hosted, b""), [release(hosted), answer(hosted, ended)], "it ended with a landed change");
 }
 
 #[test]
@@ -706,23 +726,25 @@ fn calls_beyond_the_runs_limit_and_a_second_push_are_busy() {
 }
 
 #[test]
-fn a_cancelled_run_answers_its_calls_as_unavailable_and_waits_for_its_push() {
+fn a_cancelled_run_answers_its_relayed_calls_as_unavailable_and_waits_for_its_push() {
     let mut h = Harness::new(LIMITS);
     let hosted = h.live(1);
     let push = h.push(hosted, 7);
     let relayed = h.relay(hosted, 8);
     let emitted = h.cancel(hosted);
-    let unavailable = [reply(hosted, 7, Reply::Unavailable), reply(hosted, 8, Reply::Unavailable), stop(hosted)];
-    assert_eq!(&*emitted, unavailable);
+    assert_eq!(&*emitted, [reply(hosted, 8, Reply::Unavailable), stop(hosted)]);
     assert!(h.cancel(hosted).is_empty(), "decided already");
     assert_eq!(&*h.call(hosted, 9, Ask::Relay { body: bytes(b"b") }), [reply(hosted, 9, Reply::Unavailable)]);
     let late = Event::Relayed { run: hosted.run, attempt: hosted.attempt, call: relayed, answer: bytes(b"a") };
     assert!(h.step(late).is_empty());
     assert!(h.gone(hosted, b"").is_empty(), "the push in flight still touches the workspace");
     let pushed = Event::Pushed { owner: push, push: Box::new([Landing::Landed, Landing::Unchanged]) };
-    let work = Work { landed: Box::new([0]), saved: None };
+    let emitted = h.step(pushed);
+    assert_eq!(&*emitted, [reply(hosted, 7, Reply::Pushed(Push::Done)), save(hosted)], "told how it went; saved");
+    let saved = Event::Saved { owner: hosted.owner, save: Box::new([Landing::Unchanged, Landing::Unchanged]) };
+    let work = Work { landed: Box::new([0]), saved: Some(Box::new([Landing::Unchanged, Landing::Unchanged])) };
     let cancelled = failed(Failure::Cancelled(Reason::Engine), b"", work);
-    assert_eq!(&*h.step(pushed), [release(hosted), answer(hosted, cancelled)], "landed: nothing to save");
+    assert_eq!(&*h.step(saved), [release(hosted), answer(hosted, cancelled)], "it did not end with its change");
 }
 
 #[test]
@@ -730,12 +752,10 @@ fn a_push_that_settles_before_the_agent_goes_leaves_the_tail_to_the_agent() {
     let mut h = Harness::new(LIMITS);
     let hosted = h.live(1);
     let push = h.push(hosted, 7);
-    assert_eq!(
-        &*h.step(Event::Faulted { owner: hosted.owner, fault: AgentFailure::NoProgress }),
-        [reply(hosted, 7, Reply::Unavailable), stop(hosted)]
-    );
+    assert_eq!(&*h.step(Event::Faulted { owner: hosted.owner, fault: AgentFailure::NoProgress }), [stop(hosted)]);
     let pushed = Event::Pushed { owner: push, push: Box::new([Landing::Moved, Landing::Unchanged]) };
-    assert!(h.step(pushed).is_empty(), "its call was answered, and the agent is still there");
+    let told = reply(hosted, 7, Reply::Pushed(Push::Moved));
+    assert_eq!(&*h.step(pushed), [told], "told how it went, and the agent is still there");
     assert_eq!(&*h.gone(hosted, b""), [save(hosted)], "nothing landed");
 }
 
@@ -852,7 +872,7 @@ fn every_slot_comes_back_once_every_run_has_answered() {
     saving(&mut h, first);
     saving(&mut h, second);
     for hosted in [first, second] {
-        assert_eq!(h.step(Event::Saved { owner: hosted.owner, save: Box::new([]) }).len(), 2);
+        assert_eq!(h.step(Event::Saved { owner: hosted.owner, save: Box::new([Landing::Unchanged; 2]) }).len(), 2);
     }
     h.model.reclaim();
     assert_eq!((h.model.hosted(), h.model.calls()), (0, 0));
@@ -874,4 +894,125 @@ fn the_worst_case_is_bounded_or_refused() {
     assert!(more > bound, "a slot more is more");
     assert_eq!(worst_case(&Limits { charter_bytes: u64::MAX, ..LIMITS }), None);
     assert_eq!(worst_case(&Limits { slots: u32::MAX, run_calls: u32::MAX, ..LIMITS }), None);
+}
+
+// Saving, and the run's own ending.
+
+#[test]
+fn a_run_that_landed_a_change_mid_run_and_parks_still_saves() {
+    let mut h = Harness::new(LIMITS);
+    let hosted = h.live(1);
+    let owner = h.push(hosted, 7);
+    let push = Event::Pushed { owner, push: Box::new([Landing::Landed, Landing::Unchanged]) };
+    assert_eq!(h.step(push).len(), 1);
+    assert_eq!(&*h.finish(hosted, Finish::Parked { snapshot: None }), [stop(hosted)]);
+    assert_eq!(&*h.gone(hosted, b""), [save(hosted)], "it did not end with its change");
+    let saved = Event::Saved { owner: hosted.owner, save: Box::new([Landing::Unchanged, Landing::Unchanged]) };
+    let work = Work { landed: Box::new([0]), saved: Some(Box::new([Landing::Unchanged, Landing::Unchanged])) };
+    let parked = Answer::Parked { snapshot: None, work };
+    assert_eq!(&*h.step(saved), [release(hosted), answer(hosted, parked)]);
+}
+
+#[test]
+fn a_cancelled_run_that_lands_its_change_as_it_winds_down_ends_with_it() {
+    let mut h = Harness::new(LIMITS);
+    let hosted = h.live(1);
+    let owner = h.push(hosted, 7);
+    assert_eq!(&*h.cancel(hosted), [stop(hosted)]);
+    let push = Event::Pushed { owner, push: Box::new([Landing::Landed, Landing::Unchanged]) };
+    assert_eq!(&*h.step(push), [reply(hosted, 7, Reply::Pushed(Push::Done))]);
+    assert!(h.finish(hosted, Finish::Ended { outcome: bytes(b"pr") }).is_empty(), "its own ending wins");
+    assert!(h.finish(hosted, Finish::Parked { snapshot: None }).is_empty(), "said once");
+    assert!(h.cancel(hosted).is_empty());
+    let ended = Answer::Ended { outcome: bytes(b"pr"), work: Work { landed: Box::new([0]), saved: None } };
+    assert_eq!(&*h.gone(hosted, b"bye"), [release(hosted), answer(hosted, ended)], "nothing left to save");
+}
+
+#[test]
+fn a_stopped_run_that_says_how_it_finishes_is_answered_as_it_says() {
+    let cases: [(bool, Finish, Failure); 4] = [
+        (true, Finish::Failed { failure: RunFailure::Cancelled }, Failure::Cancelled(Reason::Engine)),
+        (false, Finish::Failed { failure: RunFailure::Cancelled }, Failure::Agent(AgentFailure::NoProgress)),
+        (true, Finish::Failed { failure: RunFailure::Budget }, Failure::Run(RunFailure::Budget)),
+        (false, Finish::Ended { outcome: Box::from([0_u8; 33]) }, Failure::Agent(AgentFailure::Rules)),
+    ];
+    for (cancelled, finish, failure) in cases {
+        let mut h = Harness::new(LIMITS);
+        let hosted = h.live(1);
+        let stopped = if cancelled {
+            h.cancel(hosted)
+        } else {
+            h.step(Event::Faulted { owner: hosted.owner, fault: AgentFailure::NoProgress })
+        };
+        assert_eq!(&*stopped, [stop(hosted)]);
+        assert!(h.finish(hosted, finish).is_empty());
+        assert_eq!(&*h.gone(hosted, b"bye"), [save(hosted)]);
+        let saved = Event::Saved { owner: hosted.owner, save: Box::new([Landing::Unchanged, Landing::Unchanged]) };
+        let work = Work { landed: Box::new([]), saved: Some(Box::new([Landing::Unchanged, Landing::Unchanged])) };
+        assert_eq!(&*h.step(saved), [release(hosted), answer(hosted, failed(failure, b"bye", work))]);
+    }
+    // A cancel the run reports while live is its own.
+    let mut h = Harness::new(LIMITS);
+    let hosted = h.live(1);
+    assert_eq!(&*h.finish(hosted, Finish::Failed { failure: RunFailure::Cancelled }), [stop(hosted)]);
+    assert!(h.cancel(hosted).is_empty(), "decided already");
+    assert_eq!(&*h.gone(hosted, b""), [save(hosted)]);
+    let saved = Event::Saved { owner: hosted.owner, save: Box::new([Landing::Unchanged, Landing::Unchanged]) };
+    let work = Work { landed: Box::new([]), saved: Some(Box::new([Landing::Unchanged, Landing::Unchanged])) };
+    let own = failed(Failure::Run(RunFailure::Cancelled), b"", work);
+    assert_eq!(&*h.step(saved), [release(hosted), answer(hosted, own)]);
+}
+
+#[test]
+fn a_run_cancelled_as_it_started_may_still_park() {
+    let mut h = Harness::new(LIMITS);
+    let hosted = h.starting(1);
+    assert!(h.cancel(hosted).is_empty());
+    assert_eq!(&*h.step(Event::Started { owner: hosted.owner, agent: hosted.agent }), [stop(hosted)]);
+    assert!(h.finish(hosted, Finish::Parked { snapshot: Some(bytes(b"s")) }).is_empty());
+    assert_eq!(&*h.gone(hosted, b""), [save(hosted)]);
+    let saved = Event::Saved { owner: hosted.owner, save: Box::new([Landing::Unchanged, Landing::Unchanged]) };
+    let work = Work { landed: Box::new([]), saved: Some(Box::new([Landing::Unchanged, Landing::Unchanged])) };
+    assert_eq!(
+        &*h.step(saved),
+        [release(hosted), answer(hosted, Answer::Parked { snapshot: Some(bytes(b"s")), work })]
+    );
+}
+
+// Shutdown, and the names of repositories.
+
+#[test]
+fn a_worker_shutting_down_admits_no_more_runs() {
+    let mut h = Harness::new(LIMITS);
+    assert!(h.step(Event::CancelAll { reason: Reason::Contact }).is_empty());
+    h.admit(1);
+    assert!(h.step(Event::CancelAll { reason: Reason::Shutdown }).is_empty());
+    assert_eq!(&*h.assign(assignment(2)), [answer(run_of(2), Answer::Refused(Refusal::Busy))]);
+    assert_eq!(h.model.hosted(), 1);
+}
+
+#[test]
+fn a_repository_name_that_is_not_one_path_component_is_refused() {
+    let names: [&[u8]; 7] = [b".", b"..", b".git", b".GiT", b"a/b", b"a\0b", b"/"];
+    for name in names {
+        let mut h = Harness::new(LIMITS);
+        let repositories = Box::new([repository(name)]);
+        let assignment = Assignment { workspace: Workspace { key: bytes(b"k"), repositories }, ..assignment(1) };
+        let refused = answer(run_of(1), Answer::Refused(Refusal::Invalid(Invalid::Name)));
+        assert_eq!(&*h.assign(assignment), [refused], "{name:?}");
+    }
+    for remote in [&b""[..], &[b'r'; 17][..]] {
+        let mut h = Harness::new(LIMITS);
+        let repositories = Box::new([Repository { remote: Box::from(remote), ..repository(b"a") }]);
+        let assignment = Assignment { workspace: Workspace { key: bytes(b"k"), repositories }, ..assignment(1) };
+        let refused = answer(run_of(1), Answer::Refused(Refusal::Invalid(Invalid::Name)));
+        assert_eq!(&*h.assign(assignment), [refused]);
+    }
+    for name in [&b".github"[..], &b"git"[..], &b"..."[..]] {
+        let mut h = Harness::new(LIMITS);
+        let repositories = Box::new([repository(name)]);
+        let assignment = Assignment { workspace: Workspace { key: bytes(b"k"), repositories }, ..assignment(1) };
+        assert_eq!(h.assign(assignment).len(), 1);
+        assert_eq!(h.model.hosted(), 1, "{name:?} is a name");
+    }
 }
