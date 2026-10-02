@@ -919,3 +919,153 @@ fn a_read_is_cut_as_its_fit_says() {
     let cut = got(crate::serve::cut(&["é!".as_bytes()][..], Bounds { bytes: 1, ..utf8 }));
     assert_eq!(&cut[..], &[part(b"", 3)][..], "a UTF-8 sequence is never split");
 }
+
+impl World {
+    /// Moves time on by `secs`, and settles.
+    fn wait(&mut self, secs: u64) {
+        self.secs += secs;
+        self.settle();
+    }
+
+    /// The requests seen since `from`.
+    fn since(&self, from: u32) -> &[Request] {
+        self.seen.as_slice().get(usize::try_from(from).unwrap()..).unwrap_or(&[])
+    }
+}
+
+#[test]
+fn an_issue_handed_in_by_its_label_becomes_a_session() {
+    let mut world = World::new();
+    let labels: Box<[Box<[u8]>]> = Box::new([copy_of(b"temper:hand-in")]);
+    let item = world.forge.open(0, labels);
+    world.settle();
+    assert!(world.model.is_loaded(), "the cold start is done");
+    assert_eq!(world.model.work().items(), 1, "the issue handed in is taken in");
+    let hello = Hello { slots: 2, workstreams: Box::new([]), hosting: Box::new([]) };
+    world.deliver(Event::Hello { channel: Token::new(1), hello });
+    let assigned = assignment(&world.seen).expect("the session's first turn is assigned");
+    assert_eq!(assigned.item, item);
+    assert_eq!(assigned.charter.finish, plan::Finish::Turn { supervising: false }, "it runs a session's turn");
+}
+
+#[test]
+fn a_person_stops_a_run_and_its_worker_is_told_to_cancel() {
+    let (mut world, item) = World::session();
+    let from = world.seen.len();
+    world.deliver(Event::Ask { reply_to: ReplyTo::new(Token::new(11)), person: ALICE, ask: Ask::Stop { item } });
+    let mut cancelled = false;
+    for request in world.since(from) {
+        if let Request::Cancel { item: of, attempt: 1, .. } = request {
+            cancelled = *of == item;
+        }
+    }
+    assert!(cancelled, "the worker is told to cancel: {:?}", world.since(from));
+    assert!(replied(&world.seen, Reply::Done), "the person hears the run is stopped");
+    let failure = crate::boundary::Answer::Failed {
+        failure: crate::boundary::Failure::Run,
+        work: crate::boundary::Work { landed: Box::new([]) },
+    };
+    world.deliver(Event::Answer { channel: Token::new(1), item, attempt: 1, answer: failure });
+    assert!(acknowledged(&world.seen, item, 1), "the stopped run's answer is taken");
+    let held = match phase(&mut world, item) {
+        Some(work::Phase::Held { why, .. }) => why == work::Hold::Stopped,
+        Some(_) | None => false,
+    };
+    assert!(held, "the item is held for a person: {:?}", phase(&mut world, item));
+}
+
+#[test]
+fn a_persons_message_reaches_the_live_run() {
+    let (mut world, item) = World::session();
+    let ask = Ask::Message { item, key: copy_of(b"m1"), message: copy_of(b"and another thing") };
+    world.deliver(Event::Ask { reply_to: ReplyTo::new(Token::new(12)), person: ALICE, ask });
+    assert!(replied(&world.seen, Reply::Done), "the message is written: {:?}", world.seen.as_slice());
+    let from = world.seen.len();
+    world.deliver(Event::Hint { repository: 0, item: Some(item.number), commit: None, branch: None });
+    world.wait(60);
+    let mut relayed = false;
+    for request in world.since(from) {
+        if let Request::Inbound { item: of, attempt: 1, event: crate::boundary::Inbound::News(_), .. } = request {
+            relayed = *of == item;
+        }
+    }
+    assert!(relayed, "the message is relayed to the run: {:?}", world.since(from));
+}
+
+#[test]
+fn a_runs_calls_are_served_once_each() {
+    let (mut world, item) = World::session();
+    let from = world.seen.len();
+    let read = crate::boundary::Call::Read(forge::Read::Item { item: translate::forge_item(item), after: 0 });
+    world.deliver(Event::Relay { item, attempt: 1, call: Token::new(1), body: read });
+    let comment = crate::boundary::Call::Comment { text: copy_of(b"working on it") };
+    world.deliver(Event::Relay { item, attempt: 1, call: Token::new(2), body: comment });
+    let mut read_served = 0_u32;
+    let mut posted = 0_u32;
+    for request in world.since(from) {
+        if let Request::Relayed { call, served, .. } = request {
+            match served {
+                crate::boundary::Served::Read(_) if *call == Token::new(1) => read_served += 1,
+                crate::boundary::Served::Posted { .. } if *call == Token::new(2) => posted += 1,
+                other @ (crate::boundary::Served::Read(_)
+                | crate::boundary::Served::Posted { .. }
+                | crate::boundary::Served::Recalled { .. }
+                | crate::boundary::Served::Noted(_)
+                | crate::boundary::Served::Unserved(_)) => panic!("an unexpected answer: {other:?}"),
+            }
+        }
+    }
+    assert_eq!((read_served, posted), (1, 1), "each call is answered once: {:?}", world.since(from));
+}
+
+#[test]
+fn a_person_watches_an_item() {
+    let (mut world, item) = World::session();
+    let ask = Ask::Watch { subject: crate::boundary::Watched::Item { item } };
+    world.deliver(Event::Ask { reply_to: ReplyTo::new(Token::new(13)), person: ALICE, ask });
+    let mut watching = false;
+    for request in &world.seen {
+        if let Request::Reply { reply: Reply::Watching { .. }, .. } = request {
+            watching = true;
+        }
+    }
+    assert!(watching, "the watch is taken: {:?}", world.seen.as_slice());
+}
+
+/// An agent step that reports, in the first repository.
+fn task(name: &[u8]) -> plan::Step {
+    let charter = plan::Charter {
+        instructions: copy_of(b"look into it"),
+        template: None,
+        grants: plan::Grants { modify: false, shell: false, forge: true, subagents: false, note: false },
+        budget: Budget { tokens: 100, turns: 5, time: Duration::from_secs(60) },
+    };
+    plan::Step {
+        name: copy_of(name),
+        repository: plan::Repository(0),
+        work: plan::Work::Agent(plan::AgentSpec { charter, grows: false }),
+        after: Box::new([]),
+        gates: Box::new([]),
+    }
+}
+
+fn ended(outcome: crate::boundary::Outcome) -> crate::boundary::Answer {
+    crate::boundary::Answer::Ended { outcome, work: crate::boundary::Work { landed: Box::new([]) } }
+}
+
+#[test]
+fn a_task_a_session_makes_runs_and_is_closed_once_it_reports() {
+    let (mut world, session) = World::session();
+    let tasks = crate::boundary::Outcome::Tasks { tasks: Box::new([task(b"look")]), text: copy_of(b"on it") };
+    world.deliver(Event::Answer { channel: Token::new(1), item: session, attempt: 1, answer: ended(tasks) });
+    assert!(acknowledged(&world.seen, session, 1), "the session's answer is applied: {:?}", world.seen.as_slice());
+    let task = Item { repository: 0, number: 2 };
+    assert!(world.forge.issue(task).is_some(), "the task's issue is made");
+    let assigned = assignment(&world.seen).expect("the task is assigned");
+    assert_eq!(assigned.item, task, "the task runs");
+    let report = crate::boundary::Outcome::Report { text: copy_of(b"found it") };
+    world.deliver(Event::Answer { channel: Token::new(1), item: task, attempt: 1, answer: ended(report) });
+    assert!(acknowledged(&world.seen, task, 1), "the task's report is applied");
+    assert!(!world.forge.issue(task).unwrap().open, "the task's issue is closed once it reports");
+    assert_eq!(phase(&mut world, task), Some(work::Phase::Done), "its record says done");
+}
