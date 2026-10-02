@@ -3,8 +3,11 @@
 //! is pending at once, then passes or fails after a drawn latency, or never
 //! reports, by the repository's chances; or, where a cue is configured, as the
 //! commit's content says (testing-pyramid.md, 4.2: the stand-in until CI
-//! follows content for real). CI runs once per commit and repository. Users
-//! with write permission report statuses of their own.
+//! follows content for real). CI runs once per commit and repository; a
+//! context that reported may be run again once, by the repository's chance:
+//! pending again at once, then a verdict drawn again, so a head's CI can
+//! move after it settled. Users with write permission report statuses of
+//! their own.
 //!
 //! As on Forgejo, a status is the commit's, and moves no pull request's
 //! updated time, unless the configuration says otherwise.
@@ -48,7 +51,7 @@ pub(crate) fn start(model: &mut Model, env: &Env<Config>, id: Id<Repository>, co
         let Some(name) = name(model, id, context) else {
             break;
         };
-        let pending = Status { state: Check::Pending, author: env.limits.ci, at: model::clock(env) };
+        let pending = Status { state: Check::Pending, author: env.limits.ci, at: model::clock(env), rerun: false };
         if !set(model, id, commit, &name, pending) {
             model.tally.unreported = model.tally.unreported.saturating_add(1);
             return;
@@ -89,11 +92,43 @@ pub(crate) fn report(model: &mut Model, env: &Env<Config>, id: Id<Repository>, c
             if model.rng.chance(passes) { Check::Passed } else { Check::Failed }
         }
     };
-    let status = Status { state, author: env.limits.ci, at: model::clock(env) };
+    let repository = model.repositories.get(id).expect("a repository of the forge");
+    let reruns = repository.checks.reruns;
+    let (min, max) = (repository.checks.latency_min, repository.checks.latency_max);
+    let rerun = match repository.statuses.get(&commit) {
+        Some(statuses) => match statuses.get(&*name) {
+            Some(status) => status.rerun,
+            None => false,
+        },
+        None => false,
+    };
+    let status = Status { state, author: env.limits.ci, at: model::clock(env), rerun };
     let kept = set(model, id, commit, &name, status);
     assert!(kept, "a pending status is replaced");
     model.tally.verdicts = model.tally.verdicts.saturating_add(1);
     reported(model, env, id, commit, name, state, env.limits.ci);
+    if !rerun && model.rng.chance(reruns) {
+        let span = faults::draw(model, min, max);
+        let alarm = Alarm::Rerun { repository: id, commit, context };
+        model.timers.arm(alarm, env.now.saturating_add(span)).expect("a timer per context of a commit with statuses");
+    }
+}
+
+/// A re-run's timer: CI runs the context `context` on `commit` again, once:
+/// pending at once, and a verdict after a drawn latency.
+pub(crate) fn rerun(model: &mut Model, env: &Env<Config>, id: Id<Repository>, commit: u64, context: u32) {
+    let Some(name) = name(model, id, context) else {
+        unreachable!("a re-run's context is one of its repository's");
+    };
+    let pending = Status { state: Check::Pending, author: env.limits.ci, at: model::clock(env), rerun: true };
+    let kept = set(model, id, commit, &name, pending);
+    assert!(kept, "a context reported is replaced");
+    reported(model, env, id, commit, name, Check::Pending, env.limits.ci);
+    let checks = &model.repositories.get(id).expect("a repository of the forge").checks;
+    let (min, max) = (checks.latency_min, checks.latency_max);
+    let span = faults::draw(model, min, max);
+    let alarm = Alarm::Check { repository: id, commit, context };
+    model.timers.arm(alarm, env.now.saturating_add(span)).expect("a timer per context of a commit with statuses");
 }
 
 /// Reports `state` of `context` on `commit`, as `user`.
@@ -120,7 +155,7 @@ pub(crate) fn status(
         let repository = model.repositories.get_mut(id).expect("a repository of the forge");
         repository.statuses.insert(commit, Map::with_capacity(limits.contexts)).expect("room was made");
     }
-    if !set(model, id, commit, &context, Status { state, author: user, at: model::clock(env) }) {
+    if !set(model, id, commit, &context, Status { state, author: user, at: model::clock(env), rerun: true }) {
         return Err(Error::Full);
     }
     reported(model, env, id, commit, context, state, user);
@@ -152,6 +187,7 @@ fn room(model: &mut Model, id: Id<Repository>) -> bool {
     repository.statuses.remove(&commit);
     for context in 0..contexts {
         model.timers.cancel(Alarm::Check { repository: id, commit, context });
+        model.timers.cancel(Alarm::Rerun { repository: id, commit, context });
     }
     model.tally.forgotten = model.tally.forgotten.saturating_add(1);
     true

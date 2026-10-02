@@ -184,7 +184,7 @@ impl People {
                 let (number, _, _) = self.pick(&pulls)?;
                 self.tally.reviews += 1;
                 let verdict = if self.rng.chance(700) { Verdict::Approve } else { Verdict::RequestChanges };
-                let write = Write::Review { number, verdict, body: b"looked".as_slice().into() };
+                let write = Write::Review { number, verdict: Some(verdict), body: b"looked".as_slice().into() };
                 Act::Call { user, repository, op: Op::Write(write) }
             }
             6 => {
@@ -236,7 +236,7 @@ fn open(forge: &Model, config: &Config, repository: usize) -> Vec<(u64, Kind, Ve
             page,
             limit: 0,
         };
-        let Ok(temper_forge_model::api::Answer::Items { items: listed, more }) =
+        let Ok(temper_forge_model::api::Answer::Items { items: listed, more, .. }) =
             forge.inspect(config, REPOSITORIES[repository], &read)
         else {
             break;

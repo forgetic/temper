@@ -12,7 +12,7 @@ use crate::git::Object;
 use crate::hooks::Delivery;
 use crate::model::{Alarm, Call};
 use crate::observe::Observation;
-use crate::store::{Comment as Posted, Item, Page, Repository, Status};
+use crate::store::{Comment as Posted, Item, Kept, Page, Repository, Status};
 
 /// The forge's limits, part of its configuration. What would pass one is
 /// refused: a name, title, body or content too long as too large, and one
@@ -88,7 +88,10 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_add(Map::<Box<[u8]>, Id<Repository>>::worst_case(limits.repositories)?)?
         .checked_add(times(limits.repositories, repository(limits)?)?)?;
     let commits = Map::<u64, Object>::worst_case(limits.commits)?.checked_add(times(limits.commits, tree(limits)?)?)?;
-    let calls = Slab::<Call>::worst_case(limits.calls)?.checked_add(times(limits.calls, answer(limits)?)?)?;
+    // A call holds its answer until it goes out, or what it brought until it
+    // lands, late.
+    let held = answer(limits)?.max(call(limits)?);
+    let calls = Slab::<Call>::worst_case(limits.calls)?.checked_add(times(limits.calls, held)?)?;
     // A webhook about a push names its branch.
     let hooks =
         Slab::<Delivery>::worst_case(limits.hooks)?.checked_add(times(limits.hooks, u64::from(limits.name_bytes))?)?;
@@ -162,7 +165,7 @@ fn item(limits: &Limits) -> Option<u64> {
     let pull = name
         .checked_mul(2)?
         .checked_add(Set::<u64>::worst_case(limits.users)?)?
-        .checked_add(List::<Review>::worst_case(limits.reviews)?)?
+        .checked_add(List::<Kept>::worst_case(limits.reviews)?)?
         .checked_add(times(limits.reviews, body)?)?;
     u64::from(limits.title_bytes)
         .checked_add(body)?

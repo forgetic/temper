@@ -11,7 +11,8 @@
 //! What makes each write repeat-safe:
 //!
 //! - **Creations are keyed.** An issue carries its key inside it, a comment
-//!   too, a pull request is keyed by its branches, and a record is the one
+//!   too, a pull request is keyed by its branches (the newest for them,
+//!   open or not, is the one made), and a record is the one
 //!   record of the engine's on its item. A creation whose attempt may have
 //!   been made (it timed out) is looked for before it is tried again: among
 //!   the issues the engine opened that were updated since the newest time
@@ -774,13 +775,11 @@ fn searched(
             found_record(writing, engine, comments, more, since, page, after)
         }
         Write::OpenPull { .. } => {
+            // The newest pull request for its branches is the one an earlier
+            // attempt made, even if someone closed it since.
             let pull = api::pull(answer);
-            if pull.state == Open::Open {
-                writing.found = true;
-                State::Done { result: Ok(Written::Created(pull.number)), record: None }
-            } else {
-                State::Due { phase: Phase::Make }
-            }
+            writing.found = true;
+            State::Done { result: Ok(Written::Created(pull.number)), record: None }
         }
         Write::SetLabels { .. }
         | Write::Merge { .. }

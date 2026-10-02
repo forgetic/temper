@@ -141,9 +141,14 @@ pub struct Forge {
     records: BTreeSet<Item>,
     pulls: BTreeSet<(u32, Vec<u8>)>,
     /// Per item: the place of the plan of the last engine label write seen,
-    /// the labels it carries now and who last changed those the engine owns.
+    /// and the labels it carries now; per label the engine owns on an item,
+    /// who last added or removed it, and when, in the order of what the
+    /// forge saw; and when each plan was made, likewise.
     labelled: BTreeMap<Item, u64>,
-    labels: BTreeMap<Item, (Vec<Vec<u8>>, u64)>,
+    labels: BTreeMap<Item, Vec<Vec<u8>>>,
+    touched_labels: BTreeMap<(Item, Vec<u8>), (u64, u64)>,
+    planned_at: BTreeMap<u64, u64>,
+    seen: u64,
     /// The items whose record someone else edited since the engine last wrote
     /// it.
     touched: BTreeSet<Item>,
@@ -178,6 +183,9 @@ impl Forge {
             pulls: BTreeSet::new(),
             labelled: BTreeMap::new(),
             labels: BTreeMap::new(),
+            touched_labels: BTreeMap::new(),
+            planned_at: BTreeMap::new(),
+            seen: 0,
             touched: BTreeSet::new(),
             tracked: BTreeSet::new(),
             told: BTreeMap::new(),
@@ -379,10 +387,11 @@ impl Forge {
 
     /// A change on the forge: whose it is, and what of it is judged.
     fn forge(&mut self, observation: &Observation, judge: &mut Judge<Expected, Stimulus>) {
+        self.seen += 1;
         match observation {
-            Observation::Opened { repository, number, labels, by, .. } => {
+            Observation::Opened { repository, number, labels, .. } => {
                 let item = Item { repository: index(repository), number: *number };
-                self.labels.insert(item, (set(labels.iter().map(|label| label.to_vec()).collect()), *by));
+                self.labels.insert(item, set(labels.iter().map(|label| label.to_vec()).collect()));
             }
             Observation::Labelled { repository, number, labels, by } => {
                 let item = Item { repository: index(repository), number: *number };
@@ -422,12 +431,12 @@ impl Forge {
     /// the engine's is one it owns, part of a set planned, not older than the
     /// last it made.
     fn relabelled(&mut self, item: Item, labels: Vec<Vec<u8>>, by: u64, judge: &mut Judge<Expected, Stimulus>) {
-        let (before, mut changer) = self.labels.remove(&item).unwrap_or_default();
+        let before = self.labels.remove(&item).unwrap_or_default();
         let added: Vec<Vec<u8>> = labels.iter().filter(|label| !before.contains(label)).cloned().collect();
         let removed: Vec<Vec<u8>> = before.iter().filter(|label| !labels.contains(label)).cloned().collect();
         let owned = |label: &Vec<u8>| OWNED.contains(&label.as_slice());
-        if added.iter().chain(&removed).any(owned) {
-            changer = by;
+        for label in added.iter().chain(&removed).filter(|label| owned(label)) {
+            self.touched_labels.insert((item, label.clone()), (by, self.seen));
         }
         if by == ENGINE {
             let theirs: Vec<&Vec<u8>> = added.iter().chain(&removed).filter(|label| !owned(label)).collect();
@@ -446,30 +455,38 @@ impl Forge {
                 self.labelled.insert(item, *plan);
             }
         }
-        self.labels.insert(item, (labels, changer));
+        self.labels.insert(item, labels);
     }
 
     /// The checks once the world has settled: the labels the engine owns of
-    /// each item whose last planned set was written.
+    /// each item whose last planned set was written are that set, save those
+    /// someone else added or removed since it was planned.
     fn settled(&self, judge: &mut Judge<Expected, Stimulus>) {
-        let mut last: BTreeMap<Item, (&Vec<Vec<u8>>, Option<bool>)> = BTreeMap::new();
-        for (plan, written) in self.plans.values() {
-            if let Planned::SetLabels { item, labels } = plan {
-                last.insert(*item, (labels, *written));
+        // The place of each item's last label plan.
+        let mut last: BTreeMap<Item, u64> = BTreeMap::new();
+        for (place, (plan, _)) in &self.plans {
+            if let Planned::SetLabels { item, .. } = plan {
+                last.insert(*item, *place);
             }
         }
-        for (item, (labels, written)) in last {
-            if written != Some(true) {
-                continue;
-            }
-            let Some((now, by)) = self.labels.get(&item) else {
+        for (item, place) in last {
+            let Some((Planned::SetLabels { labels, .. }, Some(true))) = self.plans.get(&place) else {
                 continue;
             };
-            let owned: Vec<Vec<u8>> = now.iter().filter(|label| OWNED.contains(&label.as_slice())).cloned().collect();
-            if *by == ENGINE {
+            let Some(now) = self.labels.get(&item) else {
+                continue;
+            };
+            let since = self.planned_at.get(&place).copied().unwrap_or(0);
+            for label in OWNED {
+                let theirs = match self.touched_labels.get(&(item, label.to_vec())) {
+                    Some((by, at)) => *by != ENGINE && *at >= since,
+                    None => false,
+                };
+                let carried = now.iter().any(|kept| kept == label);
+                let wanted = labels.iter().any(|kept| kept == label);
                 judge.check(
-                    owned == *labels,
-                    format_args!("{item:?} ends with the last set written: {owned:?}, not {labels:?}"),
+                    theirs || carried == wanted,
+                    format_args!("{item:?} ends with the last set written, {labels:?}: {now:?}"),
                 );
             }
         }
@@ -498,6 +515,7 @@ impl Expectations for Forge {
                 let place = u64::try_from(self.places.len()).expect("fits") + 1;
                 self.places.insert(plan, place);
                 self.plans.insert(place, (write, None));
+                self.planned_at.insert(place, self.seen);
             }
             Seen::Wrote { plan, written, edited } => {
                 let place = self.places.get(&plan).expect("a write answered was planned");

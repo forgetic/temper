@@ -4,7 +4,7 @@ use temper_engine_model_forge::{
     self as sub, Config as Deployment, Event, Fact, Failure, Item, Limits, Model, News, Record, Request, Written,
 };
 use temper_forge_model::api::{self as forge_api, Checks, File, Git, Permission, Protection, Setup};
-use temper_forge_model::{self as forge, Config};
+use temper_forge_model::{self as forge, Config, Skew};
 use temper_lib::{Duration, Env, Queue, ReplyTo, Rng, Time, Token};
 use temper_world::{Key, Ledger, Referee, Schedule, Span, Stage, Trace};
 
@@ -149,6 +149,9 @@ impl Settings {
                 late_max: Duration::from_secs(20),
                 unavailable: 0,
                 timeouts: 0,
+                landing: 0,
+                land_min: Duration::from_millis(100),
+                land_max: Duration::from_secs(1),
                 rate_limit: 0,
                 rate_window: Duration::from_secs(60),
                 ci: CI,
@@ -157,6 +160,7 @@ impl Settings {
                 hooks_late: 0,
                 hooks_lost: 0,
                 resolution: Duration::from_secs(1),
+                skew: Skew::None,
                 status_updates: false,
                 edit_updates: false,
             },
@@ -362,6 +366,7 @@ impl World {
                     latency_max: Duration::from_secs(40),
                     silent: 20,
                     passes: 850,
+                    reruns: 0,
                     cue: None,
                 },
                 protection: Some(Protection {

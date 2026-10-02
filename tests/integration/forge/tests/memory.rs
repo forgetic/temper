@@ -7,7 +7,7 @@
 use temper_forge_model::api::{
     Answer, Check, Checks, Cue, Error, File, Git, Op, Permission, Protection, Read, Setup, Verdict, Write,
 };
-use temper_forge_model::{Config, Event, Limits, MAX_OUT, Model, Request, fire, step, worst_case};
+use temper_forge_model::{Config, Event, Limits, MAX_OUT, Model, Request, Skew, fire, step, worst_case};
 use temper_lib::{Duration, Env, Queue, ReplyTo, Time, Token};
 use temper_world::heap::{self, Meter};
 
@@ -48,6 +48,9 @@ const CONFIG: Config = Config {
     late_max: Duration::from_millis(1),
     unavailable: 0,
     timeouts: 0,
+    landing: 0,
+    land_min: Duration::from_millis(1),
+    land_max: Duration::from_millis(1),
     rate_limit: 1000,
     rate_window: Duration::from_secs(3600),
     ci: 9,
@@ -56,6 +59,7 @@ const CONFIG: Config = Config {
     hooks_late: 0,
     hooks_lost: 0,
     resolution: Duration::from_secs(1),
+    skew: Skew::None,
     status_updates: false,
     edit_updates: false,
 };
@@ -101,6 +105,7 @@ fn setup(index: u64) -> Setup {
             latency_max: Duration::from_secs(3600),
             silent: 0,
             passes: 1000,
+            reruns: 1000,
             cue: Some(Cue { path: name(b'p', 0), green: text(LIMITS.content_bytes, b'g') }),
         },
         protection: Some(Protection {
@@ -184,9 +189,11 @@ impl Measured {
 /// What a test needs of an answer: the number it gives, if it gives one.
 fn outcome(result: Result<Answer, Error>) -> Result<Option<u64>, Error> {
     match result? {
-        Answer::Created(number) | Answer::Commented(number) | Answer::Merged(number) | Answer::Revision(number) => {
-            Ok(Some(number))
-        }
+        Answer::Created(number)
+        | Answer::Commented(number)
+        | Answer::Reviewed(number)
+        | Answer::Merged(number)
+        | Answer::Revision(number) => Ok(Some(number)),
         Answer::Items { .. }
         | Answer::Item { .. }
         | Answer::Pull(_)
@@ -248,7 +255,7 @@ fn fill(forge: &mut Measured, index: u64, first: u64) {
     }
     for number in 1..=2 {
         for user in 3..3 + u64::from(LIMITS.reviews) {
-            let review = Write::Review { number, verdict: Verdict::Approve, body: text(LIMITS.body_bytes, b'v') };
+            let review = Write::Review { number, verdict: Some(Verdict::Approve), body: text(LIMITS.body_bytes, b'v') };
             forge.ok(user, &repository, Op::Write(review));
         }
         let reviewers = Box::new([ADMIN, 3, 4]);

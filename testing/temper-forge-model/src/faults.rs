@@ -5,7 +5,7 @@
 use temper_lib::{Duration, Env, Time};
 
 use crate::api::{Answer, Error};
-use crate::model::{Config, Model};
+use crate::model::{self, Config, Model};
 
 /// A user's rate window: when it ends, and the calls taken in it.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -24,7 +24,7 @@ pub(crate) fn admit(model: &mut Model, env: &Env<Config>, user: u64) -> Result<(
             Some(window) if env.now < window.end => {
                 if window.calls >= config.rate_limit {
                     model.tally.limited = model.tally.limited.saturating_add(1);
-                    return Err(Error::RateLimited { reset: window.end });
+                    return Err(Error::RateLimited { reset: model::time(config, window.end) });
                 }
                 window.calls = window.calls.saturating_add(1);
             }
@@ -68,9 +68,15 @@ fn reuse(model: &mut Model, env: &Env<Config>) -> Result<(), Error> {
         }
         None => {
             model.tally.crowded = model.tally.crowded.saturating_add(1);
-            Err(Error::RateLimited { reset: first.expect("a full table has a window") })
+            let first = first.expect("a full table has a window");
+            Err(Error::RateLimited { reset: model::time(&env.limits, first) })
         }
     }
+}
+
+/// Whether a call is to land late: answered as timed out, and made after.
+pub(crate) fn lands_late(model: &mut Model, env: &Env<Config>) -> bool {
+    model.rng.chance(env.limits.landing)
 }
 
 /// What the caller hears of a call that was made: `result`, or, by chance, a

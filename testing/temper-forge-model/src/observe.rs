@@ -117,10 +117,12 @@ pub enum Observation {
         id: u64,
         by: u64,
     },
-    /// The pull request `number` was reviewed at `commit`.
+    /// The pull request `number` was reviewed at `commit`, by the review
+    /// `id`: as it was made, or, if it was pending, as it was submitted.
     Reviewed {
         repository: Box<[u8]>,
         number: u64,
+        id: u64,
         commit: u64,
         verdict: Verdict,
         body: Box<[u8]>,
@@ -200,6 +202,7 @@ pub enum Operation {
     OpenPull,
     SetReviewers,
     Review,
+    Submit,
     Merge,
     Close,
     Reopen,
@@ -232,6 +235,7 @@ pub(crate) fn subject(op: &Op) -> Option<(Operation, Option<u64>, Option<u64>)> 
             Write::OpenPull { .. } => (Operation::OpenPull, None, None),
             Write::SetReviewers { number, .. } => (Operation::SetReviewers, Some(*number), None),
             Write::Review { number, .. } => (Operation::Review, Some(*number), None),
+            Write::Submit { number, .. } => (Operation::Submit, Some(*number), None),
             Write::Merge { number, head } => (Operation::Merge, Some(*number), Some(*head)),
             Write::Close { number } => (Operation::Close, Some(*number), None),
             Write::Reopen { number } => (Operation::Reopen, Some(*number), None),

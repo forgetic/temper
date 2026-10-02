@@ -172,11 +172,23 @@ pub enum Write {
         number: u64,
         reviewers: Box<[u64]>,
     },
-    /// Reviews the open pull request `number` at its head.
+    /// Reviews the open pull request `number` at its head, with `verdict`;
+    /// or, with none, starts a pending review (Forgejo's `PENDING`), which
+    /// no read shows until its author submits it. Answered by
+    /// [`Answer::Reviewed`] with its id.
     Review {
         number: u64,
-        verdict: Verdict,
+        verdict: Option<Verdict>,
         body: Box<[u8]>,
+    },
+    /// Submits the pending review `review` of the pull request `number`,
+    /// the user's own, with `verdict`, at the head it was started on. It
+    /// keeps its id, so it is shown among the reviews before any submitted
+    /// after it was started.
+    Submit {
+        number: u64,
+        review: u64,
+        verdict: Verdict,
     },
     /// Merges the pull request `number` if its head is still `head`, as one
     /// commit on its base. Answered by [`Answer::Merged`]. Needs write
@@ -246,10 +258,13 @@ pub enum Want {
 /// The answer to a call that succeeded.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Answer {
-    /// A page of items, and whether a later page has more.
+    /// A page of items, whether a later page has more, and the forge's time
+    /// as it made the page, at its resolution (what Forgejo's `Date` header
+    /// says).
     Items {
         items: Box<[Summary]>,
         more: bool,
+        now: Time,
     },
     /// An item and a page of its comments, oldest first, and whether more
     /// follow.
@@ -285,6 +300,8 @@ pub enum Answer {
     Created(u64),
     /// The id of the comment posted.
     Commented(u64),
+    /// The id of the review made.
+    Reviewed(u64),
     /// The commit the merge made on the base.
     Merged(u64),
     /// The wiki page's new revision.
@@ -355,6 +372,7 @@ pub enum What {
     Commit,
     File,
     Page,
+    Review,
 }
 
 /// Whether an item is an issue or a pull request.
@@ -422,6 +440,8 @@ pub struct Pull {
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Review {
+    /// An id that only grows, across the forge, given as it was started.
+    pub id: u64,
     pub author: u64,
     pub verdict: Verdict,
     /// The head it reviewed.
@@ -537,8 +557,8 @@ pub struct Setup {
 
 /// A repository's CI: the contexts it reports on every commit that becomes a
 /// branch's or a pull request's head, pending at once and then passed or
-/// failed after a latency drawn from `latency_min..=latency_max`, or never.
-/// Chances are per mille.
+/// failed after a latency drawn from `latency_min..=latency_max`, or never;
+/// and some of them run again. Chances are per mille.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Checks {
     pub contexts: Box<[Box<[u8]>]>,
@@ -548,6 +568,10 @@ pub struct Checks {
     pub silent: u32,
     /// The chance that a context passes, of those that report.
     pub passes: u32,
+    /// The chance that a context that reported is run again, once: pending
+    /// again at once, and a verdict drawn again after another latency, as a
+    /// re-run job reports on Forgejo.
+    pub reruns: u32,
     /// When set, content decides instead of `passes`.
     pub cue: Option<Cue>,
 }

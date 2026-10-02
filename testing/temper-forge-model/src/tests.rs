@@ -9,7 +9,9 @@ use crate::api::{
     Answer, Change, Check, Checks, Comment, Created, Cue, Error, File, Git, Head, Kind, Op, Page, PageName, Permission,
     Protection, Pull, Pushed, Read, Setup, State, Summary, Verdict, Want, What, Write,
 };
-use crate::{Branches, Config, Event, Limits, MAX_OUT, Model, Observation, Operation, Request, fire, step, worst_case};
+use crate::{
+    Branches, Config, Event, Limits, MAX_OUT, Model, Observation, Operation, Request, Skew, fire, step, worst_case,
+};
 
 const LIMITS: Limits = Limits {
     repositories: 2,
@@ -46,6 +48,9 @@ const CALM: Config = Config {
     late_max: Duration::from_secs(30),
     unavailable: 0,
     timeouts: 0,
+    landing: 0,
+    land_min: Duration::from_secs(3),
+    land_max: Duration::from_secs(3),
     rate_limit: 0,
     rate_window: Duration::from_secs(60),
     ci: CI,
@@ -54,6 +59,7 @@ const CALM: Config = Config {
     hooks_late: 0,
     hooks_lost: 0,
     resolution: Duration::from_secs(1),
+    skew: Skew::None,
     status_updates: false,
     edit_updates: false,
 };
@@ -87,6 +93,7 @@ fn setup() -> Setup {
             latency_max: Duration::from_secs(5),
             silent: 0,
             passes: 1000,
+            reruns: 0,
             cue: None,
         },
         protection: None,
@@ -151,7 +158,7 @@ fn merge(number: u64, head: u64) -> Op {
 }
 
 fn review(number: u64, verdict: Verdict) -> Op {
-    write(Write::Review { number, verdict, body: copy_of(b"looked") })
+    write(Write::Review { number, verdict: Some(verdict), body: copy_of(b"looked") })
 }
 
 fn status(commit: u64, context: &[u8], state: Check) -> Op {
@@ -276,6 +283,31 @@ impl Harness {
         unreachable!("the forge settles");
     }
 
+    /// Fires every timer due by `at`, hearing every webhook, and moves the
+    /// clock to `at`.
+    fn until(&mut self, at: Time) {
+        for _ in 0_u32..1024 {
+            match self.model.next_deadline() {
+                Some(next) if next <= at => self.env.now = self.env.now.max(next),
+                Some(_) | None => {
+                    self.env.now = at;
+                    self.model.reclaim();
+                    return;
+                }
+            }
+            fire(&mut self.model, &self.env, &mut self.out);
+            if let Some(request) = self.out.pop() {
+                match request {
+                    Request::Hook { repository: _, change, number, branch, commit } => {
+                        self.hooks.push((change, number, branch, commit));
+                    }
+                    Request::Reply { to, result: _ } => self.answered.push(to.into_token()),
+                }
+            }
+        }
+        unreachable!("the forge settles");
+    }
+
     fn wait(&mut self, span: Duration) {
         self.env.now = self.env.now.saturating_add(span);
     }
@@ -317,7 +349,7 @@ impl Harness {
             page,
             limit: 0,
         });
-        let Answer::Items { items, more } = self.ok(user, op) else {
+        let Answer::Items { items, more, .. } = self.ok(user, op) else {
             unreachable!("a page of items");
         };
         let mut numbers = List::with_capacity(LIMITS.page_size);
@@ -470,7 +502,7 @@ fn listings_page_least_recently_updated_first_by_page_number() {
         page: 3,
         limit: 1,
     });
-    let Answer::Items { items, more: false } = h.ok(ENGINE, one) else {
+    let Answer::Items { items, more: false, .. } = h.ok(ENGINE, one) else {
         unreachable!("the last page");
     };
     assert_eq!(items[0].number, 1, "a limit below the most a page holds");
@@ -510,7 +542,7 @@ fn listings_are_at_the_forges_resolution_with_since_inclusive_and_ties_by_number
     let since = Time::ZERO.saturating_add(Duration::from_millis(2900));
     let recent =
         read(Read::Items { state: None, kind: None, labels: names(&[]), author: None, since, page: 1, limit: 0 });
-    let Answer::Items { items, more: false } = h.ok(ENGINE, recent) else {
+    let Answer::Items { items, more: false, .. } = h.ok(ENGINE, recent) else {
         unreachable!("one page");
     };
     assert_eq!(items.len(), 1);
@@ -564,7 +596,10 @@ fn listings_filter_by_state_kind_labels_and_time() {
         page: 1,
         limit: 0,
     });
-    assert_eq!(h.ok(ENGINE, pulls), Answer::Items { items: Box::new([]), more: false });
+    let Answer::Items { items, more: false, .. } = h.ok(ENGINE, pulls) else {
+        unreachable!("one page");
+    };
+    assert!(items.is_empty(), "no pull requests");
     h.comment(PERSON, 2, b"later");
     let recent = read(Read::Items {
         state: None,
@@ -575,7 +610,7 @@ fn listings_filter_by_state_kind_labels_and_time() {
         page: 1,
         limit: 0,
     });
-    let Answer::Items { items, more: false } = h.ok(ENGINE, recent) else {
+    let Answer::Items { items, more: false, .. } = h.ok(ENGINE, recent) else {
         unreachable!("one page");
     };
     assert_eq!(items.len(), 1);
@@ -691,12 +726,12 @@ fn listings_filter_by_who_opened_the_items() {
             limit: 0,
         })
     };
-    let Answer::Items { items, more: false } = h.ok(PERSON, by(ENGINE)) else {
+    let Answer::Items { items, more: false, .. } = h.ok(PERSON, by(ENGINE)) else {
         unreachable!("one page");
     };
     assert_eq!(items.len(), 1, "the engine's only");
     assert_eq!(items[0].number, 1);
-    let Answer::Items { items, more: false } = h.ok(PERSON, by(PERSON)) else {
+    let Answer::Items { items, more: false, .. } = h.ok(PERSON, by(PERSON)) else {
         unreachable!("one page");
     };
     assert_eq!(items[0].number, 2, "the person's");
@@ -1147,6 +1182,72 @@ fn ci_reports_pending_then_a_drawn_verdict_or_never() {
 }
 
 #[test]
+fn ci_runs_a_context_again_after_it_settled_once() {
+    let mut setup = setup();
+    setup.checks.contexts = names(&[b"ci", b"lint"]);
+    setup.checks.passes = 0;
+    setup.checks.reruns = 1000;
+    let mut h = Harness::with(CALM, setup);
+    let work = h.commit(FIRST, &[(b"src", b"one")]);
+    h.push(ENGINE, b"work", work).expect("pushed");
+    h.open(b"work").expect("opened");
+    // Each context reports, five seconds in, then is run again: pending at
+    // once, and a verdict five seconds after.
+    let at = h.env.now.saturating_add(Duration::from_secs(5));
+    h.until(at);
+    assert_eq!(checks(&h.pull(1)).as_slice(), [Check::Failed, Check::Failed], "settled");
+    h.observations();
+    h.until(at.saturating_add(Duration::from_secs(5)));
+    assert_eq!(checks(&h.pull(1)).as_slice(), [Check::Pending, Check::Pending], "run again");
+    let rerun = h.observations();
+    assert_eq!(rerun.len(), 2, "each context reported pending again: {rerun:?}");
+    h.settle();
+    assert_eq!(checks(&h.pull(1)).as_slice(), [Check::Failed, Check::Failed], "a verdict again");
+    assert_eq!(h.model.tally().verdicts, 4, "each context ran twice, and no more");
+}
+
+#[test]
+fn a_pending_review_is_hidden_until_it_is_submitted_and_keeps_its_place() {
+    let mut setup = setup();
+    setup.protection =
+        Some(Protection { branch: copy_of(MAIN), contexts: Box::new([]), approvals: 1, dismiss_stale: false });
+    let mut h = Harness::with(CALM, setup);
+    let work = h.commit(FIRST, &[(b"src", b"one")]);
+    h.push(ENGINE, b"work", work).expect("pushed");
+    h.open(b"work").expect("opened");
+    h.observations();
+    let started = write(Write::Review { number: 1, verdict: None, body: copy_of(b"thinking") });
+    assert_eq!(h.ok(MAINTAINER, started), Answer::Reviewed(1), "started");
+    assert!(h.pull(1).reviews.is_empty(), "no read shows it");
+    assert!(h.observations().is_empty(), "nor is it observed");
+    let updated = h.item(1).0.updated;
+    h.wait(Duration::from_secs(5));
+    assert_eq!(h.ok(PERSON, review(1, Verdict::Comment)), Answer::Reviewed(2), "another, meanwhile");
+    assert_eq!(h.call(ENGINE, merge(1, work)), Err(Error::Protected), "a pending approval counts for nothing");
+    let submit = |verdict| write(Write::Submit { number: 1, review: 1, verdict });
+    assert_eq!(h.call(PERSON, submit(Verdict::Approve)), Err(Error::Forbidden), "only its author submits it");
+    h.wait(Duration::from_secs(5));
+    assert_eq!(h.ok(MAINTAINER, submit(Verdict::Approve)), Answer::Done);
+    let reviews = h.pull(1).reviews;
+    assert_eq!((reviews[0].id, reviews[0].verdict), (1, Verdict::Approve), "shown before the one after it");
+    assert_eq!(reviews[1].id, 2);
+    assert!(h.item(1).0.updated > updated, "the pull request updated as it was submitted");
+    let observed = h.observations();
+    let submitted = Observation::Reviewed {
+        repository: repository(),
+        number: 1,
+        id: 1,
+        commit: work,
+        verdict: Verdict::Approve,
+        body: copy_of(b"thinking"),
+        by: MAINTAINER,
+    };
+    assert!(observed.as_slice().contains(&submitted), "observed as submitted: {observed:?}");
+    assert_eq!(h.call(MAINTAINER, submit(Verdict::Approve)), Err(Error::Missing(What::Review)), "once");
+    assert!(matches_merged(&h.call(ENGINE, merge(1, work))), "the approval counts once submitted");
+}
+
+#[test]
 fn ci_follows_content_where_a_cue_is_configured() {
     let mut setup = setup();
     setup.checks.passes = 0;
@@ -1286,6 +1387,48 @@ fn a_call_fails_before_it_is_made_or_times_out_after() {
     assert_eq!(h.call(PERSON, create(b"made", b"", &[])), Err(Error::Timeout));
     assert_eq!(&*h.item(1).0.title, b"made", "it was done all the same");
     assert_eq!(h.model.tally().timeouts, 1);
+}
+
+#[test]
+fn a_call_may_land_after_it_was_answered_as_timed_out() {
+    let mut h = Harness::new(Config { landing: 1000, ..CALM });
+    assert_eq!(h.call(PERSON, create(b"later", b"", &[])), Err(Error::Timeout));
+    assert_eq!(h.inspect(&Read::Item { number: 1, after: 0 }), Err(Error::Missing(What::Item)), "not made yet");
+    assert_eq!(h.model.calls(), 1, "the call is held until it lands");
+    h.observations();
+    h.settle();
+    assert_eq!(&*h.item(1).0.title, b"later", "made after its answer");
+    assert_eq!(h.observations().len(), 1, "and observed then");
+    assert_eq!(h.model.tally().landed, 1);
+    assert_eq!(h.model.calls(), 0);
+    let permission = h.call(PERSON, read(Read::Permission { user: PERSON }));
+    assert_eq!(permission, Ok(Answer::Permission(Permission::Read)), "a read is never late to land");
+}
+
+#[test]
+fn the_forges_clock_is_its_own() {
+    let skew = Skew::Behind(Duration::from_secs(100));
+    let mut h = Harness::new(Config { skew, rate_limit: 1, ..CALM });
+    h.wait(Duration::from_secs(1_000));
+    h.issue(PERSON, b"one");
+    let (item, _) = h.item(1);
+    assert_eq!(item.updated, Time::ZERO.saturating_add(Duration::from_secs(900)), "the forge's time, behind");
+    assert_eq!(crate::time(&h.env.limits, h.env.now), Time::ZERO.saturating_add(Duration::from_secs(901)));
+    let op = read(Read::Items {
+        state: None,
+        kind: None,
+        labels: names(&[]),
+        author: None,
+        since: Time::ZERO,
+        page: 1,
+        limit: 0,
+    });
+    let reset = Time::ZERO.saturating_add(Duration::from_secs(960));
+    assert_eq!(h.call(PERSON, op.clone()), Err(Error::RateLimited { reset }), "a reset in the forge's time");
+    let Ok(Answer::Items { now, .. }) = h.call(ENGINE, op) else {
+        unreachable!("a page");
+    };
+    assert_eq!(now, Time::ZERO.saturating_add(Duration::from_secs(902)), "a page says when it was made");
 }
 
 #[test]
@@ -1523,6 +1666,7 @@ fn observations_and_webhooks_follow_branches_pull_requests_and_the_wiki() {
         Observation::Reviewed {
             repository: repository(),
             number: 1,
+            id: 1,
             commit: more,
             verdict: Verdict::Approve,
             body: copy_of(b"looked"),

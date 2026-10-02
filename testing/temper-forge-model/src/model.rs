@@ -2,8 +2,14 @@
 //!
 //! A call is decided when it arrives: refused for its user's rate, failed by
 //! chance, or made, its answer held until its latency is past, and then
-//! answered by [`fire`]. CI's verdicts and webhook deliveries go out the same
-//! way, as their timers fire.
+//! answered by [`fire`]; or, by chance, answered as timed out and made only
+//! after, landing late, as a request a client gave up on may still be acted
+//! on. CI's verdicts and webhook deliveries go out the same way, as their
+//! timers fire.
+//!
+//! The forge keeps its own clock, which may be ahead of or behind the
+//! world's ([`Skew`]): every time it keeps and shows is its own, at its
+//! resolution ([`time`]).
 
 use alloc::boxed::Box;
 use core::mem;
@@ -41,6 +47,12 @@ pub struct Config {
     pub unavailable: u32,
     /// The chance that a call is made and then fails as timed out.
     pub timeouts: u32,
+    /// The chance that a write or a git call fails as timed out before it
+    /// is made, and is made, landing, a time drawn from
+    /// `land_min..=land_max` after its answer went out.
+    pub landing: u32,
+    pub land_min: Duration,
+    pub land_max: Duration,
     /// The calls a user may make in a window of `rate_window`, which starts
     /// with their first call after the last one ended. Zero: no limit.
     pub rate_limit: u32,
@@ -58,11 +70,22 @@ pub struct Config {
     /// created and updated times, a comment's, a review's, a status's.
     /// Forgejo keeps seconds. Zero: the clock's own.
     pub resolution: Duration,
+    /// How far the forge's clock is from the world's.
+    pub skew: Skew,
     /// Whether a status reported on an open pull request's head moves its
     /// updated time, and whether editing or deleting a comment moves its
     /// item's. Neither does on Forgejo.
     pub status_updates: bool,
     pub edit_updates: bool,
+}
+
+/// How far the forge's clock is from the world's: the forge's time is the
+/// world's moved ahead or back, and never before zero.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Skew {
+    None,
+    Ahead(Duration),
+    Behind(Duration),
 }
 
 /// What the forge has done, for a world to check at settle.
@@ -83,8 +106,9 @@ pub struct Tally {
     /// Writes refused because the store or a repository was full: a world
     /// whose forge fills tests a forge that refuses everything.
     pub full: u32,
-    /// Calls answered late.
+    /// Calls answered late, and calls made after their answer went out.
     pub late: u32,
+    pub landed: u32,
     /// Webhooks delivered, those of them late, those lost by chance, and those
     /// dropped for want of room.
     pub hooks: u32,
@@ -110,6 +134,7 @@ impl Tally {
         crowded: 0,
         full: 0,
         late: 0,
+        landed: 0,
         hooks: 0,
         hooks_late: 0,
         hooks_lost: 0,
@@ -137,8 +162,12 @@ pub struct Model {
     /// Every commit there is, by its name, and the last name given.
     pub(crate) commits: Map<u64, Object>,
     pub(crate) made: u64,
-    /// The last id given to a comment.
+    /// The last id given to a comment, and to a review.
     pub(crate) comments: u64,
+    pub(crate) reviews: u64,
+    /// The forge's time at the last step or timer: what [`Model::inspect`]
+    /// shows a listing was made at.
+    pub(crate) clock: Time,
     pub(crate) calls: Slab<Call>,
     pub(crate) deliveries: Slab<Delivery>,
     /// Each calling user's rate window.
@@ -154,8 +183,17 @@ pub(crate) enum Alarm {
     /// The call's answer goes out.
     Call(Id<Call>),
     /// CI reports the context `context` of the repository's checks on
-    /// `commit`.
-    Check { repository: Id<Repository>, commit: u64, context: u32 },
+    /// `commit`; or runs it again.
+    Check {
+        repository: Id<Repository>,
+        commit: u64,
+        context: u32,
+    },
+    Rerun {
+        repository: Id<Repository>,
+        commit: u64,
+        context: u32,
+    },
     /// The webhook is delivered.
     Hook(Id<Delivery>),
 }
@@ -168,10 +206,21 @@ pub(crate) struct Call {
 
 #[derive(Debug)]
 enum State {
-    /// The answer is decided, and goes out when the call's timer fires.
-    Waiting { reply_to: ReplyTo, result: Result<Answer, Error> },
+    /// The answer is decided, and goes out when the call's timer fires; then
+    /// the call lands, if it is to land late.
+    Waiting { reply_to: ReplyTo, result: Result<Answer, Error>, landing: Option<Landing> },
+    /// Answered as timed out: it is made when the call's timer fires again.
+    Landing(Landing),
     /// Terminal: holds nothing.
     Closed,
+}
+
+/// A call to be made late: who made it, on which repository, and what.
+#[derive(Debug)]
+struct Landing {
+    user: u64,
+    repository: Box<[u8]>,
+    op: Op,
 }
 
 impl Model {
@@ -199,6 +248,8 @@ impl Model {
             commits: Map::with_capacity(limits.commits),
             made: 0,
             comments: 0,
+            reviews: 0,
+            clock: Time::ZERO,
             calls: Slab::with_capacity(limits.calls),
             deliveries: Slab::with_capacity(limits.hooks),
             windows: Map::with_capacity(limits.users),
@@ -322,6 +373,7 @@ impl Model {
 /// Handles one event, emitting at most [`MAX_OUT`] requests: a call refused
 /// at once for want of room.
 pub fn step(model: &mut Model, env: &Env<Config>, event: Event, out: &mut Queue<Request>) {
+    model.clock = clock(env);
     match event {
         Event::Call { reply_to, user, repository, op } => call(model, env, reply_to, user, &repository, op, out),
     }
@@ -330,12 +382,14 @@ pub fn step(model: &mut Model, env: &Env<Config>, event: Event, out: &mut Queue<
 /// Fires the earliest timer due at `env.now`, if there is one, emitting at
 /// most [`MAX_OUT`] requests: a call's answer, or a webhook.
 pub fn fire(model: &mut Model, env: &Env<Config>, out: &mut Queue<Request>) {
+    model.clock = clock(env);
     let Some(alarm) = model.timers.expire(env.now) else {
         return;
     };
     match alarm {
-        Alarm::Call(id) => answer(model, id, out),
+        Alarm::Call(id) => answer(model, env, id, out),
         Alarm::Check { repository, commit, context } => ci::report(model, env, repository, commit, context),
+        Alarm::Rerun { repository, commit, context } => ci::rerun(model, env, repository, commit, context),
         Alarm::Hook(id) => hooks::deliver(model, id, out),
     }
 }
@@ -355,25 +409,35 @@ fn call(
         out.push(Request::Reply { to: reply_to, result: Err(Error::Unavailable) });
         return;
     }
-    let result = match faults::admit(model, env, user) {
-        Err(error) => Err(error),
+    let (result, landing) = match faults::admit(model, env, user) {
+        Err(error) => (Err(error), None),
+        Ok(()) if observe::subject(&op).is_some() && faults::lands_late(model, env) => {
+            (Err(Error::Timeout), Some(Landing { user, repository: copy_of(repository), op }))
+        }
         Ok(()) => {
-            let subject = observe::subject(&op);
-            let result = execute(model, env, user, repository, op);
-            if let Err(error) = result
-                && let Some((what, number, commit)) = subject
-            {
-                if error == Error::Full {
-                    model.tally.full = model.tally.full.saturating_add(1);
-                }
-                refused(model, repository, what, number, commit, error, user);
-            }
-            faults::finish(model, env, result)
+            let result = make(model, env, user, repository, op);
+            (faults::finish(model, env, result), None)
         }
     };
     let at = faults::latency(model, env);
-    let id = model.calls.insert(Call { state: State::Waiting { reply_to, result } }).expect("checked for room above");
+    let call = Call { state: State::Waiting { reply_to, result, landing } };
+    let id = model.calls.insert(call).expect("checked for room above");
     model.timers.arm(Alarm::Call(id), at).expect("a timer per call fits");
+}
+
+/// Makes the call, as `user`, observing a write or a git call refused.
+fn make(model: &mut Model, env: &Env<Config>, user: u64, repository: &[u8], op: Op) -> Result<Answer, Error> {
+    let subject = observe::subject(&op);
+    let result = execute(model, env, user, repository, op);
+    if let Err(error) = result
+        && let Some((what, number, commit)) = subject
+    {
+        if error == Error::Full {
+            model.tally.full = model.tally.full.saturating_add(1);
+        }
+        refused(model, repository, what, number, commit, error, user);
+    }
+    result
 }
 
 /// Makes the call, as `user`.
@@ -405,6 +469,7 @@ fn execute(model: &mut Model, env: &Env<Config>, user: u64, repository: &[u8], o
             Write::OpenPull { title, body, head, base } => pulls::open(model, env, id, user, title, body, head, base),
             Write::SetReviewers { number, reviewers } => pulls::request(model, env, id, user, number, reviewers),
             Write::Review { number, verdict, body } => pulls::review(model, env, id, user, number, verdict, body),
+            Write::Submit { number, review, verdict } => pulls::submit(model, env, id, user, number, review, verdict),
             Write::Merge { number, head } => pulls::merge(model, env, id, user, number, head),
             Write::DeleteBranch { branch } => git::delete(model, env, id, user, &branch),
             Write::Status { commit, context, state } => ci::status(model, env, id, user, commit, context, state),
@@ -434,24 +499,50 @@ fn refused(
     model.observations.push(observation);
 }
 
-/// A call's timer: its answer goes out.
-fn answer(model: &mut Model, id: Id<Call>, out: &mut Queue<Request>) {
+/// A call's timer: its answer goes out, and it is retired, or waits to land;
+/// or it lands.
+fn answer(model: &mut Model, env: &Env<Config>, id: Id<Call>, out: &mut Queue<Request>) {
     let call = model.calls.get_mut(id).expect("a call lives until its timer fires");
     let state = mem::replace(&mut call.state, State::Closed);
-    call.state = match state {
-        State::Waiting { reply_to, result } => {
+    match state {
+        State::Waiting { reply_to, result, landing } => {
             out.push(Request::Reply { to: reply_to, result });
-            State::Closed
+            model.tally.answered = model.tally.answered.saturating_add(1);
+            match landing {
+                Some(landing) => {
+                    call.state = State::Landing(landing);
+                    let config = &env.limits;
+                    let at = env.now.saturating_add(faults::draw(model, config.land_min, config.land_max));
+                    model.timers.arm(Alarm::Call(id), at).expect("a timer per call fits");
+                }
+                None => model.calls.retire(id),
+            }
+        }
+        State::Landing(Landing { user, repository, op }) => {
+            model.calls.retire(id);
+            model.tally.landed = model.tally.landed.saturating_add(1);
+            // What it answered went out long ago.
+            let _made = make(model, env, user, &repository, op);
         }
         State::Closed => unreachable!("a closed call has no timer"),
-    };
-    model.calls.retire(id);
-    model.tally.answered = model.tally.answered.saturating_add(1);
+    }
 }
 
-/// The time now, at the forge's resolution: what it keeps and shows.
+/// The forge's time at the world's `now`, at its resolution: what it keeps
+/// and shows.
+#[must_use]
+pub fn time(config: &Config, now: Time) -> Time {
+    let skewed = match config.skew {
+        Skew::None => now,
+        Skew::Ahead(by) => now.saturating_add(by),
+        Skew::Behind(by) => Time::from_nanos(now.as_nanos().saturating_sub(by.as_nanos())),
+    };
+    stamp(config, skewed)
+}
+
+/// The forge's time now.
 pub(crate) fn clock(env: &Env<Config>) -> Time {
-    stamp(&env.limits, env.now)
+    time(&env.limits, env.now)
 }
 
 /// `time` at the forge's resolution.

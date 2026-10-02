@@ -2,6 +2,9 @@
 //! it.
 //!
 //! A pull request's head commit follows its head branch while it is open. A
+//! review is made at once, or started pending, which no read shows until its
+//! author submits it; it keeps the id it was started with, so it is shown
+//! before reviews submitted while it was pending. A
 //! merge happens at an exact head, refused if the head moved, as a squash: one
 //! commit on the base's tip with the merged tree. The merge is three-way from
 //! the newest commit head and base share, and conflicts where both changed a
@@ -23,7 +26,7 @@ use crate::hooks::Hook;
 use crate::limits::Limits;
 use crate::model::{self, Config, Model};
 use crate::observe::{Branches, Observation};
-use crate::store::{Item, Pull, Repository, fit_numbers, fits, numbers};
+use crate::store::{Item, Kept, Pull, Repository, fit_numbers, fits, numbers};
 
 /// Opens a pull request to merge `head` into `base`.
 #[expect(clippy::too_many_arguments, reason = "a cell handler takes the call's fields as they come")]
@@ -138,15 +141,15 @@ pub(crate) fn request(
     Ok(Answer::Done)
 }
 
-/// Reviews the open pull request `number` at its head. Its author may only
-/// comment.
+/// Reviews the open pull request `number` at its head with `verdict`, or
+/// starts a pending review with none. Its author may only comment.
 pub(crate) fn review(
     model: &mut Model,
     env: &Env<Config>,
     id: Id<Repository>,
     user: u64,
     number: u64,
-    verdict: Verdict,
+    verdict: Option<Verdict>,
     body: Box<[u8]>,
 ) -> Result<Answer, Error> {
     let repository = model.repositories.get_mut(id).expect("a repository of the forge");
@@ -162,29 +165,114 @@ pub(crate) fn review(
     if state == State::Closed {
         return Err(Error::Closed);
     }
+    // A pending review's verdict is the submission's to check.
+    let commenting = match verdict {
+        Some(verdict) => verdict == Verdict::Comment,
+        None => true,
+    };
+    if author == user && !commenting {
+        return Err(Error::Forbidden);
+    }
+    let review = model.reviews.checked_add(1).expect("ids do not run out");
+    let kept = Kept {
+        review: Review {
+            id: review,
+            author: user,
+            verdict: verdict.unwrap_or(Verdict::Comment),
+            commit: pull.commit,
+            body,
+            at: model::clock(env),
+            official: writer,
+        },
+        pending: verdict.is_none(),
+    };
+    if pull.reviews.push(kept).is_err() {
+        return Err(Error::Full);
+    }
+    model.reviews = review;
+    if verdict.is_some() {
+        shown(model, env, id, number, review);
+    }
+    Ok(Answer::Reviewed(review))
+}
+
+/// Submits the pending review `review` of the open pull request `number`,
+/// the user's own, with `verdict`.
+pub(crate) fn submit(
+    model: &mut Model,
+    env: &Env<Config>,
+    id: Id<Repository>,
+    user: u64,
+    number: u64,
+    review: u64,
+    verdict: Verdict,
+) -> Result<Answer, Error> {
+    let repository = model.repositories.get_mut(id).expect("a repository of the forge");
+    repository.require(user, Permission::Read)?;
+    let writer = repository.permission(user) >= Permission::Write;
+    let item = repository.item_mut(number)?;
+    let author = item.author;
+    let state = item.state;
+    let Some(pull) = &mut item.pull else {
+        return Err(Error::Missing(What::Pull));
+    };
+    if state == State::Closed {
+        return Err(Error::Closed);
+    }
+    let mut found = None;
+    for kept in &pull.reviews {
+        if kept.review.id == review && kept.pending {
+            found = Some(kept.review.author);
+        }
+    }
+    let Some(by) = found else {
+        return Err(Error::Missing(What::Review));
+    };
+    if by != user {
+        return Err(Error::Forbidden);
+    }
     if author == user && verdict != Verdict::Comment {
         return Err(Error::Forbidden);
     }
-    let official = writer;
-    let commit = pull.commit;
-    let observed = copy_of(&body);
-    let review = Review { author: user, verdict, commit, body, at: model::clock(env), official };
-    if pull.reviews.push(review).is_err() {
-        return Err(Error::Full);
+    for index in 0..pull.reviews.len() {
+        let kept = pull.reviews.get_mut(index).expect("within its length");
+        if kept.review.id == review {
+            kept.pending = false;
+            kept.review.verdict = verdict;
+            kept.review.official = writer;
+            kept.review.at = model::clock(env);
+        }
     }
-    // The reviewer's request, if they were asked, is answered.
-    pull.requested.remove(&user);
+    shown(model, env, id, number, review);
+    Ok(Answer::Done)
+}
+
+/// The review `review` of the pull request `number` is shown: its reviewer's
+/// request is answered, the pull request updated, and the review observed
+/// and heard.
+fn shown(model: &mut Model, env: &Env<Config>, id: Id<Repository>, number: u64, review: u64) {
+    let repository = model.repositories.get_mut(id).expect("a repository of the forge");
+    let item = repository.items.get_mut(&number).expect("a pull request reviewed");
+    let pull = item.pull.as_mut().expect("a pull request");
+    let mut shown = None;
+    for kept in &pull.reviews {
+        if kept.review.id == review {
+            shown = Some(kept.review.clone());
+        }
+    }
+    let shown = shown.expect("the review shown is kept");
+    pull.requested.remove(&shown.author);
     repository.touch(number, model::clock(env));
     let observation = Observation::Reviewed {
         repository: copy_of(&repository.name),
         number,
-        commit,
-        verdict,
-        body: observed,
-        by: user,
+        id: review,
+        commit: shown.commit,
+        verdict: shown.verdict,
+        body: shown.body,
+        by: shown.author,
     };
     model::changed(model, env, id, observation, Hook::item(Change::Review, number));
-    Ok(Answer::Done)
 }
 
 /// Merges the pull request `number` if its head is still `head`.
@@ -258,8 +346,10 @@ pub(crate) fn view(model: &Model, limits: &Limits, repository: &Repository, numb
         Some(_) | None => false,
     };
     let mut reviews = List::with_capacity(pull.reviews.len());
-    for review in &pull.reviews {
-        reviews.push(review.clone()).expect("a list as long as the reviews");
+    for kept in &pull.reviews {
+        if !kept.pending {
+            reviews.push(kept.review.clone()).expect("a list as long as the reviews");
+        }
     }
     let statuses = statuses(repository, limits, pull.commit);
     let reviewers = numbers(&pull.requested);
@@ -318,14 +408,20 @@ fn allowed(repository: &Repository, item: &Item, pull: &Pull) -> bool {
     }
     let reviews = pull.reviews.as_slice();
     let mut approvals: u32 = 0;
-    for (index, review) in reviews.iter().enumerate() {
+    for (index, kept) in reviews.iter().enumerate() {
+        let review = &kept.review;
         let stale = review.commit != pull.commit && protection.dismiss_stale;
-        if review.verdict != Verdict::Approve || stale || review.author == item.author || !review.official {
+        if kept.pending
+            || review.verdict != Verdict::Approve
+            || stale
+            || review.author == item.author
+            || !review.official
+        {
             continue;
         }
         let mut last = true;
         for later in reviews.get(index.saturating_add(1)..).unwrap_or(&[]) {
-            if later.author == review.author && later.verdict != Verdict::Comment {
+            if !later.pending && later.review.author == review.author && later.review.verdict != Verdict::Comment {
                 last = false;
             }
         }

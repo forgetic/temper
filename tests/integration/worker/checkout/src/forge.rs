@@ -19,7 +19,7 @@
 
 use temper_checkout_fake::git::{self, Created, Fault, Pushed, Remote, Tree, Want};
 use temper_forge_model::api::{Answer, Checks, Error, File, Git, Op, Permission, Read, Setup, What};
-use temper_forge_model::{Config, Event, Limits, MAX_OUT, Model, Observation, Request};
+use temper_forge_model::{Config, Event, Limits, MAX_OUT, Model, Observation, Request, Skew};
 use temper_lib::{Duration, Env, Queue, ReplyTo, Time, Token};
 
 /// The forge's users: the worker, whose identity every operation of io acts
@@ -66,6 +66,9 @@ pub const CONFIG: Config = Config {
     late_max: Duration::ZERO,
     unavailable: 0,
     timeouts: 0,
+    landing: 0,
+    land_min: Duration::ZERO,
+    land_max: Duration::ZERO,
     rate_limit: 0,
     rate_window: Duration::ZERO,
     ci: CI,
@@ -74,6 +77,7 @@ pub const CONFIG: Config = Config {
     hooks_late: 0,
     hooks_lost: 0,
     resolution: Duration::ZERO,
+    skew: Skew::None,
     status_updates: false,
     edit_updates: false,
 };
@@ -126,6 +130,7 @@ impl Forge {
                 latency_max: Duration::ZERO,
                 silent: 0,
                 passes: 0,
+                reruns: 0,
                 cue: None,
             },
             protection: None,
@@ -324,7 +329,9 @@ fn fault(error: Error) -> Fault {
         Error::Missing(What::Commit) => Fault::Missing(git::What::Commit),
         Error::Unreachable => Fault::Unreachable,
         Error::Refused => Fault::Refused,
-        Error::Missing(What::Item | What::Pull | What::Comment | What::Label | What::File | What::Page)
+        Error::Missing(
+            What::Item | What::Pull | What::Comment | What::Label | What::File | What::Page | What::Review,
+        )
         | Error::Unavailable
         | Error::Timeout
         | Error::RateLimited { .. }

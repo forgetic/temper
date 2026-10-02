@@ -28,7 +28,7 @@ use alloc::boxed::Box;
 use temper_lib::bytes::copy_of;
 use temper_lib::{Id, List, Time};
 
-use crate::api::{Answer, Error, File, Kind, Read, State, What};
+use crate::api::{Answer, Error, File, Kind, Read, State, Summary, What};
 use crate::limits::Limits;
 use crate::model::{self, Config, Model};
 use crate::store::{Repository, names, numbers};
@@ -40,7 +40,8 @@ pub(crate) fn read(model: &Model, config: &Config, id: Id<Repository>, read: &Re
     let repository = model.repositories.get(id).expect("a repository of the forge");
     match read {
         Read::Items { state, kind, labels, author, since, page, limit } => {
-            Ok(items(repository, config, *state, *kind, labels, *author, *since, *page, *limit))
+            let (items, more) = items(repository, config, *state, *kind, labels, *author, *since, *page, *limit);
+            Ok(Answer::Items { items, more, now: model.clock })
         }
         Read::Item { number, after } => item(repository, limits, *number, *after),
         Read::Comment { id } => {
@@ -108,7 +109,7 @@ fn items(
     since: Time,
     page: u32,
     limit: u32,
-) -> Answer {
+) -> (Box<[Summary]>, bool) {
     let size = if limit == 0 { config.limits.page_size } else { limit.min(config.limits.page_size) };
     let since = model::stamp(config, since);
     // Forgejo takes a page before the first as the first.
@@ -144,7 +145,7 @@ fn items(
         }
         items.push(item.summary(number)).expect("checked for room above");
     }
-    Answer::Items { items: items.into_boxed(), more }
+    (items.into_boxed(), more)
 }
 
 /// The item `number` and a page of its comments with ids above `after`.

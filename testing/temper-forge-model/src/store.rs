@@ -84,15 +84,25 @@ pub(crate) struct Pull {
     pub(crate) merged: Option<u64>,
     /// The users asked to review it who have not yet.
     pub(crate) requested: Set<u64>,
-    pub(crate) reviews: List<Review>,
+    /// Its reviews, in the order they were started.
+    pub(crate) reviews: List<Kept>,
 }
 
-/// A context's status on a commit.
+/// A review, and whether it is pending: its author has not submitted it, and
+/// no read shows it.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub(crate) struct Kept {
+    pub(crate) review: Review,
+    pub(crate) pending: bool,
+}
+
+/// A context's status on a commit, and whether CI ran it again.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct Status {
     pub(crate) state: Check,
     pub(crate) author: u64,
     pub(crate) at: Time,
+    pub(crate) rerun: bool,
 }
 
 /// A wiki page.

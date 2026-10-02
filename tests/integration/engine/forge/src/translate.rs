@@ -303,7 +303,7 @@ pub fn answer(
     let answer = result.map_err(error)?;
     let page = usize::try_from(limits.page).expect("a page fits a usize");
     let answer = match (asked, answer) {
-        (Asked::Items, forge::Answer::Items { items, more }) => {
+        (Asked::Items, forge::Answer::Items { items, more, now: _ }) => {
             engine::Answer::Items { items: items.iter().map(|item| summary(item, limits)).collect(), more }
         }
         (Asked::Item, forge::Answer::Item { item, comments, more }) => {
