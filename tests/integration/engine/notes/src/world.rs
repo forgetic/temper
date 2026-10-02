@@ -632,7 +632,7 @@ impl World {
             Request::List { owner, scope } => self.send(owner, Op::List(scope)),
             Request::Fetch { owner, scope, name } => self.send(owner, Op::Fetch(scope, name)),
             Request::Create { owner, scope, name, page } => self.send(owner, Op::Create(scope, name, page)),
-            Request::Edit { owner, scope, name, page } => self.send(owner, Op::Edit(scope, name, page)),
+            Request::Edit { owner, scope, name, page, revision: _ } => self.send(owner, Op::Edit(scope, name, page)),
             Request::Delete { owner, scope, name } => self.send(owner, Op::Delete(scope, name)),
         }
     }

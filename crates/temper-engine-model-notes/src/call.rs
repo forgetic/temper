@@ -434,7 +434,7 @@ pub(crate) fn checked(
                 model.calls.get_mut(call).expect("in flight").kind =
                     Kind::Sent { reply_to, scope, name: name.clone(), line };
                 model.kept.get_mut(kept_id).expect("a scope kept is in the slab").busy = Busy::Writing { call };
-                out.push(Request::Edit { owner, scope, name, page });
+                out.push(Request::Edit { owner, scope, name, page, revision });
                 return;
             }
             (Noted::Moved, fact)

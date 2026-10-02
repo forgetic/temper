@@ -128,7 +128,7 @@ fn payload(model: &Model, token: Token) -> Option<Payload> {
         // A record written on the side: an entry the hub is done with stays
         // until its last such write has gone out.
         Wait::Record { entry } => Some(Payload::Record(Box::new(model.items.get(*entry)?.record()?))),
-        Wait::Wiki { op: Wiki::Create { page }, .. } | Wait::Wiki { op: Wiki::Edit { page, .. }, .. } => {
+        Wait::Wiki { op: Wiki::Create { page }, .. } | Wait::Wiki { op: Wiki::Edit { page }, .. } => {
             Some(Payload::Page(page.clone()))
         }
         Wait::Aside { .. }
@@ -827,23 +827,24 @@ pub(crate) fn create(
     route::forge_step(model, env, forge::Event::Write { owner: wait.token(), write, resumed: None });
 }
 
-/// The notes edit a page, only if it is there: it is read first, and written
-/// at the revision read.
+/// The notes edit a page, only if it is still at `revision`, the one their
+/// check read as the run recalled it.
 pub(crate) fn edit(
     model: &mut Model,
     env: &Env<Limits>,
     owner: Token,
     scope: notes::Scope,
-    name: Box<[u8]>,
+    name: &[u8],
     page: notes::Page,
+    revision: u64,
 ) {
-    let (repository, name) = path(model, scope, &name);
-    let read = forge::Read::Page { repository, name: copy_of(&name) };
-    let op = Wiki::Edit { repository, name, page: Box::new(page), read: false };
-    let Ok(wait) = model.waits.insert(Wait::Wiki { owner, op }) else {
+    let (repository, name) = path(model, scope, name);
+    let Ok(wait) = model.waits.insert(Wait::Wiki { owner, op: Wiki::Edit { page: Box::new(page) } }) else {
         return route::notes_step(model, env, notes::Event::Wrote { owner, wrote: notes::Wrote::Failed });
     };
-    route::forge_step(model, env, forge::Event::Read { owner: wait.token(), read });
+    let content = forge::Content::Payload(wait.token());
+    let write = forge::Write::PutPage { repository, name, content, revision: Some(revision) };
+    route::forge_step(model, env, forge::Event::Write { owner: wait.token(), write, resumed: None });
 }
 
 /// The notes delete a page.
@@ -894,28 +895,7 @@ fn wiki_read(
             };
             route::notes_step(model, env, notes::Event::Fetched { owner, fetched });
         }
-        Wiki::Edit { repository, name, page, read: false } => {
-            let revision = match result {
-                Ok(api::Answer::Page(found)) => found.revision,
-                Err(forge::Failure::Forge(api::Error::Missing)) => {
-                    let wrote = notes::Wrote::Missing;
-                    return route::notes_step(model, env, notes::Event::Wrote { owner, wrote });
-                }
-                Ok(_) | Err(_) => {
-                    let wrote = notes::Wrote::Failed;
-                    return route::notes_step(model, env, notes::Event::Wrote { owner, wrote });
-                }
-            };
-            let op = Wiki::Edit { repository, name: copy_of(&name), page, read: true };
-            let Ok(wait) = model.waits.insert(Wait::Wiki { owner, op }) else {
-                let wrote = notes::Wrote::Failed;
-                return route::notes_step(model, env, notes::Event::Wrote { owner, wrote });
-            };
-            let content = forge::Content::Payload(wait.token());
-            let write = forge::Write::PutPage { repository, name, content, revision: Some(revision) };
-            route::forge_step(model, env, forge::Event::Write { owner: wait.token(), write, resumed: None });
-        }
-        Wiki::Edit { read: true, .. } | Wiki::Create { .. } | Wiki::Delete => {}
+        Wiki::Edit { .. } | Wiki::Create { .. } | Wiki::Delete => {}
     }
 }
 

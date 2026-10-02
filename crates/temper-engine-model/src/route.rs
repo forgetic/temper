@@ -362,7 +362,9 @@ fn from_notes(model: &mut Model, env: &Env<Limits>, request: notes::Request) {
         notes::Request::List { owner, scope } => serve::list(model, env, owner, scope),
         notes::Request::Fetch { owner, scope, name } => serve::fetch(model, env, owner, scope, &name),
         notes::Request::Create { owner, scope, name, page } => serve::create(model, env, owner, scope, &name, page),
-        notes::Request::Edit { owner, scope, name, page } => serve::edit(model, env, owner, scope, name, page),
+        notes::Request::Edit { owner, scope, name, page, revision } => {
+            serve::edit(model, env, owner, scope, &name, page, revision);
+        }
         notes::Request::Delete { owner, scope, name } => serve::delete(model, env, owner, scope, &name),
     }
 }

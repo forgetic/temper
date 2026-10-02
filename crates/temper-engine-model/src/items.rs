@@ -41,6 +41,7 @@ use crate::translate;
 use crate::waits::Wait;
 
 /// An item the top level holds.
+#[expect(clippy::struct_excessive_bools, reason = "independent facts of an item, each set and cleared on its own")]
 #[derive(Debug)]
 pub(crate) struct Entry {
     pub(crate) item: Item,
@@ -99,6 +100,8 @@ pub(crate) struct Entry {
     pub(crate) conflicted: Option<[u8; 32]>,
     /// The permission the rules want of whoever accepts what it holds.
     pub(crate) wants: Option<Permission>,
+    /// Its run, prepared before the cold start was done, waits for it.
+    pub(crate) waiting: bool,
     /// The application that created it, waiting for its first record to be
     /// written before it goes on.
     pub(crate) holding: Option<Id<Entry>>,
@@ -321,6 +324,7 @@ impl Entry {
             merged: None,
             conflicted: None,
             wants: None,
+            waiting: false,
             holding: None,
             asides: 0,
             resave: false,

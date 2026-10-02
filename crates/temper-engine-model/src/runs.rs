@@ -128,8 +128,11 @@ fn sections(model: &Model, env: &Env<Limits>, id: Id<Entry>, run: &plan::Run) ->
     };
     let mut wanted = List::with_capacity(env.limits.brief.sections);
     want(&mut wanted, brief::Source::Item(item), true);
+    // People's messages waiting are what the run is for, and what its
+    // answer takes: without them, it does not run.
     if chosen.comments {
-        want(&mut wanted, brief::Source::Comments { item, since: entry.since }, false);
+        let messages = waiting_messages(entry);
+        want(&mut wanted, brief::Source::Comments { item, since: entry.since }, messages);
     }
     if chosen.dependencies && !entry.relations.dependencies.is_empty() {
         let mut items = List::with_capacity(env.limits.brief.items);
@@ -179,6 +182,16 @@ fn sections(model: &Model, env: &Env<Limits>, id: Id<Entry>, run: &plan::Run) ->
         want(&mut wanted, brief::Source::Template(template), false);
     }
     wanted.into_boxed()
+}
+
+/// Whether people's messages wait in the item's inbox.
+fn waiting_messages(entry: &Entry) -> bool {
+    for (_, noted) in &entry.inbox {
+        if noted.source == plan::Source::Message {
+            return true;
+        }
+    }
+    false
 }
 
 /// The head of the item's pull request, as the working set holds it.
@@ -277,8 +290,11 @@ fn ready(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) {
     get_mut(model, id).assignment = Some(Box::new(assignment));
     if model.loaded.is_some() {
         place(model, env, id);
-    } else if model.held.try_push(id).is_err() {
-        unreachable!("the held runs have room for every item");
+    } else if !get(model, id).waiting {
+        get_mut(model, id).waiting = true;
+        if model.held.try_push(id).is_err() {
+            unreachable!("the held runs have room for every item");
+        }
     }
 }
 
@@ -386,7 +402,8 @@ pub(crate) fn loaded(model: &mut Model, env: &Env<Limits>) {
     route::fleet_step(model, env, fleet::Event::Loaded);
     for _ in 0..model.held.len() {
         let Some(id) = model.held.pop() else { break };
-        let Some(entry) = model.items.get(id) else { continue };
+        let Some(entry) = model.items.get_mut(id) else { continue };
+        entry.waiting = false;
         if entry.assignment.is_some() && entry.live.is_some() {
             place(model, env, id);
         }
@@ -580,7 +597,9 @@ pub(crate) fn answer(model: &mut Model, env: &Env<Limits>, channel: Token, item:
     let acted = translate::answer(&answer);
     let carried = Carried::Answer { item, attempt, answer: Box::new(answer) };
     let Ok(payload) = model.carried.insert(carried) else {
-        // No room: the worker sends it again after its next hello.
+        // No room: its channel is closed rather than the answer dropped,
+        // and the worker sends it again after its next hello.
+        model.requests.push(Request::Refuse { channel });
         return;
     };
     let event =
@@ -642,6 +661,18 @@ pub(crate) fn answered(model: &mut Model, env: &Env<Limits>, to: ReplyTo, run: T
                 let entry = get_mut(model, id);
                 if let Some(head) = landed {
                     entry.relations.branch = Some(head);
+                }
+                // A turn that parked is over, as one whose outcome is applied
+                // is: the next waits for its wake, not retried at once.
+                let parked = match answer {
+                    work::Answer::Parked { .. } => true,
+                    work::Answer::Ended { .. }
+                    | work::Answer::Failed(_)
+                    | work::Answer::Lost
+                    | work::Answer::Refused => false,
+                };
+                if parked && let Some(record) = entry.step.as_mut() {
+                    record.progress.running = None;
                 }
                 entry.live = None;
                 entry.assignment = None;

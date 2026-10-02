@@ -69,16 +69,12 @@ pub(crate) enum Wiki {
         found: List<notes::Listed>,
     },
     Fetch,
-    /// Writing a page: `revision` is the page's as read first when it is
-    /// edited (`None` while it is read, for an edit).
+    /// Writing a page.
     Create {
         page: Box<notes::Page>,
     },
     Edit {
-        repository: u32,
-        name: Box<[u8]>,
         page: Box<notes::Page>,
-        read: bool,
     },
     Delete,
 }

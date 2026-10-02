@@ -268,11 +268,14 @@ pub enum Request {
         name: Box<[u8]>,
         page: Page,
     },
+    /// Edit the page `name` of `scope`, only if it is still at `revision`,
+    /// as it was read when the run's revision of it was checked.
     Edit {
         owner: Token,
         scope: Scope,
         name: Box<[u8]>,
         page: Page,
+        revision: u64,
     },
     Delete {
         owner: Token,
