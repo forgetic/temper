@@ -91,7 +91,8 @@ fn verdicts() -> Box<[Verdict]> {
 
 /// `charter`, encoded as the module says: counted first, then written into a
 /// box of that length.
-pub(crate) fn encode(charter: &Charter) -> Box<[u8]> {
+#[must_use]
+pub fn encode(charter: &Charter) -> Box<[u8]> {
     let mut counting = Encoder { len: 0, writer: None };
     counting.charter(charter);
     let mut writing = Encoder { len: 0, writer: Some(Writer::new(counting.len)) };

@@ -29,7 +29,12 @@
 //! entities, every ticket freed, the ready list drained, nothing in flight,
 //! and facts that add up to what crossed the boundary unless some were
 //! dropped).
+//!
+//! Ahead of the worker's model taking the fake worker's place, it also holds
+//! the channel a worker speaks with an agent process, as the agent's protocol
+//! layer translates it, with the charters an engine encodes ([`channel`]).
 
+pub mod channel;
 pub mod fixture;
 pub mod script;
 pub mod translate;

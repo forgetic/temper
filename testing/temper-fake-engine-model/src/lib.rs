@@ -38,7 +38,7 @@
 extern crate alloc;
 
 pub mod api;
-mod charter;
+pub mod charter;
 mod fleet;
 mod model;
 mod traffic;
