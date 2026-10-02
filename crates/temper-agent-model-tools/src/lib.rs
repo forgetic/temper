@@ -1,7 +1,7 @@
 //! The tools sub-model of the temper coding agent's model layer
 //! (programming-model.md, 4.5; agent-model.md, 6): what a session does to the
-//! checkout. It reads, lists, writes and edits files for the calls a session's
-//! LLM makes; searching and running commands come next.
+//! checkout. It reads, lists, writes and edits files, and runs commands, for
+//! the calls a session's LLM makes; searching comes next.
 //!
 //! Sans-io: [`step`] turns events into requests and changes nothing but the
 //! [`Model`] it is given. Its parent is the session sub-model, which opens a
@@ -40,9 +40,9 @@ mod path;
 mod tests;
 mod window;
 
-pub use authority::{Authority, Grants, Repo};
-pub use boundary::{Done, Event, Expect, Op, Refusal, Request, Version};
-pub use call::{Call, Effect, Entry, Fault, Kind, Outcome, effect};
+pub use authority::{Authority, Grants, Repo, Var};
+pub use boundary::{Done, Event, Expect, Op, Refusal, Request, Root, Version};
+pub use call::{Call, Effect, Entry, Exit, Fault, Kind, Outcome, effect};
 pub use limits::{Limits, worst_case};
 pub use model::{Model, max_out, step};
 pub use path::{Name, Part, Path, Place};

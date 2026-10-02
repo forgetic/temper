@@ -21,6 +21,7 @@ unused_must_use = "deny"
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 missing_panics_doc = "allow"          # the world asserts its invariants by panicking
+missing_errors_doc = "allow"          # errors are terminals, documented where they are defined
 wildcard_enum_match_arm = "deny"      # a new variant must break the translation
 match_wildcard_for_single_variants = "deny"
 unwrap_used = "deny"

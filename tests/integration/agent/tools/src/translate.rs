@@ -3,7 +3,9 @@
 //! operations, naming roots and versions) do, without the bytes and the
 //! kernel.
 
-use temper_agent_model_tools::{Done, Entry, Expect, Fault, Kind, Name, Op, Part, Path, Version};
+use temper_agent_model_tools::{
+    Done, Entry, Exit, Expect, Fault, Kind, Name, Op, Part, Path, Place, Root, Var, Version,
+};
 use temper_checkout_fake as fake;
 use temper_lib::Token;
 
@@ -60,7 +62,50 @@ fn fake_version(version: Version) -> u64 {
     version
 }
 
-/// Runs `op` on the checkout, as io would, and returns its terminal.
+/// A command io starts for a spawn, with how much of its output to keep:
+/// what runs, its first bytes and its last.
+pub struct Started {
+    pub process: fake::Process,
+    pub head: u32,
+    pub tail: u32,
+}
+
+/// Starts the command of a spawn on the checkout, as io would, or the
+/// terminal that says why it did not start.
+pub fn spawn(
+    checkout: &fake::Checkout,
+    cwd: &Place,
+    command: &[u8],
+    env: &[Var],
+    roots: &[Root],
+    (head, tail): (u32, u32),
+) -> Result<Started, Done> {
+    let env: Vec<(Vec<u8>, Vec<u8>)> = env.iter().map(|var| (var.name.to_vec(), var.value.to_vec())).collect();
+    let roots: Vec<(u64, bool)> = roots.iter().map(|seen| (seen.root.raw(), seen.writable)).collect();
+    match checkout.spawn(root(cwd.root), &cwd.path, command, &env, &roots) {
+        Ok(process) => Ok(Started { process, head, tail }),
+        Err(failure) => Err(done(failure)),
+    }
+}
+
+/// How io ends a command that ran: with `exit`, or timed out if `None`, having
+/// written `output`, of which it keeps the head and the tail.
+#[must_use]
+pub fn exited(exit: Option<fake::Exit>, output: &[u8], head: u32, tail: u32) -> Done {
+    let exit = match exit {
+        Some(fake::Exit::Code(code)) => Exit::Code { code },
+        Some(fake::Exit::Signal(signal)) => Exit::Signal { signal },
+        None => Exit::TimedOut,
+    };
+    let head = usize::try_from(head).expect("a small head").min(output.len());
+    let tail = usize::try_from(tail).expect("a small tail").min(output.len() - head);
+    let dropped = u64::try_from(output.len() - head - tail).expect("a small output");
+    let (kept, rest) = output.split_at(head);
+    Done::Exited { exit, head: kept.into(), tail: rest[rest.len() - tail..].into(), dropped }
+}
+
+/// Runs `op` on the checkout, as io would, and returns its terminal. A spawn
+/// is started instead ([`spawn`]).
 pub fn perform(checkout: &mut fake::Checkout, op: Op) -> Done {
     match op {
         Op::Load { at, max } => match checkout.load(root(at.root), &at.path, u64::from(max)) {
@@ -84,6 +129,7 @@ pub fn perform(checkout: &mut fake::Checkout, op: Op) -> Done {
                 Err(failure) => done(failure),
             }
         }
+        Op::Spawn { .. } => panic!("a spawn is started, not run"),
     }
 }
 

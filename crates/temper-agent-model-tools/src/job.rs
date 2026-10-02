@@ -33,11 +33,18 @@
 //!                                                  or cancelled if the kit is closing
 //!            missing                     Done      not found; nothing is known there
 //!            any other                   Done      what it says
+//! Running    exited                      Done      how it ended, and its output
+//!            any other                   Done      what it says
 //! Storing    stored                      Done      written or edited; the new version is known
 //!            conflict, creating          Done      not read
 //!            conflict, replacing         Done      stale; a file now absent is forgotten
 //!            any other                   Done      what it says
 //! ```
+//!
+//! A command runs until it exits or its deadline, the call's or the tools'
+//! own limit for commands, whichever is sooner. It may change any file the kit
+//! may write; what the kit knows stays as it was, and the version check of
+//! the next write or edit catches what the command changed.
 //!
 //! A kit that closes while an edit loads stores nothing: whichever way the
 //! load's race with its cancel went, the edit answers `Cancelled`.
@@ -48,9 +55,10 @@
 use alloc::boxed::Box;
 use core::mem;
 
-use temper_lib::{Env, Id, Queue, ReplyTo, Slab, Time, Token};
+use temper_lib::{Duration, Env, Id, Queue, ReplyTo, Slab, Time, Token};
 
-use crate::boundary::{Done, Expect, Op, Request};
+use crate::authority::Var;
+use crate::boundary::{Done, Expect, Op, Request, Root};
 use crate::call::Outcome;
 use crate::edit::{self, Edit};
 use crate::kit::{self, Kit};
@@ -77,6 +85,8 @@ enum State {
     Editing { reply_to: ReplyTo, editing: Editing },
     /// Storing the file at `place`, for `change`.
     Storing { reply_to: ReplyTo, place: Place, change: Change },
+    /// Running a command.
+    Running { reply_to: ReplyTo },
     /// Terminal: answered, holds nothing.
     Done,
 }
@@ -104,15 +114,36 @@ pub(crate) enum Change {
 /// What a call that passed its kit's entrance does.
 #[derive(Debug)]
 pub(crate) enum Work {
-    Read { place: Place, span: Span },
-    List { place: Place },
-    Write { place: Place, content: Box<[u8]>, expect: Expect },
-    Edit { place: Place, edit: Edit },
+    Read {
+        place: Place,
+        span: Span,
+    },
+    List {
+        place: Place,
+    },
+    Write {
+        place: Place,
+        content: Box<[u8]>,
+        expect: Expect,
+    },
+    Edit {
+        place: Place,
+        edit: Edit,
+    },
+    /// Runs `command` in `cwd` for at most `timeout`, with the kit's `env`,
+    /// seeing its `roots`: copies of the kit's, made for the request.
+    Shell {
+        cwd: Place,
+        command: Box<[u8]>,
+        timeout: Duration,
+        env: Box<[Var]>,
+        roots: Box<[Root]>,
+    },
 }
 
 /// Starts a job for `work` in the kit `kit`, which has room for one, asking
 /// io for its operation by `deadline`, or sooner if the tools' own limit on
-/// file operations falls first.
+/// file operations, or on commands, falls first.
 pub(crate) fn start(
     jobs: &mut Slab<Job>,
     kit: Id<Kit>,
@@ -124,7 +155,12 @@ pub(crate) fn start(
 ) -> Id<Job> {
     let limits = &env.limits;
     let call_deadline = deadline;
-    let deadline = deadline.min(env.now.saturating_add(limits.file_timeout));
+    // A command has a limit of its own; any other call is a file operation.
+    let limit = match &work {
+        Work::Shell { timeout, .. } => *timeout,
+        Work::Read { .. } | Work::List { .. } | Work::Write { .. } | Work::Edit { .. } => limits.file_timeout,
+    };
+    let deadline = deadline.min(env.now.saturating_add(limit));
     // The place goes to io and stays with the job: copy at emission.
     let (state, op) = match work {
         Work::Read { place, span } => {
@@ -143,6 +179,10 @@ pub(crate) fn start(
         Work::Edit { place, edit } => {
             let op = Op::Load { at: place.clone(), max: limits.file_bytes };
             (State::Editing { reply_to, editing: Editing { place, edit, deadline: call_deadline } }, op)
+        }
+        Work::Shell { cwd, command, timeout: _, env, roots } => {
+            let op = Op::Spawn { cwd, command, env, roots, head: limits.shell_head, tail: limits.shell_tail };
+            (State::Running { reply_to }, op)
         }
     };
     // Room: a kit has at most `calls` jobs, and the slab twice that many slots
@@ -176,6 +216,7 @@ pub(crate) fn done(model: &mut Model, env: &Env<Limits>, owner: Token, done: Don
         State::Listing { reply_to } => scanned(reply_to, done, out),
         State::Editing { reply_to, editing } => to_edit(kit, id, reply_to, editing, done, env, out),
         State::Storing { reply_to, place, change } => stored(&mut kit.knowledge, reply_to, place, change, done, out),
+        State::Running { reply_to } => exited(reply_to, done, out),
         State::Done => unreachable!("a job that has answered has nothing in flight"),
     };
     follow(kits, jobs, id, out);
@@ -186,7 +227,11 @@ pub(crate) fn done(model: &mut Model, env: &Env<Limits>, owner: Token, done: Don
 fn follow(kits: &mut Slab<Kit>, jobs: &mut Slab<Job>, id: Id<Job>, out: &mut Queue<Request>) {
     let job = jobs.get(id).expect("a job lives until it is retired");
     match job.state {
-        State::Reading { .. } | State::Listing { .. } | State::Editing { .. } | State::Storing { .. } => {}
+        State::Reading { .. }
+        | State::Listing { .. }
+        | State::Editing { .. }
+        | State::Storing { .. }
+        | State::Running { .. } => {}
         State::Done => {
             kit::finished(kits, job.kit, id, out);
             jobs.retire(id);
@@ -223,7 +268,7 @@ fn loaded(
         Done::Failed { fault } => Outcome::Failed { fault },
         Done::TimedOut => Outcome::TimedOut,
         Done::Cancelled => Outcome::Cancelled,
-        Done::Scanned { .. } | Done::Stored { .. } | Done::Conflict { .. } | Done::Linked => {
+        Done::Scanned { .. } | Done::Stored { .. } | Done::Conflict { .. } | Done::Linked | Done::Exited { .. } => {
             unreachable!("io ends a load with a load's terminal")
         }
     };
@@ -245,7 +290,8 @@ fn scanned(reply_to: ReplyTo, done: Done, out: &mut Queue<Request>) -> State {
         | Done::Conflict { .. }
         | Done::NotFile
         | Done::Linked
-        | Done::TooLarge { .. } => unreachable!("io ends a scan with a scan's terminal"),
+        | Done::TooLarge { .. }
+        | Done::Exited { .. } => unreachable!("io ends a scan with a scan's terminal"),
     };
     answer(reply_to, outcome, out)
 }
@@ -294,7 +340,7 @@ fn to_edit(
         Done::Failed { fault } => Outcome::Failed { fault },
         Done::TimedOut => Outcome::TimedOut,
         Done::Cancelled => Outcome::Cancelled,
-        Done::Scanned { .. } | Done::Stored { .. } | Done::Conflict { .. } | Done::Linked => {
+        Done::Scanned { .. } | Done::Stored { .. } | Done::Conflict { .. } | Done::Linked | Done::Exited { .. } => {
             unreachable!("io ends a load with a load's terminal")
         }
     };
@@ -335,9 +381,31 @@ fn stored(
         Done::Failed { fault } => Outcome::Failed { fault },
         Done::TimedOut => Outcome::TimedOut,
         Done::Cancelled => Outcome::Cancelled,
-        Done::Loaded { .. } | Done::Scanned { .. } | Done::Missing | Done::TooLarge { .. } => {
+        Done::Loaded { .. } | Done::Scanned { .. } | Done::Missing | Done::TooLarge { .. } | Done::Exited { .. } => {
             unreachable!("io ends a store with a store's terminal")
         }
+    };
+    answer(reply_to, outcome, out)
+}
+
+/// Running, ended: answer with how the command ended and what it wrote.
+fn exited(reply_to: ReplyTo, done: Done, out: &mut Queue<Request>) -> State {
+    let outcome = match done {
+        Done::Exited { exit, head, tail, dropped } => Outcome::Exited { exit, head, tail, dropped },
+        // The working directory.
+        Done::Missing => Outcome::NotFound,
+        Done::NotDirectory => Outcome::NotDirectory,
+        Done::Escapes => Outcome::Outside,
+        Done::Failed { fault } => Outcome::Failed { fault },
+        Done::TimedOut => Outcome::TimedOut,
+        Done::Cancelled => Outcome::Cancelled,
+        Done::Loaded { .. }
+        | Done::Scanned { .. }
+        | Done::Stored { .. }
+        | Done::Conflict { .. }
+        | Done::NotFile
+        | Done::Linked
+        | Done::TooLarge { .. } => unreachable!("io ends a spawn with a spawn's terminal"),
     };
     answer(reply_to, outcome, out)
 }

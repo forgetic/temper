@@ -5,8 +5,8 @@
 //! at random through every terminal io may give, measured after every step.
 
 use temper_agent_model_tools::{
-    Authority, Call, Done, Entry, Event, Expect, Fault, Grants, Kind, Limits, Model, Name, Op, Part, Path, Repo,
-    Request, Version, max_out, worst_case,
+    Authority, Call, Done, Entry, Event, Exit, Expect, Fault, Grants, Kind, Limits, Model, Name, Op, Part, Path, Repo,
+    Request, Var, Version, max_out, worst_case,
 };
 use temper_lib::{Duration, Env, Queue, ReplyTo, Rng, Time, Token};
 
@@ -72,6 +72,11 @@ const LIMITS: Limits = Limits {
     list_entries: 4,
     match_lines: 4,
     file_timeout: Duration::from_secs(10),
+    env_bytes: 256,
+    shell_timeout: Duration::from_secs(60),
+    shell_timeout_max: Duration::from_secs(600),
+    shell_head: 64,
+    shell_tail: 128,
 };
 
 const GRANTS: Grants = Grants { inspect: true, modify: true, shell: true };
@@ -92,7 +97,11 @@ fn authority(limits: &Limits) -> Authority {
         let mount = format!("{repo:0>len$}");
         repos.push(Repo { mount: Box::new([name(mount.as_bytes())]), root: Token::new(repo.into()), writable: false });
     }
-    Authority { cwd, repos: repos.into(), grants: GRANTS }
+    // An environment as large as it may be, in variables of a byte each.
+    let vars = limits.env_bytes / 4;
+    let env =
+        (0..vars).map(|var| Var { name: format!("{var:x}").into_bytes().into(), value: b"v"[..].into() }).collect();
+    Authority { cwd, repos: repos.into(), grants: GRANTS, env }
 }
 
 /// The path of a file whose absolute path is exactly `path_bytes` long,
@@ -199,6 +208,7 @@ enum Asked {
     Load,
     Scan,
     Store { creating: bool },
+    Spawn,
 }
 
 /// Drives a model under `limits` at random for `rounds` steps, each an
@@ -216,7 +226,7 @@ fn churn(limits: Limits, seed: u64, rounds: u32) {
     let slots = usize::try_from(limits.kits * limits.calls * 2).expect("small");
     let mut ops: Vec<(Token, Asked)> = Vec::with_capacity(slots);
     let mut out = Queue::with_capacity(max_out(&limits));
-    let mut counted = [0; 4];
+    let mut counted = [0; 5];
     let base = heap::live();
     let mut model = Model::new(&limits);
     for round in 0..u64::from(rounds) {
@@ -262,8 +272,9 @@ fn churn(limits: Limits, seed: u64, rounds: u32) {
 }
 
 /// Takes what a step asked for, keeping what the driver needs to go on, and
-/// counting the operations by kind: loads, scans, creates and replaces.
-fn drain(out: &mut Queue<Request>, kits: &mut Vec<Token>, ops: &mut Vec<(Token, Asked)>, seen: &mut [u32; 4]) {
+/// counting the operations by kind: loads, scans, creates, replaces and
+/// spawns.
+fn drain(out: &mut Queue<Request>, kits: &mut Vec<Token>, ops: &mut Vec<(Token, Asked)>, seen: &mut [u32; 5]) {
     while let Some(request) = out.pop() {
         match request {
             Request::Opened { kit, .. } => kits.push(kit),
@@ -273,6 +284,7 @@ fn drain(out: &mut Queue<Request>, kits: &mut Vec<Token>, ops: &mut Vec<(Token, 
                     Op::Scan { .. } => (Asked::Scan, 1),
                     Op::Store { expect: Expect::Absent, .. } => (Asked::Store { creating: true }, 2),
                     Op::Store { expect: Expect::Is { .. }, .. } => (Asked::Store { creating: false }, 3),
+                    Op::Spawn { .. } => (Asked::Spawn, 4),
                 };
                 seen[kind] += 1;
                 ops.push((owner, asked));
@@ -286,10 +298,11 @@ fn random_call(limits: &Limits, rng: &mut Rng) -> Call {
     // A few more files than a kit remembers: most writes meet a read, and
     // some meet a file forgotten.
     let file = rng.below(u64::from(limits.known_files) + 2);
-    match rng.below(4) {
+    match rng.below(5) {
         0 => read(limits, file),
         1 => Call::List { path: path(limits, file) },
         2 => write(limits, file),
+        3 => Call::Shell { command: b"cargo test"[..].into(), timeout: None },
         _ => {
             // Mostly small, so that most edits fit and are stored.
             let len = if rng.chance(100) { u64::from(limits.file_bytes) } else { rng.below(8) };
@@ -322,6 +335,13 @@ fn random_done(limits: &Limits, rng: &mut Rng, asked: Asked) -> Done {
                     .map(|entry| Entry { name: name(format!("entry{entry}").as_bytes()), kind: Kind::File })
                     .collect();
                 Done::Scanned { entries: entries.into(), more: rng.below(3) }
+            }
+            Asked::Spawn => {
+                let exit = [Exit::Code { code: 1 }, Exit::Signal { signal: 9 }, Exit::TimedOut];
+                let exit = exit[usize::try_from(rng.below(3)).expect("an index")];
+                let head = vec![b'h'; usize::try_from(limits.shell_head).expect("small")];
+                let tail = vec![b't'; usize::try_from(limits.shell_tail).expect("small")];
+                Done::Exited { exit, head: head.into(), tail: tail.into(), dropped: rng.below(1000) }
             }
             Asked::Store { creating } => match rng.below(3) {
                 0 if creating => Done::Conflict { now: Some(version) },

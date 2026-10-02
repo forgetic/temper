@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use temper_agent_model_tools as tools;
-use temper_agent_model_tools::{Authority, Call, Done, Expect, Fault, Grants, Op, Outcome, Refusal, Repo};
+use temper_agent_model_tools::{Authority, Call, Done, Expect, Fault, Grants, Op, Outcome, Refusal, Repo, Var};
 use temper_checkout_fake::Checkout;
 use temper_lib::{Duration, Env, Queue, ReplyTo, Rng, Time, Token};
 
@@ -61,6 +61,11 @@ impl Settings {
                 list_entries: 16,
                 match_lines: 4,
                 file_timeout: Duration::from_secs(10),
+                env_bytes: 256,
+                shell_timeout: Duration::from_secs(60),
+                shell_timeout_max: Duration::from_secs(600),
+                shell_head: 64,
+                shell_tail: 128,
             },
             io: Span::millis(1, 20),
             faults: 0,
@@ -91,8 +96,9 @@ pub enum Step {
 pub struct Stats {
     /// Calls the sessions made.
     pub calls: u32,
-    /// Operations the tools asked of io.
+    /// Operations the tools asked of io, and the commands among them.
     pub ops: u32,
+    pub commands: u32,
     /// Operations that failed with a fault.
     pub faults: u32,
     /// Operations that ran out of time, and those that took effect all the
@@ -120,10 +126,21 @@ enum Delivery {
 
 /// An operation in flight, as io keeps it.
 struct Pending {
-    op: Op,
-    /// When it runs, and when its deadline passes, as deliveries.
+    work: Work,
+    /// When it ends, and when its deadline passes, as deliveries.
     ran: (Time, u64),
     deadline: (Time, u64),
+}
+
+/// What io does for an operation in flight.
+enum Work {
+    /// A file operation, run on the checkout when it is due.
+    File(Op),
+    /// A command, running since `since`.
+    Command { started: translate::Started, since: Time },
+    /// An operation that ends in this terminal, as a command that could not
+    /// start.
+    Ending(Done),
 }
 
 /// A session, as the world plays it.
@@ -363,10 +380,10 @@ impl World {
                     let known = (at.root.raw(), at.path.to_vec(), version.raw()[0]);
                     assert!(self.versions.contains(&known), "a store expects a version io gave for its place");
                 }
-                let ran = self.now.saturating_add(self.draw(self.settings.io));
+                let (work, ran) = self.start(op);
                 let ran = self.schedule(ran, Delivery::Ran { owner });
                 let deadline = self.schedule(deadline, Delivery::Deadline { owner });
-                let pending = Pending { op, ran, deadline };
+                let pending = Pending { work, ran, deadline };
                 assert!(self.ops.insert(owner, pending).is_none(), "an operation's owner has one in flight");
                 self.stats.ops += 1;
             }
@@ -385,6 +402,7 @@ impl World {
                 let pending = self.ops.remove(&owner).expect("checked above");
                 self.wire.remove(&pending.ran);
                 self.wire.remove(&pending.deadline);
+                self.abandon(pending.work);
                 self.tools_in.push_back(tools::Event::Done { owner, done: Done::Cancelled });
             }
         }
@@ -405,11 +423,19 @@ impl World {
                 Delivery::Ran { owner } => {
                     let pending = self.ops.remove(&owner).expect("a run is withdrawn when its operation ends first");
                     self.wire.remove(&pending.deadline);
-                    let done = if self.rng.chance(self.settings.faults) {
-                        self.stats.faults += 1;
-                        Done::Failed { fault: self.fault() }
-                    } else {
-                        self.perform(pending.op)
+                    let done = match pending.work {
+                        Work::File(_) if self.rng.chance(self.settings.faults) => {
+                            self.stats.faults += 1;
+                            Done::Failed { fault: self.fault() }
+                        }
+                        Work::File(op) => self.perform(op),
+                        Work::Command { started, since: _ } => {
+                            self.checkout.finish(&started.process);
+                            self.assert_untouched();
+                            let program = &started.process.program;
+                            translate::exited(Some(program.exit), &program.output, started.head, started.tail)
+                        }
+                        Work::Ending(done) => done,
                     };
                     self.tools_in.push_back(tools::Event::Done { owner, done });
                 }
@@ -417,22 +443,81 @@ impl World {
                     let pending =
                         self.ops.remove(&owner).expect("a deadline is withdrawn when its operation ends first");
                     self.wire.remove(&pending.ran);
-                    if self.rng.chance(self.settings.late_effects) {
-                        drop(translate::perform(&mut self.checkout, pending.op));
-                        self.assert_untouched();
-                        self.stats.late_effects += 1;
-                    }
-                    self.tools_in.push_back(tools::Event::Done { owner, done: Done::TimedOut });
+                    let done = match &pending.work {
+                        // io kills a command at its deadline, and tells what
+                        // it wrote by then.
+                        Work::Command { started, since } => {
+                            let program = &started.process.program;
+                            let ran = u128::from(self.now.saturating_since(*since).as_nanos());
+                            let written = usize::try_from(
+                                ran * program.output.len() as u128 / program.duration.as_nanos().max(1),
+                            )
+                            .expect("no more than the output")
+                            .min(program.output.len());
+                            translate::exited(None, &program.output[..written], started.head, started.tail)
+                        }
+                        Work::File(_) | Work::Ending(_) => Done::TimedOut,
+                    };
+                    self.abandon(pending.work);
+                    self.tools_in.push_back(tools::Event::Done { owner, done });
                     self.stats.timeouts += 1;
                 }
             }
         }
     }
 
+    /// Starts `op`, and says when it ends.
+    fn start(&mut self, op: Op) -> (Work, Time) {
+        let latency = self.now.saturating_add(self.draw(self.settings.io));
+        match op {
+            Op::Spawn { cwd, command, env, roots, head, tail } => {
+                self.stats.commands += 1;
+                let started = if self.rng.chance(self.settings.faults) {
+                    self.stats.faults += 1;
+                    Err(Done::Failed { fault: self.fault() })
+                } else {
+                    translate::spawn(&self.checkout, &cwd, &command, &env, &roots, (head, tail))
+                };
+                match started {
+                    Ok(started) => {
+                        let duration = u64::try_from(started.process.program.duration.as_nanos()).expect("short");
+                        let ends = self.now.saturating_add(Duration::from_nanos(duration));
+                        (Work::Command { started, since: self.now }, ends)
+                    }
+                    Err(done) => (Work::Ending(done), latency),
+                }
+            }
+            op @ (Op::Load { .. } | Op::Scan { .. } | Op::Store { .. }) => {
+                if let Op::Store { at, expect: Expect::Is { version }, .. } = &op {
+                    let known = (at.root.raw(), at.path.to_vec(), version.raw()[0]);
+                    assert!(self.versions.contains(&known), "a store expects a version io gave for its place");
+                }
+                (Work::File(op), latency)
+            }
+        }
+    }
+
+    /// Abandons `work`, at its deadline or for a cancel. What it did may
+    /// have taken effect all the same: a store renamed into place, a command's
+    /// changes made before it was killed.
+    fn abandon(&mut self, work: Work) {
+        if !self.rng.chance(self.settings.late_effects) {
+            return;
+        }
+        match work {
+            Work::File(op) => drop(translate::perform(&mut self.checkout, op)),
+            Work::Command { started, since: _ } => self.checkout.finish(&started.process),
+            Work::Ending(_) => return,
+        }
+        self.assert_untouched();
+        self.stats.late_effects += 1;
+    }
+
     /// Runs `op` on the checkout, and notes the version it tells of.
     fn perform(&mut self, op: Op) -> Done {
         let at = match &op {
             Op::Load { at, .. } | Op::Scan { at, .. } | Op::Store { at, .. } => at.clone(),
+            Op::Spawn { .. } => unreachable!("a spawn is started, not run"),
         };
         let done = translate::perform(&mut self.checkout, op);
         self.assert_untouched();
@@ -445,6 +530,7 @@ impl World {
             | Done::Missing
             | Done::NotFile
             | Done::Linked
+            | Done::Exited { .. }
             | Done::NotDirectory
             | Done::TooLarge { .. }
             | Done::Escapes
@@ -606,8 +692,11 @@ pub fn repo(checkout: &mut Checkout, mount: &[u8], writable: bool) -> Repo {
     Repo { mount: translate::names(mount), root: translate::token(root), writable }
 }
 
-/// An authority whose relative paths start at `cwd`.
+/// An authority whose relative paths start at `cwd`, and whose commands run
+/// with a plain environment.
 #[must_use]
 pub fn authority(cwd: &[u8], repos: Vec<Repo>, grants: Grants) -> Authority {
-    Authority { cwd: translate::names(cwd), repos: repos.into(), grants }
+    let var = |name: &[u8], value: &[u8]| Var { name: name.into(), value: value.into() };
+    let env = Box::new([var(b"PATH", b"/usr/bin:/bin"), var(b"HOME", b"/home/agent")]);
+    Authority { cwd: translate::names(cwd), repos: repos.into(), grants, env }
 }

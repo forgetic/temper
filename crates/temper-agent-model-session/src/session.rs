@@ -1023,8 +1023,14 @@ fn tally(content: &[Block]) -> (u32, u32) {
 /// Whether `outcome` is a success.
 const fn succeeded(outcome: &Outcome) -> bool {
     match outcome {
-        Outcome::Read { .. } | Outcome::Listed { .. } | Outcome::Written { .. } | Outcome::Edited { .. } => true,
-        Outcome::NotGranted
+        // A command succeeded if it exited with 0.
+        Outcome::Read { .. }
+        | Outcome::Listed { .. }
+        | Outcome::Written { .. }
+        | Outcome::Edited { .. }
+        | Outcome::Exited { exit: tools::Exit::Code { code: 0 }, .. } => true,
+        Outcome::Exited { .. }
+        | Outcome::NotGranted
         | Outcome::Outside
         | Outcome::ReadOnly
         | Outcome::TooLong
@@ -1190,6 +1196,7 @@ fn outcome_cost(outcome: &Outcome) -> Option<u64> {
             }
             Some(cost)
         }
+        Outcome::Exited { exit: _, head, tail, dropped: _ } => len(head)?.checked_add(len(tail)?),
         Outcome::Ambiguous { count: _, lines } => {
             u64::try_from(size_of::<u32>()).ok()?.checked_mul(u64::try_from(lines.len()).ok()?)
         }

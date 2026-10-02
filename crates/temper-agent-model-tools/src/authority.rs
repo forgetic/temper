@@ -8,6 +8,7 @@ use alloc::boxed::Box;
 use temper_lib::bytes::copy_of;
 use temper_lib::{List, Token};
 
+use crate::boundary::Root;
 use crate::call::{Call, Outcome};
 use crate::limits::Limits;
 use crate::path::{self, Name, Path, Place};
@@ -20,6 +21,18 @@ pub struct Authority {
     /// The repositories of the checkout. Paths outside them all are refused.
     pub repos: Box<[Repo]>,
     pub grants: Grants,
+    /// The environment commands run with, whole: io gives a process this and
+    /// nothing it would inherit, so no credential reaches a command unless it
+    /// is put here.
+    pub env: Box<[Var]>,
+}
+
+/// A variable of a command's environment. Its name is not empty and has no
+/// `=` or NUL in it, and its value has no NUL.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct Var {
+    pub name: Box<[u8]>,
+    pub value: Box<[u8]>,
 }
 
 /// A repository of the checkout.
@@ -52,6 +65,9 @@ pub(crate) struct Checkout {
     pub(crate) cwd: Box<[Name]>,
     pub(crate) mounts: Box<[Mount]>,
     pub(crate) grants: Grants,
+    pub(crate) env: Box<[Var]>,
+    /// The repositories' roots, and which a command may write.
+    pub(crate) roots: Box<[Root]>,
 }
 
 #[derive(PartialEq, Eq, Hash, Debug)]
@@ -70,7 +86,8 @@ pub(crate) struct Located {
 }
 
 /// The checkout for `authority`, or `None` if it does not fit `limits`: too
-/// many repositories, or a path longer than the tools take.
+/// many repositories, a path longer than the tools take, an environment
+/// larger than they take, or a variable that cannot be one.
 pub(crate) fn admit(authority: Authority, limits: &Limits) -> Option<Checkout> {
     let repos = u32::try_from(authority.repos.len()).ok()?;
     if repos > limits.repos {
@@ -80,14 +97,49 @@ pub(crate) fn admit(authority: Authority, limits: &Limits) -> Option<Checkout> {
     if path::joined(cwd.as_slice())? > usize::try_from(limits.path_bytes).ok()? {
         return None;
     }
+    if env_cost(&authority.env)? > u64::from(limits.env_bytes) {
+        return None;
+    }
     let mut mounts = List::with_capacity(repos);
+    let mut roots = List::with_capacity(repos);
     for repo in &authority.repos {
         let names = path::refs(&repo.mount)?;
         let at = path::join(names.as_slice(), limits.path_bytes)?;
         let mount = Mount { at, root: repo.root, writable: repo.writable };
         mounts.push(mount).expect("room for every repository");
+        roots.push(Root { root: repo.root, writable: repo.writable }).expect("room for every repository");
     }
-    Some(Checkout { cwd: authority.cwd, mounts: mounts.into_boxed(), grants: authority.grants })
+    Some(Checkout {
+        cwd: authority.cwd,
+        mounts: mounts.into_boxed(),
+        grants: authority.grants,
+        env: authority.env,
+        roots: roots.into_boxed(),
+    })
+}
+
+/// What `env` costs against `Limits::env_bytes`: its names and values, and a
+/// byte for each `=` between them; or `None` if a variable cannot be one.
+pub(crate) fn env_cost(env: &[Var]) -> Option<u64> {
+    let mut cost: u64 = 0;
+    for var in env {
+        if var.name.is_empty() {
+            return None;
+        }
+        for byte in &var.name {
+            if *byte == b'=' || *byte == 0 {
+                return None;
+            }
+        }
+        for byte in &var.value {
+            if *byte == 0 {
+                return None;
+            }
+        }
+        let len = u64::try_from(var.name.len()).ok()?.checked_add(u64::try_from(var.value.len()).ok()?)?;
+        cost = cost.checked_add(len)?.checked_add(1)?;
+    }
+    Some(cost)
 }
 
 /// Whether `grants` cover `call`.

@@ -12,8 +12,8 @@ use crate::knowledge::Knowledge;
 use crate::path;
 use crate::window::{self, Span};
 use crate::{
-    Authority, Call, Done, Effect, Entry, Event, Expect, Fault, Grants, Kind, Limits, Model, Name, Op, Outcome, Part,
-    Path, Place, Refusal, Repo, Request, Version, effect, max_out, step, worst_case,
+    Authority, Call, Done, Effect, Entry, Event, Exit, Expect, Fault, Grants, Kind, Limits, Model, Name, Op, Outcome,
+    Part, Path, Place, Refusal, Repo, Request, Root, Var, Version, effect, max_out, step, worst_case,
 };
 
 const LIMITS: Limits = Limits {
@@ -27,6 +27,11 @@ const LIMITS: Limits = Limits {
     list_entries: 16,
     match_lines: 4,
     file_timeout: Duration::from_secs(10),
+    env_bytes: 256,
+    shell_timeout: Duration::from_secs(60),
+    shell_timeout_max: Duration::from_secs(600),
+    shell_head: 64,
+    shell_tail: 128,
 };
 
 const ALL: Grants = Grants { inspect: true, modify: true, shell: true };
@@ -187,7 +192,12 @@ fn authority(grants: Grants) -> Authority {
             Repo { mount: names(b"/work/docs"), root: Token::new(3), writable: false },
         ]),
         grants,
+        env: Box::new([var(b"PATH", b"/usr/bin"), var(b"HOME", b"/home/agent")]),
     }
+}
+
+fn var(name: &[u8], value: &[u8]) -> Var {
+    Var { name: Box::from(name), value: Box::from(value) }
 }
 
 fn bytes(text: &[u8]) -> Box<[u8]> {
@@ -401,7 +411,6 @@ fn calls_are_refused_at_the_entrance() {
         // What passes the entrance does not run yet.
         (ALL, edit(b"src/lib.rs"), Outcome::NotRead),
         (ALL, Call::Search { path: path(b"src"), pattern: bytes(b"fn"), glob: None }, Outcome::Unsupported),
-        (ALL, shell, Outcome::Unsupported),
     ];
     let mut h = Harness::new(Limits { kits: 32, ..LIMITS });
     for (index, (grants, call, expected)) in table.into_iter().enumerate() {
@@ -828,7 +837,7 @@ fn an_edit_that_matches_nothing_or_too_much_stores_nothing() {
     let loaded = Done::Loaded { content: bytes(b"a\nb\na\n"), version: version(3) };
     match h.next(owner, loaded) {
         Op::Store { content, .. } => assert_eq!(&*content, b"y\nb\ny\n"),
-        op @ (Op::Load { .. } | Op::Scan { .. }) => panic!("expected the store, not {op:?}"),
+        op @ (Op::Load { .. } | Op::Scan { .. } | Op::Spawn { .. }) => panic!("expected the store, not {op:?}"),
     }
 }
 
@@ -915,4 +924,112 @@ fn a_path_is_in_git_when_one_of_its_names_is_dot_git() {
     for (path, expected) in table {
         assert_eq!(path::in_git(path), expected, "{path:?}");
     }
+}
+
+/// Sends a command to `kit` with an hour to run, and returns the spawn it asks
+/// for and its deadline.
+fn spawned(h: &mut Harness, kit: Token, timeout: Option<Duration>) -> (Token, Op, Time) {
+    let reply_to = ReplyTo::new(Token::new(1));
+    let call = Call::Shell { command: bytes(b"cargo test"), timeout };
+    let deadline = h.env.now.saturating_add(Duration::from_secs(3600));
+    match h.step(Event::Call { kit, reply_to, call, deadline }) {
+        Some(Request::Io { owner, op, deadline }) => (owner, op, deadline),
+        other => panic!("expected a spawn, not {other:?}"),
+    }
+}
+
+fn at(secs: u64) -> Time {
+    Time::ZERO.saturating_add(Duration::from_secs(secs))
+}
+
+#[test]
+fn a_command_runs_in_the_working_directory_with_the_kits_environment_and_roots() {
+    let mut h = Harness::new(LIMITS);
+    let kit = h.open(1, authority(ALL));
+    let (owner, op, deadline) = spawned(&mut h, kit, None);
+    let roots: Box<[Root]> = Box::new([
+        Root { root: Token::new(1), writable: true },
+        Root { root: Token::new(2), writable: false },
+        Root { root: Token::new(3), writable: false },
+    ]);
+    let expected = Op::Spawn {
+        cwd: place(1, b""),
+        command: bytes(b"cargo test"),
+        env: authority(ALL).env,
+        roots,
+        head: LIMITS.shell_head,
+        tail: LIMITS.shell_tail,
+    };
+    assert_eq!((op, deadline), (expected, at(60)), "the tools' default limit for a command");
+    let exited =
+        Done::Exited { exit: Exit::Code { code: 101 }, head: bytes(b"running"), tail: bytes(b"FAILED"), dropped: 7 };
+    let outcome =
+        Outcome::Exited { exit: Exit::Code { code: 101 }, head: bytes(b"running"), tail: bytes(b"FAILED"), dropped: 7 };
+    assert_eq!(h.end(owner, exited), (1, outcome));
+}
+
+#[test]
+fn a_command_runs_as_long_as_it_asks_within_the_tools_limit() {
+    let mut h = Harness::new(LIMITS);
+    let kit = h.open(1, authority(ALL));
+    for (asked, deadline) in [(Some(Duration::from_secs(5)), at(5)), (Some(Duration::from_secs(7200)), at(600))] {
+        let (owner, _, given) = spawned(&mut h, kit, asked);
+        assert_eq!(given, deadline, "{asked:?}");
+        drop(h.end(owner, Done::Cancelled));
+    }
+    // The call's own deadline holds over both.
+    let reply_to = ReplyTo::new(Token::new(1));
+    let call = Call::Shell { command: bytes(b"sleep 9"), timeout: Some(Duration::from_secs(5)) };
+    match h.step(Event::Call { kit, reply_to, call, deadline: at(2) }) {
+        Some(Request::Io { deadline, .. }) => assert_eq!(deadline, at(2)),
+        other => panic!("expected a spawn, not {other:?}"),
+    }
+}
+
+#[test]
+fn every_end_of_a_command_answers_for_itself() {
+    let table = [
+        (
+            Done::Exited { exit: Exit::TimedOut, head: bytes(b"h"), tail: bytes(b""), dropped: 0 },
+            Outcome::Exited { exit: Exit::TimedOut, head: bytes(b"h"), tail: bytes(b""), dropped: 0 },
+        ),
+        (Done::Missing, Outcome::NotFound),
+        (Done::NotDirectory, Outcome::NotDirectory),
+        (Done::Escapes, Outcome::Outside),
+        (Done::Failed { fault: Fault::Other }, Outcome::Failed { fault: Fault::Other }),
+        (Done::TimedOut, Outcome::TimedOut),
+        (Done::Cancelled, Outcome::Cancelled),
+    ];
+    let mut h = Harness::new(LIMITS);
+    let kit = h.open(1, authority(ALL));
+    for (done, expected) in table {
+        let (owner, _, _) = spawned(&mut h, kit, None);
+        assert_eq!(h.end(owner, done), (1, expected));
+    }
+}
+
+#[test]
+fn commands_need_the_shell_grant_and_a_working_directory_in_the_checkout() {
+    let mut h = Harness::new(LIMITS);
+    let modify = h.open(1, authority(Grants { inspect: true, modify: true, shell: false }));
+    assert_eq!(h.call(modify, Call::Shell { command: bytes(b"ls"), timeout: None }), Outcome::NotGranted);
+    let mut outside = authority(ALL);
+    outside.cwd = names(b"/work");
+    let outside = h.open(2, outside);
+    assert_eq!(h.call(outside, Call::Shell { command: bytes(b"ls"), timeout: None }), Outcome::Outside);
+}
+
+#[test]
+fn an_environment_that_cannot_be_one_or_is_too_large_is_refused() {
+    let table = [var(b"", b"x"), var(b"A=B", b"x"), var(b"A\0", b"x"), var(b"A", b"x\0"), var(b"BIG", &[b'x'; 256])];
+    for var in table {
+        let mut authority = authority(ALL);
+        authority.env = Box::new([var.clone()]);
+        invalid(LIMITS, authority);
+    }
+    // Exactly at the limit is within it: a name, its `=` and its value.
+    let mut fits = authority(ALL);
+    fits.env = Box::new([var(b"A", &[b'x'; 254])]);
+    let mut h = Harness::new(LIMITS);
+    let _: Token = h.open(1, fits);
 }

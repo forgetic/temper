@@ -3,10 +3,12 @@
 
 use std::collections::BTreeSet;
 
-use temper_agent_model_tools::{Authority, Entry, Fault, Grants, Kind, Limits, Name, Outcome, Refusal, Repo};
-use temper_agent_model_tools_tests::calls::{edit, list, read, read_lines, write};
+use temper_agent_model_tools::{
+    self as tools, Authority, Entry, Fault, Grants, Kind, Limits, Name, Outcome, Refusal, Repo,
+};
+use temper_agent_model_tools_tests::calls::{edit, list, read, read_lines, shell, write};
 use temper_agent_model_tools_tests::{Settings, Span, Stats, Step, World, authority, repo};
-use temper_checkout_fake::Checkout;
+use temper_checkout_fake::{Checkout, Exit, Program};
 use temper_lib::{Duration, Rng, Time};
 
 const ITERATIONS: u32 = 100_000;
@@ -14,6 +16,8 @@ const ITERATIONS: u32 = 100_000;
 const INSPECT: Grants = Grants { inspect: true, modify: false, shell: false };
 
 const MODIFY: Grants = Grants { inspect: true, modify: true, shell: false };
+
+const ALL: Grants = Grants { inspect: true, modify: true, shell: true };
 
 const LIB: &[u8] = b"pub fn one() {}\npub fn two() {}\npub fn three() {}\n";
 
@@ -51,12 +55,39 @@ impl Fixture {
         checkout.write(b"work/temper/vendor/lib/lib.rs", b"// vendored\n");
         checkout.write(b"work/docs/guide.md", b"# Guide\n");
         checkout.write(b"etc/passwd", b"root:x:0:0\n");
+        checkout
+            .program(b"cargo fmt", program(2_000, b"", Exit::Code(0), &[(b"work/temper/src/lib.rs", Some(FORMATTED))]));
+        checkout.program(b"cargo test", program(3_000, &test_log(), Exit::Code(101), &[]));
+        checkout
+            .program(b"sleep 600", program(600_000, b"zzz", Exit::Code(0), &[(b"work/temper/slept", Some(b"yes"))]));
+        checkout.program(b"kill -9 $$", program(10, b"", Exit::Signal(9), &[]));
+        let vendor = [
+            (&b"work/temper/vendor/lib/lib.rs"[..], Some(&b"// updated\n"[..])),
+            (b"work/temper/src/new.rs", Some(b"new\n")),
+        ];
+        checkout.program(b"vendor update", program(100, b"updated\n", Exit::Code(0), &vendor));
         Fixture { checkout, repos }
     }
 
     fn authority(&self, grants: Grants) -> Authority {
         authority(b"/work/temper", self.repos.clone(), grants)
     }
+}
+
+const FORMATTED: &[u8] = b"pub fn one() {}\n\npub fn two() {}\n\npub fn three() {}\n";
+
+/// A scripted command: it runs for `millis`, writes `output`, ends with
+/// `exit`, and makes `changes` (absolute paths, new content or removed).
+fn program(millis: u64, output: &[u8], exit: Exit, changes: &[(&[u8], Option<&[u8]>)]) -> Program {
+    let changes = changes.iter().map(|(path, content)| (path.to_vec(), content.map(<[u8]>::to_vec))).collect();
+    Program { duration: std::time::Duration::from_millis(millis), output: output.to_vec(), exit, changes }
+}
+
+/// What a failing test run writes: a hundred lines, and the result.
+fn test_log() -> Vec<u8> {
+    let mut log: Vec<u8> = (0..100).flat_map(|test| format!("test case_{test:03} ... ok\n").into_bytes()).collect();
+    log.extend_from_slice(b"test result: FAILED. 99 passed; 1 failed\n");
+    log
 }
 
 /// A hundred lines of twenty bytes.
@@ -335,6 +366,7 @@ fn random_worlds_settle_with_every_call_answered() {
         "busy",
         "cancelled",
         "edited",
+        "exited",
         "failed",
         "linked",
         "listed",
@@ -375,6 +407,7 @@ fn kind(outcome: &Outcome) -> &'static str {
         Outcome::Listed { .. } => "listed",
         Outcome::Written { .. } => "written",
         Outcome::Edited { .. } => "edited",
+        Outcome::Exited { .. } => "exited",
         Outcome::NoMatch => "no match",
         Outcome::Ambiguous { .. } => "ambiguous",
         Outcome::Unchanged => "unchanged",
@@ -424,6 +457,9 @@ const PATHS: [&[u8]; 22] = [
 ];
 
 const HOT: [&[u8]; 3] = [b"src/lib.rs", b"Cargo.toml", b"src/new.rs"];
+
+/// What commands the LLM runs.
+const COMMANDS: [&[u8]; 6] = [b"cargo test", b"cargo fmt", b"env", b"sleep 600", b"kill -9 $$", b"vendor update"];
 
 /// What edits replace: in every file, in some, in one line of one, nowhere.
 const SNIPPETS: [&[u8]; 5] = [b"\n", b"pub", b"fn one", b"written", b"nowhere"];
@@ -479,7 +515,14 @@ fn noisy_world(seed: u64) -> World {
 fn noisy_script(rng: &mut Rng) -> Vec<Step> {
     let mut script = Vec::new();
     for _ in 0..rng.between(0, 10) {
-        let step = match rng.below(12) {
+        let step = match rng.below(13) {
+            // As an LLM does: read a file, then edit it.
+            12 => {
+                let path = HOT[usize::try_from(rng.below(HOT.len() as u64)).expect("an index")];
+                script.push(Step::Calls(vec![read(path)]));
+                let old = SNIPPETS[usize::try_from(rng.below(SNIPPETS.len() as u64)).expect("an index")];
+                Step::Calls(vec![edit(path, old, b"edited", rng.chance(300))])
+            }
             0..=4 => Step::Calls(noisy_calls(rng)),
             5..=7 => Step::Send(noisy_calls(rng)),
             8 => Step::Sleep(Duration::from_millis(rng.between(1, 5_000))),
@@ -502,7 +545,8 @@ fn noisy_calls(rng: &mut Rng) -> Vec<temper_agent_model_tools::Call> {
         // Half the calls are about a few files, so that kits and changes meet.
         let pool: &[&[u8]] = if rng.chance(500) { &HOT } else { &PATHS };
         let path = pool[usize::try_from(rng.below(pool.len() as u64)).expect("an index")];
-        let call = match rng.below(8) {
+        let call = match rng.below(9) {
+            8 => shell(COMMANDS[usize::try_from(rng.below(COMMANDS.len() as u64)).expect("an index")], None),
             0 => list(path),
             1 => read_lines(path, u32::try_from(rng.below(5)).expect("small"), 2),
             2 | 3 => write(path, format!("written {}\n", rng.below(1000)).as_bytes()),
@@ -926,6 +970,13 @@ fn closing_a_kit_settles_a_call_in_every_state() {
             file: b"work/temper/src/lib.rs",
         },
         Closing {
+            state: "running",
+            script: || vec![Step::Send(vec![shell(b"cargo fmt", None)])],
+            won: (Outcome::Cancelled, Some(LIB)),
+            lost: (exited(tools::Exit::Code { code: 0 }, b"", b"", 0), Some(FORMATTED)),
+            file: b"work/temper/src/lib.rs",
+        },
+        Closing {
             state: "editing, storing",
             script: || {
                 let edit = edit(b"src/lib.rs", b"fn one", b"fn uno", false);
@@ -940,7 +991,7 @@ fn closing_a_kit_settles_a_call_in_every_state() {
     for (seed, case) in (40..).zip(table) {
         for (late_cancels, (answer, content)) in [(0, &case.won), (1000, &case.lost)] {
             let settings = Settings { late_cancels, ..Settings::calm(seed) };
-            let (answers, world) = run(settings, MODIFY, (case.script)());
+            let (answers, world) = run(settings, ALL, (case.script)());
             assert_eq!(answers.last(), Some(answer), "{}, late cancels {late_cancels}", case.state);
             assert_eq!(world.checkout().content(case.file), *content, "{}, late cancels {late_cancels}", case.state);
             assert_eq!(world.stats().cancels, 1, "{}", case.state);
@@ -956,4 +1007,85 @@ fn a_cancel_that_comes_after_its_operation_ended_changes_nothing() {
     let (answers, world) = run(settings, INSPECT, vec![Step::Send(vec![read(b"src/lib.rs")])]);
     assert_eq!(answers, vec![read_of(LIB, 0, 3, 3)]);
     assert_eq!((world.stats().cancels, world.stats().stale_cancels), (0, 1));
+}
+
+fn exited(exit: tools::Exit, head: &[u8], tail: &[u8], dropped: u64) -> Outcome {
+    Outcome::Exited { exit, head: head.into(), tail: tail.into(), dropped }
+}
+
+#[test]
+fn a_command_runs_and_its_output_is_kept_at_both_ends() {
+    let script = vec![Step::Calls(vec![
+        shell(b"cargo test", None),
+        shell(b"env", None),
+        shell(b"nosuch --flag", None),
+        shell(b"kill -9 $$", None),
+    ])];
+    let (answers, _) = run(Settings::calm(60), ALL, script);
+    let log = test_log();
+    let (head, tail) = (Settings::calm(60).tools.shell_head as usize, Settings::calm(60).tools.shell_tail as usize);
+    let dropped = (log.len() - head - tail) as u64;
+    let expected = vec![
+        exited(tools::Exit::Code { code: 101 }, &log[..head], &log[log.len() - tail..], dropped),
+        // The environment is the authority's, and nothing else.
+        exited(tools::Exit::Code { code: 0 }, b"PATH=/usr/bin:/bin\nHOME=/home/agent\n", b"", 0),
+        exited(tools::Exit::Code { code: 127 }, b"sh: nosuch --flag: not found\n", b"", 0),
+        exited(tools::Exit::Signal { signal: 9 }, b"", b"", 0),
+    ];
+    assert_eq!(answers, expected);
+    assert!(log[log.len() - tail..].ends_with(b"test result: FAILED. 99 passed; 1 failed\n"), "the tail tells");
+}
+
+#[test]
+fn a_command_past_its_deadline_is_killed_with_what_it_wrote() {
+    let calm = Settings::calm(61);
+    let settings = Settings { tools: Limits { shell_timeout_max: Duration::from_secs(5), ..calm.tools }, ..calm };
+    // Asked for an hour, the command gets the tools' most: five seconds of
+    // the six hundred it would take, and so none of its output yet.
+    let script = vec![Step::Calls(vec![shell(b"sleep 600", Some(Duration::from_secs(3600)))])];
+    let (answers, world) = run(settings, ALL, script);
+    assert_eq!(answers, vec![exited(tools::Exit::TimedOut, b"", b"", 0)]);
+    assert!(world.now() < Time::ZERO.saturating_add(Duration::from_secs(6)), "killed at its deadline");
+    assert_eq!(world.checkout().content(b"work/temper/slept"), None, "nor its changes");
+    // A command asking for less gets less, and the call's own deadline holds.
+    let hurried = Settings { call_timeout: Duration::from_secs(1), ..calm };
+    let (answers, world) = run(hurried, ALL, vec![Step::Calls(vec![shell(b"sleep 600", None)])]);
+    assert_eq!(answers, vec![exited(tools::Exit::TimedOut, b"", b"", 0)]);
+    assert!(world.now() < Time::ZERO.saturating_add(Duration::from_secs(2)), "killed at the call's deadline");
+}
+
+#[test]
+fn a_command_that_changes_a_file_its_llm_read_makes_the_next_write_stale() {
+    let script = vec![
+        Step::Calls(vec![read(b"src/lib.rs")]),
+        Step::Calls(vec![shell(b"cargo fmt", None)]),
+        Step::Calls(vec![write(b"src/lib.rs", b"mine\n"), edit(b"src/lib.rs", b"fn one", b"fn uno", false)]),
+        Step::Calls(vec![read(b"src/lib.rs")]),
+        Step::Calls(vec![edit(b"src/lib.rs", b"fn one", b"fn uno", false)]),
+    ];
+    let (answers, world) = run(Settings::calm(62), ALL, script);
+    let expected = vec![
+        read_of(LIB, 0, 3, 3),
+        exited(tools::Exit::Code { code: 0 }, b"", b"", 0),
+        Outcome::Stale,
+        Outcome::Stale,
+        read_of(FORMATTED, 0, 5, 5),
+        Outcome::Edited { replaced: 1 },
+    ];
+    assert_eq!(answers, expected);
+    let uno = b"pub fn uno() {}\n\npub fn two() {}\n\npub fn three() {}\n";
+    assert_eq!(world.checkout().content(b"work/temper/src/lib.rs"), Some(&uno[..]));
+}
+
+#[test]
+fn a_command_writes_only_the_repositories_its_kit_may() {
+    let script = vec![Step::Calls(vec![shell(b"vendor update", None)])];
+    let (answers, world) = run(Settings::calm(63), ALL, script);
+    assert_eq!(answers, vec![exited(tools::Exit::Code { code: 0 }, b"updated\n", b"", 0)]);
+    let checkout = world.checkout();
+    assert_eq!(checkout.content(b"work/temper/vendor/lib/lib.rs"), Some(&b"// vendored\n"[..]), "read-only");
+    assert_eq!(checkout.content(b"work/temper/src/new.rs"), Some(&b"new\n"[..]));
+
+    let (answers, world) = run(Settings::calm(64), MODIFY, vec![Step::Calls(vec![shell(b"cargo fmt", None)])]);
+    assert_eq!((answers, world.stats().ops), (vec![Outcome::NotGranted], 0));
 }

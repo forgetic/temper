@@ -1,7 +1,8 @@
 //! A fake checkout: directories, files, symbolic links and special files in
-//! memory, standing in for io's files in the agent's model worlds (the tools'
-//! now, the session's and the whole agent's later). It shares no types with
-//! the model: a world translates between them, as a protocol layer would.
+//! memory, and scripted commands that run in it, standing in for io's files
+//! and processes in the agent's model worlds (the tools' now, the session's
+//! and the whole agent's later). It shares no types with the model: a world
+//! translates between them, as a protocol layer would.
 //!
 //! Paths are absolute, as bytes without the leading slash (`work/temper/src`;
 //! the root is empty). The operations io offers the model resolve a path
@@ -12,6 +13,7 @@
 //! gets a new inode.
 
 use std::collections::{BTreeMap, VecDeque};
+use std::time::Duration;
 
 /// The most symbolic links one resolution follows, as Linux does.
 const LINKS: u32 = 40;
@@ -24,6 +26,34 @@ pub struct Checkout {
     roots: BTreeMap<u64, Vec<u8>>,
     /// The last version given to a file.
     versions: u64,
+    /// What each scripted command does.
+    programs: BTreeMap<Vec<u8>, Program>,
+}
+
+/// What a scripted command does: how long it runs, what it writes, how it
+/// ends, and the files it changes as it goes, by absolute path: written with
+/// their new content, or removed.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Program {
+    pub duration: Duration,
+    pub output: Vec<u8>,
+    pub exit: Exit,
+    pub changes: Vec<(Vec<u8>, Option<Vec<u8>>)>,
+}
+
+/// How a command ends.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Exit {
+    Code(u8),
+    Signal(u8),
+}
+
+/// A command started: what it will do, and the roots it sees, by path, with
+/// whether it may change files beneath them.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Process {
+    pub program: Program,
+    roots: Vec<(Vec<u8>, bool)>,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -111,6 +141,69 @@ impl Checkout {
     #[must_use]
     pub fn root_path(&self, root: u64) -> &[u8] {
         self.roots.get(&root).expect("a root the checkout named")
+    }
+
+    /// Scripts `command`: from now on it does what `program` says.
+    pub fn program(&mut self, command: &[u8], program: Program) {
+        self.programs.insert(command.to_vec(), program);
+    }
+
+    /// Starts `command` with the shell in the directory at `cwd` beneath
+    /// `root`, with the environment `env` and nothing else, able to change
+    /// files only where the deepest of `roots` that holds them is writable.
+    /// `env` prints the environment; a command never scripted is not found.
+    pub fn spawn(
+        &self,
+        root: u64,
+        cwd: &[u8],
+        command: &[u8],
+        env: &[(Vec<u8>, Vec<u8>)],
+        roots: &[(u64, bool)],
+    ) -> Result<Process, Failure> {
+        let (at, _) = self.resolve(root, cwd, Resolve::Follow)?;
+        match self.nodes.get(&at) {
+            None => return Err(Failure::Missing),
+            Some(Node::Directory) => {}
+            Some(Node::File { .. } | Node::Special) => return Err(Failure::NotDirectory),
+            Some(Node::Link { .. }) => unreachable!("links are followed"),
+        }
+        let program = if command == b"env" {
+            let mut output = Vec::new();
+            for (name, value) in env {
+                output.extend_from_slice(&[&name[..], b"=", value, b"\n"].concat());
+            }
+            Program { duration: Duration::from_millis(1), output, exit: Exit::Code(0), changes: Vec::new() }
+        } else if let Some(program) = self.programs.get(command) {
+            program.clone()
+        } else {
+            let output = [b"sh: ", command, b": not found\n"].concat();
+            Program { duration: Duration::from_millis(1), output, exit: Exit::Code(127), changes: Vec::new() }
+        };
+        let roots = roots.iter().map(|(root, writable)| (self.root_path(*root).to_vec(), *writable)).collect();
+        Ok(Process { program, roots })
+    }
+
+    /// The changes `process` made as it ran: those where the deepest root
+    /// that holds them is writable. Changes elsewhere fail, as on a read-only
+    /// file system.
+    pub fn finish(&mut self, process: &Process) {
+        for (path, content) in &process.program.changes {
+            let deepest = process
+                .roots
+                .iter()
+                .filter(|(root, _)| {
+                    root.is_empty()
+                        || path.strip_prefix(root.as_slice()).is_some_and(|rest| rest.first() == Some(&b'/'))
+                })
+                .max_by_key(|(root, _)| root.len());
+            let Some((_, true)) = deepest else {
+                continue;
+            };
+            match content {
+                Some(content) => drop(self.write(path, content)),
+                None => self.remove(path),
+            }
+        }
     }
 
     // What anything else on the machine does: an outsider changing the

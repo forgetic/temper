@@ -24,6 +24,8 @@
 //! A call or a close to a kit that is not open is the session's bug. A kit is
 //! retired once it is Closed.
 
+use alloc::boxed::Box;
+
 use temper_lib::{Env, Id, Queue, ReplyTo, Set, Slab, Time, Token};
 
 use crate::authority::{self, Authority, Checkout, Located};
@@ -200,7 +202,16 @@ fn admit(kit: &Kit, call: Call, deadline: Time, env: &Env<Limits>) -> Result<Wor
             }
             Work::Edit { place: located.place, edit: Edit { old, new, all } }
         }
-        Call::Shell { .. } => return Err(Outcome::Unsupported),
+        Call::Shell { command, timeout } => {
+            // Commands run in the working directory, which must be in the
+            // checkout.
+            let here = Path { absolute: false, parts: Box::new([]) };
+            let located = authority::locate(&kit.checkout, &here, limits.path_bytes)?;
+            let timeout = timeout.unwrap_or(limits.shell_timeout).min(limits.shell_timeout_max);
+            let env = kit.checkout.env.clone();
+            let roots = kit.checkout.roots.clone();
+            Work::Shell { cwd: located.place, command, timeout, env, roots }
+        }
     };
     if deadline <= env.now {
         return Err(Outcome::TimedOut);

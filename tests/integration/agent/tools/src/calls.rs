@@ -1,6 +1,7 @@
 //! Calls as the protocol layer would decode them from what an LLM wrote.
 
 use temper_agent_model_tools::Call;
+use temper_lib::Duration;
 
 use crate::translate::path;
 
@@ -33,4 +34,10 @@ pub fn write(at: &[u8], content: &[u8]) -> Call {
 #[must_use]
 pub fn edit(at: &[u8], old: &[u8], new: &[u8], all: bool) -> Call {
     Call::Edit { path: path(at), old: old.into(), new: new.into(), all }
+}
+
+/// Runs `command` with the shell, for at most `timeout` if given.
+#[must_use]
+pub fn shell(command: &[u8], timeout: Option<Duration>) -> Call {
+    Call::Shell { command: command.into(), timeout }
 }

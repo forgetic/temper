@@ -67,6 +67,11 @@ pub enum Outcome {
     Written { created: bool },
     /// The edit `replaced` that many occurrences.
     Edited { replaced: u32 },
+    /// The command ended so, having written its output (standard output and
+    /// standard error together, as they came): the first bytes of it in
+    /// `head`, the last in `tail`, and `dropped` bytes between them that were
+    /// not kept.
+    Exited { exit: Exit, head: Box<[u8]>, tail: Box<[u8]>, dropped: u64 },
 
     /// The kit was not granted the call's family of tools.
     NotGranted,
@@ -115,7 +120,7 @@ pub enum Outcome {
     Cancelled,
     /// The kit has as many calls running as it may.
     Busy,
-    /// The tools do not run this call yet: search and shell come next.
+    /// The tools do not run this call yet: search comes next.
     Unsupported,
 }
 
@@ -134,6 +139,18 @@ pub enum Kind {
     Link,
     /// A device, a socket, a pipe.
     Other,
+}
+
+/// How a command ended.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Exit {
+    /// It exited with `code`.
+    Code { code: u8 },
+    /// A signal killed it.
+    Signal { signal: u8 },
+    /// It ran past its deadline, and io killed it, with every process it
+    /// started.
+    TimedOut,
 }
 
 /// Why io failed, as the protocol layer classifies the error.

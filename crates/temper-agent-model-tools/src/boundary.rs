@@ -24,8 +24,8 @@ use alloc::boxed::Box;
 
 use temper_lib::{ReplyTo, Time, Token};
 
-use crate::authority::Authority;
-use crate::call::{Call, Entry, Fault, Outcome};
+use crate::authority::{Authority, Var};
+use crate::call::{Call, Entry, Exit, Fault, Outcome};
 use crate::path::Place;
 
 /// session -> tools
@@ -99,6 +99,27 @@ pub enum Op {
     /// Ends in `Stored`, `Conflict`, `Linked`, `NotFile`, `NotDirectory` or a
     /// common terminal.
     Store { at: Place, content: Box<[u8]>, expect: Expect },
+    /// Run `command` with the shell, in the directory at `cwd`, as a process
+    /// tree contained by io. It sees the repositories in `roots`, and may
+    /// write only those marked writable: io mounts the rest read-only, a
+    /// repository mounted inside another over it, so that what a process may
+    /// write beneath a root is decided by the deepest root that holds it. Its
+    /// environment is `env` and nothing else. Its output,
+    /// standard output and standard error together, is captured: the first
+    /// `head` bytes, the last `tail`, and a count of those dropped between.
+    /// At the deadline io kills the whole tree and ends it as `Exited`, timed
+    /// out, with what it captured. Ends in `Exited`, `Missing` or
+    /// `NotDirectory` (for `cwd`), `Escapes`, `Failed` (it could not start),
+    /// or `Cancelled` (killed by a cancel).
+    Spawn { cwd: Place, command: Box<[u8]>, env: Box<[Var]>, roots: Box<[Root]>, head: u32, tail: u32 },
+}
+
+/// A repository a command sees: io's name for its root, and whether the
+/// command may write in it.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Root {
+    pub root: Token,
+    pub writable: bool,
 }
 
 /// What a `Store` expects to replace.
@@ -124,6 +145,8 @@ pub enum Done {
     Stored { version: Version },
     /// Store: the file is not as expected. It is at `now`, or absent.
     Conflict { now: Option<Version> },
+    /// Spawn: the command ended so, with the output captured.
+    Exited { exit: Exit, head: Box<[u8]>, tail: Box<[u8]>, dropped: u64 },
     /// Load, Scan: nothing is at the place.
     Missing,
     /// Load, Store: what is at the place is not a regular file.

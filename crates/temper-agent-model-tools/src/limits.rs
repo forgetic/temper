@@ -1,6 +1,7 @@
 use temper_lib::{Duration, Id, List, Map, Set, Slab};
 
-use crate::authority::Mount;
+use crate::authority::{Mount, Var};
+use crate::boundary::Root;
 use crate::job::{self, Job};
 use crate::kit::Kit;
 use crate::knowledge::Seen;
@@ -32,6 +33,16 @@ pub struct Limits {
     pub match_lines: u32,
     /// How long a file operation may take, within its call's deadline.
     pub file_timeout: Duration,
+    /// The most an authority's environment may hold: its names and values,
+    /// with a byte for each `=`.
+    pub env_bytes: u32,
+    /// How long a command may run if its call does not say, and the longest
+    /// it may ask for; both within the call's deadline.
+    pub shell_timeout: Duration,
+    pub shell_timeout_max: Duration,
+    /// How much of a command's output is kept: its first bytes, and its last.
+    pub shell_head: u32,
+    pub shell_tail: u32,
 }
 
 /// The most memory the model holds under `limits`, in bytes (6.4), or `None`
@@ -69,5 +80,9 @@ fn authority(limits: &Limits) -> Option<u64> {
     let cwd = List::<Name>::worst_case(cwd_names)?.checked_add(path_bytes)?;
     let mount_bytes = u64::from(limits.repos).checked_mul(path_bytes)?;
     let mounts = List::<Mount>::worst_case(limits.repos)?.checked_add(mount_bytes)?;
-    cwd.checked_add(mounts)
+    let roots = List::<Root>::worst_case(limits.repos)?;
+    // A variable costs at least two bytes: a name and its `=`.
+    let vars = limits.env_bytes / 2;
+    let env = List::<Var>::worst_case(vars)?.checked_add(u64::from(limits.env_bytes))?;
+    cwd.checked_add(mounts)?.checked_add(roots)?.checked_add(env)
 }
