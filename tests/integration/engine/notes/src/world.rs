@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use temper_engine_model_notes::{
-    self as notes, Author, Change, Event, Fact, Fetched, Limits, Listed, Model, Noted, Page, Recall, Reference,
+    self as notes, Author, Change, Event, Fact, Fetched, Item, Limits, Listed, Model, Noted, Page, Recall, Reference,
     Refusal, Request, Scope, Scopes, Wrote,
 };
 use temper_lib::{Duration, ReplyTo, Rng, Time, Token};
@@ -28,12 +28,14 @@ pub const SCOPES: [Scope; 5] = [
     Scope::Goal { repository: 1, number: 9 },
 ];
 
-/// The runs whose notes are asked for.
-pub const RUNS: [Scopes; 4] = [
+/// The runs whose notes are asked for: one of them under a goal in the
+/// other repository.
+pub const RUNS: [Scopes; 5] = [
     Scopes { repository: 0, goal: None },
-    Scopes { repository: 0, goal: Some(7) },
+    Scopes { repository: 0, goal: Some(Item { repository: 0, number: 7 }) },
     Scopes { repository: 1, goal: None },
-    Scopes { repository: 1, goal: Some(9) },
+    Scopes { repository: 1, goal: Some(Item { repository: 1, number: 9 }) },
+    Scopes { repository: 1, goal: Some(Item { repository: 0, number: 7 }) },
 ];
 
 /// What pages may be called: few, so that a page deleted is made again, and

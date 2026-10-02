@@ -4,8 +4,8 @@
 //! the way.
 
 use temper_engine_model_notes::{
-    Author, Change, Event, Fetched, Limits, Listed, Model, Page, Recall, Reference, Request, Scope, Scopes, Wrote,
-    max_out, resume, step, worst_case,
+    Author, Change, Event, Fetched, Item, Limits, Listed, Model, Page, Recall, Reference, Request, Scope, Scopes,
+    Wrote, max_out, resume, step, worst_case,
 };
 use temper_lib::{Env, Queue, ReplyTo, Time, Token};
 use temper_world::heap::{self, Meter};
@@ -230,7 +230,11 @@ fn fill(limits: Limits) {
 fn paths(limits: Limits) {
     let mut notes = Measured::new(limits);
     let reply_to = notes.reply();
-    let asked = notes.step(Event::Index { reply_to, scopes: Scopes { repository: 0, goal: Some(1) }, budget: 64 });
+    let asked = notes.step(Event::Index {
+        reply_to,
+        scopes: Scopes { repository: 0, goal: Some(Item { repository: 0, number: 1 }) },
+        budget: 64,
+    });
     for list in asked {
         let Asked::List(owner) = list else { panic!("listed") };
         let asked = notes.step(Event::Listed { owner, pages: None });

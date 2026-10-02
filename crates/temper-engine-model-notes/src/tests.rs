@@ -5,8 +5,8 @@ use alloc::boxed::Box;
 use temper_lib::{Env, List, Queue, ReplyTo, Time, Token};
 
 use crate::{
-    Author, Change, Entry, Event, Fact, Fetched, Limits, Line, Listed, Model, Noted, Page, Recall, Reference, Refusal,
-    Request, Scope, Scopes, Wrote, max_out, resume, step, worst_case,
+    Author, Change, Entry, Event, Fact, Fetched, Item, Limits, Line, Listed, Model, Noted, Page, Recall, Reference,
+    Refusal, Request, Scope, Scopes, Wrote, max_out, resume, step, worst_case,
 };
 
 const LIMITS: Limits = Limits {
@@ -28,7 +28,7 @@ const GOAL: Scope = Scope::Goal { repository: 0, number: 7 };
 
 /// A run of the first repository, under no goal, and one under goal 7.
 const RUN: Scopes = Scopes { repository: 0, goal: None };
-const GOAL_RUN: Scopes = Scopes { repository: 0, goal: Some(7) };
+const GOAL_RUN: Scopes = Scopes { repository: 0, goal: Some(Item { repository: 0, number: 7 }) };
 
 const ALICE: Author = Author::Person(1);
 
@@ -236,6 +236,18 @@ fn a_goal_s_notes_come_first() {
     assert!(h.pass(owner(&asked), GOAL, &[b"goal"]).is_empty());
     let [Request::Indexed { lines, .. }] = &*h.resume() else { panic!("answered") };
     assert_eq!(**lines, [line(GOAL, b"goal"), line(REPO, b"repo"), line(DEPLOYMENT, b"deploy")]);
+}
+
+#[test]
+fn a_goal_in_another_repository_is_a_scope_of_that_repository() {
+    let mut h = read(&[b"repo"], &[b"deploy"]);
+    let goal = Scope::Goal { repository: 1, number: 9 };
+    let away = Scopes { repository: 0, goal: Some(Item { repository: 1, number: 9 }) };
+    let asked = h.step(Event::Index { reply_to: reply(2), scopes: away, budget: 1000 });
+    assert_eq!(listing(&asked, goal), owner(&asked));
+    assert!(h.pass(owner(&asked), goal, &[b"goal"]).is_empty());
+    let [Request::Indexed { lines, .. }] = &*h.resume() else { panic!("answered") };
+    assert_eq!(**lines, [line(goal, b"goal"), line(REPO, b"repo"), line(DEPLOYMENT, b"deploy")]);
 }
 
 #[test]

@@ -39,11 +39,19 @@ pub enum Scope {
 }
 
 /// The scopes of a run's notes: the deployment's, its repository's, and its
-/// goal's if it has one, in its repository.
+/// goal's if it has one, in the goal's repository, which may be another.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Scopes {
     pub repository: u32,
-    pub goal: Option<u64>,
+    pub goal: Option<Item>,
+}
+
+/// An issue or pull request of one of the deployment's repositories: the
+/// repository's index in the deployment's list, and the item's number there.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct Item {
+    pub repository: u32,
+    pub number: u64,
 }
 
 /// Who wrote an entry: a person, or a run and the item it ran for.

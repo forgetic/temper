@@ -529,8 +529,8 @@ fn refuse(model: &mut Model, reply_to: ReplyTo, refusal: Refusal, out: &mut Queu
 fn order(scopes: Scopes) -> Order {
     let repository = Scope::Repository(scopes.repository);
     match scopes.goal {
-        Some(number) => {
-            let goal = Scope::Goal { repository: scopes.repository, number };
+        Some(goal) => {
+            let goal = Scope::Goal { repository: goal.repository, number: goal.number };
             Order { scopes: [goal, repository, Scope::Deployment], count: 3 }
         }
         None => Order { scopes: [repository, Scope::Deployment, Scope::Deployment], count: 2 },

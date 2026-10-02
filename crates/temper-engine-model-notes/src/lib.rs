@@ -44,7 +44,7 @@ mod model;
 mod tests;
 
 pub use boundary::{
-    Author, Change, Entry, Event, Fetched, Line, Listed, Noted, Page, Recall, Reference, Refusal, Request, Scope,
+    Author, Change, Entry, Event, Fetched, Item, Line, Listed, Noted, Page, Recall, Reference, Refusal, Request, Scope,
     Scopes, Wrote,
 };
 pub use facts::Fact;

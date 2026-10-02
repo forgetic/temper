@@ -46,8 +46,8 @@ fn once_people_stop_the_index_holds_what_the_wiki_holds() {
         for run in RUNS {
             let lines = world.index(run, ITERATIONS);
             let mut scopes = vec![Scope::Repository(run.repository), Scope::Deployment];
-            if let Some(number) = run.goal {
-                scopes.push(Scope::Goal { repository: run.repository, number });
+            if let Some(goal) = run.goal {
+                scopes.push(Scope::Goal { repository: goal.repository, number: goal.number });
             }
             for scope in scopes {
                 let indexed: BTreeSet<Vec<u8>> =
