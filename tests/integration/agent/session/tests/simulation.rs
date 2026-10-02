@@ -474,6 +474,7 @@ fn random_worlds_settle_with_every_session_ended() {
     let mut ends = BTreeSet::new();
     let mut stops = BTreeSet::new();
     let (mut stale, mut invalid, mut not_run, mut parallel, mut op_timeouts) = (0, 0, 0, 0, 0);
+    let mut most_runs = 0;
     let mut failures = BTreeSet::new();
     let mut races = [0; 4];
     let mut served = [0; 6];
@@ -484,6 +485,7 @@ fn random_worlds_settle_with_every_session_ended() {
         world.run(ITERATIONS);
         stale += world.stats().stale;
         parallel = parallel.max(world.stats().most_parallel);
+        most_runs = most_runs.max(world.stats().most_runs);
         op_timeouts += world.stats().op_timeouts;
         invalid += world.told().0.invalid_calls;
         not_run += world.stats().not_run;
@@ -545,6 +547,7 @@ fn random_worlds_settle_with_every_session_ended() {
     assert_eq!(stops, ["Done", "Malformed", "Refused", "Truncated"].into_iter().map(String::from).collect());
     assert!(stale > 0, "some continues and closes reached sessions that had ended");
     assert!(parallel > 1, "some reads ran side by side");
+    assert!(most_runs > parallel, "an iteration held more runs, ended ones among them, than a batch");
     assert!(
         served.iter().all(|&count| count > 0),
         "the opener served calls, some withdrawn, some answered all the same, some late, finishes refused and accepted: {served:?}"

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use temper_agent_model_session as agent;
 use temper_agent_model_session::llm::{Answer, Block, Decoded, Descriptor, Endpoint, Failure, Prompt, Returned, Usage};
@@ -216,6 +216,9 @@ pub struct Stats {
     /// The most operations and delegated calls one session had in flight at
     /// once.
     pub most_parallel: u32,
+    /// The most tool runs the sessions held at the end of an iteration,
+    /// before its reclaim point.
+    pub most_runs: u32,
     /// Cancels of calls and of operations that lost their race.
     pub cancels_lost: u32,
     pub op_cancels_lost: u32,
@@ -424,6 +427,11 @@ pub struct World {
     /// operation has had (a call's, for each operation it asks for).
     ops: Ledger<Token, Pending>,
     owners: BTreeSet<Token>,
+    /// The tools of the calls each session's tools started, as they told,
+    /// until their first operation; and whether the call of each operation's
+    /// token writes (an edit loads before it stores).
+    starting: BTreeMap<Token, VecDeque<tools::Tool>>,
+    writing: BTreeMap<Token, bool>,
     /// How many messages of each session's transcript have had their results
     /// counted.
     counted: BTreeMap<Token, usize>,
@@ -475,6 +483,8 @@ impl World {
             roots: BTreeMap::new(),
             ops: Ledger::new("operation"),
             owners: BTreeSet::new(),
+            starting: BTreeMap::new(),
+            writing: BTreeMap::new(),
             counted: BTreeMap::new(),
             cancel_lost: BTreeSet::new(),
             run_cancel_lost: BTreeSet::new(),
@@ -607,14 +617,16 @@ impl World {
             self.provider_request(request);
         }
 
-        // The reclaim point.
-        self.agent.reclaim();
-        self.provider.reclaim();
+        // What the iteration held at its most, before the reclaim point
+        // frees what ended in it.
         assert!(self.agent.sessions() <= self.settings.agent.sessions, "sessions stay within their slots");
         let runs = self.settings.agent.sessions * self.settings.agent.parallel_tools * 2;
         assert!(self.agent.runs() <= runs, "runs stay within two batches a session");
         assert!(self.agent.kits() <= self.settings.agent.sessions, "a kit at most for each session");
         assert!(self.provider.calls() <= self.settings.provider.calls, "calls stay within their slots");
+        self.stats.most_runs = self.stats.most_runs.max(self.agent.runs());
+        self.agent.reclaim();
+        self.provider.reclaim();
     }
 
     /// The agent's requests, carried out the way its opener, its protocol
@@ -871,7 +883,7 @@ impl World {
         let opener = *self.roots.get(&at.raw()).expect("an operation is in a session's repository");
         let session = self.sessions.get(&opener).and_then(|session| session.session);
         let session = session.expect("a session's tools ask io for something once it has opened");
-        let writes = matches!(op, Op::Store { .. } | Op::Spawn { .. });
+        let writes = self.writes(owner, session, &op);
         self.batched(session, writes);
         let mut ends = self.now.saturating_add(self.draw(self.settings.tool));
         let mut work = if self.rng.chance(self.settings.tool_errors) {
@@ -983,6 +995,32 @@ impl World {
         !self.calling.contains_key(&name)
             && self.tools.values().all(|run| run.session != name)
             && self.ops.values().all(|op| op.session != name)
+    }
+
+    /// Whether the call `owner`'s operation `op` is for, of `session`'s tools,
+    /// writes: as the tools told when it started, matched with its first
+    /// operation, so that an edit writes as it loads. Once facts have been
+    /// lost, the start may not have been told: the operation's own effect.
+    fn writes(&mut self, owner: Token, session: Token, op: &Op) -> bool {
+        let stores = matches!(op, Op::Store { .. } | Op::Spawn { .. });
+        if let Some(&writes) = self.writing.get(&owner) {
+            assert!(writes || !stores, "only a call that writes stores or runs a command");
+            return writes;
+        }
+        let told = self.starting.get_mut(&session).and_then(VecDeque::pop_front);
+        let writes = match told {
+            Some(tool) if self.agent.facts_lost() == 0 => match tool {
+                tools::Tool::Write | tools::Tool::Edit | tools::Tool::Shell => true,
+                tools::Tool::Read | tools::Tool::List | tools::Tool::Search => false,
+            },
+            Some(_) | None => {
+                assert!(self.agent.facts_lost() > 0, "a call's first operation follows the fact of its start");
+                stores
+            }
+        };
+        assert!(writes || !stores, "only a call that writes stores or runs a command");
+        self.writing.insert(owner, writes);
+        writes
     }
 
     /// Something starts for `session`, an operation of its tools or a
@@ -1167,6 +1205,9 @@ impl World {
             assert!(self.sessions.contains_key(&opener.raw()), "a kit's fact names an opener that opened");
             if let Some(&known) = self.openers.get(&session) {
                 assert_eq!(known, opener.raw(), "a kit's fact names the opener of its session");
+            }
+            if let tools::Fact::Started { session, tool } = fact {
+                self.starting.entry(session).or_default().push_back(tool);
             }
         }
         let told = &mut self.told;
