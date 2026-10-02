@@ -36,6 +36,9 @@ pub struct Script {
     pub pace: Span,
     /// How long a worker keeps its runs going without contact.
     pub grace: Duration,
+    /// How long a run waits for the answer to its call, as its agent's
+    /// tools bound every wait.
+    pub call: Duration,
 }
 
 /// An assignment as it comes down a channel: the charter as bytes.
@@ -120,6 +123,11 @@ struct Run {
     wait: Wait,
     serial: u64,
     landed: Vec<Landed>,
+    /// Its push in flight, and whether it was refused once already.
+    pushing: Option<(u32, Box<[u8]>, Vec<u8>)>,
+    refused: bool,
+    /// Inbound events that came while it did not wait for one.
+    inbound: u32,
 }
 
 /// What a worker did, counted.
@@ -260,9 +268,11 @@ impl Worker {
             Down::Assign(assigned) => self.assign(assigned, now, mirror, out),
             Down::Inbound { item, attempt, event: _ } => {
                 self.tally.inbound += 1;
-                if let Some(run) = self.runs.get(&(item, attempt)) {
+                if let Some(run) = self.runs.get_mut(&(item, attempt)) {
                     if run.wait == Wait::Inbound {
                         self.wake(item, attempt, now, out);
+                    } else {
+                        run.inbound += 1;
                     }
                 } else {
                     self.tally.bounced += 1;
@@ -311,7 +321,16 @@ impl Worker {
         let charter: Charter = codec::charter_of(&charter).expect("a charter decodes as it was encoded");
         let acts = script::acts(item, &charter, snapshot.as_deref(), mirror);
         self.workstreams.insert(workspace.key.clone());
-        let run = Run { workspace, acts: acts.into(), wait: Wait::Act, serial: 0, landed: Vec::new() };
+        let run = Run {
+            workspace,
+            acts: acts.into(),
+            wait: Wait::Act,
+            serial: 0,
+            landed: Vec::new(),
+            pushing: None,
+            refused: false,
+            inbound: 0,
+        };
         self.runs.insert(key, run);
         self.wake(item, attempt, now, out);
     }
@@ -332,8 +351,12 @@ impl Worker {
     pub fn act(&mut self, item: Item, attempt: u64, serial: u64, now: Time, out: &mut Vec<Effect>) {
         let connected = self.channel.is_some();
         let Some(run) = self.runs.get_mut(&(item, attempt)) else { return };
-        if run.serial != serial || !(run.wait == Wait::Act || run.wait == Wait::Inbound) {
+        if run.serial != serial || !(run.wait == Wait::Act || run.wait == Wait::Inbound || run.wait.is_call()) {
             return;
+        }
+        if run.wait.is_call() {
+            // Its call was not answered in time: it goes on without.
+            self.tally.unserved += 1;
         }
         let Some(act) = run.acts.pop_front() else { unreachable!("a script ends with its answer") };
         match act {
@@ -352,8 +375,12 @@ impl Worker {
                 self.calls += 1;
                 let call = Token::new(self.calls);
                 run.wait = Wait::Call(call);
+                self.serials += 1;
+                run.serial = self.serials;
                 self.tally.calls += 1;
                 out.push(Effect::Up(Up::Relay { item, attempt, call, body }));
+                let at = now.saturating_add(self.script.call);
+                out.push(Effect::Wake { at, item, attempt, serial: run.serial });
             }
             Act::Push { repository, content } => {
                 let checkout = run.workspace.repositories.iter().find(|checkout| checkout.repository == repository);
@@ -361,10 +388,16 @@ impl Worker {
                 let Some(branch) = checkout.push.clone() else { unreachable!("a change's run may push") };
                 let start = checkout.start.clone();
                 run.wait = Wait::Push;
+                run.pushing = Some((repository, branch.clone(), content.clone()));
                 self.tally.pushes += 1;
                 out.push(Effect::Push { item, attempt, repository, start, branch, content });
             }
             Act::Await { within } => {
+                if run.inbound > 0 {
+                    run.inbound -= 1;
+                    self.wake(item, attempt, now, out);
+                    return;
+                }
                 self.serials += 1;
                 run.serial = self.serials;
                 run.wait = Wait::Inbound;
@@ -399,6 +432,17 @@ impl Worker {
         }
         if let Some(landed) = landed {
             run.landed.push(landed);
+        } else if !run.refused
+            && let Some((repository, branch, content)) = run.pushing.take()
+        {
+            // Refused: the branch moved since the run started, by a push
+            // of an earlier attempt that landed late, say. The run is told,
+            // works again from where the branch is, and pushes once more.
+            run.refused = true;
+            let start = Start::Branch { branch: branch.clone() };
+            self.tally.pushes += 1;
+            out.push(Effect::Push { item, attempt, repository, start, branch, content });
+            return;
         } else {
             // Rejected: the run fails, as a push that does not land.
             run.acts.clear();

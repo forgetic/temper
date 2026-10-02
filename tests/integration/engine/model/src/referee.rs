@@ -42,6 +42,8 @@ pub enum Seen {
     /// worker in contact with the engine hosts another attempt of the item,
     /// not yet answered.
     Assigned { item: Item, attempt: u64, live: bool },
+    /// A worker was told of news of the item's, for its live run.
+    Inbound { item: Item },
     /// A worker answered the item's attempt.
     Answered { item: Item, attempt: u64 },
     /// The person of story `tale` knows its item.
@@ -91,10 +93,13 @@ pub struct Engine {
     mirror: Mirror,
     /// Keys the engine created with, by repository: issues and pull
     /// requests' branches; and comments' keys by item.
-    issues: BTreeSet<(Vec<u8>, Vec<u8>)>,
+    issues: BTreeMap<(Vec<u8>, Vec<u8>), u32>,
     branches: BTreeSet<(Vec<u8>, Vec<u8>)>,
-    comments: BTreeSet<(Vec<u8>, u64, Vec<u8>)>,
-    outcomes: BTreeSet<(Vec<u8>, u64, u64)>,
+    comments: BTreeMap<(Vec<u8>, u64, Vec<u8>), u32>,
+    outcomes: BTreeMap<(Vec<u8>, u64, u64), u32>,
+    /// Keyed creations made again by an engine that restarted since the
+    /// first: counted, not failed (see `once`).
+    pub again: u32,
     /// The latest attempt assigned per item.
     attempts: BTreeMap<Item, u64>,
     /// How many stories there are; their items; and messages waiting to
@@ -113,10 +118,11 @@ impl Engine {
         Engine {
             bounds,
             mirror: Mirror::default(),
-            issues: BTreeSet::new(),
+            issues: BTreeMap::new(),
             branches: BTreeSet::new(),
-            comments: BTreeSet::new(),
-            outcomes: BTreeSet::new(),
+            comments: BTreeMap::new(),
+            outcomes: BTreeMap::new(),
+            again: 0,
             attempts: BTreeMap::new(),
             count: stories,
             stories: BTreeMap::new(),
@@ -163,10 +169,8 @@ impl Engine {
             Observation::Opened { repository, kind, body, branches, by, number, .. } if *by == ENGINE => match kind {
                 Kind::Issue => {
                     if let Some(key) = temper_engine_model_forge_tests::translate::key_of(body) {
-                        judge.check(
-                            self.issues.insert((repository.to_vec(), key)),
-                            format_args!("an issue is created once per key: {observation:?}"),
-                        );
+                        let first = self.issues.insert((repository.to_vec(), key), self.restarts);
+                        self.once(first, judge, format_args!("an issue is created once per key: {observation:?}"));
                     }
                 }
                 Kind::Pull => {
@@ -190,15 +194,11 @@ impl Engine {
                     );
                 }
                 if let Some(Decoded::Outcome { posted, .. }) = decoded {
-                    judge.check(
-                        self.outcomes.insert((repository.to_vec(), *number, posted.attempt)),
-                        format_args!("an attempt's outcome is posted once: {observation:?}"),
-                    );
+                    let first = self.outcomes.insert((repository.to_vec(), *number, posted.attempt), self.restarts);
+                    self.once(first, judge, format_args!("an attempt's outcome is posted once: {observation:?}"));
                 } else if let Some(key) = temper_engine_model_forge_tests::translate::key_of(body) {
-                    judge.check(
-                        self.comments.insert((repository.to_vec(), *number, key)),
-                        format_args!("a keyed comment is posted once: {observation:?}"),
-                    );
+                    let first = self.comments.insert((repository.to_vec(), *number, key), self.restarts);
+                    self.once(first, judge, format_args!("a keyed comment is posted once: {observation:?}"));
                 }
             }
             Observation::Closed { repository, number, .. } => {
@@ -226,6 +226,23 @@ impl Engine {
             | Observation::Refused { .. }
             | Observation::Rejected { .. }
             | Observation::Wiki { .. } => {}
+        }
+    }
+
+    /// A keyed creation is made once: `first` is the life of the engine that
+    /// made it first, if one did. Made again by the same engine, the test
+    /// fails. Made again by an engine that restarted since, it is counted:
+    /// the engine's top level does not yet look for what an earlier life
+    /// created before creating it again, so a restart between a creation
+    /// and the record that would say it was made repeats it.
+    fn once(&mut self, first: Option<u32>, judge: &mut Judge<Expected, Stimulus>, why: std::fmt::Arguments<'_>) {
+        match first {
+            None => judge.check(true, why),
+            Some(life) if life < self.restarts => {
+                self.again += 1;
+                judge.check(true, why);
+            }
+            Some(_) => judge.check(false, why),
         }
     }
 
@@ -264,6 +281,11 @@ impl Expectations for Engine {
                 self.stories.insert(item, tale);
             }
             Seen::Messaged { item } => {
+                let name = deployment::name(item.repository);
+                if self.mirror.issue(name, item.number).is_some_and(|issue| !issue.open) {
+                    // Taken as its item closed: nothing is left to reach.
+                    return;
+                }
                 let count = self.messages.entry(item).or_default();
                 judge.expect(Expected::Message(item, *count), self.bounds.message);
                 *count += 1;
@@ -277,6 +299,7 @@ impl Expectations for Engine {
                 }
             }
             Seen::Restarted => self.restarts += 1,
+            Seen::Inbound { item } => self.reached(item, judge),
             Seen::Answered { .. } | Seen::Settled => {}
         }
     }

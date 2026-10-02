@@ -8,9 +8,9 @@
 //! simply looked at again. A reviewer approves every pull request the
 //! engine opens once CI passed on its exact head.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-use temper_engine_model::notes::{Author, Page};
+use temper_engine_model::notes::Author;
 use temper_engine_model::{Ask, Item, Refusal, Reply};
 use temper_forge_model::api::{self as forge, Kind, Verdict, Write};
 
@@ -38,11 +38,24 @@ pub enum Story {
 
 pub const STORIES: [Story; 4] = [Story::Hello, Story::Fix, Story::Chat, Story::Notes];
 
+/// Who asks the engine: a story's person, or the caretaker, who releases
+/// a held item.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Asker {
+    Tale(usize),
+    Caretaker(Item),
+}
+
+/// The person who releases items held for failures or stalls, up to
+/// `RELEASES` times each.
+pub const CARETAKER: u64 = deployment::PEOPLE[0];
+pub const RELEASES: u32 = 3;
+
 /// Something a person does.
 #[derive(Debug)]
 pub enum Act {
     /// Through the engine's web.
-    Ask { tale: usize, person: u64, ask: Ask },
+    Ask { asker: Asker, person: u64, ask: Ask },
     /// On the forge, as a forge user: `tale` is the story's, if any.
     Forge { tale: Option<usize>, user: u64, repository: usize, op: forge::Op },
 }
@@ -70,6 +83,7 @@ pub struct Tally {
     pub lost: u32,
     pub calls: u32,
     pub reviews: u32,
+    pub releases: u32,
 }
 
 #[derive(Debug)]
@@ -77,6 +91,9 @@ pub struct People {
     tales: Vec<Tale>,
     /// Reviews in flight, by repository, pull request and head.
     reviewing: BTreeSet<(usize, u64, u64)>,
+    /// Releases asked per item, and those in flight.
+    released: BTreeMap<Item, u32>,
+    releasing: BTreeSet<Item>,
     tally: Tally,
 }
 
@@ -96,7 +113,13 @@ impl People {
                 corrected: false,
             })
             .collect();
-        People { tales, reviewing: BTreeSet::new(), tally: Tally::default() }
+        People {
+            tales,
+            reviewing: BTreeSet::new(),
+            released: BTreeMap::new(),
+            releasing: BTreeSet::new(),
+            tally: Tally::default(),
+        }
     }
 
     #[must_use]
@@ -120,6 +143,7 @@ impl People {
     #[must_use]
     pub fn is_done(&self, mirror: &Mirror) -> bool {
         self.reviewing.is_empty()
+            && self.releasing.is_empty()
             && self.tales.iter().all(|tale| {
                 !tale.pending
                     && tale.item.is_some_and(|item| {
@@ -141,6 +165,39 @@ impl People {
             }
         }
         self.review(mirror, out);
+        self.release(mirror, out);
+    }
+
+    /// The caretaker releases what is held for failures or a stall.
+    fn release(&mut self, mirror: &Mirror, out: &mut Vec<Act>) {
+        use temper_engine_model::work::{Hold, Phase};
+        for ((repository, number), issue) in &mirror.issues {
+            let Some(index) = deployment::index(repository) else { continue };
+            let item = Item { repository: index, number: *number };
+            if !issue.open || self.releasing.contains(&item) {
+                continue;
+            }
+            let Some(record) = mirror.record(repository, *number) else { continue };
+            let releasable = match record.lifecycle.phase {
+                Phase::Held { why, .. } => match why {
+                    Hold::Failures(_) | Hold::Plan { .. } | Hold::Stopped => true,
+                    Hold::Acceptance | Hold::Writes | Hold::Record => false,
+                },
+                Phase::Waiting
+                | Phase::Parked
+                | Phase::Retrying(_)
+                | Phase::Claimed
+                | Phase::Applying { .. }
+                | Phase::Done => false,
+            };
+            let count = self.released.entry(item).or_default();
+            if !releasable || *count >= RELEASES {
+                continue;
+            }
+            *count += 1;
+            self.releasing.insert(item);
+            out.push(Act::Ask { asker: Asker::Caretaker(item), person: CARETAKER, ask: Ask::Release { item } });
+        }
     }
 
     /// A story's item, found on the forge by what its person made there.
@@ -149,10 +206,12 @@ impl People {
         if tale.item.is_some() || tale.story != Story::Fix {
             return;
         }
+        // The first it made: a call that timed out may have made one too.
         for ((repository, number), issue) in &mirror.issues {
             if issue.by == tale.person && issue.body == tale.key {
                 let repository = deployment::index(repository).expect("one of the deployment's");
                 tale.item = Some(Item { repository, number: *number });
+                return;
             }
         }
     }
@@ -182,7 +241,7 @@ impl People {
                         title: title.into(),
                         message: b"hi".as_slice().into(),
                     };
-                    Act::Ask { tale: at, person, ask }
+                    Act::Ask { asker: Asker::Tale(at), person, ask }
                 }
             });
         };
@@ -192,7 +251,16 @@ impl People {
             return None;
         }
         match tale.story {
-            Story::Fix => None,
+            // An issue it handed in twice, its first call made though it
+            // failed: it closes the other.
+            Story::Fix => mirror.issues.iter().find_map(|((repository, number), issue)| {
+                let twice = issue.by == person && issue.body == tale.key && issue.open && *number != item.number;
+                twice.then(|| {
+                    let repository = REPOSITORIES.iter().position(|name| **name == **repository).expect("ours");
+                    let op = forge::Op::Write(Write::Close { number: *number });
+                    Act::Forge { tale: Some(at), user: person, repository, op }
+                })
+            }),
             Story::Hello => {
                 let replied = !mirror.outcomes(name, item.number).is_empty();
                 (replied && tale.sent == 0).then(|| self.message(at, item, b"thanks"))
@@ -208,17 +276,24 @@ impl People {
                 due.then(|| self.message(at, item, b"more"))
             }
             Story::Notes => {
-                let page = mirror.pages.get(&(name.to_vec(), NOTE.to_vec()))?;
-                if !tale.corrected {
+                // Corrects the note once it is in the wiki; and asks the
+                // session again each time it has answered, to note it while
+                // it is not there, and what it learned once it is.
+                let replies = u32::try_from(mirror.outcomes(name, item.number).len()).expect("few");
+                let page = mirror.pages.get(&(name.to_vec(), NOTE.to_vec()));
+                if let Some(page) = page
+                    && !tale.corrected
+                {
                     let mut note = codec::page_of(page)?;
                     note.body = b"cache it, and clean it weekly".as_slice().into();
                     note.author = Author::Person(person);
-                    let content = codec::page(&Page { ..note }).into_boxed_slice();
+                    let content = codec::page(&note).into_boxed_slice();
                     let op = forge::Op::Write(Write::PutPage { name: NOTE.into(), content });
                     let repository = usize::try_from(item.repository).expect("few");
                     return Some(Act::Forge { tale: Some(at), user: person, repository, op });
                 }
-                (tale.sent == 0).then(|| self.message(at, item, b"what did you learn?"))
+                let message: &[u8] = if page.is_some() { b"what did you learn?" } else { b"please note it" };
+                (replies > tale.sent).then(|| self.message(at, item, message))
             }
         }
     }
@@ -228,7 +303,7 @@ impl People {
         let mut key = tale.key.clone();
         key.extend_from_slice(format!("/m{}", tale.sent).as_bytes());
         let ask = Ask::Message { item, key: key.into(), message: message.into() };
-        Act::Ask { tale: at, person: tale.person, ask }
+        Act::Ask { asker: Asker::Tale(at), person: tale.person, ask }
     }
 
     /// The reviewer approves each pull request the engine opened, once CI
@@ -260,9 +335,20 @@ impl People {
         self.reviewing.remove(&(repository, number, head));
     }
 
-    /// The engine answered the story's ask.
-    pub fn replied(&mut self, at: usize, reply: Reply) {
+    /// The engine answered an ask.
+    pub fn replied(&mut self, asker: Asker, reply: Reply) {
         self.tally.asks += 1;
+        let at = match asker {
+            Asker::Tale(at) => at,
+            Asker::Caretaker(item) => {
+                self.releasing.remove(&item);
+                match reply {
+                    Reply::Done => self.tally.releases += 1,
+                    Reply::Opened { .. } | Reply::Watching { .. } | Reply::Refused(_) => self.tally.refused += 1,
+                }
+                return;
+            }
+        };
         let tale = &mut self.tales[at];
         tale.pending = false;
         match reply {
@@ -272,8 +358,10 @@ impl People {
             Reply::Refused(refusal) => {
                 self.tally.refused += 1;
                 match refusal {
-                    Refusal::Busy | Refusal::Failed => {}
-                    Refusal::Unknown | Refusal::Unpermitted | Refusal::Idle | Refusal::Unheld | Refusal::Unfollowed => {
+                    // Not tracked yet, as an engine that restarted may not
+                    // have read it back yet: asked again later.
+                    Refusal::Busy | Refusal::Failed | Refusal::Unknown => {}
+                    Refusal::Unpermitted | Refusal::Idle | Refusal::Unheld | Refusal::Unfollowed => {
                         panic!("a story asks only what it may: {refusal:?}")
                     }
                 }
@@ -281,10 +369,15 @@ impl People {
         }
     }
 
-    /// The story's ask was lost with the engine that had it.
-    pub fn lost(&mut self, at: usize) {
+    /// An ask was lost with the engine that had it.
+    pub fn lost(&mut self, asker: Asker) {
         self.tally.lost += 1;
-        self.tales[at].pending = false;
+        match asker {
+            Asker::Tale(at) => self.tales[at].pending = false,
+            Asker::Caretaker(item) => {
+                self.releasing.remove(&item);
+            }
+        }
     }
 
     /// The story's call to the forge ended.

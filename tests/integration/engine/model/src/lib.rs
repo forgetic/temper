@@ -14,4 +14,4 @@ pub mod workers;
 mod world;
 
 pub use temper_world::Span;
-pub use world::{Settings, Stats, World};
+pub use world::{ENDINGS, Settings, Stats, World};

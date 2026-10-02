@@ -13,7 +13,7 @@ use crate::deployment::{
     self, CI, CUE, ELSEWHERE, ENGINE, GREEN, LABELS, LIMITS, MAIN, PEOPLE, REPOSITORIES, REVIEWER, STRANGER, WORKER,
 };
 use crate::mirror::Mirror;
-use crate::people::{self, People, Story};
+use crate::people::{self, Asker, People, Story};
 use crate::referee::{Bounds, Engine, Seen, Stimulus};
 use crate::store::{self, Store};
 use crate::translate::{self, Asked};
@@ -112,18 +112,94 @@ impl Settings {
             },
             stories: people::STORIES.to_vec(),
             workers: 2,
-            worker: workers::Script { slots: 2, pace: Span::millis(200, 3_000), grace: Duration::from_secs(30) },
+            worker: workers::Script {
+                slots: 2,
+                pace: Span::millis(200, 3_000),
+                grace: Duration::from_secs(30),
+                call: Duration::from_secs(60),
+            },
             channel: Span::millis(5, 50),
             redial: Span::millis(1_000, 10_000),
             people: Span::millis(1_000, 10_000),
             store: store::Script { latency: Span::millis(1, 50), failures: 0, done_anyway: 0 },
             timeout: Duration::from_secs(10),
             restarts: 0,
-            restart_at: Span::millis(10_000, 600_000),
+            restart_at: Span::millis(5_000, 200_000),
             drops: 0,
-            drop_at: Span::millis(10_000, 600_000),
+            drop_at: Span::millis(5_000, 200_000),
             bounds: Bounds { story: Duration::from_secs(4 * 3_600), message: Duration::from_secs(3_600) },
         }
+    }
+
+    /// A world where everything that can go wrong does, now and then: the
+    /// forge late, failing, limiting and losing webhooks, its clock behind;
+    /// the store failing; channels dropping; the engine restarting.
+    #[must_use]
+    pub fn rough(seed: u64) -> Settings {
+        let calm = Settings::calm(seed);
+        Settings {
+            forge: forge::Config {
+                late: 60,
+                unavailable: 40,
+                timeouts: 40,
+                landing: 30,
+                rate_limit: 50,
+                hooks_late: 200,
+                hooks_lost: 300,
+                skew: Skew::Behind(Duration::from_secs(20)),
+                ..calm.forge
+            },
+            store: store::Script { latency: Span::millis(1, 2_000), failures: 50, done_anyway: 300 },
+            restarts: 2,
+            drops: 3,
+            ..calm
+        }
+    }
+
+    /// A world drawn from `seed`, between calm and rough.
+    #[must_use]
+    pub fn random(seed: u64) -> Settings {
+        let mut rng = Rng::new(seed ^ 0x5eed);
+        let calm = Settings::calm(seed);
+        let skew = match rng.below(3) {
+            0 => Skew::None,
+            1 => Skew::Ahead(Duration::from_millis(rng.below(60_000))),
+            _ => Skew::Behind(Duration::from_millis(rng.below(60_000))),
+        };
+        let small = |rng: &mut Rng, most: u64| u32::try_from(rng.below(most)).expect("small");
+        let forge = forge::Config {
+            late: small(&mut rng, 80),
+            unavailable: small(&mut rng, 60),
+            timeouts: small(&mut rng, 60),
+            landing: small(&mut rng, 40),
+            rate_limit: if rng.chance(400) { 40 } else { 0 },
+            hooks_late: small(&mut rng, 400),
+            hooks_lost: small(&mut rng, 1_001),
+            skew,
+            ..calm.forge
+        };
+        let mut stories = Vec::new();
+        for story in people::STORIES {
+            if rng.chance(600) {
+                stories.push(story);
+            }
+        }
+        let store = store::Script { latency: Span::millis(1, 2_000), failures: small(&mut rng, 80), done_anyway: 300 };
+        Settings {
+            forge,
+            stories,
+            workers: 1 + usize::try_from(rng.below(3)).expect("few"),
+            store,
+            drops: small(&mut rng, 4),
+            ..calm
+        }
+    }
+
+    /// A random world whose engine restarts once or twice, at drawn moments.
+    #[must_use]
+    pub fn restarting(seed: u64) -> Settings {
+        let restarts = 1 + u32::try_from(seed % 2).expect("small");
+        Settings { restarts, ..Settings::random(seed) }
     }
 
     /// The calm world with only `stories`.
@@ -132,6 +208,25 @@ impl Settings {
         Settings { stories: stories.to_vec(), ..Settings::calm(seed) }
     }
 }
+
+/// What the world counted, by name, that the sweep must reach.
+pub const ENDINGS: [&str; 15] = [
+    "acknowledged",
+    "answer: ended",
+    "answer: parked",
+    "assigned",
+    "corrected",
+    "dropped",
+    "inbound",
+    "limited",
+    "loaded",
+    "merged",
+    "relayed: served",
+    "released",
+    "reviewed",
+    "store: failed",
+    "timed out",
+];
 
 /// What the world counted.
 #[derive(Clone, Default, PartialEq, Eq, Debug)]
@@ -199,7 +294,7 @@ struct Out {
 enum Theirs {
     Person { tale: Option<usize> },
     Review { repository: usize, number: u64, head: u64 },
-    Push { worker: usize, item: Item, attempt: u64, repository: u32, commit: u64 },
+    Push { worker: usize, item: Item, attempt: u64, repository: u32, branch: Box<[u8]>, commit: u64 },
 }
 
 pub struct World {
@@ -226,8 +321,9 @@ pub struct World {
     calls: Ledger<u64, Out>,
     owned: Ledger<(u64, Token), ()>,
     theirs: Ledger<u64, Theirs>,
-    /// People's asks, by their names: the story's, and the life it went to.
-    asks: Ledger<u64, (usize, u64)>,
+    /// People's asks, by their names: who asked, the life it went to, and
+    /// the item a message was for.
+    asks: Ledger<u64, (Asker, u64, Option<Item>)>,
     stores: Ledger<(u64, Token), ()>,
 
     workers: Vec<Worker>,
@@ -316,6 +412,13 @@ impl World {
     #[must_use]
     pub fn trace(&self) -> &[String] {
         self.trace.lines()
+    }
+
+    /// How many safety checks the referee made, and liveness expectations
+    /// it saw met.
+    #[must_use]
+    pub fn judged(&self) -> (u64, u64) {
+        self.referee.judged()
     }
 
     /// The forge as observed.
@@ -425,6 +528,28 @@ impl World {
     fn observe_forge(&mut self) {
         while let Some(observation) = self.forge.pop_observation() {
             self.mirror.observe(&observation);
+            match &observation {
+                forge::Observation::Merged { .. } => self.end("merged"),
+                forge::Observation::Wiki { by, .. } if *by != ENGINE => self.end("corrected"),
+                forge::Observation::Reviewed { .. } => self.end("reviewed"),
+                forge::Observation::Wiki { .. }
+                | forge::Observation::Moved { .. }
+                | forge::Observation::Deleted { .. }
+                | forge::Observation::Opened { .. }
+                | forge::Observation::Closed { .. }
+                | forge::Observation::Reopened { .. }
+                | forge::Observation::Labelled { .. }
+                | forge::Observation::Revised { .. }
+                | forge::Observation::Depends { .. }
+                | forge::Observation::Requested { .. }
+                | forge::Observation::Defined { .. }
+                | forge::Observation::Commented { .. }
+                | forge::Observation::Edited { .. }
+                | forge::Observation::Removed { .. }
+                | forge::Observation::Reported { .. }
+                | forge::Observation::Refused { .. }
+                | forge::Observation::Rejected { .. } => {}
+            }
             self.observe(Seen::Forge(observation));
         }
     }
@@ -448,6 +573,22 @@ impl World {
             Delivery::Down { worker, channel, down } => {
                 if self.workers[worker].channel() != Some(channel) {
                     return;
+                }
+                self.end(match &down {
+                    Down::Assign(_) => "assigned",
+                    Down::Inbound { .. } => "inbound",
+                    Down::Cancel { .. } => "cancelled",
+                    Down::Relayed { served, .. } => {
+                        if workers::is_served(served) {
+                            "relayed: served"
+                        } else {
+                            "relayed: unserved"
+                        }
+                    }
+                    Down::Acknowledge { .. } => "acknowledged",
+                });
+                if let Down::Inbound { item, event: engine::Inbound::News(_), .. } = &down {
+                    self.observe(Seen::Inbound { item: *item });
                 }
                 if let Down::Assign(assigned) = &down {
                     let item = assigned.item;
@@ -517,6 +658,7 @@ impl World {
     fn hang_up(&mut self, worker: usize) {
         let Some(channel) = self.workers[worker].channel() else { return };
         self.stats.drops += 1;
+        self.end("dropped");
         self.log(format!("worker {worker}'s channel {} drops", channel.raw()));
         let mut effects = Vec::new();
         self.workers[worker].lose(self.now, &mut effects);
@@ -535,8 +677,17 @@ impl World {
         for effect in effects {
             match effect {
                 Effect::Up(up) => {
-                    if let Up::Answer { item, attempt, .. } = &up {
+                    if let Up::Answer { item, attempt, said } = &up {
+                        self.end(match said {
+                            Said::Busy => "answer: busy",
+                            Said::Ended { .. } => "answer: ended",
+                            Said::Parked { .. } => "answer: parked",
+                            Said::Failed { .. } => "answer: failed",
+                        });
                         self.observe(Seen::Answered { item: *item, attempt: *attempt });
+                    }
+                    if let Up::Bounced { .. } = &up {
+                        self.end("bounced");
                     }
                     let Some(channel) = self.workers[worker].channel() else { continue };
                     let at = self.channel_time(channel, true);
@@ -617,17 +768,27 @@ impl World {
                 return;
             }
         };
-        let op = forge_api::Op::Git(Git::Push { branch, commit });
+        let op = forge_api::Op::Git(Git::Push { branch: branch.clone(), commit });
         let at = usize::try_from(repository).expect("few");
-        self.call(WORKER, REPOSITORIES[at], op, Theirs::Push { worker, item, attempt, repository, commit });
+        let theirs = Theirs::Push { worker, item, attempt, repository, branch, commit };
+        self.call(WORKER, REPOSITORIES[at], op, theirs);
     }
 
     /// A person acts.
     fn person(&mut self, act: people::Act) {
         match act {
-            people::Act::Ask { tale, person, ask } => {
+            people::Act::Ask { asker, person, ask } => {
                 let name = self.wire.name();
-                self.asks.open(name, (tale, self.life));
+                let message = match &ask {
+                    engine::Ask::Message { item, .. } => Some(*item),
+                    engine::Ask::Open { .. }
+                    | engine::Ask::Accept { .. }
+                    | engine::Ask::Reject { .. }
+                    | engine::Ask::Stop { .. }
+                    | engine::Ask::Release { .. }
+                    | engine::Ask::Watch { .. } => None,
+                };
+                self.asks.open(name, (asker, self.life, message));
                 self.log(format!("person {person} asks {ask:?}"));
                 if let engine::Ask::Accept { item } = &ask {
                     self.observe(Seen::Accepting { item: *item });
@@ -635,6 +796,7 @@ impl World {
                 self.stage.push(Event::Ask { reply_to: ReplyTo::new(Token::new(name)), person, ask });
             }
             people::Act::Forge { tale, user, repository, op } => {
+                self.log(format!("person {user} calls {op:?}"));
                 let theirs = match &op {
                     forge_api::Op::Write(forge_api::Write::Review { number, .. }) => {
                         let head = self.mirror_head(repository, *number);
@@ -690,10 +852,14 @@ impl World {
             let limits = &self.settings.limits.forge;
             let mut answer = temper_engine_model_forge_tests::translate::answer(out.asked, result, limits, now);
             let decoded = translate::decode(&mut answer, &bodies, page);
+            if let Err(engine_api::Error::RateLimited { .. }) = &answer {
+                self.end("limited");
+            }
             self.answer(out.call, answer, decoded);
             return;
         }
         let made = result.is_ok();
+        self.log(format!("their call {name} answered {}", if made { "ok" } else { "failed" }));
         match self.theirs.end(name) {
             Theirs::Person { tale } => {
                 if let Some(tale) = tale {
@@ -701,13 +867,15 @@ impl World {
                 }
             }
             Theirs::Review { repository, number, head } => self.people.reviewed(repository, number, head),
-            Theirs::Push { worker, item, attempt, repository, commit } => {
-                let pushed = match result {
-                    Ok(forge_api::Answer::Pushed(forge_api::Pushed::Pushed)) => {
-                        Some(Landed { repository, commit: translate::commit(commit) })
-                    }
-                    Ok(_) | Err(_) => None,
+            Theirs::Push { worker, item, attempt, repository, branch, commit } => {
+                // A push that ended ambiguously is verified against the
+                // forge, by its branch (worker-model.md, section 5).
+                let landed = match result {
+                    Ok(forge_api::Answer::Pushed(pushed)) => pushed == forge_api::Pushed::Pushed,
+                    Ok(_) => false,
+                    Err(_) => self.forge.branch(deployment::name(repository), &branch) == Some(commit),
                 };
+                let pushed = landed.then(|| Landed { repository, commit: translate::commit(commit) });
                 let mut effects = Vec::new();
                 self.workers[worker].pushed(item, attempt, pushed, self.now, &mut effects);
                 self.effects(worker, effects);
@@ -774,14 +942,19 @@ impl World {
             }
             Request::Reply { to, reply } => {
                 let name = to.into_token().raw();
-                let (tale, life) = self.asks.end(name);
+                let (asker, life, message) = self.asks.end(name);
                 assert_eq!(life, self.life, "a person's ask is answered by the engine it went to");
-                if let engine::Reply::Done = reply
-                    && let Some(item) = self.people.item(tale)
+                if reply == engine::Reply::Done
+                    && let Some(item) = message
                 {
                     self.observe(Seen::Messaged { item });
                 }
-                self.people.replied(tale, reply);
+                if let Asker::Caretaker(_) = asker
+                    && reply == engine::Reply::Done
+                {
+                    self.end("released");
+                }
+                self.people.replied(asker, reply);
             }
             Request::Deliver { watcher, .. } => {
                 let at = self.now.saturating_add(self.settings.channel.draw(&mut self.rng));
@@ -791,6 +964,9 @@ impl World {
             Request::Store { owner, op } => {
                 self.stores.open((self.life, owner), ());
                 let (stored, after) = self.store.apply(op);
+                if stored == engine::Stored::Failed {
+                    self.end("store: failed");
+                }
                 self.stores.end((self.life, owner));
                 let event = Event::Stored { owner, stored };
                 self.send(self.now.saturating_add(after), Delivery::Engine { life: self.life, event });
@@ -831,8 +1007,8 @@ impl World {
         self.owned = Ledger::new("engine's forge call");
         let asks: Vec<u64> = self.asks.keys().copied().collect();
         for name in asks {
-            let (tale, _) = self.asks.end(name);
-            self.people.lost(tale);
+            let (asker, _, _) = self.asks.end(name);
+            self.people.lost(asker);
         }
         self.open.clear();
         for worker in 0..self.workers.len() {
