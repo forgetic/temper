@@ -25,4 +25,5 @@ pub mod tickets;
 pub mod translate;
 mod world;
 
-pub use world::{BUDGET, Count, Ended, Session, Settings, Span, Stats, TOOLS, Told, World, spec};
+pub use temper_world::Span;
+pub use world::{BUDGET, Count, Ended, Session, Settings, Stats, TOOLS, Told, World, spec};

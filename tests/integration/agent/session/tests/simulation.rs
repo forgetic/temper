@@ -449,17 +449,14 @@ fn a_spec_that_asks_for_more_than_the_limits_is_refused() {
 
 #[test]
 fn a_seed_replays_to_the_same_run() {
-    let replay = |seed| {
+    let trace = temper_world::assert_replays(13, 14, |seed| {
         let settings = noisy(seed);
         let mut world = World::new(settings);
         submit_noisily(&mut world, &settings, seed);
         world.run(ITERATIONS);
-        (world.trace().to_vec(), world.stats(), world.now())
-    };
-    let (trace, stats, end) = replay(13);
+        (world.trace().to_vec(), (world.stats(), world.now()))
+    });
     assert!(trace.len() > 20, "the run did something");
-    assert_eq!(replay(13), (trace.clone(), stats, end));
-    assert_ne!(replay(14).0, trace);
 }
 
 /// Facts are told on the side: sessions that keep none of them make the same

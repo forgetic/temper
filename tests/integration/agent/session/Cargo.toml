@@ -13,6 +13,7 @@ temper-agent-model-tools.workspace = true
 temper-agent-model-tools-tests.workspace = true
 temper-checkout-fake.workspace = true
 temper-llm-model.workspace = true
+temper-world.workspace = true
 
 # Ordinary Rust (programming-model.md, 10.2), so not the step crates' lints.
 # tests/integration/clippy.toml bans what would make a run unrepeatable.

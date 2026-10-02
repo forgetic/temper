@@ -1,12 +1,13 @@
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 
 use temper_agent_model_session as agent;
 use temper_agent_model_session::llm::{Answer, Block, Decoded, Descriptor, Endpoint, Failure, Prompt, Returned, Usage};
 use temper_agent_model_tools::{self as tools, Authority, Done, Effect, Fault, Grants, Op, Repo};
 use temper_agent_model_tools_tests::translate as io;
 use temper_checkout_fake::Checkout;
-use temper_lib::{Duration, Env, Queue, ReplyTo, Rng, Time, Token};
+use temper_lib::{Duration, ReplyTo, Rng, Time, Token};
 use temper_llm_model as provider;
+use temper_world::{Key, Ledger, Schedule, Span, Stage, Trace};
 
 use crate::fixture;
 use crate::tickets::{SERVED, Ticketed, Tickets};
@@ -53,20 +54,6 @@ pub const TOOLS: tools::Limits = tools::Limits {
     search_timeout: Duration::from_secs(30),
     facts: 256,
 };
-
-/// Durations drawn uniformly from `min..=max`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Span {
-    pub min: Duration,
-    pub max: Duration,
-}
-
-impl Span {
-    #[must_use]
-    pub const fn millis(min: u64, max: u64) -> Span {
-        Span { min: Duration::from_millis(min), max: Duration::from_millis(max) }
-    }
-}
 
 /// Counts drawn uniformly from `min..=max`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -370,7 +357,7 @@ enum Delivery {
 /// A delegated call in flight, as the opener keeps it.
 struct Running {
     /// The answer's delivery, withdrawn if the call is withdrawn.
-    delivery: (Time, u64),
+    delivery: Key,
     /// The session that started it.
     session: Token,
     effect: Effect,
@@ -381,7 +368,7 @@ struct Running {
 /// An operation of the tools in flight, as io keeps it.
 struct Pending {
     /// Its end's delivery, moved up when a cancel wins the race.
-    delivery: (Time, u64),
+    delivery: Key,
     /// The session whose tools asked for it, by the repository it is in.
     session: Token,
     /// A store or a command, which only a call that writes asks for.
@@ -404,7 +391,7 @@ enum Work {
 struct Call {
     owner: Token,
     /// The deadline's delivery, withdrawn when the call ends first.
-    deadline: (Time, u64),
+    deadline: Key,
     /// The session's opener, and the tools it served in the query.
     opener: u64,
     served: Box<[Descriptor]>,
@@ -416,25 +403,19 @@ pub struct World {
     settings: Settings,
 
     agent: agent::Model,
-    agent_env: Env<agent::Limits>,
-    agent_in: VecDeque<agent::Event>,
-    agent_out: Queue<agent::Request>,
+    agent_stage: Stage<agent::Limits, agent::Event, agent::Request>,
 
     provider: provider::Model,
-    provider_env: Env<provider::Config>,
-    provider_in: VecDeque<provider::Event>,
-    provider_out: Queue<provider::Request>,
+    provider_stage: Stage<provider::Config, provider::Event, provider::Request>,
 
-    /// Deliveries in flight, by time and then by the order they were sent.
-    wire: BTreeMap<(Time, u64), Delivery>,
-    /// Names for openers, calls and deliveries.
-    serial: u64,
+    /// Deliveries in flight, whose count names openers and calls too.
+    wire: Schedule<Delivery>,
     /// The agent's calls in flight, and the call each session has in flight.
-    calls: BTreeMap<u64, Call>,
+    calls: Ledger<u64, Call>,
     calling: BTreeMap<Token, u64>,
     /// The delegated calls in flight, by their tokens; and the session of
     /// each the agent has started or has yet to hear the end of.
-    tools: BTreeMap<Token, Running>,
+    tools: Ledger<Token, Running>,
     runs: BTreeMap<Token, Token>,
     /// The checkout the sessions' tools work on, a repository for each
     /// session, and the opener of each by io's name for its root.
@@ -442,7 +423,7 @@ pub struct World {
     roots: BTreeMap<u64, u64>,
     /// The tools' operations in flight, by their tokens, and every token an
     /// operation has had (a call's, for each operation it asks for).
-    ops: BTreeMap<Token, Pending>,
+    ops: Ledger<Token, Pending>,
     owners: BTreeSet<Token>,
     /// How many messages of each session's transcript have had their results
     /// counted.
@@ -457,7 +438,7 @@ pub struct World {
     /// The opener's tickets, as the top level would keep them.
     tickets: Tickets,
     /// Calls the provider has not answered yet.
-    serving: BTreeSet<u64>,
+    serving: Ledger<u64, ()>,
     /// The sessions opened, by the opener's name for each, and the opener's
     /// name for each session by the session's own while it lives.
     sessions: BTreeMap<u64, Session>,
@@ -465,7 +446,7 @@ pub struct World {
 
     stats: Stats,
     told: Told,
-    trace: Vec<String>,
+    trace: Trace,
 }
 
 impl World {
@@ -475,6 +456,7 @@ impl World {
         let mut rng = Rng::new(settings.seed);
         let agent = agent::Model::new(&settings.agent, rng.next_u64());
         let provider = provider::Model::new(&settings.provider, rng.next_u64());
+        let max_out = agent::max_out(&settings.agent);
         let mut checkout = Checkout::new();
         fixture::script(&mut checkout);
         World {
@@ -482,22 +464,17 @@ impl World {
             rng,
             settings,
             agent,
-            agent_env: Env { now: Time::ZERO, limits: settings.agent },
-            agent_in: VecDeque::new(),
-            agent_out: Queue::with_capacity(agent::max_out(&settings.agent) + SLACK),
+            agent_stage: Stage::new(settings.agent, max_out, max_out + SLACK),
             provider,
-            provider_env: Env { now: Time::ZERO, limits: settings.provider },
-            provider_in: VecDeque::new(),
-            provider_out: Queue::with_capacity(provider::MAX_OUT + SLACK),
-            wire: BTreeMap::new(),
-            serial: 0,
-            calls: BTreeMap::new(),
+            provider_stage: Stage::new(settings.provider, provider::MAX_OUT, provider::MAX_OUT + SLACK),
+            wire: Schedule::new(),
+            calls: Ledger::new("call to the provider"),
             calling: BTreeMap::new(),
-            tools: BTreeMap::new(),
+            tools: Ledger::new("delegated call"),
             runs: BTreeMap::new(),
             checkout,
             roots: BTreeMap::new(),
-            ops: BTreeMap::new(),
+            ops: Ledger::new("operation"),
             owners: BTreeSet::new(),
             counted: BTreeMap::new(),
             cancel_lost: BTreeSet::new(),
@@ -505,12 +482,12 @@ impl World {
             op_cancel_lost: BTreeSet::new(),
             closing: BTreeSet::new(),
             tickets: Tickets::default(),
-            serving: BTreeSet::new(),
+            serving: Ledger::new("call the provider serves"),
             sessions: BTreeMap::new(),
             openers: BTreeMap::new(),
             stats: Stats::default(),
             told: Told::default(),
-            trace: Vec::new(),
+            trace: Trace::default(),
         }
     }
 
@@ -534,13 +511,13 @@ impl World {
     /// What crossed between the models and the world, in order, with times.
     #[must_use]
     pub fn trace(&self) -> &[String] {
-        &self.trace
+        self.trace.lines()
     }
 
     /// Has the opener open a session for `spec` at `at`. Returns the opener's
     /// name for it.
     pub fn submit(&mut self, at: Time, mut spec: agent::Spec) -> u64 {
-        let opener = self.next_serial();
+        let opener = self.wire.name();
         if self.rng.chance(self.settings.serve) {
             let mut served = Vec::new();
             for (name, effect, schema) in SERVED {
@@ -584,43 +561,40 @@ impl World {
 
     /// One iteration of the loop, as the shell would run it.
     fn iterate(&mut self) {
-        self.agent_env.now = self.now;
-        self.provider_env.now = self.now;
+        self.agent_stage.tick(self.now);
+        self.provider_stage.tick(self.now);
         self.deliver();
 
         // Each stage takes its events, then fires its alarms, while it has room
         // for what one more may produce.
-        let most = agent::max_out(&self.settings.agent);
-        while self.agent_out.room() >= most {
-            let Some(event) = self.agent_in.pop_front() else { break };
+        while let Some(event) = self.agent_stage.next_event() {
             self.log(&format!("agent <- {}", describe_agent_event(&event)));
             let ended = ended_run(&event);
-            agent::step(&mut self.agent, &self.agent_env, event, &mut self.agent_out);
+            agent::step(&mut self.agent, &self.agent_stage.env, event, &mut self.agent_stage.out);
             if let Some(run) = ended {
                 self.runs.remove(&run);
             }
         }
-        while self.agent_out.room() >= most && self.agent.is_due(self.now) {
+        while self.agent_stage.has_room() && self.agent.is_due(self.now) {
             self.log("agent alarm");
-            agent::fire(&mut self.agent, &self.agent_env, &mut self.agent_out);
+            agent::fire(&mut self.agent, &self.agent_stage.env, &mut self.agent_stage.out);
         }
         // The facts, drained as the shell would write them out.
         while let Some(fact) = self.agent.pop_fact() {
             self.tell(fact);
         }
-        while self.provider_out.room() >= provider::MAX_OUT {
-            let Some(event) = self.provider_in.pop_front() else { break };
-            provider::step(&mut self.provider, &self.provider_env, event, &mut self.provider_out);
+        while let Some(event) = self.provider_stage.next_event() {
+            provider::step(&mut self.provider, &self.provider_stage.env, event, &mut self.provider_stage.out);
         }
-        while self.provider_out.room() >= provider::MAX_OUT && self.provider.is_due(self.now) {
-            provider::fire(&mut self.provider, &self.provider_env, &mut self.provider_out);
+        while self.provider_stage.has_room() && self.provider.is_due(self.now) {
+            provider::fire(&mut self.provider, &self.provider_stage.env, &mut self.provider_stage.out);
         }
 
         // What the steps asked for, submitted at the end of the iteration.
-        while let Some(request) = self.agent_out.pop() {
+        while let Some(request) = self.agent_stage.out.pop() {
             self.agent_request(request);
         }
-        while let Some(request) = self.provider_out.pop() {
+        while let Some(request) = self.provider_stage.out.pop() {
             self.provider_request(request);
         }
 
@@ -650,11 +624,11 @@ impl World {
                 in_call_order(&prompt);
                 self.check_results(owner, &prompt);
                 self.stats.not_run += not_run(&prompt);
-                let call = self.next_serial();
+                let call = self.wire.name();
                 let deadline = self.schedule(self.now.saturating_add(timeout), Delivery::Deadline { call });
                 let opener = *self.openers.get(&owner).expect("a session calls the LLM while it lives");
                 let served = prompt.delegated.clone();
-                self.calls.insert(call, Call { owner, deadline, opener, served });
+                self.calls.open(call, Call { owner, deadline, opener, served });
                 assert!(self.calling.insert(owner, call).is_none(), "a session has one call in flight");
                 let query = translate::query(prompt, &self.tickets);
                 self.send(Delivery::Query { call, query });
@@ -690,11 +664,11 @@ impl World {
                     return;
                 };
                 self.closing.insert(session);
-                if self.tools.contains_key(&owner) && self.rng.chance(self.settings.cancels_lost) {
+                if self.tools.contains(owner) && self.rng.chance(self.settings.cancels_lost) {
                     self.run_cancel_lost.insert(owner);
                     self.stats.withdraws_lost += 1;
-                } else if let Some(Running { delivery, .. }) = self.tools.remove(&owner) {
-                    self.wire.remove(&delivery).expect("a served call in flight has its answer on the way");
+                } else if let Some(Running { delivery, .. }) = self.tools.take(owner) {
+                    self.wire.withdraw(delivery).expect("a served call in flight has its answer on the way");
                     self.send(Delivery::AnswerCancelled { owner });
                     self.stats.withdraws += 1;
                 }
@@ -849,7 +823,7 @@ impl World {
         let answer = Answer { ticket, bytes: u64::try_from(text.len()).expect("a short answer"), error };
         let delivery = self.schedule(at, Delivery::Answered { owner, answer });
         let running = Running { delivery, session, effect, accepts };
-        assert!(self.tools.insert(owner, running).is_none(), "each run has a token of its own");
+        self.tools.open(owner, running);
         self.stats.delegates += 1;
     }
 
@@ -857,7 +831,6 @@ impl World {
     /// `deadline`: after a draw, or at the deadline if that comes first.
     fn start_op(&mut self, owner: Token, op: Op, deadline: Time) {
         // A call's operations, one after another, carry its token.
-        assert!(!self.ops.contains_key(&owner), "each operation in flight has a token of its own");
         self.owners.insert(owner);
         let at = match &op {
             Op::Load { at, .. } | Op::Scan { at, .. } | Op::Store { at, .. } | Op::Search { at, .. } => at.root,
@@ -896,7 +869,7 @@ impl World {
             self.stats.op_timeouts += 1;
         }
         let delivery = self.schedule(ends, Delivery::Ran { owner });
-        self.ops.insert(owner, Pending { delivery, session, writes, work });
+        self.ops.open(owner, Pending { delivery, session, writes, work });
         self.stats.ops += 1;
     }
 
@@ -904,7 +877,7 @@ impl World {
     /// after a network draw, unless it ends of itself first.
     fn cancel_op(&mut self, owner: Token) {
         assert!(self.owners.contains(&owner), "a cancel names an operation io was asked for");
-        let Some(pending) = self.ops.get(&owner) else {
+        let Some(pending) = self.ops.get(owner) else {
             // It ended in the iteration the cancel was sent.
             self.stats.cancels_crossed += 1;
             return;
@@ -917,15 +890,15 @@ impl World {
         }
         let at = self.now.saturating_add(self.draw(self.settings.network));
         let delivery = self.schedule(at, Delivery::Ran { owner });
-        let pending = self.ops.get_mut(&owner).expect("looked up above");
-        self.wire.remove(&pending.delivery).expect("an operation in flight has its end on the way");
+        let pending = self.ops.get_mut(owner).expect("looked up above");
+        self.wire.withdraw(pending.delivery).expect("an operation in flight has its end on the way");
         (pending.delivery, pending.work) = (delivery, Work::Ending(Done::Cancelled));
         self.stats.op_cancels += 1;
     }
 
     /// The operation of `owner` ends, and io tells the tools how.
     fn ran(&mut self, owner: Token) {
-        let pending = self.ops.remove(&owner).expect("an operation ends once");
+        let pending = self.ops.end(owner);
         let done = match pending.work {
             Work::File(op) => io::perform(&mut self.checkout, op),
             Work::Command(started) => {
@@ -938,7 +911,7 @@ impl World {
         if self.op_cancel_lost.remove(&owner) {
             self.stats.done_after_cancel += 1;
         }
-        self.agent_in.push_back(agent::Event::Done { owner, done });
+        self.agent_stage.push(agent::Event::Done { owner, done });
     }
 
     /// Checks every result of the session's own tools in `prompt` against
@@ -1003,7 +976,7 @@ impl World {
         match request {
             provider::Request::Reply { to, result } => {
                 let call = to.into_token().raw();
-                assert!(self.serving.remove(&call), "the provider answers each call once");
+                self.serving.end(call);
                 self.send(Delivery::Answer { call, result });
             }
         }
@@ -1011,11 +984,8 @@ impl World {
 
     /// Hands every delivery that is due to its destination.
     fn deliver(&mut self) {
-        while let Some(entry) = self.wire.first_entry() {
-            if entry.key().0 > self.now {
-                break;
-            }
-            match entry.remove() {
+        while let Some(delivery) = self.wire.next(self.now) {
+            match delivery {
                 Delivery::Open { opener, spec } => self.open(opener, spec),
                 Delivery::Continue { opener, content } => {
                     let session = self.sessions.get_mut(&opener).expect("the opener continues what it opened");
@@ -1029,7 +999,7 @@ impl World {
                     if session.ended.is_some() {
                         self.stats.stale += 1;
                     }
-                    self.agent_in.push_back(agent::Event::Continue { session: name, content });
+                    self.agent_stage.push(agent::Event::Continue { session: name, content });
                     self.stats.continues += 1;
                 }
                 Delivery::Close { opener } => {
@@ -1043,16 +1013,15 @@ impl World {
                     } else if self.closing.contains(&name) {
                         self.stats.closed_while_closing += 1;
                     }
-                    self.agent_in.push_back(agent::Event::Close { session: name });
+                    self.agent_stage.push(agent::Event::Close { session: name });
                     self.stats.closes += 1;
                     if again {
                         self.send(Delivery::Close { opener });
                     }
                 }
                 Delivery::Query { call, query } => {
-                    self.serving.insert(call);
-                    self.provider_in
-                        .push_back(provider::Event::Call { reply_to: ReplyTo::new(Token::new(call)), query });
+                    self.serving.open(call, ());
+                    self.provider_stage.push(provider::Event::Call { reply_to: ReplyTo::new(Token::new(call)), query });
                     self.stats.provider_calls += 1;
                 }
                 Delivery::Answer { call, result } => {
@@ -1067,7 +1036,7 @@ impl World {
                             }
                         }
                         let event = translate::outcome(owner, result, &mut self.tickets, opener, &served);
-                        self.agent_in.push_back(event);
+                        self.agent_stage.push(event);
                     } else {
                         self.stats.late_answers += 1;
                     }
@@ -1078,17 +1047,18 @@ impl World {
                     if self.cancel_lost.remove(&owner) {
                         self.stats.failed_after_cancel += 1;
                     }
-                    self.agent_in.push_back(agent::Event::Failed { owner, failure: Failure::TimedOut });
+                    self.agent_stage.push(agent::Event::Failed { owner, failure: Failure::TimedOut });
                     self.stats.timeouts += 1;
                 }
-                Delivery::Cancelled { owner } => self.agent_in.push_back(agent::Event::Cancelled { owner }),
-                Delivery::AnswerCancelled { owner } => self.agent_in.push_back(agent::Event::AnswerCancelled { owner }),
+                Delivery::Cancelled { owner } => self.agent_stage.push(agent::Event::Cancelled { owner }),
+                Delivery::AnswerCancelled { owner } => self.agent_stage.push(agent::Event::AnswerCancelled { owner }),
                 Delivery::Answered { owner, answer } => {
-                    let run = self.tools.remove(&owner).expect("a withdrawn call's answer is withdrawn");
+                    // A withdrawn call's answer is withdrawn.
+                    let run = self.tools.end(owner);
                     if self.run_cancel_lost.remove(&owner) {
                         self.stats.answered_after_withdraw += 1;
                     }
-                    self.agent_in.push_back(agent::Event::Answered { owner, answer });
+                    self.agent_stage.push(agent::Event::Answered { owner, answer });
                     // The opener has its finish, and closes the session.
                     if run.accepts {
                         let opener = *self.openers.get(&run.session).expect("a session lives while its calls run");
@@ -1129,29 +1099,28 @@ impl World {
         for repo in &mut spec.authority.repos {
             repo.root = io::token(root);
         }
-        self.agent_in.push_back(agent::Event::Open { opener: Token::new(opener), spec });
+        self.agent_stage.push(agent::Event::Open { opener: Token::new(opener), spec });
     }
 
     /// Ends the agent's call `call` if it is still in flight, withdrawing its
     /// deadline, and returns its owner.
     fn end_call(&mut self, call: u64) -> Option<Call> {
-        let ended = self.calls.remove(&call)?;
+        let ended = self.calls.take(call)?;
         self.calling.remove(&ended.owner);
-        self.wire.remove(&ended.deadline);
+        self.wire.withdraw(ended.deadline);
         Some(ended)
     }
 
     fn has_work_now(&self) -> bool {
-        !self.agent_in.is_empty()
-            || !self.provider_in.is_empty()
+        self.agent_stage.has_events()
+            || self.provider_stage.has_events()
             || self.agent.is_due(self.now)
             || self.provider.is_due(self.now)
-            || self.wire.first_key_value().is_some_and(|((at, _), _)| *at <= self.now)
+            || self.wire.is_due(self.now)
     }
 
     fn next_time(&self) -> Option<Time> {
-        let wire = self.wire.first_key_value().map(|((at, _), _)| *at);
-        [wire, self.agent.next_deadline(), self.provider.next_deadline()].into_iter().flatten().min()
+        [self.wire.next_time(), self.agent.next_deadline(), self.provider.next_deadline()].into_iter().flatten().min()
     }
 
     fn tell(&mut self, fact: agent::Fact) {
@@ -1222,7 +1191,7 @@ impl World {
         assert!(self.cancel_lost.is_empty() && self.run_cancel_lost.is_empty(), "every lost cancel's race ended");
         assert!(self.serving.is_empty(), "the provider answered every call");
         assert!(
-            self.wire.is_empty() && self.agent_in.is_empty() && self.provider_in.is_empty(),
+            self.wire.is_empty() && !self.agent_stage.has_events() && !self.provider_stage.has_events(),
             "nothing is on its way"
         );
         for (opener, session) in &self.sessions {
@@ -1238,27 +1207,20 @@ impl World {
         self.schedule(at, delivery);
     }
 
-    fn schedule(&mut self, at: Time, delivery: Delivery) -> (Time, u64) {
+    fn schedule(&mut self, at: Time, delivery: Delivery) -> Key {
         // On a coarse grid, if the world has one, so that deliveries coincide.
         let granule = self.settings.granule.as_nanos();
         let at =
             if granule > 0 { Time::from_nanos(at.as_nanos().div_ceil(granule).saturating_mul(granule)) } else { at };
-        let key = (at, self.next_serial());
-        self.wire.insert(key, delivery);
-        key
+        self.wire.send(at, delivery)
     }
 
     fn draw(&mut self, span: Span) -> Duration {
-        Duration::from_nanos(self.rng.between(span.min.as_nanos(), span.max.as_nanos()))
-    }
-
-    fn next_serial(&mut self) -> u64 {
-        self.serial += 1;
-        self.serial
+        span.draw(&mut self.rng)
     }
 
     fn log(&mut self, line: &str) {
-        self.trace.push(format!("{:>16} {line}", self.now.as_nanos()));
+        self.trace.log(self.now, line);
     }
 }
 

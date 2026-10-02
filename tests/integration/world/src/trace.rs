@@ -25,7 +25,11 @@ impl Trace {
 /// (its stats, the time it settled at). `seed` run twice comes out the same,
 /// and `other` takes a course of its own. Returns the trace of `seed`, for the
 /// caller to check that the world did something.
-pub fn assert_replays<T: PartialEq + Debug>(seed: u64, other: u64, run: impl Fn(u64) -> (Vec<String>, T)) -> Vec<String> {
+pub fn assert_replays<T: PartialEq + Debug>(
+    seed: u64,
+    other: u64,
+    run: impl Fn(u64) -> (Vec<String>, T),
+) -> Vec<String> {
     let (trace, end) = run(seed);
     let again = run(seed);
     assert!(again.0 == trace, "seed {seed} replays to the same trace");

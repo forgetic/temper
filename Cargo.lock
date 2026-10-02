@@ -45,6 +45,7 @@ dependencies = [
  "temper-checkout-fake",
  "temper-lib",
  "temper-llm-model",
+ "temper-world",
 ]
 
 [[package]]
