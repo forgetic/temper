@@ -1,5 +1,5 @@
 //! End to end at the checkout sub-model: the checkout, its scripted clients,
-//! a fake forge's git and a fake disk, talking through a simulated world.
+//! a fake forge and a fake disk, talking through a simulated world.
 
 use std::collections::BTreeSet;
 
