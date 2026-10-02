@@ -135,6 +135,7 @@ const LIMITS: Limits = Limits {
         flush: Duration::from_secs(1),
         retention: Duration::from_secs(600),
         sweep: Duration::from_secs(60),
+        snapshot_bytes: 256,
         facts: 64,
     },
     asks: 4,
@@ -216,7 +217,7 @@ const fn env(secs: u64) -> Env<Limits> {
 
 fn model() -> Model {
     assert!(worst_case(&LIMITS).is_some(), "the limits are bounded");
-    Model::new(config(), &LIMITS, 1)
+    Model::new(config(), &LIMITS, 1, Time::ZERO)
 }
 
 /// What one event leads to.
@@ -1163,6 +1164,15 @@ fn a_person_watches_an_item() {
         }
     }
     assert!(watching, "the watch is taken: {:?}", world.seen.as_slice());
+    let mut snapshot = None;
+    for request in &world.seen {
+        if let Request::Deliver { chunks, .. } = request
+            && let Some(crate::boundary::Chunk::Snapshot { content, .. }) = chunks.first()
+        {
+            snapshot = Some(content.clone());
+        }
+    }
+    assert_eq!(snapshot.as_deref(), Some(&b"1 running\n"[..]), "the watch begins from the item as it is");
 }
 
 /// An agent step that reports, in the first repository.

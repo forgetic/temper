@@ -104,9 +104,9 @@ impl Steps {
 impl Model {
     /// A model of the deployment `config`, which [`crate::accepts`] takes,
     /// with room for `limits`, which [`crate::worst_case`] accepts, drawing
-    /// randomness from `seed`.
+    /// randomness from `seed`, made at `now`.
     #[must_use]
-    pub fn new(config: Config, limits: &Limits, seed: u64) -> Model {
+    pub fn new(config: Config, limits: &Limits, seed: u64, now: Time) -> Model {
         assert!(limits::accepts(&config, limits), "the limits take the configuration");
         let waits = limits::waits(limits).expect("worst_case accepted the limits");
         let carried = limits::carried(limits).expect("worst_case accepted the limits");
@@ -119,7 +119,7 @@ impl Model {
             fleet: fleet::Model::new(&limits.fleet),
             brief: brief::Model::new(&limits.brief),
             notes: notes::Model::new(&limits.notes),
-            views: views::Model::new(&limits.views),
+            views: views::Model::new(&limits.views, now),
             config,
             items: Slab::with_capacity(items),
             names: Map::with_capacity(items),

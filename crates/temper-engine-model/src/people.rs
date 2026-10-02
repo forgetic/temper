@@ -32,7 +32,7 @@ use temper_engine_model_work as work;
 use temper_lib::bytes::copy_of;
 use temper_lib::{Env, Id, List, Queue, ReplyTo, Token};
 
-use crate::boundary::{Ask, Inbound, Item, Refusal, Reply, Request, Watched};
+use crate::boundary::{Ask, Inbound, Item, Phase, Refusal, Reply, Request, Watched};
 use crate::items::{self, Entry};
 use crate::limits::Limits;
 use crate::model::Model;
@@ -178,7 +178,8 @@ fn permitted(model: &mut Model, env: &Env<Limits>, to: ReplyTo, person: u64, ask
             if model.watches.insert(watcher, to).is_err() {
                 unreachable!("the watches being taken have room for every person's call");
             }
-            route::views_step(model, env, views::Event::Watch { watcher, subject });
+            let snapshot = snapshot(model, subject, env.limits.views.snapshot_bytes);
+            route::views_step(model, env, views::Event::Watch { watcher, subject, snapshot });
         }
     }
 }
@@ -381,10 +382,42 @@ pub(crate) fn watching(model: &mut Model, watcher: Token, refusal: Option<views:
     let Some(to) = model.watches.remove(&watcher) else { return };
     let reply = match refusal {
         None => Reply::Watching { watcher },
-        Some(views::Refusal::Busy) => Reply::Refused(Refusal::Busy),
-        Some(views::Refusal::Unknown) => Reply::Refused(Refusal::Unfollowed),
+        Some(views::Refusal::Busy | views::Refusal::Oversized) => Reply::Refused(Refusal::Busy),
+        Some(views::Refusal::Unknown | views::Refusal::Unfollowed) => Reply::Refused(Refusal::Unfollowed),
     };
     out.push(Request::Reply { to, reply });
+}
+
+/// What a watch begins from: a line per item it covers (the item, or the
+/// board's), its number and its phase, as many as fit `most` bytes.
+fn snapshot(model: &Model, subject: views::Subject, most: u32) -> Box<[u8]> {
+    let mut lines: List<Box<[u8]>> = List::with_capacity(model.names.len().max(1));
+    let mut room = usize::try_from(most).unwrap_or(usize::MAX);
+    for (item, id) in &model.names {
+        let covered = match subject {
+            views::Subject::Run(run) | views::Subject::Item(run) => translate::run(*item) == Some(run),
+            views::Subject::Board(repository) => item.repository == repository,
+        };
+        let Some(entry) = model.items.get(*id) else { continue };
+        if !covered {
+            continue;
+        }
+        let phase = match entry.live {
+            Some(live) if live.started => Phase::Running,
+            Some(_) | None => translate::phase(entry.lifecycle.phase),
+        };
+        let line = translate::concat(&[&translate::decimal(item.number), b" ", phase.name(), b"\n"]);
+        if line.len() > room {
+            break;
+        }
+        room = room.saturating_sub(line.len());
+        lines.push(line).expect("a line per item held");
+    }
+    let mut parts: List<&[u8]> = List::with_capacity(lines.len());
+    for line in &lines {
+        parts.push(&line[..]).expect("a part per line");
+    }
+    translate::concat(parts.as_slice())
 }
 
 /// Answers a person.

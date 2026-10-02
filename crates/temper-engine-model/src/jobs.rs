@@ -35,7 +35,7 @@ use temper_engine_model_work as work;
 use temper_lib::bytes::copy_of;
 use temper_lib::{Env, Id, List, Queue, Time, Token};
 
-use crate::boundary::{Inbound, Item, Related};
+use crate::boundary::{Inbound, Item, Phase, Related};
 use crate::facts::Fact;
 use crate::items::{self, Applying, Doing, Entry, Job, Of, Writes};
 use crate::limits::Limits;
@@ -53,12 +53,10 @@ pub(crate) fn due(model: &mut Model, env: &Env<Limits>, owner: Token, item: Item
     route::views_step(
         model,
         env,
-        temper_engine_model_views::Event::Phase { item: token, repository: item.repository, phase: Phase::Due },
+        temper_engine_model_views::Event::Phase { item: token, repository: item.repository, phase: Phase::Due.code() },
     );
     ask(model, env, id, 0);
 }
-
-use temper_engine_model_views::Phase;
 
 /// Reads afresh the first relation from `from` on that is not known to be
 /// done and not held, or decides once there is none.
@@ -299,7 +297,8 @@ pub(crate) fn write(model: &mut Model, env: &Env<Limits>, owner: Token, item: It
     let known = entry.step.is_some();
     let phase = translate::phase(lifecycle.phase);
     let token = translate::run_of(item);
-    let notice = temper_engine_model_views::Event::Phase { item: token, repository: item.repository, phase };
+    let notice =
+        temper_engine_model_views::Event::Phase { item: token, repository: item.repository, phase: phase.code() };
     route::views_step(model, env, notice);
     if closed {
         // The forge shows the item closed: its record is done with it.

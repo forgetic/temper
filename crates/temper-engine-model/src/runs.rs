@@ -347,7 +347,7 @@ fn place(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) {
     let run = translate::run_of(item);
     let reply_to = ReplyTo::new(run);
     let workstream = translate::workstream(item);
-    let started = views::Event::Started { run, item: run, policy: model.config.policy };
+    let started = views::Event::Started { run, attempt: Token::new(attempt), item: run, policy: model.config.policy };
     route::views_step(model, env, started);
     route::fleet_step(model, env, fleet::Event::Start { reply_to, run, attempt: Token::new(attempt), workstream });
 }
@@ -423,7 +423,8 @@ pub(crate) fn assign(model: &mut Model, channel: Token, run: Token, attempt: Tok
 /// The fleet places the item's attempt on a worker.
 pub(crate) fn placed(model: &mut Model, env: &Env<Limits>, run: Token, attempt: Token) {
     let item = translate::item(run);
-    let phase = views::Event::Phase { item: run, repository: item.repository, phase: views::Phase::Running };
+    let phase =
+        views::Event::Phase { item: run, repository: item.repository, phase: crate::boundary::Phase::Running.code() };
     route::views_step(model, env, phase);
     route::work_step(model, env, work::Event::Placed { item, attempt: attempt.raw() });
 }

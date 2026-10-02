@@ -24,7 +24,7 @@ use temper_engine_model_work as work;
 use temper_lib::bytes::copy_of;
 use temper_lib::{List, Token, Writer};
 
-use crate::boundary::{Answer, Chunk, Failure, Hello, Item, Outcome, Posted, Trace};
+use crate::boundary::{Answer, Chunk, Failure, Hello, Item, Outcome, Phase, Posted, Trace};
 use crate::items::Seen;
 
 /// The bits of a run's token that hold the item's number.
@@ -137,14 +137,14 @@ pub(crate) const fn then(then: plan::Then) -> work::Then {
     }
 }
 
-/// An item's phase as the views show it.
-pub(crate) const fn phase(phase: work::Phase) -> views::Phase {
+/// An item's phase as people see it, from its record's.
+pub(crate) const fn phase(phase: work::Phase) -> Phase {
     match phase {
-        work::Phase::Waiting | work::Phase::Parked | work::Phase::Retrying(_) => views::Phase::Waiting,
-        work::Phase::Claimed => views::Phase::Claimed,
-        work::Phase::Applying { .. } => views::Phase::Applying,
-        work::Phase::Held { .. } => views::Phase::Held,
-        work::Phase::Done => views::Phase::Done,
+        work::Phase::Waiting | work::Phase::Parked | work::Phase::Retrying(_) => Phase::Waiting,
+        work::Phase::Claimed => Phase::Claimed,
+        work::Phase::Applying { .. } => Phase::Applying,
+        work::Phase::Held { .. } => Phase::Held,
+        work::Phase::Done => Phase::Done,
     }
 }
 
@@ -153,8 +153,15 @@ pub(crate) fn chunks(chunks: Box<[views::Chunk]>) -> Box<[Chunk]> {
     let mut stream = List::with_capacity(u32::try_from(chunks.len()).unwrap_or(0));
     for chunk in chunks {
         let chunk = match chunk {
-            views::Chunk::Report { run, kind, at, content } => Chunk::Report { item: item(run), kind, at, content },
-            views::Chunk::Phase { item: of, phase, at } => Chunk::Phase { item: item(of), phase, at },
+            views::Chunk::Snapshot { at, content } => Chunk::Snapshot { at, content },
+            views::Chunk::Report { run, attempt, kind, at, content } => {
+                Chunk::Report { item: item(run), attempt: attempt.raw(), kind, at, content }
+            }
+            views::Chunk::Phase { item: of, phase, at } => {
+                // The views carry back the codes the top level gave them.
+                let Some(phase) = Phase::of(phase) else { continue };
+                Chunk::Phase { item: item(of), phase, at }
+            }
         };
         if stream.push(chunk).is_err() {
             break;
@@ -167,8 +174,8 @@ pub(crate) fn chunks(chunks: Box<[views::Chunk]>) -> Box<[Chunk]> {
 pub(crate) fn traces(records: Box<[views::Record]>) -> Box<[Trace]> {
     let mut traces = List::with_capacity(u32::try_from(records.len()).unwrap_or(0));
     for record in records {
-        let views::Record { run, kind, at, size, content } = record;
-        if traces.push(Trace { item: item(run), kind, at, size, content }).is_err() {
+        let views::Record { run, attempt, kind, at, size, content } = record;
+        if traces.push(Trace { item: item(run), attempt: attempt.raw(), kind, at, size, content }).is_err() {
             break;
         }
     }

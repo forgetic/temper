@@ -50,7 +50,7 @@ use temper_engine_model_forge::{News, Read, api};
 use temper_engine_model_notes::{Change, Entry, Noted, Page, Recall, Scope};
 use temper_engine_model_plan::{self as plan, Budget, Decided, Finish, Grants, Why};
 use temper_engine_model_rules::Permission;
-use temper_engine_model_views::{End, Kind, Phase, Policy};
+use temper_engine_model_views::{End, Kind, Policy};
 use temper_engine_model_work::Lifecycle;
 use temper_lib::{ReplyTo, Time, Token};
 
@@ -93,8 +93,9 @@ pub enum Event {
     Ask { reply_to: ReplyTo, person: u64, ask: Ask },
     /// The person watching as `watcher` stopped, or their stream closed.
     Unwatch { watcher: Token },
-    /// Terminal for `Deliver`: the stream of `watcher` took it, or could not.
-    Delivered { watcher: Token },
+    /// Terminal for `Deliver`: the stream of `watcher` took it, or did not in
+    /// the time the protocol layer gives a delivery.
+    Delivered { watcher: Token, done: bool },
     /// Terminal for `Store`.
     Stored { owner: Token, stored: Stored },
 }
@@ -505,17 +506,79 @@ pub enum Watched {
 /// A piece of a watcher's stream.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Chunk {
-    /// What the item's run reported at `at`.
-    Report { item: Item, kind: Kind, at: Time, content: Box<[u8]> },
+    /// What the subject was when the watch began: a line per item, its
+    /// number and its phase.
+    Snapshot { at: Time, content: Box<[u8]> },
+    /// What the item's run reported at `at`, at its attempt `attempt`.
+    Report { item: Item, attempt: u64, kind: Kind, at: Time, content: Box<[u8]> },
     /// The item went to `phase` at `at`.
     Phase { item: Item, phase: Phase, at: Time },
 }
 
-/// A report, as a trace keeps it: its run's item, its kind, when it was
-/// reported, its size, and its bytes if the run's capture policy keeps them.
+/// An item's phase (engine-model.md, 4.2), as people see it.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum Phase {
+    Waiting,
+    Due,
+    Claimed,
+    Running,
+    Applying,
+    Held,
+    Done,
+}
+
+impl Phase {
+    /// Its code, which the views carry.
+    #[must_use]
+    pub const fn code(self) -> u32 {
+        match self {
+            Phase::Waiting => 0,
+            Phase::Due => 1,
+            Phase::Claimed => 2,
+            Phase::Running => 3,
+            Phase::Applying => 4,
+            Phase::Held => 5,
+            Phase::Done => 6,
+        }
+    }
+
+    /// The phase of `code`, if it is one.
+    #[must_use]
+    pub const fn of(code: u32) -> Option<Phase> {
+        match code {
+            0 => Some(Phase::Waiting),
+            1 => Some(Phase::Due),
+            2 => Some(Phase::Claimed),
+            3 => Some(Phase::Running),
+            4 => Some(Phase::Applying),
+            5 => Some(Phase::Held),
+            6 => Some(Phase::Done),
+            _ => None,
+        }
+    }
+
+    /// Its name, as a snapshot writes it.
+    #[must_use]
+    pub const fn name(self) -> &'static [u8] {
+        match self {
+            Phase::Waiting => b"waiting",
+            Phase::Due => b"due",
+            Phase::Claimed => b"claimed",
+            Phase::Running => b"running",
+            Phase::Applying => b"applying",
+            Phase::Held => b"held",
+            Phase::Done => b"done",
+        }
+    }
+}
+
+/// A report, as a trace keeps it: its run's item and attempt, its kind,
+/// when it was reported, its size, and its bytes if the run's capture
+/// policy keeps them.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Trace {
     pub item: Item,
+    pub attempt: u64,
     pub kind: Kind,
     pub at: Time,
     pub size: u32,
@@ -553,7 +616,8 @@ pub enum Refusal {
     Unheld,
     /// The forge did not take it.
     Failed,
-    /// The run is not followed: it has finished, or never started.
+    /// The run is not followed: it has finished, or never started, or
+    /// started when the views had no room for it.
     Unfollowed,
 }
 

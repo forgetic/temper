@@ -82,7 +82,7 @@ pub(crate) fn event(model: &mut Model, env: &Env<Limits>, event: Event, out: &mu
         Event::Told { item, attempt, kind, content } => runs::told(model, env, item, attempt, kind, content),
         Event::Ask { reply_to, person, ask } => people::ask(model, env, reply_to, person, ask, out),
         Event::Unwatch { watcher } => views_step(model, env, views::Event::Unwatch { watcher }),
-        Event::Delivered { watcher } => views_step(model, env, views::Event::Delivered { watcher }),
+        Event::Delivered { watcher, done } => views_step(model, env, views::Event::Delivered { watcher, done }),
         Event::Stored { owner, stored } => serve::stored(model, env, owner, stored),
     }
 }

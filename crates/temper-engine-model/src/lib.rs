@@ -82,7 +82,7 @@ mod waits;
 
 pub use boundary::{
     Answer, Ask, Assignment, Call, Charter, Checkout, Chunk, Decoded, Event, Failure, Hello, Hosted, Inbound, Item,
-    Landed, Outcome, Payload, Posted, Record, Refusal, Related, Relations, Reply, Request, Served, Start, Store,
+    Landed, Outcome, Payload, Phase, Posted, Record, Refusal, Related, Relations, Reply, Request, Served, Start, Store,
     Stored, Trace, Unserved, Watched, Work, Workspace,
 };
 pub use config::Config;
