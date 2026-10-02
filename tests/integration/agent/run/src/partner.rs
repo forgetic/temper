@@ -11,8 +11,8 @@
 //!   (`Ended` with a fault), call `finish` (`Delegated`, then wait for its
 //!   `Return`), ask for sub-agents (the same, for each), yield (`Yielded`,
 //!   then wait for `Say` or `Close`), or carry on. A finish declares an
-//!   outcome that fits the fake worker's charters or one that breaks them, a
-//!   change or a verdict. An ask may want more than the asker has, or an LLM
+//!   outcome that fits the host's charters or one that breaks them, a change
+//!   or a verdict. An ask may want more than the asker has, or an LLM
 //!   the charter does not list, and may ask for a small share. A sub-agent
 //!   may not finish: where main would, it yields its answer.
 //! - A write runs alone, as a session runs it: a finish, or an ask for a
@@ -73,7 +73,7 @@ pub struct Script {
     /// The most read-only asks a turn makes at once.
     pub parallel: u32,
     /// Of finishes, the chance, per mille, that the outcome is a change
-    /// rather than a verdict, and that it fits the fake worker's charters.
+    /// rather than a verdict, and that it fits the host's charters.
     pub changes: u32,
     pub good: u32,
     /// The chance, per mille, that a yield stops for something other than the
@@ -465,8 +465,8 @@ impl Partner {
         talk.phase = Phase::Calling { pending, over };
     }
 
-    /// An outcome to declare: a change or a verdict, one that fits the fake
-    /// worker's charters or one that does not.
+    /// An outcome to declare: a change or a verdict, one that fits the host's
+    /// charters or one that does not.
     fn outcome(&mut self) -> Declared {
         let change = self.rng.chance(self.script.changes);
         let good = self.rng.chance(self.script.good);

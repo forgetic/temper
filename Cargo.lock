@@ -24,7 +24,6 @@ name = "temper-agent-model-run-tests"
 version = "0.0.0"
 dependencies = [
  "temper-agent-model-run",
- "temper-fake-worker-model",
  "temper-lib",
  "temper-world",
 ]

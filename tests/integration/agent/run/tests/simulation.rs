@@ -1,13 +1,13 @@
-//! End to end at the run sub-model: runs started by a fake worker's model, with
-//! a scripted partner playing their conversations, in a simulated world.
+//! End to end at the run sub-model: runs started by a scripted host, with a
+//! scripted partner playing their conversations, in a simulated world.
 //!
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use temper_agent_model_run::{Answer, Budget, Exhausted, Failure, Fault, Invalid, Limits, Policy, Refusal};
+use temper_agent_model_run_tests::host;
 use temper_agent_model_run_tests::partner::Script;
 use temper_agent_model_run_tests::{Checkouts, Settings, Span, World};
-use temper_fake_worker_model::Config;
 use temper_lib::{Duration, Rng};
 
 const ITERATIONS: u32 = 1_000_000;
@@ -79,8 +79,8 @@ fn an_llm_that_works_on_runs_out_of_turns() {
 #[test]
 fn an_llm_that_spends_past_the_tokens_fails_its_run_for_budget() {
     let calm = Settings::calm(5);
-    let worker = Config { tokens_min: 5_000, tokens_max: 20_000, ..calm.worker };
-    let world = settled(&Settings { worker, partner: Script { yields: 0, ..calm.partner }, ..calm });
+    let host = host::Script { tokens_min: 5_000, tokens_max: 20_000, ..calm.host };
+    let world = settled(&Settings { host, partner: Script { yields: 0, ..calm.partner }, ..calm });
     let tokens =
         [Exhausted::Input, Exhausted::Output, Exhausted::CacheRead, Exhausted::CacheWrite].map(Failure::Budget);
     for answer in answers(&world) {
@@ -91,9 +91,9 @@ fn an_llm_that_spends_past_the_tokens_fails_its_run_for_budget() {
 #[test]
 fn a_run_out_of_time_fails_for_time() {
     let calm = Settings::calm(6);
-    let worker = Config { time_min: Duration::from_secs(10), time_max: Duration::from_secs(20), ..calm.worker };
+    let host = host::Script { time: Span::millis(10_000, 20_000), ..calm.host };
     let script = Script { turn: Span::millis(3_000, 8_000), yields: 0, ..calm.partner };
-    let world = settled(&Settings { worker, partner: script, ..calm });
+    let world = settled(&Settings { host, partner: script, ..calm });
     for answer in answers(&world) {
         assert_eq!(failure(answer), Failure::Budget(Exhausted::Time));
     }
@@ -102,9 +102,8 @@ fn a_run_out_of_time_fails_for_time() {
 #[test]
 fn a_cancelled_run_closes_its_conversation_and_answers_as_cancelled() {
     let calm = Settings::calm(7);
-    let worker =
-        Config { cancels: 1000, cancel_min: Duration::ZERO, cancel_max: Duration::from_secs(30), ..calm.worker };
-    let world = settled(&Settings { worker, partner: Script { yields: 0, ..calm.partner }, ..calm });
+    let host = host::Script { cancels: 1000, cancel: Span::millis(0, 30_000), ..calm.host };
+    let world = settled(&Settings { host, partner: Script { yields: 0, ..calm.partner }, ..calm });
     for answer in answers(&world) {
         assert_eq!(failure(answer), Failure::Cancelled);
     }
@@ -115,11 +114,11 @@ fn a_cancelled_run_closes_its_conversation_and_answers_as_cancelled() {
 #[test]
 fn a_cancel_that_comes_before_main_starts_closes_main_once_it_does() {
     let calm = Settings::calm(8);
-    let worker = Config { cancels: 1000, cancel_min: Duration::ZERO, cancel_max: Duration::ZERO, ..calm.worker };
+    let host = host::Script { cancels: 1000, cancel: Span::millis(0, 0), ..calm.host };
     // The checkout is read at once, and the cancel is back within two trips to
-    // the worker; main's start takes two hops longer than that.
+    // the host; main's start takes two hops longer than that.
     let checkout = Checkouts { io: Span::millis(0, 0), ..calm.checkout };
-    let world = settled(&Settings { worker, hop: Span::millis(50, 100), checkout, ..calm });
+    let world = settled(&Settings { host, hop: Span::millis(50, 100), checkout, ..calm });
     for answer in answers(&world) {
         assert_eq!(failure(answer), Failure::Cancelled);
     }
@@ -132,9 +131,9 @@ fn a_cancel_that_comes_before_main_starts_closes_main_once_it_does() {
 #[test]
 fn a_cancel_while_the_run_reads_its_checkout_answers_once_the_read_has_ended() {
     let calm = Settings::calm(13);
-    let worker = Config { cancels: 1000, cancel_min: Duration::ZERO, cancel_max: Duration::ZERO, ..calm.worker };
+    let host = host::Script { cancels: 1000, cancel: Span::millis(0, 0), ..calm.host };
     let checkout = Checkouts { io: Span::millis(500, 1_000), ..calm.checkout };
-    let world = settled(&Settings { worker, checkout, ..calm });
+    let world = settled(&Settings { host, checkout, ..calm });
     for answer in answers(&world) {
         assert_eq!(failure(answer), Failure::Cancelled);
     }
@@ -157,7 +156,7 @@ fn starts_beyond_the_run_slots_are_refused_as_busy() {
     let calm = Settings::calm(8);
     let settings = Settings {
         run: Limits { runs: 1, ..calm.run },
-        worker: Config { window: Duration::ZERO, ..calm.worker },
+        host: host::Script { window: Duration::ZERO, ..calm.host },
         partner: Script { yields: 1000, ..calm.partner },
         ..calm
     };
@@ -195,7 +194,7 @@ fn a_main_conversation_refused_at_its_entrance_refuses_its_run() {
 fn finishing(seed: u64) -> Settings {
     let calm = Settings::calm(seed);
     Settings {
-        worker: Config { writable: 1000, changes: 1000, checks: 1000, verdicts: 1000, ..calm.worker },
+        host: host::Script { writable: 1000, changes: 1000, checks: 1000, verdicts: 1000, ..calm.host },
         partner: Script { finishes: 300, yields: 0, ..calm.partner },
         checkout: Checkouts { checks: 1000, check_failures: 2, ..calm.checkout },
         ..calm
@@ -218,14 +217,15 @@ fn changes_land_after_their_checks_pass_and_their_push_goes_through() {
     let stats = world.stats();
     assert_eq!(stats.partner.accepted, 4, "{stats:?}");
     assert!(stats.partner.checks_failed > 0, "{stats:?}");
-    assert!(world.trace().iter().any(|line| line.contains("Checking {")), "the worker hears of each check");
+    assert!(world.trace().iter().any(|line| line.contains("Checking {")), "the run tells the host of its checks");
+    assert_eq!(stats.host.notices, stats.checks, "the host hears of each check");
 }
 
 #[test]
 fn a_change_whose_branch_moved_ends_its_run_as_stale() {
     let settings = finishing(19);
     let world = settled(&Settings {
-        worker: Config { moved: 1000, ..settings.worker },
+        host: host::Script { moved: 1000, ..settings.host },
         partner: Script { changes: 1000, ..settings.partner },
         ..settings
     });
@@ -251,7 +251,7 @@ fn an_outcome_that_does_not_fit_is_rejected_and_the_llm_tries_again() {
 fn a_finish_past_its_deadline_has_its_checks_aborted_and_times_out() {
     let settings = finishing(18);
     let world = settled(&Settings {
-        worker: Config { time_min: Duration::from_secs(2), time_max: Duration::from_secs(10), ..settings.worker },
+        host: host::Script { time: Span::millis(2_000, 10_000), ..settings.host },
         partner: Script { changes: 1000, turn: Span::millis(100, 2_000), ..settings.partner },
         checkout: Checkouts { check: Span::millis(2_000, 8_000), ..settings.checkout },
         races: 0,
@@ -340,30 +340,27 @@ fn noisy(seed: u64) -> Settings {
         budget: Budget { turns: 30, time: Duration::from_secs(3600), ..calm.run.budget },
         ..calm.run
     };
-    let worker = Config {
+    let host = host::Script {
         jobs: small(pick(1, 8)),
         window: Duration::from_secs(pick(0, 120)),
         cancels: small(pick(0, 300)),
-        cancel_min: Duration::ZERO,
-        cancel_max: Duration::from_secs(pick(1, 300)),
+        cancel: Span { min: Duration::ZERO, max: Duration::from_secs(pick(1, 300)) },
         brief_min: 0,
         brief_max: small(pick(100, 4_000)),
         turns_min: 1,
         turns_max: small(pick(5, 35)),
         tokens_min: 500,
         tokens_max: pick(1_000, 200_000),
-        time_min: Duration::from_secs(5),
-        time_max: Duration::from_secs(pick(60, 4_000)),
-        ..calm.worker
+        time: Span { min: Duration::from_secs(5), max: Duration::from_secs(pick(60, 4_000)) },
+        ..calm.host
     };
-    let worker = Config {
+    let host = host::Script {
         recancels: small(pick(0, 300)),
         late_cancels: small(pick(0, 300)),
-        push_min: Duration::ZERO,
-        push_max: Duration::from_millis(pick(0, 3_000)),
+        push: Span::millis(0, pick(0, 3_000)),
         moved: small(pick(0, 300)),
         push_failures: small(pick(0, 200)),
-        ..worker
+        ..host
     };
     let partner = Script {
         conversations: small(pick(0, 4)),
@@ -413,10 +410,10 @@ fn noisy(seed: u64) -> Settings {
         facts: small(pick(0, 64)),
         ..run
     };
-    let worker = Config { agents: small(pick(0, 1000)), ..worker };
+    let host = host::Script { agents: small(pick(0, 1000)), ..host };
     Settings {
         run,
-        worker,
+        host,
         partner,
         hop: Span::millis(0, pick(0, 50)),
         checkout,
@@ -436,7 +433,7 @@ fn tally(world: &World, cancels: &mut BTreeMap<&'static str, u32>, deadlines: &m
     }
 }
 
-/// Cancels at random moments, from the worker (once, twice, late) and handed
+/// Cancels at random moments, from the host (once, twice, late) and handed
 /// to the run right before or after any of its events, find runs in every
 /// state, and each answers once (checked by `World::run`).
 #[test]
@@ -447,32 +444,25 @@ fn cancels_find_runs_in_every_state() {
     }
     // Cancelled twice while the run reads a slow checkout.
     let calm = Settings::calm(20);
-    let worker = Config {
-        cancels: 1000,
-        cancel_min: Duration::ZERO,
-        cancel_max: Duration::from_secs(1),
-        recancels: 1000,
-        ..calm.worker
-    };
+    let host = host::Script { cancels: 1000, cancel: Span::millis(0, 1_000), recancels: 1000, ..calm.host };
     let checkout = Checkouts { io: Span::millis(3_000, 5_000), ..calm.checkout };
-    tally(&settled(&Settings { worker, checkout, ..calm }), &mut cancels, &mut deadlines);
+    tally(&settled(&Settings { host, checkout, ..calm }), &mut cancels, &mut deadlines);
     // Cancelled as changes are checked and pushed, and as the LLM spends past
     // its budget.
     for seed in 21..24 {
         let landing = finishing(seed);
         let run = Limits { runs: 16, conversations: 16, calls: 16, ..landing.run };
-        let worker = Config {
+        let host = host::Script {
             jobs: 16,
             cancels: 1000,
-            cancel_min: Duration::from_secs(2),
-            cancel_max: Duration::from_secs(30),
+            cancel: Span::millis(2_000, 30_000),
             tokens_min: 5_000,
             tokens_max: 40_000,
-            ..landing.worker
+            ..landing.host
         };
         let partner = Script { changes: 1000, ..landing.partner };
         let checkout = Checkouts { check: Span::millis(2_000, 8_000), check_failures: 3, ..landing.checkout };
-        let settings = Settings { run, worker, partner, checkout, inject: 20, ..landing };
+        let settings = Settings { run, host, partner, checkout, inject: 20, ..landing };
         tally(&settled(&settings), &mut cancels, &mut deadlines);
     }
     let cells = ["preparing", "stopping", "opening", "working", "landing", "over", "winding", "answered", "gone"];
@@ -488,10 +478,10 @@ fn deadlines_find_runs_in_every_state_they_run_in() {
     let (mut cancels, mut deadlines) = (BTreeMap::new(), BTreeMap::new());
     for seed in 0..50 {
         let calm = Settings::calm(seed);
-        let worker = Config { time_min: Duration::from_secs(1), time_max: Duration::from_secs(6), ..calm.worker };
+        let host = host::Script { time: Span::millis(1_000, 6_000), ..calm.host };
         let checkout = Checkouts { io: Span::millis(0, 2_000), ..calm.checkout };
         let partner = Script { turn: Span::millis(100, 2_000), ..calm.partner };
-        let settings = Settings { worker, checkout, partner, hop: Span::millis(0, 1_500), ..calm };
+        let settings = Settings { host, checkout, partner, hop: Span::millis(0, 1_500), ..calm };
         tally(&settled(&settings), &mut cancels, &mut deadlines);
     }
     // And as changes are checked and pushed, and as the LLM spends past its
@@ -499,17 +489,16 @@ fn deadlines_find_runs_in_every_state_they_run_in() {
     for seed in 50..56 {
         let landing = finishing(seed);
         let run = Limits { runs: 16, conversations: 16, calls: 16, ..landing.run };
-        let worker = Config {
+        let host = host::Script {
             jobs: 16,
-            time_min: Duration::from_secs(2),
-            time_max: Duration::from_secs(15),
+            time: Span::millis(2_000, 15_000),
             tokens_min: 2_000,
             tokens_max: 8_000,
-            ..landing.worker
+            ..landing.host
         };
         let partner = Script { changes: 1000, turn: Span::millis(100, 2_000), ..landing.partner };
         let checkout = Checkouts { check: Span::millis(2_000, 8_000), check_failures: 3, ..landing.checkout };
-        let settings = Settings { run, worker, partner, checkout, hop: Span::millis(0, 1_500), ..landing };
+        let settings = Settings { run, host, partner, checkout, hop: Span::millis(0, 1_500), ..landing };
         tally(&settled(&settings), &mut cancels, &mut deadlines);
     }
     for cell in ["preparing", "opening", "working", "landing", "over"] {
@@ -522,7 +511,7 @@ fn deadlines_find_runs_in_every_state_they_run_in() {
 fn asking(seed: u64) -> Settings {
     let calm = Settings::calm(seed);
     Settings {
-        worker: Config { agents: 1000, ..calm.worker },
+        host: host::Script { agents: 1000, ..calm.host },
         partner: Script { asks: 300, finishes: 50, yields: 100, parallel: 3, ..calm.partner },
         ..calm
     }
@@ -562,14 +551,9 @@ fn sub_agents_with_a_small_share_come_back_unanswered_when_it_runs_out() {
 #[test]
 fn a_cancelled_run_closes_its_sub_agents_down_the_tree() {
     let settings = asking(33);
-    let worker = Config {
-        cancels: 1000,
-        cancel_min: Duration::from_secs(5),
-        cancel_max: Duration::from_secs(60),
-        ..settings.worker
-    };
+    let host = host::Script { cancels: 1000, cancel: Span::millis(5_000, 60_000), ..settings.host };
     let partner = Script { turn: Span::millis(1_000, 10_000), ..settings.partner };
-    let world = settled(&Settings { worker, partner, ..settings });
+    let world = settled(&Settings { host, partner, ..settings });
     let stats = world.stats();
     assert!(stats.children > 0 && stats.partner.withdrawn > 0, "{stats:?}");
     for answer in answers(&world) {
