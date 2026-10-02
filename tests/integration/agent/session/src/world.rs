@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use temper_agent_model as agent;
-use temper_agent_model::llm::{Endpoint, Failure, Tool};
+use temper_agent_model_session as agent;
+use temper_agent_model_session::llm::{Endpoint, Failure, Tool};
 use temper_lib::{Duration, Env, Queue, ReplyTo, Rng, Time, Token};
 use temper_llm_model as provider;
 

@@ -1,8 +1,8 @@
 //! The mapping between the agent's vocabulary and the provider's: what the two
 //! protocol layers and the wire between them do, without the bytes.
 
-use temper_agent_model::Event;
-use temper_agent_model::llm as agent;
+use temper_agent_model_session::Event;
+use temper_agent_model_session::llm as agent;
 use temper_lib::Token;
 use temper_llm_model::api as provider;
 

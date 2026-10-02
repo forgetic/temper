@@ -1,4 +1,5 @@
-# The simulation is ordinary Rust, but a seed must replay to the same run.
+# What the worlds and harnesses under tests/integration may not use: they are
+# ordinary Rust, but a seed must replay to the same run.
 
 disallowed-types = [
     { path = "std::collections::HashMap", reason = "iteration order depends on a random seed: BTreeMap" },

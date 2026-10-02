@@ -1,72 +1,67 @@
-//! The model layer's state and its entry points (section 3).
+//! The model's state and its entry points (section 3). Each hands what it is
+//! given to the sub-model it is for, and routes what that sub-model emits back
+//! out before it returns.
 
-use temper_lib::{Deadlines, Env, Queue, Rng, Slab, Time};
+use temper_agent_model_session as session;
+use temper_lib::{Env, Queue, Time};
 
 use crate::boundary::{Event, Request};
-use crate::limits::{self, Limits};
-use crate::session::{self, Alarm, Session};
+use crate::limits::Limits;
+use crate::route;
 
-/// The most requests an entry point emits per call. The loop reserves this
-/// much room in `out` before calling it.
-pub const MAX_OUT: u32 = 1;
+/// The most requests an entry point emits per call: the session's, since each
+/// of its requests routes to one of ours. The loop reserves this much room in
+/// `out` before calling it.
+pub const MAX_OUT: u32 = session::MAX_OUT;
 
-/// The agent model's state.
+/// The agent model's state: its sub-models', and room for what they emit
+/// within a step.
 #[derive(Debug)]
 pub struct Model {
-    pub(crate) sessions: Slab<Session>,
-    pub(crate) alarms: Deadlines<Alarm>,
-    pub(crate) rng: Rng,
+    session: session::Model,
+    /// What the session emits in one step, until it is routed out. Empty
+    /// between steps.
+    session_out: Queue<session::Request>,
 }
 
 impl Model {
     /// A model with room for `limits`, drawing randomness from `seed`.
     #[must_use]
     pub fn new(limits: &Limits, seed: u64) -> Model {
-        let alarms = limits::alarms(limits).expect("worst_case accepted the limits");
         Model {
-            sessions: Slab::with_capacity(limits.sessions),
-            alarms: Deadlines::with_capacity(alarms),
-            rng: Rng::new(seed),
+            session: session::Model::new(&limits.session, seed),
+            session_out: Queue::with_capacity(session::MAX_OUT),
         }
     }
 
     /// Sessions present, closed ones included until they are reclaimed.
     #[must_use]
     pub fn sessions(&self) -> u32 {
-        self.sessions.len()
+        self.session.sessions()
     }
 
     /// When the earliest alarm falls due.
     #[must_use]
     pub fn next_deadline(&self) -> Option<Time> {
-        self.alarms.next()
+        self.session.next_deadline()
     }
 
     /// Whether an alarm is due at `now`. The loop calls [`fire`] while one is.
     #[must_use]
     pub fn is_due(&self, now: Time) -> bool {
-        match self.alarms.next() {
-            Some(at) => at <= now,
-            None => false,
-        }
+        self.session.is_due(now)
     }
 
     /// The reclaim point: frees what closed in this iteration.
     pub fn reclaim(&mut self) {
-        self.sessions.reclaim();
+        self.session.reclaim();
     }
 }
 
 /// Handles one event, emitting at most [`MAX_OUT`] requests.
 pub fn step(model: &mut Model, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
-    match event {
-        Event::Run { reply_to, task } => session::run(model, env, reply_to, task, out),
-        Event::Completed { owner, completion } => session::completed(model, env, owner, completion, out),
-        Event::Failed { owner, failure } => session::failed(model, env, owner, failure, out),
-        Event::Cancelled { owner } => session::cancelled(model, owner, out),
-        Event::ToolDone { owner, output, error } => session::tool_done(model, env, owner, output, error, out),
-        Event::ToolCancelled { owner } => session::tool_cancelled(model, owner, out),
-    }
+    session::step(&mut model.session, &session_env(env), route::event(event), &mut model.session_out);
+    route_out(model, out);
 }
 
 /// Fires the earliest alarm due at `env.now`, if there is one, emitting at most
@@ -74,11 +69,21 @@ pub fn step(model: &mut Model, env: &Env<Limits>, event: Event, out: &mut Queue<
 /// progress that arrived in the same iteration wins over a deadline that passed
 /// while the loop waited.
 pub fn fire(model: &mut Model, env: &Env<Limits>, out: &mut Queue<Request>) {
-    let Some(alarm) = model.alarms.expire(env.now) else {
-        return;
-    };
-    match alarm {
-        Alarm::Expiry { session } => session::expire(model, session, out),
-        Alarm::Retry { session } => session::retry(model, env, session, out),
+    session::fire(&mut model.session, &session_env(env), &mut model.session_out);
+    route_out(model, out);
+}
+
+/// What the session reads: this iteration's time, and its own limits.
+fn session_env(env: &Env<Limits>) -> Env<session::Limits> {
+    Env { now: env.now, limits: env.limits.session }
+}
+
+/// Routes what the session emitted into `out`, leaving the session's queue
+/// empty for the next step.
+fn route_out(model: &mut Model, out: &mut Queue<Request>) {
+    for _ in 0..session::MAX_OUT {
+        let Some(request) = model.session_out.pop() else { break };
+        out.push(route::request(request));
     }
+    assert!(model.session_out.is_empty(), "the session emits at most its MAX_OUT");
 }

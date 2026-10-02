@@ -1,6 +1,10 @@
 //! The records that cross the boundary with the protocol layer (4.4). The
 //! model defines them; the protocol crate depends on the model.
 //!
+//! For now the variants mirror the session sub-model's, and their payloads are
+//! the session's own types. The `route` module translates each variant to the
+//! session's vocabulary and back.
+//!
 //! Two shapes cross it: calls up and replies down (a [`Event::Run`] is answered
 //! by exactly one [`Request::Reply`]), and requests down with exactly one
 //! terminal event up (a [`Request::Complete`] is ended by one of
@@ -9,9 +13,9 @@
 
 use alloc::boxed::Box;
 
+use temper_agent_model_session::llm::{Completion, Failure, Prompt};
+use temper_agent_model_session::{Report, Task, ToolCall};
 use temper_lib::{Duration, ReplyTo, Token};
-
-use crate::llm::{Block, Completion, Endpoint, Failure, Prompt, Tool, Usage};
 
 /// protocol -> model
 #[derive(PartialEq, Eq, Debug)]
@@ -46,58 +50,4 @@ pub enum Request {
     /// Abandon the `Tool` in flight for `owner`. Its terminal event still
     /// comes: `ToolCancelled`, or `ToolDone` if the run won the race.
     CancelTool { owner: Token },
-}
-
-/// What a session is asked to do.
-#[derive(PartialEq, Eq, Debug)]
-pub struct Task {
-    pub endpoint: Endpoint,
-    /// The provider's name for the model.
-    pub model: Box<[u8]>,
-    pub system: Box<[u8]>,
-    /// The tools the LLM may call.
-    pub tools: Box<[Tool]>,
-    /// The first user message.
-    pub prompt: Box<[u8]>,
-    /// The most tokens each answer may take.
-    pub max_tokens: u32,
-}
-
-/// A tool to run, as the LLM asked for it. `input` is a JSON object.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct ToolCall {
-    pub name: Box<[u8]>,
-    pub input: Box<[u8]>,
-}
-
-/// The answer to a `Run`.
-#[derive(PartialEq, Eq, Hash, Debug)]
-pub enum Report {
-    /// Refused at the entrance: every session slot is taken.
-    Busy,
-    /// Refused at the entrance: the task does not fit the limits.
-    Invalid,
-    /// The session ran and ended, after `turns` completions that used `usage`.
-    Ended { outcome: Outcome, turns: u32, usage: Usage },
-}
-
-/// How a session ended.
-#[derive(PartialEq, Eq, Hash, Debug)]
-pub enum Outcome {
-    /// The LLM finished its turn, with this message.
-    Done { content: Box<[Block]> },
-    /// A call failed, for good or after its retries ran out.
-    Failed { failure: Failure },
-    /// The LLM ran out of tokens mid-answer.
-    Truncated,
-    /// The LLM declined to answer.
-    Refused,
-    /// The LLM asked for tools and named none.
-    Malformed,
-    /// The session used every completion it was allowed.
-    TurnLimit,
-    /// The conversation outgrew the session's message or byte limit.
-    TranscriptFull,
-    /// The session ran out of time.
-    Expired,
 }

@@ -1,6 +1,6 @@
 [package]
-name = "temper-agent-model-tests"
-description = "End-to-end simulation of the agent model against a fake LLM provider"
+name = "temper-agent-model-session-tests"
+description = "The session sub-model's world: a simulation against a fake LLM provider"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,11 +8,11 @@ publish.workspace = true
 
 [dependencies]
 temper-lib.workspace = true
-temper-agent-model.workspace = true
+temper-agent-model-session.workspace = true
 temper-llm-model.workspace = true
 
 # Ordinary Rust (programming-model.md, 10.2), so not the step crates' lints.
-# Its clippy.toml bans what would make a run unrepeatable.
+# tests/integration/clippy.toml bans what would make a run unrepeatable.
 [lints.rust]
 unsafe_code = "deny"                  # not forbid: tests/memory.rs's counting allocator expects it
 elided_lifetimes_in_paths = "deny"

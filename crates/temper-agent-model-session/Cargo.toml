@@ -1,6 +1,6 @@
 [package]
-name = "temper-agent-model"
-description = "The model layer of the temper coding agent: the agent loop's entry point, sans-io"
+name = "temper-agent-model-session"
+description = "One conversation with an LLM: the agent model's session sub-model, sans-io"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,7 +8,6 @@ publish.workspace = true
 
 [dependencies]
 temper-lib.workspace = true
-temper-agent-model-session.workspace = true
 
 [lints]
 workspace = true

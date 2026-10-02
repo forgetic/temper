@@ -1,9 +1,9 @@
-//! End to end at the model layer: the agent's model and a fake provider's
-//! model, talking through a simulated world.
+//! End to end at the session sub-model: the agent's sessions and a fake
+//! provider's model, talking through a simulated world.
 
-use temper_agent_model::llm::{Block, Failure};
-use temper_agent_model::{Limits, Outcome, Report};
-use temper_agent_model_tests::{Settings, Span, World, task};
+use temper_agent_model_session::llm::{Block, Failure};
+use temper_agent_model_session::{Limits, Outcome, Report};
+use temper_agent_model_session_tests::{Settings, Span, World, task};
 use temper_lib::{Duration, Rng, Time};
 use temper_llm_model::Config;
 

@@ -5,8 +5,9 @@ resolver = "3"
 members = [
     "crates/temper-lib",
     "crates/temper-agent-model",
+    "crates/temper-agent-model-session",
     "testing/temper-llm-model",
-    "tests/integration/agent/model",
+    "tests/integration/agent/session",
 ]
 
 [workspace.package]
@@ -18,6 +19,7 @@ publish = false
 [workspace.dependencies]
 temper-lib = { path = "crates/temper-lib" }
 temper-agent-model = { path = "crates/temper-agent-model" }
+temper-agent-model-session = { path = "crates/temper-agent-model-session" }
 temper-llm-model = { path = "testing/temper-llm-model" }
 
 # Panics are fail-stop and overflow traps, in every profile. (The test harness

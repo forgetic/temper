@@ -1,11 +1,11 @@
 //! Memory stays within the worst case (programming-model.md, 6.4), measured by
-//! a counting allocator: the model with every session filled to its limits,
-//! and lib's containers on their own.
+//! a counting allocator: the session sub-model with every session filled to its
+//! limits, and lib's containers on their own.
 
 use std::mem::size_of;
 
-use temper_agent_model::llm::{Block, Completion, Endpoint, Failure, Stop, Tool, Usage};
-use temper_agent_model::{Event, Limits, MAX_OUT, Model, Request, Task, worst_case};
+use temper_agent_model_session::llm::{Block, Completion, Endpoint, Failure, Stop, Tool, Usage};
+use temper_agent_model_session::{Event, Limits, MAX_OUT, Model, Request, Task, worst_case};
 use temper_lib::{Deadlines, Duration, Env, List, Queue, ReplyTo, Rng, Slab, Time, Token};
 
 /// Counts the heap each thread allocates, so that tests running side by side
@@ -99,7 +99,7 @@ fn fill(limits: Limits) {
     // The requests are the protocol layer's to hold and count: each is
     // dropped, keeping only what it asked for, before the heap is measured.
     let mut step = |event: Event| -> Option<Asked> {
-        temper_agent_model::step(&mut model, &env, event, &mut out);
+        temper_agent_model_session::step(&mut model, &env, event, &mut out);
         let asked = match out.pop()? {
             Request::Complete { owner, .. } => Asked::Complete { owner },
             Request::Tool { .. } => Asked::Tool,
