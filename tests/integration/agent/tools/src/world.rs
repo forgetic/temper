@@ -99,9 +99,11 @@ pub struct Stats {
     /// same.
     pub timeouts: u32,
     pub late_effects: u32,
-    /// Operations the tools cancelled, and those whose cancel lost the race.
+    /// Operations the tools cancelled, those whose cancel lost the race, and
+    /// cancels that came after their operation had ended.
     pub cancels: u32,
     pub late_cancels: u32,
+    pub stale_cancels: u32,
 }
 
 /// Something on its way, delivered at its time.
@@ -372,6 +374,7 @@ impl World {
                 // An operation that has ended has its terminal on the way: the
                 // cancel lost the race and changes nothing.
                 if !self.ops.contains_key(&owner) {
+                    self.stats.stale_cancels += 1;
                     return;
                 }
                 self.stats.cancels += 1;

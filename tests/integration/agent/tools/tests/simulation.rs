@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 
 use temper_agent_model_tools::{Authority, Entry, Fault, Grants, Kind, Limits, Name, Outcome, Refusal, Repo};
 use temper_agent_model_tools_tests::calls::{edit, list, read, read_lines, write};
-use temper_agent_model_tools_tests::{Settings, Span, Step, World, authority, repo};
+use temper_agent_model_tools_tests::{Settings, Span, Stats, Step, World, authority, repo};
 use temper_checkout_fake::Checkout;
 use temper_lib::{Duration, Rng, Time};
 
@@ -309,9 +309,17 @@ fn a_seed_replays_to_the_same_run() {
 #[test]
 fn random_worlds_settle_with_every_call_answered() {
     let mut seen = BTreeSet::new();
+    let mut faults = Stats::default();
     for seed in 0..300 {
         let mut world = noisy_world(seed);
         world.run(ITERATIONS);
+        let stats = world.stats();
+        faults.faults += stats.faults;
+        faults.timeouts += stats.timeouts;
+        faults.late_effects += stats.late_effects;
+        faults.cancels += stats.cancels;
+        faults.late_cancels += stats.late_cancels;
+        faults.stale_cancels += stats.stale_cancels;
         for session in world.sessions().collect::<Vec<_>>() {
             if world.refusal(session).is_some() {
                 seen.insert("refused");
@@ -348,6 +356,17 @@ fn random_worlds_settle_with_every_call_answered() {
         "written",
     ];
     assert_eq!(seen, expected.into_iter().collect());
+    // Between them, the worlds faulted at every point.
+    let Stats { faults, timeouts, late_effects, cancels, late_cancels, .. } = faults;
+    for (count, what) in [
+        (faults, "faults"),
+        (timeouts, "timeouts"),
+        (late_effects, "late effects"),
+        (cancels, "cancels"),
+        (late_cancels, "late cancels"),
+    ] {
+        assert!(count > 10, "only {count} {what}");
+    }
 }
 
 fn kind(outcome: &Outcome) -> &'static str {
@@ -379,9 +398,11 @@ fn kind(outcome: &Outcome) -> &'static str {
     }
 }
 
-const PATHS: [&[u8]; 20] = [
+const PATHS: [&[u8]; 22] = [
     b".git/config",
     b"vendor/lib/lib.rs",
+    b"third_party/lib.rs",
+    b"third_party/new.rs",
     b"src/lib.rs",
     b"src",
     b".",
@@ -402,7 +423,7 @@ const PATHS: [&[u8]; 20] = [
     b"Cargo.toml/x",
 ];
 
-const HOT: [&[u8]; 5] = [b"src/lib.rs", b"Cargo.toml", b"src/new.rs", b"third_party/lib.rs", b"third_party/new.rs"];
+const HOT: [&[u8]; 3] = [b"src/lib.rs", b"Cargo.toml", b"src/new.rs"];
 
 /// What edits replace: in every file, in some, in one line of one, nowhere.
 const SNIPPETS: [&[u8]; 5] = [b"\n", b"pub", b"fn one", b"written", b"nowhere"];
@@ -457,12 +478,14 @@ fn noisy_world(seed: u64) -> World {
 
 fn noisy_script(rng: &mut Rng) -> Vec<Step> {
     let mut script = Vec::new();
-    for _ in 0..rng.between(0, 8) {
-        let step = match rng.below(10) {
+    for _ in 0..rng.between(0, 10) {
+        let step = match rng.below(12) {
             0..=4 => Step::Calls(noisy_calls(rng)),
-            5 | 6 => Step::Send(noisy_calls(rng)),
-            7 => Step::Sleep(Duration::from_millis(rng.between(1, 5_000))),
-            8 => Step::Change(Box::new(|checkout: &mut Checkout| {
+            5..=7 => Step::Send(noisy_calls(rng)),
+            8 => Step::Sleep(Duration::from_millis(rng.between(1, 5_000))),
+            // A slow spell, or the end of one.
+            9 => Step::Latency(Span::millis(1, rng.between(1, 8_000))),
+            10 => Step::Change(Box::new(|checkout: &mut Checkout| {
                 checkout.write(b"work/temper/src/lib.rs", b"pub fn changed() {}\n");
                 checkout.write(b"work/temper/Cargo.toml", b"[package]\n");
             })),
@@ -840,4 +863,97 @@ fn an_edit_that_timed_out_may_have_happened_and_the_next_one_finds_out() {
     ];
     assert_eq!(answers, expected);
     assert_eq!((world.stats().timeouts, world.stats().late_effects), (1, 1));
+}
+
+/// What a session does before it closes its kit, with io slow, to leave a call
+/// in a given state; and what the call answers, and what `src/lib.rs` (or the
+/// new file, for a create) holds after, if the cancel wins and if it loses.
+struct Closing {
+    state: &'static str,
+    script: fn() -> Vec<Step>,
+    won: (Outcome, Option<&'static [u8]>),
+    lost: (Outcome, Option<&'static [u8]>),
+    file: &'static [u8],
+}
+
+fn slow() -> Step {
+    Step::Latency(Span::millis(2_000, 2_000))
+}
+
+#[test]
+fn closing_a_kit_settles_a_call_in_every_state() {
+    const UNO: &[u8] = b"pub fn uno() {}\npub fn two() {}\npub fn three() {}\n";
+    let table = [
+        Closing {
+            state: "reading",
+            script: || vec![slow(), Step::Send(vec![read(b"src/lib.rs")])],
+            won: (Outcome::Cancelled, Some(LIB)),
+            lost: (read_of(LIB, 0, 3, 3), Some(LIB)),
+            file: b"work/temper/src/lib.rs",
+        },
+        Closing {
+            state: "listing",
+            script: || vec![slow(), Step::Send(vec![list(b"vendor/lib")])],
+            won: (Outcome::Cancelled, Some(LIB)),
+            lost: (Outcome::Listed { entries: [entry(b"lib.rs", Kind::File)].into(), more: 0 }, Some(LIB)),
+            file: b"work/temper/src/lib.rs",
+        },
+        Closing {
+            state: "creating",
+            script: || vec![slow(), Step::Send(vec![write(b"src/new.rs", b"new\n")])],
+            won: (Outcome::Cancelled, None),
+            lost: (written(true), Some(b"new\n")),
+            file: b"work/temper/src/new.rs",
+        },
+        Closing {
+            state: "replacing",
+            script: || {
+                vec![Step::Calls(vec![read(b"src/lib.rs")]), slow(), Step::Send(vec![write(b"src/lib.rs", b"new\n")])]
+            },
+            won: (Outcome::Cancelled, Some(LIB)),
+            lost: (written(false), Some(b"new\n")),
+            file: b"work/temper/src/lib.rs",
+        },
+        Closing {
+            state: "editing, loading",
+            script: || {
+                let edit = edit(b"src/lib.rs", b"fn one", b"fn uno", false);
+                vec![Step::Calls(vec![read(b"src/lib.rs")]), slow(), Step::Send(vec![edit])]
+            },
+            // A load that won its race stores nothing.
+            won: (Outcome::Cancelled, Some(LIB)),
+            lost: (Outcome::Cancelled, Some(LIB)),
+            file: b"work/temper/src/lib.rs",
+        },
+        Closing {
+            state: "editing, storing",
+            script: || {
+                let edit = edit(b"src/lib.rs", b"fn one", b"fn uno", false);
+                let wait = Step::Sleep(Duration::from_secs(3));
+                vec![Step::Calls(vec![read(b"src/lib.rs")]), slow(), Step::Send(vec![edit]), wait]
+            },
+            won: (Outcome::Cancelled, Some(LIB)),
+            lost: (Outcome::Edited { replaced: 1 }, Some(UNO)),
+            file: b"work/temper/src/lib.rs",
+        },
+    ];
+    for (seed, case) in (40..).zip(table) {
+        for (late_cancels, (answer, content)) in [(0, &case.won), (1000, &case.lost)] {
+            let settings = Settings { late_cancels, ..Settings::calm(seed) };
+            let (answers, world) = run(settings, MODIFY, (case.script)());
+            assert_eq!(answers.last(), Some(answer), "{}, late cancels {late_cancels}", case.state);
+            assert_eq!(world.checkout().content(case.file), *content, "{}, late cancels {late_cancels}", case.state);
+            assert_eq!(world.stats().cancels, 1, "{}", case.state);
+        }
+    }
+}
+
+#[test]
+fn a_cancel_that_comes_after_its_operation_ended_changes_nothing() {
+    // io and the session take as long: the session closes its kit in the
+    // iteration its read ends, and the close comes first.
+    let settings = Settings { io: Span::millis(100, 100), think: Span::millis(100, 100), ..Settings::calm(50) };
+    let (answers, world) = run(settings, INSPECT, vec![Step::Send(vec![read(b"src/lib.rs")])]);
+    assert_eq!(answers, vec![read_of(LIB, 0, 3, 3)]);
+    assert_eq!((world.stats().cancels, world.stats().stale_cancels), (0, 1));
 }
