@@ -333,16 +333,16 @@ impl Engine {
         let start = match self.rng.below(4) {
             0 => Start::Base { branch },
             1 => Start::Branch { branch },
-            2 => Start::Commit { commit: Box::from(&b"0123abcd"[..]) },
+            2 => Start::Commit { commit: [0x5e; 32] },
             _ => Start::Saved { branch: Box::from(&b"saved/work"[..]) },
         };
         let access = if self.rng.chance(self.script.writable) {
-            Access::Writable { push: Box::from(&b"temper/fix"[..]), identity: Box::from(&b"bot"[..]) }
+            Access::Writable { push: Box::from(&b"temper/fix"[..]) }
         } else {
             Access::ReadOnly
         };
         let remote = format!("org/repo-{index}").into_bytes().into_boxed_slice();
-        Repository { name, remote, start, access }
+        Repository { name, remote, start, access, identity: Box::from(&b"bot"[..]) }
     }
 
     fn inbound(&mut self, run: Token, attempt: Token) -> Vec<Act> {

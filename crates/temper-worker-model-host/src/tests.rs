@@ -189,13 +189,15 @@ fn workspace() -> Workspace {
                 name: bytes(b"app"),
                 remote: bytes(b"org/app"),
                 start: Start::Base { branch: bytes(b"main") },
-                access: Access::Writable { push: bytes(b"fix-7"), identity: bytes(b"bot") },
+                access: Access::Writable { push: bytes(b"fix-7") },
+                identity: bytes(b"bot"),
             },
             Repository {
                 name: bytes(b"lib"),
                 remote: bytes(b"org/lib"),
-                start: Start::Commit { commit: bytes(b"abc123") },
+                start: Start::Commit { commit: [7; 32] },
                 access: Access::ReadOnly,
+                identity: bytes(b"reader"),
             },
         ]),
     }
@@ -297,10 +299,7 @@ fn an_assignment_beyond_the_limits_is_refused_as_invalid() {
             Assignment {
                 workspace: Workspace {
                     key: bytes(b"k"),
-                    repositories: Box::new([Repository {
-                        access: Access::Writable { push: bytes(b"p"), identity: bytes(b"") },
-                        ..repository(b"a")
-                    }]),
+                    repositories: Box::new([Repository { identity: bytes(b""), ..repository(b"a") }]),
                 },
                 ..assignment(1)
             },
@@ -336,6 +335,7 @@ fn repository(name: &[u8]) -> Repository {
         remote: bytes(b"org/repo"),
         start: Start::Branch { branch: bytes(b"b") },
         access: Access::ReadOnly,
+        identity: bytes(b"bot"),
     }
 }
 

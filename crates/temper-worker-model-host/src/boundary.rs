@@ -164,6 +164,10 @@ pub struct Repository {
     pub remote: Box<[u8]>,
     pub start: Start,
     pub access: Access,
+    /// Who the worker is to the forge for this repository, to read it and to
+    /// push to it, and who commits to it: a name the protocol layer maps to
+    /// credentials and an author.
+    pub identity: Box<[u8]>,
 }
 
 /// Where a repository's checkout starts.
@@ -176,8 +180,10 @@ pub enum Start {
     Branch {
         branch: Box<[u8]>,
     },
+    /// A commit, by the fixed-size value the protocol layer makes of its
+    /// hash: compared, never looked inside.
     Commit {
-        commit: Box<[u8]>,
+        commit: [u8; 32],
     },
     /// Saved work, on the saved-work branch `branch`.
     Saved {
@@ -189,11 +195,9 @@ pub enum Start {
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub enum Access {
     ReadOnly,
-    /// A change is pushed to `push`, as the push identity `identity`, a name
-    /// the protocol layer maps to credentials.
+    /// A change is pushed to `push`.
     Writable {
         push: Box<[u8]>,
-        identity: Box<[u8]>,
     },
 }
 
@@ -336,8 +340,8 @@ pub enum Invalid {
     Repositories,
     /// The workspace lists one repository name twice.
     Duplicate,
-    /// A workstream key, repository name, remote, branch, commit or identity
-    /// is empty or longer than a name may be; or a repository name is not one
+    /// A workstream key, repository name, remote, branch or identity is empty
+    /// or longer than a name may be; or a repository name is not one
     /// safe path component: `.`, `..`, `.git` in any case, or holding `/` or
     /// NUL.
     Name,

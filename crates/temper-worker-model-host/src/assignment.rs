@@ -44,16 +44,14 @@ fn repository(repository: &Repository, limits: &Limits) -> Result<(), Invalid> {
     name(&repository.name, limits)?;
     component(&repository.name)?;
     name(&repository.remote, limits)?;
+    name(&repository.identity, limits)?;
     match &repository.start {
         Start::Base { branch } | Start::Branch { branch } | Start::Saved { branch } => name(branch, limits)?,
-        Start::Commit { commit } => name(commit, limits)?,
+        Start::Commit { .. } => {}
     }
     match &repository.access {
         Access::ReadOnly => Ok(()),
-        Access::Writable { push, identity } => {
-            name(push, limits)?;
-            name(identity, limits)
-        }
+        Access::Writable { push } => name(push, limits),
     }
 }
 

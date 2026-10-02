@@ -16,8 +16,8 @@ pub struct Limits {
     pub slots: u32,
     /// Repositories a workspace may list.
     pub repositories: u32,
-    /// The most bytes of a workstream key, a repository name, a branch, a
-    /// commit or an identity.
+    /// The most bytes of a workstream key, a repository name or remote, a
+    /// branch or an identity.
     pub name_bytes: u32,
     /// The most bytes of a charter.
     pub charter_bytes: u64,

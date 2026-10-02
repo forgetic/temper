@@ -112,7 +112,8 @@ fn assignment(run: u64, limits: &Limits) -> Assignment {
             name: name(letter),
             remote: name(b'r'),
             start: Start::Branch { branch: name(b'b') },
-            access: Access::Writable { push: name(b'p'), identity: name(b'i') },
+            access: Access::Writable { push: name(b'p') },
+            identity: name(b'i'),
         });
     }
     Assignment {
