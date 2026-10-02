@@ -122,3 +122,45 @@ fn an_assignment_left_unanswered_past_its_bound_fails_listing_it() {
     referee.fire(at(60), &mut Vec::new());
     assert_eq!(why(&referee), "Answer(1) was not met by 60.000000000s");
 }
+
+/// The forge merges `head` into main, with `merged` where the head changed
+/// the code.
+fn merged(head: u64, merged: &[u8]) -> Seen {
+    Seen::Merged {
+        remote: b"forge/app".to_vec(),
+        base: b"main".to_vec(),
+        head,
+        changed: tree(b"43"),
+        merged: tree(merged),
+    }
+}
+
+#[test]
+fn a_merge_of_what_a_run_landed_keeping_its_change_passes() {
+    let mut referee = started(b"43");
+    referee.observe(at(5), moved(b"fix", 9, &[9, 1], b"43"), &mut Vec::new());
+    referee.observe(at(6), ended(9), &mut Vec::new());
+    referee.observe(at(7), merged(9, b"43"), &mut Vec::new());
+    assert_eq!(referee.verdict(), Verdict::Passed);
+}
+
+#[test]
+fn a_merge_of_a_head_no_run_landed_fails_the_run() {
+    let mut referee = started(b"43");
+    referee.observe(at(5), moved(b"fix", 9, &[9, 1], b"43"), &mut Vec::new());
+    referee.observe(at(6), ended(9), &mut Vec::new());
+    referee.observe(at(7), merged(8, b"43"), &mut Vec::new());
+    assert_eq!(
+        why(&referee),
+        "the engine merges into forge/app's main only what a run landed or another party made, not 8"
+    );
+}
+
+#[test]
+fn a_merge_that_loses_what_the_run_changed_fails_the_run() {
+    let mut referee = started(b"43");
+    referee.observe(at(5), moved(b"fix", 9, &[9, 1], b"43"), &mut Vec::new());
+    referee.observe(at(6), ended(9), &mut Vec::new());
+    referee.observe(at(7), merged(9, b"42"), &mut Vec::new());
+    assert_eq!(why(&referee), r#"a merge keeps src/lib.rs as the head 9 has it: { "src/lib.rs": "42" } merged"#);
+}

@@ -8,10 +8,11 @@ use std::collections::BTreeMap;
 
 use temper_agent_model::run::outcome::Declared;
 use temper_agent_model::run::{Answer, Exhausted, Failure, Push};
-use temper_agent_model_tests::desk::{Reviewer, Work};
+use temper_agent_model_tests::desk::{CODING, Hand, Reviewer, Work};
 use temper_agent_model_tests::{CALM, Job, Run, Settings, Span, World};
 use temper_engine_model::Outcome;
 use temper_engine_model::plan::{Budget, Verdict};
+use temper_engine_model::work::{Hold, Phase};
 use temper_engine_model_tests::deployment;
 use temper_lib::Duration;
 use temper_world::assert_replays;
@@ -284,6 +285,36 @@ fn checks_that_run_past_their_deadline_are_stopped_and_fail() {
     assert_eq!((told.checks_failed, told.checks_finished), (3 * count, 3 * count));
 }
 
+/// Two changes to the same code handed in at once, one that lands an answer
+/// of 41 (its checks are not asked for) and one that lands 43: both pass CI
+/// and are approved, and the engine merges them one after the other, before
+/// it has read that the first moved the base under the second. The forge
+/// refuses the second merge for a conflict, and the engine holds its item for
+/// a write that failed for good, where a conflict is the change's to repair
+/// (engine-model.md, 5.1; the plan's `Repair::Conflicts`), as it does when it
+/// reads the conflict before it merges.
+#[test]
+#[ignore = "engine: a merge refused for a conflict holds the item for its writes instead of repairing the change"]
+fn a_merge_refused_for_a_conflict_sends_the_change_back_for_repair() {
+    let hand = |checks| Hand {
+        at: Duration::ZERO,
+        repository: 0,
+        job: Job::Coding,
+        work: Work::Change { checks, reviewer: Reviewer::Person },
+        grants: CODING,
+        budget: CALM,
+    };
+    let mut world = World::new(Settings { hands: vec![hand(false), hand(true)], ..Settings::calm(2) });
+    world.run(ITERATIONS);
+
+    assert_eq!(world.stats().merged, 1, "the second merge was refused\n{}", trace(&world));
+    for item in world.items() {
+        let record = world.mirror().record(deployment::name(item.repository), item.number);
+        let phase = record.map(|record| record.lifecycle.phase);
+        assert_ne!(phase, Some(Phase::Held { why: Hold::Writes, outcome: None }), "{item:?}");
+    }
+}
+
 /// How the runs of many random worlds ended, by kind, as their agents
 /// answered; and those whose agents were killed before they did.
 #[derive(Default, Debug)]
@@ -343,7 +374,7 @@ fn random_worlds_settle_with_every_invariant_held() {
         // The referees passed the world, having seen every assignment
         // answered in time.
         let (checked, met) = world.judged();
-        assert!(met >= u64::from(world.stats().assigned), "seed {seed}: the referee saw every assignment answered");
+        assert_eq!(met, u64::from(world.stats().assigned), "seed {seed}: the referee saw every assignment answered");
         checks += checked;
         for run in world.runs() {
             ends.count(run);
@@ -354,10 +385,6 @@ fn random_worlds_settle_with_every_invariant_held() {
         (unprepared, landed, saves) = (unprepared + stats.unprepared, landed + stats.landed, saves + stats.saves);
         (invalid, merged, stopped) = (invalid + stats.invalid, merged + stats.merged, stopped + stats.stopped);
     }
-    eprintln!(
-        "{ends:?}\n{reported:?}\nunprepared={unprepared} invalid={invalid} landed={landed} saves={saves} \
-         merged={merged} stopped={stopped} checks={checks} lost={lost}"
-    );
     assert_eq!(lost, 0, "the facts kept up in every world");
     let Ends { changes, verdicts, refused, cancelled, stale, budget, policy, model, killed } = ends;
     assert!(
