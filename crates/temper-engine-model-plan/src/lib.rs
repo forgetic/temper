@@ -1,13 +1,18 @@
 //! The plan sub-model of the temper engine's model layer
-//! (programming-style.md, 4.5; engine-model.md, sections 3 and 5): the
+//! (programming-style.md, 4.5; engine-model.md, sections 3, 5 and 6): the
 //! engine's plan policy. It knows the primitives (agent steps, changes, waits
 //! and sessions), plans as graphs of steps under a goal, gates, wake rules,
-//! envelopes and templates. It checks a plan before it exists, says what
-//! accepting it makes, and what growing it does to its envelope. It says
-//! what is due for an item, from its step and the facts about it: a run and
-//! the parts of its charter, an engine action, or nothing yet; and whether
-//! the events in an item's inbox wake it; and what a run's outcome writes,
-//! or why it does not fit.
+//! envelopes and templates, and decides:
+//!
+//! - whether a plan may exist ([`check`]), what accepting it makes
+//!   ([`accept`]), and what growing it makes and whether that needs a
+//!   person's acceptance ([`grow`]) (5.2);
+//! - what is due for an item, from its step and the facts about it: nothing
+//!   yet, a run and the parts of its charter, an engine action, done, or a
+//!   hold for a person ([`due`], 5.3 and 4.5);
+//! - whether the events in an item's inbox wake it ([`wake`], 5.4);
+//! - what a run's outcome writes, or that it is stale or invalid
+//!   ([`apply`], 4.4).
 //!
 //! It knows nothing of the forge's API, the workers, the record's encoding or
 //! the mechanics of an item's lifecycle, and it never checks the rules: it
