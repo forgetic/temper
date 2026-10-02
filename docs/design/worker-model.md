@@ -261,9 +261,10 @@ model, with a fake LLM provider, takes the scripted agent's place.
   CI, and when the engine deletes them.
 - **When to save:** at park and at an unfinished end only, or also
   periodically, so a dying worker loses less.
-- **Snapshots:** what the agent puts in one, its size limit, and where
-  the engine keeps it. Until runs offer them, parking ends the run and
-  resuming starts a fresh one from forge state (agent-model.md, 4.5).
+- **Snapshots:** what the agent puts in one, and its size limit. The
+  engine keeps them as a cache (engine-model.md, section 6). Until runs
+  offer them, parking ends the run and resuming starts a fresh one from
+  forge state (agent-model.md, 4.5).
 - **Checks without an LLM:** validating an exact head needs a checkout
   and the repository's checks but no conversation. It could be a run whose
   outcome is its checks' result; add it when it is wanted.

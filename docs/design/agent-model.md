@@ -309,5 +309,6 @@ to be designed after it:
   run's policy, the parent LLM when it asks for the sub-agent, or the LLM
   within limits the charter sets.
 - **Facts and the layers below** (sections 7 and 8).
-- **Long-lived runs:** where their state would be kept, and how a live run
-  is addressed.
+- **Long-lived runs:** what a run puts in its snapshot. The engine keeps
+  snapshots as a cache and addresses a run through its item
+  (engine-model.md, section 6).
