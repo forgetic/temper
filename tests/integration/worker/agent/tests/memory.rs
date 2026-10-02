@@ -1,10 +1,11 @@
 //! Memory stays within the worst case (programming-model.md, 6.4), measured by
 //! a counting allocator: the agent sub-model with every slot holding a spawn
 //! of exactly its limits, then every run's outbox full of what may wait for
-//! it, then every agent ending with as much detail as it may keep; and every
-//! entry point along the way.
+//! it, then every agent ending with as much detail as it may keep, its facts'
+//! queue full; and every entry point along the way. The fill reaches the
+//! worst case, short only of what no agent can hold at once.
 
-use temper_lib::{Duration, Env, Queue, Time, Token};
+use temper_lib::{Duration, Env, Queue, Set, Time, Token};
 use temper_worker_model_agent::channel::{Ask, Finish, Reply, Up};
 use temper_worker_model_agent::{
     Bounce, End, Event, Fault, Invalid, Limits, MAX_OUT, Model, Request, Signal, Spawn, fire, step, worst_case,
@@ -32,7 +33,7 @@ const LIMITS: Limits = Limits {
     wall_time: Duration::from_secs(100),
     grace: Duration::from_secs(5),
     kill_after: Duration::from_secs(2),
-    facts: 16,
+    facts: 4,
 };
 
 fn bytes(len: u64) -> Box<[u8]> {
@@ -64,6 +65,8 @@ struct Measured {
     out: Queue<Request>,
     meter: Meter,
     bound: u64,
+    /// The most held between steps, so far.
+    peak: u64,
 }
 
 impl Measured {
@@ -72,7 +75,7 @@ impl Measured {
         let meter = Meter::new();
         let model = Model::new(&limits);
         let out = Queue::with_capacity(MAX_OUT);
-        Measured { model, env: Env { now: Time::ZERO, limits }, out, meter, bound }
+        Measured { model, env: Env { now: Time::ZERO, limits }, out, meter, bound, peak: 0 }
     }
 
     fn step(&mut self, event: Event) -> Vec<Asked> {
@@ -111,6 +114,7 @@ impl Measured {
             });
         }
         self.meter.check(measured, self.bound, self.env.limits);
+        self.peak = self.peak.max(self.meter.held());
         // The iteration ends: the reclaim point.
         self.model.reclaim();
         asked
@@ -187,6 +191,16 @@ fn fill(limits: Limits) {
         assert_eq!(agent.step(Event::Hangup { owner: *owner }), [Asked::Gone(End::Stopped)]);
     }
     assert_eq!(agent.model.agents(), 0, "every slot came back");
+    assert!(agent.model.facts_lost() > 0, "{limits:?}: the facts' queue was filled, and more");
+    // The bound is reached, not only respected: short of it by no more than
+    // what no agent holds at once, the detail of its end (kept once its
+    // outbox has gone), and the bookkeeping of its three sets of call names
+    // (those in flight, those the client has to answer, those withdrawn),
+    // which the worst case counts at its most. Every payload is reached.
+    let names = Set::<Token>::worst_case(limits.calls).expect("fits");
+    let apart = u64::from(limits.agents) * (u64::from(limits.detail_bytes) + 3 * names);
+    let (peak, bound) = (agent.peak, agent.bound);
+    assert!(peak + apart >= bound, "{limits:?}: {peak} held at the most, short of the worst case of {bound}");
 
     let beyond = Spawn { workspace: Token::new(0), charter: bytes(limits.charter_bytes + 1), snapshot: None };
     let refused = agent.step(Event::Spawn { client: Token::new(0), spawn: beyond });
