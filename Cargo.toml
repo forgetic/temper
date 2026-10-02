@@ -30,6 +30,7 @@ members = [
     "tests/integration/engine/forge",
     "tests/integration/engine/notes",
     "tests/integration/engine/plan",
+    "tests/integration/engine/work",
     "tests/integration/forge",
     "tests/integration/worker/agent",
     "tests/integration/worker/checkout",
