@@ -1,7 +1,8 @@
 //! The fake engine's state and its entry points.
 //!
-//! Events take what a worker says and emit nothing: what follows goes out as
-//! alarms fire, and from the ready list, which [`resume`] drains one entry at a
+//! Events take what a worker says and emit nothing but an answer's
+//! acknowledgement: what follows goes out as alarms fire, and from the ready
+//! list, which [`resume`] drains one entry at a
 //! time: the cancels decided at a hello, then the due items, each placed on a
 //! worker with a free slot.
 
@@ -166,6 +167,10 @@ pub enum Request {
     /// The answer to the relayed call `call` of the run `run`'s attempt
     /// `attempt`, opaque: at most one per call.
     Relayed { worker: Token, run: Token, attempt: Token, call: Token, answer: Box<[u8]> },
+    /// The engine has the answer for the run `run`'s attempt `attempt`: the
+    /// worker forgets it. Every answer is acknowledged, one the engine had
+    /// already too.
+    Acknowledge { worker: Token, run: Token, attempt: Token },
 }
 
 /// What the fake has done and heard, for a world to check at settle.
@@ -211,6 +216,10 @@ pub struct Tally {
     /// Calls, bounces and hello listings for attempts that had answered, were
     /// cancelled or were presumed lost, dropped as they came.
     pub fenced: u32,
+    /// Answers for attempts that had answered already, sent again by a worker
+    /// that had not heard the acknowledgement: acknowledged again, and
+    /// dropped.
+    pub duplicates: u32,
     /// Repositories the answers say landed a change, and saved work.
     pub landed: u32,
     pub saved: u32,
@@ -260,6 +269,7 @@ impl Tally {
         errors: 0,
         dropped: 0,
         fenced: 0,
+        duplicates: 0,
         landed: 0,
         saved: 0,
         facts: 0,
@@ -410,12 +420,15 @@ impl Model {
     }
 }
 
-/// Handles one event. Events emit nothing: see the module doc.
-pub fn step(model: &mut Model, env: &Env<Config>, event: Event, _out: &mut Queue<Request>) {
+/// Handles one event, emitting at most [`MAX_OUT`] requests: an answer's
+/// acknowledgement (see the module doc).
+pub fn step(model: &mut Model, env: &Env<Config>, event: Event, out: &mut Queue<Request>) {
     match event {
         Event::Hello { worker, hello } => fleet::hello(model, env, worker, hello),
         Event::Lost { worker } => fleet::lost(model, env, worker),
-        Event::Answered { worker, run, attempt, answer } => work::answered(model, env, worker, run, attempt, answer),
+        Event::Answered { worker, run, attempt, answer } => {
+            work::answered(model, env, worker, run, attempt, answer, out);
+        }
         Event::Relay { worker, run, attempt, call, body: _ } => traffic::relay(model, env, worker, run, attempt, call),
         Event::Bounced { worker, run, attempt, bounce } => traffic::bounced(model, env, worker, run, attempt, bounce),
         Event::Fact { worker, run, attempt } => {

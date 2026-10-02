@@ -238,7 +238,10 @@ pub(crate) fn place(model: &mut Model, env: &Env<Config>, id: Id<Item>, worker: 
     out.push(Request::Assign { worker, assignment });
 }
 
-/// Placed, answered: what the answer leads to.
+/// Placed, answered: what the answer leads to, once it is acknowledged. An
+/// answer for an attempt that has answered already is a duplicate, sent
+/// again by a worker that did not hear the acknowledgement: acknowledged
+/// again, counted and dropped.
 pub(crate) fn answered(
     model: &mut Model,
     env: &Env<Config>,
@@ -246,9 +249,15 @@ pub(crate) fn answered(
     run: Token,
     attempt: Token,
     answer: Answer,
+    out: &mut Queue<Request>,
 ) {
     let config = &env.limits;
-    assert!(state(model, worker, run, attempt).is_some(), "an attempt is answered once");
+    let known = state(model, worker, run, attempt);
+    out.push(Request::Acknowledge { worker, run, attempt });
+    if known.is_none() {
+        model.tally.duplicates = model.tally.duplicates.saturating_add(1);
+        return;
+    }
     let record = model.attempts.remove(&attempt).expect("an attempt not answered has a record");
     model.timers.cancel(Alarm::Inbound(attempt));
     model.timers.cancel(Alarm::Cancel(attempt));

@@ -129,8 +129,12 @@ impl Harness {
         assigned(self.resume())
     }
 
+    /// The worker answers `assignment`, and the engine acknowledges it.
     fn answer(&mut self, assignment: &Assignment, answer: Answer) {
-        self.step(Event::Answered { worker: WORKER, run: assignment.run, attempt: assignment.attempt, answer });
+        let (run, attempt) = (assignment.run, assignment.attempt);
+        step(&mut self.model, &self.env, Event::Answered { worker: WORKER, run, attempt, answer }, &mut self.out);
+        assert_eq!(self.out.pop(), Some(Request::Acknowledge { worker: WORKER, run, attempt }));
+        assert!(self.out.is_empty(), "an answer is acknowledged, and nothing more");
     }
 
     /// The next due item's assignment, after its retry or wake alarm.
@@ -559,12 +563,31 @@ fn facts_are_only_counted() {
 }
 
 #[test]
-#[should_panic(expected = "an attempt is answered once")]
-fn an_attempt_answered_twice_is_a_bug() {
+fn a_second_answer_for_an_attempt_is_a_duplicate_acknowledged_and_dropped() {
     let mut h = Harness::new(config());
     let assignment = h.assign_first();
     h.answer(&assignment, Answer::Refused(Refusal::Invalid(Invalid::Name)));
-    h.answer(&assignment, Answer::Refused(Refusal::Invalid(Invalid::Name)));
+    h.answer(&assignment, Answer::Ended { outcome: copy_of(b"done"), work: nothing() });
+    let tally = h.model.tally();
+    assert_eq!((tally.invalid, tally.ended, tally.duplicates), (1, 0, 1), "the first answer stands");
+    assert_eq!(tally.endings.rejected, 1);
+}
+
+#[test]
+fn an_answer_sent_again_after_a_lost_acknowledgement_is_a_duplicate() {
+    let mut h = Harness::new(Config { keeps: 0, ..config() });
+    let assignment = h.assign_first();
+    h.answer(&assignment, Answer::Ended { outcome: copy_of(b"done"), work: nothing() });
+    // The channel drops before the worker hears the acknowledgement: its
+    // hello lists the run as answered, and the answer follows.
+    h.step(Event::Lost { worker: WORKER });
+    let held = Hosted { phase: Phase::Answered, ..hosted(&assignment) };
+    h.hello(WORKER, 1, &[held]);
+    assert!(!h.model.is_ready(), "nothing to cancel");
+    h.answer(&assignment, Answer::Ended { outcome: copy_of(b"done"), work: nothing() });
+    let tally = h.model.tally();
+    assert_eq!((tally.ended, tally.duplicates, tally.fenced, tally.endings.finished), (1, 1, 1, 1));
+    assert_eq!(h.model.outstanding(), 0);
 }
 
 #[test]

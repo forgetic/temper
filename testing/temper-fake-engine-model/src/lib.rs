@@ -17,13 +17,18 @@
 //! presumes lost, and retries, the runs it does not hear about, or does not
 //! hear from in time.
 //!
-//! It checks the worker as it goes, by asserting: every assignment is
-//! answered at most once per attempt, and exactly once unless the attempt was
-//! presumed lost; nothing arrives for an attempt it never made, or from a
-//! worker it did not assign it to; a run names its relayed calls apart.
-//! Traffic for an attempt that has answered, was cancelled or was presumed
-//! lost is counted and dropped (attempts are fenced). Facts are only counted.
-//! A world reads its [`Tally`] at settle.
+//! It acknowledges every answer, and takes the first for each attempt: a
+//! worker keeps an answer until it hears the acknowledgement, and sends it
+//! again after its next hello if it did not, so a second answer for an
+//! attempt is a duplicate, counted, acknowledged again and dropped. A world
+//! checks every assignment is answered once unless its attempt was presumed
+//! lost, from the tally.
+//!
+//! It checks the worker as it goes, by asserting: nothing arrives for an
+//! attempt it never made, or from a worker it did not assign it to; a run
+//! names its relayed calls apart. Traffic for an attempt that has answered,
+//! was cancelled or was presumed lost is counted and dropped (attempts are
+//! fenced). Facts are only counted. A world reads its [`Tally`] at settle.
 //!
 //! Its vocabulary ([`api`]) is its own: it shares nothing with the worker's
 //! model. Between the two sits a protocol layer on each side, or a simulator
