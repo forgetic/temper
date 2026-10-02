@@ -95,13 +95,15 @@ pub struct Spec {
 /// within the session's `Limits`, or the spec is refused.
 ///
 /// A session starts a completion only while it has turns, input and output
-/// tokens left (what it spent is below the budget) and its `time` has not run
-/// out; when it needs one it may not start, it ends. A completion's tokens are
-/// known only once it comes back, so it may take input and cache tokens past
-/// their budget: the session then ends at once. The output budget it cannot
-/// pass, as the answer's `max_tokens` is cut to what is left. A zero cache
-/// budget therefore ends a session only once a completion touches the
-/// cache.
+/// tokens left (what it spent is below the budget), its cache reads and writes
+/// are within their budget, and its `time` has not run out; when it needs one
+/// it may not start, it ends. A completion's tokens are known only once it
+/// comes back, so it may take input and cache tokens past their budget: its
+/// turn still runs the tools it asked for, and the session ends where it
+/// would have started the next. The output budget it cannot pass, as the
+/// answer's `max_tokens` is cut to what is left. A zero cache budget
+/// therefore ends a session only once a completion touches the cache. Time
+/// does not wait for the turn: when it runs out, the session closes at once.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Budget {
     pub turns: u32,
@@ -154,9 +156,8 @@ pub enum End {
     Closed,
     /// A call failed, for good or after its retries ran out.
     Failed { failure: Failure },
-    /// The session's budget ran out in the `spent` dimension: a completion
-    /// took it past its end, the session needed a completion the budget does
-    /// not leave room for, or its time is up.
+    /// The session's budget ran out in the `spent` dimension: it needed a
+    /// completion the budget does not leave room for, or its time is up.
     Budget { spent: Dimension },
     /// The conversation outgrew the session's message or byte limit.
     TranscriptFull,

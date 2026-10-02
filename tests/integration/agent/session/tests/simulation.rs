@@ -242,7 +242,7 @@ fn the_output_budget_cuts_the_last_answer_short_and_ends_the_session() {
 }
 
 #[test]
-fn the_token_budgets_end_a_session_once_a_completion_uses_them_up() {
+fn the_token_budgets_end_a_session_after_the_turn_that_uses_them_up() {
     let calm = Settings::calm(16);
     let settings = Settings { nudges: Count { min: 100, max: 100 }, ..calm };
     let budgets = [

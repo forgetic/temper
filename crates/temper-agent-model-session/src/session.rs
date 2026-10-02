@@ -35,12 +35,15 @@
 //! ```
 //!
 //! Every completion that comes back is reported to the opener as `Used`, in
-//! Calling and in Closing alike, and checked against the budget: one that
-//! took a dimension past its end ends the session at once. Before it calls
-//! the LLM, the session checks that it has turns, input and output tokens and
-//! time left, and ends instead if not, so it never starts a completion it
-//! may not pay for. Either end names the dimension. A byte limit that a completion, a tool's result or a new message would
-//! cross ends the session in place of the transition it would have made.
+//! Calling and in Closing alike. Before it calls the LLM, the session checks
+//! its budget, and ends instead, naming the dimension, if its turns, input or
+//! output tokens are used up, if the last completion took cache reads or
+//! writes past their budget, or if its time has run out. So it never starts a
+//! completion it may not pay for, and the turn that crossed a budget still
+//! runs its tools and keeps their results. Only time does not wait: its
+//! expiry closes the session at once. A byte limit that a completion, a
+//! tool's result or a new message would cross ends the session in place of
+//! the transition it would have made.
 //!
 //! The expiry alarm, set for when the time budget runs out, runs in Calling,
 //! Backoff, Tooling and Yielded; the retry alarm in Backoff. Both follow from
@@ -431,9 +434,6 @@ fn answered(
     out: &mut Queue<Request>,
 ) -> State {
     used(conversation, completion.usage, out);
-    if let Some(spent) = overspent(conversation) {
-        return finish(conversation, End::Budget { spent }, out);
-    }
     match completion.stop {
         Stop::ToolUse => use_tools(conversation, id, completion.content, &env.limits, out),
         Stop::EndTurn => pause(conversation, Yield::Done, completion.content, &env.limits, out),
@@ -640,8 +640,10 @@ fn affordable(budget: &Budget, most: &Budget) -> bool {
         && budget.time <= most.time
 }
 
-/// The first dimension that keeps the session from starting a completion at
-/// `now`, if any: its turns, its input or output tokens used up, or its time.
+/// The first dimension of the budget that keeps the session from starting
+/// another completion at `now`, if any: its turns, input or output tokens used
+/// up, its cache reads or writes taken past their budget by a completion (whose
+/// tokens are known only once it comes back), or its time run out.
 fn spent(conversation: &Conversation, now: Time) -> Option<Dimension> {
     let Conversation { budget, turns, usage, expires, .. } = conversation;
     if *turns >= budget.turns {
@@ -653,29 +655,14 @@ fn spent(conversation: &Conversation, now: Time) -> Option<Dimension> {
     if usage.output_tokens >= budget.output {
         return Some(Dimension::Output);
     }
-    if now >= *expires {
-        return Some(Dimension::Time);
-    }
-    None
-}
-
-/// The first dimension whose tokens a completion took past its budget, if any.
-/// No turn starts past its budget, and an answer's `max_tokens` is cut to the
-/// output left, but a call's input and cache tokens are known only once it
-/// comes back.
-fn overspent(conversation: &Conversation) -> Option<Dimension> {
-    let Conversation { budget, usage, .. } = conversation;
-    if usage.input_tokens > budget.input {
-        return Some(Dimension::Input);
-    }
-    if usage.output_tokens > budget.output {
-        return Some(Dimension::Output);
-    }
     if usage.cache_read_tokens > budget.cache_read {
         return Some(Dimension::CacheRead);
     }
     if usage.cache_write_tokens > budget.cache_write {
         return Some(Dimension::CacheWrite);
+    }
+    if now >= *expires {
+        return Some(Dimension::Time);
     }
     None
 }

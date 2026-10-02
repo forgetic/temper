@@ -536,7 +536,7 @@ fn a_session_starts_no_completion_once_its_input_or_output_reach_their_budget() 
 }
 
 #[test]
-fn a_completion_that_takes_tokens_past_their_budget_ends_the_session_at_once() {
+fn the_turn_that_takes_tokens_past_their_budget_runs_its_tools_and_ends_the_session() {
     let cases = [
         (Budget { input: 9, ..BUDGET }, Dimension::Input),
         (Budget { cache_read: 2, ..BUDGET }, Dimension::CacheRead),
@@ -545,19 +545,25 @@ fn a_completion_that_takes_tokens_past_their_budget_ends_the_session_at_once() {
         (Budget { cache_read: 0, ..BUDGET }, Dimension::CacheRead),
     ];
     for (asked, spent) in cases {
-        // Neither the yield nor the tools: the session ends there.
-        for answer in [done(), ls()] {
-            let mut h = Harness::new(LIMITS);
-            let (owner, _) = h.open_with(1, budget(asked));
-            let end = h.step(Event::Completed { owner, completion: answer });
-            assert_eq!(end, Some(ended(End::Budget { spent }, 1)), "{asked:?}");
-        }
+        // The tools run, and their results are kept, but do not go back.
+        let mut h = Harness::new(LIMITS);
+        let (owner, _) = h.open_with(1, budget(asked));
+        drop(running(h.step(Event::Completed { owner, completion: ls() })));
+        let end = h.step(Event::ToolDone { owner, output: bytes(b"main.rs"), error: false });
+        assert_eq!(end, Some(ended(End::Budget { spent }, 1)), "{asked:?}");
+
+        // A yield still yields; the next message ends it.
+        let mut h = Harness::new(LIMITS);
+        let session = h.yielded_with(budget(asked), done());
+        let end = h.step(Event::Continue { session, content: bytes(b"go on") });
+        assert_eq!(end, Some(ended(End::Budget { spent }, 1)), "{asked:?}");
     }
     // An answer past its output budget, which a provider should not give.
     let mut h = Harness::new(LIMITS);
     let (owner, prompt) = h.open_with(1, budget(Budget { output: 4, ..BUDGET }));
     assert_eq!(prompt.max_tokens, 4);
-    let end = h.step(Event::Completed { owner, completion: done() });
+    drop(running(h.step(Event::Completed { owner, completion: ls() })));
+    let end = h.step(Event::ToolDone { owner, output: bytes(b"main.rs"), error: false });
     assert_eq!(end, Some(ended(End::Budget { spent: Dimension::Output }, 1)));
 
     // Without the cache, a zero cache budget stops nothing.
@@ -565,6 +571,17 @@ fn a_completion_that_takes_tokens_past_their_budget_ends_the_session_at_once() {
     let uncached = Completion { usage: Usage { cache_read_tokens: 0, cache_write_tokens: 0, ..USAGE }, ..done() };
     let session = h.yielded_with(budget(Budget { cache_read: 0, cache_write: 0, ..BUDGET }), uncached);
     drop(calling(h.step(Event::Continue { session, content: bytes(b"go on") })));
+}
+
+#[test]
+fn time_does_not_wait_for_the_turn_that_crossed_a_budget() {
+    let time = Duration::from_secs(60);
+    let mut h = Harness::new(LIMITS);
+    let (owner, _) = h.open_with(1, budget(Budget { input: 9, time, ..BUDGET }));
+    drop(running(h.step(Event::Completed { owner, completion: ls() })));
+    h.after(time);
+    assert_eq!(h.fire(), Some(Request::CancelTool { owner }));
+    assert_eq!(h.step(Event::ToolCancelled { owner }), Some(ended(OUT_OF_TIME, 1)));
 }
 
 #[test]
