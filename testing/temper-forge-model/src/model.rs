@@ -8,16 +8,17 @@
 use alloc::boxed::Box;
 use core::mem;
 
-use temper_lib::bytes::copy_of;
 use temper_lib::{Deadlines, Duration, Env, Id, Map, Queue, ReplyTo, Rng, Slab, Time};
 
-use crate::api::{Answer, Change, Error, File, Op, Permission, Read, Setup, What, Write};
+use crate::boundary::{Event, Request};
+
+use crate::api::{Answer, Change, Error, Op, Permission, Read, What, Write};
 use crate::faults::{self, Window};
 use crate::git::{self, Object};
 use crate::hooks::{self, Delivery};
 use crate::limits::{self, Limits};
 use crate::observe::{Observation, Observations};
-use crate::store::{self, Repository};
+use crate::store::Repository;
 use crate::{ci, issues, pulls, reads, wiki};
 
 /// The most requests an entry point emits per call.
@@ -52,23 +53,6 @@ pub struct Config {
     pub hook_max: Duration,
     pub hooks_late: u32,
     pub hooks_lost: u32,
-}
-
-/// protocol -> model
-#[derive(PartialEq, Eq, Debug)]
-pub enum Event {
-    /// A call by `user`: do `op` on `repository`, named in full.
-    Call { reply_to: ReplyTo, user: u64, repository: Box<[u8]>, op: Op },
-}
-
-/// model -> protocol
-#[derive(PartialEq, Eq, Debug)]
-pub enum Request {
-    /// The answer to a `Call`: exactly one per call.
-    Reply { to: ReplyTo, result: Result<Answer, Error> },
-    /// A webhook to `repository`'s subscriber: something of `change` changed,
-    /// about the item `number` if it names one.
-    Hook { repository: Box<[u8]>, change: Change, number: Option<u64> },
 }
 
 /// What the forge has done, for a world to check at settle.
@@ -168,6 +152,20 @@ impl Model {
     #[must_use]
     pub fn new(config: &Config, seed: u64) -> Model {
         let limits = &config.limits;
+        assert!(limits::worst_case(limits).is_some(), "the limits fit");
+        assert!(
+            limits.repositories > 0 && limits.users > 0 && limits.items > 0 && limits.commits > 0,
+            "a forge holds something"
+        );
+        assert!(limits.files > 0 && limits.branches > 0, "a repository holds a first commit on its default branch");
+        assert!(limits.page_size > 0 && limits.calls > 0, "a listing answers something, and a call is taken");
+        assert!(
+            config.latency_min <= config.latency_max
+                && config.late_min <= config.late_max
+                && config.hook_min <= config.hook_max,
+            "latencies are ranges"
+        );
+        assert!(config.rate_limit == 0 || config.rate_window > Duration::ZERO, "a rate is over a window");
         Model {
             repositories: Slab::with_capacity(limits.repositories),
             names: Map::with_capacity(limits.repositories),
@@ -182,72 +180,6 @@ impl Model {
             rng: Rng::new(seed),
             tally: Tally::ZERO,
         }
-    }
-
-    /// Adds the repository `setup` describes, its default branch at a first
-    /// commit of its tree, and returns that commit. Setting up is not
-    /// observed, and starts no CI.
-    pub fn repository(&mut self, config: &Config, setup: Setup) -> u64 {
-        let limits = &config.limits;
-        let Setup { name, default, tree, labels, checks, protection, hooked } = setup;
-        assert!(!self.names.contains_key(&*name), "a repository is added once");
-        store::fits(&name, limits.name_bytes).expect("a repository's name within the limits");
-        store::fits(&default, limits.name_bytes).expect("a branch name within the limits");
-        store::fit_names(&labels, limits.labels, limits).expect("labels within the limits");
-        store::fit_names(&checks.contexts, limits.contexts, limits).expect("contexts within the limits");
-        if let Some(cue) = &checks.cue {
-            store::fits(&cue.path, limits.name_bytes).expect("a path within the limits");
-            store::fits(&cue.green, limits.content_bytes).expect("content within the limits");
-        }
-        if let Some(protection) = &protection {
-            store::fits(&protection.branch, limits.name_bytes).expect("a branch name within the limits");
-            store::fit_names(&protection.contexts, limits.contexts, limits).expect("contexts within the limits");
-        }
-        let tree = git::tree(limits, tree).expect("a first tree within the limits");
-        let first = git::store(self, Object { parent: None, tree }).expect("room for a first commit");
-        let mut repository = Repository::new(limits, copy_of(&name), default, first, checks, protection, hooked);
-        for label in labels {
-            repository.labels.insert(label).expect("a repository's labels are within the limits");
-        }
-        let id = self.repositories.insert(repository).expect("a repository's room");
-        self.names.insert(name, id).expect("as many names as repositories");
-        first
-    }
-
-    /// Gives `user` the permission `permission` on `repository`.
-    pub fn grant(&mut self, repository: &[u8], user: u64, permission: Permission) {
-        let id = self.id(repository);
-        let repository = self.repositories.get_mut(id).expect("a repository of the forge");
-        repository.permissions.insert(user, permission).expect("a repository's users are within the limits");
-    }
-
-    /// Makes `repository` reachable by git, or not.
-    pub fn set_reachable(&mut self, repository: &[u8], reachable: bool) {
-        let id = self.id(repository);
-        self.repositories.get_mut(id).expect("a repository of the forge").reachable = reachable;
-    }
-
-    /// Makes `repository` refuse what is pushed to it, branches created
-    /// included, or not.
-    pub fn set_refusing(&mut self, repository: &[u8], refusing: bool) {
-        let id = self.id(repository);
-        self.repositories.get_mut(id).expect("a repository of the forge").refusing = refusing;
-    }
-
-    /// What a working tree's git does when it commits: names a commit of
-    /// `tree` on `parent` in the forge's one store, where no repository has
-    /// it until it is pushed. Returns `None` if the tree is `parent`'s, and
-    /// refuses a tree past the limits, or a store that is full.
-    pub fn commit(&mut self, config: &Config, parent: u64, tree: Box<[File]>) -> Result<Option<u64>, Error> {
-        let tree = git::tree(&config.limits, tree)?;
-        let Some(object) = self.commits.get(&parent) else {
-            return Err(Error::Missing(What::Commit));
-        };
-        if git::same(&object.tree, &tree) {
-            return Ok(None);
-        }
-        let commit = git::store(self, Object { parent: Some(parent), tree })?;
-        Ok(Some(commit))
     }
 
     /// Where `branch` of `repository` is.

@@ -290,12 +290,16 @@ fn merged(model: &Model, limits: &Limits, head: u64, onto: u64) -> Result<Tree, 
             } else {
                 return Err(Error::Conflict);
             };
-            if let Some(content) = kept
-                && !tree.contains_key(&**path)
-                && tree.insert(copy_of(path), copy_of(content)).is_err()
-            {
+            let Some(content) = kept else {
+                continue;
+            };
+            if tree.contains_key(&**path) {
+                continue;
+            }
+            if tree.len() >= tree.capacity() {
                 return Err(Error::TooLarge);
             }
+            tree.insert(copy_of(path), copy_of(content)).expect("checked for room above");
         }
     }
     Ok(tree)

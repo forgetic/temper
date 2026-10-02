@@ -193,7 +193,7 @@ impl Harness {
     fn seeded(config: Config, setup: Setup, seed: u64) -> Harness {
         let mut model = Model::new(&config, seed);
         let name = copy_of(&setup.name);
-        assert_eq!(model.repository(&config, setup), FIRST);
+        assert_eq!(crate::repository(&mut model, &config, setup), FIRST);
         for (user, permission) in [
             (ENGINE, Permission::Write),
             (PERSON, Permission::Read),
@@ -201,7 +201,7 @@ impl Harness {
             (ADMIN, Permission::Admin),
             (MAINTAINER, Permission::Write),
         ] {
-            model.grant(&name, user, permission);
+            crate::grant(&mut model, &name, user, permission);
         }
         Harness {
             model,
@@ -334,7 +334,7 @@ impl Harness {
         for (path, content) in &tree {
             list.push(File { path: copy_of(path), content: copy_of(content) }).expect("room");
         }
-        self.model.commit(&self.env.limits, parent, list.into_boxed()).expect("room").expect("a change")
+        crate::commit(&mut self.model, &self.env.limits, parent, list.into_boxed()).expect("room").expect("a change")
     }
 
     fn push(&mut self, user: u64, branch: &[u8], commit: u64) -> Result<Answer, Error> {
@@ -622,7 +622,8 @@ fn another_party_advancing_a_branch_rejects_a_push_from_where_it_was() {
     let mut h = Harness::new(CALM);
     let work = h.commit(FIRST, &[(b"src", b"one")]);
     assert_eq!(h.push(ENGINE, b"work", work), Ok(Answer::Pushed(Pushed::Pushed)));
-    let theirs = crate::advance(&mut h.model, &h.env, REPOSITORY, b"work", b"src", b"theirs", PERSON);
+    let theirs =
+        crate::advance(&mut h.model, &h.env, REPOSITORY, b"work", b"src", b"theirs", PERSON).expect("advanced");
     let ours = h.commit(work, &[(b"src", b"two")]);
     assert_eq!(h.push(ENGINE, b"work", ours), Ok(Answer::Pushed(Pushed::Rejected)));
     assert_eq!(h.branch(b"work"), Some(theirs));
@@ -664,15 +665,15 @@ fn a_clone_has_every_branch_and_a_fetch_what_it_names() {
 fn unreachable_and_refusing_repositories_fail_as_git_would() {
     let mut h = Harness::new(CALM);
     let work = h.commit(FIRST, &[(b"src", b"one")]);
-    h.model.set_refusing(REPOSITORY, true);
+    crate::set_refusing(&mut h.model, REPOSITORY, true);
     assert_eq!(h.push(ENGINE, b"work", work), Err(Error::Refused));
     assert_eq!(h.call(ENGINE, create_branch(b"base", FIRST)), Err(Error::Refused));
     assert_eq!(h.ok(PERSON, fetch(Want::Default)), Answer::Commit(FIRST), "it still serves");
-    h.model.set_reachable(REPOSITORY, false);
+    crate::set_reachable(&mut h.model, REPOSITORY, false);
     assert_eq!(h.call(PERSON, Op::Git(Git::Clone)), Err(Error::Unreachable));
     assert_eq!(h.call(PERSON, fetch(Want::Default)), Err(Error::Unreachable));
-    h.model.set_reachable(REPOSITORY, true);
-    h.model.set_refusing(REPOSITORY, false);
+    crate::set_reachable(&mut h.model, REPOSITORY, true);
+    crate::set_refusing(&mut h.model, REPOSITORY, false);
     assert_eq!(h.push(ENGINE, b"work", work), Ok(Answer::Pushed(Pushed::Pushed)));
 }
 
@@ -680,15 +681,15 @@ fn unreachable_and_refusing_repositories_fail_as_git_would() {
 fn a_working_tree_commits_into_the_one_store() {
     let mut h = Harness::new(CALM);
     let same = files(&[(b"README", b"hello"), (b"ci", b"green")]);
-    assert_eq!(h.model.commit(&h.env.limits, FIRST, same), Ok(None), "nothing changed");
-    let next = h.model.commit(&h.env.limits, FIRST, files(&[(b"README", b"bye")])).expect("room");
+    assert_eq!(crate::commit(&mut h.model, &h.env.limits, FIRST, same), Ok(None), "nothing changed");
+    let next = crate::commit(&mut h.model, &h.env.limits, FIRST, files(&[(b"README", b"bye")])).expect("room");
     assert_eq!(next, Some(2), "named by a count");
     let object = h.model.object(2).expect("stored");
     assert_eq!(object.parent, Some(FIRST));
     assert_eq!(object.tree.len(), 1, "a tree is the whole tree");
-    assert_eq!(h.model.commit(&h.env.limits, 99, files(&[])), Err(Error::Missing(What::Commit)));
+    assert_eq!(crate::commit(&mut h.model, &h.env.limits, 99, files(&[])), Err(Error::Missing(What::Commit)));
     let wide = files(&[(b"a", b""), (b"b", b""), (b"c", b""), (b"d", b""), (b"e", b"")]);
-    assert_eq!(h.model.commit(&h.env.limits, FIRST, wide), Err(Error::TooLarge));
+    assert_eq!(crate::commit(&mut h.model, &h.env.limits, FIRST, wide), Err(Error::TooLarge));
 }
 
 #[test]
@@ -764,11 +765,11 @@ fn opening_a_pull_request_refuses_what_forgejo_refuses() {
 fn a_merge_squashes_the_head_onto_the_base() {
     let mut h = Harness::new(CALM);
     let tree = files(&[(b"README", b"hello"), (b"src", b"one")]);
-    let work = h.model.commit(&h.env.limits, FIRST, tree).expect("room").expect("a change");
+    let work = crate::commit(&mut h.model, &h.env.limits, FIRST, tree).expect("room").expect("a change");
     let more = h.commit(work, &[(b"src", b"two")]);
     h.push(ENGINE, b"work", more).expect("pushed");
     h.open(b"work").expect("opened");
-    let theirs = crate::advance(&mut h.model, &h.env, REPOSITORY, MAIN, b"other", b"x", MAINTAINER);
+    let theirs = crate::advance(&mut h.model, &h.env, REPOSITORY, MAIN, b"other", b"x", MAINTAINER).expect("advanced");
     assert_eq!(h.call(PERSON, merge(1, more)), Err(Error::Forbidden), "merging needs write");
     let Answer::Merged(commit) = h.ok(ENGINE, merge(1, more)) else {
         unreachable!("merged");
@@ -791,9 +792,9 @@ fn a_merge_conflicts_where_head_and_base_changed_a_path_differently() {
     let work = h.commit(FIRST, &[(b"README", b"ours"), (b"src", b"one")]);
     h.push(ENGINE, b"work", work).expect("pushed");
     h.open(b"work").expect("opened");
-    crate::advance(&mut h.model, &h.env, REPOSITORY, MAIN, b"src", b"one", MAINTAINER);
+    crate::advance(&mut h.model, &h.env, REPOSITORY, MAIN, b"src", b"one", MAINTAINER).expect("advanced");
     assert!(h.pull(1).mergeable, "the same change on both sides merges");
-    crate::advance(&mut h.model, &h.env, REPOSITORY, MAIN, b"README", b"theirs", MAINTAINER);
+    crate::advance(&mut h.model, &h.env, REPOSITORY, MAIN, b"README", b"theirs", MAINTAINER).expect("advanced");
     assert!(!h.pull(1).mergeable);
     assert_eq!(h.call(ENGINE, merge(1, work)), Err(Error::Conflict));
     assert_eq!(h.pull(1).state, State::Open, "nothing merged");

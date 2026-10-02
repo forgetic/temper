@@ -41,6 +41,7 @@
 extern crate alloc;
 
 pub mod api;
+mod boundary;
 mod ci;
 mod faults;
 mod git;
@@ -51,13 +52,16 @@ mod model;
 mod observe;
 mod pulls;
 mod reads;
+mod scenario;
 mod store;
 mod wiki;
 
 #[cfg(test)]
 mod tests;
 
-pub use git::{Object, Tree, advance};
+pub use boundary::{Event, Request};
+pub use git::{Object, Tree};
 pub use limits::{Limits, worst_case};
-pub use model::{Config, Event, MAX_OUT, Model, Request, Tally, fire, step};
+pub use model::{Config, MAX_OUT, Model, Tally, fire, step};
 pub use observe::Observation;
+pub use scenario::{advance, commit, grant, repository, set_reachable, set_refusing};

@@ -35,37 +35,13 @@ pub struct Object {
     pub tree: Tree,
 }
 
-/// Another party commits on `branch` of `repository`, writing `path` with
-/// `content`, and moves the branch to it, as a push of its own would, past
-/// any protection, as the user `by`. Returns the commit.
-pub fn advance(
-    model: &mut Model,
-    env: &Env<Config>,
-    repository: &[u8],
-    branch: &[u8],
-    path: &[u8],
-    content: &[u8],
-    by: u64,
-) -> u64 {
-    let limits = &env.limits.limits;
-    let id = model.id(repository);
-    let tip = *model.repositories.get(id).expect("a repository of the forge").branches.get(branch).expect("a branch");
-    let mut tree = copy_tree(limits, &model.commits.get(&tip).expect("a commit of the store").tree);
-    tree.insert(copy_of(path), copy_of(content)).expect("a tree within the limits");
-    let commit = store(model, Object { parent: Some(tip), tree }).expect("room for another commit");
-    let repository = model.repositories.get_mut(id).expect("a repository of the forge");
-    repository.has.insert(commit).expect("a repository has room for every commit");
-    repository.branches.insert(copy_of(branch), commit).expect("the branch is there");
-    moved(model, env, id, branch, Some(tip), commit, by);
-    commit
-}
-
 /// Names `object` in the store, or refuses it when the store is full.
 pub(crate) fn store(model: &mut Model, object: Object) -> Result<u64, Error> {
-    let commit = model.made.checked_add(1).expect("names do not run out");
-    if model.commits.insert(commit, object).is_err() {
+    if model.commits.len() >= model.commits.capacity() {
         return Err(Error::Full);
     }
+    let commit = model.made.checked_add(1).expect("names do not run out");
+    model.commits.insert(commit, object).expect("checked for room above");
     model.made = commit;
     Ok(commit)
 }

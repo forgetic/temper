@@ -7,8 +7,9 @@ use temper_lib::bytes::copy_of;
 use temper_lib::{Env, Id, Queue};
 
 use crate::api::Change;
+use crate::boundary::Request;
 use crate::faults;
-use crate::model::{Alarm, Config, Model, Request};
+use crate::model::{Alarm, Config, Model};
 use crate::store::Repository;
 
 /// A webhook on its way.

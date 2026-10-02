@@ -1,0 +1,114 @@
+//! What a world does to the forge from outside its API (testing-pyramid.md,
+//! 5.1): it sets up repositories and their users, makes a repository
+//! unreachable or refusing, commits as a working tree's git does, and has
+//! another party advance a branch.
+//!
+//! Setting up is not observed and starts no CI; what another party does is
+//! observed, heard and checked as any change is.
+
+use alloc::boxed::Box;
+
+use temper_lib::Env;
+use temper_lib::bytes::copy_of;
+
+use crate::api::{Error, File, Permission, Setup, What};
+use crate::git::{self, Object};
+use crate::model::{Config, Model};
+use crate::store::{Repository, fit_names, fits};
+
+/// Adds the repository `setup` describes, its default branch at a first
+/// commit of its tree, and returns that commit.
+pub fn repository(model: &mut Model, config: &Config, setup: Setup) -> u64 {
+    let limits = &config.limits;
+    let Setup { name, default, tree, labels, checks, protection, hooked } = setup;
+    assert!(!model.names.contains_key(&*name), "a repository is added once");
+    fits(&name, limits.name_bytes).expect("a repository's name within the limits");
+    fits(&default, limits.name_bytes).expect("a branch name within the limits");
+    fit_names(&labels, limits.labels, limits).expect("labels within the limits");
+    fit_names(&checks.contexts, limits.contexts, limits).expect("contexts within the limits");
+    assert!(checks.latency_min <= checks.latency_max, "CI's latency is a range");
+    if let Some(cue) = &checks.cue {
+        fits(&cue.path, limits.name_bytes).expect("a path within the limits");
+        fits(&cue.green, limits.content_bytes).expect("content within the limits");
+    }
+    if let Some(protection) = &protection {
+        fits(&protection.branch, limits.name_bytes).expect("a branch name within the limits");
+        fit_names(&protection.contexts, limits.contexts, limits).expect("contexts within the limits");
+    }
+    let tree = git::tree(limits, tree).expect("a first tree within the limits");
+    let first = git::store(model, Object { parent: None, tree }).expect("room for a first commit");
+    let mut repository = Repository::new(limits, copy_of(&name), default, first, checks, protection, hooked);
+    for label in labels {
+        repository.labels.insert(label).expect("a repository's labels are within the limits");
+    }
+    let id = model.repositories.insert(repository).expect("a repository's room");
+    model.names.insert(name, id).expect("as many names as repositories");
+    first
+}
+
+/// Gives `user` the permission `permission` on `repository`.
+pub fn grant(model: &mut Model, repository: &[u8], user: u64, permission: Permission) {
+    let id = model.id(repository);
+    let repository = model.repositories.get_mut(id).expect("a repository of the forge");
+    repository.permissions.insert(user, permission).expect("a repository's users are within the limits");
+}
+
+/// Makes `repository` reachable by git, or not.
+pub fn set_reachable(model: &mut Model, repository: &[u8], reachable: bool) {
+    let id = model.id(repository);
+    model.repositories.get_mut(id).expect("a repository of the forge").reachable = reachable;
+}
+
+/// Makes `repository` refuse what is pushed to it, branches created included,
+/// or not.
+pub fn set_refusing(model: &mut Model, repository: &[u8], refusing: bool) {
+    let id = model.id(repository);
+    model.repositories.get_mut(id).expect("a repository of the forge").refusing = refusing;
+}
+
+/// What a working tree's git does when it commits: names a commit of `tree`
+/// on `parent` in the forge's one store, where no repository has it until it
+/// is pushed. Returns `None` if the tree is `parent`'s, and refuses a tree
+/// past the limits, or a store that is full.
+pub fn commit(model: &mut Model, config: &Config, parent: u64, tree: Box<[File]>) -> Result<Option<u64>, Error> {
+    let tree = git::tree(&config.limits, tree)?;
+    let Some(object) = model.commits.get(&parent) else {
+        return Err(Error::Missing(What::Commit));
+    };
+    if git::same(&object.tree, &tree) {
+        return Ok(None);
+    }
+    let commit = git::store(model, Object { parent: Some(parent), tree })?;
+    Ok(Some(commit))
+}
+
+/// Another party commits on `branch` of `repository`, writing `path` with
+/// `content`, and moves the branch to it, as a push of its own would, past
+/// any protection, as the user `by`. Returns the commit, or refuses what is
+/// past the limits, as a store or a tree that is full.
+pub fn advance(
+    model: &mut Model,
+    env: &Env<Config>,
+    repository: &[u8],
+    branch: &[u8],
+    path: &[u8],
+    content: &[u8],
+    by: u64,
+) -> Result<u64, Error> {
+    let limits = &env.limits.limits;
+    fits(path, limits.name_bytes)?;
+    fits(content, limits.content_bytes)?;
+    let id = model.id(repository);
+    let tip = *model.repositories.get(id).expect("a repository of the forge").branches.get(branch).expect("a branch");
+    let mut tree = git::copy_tree(limits, &model.commits.get(&tip).expect("a commit of the store").tree);
+    if !tree.contains_key(path) && tree.len() >= tree.capacity() {
+        return Err(Error::TooLarge);
+    }
+    tree.insert(copy_of(path), copy_of(content)).expect("checked for room above");
+    let commit = git::store(model, Object { parent: Some(tip), tree })?;
+    let repository = model.repositories.get_mut(id).expect("a repository of the forge");
+    repository.has.insert(commit).expect("a repository has room for every commit");
+    repository.branches.insert(copy_of(branch), commit).expect("the branch is there");
+    git::moved(model, env, id, branch, Some(tip), commit, by);
+    Ok(commit)
+}

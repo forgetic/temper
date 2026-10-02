@@ -32,11 +32,12 @@ pub(crate) fn start(model: &mut Model, env: &Env<Config>, id: Id<Repository>, co
     {
         return;
     }
-    if !repository.statuses.contains_key(&commit)
-        && repository.statuses.insert(commit, Map::with_capacity(limits.contexts)).is_err()
-    {
-        model.tally.unreported = model.tally.unreported.saturating_add(1);
-        return;
+    if !repository.statuses.contains_key(&commit) {
+        if repository.statuses.len() >= repository.statuses.capacity() {
+            model.tally.unreported = model.tally.unreported.saturating_add(1);
+            return;
+        }
+        repository.statuses.insert(commit, Map::with_capacity(limits.contexts)).expect("checked for room above");
     }
     let contexts = u32::try_from(repository.checks.contexts.len()).expect("contexts within the limits");
     for context in 0..contexts {
@@ -109,10 +110,11 @@ pub(crate) fn status(
     if !repository.has.contains(&commit) {
         return Err(Error::Missing(What::Commit));
     }
-    if !repository.statuses.contains_key(&commit)
-        && repository.statuses.insert(commit, Map::with_capacity(limits.contexts)).is_err()
-    {
-        return Err(Error::Full);
+    if !repository.statuses.contains_key(&commit) {
+        if repository.statuses.len() >= repository.statuses.capacity() {
+            return Err(Error::Full);
+        }
+        repository.statuses.insert(commit, Map::with_capacity(limits.contexts)).expect("checked for room above");
     }
     if !set(model, id, commit, &context, Status { state, author: user, at: env.now }) {
         return Err(Error::Full);
