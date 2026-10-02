@@ -342,6 +342,8 @@ fn a_workers_hello_reaches_the_fleet() {
 struct Forge {
     issues: List<Issue>,
     pulls: List<Change>,
+    /// The wikis' pages: their repository, name, revision and note.
+    pages: List<Wiki>,
     /// Where each branch is, as workers push.
     branches: List<(Box<[u8]>, [u8; 32])>,
     /// The forge's clock, which the world moves.
@@ -359,6 +361,9 @@ struct Issue {
     updated: Time,
     comments: List<Note>,
 }
+
+/// A wiki page: its repository, name, revision and the note it holds.
+type Wiki = (u32, Box<[u8]>, u64, Option<notes::Page>);
 
 /// A pull request: its item, branches, head, CI on it, and its reviews.
 #[derive(Debug)]
@@ -386,6 +391,7 @@ impl Forge {
         Forge {
             issues: List::with_capacity(16),
             pulls: List::with_capacity(8),
+            pages: List::with_capacity(8),
             branches: List::with_capacity(8),
             now: Time::ZERO,
             comments: 100,
@@ -573,7 +579,6 @@ impl Forge {
                 }
                 Ok(api::Answer::Done)
             }
-            api::Op::Pages { .. } => Ok(api::Answer::Pages { pages: Box::new([]), next: None }),
             api::Op::Comment { number, id } => {
                 let Some(issue) = self.issue(Item { repository, number }) else {
                     return (Err(api::Error::Missing), decoded);
@@ -663,7 +668,51 @@ impl Forge {
                     None => Err(api::Error::Missing),
                 }
             }
-            api::Op::Remarks { .. } | api::Op::Page { .. } => Err(api::Error::Missing),
+            api::Op::Pages { .. } => {
+                let mut names = List::with_capacity(8);
+                for (at, name, revision, _) in &self.pages {
+                    if *at == repository {
+                        names.push(api::PageName { name: name.clone(), revision: *revision }).unwrap();
+                    }
+                }
+                Ok(api::Answer::Pages { pages: names.into_boxed(), next: None })
+            }
+            api::Op::Page { name } => {
+                let mut found = Err(api::Error::Missing);
+                for (at, page_name, revision, note) in &self.pages {
+                    if *at != repository || **page_name != *name || note.is_none() {
+                        continue;
+                    }
+                    if let Some(note) = note {
+                        let page = Box::new(note.clone());
+                        decoded.push(crate::boundary::Decoded::Page { name: name.clone(), page }).unwrap();
+                    }
+                    let page =
+                        api::Page { name: name.clone(), content: Box::new([]), revision: *revision, nonce: None };
+                    found = Ok(api::Answer::Page(page));
+                }
+                found
+            }
+            api::Op::PutPage { name, .. } => {
+                let note = match payload {
+                    Some(crate::boundary::Payload::Page(page)) => Some(*page),
+                    Some(_) | None => None,
+                };
+                let mut revision = 1;
+                for at in 0..self.pages.len() {
+                    let page = self.pages.get_mut(at).unwrap();
+                    if page.0 == repository && page.1 == name {
+                        page.2 += 1;
+                        page.3 = note.clone();
+                        revision = page.2;
+                    }
+                }
+                if revision == 1 {
+                    self.pages.push((repository, name, 1, note)).unwrap();
+                }
+                Ok(api::Answer::Revision(revision))
+            }
+            api::Op::Remarks { .. } => Err(api::Error::Missing),
             api::Op::AddLabels { .. }
             | api::Op::RemoveLabels { .. }
             | api::Op::Review { .. }
@@ -671,7 +720,6 @@ impl Forge {
             | api::Op::SetDependencies { .. }
             | api::Op::Reopen { .. }
             | api::Op::DeleteBranch { .. }
-            | api::Op::PutPage { .. }
             | api::Op::DeletePage { .. } => Ok(api::Answer::Done),
         };
         (answer, decoded)
@@ -1273,4 +1321,94 @@ fn a_change_is_pushed_opened_reviewed_and_merged_into_a_protected_branch() {
         "the change's item is closed once it has landed: {:?}",
         phase(&mut world, change)
     );
+}
+
+/// A plan of one change into `main`, which the rules want a person to
+/// accept: it lands on a protected branch.
+fn proposal() -> crate::boundary::Outcome {
+    let envelope = plan::Envelope {
+        agents: 0,
+        changes: 0,
+        waits: 0,
+        sessions: 0,
+        repositories: Box::new([plan::Repository(0)]),
+        into: Box::new([plan::Target { repository: plan::Repository(0), base: copy_of(b"main") }]),
+    };
+    let plan = plan::Plan { steps: Box::new([change_step(b"fix")]), envelope, budget: 500 };
+    crate::boundary::Outcome::Plan { plan, text: copy_of(b"shall we?") }
+}
+
+fn held_for(world: &mut World, item: Item) -> Option<work::Hold> {
+    match phase(world, item) {
+        Some(work::Phase::Held { why, .. }) => Some(why),
+        Some(_) | None => None,
+    }
+}
+
+#[test]
+fn a_plan_landing_on_a_protected_branch_waits_for_a_persons_acceptance() {
+    let (mut world, session) = World::session();
+    world.deliver(Event::Answer { channel: Token::new(1), item: session, attempt: 1, answer: ended(proposal()) });
+    assert!(acknowledged(&world.seen, session, 1), "the proposal is recorded");
+    assert_eq!(held_for(&mut world, session), Some(work::Hold::Acceptance), "it waits for a person");
+    assert!(world.forge.issue(Item { repository: 0, number: 2 }).is_none(), "nothing of it is made yet");
+    world.deliver(Event::Ask {
+        reply_to: ReplyTo::new(Token::new(14)),
+        person: ALICE,
+        ask: Ask::Accept { item: session },
+    });
+    assert!(replied(&world.seen, Reply::Done), "the acceptance is taken: {:?}", world.seen.as_slice());
+    assert!(world.forge.issue(Item { repository: 0, number: 2 }).is_some(), "once accepted, its step's item is made");
+    assert_eq!(held_for(&mut world, session), None, "the session goes on: {:?}", phase(&mut world, session));
+}
+
+#[test]
+fn a_rejected_plan_is_not_made() {
+    let (mut world, session) = World::session();
+    world.deliver(Event::Answer { channel: Token::new(1), item: session, attempt: 1, answer: ended(proposal()) });
+    world.deliver(Event::Ask {
+        reply_to: ReplyTo::new(Token::new(15)),
+        person: ALICE,
+        ask: Ask::Reject { item: session },
+    });
+    assert!(replied(&world.seen, Reply::Done), "the rejection is taken");
+    assert!(world.forge.issue(Item { repository: 0, number: 2 }).is_none(), "nothing of it is made");
+    assert_eq!(held_for(&mut world, session), None, "the session goes on: {:?}", phase(&mut world, session));
+}
+
+#[test]
+fn a_run_notes_what_it_learnt_and_recalls_it() {
+    let (mut world, item) = World::session();
+    let page = notes::Page {
+        description: copy_of(b"the build is flaky"),
+        author: notes::Author::Run { repository: 0, number: item.number },
+        references: Box::new([]),
+        body: copy_of(b"retry it"),
+    };
+    let note = crate::boundary::Call::Note {
+        scope: notes::Scope::Repository(0),
+        name: copy_of(b"flaky"),
+        change: notes::Change::New(page),
+    };
+    world.deliver(Event::Relay { item, attempt: 1, call: Token::new(1), body: note });
+    let recall = notes::Recall::Name { scope: notes::Scope::Repository(0), name: copy_of(b"flaky") };
+    world.deliver(Event::Relay { item, attempt: 1, call: Token::new(2), body: crate::boundary::Call::Recall(recall) });
+    let mut noted = None;
+    let mut recalled = None;
+    for request in &world.seen {
+        if let Request::Relayed { call, served, .. } = request {
+            if *call == Token::new(1)
+                && let crate::boundary::Served::Noted(how) = served
+            {
+                noted = Some(*how);
+            }
+            if *call == Token::new(2)
+                && let crate::boundary::Served::Recalled { entries, .. } = served
+            {
+                recalled = Some(entries.len());
+            }
+        }
+    }
+    assert_eq!(noted, Some(notes::Noted::Done), "the note is written: {:?}", world.seen.as_slice());
+    assert_eq!(recalled, Some(1), "the note is recalled");
 }

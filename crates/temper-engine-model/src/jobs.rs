@@ -444,10 +444,7 @@ fn applied(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, fresh: Option<pl
     match decided {
         plan::Applied::Writes { accept, then, estimate } => {
             let relations = &entry.relations;
-            let rejected = match relations.decision {
-                Some(decided) => decided.decision == plan::Decision::Rejected,
-                None => false,
-            };
+            let rejected = rejected(entry);
             let person = match accept {
                 plan::Accept::Person => relations.accepted.is_none(),
                 plan::Accept::Rules => false,
@@ -462,6 +459,7 @@ fn applied(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, fresh: Option<pl
             if let Some(proposed) = proposed {
                 match rule_plan(model, env, id, &proposed, estimate) {
                     rules::Decision::Allow => {}
+                    rules::Decision::Accept { .. } if rejected => return reject(model, env, id),
                     rules::Decision::Accept { permission } => {
                         get_mut(model, id).wants = Some(permission);
                         return finish(model, env, id, Finish::Accepting);
@@ -485,6 +483,14 @@ fn applied(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, fresh: Option<pl
         }
         plan::Applied::Stale(_) => finish(model, env, id, Finish::Stale),
         plan::Applied::Invalid(_) => finish(model, env, id, Finish::Invalid),
+    }
+}
+
+/// Whether a person rejected what the item holds for them.
+fn rejected(entry: &Entry) -> bool {
+    match entry.relations.decision {
+        Some(decided) => decided.decision == plan::Decision::Rejected,
+        None => false,
     }
 }
 
@@ -646,6 +652,7 @@ fn ruled(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, decision: rules::D
             get_mut(model, id).blocked = true;
             finish(model, env, id, Finish::Stale);
         }
+        rules::Decision::Accept { .. } if !action && rejected(get(model, id)) => reject(model, env, id),
         rules::Decision::Accept { permission } => {
             get_mut(model, id).wants = Some(permission);
             finish(model, env, id, Finish::Accepting);
