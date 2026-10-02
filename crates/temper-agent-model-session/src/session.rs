@@ -157,16 +157,9 @@ struct Conversation {
     usage: Usage,
     /// When the time budget runs out.
     expires: Time,
-    kit: Kit,
-}
-
-/// A session's kit, in the tools it owns: open, as the tools name it; closing,
-/// its calls cancelled; or closed.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-enum Kit {
-    Open { kit: Token },
-    Closing,
-    Closed,
+    /// Its kit in the tools it owns, as the tools name it. A session is
+    /// inserted Closed, holding nothing, and given its kit as it opens.
+    kit: Token,
 }
 
 #[derive(Debug)]
@@ -184,22 +177,37 @@ enum State {
     /// The LLM stopped calling tools: waiting for the opener to continue or
     /// close the session.
     Yielded,
-    /// Ending with `end`, once its kit has closed and what it waits for has
-    /// settled.
+    /// Ending with `end`, once what it waits for has settled, its kit's close
+    /// among it.
     Closing { end: End, waiting: Waiting },
     /// Terminal: holds nothing.
     Closed,
 }
 
-/// What a closing session waits for besides its kit: the terminal event of
-/// its call, and of each of its tool runs still `runs`.
+/// What a closing session waits for: the terminal event of its call, and of
+/// each of its tool runs still `runs`, and its kit's close.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 struct Waiting {
     call: bool,
     runs: u32,
+    kit: Kit,
 }
 
-const NOTHING: Waiting = Waiting { call: false, runs: 0 };
+/// A closing session's kit: open until the session closes it as it settles
+/// ([`settle`]), closing, its calls cancelled, or closed.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum Kit {
+    Open,
+    Closing,
+    Closed,
+}
+
+/// What a session waits for once nothing it asked for is in flight but its
+/// kit, which it closes.
+const KIT: Waiting = Waiting { call: false, runs: 0, kit: Kit::Open };
+
+/// A closing session that waits for nothing: it has ended.
+const SETTLED: Waiting = Waiting { call: false, runs: 0, kit: Kit::Closed };
 
 /// The tool calls of the last assistant message, run in batches: adjacent
 /// calls that read, up to `Limits::parallel_tools` of them, run together, and
@@ -337,7 +345,7 @@ pub(crate) fn open(model: &mut Model, env: &Env<Limits>, opener: Token, spec: Sp
     let session = model.sessions.get_mut(id).expect("inserted above");
     match heard.kit {
         Some(News::Opened { kit }) => {
-            session.conversation.kit = Kit::Open { kit };
+            session.conversation.kit = kit;
             out.push(Request::Opened { opener, session: id.token() });
             session.state = call(&session.conversation, id, 0, env, out);
         }
@@ -415,8 +423,8 @@ pub(crate) fn completed(
     let conversation = &mut session.conversation;
     session.state = match state {
         State::Calling { attempt: _ } => answered(conversation, id, &mut model.calls, completion, env, out),
-        State::Closing { end, waiting: Waiting { call: true, runs } } => {
-            answered_late(conversation, end, runs, completion.usage, out)
+        State::Closing { end, waiting: waiting @ Waiting { call: true, .. } } => {
+            answered_late(conversation, end, waiting, completion.usage, out)
         }
         State::Backoff { .. }
         | State::Tooling { .. }
@@ -437,8 +445,8 @@ pub(crate) fn failed(model: &mut Model, env: &Env<Limits>, owner: Token, failure
     let state = mem::replace(&mut session.state, State::Closed);
     session.state = match state {
         State::Calling { attempt } => call_failed(attempt, failure, &mut model.rng, env),
-        State::Closing { end, waiting: Waiting { call: true, runs } } => {
-            State::Closing { end, waiting: Waiting { call: false, runs } }
+        State::Closing { end, waiting: waiting @ Waiting { call: true, .. } } => {
+            State::Closing { end, waiting: Waiting { call: false, ..waiting } }
         }
         State::Backoff { .. }
         | State::Tooling { .. }
@@ -470,8 +478,8 @@ pub(crate) fn cancelled(model: &mut Model, env: &Env<Limits>, owner: Token, out:
     model.facts.push(Fact::CompletionCancelled { opener: session.conversation.opener });
     let state = mem::replace(&mut session.state, State::Closed);
     session.state = match state {
-        State::Closing { end, waiting: Waiting { call: true, runs } } => {
-            State::Closing { end, waiting: Waiting { call: false, runs } }
+        State::Closing { end, waiting: waiting @ Waiting { call: true, .. } } => {
+            State::Closing { end, waiting: Waiting { call: false, ..waiting } }
         }
         State::Calling { .. }
         | State::Backoff { .. }
@@ -537,8 +545,19 @@ fn owned_answered(
 /// The kit of `id`, closing, has closed.
 fn kit_closed(sessions: &mut Slab<Session>, id: Id<Session>) {
     let session = sessions.get_mut(id).expect("a session lives until its kit has closed");
-    assert!(session.conversation.kit == Kit::Closing, "a kit closes when its session closes it");
-    session.conversation.kit = Kit::Closed;
+    let state = mem::replace(&mut session.state, State::Closed);
+    session.state = match state {
+        State::Closing { end, waiting: waiting @ Waiting { kit: Kit::Closing, .. } } => {
+            State::Closing { end, waiting: Waiting { kit: Kit::Closed, ..waiting } }
+        }
+        State::Calling { .. }
+        | State::Backoff { .. }
+        | State::Tooling { .. }
+        | State::Resting { .. }
+        | State::Yielded
+        | State::Closing { waiting: Waiting { kit: Kit::Open | Kit::Closed, .. }, .. }
+        | State::Closed => unreachable!("a kit closes when its session closes it"),
+    };
 }
 
 pub(crate) fn delegate_answered(
@@ -759,24 +778,30 @@ fn settle(model: &mut Model, env: &Env<Limits>, id: Id<Session>, out: &mut Queue
         | State::Yielded
         | State::Closed => return,
     };
-    match session.conversation.kit {
-        Kit::Open { kit } => {
-            session.conversation.kit = Kit::Closing;
-            let heard = tools_step(&mut model.calls, env, tools::Event::Close { kit }, out);
+    let kit = match waiting.kit {
+        Kit::Open => {
+            let close = tools::Event::Close { kit: session.conversation.kit };
+            let heard = tools_step(&mut model.calls, env, close, out);
             assert!(heard.answer.is_none(), "a kit's close answers its calls later, as their operations end");
             match heard.kit {
-                Some(News::Closed { session: closed }) => kit_closed(&mut model.sessions, closed),
-                None => {}
+                Some(News::Closed { session: closed }) => {
+                    assert!(closed == id, "a close is news of its own kit");
+                    Kit::Closed
+                }
+                None => Kit::Closing,
                 Some(News::Opened { .. } | News::Refused { .. }) => unreachable!("a close opens no kit"),
             }
         }
-        Kit::Closing | Kit::Closed => {}
-    }
+        Kit::Closing | Kit::Closed => waiting.kit,
+    };
+    let waiting = Waiting { kit, ..waiting };
     let session = model.sessions.get_mut(id).expect("looked up above");
-    if session.conversation.kit == Kit::Closed && waiting == NOTHING {
+    if waiting == SETTLED {
         let Conversation { opener, turns, usage, .. } = session.conversation;
         out.push(Request::Ended { opener, end, turns, usage });
         session.state = State::Closed;
+    } else {
+        session.state = State::Closing { end, waiting };
     }
 }
 
@@ -877,12 +902,12 @@ fn answered(
 fn answered_late(
     conversation: &mut Conversation,
     end: End,
-    runs: u32,
+    waiting: Waiting,
     usage: Usage,
     out: &mut Queue<Request>,
 ) -> State {
     used(conversation, usage, out);
-    State::Closing { end, waiting: Waiting { call: false, runs } }
+    State::Closing { end, waiting: Waiting { call: false, ..waiting } }
 }
 
 /// Calling, completed with tool use: record the message and go through its
@@ -950,7 +975,7 @@ fn advance(
                 let run = Run { session: id, slot: tools.slots.len(), block: index, by: By::Tools };
                 let run = calls.runs.insert(run).expect("the run slab has room for two batches a session");
                 let deadline = env.now.saturating_add(env.limits.tool_timeout).min(conversation.expires);
-                let (kit, reply_to) = (kit_of(conversation), ReplyTo::new(run.token()));
+                let (kit, reply_to) = (conversation.kit, ReplyTo::new(run.token()));
                 let heard = tools_step(calls, env, tools::Event::Call { kit, reply_to, call, deadline }, out);
                 assert!(heard.kit.is_none(), "a call is news of no kit");
                 started = started.saturating_add(1);
@@ -1014,14 +1039,6 @@ fn advance(
     let results = Message { role: Role::User, content: results.into_boxed() };
     conversation.transcript.push(results).expect("room was checked when the message was recorded");
     call(conversation, id, 0, env, out)
-}
-
-/// The tools' name for the session's kit, which is open while it runs calls.
-fn kit_of(conversation: &Conversation) -> Token {
-    match conversation.kit {
-        Kit::Open { kit } => kit,
-        Kit::Closing | Kit::Closed => unreachable!("a session's kit is open while it runs tools"),
-    }
 }
 
 /// Whether a call with `effect` joins a batch of `batch` that has started
@@ -1129,7 +1146,7 @@ fn tool_ran(
 /// Closing, a tool run ended: one fewer to wait for.
 fn settled(end: End, waiting: Waiting) -> State {
     let runs = waiting.runs.checked_sub(1).expect("the run that ended was waited for");
-    State::Closing { end, waiting: Waiting { call: waiting.call, runs } }
+    State::Closing { end, waiting: Waiting { runs, ..waiting } }
 }
 
 /// Calling, failed: wait and call again if the failure is transient and
@@ -1163,7 +1180,7 @@ fn call(
 
 fn cancel_call(id: Id<Session>, end: End, out: &mut Queue<Request>) -> State {
     out.push(Request::Cancel { owner: id.token() });
-    State::Closing { end, waiting: Waiting { call: true, runs: 0 } }
+    State::Closing { end, waiting: Waiting { call: true, ..KIT } }
 }
 
 /// Withdraws the delegated runs in flight, to end with `end` once every run
@@ -1178,7 +1195,7 @@ fn cancel_tools(runs: &Slab<Run>, tools: Tools, end: End, out: &mut Queue<Reques
             Slot::Done { .. } => {}
         }
     }
-    State::Closing { end, waiting: Waiting { call: false, runs: tools.running } }
+    State::Closing { end, waiting: Waiting { runs: tools.running, ..KIT } }
 }
 
 /// Ends with `end` at once, or once the runs in flight have settled.
@@ -1199,7 +1216,7 @@ fn used(conversation: &mut Conversation, usage: Usage, out: &mut Queue<Request>)
 /// Ends the session with `end`, which has nothing in flight but its kit: the
 /// kit closes, and the opener is told once it has ([`settle`]).
 const fn finish(end: End) -> State {
-    State::Closing { end, waiting: NOTHING }
+    State::Closing { end, waiting: KIT }
 }
 
 // Helpers.
@@ -1240,8 +1257,9 @@ fn admit(opener: Token, spec: Spec, limits: &Limits, now: Time) -> Option<(Conve
         turns: 0,
         usage: Usage::ZERO,
         expires: now.saturating_add(spec.budget.time),
-        // Until the kit opens.
-        kit: Kit::Closed,
+        // Named as the kit opens: until then, the session is Closed, which
+        // holds nothing.
+        kit: Token::new(0),
     };
     Some((conversation, spec.authority))
 }
