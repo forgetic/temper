@@ -185,10 +185,12 @@ outcome spec asks for them, and then asks the worker to push:
   only as long as the call that asked for it. A push that lands is the
   outcome, even if the run was winding down meanwhile.
 - **Failures are feedback,** like any other: a failing check comes back
-  with its output, and so does a push that fails. A push that finds the
-  branch moved is the exception: it ends the run as stale, since every
-  later push of the run would find the same (worker-model.md, section 5)
-  and the engine re-plans against fresh forge state.
+  with its output, and so does a push that fails. So does one that finds
+  nothing to push, which is how a declared change is checked to exist:
+  the worker says so, and the run tells the LLM its push failed. A push
+  that finds the branch moved is the exception: it ends the run as stale,
+  since every later push of the run would find the same (worker-model.md,
+  section 5) and the engine re-plans against fresh forge state.
 - **Not a security boundary.** An agent can change what a check runs; CI
   on the forge and the engine's rules guard landing. The checks catch
   failures early, inside the run that can fix them.
@@ -325,9 +327,6 @@ to be designed after it:
 
 ## 9. Open questions
 
-- **Checking that a change exists:** the run could ask the worker before
-  accepting a change, or leave it to the worker's final check. Add it if it
-  proves needed.
 - **Facts and the layers below** (sections 7 and 8).
 - **Long-lived runs:** what a run puts in its snapshot. The engine keeps
   snapshots as a cache and addresses a run through its item
@@ -343,9 +342,13 @@ yet, each to be designed before it is built:
 - **MCP servers as a tool source** (sections 5 and 6): calls that leave
   the model as opaque payloads, starting with the code graph that
   complements `rg`.
-- **Forge reads, outlets beyond finish, and inbound events beyond the
-  first request** (4.3), which the engine answers through the worker
-  (engine-model.md).
+- **The agent's half of the channel** (section 8; worker-model.md,
+  section 6), which the worker speaks already: inbound events beyond the
+  first request, and the run saying it waits, with how many it has read;
+  parking with a snapshot, and resuming from one (4.5); forge reads and
+  outlets beyond finish (4.3), relayed to the engine, and their answers.
+  The channel has no refusal and no place for what a run spent: a refused
+  run reaches the worker as failed for policy, and its spend is dropped.
 - **Facts for the worker** (section 7): the content-free stream for
   liveness and the trace, projected by the protocol layer.
 - **The environment commands run with** (section 6): empty today, so no
