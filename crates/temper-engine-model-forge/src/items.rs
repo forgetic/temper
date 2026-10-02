@@ -619,7 +619,7 @@ fn found(
                 record = Some(Record::Mangled { comment: comment.id, revision: comment.revision });
                 break;
             }
-            Mark::None | Mark::Key(_) => {}
+            Mark::None | Mark::Key { .. } => {}
         }
     }
     let record = match record {
@@ -879,7 +879,8 @@ fn failed(env: &Env<Limits>, rng: &mut Rng, phase: Phase, attempt: u32, error: E
         | Error::Closed
         | Error::Stale
         | Error::Conflict
-        | Error::Protected => {
+        | Error::Protected
+        | Error::Circular => {
             let attempt = attempt.saturating_add(1);
             let until = env.now.saturating_add(backoff(&env.limits, rng, attempt));
             State::Waiting { phase, attempt, until, forbidden: error == Error::Forbidden }
@@ -894,8 +895,9 @@ fn has_room_for_comments(entry: &Entry) -> bool {
 }
 
 /// The comments of a page, on the item `on`, that are news, told while the
-/// inbox has room; the engine's own are passed over. Says whether it stopped
-/// for room.
+/// inbox has room: people's, and those the engine wrote for a person, as
+/// theirs; the engine's own are passed over. Says whether it stopped for
+/// room.
 fn comment_news(entry: &mut Entry, engine: u64, on: u64, comments: &[Comment], out: &mut Queue<Request>) -> bool {
     let own = on == entry.item.number;
     for comment in comments {
@@ -908,14 +910,18 @@ fn comment_news(entry: &mut Entry, engine: u64, on: u64, comments: &[Comment], o
         } else {
             Position { pull_comment: comment.id, ..entry.announced }
         };
-        if comment.author == engine {
+        let author = match &comment.mark {
+            Mark::Key { key: _, person: Some(person) } if comment.author == engine => *person,
+            Mark::Key { .. } | Mark::None | Mark::Record { .. } | Mark::Mangled => comment.author,
+        };
+        if author == engine {
             entry.announced = position;
             continue;
         }
         if !has_room_for_comments(entry) {
             return true;
         }
-        tell(entry, News::Comment { on, id: comment.id, author: comment.author }, position, out);
+        tell(entry, News::Comment { on, id: comment.id, author }, position, out);
     }
     false
 }

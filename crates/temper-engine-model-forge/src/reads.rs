@@ -122,7 +122,8 @@ pub(crate) fn answered(
         | Error::Closed
         | Error::Stale
         | Error::Conflict
-        | Error::Protected => answer_with(model, id, Err(Failure::Forge(error)), out),
+        | Error::Protected
+        | Error::Circular => answer_with(model, id, Err(Failure::Forge(error)), out),
     }
 }
 
@@ -146,6 +147,9 @@ pub(crate) fn op(model: &Model, id: Id<Fetch>) -> (u32, Op) {
         Read::Item { item, after } => (item.repository, Op::Item { number: item.number, after: *after }),
         Read::Pull { item } => (item.repository, Op::Pull { number: item.number }),
         Read::Reviews { item, page } => (item.repository, Op::Reviews { number: item.number, page: *page }),
+        Read::Remarks { item, review, page } => {
+            (item.repository, Op::Remarks { number: item.number, review: *review, page: *page })
+        }
         Read::PullFor { repository, head, base } => {
             (*repository, Op::PullFor { head: copy_of(head), base: copy_of(base) })
         }
@@ -161,7 +165,9 @@ pub(crate) fn op(model: &Model, id: Id<Fetch>) -> (u32, Op) {
 fn valid(read: &Read, limits: &Limits) -> bool {
     let none: &[u8] = &[];
     let (repository, names): (u32, [&[u8]; 2]) = match read {
-        Read::Item { item, .. } | Read::Pull { item } | Read::Reviews { item, .. } => (item.repository, [none, none]),
+        Read::Item { item, .. } | Read::Pull { item } | Read::Reviews { item, .. } | Read::Remarks { item, .. } => {
+            (item.repository, [none, none])
+        }
         Read::PullFor { repository, head, base } => (*repository, [head, base]),
         Read::Statuses { repository, .. } | Read::Permission { repository, .. } => (*repository, [none, none]),
         Read::Branch { repository, branch } => (*repository, [branch, none]),

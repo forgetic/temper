@@ -4,7 +4,7 @@ use alloc::boxed::Box;
 
 use temper_lib::{Duration, Env, List, Queue, Time, Token};
 
-use crate::api::{Answer, Body, Comment, Error, Kind, Mark, Op, Page, Pull, Review, State, Summary, Verdict};
+use crate::api::{Answer, Body, Comment, Error, Kind, Mark, Op, Page, Pull, Remark, Review, State, Summary, Verdict};
 use crate::{
     Cause, Ci, Config, Content, Event, Fact, Failure, Item, Level, Limits, Model, News, Position, Priority, Read,
     Record, Request, Reviewed, View, Why, Write, Written, fire, max_out, resume, step, worst_case,
@@ -18,6 +18,7 @@ const LIMITS: Limits = Limits {
     repositories: 2,
     items: 3,
     labels: 3,
+    members: 3,
     inbox: 3,
     reviewers: 4,
     reads: 2,
@@ -283,6 +284,11 @@ fn lists_changes(op: &Op) -> bool {
         | Op::RemoveLabels { .. }
         | Op::OpenPull { .. }
         | Op::Merge { .. }
+        | Op::Remarks { .. }
+        | Op::Review { .. }
+        | Op::SetReviewers { .. }
+        | Op::SetDependencies { .. }
+        | Op::Reopen { .. }
         | Op::Close { .. }
         | Op::DeleteBranch { .. }
         | Op::PutPage { .. }
@@ -358,7 +364,7 @@ fn comments(list: &[Comment]) -> Box<[Comment]> {
     for comment in list {
         let mark = match &comment.mark {
             Mark::None => Mark::None,
-            Mark::Key(key) => Mark::Key(key.clone()),
+            Mark::Key { key, person } => Mark::Key { key: key.clone(), person: *person },
             Mark::Record { position, nonce } => Mark::Record { position: *position, nonce: *nonce },
             Mark::Mangled => Mark::Mangled,
         };
@@ -418,7 +424,7 @@ fn pull(number: u64, commit: [u8; 32], ci: Ci) -> Pull {
 fn reviews(list: &[(u64, u64, Verdict)], commit: [u8; 32], more: bool) -> Result<Answer, Error> {
     let mut reviews = List::with_capacity(8);
     for (id, author, verdict) in list {
-        let review = Review { id: *id, author: *author, verdict: *verdict, commit, body: bytes(b"review") };
+        let review = Review { id: *id, author: *author, verdict: *verdict, commit, key: None, body: bytes(b"review") };
         reviews.push(review).expect("room");
     }
     Ok(Answer::Reviews { reviews: reviews.into_boxed(), more })
@@ -1033,6 +1039,11 @@ fn the_slow_pass_reads_a_few_candidates_a_page_and_items_held_it_never_shows() {
                 | Op::RemoveLabels { .. }
                 | Op::OpenPull { .. }
                 | Op::Merge { .. }
+                | Op::Remarks { .. }
+                | Op::Review { .. }
+                | Op::SetReviewers { .. }
+                | Op::SetDependencies { .. }
+                | Op::Reopen { .. }
                 | Op::Close { .. }
                 | Op::DeleteBranch { .. }
                 | Op::PutPage { .. }
@@ -1079,6 +1090,11 @@ fn the_slow_pass_finds_an_item_whose_tracking_label_was_removed() {
             | Op::RemoveLabels { .. }
             | Op::OpenPull { .. }
             | Op::Merge { .. }
+            | Op::Remarks { .. }
+            | Op::Review { .. }
+            | Op::SetReviewers { .. }
+            | Op::SetDependencies { .. }
+            | Op::Reopen { .. }
             | Op::Close { .. }
             | Op::DeleteBranch { .. }
             | Op::PutPage { .. }
@@ -1338,10 +1354,16 @@ fn a_resumed_creation_is_looked_for_after_its_cause_not_where_the_working_set_is
     };
     assert_eq!(made.op, create, "not found: made");
     let owner = Token::new(2);
-    let reply = Write::Comment { item: item(5), key: bytes(b"reply"), body: Content::Text(bytes(b"hi")) };
+    let reply = Write::Comment { item: item(5), key: bytes(b"reply"), person: None, body: Content::Text(bytes(b"hi")) };
     h.step(Event::Write { owner, write: reply, resumed: Some(CAUSE) });
     let find = h.send_for(&Op::Item { number: 5, after: CAUSE.comment });
-    let keyed = Comment { id: 60, author: ENGINE, revision: 1, mark: Mark::Key(bytes(b"reply")), body: bytes(b"x") };
+    let keyed = Comment {
+        id: 60,
+        author: ENGINE,
+        revision: 1,
+        mark: Mark::Key { key: bytes(b"reply"), person: None },
+        body: bytes(b"x"),
+    };
     let told = h.answer(&find, item_page(issue(5, &[TRACKING], 1), comments(&[keyed]), false));
     assert_eq!(*told, [Request::Wrote { owner, result: Ok(Written::Commented(60)) }], "found before the record");
 }
@@ -1351,17 +1373,24 @@ fn a_comment_not_found_after_a_timeout_is_posted_again() {
     let mut h = Harness::new(LIMITS);
     h.start(&[issue(5, &[TRACKING], 1)], &[]);
     let owner = Token::new(1);
-    let write = Write::Comment { item: item(5), key: bytes(b"reply"), body: Content::Text(bytes(b"hello")) };
+    let write =
+        Write::Comment { item: item(5), key: bytes(b"reply"), person: None, body: Content::Text(bytes(b"hello")) };
     h.step(Event::Write { owner, write, resumed: None });
     let made = h.send_one();
-    let post = Op::Post { number: 5, key: Some(bytes(b"reply")), body: Body::Text(bytes(b"hello")) };
+    let post = Op::Post { number: 5, key: Some(bytes(b"reply")), person: None, body: Body::Text(bytes(b"hello")) };
     assert_eq!(made.op, post, "posted with its key");
     h.answer(&made, Err(Error::Timeout));
     h.at(3);
     h.fire();
     let find = h.send_one();
     assert_eq!(find.op, Op::Item { number: 5, after: 100 }, "looked for after the last comment passed");
-    let keyed = Comment { id: 102, author: PERSON, revision: 1, mark: Mark::Key(bytes(b"reply")), body: bytes(b"x") };
+    let keyed = Comment {
+        id: 102,
+        author: PERSON,
+        revision: 1,
+        mark: Mark::Key { key: bytes(b"reply"), person: None },
+        body: bytes(b"x"),
+    };
     let told = h.answer(&find, item_page(issue(5, &[TRACKING], 1), comments(&[comment(101, PERSON), keyed]), false));
     assert!(told.is_empty(), "a person's marker is not the engine's");
     let again = h.send_one();
@@ -1474,7 +1503,10 @@ fn a_record_is_posted_once_then_edited_after_a_fresh_read_carrying_the_position_
     let post = h.send_one();
     let position = Position { comment: 1, ..Position::START };
     let mine = nonce(&post.op);
-    assert_eq!(post.op, Op::Post { number: 9, key: None, body: Body::Record { payload, position, nonce: mine } });
+    assert_eq!(
+        post.op,
+        Op::Post { number: 9, key: None, person: None, body: Body::Record { payload, position, nonce: mine } }
+    );
     h.answer(&post, Err(Error::Timeout));
     h.at(3);
     h.fire();
@@ -1691,6 +1723,128 @@ fn a_write_that_timed_out_waits_until_it_can_no_longer_land() {
     h.at(90);
     h.fire();
     assert_eq!(h.send_one().op, Op::AddLabels { number: 1, labels: labels(&[TRACKING, b"a"]) }, "then the next");
+}
+
+#[test]
+fn a_verdict_is_a_review_keyed_and_found_by_its_key() {
+    let mut h = Harness::started(LIMITS);
+    let owner = Token::new(1);
+    let write = Write::Review {
+        item: item(4),
+        key: bytes(b"verdict"),
+        verdict: Verdict::RequestChanges,
+        body: Content::Text(bytes(b"not yet")),
+    };
+    h.step(Event::Write { owner, write, resumed: None });
+    let made = h.send_one();
+    let review = Op::Review {
+        number: 4,
+        key: bytes(b"verdict"),
+        verdict: Verdict::RequestChanges,
+        body: Body::Text(bytes(b"not yet")),
+    };
+    assert_eq!(made.op, review, "made with its key");
+    h.answer(&made, Err(Error::Timeout));
+    h.at(3);
+    h.fire();
+    let find = h.send_one();
+    assert_eq!(find.op, Op::Reviews { number: 4, page: 1 }, "looked for among the reviews");
+    h.answer(&find, reviews(&[(3, PERSON, Verdict::Approve)], HEAD, true));
+    let next = h.send_one();
+    assert_eq!(next.op, Op::Reviews { number: 4, page: 2 });
+    let mut list = List::with_capacity(1);
+    let found = Review {
+        id: 8,
+        author: ENGINE,
+        verdict: Verdict::RequestChanges,
+        commit: HEAD,
+        key: Some(bytes(b"verdict")),
+        body: bytes(b"not yet"),
+    };
+    list.push(found).expect("room");
+    let told = h.answer(&next, Ok(Answer::Reviews { reviews: list.into_boxed(), more: false }));
+    assert_eq!(*told, [Request::Wrote { owner, result: Ok(Written::Reviewed(8)) }], "found, not made twice");
+}
+
+#[test]
+fn reviewers_and_dependencies_are_written_as_sets_and_an_item_reopened() {
+    let mut h = Harness::started(LIMITS);
+    let owner = Token::new(1);
+    let many = Write::SetReviewers { item: item(4), reviewers: Box::new([1, 2, 3, 4]) };
+    let told = h.step(Event::Write { owner, write: many, resumed: None });
+    assert_eq!(*told, [Request::Wrote { owner, result: Err(Failure::Invalid) }], "more than the limits");
+    for (write, op) in [
+        (
+            Write::SetReviewers { item: item(4), reviewers: Box::new([PERSON]) },
+            Op::SetReviewers { number: 4, reviewers: Box::new([PERSON]) },
+        ),
+        (
+            Write::SetDependencies { item: item(4), dependencies: Box::new([2, 3]) },
+            Op::SetDependencies { number: 4, dependencies: Box::new([2, 3]) },
+        ),
+        (Write::Reopen { item: item(4) }, Op::Reopen { number: 4 }),
+    ] {
+        h.step(Event::Write { owner, write, resumed: None });
+        let made = h.send_one();
+        assert_eq!(made.op, op);
+        assert!(h.answer(&made, Err(Error::Timeout)).is_empty(), "the same whenever it lands");
+        h.at(h.env.now.as_nanos() / 1_000_000_000 + 3);
+        h.fire();
+        let again = h.send_one();
+        assert_eq!(again.op, op, "written again as it is");
+        let told = h.answer(&again, Ok(Answer::Done));
+        assert_eq!(*told, [Request::Wrote { owner, result: Ok(Written::Done) }]);
+    }
+}
+
+#[test]
+fn a_persons_message_the_engine_writes_is_their_news() {
+    let mut h = Harness::new(LIMITS);
+    h.start(&[issue(5, &[TRACKING], 1)], &[]);
+    let owner = Token::new(1);
+    let message = Content::Text(bytes(b"please"));
+    let write = Write::Comment { item: item(5), key: bytes(b"web-1"), person: Some(PERSON), body: message };
+    h.step(Event::Write { owner, write, resumed: None });
+    let made = h.send_one();
+    let post =
+        Op::Post { number: 5, key: Some(bytes(b"web-1")), person: Some(PERSON), body: Body::Text(bytes(b"please")) };
+    assert_eq!(made.op, post, "written for the person");
+    h.answer(&made, Ok(Answer::Commented { id: 101, revision: 1 }));
+    let (_, sent) = h.pass(30, &[issue(5, &[TRACKING], 20)]);
+    let theirs = Comment {
+        id: 101,
+        author: ENGINE,
+        revision: 1,
+        mark: Mark::Key { key: bytes(b"web-1"), person: Some(PERSON) },
+        body: bytes(b"please"),
+    };
+    let ours = Comment {
+        id: 102,
+        author: ENGINE,
+        revision: 1,
+        mark: Mark::Key { key: bytes(b"r"), person: None },
+        body: bytes(b"x"),
+    };
+    let told = h.answer(&sent[0], item_page(issue(5, &[TRACKING], 20), comments(&[theirs, ours]), false));
+    assert_eq!(*told, [news(5, 1, News::Comment { on: 5, id: 101, author: PERSON })], "the person's, not the engine's");
+}
+
+#[test]
+fn a_reviews_inline_comments_are_a_fresh_read() {
+    let mut h = Harness::started(LIMITS);
+    let owner = Token::new(1);
+    h.step(Event::Read { owner, read: Read::Remarks { item: item(4), review: 8, page: 2 } });
+    let read = h.send_one();
+    assert_eq!(read.op, Op::Remarks { number: 4, review: 8, page: 2 });
+    let mut remarks = List::with_capacity(1);
+    let remark = Remark { id: 9, author: PERSON, path: bytes(b"src"), line: 3, body: bytes(b"why?") };
+    remarks.push(remark).expect("room");
+    let answer = Answer::Remarks { remarks: remarks.into_boxed(), more: false };
+    let told = h.answer(&read, Ok(answer));
+    let Request::Read { owner: answered, result: Ok(Answer::Remarks { remarks, more: false }) } = &told[0] else {
+        panic!("the read answered: {told:?}");
+    };
+    assert_eq!((*answered, remarks.len()), (owner, 1), "answered once, as read");
 }
 
 // The budget.

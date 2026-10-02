@@ -16,9 +16,11 @@ use crate::boundary::Item;
 /// (engine-model.md, section 12).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Priority {
-    /// The parent's fresh reads, for its writes, its runs and its briefs.
+    /// Reads for writes: the parent's fresh reads, for its writes, its runs
+    /// and its briefs; and a write's own, what it checks before it writes and
+    /// what it looks for after an attempt that may have been made.
     Fresh,
-    /// Writes, and the reads that find what an attempt made.
+    /// Writes.
     Write,
     /// Keeping up: listings and the reads of the items held.
     Keep,

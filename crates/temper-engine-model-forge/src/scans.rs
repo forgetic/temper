@@ -421,7 +421,8 @@ fn failed(model: &mut Model, env: &Env<Limits>, repository: u32, progress: Progr
         | Error::Closed
         | Error::Stale
         | Error::Conflict
-        | Error::Protected => {
+        | Error::Protected
+        | Error::Circular => {
             let attempt = attempt.saturating_add(1);
             let until = env.now.saturating_add(items::backoff(&env.limits, &mut model.rng, attempt));
             scan_mut(model, repository).pass = Pass::Waiting { progress, attempt, until };
@@ -545,7 +546,8 @@ fn slow_listed(model: &mut Model, env: &Env<Limits>, repository: u32, page: u32,
             | Error::Closed
             | Error::Stale
             | Error::Conflict
-            | Error::Protected,
+            | Error::Protected
+            | Error::Circular,
         ) => {
             slow_rest(model, env, repository, page);
             return;
@@ -627,7 +629,8 @@ fn probed(
             | Error::Closed
             | Error::Stale
             | Error::Conflict
-            | Error::Protected,
+            | Error::Protected
+            | Error::Circular,
         ) => {
             slow_rest(model, env, repository, next);
             return;
@@ -640,7 +643,7 @@ fn probed(
         last = last.max(comment.id);
         let record = match comment.mark {
             Mark::Record { .. } | Mark::Mangled => comment.author == engine,
-            Mark::None | Mark::Key(_) => false,
+            Mark::None | Mark::Key { .. } => false,
         };
         if record {
             let item = Item { repository, number: summary.number };

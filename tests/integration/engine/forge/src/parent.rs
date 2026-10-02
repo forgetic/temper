@@ -524,6 +524,7 @@ impl Parent {
             Intent::Comment { item, key } => Write::Comment {
                 item: *item,
                 key: key.clone().into_boxed_slice(),
+                person: None,
                 body: Content::Text(format!("a reply on #{}", item.number).into_bytes().into_boxed_slice()),
             },
             Intent::Task { repository, key } => Write::CreateIssue {

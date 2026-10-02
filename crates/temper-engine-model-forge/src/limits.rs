@@ -3,7 +3,7 @@ use core::mem::size_of;
 
 use temper_lib::{Deadlines, Duration, Id, List, Map, Queue, Slab};
 
-use crate::api::{Answer, Comment, PageName, Pull, Review, Status, Summary};
+use crate::api::{Answer, Comment, PageName, Pull, Remark, Review, Status, Summary};
 use crate::boundary::{Item, Reviewed};
 use crate::calls::Call;
 use crate::facts::Fact;
@@ -22,8 +22,10 @@ pub struct Limits {
     /// Items held in the working set at once, those leaving included. Beyond
     /// them, new work waits on the forge.
     pub items: u32,
-    /// Labels an item carries or a write sets.
+    /// Labels an item carries or a write sets; users or items a write names
+    /// as reviewers or dependencies.
     pub labels: u32,
+    pub members: u32,
     /// News an item's inbox holds until the parent takes it, the last place
     /// kept for its pull request's state and verdicts. Beyond them, the rest
     /// waits on the forge until there is room. At least two.
@@ -44,9 +46,10 @@ pub struct Limits {
     pub page: u32,
     /// The most bytes of a label, a key, a branch or a wiki page's name.
     pub name_bytes: u32,
-    /// The most bytes of a title, and of a body or a wiki page's content: of
-    /// what a write carries, and of what an answer brings, which the protocol
-    /// layer cuts to them (the sub-model carries text and never reads it).
+    /// The most bytes of a title (and of a status's description and its
+    /// URL), and of a body or a wiki page's content: of what a write carries,
+    /// and of what an answer brings, which the protocol layer cuts to them
+    /// (the sub-model carries text and never reads it).
     pub title_bytes: u32,
     pub body_bytes: u32,
     /// The request budget: the calls made in a window of `window`, which
@@ -110,20 +113,22 @@ pub(crate) fn labels_bytes(limits: &Limits) -> Option<u64> {
     u64::from(limits.labels).checked_mul(each)
 }
 
-/// The most bytes a write holds besides itself: a title, a body, labels, and
-/// two names (a key, or a pull request's branches, or a page's name); and the
-/// labels it removes, made as its call goes out.
+/// The most bytes a write holds besides itself: a title, a body, labels, the
+/// users or items it names, and two names (a key, or a pull request's
+/// branches, or a page's name); and the labels it removes, made as its call
+/// goes out.
 fn write_bytes(limits: &Limits) -> Option<u64> {
     let names = u64::from(limits.name_bytes).checked_mul(2)?;
     u64::from(limits.title_bytes)
         .checked_add(u64::from(limits.body_bytes))?
         .checked_add(labels_bytes(limits)?.checked_mul(2)?)?
+        .checked_add(u64::from(limits.members).checked_mul(size(size_of::<u64>())?)?)?
         .checked_add(names)
 }
 
 /// The most bytes an answer brings in: a page of items, an item and a page
-/// of its comments, a pull request, a page of its reviews or of statuses, a
-/// page of wiki page names, or a wiki page.
+/// of its comments, a pull request, a page of its reviews, of statuses or of
+/// a review's inline comments, a page of wiki page names, or a wiki page.
 fn answer_bytes(limits: &Limits) -> Option<u64> {
     let page = u64::from(limits.page);
     let name = u64::from(limits.name_bytes);
@@ -133,14 +138,25 @@ fn answer_bytes(limits: &Limits) -> Option<u64> {
     let items = page.checked_mul(summary)?;
     let comment = size(size_of::<Comment>())?.checked_add(u64::from(limits.body_bytes))?.checked_add(name)?;
     let item = summary.checked_add(page.checked_mul(comment)?)?;
-    let review = size(size_of::<Review>())?.checked_add(u64::from(limits.body_bytes))?;
+    let review = size(size_of::<Review>())?.checked_add(u64::from(limits.body_bytes))?.checked_add(name)?;
     let reviews = page.checked_mul(review)?;
-    let status = size(size_of::<Status>())?.checked_add(name)?;
+    let status =
+        size(size_of::<Status>())?.checked_add(name)?.checked_add(u64::from(limits.title_bytes).checked_mul(2)?)?;
     let statuses = page.checked_mul(status)?;
+    let remark = size(size_of::<Remark>())?.checked_add(name)?.checked_add(u64::from(limits.body_bytes))?;
+    let remarks = page.checked_mul(remark)?;
     let pull = size(size_of::<Pull>())?.checked_add(name.checked_mul(2)?)?;
     let pages = page.checked_mul(size(size_of::<PageName>())?.checked_add(name)?)?.checked_add(name)?;
     let wiki = name.checked_add(u64::from(limits.body_bytes))?;
-    items.max(item).max(pull).max(reviews).max(statuses).max(pages).max(wiki).checked_add(size(size_of::<Answer>())?)
+    items
+        .max(item)
+        .max(pull)
+        .max(reviews)
+        .max(statuses)
+        .max(remarks)
+        .max(pages)
+        .max(wiki)
+        .checked_add(size(size_of::<Answer>())?)
 }
 
 fn size(bytes: usize) -> Option<u64> {

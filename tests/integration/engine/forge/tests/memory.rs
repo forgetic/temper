@@ -4,8 +4,8 @@
 //! answers as large as the limits allow and failures of every kind.
 
 use temper_engine_model_forge::api::{
-    Answer, Body, Check, Comment, Error, Kind, Mark, Op, Page, PageName, Permission, Pull, Review, State, Status,
-    Summary, Verdict,
+    Answer, Body, Check, Comment, Error, Kind, Mark, Op, Page, PageName, Permission, Pull, Remark, Review, State,
+    Status, Summary, Verdict,
 };
 use temper_engine_model_forge::{
     Cause, Config, Content, Event, Item, Limits, Model, Position, Read, Request, Write, fire, max_out, resume, step,
@@ -23,6 +23,7 @@ const LIMITS: Limits = Limits {
     repositories: 2,
     items: 4,
     labels: 3,
+    members: 3,
     inbox: 3,
     reviewers: 3,
     reads: 2,
@@ -71,6 +72,8 @@ enum Asked {
     Commented,
     Edited,
     Merged,
+    Reviewed,
+    Remarks,
     Revision { put: bool },
     Done,
 }
@@ -82,6 +85,7 @@ fn asked(op: &Op) -> Asked {
         Op::Comment { id, .. } => Asked::Comment { id: *id },
         Op::Pull { number } => Asked::Pull { number: *number },
         Op::Reviews { number, page } => Asked::Reviews { number: *number, page: *page },
+        Op::Remarks { .. } => Asked::Remarks,
         Op::PullFor { .. } => Asked::Pull { number: 4 },
         Op::Statuses { .. } => Asked::Statuses,
         Op::Permission { .. } => Asked::Permission,
@@ -92,9 +96,13 @@ fn asked(op: &Op) -> Asked {
         Op::Post { .. } => Asked::Commented,
         Op::EditComment { .. } => Asked::Edited,
         Op::Merge { .. } => Asked::Merged,
+        Op::Review { .. } => Asked::Reviewed,
         Op::PutPage { content, .. } => Asked::Revision { put: matches!(content, Body::Payload(_)) },
         Op::AddLabels { .. }
         | Op::RemoveLabels { .. }
+        | Op::SetReviewers { .. }
+        | Op::SetDependencies { .. }
+        | Op::Reopen { .. }
         | Op::Close { .. }
         | Op::DeleteBranch { .. }
         | Op::DeletePage { .. } => Asked::Done,
@@ -222,7 +230,8 @@ fn comments(limits: &Limits, after: u64, record: bool) -> Box<[Comment]> {
                     },
                 )
             } else {
-                (9, Mark::Key(name(limits, b'k')))
+                let person = if nth.is_multiple_of(2) { Some(8) } else { None };
+                (ENGINE, Mark::Key { key: name(limits, b'k'), person })
             };
             Comment { id, author, revision: id, mark, body: bytes(limits.body_bytes, b'c') }
         })
@@ -253,6 +262,7 @@ fn reviews(limits: &Limits, page: u32, now: u64) -> Answer {
                 author: 9 + u64::from(page * 10 + nth),
                 verdict: Verdict::Approve,
                 commit: [u8::try_from(now % 200).expect("small"); 32],
+                key: Some(name(limits, b'k')),
                 body: bytes(limits.body_bytes, b'r'),
             })
             .collect(),
@@ -288,7 +298,14 @@ fn answer(limits: &Limits, rng: &mut Rng, now: u64, op: Asked) -> Result<Answer,
         Asked::Reviews { number: _, page } => reviews(limits, page, now),
         Asked::Statuses => Answer::Statuses {
             ci: temper_engine_model_forge::Ci::Passed,
-            statuses: (0..limits.page).map(|_| Status { context: name(limits, b's'), check: Check::Passed }).collect(),
+            statuses: (0..limits.page)
+                .map(|_| Status {
+                    context: name(limits, b's'),
+                    check: Check::Passed,
+                    description: bytes(limits.title_bytes, b'd'),
+                    url: bytes(limits.title_bytes, b'u'),
+                })
+                .collect(),
             more: true,
         },
         Asked::Permission => Answer::Permission(Permission::Write),
@@ -307,6 +324,19 @@ fn answer(limits: &Limits, rng: &mut Rng, now: u64, op: Asked) -> Result<Answer,
         Asked::Commented => Answer::Commented { id: rng.below(50), revision: 7 },
         Asked::Edited => Answer::Edited { revision: 8 },
         Asked::Merged => Answer::Merged([6; 32]),
+        Asked::Reviewed => Answer::Reviewed(rng.below(50)),
+        Asked::Remarks => Answer::Remarks {
+            remarks: (0..limits.page)
+                .map(|nth| Remark {
+                    id: u64::from(nth),
+                    author: 9,
+                    path: name(limits, b'f'),
+                    line: nth,
+                    body: bytes(limits.body_bytes, b'm'),
+                })
+                .collect(),
+            more: true,
+        },
         Asked::Revision { .. } => Answer::Revision(2),
         Asked::Done => Answer::Done,
     };
@@ -324,7 +354,11 @@ fn writes(limits: &Limits, item: Item, payload: Token) -> Vec<Write> {
             body: text(),
             labels: labels(limits),
         },
-        Write::Comment { item, key: name(limits, b'k'), body: text() },
+        Write::Comment { item, key: name(limits, b'k'), person: Some(8), body: text() },
+        Write::Review { item, key: name(limits, b'k'), verdict: Verdict::Approve, body: text() },
+        Write::SetReviewers { item, reviewers: (0..u64::from(limits.members)).collect() },
+        Write::SetDependencies { item, dependencies: (0..u64::from(limits.members)).collect() },
+        Write::Reopen { item },
         Write::Record { item, payload },
         Write::SetLabels { item, labels: labels(limits) },
         Write::OpenPull {
@@ -349,6 +383,7 @@ fn reads(limits: &Limits, item: Item) -> Vec<Read> {
         Read::PullFor { repository: 0, head: name(limits, b'h'), base: name(limits, b'b') },
         Read::Statuses { repository: 0, commit: [1; 32], page: 2 },
         Read::Reviews { item, page: 2 },
+        Read::Remarks { item, review: 3, page: 1 },
         Read::Permission { repository: 1, user: 9 },
         Read::Branch { repository: 0, branch: name(limits, b'h') },
         Read::Pages { repository: 0, after: Some(name(limits, b'p')) },
@@ -392,13 +427,13 @@ fn run(limits: Limits, seed: u64, rounds: u64) -> (Measured, u64) {
             }
             5 => {
                 let all = reads(&limits, item);
-                let read = all.into_iter().nth(usize::try_from(rng.below(9)).expect("few")).expect("nine");
+                let read = all.into_iter().nth(usize::try_from(rng.below(10)).expect("few")).expect("ten");
                 Event::Read { owner: model.owner(), read }
             }
             _ => {
                 let payload = model.owner();
                 let all = writes(&limits, item, payload);
-                let write = all.into_iter().nth(usize::try_from(rng.below(10)).expect("few")).expect("ten");
+                let write = all.into_iter().nth(usize::try_from(rng.below(14)).expect("few")).expect("fourteen");
                 let resumed =
                     if rng.chance(300) { Some(Cause { comment: rng.below(9), at: Time::ZERO }) } else { None };
                 Event::Write { owner: model.owner(), write, resumed }

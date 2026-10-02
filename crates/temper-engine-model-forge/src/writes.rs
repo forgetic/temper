@@ -221,7 +221,11 @@ pub(crate) fn write(
         | Write::Close { .. }
         | Write::DeleteBranch { .. }
         | Write::PutPage { .. }
-        | Write::DeletePage { .. } => (None, Position::START, None),
+        | Write::DeletePage { .. }
+        | Write::Review { .. }
+        | Write::SetReviewers { .. }
+        | Write::SetDependencies { .. }
+        | Write::Reopen { .. } => (None, Position::START, None),
     };
     let lane = lane(&write);
     let nonce = model.rng.next_u64();
@@ -283,7 +287,11 @@ fn start(model: &mut Model, env: &Env<Limits>, id: Id<Writing>) {
         | Write::Close { .. }
         | Write::DeleteBranch { .. }
         | Write::PutPage { .. }
-        | Write::DeletePage { .. } => None,
+        | Write::DeletePage { .. }
+        | Write::Review { .. }
+        | Write::SetReviewers { .. }
+        | Write::SetDependencies { .. }
+        | Write::Reopen { .. } => None,
     };
     let unwanted = unwanted(&model.owned, &env.limits, &model.writes.get(id).expect("a write lives").write);
     let writing = model.writes.get_mut(id).expect("a write lives until it closes");
@@ -302,12 +310,8 @@ fn start(model: &mut Model, env: &Env<Limits>, id: Id<Writing>) {
             None if resumed || writing.uncertain.is_some() => find(writing),
             None => Phase::Make,
         },
-        Write::CreateIssue { .. } | Write::Comment { .. } | Write::OpenPull { .. } => {
-            if resumed {
-                find(writing)
-            } else {
-                Phase::Make
-            }
+        Write::CreateIssue { .. } | Write::Comment { .. } | Write::OpenPull { .. } | Write::Review { .. } => {
+            if resumed { find(writing) } else { Phase::Make }
         }
         Write::Merge { .. } => {
             if resumed {
@@ -324,7 +328,12 @@ fn start(model: &mut Model, env: &Env<Limits>, id: Id<Writing>) {
                 Phase::Make
             }
         }
-        Write::Close { .. } | Write::DeleteBranch { .. } | Write::DeletePage { .. } => Phase::Make,
+        Write::Close { .. }
+        | Write::Reopen { .. }
+        | Write::DeleteBranch { .. }
+        | Write::DeletePage { .. }
+        | Write::SetReviewers { .. }
+        | Write::SetDependencies { .. } => Phase::Make,
     };
     writing.state = State::Due { phase };
     ask(model, id);
@@ -344,7 +353,11 @@ fn find(writing: &Writing) -> Phase {
         | Write::Close { .. }
         | Write::DeleteBranch { .. }
         | Write::PutPage { .. }
-        | Write::DeletePage { .. } => writing.from,
+        | Write::DeletePage { .. }
+        | Write::Review { .. }
+        | Write::SetReviewers { .. }
+        | Write::SetDependencies { .. }
+        | Write::Reopen { .. } => writing.from,
     };
     Phase::Find { since: writing.since, page: 1, after }
 }
@@ -442,7 +455,11 @@ fn check_op(writing: &Writing) -> Op {
         | Write::OpenPull { .. }
         | Write::Close { .. }
         | Write::DeleteBranch { .. }
-        | Write::DeletePage { .. } => unreachable!("only a record, a page and a merge are checked"),
+        | Write::DeletePage { .. }
+        | Write::Review { .. }
+        | Write::SetReviewers { .. }
+        | Write::SetDependencies { .. }
+        | Write::Reopen { .. } => unreachable!("only a record, a page and a merge are checked"),
     }
 }
 
@@ -454,14 +471,14 @@ fn make_op(writing: &Writing) -> Op {
             body: body_of(body),
             labels: copy_labels(labels),
         },
-        Write::Comment { item, key, body } => {
-            Op::Post { number: item.number, key: Some(copy_of(key)), body: body_of(body) }
+        Write::Comment { item, key, person, body } => {
+            Op::Post { number: item.number, key: Some(copy_of(key)), person: *person, body: body_of(body) }
         }
         Write::Record { item, payload } => {
             let body = Body::Record { payload: *payload, position: writing.position, nonce: writing.nonce };
             match writing.target {
                 Some(target) => Op::EditComment { number: item.number, id: target.comment, body },
-                None => Op::Post { number: item.number, key: None, body },
+                None => Op::Post { number: item.number, key: None, person: None, body },
             }
         }
         Write::SetLabels { item, labels } => Op::AddLabels { number: item.number, labels: copy_labels(labels) },
@@ -469,7 +486,17 @@ fn make_op(writing: &Writing) -> Op {
             Op::OpenPull { title: copy_of(title), body: body_of(body), head: copy_of(head), base: copy_of(base) }
         }
         Write::Merge { item, head } => Op::Merge { number: item.number, head: *head },
+        Write::Review { item, key, verdict, body } => {
+            Op::Review { number: item.number, key: copy_of(key), verdict: *verdict, body: body_of(body) }
+        }
+        Write::SetReviewers { item, reviewers } => {
+            Op::SetReviewers { number: item.number, reviewers: Box::from(&**reviewers) }
+        }
+        Write::SetDependencies { item, dependencies } => {
+            Op::SetDependencies { number: item.number, dependencies: Box::from(&**dependencies) }
+        }
         Write::Close { item } => Op::Close { number: item.number },
+        Write::Reopen { item } => Op::Reopen { number: item.number },
         Write::DeleteBranch { repository: _, branch } => Op::DeleteBranch { branch: copy_of(branch) },
         Write::PutPage { repository: _, name, content, revision: _ } => {
             Op::PutPage { name: copy_of(name), content: body_of(content), nonce: writing.nonce }
@@ -485,12 +512,16 @@ fn find_op(writing: &Writing, engine: u64, since: Time, page: u32, after: u64) -
         }
         Write::Comment { item, .. } | Write::Record { item, .. } => Op::Item { number: item.number, after },
         Write::OpenPull { head, base, .. } => Op::PullFor { head: copy_of(head), base: copy_of(base) },
+        Write::Review { item, .. } => Op::Reviews { number: item.number, page },
         Write::SetLabels { .. }
         | Write::Merge { .. }
         | Write::Close { .. }
         | Write::DeleteBranch { .. }
         | Write::PutPage { .. }
-        | Write::DeletePage { .. } => unreachable!("only creations are looked for"),
+        | Write::DeletePage { .. }
+        | Write::SetReviewers { .. }
+        | Write::SetDependencies { .. }
+        | Write::Reopen { .. } => unreachable!("only creations are looked for"),
     }
 }
 
@@ -531,7 +562,7 @@ fn checked(
             // its lane, which this one writes over.
             let nonce = match comment.mark {
                 Mark::Record { nonce, .. } if comment.author == engine => Some(nonce),
-                Mark::Record { .. } | Mark::None | Mark::Key(_) | Mark::Mangled => None,
+                Mark::Record { .. } | Mark::None | Mark::Key { .. } | Mark::Mangled => None,
             };
             if nonce == Some(writing.nonce) {
                 let record =
@@ -572,7 +603,11 @@ fn checked(
         | Write::OpenPull { .. }
         | Write::Close { .. }
         | Write::DeleteBranch { .. }
-        | Write::DeletePage { .. } => unreachable!("only a record, a page and a merge are checked"),
+        | Write::DeletePage { .. }
+        | Write::Review { .. }
+        | Write::SetReviewers { .. }
+        | Write::SetDependencies { .. }
+        | Write::Reopen { .. } => unreachable!("only a record, a page and a merge are checked"),
     }
 }
 
@@ -595,7 +630,11 @@ fn gone(writing: &Writing) -> State {
         | Write::Merge { .. }
         | Write::Close { .. }
         | Write::DeleteBranch { .. }
-        | Write::DeletePage { .. } => refused(Error::Missing),
+        | Write::DeletePage { .. }
+        | Write::Review { .. }
+        | Write::SetReviewers { .. }
+        | Write::SetDependencies { .. }
+        | Write::Reopen { .. } => refused(Error::Missing),
     }
 }
 
@@ -605,7 +644,7 @@ fn found(comment: &api::Comment, engine: u64) -> Record {
         Mark::Record { position, .. } if comment.author == engine => {
             Record::Found { comment: comment.id, revision: comment.revision, position }
         }
-        Mark::Record { .. } | Mark::Mangled | Mark::None | Mark::Key(_) => {
+        Mark::Record { .. } | Mark::Mangled | Mark::None | Mark::Key { .. } => {
             Record::Mangled { comment: comment.id, revision: comment.revision }
         }
     }
@@ -632,14 +671,21 @@ fn made(
         Error::Timeout => {
             writing.ambiguous = true;
             let next = match &writing.write {
-                Write::CreateIssue { .. } | Write::Comment { .. } | Write::OpenPull { .. } => find(writing),
+                Write::CreateIssue { .. } | Write::Comment { .. } | Write::OpenPull { .. } | Write::Review { .. } => {
+                    find(writing)
+                }
                 Write::Record { .. } => match writing.target {
                     Some(_) => Phase::Check,
                     None => find(writing),
                 },
                 Write::Merge { .. } | Write::PutPage { .. } => Phase::Check,
                 Write::SetLabels { .. } => phase,
-                Write::Close { .. } | Write::DeleteBranch { .. } | Write::DeletePage { .. } => Phase::Make,
+                Write::Close { .. }
+                | Write::Reopen { .. }
+                | Write::DeleteBranch { .. }
+                | Write::DeletePage { .. }
+                | Write::SetReviewers { .. }
+                | Write::SetDependencies { .. } => Phase::Make,
             };
             failed(writing, env, rng, next, error)
         }
@@ -653,7 +699,11 @@ fn made(
             | Write::Close { .. }
             | Write::DeleteBranch { .. }
             | Write::PutPage { .. }
-            | Write::DeletePage { .. } => refused(error),
+            | Write::DeletePage { .. }
+            | Write::Review { .. }
+            | Write::SetReviewers { .. }
+            | Write::SetDependencies { .. }
+            | Write::Reopen { .. } => refused(error),
         },
         Error::Missing if writing.ambiguous => match writing.write {
             Write::DeleteBranch { .. } | Write::DeletePage { .. } => {
@@ -666,7 +716,11 @@ fn made(
             | Write::OpenPull { .. }
             | Write::Merge { .. }
             | Write::Close { .. }
-            | Write::PutPage { .. } => refused(error),
+            | Write::PutPage { .. }
+            | Write::Review { .. }
+            | Write::SetReviewers { .. }
+            | Write::SetDependencies { .. }
+            | Write::Reopen { .. } => refused(error),
         },
         Error::Closed | Error::Stale if writing.ambiguous => match writing.write {
             Write::Merge { .. } => State::Due { phase: Phase::Check },
@@ -678,7 +732,11 @@ fn made(
             | Write::Close { .. }
             | Write::DeleteBranch { .. }
             | Write::PutPage { .. }
-            | Write::DeletePage { .. } => refused(error),
+            | Write::DeletePage { .. }
+            | Write::Review { .. }
+            | Write::SetReviewers { .. }
+            | Write::SetDependencies { .. }
+            | Write::Reopen { .. } => refused(error),
         },
         Error::Unavailable
         | Error::RateLimited { .. }
@@ -691,7 +749,8 @@ fn made(
         | Error::Closed
         | Error::Stale
         | Error::Conflict
-        | Error::Protected => failed(writing, env, rng, phase, error),
+        | Error::Protected
+        | Error::Circular => failed(writing, env, rng, phase, error),
     }
 }
 
@@ -720,7 +779,11 @@ fn searched(
             | Write::Close { .. }
             | Write::DeleteBranch { .. }
             | Write::PutPage { .. }
-            | Write::DeletePage { .. } => return refused(Error::Missing),
+            | Write::DeletePage { .. }
+            | Write::Review { .. }
+            | Write::SetReviewers { .. }
+            | Write::SetDependencies { .. }
+            | Write::Reopen { .. } => return refused(Error::Missing),
         },
         Err(error) => return failed(writing, env, rng, Phase::Find { since, page, after }, error),
     };
@@ -755,7 +818,7 @@ fn searched(
             for comment in comments {
                 last = last.max(comment.id);
                 let keyed = match &comment.mark {
-                    Mark::Key(found) => **found == **key,
+                    Mark::Key { key: found, person: _ } => **found == **key,
                     Mark::None | Mark::Record { .. } | Mark::Mangled => false,
                 };
                 if keyed && comment.author == engine {
@@ -774,6 +837,20 @@ fn searched(
             let comments = comments.get(..most).unwrap_or(&comments);
             found_record(writing, engine, comments, more, since, page, after)
         }
+        Write::Review { key, .. } => {
+            let (reviews, more) = api::reviews(answer);
+            let reviews = reviews.get(..most).unwrap_or(&reviews);
+            match keyed_review(reviews, engine, key) {
+                Some(id) => {
+                    writing.found = true;
+                    State::Done { result: Ok(Written::Reviewed(id)), record: None }
+                }
+                None if more && !reviews.is_empty() => {
+                    State::Due { phase: Phase::Find { since, page: page.saturating_add(1), after } }
+                }
+                None => State::Due { phase: Phase::Make },
+            }
+        }
         Write::OpenPull { .. } => {
             // The newest pull request for its branches is the one an earlier
             // attempt made, even if someone closed it since.
@@ -786,8 +863,25 @@ fn searched(
         | Write::Close { .. }
         | Write::DeleteBranch { .. }
         | Write::PutPage { .. }
-        | Write::DeletePage { .. } => unreachable!("only creations are looked for"),
+        | Write::DeletePage { .. }
+        | Write::SetReviewers { .. }
+        | Write::SetDependencies { .. }
+        | Write::Reopen { .. } => unreachable!("only creations are looked for"),
     }
+}
+
+/// The review of the engine's among `reviews` carrying `key`, if one does.
+fn keyed_review(reviews: &[api::Review], engine: u64, key: &[u8]) -> Option<u64> {
+    for review in reviews {
+        let keyed = match &review.key {
+            Some(found) => **found == *key,
+            None => false,
+        };
+        if keyed && review.author == engine {
+            return Some(review.id);
+        }
+    }
+    None
 }
 
 /// Find, a page of a record's item's comments: a record of the engine's this
@@ -826,7 +920,7 @@ fn found_record(
                 let record = Record::Mangled { comment: comment.id, revision: comment.revision };
                 return State::Done { result: Err(Failure::Edited { record }), record: Some(record) };
             }
-            Mark::None | Mark::Key(_) => {}
+            Mark::None | Mark::Key { .. } => {}
         }
     }
     if more && last > after {
@@ -852,13 +946,18 @@ fn done(writing: &Writing, answer: Answer) -> State {
             | Write::Close { .. }
             | Write::DeleteBranch { .. }
             | Write::PutPage { .. }
-            | Write::DeletePage { .. } => (Written::Commented(id), None),
+            | Write::DeletePage { .. }
+            | Write::Review { .. }
+            | Write::SetReviewers { .. }
+            | Write::SetDependencies { .. }
+            | Write::Reopen { .. } => (Written::Commented(id), None),
         },
         Answer::Edited { revision } => {
             let target = writing.target.expect("only a record is edited");
             (Written::Done, Some(Record::Found { comment: target.comment, revision, position: writing.position }))
         }
         Answer::Merged(commit) => (Written::Merged(commit), None),
+        Answer::Reviewed(id) => (Written::Reviewed(id), None),
         Answer::Revision(revision) => (Written::Revision(revision), None),
         Answer::Done => (Written::Done, None),
         Answer::Items { .. }
@@ -870,7 +969,8 @@ fn done(writing: &Writing, answer: Answer) -> State {
         | Answer::Permission(_)
         | Answer::Commit(_)
         | Answer::Pages { .. }
-        | Answer::Page(_) => unreachable!("a write is answered as one"),
+        | Answer::Page(_)
+        | Answer::Remarks { .. } => unreachable!("a write is answered as one"),
     };
     State::Done { result: Ok(written), record }
 }
@@ -903,7 +1003,8 @@ fn failed(writing: &mut Writing, env: &Env<Limits>, rng: &mut Rng, phase: Phase,
         | Error::Closed
         | Error::Stale
         | Error::Conflict
-        | Error::Protected => refused(error),
+        | Error::Protected
+        | Error::Circular => refused(error),
     }
 }
 
@@ -964,7 +1065,11 @@ fn answer(
         | Write::Close { .. }
         | Write::DeleteBranch { .. }
         | Write::PutPage { .. }
-        | Write::DeletePage { .. } => None,
+        | Write::DeletePage { .. }
+        | Write::Review { .. }
+        | Write::SetReviewers { .. }
+        | Write::SetDependencies { .. }
+        | Write::Reopen { .. } => None,
     };
     // Given up as its last call timed out: it may still land.
     let pending = result == Err(Failure::Forge(Error::Timeout));
@@ -1081,7 +1186,11 @@ fn follow_record(
             | Write::Close { .. }
             | Write::DeleteBranch { .. }
             | Write::PutPage { .. }
-            | Write::DeletePage { .. } => {}
+            | Write::DeletePage { .. }
+            | Write::Review { .. }
+            | Write::SetReviewers { .. }
+            | Write::SetDependencies { .. }
+            | Write::Reopen { .. } => {}
         }
         next = writing.next;
     }
@@ -1109,7 +1218,11 @@ fn is_labels(write: &Write) -> bool {
         | Write::Close { .. }
         | Write::DeleteBranch { .. }
         | Write::PutPage { .. }
-        | Write::DeletePage { .. } => false,
+        | Write::DeletePage { .. }
+        | Write::Review { .. }
+        | Write::SetReviewers { .. }
+        | Write::SetDependencies { .. }
+        | Write::Reopen { .. } => false,
     }
 }
 
@@ -1126,7 +1239,11 @@ fn unwanted(owned: &[Box<[u8]>], limits: &Limits, write: &Write) -> Box<[Box<[u8
         | Write::Close { .. }
         | Write::DeleteBranch { .. }
         | Write::PutPage { .. }
-        | Write::DeletePage { .. } => return Box::new([]),
+        | Write::DeletePage { .. }
+        | Write::Review { .. }
+        | Write::SetReviewers { .. }
+        | Write::SetDependencies { .. }
+        | Write::Reopen { .. } => return Box::new([]),
     };
     let mut unwanted = List::with_capacity(limits.labels.saturating_add(2));
     for label in owned {
@@ -1166,7 +1283,11 @@ fn subject(write: &Write) -> Option<Item> {
         | Write::Record { item, .. }
         | Write::SetLabels { item, .. }
         | Write::Merge { item, .. }
-        | Write::Close { item } => Some(*item),
+        | Write::Review { item, .. }
+        | Write::SetReviewers { item, .. }
+        | Write::SetDependencies { item, .. }
+        | Write::Close { item }
+        | Write::Reopen { item } => Some(*item),
         Write::CreateIssue { .. }
         | Write::OpenPull { .. }
         | Write::DeleteBranch { .. }
@@ -1181,7 +1302,11 @@ fn repository(write: &Write) -> u32 {
         | Write::Record { item, .. }
         | Write::SetLabels { item, .. }
         | Write::Merge { item, .. }
-        | Write::Close { item } => item.repository,
+        | Write::Review { item, .. }
+        | Write::SetReviewers { item, .. }
+        | Write::SetDependencies { item, .. }
+        | Write::Close { item }
+        | Write::Reopen { item } => item.repository,
         Write::CreateIssue { repository, .. }
         | Write::OpenPull { repository, .. }
         | Write::DeleteBranch { repository, .. }
@@ -1201,8 +1326,12 @@ fn valid(write: &Write, limits: &Limits, owned: &[Box<[u8]>]) -> bool {
         Write::CreateIssue { repository: _, key, title, body, labels } => {
             fits(key, name) && fits(title, limits.title_bytes) && content(body, limits) && labelled(labels, limits)
         }
-        Write::Comment { item: _, key, body } => fits(key, name) && content(body, limits),
-        Write::Record { .. } | Write::Merge { .. } | Write::Close { .. } => true,
+        Write::Comment { item: _, key, person: _, body } | Write::Review { item: _, key, verdict: _, body } => {
+            fits(key, name) && content(body, limits)
+        }
+        Write::SetReviewers { item: _, reviewers: members }
+        | Write::SetDependencies { item: _, dependencies: members } => counted(members, limits.members),
+        Write::Record { .. } | Write::Merge { .. } | Write::Close { .. } | Write::Reopen { .. } => true,
         Write::SetLabels { item: _, labels } => labelled(labels, limits) && owns(owned, labels),
         Write::OpenPull { repository: _, title, body, head, base } => {
             fits(title, limits.title_bytes) && content(body, limits) && fits(head, name) && fits(base, name)
@@ -1212,6 +1341,13 @@ fn valid(write: &Write, limits: &Limits, owned: &[Box<[u8]>]) -> bool {
             fits(page, name) && content(body, limits)
         }
         Write::DeletePage { repository: _, name: page } => fits(page, name),
+    }
+}
+
+fn counted(members: &[u64], most: u32) -> bool {
+    match u32::try_from(members.len()) {
+        Ok(count) => count <= most,
+        Err(_) => false,
     }
 }
 

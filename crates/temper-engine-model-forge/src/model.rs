@@ -31,8 +31,9 @@ pub const fn max_out(limits: &Limits) -> u32 {
 /// What the deployment says of the forge, which the sub-model keeps.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Config {
-    /// The engine's own forge user. Its comments are never news, and only its
-    /// records are records.
+    /// The engine's own forge user. Its comments are never news, save those
+    /// it writes for a person, which are theirs; and only its records are
+    /// records.
     pub engine: u64,
     /// The label on every item the engine tracks, and the label that hands an
     /// issue to it (engine-model.md, 4.1 and 4.6). Each within the limits'

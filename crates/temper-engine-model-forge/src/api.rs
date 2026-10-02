@@ -72,62 +72,157 @@ pub enum Op {
     },
     /// The item `number`, and a page of its comments with ids above `after`,
     /// oldest first. Answered by [`Answer::Item`].
-    Item { number: u64, after: u64 },
+    Item {
+        number: u64,
+        after: u64,
+    },
     /// The comment `id` on the item `number`. Answered by
     /// [`Answer::Comment`].
-    Comment { number: u64, id: u64 },
+    Comment {
+        number: u64,
+        id: u64,
+    },
     /// The pull request `number`: its head, where its base is, and CI on its
     /// head. Answered by [`Answer::Pull`].
-    Pull { number: u64 },
+    Pull {
+        number: u64,
+    },
     /// The newest pull request, open or not, that merges `head` into `base`.
     /// Answered by [`Answer::Pull`].
-    PullFor { head: Box<[u8]>, base: Box<[u8]> },
+    PullFor {
+        head: Box<[u8]>,
+        base: Box<[u8]>,
+    },
     /// The `page`th page (from 1) of the reviews of the pull request
     /// `number`, oldest first. Answered by [`Answer::Reviews`].
-    Reviews { number: u64, page: u32 },
+    Reviews {
+        number: u64,
+        page: u32,
+    },
     /// CI on `commit`, and the `page`th page (from 1) of the latest status of
     /// each context on it. Answered by [`Answer::Statuses`].
-    Statuses { commit: [u8; 32], page: u32 },
+    Statuses {
+        commit: [u8; 32],
+        page: u32,
+    },
+    /// The `page`th page (from 1) of the inline comments of the review
+    /// `review` of the pull request `number`. Answered by
+    /// [`Answer::Remarks`].
+    Remarks {
+        number: u64,
+        review: u64,
+        page: u32,
+    },
     /// The permission of `user`. Answered by [`Answer::Permission`].
-    Permission { user: u64 },
+    Permission {
+        user: u64,
+    },
     /// Where `branch` is. Answered by [`Answer::Commit`].
-    Branch { branch: Box<[u8]> },
+    Branch {
+        branch: Box<[u8]>,
+    },
     /// A page of the wiki's page names, in order, from after `after`.
     /// Answered by [`Answer::Pages`].
-    Pages { after: Option<Box<[u8]>> },
+    Pages {
+        after: Option<Box<[u8]>>,
+    },
     /// The wiki page `name`. Answered by [`Answer::Page`].
-    Page { name: Box<[u8]> },
+    Page {
+        name: Box<[u8]>,
+    },
     /// Opens an issue carrying `labels`, with `key` inside it. Answered by
     /// [`Answer::Created`].
-    CreateIssue { key: Box<[u8]>, title: Box<[u8]>, body: Body, labels: Box<[Box<[u8]>]> },
+    CreateIssue {
+        key: Box<[u8]>,
+        title: Box<[u8]>,
+        body: Body,
+        labels: Box<[Box<[u8]>]>,
+    },
     /// Comments on the item `number`, with `key` inside the comment if there
-    /// is one (a record carries none: it is found as the engine's record).
-    /// Answered by [`Answer::Commented`].
-    Post { number: u64, key: Option<Box<[u8]>>, body: Body },
+    /// is one (a record carries none: it is found as the engine's record),
+    /// and the person it is written for, if it is a person's (a message
+    /// from the web). Answered by [`Answer::Commented`].
+    Post {
+        number: u64,
+        key: Option<Box<[u8]>>,
+        person: Option<u64>,
+        body: Body,
+    },
     /// Edits the comment `id` on the item `number`. Answered by
     /// [`Answer::Edited`].
-    EditComment { number: u64, id: u64, body: Body },
+    EditComment {
+        number: u64,
+        id: u64,
+        body: Body,
+    },
     /// Adds `labels` to the item `number`, leaving those it carries. Answered
     /// by [`Answer::Done`].
-    AddLabels { number: u64, labels: Box<[Box<[u8]>]> },
+    AddLabels {
+        number: u64,
+        labels: Box<[Box<[u8]>]>,
+    },
     /// Removes `labels` from the item `number`, those it does not carry
     /// aside. Answered by [`Answer::Done`].
-    RemoveLabels { number: u64, labels: Box<[Box<[u8]>]> },
+    RemoveLabels {
+        number: u64,
+        labels: Box<[Box<[u8]>]>,
+    },
     /// Opens a pull request to merge `head` into `base`. Answered by
     /// [`Answer::Created`].
-    OpenPull { title: Box<[u8]>, body: Body, head: Box<[u8]>, base: Box<[u8]> },
+    OpenPull {
+        title: Box<[u8]>,
+        body: Body,
+        head: Box<[u8]>,
+        base: Box<[u8]>,
+    },
     /// Merges the pull request `number` if its head is still `head`.
     /// Answered by [`Answer::Merged`].
-    Merge { number: u64, head: [u8; 32] },
-    /// Closes the item `number`. Answered by [`Answer::Done`].
-    Close { number: u64 },
+    Merge {
+        number: u64,
+        head: [u8; 32],
+    },
+    /// Reviews the pull request `number` at its head with `verdict`, with
+    /// `key` inside the review. Answered by [`Answer::Reviewed`].
+    Review {
+        number: u64,
+        key: Box<[u8]>,
+        verdict: Verdict,
+        body: Body,
+    },
+    /// Makes the users asked to review the pull request `number` exactly
+    /// `reviewers`. Answered by [`Answer::Done`].
+    SetReviewers {
+        number: u64,
+        reviewers: Box<[u64]>,
+    },
+    /// Makes the items of its repository the item `number` depends on
+    /// exactly `dependencies`. Answered by [`Answer::Done`].
+    SetDependencies {
+        number: u64,
+        dependencies: Box<[u64]>,
+    },
+    /// Closes the item `number`; reopens it. Answered by [`Answer::Done`].
+    Close {
+        number: u64,
+    },
+    Reopen {
+        number: u64,
+    },
     /// Deletes `branch`. Answered by [`Answer::Done`].
-    DeleteBranch { branch: Box<[u8]> },
+    DeleteBranch {
+        branch: Box<[u8]>,
+    },
     /// Creates or replaces the wiki page `name`, with `nonce` inside it.
     /// Answered by [`Answer::Revision`].
-    PutPage { name: Box<[u8]>, content: Body, nonce: u64 },
+    PutPage {
+        name: Box<[u8]>,
+        content: Body,
+        nonce: u64,
+    },
     /// Deletes the wiki page `name`. Answered by [`Answer::Done`].
-    DeletePage { name: Box<[u8]> },
+    DeletePage {
+        name: Box<[u8]>,
+    },
 }
 
 /// What a write carries: bytes the model carries as they are, or a payload
@@ -176,6 +271,11 @@ pub enum Answer {
         statuses: Box<[Status]>,
         more: bool,
     },
+    /// A page of a review's inline comments, and whether more follow.
+    Remarks {
+        remarks: Box<[Remark]>,
+        more: bool,
+    },
     Permission(Permission),
     /// Where a branch is.
     Commit([u8; 32]),
@@ -196,6 +296,8 @@ pub enum Answer {
     Edited {
         revision: u64,
     },
+    /// The id of the review made.
+    Reviewed(u64),
     /// The commit the merge made on the base.
     Merged([u8; 32]),
     /// The wiki page's revision after the write.
@@ -239,6 +341,8 @@ pub enum Error {
     Conflict,
     /// The branch's protection refuses it.
     Protected,
+    /// An item would depend on itself, or on one that depends on it.
+    Circular,
 }
 
 /// A user's permission on a repository.
@@ -294,8 +398,9 @@ pub struct Comment {
 pub enum Mark {
     /// Nothing of the engine's.
     None,
-    /// A creation's key.
-    Key(Box<[u8]>),
+    /// A creation's key, and the person the engine wrote it for, if it is a
+    /// person's: a message from the web, news from them.
+    Key { key: Box<[u8]>, person: Option<u64> },
     /// A record, and this sub-model's part of it: the inbox position, and
     /// the nonce of the write that made it.
     Record { position: Position, nonce: u64 },
@@ -327,6 +432,18 @@ pub struct Review {
     pub verdict: Verdict,
     /// The head it reviewed.
     pub commit: [u8; 32],
+    /// The key found inside it, if the engine made it.
+    pub key: Option<Box<[u8]>>,
+    pub body: Box<[u8]>,
+}
+
+/// A review's inline comment: on the line `line` of the file `path`.
+#[derive(PartialEq, Eq, Hash, Debug)]
+pub struct Remark {
+    pub id: u64,
+    pub author: u64,
+    pub path: Box<[u8]>,
+    pub line: u32,
     pub body: Box<[u8]>,
 }
 
@@ -337,11 +454,14 @@ pub enum Verdict {
     Comment,
 }
 
-/// A context's status on a commit.
+/// A context's status on a commit: what it says of itself, and where its
+/// output is (what a brief of a CI failure shows).
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub struct Status {
     pub context: Box<[u8]>,
     pub check: Check,
+    pub description: Box<[u8]>,
+    pub url: Box<[u8]>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -378,6 +498,7 @@ pub(crate) fn items(answer: Answer) -> (Box<[Summary]>, bool, Time) {
         | Answer::Pull(_)
         | Answer::Reviews { .. }
         | Answer::Statuses { .. }
+        | Answer::Remarks { .. }
         | Answer::Permission(_)
         | Answer::Commit(_)
         | Answer::Pages { .. }
@@ -385,6 +506,7 @@ pub(crate) fn items(answer: Answer) -> (Box<[Summary]>, bool, Time) {
         | Answer::Created(_)
         | Answer::Commented { .. }
         | Answer::Edited { .. }
+        | Answer::Reviewed(_)
         | Answer::Merged(_)
         | Answer::Revision(_)
         | Answer::Done => unreachable!("a listing is answered with items"),
@@ -400,6 +522,7 @@ pub(crate) fn item(answer: Answer) -> (Summary, Box<[Comment]>, bool) {
         | Answer::Pull(_)
         | Answer::Reviews { .. }
         | Answer::Statuses { .. }
+        | Answer::Remarks { .. }
         | Answer::Permission(_)
         | Answer::Commit(_)
         | Answer::Pages { .. }
@@ -407,6 +530,7 @@ pub(crate) fn item(answer: Answer) -> (Summary, Box<[Comment]>, bool) {
         | Answer::Created(_)
         | Answer::Commented { .. }
         | Answer::Edited { .. }
+        | Answer::Reviewed(_)
         | Answer::Merged(_)
         | Answer::Revision(_)
         | Answer::Done => unreachable!("an item's read is answered with the item"),
@@ -422,6 +546,7 @@ pub(crate) fn comment(answer: Answer) -> Comment {
         | Answer::Pull(_)
         | Answer::Reviews { .. }
         | Answer::Statuses { .. }
+        | Answer::Remarks { .. }
         | Answer::Permission(_)
         | Answer::Commit(_)
         | Answer::Pages { .. }
@@ -429,6 +554,7 @@ pub(crate) fn comment(answer: Answer) -> Comment {
         | Answer::Created(_)
         | Answer::Commented { .. }
         | Answer::Edited { .. }
+        | Answer::Reviewed(_)
         | Answer::Merged(_)
         | Answer::Revision(_)
         | Answer::Done => unreachable!("a comment's read is answered with the comment"),
@@ -444,6 +570,7 @@ pub(crate) fn pull(answer: Answer) -> Pull {
         | Answer::Comment(_)
         | Answer::Reviews { .. }
         | Answer::Statuses { .. }
+        | Answer::Remarks { .. }
         | Answer::Permission(_)
         | Answer::Commit(_)
         | Answer::Pages { .. }
@@ -451,6 +578,7 @@ pub(crate) fn pull(answer: Answer) -> Pull {
         | Answer::Created(_)
         | Answer::Commented { .. }
         | Answer::Edited { .. }
+        | Answer::Reviewed(_)
         | Answer::Merged(_)
         | Answer::Revision(_)
         | Answer::Done => unreachable!("a pull request's read is answered with the pull request"),
@@ -467,12 +595,14 @@ pub(crate) fn page(answer: Answer) -> Page {
         | Answer::Pull(_)
         | Answer::Reviews { .. }
         | Answer::Statuses { .. }
+        | Answer::Remarks { .. }
         | Answer::Permission(_)
         | Answer::Commit(_)
         | Answer::Pages { .. }
         | Answer::Created(_)
         | Answer::Commented { .. }
         | Answer::Edited { .. }
+        | Answer::Reviewed(_)
         | Answer::Merged(_)
         | Answer::Revision(_)
         | Answer::Done => unreachable!("a wiki page's read is answered with the page"),
@@ -488,6 +618,7 @@ pub(crate) fn reviews(answer: Answer) -> (Box<[Review]>, bool) {
         | Answer::Comment(_)
         | Answer::Pull(_)
         | Answer::Statuses { .. }
+        | Answer::Remarks { .. }
         | Answer::Permission(_)
         | Answer::Commit(_)
         | Answer::Pages { .. }
@@ -495,6 +626,7 @@ pub(crate) fn reviews(answer: Answer) -> (Box<[Review]>, bool) {
         | Answer::Created(_)
         | Answer::Commented { .. }
         | Answer::Edited { .. }
+        | Answer::Reviewed(_)
         | Answer::Merged(_)
         | Answer::Revision(_)
         | Answer::Done => unreachable!("a pull request's reviews are answered with reviews"),

@@ -1,8 +1,8 @@
 //! Calls to the forge and the request budget (engine-model.md, section 12).
 //!
-//! Whatever needs the forge queues a call, in its priority's class: the
-//! parent's fresh reads first, then writes and the reads that find what an
-//! attempt made, then keeping up, then the slow pass. So that the first two
+//! Whatever needs the forge queues a call, in its priority's class: reads
+//! for writes first (the parent's fresh reads, and a write's own checks and
+//! finds), then writes, then keeping up, then the slow pass. So that the first two
 //! never starve the others, `Limits::reserve` calls of each window are kept
 //! for keeping up and the slow pass while they wait. A call holds only what
 //! it is for; its operation is built as it goes out, from its owner's state,
@@ -285,7 +285,8 @@ pub(crate) fn answered(
             | Error::Closed
             | Error::Stale
             | Error::Conflict
-            | Error::Protected => {}
+            | Error::Protected
+            | Error::Circular => {}
         }
     }
     match purpose {

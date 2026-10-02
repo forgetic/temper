@@ -51,8 +51,9 @@ pub struct Item {
 #[derive(PartialEq, Eq, Debug)]
 pub enum Event {
     /// Hold `item` in the working set: the engine created it, or takes it in
-    /// (engine-model.md, 4.6). Its record is read, and it is announced. An item
-    /// held already changes nothing.
+    /// (engine-model.md, 4.6). Its record is read, and it is announced; or it
+    /// leaves at once, if it is closed or not there; or it is refused, if
+    /// there is no room. An item held already changes nothing.
     Track { item: Item },
     /// Stop holding `item`, which the engine no longer tracks. Nothing is
     /// told of it after.
@@ -145,6 +146,13 @@ pub enum Read {
         item: Item,
         page: u32,
     },
+    /// The `page`th page (from 1) of the inline comments of the review
+    /// `review` of the pull request `item`.
+    Remarks {
+        item: Item,
+        review: u64,
+        page: u32,
+    },
     PullFor {
         repository: u32,
         head: Box<[u8]>,
@@ -180,37 +188,101 @@ pub enum Read {
 #[derive(PartialEq, Eq, Debug)]
 pub enum Write {
     /// Opens an issue in `repository`, keyed. Done as [`Written::Created`].
-    CreateIssue { repository: u32, key: Box<[u8]>, title: Box<[u8]>, body: Content, labels: Box<[Box<[u8]>]> },
-    /// Comments on `item`, keyed. Done as [`Written::Commented`].
-    Comment { item: Item, key: Box<[u8]>, body: Content },
+    CreateIssue {
+        repository: u32,
+        key: Box<[u8]>,
+        title: Box<[u8]>,
+        body: Content,
+        labels: Box<[Box<[u8]>]>,
+    },
+    /// Comments on `item`, keyed; for `person`, if it is a person's message
+    /// the engine writes for them, whose news it is when it is read. Done as
+    /// [`Written::Commented`].
+    Comment {
+        item: Item,
+        key: Box<[u8]>,
+        person: Option<u64>,
+        body: Content,
+    },
     /// Writes `item`'s record: the parent's part named by `payload`, and the
     /// inbox position taken. Posted if the item has none, edited otherwise,
     /// once a fresh read finds it as last read: a record someone else changed
     /// is not written over ([`Failure::Edited`]). Done as [`Written::Done`].
-    Record { item: Item, payload: Token },
+    Record {
+        item: Item,
+        payload: Token,
+    },
     /// Makes `item`'s labels among those the engine owns
     /// ([`crate::Config`]) exactly `labels`, which it owns: they are added,
     /// and the others it owns removed, while the labels people set stay as
     /// they are. Done as [`Written::Done`].
-    SetLabels { item: Item, labels: Box<[Box<[u8]>]> },
+    SetLabels {
+        item: Item,
+        labels: Box<[Box<[u8]>]>,
+    },
     /// Opens a pull request in `repository` to merge `head` into `base`,
     /// keyed by its branches. Done as [`Written::Created`].
-    OpenPull { repository: u32, title: Box<[u8]>, body: Content, head: Box<[u8]>, base: Box<[u8]> },
+    OpenPull {
+        repository: u32,
+        title: Box<[u8]>,
+        body: Content,
+        head: Box<[u8]>,
+        base: Box<[u8]>,
+    },
     /// Merges the pull request `item` at exactly `head`. Done as
     /// [`Written::Merged`].
-    Merge { item: Item, head: [u8; 32] },
-    /// Closes `item`. Done as [`Written::Done`].
-    Close { item: Item },
+    Merge {
+        item: Item,
+        head: [u8; 32],
+    },
+    /// Reviews the pull request `item` at its head with `verdict`, keyed (a
+    /// verdict an outcome gives). Done as [`Written::Reviewed`].
+    Review {
+        item: Item,
+        key: Box<[u8]>,
+        verdict: Verdict,
+        body: Content,
+    },
+    /// Makes the users asked to review the pull request `item` exactly
+    /// `reviewers`: a set. Done as [`Written::Done`].
+    SetReviewers {
+        item: Item,
+        reviewers: Box<[u64]>,
+    },
+    /// Makes the items of its repository `item` depends on exactly
+    /// `dependencies`: a set. Done as [`Written::Done`].
+    SetDependencies {
+        item: Item,
+        dependencies: Box<[u64]>,
+    },
+    /// Closes `item`; reopens it. Done as [`Written::Done`].
+    Close {
+        item: Item,
+    },
+    Reopen {
+        item: Item,
+    },
     /// Deletes `branch` of `repository`. Done as [`Written::Done`].
-    DeleteBranch { repository: u32, branch: Box<[u8]> },
+    DeleteBranch {
+        repository: u32,
+        branch: Box<[u8]>,
+    },
     /// Writes the wiki page `name` of `repository`, once a fresh read finds
     /// it at `revision` as last read, or finds none if `None`: a page someone
     /// else wrote or deleted since is not written over
     /// ([`Failure::Revised`]). Done as [`Written::Revision`].
-    PutPage { repository: u32, name: Box<[u8]>, content: Content, revision: Option<u64> },
+    PutPage {
+        repository: u32,
+        name: Box<[u8]>,
+        content: Content,
+        revision: Option<u64>,
+    },
     /// Deletes the wiki page `name` of `repository`. Done as
     /// [`Written::Done`].
-    DeletePage { repository: u32, name: Box<[u8]> },
+    DeletePage {
+        repository: u32,
+        name: Box<[u8]>,
+    },
 }
 
 /// What a write carries: bytes, or a payload the parent names, which it
@@ -231,6 +303,9 @@ pub enum Written {
     Commented(u64),
     /// The commit the merge made.
     Merged([u8; 32]),
+    /// The review made, by this write or by an earlier attempt found by its
+    /// key.
+    Reviewed(u64),
     /// The wiki page's revision.
     Revision(u64),
     Done,

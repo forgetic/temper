@@ -72,6 +72,7 @@ const CALM: Limits = Limits {
     repositories: 2,
     items: 16,
     labels: 6,
+    members: 4,
     inbox: 8,
     reviewers: 8,
     reads: 4,
@@ -765,6 +766,7 @@ impl World {
                     Ok(Written::Created(_)) => "wrote: created",
                     Ok(Written::Commented(_)) => "wrote: commented",
                     Ok(Written::Merged(_)) => "wrote: merged",
+                    Ok(Written::Reviewed(_)) => "wrote: reviewed",
                     Ok(Written::Revision(_) | Written::Done) => "wrote",
                     Err(Failure::Edited { .. }) => "wrote: edited",
                     Err(Failure::Revised { .. }) => "wrote: revised",
@@ -977,6 +979,8 @@ fn describe_answer(answer: &sub::api::Answer) -> String {
         | sub::api::Answer::Pull(_)
         | sub::api::Answer::Reviews { .. }
         | sub::api::Answer::Statuses { .. }
+        | sub::api::Answer::Remarks { .. }
+        | sub::api::Answer::Reviewed(_)
         | sub::api::Answer::Permission(_)
         | sub::api::Answer::Commit(_)
         | sub::api::Answer::Pages { .. }
