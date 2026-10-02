@@ -53,6 +53,10 @@ pub(crate) fn open(
     if repository.open_pull(&head, &base).is_some() {
         return Err(Error::Exists);
     }
+    if title.is_empty() {
+        return Err(Error::Empty);
+    }
+    repository.room()?;
     let pull = Pull { head, base, commit, merged: None, reviews: List::with_capacity(limits.reviews) };
     let item = Item {
         title,
@@ -66,7 +70,7 @@ pub(crate) fn open(
         pull: Some(pull),
     };
     let repository = model.repositories.get_mut(id).expect("a repository of the forge");
-    let number = repository.number(item)?;
+    let number = repository.number(item);
     let item = repository.items.get(&number).expect("the pull request just opened");
     let observation = Observation::Opened {
         repository: copy_of(&repository.name),
@@ -96,6 +100,7 @@ pub(crate) fn review(
     let repository = model.repositories.get_mut(id).expect("a repository of the forge");
     repository.require(user, Permission::Read)?;
     fits(&body, env.limits.limits.body_bytes)?;
+    let writer = repository.permission(user) >= Permission::Write;
     let item = repository.item_mut(number)?;
     let author = item.author;
     let state = item.state;
@@ -108,9 +113,11 @@ pub(crate) fn review(
     if author == user && verdict != Verdict::Comment {
         return Err(Error::Forbidden);
     }
+    let official = writer;
     let commit = pull.commit;
     let observed = copy_of(&body);
-    if pull.reviews.push(Review { author: user, verdict, commit, body, at: model::clock(env) }).is_err() {
+    let review = Review { author: user, verdict, commit, body, at: model::clock(env), official };
+    if pull.reviews.push(review).is_err() {
         return Err(Error::Full);
     }
     repository.touch(number, model::clock(env));
@@ -222,9 +229,11 @@ pub(crate) fn statuses(repository: &Repository, limits: &Limits, commit: u64) ->
 }
 
 /// Whether the base's protection, if it has one, lets the pull request
-/// merge at its head: each required context passed on it, and enough users
-/// with write permission, its author aside, approving it in their last
-/// review that was not a comment.
+/// merge at its head: each required context passed on it, and enough
+/// official approvals (by users who had write permission when they
+/// reviewed, its author aside, in their last review that was not a
+/// comment), of any head unless the protection dismisses stale ones, as
+/// Forgejo counts them.
 fn allowed(repository: &Repository, item: &Item, pull: &Pull) -> bool {
     let Some(protection) = &repository.protection else {
         return true;
@@ -247,11 +256,8 @@ fn allowed(repository: &Repository, item: &Item, pull: &Pull) -> bool {
     let reviews = pull.reviews.as_slice();
     let mut approvals: u32 = 0;
     for (index, review) in reviews.iter().enumerate() {
-        if review.verdict != Verdict::Approve
-            || review.commit != pull.commit
-            || review.author == item.author
-            || repository.permission(review.author) < Permission::Write
-        {
+        let stale = review.commit != pull.commit && protection.dismiss_stale;
+        if review.verdict != Verdict::Approve || stale || review.author == item.author || !review.official {
             continue;
         }
         let mut last = true;

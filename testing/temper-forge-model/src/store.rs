@@ -178,16 +178,36 @@ impl Repository {
         self.recent.insert((now, number)).expect("an item already listed fits again");
     }
 
-    /// Takes in the item `item` under the next number, or refuses it as full.
-    pub(crate) fn number(&mut self, item: Item) -> Result<u64, Error> {
-        let number = self.numbered.checked_add(1).expect("numbers do not run out");
-        let created = item.created;
-        if self.items.insert(number, item).is_err() {
+    /// Refuses another item when the repository holds as many as it may.
+    pub(crate) fn room(&self) -> Result<(), Error> {
+        if self.items.len() >= self.items.capacity() {
             return Err(Error::Full);
         }
+        Ok(())
+    }
+
+    /// Takes in the item `item` under the next number: there is room for it.
+    pub(crate) fn number(&mut self, item: Item) -> u64 {
+        let number = self.numbered.checked_add(1).expect("numbers do not run out");
+        let created = item.created;
+        self.items.insert(number, item).expect("checked for room before");
         self.recent.insert((created, number)).expect("the listing index has room for every item");
         self.numbered = number;
-        Ok(number)
+        number
+    }
+
+    /// The open pull requests whose head or base branch is `branch`.
+    pub(crate) fn on_branch(&self, branch: &[u8]) -> List<u64> {
+        let mut numbers = List::with_capacity(self.items.len());
+        for (&number, item) in &self.items {
+            if let Some(pull) = &item.pull
+                && item.state == State::Open
+                && (*pull.head == *branch || *pull.base == *branch)
+            {
+                numbers.push(number).expect("a list as long as the items");
+            }
+        }
+        numbers
     }
 
     /// The open pull requests whose head branch is `branch`.

@@ -18,11 +18,11 @@ use temper_lib::bytes::copy_of;
 use temper_lib::{Env, Id, List, Map, Set};
 
 use crate::api::{Answer, Change, Created, Error, File, Git, Head, Permission, Pushed, Want, What};
-use crate::ci;
 use crate::limits::Limits;
 use crate::model::{self, Config, Model};
 use crate::observe::Observation;
 use crate::store::{Repository, fits};
+use crate::{ci, issues};
 
 /// Files by their paths, with their content.
 pub type Tree = Map<Box<[u8]>, Box<[u8]>>;
@@ -228,6 +228,9 @@ fn create(
     if repository.refusing {
         return Err(Error::Refused);
     }
+    if repository.is_protected(branch) {
+        return Err(Error::Protected);
+    }
     if !repository.has.contains(&commit) {
         return Err(Error::Missing(What::Commit));
     }
@@ -241,7 +244,8 @@ fn create(
     Ok(Answer::Branch(Created::Created))
 }
 
-/// Deletes `branch`, which is neither the default nor protected.
+/// Deletes `branch`, which is neither the default nor protected, closing
+/// the open pull requests whose head or base it is.
 pub(crate) fn delete(
     model: &mut Model,
     env: &Env<Config>,
@@ -257,9 +261,14 @@ pub(crate) fn delete(
     let Some(at) = repository.branches.remove(branch) else {
         return Err(Error::Missing(What::Branch));
     };
+    let closing = repository.on_branch(branch);
     let observation =
         Observation::Deleted { repository: copy_of(&repository.name), branch: copy_of(branch), at, by: user };
     model::changed(model, env, id, observation, Change::Push, None);
+    // As Forgejo does, the open pull requests from or into it close.
+    for &number in &closing {
+        issues::shut(model, env, id, number, user);
+    }
     Ok(Answer::Done)
 }
 

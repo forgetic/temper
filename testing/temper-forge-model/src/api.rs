@@ -23,9 +23,9 @@ pub enum Permission {
     None,
     /// Read, open issues and pull requests, comment and review.
     Read,
-    /// Label, merge, push, delete branches, edit the wiki, report statuses.
+    /// Label, merge, push, delete branches, edit the wiki, report statuses,
+    /// edit and delete anyone's comments.
     Write,
-    /// Edit and delete anyone's comments.
     Admin,
 }
 
@@ -79,25 +79,28 @@ pub enum Read {
 /// The writes, each answered by [`Answer::Done`] unless it says otherwise.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Write {
-    /// Opens an issue carrying `labels`, which are defined. Answered by
-    /// [`Answer::Created`] with its number. Labelling needs write permission.
+    /// Opens an issue titled, carrying `labels`, which are defined. Answered
+    /// by [`Answer::Created`] with its number. The labels of a user who may
+    /// not label are dropped.
     CreateIssue {
         title: Box<[u8]>,
         body: Box<[u8]>,
         labels: Box<[Box<[u8]>]>,
     },
-    /// Comments on the item `number`. Answered by [`Answer::Commented`] with
-    /// the comment's id.
+    /// Comments on the item `number`, to say something. Answered by
+    /// [`Answer::Commented`] with the comment's id.
     Comment {
         number: u64,
         body: Box<[u8]>,
     },
-    /// Edits the comment `id`: its author's, or anyone's for an admin.
+    /// Edits the comment `id`, to say something: its author's, or anyone's
+    /// with write permission.
     EditComment {
         id: u64,
         body: Box<[u8]>,
     },
-    /// Deletes the comment `id`: its author's, or anyone's for an admin.
+    /// Deletes the comment `id`: its author's, or anyone's with write
+    /// permission.
     DeleteComment {
         id: u64,
     },
@@ -140,7 +143,8 @@ pub enum Write {
     Reopen {
         number: u64,
     },
-    /// Deletes `branch`, which is neither the default nor protected. Needs
+    /// Deletes `branch`, which is neither the default nor protected, and
+    /// closes the open pull requests from or into it, as Forgejo does. Needs
     /// write permission.
     DeleteBranch {
         branch: Box<[u8]>,
@@ -260,6 +264,8 @@ pub enum Error {
     Exists,
     /// The head has nothing the base does not have.
     NothingToMerge,
+    /// A title or a comment's body that must say something is empty.
+    Empty,
     /// The pull request is closed, or merged.
     Closed,
     /// The pull request's head is no longer the one named.
@@ -359,6 +365,9 @@ pub struct Review {
     pub commit: u64,
     pub body: Box<[u8]>,
     pub at: Time,
+    /// Whether its author had write permission when they reviewed: only
+    /// official approvals count towards a protection's.
+    pub official: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -488,13 +497,14 @@ pub struct Cue {
     pub green: Box<[u8]>,
 }
 
-/// A protected branch: nothing is pushed to it or deletes it, and a pull
-/// request merges into it only with each of `contexts` passed on its exact
-/// head and `approvals` approving reviews of that head by users with write
-/// permission, its author aside.
+/// A protected branch: nothing is pushed to it, creates it or deletes it,
+/// and a pull request merges into it only with each of `contexts` passed on
+/// its exact head and `approvals` official approvals, its author aside: of
+/// that head if `dismiss_stale`, and of any head if not (Forgejo's default).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Protection {
     pub branch: Box<[u8]>,
     pub contexts: Box<[Box<[u8]>]>,
     pub approvals: u32,
+    pub dismiss_stale: bool,
 }

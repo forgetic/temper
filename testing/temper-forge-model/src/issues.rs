@@ -1,12 +1,13 @@
 //! Writes to items that issues and pull requests share: opening an issue,
 //! comments, labels, closing and reopening. Each refuses what Forgejo refuses:
-//! too little permission, someone else's comment, a label not defined, what
-//! is past the limits.
+//! too little permission, someone else's comment for a user who may not
+//! write, a label not defined, an empty title or comment, what is past the
+//! limits.
 
 use alloc::boxed::Box;
 
 use temper_lib::bytes::copy_of;
-use temper_lib::{Env, Id, Map};
+use temper_lib::{Env, Id, Map, Set};
 
 use crate::api::{Answer, Change, Error, Kind, Permission, State, What};
 use crate::ci;
@@ -27,13 +28,20 @@ pub(crate) fn create(
     let limits = &env.limits.limits;
     let repository = model.repositories.get_mut(id).expect("a repository of the forge");
     repository.require(user, Permission::Read)?;
-    if !labels.is_empty() {
-        repository.require(user, Permission::Write)?;
-    }
     fits(&title, limits.title_bytes)?;
     fits(&body, limits.body_bytes)?;
     fit_names(&labels, limits.labels, limits)?;
-    let labels = repository.label_set(limits, labels)?;
+    if title.is_empty() {
+        return Err(Error::Empty);
+    }
+    repository.room()?;
+    // As Forgejo's API does, the labels of a user who may not label are
+    // dropped, not refused.
+    let labels = if repository.permission(user) >= Permission::Write {
+        repository.label_set(limits, labels)?
+    } else {
+        Set::with_capacity(limits.labels)
+    };
     let item = Item {
         title,
         body,
@@ -45,7 +53,7 @@ pub(crate) fn create(
         updated: model::clock(env),
         pull: None,
     };
-    let number = repository.number(item)?;
+    let number = repository.number(item);
     let item = repository.items.get(&number).expect("the item just opened");
     let observation = Observation::Opened {
         repository: copy_of(&repository.name),
@@ -72,6 +80,9 @@ pub(crate) fn comment(
     let repository = model.repositories.get_mut(id).expect("a repository of the forge");
     repository.require(user, Permission::Read)?;
     fits(&body, env.limits.limits.body_bytes)?;
+    if body.is_empty() {
+        return Err(Error::Empty);
+    }
     let comment = model.comments.checked_add(1).expect("comment ids do not run out");
     let observed = copy_of(&body);
     let item = repository.item_mut(number)?;
@@ -88,7 +99,8 @@ pub(crate) fn comment(
     Ok(Answer::Commented(comment))
 }
 
-/// Edits the comment `comment`: the user's own, or anyone's for an admin.
+/// Edits the comment `comment`: the user's own, or anyone's for a user
+/// with write permission, as Forgejo's web interface lets people.
 pub(crate) fn edit(
     model: &mut Model,
     env: &Env<Config>,
@@ -100,11 +112,14 @@ pub(crate) fn edit(
     let repository = model.repositories.get_mut(id).expect("a repository of the forge");
     repository.require(user, Permission::Read)?;
     fits(&body, env.limits.limits.body_bytes)?;
+    if body.is_empty() {
+        return Err(Error::Empty);
+    }
     let number = *repository.comments.get(&comment).ok_or(Error::Missing(What::Comment))?;
-    let admin = repository.permission(user) >= Permission::Admin;
+    let writer = repository.permission(user) >= Permission::Write;
     let item = repository.items.get_mut(&number).expect("the index names items");
     let kept = item.comments.get_mut(&comment).expect("the index names comments");
-    if kept.author != user && !admin {
+    if kept.author != user && !writer {
         return Err(Error::Forbidden);
     }
     let observed = copy_of(&body);
@@ -119,7 +134,8 @@ pub(crate) fn edit(
     Ok(Answer::Done)
 }
 
-/// Deletes the comment `comment`: the user's own, or anyone's for an admin.
+/// Deletes the comment `comment`: the user's own, or anyone's for a user
+/// with write permission.
 pub(crate) fn remove(
     model: &mut Model,
     env: &Env<Config>,
@@ -130,10 +146,10 @@ pub(crate) fn remove(
     let repository = model.repositories.get_mut(id).expect("a repository of the forge");
     repository.require(user, Permission::Read)?;
     let number = *repository.comments.get(&comment).ok_or(Error::Missing(What::Comment))?;
-    let admin = repository.permission(user) >= Permission::Admin;
+    let writer = repository.permission(user) >= Permission::Write;
     let item = repository.items.get_mut(&number).expect("the index names items");
     let author = item.comments.get(&comment).expect("the index names comments").author;
-    if author != user && !admin {
+    if author != user && !writer {
         return Err(Error::Forbidden);
     }
     item.comments.remove(&comment);
@@ -205,16 +221,23 @@ pub(crate) fn close(
 ) -> Result<Answer, Error> {
     let repository = model.repositories.get_mut(id).expect("a repository of the forge");
     may_change(repository, user, number)?;
-    let item = repository.item_mut(number)?;
-    if item.state == State::Closed {
+    if repository.item(number)?.state == State::Closed {
         return Ok(Answer::Done);
     }
+    shut(model, env, id, number, user);
+    Ok(Answer::Done)
+}
+
+/// Closes the open item `number`, as `by`.
+pub(crate) fn shut(model: &mut Model, env: &Env<Config>, id: Id<Repository>, number: u64, by: u64) {
+    let repository = model.repositories.get_mut(id).expect("a repository of the forge");
+    let item = repository.items.get_mut(&number).expect("an item to close");
+    assert!(item.state == State::Open, "only an open item is closed");
     item.state = State::Closed;
     let change = change(item.kind());
     repository.touch(number, model::clock(env));
-    let observation = Observation::Closed { repository: copy_of(&repository.name), number, by: user };
+    let observation = Observation::Closed { repository: copy_of(&repository.name), number, by };
     model::changed(model, env, id, observation, change, Some(number));
-    Ok(Answer::Done)
 }
 
 /// Reopens the item `number`: the user's own, or any with write permission.

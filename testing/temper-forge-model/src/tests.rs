@@ -557,22 +557,26 @@ fn an_items_comments_come_a_page_at_a_time_after_an_id() {
 // Writes and refusals.
 
 #[test]
-fn a_comment_is_edited_or_deleted_by_its_author_or_an_admin() {
+fn a_comment_is_edited_or_deleted_by_its_author_or_a_writer() {
     let mut h = Harness::new(CALM);
     let number = h.issue(ENGINE, b"talk");
     let id = h.comment(PERSON, number, b"typo");
-    assert_eq!(h.call(ENGINE, edit(id, b"mine now")), Err(Error::Forbidden), "someone else's comment");
+    let record = h.comment(ENGINE, number, b"the record");
+    assert_eq!(h.call(PERSON, edit(record, b"mangled")), Err(Error::Forbidden), "a reader edits only theirs");
+    assert_eq!(h.call(PERSON, edit(id, b"")), Err(Error::Empty));
     h.wait(Duration::from_secs(10));
     assert_eq!(h.ok(PERSON, edit(id, b"fixed")), Answer::Done);
     let (item, comments) = h.item(number);
     assert_eq!(&*comments[0].body, b"fixed");
     assert!(item.updated < comments[0].edited.expect("edited"), "an edit leaves the item's updated time");
-    assert_eq!(h.ok(ADMIN, edit(id, b"moderated")), Answer::Done, "an admin edits anyone's");
-    assert_eq!(h.call(ENGINE, write(Write::DeleteComment { id })), Err(Error::Forbidden));
-    assert_eq!(h.ok(ADMIN, write(Write::DeleteComment { id })), Answer::Done);
+    assert_eq!(h.ok(MAINTAINER, edit(record, b"mangled")), Answer::Done, "a writer mangles the engine's record");
+    assert_eq!(&*h.item(number).1[1].body, b"mangled");
+    assert_eq!(h.call(PERSON, write(Write::DeleteComment { id: record })), Err(Error::Forbidden));
+    assert_eq!(h.ok(MAINTAINER, write(Write::DeleteComment { id })), Answer::Done);
     assert_eq!(h.call(PERSON, write(Write::DeleteComment { id })), Err(Error::Missing(What::Comment)));
     assert_eq!(h.call(PERSON, edit(id, b"gone")), Err(Error::Missing(What::Comment)));
-    assert!(h.item(number).1.is_empty());
+    assert_eq!(h.item(number).1.len(), 1);
+    assert_eq!(h.call(PERSON, write(Write::Comment { number, body: copy_of(b"") })), Err(Error::Empty));
 }
 
 #[test]
@@ -590,7 +594,9 @@ fn labels_are_defined_before_they_are_set_and_set_as_a_whole() {
     assert_eq!(h.ok(ENGINE, set_labels(number, &[b"temper"])), Answer::Done);
     assert_eq!(h.item(number).0.labels, names(&[b"temper"]), "a set replaces");
     assert_eq!(h.call(ENGINE, set_labels(number, &[b"a", b"b", b"c", b"d"])), Err(Error::TooLarge));
-    assert_eq!(h.call(PERSON, create(b"t", b"", &[b"bug"])), Err(Error::Forbidden), "opening with labels needs write");
+    assert_eq!(h.ok(PERSON, create(b"t", b"", &[b"bug"])), Answer::Created(2));
+    assert!(h.item(2).0.labels.is_empty(), "the labels of a user who may not label are dropped");
+    assert_eq!(h.call(ENGINE, create(b"", b"body", &[])), Err(Error::Empty), "an issue has a title");
 }
 
 #[test]
@@ -637,7 +643,7 @@ fn what_is_missing_is_refused() {
     );
     assert_eq!(h.call(ENGINE, read(Read::Item { number: 9, after: 0 })), Err(Error::Missing(What::Item)));
     assert_eq!(
-        h.call(ENGINE, write(Write::Comment { number: 9, body: copy_of(b"") })),
+        h.call(ENGINE, write(Write::Comment { number: 9, body: copy_of(b"hello") })),
         Err(Error::Missing(What::Item))
     );
     assert_eq!(h.call(ENGINE, read(Read::Pull { number: 1 })), Err(Error::Missing(What::Pull)), "an issue");
@@ -765,18 +771,57 @@ fn a_working_tree_commits_into_the_one_store() {
 #[test]
 fn a_branch_is_deleted_unless_it_is_the_default_or_protected() {
     let mut setup = setup();
-    setup.protection = Some(Protection { branch: copy_of(b"release"), contexts: names(&[]), approvals: 0 });
+    setup.protection =
+        Some(Protection { branch: copy_of(b"release"), contexts: names(&[]), approvals: 0, dismiss_stale: false });
     let mut h = Harness::with(CALM, setup);
-    h.ok(ENGINE, create_branch(b"release", FIRST));
     h.ok(ENGINE, create_branch(b"work", FIRST));
-    assert_eq!(h.call(ENGINE, delete_branch(MAIN)), Err(Error::Protected));
-    assert_eq!(h.call(ENGINE, delete_branch(b"release")), Err(Error::Protected));
+    assert_eq!(h.call(ENGINE, delete_branch(MAIN)), Err(Error::Protected), "the default");
     let release = h.commit(FIRST, &[(b"src", b"x")]);
     assert_eq!(h.push(ENGINE, b"release", release), Err(Error::Protected));
     assert_eq!(h.call(PERSON, delete_branch(b"work")), Err(Error::Forbidden));
     assert_eq!(h.ok(ENGINE, delete_branch(b"work")), Answer::Done);
     assert_eq!(h.branch(b"work"), None);
     assert_eq!(h.call(ENGINE, delete_branch(b"work")), Err(Error::Missing(What::Branch)));
+}
+
+#[test]
+fn deleting_a_branch_closes_the_pull_requests_from_or_into_it() {
+    let mut h = Harness::new(CALM);
+    let work = h.commit(FIRST, &[(b"src", b"one")]);
+    let next = h.commit(work, &[(b"src", b"two")]);
+    h.push(ENGINE, b"work", work).expect("pushed");
+    h.push(ENGINE, b"next", next).expect("pushed");
+    h.open(b"work").expect("opened");
+    let op = write(Write::OpenPull {
+        title: copy_of(b"t"),
+        body: copy_of(b""),
+        head: copy_of(b"next"),
+        base: copy_of(b"work"),
+    });
+    assert_eq!(h.ok(ENGINE, op), Answer::Created(2));
+    h.observations();
+    h.ok(MAINTAINER, delete_branch(b"work"));
+    assert_eq!((h.pull(1).state, h.pull(2).state), (State::Closed, State::Closed), "its head's, and its base's");
+    let closed = [
+        Observation::Deleted { repository: repository(), branch: copy_of(b"work"), at: work, by: MAINTAINER },
+        Observation::Closed { repository: repository(), number: 1, by: MAINTAINER },
+        Observation::Closed { repository: repository(), number: 2, by: MAINTAINER },
+    ];
+    assert_eq!(h.observations().as_slice(), closed);
+    h.push(ENGINE, b"work", next).expect("pushed again");
+    assert_eq!(h.pull(1).state, State::Closed, "a new branch of the name revives nothing");
+    assert_eq!(h.pull(1).commit, work);
+}
+
+#[test]
+fn a_protected_branch_is_not_created() {
+    let mut setup = setup();
+    setup.protection =
+        Some(Protection { branch: copy_of(b"release"), contexts: names(&[]), approvals: 0, dismiss_stale: false });
+    let mut h = Harness::with(CALM, setup);
+    assert_eq!(h.call(ENGINE, create_branch(b"release", FIRST)), Err(Error::Protected));
+    assert_eq!(h.push(ENGINE, b"release", FIRST), Err(Error::Protected));
+    assert_eq!(h.branch(b"release"), None);
 }
 
 // Pull requests, CI, merges and protection.
@@ -880,7 +925,7 @@ fn a_merge_at_a_head_that_moved_is_stale() {
     h.push(ENGINE, b"work", more).expect("pushed");
     assert_eq!(h.call(ENGINE, merge(1, work)), Err(Error::Stale));
     h.ok(ENGINE, delete_branch(b"work"));
-    assert_eq!(h.call(ENGINE, merge(1, more)), Err(Error::Missing(What::Branch)));
+    assert_eq!(h.call(ENGINE, merge(1, more)), Err(Error::Closed), "deleting its head closed it");
     assert_eq!(h.call(ENGINE, merge(9, more)), Err(Error::Missing(What::Item)));
 }
 
@@ -896,9 +941,10 @@ fn a_merge_of_what_the_base_has_already_is_refused() {
 }
 
 #[test]
-fn protection_wants_green_ci_and_approvals_on_the_exact_head() {
+fn protection_wants_green_ci_and_approvals_of_the_exact_head_where_stale_ones_are_dismissed() {
     let mut setup = setup();
-    setup.protection = Some(Protection { branch: copy_of(MAIN), contexts: names(&[b"ci"]), approvals: 1 });
+    setup.protection =
+        Some(Protection { branch: copy_of(MAIN), contexts: names(&[b"ci"]), approvals: 1, dismiss_stale: true });
     let mut h = Harness::with(CALM, setup);
     let work = h.commit(FIRST, &[(b"src", b"one")]);
     assert_eq!(h.push(ENGINE, MAIN, work), Err(Error::Protected), "nothing is pushed to it");
@@ -922,6 +968,27 @@ fn protection_wants_green_ci_and_approvals_on_the_exact_head() {
     assert_eq!(h.call(ENGINE, merge(1, more)), Err(Error::Protected), "the last verdict counts");
     h.ok(MAINTAINER, review(1, Verdict::Approve));
     assert!(matches_merged(&h.call(ENGINE, merge(1, more))));
+}
+
+#[test]
+fn protection_counts_official_approvals_of_any_head_by_default() {
+    let mut setup = setup();
+    setup.protection =
+        Some(Protection { branch: copy_of(MAIN), contexts: names(&[]), approvals: 2, dismiss_stale: false });
+    let mut h = Harness::with(CALM, setup);
+    let work = h.commit(FIRST, &[(b"src", b"one")]);
+    h.push(ENGINE, b"work", work).expect("pushed");
+    h.open(b"work").expect("opened");
+    h.ok(MAINTAINER, review(1, Verdict::Approve));
+    h.ok(PERSON, review(1, Verdict::Approve));
+    crate::grant(&mut h.model, REPOSITORY, PERSON, Permission::Write);
+    let more = h.commit(work, &[(b"src", b"two")]);
+    h.push(ENGINE, b"work", more).expect("pushed");
+    assert_eq!(h.call(ENGINE, merge(1, more)), Err(Error::Protected), "a reader's approval was not official");
+    assert!(!h.pull(1).reviews[1].official);
+    h.ok(ADMIN, review(1, Verdict::Approve));
+    crate::grant(&mut h.model, REPOSITORY, ADMIN, Permission::Read);
+    assert!(matches_merged(&h.call(ENGINE, merge(1, more))), "an approval of the older head counts, as on Forgejo");
 }
 
 fn matches_merged(result: &Result<Answer, Error>) -> bool {
