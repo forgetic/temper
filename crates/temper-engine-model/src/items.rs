@@ -82,6 +82,9 @@ pub(crate) struct Entry {
     /// The rules wait on facts before its action: nothing is due until news
     /// comes.
     pub(crate) blocked: bool,
+    /// Its pull request was merged by the engine, at this commit, which the
+    /// working set may not show yet.
+    pub(crate) merged: Option<[u8; 32]>,
     /// The permission the rules want of whoever accepts what it holds.
     pub(crate) wants: Option<Permission>,
 }
@@ -244,6 +247,7 @@ impl Entry {
             seen: None,
             closed: false,
             blocked: false,
+            merged: None,
             wants: None,
         }
     }

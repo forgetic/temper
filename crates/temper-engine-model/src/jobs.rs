@@ -128,7 +128,12 @@ fn decide(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) {
             unreachable!("an item asking decides")
         }
     };
-    if entry.blocked {
+    // A pull request opened and not read yet: the forge's news of it wakes
+    // the item, so the plan never decides on a change it cannot see.
+    let blocked = entry.blocked;
+    let entry = get(model, id);
+    let unread = entry.relations.pull.is_some() && model.forge.pull(translate::forge_item(entry.item)).is_none();
+    if blocked || unread {
         let due = work::Due::Nothing { until: None };
         return route::work_step(model, env, work::Event::Decided { owner, due });
     }
@@ -223,7 +228,11 @@ pub(crate) fn facts(model: &Model, env: &Env<Limits>, entry: &Entry) -> plan::Fa
         Some(_) => match model.forge.pull(translate::forge_item(entry.item)) {
             Some(level) => {
                 let reviews = model.forge.reviews(translate::forge_item(entry.item));
-                Some(translate::pull(level, reviews, entry.seen))
+                let mut pull = translate::pull(level, reviews, entry.seen);
+                if entry.merged.is_some() {
+                    pull.state = plan::PullState::Merged;
+                }
+                Some(pull)
             }
             None => None,
         },
@@ -362,7 +371,7 @@ pub(crate) fn act(model: &mut Model, env: &Env<Limits>, owner: Token, item: Item
         list: writes,
         next: 0,
         then: plan::Then::Wait,
-        reviews: List::with_capacity(0),
+        reviews: List::with_capacity(env.limits.forge.reviewers),
         retried: false,
         pull: None,
         reading: None,
@@ -498,7 +507,7 @@ fn reject(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) {
         list: Box::new([]),
         next: 0,
         then,
-        reviews: List::with_capacity(0),
+        reviews: List::with_capacity(env.limits.forge.reviewers),
         retried: false,
         pull: None,
         reading: None,
@@ -711,19 +720,14 @@ fn landing(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, head: plan::Comm
             None => (plan::Ci::None, [0; 32]),
         },
     };
-    let read = writes.reviews.len();
     let mut reviews = List::with_capacity(env.limits.forge.reviewers);
-    for (index, verdict) in model.forge.reviews(item).unwrap_or(&[]).iter().enumerate() {
+    for verdict in model.forge.reviews(item).unwrap_or(&[]) {
         let Some(stance) = translate::stance(verdict.verdict) else { continue };
-        let index = u32::try_from(index).unwrap_or(u32::MAX);
         let Some(permission) = permission_of(writes, verdict.author) else {
-            if index >= read || read == 0 {
-                let user = verdict.author;
-                let repository = entry.item.repository;
-                permission_read(model, env, id, repository, user);
-                return None;
-            }
-            continue;
+            let user = verdict.author;
+            let repository = entry.item.repository;
+            permission_read(model, env, id, repository, user);
+            return None;
         };
         let review = rules::Review { person: verdict.author, permission, head: ci_head, stance };
         if reviews.push(review).is_err() {
@@ -1177,6 +1181,10 @@ fn written(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, result: Result<f
             return again(model, env, id);
         }
         Err(forge::Failure::Forge(api::Error::Missing)) if deleting(model, id) => forge::Written::Done,
+        // The pull request moved on, or closed, since the merge was decided.
+        Err(forge::Failure::Forge(api::Error::Stale | api::Error::Closed)) => {
+            return finish(model, env, id, Finish::Stale);
+        }
         Err(_) => return finish(model, env, id, Finish::Failed),
     };
     made(model, env, id, written);
@@ -1224,8 +1232,11 @@ fn made(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, written: forge::Wri
             let item = translate::forge_item(entry.item);
             route::forge_step(model, env, forge::Event::Link { item, pull: Some(number) });
         }
+        plan::Write::Merge { .. } => {
+            let forge::Written::Merged(commit) = written else { return };
+            get_mut(model, id).merged = Some(commit);
+        }
         plan::Write::ReopenPull
-        | plan::Write::Merge { .. }
         | plan::Write::Close
         | plan::Write::DeleteBranch
         | plan::Write::Progress(_)

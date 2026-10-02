@@ -340,6 +340,9 @@ fn a_workers_hello_reaches_the_fleet() {
 /// decoding them back as the protocol layer would.
 struct Forge {
     issues: List<Issue>,
+    pulls: List<Change>,
+    /// Where each branch is, as workers push.
+    branches: List<(Box<[u8]>, [u8; 32])>,
     /// The forge's clock, which the world moves.
     now: Time,
     /// The next comment's id, and the next item's number.
@@ -356,6 +359,18 @@ struct Issue {
     comments: List<Note>,
 }
 
+/// A pull request: its item, branches, head, CI on it, and its reviews.
+#[derive(Debug)]
+struct Change {
+    item: Item,
+    head: Box<[u8]>,
+    base: Box<[u8]>,
+    commit: [u8; 32],
+    ci: forge::Ci,
+    merged: Option<[u8; 32]>,
+    reviews: List<api::Review>,
+}
+
 #[derive(Debug)]
 struct Note {
     id: u64,
@@ -367,7 +382,14 @@ struct Note {
 
 impl Forge {
     fn new() -> Forge {
-        Forge { issues: List::with_capacity(16), now: Time::ZERO, comments: 100, numbers: 1 }
+        Forge {
+            issues: List::with_capacity(16),
+            pulls: List::with_capacity(8),
+            branches: List::with_capacity(8),
+            now: Time::ZERO,
+            comments: 100,
+            numbers: 1,
+        }
     }
 
     fn issue(&mut self, item: Item) -> Option<&mut Issue> {
@@ -378,6 +400,42 @@ impl Forge {
             }
         }
         self.issues.get_mut(index?)
+    }
+
+    fn change(&mut self, item: Item) -> Option<&mut Change> {
+        let mut index = None;
+        for (at, change) in self.pulls.iter().enumerate() {
+            if change.item == item {
+                index = Some(u32::try_from(at).unwrap());
+            }
+        }
+        self.pulls.get_mut(index?)
+    }
+
+    fn branch(&self, name: &[u8]) -> Option<[u8; 32]> {
+        for (branch, commit) in &self.branches {
+            if **branch == *name {
+                return Some(*commit);
+            }
+        }
+        None
+    }
+
+    fn pull(&mut self, item: Item) -> Result<api::Answer, api::Error> {
+        let open = self.issue(item).ok_or(api::Error::Missing)?.open;
+        let change = self.change(item).ok_or(api::Error::Missing)?;
+        let state = if open { api::State::Open } else { api::State::Closed };
+        Ok(api::Answer::Pull(api::Pull {
+            number: item.number,
+            state,
+            head: change.head.clone(),
+            base: change.base.clone(),
+            commit: change.commit,
+            base_commit: Some([9; 32]),
+            merged: change.merged,
+            mergeable: true,
+            ci: change.ci,
+        }))
     }
 
     fn open(&mut self, repository: u32, labels: Box<[Box<[u8]>]>) -> Item {
@@ -459,6 +517,7 @@ impl Forge {
     }
 
     /// The answer to `op` on `repository`, and what is decoded inside it.
+    #[expect(clippy::too_many_lines, reason = "the scripted forge answers every operation in one match")]
     fn answer(
         &mut self,
         repository: u32,
@@ -537,17 +596,75 @@ impl Forge {
                 }
                 found
             }
-            api::Op::Pull { .. }
-            | api::Op::PullFor { .. }
-            | api::Op::Reviews { .. }
-            | api::Op::Statuses { .. }
-            | api::Op::Remarks { .. }
-            | api::Op::Branch { .. }
-            | api::Op::Page { .. } => Err(api::Error::Missing),
+            api::Op::Pull { number } => self.pull(Item { repository, number }),
+            api::Op::Reviews { number, page } => {
+                let reviews = match self.change(Item { repository, number }) {
+                    Some(change) if page == 1 => copy_reviews(&change.reviews),
+                    Some(_) | None => Box::new([]),
+                };
+                Ok(api::Answer::Reviews { reviews, more: false })
+            }
+            api::Op::Statuses { commit, .. } => {
+                let mut ci = forge::Ci::None;
+                for change in &self.pulls {
+                    if change.commit == commit {
+                        ci = change.ci;
+                    }
+                }
+                Ok(api::Answer::Statuses { ci, statuses: Box::new([]), more: false })
+            }
+            api::Op::Branch { branch } => match self.branch(&branch) {
+                Some(commit) => Ok(api::Answer::Commit(commit)),
+                None => Err(api::Error::Missing),
+            },
+            api::Op::OpenPull { head, base, .. } => {
+                let Some(commit) = self.branch(&head) else { return (Err(api::Error::Missing), decoded) };
+                let item = self.open(repository, Box::new([]));
+                let change = Change {
+                    item,
+                    head,
+                    base,
+                    commit,
+                    ci: forge::Ci::Passed,
+                    merged: None,
+                    reviews: List::with_capacity(4),
+                };
+                self.pulls.push(change).unwrap();
+                Ok(api::Answer::Created(item.number))
+            }
+            api::Op::Merge { number, head } => {
+                let item = Item { repository, number };
+                let merged = match self.change(item) {
+                    Some(change) if change.merged.is_none() && change.commit == head => {
+                        change.merged = Some([8; 32]);
+                        true
+                    }
+                    Some(_) | None => false,
+                };
+                if !merged {
+                    return (Err(api::Error::Stale), decoded);
+                }
+                let now = self.now;
+                let issue = self.issue(item).unwrap();
+                issue.open = false;
+                issue.updated = now;
+                Ok(api::Answer::Merged([8; 32]))
+            }
+            api::Op::PullFor { head, base } => {
+                let mut found = None;
+                for change in &self.pulls {
+                    if change.head == head && change.base == base {
+                        found = Some(change.item);
+                    }
+                }
+                match found {
+                    Some(item) => self.pull(item),
+                    None => Err(api::Error::Missing),
+                }
+            }
+            api::Op::Remarks { .. } | api::Op::Page { .. } => Err(api::Error::Missing),
             api::Op::AddLabels { .. }
             | api::Op::RemoveLabels { .. }
-            | api::Op::OpenPull { .. }
-            | api::Op::Merge { .. }
             | api::Op::Review { .. }
             | api::Op::SetReviewers { .. }
             | api::Op::SetDependencies { .. }
@@ -581,6 +698,22 @@ fn summary(issue: &Issue) -> api::Summary {
         body: copy_of(b"body"),
         updated: issue.updated,
     }
+}
+
+fn copy_reviews(reviews: &List<api::Review>) -> Box<[api::Review]> {
+    let mut copies = List::with_capacity(reviews.len());
+    for review in reviews {
+        let copy = api::Review {
+            id: review.id,
+            author: review.author,
+            verdict: review.verdict,
+            commit: review.commit,
+            key: review.key.clone(),
+            body: review.body.clone(),
+        };
+        copies.push(copy).unwrap();
+    }
+    copies.into_boxed()
 }
 
 fn copy_mark(mark: &api::Mark) -> api::Mark {
@@ -1068,4 +1201,66 @@ fn a_task_a_session_makes_runs_and_is_closed_once_it_reports() {
     assert!(acknowledged(&world.seen, task, 1), "the task's report is applied");
     assert!(!world.forge.issue(task).unwrap().open, "the task's issue is closed once it reports");
     assert_eq!(phase(&mut world, task), Some(work::Phase::Done), "its record says done");
+}
+
+/// A change step into `main`, which a person reviews.
+fn change_step(name: &[u8]) -> plan::Step {
+    let produce = plan::Charter {
+        instructions: copy_of(b"fix it"),
+        template: None,
+        grants: plan::Grants { modify: true, shell: true, forge: true, subagents: false, note: false },
+        budget: Budget { tokens: 100, turns: 5, time: Duration::from_secs(60) },
+    };
+    let change = plan::ChangeSpec { base: copy_of(b"main"), produce, checks: false, review: plan::Review::Person };
+    plan::Step {
+        name: copy_of(name),
+        repository: plan::Repository(0),
+        work: plan::Work::Change(change),
+        after: Box::new([]),
+        gates: Box::new([]),
+    }
+}
+
+#[test]
+fn a_change_is_pushed_opened_reviewed_and_merged_into_a_protected_branch() {
+    let (mut world, session) = World::session();
+    let tasks = crate::boundary::Outcome::Tasks { tasks: Box::new([change_step(b"fix")]), text: copy_of(b"on it") };
+    world.deliver(Event::Answer { channel: Token::new(1), item: session, attempt: 1, answer: ended(tasks) });
+    let change = Item { repository: 0, number: 2 };
+    let assigned = assignment(&world.seen).expect("the change is assigned");
+    assert_eq!(assigned.item, change, "the change runs");
+    let checkout = assigned.workspace.repositories.first().unwrap();
+    assert_eq!(checkout.push.as_deref(), Some(&b"temper/2"[..]), "it may push to its branch");
+    // The worker pushes, and answers.
+    let head = [1; 32];
+    world.forge.branches.push((copy_of(b"temper/2"), head)).unwrap();
+    let landed = crate::boundary::Landed { repository: 0, commit: head };
+    let outcome = crate::boundary::Outcome::Change { message: copy_of(b"fixed") };
+    let answer = crate::boundary::Answer::Ended { outcome, work: crate::boundary::Work { landed: Box::new([landed]) } };
+    world.deliver(Event::Answer { channel: Token::new(1), item: change, attempt: 1, answer });
+    assert!(acknowledged(&world.seen, change, 1), "the change's answer is applied");
+    let pull = Item { repository: 0, number: 3 };
+    assert!(world.forge.change(pull).is_some(), "the engine opens its pull request");
+    world.wait(60);
+    assert!(world.forge.change(pull).unwrap().merged.is_none(), "nothing lands on main before a person approves");
+    let review = api::Review {
+        id: 500,
+        author: ALICE,
+        verdict: api::Verdict::Approve,
+        commit: head,
+        key: None,
+        body: copy_of(b"lgtm"),
+    };
+    world.forge.change(pull).unwrap().reviews.push(review).unwrap();
+    world.forge.issue(pull).unwrap().updated = world.env().now;
+    world.deliver(Event::Hint { repository: 0, item: Some(pull.number), commit: None, branch: None });
+    for _ in 0_u32..10 {
+        world.wait(30);
+    }
+    assert_eq!(world.forge.change(pull).unwrap().merged, Some([8; 32]), "it is merged at its exact head once approved");
+    assert!(
+        !world.forge.issue(change).unwrap().open,
+        "the change's item is closed once it has landed: {:?}",
+        phase(&mut world, change)
+    );
 }
