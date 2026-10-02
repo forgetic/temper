@@ -31,7 +31,7 @@ use temper_lib::{Duration, Rng, Time, Token};
 use temper_worker_model_agent::{Event, Request, Signal};
 use temper_world::Span;
 
-use crate::script::{self, Act, Agent, Heard, Said, Sizes, View};
+use crate::script::{self, Act, Agent, Heard, Plot, Said, Sizes, View};
 use crate::translate;
 
 /// How process trees behave.
@@ -200,6 +200,13 @@ impl Tree {
     #[must_use]
     pub fn is_gone(&self, owner: Token) -> bool {
         self.find(owner).is_empty()
+    }
+
+    /// Gives the agent the model names `owner` its world's `plot`, before
+    /// it hears its start.
+    pub fn plot(&mut self, owner: Token, plot: Plot) {
+        let proc = self.procs.values_mut().find(|proc| proc.owner == owner).expect("the model names a spawned agent");
+        proc.agent.plot(plot);
     }
 
     fn find(&self, owner: Token) -> &Proc {

@@ -1,21 +1,30 @@
-//! io's git and files, on the fake disk and the fake forge, through the
-//! checkout world's translation of the checkout's operations and its route to
-//! the forge: each after a latency,
-//! racing its deadline and the cancel of an aborted prepare, with the faults
-//! the world scripts; and what moves on the forge, and what lands, checked as
+//! io's git and files, on the fake disk and the one fake forge the engine
+//! reads and people use, through the checkout world's translation of the
+//! checkout's operations and a route of the world's to the forge ([`Line`]):
+//! each after a latency, racing its deadline and the cancel of an aborted
+//! prepare, with the faults the world scripts; and what lands, checked as
 //! it does.
+//!
+//! git's calls reach the forge as the worker's forge user, and are answered
+//! at once: io's latency for an operation that reaches the forge stands for
+//! all of it, the network and the forge included, so the forge adds no
+//! latency of its own, nor faults but those the world scripts (a
+//! repository unreachable, or refusing what is pushed to it). What a push
+//! moves, the forge observes, and its webhooks go out, as for any change.
 
-use temper_checkout_fake::git::{Remote, Tree as Files};
+use temper_checkout_fake::git::{self as fake, Created, Pushed, Remote, Tree as Files};
 use temper_checkout_fake::{Checkout, in_git};
-use temper_fake_engine_model::{BASE, IDENTITY};
-use temper_lib::{Rng, Time, Token};
+use temper_engine_model_tests::deployment::WORKER;
+use temper_forge_model::api::{Answer, Error, File, Git as Call, Op as ForgeOp, What};
+use temper_forge_model::{self as forge, Config};
+use temper_lib::{Env, Queue, ReplyTo, Time, Token};
 use temper_worker_model::Event;
 use temper_worker_model::checkout::git::{Done, Fault, Kind, Op, Place, Want};
-use temper_worker_model_checkout_tests::forge::{Forge, Move};
 use temper_worker_model_checkout_tests::translate as io;
 use temper_world::{Key, Span};
 
-use super::{Delivery, PUSH_PREFIX, Settings, Space, World, gone};
+use super::{Delivery, Space, World, gone};
+use crate::protocol::IDENTITY;
 
 /// How io's git and files behave.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -47,12 +56,11 @@ pub struct Git {
     /// that has started, a drawn `advance_after` later.
     pub advance: u32,
     pub advance_after: Span,
-    /// The chance, per mille, that a repository's default branch is not the
-    /// base branch, which a run then creates; and that a workstream's branch
-    /// exists in a repository from the start, which a run may start from.
-    pub trunks: u32,
-    pub branched: u32,
 }
+
+/// The forge user of another party, who moves branches under
+/// the worker.
+pub(super) const OTHER: u64 = 20;
 
 /// A git operation in flight in io: its end on the way, and what it does then.
 #[derive(Debug)]
@@ -137,7 +145,7 @@ impl World {
             ends = deadline.saturating_add(git.network.draw(&mut self.rng));
             self.stats.op_timeouts += 1;
         }
-        let delivery = self.wire.send(ends, Delivery::Ran { owner });
+        let delivery = self.send(ends, Delivery::Ran { owner });
         self.ops.open(owner, Pending { delivery, workspace, work });
         self.stats.ops += 1;
     }
@@ -163,8 +171,8 @@ impl World {
         }
         let key = pending.delivery;
         let at = self.now.saturating_add(self.settings.git.network.draw(&mut self.rng));
-        self.wire.withdraw(key).expect("an operation in flight has its end on the way");
-        let delivery = self.wire.send(at, Delivery::Ran { owner });
+        self.withdraw(key).expect("an operation in flight has its end on the way");
+        let delivery = self.send(at, Delivery::Ran { owner });
         let pending = self.ops.get_mut(owner).expect("looked up above");
         pending.delivery = delivery;
         pending.work = Work::Ending(Done::Failed { fault: Fault::Cancelled });
@@ -188,7 +196,7 @@ impl World {
     }
 
     /// Runs `op` on the fakes, with the faults the world scripts, and checks
-    /// what moved on the forge and what landed.
+    /// what landed.
     fn perform(&mut self, owner: Token, op: Op) -> Done {
         let workspace = io::workspace(&op);
         let remote = io::remote(&op).map(<[u8]>::to_vec);
@@ -196,8 +204,8 @@ impl World {
         if let Some(remote) = &remote {
             let reachable = !self.rng.chance(self.settings.git.unreachable);
             let refusing = writes && self.rng.chance(self.settings.git.refusing);
-            self.forge.set_reachable(remote, reachable);
-            self.forge.set_refusing(remote, refusing);
+            forge::set_reachable(&mut self.forge, remote, reachable);
+            forge::set_refusing(&mut self.forge, remote, refusing);
         }
         let made = op.kind() == Kind::Make;
         let checked = match &op {
@@ -220,13 +228,21 @@ impl World {
             | Op::CheckOut { .. }
             | Op::Commit { .. } => None,
         };
-        self.forge.at(self.now);
-        let done = io::perform(&mut self.forge, &mut self.disk, op);
+        let mut spill = Vec::new();
+        let mut line = Line {
+            forge: &mut self.forge,
+            env: Env { now: self.now, limits: self.settings.forge },
+            spill: &mut spill,
+            calls: &mut self.git_calls,
+        };
+        let done = io::perform(&mut line, &mut self.disk, op);
         if let Some(remote) = &remote {
-            self.forge.set_reachable(remote, true);
-            self.forge.set_refusing(remote, false);
+            forge::set_reachable(&mut self.forge, remote, true);
+            forge::set_refusing(&mut self.forge, remote, false);
         }
-        self.check_moves();
+        for request in spill {
+            self.forge_out.push(request);
+        }
         let space = self.spaces.entry(workspace).or_default();
         if made {
             *space = Space { hold: Some(owner), agent: space.agent, ..Space::default() };
@@ -239,7 +255,7 @@ impl World {
         if let Some((repository, remote, commit, branch)) = pushed
             && done == Done::Succeeded
         {
-            let tree = &self.forge.tree(commit);
+            let tree = &tree(&self.forge, commit);
             if self.save_branches.contains(&branch) {
                 let left = space.left.get(&repository).expect("a save is of a repository checked out");
                 assert_eq!(tree, left, "saved work is exactly the tree its agent left");
@@ -247,7 +263,7 @@ impl World {
                 self.stats.saved += 1;
             } else {
                 let asked = space.asked.get(&repository).expect("a push lands what its agent asked to push");
-                assert_eq!(tree, asked, "what lands is exactly the tree its agent left when it asked to push");
+                assert_eq!(tree, asked, "what lands is exactly the tree the agent left when it asked to push");
                 self.stats.landed += 1;
             }
         }
@@ -272,24 +288,156 @@ impl World {
         }
         self.stats.advanced += 1;
         let content = format!("another party, {}", self.stats.advanced);
-        self.forge.at(self.now);
-        self.forge.advance(remote, branch, b"OTHER", content.as_bytes());
-        self.check_moves();
+        let env = Env { now: self.now, limits: self.settings.forge };
+        let advanced = forge::advance(&mut self.forge, &env, remote, branch, b"OTHER", content.as_bytes(), OTHER);
+        advanced.expect("the forge has room for another party's commit");
     }
+}
 
-    /// The branches the forge moved since the world last looked, each a
-    /// fast-forward.
-    fn check_moves(&mut self) {
-        for Move { remote, branch, from, to } in self.forge.moves() {
-            if let Some(from) = from {
-                assert!(
-                    self.forge.is_ancestor(from, to),
-                    "{}: {} moved only by a fast-forward",
-                    String::from_utf8_lossy(&remote),
-                    String::from_utf8_lossy(&branch)
-                );
+/// The files of `commit` in the forge's store.
+pub(super) fn tree(forge: &forge::Model, commit: u64) -> Files {
+    let object = forge.object(commit).expect("a commit of the store");
+    object.tree.iter().map(|(path, content)| (path.to_vec(), content.to_vec())).collect()
+}
+
+/// git's route to the forge: each call made as the worker's forge user and
+/// answered at once, with no latency or fault of the forge's own; and what
+/// else the forge had due meanwhile, spilled for the world to route.
+pub(super) struct Line<'a> {
+    pub(super) forge: &'a mut forge::Model,
+    pub(super) env: Env<Config>,
+    pub(super) spill: &'a mut Vec<forge::Request>,
+    /// git's calls so far, the last naming the latest.
+    pub(super) calls: &'a mut u64,
+}
+
+impl Line<'_> {
+    fn call(&mut self, remote: &[u8], user: u64, op: ForgeOp) -> Result<Answer, Error> {
+        *self.calls += 1;
+        // The world's names for its own calls are below; git's above.
+        let name = Token::new(u64::MAX - *self.calls);
+        let direct = Config {
+            latency_min: temper_lib::Duration::ZERO,
+            latency_max: temper_lib::Duration::ZERO,
+            late: 0,
+            unavailable: 0,
+            timeouts: 0,
+            landing: 0,
+            rate_limit: 0,
+            ..self.env.limits
+        };
+        let mut out = Queue::with_capacity(forge::MAX_OUT);
+        let event = forge::Event::Call { reply_to: ReplyTo::new(name), user, repository: remote.into(), op };
+        forge::step(self.forge, &Env { now: self.env.now, limits: direct }, event, &mut out);
+        let mut answered = None;
+        while answered.is_none() {
+            while let Some(request) = out.pop() {
+                match request {
+                    forge::Request::Reply { to, result } => {
+                        let to = to.into_token();
+                        if to == name {
+                            answered = Some(result);
+                        } else {
+                            self.spill.push(forge::Request::Reply { to: ReplyTo::new(to), result });
+                        }
+                    }
+                    forge::Request::Hook { .. } => self.spill.push(request),
+                }
+            }
+            if answered.is_none() {
+                assert!(self.forge.is_due(self.env.now), "the forge answers git at once");
+                forge::fire(self.forge, &self.env, &mut out);
             }
         }
+        answered.expect("answered above")
+    }
+
+    fn git(&mut self, remote: &[u8], op: Call) -> Result<Answer, fake::Fault> {
+        self.call(remote, WORKER, ForgeOp::Git(op)).map_err(fault)
+    }
+}
+
+impl Remote for Line<'_> {
+    fn heads(&mut self, remote: &[u8]) -> Result<Vec<u64>, fake::Fault> {
+        let Answer::Cloned { default: _, branches } = self.git(remote, Call::Clone)? else {
+            panic!("a clone is answered with the branches");
+        };
+        Ok(branches.iter().map(|head| head.commit).collect())
+    }
+
+    fn fetch(&mut self, remote: &[u8], want: fake::Want<'_>) -> Result<u64, fake::Fault> {
+        let want = match want {
+            fake::Want::Branch(branch) => temper_forge_model::api::Want::Branch(branch.into()),
+            fake::Want::Commit(commit) => temper_forge_model::api::Want::Commit(commit),
+            fake::Want::Default => temper_forge_model::api::Want::Default,
+        };
+        let Answer::Commit(commit) = self.git(remote, Call::Fetch { want })? else {
+            panic!("a fetch is answered with the commit fetched");
+        };
+        Ok(commit)
+    }
+
+    fn create(&mut self, remote: &[u8], branch: &[u8], commit: u64) -> Result<Created, fake::Fault> {
+        let Answer::Branch(created) = self.git(remote, Call::Create { branch: branch.into(), commit })? else {
+            panic!("a branch's creation is answered with how it went");
+        };
+        Ok(match created {
+            temper_forge_model::api::Created::Created => Created::Created,
+            temper_forge_model::api::Created::Exists => Created::Exists,
+        })
+    }
+
+    fn push(&mut self, remote: &[u8], branch: &[u8], commit: u64) -> Result<Pushed, fake::Fault> {
+        let Answer::Pushed(pushed) = self.git(remote, Call::Push { branch: branch.into(), commit })? else {
+            panic!("a push is answered with how it went");
+        };
+        Ok(match pushed {
+            temper_forge_model::api::Pushed::Pushed => Pushed::Pushed,
+            temper_forge_model::api::Pushed::Rejected => Pushed::Rejected,
+        })
+    }
+
+    fn parent(&self, commit: u64) -> Option<u64> {
+        self.forge.object(commit).expect("a commit of the store").parent
+    }
+
+    fn tree(&self, commit: u64) -> Files {
+        tree(self.forge, commit)
+    }
+
+    fn store(&mut self, parent: u64, tree: Files) -> Option<u64> {
+        let files = tree.into_iter().map(|(path, content)| File { path: path.into(), content: content.into() });
+        let committed = forge::commit(self.forge, &self.env.limits, parent, files.collect());
+        committed.expect("the forge's store has room for every commit")
+    }
+}
+
+/// git's fault for what the forge refused: only what the world scripts, or
+/// what a start names that the forge does not have.
+fn fault(error: Error) -> fake::Fault {
+    match error {
+        Error::Missing(What::Repository) => fake::Fault::Missing(fake::What::Repository),
+        Error::Missing(What::Branch) => fake::Fault::Missing(fake::What::Branch),
+        Error::Missing(What::Commit) => fake::Fault::Missing(fake::What::Commit),
+        Error::Unreachable => fake::Fault::Unreachable,
+        Error::Refused => fake::Fault::Refused,
+        Error::Missing(
+            What::Item | What::Pull | What::Comment | What::Label | What::File | What::Page | What::Review,
+        )
+        | Error::Unavailable
+        | Error::Timeout
+        | Error::RateLimited { .. }
+        | Error::Forbidden
+        | Error::TooLarge
+        | Error::Full
+        | Error::Exists
+        | Error::Circular
+        | Error::NothingToMerge
+        | Error::Empty
+        | Error::Closed
+        | Error::Stale
+        | Error::Conflict
+        | Error::Protected => panic!("the forge fails git only as the world scripts it: {error:?}"),
     }
 }
 
@@ -299,30 +447,4 @@ pub(super) fn files(disk: &Checkout, workspace: Token, repository: &[u8]) -> Fil
     let mut files = disk.tree(&io::path(&at));
     files.retain(|path, _| !in_git(path));
     files
-}
-
-/// The forge, seeded from the engine's names: each repository the engine
-/// draws from, its default branch the base branch or not, and each
-/// workstream's branch in it or not. Returns it, and the commit the engine's
-/// one hash stands for: the first repository's first.
-pub(super) fn seed_forge(rng: &mut Rng, settings: &Settings) -> (Forge, u64) {
-    let mut forge = Forge::new(settings.seed);
-    let mut first = None;
-    for origin in &settings.engine.repositories {
-        let default: &[u8] = if rng.chance(settings.git.trunks) { b"trunk" } else { BASE };
-        let files =
-            Files::from([(b"README".to_vec(), origin.name.to_vec()), (b"src/lib.rs".to_vec(), b"fn f() {}".to_vec())]);
-        let commit = forge.repository(&origin.remote, default, files);
-        first.get_or_insert(commit);
-        for key in &settings.engine.workstreams {
-            if rng.chance(settings.git.branched) {
-                let branch = [PUSH_PREFIX, key].concat();
-                let created = forge.create_branch(&origin.remote, &branch, commit);
-                created.expect("a branch is created on a forge that works");
-                // Setting up moves no branch the world checks.
-                drop(forge.moves());
-            }
-        }
-    }
-    (forge, first.expect("the engine draws from a repository"))
 }

@@ -334,7 +334,10 @@ name = "temper-worker-model-tests"
 version = "0.0.0"
 dependencies = [
  "temper-checkout-fake",
- "temper-fake-engine-model",
+ "temper-engine-model",
+ "temper-engine-model-forge-tests",
+ "temper-engine-model-tests",
+ "temper-forge-model",
  "temper-lib",
  "temper-worker-model",
  "temper-worker-model-agent-tests",

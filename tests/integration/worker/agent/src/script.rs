@@ -17,10 +17,19 @@
 //! unless it ignores cancels or closes its output at one; a terminate makes it
 //! exit after a while, unless it ignores that too, and a kill always does.
 //!
+//! A world may give a run a plot ([`Plot`]) before it starts: the beats its
+//! story calls for (calls it waits for, pushes among them, and waits for an
+//! inbound event that it gives up on after a while), which it takes in order
+//! before its own steps, and the ending its story calls for (ended, or parked
+//! with a snapshot), which it meets when its fate would end or park it. A
+//! plotted run gives up a wait of its own after its idle time, and goes on,
+//! rather than parking. Its other fates, misbehaviour among them, it meets as
+//! drawn. A run with no plot draws exactly as it would without plots.
+//!
 //! It checks what it hears as it goes: the start first and once, inbound
 //! events once each, in the order sent, and an answer only to a call it made.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 
 use temper_lib::{Duration, Rng, Time};
 use temper_world::Span;
@@ -150,6 +159,30 @@ pub struct Script {
     /// takes to exit when it does not.
     pub stubborn: u32,
     pub term: Span,
+}
+
+/// What a world's story calls for of a run: the beats it takes before its
+/// own steps, and how it ends when its fate is to end or park.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Plot {
+    pub beats: VecDeque<Beat>,
+    pub ending: Ending,
+}
+
+/// One thing a story calls for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Beat {
+    /// A host call it waits for: a push, or a relayed call.
+    Call { push: bool },
+    /// A wait for an inbound event, given up after `within`.
+    Await { within: Duration },
+}
+
+/// How a story ends a run.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Ending {
+    Ended,
+    Parked { snapshot: Option<Vec<u8>> },
 }
 
 /// The weights of a run's fates.
@@ -303,6 +336,8 @@ pub struct Agent {
     deaf: bool,
     finished: bool,
     hung: Option<Time>,
+    /// What its world's story calls for, if it gave one.
+    plot: Option<Plot>,
 }
 
 impl Agent {
@@ -337,7 +372,14 @@ impl Agent {
             deaf: false,
             finished: false,
             hung: None,
+            plot: None,
         }
+    }
+
+    /// Its world's story calls for `plot`: given before it starts.
+    pub fn plot(&mut self, plot: Plot) {
+        assert_eq!(self.phase, Phase::Unstarted, "a plot is given before the start");
+        self.plot = Some(plot);
     }
 
     #[must_use]
@@ -457,6 +499,11 @@ impl Agent {
                 self.phase = Phase::Working;
                 self.next(&mut acts);
             }
+            Phase::Waiting if self.plot.is_some() => {
+                // A plotted run gives up its wait, and goes on.
+                self.phase = Phase::Working;
+                self.next(&mut acts);
+            }
             Phase::Waiting => {
                 let snapshot = self.snapshot();
                 self.finish(now, Said::Parked { snapshot }, &mut acts);
@@ -488,6 +535,10 @@ impl Agent {
 
     /// A step, or its fate once its steps are taken.
     fn step(&mut self, now: Time, acts: &mut Vec<Act>) {
+        if let Some(beat) = self.plot.as_mut().and_then(|plot| plot.beats.pop_front()) {
+            self.beat(now, beat, acts);
+            return;
+        }
         if self.steps == 0 {
             self.meet_fate(now, acts);
             return;
@@ -529,7 +580,44 @@ impl Agent {
         }
     }
 
+    /// A beat of its plot.
+    fn beat(&mut self, now: Time, beat: Beat, acts: &mut Vec<Act>) {
+        match beat {
+            Beat::Call { push } => {
+                self.names += 1;
+                let name = self.names;
+                let body = self.bytes(self.sizes.call);
+                self.write(now, Said::Call { name, push, body }, acts);
+                *self.awaiting.entry(name).or_default() += 1;
+                self.phase = Phase::Blocked { name, withdrawn: false };
+                let deadline = self.script.call_deadline.draw(&mut self.rng);
+                self.wake(deadline, acts);
+            }
+            Beat::Await { within } => {
+                if self.events > 0 {
+                    self.events -= 1;
+                    self.write(now, Said::Fact { text: b"took".to_vec() }, acts);
+                    self.next(acts);
+                } else {
+                    self.write(now, Said::Waiting { heard: self.heard }, acts);
+                    self.phase = Phase::Waiting;
+                    self.wake(within, acts);
+                }
+            }
+        }
+    }
+
     fn meet_fate(&mut self, now: Time, acts: &mut Vec<Act>) {
+        if let Some(plot) = &self.plot
+            && (self.fate == Fate::Ended || self.fate == Fate::Parked)
+        {
+            let said = match plot.ending.clone() {
+                Ending::Ended => Said::Ended { outcome: vec![b'b'] },
+                Ending::Parked { snapshot } => Said::Parked { snapshot },
+            };
+            self.finish(now, said, acts);
+            return;
+        }
         match self.fate {
             Fate::Ended => {
                 let outcome = self.bytes(self.sizes.outcome);
@@ -591,8 +679,12 @@ impl Agent {
                 self.next(acts);
             }
             Fate::Trailing => {
-                let outcome = self.bytes(self.sizes.outcome);
-                self.finish(now, Said::Ended { outcome }, acts);
+                let said = match self.plot.as_ref().map(|plot| plot.ending.clone()) {
+                    Some(Ending::Parked { snapshot }) => Said::Parked { snapshot },
+                    Some(Ending::Ended) => Said::Ended { outcome: vec![b'b'] },
+                    None => Said::Ended { outcome: self.bytes(self.sizes.outcome) },
+                };
+                self.finish(now, said, acts);
                 self.write(now, Said::Fact { text: b"and one more thing".to_vec() }, acts);
             }
             Fate::Oversized => {
