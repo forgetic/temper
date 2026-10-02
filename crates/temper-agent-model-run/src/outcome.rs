@@ -16,12 +16,20 @@ use crate::limits::Limits;
 /// either.
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub struct OutcomeSpec {
-    /// Whether it may finish with a change: the diff of its checkout, with a
-    /// title and body for its pull request.
-    pub change: bool,
+    /// Whether it may finish with a change, the diff of its checkout with a
+    /// title and body for its pull request, and on what terms.
+    pub change: Option<ChangeSpec>,
     /// The verdicts it may finish with, each with its contract. None, if it
     /// may only finish with a change.
     pub verdicts: Box<[VerdictRule]>,
+}
+
+/// The terms on which a run may finish with a change.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct ChangeSpec {
+    /// Whether the checks of the repositories that have them must pass before
+    /// the change is pushed (agent-model.md, 4.4).
+    pub checks: bool,
 }
 
 /// A verdict a run may finish with, and its contract.
@@ -119,7 +127,7 @@ pub fn judge(spec: &OutcomeSpec, declared: &Declared) -> Result<(), Problems> {
     let mut found = Found { listed: List::with_capacity(Problems::LISTED), more: 0 };
     match declared {
         Declared::Change { title: _, body: _ } => {
-            if !spec.change {
+            if spec.change.is_none() {
                 found.add(Problem::ChangeNotAllowed);
             }
         }
@@ -212,7 +220,7 @@ fn has_field(fields: &[Field], name: &[u8]) -> bool {
 /// a kind for children to be if it allows any.
 pub(crate) fn is_valid(spec: &OutcomeSpec, limits: &Limits) -> bool {
     let OutcomeSpec { change, verdicts } = spec;
-    if !*change && verdicts.is_empty() {
+    if change.is_none() && verdicts.is_empty() {
         return false;
     }
     if count(verdicts.len()) > limits.verdicts {
@@ -262,7 +270,9 @@ mod tests {
 
     use temper_lib::bytes::copy_of;
 
-    use super::{Child, Children, Declared, Field, OutcomeSpec, Problem, Problems, Verdict, VerdictRule, judge};
+    use super::{
+        ChangeSpec, Child, Children, Declared, Field, OutcomeSpec, Problem, Problems, Verdict, VerdictRule, judge,
+    };
 
     fn labels(names: &[&[u8]]) -> Box<[Box<[u8]>]> {
         let mut labels = temper_lib::List::with_capacity(4);
@@ -287,7 +297,7 @@ mod tests {
             kinds: labels(&[b"blocking", b"nit"]),
             fields: labels(&[b"path", b"body"]),
         };
-        OutcomeSpec { change, verdicts: Box::new([approve, request]) }
+        OutcomeSpec { change: change.then_some(ChangeSpec { checks: false }), verdicts: Box::new([approve, request]) }
     }
 
     fn change() -> Declared {
@@ -323,7 +333,7 @@ mod tests {
         let cases: [(OutcomeSpec, Declared, Result<(), Problems>); 13] = [
             // What the spec allows.
             (review(true), change(), Ok(())),
-            (OutcomeSpec { change: true, verdicts: Box::new([]) }, change(), Ok(())),
+            (OutcomeSpec { change: Some(ChangeSpec { checks: false }), verdicts: Box::new([]) }, change(), Ok(())),
             (review(false), verdict(b"approve", Box::new([])), Ok(())),
             (
                 review(false),
@@ -333,7 +343,7 @@ mod tests {
             // What it does not.
             (review(false), change(), problems(Box::new([Problem::ChangeNotAllowed]), 0)),
             (
-                OutcomeSpec { change: true, verdicts: Box::new([]) },
+                OutcomeSpec { change: Some(ChangeSpec { checks: false }), verdicts: Box::new([]) },
                 verdict(b"approve", Box::new([])),
                 problems(Box::new([Problem::VerdictNotAllowed]), 0),
             ),

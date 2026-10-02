@@ -9,10 +9,10 @@
 //! parent, the top-level model (`temper-agent-model`), routes on, and its
 //! outcome comes back later through the parent as an [`Event`].
 //!
-//! A run has two faces, both through its parent: the worker's, which the
-//! parent routes to and from the protocol layer, and its conversations', which
-//! the parent translates to and from the session sub-model's vocabulary. The
-//! run names no session type: siblings share none (4.5).
+//! A run has three faces, all through its parent: the worker's and io's, which
+//! the parent routes to and from the protocol layer, and its conversations',
+//! which the parent translates to and from the session sub-model's
+//! vocabulary. The run names no session type: siblings share none (4.5).
 //!
 //! What a run is given is policy as data ([`charter`]): the run interprets no
 //! workflow vocabulary, and compares the labels in it byte for byte. So is what
@@ -30,11 +30,13 @@ pub mod charter;
 mod limits;
 mod model;
 pub mod outcome;
+mod prepare;
+mod prompt;
 mod run;
 #[cfg(test)]
 mod tests;
 
-pub use boundary::{Answer, End, Event, Failure, Fault, Invalid, Opening, Policy, Refusal, Request, Stop};
+pub use boundary::{Answer, End, Event, Failure, Fault, Invalid, Opening, Place, Policy, Read, Refusal, Request, Stop};
 pub use budget::{Budget, Exhausted, Spend};
 pub use charter::Charter;
 pub use limits::{Limits, worst_case};

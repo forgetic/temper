@@ -1,35 +1,45 @@
 //! Runs: one agent instance, from its admission to its one answer.
 //!
 //! A `Start` admits a run, or refuses it at the entrance. An admitted run
-//! opens its main conversation and drives it: when the LLM stops without
-//! finishing, the run nudges it, within its nudges and its budget. It works
-//! until how it ends is decided; then it closes main, waits for main to end,
-//! and answers. The first ending decided wins, and the run answers only once
-//! main has ended, so nothing it started is still in flight.
+//! first looks in its checkout for what it tells the LLM and what it checks
+//! (the `prepare` module), then opens its main conversation and drives it:
+//! when the LLM stops without finishing, the run nudges it, within its nudges
+//! and its budget. It works until how it ends is decided; then it closes main,
+//! waits for main to end, and answers. The first ending decided wins, and the
+//! run answers only once nothing it started is still in flight.
 //!
 //! A run's transition table:
 //!
 //! ```text
-//! state     event or alarm               next      emits
-//! -         start, no room               -         answer: busy
-//!           start, beyond the limits     -         answer: invalid
-//!           start                        Working   admitted, open main
-//! Working   main yielded                 Working   say: a nudge
-//!           main yielded, no nudge left  Winding   close main: unfinished
-//!           main yielded, no turn left   Winding   close main: out of budget
-//!           used, over the budget        Winding   close main: out of budget
-//!           deadline                     Winding   close main: out of time
-//!           cancel                       Winding   close main: cancelled
-//!           main ended                   Closed    answer: how main ended
-//! Winding   used, cancel                 Winding
-//!           main ended                   Closed    answer: the ending decided
-//! Closed    cancel                       Closed
+//! state      event or alarm               next       emits
+//! -          start, no room               -          answer: busy
+//!            start, beyond the limits     -          answer: invalid
+//!            start                        Preparing  admitted, the first look
+//!            start, nothing to look for   Working    admitted, open main
+//! Preparing  read, probed                 Preparing  the next look
+//!            read, probed, the last       Working    open main
+//!            deadline                     Stopping   (out of time)
+//!            cancel                       Stopping   (cancelled)
+//! Stopping   read, probed                 Closed     answer: the ending decided
+//!            cancel                       Stopping
+//! Working    main yielded                 Working    say: a nudge
+//!            main yielded, no nudge left  Winding    close main: unfinished
+//!            main yielded, no turn left   Winding    close main: out of budget
+//!            used, over the budget        Winding    close main: out of budget
+//!            deadline                     Winding    close main: out of time
+//!            cancel                       Winding    close main: cancelled
+//!            main ended                   Closed     answer: how main ended
+//! Winding    used, cancel                 Winding
+//!            main ended                   Closed     answer: the ending decided
+//! Closed     cancel                       Closed
 //! ```
 //!
 //! and a conversation's, as the run keeps it:
 //!
 //! ```text
 //! state     event or call                next
+//! Pending   opened by its run            Opening   open it
+//!           the run stops                Closed
 //! Opening   started                      Running
 //!           closed by its run            Unwanted
 //!           ended (refused)              Closed
@@ -44,32 +54,32 @@
 //!
 //! Every other cell is unreachable by the conversations' contract: `Started`
 //! first unless refused, then events, then one `Ended`, which after a `Close`
-//! comes once what was in flight has settled. A yield is decided in the step
-//! it arrives, so a conversation never rests yielded. The deadline alarm runs
-//! while a run works; it follows from the state, in one place ([`follow`]),
-//! which also retires a run once it is Closed.
+//! comes once what was in flight has settled; and io's: one terminal per
+//! operation, and one operation at a time while a run prepares. A yield is
+//! decided in the step it arrives, so a conversation never rests yielded. The
+//! deadline alarm runs while a run prepares or works; it follows from the
+//! state, in one place ([`follow`]), which also retires a run once it is
+//! Closed.
 
+use alloc::boxed::Box;
 use core::mem;
 
 use temper_lib::bytes::copy_of;
 use temper_lib::{Deadlines, Duration, Env, Id, Queue, ReplyTo, Slab, Time, Token};
 
-use crate::boundary::{Answer, End, Failure, Fault, Invalid, Opening, Policy, Refusal, Request, Stop};
+use crate::boundary::{Answer, End, Failure, Fault, Invalid, Opening, Policy, Read, Refusal, Request, Stop};
 use crate::budget::{Exhausted, Spend};
-use crate::charter::{self, Charter};
+use crate::charter::{self, Charter, count};
 use crate::limits::Limits;
 use crate::model::Model;
-
-/// The first user message of a main conversation, whose system text is the
-/// brief.
-pub(crate) const BEGIN: &[u8] = b"Begin the work your brief describes.";
-
-/// What a run says to an LLM that stopped without finishing.
-pub(crate) const NUDGE: &[u8] = b"You stopped without finishing. Carry on with the work your brief describes.";
+use crate::prepare::{self, Found, Step};
+use crate::prompt;
 
 #[derive(Debug)]
 pub(crate) struct Run {
     charter: Charter,
+    /// What it found in its checkout as it prepared.
+    found: Found,
     /// What its conversations have spent.
     spent: Spend,
     /// Nudges given.
@@ -81,6 +91,11 @@ pub(crate) struct Run {
 
 #[derive(Debug)]
 enum State {
+    /// Looking in its checkout: the look `step` is in flight. Its main
+    /// conversation has its slot, and is not opened yet.
+    Preparing { reply_to: ReplyTo, main: Id<Conversation>, step: Step },
+    /// It fails with `failure` once the look in flight has ended.
+    Stopping { reply_to: ReplyTo, main: Id<Conversation>, failure: Failure },
     /// Its main conversation is at work.
     Working { reply_to: ReplyTo, main: Id<Conversation> },
     /// It fails with `failure` once its main conversation has ended.
@@ -100,6 +115,8 @@ pub(crate) struct Conversation {
 
 #[derive(Debug)]
 enum Phase {
+    /// Not opened yet: its run is preparing.
+    Pending,
     /// Opened, and not started yet.
     Opening,
     /// Opened, not started yet, and no longer wanted: closed once it starts.
@@ -140,16 +157,55 @@ pub(crate) fn start(
         return;
     }
     let deadline = env.now.saturating_add(charter.budget.time);
-    let opening = opening(&charter, Spend::ZERO, deadline.saturating_since(env.now));
+    let found = Found::with_capacity(count(charter.checkout.repositories.len()));
     // A run is stored before its main conversation, which names it, and starts
-    // work once main has a name too.
-    let run = Run { charter, spent: Spend::ZERO, nudges: 0, deadline, state: State::Closed };
+    // once main has a name too: main's slot is the run's from its admission.
+    let run = Run { charter, found, spent: Spend::ZERO, nudges: 0, deadline, state: State::Closed };
     let id = runs.insert(run).expect("checked for room above");
-    let conversation = Conversation { run: id, spent: Spend::ZERO, phase: Phase::Opening };
+    let conversation = Conversation { run: id, spent: Spend::ZERO, phase: Phase::Pending };
     let main = conversations.insert(conversation).expect("checked for room above");
-    runs.get_mut(id).expect("inserted above").state = State::Working { reply_to, main };
     out.push(Request::Admitted { worker, run: id.token() });
-    out.push(Request::Open { conversation: main.token(), opening });
+    let run = runs.get_mut(id).expect("inserted above");
+    run.state = match prepare::next(&run.charter, None) {
+        Some(step) => look(run, id, reply_to, main, step, env, out),
+        None => open(run, conversations, reply_to, main, env.now, out),
+    };
+    follow(runs, alarms, id);
+}
+
+pub(crate) fn read(model: &mut Model, env: &Env<Limits>, owner: Token, read: Read, out: &mut Queue<Request>) {
+    let Model { runs, conversations, alarms } = model;
+    let id = Id::<Run>::from_token(owner);
+    let run = runs.get_mut(id).expect("a run lives until its look in flight has ended");
+    let state = mem::replace(&mut run.state, State::Closed);
+    run.state = match state {
+        State::Preparing { reply_to, main, step } => {
+            prepare::guide(&mut run.found, step, read, &env.limits);
+            prepared(run, conversations, id, reply_to, main, step, env, out)
+        }
+        State::Stopping { reply_to, main, failure } => stop(run, conversations, reply_to, main, failure, out),
+        State::Working { .. } | State::Winding { .. } | State::Closed => {
+            unreachable!("a run reads only while it prepares")
+        }
+    };
+    follow(runs, alarms, id);
+}
+
+pub(crate) fn probed(model: &mut Model, env: &Env<Limits>, owner: Token, executable: bool, out: &mut Queue<Request>) {
+    let Model { runs, conversations, alarms } = model;
+    let id = Id::<Run>::from_token(owner);
+    let run = runs.get_mut(id).expect("a run lives until its look in flight has ended");
+    let state = mem::replace(&mut run.state, State::Closed);
+    run.state = match state {
+        State::Preparing { reply_to, main, step } => {
+            prepare::checks(&mut run.found, step, executable);
+            prepared(run, conversations, id, reply_to, main, step, env, out)
+        }
+        State::Stopping { reply_to, main, failure } => stop(run, conversations, reply_to, main, failure, out),
+        State::Working { .. } | State::Winding { .. } | State::Closed => {
+            unreachable!("a run probes only while it prepares")
+        }
+    };
     follow(runs, alarms, id);
 }
 
@@ -162,8 +218,10 @@ pub(crate) fn cancel(model: &mut Model, run: Token, out: &mut Queue<Request>) {
     };
     let state = mem::replace(&mut run.state, State::Closed);
     run.state = match state {
+        State::Preparing { reply_to, main, step: _ } => State::Stopping { reply_to, main, failure: Failure::Cancelled },
         State::Working { reply_to, main } => wind_down(conversations, reply_to, main, Failure::Cancelled, out),
         // How the run ends is decided already.
+        State::Stopping { reply_to, main, failure } => State::Stopping { reply_to, main, failure },
         State::Winding { reply_to, failure } => State::Winding { reply_to, failure },
         // It answered in this iteration, and is retired already.
         State::Closed => return,
@@ -178,8 +236,8 @@ pub(crate) fn started(model: &mut Model, conversation: Token, peer: Token, out: 
     conversation.phase = match phase {
         Phase::Opening => Phase::Running { peer },
         Phase::Unwanted => close(peer, out),
-        Phase::Running { .. } | Phase::Closing | Phase::Closed => {
-            unreachable!("a conversation starts once, before anything else")
+        Phase::Pending | Phase::Running { .. } | Phase::Closing | Phase::Closed => {
+            unreachable!("a conversation starts once it is opened, before anything else")
         }
     };
 }
@@ -192,7 +250,7 @@ pub(crate) fn yielded(model: &mut Model, env: &Env<Limits>, conversation: Token,
         Phase::Running { peer } => *peer,
         // The yield crossed the run's close: there is nothing left to decide.
         Phase::Closing => return,
-        Phase::Opening | Phase::Unwanted | Phase::Closed => {
+        Phase::Pending | Phase::Opening | Phase::Unwanted | Phase::Closed => {
             unreachable!("a conversation yields only between starting and ending")
         }
     };
@@ -203,12 +261,12 @@ pub(crate) fn yielded(model: &mut Model, env: &Env<Limits>, conversation: Token,
         State::Working { reply_to, main } => {
             assert!(main == id, "a run's only conversation is its main one");
             match nudge(run, stop, &env.limits) {
-                Ok(()) => say(reply_to, main, peer, out),
+                Ok(()) => say(reply_to, main, peer, prompt::nudge(stop, run.nudges, env.limits.nudges), out),
                 Err(failure) => wind_down(conversations, reply_to, main, failure, out),
             }
         }
-        State::Winding { .. } | State::Closed => {
-            unreachable!("a run closes its conversation when it winds down, and it yields no more")
+        State::Preparing { .. } | State::Stopping { .. } | State::Winding { .. } | State::Closed => {
+            unreachable!("a run's conversation yields only while it works: it is closed when the run winds down")
         }
     };
     follow(runs, alarms, run_id);
@@ -220,7 +278,7 @@ pub(crate) fn used(model: &mut Model, conversation: Token, spend: Spend, out: &m
     let conversation = conversations.get_mut(id).expect("a conversation lives until it has ended");
     match &conversation.phase {
         Phase::Running { .. } | Phase::Closing => {}
-        Phase::Opening | Phase::Unwanted | Phase::Closed => {
+        Phase::Pending | Phase::Opening | Phase::Unwanted | Phase::Closed => {
             unreachable!("a conversation spends only between starting and ending")
         }
     }
@@ -236,7 +294,9 @@ pub(crate) fn used(model: &mut Model, conversation: Token, spend: Spend, out: &m
         },
         // Spent all the same, and counted in the answer.
         State::Winding { reply_to, failure } => State::Winding { reply_to, failure },
-        State::Closed => unreachable!("a run lives until its conversations have ended"),
+        State::Preparing { .. } | State::Stopping { .. } | State::Closed => {
+            unreachable!("a run's conversation spends only while the run works or winds down")
+        }
     };
     follow(runs, alarms, run_id);
 }
@@ -248,7 +308,7 @@ pub(crate) fn ended(model: &mut Model, conversation: Token, end: End, spend: Spe
     let phase = mem::replace(&mut conversation.phase, Phase::Closed);
     match phase {
         Phase::Opening | Phase::Unwanted | Phase::Running { .. } | Phase::Closing => {}
-        Phase::Closed => unreachable!("a conversation ends once"),
+        Phase::Pending | Phase::Closed => unreachable!("a conversation ends once, once opened"),
     }
     // Its turns were counted as they were used; whatever its end counts beyond
     // them is counted now.
@@ -264,7 +324,9 @@ pub(crate) fn ended(model: &mut Model, conversation: Token, end: End, spend: Spe
             answer(reply_to, ending(end, run.spent), out)
         }
         State::Winding { reply_to, failure } => answer(reply_to, Answer::Failed { failure, spent: run.spent }, out),
-        State::Closed => unreachable!("a run lives until its conversations have ended"),
+        State::Preparing { .. } | State::Stopping { .. } | State::Closed => {
+            unreachable!("a run's conversation ends only once the run has opened it")
+        }
     };
     follow(runs, alarms, run_id);
 }
@@ -273,11 +335,13 @@ pub(crate) fn deadline(model: &mut Model, id: Id<Run>, out: &mut Queue<Request>)
     let Model { runs, conversations, alarms } = model;
     let run = runs.get_mut(id).expect("an alarm is cancelled before its run closes");
     let state = mem::replace(&mut run.state, State::Closed);
+    let failure = Failure::Budget(Exhausted::Time);
     run.state = match state {
-        State::Working { reply_to, main } => {
-            wind_down(conversations, reply_to, main, Failure::Budget(Exhausted::Time), out)
+        State::Preparing { reply_to, main, step: _ } => State::Stopping { reply_to, main, failure },
+        State::Working { reply_to, main } => wind_down(conversations, reply_to, main, failure, out),
+        State::Stopping { .. } | State::Winding { .. } | State::Closed => {
+            unreachable!("the deadline alarm runs only while a run prepares or works")
         }
-        State::Winding { .. } | State::Closed => unreachable!("the deadline alarm runs only while a run works"),
     };
     follow(runs, alarms, id);
 }
@@ -287,8 +351,8 @@ pub(crate) fn deadline(model: &mut Model, id: Id<Run>, out: &mut Queue<Request>)
 fn follow(runs: &mut Slab<Run>, alarms: &mut Deadlines<Alarm>, id: Id<Run>) {
     let run = runs.get(id).expect("a run lives until it is retired");
     let (deadline, closed) = match &run.state {
-        State::Working { .. } => (Some(run.deadline), false),
-        State::Winding { .. } => (None, false),
+        State::Preparing { .. } | State::Working { .. } => (Some(run.deadline), false),
+        State::Stopping { .. } | State::Winding { .. } => (None, false),
         State::Closed => (None, true),
     };
     let alarm = Alarm::Deadline { run: id };
@@ -305,6 +369,82 @@ fn follow(runs: &mut Slab<Run>, alarms: &mut Deadlines<Alarm>, id: Id<Run>) {
 // Cell handlers: each takes the source state's data by value and returns the
 // target state.
 
+/// Asks for the look `step`, preparing.
+fn look(
+    run: &Run,
+    id: Id<Run>,
+    reply_to: ReplyTo,
+    main: Id<Conversation>,
+    step: Step,
+    env: &Env<Limits>,
+    out: &mut Queue<Request>,
+) -> State {
+    out.push(prepare::request(&run.charter, step, id.token(), env.now, &env.limits));
+    State::Preparing { reply_to, main, step }
+}
+
+/// Preparing, the look `step` ended: the next one, or open main.
+#[expect(clippy::too_many_arguments, reason = "a cell handler takes the fields it touches")]
+fn prepared(
+    run: &Run,
+    conversations: &mut Slab<Conversation>,
+    id: Id<Run>,
+    reply_to: ReplyTo,
+    main: Id<Conversation>,
+    step: Step,
+    env: &Env<Limits>,
+    out: &mut Queue<Request>,
+) -> State {
+    match prepare::next(&run.charter, Some(step)) {
+        Some(next) => look(run, id, reply_to, main, next, env, out),
+        None => open(run, conversations, reply_to, main, env.now, out),
+    }
+}
+
+/// Prepared: open main with what the run found, and the whole budget.
+fn open(
+    run: &Run,
+    conversations: &mut Slab<Conversation>,
+    reply_to: ReplyTo,
+    main: Id<Conversation>,
+    now: Time,
+    out: &mut Queue<Request>,
+) -> State {
+    let conversation = conversations.get_mut(main).expect("main lives while its run prepares");
+    let phase = mem::replace(&mut conversation.phase, Phase::Closed);
+    conversation.phase = match phase {
+        Phase::Pending => Phase::Opening,
+        Phase::Opening | Phase::Unwanted | Phase::Running { .. } | Phase::Closing | Phase::Closed => {
+            unreachable!("main is opened once, when its run has prepared")
+        }
+    };
+    let opening = opening(&run.charter, &run.found, run.spent, run.deadline.saturating_since(now));
+    out.push(Request::Open { conversation: main.token(), opening });
+    State::Working { reply_to, main }
+}
+
+/// Stopping, the look in flight ended: main was never opened, and the run
+/// answers.
+fn stop(
+    run: &Run,
+    conversations: &mut Slab<Conversation>,
+    reply_to: ReplyTo,
+    main: Id<Conversation>,
+    failure: Failure,
+    out: &mut Queue<Request>,
+) -> State {
+    let conversation = conversations.get_mut(main).expect("main lives while its run prepares");
+    let phase = mem::replace(&mut conversation.phase, Phase::Closed);
+    match phase {
+        Phase::Pending => {}
+        Phase::Opening | Phase::Unwanted | Phase::Running { .. } | Phase::Closing | Phase::Closed => {
+            unreachable!("main is not opened while its run prepares")
+        }
+    }
+    conversations.retire(main);
+    answer(reply_to, Answer::Failed { failure, spent: run.spent }, out)
+}
+
 /// Working, an ending decided: close main, and wait for it to end.
 fn wind_down(
     conversations: &mut Slab<Conversation>,
@@ -319,14 +459,16 @@ fn wind_down(
         // It is closed once it starts, or ends refused.
         Phase::Opening => Phase::Unwanted,
         Phase::Running { peer } => close(peer, out),
-        Phase::Unwanted | Phase::Closing | Phase::Closed => unreachable!("a run closes main once, winding down"),
+        Phase::Pending | Phase::Unwanted | Phase::Closing | Phase::Closed => {
+            unreachable!("a run closes main once it is opened, once, winding down")
+        }
     };
     State::Winding { reply_to, failure }
 }
 
 /// Working, main yielded and may be nudged: tell it to carry on.
-fn say(reply_to: ReplyTo, main: Id<Conversation>, peer: Token, out: &mut Queue<Request>) -> State {
-    out.push(Request::Say { peer, text: copy_of(NUDGE) });
+fn say(reply_to: ReplyTo, main: Id<Conversation>, peer: Token, text: Box<[u8]>, out: &mut Queue<Request>) -> State {
+    out.push(Request::Say { peer, text });
     State::Working { reply_to, main }
 }
 
@@ -343,14 +485,15 @@ fn answer(reply_to: ReplyTo, answer: Answer, out: &mut Queue<Request>) -> State 
 
 // Helpers.
 
-/// The opening of a run's main conversation, given what the run has spent and
-/// the time it has left. It is a copy of the charter's parts: the run keeps
-/// the charter (copy at emission).
-fn opening(charter: &Charter, spent: Spend, left: Duration) -> Opening {
+/// The opening of a run's main conversation, given what the run found in its
+/// checkout, what it has spent and the time it has left. What it holds is
+/// rendered from the charter or copied: the run keeps the charter (copy at
+/// emission).
+fn opening(charter: &Charter, found: &Found, spent: Spend, left: Duration) -> Opening {
     Opening {
         llm: charter.llm.clone(),
-        system: copy_of(&charter.brief),
-        prompt: copy_of(BEGIN),
+        system: prompt::system(charter, found),
+        prompt: copy_of(prompt::BEGIN),
         tools: charter.grants.tools,
         checkout: charter.checkout.clone(),
         budget: charter.budget.remainder(spent, left),

@@ -7,7 +7,8 @@
 //!   "comment" outlet each at random; sub-agents never.
 //! - The outcome is a change, the verdicts "approve" (no children) and
 //!   "request-changes" (one to eight children, each "blocking" or a "nit",
-//!   with a "path" and a "body"), or either.
+//!   with a "path" and a "body"), or either; a change must pass its checks
+//!   most of the time.
 //! - The budget's turns, tokens and time are drawn from their ranges.
 
 use alloc::boxed::Box;
@@ -34,10 +35,11 @@ pub(crate) fn draw(rng: &mut Rng, config: &Config) -> Charter {
     let tools = Tools { read: true, write: rng.chance(500), shell: rng.chance(500) };
     let forge = rng.chance(500);
     let outlets: Box<[Box<[u8]>]> = if rng.chance(500) { Box::new([copy_of(b"comment")]) } else { Box::new([]) };
+    let checks = rng.chance(800);
     let outcome = match rng.below(3) {
-        0 => Outcome { change: true, verdicts: Box::new([]) },
-        1 => Outcome { change: false, verdicts: verdicts() },
-        _ => Outcome { change: true, verdicts: verdicts() },
+        0 => Outcome { change: true, checks, verdicts: Box::new([]) },
+        1 => Outcome { change: false, checks: false, verdicts: verdicts() },
+        _ => Outcome { change: true, checks, verdicts: verdicts() },
     };
     let budget = Budget {
         turns: u32::try_from(rng.between(u64::from(config.turns_min), u64::from(config.turns_max)))

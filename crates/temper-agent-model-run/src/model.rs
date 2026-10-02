@@ -7,8 +7,8 @@ use crate::limits::Limits;
 use crate::run::{self, Alarm, Conversation, Run};
 
 /// The most requests an entry point emits per call: an admitted start names
-/// the run and opens its main conversation. The parent reserves this much room
-/// in `out` before calling it.
+/// the run and opens its main conversation, or asks io for its first look.
+/// The parent reserves this much room in `out` before calling it.
 pub const MAX_OUT: u32 = 2;
 
 /// The run sub-model's state.
@@ -74,6 +74,8 @@ pub fn step(model: &mut Model, env: &Env<Limits>, event: Event, out: &mut Queue<
         Event::Yielded { conversation, stop, text: _ } => run::yielded(model, env, conversation, stop, out),
         Event::Used { conversation, spend } => run::used(model, conversation, spend, out),
         Event::Ended { conversation, end, spend } => run::ended(model, conversation, end, spend, out),
+        Event::Read { owner, read } => run::read(model, env, owner, read, out),
+        Event::Probed { owner, executable } => run::probed(model, env, owner, executable, out),
     }
 }
 

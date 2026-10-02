@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use temper_agent_model_run as run;
 use temper_fake_worker_model as worker;
@@ -38,6 +38,23 @@ pub struct Settings {
     /// agent, the top level hands records over in the step that makes them;
     /// a latency here lets them cross in every order.
     pub hop: Span,
+    /// What the checkouts hold, and how io reads them.
+    pub checkout: Checkouts,
+}
+
+/// The checkouts the world makes for runs, and io's way with them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Checkouts {
+    /// The chance, per mille, that a repository has an `AGENTS.md`, of a
+    /// length drawn from `1..=guide_max`.
+    pub guides: u32,
+    pub guide_max: u32,
+    /// The chance, per mille, that a repository has checks.
+    pub checks: u32,
+    /// How long io takes for each operation, and the chance, per mille, that
+    /// it fails.
+    pub io: Span,
+    pub io_failures: u32,
 }
 
 impl Settings {
@@ -65,6 +82,8 @@ impl Settings {
                 },
                 max_tokens: 8192,
                 nudges: 2,
+                guide_bytes: 1024,
+                io_timeout: Duration::from_secs(5),
             },
             worker: worker::Config {
                 jobs: 4,
@@ -97,6 +116,7 @@ impl Settings {
             },
             network: Span::millis(1, 20),
             hop: Span::millis(0, 2),
+            checkout: Checkouts { guides: 500, guide_max: 2000, checks: 500, io: Span::millis(0, 50), io_failures: 0 },
         }
     }
 }
@@ -107,6 +127,9 @@ pub struct Stats {
     /// Runs the worker started, and cancels it sent.
     pub starts: u32,
     pub cancels: u32,
+    /// Reads and probes the run asked io for.
+    pub reads: u32,
+    pub probes: u32,
     /// Conversations the run opened, nudges it said, and closes it sent.
     pub opens: u32,
     pub says: u32,
@@ -148,6 +171,8 @@ enum Delivery {
     },
     /// A conversation's event reaches the run.
     Event(run::Event),
+    /// io's answer reaches the run.
+    Io(run::Event),
     /// The partner's own timer.
     Wake {
         peer: Token,
@@ -205,6 +230,11 @@ pub struct World {
     /// name for the conversation.
     starts: BTreeMap<Token, Start>,
     opens: BTreeMap<Token, Open>,
+    /// The checkouts' files, by their roots and paths, and which of them are
+    /// executable; and io's operations in flight, by their owners.
+    files: BTreeMap<(Token, Vec<u8>), Vec<u8>>,
+    executables: BTreeSet<(Token, Vec<u8>)>,
+    io: BTreeSet<Token>,
 
     stats: Stats,
     trace: Vec<String>,
@@ -235,6 +265,9 @@ impl World {
             lanes: [Time::ZERO; 4],
             starts: BTreeMap::new(),
             opens: BTreeMap::new(),
+            files: BTreeMap::new(),
+            executables: BTreeSet::new(),
+            io: BTreeSet::new(),
             stats: Stats::default(),
             trace: Vec::new(),
         }
@@ -352,7 +385,63 @@ impl World {
                 self.stats.closes += 1;
                 self.send(Lane::Conversations, Delivery::Close { peer });
             }
+            run::Request::Read { owner, at, max, deadline } => {
+                let read = match self.io_result(owner, deadline) {
+                    Some(at_time) => {
+                        let read = match self.files.get(&(at.root, at.path.to_vec())) {
+                            Some(content) => {
+                                let max = usize::try_from(max).expect("a u32 fits");
+                                let bytes = content[..content.len().min(max)].into();
+                                run::Read::Bytes { bytes, whole: content.len() <= max }
+                            }
+                            None => run::Read::Missing,
+                        };
+                        (at_time, read)
+                    }
+                    None => (deadline, run::Read::Failed),
+                };
+                self.stats.reads += 1;
+                self.schedule(read.0, Delivery::Io(run::Event::Read { owner, read: read.1 }));
+            }
+            run::Request::Probe { owner, at, deadline } => {
+                let (at_time, executable) = match self.io_result(owner, deadline) {
+                    Some(at_time) => (at_time, self.executables.contains(&(at.root, at.path.to_vec()))),
+                    None => (deadline, false),
+                };
+                self.stats.probes += 1;
+                self.schedule(at_time, Delivery::Io(run::Event::Probed { owner, executable }));
+            }
         }
+    }
+
+    /// When io answers an operation of `owner`'s due by `deadline`, or `None`
+    /// if it fails or runs out of time.
+    fn io_result(&mut self, owner: Token, deadline: Time) -> Option<Time> {
+        assert!(self.io.insert(owner), "a run has one look in flight at a time");
+        let at = self.now.saturating_add(self.draw(self.settings.checkout.io));
+        let failed = self.rng.chance(self.settings.checkout.io_failures);
+        (!failed && at <= deadline).then_some(at)
+    }
+
+    /// Makes a checkout of `repositories` repositories: their roots, and what
+    /// each holds.
+    fn checkout(&mut self, repositories: usize) -> Vec<Token> {
+        let settings = self.settings.checkout;
+        let mut roots = Vec::new();
+        for _ in 0..repositories {
+            self.serial += 1;
+            let root = Token::new(self.serial);
+            if self.rng.chance(settings.guides) {
+                let len = usize::try_from(self.rng.between(1, u64::from(settings.guide_max))).expect("small");
+                let guide = b"Keep changes small, and run the tests. ".iter().copied().cycle().take(len).collect();
+                self.files.insert((root, b"AGENTS.md".to_vec()), guide);
+            }
+            if self.rng.chance(settings.checks) {
+                self.executables.insert((root, b".temper/pre-pr".to_vec()));
+            }
+            roots.push(root);
+        }
+        roots
     }
 
     /// The worker's requests, carried to the agent the way the two protocol
@@ -380,7 +469,8 @@ impl World {
             }
             match entry.remove() {
                 Delivery::Start { owner, charter } => {
-                    let charter = translate::charter(charter);
+                    let roots = self.checkout(charter.repositories.len());
+                    let charter = translate::charter(charter, &roots);
                     self.run_in.push_back(run::Event::Start { reply_to: ReplyTo::new(owner), worker: owner, charter });
                 }
                 Delivery::Cancel { run } => self.run_in.push_back(run::Event::Cancel { run }),
@@ -412,6 +502,13 @@ impl World {
                     self.check_conversation(&event);
                     self.run_in.push_back(event);
                 }
+                Delivery::Io(event) => {
+                    let (run::Event::Read { owner, .. } | run::Event::Probed { owner, .. }) = &event else {
+                        unreachable!("io answers reads and probes");
+                    };
+                    assert!(self.io.remove(owner), "io answers each operation once");
+                    self.run_in.push_back(event);
+                }
             }
         }
     }
@@ -437,7 +534,10 @@ impl World {
             run::Event::Yielded { conversation, .. } | run::Event::Used { conversation, .. } => {
                 (conversation, false, false)
             }
-            run::Event::Start { .. } | run::Event::Cancel { .. } => unreachable!("not a conversation's event"),
+            run::Event::Start { .. }
+            | run::Event::Cancel { .. }
+            | run::Event::Read { .. }
+            | run::Event::Probed { .. } => unreachable!("not a conversation's event"),
         };
         let open = self.opens.get_mut(conversation).expect("events are about conversations the run opened");
         assert!(!open.ended, "nothing comes after a conversation's end");
@@ -472,6 +572,7 @@ impl World {
         assert_eq!(self.worker.jobs(), 0, "the worker took every answer");
         assert_eq!(self.worker.answered(), self.settings.worker.jobs, "every job was started and answered");
         assert_eq!(self.partner.live(), 0, "every conversation has ended");
+        assert!(self.io.is_empty(), "io answered every operation");
         assert!(self.wire.is_empty() && self.run_in.is_empty() && self.worker_in.is_empty(), "nothing is on its way");
         let mut answered = run::Spend::ZERO;
         for (owner, start) in &self.starts {

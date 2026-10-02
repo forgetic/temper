@@ -3,12 +3,14 @@
 
 use temper_agent_model_run as run;
 use temper_agent_model_run::charter;
-use temper_agent_model_run::outcome::{Children, OutcomeSpec, VerdictRule};
+use temper_agent_model_run::outcome::{ChangeSpec, Children, OutcomeSpec, VerdictRule};
 use temper_fake_worker_model::api as worker;
+use temper_lib::Token;
 
-/// The run's charter for the worker's.
+/// The run's charter for the worker's, its repositories at `roots`, as io
+/// names them.
 #[must_use]
-pub fn charter(charter: worker::Charter) -> run::Charter {
+pub fn charter(charter: worker::Charter, roots: &[Token]) -> run::Charter {
     let worker::Charter {
         brief,
         repositories,
@@ -24,14 +26,19 @@ pub fn charter(charter: worker::Charter) -> run::Charter {
     } = charter;
     run::Charter {
         brief,
-        checkout: charter::Checkout { repositories: repositories.into_iter().map(repository).collect() },
+        checkout: charter::Checkout {
+            repositories: repositories.into_iter().zip(roots).map(|(found, root)| repository(found, *root)).collect(),
+        },
         grants: charter::Grants {
             tools: charter::Tools { inspect: tools.read, modify: tools.write, shell: tools.shell },
             forge,
             agents,
             outlets: outlets.into_iter().map(|name| charter::Outlet { name }).collect(),
         },
-        outcome: OutcomeSpec { change: outcome.change, verdicts: outcome.verdicts.into_iter().map(verdict).collect() },
+        outcome: OutcomeSpec {
+            change: outcome.change.then_some(ChangeSpec { checks: outcome.checks }),
+            verdicts: outcome.verdicts.into_iter().map(verdict).collect(),
+        },
         budget: self::budget(budget),
         llm: charter::Llm { endpoint: charter::Endpoint(endpoint), model, max_tokens },
     }
@@ -68,9 +75,11 @@ pub fn answer(answer: &run::Answer) -> worker::Answer {
     }
 }
 
-fn repository(repository: worker::Repository) -> charter::Repository {
-    let worker::Repository { name, path, writable } = repository;
-    charter::Repository { name, path, writable }
+/// The run's repository for the worker's: where the worker put it is io's
+/// business, which names it by `root`.
+fn repository(repository: worker::Repository, root: Token) -> charter::Repository {
+    let worker::Repository { name, path: _, writable } = repository;
+    charter::Repository { name, root, writable }
 }
 
 fn verdict(verdict: worker::Verdict) -> VerdictRule {

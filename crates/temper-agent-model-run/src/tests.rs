@@ -5,10 +5,11 @@ use alloc::boxed::Box;
 use temper_lib::{Duration, Env, List, Queue, ReplyTo, Time, Token};
 
 use crate::charter::{Checkout, Endpoint, Grants, Llm, Outlet, Repository, Tools};
-use crate::outcome::{Children, OutcomeSpec, VerdictRule};
+use crate::outcome::{ChangeSpec, Children, OutcomeSpec, VerdictRule};
+use crate::prepare::{Found, Guide};
 use crate::{
-    Answer, Budget, Charter, End, Event, Exhausted, Failure, Fault, Invalid, Limits, MAX_OUT, Model, Opening, Policy,
-    Refusal, Request, Spend, Stop, fire, step, worst_case,
+    Answer, Budget, Charter, End, Event, Exhausted, Failure, Fault, Invalid, Limits, MAX_OUT, Model, Opening, Place,
+    Policy, Read, Refusal, Request, Spend, Stop, fire, step, worst_case,
 };
 
 const BUDGET: Budget = Budget {
@@ -37,6 +38,8 @@ const LIMITS: Limits = Limits {
     },
     max_tokens: 4096,
     nudges: 2,
+    guide_bytes: 64,
+    io_timeout: Duration::from_secs(10),
 };
 
 /// The model, its environment, and room for one step's output.
@@ -80,14 +83,25 @@ impl Harness {
     }
 
     /// Starts a run of the test charter for call `call`, which is admitted:
-    /// the run's token and its main conversation's.
-    fn admit(&mut self, call: u64) -> (Token, Token) {
+    /// the run's token, once it has looked for its one repository's guide.
+    fn prepare(&mut self, call: u64) -> Token {
         let emitted = self.start(call, charter());
-        let [Request::Admitted { worker, run }, Request::Open { conversation, opening: _ }] = &*emitted else {
+        let [Request::Admitted { worker, run }, Request::Read { owner, .. }] = &*emitted else {
             panic!("expected an admitted run, got {emitted:?}");
         };
-        assert_eq!(*worker, Token::new(call));
-        (*run, *conversation)
+        assert_eq!((*worker, owner), (Token::new(call), run));
+        *run
+    }
+
+    /// Starts a run of the test charter for call `call`, which is admitted and
+    /// finds no guide: the run's token and its main conversation's.
+    fn admit(&mut self, call: u64) -> (Token, Token) {
+        let run = self.prepare(call);
+        let emitted = self.step(Event::Read { owner: run, read: Read::Missing });
+        let [Request::Open { conversation, opening: _ }] = &*emitted else {
+            panic!("expected main to open, got {emitted:?}");
+        };
+        (run, *conversation)
     }
 
     /// Admits a run for call `call` and starts its main conversation as
@@ -103,11 +117,11 @@ impl Harness {
     }
 }
 
-fn bytes(text: &[u8]) -> Box<[u8]> {
+pub(crate) fn bytes(text: &[u8]) -> Box<[u8]> {
     Box::from(text)
 }
 
-fn rule(name: &[u8], min: u32, max: u32) -> VerdictRule {
+pub(crate) fn rule(name: &[u8], min: u32, max: u32) -> VerdictRule {
     VerdictRule {
         name: bytes(name),
         children: Children { min, max },
@@ -116,15 +130,11 @@ fn rule(name: &[u8], min: u32, max: u32) -> VerdictRule {
     }
 }
 
-fn charter() -> Charter {
+pub(crate) fn charter() -> Charter {
     Charter {
         brief: bytes(b"Review the change."),
         checkout: Checkout {
-            repositories: Box::new([Repository {
-                name: bytes(b"temper"),
-                path: bytes(b"/work/temper"),
-                writable: false,
-            }]),
+            repositories: Box::new([Repository { name: bytes(b"temper"), root: Token::new(900), writable: false }]),
         },
         grants: Grants {
             tools: Tools { inspect: true, modify: false, shell: true },
@@ -132,7 +142,7 @@ fn charter() -> Charter {
             agents: false,
             outlets: Box::new([Outlet { name: bytes(b"comment") }]),
         },
-        outcome: OutcomeSpec { change: false, verdicts: Box::new([rule(b"approve", 0, 0), rule(b"request", 1, 8)]) },
+        outcome: OutcomeSpec { change: None, verdicts: Box::new([rule(b"approve", 0, 0), rule(b"request", 1, 8)]) },
         budget: BUDGET,
         llm: Llm { endpoint: Endpoint(1), model: bytes(b"model-a"), max_tokens: 1024 },
     }
@@ -158,24 +168,98 @@ fn failed(failure: Failure, spent: Spend) -> Answer {
 }
 
 #[test]
-fn an_admitted_run_names_itself_and_opens_its_main_conversation_with_the_whole_budget() {
+fn an_admitted_run_reads_its_checkout_then_opens_main_with_the_whole_budget() {
     let mut h = Harness::new(LIMITS);
     let emitted = h.start(7, charter());
-    let [Request::Admitted { worker, run: _ }, Request::Open { conversation: _, opening }] = &*emitted else {
+    let [Request::Admitted { worker, run }, Request::Read { owner, at, max, deadline }] = &*emitted else {
         panic!("expected an admitted run, got {emitted:?}");
     };
-    assert_eq!(*worker, Token::new(7));
+    assert_eq!((*worker, owner), (Token::new(7), run));
+    assert_eq!(at, &Place { root: Token::new(900), path: bytes(b"AGENTS.md") });
+    assert_eq!((*max, *deadline), (LIMITS.guide_bytes, Time::ZERO.saturating_add(LIMITS.io_timeout)));
+    assert_eq!((h.model.runs(), h.model.conversations()), (1, 1), "main has its slot from the start");
+
+    let read = Read::Bytes { bytes: bytes(b"Run the tests."), whole: true };
+    let emitted = h.step(Event::Read { owner: *run, read });
+    let [Request::Open { conversation: _, opening }] = &*emitted else {
+        panic!("expected main to open, got {emitted:?}");
+    };
+    let mut found = Found::with_capacity(1);
+    found.guides.push(Guide { repository: 0, text: bytes(b"Run the tests."), whole: true }).expect("room");
     let expected = Opening {
         llm: charter().llm,
-        system: charter().brief,
-        prompt: bytes(super::run::BEGIN),
+        system: super::prompt::system(&charter(), &found),
+        prompt: bytes(super::prompt::BEGIN),
         tools: charter().grants.tools,
         checkout: charter().checkout,
         budget: BUDGET,
     };
     assert_eq!(opening, &expected);
-    assert_eq!((h.model.runs(), h.model.conversations()), (1, 1));
     assert_eq!(h.model.next_deadline(), Some(Time::ZERO.saturating_add(BUDGET.time)));
+}
+
+#[test]
+fn a_run_looks_for_checks_in_writable_repositories_when_a_change_must_pass_them() {
+    let mut h = Harness::new(LIMITS);
+    let checkout = Checkout {
+        repositories: Box::new([
+            Repository { name: bytes(b"temper"), root: Token::new(900), writable: true },
+            Repository { name: bytes(b"docs"), root: Token::new(901), writable: false },
+        ]),
+    };
+    let outcome = OutcomeSpec { change: Some(ChangeSpec { checks: true }), verdicts: Box::new([]) };
+    let emitted = h.start(1, Charter { checkout, outcome, ..charter() });
+    let [Request::Admitted { run, .. }, Request::Read { at, .. }] = &*emitted else {
+        panic!("expected a read, got {emitted:?}");
+    };
+    let run = *run;
+    assert_eq!(at.root, Token::new(900));
+    let emitted = h.step(Event::Read { owner: run, read: Read::Failed });
+    let [Request::Probe { owner, at, deadline }] = &*emitted else {
+        panic!("expected a probe, got {emitted:?}");
+    };
+    assert_eq!((owner, at), (&run, &Place { root: Token::new(900), path: bytes(b".temper/pre-pr") }));
+    assert_eq!(*deadline, Time::ZERO.saturating_add(LIMITS.io_timeout));
+    let emitted = h.step(Event::Probed { owner: run, executable: true });
+    let [Request::Read { at, .. }] = &*emitted else {
+        panic!("expected a read, got {emitted:?}");
+    };
+    assert_eq!(at.root, Token::new(901), "a read-only repository has no checks to look for");
+    let emitted = h.step(Event::Read { owner: run, read: Read::Missing });
+    let [Request::Open { opening, .. }] = &*emitted else {
+        panic!("expected main to open, got {emitted:?}");
+    };
+    let system = &opening.system;
+    let marked = b"- `temper`, which you may change, with checks (`.temper/pre-pr`)\n";
+    assert!(temper_lib::bytes::find(system, marked).is_some(), "the checkout says which has checks");
+}
+
+#[test]
+fn a_run_with_nothing_to_look_for_opens_main_at_once() {
+    let mut h = Harness::new(LIMITS);
+    let emitted = h.start(1, Charter { checkout: Checkout { repositories: Box::new([]) }, ..charter() });
+    let [Request::Admitted { .. }, Request::Open { .. }] = &*emitted else {
+        panic!("expected an admitted run and main, got {emitted:?}");
+    };
+}
+
+#[test]
+fn a_run_cancelled_or_out_of_time_while_it_prepares_answers_once_its_look_has_ended() {
+    let mut h = Harness::new(LIMITS);
+    let run = h.prepare(1);
+    assert!(h.step(Event::Cancel { run }).is_empty(), "the look is in flight");
+    assert!(h.step(Event::Cancel { run }).is_empty(), "the ending is decided");
+    assert_eq!(h.model.next_deadline(), None);
+    let emitted = h.step(Event::Read { owner: run, read: Read::Missing });
+    assert_eq!(answered(emitted), (1, failed(Failure::Cancelled, Spend::ZERO)));
+    h.model.reclaim();
+    assert_eq!((h.model.runs(), h.model.conversations()), (0, 0), "main was never opened, and is gone too");
+
+    let run = h.prepare(2);
+    h.after(BUDGET.time);
+    assert!(h.fire().is_empty(), "the look is in flight");
+    let emitted = h.step(Event::Probed { owner: run, executable: false });
+    assert_eq!(answered(emitted), (2, failed(Failure::Budget(Exhausted::Time), Spend::ZERO)));
 }
 
 #[test]
@@ -226,16 +310,22 @@ fn charters_beyond_the_limits_are_refused_as_invalid() {
     }
     // A change alone is an outcome.
     let mut h = Harness::new(LIMITS);
-    drop(h.start(1, Charter { outcome: OutcomeSpec { change: true, verdicts: Box::new([]) }, ..charter() }));
+    drop(h.start(
+        1,
+        Charter {
+            outcome: OutcomeSpec { change: Some(ChangeSpec { checks: true }), verdicts: Box::new([]) },
+            ..charter()
+        },
+    ));
     assert_eq!(h.model.runs(), 1);
 }
 
 fn repository(name: &[u8]) -> Repository {
-    Repository { name: bytes(name), path: bytes(b"/work"), writable: true }
+    Repository { name: bytes(name), root: Token::new(1), writable: true }
 }
 
 fn spec(verdicts: Box<[VerdictRule]>) -> OutcomeSpec {
-    OutcomeSpec { change: false, verdicts }
+    OutcomeSpec { change: None, verdicts }
 }
 
 #[test]
@@ -276,9 +366,10 @@ fn an_llm_that_stops_without_finishing_is_nudged_until_its_nudges_run_out() {
     let mut h = Harness::new(LIMITS);
     let (_, conversation) = h.running(1, 100);
     let peer = Token::new(100);
-    for _ in 0..LIMITS.nudges {
+    for nudge in 1..=LIMITS.nudges {
         assert!(h.step(Event::Used { conversation, spend: spend(5) }).is_empty(), "within the budget");
-        assert_eq!(&*h.step(end_turn(conversation)), &[Request::Say { peer, text: bytes(super::run::NUDGE) }]);
+        let text = super::prompt::nudge(Stop::EndTurn, nudge, LIMITS.nudges);
+        assert_eq!(&*h.step(end_turn(conversation)), &[Request::Say { peer, text }]);
     }
     assert!(h.step(Event::Used { conversation, spend: spend(5) }).is_empty(), "within the budget");
     assert_eq!(&*h.step(end_turn(conversation)), &[Request::Close { peer }]);

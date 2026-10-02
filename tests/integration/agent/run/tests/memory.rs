@@ -5,9 +5,9 @@
 use std::mem::size_of;
 
 use temper_agent_model_run::charter::{Checkout, Endpoint, Grants, Llm, Outlet, Repository, Tools};
-use temper_agent_model_run::outcome::{Children, OutcomeSpec, VerdictRule};
+use temper_agent_model_run::outcome::{ChangeSpec, Children, OutcomeSpec, VerdictRule};
 use temper_agent_model_run::{
-    Answer, Budget, Charter, Event, Invalid, Limits, MAX_OUT, Model, Refusal, Request, Spend, Stop, worst_case,
+    Answer, Budget, Charter, Event, Invalid, Limits, MAX_OUT, Model, Read, Refusal, Request, Spend, Stop, worst_case,
 };
 use temper_lib::{Duration, Env, Queue, ReplyTo, Time, Token};
 
@@ -89,6 +89,8 @@ const LIMITS: Limits = Limits {
     budget: BUDGET,
     max_tokens: 1024,
     nudges: 1,
+    guide_bytes: 512,
+    io_timeout: Duration::from_secs(5),
 };
 
 /// A charter that holds exactly `held` bytes, as the run counts them: one of
@@ -96,11 +98,13 @@ const LIMITS: Limits = Limits {
 /// and a brief of the rest.
 fn charter(held: u64) -> Charter {
     let label = size(size_of::<Box<[u8]>>());
-    let parts = (size(size_of::<Repository>()) + 2) + (size(size_of::<Outlet>()) + 1) + 1;
+    let parts = (size(size_of::<Repository>()) + 1) + (size(size_of::<Outlet>()) + 1) + 1;
     let rule = size(size_of::<VerdictRule>()) + 1 + 2 * (label + 1);
     Charter {
         brief: bytes(held - parts - rule),
-        checkout: Checkout { repositories: Box::new([Repository { name: bytes(1), path: bytes(1), writable: true }]) },
+        checkout: Checkout {
+            repositories: Box::new([Repository { name: bytes(1), root: Token::new(1), writable: true }]),
+        },
         grants: Grants {
             tools: Tools { inspect: true, modify: true, shell: true },
             forge: true,
@@ -108,7 +112,7 @@ fn charter(held: u64) -> Charter {
             outlets: Box::new([Outlet { name: bytes(1) }]),
         },
         outcome: OutcomeSpec {
-            change: true,
+            change: Some(ChangeSpec { checks: true }),
             verdicts: Box::new([VerdictRule {
                 name: bytes(1),
                 children: Children { min: 0, max: 1 },
@@ -124,14 +128,17 @@ fn charter(held: u64) -> Charter {
 /// What a step asked for, without the payload.
 #[derive(PartialEq, Eq, Debug)]
 enum Asked {
+    Read { owner: Token },
+    Probe { owner: Token },
     Open { conversation: Token },
     Answer { answer: Answer },
     Other,
 }
 
 /// Fills every run of a model under `limits` with a charter of exactly its
-/// byte limit, and has each one's main conversation start, spend, yield and be
-/// nudged, checking the heap against the worst case after every step.
+/// byte limit and a guide of exactly its limit too, and has each one's main
+/// conversation start, spend, yield and be nudged, checking the heap against
+/// the worst case after every step.
 fn fill(limits: Limits) {
     let bound = worst_case(&limits).expect("the test limits fit");
     let env = Env { now: Time::ZERO, limits };
@@ -147,6 +154,8 @@ fn fill(limits: Limits) {
         while let Some(request) = out.pop() {
             asked.push(match request {
                 Request::Open { conversation, .. } => Asked::Open { conversation },
+                Request::Read { owner, .. } => Asked::Read { owner },
+                Request::Probe { owner, .. } => Asked::Probe { owner },
                 Request::Answer { answer, to: _ } => Asked::Answer { answer },
                 Request::Admitted { .. } | Request::Say { .. } | Request::Close { .. } => Asked::Other,
             });
@@ -159,8 +168,15 @@ fn fill(limits: Limits) {
     for run in 0..limits.runs {
         let worker = Token::new(u64::from(run));
         let start = Event::Start { reply_to: ReplyTo::new(worker), worker, charter: charter(limits.run_bytes) };
-        let [Asked::Other, Asked::Open { conversation }] = step(start)[..] else {
+        let [Asked::Other, Asked::Read { owner }] = step(start)[..] else {
             panic!("a charter of exactly the byte limit is admitted");
+        };
+        let read = Read::Bytes { bytes: bytes(u64::from(limits.guide_bytes)), whole: false };
+        let [Asked::Probe { owner }] = step(Event::Read { owner, read })[..] else {
+            panic!("the run looks for the checks of its writable repository");
+        };
+        let [Asked::Open { conversation }] = step(Event::Probed { owner, executable: true })[..] else {
+            panic!("the run opens main once it has prepared");
         };
         assert!(step(Event::Started { conversation, peer: worker }).is_empty(), "starting is quiet");
         assert!(step(Event::Used { conversation, spend }).is_empty(), "within the budget");
@@ -168,7 +184,7 @@ fn fill(limits: Limits) {
         assert_eq!(step(yielded), [Asked::Other], "nudged");
     }
     let held = held(base);
-    let full = u64::from(limits.runs) * limits.run_bytes;
+    let full = u64::from(limits.runs) * (limits.run_bytes + u64::from(limits.guide_bytes));
     assert!(held >= full, "{limits:?}: every run holds its byte limit");
 
     // A byte more is refused.
@@ -183,6 +199,6 @@ fn fill(limits: Limits) {
 #[test]
 fn a_model_with_every_run_full_stays_within_its_worst_case() {
     fill(LIMITS);
-    fill(Limits { runs: 64, conversations: 64, run_bytes: 65_536, ..LIMITS });
-    fill(Limits { runs: 1000, conversations: 1000, run_bytes: 2048, ..LIMITS });
+    fill(Limits { runs: 64, conversations: 64, run_bytes: 65_536, guide_bytes: 32_768, ..LIMITS });
+    fill(Limits { runs: 1000, conversations: 1000, run_bytes: 2048, guide_bytes: 16, ..LIMITS });
 }

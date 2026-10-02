@@ -8,6 +8,8 @@
 use alloc::boxed::Box;
 use core::mem::size_of;
 
+use temper_lib::Token;
+
 use crate::boundary::Invalid;
 use crate::budget::Budget;
 use crate::limits::Limits;
@@ -40,8 +42,8 @@ pub struct Checkout {
 pub struct Repository {
     /// The name the LLM and the tools know it by.
     pub name: Box<[u8]>,
-    /// Where it sits, as io names it. The model never interprets it.
-    pub path: Box<[u8]>,
+    /// io's name for its root directory, where the worker put it.
+    pub root: Token,
     pub writable: bool,
 }
 
@@ -125,8 +127,8 @@ pub(crate) fn check(charter: &Charter, limits: &Limits) -> Result<(), Invalid> {
 pub(crate) fn cost(charter: &Charter) -> Option<u64> {
     let mut cost = len(&charter.brief)?.checked_add(len(&charter.llm.model)?)?;
     let repository = u64::try_from(size_of::<Repository>()).ok()?;
-    for Repository { name, path, writable: _ } in &charter.checkout.repositories {
-        cost = cost.checked_add(repository)?.checked_add(len(name)?)?.checked_add(len(path)?)?;
+    for Repository { name, root: _, writable: _ } in &charter.checkout.repositories {
+        cost = cost.checked_add(repository)?.checked_add(len(name)?)?;
     }
     let outlet = u64::try_from(size_of::<Outlet>()).ok()?;
     for Outlet { name } in &charter.grants.outlets {

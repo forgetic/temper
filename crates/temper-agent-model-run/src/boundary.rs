@@ -1,12 +1,17 @@
 //! The records that cross the boundary with the run's parent, the top-level
 //! model (4.5). The run defines them; its parent depends on it.
 //!
-//! Both of the run's faces cross here:
+//! All three of the run's faces cross here:
 //!
 //! - The worker's, which the parent routes to and from the protocol layer. A
 //!   [`Event::Start`] is a call, answered by exactly one [`Request::Answer`].
 //!   An admitted run is named by [`Request::Admitted`] first, so that a
 //!   [`Event::Cancel`] can name it.
+//! - io's, for what the run itself reads in its checkout, which the parent
+//!   routes to and from the protocol layer. A [`Request::Read`] is ended by
+//!   exactly one [`Event::Read`], and a [`Request::Probe`] by one
+//!   [`Event::Probed`]; each carries its deadline, and io runs the race
+//!   (5.3). The `owner` is the run's token, echoed on the terminal.
 //! - The conversations', which the parent translates to and from the session
 //!   sub-model's vocabulary. A [`Request::Open`] is ended by exactly one
 //!   [`Event::Ended`], after a [`Event::Started`] unless the conversation was
@@ -16,7 +21,7 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::{ReplyTo, Token};
+use temper_lib::{ReplyTo, Time, Token};
 
 use crate::budget::{Budget, Exhausted, Spend};
 use crate::charter::{Charter, Checkout, Llm, Tools};
@@ -41,6 +46,11 @@ pub enum Event {
     /// Terminal for `Open`: the conversation ended, having spent `spend` in
     /// all, once nothing it started was in flight.
     Ended { conversation: Token, end: End, spend: Spend },
+    /// Terminal for `Read`.
+    Read { owner: Token, read: Read },
+    /// Terminal for `Probe`: whether an executable file is at the place. A
+    /// failure or a deadline passed reads as not.
+    Probed { owner: Token, executable: bool },
 }
 
 /// run -> parent
@@ -58,6 +68,33 @@ pub enum Request {
     Say { peer: Token, text: Box<[u8]> },
     /// Close `peer`, in any state: it stops what is in flight, then ends.
     Close { peer: Token },
+    /// Read the first `max` bytes of the regular file at `at`, following
+    /// symbolic links within its root, giving up at `deadline`.
+    Read { owner: Token, at: Place, max: u32, deadline: Time },
+    /// Find out whether an executable file is at `at`, giving up at
+    /// `deadline`.
+    Probe { owner: Token, at: Place, deadline: Time },
+}
+
+/// Where a file is, for the run's own io: a repository's root, as io names
+/// it, and the path beneath it, names joined by `/`. io resolves it beneath
+/// the root.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct Place {
+    pub root: Token,
+    pub path: Box<[u8]>,
+}
+
+/// What a `Read` found.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum Read {
+    /// The file's first bytes, at most as many as asked for; `whole` when
+    /// they are all of it.
+    Bytes { bytes: Box<[u8]>, whole: bool },
+    /// Nothing is there, or not a regular file.
+    Missing,
+    /// io failed, or the deadline passed first.
+    Failed,
 }
 
 /// What a conversation is opened with.

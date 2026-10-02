@@ -45,6 +45,8 @@ pub struct Tools {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Outcome {
     pub change: bool,
+    /// Whether a change must pass the checks its repositories have.
+    pub checks: bool,
     pub verdicts: Box<[Verdict]>,
 }
 

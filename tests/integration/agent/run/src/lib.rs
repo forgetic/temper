@@ -17,4 +17,4 @@ pub mod partner;
 pub mod translate;
 mod world;
 
-pub use world::{Settings, Span, Stats, World};
+pub use world::{Checkouts, Settings, Span, Stats, World};

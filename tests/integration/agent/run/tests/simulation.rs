@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 
 use temper_agent_model_run::{Answer, Budget, Exhausted, Failure, Fault, Invalid, Limits, Policy, Refusal};
 use temper_agent_model_run_tests::partner::Script;
-use temper_agent_model_run_tests::{Settings, Span, World};
+use temper_agent_model_run_tests::{Checkouts, Settings, Span, World};
 use temper_fake_worker_model::Config;
 use temper_lib::{Duration, Rng};
 
@@ -117,9 +117,10 @@ fn a_cancelled_run_closes_its_conversation_and_answers_as_cancelled() {
 fn a_cancel_that_comes_before_main_starts_closes_main_once_it_does() {
     let calm = Settings::calm(8);
     let worker = Config { cancels: 1000, cancel_min: Duration::ZERO, cancel_max: Duration::ZERO, ..calm.worker };
-    // The cancel is back within two trips to the worker; main's start takes two
-    // hops longer than that.
-    let world = settled(&Settings { worker, hop: Span::millis(50, 100), ..calm });
+    // The checkout is read at once, and the cancel is back within two trips to
+    // the worker; main's start takes two hops longer than that.
+    let checkout = Checkouts { io: Span::millis(0, 0), ..calm.checkout };
+    let world = settled(&Settings { worker, hop: Span::millis(50, 100), checkout, ..calm });
     for answer in answers(&world) {
         assert_eq!(failure(answer), Failure::Cancelled);
     }
@@ -127,6 +128,29 @@ fn a_cancel_that_comes_before_main_starts_closes_main_once_it_does() {
     assert!(first("run <- Cancel {") < first("run <- Started {"), "the first cancel came before the first start");
     let stats = world.stats();
     assert_eq!((stats.cancels, stats.closes, stats.partner.closed), (4, 4, 4));
+}
+
+#[test]
+fn a_cancel_while_the_run_reads_its_checkout_answers_once_the_read_has_ended() {
+    let calm = Settings::calm(13);
+    let worker = Config { cancels: 1000, cancel_min: Duration::ZERO, cancel_max: Duration::ZERO, ..calm.worker };
+    let checkout = Checkouts { io: Span::millis(500, 1_000), ..calm.checkout };
+    let world = settled(&Settings { worker, checkout, ..calm });
+    for answer in answers(&world) {
+        assert_eq!(failure(answer), Failure::Cancelled);
+    }
+    let stats = world.stats();
+    assert_eq!((stats.cancels, stats.opens, stats.reads), (4, 0, 4), "each run stopped at its first read");
+}
+
+#[test]
+fn a_run_reads_its_checkouts_guides_and_looks_for_checks() {
+    let calm = Settings::calm(14);
+    let checkout = Checkouts { guides: 1000, checks: 1000, ..calm.checkout };
+    let world = settled(&Settings { partner: Script { yields: 1000, ..calm.partner }, checkout, ..calm });
+    let stats = world.stats();
+    assert_eq!(stats.opens, 4);
+    assert!(stats.reads >= 4 && stats.probes > 0, "{stats:?}");
 }
 
 #[test]
@@ -274,5 +298,13 @@ fn noisy(seed: u64) -> Settings {
         settle: Span::millis(0, pick(0, 2_000)),
         races: small(pick(0, 1000)),
     };
-    Settings { run, worker, partner, hop: Span::millis(0, pick(0, 50)), ..calm }
+    let checkout = Checkouts {
+        guides: small(pick(0, 1000)),
+        guide_max: small(pick(1, 3000)),
+        checks: small(pick(0, 1000)),
+        io: Span::millis(0, pick(0, 6_000)),
+        io_failures: small(pick(0, 200)),
+    };
+    let run = Limits { guide_bytes: small(pick(1, 2000)), io_timeout: Duration::from_secs(pick(1, 5)), ..run };
+    Settings { run, worker, partner, hop: Span::millis(0, pick(0, 50)), checkout, ..calm }
 }

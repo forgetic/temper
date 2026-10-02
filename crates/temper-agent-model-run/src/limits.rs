@@ -1,6 +1,7 @@
-use temper_lib::{Deadlines, Slab};
+use temper_lib::{Deadlines, Duration, List, Slab};
 
 use crate::budget::Budget;
+use crate::prepare::Guide;
 use crate::run::{Alarm, Conversation, Run};
 
 /// The run sub-model's limits (section 7), handed by its parent to every step
@@ -28,6 +29,11 @@ pub struct Limits {
     /// Nudges a run gives its LLM when it stops without finishing, after which
     /// the run fails.
     pub nudges: u32,
+    /// The most bytes of a repository's `AGENTS.md` a run reads and puts in
+    /// its system text.
+    pub guide_bytes: u32,
+    /// How long io has for each look in the checkout.
+    pub io_timeout: Duration,
 }
 
 /// The most memory the model holds under `limits`, in bytes (6.4), or `None`
@@ -41,7 +47,12 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     let runs = Slab::<Run>::worst_case(limits.runs)?;
     let conversations = Slab::<Conversation>::worst_case(limits.conversations)?;
     let alarms = Deadlines::<Alarm>::worst_case(limits.runs)?;
-    // Each run holds its charter, up to its byte limit.
-    let charters = u64::from(limits.runs).checked_mul(limits.run_bytes)?;
-    runs.checked_add(conversations)?.checked_add(alarms)?.checked_add(charters)
+    // Each run holds its charter, up to its byte limit, and what it found in
+    // its checkout: a guide and a mark for checks per repository.
+    let guides = List::<Guide>::worst_case(limits.repositories)?
+        .checked_add(u64::from(limits.repositories).checked_mul(u64::from(limits.guide_bytes))?)?;
+    let checks = List::<u32>::worst_case(limits.repositories)?;
+    let run = limits.run_bytes.checked_add(guides)?.checked_add(checks)?;
+    let held = u64::from(limits.runs).checked_mul(run)?;
+    runs.checked_add(conversations)?.checked_add(alarms)?.checked_add(held)
 }
