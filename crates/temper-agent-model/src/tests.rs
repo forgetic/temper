@@ -7,9 +7,10 @@ use alloc::boxed::Box;
 use temper_agent_model_session as session;
 use temper_lib::{Duration, Env, Queue, Time, Token};
 
-use crate::llm::{Block, Completion, Endpoint, Failure, Message, Role, Stop, Tool, Usage};
+use crate::llm::{Block, Completion, Decoded, Endpoint, Failure, Message, Returned, Role, Stop, Usage};
+use crate::tools::{Call, Entry, Grants, Kind, Name, Outcome, Part, Path};
 use crate::{
-    Budget, Dimension, End, Event, Fact, Limits, MAX_OUT, Model, Request, Spec, ToolCall, Yield, fire, step, worst_case,
+    Budget, Dimension, End, Event, Fact, Limits, MAX_OUT, Model, Request, Spec, Yield, fire, step, worst_case,
 };
 
 const BUDGET: Budget = Budget {
@@ -129,7 +130,7 @@ fn spec() -> Spec {
         endpoint: Endpoint(0),
         model: bytes(b"model"),
         system: bytes(b"be brief"),
-        tools: Box::new([Tool { name: bytes(b"ls"), description: bytes(b"lists files"), schema: bytes(b"{}") }]),
+        tools: Grants { inspect: true, modify: false, shell: false },
         prompt: bytes(b"fix the bug"),
         max_tokens: 1024,
         budget: BUDGET,
@@ -140,9 +141,21 @@ fn usage() -> Usage {
     Usage { input_tokens: 10, output_tokens: 5, cache_read_tokens: 3, cache_write_tokens: 2 }
 }
 
+/// Lists the working directory.
+fn list() -> Call {
+    Call::List { path: Path { absolute: false, parts: Box::new([Part::Current]) } }
+}
+
+/// A listing of one file.
+fn listed() -> Outcome {
+    let name = Name::new(bytes(b"main.rs")).expect("a name");
+    Outcome::Listed { entries: Box::new([Entry { name, kind: Kind::File }]), more: 0 }
+}
+
 /// The LLM asks for `ls`.
 fn ls() -> Completion {
-    let content = Box::new([Block::ToolCall { id: bytes(b"c1"), name: bytes(b"ls"), input: bytes(b"{}") }]);
+    let call = Decoded::Owned { call: list() };
+    let content = Box::new([Block::ToolCall { id: bytes(b"c1"), name: bytes(b"ls"), input: bytes(b"{}"), call }]);
     Completion { content, stop: Stop::ToolUse, usage: usage() }
 }
 
@@ -184,7 +197,7 @@ fn a_completion_reaches_the_session_and_its_tool_run_comes_back_out() {
     let mut h = Harness::new();
     let owner = h.open();
     let request = h.complete(owner, ls());
-    assert_eq!(request, Some(Request::Tool { owner, call: ToolCall { name: bytes(b"ls"), input: bytes(b"{}") } }));
+    assert_eq!(request, Some(Request::Tool { owner, call: list() }));
 }
 
 #[test]
@@ -192,12 +205,12 @@ fn a_tool_result_reaches_the_session_and_its_next_call_comes_back_out() {
     let mut h = Harness::new();
     let owner = h.open_tool();
     let Some(Request::Complete { owner: next, prompt, timeout: _ }) =
-        h.step(Event::ToolDone { owner, output: bytes(b"main.rs"), error: false })
+        h.step(Event::ToolDone { owner, outcome: listed() })
     else {
         panic!("expected a call");
     };
     assert_eq!(next, owner);
-    let result = Block::ToolResult { id: bytes(b"c1"), output: bytes(b"main.rs"), error: false };
+    let result = Block::ToolResult { id: bytes(b"c1"), result: Returned::Owned { outcome: listed() } };
     let last = prompt.messages.last().expect("the results go back last");
     assert_eq!(&*last.content, &[result]);
 }

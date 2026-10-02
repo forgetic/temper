@@ -14,9 +14,10 @@
 
 use alloc::boxed::Box;
 
+use temper_agent_model_tools as tools;
 use temper_lib::{Duration, Token};
 
-use crate::llm::{Completion, Endpoint, Failure, Prompt, Tool, Usage};
+use crate::llm::{Completion, Endpoint, Failure, Prompt, Usage};
 
 /// parent -> session
 #[derive(PartialEq, Eq, Debug)]
@@ -37,9 +38,8 @@ pub enum Event {
     Failed { owner: Token, failure: Failure },
     /// Terminal for `Complete`, after `Cancel`: the call was abandoned.
     Cancelled { owner: Token },
-    /// Terminal for `Tool`: the tool ran. `error` marks a failed run, and
-    /// `output` then says why.
-    ToolDone { owner: Token, output: Box<[u8]>, error: bool },
+    /// Terminal for `Tool`: what came of the call, a success or a failure.
+    ToolDone { owner: Token, outcome: tools::Outcome },
     /// Terminal for `Tool`, after `CancelTool`: the run was abandoned.
     ToolCancelled { owner: Token },
 }
@@ -67,8 +67,8 @@ pub enum Request {
     /// Abandon the `Complete` in flight for `owner`. Its terminal event still
     /// comes: `Cancelled`, or whichever outcome won the race.
     Cancel { owner: Token },
-    /// Run a tool.
-    Tool { owner: Token, call: ToolCall },
+    /// Run a call of the tools the session owns.
+    Tool { owner: Token, call: tools::Call },
     /// Abandon the `Tool` in flight for `owner`. Its terminal event still
     /// comes: `ToolCancelled`, or `ToolDone` if the run won the race.
     CancelTool { owner: Token },
@@ -81,8 +81,8 @@ pub struct Spec {
     /// The provider's name for the model.
     pub model: Box<[u8]>,
     pub system: Box<[u8]>,
-    /// The tools the LLM may call.
-    pub tools: Box<[Tool]>,
+    /// The families of the session's own tools the LLM may call.
+    pub tools: tools::Grants,
     /// The first user message.
     pub prompt: Box<[u8]>,
     /// The most tokens each answer may take, and fewer once the output budget
@@ -123,13 +123,6 @@ pub enum Dimension {
     CacheRead,
     CacheWrite,
     Time,
-}
-
-/// A tool to run, as the LLM asked for it. `input` is a JSON object.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct ToolCall {
-    pub name: Box<[u8]>,
-    pub input: Box<[u8]>,
 }
 
 /// Why a session yielded: how the LLM stopped calling tools.

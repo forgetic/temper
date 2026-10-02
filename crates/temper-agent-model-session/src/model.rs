@@ -85,7 +85,7 @@ pub fn step(model: &mut Model, env: &Env<Limits>, event: Event, out: &mut Queue<
         Event::Completed { owner, completion } => session::completed(model, env, owner, completion, out),
         Event::Failed { owner, failure } => session::failed(model, env, owner, failure, out),
         Event::Cancelled { owner } => session::cancelled(model, owner, out),
-        Event::ToolDone { owner, output, error } => session::tool_done(model, env, owner, output, error, out),
+        Event::ToolDone { owner, outcome } => session::tool_done(model, env, owner, outcome, out),
         Event::ToolCancelled { owner } => session::tool_cancelled(model, owner, out),
     }
 }

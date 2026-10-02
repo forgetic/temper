@@ -3,10 +3,13 @@
 //!
 //! An `Open` opens a session and the session calls the LLM. While the LLM asks
 //! for tools, the session runs them one at a time and sends their results back
-//! in another call. When the LLM stops calling tools, the session yields to its
-//! opener, which continues it with a new user message or closes it. A session
-//! ends once, and only once nothing it asked for is in flight: closing cancels
-//! what is, and waits for it to settle (5.3).
+//! in another call. A call the protocol layer could not decode is answered
+//! with its problem, and nothing runs for it. When the LLM stops calling
+//! tools, the session yields to its opener, which continues it with a new user
+//! message or closes it; the message goes back after a result for each call
+//! the yielded answer made but did not wait for. A session ends once, and only
+//! once nothing it asked for is in flight: closing cancels what is, and waits
+//! for it to settle (5.3).
 //!
 //! The transition table. Every other cell is unreachable by the boundary's
 //! contract: one terminal event per request, a request only from the states
@@ -17,22 +20,25 @@
 //! state          event or alarm               next
 //! (none)         open, admitted               Calling      opened; call the LLM
 //!                open, busy or invalid        (none)       ended: busy, invalid
-//! Calling        completed, tool use          Tooling      run the first tool
+//! Calling        completed, tool use          Tooling      run the first owned call
 //!                completed, otherwise         Yielded      yielded
 //!                failed, transient            Backoff
 //!                failed, otherwise            Closed       ended: failed
 //!                close, expiry                Closing      cancel the call
 //! Backoff        retry                        Calling      call again
 //!                close, expiry                Closed       ended: closed, out of time
-//! Tooling        tool done, more tools        Tooling      run the next tool
-//!                tool done, last tool         Calling      send the results
+//! Tooling        tool done, more owned calls  Tooling      run the next one
+//!                tool done, no more           Calling      send the results
 //!                close, expiry                Closing      cancel the tool
-//! Yielded        continue                     Calling      call with the new message
+//! Yielded        continue                     Calling      call with the message
 //!                close, expiry                Closed       ended: closed, out of time
 //! Closing        what was cancelled ends      Closed       ended
 //!                close                        Closing      (already closing)
 //! Closed         continue, close              Closed       (dropped: the handle is stale)
 //! ```
+//!
+//! Invalid calls are answered as they are reached, in Calling or Tooling, and a
+//! message with no owned call goes straight back.
 //!
 //! Every completion that comes back is reported to the opener as `Used`, in
 //! Calling and in Closing alike. Before it calls the LLM, the session checks
@@ -57,12 +63,15 @@
 use alloc::boxed::Box;
 use core::mem::{self, size_of};
 
+use temper_agent_model_tools::{Call, Entry, Grants, Outcome, Part, Path};
 use temper_lib::{Deadlines, Duration, Env, Id, List, Queue, Rng, Slab, Time, Token, Writer};
 
-use crate::boundary::{Budget, Dimension, End, Request, Spec, ToolCall, Yield};
+use crate::boundary::{Budget, Dimension, End, Request, Spec, Yield};
 use crate::facts::{Fact, Facts};
 use crate::limits::Limits;
-use crate::llm::{Block, Completion, Endpoint, Failure, Message, Prompt, Role, Stop, Tool, Usage};
+use crate::llm::{
+    Block, Completion, Decoded, Endpoint, Failure, Message, Problem, Prompt, Returned, Role, Stop, Usage,
+};
 use crate::model::Model;
 
 #[derive(Debug)]
@@ -79,7 +88,7 @@ struct Conversation {
     endpoint: Endpoint,
     model: Box<[u8]>,
     system: Box<[u8]>,
-    tools: Box<[Tool]>,
+    tools: Grants,
     max_tokens: u32,
     /// The conversation so far, oldest first, starting with the spec's prompt.
     transcript: List<Message>,
@@ -114,7 +123,7 @@ enum State {
 /// The tool calls of the last assistant message, run one at a time.
 #[derive(Debug)]
 struct Tools {
-    /// The block of the call in flight.
+    /// The block of the owned call in flight.
     block: u32,
     /// The results so far, in call order, with room for one per call.
     results: List<Block>,
@@ -204,7 +213,8 @@ pub(crate) fn completed(
     let id = Id::from_token(owner);
     let session = model.sessions.get_mut(id).expect("a session lives until its requests have ended");
     let (opener, stop, blocks) = (session.conversation.opener, completion.stop, count(completion.content.len()));
-    model.facts.push(Fact::CompletionAnswered { opener, stop, blocks });
+    let (calls, invalid) = tally(&completion.content);
+    model.facts.push(Fact::CompletionAnswered { opener, stop, blocks, calls, invalid });
     let state = mem::replace(&mut session.state, State::Closed);
     let conversation = &mut session.conversation;
     session.state = match state {
@@ -262,20 +272,21 @@ pub(crate) fn tool_done(
     model: &mut Model,
     env: &Env<Limits>,
     owner: Token,
-    output: Box<[u8]>,
-    error: bool,
+    outcome: Outcome,
     out: &mut Queue<Request>,
 ) {
     let mark = out.len();
     let id = Id::from_token(owner);
     let session = model.sessions.get_mut(id).expect("a session lives until its requests have ended");
-    let fact = Fact::ToolFinished { opener: session.conversation.opener, output: size(&output), error };
+    let output = outcome_cost(&outcome).unwrap_or(u64::MAX);
+    let fact = Fact::ToolFinished { opener: session.conversation.opener, output, failed: !succeeded(&outcome) };
     model.facts.push(fact);
     let state = mem::replace(&mut session.state, State::Closed);
     let conversation = &mut session.conversation;
     session.state = match state {
         State::Tooling { tools } => {
-            let result = Block::ToolResult { id: call_id(conversation, tools.block), output, error };
+            let result =
+                Block::ToolResult { id: call_id(conversation, tools.block), result: Returned::Owned { outcome } };
             tool_ran(conversation, id, tools, result, env, out)
         }
         State::Closing { end } => finish(conversation, end, out),
@@ -435,7 +446,7 @@ fn answered(
 ) -> State {
     used(conversation, completion.usage, out);
     match completion.stop {
-        Stop::ToolUse => use_tools(conversation, id, completion.content, &env.limits, out),
+        Stop::ToolUse => use_tools(conversation, id, completion.content, env, out),
         Stop::EndTurn => pause(conversation, Yield::Done, completion.content, &env.limits, out),
         Stop::MaxTokens => pause(conversation, Yield::Truncated, completion.content, &env.limits, out),
         Stop::Refusal => pause(conversation, Yield::Refused, completion.content, &env.limits, out),
@@ -450,25 +461,63 @@ fn answered_late(conversation: &mut Conversation, end: End, usage: Usage, out: &
     finish(conversation, end, out)
 }
 
-/// Calling, completed with tool use: record the message and run its first tool.
+/// Calling, completed with tool use: record the message and go through its
+/// calls.
 fn use_tools(
     conversation: &mut Conversation,
     id: Id<Session>,
     content: Box<[Block]>,
-    limits: &Limits,
+    env: &Env<Limits>,
     out: &mut Queue<Request>,
 ) -> State {
-    let Some(first) = next_tool_call(&content, 0) else {
-        return pause(conversation, Yield::Malformed, content, limits, out);
-    };
-    let calls = tool_calls(&content).expect("blocks counted in a u32 count their calls in one");
+    let (calls, _) = tally(&content);
+    if calls == 0 {
+        return pause(conversation, Yield::Malformed, content, &env.limits, out);
+    }
     // The results go back in another message.
-    if conversation.transcript.room() < 2 || !charge(conversation, held(&content, calls), limits) {
+    if conversation.transcript.room() < 2 || !charge(conversation, held(&content, calls), &env.limits) {
         return finish(conversation, End::TranscriptFull, out);
     }
     conversation.transcript.push(Message { role: Role::Assistant, content }).expect("checked for room above");
-    out.push(run_tool(conversation, id, first));
-    State::Tooling { tools: Tools { block: first, results: List::with_capacity(calls) } }
+    advance(conversation, id, List::with_capacity(calls), 0, env, out)
+}
+
+/// Goes through the tool calls of the last message from block `from`, with
+/// the `results` of those before it: answers each invalid one with its
+/// problem, and runs the first owned one; past the last, sends the results
+/// back.
+fn advance(
+    conversation: &mut Conversation,
+    id: Id<Session>,
+    mut results: List<Block>,
+    from: u32,
+    env: &Env<Limits>,
+    out: &mut Queue<Request>,
+) -> State {
+    let message = conversation.transcript.last().expect("the assistant message is last while tooling");
+    let end = u32::try_from(message.content.len()).expect("a message whose calls were counted has its blocks counted");
+    for index in from..end {
+        let message = conversation.transcript.last().expect("the assistant message is last while tooling");
+        let block = message.content.get(usize::try_from(index).expect("a u32 fits in a usize"));
+        let answer = match block.expect("within the message") {
+            Block::ToolCall { id: _, name: _, input: _, call: Decoded::Owned { call } } => {
+                out.push(Request::Tool { owner: id.token(), call: call.clone() });
+                return State::Tooling { tools: Tools { block: index, results } };
+            }
+            Block::ToolCall { id: call, name: _, input: _, call: Decoded::Invalid { problem } } => {
+                Block::ToolResult { id: call.clone(), result: Returned::Invalid { problem: problem.clone() } }
+            }
+            Block::Text { .. } | Block::ToolResult { .. } => continue,
+        };
+        // The answer's block was counted when the message was recorded.
+        if !charge(conversation, payload_cost(&answer), &env.limits) {
+            return finish(conversation, End::TranscriptFull, out);
+        }
+        results.push(answer).expect("room for one result per tool call");
+    }
+    let results = Message { role: Role::User, content: results.into_boxed() };
+    conversation.transcript.push(results).expect("room was checked when the message was recorded");
+    call(conversation, id, 0, env, out)
 }
 
 /// Calling, completed without tools to run: record the message, and yield to
@@ -490,7 +539,8 @@ fn pause(
     State::Yielded
 }
 
-/// Yielded, continue: the opener's message goes to the LLM.
+/// Yielded, continue: the opener's message goes to the LLM, after a result for
+/// each tool call the yielded message made, as every call needs one.
 fn resumed(
     conversation: &mut Conversation,
     id: Id<Session>,
@@ -498,7 +548,7 @@ fn resumed(
     env: &Env<Limits>,
     out: &mut Queue<Request>,
 ) -> State {
-    let content: Box<[Block]> = Box::new([Block::Text { text }]);
+    let content = unrun(conversation, text);
     if conversation.transcript.room() == 0 || !charge(conversation, content_cost(&content), &env.limits) {
         return finish(conversation, End::TranscriptFull, out);
     }
@@ -506,8 +556,26 @@ fn resumed(
     call(conversation, id, 0, env, out)
 }
 
-/// Tooling, tool done: keep the result, then run the next tool or send the
-/// results back.
+/// The opener's message `text`, after a `NotRun` result for each tool call of
+/// the last message, the one the session yielded with.
+fn unrun(conversation: &Conversation, text: Box<[u8]>) -> Box<[Block]> {
+    let message = conversation.transcript.last().expect("a yielded session's transcript ends with its answer");
+    let (calls, _) = tally(&message.content);
+    let mut content = List::with_capacity(calls.saturating_add(1));
+    for block in &message.content {
+        match block {
+            Block::ToolCall { id, .. } => {
+                let result = Block::ToolResult { id: id.clone(), result: Returned::NotRun };
+                content.push(result).expect("room for a result per call");
+            }
+            Block::Text { .. } | Block::ToolResult { .. } => {}
+        }
+    }
+    content.push(Block::Text { text }).expect("room for the message after the results");
+    content.into_boxed()
+}
+
+/// Tooling, tool done: keep the result, and go on through the calls after it.
 fn tool_ran(
     conversation: &mut Conversation,
     id: Id<Session>,
@@ -516,23 +584,12 @@ fn tool_ran(
     env: &Env<Limits>,
     out: &mut Queue<Request>,
 ) -> State {
-    // The result's block was counted when the tools started.
+    // The result's block was counted when the message was recorded.
     if !charge(conversation, payload_cost(&result), &env.limits) {
         return finish(conversation, End::TranscriptFull, out);
     }
     tools.results.push(result).expect("room for one result per tool call");
-    let message = conversation.transcript.last().expect("the assistant message is last while tooling");
-    match next_tool_call(&message.content, tools.block.saturating_add(1)) {
-        Some(block) => {
-            out.push(run_tool(conversation, id, block));
-            State::Tooling { tools: Tools { block, results: tools.results } }
-        }
-        None => {
-            let results = Message { role: Role::User, content: tools.results.into_boxed() };
-            conversation.transcript.push(results).expect("room was checked when the tools started");
-            call(conversation, id, 0, env, out)
-        }
-    }
+    advance(conversation, id, tools.results, tools.block.saturating_add(1), env, out)
 }
 
 /// Calling, failed: wait and call again if the failure is transient and
@@ -608,7 +665,7 @@ fn admit(opener: Token, spec: Spec, limits: &Limits, now: Time) -> Option<Conver
         return None;
     }
     let content: Box<[Block]> = Box::new([Block::Text { text: spec.prompt }]);
-    let bytes = spec_cost(&spec.model, &spec.system, &spec.tools, &content)?;
+    let bytes = spec_cost(&spec.model, &spec.system, &content)?;
     if bytes > limits.session_bytes {
         return None;
     }
@@ -677,36 +734,22 @@ fn complete(id: Id<Session>, conversation: &Conversation, limits: &Limits) -> Re
         endpoint: conversation.endpoint,
         model: conversation.model.clone(),
         system: conversation.system.clone(),
-        tools: conversation.tools.clone(),
+        tools: conversation.tools,
         messages: conversation.transcript.to_boxed(),
         max_tokens,
     };
     Request::Complete { owner: id.token(), prompt, timeout: limits.call_timeout }
 }
 
-/// The request to run the tool call at `block` of the last message.
-fn run_tool(conversation: &Conversation, id: Id<Session>, block: u32) -> Request {
-    match tool_call(conversation, block) {
-        Block::ToolCall { id: _, name, input } => {
-            Request::Tool { owner: id.token(), call: ToolCall { name: name.clone(), input: input.clone() } }
-        }
-        Block::Text { .. } | Block::ToolResult { .. } => unreachable!("blocks to run are found by next_tool_call"),
-    }
-}
-
 /// The provider's name for the tool call at `block` of the last message, which
 /// its result echoes.
 fn call_id(conversation: &Conversation, block: u32) -> Box<[u8]> {
-    match tool_call(conversation, block) {
-        Block::ToolCall { id, name: _, input: _ } => id.clone(),
-        Block::Text { .. } | Block::ToolResult { .. } => unreachable!("blocks to run are found by next_tool_call"),
-    }
-}
-
-fn tool_call(conversation: &Conversation, block: u32) -> &Block {
     let message = conversation.transcript.last().expect("the assistant message is last while tooling");
     let index = usize::try_from(block).expect("a u32 fits in a usize");
-    message.content.get(index).expect("blocks to run are found by next_tool_call")
+    match message.content.get(index).expect("the call in flight is a block of the message") {
+        Block::ToolCall { id, .. } => id.clone(),
+        Block::Text { .. } | Block::ToolResult { .. } => unreachable!("the call in flight is a tool call"),
+    }
 }
 
 /// The text blocks of `content`, one after another, in a box of their own: the
@@ -730,30 +773,46 @@ fn text_of(content: &[Block]) -> Box<[u8]> {
     text.finish()
 }
 
-/// How many tool calls `content` holds, or `None` if they cannot be counted in
-/// a `u32`.
-fn tool_calls(content: &[Block]) -> Option<u32> {
-    let mut calls: u32 = 0;
+/// How many tool calls `content` holds, and how many of them are invalid. A
+/// message too long to count in a `u32` counts as having none, and yields.
+fn tally(content: &[Block]) -> (u32, u32) {
+    if u32::try_from(content.len()).is_err() {
+        return (0, 0);
+    }
+    let (mut calls, mut invalid): (u32, u32) = (0, 0);
     for block in content {
         match block {
-            Block::ToolCall { .. } => calls = calls.checked_add(1)?,
+            Block::ToolCall { call: Decoded::Owned { .. }, .. } => calls = calls.saturating_add(1),
+            Block::ToolCall { call: Decoded::Invalid { .. }, .. } => {
+                calls = calls.saturating_add(1);
+                invalid = invalid.saturating_add(1);
+            }
             Block::Text { .. } | Block::ToolResult { .. } => {}
         }
     }
-    Some(calls)
+    (calls, invalid)
 }
 
-/// The first tool call in `content` at or after block `from`, or `None` if
-/// there is none or the blocks cannot be counted in a `u32`.
-fn next_tool_call(content: &[Block], from: u32) -> Option<u32> {
-    let end = u32::try_from(content.len()).ok()?;
-    for index in from..end {
-        match content.get(usize::try_from(index).ok()?)? {
-            Block::ToolCall { .. } => return Some(index),
-            Block::Text { .. } | Block::ToolResult { .. } => {}
-        }
+/// Whether `outcome` is a success.
+const fn succeeded(outcome: &Outcome) -> bool {
+    match outcome {
+        Outcome::Read { .. } | Outcome::Listed { .. } | Outcome::Written { .. } => true,
+        Outcome::NotGranted
+        | Outcome::Outside
+        | Outcome::ReadOnly
+        | Outcome::TooLong
+        | Outcome::NotFound
+        | Outcome::NotFile
+        | Outcome::NotDirectory
+        | Outcome::TooLarge { .. }
+        | Outcome::NotRead
+        | Outcome::Stale
+        | Outcome::Failed { .. }
+        | Outcome::TimedOut
+        | Outcome::Cancelled
+        | Outcome::Busy
+        | Outcome::Unsupported => false,
     }
-    None
 }
 
 /// How long to wait before retrying a call that failed with `failure` after
@@ -792,18 +851,9 @@ fn charge(conversation: &mut Conversation, cost: Option<u64>, limits: &Limits) -
     true
 }
 
-/// What a spec costs: its names, its tools and its first message.
-fn spec_cost(model: &[u8], system: &[u8], tools: &[Tool], content: &[Block]) -> Option<u64> {
-    let mut cost = len(model)?.checked_add(len(system)?)?.checked_add(content_cost(content)?)?;
-    let tool = u64::try_from(size_of::<Tool>()).ok()?;
-    for Tool { name, description, schema } in tools {
-        cost = cost
-            .checked_add(tool)?
-            .checked_add(len(name)?)?
-            .checked_add(len(description)?)?
-            .checked_add(len(schema)?)?;
-    }
-    Some(cost)
+/// What a spec costs: its names and its first message.
+fn spec_cost(model: &[u8], system: &[u8], content: &[Block]) -> Option<u64> {
+    len(model)?.checked_add(len(system)?)?.checked_add(content_cost(content)?)
 }
 
 /// What an assistant message with `calls` tool calls costs while its tools run:
@@ -826,12 +876,96 @@ fn block_cost(block: &Block) -> Option<u64> {
     u64::try_from(size_of::<Block>()).ok()?.checked_add(payload_cost(block)?)
 }
 
+/// The bytes a block holds beyond its fixed size: its own, and those of the
+/// call or outcome it carries.
 fn payload_cost(block: &Block) -> Option<u64> {
     match block {
         Block::Text { text } => len(text),
-        Block::ToolCall { id, name, input } => len(id)?.checked_add(len(name)?)?.checked_add(len(input)?),
-        Block::ToolResult { id, output, error: _ } => len(id)?.checked_add(len(output)?),
+        Block::ToolCall { id, name, input, call } => {
+            let decoded = match call {
+                Decoded::Owned { call } => call_cost(call)?,
+                Decoded::Invalid { problem } => problem_cost(problem)?,
+            };
+            len(id)?.checked_add(len(name)?)?.checked_add(len(input)?)?.checked_add(decoded)
+        }
+        Block::ToolResult { id, result } => {
+            let returned = match result {
+                Returned::Owned { outcome } => outcome_cost(outcome)?,
+                Returned::Invalid { problem } => problem_cost(problem)?,
+                Returned::NotRun => 0,
+            };
+            len(id)?.checked_add(returned)
+        }
     }
+}
+
+fn call_cost(call: &Call) -> Option<u64> {
+    match call {
+        Call::Read { path, skip: _, lines: _ } | Call::List { path } => path_cost(path),
+        Call::Search { path, pattern, glob } => {
+            let glob = match glob {
+                Some(glob) => len(glob)?,
+                None => 0,
+            };
+            path_cost(path)?.checked_add(len(pattern)?)?.checked_add(glob)
+        }
+        Call::Write { path, content } => path_cost(path)?.checked_add(len(content)?),
+        Call::Edit { path, old, new, all: _ } => path_cost(path)?.checked_add(len(old)?)?.checked_add(len(new)?),
+        Call::Shell { command, timeout: _ } => len(command),
+    }
+}
+
+/// A path's parts and the names in them.
+fn path_cost(path: &Path) -> Option<u64> {
+    let parts = u64::try_from(size_of::<Part>()).ok()?.checked_mul(len_of(&path.parts)?)?;
+    let mut cost = parts;
+    for part in &path.parts {
+        match part {
+            Part::Name { name } => cost = cost.checked_add(len(name.as_bytes())?)?,
+            Part::Current | Part::Parent => {}
+        }
+    }
+    Some(cost)
+}
+
+fn outcome_cost(outcome: &Outcome) -> Option<u64> {
+    match outcome {
+        Outcome::Read { content, .. } => len(content),
+        Outcome::Listed { entries, more: _ } => {
+            let mut cost = u64::try_from(size_of::<Entry>()).ok()?.checked_mul(len_of(entries)?)?;
+            for entry in entries {
+                cost = cost.checked_add(len(entry.name.as_bytes())?)?;
+            }
+            Some(cost)
+        }
+        Outcome::Written { .. }
+        | Outcome::NotGranted
+        | Outcome::Outside
+        | Outcome::ReadOnly
+        | Outcome::TooLong
+        | Outcome::NotFound
+        | Outcome::NotFile
+        | Outcome::NotDirectory
+        | Outcome::TooLarge { .. }
+        | Outcome::NotRead
+        | Outcome::Stale
+        | Outcome::Failed { .. }
+        | Outcome::TimedOut
+        | Outcome::Cancelled
+        | Outcome::Busy
+        | Outcome::Unsupported => Some(0),
+    }
+}
+
+fn problem_cost(problem: &Problem) -> Option<u64> {
+    match problem {
+        Problem::UnknownTool | Problem::NotAnObject => Some(0),
+        Problem::Missing { field } | Problem::WrongType { field } | Problem::BadValue { field } => len(field),
+    }
+}
+
+fn len_of<T>(items: &[T]) -> Option<u64> {
+    u64::try_from(items.len()).ok()
 }
 
 fn len(bytes: &[u8]) -> Option<u64> {
@@ -842,9 +976,4 @@ fn len(bytes: &[u8]) -> Option<u64> {
 /// nothing.
 fn count(items: usize) -> u32 {
     u32::try_from(items).unwrap_or(u32::MAX)
-}
-
-/// A size for a fact, likewise.
-fn size(bytes: &[u8]) -> u64 {
-    u64::try_from(bytes.len()).unwrap_or(u64::MAX)
 }

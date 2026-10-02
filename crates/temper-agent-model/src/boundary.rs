@@ -17,7 +17,8 @@
 use alloc::boxed::Box;
 
 use temper_agent_model_session::llm::{Completion, Failure, Prompt, Usage};
-use temper_agent_model_session::{End, Spec, ToolCall, Yield};
+use temper_agent_model_session::{End, Spec, Yield};
+use temper_agent_model_tools as tools;
 use temper_lib::{Duration, Token};
 
 /// protocol -> model
@@ -38,9 +39,8 @@ pub enum Event {
     Failed { owner: Token, failure: Failure },
     /// Terminal for `Complete`, after `Cancel`: the call was abandoned.
     Cancelled { owner: Token },
-    /// Terminal for `Tool`: the tool ran. `error` marks a failed run, and
-    /// `output` then says why.
-    ToolDone { owner: Token, output: Box<[u8]>, error: bool },
+    /// Terminal for `Tool`: what came of the call, a success or a failure.
+    ToolDone { owner: Token, outcome: tools::Outcome },
     /// Terminal for `Tool`, after `CancelTool`: the run was abandoned.
     ToolCancelled { owner: Token },
 }
@@ -64,8 +64,8 @@ pub enum Request {
     /// Abandon the `Complete` in flight for `owner`. Its terminal event still
     /// comes: `Cancelled`, or whichever outcome won the race.
     Cancel { owner: Token },
-    /// Run a tool.
-    Tool { owner: Token, call: ToolCall },
+    /// Run a call of the tools the session owns.
+    Tool { owner: Token, call: tools::Call },
     /// Abandon the `Tool` in flight for `owner`. Its terminal event still
     /// comes: `ToolCancelled`, or `ToolDone` if the run won the race.
     CancelTool { owner: Token },

@@ -66,6 +66,36 @@ fn a_nudged_session_goes_on_until_its_opener_closes_it() {
 }
 
 #[test]
+fn malformed_calls_are_answered_with_their_problem_and_the_conversation_goes_on() {
+    let calm = Settings::calm(18);
+    let settings = Settings { provider: Config { malformed: 1000, calls_per_answer: 3, ..calm.provider }, ..calm };
+    let mut world = World::new(settings);
+    let opener = world.submit(Time::ZERO, spec(b"fix the build"));
+    world.run(ITERATIONS);
+
+    // Every call is malformed: none runs, and each gets an answer, or the
+    // provider would refuse the next query.
+    assert_eq!(yields(&world, opener), [(Yield::Done, &b"done"[..])]);
+    assert_eq!(world.stats().tool_runs, 0);
+    let (told, _) = world.told();
+    assert!(told.invalid_calls >= 2 && told.invalid_calls == told.calls, "{told:?}");
+}
+
+#[test]
+fn several_calls_in_one_answer_run_in_turn_and_their_results_go_back_together() {
+    let calm = Settings::calm(19);
+    let settings = Settings { provider: Config { calls_per_answer: 3, ..calm.provider }, ..calm };
+    let mut world = World::new(settings);
+    let opener = world.submit(Time::ZERO, spec(b"fix the build"));
+    world.run(ITERATIONS);
+
+    assert_eq!((end(&world, opener), turns(&world, opener)), (End::Closed, 3));
+    let (told, _) = world.told();
+    assert_eq!(world.stats().tool_runs, told.calls);
+    assert!(told.calls > 2, "some answers made several calls");
+}
+
+#[test]
 fn sessions_run_side_by_side_and_opens_beyond_the_slots_are_refused() {
     let calm = Settings::calm(3);
     let mut world = World::new(Settings { agent: Limits { sessions: 2, ..calm.agent }, ..calm });
@@ -313,13 +343,15 @@ fn facts_change_nothing_the_sessions_do() {
 fn random_worlds_settle_with_every_session_ended() {
     let mut ends = BTreeSet::new();
     let mut stops = BTreeSet::new();
-    let mut stale = 0;
+    let (mut stale, mut invalid, mut not_run) = (0, 0, 0);
     for seed in 0..300 {
         let settings = noisy(seed);
         let mut world = World::new(settings);
         submit_noisily(&mut world, &settings, seed);
         world.run(ITERATIONS);
         stale += world.stats().stale;
+        invalid += world.told().0.invalid_calls;
+        not_run += world.stats().not_run;
         for (_, session) in world.sessions() {
             for (stop, _) in &session.yields {
                 stops.insert(format!("{stop:?}"));
@@ -353,6 +385,10 @@ fn random_worlds_settle_with_every_session_ended() {
     assert_eq!(ends, expected.into_iter().map(String::from).collect());
     assert_eq!(stops, ["Done", "Malformed", "Refused", "Truncated"].into_iter().map(String::from).collect());
     assert!(stale > 0, "some continues and closes reached sessions that had ended");
+    assert!(
+        invalid > 0 && not_run > 0,
+        "some calls were malformed, and some were cut short and not run: {invalid} {not_run}"
+    );
 }
 
 /// Settings drawn from `seed`: small limits, faults, latencies that race the
@@ -389,6 +425,8 @@ fn noisy(seed: u64) -> Settings {
             refused: pick(0, 100),
             no_calls: pick(0, 100),
             answer_tokens: pick(1, 40),
+            calls_per_answer: pick(1, 3),
+            malformed: pick(0, 200),
             tool_rounds: pick(0, 5),
             ..calm.provider
         },
@@ -404,7 +442,8 @@ fn noisy(seed: u64) -> Settings {
 
 /// Up to eight sessions opened at random times in the first minute, each with
 /// a budget of its own, small enough to run out in any dimension, now and then
-/// empty in one, and now and then more than the limits allow.
+/// empty in one, and now and then more than the limits allow; and room for
+/// short answers only.
 fn submit_noisily(world: &mut World, settings: &Settings, seed: u64) {
     let mut rng = Rng::new(seed.wrapping_add(2));
     let most = settings.agent.budget;
@@ -429,6 +468,8 @@ fn submit_noisily(world: &mut World, settings: &Settings, seed: u64) {
                 _ => budget.time = Duration::ZERO,
             }
         }
-        world.submit(at, Spec { budget, ..spec(b"make the tests pass") });
+        // Answers short enough that some are cut, a tool call included.
+        let max_tokens = u32::try_from(rng.between(4, 64)).expect("a small number");
+        world.submit(at, Spec { budget, max_tokens, ..spec(b"make the tests pass") });
     }
 }

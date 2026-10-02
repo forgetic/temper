@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use temper_agent_model_session as agent;
-use temper_agent_model_session::llm::{Endpoint, Failure, Prompt, Tool, Usage};
+use temper_agent_model_session::llm::{Block, Endpoint, Failure, Prompt, Returned, Usage};
+use temper_agent_model_tools::{self as tools, Entry, Fault, Grants, Kind, Name, Outcome};
 use temper_lib::{Duration, Env, Queue, ReplyTo, Rng, Time, Token};
 use temper_llm_model as provider;
 
@@ -99,6 +100,8 @@ impl Settings {
                 refused: 0,
                 no_calls: 0,
                 answer_tokens: 1,
+                calls_per_answer: 1,
+                malformed: 0,
                 tool_rounds: 2,
             },
             network: Span::millis(1, 20),
@@ -112,19 +115,14 @@ impl Settings {
     }
 }
 
-/// A spec with two tools for the LLM to call, and the calm budget.
+/// A spec that grants every family of tools, with the calm budget.
 #[must_use]
 pub fn spec(prompt: &[u8]) -> agent::Spec {
-    let tool = |name: &[u8], description: &[u8]| Tool {
-        name: name.into(),
-        description: description.into(),
-        schema: br#"{"type":"object"}"#[..].into(),
-    };
     agent::Spec {
         endpoint: Endpoint(0),
         model: b"fake-1"[..].into(),
         system: b"You are a coding agent."[..].into(),
-        tools: Box::new([tool(b"read_file", b"Reads a file."), tool(b"run_tests", b"Runs the tests.")]),
+        tools: Grants { inspect: true, modify: true, shell: true },
         prompt: prompt.into(),
         max_tokens: 1024,
         budget: BUDGET,
@@ -148,6 +146,9 @@ pub struct Stats {
     pub tool_runs: u32,
     /// Tool runs the agent cancelled.
     pub tool_cancels: u32,
+    /// Tool calls the session answered as not run, as the LLM stopped
+    /// before it could use them.
+    pub not_run: u32,
     /// Times a session yielded.
     pub yields: u32,
     /// Messages the opener sent to yielded sessions.
@@ -173,6 +174,9 @@ pub struct Told {
     pub yielded: u32,
     pub used: u32,
     pub ended: u32,
+    /// Tool calls the completions made, and those that could not be decoded.
+    pub calls: u32,
+    pub invalid_calls: u32,
 }
 
 /// A session as its opener saw it.
@@ -226,7 +230,7 @@ enum Delivery {
     /// The agent's side gives up on a call.
     Deadline { call: u64 },
     /// A tool run finishes.
-    ToolDone { owner: Token, output: Box<[u8]>, error: bool },
+    ToolDone { owner: Token, outcome: Outcome },
 }
 
 /// A call of the agent in flight, as its protocol layer would keep it.
@@ -422,6 +426,7 @@ impl World {
             }
             agent::Request::Complete { owner, prompt, timeout } => {
                 self.affordable(owner, &prompt);
+                self.stats.not_run += not_run(&prompt);
                 let call = self.next_serial();
                 let deadline = self.schedule(self.now.saturating_add(timeout), Delivery::Deadline { call });
                 self.calls.insert(call, Call { owner, deadline });
@@ -440,10 +445,9 @@ impl World {
                 }
             }
             agent::Request::Tool { owner, call } => {
-                let error = self.rng.chance(self.settings.tool_errors);
-                let output = if error { b"the tool failed"[..].into() } else { [b"ran ", &*call.name].concat().into() };
+                let outcome = self.run_tool(&call);
                 let at = self.now.saturating_add(self.draw(self.settings.tool));
-                let delivery = self.schedule(at, Delivery::ToolDone { owner, output, error });
+                let delivery = self.schedule(at, Delivery::ToolDone { owner, outcome });
                 assert!(self.tools.insert(owner, delivery).is_none(), "a session has one tool run in flight");
                 self.stats.tool_runs += 1;
             }
@@ -562,6 +566,25 @@ impl World {
         }
     }
 
+    /// What the fake tools make of `call`: what a checkout would answer, or,
+    /// with the configured chance, a failure.
+    fn run_tool(&mut self, call: &tools::Call) -> Outcome {
+        if self.rng.chance(self.settings.tool_errors) {
+            return if self.rng.chance(500) { Outcome::NotFound } else { Outcome::Failed { fault: Fault::Other } };
+        }
+        match call {
+            tools::Call::Read { .. } => {
+                Outcome::Read { content: b"fn main() {}\n"[..].into(), skipped: 0, lines: 1, total: 1, cut: false }
+            }
+            tools::Call::List { .. } => {
+                let name = Name::new(b"main.rs"[..].into()).expect("a name");
+                Outcome::Listed { entries: Box::new([Entry { name, kind: Kind::File }]), more: 0 }
+            }
+            tools::Call::Write { .. } => Outcome::Written { created: true },
+            tools::Call::Search { .. } | tools::Call::Edit { .. } | tools::Call::Shell { .. } => Outcome::Unsupported,
+        }
+    }
+
     /// Whether the session `name` has nothing in flight.
     fn idle(&self, name: Token) -> bool {
         !self.calling.contains_key(&name) && !self.tools.contains_key(&name)
@@ -618,6 +641,9 @@ impl World {
                     self.stats.provider_calls += 1;
                 }
                 Delivery::Answer { call, result } => {
+                    // The fake refuses a transcript a real provider would:
+                    // a call without its result, a result without its call.
+                    assert!(result != Err(provider::api::Error::InvalidRequest), "the agent sends well-formed queries");
                     if let Some(owner) = self.end_call(call) {
                         self.agent_in.push_back(translate::outcome(owner, result));
                     } else {
@@ -629,10 +655,10 @@ impl World {
                     self.agent_in.push_back(agent::Event::Failed { owner, failure: Failure::TimedOut });
                     self.stats.timeouts += 1;
                 }
-                Delivery::ToolDone { owner, output, error } => {
+                Delivery::ToolDone { owner, outcome } => {
                     let run = self.tools.remove(&owner);
                     assert!(run.is_some(), "a cancelled tool run's result is withdrawn");
-                    self.agent_in.push_back(agent::Event::ToolDone { owner, output, error });
+                    self.agent_in.push_back(agent::Event::ToolDone { owner, outcome });
                 }
             }
         }
@@ -685,6 +711,10 @@ impl World {
 
     fn tell(&mut self, fact: agent::Fact) {
         let told = &mut self.told;
+        if let agent::Fact::CompletionAnswered { calls, invalid, .. } = fact {
+            told.calls += calls;
+            told.invalid_calls += invalid;
+        }
         let count = match fact {
             agent::Fact::Opened { .. } => &mut told.opened,
             agent::Fact::CompletionStarted { .. } => &mut told.completions_started,
@@ -780,8 +810,8 @@ fn describe_agent_event(event: &agent::Event) -> String {
         }
         agent::Event::Failed { owner, failure } => format!("failed {} {failure:?}", owner.raw()),
         agent::Event::Cancelled { owner } => format!("cancelled {}", owner.raw()),
-        agent::Event::ToolDone { owner, output, error } => {
-            format!("tool done {} {:?} error={error}", owner.raw(), String::from_utf8_lossy(output))
+        agent::Event::ToolDone { owner, outcome } => {
+            format!("tool done {} {outcome:?}", owner.raw())
         }
         agent::Event::ToolCancelled { owner } => format!("tool cancelled {}", owner.raw()),
     }
@@ -802,9 +832,14 @@ fn describe_agent_request(request: &agent::Request) -> String {
             format!("complete {} with {messages} messages, at most {most} tokens, within {timeout:?}", owner.raw())
         }
         agent::Request::Cancel { owner } => format!("cancel {}", owner.raw()),
-        agent::Request::Tool { owner, call } => {
-            format!("tool {} {:?}", owner.raw(), String::from_utf8_lossy(&call.name))
-        }
+        agent::Request::Tool { owner, call } => format!("tool {} {call:?}", owner.raw()),
         agent::Request::CancelTool { owner } => format!("cancel tool {}", owner.raw()),
     }
+}
+
+/// The results answered as not run in the last message of `prompt`.
+fn not_run(prompt: &Prompt) -> u32 {
+    let Some(last) = prompt.messages.last() else { return 0 };
+    let unrun = last.content.iter().filter(|block| matches!(block, Block::ToolResult { result: Returned::NotRun, .. }));
+    u32::try_from(unrun.count()).expect("a small message")
 }

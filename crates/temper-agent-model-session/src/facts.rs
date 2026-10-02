@@ -20,8 +20,9 @@ pub enum Fact {
     /// A completion was asked for, after `attempt` retries, with `messages`
     /// messages and room for `max_tokens` in its answer.
     CompletionStarted { opener: Token, attempt: u32, messages: u32, max_tokens: u32 },
-    /// The completion came back with an answer of `blocks` blocks.
-    CompletionAnswered { opener: Token, stop: Stop, blocks: u32 },
+    /// The completion came back with an answer of `blocks` blocks, `calls` of
+    /// them tool calls, of which `invalid` could not be decoded.
+    CompletionAnswered { opener: Token, stop: Stop, blocks: u32, calls: u32, invalid: u32 },
     /// The completion produced no answer.
     CompletionFailed { opener: Token, failure: Failure },
     /// The completion was abandoned.
@@ -31,8 +32,9 @@ pub enum Fact {
     CompletionRetried { opener: Token, attempt: u32, delay: Duration },
     /// The tool call at `block` of the last message started.
     ToolStarted { opener: Token, block: u32 },
-    /// The tool ran, with `output` bytes of output; `error` marks a failed run.
-    ToolFinished { opener: Token, output: u64, error: bool },
+    /// The tool ran, and its outcome holds `output` bytes; `failed` marks one
+    /// that is not a success.
+    ToolFinished { opener: Token, output: u64, failed: bool },
     /// The tool run was abandoned.
     ToolCancelled { opener: Token },
     /// The session yielded.

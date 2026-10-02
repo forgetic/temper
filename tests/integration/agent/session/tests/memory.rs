@@ -4,8 +4,9 @@
 
 use std::mem::size_of;
 
-use temper_agent_model_session::llm::{Block, Completion, Endpoint, Failure, Stop, Tool, Usage};
+use temper_agent_model_session::llm::{Block, Completion, Decoded, Endpoint, Failure, Problem, Stop, Usage};
 use temper_agent_model_session::{Budget, Event, Limits, MAX_OUT, Model, Request, Spec, worst_case};
+use temper_agent_model_tools::{Call, Grants, Name, Outcome, Part, Path};
 use temper_lib::{Deadlines, Duration, Env, List, Map, Queue, Rng, Set, Slab, Time, Token};
 
 /// Counts the heap each thread allocates, so that tests running side by side
@@ -99,6 +100,9 @@ enum Asked {
 enum Route {
     /// The LLM calls a tool, whose output fills the rest.
     Tool,
+    /// The LLM makes a call that cannot be decoded, whose problem, and the
+    /// answer that repeats it, fill the rest.
+    Invalid,
     /// The LLM yields, and the opener's next message fills the rest.
     Talk,
 }
@@ -134,22 +138,24 @@ fn fill(limits: Limits, route: Route) {
         assert!(held <= bound, "{limits:?}: the model holds {held} bytes, more than its worst case of {bound}");
         asked
     };
-    let (block, tool) = (size(size_of::<Block>()), size(size_of::<Tool>()));
+    let (block, part) = (size(size_of::<Block>()), size(size_of::<Part>()));
     for opener in 0..limits.sessions {
-        // What the model charges, as it charges it: the spec's names, tools
-        // and prompt; then, by tool, the assistant's message and room for its
-        // result, then the result's id and output; or, by talk, the
-        // assistant's answer, then the opener's message.
+        // What the model charges, as it charges it: the spec's names and
+        // prompt; then, by tool, the assistant's message with its call and
+        // room for its result, then the result's id and output; by an invalid
+        // call, the message with its problem and room for its answer, then
+        // the answer's id and the problem again; or, by talk, the assistant's
+        // answer, then the opener's message.
         let spec = Spec {
             endpoint: Endpoint(0),
             model: bytes(1),
             system: bytes(1),
-            tools: Box::new([Tool { name: bytes(1), description: bytes(1), schema: bytes(1) }]),
+            tools: Grants { inspect: true, modify: false, shell: false },
             prompt: bytes(1),
             max_tokens: 1,
             budget: limits.budget,
         };
-        let spec_cost = 2 + (tool + 3) + (block + 1);
+        let spec_cost = 2 + (block + 1);
 
         let opener = Token::new(u64::from(opener));
         let Some(Asked::Complete { owner }) = step(Event::Open { opener, spec }) else {
@@ -157,16 +163,30 @@ fn fill(limits: Limits, route: Route) {
         };
         match route {
             Route::Tool => {
-                let tooling_cost = (block + 3) + block;
+                let tooling_cost = (block + 3 + (part + 1)) + block;
                 let output = limits.session_bytes - spec_cost - tooling_cost - 1;
-                let content = Box::new([Block::ToolCall { id: bytes(1), name: bytes(1), input: bytes(1) }]);
+                let name = Name::new(bytes(1)).expect("a name");
+                let path = Path { absolute: false, parts: Box::new([Part::Name { name }]) };
+                let call = Decoded::Owned { call: Call::Read { path, skip: 0, lines: None } };
+                let content = Box::new([Block::ToolCall { id: bytes(1), name: bytes(1), input: bytes(1), call }]);
                 let completion = Completion { content, stop: Stop::ToolUse, usage: Usage::ZERO };
                 let Some(Asked::Tool) = step(Event::Completed { owner, completion }) else {
                     panic!("the session runs the tool");
                 };
-                let done = Event::ToolDone { owner, output: bytes(output), error: false };
+                let outcome = Outcome::Read { content: bytes(output), skipped: 0, lines: 1, total: 1, cut: false };
+                let done = Event::ToolDone { owner, outcome };
                 let Some(Asked::Complete { .. }) = step(done) else {
                     panic!("a session filled exactly to its byte limit goes on");
+                };
+            }
+            Route::Invalid => {
+                // The problem is held twice, in the call and in its answer.
+                let field = (limits.session_bytes - spec_cost - (block + 3) - (block + 1)) / 2;
+                let call = Decoded::Invalid { problem: Problem::Missing { field: bytes(field) } };
+                let content = Box::new([Block::ToolCall { id: bytes(1), name: bytes(1), input: bytes(1), call }]);
+                let completion = Completion { content, stop: Stop::ToolUse, usage: Usage::ZERO };
+                let Some(Asked::Complete { .. }) = step(Event::Completed { owner, completion }) else {
+                    panic!("a session that answers its calls itself goes on");
                 };
             }
             Route::Talk => {
@@ -193,7 +213,7 @@ fn fill(limits: Limits, route: Route) {
 
 #[test]
 fn a_model_with_every_session_full_stays_within_its_worst_case() {
-    for route in [Route::Tool, Route::Talk] {
+    for route in [Route::Tool, Route::Invalid, Route::Talk] {
         fill(LIMITS, route);
         fill(Limits { sessions: 64, session_bytes: 65_536, ..LIMITS }, route);
         fill(Limits { sessions: 1000, messages: 8, session_bytes: 600, ..LIMITS }, route);

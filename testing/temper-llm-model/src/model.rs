@@ -32,6 +32,13 @@ pub struct Config {
     /// The most tokens a final answer takes: each takes between one and this
     /// many, and is cut short at the query's `max_tokens`.
     pub answer_tokens: u32,
+    /// The most tool calls an answer makes: each that makes some makes
+    /// between one and this many.
+    pub calls_per_answer: u32,
+    /// The chance, per mille, that a tool call is malformed: it names a tool
+    /// that was not offered, or its arguments are not an object or lack the
+    /// path.
+    pub malformed: u32,
     /// Rounds of tool calls after each of the client's messages before the
     /// fake answers it.
     pub tool_rounds: u32,

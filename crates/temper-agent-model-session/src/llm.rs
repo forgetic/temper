@@ -2,12 +2,16 @@
 //!
 //! The model speaks this to every provider. The protocol layer turns it into
 //! each provider's wire format (the Anthropic and `OpenAI` APIs, ...) and back,
-//! and classifies whatever goes wrong as a [`Failure`]. What is structured
-//! inside a payload (a tool's input, a JSON schema) stays opaque bytes here:
-//! the model never parses.
+//! and classifies whatever goes wrong as a [`Failure`]. It owns the schemas of
+//! the tools a prompt offers, decodes the JSON the LLM writes as a tool's input
+//! into a typed call, or into the [`Problem`] that keeps it from being one, and
+//! renders what comes of a call as the text the LLM reads. The model never
+//! parses: it keeps a call's input as the bytes the LLM wrote, to send back
+//! verbatim, beside what was decoded from it.
 
 use alloc::boxed::Box;
 
+use temper_agent_model_tools as tools;
 use temper_lib::Duration;
 
 /// A provider endpoint the protocol layer is configured with: which provider,
@@ -31,33 +35,66 @@ pub enum Block {
         text: Box<[u8]>,
     },
     /// The LLM asks for a tool to run. `id` is the provider's name for this
-    /// call, which its result echoes; `input` is a JSON object.
+    /// call, which its result echoes; `name` and `input` are what the LLM
+    /// wrote, the input a JSON object; `call` is what the protocol layer
+    /// decoded from them.
     ToolCall {
         id: Box<[u8]>,
         name: Box<[u8]>,
         input: Box<[u8]>,
+        call: Decoded,
     },
-    /// What the tool call `id` produced. `error` marks a run that failed, and
-    /// `output` then says why.
+    /// What came of the tool call `id`.
     ToolResult {
         id: Box<[u8]>,
-        output: Box<[u8]>,
-        error: bool,
+        result: Returned,
     },
+}
+
+/// A tool call, as the protocol layer decoded it.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum Decoded {
+    /// A call to one of the tools the session owns.
+    Owned { call: tools::Call },
+    /// A call that is no call: the session answers it with its problem, and
+    /// runs nothing.
+    Invalid { problem: Problem },
+}
+
+/// What came of a tool call, for the protocol layer to render as the text the
+/// LLM reads.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum Returned {
+    /// The tools' outcome: a success, or a failure, one that ran out of time
+    /// included.
+    Owned { outcome: tools::Outcome },
+    /// The call was malformed, and this is why.
+    Invalid { problem: Problem },
+    /// Nothing ran for the call: the LLM stopped for another reason than
+    /// calling tools, its answer cut short or its turn ended.
+    NotRun,
+}
+
+/// Why the protocol layer could not decode a tool call.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum Problem {
+    /// No tool the prompt offered has the call's name.
+    UnknownTool,
+    /// The input is not a JSON object.
+    NotAnObject,
+    /// The input has no `field`, which the tool needs.
+    Missing { field: Box<[u8]> },
+    /// The input's `field` has the wrong type.
+    WrongType { field: Box<[u8]> },
+    /// The input's `field` has a value the tool cannot take: a path with an
+    /// empty name or a NUL in it, a number out of range.
+    BadValue { field: Box<[u8]> },
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Message {
     pub role: Role,
     pub content: Box<[Block]>,
-}
-
-/// A tool the LLM may call. `schema` is the JSON schema of its input.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct Tool {
-    pub name: Box<[u8]>,
-    pub description: Box<[u8]>,
-    pub schema: Box<[u8]>,
 }
 
 /// One call to an LLM: everything it needs to produce the next assistant
@@ -68,7 +105,9 @@ pub struct Prompt {
     /// The provider's name for the model.
     pub model: Box<[u8]>,
     pub system: Box<[u8]>,
-    pub tools: Box<[Tool]>,
+    /// The families of tools the LLM may call, whose schemas the protocol
+    /// layer offers it.
+    pub tools: tools::Grants,
     /// The conversation so far, oldest first, ending with a user message.
     pub messages: Box<[Message]>,
     /// The most tokens the answer may take.

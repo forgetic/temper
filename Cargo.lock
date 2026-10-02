@@ -7,6 +7,7 @@ name = "temper-agent-model"
 version = "0.0.0"
 dependencies = [
  "temper-agent-model-session",
+ "temper-agent-model-tools",
  "temper-lib",
 ]
 
@@ -30,6 +31,7 @@ dependencies = [
 name = "temper-agent-model-session"
 version = "0.0.0"
 dependencies = [
+ "temper-agent-model-tools",
  "temper-lib",
 ]
 
@@ -38,6 +40,7 @@ name = "temper-agent-model-session-tests"
 version = "0.0.0"
 dependencies = [
  "temper-agent-model-session",
+ "temper-agent-model-tools",
  "temper-lib",
  "temper-llm-model",
 ]

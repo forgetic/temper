@@ -20,7 +20,7 @@ pub(crate) fn event(event: Event) -> session::Event {
         Event::Completed { owner, completion } => session::Event::Completed { owner, completion },
         Event::Failed { owner, failure } => session::Event::Failed { owner, failure },
         Event::Cancelled { owner } => session::Event::Cancelled { owner },
-        Event::ToolDone { owner, output, error } => session::Event::ToolDone { owner, output, error },
+        Event::ToolDone { owner, outcome } => session::Event::ToolDone { owner, outcome },
         Event::ToolCancelled { owner } => session::Event::ToolCancelled { owner },
     }
 }
