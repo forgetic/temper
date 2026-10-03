@@ -1,7 +1,7 @@
-//! A simulated world for the worker's checkout child domain
-//! (programming-model.md, 4.5; worker-domain.md, 9): the checkout, with the
-//! world as its parent, against a fake forge and a fake disk, driven by one
-//! loop, deterministically from a seed.
+//! A domain world for the worker's checkout child domain
+//! (programming-model.md, 4.5; testing-strategy.md, 2.2; worker-domain.md, 9):
+//! the checkout, with the world as its parent, against a fake forge and a fake
+//! disk, driven by one loop, deterministically from a seed.
 //!
 //! The world owns the clock and the seed, and stands in for everything around
 //! the domain: its clients, scripted ([`client`]), which prepare workspaces for

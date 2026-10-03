@@ -5,10 +5,10 @@ use skein_lib::{Duration, Time};
 
 use crate::Schedule;
 
-/// A scenario's expectations (testing.md, 5.2), which a [`Referee`]
-/// holds a world to. Each world writes its own: what its referee observes,
-/// the names of what it expects to happen, what it injects, and what it
-/// checks of each observation.
+/// A scenario's expectations (testing.md, 5.2), which a [`Referee`] holds a
+/// world to. Each world writes its own: what its referee observes, the names
+/// of what it expects to happen, what it injects, and what it checks of each
+/// observation.
 pub trait Expectations {
     /// What the referee observes: what the fakes see, and the facts temper
     /// emits; never a domain's state.
@@ -26,11 +26,11 @@ pub trait Expectations {
 }
 
 /// A scenario's expectations as a step machine of the world's loop
-/// (testing.md, 5.2): observations in, stimuli out, and a deadline
-/// table of its own, whose earliest deadline the loop covers as it covers
-/// every domain's. It steps only on what it observes and on its own
-/// deadlines, and its [`Verdict`] ends the test: passed, failed, or stopped
-/// early by the scenario.
+/// (testing.md, 5.2): observations in, stimuli out, and a deadline table of
+/// its own, whose earliest deadline the loop covers as it covers every
+/// domain's. It steps only on what it observes and on its own deadlines, and
+/// its [`Verdict`] ends the test: passed, failed, or stopped early by the
+/// scenario.
 ///
 /// A stimulus comes out at a moment of the scenario, from [`Referee::fire`]
 /// once it is due; or at once, from the [`Referee::observe`] whose

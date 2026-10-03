@@ -1,10 +1,10 @@
-//! A simulated world for the worker's host child domain (programming-model.md,
-//! 4.5 and 11; worker-domain.md, sections 4 and 9): the host, with the world as
-//! its parent, a scripted engine assigning it runs ([`engine`]), and the
-//! parent's capabilities scripted ([`parent`]): workspaces that prepare,
-//! push and save, and agents whose runs make host calls, yield, park, end,
-//! fail, hang and get stopped. One loop drives them, deterministically from a
-//! seed.
+//! A domain world for the worker's host child domain (programming-model.md,
+//! 4.5; testing-strategy.md, 2.2; worker-domain.md, sections 4 and 9): the
+//! host, with the world as its parent, a scripted engine assigning it runs
+//! ([`engine`]), and the parent's capabilities scripted ([`parent`]):
+//! workspaces that prepare, push and save, and agents whose runs make host
+//! calls, yield, park, end, fail, hang and get stopped. One loop drives them,
+//! deterministically from a seed.
 //!
 //! The world owns the clock and the seeds, and stands in for everything around
 //! the host: the top level that will route between it, the engine link and

@@ -1,6 +1,7 @@
-//! A simulated world for the engine's fleet child domain (programming-model.md,
-//! 4.5 and 11; engine-domain.md, section 8): the fleet, with the world as its
-//! parent, driven by one loop, deterministically from a seed.
+//! A domain world for the engine's fleet child domain (programming-model.md,
+//! 4.5; testing-strategy.md, 2.2; engine-domain.md, section 8): the fleet,
+//! with the world as its parent, driven by one loop, deterministically from a
+//! seed.
 //!
 //! The world owns the clock and the seeds, and stands in for everything
 //! around the fleet: the protocol layer and the network, as channels that

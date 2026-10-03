@@ -1,7 +1,7 @@
-//! A simulated world for the engine's domain (engine-domain.md, section 14;
-//! testing.md, 2.2): the engine's root domain, with all its
-//! child domains beneath it, in one loop, deterministically from a seed,
-//! against fakes for everything else.
+//! A domain world for the engine's root domain (engine-domain.md, section 14;
+//! testing-strategy.md, 2.2): the engine's root domain, with all its child
+//! domains beneath it, in one loop, deterministically from a seed, against
+//! fakes for everything else.
 //!
 //! The world owns the clock and the seeds, and stands in for:
 //!

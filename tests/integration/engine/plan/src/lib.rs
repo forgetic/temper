@@ -1,9 +1,10 @@
-//! A simulated world for the engine's plan child domain (programming-model.md,
-//! 4.5 and 11; engine-domain.md, sections 4 to 6): the plan, with a scripted
-//! engine as its parent, which holds the items of a few goals on an abstract
-//! forge ([`forge`]), asks the plan what is due for each, runs what is due
-//! with outcomes drawn from the seed ([`script`]), applies the writes the plan
-//! asks for, and moves time on. One loop drives them, deterministically.
+//! A domain world for the engine's plan child domain (programming-model.md,
+//! 4.5; testing-strategy.md, 2.2; engine-domain.md, sections 4 to 6): the
+//! plan, with a scripted engine as its parent, which holds the items of a few
+//! goals on an abstract forge ([`forge`]), asks the plan what is due for each,
+//! runs what is due with outcomes drawn from the seed ([`script`]), applies
+//! the writes the plan asks for, and moves time on. One loop drives them,
+//! deterministically.
 //!
 //! The world stands in for the rest of the engine (the item lifecycle's
 //! mechanics, the rules, briefs and the fleet, reduced to what the plan

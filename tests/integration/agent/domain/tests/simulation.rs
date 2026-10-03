@@ -2,7 +2,7 @@
 //! people hand in, whose steps the engine runs on the worker, each run
 //! carried by an agent process with its conversations as sessions and their
 //! tools at work in the checkout the worker prepared, with a fake LLM
-//! provider and a fake forge, talking through a simulated world.
+//! provider and a fake forge, talking through a system world.
 
 use skein_lib::Duration;
 use temper_agent_domain::run::outcome::Declared;

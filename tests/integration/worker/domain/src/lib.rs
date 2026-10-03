@@ -1,8 +1,8 @@
-//! A simulated world for the whole worker (worker-domain.md, section 9;
-//! testing.md, 2.3): the worker's root domain
-//! (`temper_worker_domain`) run against the engine's (`temper_engine_domain`),
-//! each with everything around it, with no protocol and no io. One loop drives
-//! both, deterministically from a seed.
+//! A system world for the whole worker (worker-domain.md, section 9;
+//! testing.md, 2.1): the worker's root domain (`temper_worker_domain`) run
+//! against the engine's (`temper_engine_domain`), each with everything around
+//! it, with no protocol and no io. One loop drives both, deterministically
+//! from a seed.
 //!
 //! The world owns the clock and the seeds, and stands in for:
 //!

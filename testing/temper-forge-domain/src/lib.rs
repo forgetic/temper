@@ -1,4 +1,4 @@
-//! The domain layer of a fake forge, for simulations.
+//! The domain layer of a fake forge, for the worlds that test temper.
 //!
 //! A forge seen from the inside (testing.md, 4.2), Forgejo-shaped:
 //! repositories with their users' permissions, labels, issues and pull
@@ -30,7 +30,7 @@
 //! and acts on it from outside its API, with free functions (the `scenario`
 //! module: [`repository`], [`grant`], [`commit`], [`advance`], ...).
 //! Everything that changes is observed, content and all, and so is every
-//! write the forge refused, for a referee (testing.md, 5.2): a
+//! write the forge refused, for a referee (testing-strategy.md, section 7): a
 //! bounded queue a world drains ([`Domain::pop_observation`]).
 //! [`Domain::inspect`] reads the store at settle, [`Domain::tally`] counts
 //! what the forge did and refused, and [`Domain::room`] says what room is
@@ -38,8 +38,8 @@
 //!
 //! Its vocabulary ([`api`]) is its own: it shares nothing with the engine's
 //! domain, the worker's, or the git a working tree keeps. Between them sits a
-//! protocol layer on each side, or a world translating. It follows the same
-//! programming style as any other step crate, bounded by its [`Limits`].
+//! protocol layer on each side, or a world translating. It follows the
+//! programming model as any other step crate does, bounded by its [`Limits`].
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]

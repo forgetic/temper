@@ -1,6 +1,7 @@
-//! A simulated world for the engine's notes child domain (programming-model.md,
-//! 4.5 and 11; engine-domain.md, section 10): the notes, with the world as
-//! their parent, driven by one loop, deterministically from a seed.
+//! A domain world for the engine's notes child domain (programming-model.md,
+//! 4.5; testing-strategy.md, 2.2; engine-domain.md, section 10): the notes,
+//! with the world as their parent, driven by one loop, deterministically from
+//! a seed.
 //!
 //! The world owns the clock and the seeds, and stands in for everything
 //! around the notes: the top level that routes to and from them, and the

@@ -1,5 +1,5 @@
 //! End to end at the session child domain: the agent's sessions, their opener
-//! and a fake provider's domain, talking through a simulated world.
+//! and a fake provider's domain, talking through a domain world.
 
 use skein_lib::{Duration, Time};
 use temper_agent_domain_session::llm::Failure;

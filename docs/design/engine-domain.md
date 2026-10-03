@@ -2,12 +2,13 @@
 
 Provisional, 2026-10-02. What the temper engine does, as a domain layer:
 its parts, what each is responsible for, and how they fit together. The
-mechanics are those of skein's `programming-model.md`; the worker it
-drives is described in `worker-domain.md`, and the agent in
+mechanics are those of skein's `docs/foundation/programming-model.md`;
+the worker it drives is described in `worker-domain.md`, and the agent in
 `agent-domain.md`. Each part's details are settled as it is built and kept
 in its crate's documentation; this document keeps the decisions and their
 reasons. What is still open is listed in section 15, and what is not built
-yet in section 16. How the engine is tested is in `testing.md`.
+yet in section 16. How the engine is tested is in `testing.md`, which
+applies skein's `docs/foundation/testing-strategy.md` to temper.
 
 ## 1. In one page
 
@@ -745,7 +746,7 @@ rule.
 
 The engine's world, `tests/integration/engine/domain`, runs the top level
 with every child domain beneath it against fakes that share none of its
-types (testing.md, section 4): the fake forge, its faults
+types (testing-strategy.md, section 4): the fake forge, its faults
 drawn from the seed, reached through its protocol layer as the world
 plays it, with codecs for what the engine writes inside comments and
 wiki pages and for the charters and outcomes a worker carries as bytes;
@@ -774,7 +775,7 @@ is made, nor a goal's envelope widened, before a person accepts it; a
 call its grants allow is never refused as ungranted; a person's message
 reaches a run, or its item ends; every story ends within a bound. The
 engine, workers and agents meet in the system worlds (testing.md,
-2.3), which reuse this world's codecs, people, store and referee, and
+2.1), which reuse this world's codecs, people, store and referee, and
 the names runs and attempts take on a worker's channel.
 
 ## 15. Open questions

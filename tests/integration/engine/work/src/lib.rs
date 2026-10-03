@@ -1,6 +1,7 @@
-//! A simulated world for the engine's work hub (programming-model.md, 4.5 and
-//! 11; engine-domain.md, sections 4, 8 and 12): the hub, with the world as its
-//! parent, driven by one loop, deterministically from a seed.
+//! A domain world for the engine's work hub (programming-model.md, 4.5;
+//! testing-strategy.md, 2.2; engine-domain.md, sections 4, 8 and 12): the
+//! hub, with the world as its parent, driven by one loop, deterministically
+//! from a seed.
 //!
 //! The world owns the clock and the seeds, and stands in for everything
 //! around the hub: the top level that routes to and from it, and below it

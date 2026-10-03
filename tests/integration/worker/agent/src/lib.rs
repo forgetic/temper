@@ -1,9 +1,10 @@
-//! A simulated world for the worker's agent child domain (programming-model.md,
-//! 4.5 and 11; worker-domain.md, sections 6 and 9): the agent child domain,
-//! with the world as its parent, a scripted client spawning agents
-//! ([`client`]), and process trees standing in for io ([`tree`]), each running
-//! a scripted agent process that speaks the channel ([`script`]), well or
-//! badly. One loop drives them, deterministically from a seed.
+//! A domain world for the worker's agent child domain (programming-model.md,
+//! 4.5; testing-strategy.md, 2.2; worker-domain.md, sections 6 and 9): the
+//! agent child domain, with the world as its parent, a scripted client
+//! spawning agents ([`client`]), and process trees standing in for io
+//! ([`tree`]), each running a scripted agent process that speaks the channel
+//! ([`script`]), well or badly. One loop drives them, deterministically from a
+//! seed.
 //!
 //! The world owns the clock and the seeds, and stands in for everything
 //! around the agent child domain: the top level and, through it, the host that

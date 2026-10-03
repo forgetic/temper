@@ -1,4 +1,4 @@
-//! A counting allocator for the memory tests (testing.md, 6): it
+//! A counting allocator for the memory tests (testing.md, section 6): it
 //! records the live heap of each thread and its peak, so that a test can check
 //! the most a domain held at once in each step against its worst case
 //! (programming-model.md, 6.3).

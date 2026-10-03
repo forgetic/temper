@@ -1,4 +1,4 @@
-//! The agent's top-level world (testing.md, 2.3; agent-domain.md,
+//! The agent's top-level world (testing.md, 2.1; agent-domain.md,
 //! section 3), where it meets the worker's (worker-domain.md, section 9) and
 //! the engine's (engine-domain.md, section 14): the engine's root domain, with
 //! every child domain beneath it, assigning the steps of the issues people hand

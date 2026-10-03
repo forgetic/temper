@@ -2,11 +2,12 @@
 
 Provisional, 2026-10-02. What the temper worker does, as a domain layer:
 its parts, what each is responsible for, and how they fit together. The
-mechanics are those of skein's `programming-model.md`, and the agent it
-hosts is described in `agent-domain.md`. Each part's details are settled
-as it is built; what is still open is listed in section 10, and what is
-not built yet in section 11. How the worker is tested, and the fakes
-around it, is in `testing.md`.
+mechanics are those of skein's `docs/foundation/programming-model.md`,
+and the agent it hosts is described in `agent-domain.md`. Each part's
+details are settled as it is built; what is still open is listed in
+section 10, and what is not built yet in section 11. How the worker is
+tested, and the fakes around it, is in `testing.md`, which applies skein's
+`docs/foundation/testing-strategy.md` to temper.
 
 ## 1. In one page
 
@@ -356,7 +357,7 @@ What the protocol and io layers owe the domain, to be designed after it:
 ## 9. The world
 
 The worker's worlds run the domain against neighbours that share none of
-its types (testing.md, section 4):
+its types (testing-strategy.md, section 4):
 
 - **an engine:** the real one, the engine's root domain, which
   assigns, sends inbound events, cancels, answers relayed calls and
@@ -371,7 +372,7 @@ its types (testing.md, section 4):
 
 Each child domain has a world of its own, its parent and neighbours
 scripted in it. The whole worker's world has all four, the agents' process
-trees standing in for io: a system world (testing.md, 2.3), where
+trees standing in for io: a system world (testing.md, 2.1), where
 the worker meets the real engine over a channel the world translates as
 the protocol layers would, and both reach the fake forge. Its channel
 drops, stalls and carries late copies of frames; it shuts the worker down
@@ -401,7 +402,7 @@ engine reads; the worlds reach it through git's transport, answered in
 the same instant, since io's latency stands for the network and the
 forge. The files and working trees are to become the machine, whose
 programs, git among them, grow command-line faces for the protocol layer
-to meet (testing.md, sections 4.2 and 4.3).
+to meet (testing.md, 4.2 and 4.3).
 
 ## 10. Open questions
 

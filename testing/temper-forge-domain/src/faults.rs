@@ -1,6 +1,6 @@
-//! Faults, drawn from the seed per call (testing.md, 4): a rate limit
-//! per user per window, failures before a call is made and after, and the
-//! latency of its answer, sometimes late.
+//! Faults, drawn from the seed per call (testing-strategy.md, section 4): a
+//! rate limit per user per window, failures before a call is made and after,
+//! and the latency of its answer, sometimes late.
 
 use skein_lib::{Duration, Env, Time};
 

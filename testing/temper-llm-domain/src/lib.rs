@@ -1,4 +1,4 @@
-//! The domain layer of a fake LLM provider, for simulations.
+//! The domain layer of a fake LLM provider, for the worlds that test temper.
 //!
 //! A provider seen from the inside: calls come up from its protocol layer as
 //! [`Event::Call`], and each is answered with exactly one [`Request::Reply`]
@@ -10,10 +10,10 @@
 //! so it also checks its clients.
 //!
 //! Its vocabulary ([`api`]) is its own: it shares nothing with the agent's
-//! domain. Between the two sits a protocol layer on each side, or a simulator
-//! standing in for both.
+//! domain. Between the two sits a protocol layer on each side, or a world
+//! translating (testing-strategy.md, section 4).
 //!
-//! It follows the same programming style as any other step crate.
+//! It follows the programming model as any other step crate does.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]

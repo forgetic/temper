@@ -2,11 +2,12 @@
 
 Provisional, 2026-10-02. What the temper agent does, as a domain layer:
 its parts, what each is responsible for, and how they fit together. The
-mechanics are those of skein's `programming-model.md`; this document says
-what the agent's domain is made of. Each part's details are settled as it
-is built; what is still open is listed in section 9, and what is not built
-yet in section 10. How the agent is tested, and the fakes around it, is in
-`testing.md`.
+mechanics are those of skein's `docs/foundation/programming-model.md`;
+this document says what the agent's domain is made of. Each part's
+details are settled as it is built; what is still open is listed in
+section 9, and what is not built yet in section 10. How the agent is
+tested, and the fakes around it, is in `testing.md`, which applies skein's
+`docs/foundation/testing-strategy.md` to temper.
 
 ## 1. In one page
 

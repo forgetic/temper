@@ -1,6 +1,7 @@
-//! A simulated world for the engine's views child domain (programming-model.md,
-//! 4.5; engine-domain.md, section 11): the views, with the world as
-//! their parent, driven by one loop, deterministically from a seed.
+//! A domain world for the engine's views child domain (programming-model.md,
+//! 4.5; testing-strategy.md, 2.2; engine-domain.md, section 11): the views,
+//! with the world as their parent, driven by one loop, deterministically from
+//! a seed.
 //!
 //! The world owns the clock and the seeds, and stands in for everything
 //! around the views: the top level, which starts runs for items (a run named

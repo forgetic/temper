@@ -1,7 +1,7 @@
-//! A simulated world for the agent's run child domain (programming-model.md,
-//! 4.5): the runs, with the world as their parent, a scripted host starting
-//! them, and a scripted partner playing their conversations, driven by one
-//! loop, deterministically from a seed.
+//! A domain world for the agent's run child domain (programming-model.md, 4.5;
+//! testing-strategy.md, 2.2): the runs, with the world as their parent, a
+//! scripted host starting them, and a scripted partner playing their
+//! conversations, driven by one loop, deterministically from a seed.
 //!
 //! The world owns the clock and the seeds, and stands in for everything around
 //! the run: the top level that will route its conversations to sessions, the

@@ -1,6 +1,6 @@
 //! What happened on the forge, content and all, for a referee
-//! (testing.md, 5.2): every change a call, CI or another party made,
-//! in a bounded queue a world drains at its own pace.
+//! (testing-strategy.md, section 7): every change a call, CI or another party
+//! made, in a bounded queue a world drains at its own pace.
 //!
 //! A refused write or git call is observed too, so that a referee sees what
 //! a client tried that the forge kept from happening: a merge its protection

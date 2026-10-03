@@ -1,5 +1,5 @@
 //! End to end at the run child domain: runs started by a scripted host, with a
-//! scripted partner playing their conversations, in a simulated world.
+//! scripted partner playing their conversations, in a domain world.
 //!
 
 use std::collections::BTreeMap;

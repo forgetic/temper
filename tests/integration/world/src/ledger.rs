@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::collections::btree_map;
 use std::fmt::Debug;
 
-/// Requests in flight, each ended once (testing.md, 6: one
+/// Requests in flight, each ended once (testing-strategy.md, section 6: one
 /// terminal event per request, every `ReplyTo` answered): opened under a key
 /// of its own, with what the world keeps of it, and ended by its terminal, its
 /// reply or its withdrawal.

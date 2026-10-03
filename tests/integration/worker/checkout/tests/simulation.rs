@@ -1,5 +1,5 @@
 //! End to end at the checkout child domain: the checkout, its scripted clients,
-//! a fake forge and a fake disk, talking through a simulated world.
+//! a fake forge and a fake disk, talking through a domain world.
 
 use skein_lib::{Duration, Time};
 use temper_worker_domain_checkout::git::Missing;
