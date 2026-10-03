@@ -42,8 +42,8 @@ section 9 what is not built yet, and section 10 what is still open.
   seconds; fuzzy tests search many random worlds for what nobody thought
   to check, spend more CPU, and gate merges to main (section 6.1).
 - **Some fakes are temporary.** A fake of one of temper's own components
-  stands in until its real model exists, then retires. The worker's
-  already has, and the engine's will.
+  stands in until its real model exists, then retires. The worker's and
+  the engine's both have.
 
 ## 2. The tiers
 
@@ -93,12 +93,14 @@ machine. Behaviour is tested here, and most of temper's tests live here.
 ### 2.3 System worlds
 
 A system world is a model world where several of temper's components
-meet, each as its real top-level model: today the worker hosting real
-agents, later the engine driving workers that host agents. It aims at
-what crosses components, which no component's own world can see: the
-tree an agent left is the tree the worker pushes, and the outcome the
-run accepted is the one the engine records. It is still the model layer
-only.
+meet, each as its real top-level model. Two are built, both with the
+real engine driving the real worker: the agent's top-level world, whose
+worker hosts real agents, and the whole worker's world, whose worker
+hosts scripted agents over a channel that fails (4.5). A system world
+aims at what crosses components, which no component's own world can
+see: the tree an agent left is the tree the worker pushes, and the
+outcome the run accepted is the one the engine records. It is still the
+model layer only: where a protocol layer will sit, the world translates.
 
 ### 2.4 Protocol worlds
 
@@ -337,14 +339,47 @@ forge it acts as a forge user. On the web it is a client of the engine's
 web protocol, a peer like the others, and it grows that protocol's client
 side when the web is built.
 
+Today people are scripted in the engine's world, ordinary Rust rather
+than a model: each story's person looks at the forge as observed, never
+at its store, and does what the story calls for next, one thing at a
+time, so a call lost to a restarting engine is simply tried again. On the
+web they make the engine's own calls, which no protocol carries yet. The
+whole worker's world reuses them; the agent's top-level world scripts its
+own, as its agents cannot take a session's turns yet.
+
 ### 4.5 Temper's own components
 
 A fake of one of temper's components stands in for it in its neighbours'
 worlds until its real model exists, then retires, and the worlds meet the
-real component. A fake worker served until the worker's model was built;
-`testing/temper-fake-engine-model` serves the worker's worlds until the
-engine's model exists: its sub-models do, and its top level is being
-built (engine-model.md, section 16).
+real component. A fake worker served until the worker's model was built,
+and a fake engine until the engine's was. Both have retired: the system
+worlds run the real engine, each wiring it as the protocol layers would.
+
+- **The agent's top-level world** (`tests/integration/agent/model`): the
+  real engine, worker and agents; the fake LLM provider; one fake forge,
+  which the engine reaches through the forge's protocol as the engine's
+  world plays it, and io's git through the working trees' transport; the
+  engine's store; people who hand in issues whose step is an agent step
+  or a change, each with a record as an earlier life of the engine would
+  have written it (the agent's side cannot take a session's turns yet), a
+  reviewer, and a person who stops a run now and then. Its channel
+  between engine and worker keeps its order and never drops.
+- **The whole worker's world** (`tests/integration/worker/model`): the
+  real engine and worker; the fake forge, reached by the engine and by
+  the worker's git; the engine's world's people and store; and the
+  process trees and scripted agents of the worker's agent world, their
+  words drawn from their charters. Its channel drops for less and more
+  than the worker's grace, stalls, and carries copies of frames, some
+  late; the worker shuts down and a new one starts cold; the engine
+  restarts, at drawn moments and while it applies an outcome.
+
+Both use what the engine's world's crate offers as a library: the
+codecs for what the engine writes inside comments and wiki pages and for
+the charters and outcomes a worker carries as bytes, the forge's
+protocol as the world plays it, the store, the engine's referee, and the
+names runs and attempts take on a worker's channel (a run by its item,
+an attempt by its item and count); the whole worker's world uses its
+people too.
 
 Scripted stand-ins inside a world are another matter, and stay. The
 worker's worlds keep agents that hang, crash and break the channel's
@@ -415,13 +450,29 @@ stimuli it may inject, and what it checks of each observation. Through
 them the referee checks safety and fails at once, arms a liveness
 expectation as a deadline, meets it, or withdraws and re-arms it; a
 liveness expectation whose deadline fires fails the test and is no
-longer pending, so meeting it later counts for nothing. A stimulus comes out when it is due, or at once from the
-observation that calls for it, so a world can inject it between two
-things it does, such as a restart between two writes. The verdict is
-passed, still open (and what is pending), stopped early by the
-scenario, or failed (when, why, and what was pending then). The agent's
-top-level world and every engine sub-model's world have one; the
-worker's worlds keep their checks inline.
+longer pending, so meeting it later counts for nothing. A stimulus comes
+out when it is due, or at once from the observation that calls for it,
+so a world can inject it between two things it does, such as a restart
+between two writes. The verdict is passed, still open (and what is
+pending), stopped early by the scenario, or failed (when, why, and what
+was pending then).
+
+Every engine world has a referee, the engine's own included, and so do
+both system worlds, each with two: the engine's world's, over what the
+forge did and what the engine assigned, and one of its own where the
+components meet (the worker and its agents; or the channel, over the
+engine's acknowledgements, the calls relayed and answered once, and each
+answer taken once). Their stimuli are an engine restarting cold (at a
+drawn moment, or at once as it posts an outcome, so that it restarts
+while applying it), a worker's channel dropping or a worker vanishing,
+and a worker told to shut down. The engine's referee meets a story only
+when its item closes. In the agent's top-level world a story may end
+held, so its own referee ends an item's expectation on a hold the
+scenario allows (for its runs' failures, a person's stop or its plan's
+reasons, and for its writes or record only where the forge or the store
+were scripted to fail) as well as on a close; the engine's referee could
+take the allowed holds as a parameter. The worker's sub-model worlds,
+and the agent's tools', session's and run's, keep their checks inline.
 
 ## 6. What the tiers check
 
@@ -485,19 +536,23 @@ tests/fuzzy/<component>/<sub-model>         each world's fuzzy tests: random wor
 tests/fuzzy/lib                             lib's byte search against a naive one
 ```
 
+Under `tests/integration/<component>/model`, the engine's is its own
+world, and the agent's and the whole worker's are system worlds (2.3);
+the engine world's crate is a library the system worlds use (4.5).
+
 The protocol worlds, the simulator (`sim/`, programming-style.md,
 section 12) and the real loop find their homes when the first of each is
 built.
 
 ## 8. Where things stand
 
-As of 2026-10-02.
+As of 2026-10-03.
 
 | Tier | Built |
 |---|---|
 | step tests | every model crate, the fakes, and lib |
-| model worlds | the agent's tools, session and run; the worker's checkout, agent and host; the whole worker; the engine's work, plan, forge, fleet, brief, notes and views (the rules, which keep no state, by step tests alone) |
-| system worlds | the worker and the agent, in the agent's top-level world |
+| model worlds | the agent's tools, session and run; the worker's checkout, agent and host; the engine's work, plan, forge, fleet, brief, notes and views (the rules, which keep no state, by step tests alone); the engine's own |
+| system worlds | the agent's top-level world: the engine, the worker and agents; the whole worker's: the engine, the worker and scripted agents |
 | protocol worlds | none: no protocol layer exists |
 | simulator | none: no io layer, service or shell exists |
 | real loop | none |
@@ -505,14 +560,14 @@ As of 2026-10-02.
 The fakes:
 
 - **LLM provider:** its model, `testing/temper-llm-model`.
-- **Engine:** its model, temporary, `testing/temper-fake-engine-model`,
-  which the worker's worlds and the agent's top-level world meet.
+- **Engine:** retired; the system worlds run the real one (4.5).
 - **Forge:** its model, `testing/temper-forge-model` (4.2), with its git.
-  The forge sub-model's world runs against it, its translation standing
-  in for the protocol layer; the worker's and the agent's worlds reach its git
-  through the working trees' transport, with no latency or faults of its
-  own there, as io's stand for them. It has no inline review comments,
-  and no description or link on a status, which the worlds answer empty.
+  The forge sub-model's world, the engine's and the system worlds run
+  against it, the forge sub-model world's translation standing in for
+  the protocol layer; io's git reaches it through the working trees'
+  transport, with no latency or faults of its own there, as io's stand
+  for them. It has no inline review comments, and no description or link
+  on a status, which the worlds answer empty.
 - **Machine:** `temper-checkout-fake`, ordinary Rust rather than a step
   crate, at its model face only, through each world's translation. It has
   files with versions, links and roots, a search, and the working trees'
@@ -520,8 +575,10 @@ The fakes:
   file changes, whatever the files hold. Agents are programs already, at
   the model face: the agent's top-level world starts an agent model for
   each spawn, with its channel on the process's pipes.
-- **People:** none. The engine sub-models' worlds script what people do
-  through the parent they script.
+- **People:** scripted in the engine's world (4.4), and reused by the
+  whole worker's; the agent's top-level world scripts its own, and the
+  engine sub-models' worlds script what people do through the parent
+  they script.
 
 The checks:
 
@@ -530,22 +587,21 @@ The checks:
 - **Replay** is checked in every world.
 - **Transition coverage** is not measured, and nothing is fuzzed yet, as
   there is no protocol machine.
-- **Scenario expectations** are a referee's (5.2) in the agent's
-  top-level world and in every engine sub-model's world. The worker's
-  worlds, and the agent's tools', session's and run's, check theirs
-  inline, beside their contracts.
+- **Scenario expectations** are a referee's (5.2) in every engine world
+  and both system worlds. The worker's sub-model worlds, and the agent's
+  tools', session's and run's, check theirs inline, beside their
+  contracts.
 
 ## 9. Not built yet
 
 By tier:
 
-- **Model worlds:** the engine's own, with its top level, which are being
-  built, and with fake people (engine-model.md, section 14).
-- **System worlds:** the engine, workers and agents together, with the
-  fake LLM, the fake forge and fake people; several workers in one world
-  (worker-model.md, section 11). The worker-and-agent world lacks what the
-  agent's side lacks (agent-model.md, section 10): inbound events,
-  waiting, parking and relayed calls.
+- **System worlds:** several real workers in one world (the engine's
+  world places runs on scripted ones; worker-model.md, section 11); in
+  the agent's top-level world, what the agent's side lacks
+  (agent-model.md, section 10): sessions, inbound events, waiting,
+  parking and relayed calls; in the whole worker's world, plans' stories,
+  which run in the engine's world only.
 - **Protocol worlds,** each with the protocol layer it tests.
 - **The simulator,** with the io layers, the services and the shells.
 - **The real loop:** a shell that drives every service in one loop, and
@@ -565,8 +621,6 @@ By fake:
   faces; the shell subset; the io face and the kernel face; the real
   loop's sandbox.
 - **People:** a model, then the client side of the web's protocol.
-- **Engine:** retired once the engine's top level exists, when the
-  worker's and the agent's worlds meet the real engine.
 
 ## 10. Open questions
 

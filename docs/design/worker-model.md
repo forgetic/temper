@@ -83,7 +83,9 @@ agent    LLM work: one run per agent process, reporting to the worker
   outlet must not happen after its run was told it did not). On
   reconnecting, the worker says what it hosts and the engine keeps or
   cancels each run. Past the grace, the worker cancels them itself, saving
-  their work first, and keeps their answers for the next channel.
+  their work first, and keeps their answers for the next channel. The
+  engine keeps a lost worker's runs for a grace of its own, which need not
+  be longer than the worker's (engine-model.md, section 8).
 - **Shutting down** cancels every run and admits no more. The worker is
   done once the engine has every answer. It gives the answers it keeps
   up, counted, only once no run is left and the engine is still out of
@@ -352,12 +354,12 @@ What the protocol and io layers owe the model, to be designed after it:
 
 ## 9. The world
 
-The worker's worlds run the model against fakes that share none of its
-types (programming-style.md, section 11):
+The worker's worlds run the model against neighbours that share none of
+its types (programming-style.md, section 11):
 
-- **an engine** that assigns, sends inbound events, cancels, answers
-  relayed calls, acknowledges answers, and checks that every attempt is
-  answered once;
+- **an engine:** the real one, the engine's top-level model, which
+  assigns, sends inbound events, cancels, answers relayed calls and
+  acknowledges answers;
 - **a network** whose channel drops at random, for less and for more than
   the grace;
 - **an agent** that follows a script: progress, host calls, yields, parks
@@ -368,11 +370,18 @@ types (programming-style.md, section 11):
 
 Each sub-model has a world of its own, its parent and neighbours scripted
 in it. The whole worker's world has all four, the agents' process trees
-standing in for io, and shuts the worker down at random. It checks that
-the engine takes each attempt's answer once, that what lands is exactly
-the tree the agent left and saved work exactly the tree at the stop, that
-no git operation runs while a run's agent may, but the push it asked for,
-and that nothing is live once it settles.
+standing in for io: a system world (testing-pyramid.md, 2.3), where the
+worker meets the real engine over a channel the world translates as the
+protocol layers would, and both reach the fake forge. Its channel drops,
+stalls and carries late copies of frames; it shuts the worker down and
+starts a new one cold; the engine restarts. It checks that the engine
+takes each attempt's answer once and acknowledges it in time, that each
+relayed call reaches the engine once and is answered once, that what
+lands is exactly the tree the agent left and saved work exactly the tree
+at the stop, that no git operation runs while a run's agent may, but the
+push it asked for, and that nothing is live once it settles. The engine
+starts a run only from a base or its item's branch, so a preparation
+from saved work or a commit (4.1) is not reached there.
 
 The worker meets the real agent in the agent's top-level world: each
 process it spawns is an agent model with a fake LLM provider, its tools
@@ -381,8 +390,8 @@ outcome the run accepted. Its network and git are kept simple there, as
 the whole worker's world covers their faults. The agent's worlds no
 longer use a fake worker: the run's world scripts its host itself.
 
-The fake engine is a step crate, as much of an engine as a worker meets,
-and temporary: the engine's model takes its place once it exists.
+A fake engine stood in for the engine in both worlds until the engine's
+model was built; it is retired.
 
 testing-pyramid.md places these worlds among temper's tiers and tracks
 their fakes. The working trees' remotes are on the fake forge, in one
@@ -398,7 +407,8 @@ to meet (testing-pyramid.md, sections 4.2 and 4.3).
 - **Saved-work branches:** their names, whether pushing to them triggers
   CI, and when the engine deletes them. A save from any other start onto
   a saved-work branch that exists finds it moved, so while one exists the
-  engine starts runs from it, or deletes it first.
+  engine starts runs from it, or deletes it first. It does neither yet
+  (engine-model.md, section 16).
 - **Inbound acknowledgement:** the worker bounces an inbound event a run
   could not take, saying why but not which event it was, and says nothing
   of those it delivered. The engine moves an item's inbox position
@@ -436,10 +446,6 @@ yet, each to be designed before it is built:
 - **The layers below the model** (section 8): the engine's protocol, the
   agent channel's framing, git invocations and their parsing, contained
   process trees, workspace directories.
-- **The engine.** The worker's worlds meet a fake one, temporary until
-  the engine's model exists: its sub-models are built, the fleet among
-  them, and its top level is being built (engine-model.md, sections 8
-  and 16).
 - **Saving periodically** (4.2), so a dying worker loses less: a run
   saves at park, at an unfinished end and at cancel only.
 - **Checks-only runs and code-graph indexing** (section 10).
@@ -447,9 +453,10 @@ yet, each to be designed before it is built:
   snapshot and where the repositories sit; what the agent is configured
   with (its LLM endpoints, their credentials, its limits) is not part of
   it yet.
-- **Several workers in one world:** the fake engine places runs on one
-  worker; placement across several, preferring one that holds the
-  workstream's checkout, is the engine's (engine-model.md, section 8).
+- **Several workers in one world:** the whole worker's world runs one;
+  the engine's placement across several, preferring one that holds the
+  workstream's checkout, is exercised with scripted workers in the
+  engine's world (engine-model.md, sections 8 and 14).
 - **A workspace's repositories in parallel:** a checkout runs one
   operation at a time, so its repositories are cloned, fetched and pushed
   one after another.

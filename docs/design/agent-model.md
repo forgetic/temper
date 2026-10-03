@@ -120,6 +120,27 @@ assignment:
   with endpoints (a provider and its credentials, held by the protocol
   layer); a charter only names them.
 
+The engine's charter is typed in its own terms (engine-model.md, 5.3
+and section 9), and the protocol layer is to map it onto this one. Until
+that layer exists, the agent's top-level world maps it as follows
+(testing-pyramid.md, 4.5):
+
+- **The brief** is the engine's sections as text: the plan's guidance
+  first, then why the run is due, then each section under a heading.
+- **Grants:** reading is always granted; writing and the shell are the
+  engine's modify and shell grants, and its `note` grant the outlet of
+  that name. Which repositories are writable is the workspace's.
+- **Outcome spec:** a change; a review's verdicts, `approve`, or
+  `request-changes` with its children; or a report, which the run
+  declares as a verdict named `report`. A session's turn has no mapping,
+  as sessions do not reach agents yet (section 10).
+- **Budget:** the engine gives one token budget, which is split across
+  the kinds the agent bounds (half for input, a quarter for output, an
+  eighth for cache reads, the rest for cache writes), so that together
+  they spend no more than the engine gave.
+- **LLMs:** the deployment's models, listed main first, then those a
+  sub-agent may pick.
+
 ### 4.2 What a run does
 
 1. **Admits** a request, or refuses it at the entrance: busy, or beyond
