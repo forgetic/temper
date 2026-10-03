@@ -589,7 +589,8 @@ on per-entity caps instead of quotas, and keeps accounting as the fallback
 What it gives up: running out of heap aborts rather than refuses, so the
 worst case must fit (6.4); and the general allocator sits in the hot path,
 so allocation time is not constant, and fragmentation can push the
-resident size above the live bytes.
+resident size above the live bytes. What these costs come to for temper's
+workload, and what to do if they show, is in `performance.md`.
 
 ### 6.3 What holds
 
