@@ -544,7 +544,7 @@ impl World {
 
         // The facts the run told, drained at the world's pace.
         while let Some(fact) = self.run.pop_fact() {
-            self.fact(fact);
+            self.fact(&fact);
         }
 
         // The reclaim point.
@@ -1072,7 +1072,7 @@ impl World {
 
     /// A fact the run told: of a run it admitted, and a conversation it
     /// opened.
-    fn fact(&mut self, fact: run::facts::Fact) {
+    fn fact(&mut self, fact: &run::facts::Fact) {
         use run::facts::Fact;
         let (Fact::Admitted { run }
         | Fact::Prepared { run, .. }
@@ -1084,11 +1084,11 @@ impl World {
         | Fact::CheckFinished { run, .. }
         | Fact::Pushed { run, .. }
         | Fact::Answered { run, .. }) = fact;
-        assert!(self.views.contains_key(&run), "a fact is of a run that was admitted");
+        assert!(self.views.contains_key(run), "a fact is of a run that was admitted");
         if let Fact::Opened { conversation, .. } | Fact::Ended { conversation, .. } = fact {
-            assert!(self.opens.contains_key(&conversation), "a fact is of a conversation that was opened");
+            assert!(self.opens.contains_key(conversation), "a fact is of a conversation that was opened");
         }
-        *self.facts.entry(kind(&fact)).or_insert(0) += 1;
+        *self.facts.entry(kind(fact)).or_insert(0) += 1;
     }
 
     /// The facts the run told, by kind, and how many it dropped.

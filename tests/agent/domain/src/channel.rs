@@ -12,7 +12,7 @@
 //! Start, no snapshot                 Start, the charter decoded with the spawn's repositories
 //! Start, a snapshot                  - (asserted against: the agent cannot resume a run)
 //! Event                              - (dropped: the run hears no inbound events yet)
-//! Answer: pushed                     Pushed: done, moved, failed; nothing to push as failed
+//! Answer: pushed                     Pushed: done, moved, failed with detail, or nothing to push
 //! Answer: unavailable, busy,
 //!         too large                  Pushed, failed
 //! Answer: withdrawn                  HostCancelled
@@ -143,7 +143,9 @@ pub fn down(down: Down, link: &Link) -> Option<Event> {
 pub fn answer(call: Token, reply: &Reply) -> Event {
     match reply {
         Reply::Pushed(pushed) => Event::Pushed { owner: call, push: push(*pushed) },
-        Reply::Unavailable | Reply::Busy | Reply::TooLarge => Event::Pushed { owner: call, push: run::Push::Failed },
+        Reply::Unavailable => unpushed(call, run::PushReason::Unavailable),
+        Reply::Busy => unpushed(call, run::PushReason::Busy),
+        Reply::TooLarge => unpushed(call, run::PushReason::TooLarge),
         Reply::Withdrawn => Event::HostCancelled { owner: call },
         Reply::Relayed { answer: _ } => panic!("the run relays no calls, so no relayed answer comes down"),
     }
@@ -155,7 +157,8 @@ pub fn push(push: Push) -> run::Push {
     match push {
         Push::Done => run::Push::Done,
         Push::Moved => run::Push::Moved,
-        Push::Failed | Push::Nothing => run::Push::Failed,
+        Push::Failed { failure } => run::Push::Failed { failure: push_failure(&failure) },
+        Push::Nothing => run::Push::Nothing,
     }
 }
 
@@ -219,7 +222,7 @@ fn message(change: &Change) -> Box<[u8]> {
 #[must_use]
 pub fn fact(fact: Fact) -> Up {
     let kind = match fact {
-        Fact::Run { fact } => run_fact(fact),
+        Fact::Run { fact } => run_fact(&fact),
         Fact::Session { fact } => Some(session_fact(fact)),
     };
     match kind {
@@ -230,7 +233,7 @@ pub fn fact(fact: Fact) -> Up {
 
 /// The kind of a run's fact; none for the end of a check, which is told as
 /// such.
-fn run_fact(fact: run_facts::Fact) -> Option<&'static [u8]> {
+fn run_fact(fact: &run_facts::Fact) -> Option<&'static [u8]> {
     let kind: &[u8] = match fact {
         run_facts::Fact::Admitted { .. } => b"run.admitted",
         run_facts::Fact::Prepared { .. } => b"run.prepared",
@@ -403,4 +406,33 @@ pub fn engine_outcome(declared: &Declared) -> Outcome {
             }
         }
     }
+}
+
+/// The run retains the worker's reason, repository and diagnostic tail.
+fn push_failure(failure: &temper_worker_domain_agent::PushFailure) -> run::PushFailure {
+    use temper_worker_domain_agent::PushReason;
+    let reason = match failure.reason {
+        PushReason::MissingRepository => run::PushReason::MissingRepository,
+        PushReason::MissingBranch => run::PushReason::MissingBranch,
+        PushReason::MissingCommit => run::PushReason::MissingCommit,
+        PushReason::Refused => run::PushReason::Refused,
+        PushReason::Unreachable => run::PushReason::Unreachable,
+        PushReason::Broken => run::PushReason::Broken,
+        PushReason::TimedOut => run::PushReason::TimedOut,
+        PushReason::Cancelled => run::PushReason::Cancelled,
+        PushReason::Unavailable => run::PushReason::Unavailable,
+        PushReason::Busy => run::PushReason::Busy,
+        PushReason::TooLarge => run::PushReason::TooLarge,
+        PushReason::Nothing => run::PushReason::Nothing,
+        PushReason::Unknown => run::PushReason::Unknown,
+    };
+    run::PushFailure {
+        repository: failure.repository,
+        reason,
+        diagnostic: run::PushDiagnostic::new(failure.diagnostic.output(), failure.diagnostic.cut()),
+    }
+}
+
+fn unpushed(owner: Token, reason: run::PushReason) -> Event {
+    Event::Pushed { owner, push: run::Push::Failed { failure: run::PushFailure::new(reason) } }
 }

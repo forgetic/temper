@@ -1349,6 +1349,28 @@ fn growth_a_person_accepted_beyond_the_envelope_widens_it() {
 }
 
 #[test]
+fn a_restored_goal_must_have_steps_with_valid_unique_names_and_known_dependencies() {
+    let malformed = [
+        Goal { steps: Box::new([]), ..goal() },
+        Goal { steps: Box::new([entry("", &[], None)]), ..goal() },
+        Goal { steps: Box::new([entry("longer-than-sixteen", &[], None)]), ..goal() },
+        Goal { steps: Box::new([entry("a", &[], None), entry("a", &[], None)]), ..goal() },
+        Goal { steps: Box::new([entry("a", &["missing"], None)]), ..goal() },
+    ];
+    for goal in malformed {
+        assert_eq!(check_goal(&env(), &goal), Err(Problems { listed: Box::new([Problem::Goal]), more: 0 }));
+    }
+}
+
+#[test]
+fn restoring_a_goal_allows_dependencies_on_later_entries_and_growth_parents() {
+    let forward = Goal { steps: Box::new([entry("a", &["b"], None), entry("b", &[], None)]), ..goal() };
+    assert_eq!(check_goal(&env(), &forward), Ok(()));
+    let grown = Goal { steps: Box::new([entry("a", &[], None), entry("b", &[], Some(0))]), ..goal() };
+    assert_eq!(check_goal(&env(), &grown), Ok(()));
+}
+
+#[test]
 fn a_goal_a_person_edited_into_a_cycle_is_a_problem_not_a_panic() {
     let cyclic = Goal { steps: Box::new([entry("a", &["b"], None), entry("b", &["a"], None)]), ..goal() };
     let problem = Err(Problems { listed: Box::new([Problem::Goal]), more: 0 });

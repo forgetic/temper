@@ -263,7 +263,7 @@ fn returned_cost(returned: &run::Returned) -> Option<u64> {
     let payload = match returned {
         run::Returned::Accepted
         | run::Returned::Moved
-        | run::Returned::Unpushed
+        | run::Returned::Unpushed { .. }
         | run::Returned::Cancelled
         | run::Returned::TimedOut
         | run::Returned::Busy

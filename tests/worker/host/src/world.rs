@@ -205,6 +205,10 @@ pub struct Stats {
 
 /// Something on its way, delivered at its time.
 #[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "fixed diagnostic tails keep boundary records bounded without allocation"
+)]
 enum Delivery {
     /// An event reaching the host: `stale` when it names an attempt never
     /// assigned, so it must change nothing.

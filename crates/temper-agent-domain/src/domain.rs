@@ -318,6 +318,7 @@ fn gather(domain: &mut Domain, limits: &Limits) {
     }
 }
 
+#[expect(clippy::large_types_passed_by_value, reason = "a bounded fact moves into its fixed-capacity queue")]
 fn keep(domain: &mut Domain, fact: Fact) {
     if domain.facts.try_push(fact).is_err() {
         domain.lost = domain.lost.saturating_add(1);

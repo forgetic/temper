@@ -54,6 +54,10 @@ pub struct Message {
 /// A piece of a message in a prompt. Text is UTF-8, checked by the protocol
 /// layer.
 #[derive(PartialEq, Eq, Hash, Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "fixed diagnostic tails keep boundary records bounded without allocation"
+)]
 pub enum Block {
     Text {
         text: Box<[u8]>,
@@ -75,6 +79,10 @@ pub enum Block {
 /// What came of a tool call, for the protocol layer to render as the text the
 /// LLM reads.
 #[derive(PartialEq, Eq, Hash, Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "fixed diagnostic tails keep boundary records bounded without allocation"
+)]
 pub enum Returned {
     /// The tools' outcome: a success, or a failure, one that ran out of time
     /// included.

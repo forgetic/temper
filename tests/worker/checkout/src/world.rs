@@ -226,6 +226,10 @@ struct Pending {
 }
 
 #[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "fixed diagnostic tails keep boundary records bounded without allocation"
+)]
 enum Work {
     /// It runs when it ends.
     Perform(Op),
@@ -429,7 +433,7 @@ impl World {
         }
         // The facts, drained as the shell would write them out.
         while let Some(fact) = self.domain.pop_fact() {
-            self.tell(fact);
+            self.tell(&fact);
         }
         // What the steps asked for, submitted at the end of the iteration.
         while let Some(request) = self.stage.out.pop() {
@@ -869,7 +873,12 @@ impl World {
                     }
                     stats.unchanged += 1;
                 }
-                Landing::Failed => {
+                Landing::Failed
+                | Landing::Explained {
+                    fault:
+                        Fault::Missing { .. } | Fault::Unreachable | Fault::Broken | Fault::TimedOut | Fault::Cancelled,
+                    ..
+                } => {
                     // A push that landed is reported landed, unless the fetch
                     // that would have told so failed too.
                     if let Some(attempt) = self.attempts.get(&(hold, repo.remote.clone())) {
@@ -879,7 +888,7 @@ impl World {
                     }
                     stats.failed += 1;
                 }
-                Landing::Refused => stats.push_refused += 1,
+                Landing::Refused | Landing::Explained { fault: Fault::Refused, .. } => stats.push_refused += 1,
                 Landing::Aborted => stats.landings_aborted += 1,
             }
         }
@@ -1025,7 +1034,8 @@ impl World {
                 | Done::Unchanged
                 | Done::Exists
                 | Done::Rejected
-                | Done::Failed { .. } => Verified::Failed,
+                | Done::Failed { .. }
+                | Done::FailedWithOutput { .. } => Verified::Failed,
             };
         }
         self.stage.push(Event::Done { owner, done });
@@ -1073,8 +1083,12 @@ impl World {
         }
         let new = self.check_moves();
         match done {
-            Done::Failed { fault: Fault::Unreachable } => self.stats.unreachable += 1,
-            Done::Failed { fault: Fault::Refused } => self.stats.refusals += 1,
+            Done::Failed { fault: Fault::Unreachable } | Done::FailedWithOutput { fault: Fault::Unreachable, .. } => {
+                self.stats.unreachable += 1;
+            }
+            Done::Failed { fault: Fault::Refused } | Done::FailedWithOutput { fault: Fault::Refused, .. } => {
+                self.stats.refusals += 1;
+            }
             Done::Succeeded if creates => {
                 assert!(new.len() == 1 && new[0].from.is_none(), "a base branch is created, never moved");
                 self.stats.created += 1;
@@ -1088,7 +1102,8 @@ impl World {
             | Done::Committed { .. }
             | Done::Unchanged
             | Done::Rejected
-            | Done::Failed { .. } => {}
+            | Done::Failed { .. }
+            | Done::FailedWithOutput { .. } => {}
         }
         done
     }
@@ -1112,7 +1127,7 @@ impl World {
 
     // Facts.
 
-    fn tell(&mut self, fact: Fact) {
+    fn tell(&mut self, fact: &Fact) {
         let told = &mut self.told;
         let count = match fact {
             Fact::Refused { .. } => &mut told.refused,

@@ -144,9 +144,12 @@ fn assignment(run: u64, limits: &Limits) -> Assignment {
 /// takes each through its tail. Every step's peak is checked against the
 /// worst case.
 fn fill(limits: Limits) {
-    let mut host = Measured::new(limits);
+    // The reusable landing fixture belongs to the checkout peer, not to the
+    // host. Allocate it before the meter; each event still owns its measured
+    // copy, so the host's transient handling remains covered.
     let landing = Landing::Landed { commit: [7; 32] };
     let landed = vec![landing; usize::try_from(limits.repositories).expect("fits")].into_boxed_slice();
+    let mut host = Measured::new(limits);
     let mut owners = Vec::new();
     for run in 0..u64::from(limits.slots) {
         let [Asked::Prepare { owner }] = host

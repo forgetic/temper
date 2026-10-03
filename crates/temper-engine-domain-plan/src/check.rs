@@ -97,10 +97,10 @@ pub enum Problem {
     NoGoal,
     /// A session released a step its goal does not have.
     UnknownStep,
-    /// The goal's record is not one the plan wrote: its steps come, through
-    /// one another, after themselves, or one comes after more steps than a
-    /// step may, or was added by a step that joined after it. Its parent holds
-    /// the goal's item for a person.
+    /// The goal's record is not one the plan wrote: it is empty, its names
+    /// are invalid or repeated, or its dependencies are missing, excessive
+    /// or cyclic, or a step was added by one that joined after it. Its parent
+    /// holds the goal's item for a person.
     Goal,
 }
 
@@ -135,7 +135,7 @@ pub fn check(config: &Config, env: &Env<Limits>, plan: &Plan) -> Result<u64, Pro
 pub fn check_goal(env: &Env<Limits>, goal: &Goal) -> Result<(), Problems> {
     let limits = &env.limits;
     let mut found = Found::new();
-    if count(goal.steps.len()) > limits.steps || !holds_together(limits, &goal.steps) {
+    if goal.steps.is_empty() || count(goal.steps.len()) > limits.steps || !holds_together(limits, &goal.steps) {
         found.add(Problem::Goal);
     } else {
         let _order: List<u32> = check_order(limits, &goal.steps, None, &[], &mut found);
@@ -234,13 +234,25 @@ pub(crate) fn check_steps(
     Checked { estimate, order }
 }
 
-/// Whether the steps a goal has hold together as the plan wrote them: each
-/// comes after no more steps than a step may, and was added, if a step added
-/// it, by one that joined before it.
+/// Whether the steps a goal has hold together as the plan wrote them: names
+/// are valid and unique, dependencies name its steps within the limit, and
+/// each was added, if a step added it, by one that joined before it. An empty
+/// slice is allowed here because a new plan has no existing steps.
 fn holds_together(limits: &Limits, existing: &[Entry]) -> bool {
     for (index, entry) in existing.iter().enumerate() {
+        if entry.name.is_empty()
+            || count(entry.name.len()) > limits.name_bytes
+            || entry_named(existing, &entry.name) != Some(count(index))
+        {
+            return false;
+        }
         if count(entry.after.len()) > limits.dependencies {
             return false;
+        }
+        for name in &entry.after {
+            if entry_named(existing, name).is_none() {
+                return false;
+            }
         }
         if let Some(parent) = entry.parent
             && parent >= count(index)

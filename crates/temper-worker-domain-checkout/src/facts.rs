@@ -14,6 +14,7 @@ use crate::git::{Done, Kind};
 
 /// Something that happened for the client `client`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[expect(clippy::large_enum_variant, reason = "bounded diagnostics stay inline and are included in worst_case")]
 pub enum Fact {
     /// A prepare, a push or a save was refused at the entrance.
     Refused { client: Token, refusal: Refusal },
@@ -84,6 +85,7 @@ impl Facts {
     }
 
     /// Keeps `fact` if there is room for it, and counts it otherwise.
+    #[expect(clippy::large_types_passed_by_value, reason = "a bounded fact moves into its fixed-capacity queue")]
     pub(crate) fn push(&mut self, fact: Fact) {
         if self.queue.try_push(fact).is_err() {
             self.lost = self.lost.saturating_add(1);

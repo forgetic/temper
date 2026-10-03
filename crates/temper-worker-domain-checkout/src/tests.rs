@@ -71,6 +71,7 @@ impl Harness {
 
     /// Ends the operation in flight for `hold` with `done`, which asks for the
     /// next operation: returns it.
+    #[expect(clippy::large_types_passed_by_value, reason = "the driver hands an owned terminal to the step")]
     fn next(&mut self, hold: Token, done: Done) -> Op {
         io(self.one(Event::Done { owner: hold, done }), hold)
     }
@@ -574,8 +575,11 @@ fn an_unchanged_tree_has_nothing_to_push() {
 fn a_push_that_is_not_a_fast_forward_is_moved_and_others_fail_by_kind() {
     let cases = [
         (Done::Rejected, Landing::Moved),
-        (failed(Fault::Refused), Landing::Refused),
-        (failed(Fault::Missing { missing: Missing::Repository }), Landing::Failed),
+        (failed(Fault::Refused), explained(Fault::Refused)),
+        (
+            failed(Fault::Missing { missing: Missing::Repository }),
+            explained(Fault::Missing { missing: Missing::Repository }),
+        ),
     ];
     for (done, landing) in cases {
         let mut h = Harness::new(LIMITS);
@@ -595,7 +599,7 @@ fn a_push_that_is_not_a_fast_forward_is_moved_and_others_fail_by_kind() {
     let hold = h.ready(1, one(b"w"));
     h.one(Event::Push { hold, message: message() });
     let end = h.one(Event::Done { owner: hold, done: failed(Fault::Broken) });
-    assert_eq!(&*landings(end), &[Landing::Failed]);
+    assert_eq!(&*landings(end), &[explained(Fault::Broken)]);
 }
 
 #[test]
@@ -713,9 +717,9 @@ fn an_abort_mid_push_waits_for_the_push_keeps_what_landed_and_reports_the_rest_a
 fn a_push_that_may_have_landed_is_verified() {
     let cases = [
         (failed(Fault::TimedOut), Done::Fetched { commit: commit(11) }, Landing::Landed { commit: commit(11) }),
-        (failed(Fault::Broken), Done::Fetched { commit: commit(1) }, Landing::Failed),
-        (failed(Fault::Unreachable), failed(Fault::Unreachable), Landing::Failed),
-        (failed(Fault::TimedOut), failed(Fault::Missing { missing: Missing::Branch }), Landing::Failed),
+        (failed(Fault::Broken), Done::Fetched { commit: commit(1) }, explained(Fault::Broken)),
+        (failed(Fault::Unreachable), failed(Fault::Unreachable), explained(Fault::Unreachable)),
+        (failed(Fault::TimedOut), failed(Fault::Missing { missing: Missing::Branch }), explained(Fault::TimedOut)),
     ];
     for (ended, found, landing) in cases {
         let mut h = Harness::new(LIMITS);
@@ -743,7 +747,7 @@ fn a_push_that_may_have_landed_is_verified() {
     let end = h.one(Event::Done { owner: hold, done: Done::Unchanged });
     assert_eq!(&*landings(end), &[Landing::Unchanged]);
     // A push refused, or not a fast-forward, is not verified.
-    for (ended, landing) in [(failed(Fault::Refused), Landing::Refused), (Done::Rejected, Landing::Moved)] {
+    for (ended, landing) in [(failed(Fault::Refused), explained(Fault::Refused)), (Done::Rejected, Landing::Moved)] {
         let mut h = Harness::new(LIMITS);
         let hold = h.ready(1, one(b"w"));
         h.one(Event::Push { hold, message: message() });
@@ -905,4 +909,47 @@ fn the_worst_case_is_bounded_or_refused() {
     assert_eq!(worst_case(&Limits { workspaces: 0, ..LIMITS }), None);
     assert_eq!(worst_case(&Limits { repositories: 0, ..LIMITS }), None);
     assert_eq!(worst_case(&Limits { workspaces: u32::MAX, name_bytes: u32::MAX, ..LIMITS }), None);
+}
+
+fn explained(fault: Fault) -> Landing {
+    Landing::Explained { fault, diagnostic: crate::git::PushDiagnostic::empty() }
+}
+
+#[test]
+fn failed_git_output_is_bounded_and_survives_push_verification() {
+    let prefix = [b'x'; crate::git::PushDiagnostic::CAPACITY + 32];
+    let suffix = b"connection reset after sending commit";
+    let mut writer = Writer::new(prefix.len() + suffix.len());
+    writer.put(&prefix).expect("the prefix fits");
+    writer.put(suffix).expect("the suffix fits");
+    let output = writer.finish();
+    let diagnostic = crate::git::PushDiagnostic::new(&output, 7);
+    assert_eq!(diagnostic.output().len(), crate::git::PushDiagnostic::CAPACITY);
+    assert!(diagnostic.output().ends_with(b"connection reset after sending commit"));
+    assert_eq!(diagnostic.cut(), 7 + u64::try_from(output.len() - diagnostic.output().len()).expect("small test"));
+    for verification in [Done::Fetched { commit: commit(1) }, failed(Fault::Unreachable)] {
+        let mut h = Harness::new(LIMITS);
+        let hold = h.ready(1, one(b"w"));
+        h.one(Event::Push { hold, message: message() });
+        h.next(hold, Done::Committed { commit: commit(11) });
+        h.next(hold, Done::FailedWithOutput { fault: Fault::Unreachable, diagnostic });
+        let end = h.one(Event::Done { owner: hold, done: verification });
+        assert_eq!(&*landings(end), &[Landing::Explained { fault: Fault::Unreachable, diagnostic }]);
+    }
+}
+
+#[test]
+fn failed_commit_or_refused_push_returns_git_diagnostics() {
+    let diagnostic = crate::git::PushDiagnostic::new(b"remote: protected branch hook rejected change", 0);
+    for commit_failed in [true, false] {
+        let mut h = Harness::new(LIMITS);
+        let hold = h.ready(1, one(b"w"));
+        h.one(Event::Push { hold, message: message() });
+        if !commit_failed {
+            h.next(hold, Done::Committed { commit: commit(11) });
+        }
+        let fault = if commit_failed { Fault::Broken } else { Fault::Refused };
+        let end = h.one(Event::Done { owner: hold, done: Done::FailedWithOutput { fault, diagnostic } });
+        assert_eq!(&*landings(end), &[Landing::Explained { fault, diagnostic }]);
+    }
 }

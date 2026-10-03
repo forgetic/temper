@@ -166,7 +166,7 @@ pub(crate) const fn failed(returned: &run::Returned) -> bool {
         run::Returned::Rejected { .. }
         | run::Returned::ChecksFailed { .. }
         | run::Returned::Moved
-        | run::Returned::Unpushed
+        | run::Returned::Unpushed { .. }
         | run::Returned::Cancelled
         | run::Returned::TimedOut
         | run::Returned::Busy
@@ -186,7 +186,7 @@ pub(crate) fn copy(returned: &run::Returned) -> run::Returned {
             run::Returned::ChecksFailed { repository: copy_of(repository), ran }
         }
         run::Returned::Moved => run::Returned::Moved,
-        run::Returned::Unpushed => run::Returned::Unpushed,
+        run::Returned::Unpushed { failure } => run::Returned::Unpushed { failure: *failure },
         run::Returned::Cancelled => run::Returned::Cancelled,
         run::Returned::TimedOut => run::Returned::TimedOut,
         run::Returned::Busy => run::Returned::Busy,

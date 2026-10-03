@@ -4,6 +4,7 @@
 use std::collections::BTreeSet;
 
 use temper_worker_checkout_world::{World, noisy, submit_noisily};
+use temper_worker_domain_checkout::git::Fault;
 use temper_worker_domain_checkout::{Failure, Landing, Prepared};
 
 const ITERATIONS: u32 = 100_000;
@@ -55,8 +56,8 @@ fn random_worlds_settle_with_every_client_heard() {
                     let kind = match landing {
                         Landing::Landed { .. } => "landed",
                         Landing::Moved => "moved",
-                        Landing::Failed => "failed",
-                        Landing::Refused => "refused",
+                        Landing::Refused | Landing::Explained { fault: Fault::Refused, .. } => "refused",
+                        Landing::Failed | Landing::Explained { .. } => "failed",
                         Landing::Unchanged => "unchanged",
                         Landing::Aborted => "aborted",
                     };

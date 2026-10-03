@@ -120,6 +120,7 @@ impl Fill {
         asked
     }
 
+    #[expect(clippy::large_types_passed_by_value, reason = "the driver hands an owned terminal to the step")]
     fn done(&mut self, hold: Token, done: Done) -> Vec<Asked> {
         self.step(Event::Done { owner: hold, done })
     }

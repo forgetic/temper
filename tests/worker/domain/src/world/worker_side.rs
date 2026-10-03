@@ -427,7 +427,7 @@ impl World {
                         assert!(!stopped, "a cancelled run's relayed calls are answered unavailable");
                         self.stats.relayed += 1;
                     }
-                    Reply::Pushed(push) => *self.stats.pushed.entry(push_kind(*push)).or_default() += 1,
+                    Reply::Pushed(push) => *self.stats.pushed.entry(push_kind(push)).or_default() += 1,
                     Reply::Unavailable => self.stats.unavailable += 1,
                     Reply::Busy => self.stats.busy += 1,
                     Reply::Withdrawn => self.stats.withdrawn += 1,
@@ -719,11 +719,11 @@ impl World {
     }
 }
 
-fn push_kind(push: agent::channel::Push) -> &'static str {
+fn push_kind(push: &agent::channel::Push) -> &'static str {
     match push {
         agent::channel::Push::Done => "done",
         agent::channel::Push::Moved => "moved",
-        agent::channel::Push::Failed => "failed",
+        agent::channel::Push::Failed { .. } => "failed",
         agent::channel::Push::Nothing => "nothing",
     }
 }

@@ -134,6 +134,10 @@ pub fn perform(forge: &mut impl Remote, disk: &mut Checkout, op: Op) -> Done {
             match git::push(forge, disk, &remote, &path(&at), fake(commit), &branch) {
                 Ok(Pushed::Pushed) => Done::Succeeded,
                 Ok(Pushed::Rejected) => Done::Rejected,
+                Err(git::Fault::Refused) => Done::FailedWithOutput {
+                    fault: Fault::Refused,
+                    diagnostic: temper_worker_domain_checkout::git::PushDiagnostic::new(b"remote: push refused", 0),
+                },
                 Err(fault) => failed(fault),
             }
         }

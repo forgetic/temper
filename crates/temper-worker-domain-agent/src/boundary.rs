@@ -61,6 +61,7 @@ use crate::channel::{Ask, Down, Finish, Reply, Up};
 
 /// parent -> agent
 #[derive(PartialEq, Eq, Debug)]
+#[expect(clippy::large_enum_variant, reason = "bounded diagnostics stay inline and are included in worst_case")]
 pub enum Event {
     /// From the client: spawn an agent process for `spawn`, and start its run.
     /// Ended by exactly one `Gone`.
@@ -106,6 +107,7 @@ pub enum Event {
 
 /// agent -> parent
 #[derive(PartialEq, Eq, Debug)]
+#[expect(clippy::large_enum_variant, reason = "bounded diagnostics stay inline and are included in worst_case")]
 pub enum Request {
     /// To the client: the agent for `client` was spawned and its run started,
     /// and `agent` names it from now on.

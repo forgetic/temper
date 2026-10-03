@@ -2,7 +2,7 @@ use alloc::boxed::Box;
 
 use skein_lib::{Id, Map, Queue, Set, Slab, Token};
 
-use crate::boundary::Reason;
+use crate::boundary::{Landing, Reason};
 use crate::call::Call;
 use crate::facts::Fact;
 use crate::hosted::Hosted;
@@ -53,10 +53,12 @@ pub(crate) fn calls(limits: &Limits) -> Option<u32> {
 ///
 /// It counts the containers, their bookkeeping included, and the payloads, not
 /// allocator overhead. What the host passes on (a workspace, the bodies of
-/// host calls and their answers, what a push or a save did) is moved into a
+/// host calls and their answers, what a save did) is moved into a
 /// request in the step it arrives in, and what it makes for a request (an
 /// answer, a report) is moved out in the step that makes it: either is its
-/// receiver's to count.
+/// receiver's to count. A push terminal's repository array is consumed while
+/// deriving its reply, so one such incoming array is counted at the step
+/// peak, alongside the runs' retained state.
 #[must_use]
 pub fn worst_case(limits: &Limits) -> Option<u64> {
     // The reserved output bound must be representable without saturation.
@@ -85,5 +87,15 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     let run =
         starting.max(ending).checked_add(u64::from(limits.name_bytes))?.checked_add(landed)?.checked_add(run_calls)?;
     let runs = u64::from(limits.slots).checked_mul(run)?;
-    hosted.checked_add(names)?.checked_add(ready)?.checked_add(calls)?.checked_add(facts)?.checked_add(runs)
+    // One terminal arrives per step. Push feedback consumes this array
+    // instead of handing it on; its fixed diagnostic payload is included.
+    let landing = u64::try_from(size_of::<Landing>()).ok()?;
+    let pushed = u64::from(limits.repositories).checked_mul(landing)?;
+    hosted
+        .checked_add(names)?
+        .checked_add(ready)?
+        .checked_add(calls)?
+        .checked_add(facts)?
+        .checked_add(runs)?
+        .checked_add(pushed)
 }

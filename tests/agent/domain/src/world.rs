@@ -943,6 +943,10 @@ struct Checking {
     work: Checks,
 }
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "fixed diagnostic tails keep boundary records bounded without allocation"
+)]
 enum Checks {
     /// Running in the repository at `root`, keeping the last `tail` bytes of
     /// what they write.

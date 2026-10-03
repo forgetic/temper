@@ -221,6 +221,19 @@ outcome spec asks for them, and then asks the worker to push:
   on the forge and the engine's rules guard landing. The checks catch
   failures early, inside the run that can fix them.
 
+Push failure feedback keeps a typed reason and the failed repository's index,
+with the last **512 bytes** of the git invocation's diagnostic output and the
+number of preceding bytes dropped. This is a fixed protocol cap, sealed by
+its value constructor and included in the domains' fixed-size memory bounds;
+it is separate from an agent process's operator-only stderr. If several
+repositories fail, feedback names the first in workspace order. The worker
+channel further trims the tail to its configured answer-byte limit, counting
+those dropped bytes too. Branch
+movement takes precedence. An ambiguous push is still verified before feedback
+is returned; unsuccessful verification keeps the original push diagnostic.
+No changed tree is a distinct `Nothing` result, reported to the LLM as failed
+finish feedback with that reason.
+
 Proposing a change mid-run, as a session does, goes the same way.
 
 ### 4.5 Lifetime

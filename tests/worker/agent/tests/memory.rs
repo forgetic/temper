@@ -72,9 +72,10 @@ struct Measured {
 impl Measured {
     fn new(limits: Limits) -> Measured {
         let bound = worst_case(&limits).expect("the test limits fit");
+        // The output queue belongs to the parent, not the measured child.
+        let out = Queue::with_capacity(MAX_OUT);
         let meter = Meter::new();
         let domain = Domain::new(&limits);
-        let out = Queue::with_capacity(MAX_OUT);
         Measured { domain, env: Env { now: Time::ZERO, wall: Wall::EPOCH, limits }, out, meter, bound, peak: 0 }
     }
 

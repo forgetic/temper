@@ -312,7 +312,9 @@ impl World {
         self.pushes.end((id, call));
         let push = match reply {
             Reply::Pushed(push) => channel::push(*push),
-            Reply::Unavailable | Reply::Busy | Reply::TooLarge => run::Push::Failed,
+            Reply::Unavailable => run::Push::Failed { failure: run::PushFailure::new(run::PushReason::Unavailable) },
+            Reply::Busy => run::Push::Failed { failure: run::PushFailure::new(run::PushReason::Busy) },
+            Reply::TooLarge => run::Push::Failed { failure: run::PushFailure::new(run::PushReason::TooLarge) },
             Reply::Withdrawn => {
                 self.stats.pushes_cancelled += 1;
                 return;
@@ -322,7 +324,7 @@ impl World {
         match push {
             run::Push::Done => self.stats.pushed += 1,
             run::Push::Moved => self.stats.moved += 1,
-            run::Push::Failed => self.stats.unpushed += 1,
+            run::Push::Failed { .. } | run::Push::Nothing => self.stats.unpushed += 1,
         }
         let run = self.processes.get_mut(&id).and_then(|process| process.run.as_mut());
         run.expect("a run pushes once started").pushes.push(push);

@@ -223,7 +223,9 @@ struct Channel {
     /// Inbound events sent down so far.
     sent: u64,
     /// Calls answered as busy at the entrance: their answers go down ahead of
-    /// the outbox, and while two wait, nothing more is read.
+    /// the outbox, and while two wait, nothing more is read. Their names stay
+    /// in flight here until the answers go down, separately from admitted
+    /// calls in `flight`.
     busy: Queue<Token>,
     /// The names of the run's calls in flight, from the call until its answer
     /// is sent down.
@@ -1130,7 +1132,7 @@ fn broken(message: &Up, channel: Option<&Channel>, limits: &Limits) -> bool {
     match message {
         Up::Call { call, ask } => {
             let reused = match channel {
-                Some(channel) => channel.flight.contains(call),
+                Some(channel) => in_flight(channel, *call),
                 None => false,
             };
             let body = match ask {
@@ -1158,8 +1160,23 @@ fn broken(message: &Up, channel: Option<&Channel>, limits: &Limits) -> bool {
     }
 }
 
+/// Admitted calls and overflow calls both keep their names until their
+/// answers go down. Overflow names already live in the bounded Busy queue.
+fn in_flight(channel: &Channel, call: Token) -> bool {
+    if channel.flight.contains(&call) {
+        return true;
+    }
+    for waiting in &channel.busy {
+        if *waiting == call {
+            return true;
+        }
+    }
+    false
+}
+
 /// An answer as it may go down: a relayed answer beyond the limits goes as
-/// too large.
+/// too large. Git diagnostics retain only the allowed tail, with dropped
+/// bytes counted; typed push reasons always fit independently of byte payload.
 fn bounded(reply: Reply, limits: &Limits) -> Reply {
     match reply {
         Reply::Relayed { answer } => {
@@ -1169,7 +1186,23 @@ fn bounded(reply: Reply, limits: &Limits) -> Reply {
                 Reply::TooLarge
             }
         }
-        reply @ (Reply::Pushed(_) | Reply::Unavailable | Reply::Busy | Reply::Withdrawn | Reply::TooLarge) => reply,
+        Reply::Pushed(crate::channel::Push::Failed { mut failure }) => {
+            let output = failure.diagnostic.output();
+            let keep = usize::try_from(limits.answer_bytes).unwrap_or(usize::MAX).min(output.len());
+            let dropped = output.len().checked_sub(keep).expect("the tail is within the output");
+            let cut =
+                failure.diagnostic.cut().saturating_add(u64::try_from(dropped).expect("the fixed tail fits in u64"));
+            failure.diagnostic =
+                crate::PushDiagnostic::new(output.get(dropped..).expect("the tail is within the output"), cut);
+            Reply::Pushed(crate::channel::Push::Failed { failure })
+        }
+        reply @ (Reply::Pushed(
+            crate::channel::Push::Done | crate::channel::Push::Moved | crate::channel::Push::Nothing,
+        )
+        | Reply::Unavailable
+        | Reply::Busy
+        | Reply::Withdrawn
+        | Reply::TooLarge) => reply,
     }
 }
 

@@ -273,7 +273,11 @@ impl Driver {
             }
             Asked::Push { owner, cancelled: true } if self.rng.chance(700) => Event::HostCancelled { owner },
             Asked::Push { owner, .. } => {
-                let push = [run::Push::Done, run::Push::Moved, run::Push::Failed][index(&mut self.rng, 3)];
+                let push = [
+                    run::Push::Done,
+                    run::Push::Moved,
+                    run::Push::Failed { failure: run::PushFailure::new(run::PushReason::Unknown) },
+                ][index(&mut self.rng, 3)];
                 Event::Pushed { owner, push }
             }
         })
@@ -440,6 +444,7 @@ fn churn(limits: &Limits, seed: u64, rounds: u32) -> [u32; 6] {
 }
 
 /// An entry point the loop calls.
+#[expect(clippy::large_enum_variant, reason = "the memory driver passes an owned bounded terminal to the step")]
 enum Point {
     Resume,
     Fire,

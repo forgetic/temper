@@ -54,6 +54,10 @@ use temper_worker_domain_host as host;
 
 /// protocol -> domain
 #[derive(PartialEq, Eq, Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "fixed diagnostic tails keep boundary records bounded without allocation"
+)]
 pub enum Event {
     /// The channel to the engine opened: the worker says hello next.
     Connected,
@@ -105,6 +109,10 @@ pub enum Event {
 
 /// domain -> protocol
 #[derive(PartialEq, Eq, Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "fixed diagnostic tails keep boundary records bounded without allocation"
+)]
 pub enum Request {
     /// Open the channel to the engine. Ended by one `Lost`, after a
     /// `Connected` if it opened.

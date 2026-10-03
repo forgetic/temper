@@ -36,6 +36,7 @@ mod limits;
 pub mod outcome;
 mod prepare;
 mod prompt;
+mod push;
 mod run;
 #[cfg(test)]
 mod tests;
@@ -48,3 +49,5 @@ pub use budget::{Budget, Exhausted, Spend};
 pub use charter::Charter;
 pub use domain::{Domain, MAX_OUT, fire, step};
 pub use limits::{Limits, worst_case};
+
+pub use push::{PushDiagnostic, PushFailure, PushReason};

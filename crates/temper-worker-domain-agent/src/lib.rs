@@ -41,6 +41,7 @@ pub mod channel;
 mod domain;
 mod facts;
 mod limits;
+mod push;
 #[cfg(test)]
 mod tests;
 
@@ -48,3 +49,5 @@ pub use boundary::{Bounce, End, Event, Fault, Invalid, Request, Signal, Spawn};
 pub use domain::{Domain, MAX_OUT, fire, step};
 pub use facts::Fact;
 pub use limits::{Limits, worst_case};
+
+pub use push::{PushDiagnostic, PushFailure, PushReason};

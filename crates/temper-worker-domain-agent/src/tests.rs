@@ -346,6 +346,47 @@ fn a_call_reusing_a_name_in_flight_breaks_the_rules() {
 }
 
 #[test]
+fn an_overflow_call_reusing_a_name_awaiting_its_busy_answer_breaks_the_rules() {
+    for cancelled in [false, true] {
+        let mut h = Harness::new(LIMITS);
+        let a = h.live(1);
+        h.call(a, 1);
+        h.call(a, 2);
+        if cancelled {
+            assert_eq!(&*h.stop(a), [send(a, Down::Cancel)]);
+            assert!(h.sent(a).is_empty());
+        }
+        let overflow = |call| Up::Call { call: Token::new(call), ask: Ask::Push { message: bytes(b"m") } };
+        assert_eq!(&*h.say(a, overflow(3)), [busy(a, 3), read(a)]);
+        assert_eq!(&*h.say(a, overflow(4)), [read(a)], "its Busy answer waits behind the send");
+        let emitted = h.say(a, overflow(4));
+        if cancelled {
+            assert_eq!(&*emitted, [signal(a, Signal::Terminate), read(a)]);
+        } else {
+            assert_eq!(&*emitted, [faulted(a, Fault::Rules), signal(a, Signal::Terminate), read(a)]);
+        }
+    }
+}
+
+#[test]
+fn an_overflow_calls_name_is_reusable_once_its_busy_answer_goes_down() {
+    let mut h = Harness::new(LIMITS);
+    let a = h.live(1);
+    h.call(a, 1);
+    h.call(a, 2);
+    let overflow = |call| Up::Call { call: Token::new(call), ask: Ask::Push { message: bytes(b"m") } };
+    assert_eq!(&*h.say(a, overflow(3)), [busy(a, 3), read(a)]);
+    assert_eq!(&*h.say(a, overflow(4)), [read(a)]);
+    assert!(h.say(a, overflow(5)).is_empty(), "two queued Busy answers pause reading");
+    assert_eq!(&*h.sent(a), [busy(a, 4), read(a)], "sending a Busy answer resumes reading");
+    assert!(h.say(a, overflow(4)).is_empty(), "its name can be reused; the new Busy answer pauses reading");
+    assert_eq!(&*h.sent(a), [busy(a, 5), read(a)]);
+    assert_eq!(&*h.sent(a), [busy(a, 4)]);
+    assert!(h.sent(a).is_empty());
+    assert_eq!(&*h.facts(), [Fact::Started { client: a.client }]);
+}
+
+#[test]
 fn payloads_beyond_the_limits_break_the_rules() {
     let breaches = [
         Up::Call { call: Token::new(1), ask: Ask::Relay { body: bytes(&[b'x'; 9]) } },
@@ -910,4 +951,30 @@ fn facts_beyond_their_room_are_dropped_and_counted() {
     h.stop(a);
     assert_eq!(h.domain.facts_lost(), 1);
     assert_eq!(&*h.facts(), [Fact::Started { client: a.client }]);
+}
+
+#[test]
+fn push_diagnostics_keep_the_allowed_tail_and_count_omitted_bytes() {
+    for answer_bytes in [0, 8] {
+        let limits = Limits { answer_bytes, ..LIMITS };
+        let mut h = Harness::new(limits);
+        let a = h.live(1);
+        h.call(a, 1);
+        let output = b"0123456789abcdef";
+        let failure = crate::PushFailure {
+            repository: Some(2),
+            reason: crate::PushReason::Refused,
+            diagnostic: crate::PushDiagnostic::new(output, 3),
+        };
+        let emitted = h.answer(a, 1, Reply::Pushed(Push::Failed { failure }));
+        let dropped = output.len() - usize::try_from(answer_bytes).expect("small test limit");
+        let expected = crate::PushFailure {
+            diagnostic: crate::PushDiagnostic::new(&output[dropped..], 3 + u64::try_from(dropped).expect("small test")),
+            ..failure
+        };
+        assert_eq!(
+            &*emitted,
+            [send(a, Down::Answer { call: Token::new(1), reply: Reply::Pushed(Push::Failed { failure: expected }) })]
+        );
+    }
 }

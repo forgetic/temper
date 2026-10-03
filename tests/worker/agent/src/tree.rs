@@ -59,6 +59,10 @@ pub struct Script {
 
 /// What the tree does next.
 #[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "fixed diagnostic tails keep boundary records bounded without allocation"
+)]
 pub enum Out {
     /// An event for the domain, `after` from now, and then a hop.
     Domain { after: Duration, event: Event },

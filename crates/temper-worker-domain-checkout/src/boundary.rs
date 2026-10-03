@@ -32,6 +32,7 @@ use crate::git::{Commit, Done, Missing, Op};
 
 /// parent -> checkout
 #[derive(PartialEq, Eq, Debug)]
+#[expect(clippy::large_enum_variant, reason = "bounded diagnostics stay inline and are included in worst_case")]
 pub enum Event {
     /// Prepare a workspace for `spec`, on behalf of `client`, which holds it
     /// until it releases it. Answered by exactly one `Prepared`, after a
@@ -190,7 +191,10 @@ pub enum Outcome {
 /// the way) is checked by fetching its branch: it landed if the branch is at
 /// its commit.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[expect(clippy::large_enum_variant, reason = "bounded diagnostics stay inline and are included in worst_case")]
 pub enum Landing {
+    /// A failed commit or push, with bounded diagnostics supplied by io.
+    Explained { fault: crate::git::Fault, diagnostic: crate::git::PushDiagnostic },
     /// `commit` is on the branch now.
     Landed { commit: Commit },
     /// The branch is somewhere the commit does not descend from, so the push

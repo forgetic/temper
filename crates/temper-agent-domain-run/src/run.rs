@@ -531,11 +531,22 @@ pub(crate) fn aborted(domain: &mut Domain, owner: Token, out: &mut Queue<Request
     settle(domain, id, settled, out);
 }
 
+#[expect(
+    clippy::large_types_passed_by_value,
+    reason = "owned terminal diagnostics pass through the step without allocation"
+)]
 pub(crate) fn pushed(domain: &mut Domain, owner: Token, push: Push, out: &mut Queue<Request>) {
     let id = Id::<Call>::from_token(owner);
     let call = domain.calls.get_mut(id).expect("a call lives until it returns");
     domain.facts.about(call.run.token());
-    domain.facts.push(Fact::Pushed { run: call.run.token(), push });
+    let told = match push {
+        Push::Failed { mut failure } => {
+            failure.diagnostic = crate::PushDiagnostic::empty();
+            Push::Failed { failure }
+        }
+        other @ (Push::Done | Push::Moved | Push::Nothing) => other,
+    };
+    domain.facts.push(Fact::Pushed { run: call.run.token(), push: told });
     let settled = match &mut call.work {
         Work::Landing(landing) => land::pushed(landing, call.owner, push, out),
         Work::Child(_) => unreachable!("io and the worker answer only a landing's requests"),

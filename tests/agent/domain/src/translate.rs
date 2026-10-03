@@ -6,6 +6,7 @@
 //! worker is [`crate::channel`]'s.
 
 use std::collections::BTreeMap;
+use std::fmt::Write;
 
 use temper_agent_domain::llm::{self as agent, Decoded, Served};
 use temper_agent_domain::run::charter;
@@ -134,11 +135,23 @@ pub fn render(result: &agent::Returned) -> (Box<[u8]>, bool) {
         agent::Returned::Served { returned, error } => {
             let text = match returned {
                 run::Returned::Answered { text, .. } => text.clone(),
+                run::Returned::Unpushed { failure } => {
+                    let mut text = format!("push failed: {:?}", failure.reason);
+                    if let Some(repository) = failure.repository {
+                        write!(text, " (repository {repository})").expect("writing to a String succeeds");
+                    }
+                    if failure.diagnostic.cut() > 0 {
+                        write!(text, "; {} diagnostic bytes omitted", failure.diagnostic.cut())
+                            .expect("writing to a String succeeds");
+                    }
+                    text.push('\n');
+                    text.push_str(&String::from_utf8_lossy(failure.diagnostic.output()));
+                    text.into_bytes().into()
+                }
                 returned @ (run::Returned::Accepted
                 | run::Returned::Rejected { .. }
                 | run::Returned::ChecksFailed { .. }
                 | run::Returned::Moved
-                | run::Returned::Unpushed
                 | run::Returned::Cancelled
                 | run::Returned::TimedOut
                 | run::Returned::Busy

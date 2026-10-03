@@ -230,7 +230,13 @@ fn a_push_the_forge_refuses_is_told_to_the_llm_which_finishes_again() {
     let run = first(&world);
     assert!(matches!(run.answer, Some(Answer::Failed { failure: Failure::Policy(_), .. })), "{:?}", run.answer);
     assert_eq!(run.checked, [false, true, true], "each finish is checked afresh");
-    assert_eq!(run.pushes, [Push::Failed, Push::Failed]);
+    assert_eq!(run.pushes.len(), 2);
+    for push in &run.pushes {
+        let Push::Failed { failure } = push else { panic!("the forge refused the push") };
+        assert_eq!(failure.reason, temper_agent_domain::run::PushReason::Refused);
+        assert_eq!(failure.repository, Some(0));
+        assert_eq!(failure.diagnostic.output(), b"remote: push refused");
+    }
     assert_eq!(run.reported, Some("run policy"));
     assert_eq!(world.stats().pushes_landed, 0, "nothing lands on a forge that refuses it");
 }

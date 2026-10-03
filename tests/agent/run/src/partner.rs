@@ -87,6 +87,10 @@ pub struct Script {
 
 /// What the partner asks of the world.
 #[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "fixed diagnostic tails keep boundary records bounded without allocation"
+)]
 pub enum Out {
     /// An event for the run.
     Event(Event),
@@ -290,7 +294,7 @@ impl Partner {
             Returned::Rejected { .. } => self.tally.rejected += 1,
             Returned::ChecksFailed { .. } => self.tally.checks_failed += 1,
             Returned::Moved => self.tally.moved += 1,
-            Returned::Unpushed => self.tally.unpushed += 1,
+            Returned::Unpushed { .. } => self.tally.unpushed += 1,
             Returned::Cancelled => self.tally.cancelled += 1,
             Returned::TimedOut => self.tally.timed_out += 1,
             Returned::Busy => self.tally.busy += 1,

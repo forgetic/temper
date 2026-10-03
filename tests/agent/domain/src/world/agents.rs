@@ -644,6 +644,7 @@ impl World {
 
     /// Counts a fact of the agent of `process`, follows its run's
     /// conversations and what they use, and writes it up the channel.
+    #[expect(clippy::large_types_passed_by_value, reason = "the observed fact moves into its channel projection")]
     fn tell(&mut self, id: u64, fact: Fact) {
         let told = &mut self.told;
         let process = self.processes.get_mut(&id).expect("a process tells once spawned");
@@ -735,7 +736,7 @@ impl World {
                         | run::Returned::Rejected { .. }
                         | run::Returned::ChecksFailed { .. }
                         | run::Returned::Moved
-                        | run::Returned::Unpushed
+                        | run::Returned::Unpushed { .. }
                         | run::Returned::Cancelled
                         | run::Returned::TimedOut
                         | run::Returned::Busy

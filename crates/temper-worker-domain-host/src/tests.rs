@@ -700,8 +700,26 @@ fn a_push_is_served_through_the_workspace_and_the_run_told_how_it_went() {
         ([LANDED, Landing::Unchanged], Push::Done),
         ([LANDED, Landing::Moved], Push::Moved),
         ([Landing::Failed, Landing::Moved], Push::Moved),
-        ([Landing::Failed, LANDED], Push::Failed),
-        ([Landing::Refused, LANDED], Push::Failed),
+        (
+            [Landing::Failed, LANDED],
+            Push::Failed {
+                failure: crate::PushFailure {
+                    repository: Some(0),
+                    reason: crate::PushReason::Unknown,
+                    diagnostic: crate::PushDiagnostic::empty(),
+                },
+            },
+        ),
+        (
+            [Landing::Refused, LANDED],
+            Push::Failed {
+                failure: crate::PushFailure {
+                    repository: Some(0),
+                    reason: crate::PushReason::Refused,
+                    diagnostic: crate::PushDiagnostic::empty(),
+                },
+            },
+        ),
         ([Landing::Unchanged, Landing::Unchanged], Push::Nothing),
     ];
     for (push, told) in cases {
@@ -764,7 +782,20 @@ fn calls_beyond_the_runs_limit_and_a_second_push_are_busy() {
     h.relay(hosted, 9);
     assert_eq!(&*h.call(hosted, 10, Ask::Relay { body: bytes(b"b") }), [reply(hosted, 10, Reply::Busy)]);
     let pushed = Event::Pushed { owner: push, push: Box::new([Landing::Failed, Landing::Unchanged]) };
-    assert_eq!(&*h.step(pushed), [reply(hosted, 7, Reply::Pushed(Push::Failed))]);
+    assert_eq!(
+        &*h.step(pushed),
+        [reply(
+            hosted,
+            7,
+            Reply::Pushed(Push::Failed {
+                failure: crate::PushFailure {
+                    repository: Some(0),
+                    reason: crate::PushReason::Unknown,
+                    diagnostic: crate::PushDiagnostic::empty()
+                }
+            })
+        )]
+    );
     // The push's call keeps its slot until the reclaim point: the slab is
     // full for now, though the run has room.
     let tight = Limits { slots: 1, ..LIMITS };
@@ -1228,4 +1259,37 @@ fn cancelling_a_full_run_reserves_room_for_replies_and_cancels() {
 fn output_bounds_that_overflow_are_refused_before_startup() {
     assert_eq!(worst_case(&Limits { slots: 1, run_calls: u32::MAX, ..LIMITS }), None);
     assert_eq!(worst_case(&Limits { held: u32::MAX, ..LIMITS }), None);
+}
+
+#[test]
+fn push_feedback_keeps_the_first_failed_repository_and_its_diagnostics() {
+    let first = crate::PushFailure {
+        repository: None,
+        reason: crate::PushReason::Refused,
+        diagnostic: crate::PushDiagnostic::new(b"remote: protected branch", 17),
+    };
+    let later = crate::PushFailure {
+        repository: None,
+        reason: crate::PushReason::Unreachable,
+        diagnostic: crate::PushDiagnostic::new(b"could not resolve host", 0),
+    };
+    for (push, expected) in [
+        (
+            [Landing::Explained { failure: first }, Landing::Explained { failure: later }],
+            Push::Failed { failure: crate::PushFailure { repository: Some(0), ..first } },
+        ),
+        (
+            [LANDED, Landing::Explained { failure: later }],
+            Push::Failed { failure: crate::PushFailure { repository: Some(1), ..later } },
+        ),
+        ([Landing::Explained { failure: first }, Landing::Moved], Push::Moved),
+    ] {
+        let mut h = Harness::new(LIMITS);
+        let hosted = h.live(1);
+        let owner = h.push(hosted, 7);
+        assert_eq!(
+            &*h.step(Event::Pushed { owner, push: Box::new(push) }),
+            [reply(hosted, 7, Reply::Pushed(expected))]
+        );
+    }
 }

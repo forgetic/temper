@@ -680,7 +680,7 @@ pub(crate) fn pushed(domain: &mut Domain, owner: Token, push: Box<[Landing]>, ou
             Landing::Landed { commit } => {
                 entry.landed.insert(index, *commit).expect("room for every repository");
             }
-            Landing::Moved | Landing::Failed | Landing::Refused | Landing::Unchanged => {}
+            Landing::Moved | Landing::Failed | Landing::Refused | Landing::Explained { .. } | Landing::Unchanged => {}
         }
     }
     // Live or stopping, the run is told how it went; an agent that has gone
@@ -1034,19 +1034,33 @@ fn explained(ending: Ending, detail: Box<[u8]>) -> Ending {
 /// change landed it; moved if any branch moved; failed if the forge refused
 /// one, or one failed.
 fn told(push: &[Landing]) -> Push {
-    let (mut landed, mut moved, mut failed) = (false, false, false);
-    for landing in push {
-        match landing {
-            Landing::Landed { .. } => landed = true,
-            Landing::Moved => moved = true,
-            Landing::Failed | Landing::Refused => failed = true,
-            Landing::Unchanged => {}
+    let (mut landed, mut moved, mut failed) = (false, false, None);
+    for (index, landing) in push.iter().enumerate() {
+        let failure = match landing {
+            Landing::Landed { .. } => {
+                landed = true;
+                None
+            }
+            Landing::Moved => {
+                moved = true;
+                None
+            }
+            Landing::Failed => Some(crate::PushFailure::new(crate::PushReason::Unknown)),
+            Landing::Refused => Some(crate::PushFailure::new(crate::PushReason::Refused)),
+            Landing::Explained { failure } => Some(*failure),
+            Landing::Unchanged => None,
+        };
+        if failed.is_none()
+            && let Some(mut failure) = failure
+        {
+            failure.repository = Some(u32::try_from(index).expect("repository counts fit in a u32"));
+            failed = Some(failure);
         }
     }
     if moved {
         Push::Moved
-    } else if failed {
-        Push::Failed
+    } else if let Some(failure) = failed {
+        Push::Failed { failure }
     } else if landed {
         Push::Done
     } else {

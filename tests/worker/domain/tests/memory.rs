@@ -38,6 +38,10 @@ enum Asked {
 
 /// An io terminal owed, to be stepped in turn.
 #[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "fixed diagnostic tails keep boundary records bounded without allocation"
+)]
 enum Owed {
     RelayCancelled { call: Token },
     Done { owner: Token, done: Done },

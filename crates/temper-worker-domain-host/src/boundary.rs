@@ -39,6 +39,8 @@
 
 use alloc::boxed::Box;
 
+use crate::push::PushFailure;
+
 use skein_lib::{ReplyTo, Token};
 
 /// parent -> host
@@ -108,6 +110,7 @@ pub enum Event {
 
 /// host -> parent
 #[derive(PartialEq, Eq, Debug)]
+#[expect(clippy::large_enum_variant, reason = "bounded diagnostics stay inline and are included in worst_case")]
 pub enum Request {
     /// To the engine, the answer to an `Assign`: exactly one per assignment.
     Answer { to: ReplyTo, run: Token, attempt: Token, answer: Answer },
@@ -239,6 +242,7 @@ pub enum Ask {
 
 /// The answer to a host call.
 #[derive(PartialEq, Eq, Hash, Debug)]
+#[expect(clippy::large_enum_variant, reason = "bounded diagnostics stay inline and are included in worst_case")]
 pub enum Reply {
     /// The engine's answer to a relayed call, as it is.
     Relayed { answer: Box<[u8]> },
@@ -260,20 +264,26 @@ pub enum Reply {
 /// How a push went, as the run is told: done only if every repository with a
 /// change landed it. A push the forge refused failed, as the run sees it.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[expect(clippy::large_enum_variant, reason = "bounded diagnostics stay inline and are included in worst_case")]
 pub enum Push {
     Done,
     /// A branch moved since the run started: no change of the run can land
     /// there.
     Moved,
     /// A push failed, and none moved.
-    Failed,
+    Failed {
+        failure: PushFailure,
+    },
     /// No repository had a change.
     Nothing,
 }
 
 /// What became of one repository in a push or a save.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[expect(clippy::large_enum_variant, reason = "bounded diagnostics stay inline and are included in worst_case")]
 pub enum Landing {
+    /// A failed invocation, with its typed reason and bounded diagnostics.
+    Explained { failure: PushFailure },
     /// Its change is on the branch, as `commit`, by its object id (as
     /// [`Start::Commit`]'s).
     Landed { commit: [u8; 32] },

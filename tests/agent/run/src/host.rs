@@ -312,7 +312,9 @@ impl Host {
         let push = if moved {
             Push::Moved
         } else if self.rng.chance(self.script.push_failures) {
-            Push::Failed
+            Push::Failed {
+                failure: temper_agent_domain_run::PushFailure::new(temper_agent_domain_run::PushReason::Unknown),
+            }
         } else {
             Push::Done
         };

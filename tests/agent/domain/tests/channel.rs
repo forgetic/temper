@@ -166,11 +166,19 @@ fn every_reply_ends_the_push_it_answers() {
     let replies = [
         (Reply::Pushed(Push::Done), pushed(run::Push::Done)),
         (Reply::Pushed(Push::Moved), pushed(run::Push::Moved)),
-        (Reply::Pushed(Push::Failed), pushed(run::Push::Failed)),
-        (Reply::Pushed(Push::Nothing), pushed(run::Push::Failed)),
-        (Reply::Unavailable, pushed(run::Push::Failed)),
-        (Reply::Busy, pushed(run::Push::Failed)),
-        (Reply::TooLarge, pushed(run::Push::Failed)),
+        (
+            Reply::Pushed(Push::Failed {
+                failure: temper_worker_domain_agent::PushFailure::new(temper_worker_domain_agent::PushReason::Refused),
+            }),
+            pushed(run::Push::Failed { failure: run::PushFailure::new(run::PushReason::Refused) }),
+        ),
+        (Reply::Pushed(Push::Nothing), pushed(run::Push::Nothing)),
+        (
+            Reply::Unavailable,
+            pushed(run::Push::Failed { failure: run::PushFailure::new(run::PushReason::Unavailable) }),
+        ),
+        (Reply::Busy, pushed(run::Push::Failed { failure: run::PushFailure::new(run::PushReason::Busy) })),
+        (Reply::TooLarge, pushed(run::Push::Failed { failure: run::PushFailure::new(run::PushReason::TooLarge) })),
         (Reply::Withdrawn, Event::HostCancelled { owner: CALL }),
     ];
     for (reply, event) in replies {
@@ -387,4 +395,46 @@ fn a_budgets_tokens_are_split_across_the_kinds_spending_no_more_than_given() {
         assert!(budget.input >= budget.output && budget.output >= budget.cache_read, "{budget:?}");
         assert_eq!((budget.turns, budget.time), (3, Duration::from_secs(1)));
     }
+}
+
+#[test]
+fn a_push_failure_reaches_the_llm_as_its_reason_and_actual_diagnostic_output() {
+    use temper_agent_domain_world::translate;
+    use temper_fake_llm_domain::api::Part;
+    use temper_worker_domain_agent::{PushDiagnostic, PushFailure, PushReason};
+
+    let failure = PushFailure {
+        repository: Some(2),
+        reason: PushReason::Refused,
+        diagnostic: PushDiagnostic::new(b"remote: hook declined: missing changelog", 37),
+    };
+    let Event::Pushed { push: run::Push::Failed { failure }, .. } =
+        channel::answer(CALL, &Reply::Pushed(Push::Failed { failure }))
+    else {
+        panic!("a failed push retains its feedback")
+    };
+    let prompt = llm::Prompt {
+        endpoint: llm::Endpoint(0),
+        model: bytes(b"test"),
+        system: Box::new([]),
+        tools: tools::Grants { inspect: false, modify: false, shell: false },
+        served: Box::new([]),
+        messages: Box::new([llm::Message {
+            role: llm::Role::User,
+            content: Box::new([llm::Block::ToolResult {
+                id: bytes(b"finish"),
+                result: llm::Returned::Served { returned: run::Returned::Unpushed { failure }, error: true },
+            }]),
+        }]),
+        max_tokens: 100,
+    };
+    let query = translate::query(prompt);
+    let Part::ToolOutput { output, is_error, .. } = &query.messages[0].parts[0] else {
+        panic!("the provider receives a tool result")
+    };
+    assert!(*is_error);
+    assert_eq!(
+        output.as_ref(),
+        b"push failed: Refused (repository 2); 37 diagnostic bytes omitted\nremote: hook declined: missing changelog"
+    );
 }

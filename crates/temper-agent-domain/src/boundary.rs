@@ -43,6 +43,10 @@ use crate::llm::{Completion, Failure, Prompt};
 
 /// protocol -> domain
 #[derive(PartialEq, Eq, Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "fixed diagnostic tails keep boundary records bounded without allocation"
+)]
 pub enum Event {
     /// From the worker, a call: start a run on `charter`, and answer once it
     /// has ended. `worker` is the worker's name for the run, echoed on

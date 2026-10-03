@@ -33,6 +33,8 @@
 
 use alloc::boxed::Box;
 
+use crate::push::PushFailure;
+
 use skein_lib::{ReplyTo, Time, Token};
 
 use crate::budget::{Budget, Exhausted, Spend};
@@ -41,6 +43,7 @@ use crate::outcome::{Change, Declared, Problems};
 
 /// parent -> run
 #[derive(PartialEq, Eq, Debug)]
+#[expect(clippy::large_enum_variant, reason = "bounded diagnostics stay inline and are included in worst_case")]
 pub enum Event {
     /// From the worker, a call: start a run on `charter`, and answer once it
     /// has ended. `worker` is the worker's name for the run, echoed on
@@ -85,6 +88,7 @@ pub enum Event {
 
 /// run -> parent
 #[derive(PartialEq, Eq, Debug)]
+#[expect(clippy::large_enum_variant, reason = "bounded diagnostics stay inline and are included in worst_case")]
 pub enum Request {
     /// To the worker: the run it names `worker` was admitted, and is `run` to
     /// the run child domain from now on.
@@ -143,6 +147,7 @@ pub enum Ask {
 
 /// The run's answer to a delegated call.
 #[derive(PartialEq, Eq, Hash, Debug)]
+#[expect(clippy::large_enum_variant, reason = "bounded diagnostics stay inline and are included in worst_case")]
 pub enum Returned {
     /// The outcome is accepted: the run finishes with it.
     Accepted,
@@ -154,7 +159,7 @@ pub enum Returned {
     /// the run ends.
     Moved,
     /// The change was not pushed: the push failed.
-    Unpushed,
+    Unpushed { failure: PushFailure },
     /// Nothing was decided: the call was withdrawn, or the run is ending
     /// otherwise.
     Cancelled,
@@ -217,13 +222,16 @@ pub enum Exit {
 
 /// How a push ended.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[expect(clippy::large_enum_variant, reason = "bounded diagnostics stay inline and are included in worst_case")]
 pub enum Push {
     /// The change is pushed.
     Done,
     /// The branch moved since the run started: nothing was pushed.
     Moved,
     /// The push failed.
-    Failed,
+    Failed { failure: PushFailure },
+    /// No repository contained a change.
+    Nothing,
 }
 
 /// Where a file is, for the run's own io: a repository's root, as io names

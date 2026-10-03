@@ -267,12 +267,14 @@ runs as contained processes and whose output it parses.
   repository's checks with nothing else writing to the checkout
   (agent-domain.md, 4.4); the worker commits exactly that tree and pushes
   the commit, with the run's message whole as its title. A push is a
-  fast-forward and never forced: if the branch moved since the run
-  started, the push fails and the run is told, which makes it the
-  freshness check too.
+  fast-forward and never forced: if the branch moved incompatibly with the
+  run's commit, the push fails and the run is told. This checks freshness
+  against divergent changes; it does not detect every branch movement
+  (section 12).
 - **Each repository lands on its own.** Pushing several is not atomic:
   the run is told done only if every repository with a change landed it,
-  moved if a branch moved, and nothing to push if none had a change. A
+  moved if a branch cannot take the commit as a fast-forward, and nothing
+  to push if none had a change. A
   push the forge refused (permissions, a protected branch, a hook) is a
   landing of its own, which a retry will not change.
 - **Pushes are never cancelled.** A push in flight runs to its end, which
@@ -469,3 +471,13 @@ yet, each to be designed before it is built:
 - **A workspace's repositories in parallel:** a checkout runs one
   operation at a time, so its repositories are cloned, fetched and pushed
   one after another.
+
+## 12. Deferred conformance issues
+
+- **Exact-head freshness on push.** The git operation enforces an ordinary
+  fast-forward, with no expected previous head. If another party rewinds
+  the remote branch to an ancestor, a run may still push successfully and
+  restore commits that party removed. Detecting every movement since the
+  run started needs an expected-head precondition, including a decision
+  about branches that did not exist at prepare. This is deferred; current
+  pushes reject incompatible history and never force a branch.

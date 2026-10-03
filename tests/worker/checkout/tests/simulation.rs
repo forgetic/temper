@@ -5,7 +5,7 @@ use skein_lib::{Duration, Time};
 use temper_worker_checkout_world::client::{Interrupt, Pick, Plan};
 use temper_worker_checkout_world::translate;
 use temper_worker_checkout_world::{LIMITS, Settings, Span, Told, World, noisy, submit_noisily};
-use temper_worker_domain_checkout::git::Missing;
+use temper_worker_domain_checkout::git::{Fault, Missing, PushDiagnostic};
 use temper_worker_domain_checkout::{Failure, Landing, Limits, Prepared, Refusal};
 
 const ITERATIONS: u32 = 100_000;
@@ -116,7 +116,10 @@ fn an_unreachable_forge_fails_the_prepare_for_now_and_a_refusing_one_for_good() 
     let mut world = World::new(Settings { refusing: 1000, ..Settings::calm(6) });
     let client = world.submit(Time::ZERO, Plan { start: Some(Pick::Branch), ..Plan::simple(0) });
     world.run(ITERATIONS);
-    assert_eq!(first_landings(&world, client), [Landing::Refused]);
+    assert_eq!(
+        first_landings(&world, client),
+        [Landing::Explained { fault: Fault::Refused, diagnostic: PushDiagnostic::new(b"remote: push refused", 0) }]
+    );
 }
 
 #[test]
@@ -130,7 +133,11 @@ fn a_branch_another_party_advanced_makes_the_push_moved_and_nothing_is_forced() 
             match landing {
                 Landing::Landed { .. } => {}
                 Landing::Moved => moved += 1,
-                other @ (Landing::Failed | Landing::Refused | Landing::Unchanged | Landing::Aborted) => {
+                other @ (Landing::Failed
+                | Landing::Refused
+                | Landing::Explained { .. }
+                | Landing::Unchanged
+                | Landing::Aborted) => {
                     panic!("seed {seed}: landed or moved, not {other:?}")
                 }
             }

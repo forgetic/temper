@@ -147,6 +147,10 @@ pub(crate) fn aborted(landing: &mut Landing, owner: Token, out: &mut Queue<Reque
 }
 
 /// The push of a call its conversation names `owner` ended as `push`.
+#[expect(
+    clippy::large_types_passed_by_value,
+    reason = "owned terminal diagnostics pass through the step without allocation"
+)]
 pub(crate) fn pushed(landing: &mut Landing, owner: Token, push: Push, out: &mut Queue<Request>) -> Settled {
     let stage = mem::replace(&mut landing.stage, Stage::Closed);
     match stage {
@@ -157,7 +161,13 @@ pub(crate) fn pushed(landing: &mut Landing, owner: Token, push: Push, out: &mut 
                 back(owner, Returned::Accepted, Settled::Pushed(change), out)
             }
             Push::Moved => back(owner, Returned::Moved, Settled::Stale, out),
-            Push::Failed => back(owner, Returned::Unpushed, Settled::Refused, out),
+            Push::Failed { failure } => back(owner, Returned::Unpushed { failure }, Settled::Refused, out),
+            Push::Nothing => back(
+                owner,
+                Returned::Unpushed { failure: crate::PushFailure::new(crate::PushReason::Nothing) },
+                Settled::Refused,
+                out,
+            ),
         },
         Stage::Checking { .. } | Stage::Aborting { .. } | Stage::Closed => {
             unreachable!("a push ends only while it is in flight")

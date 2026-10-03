@@ -553,3 +553,12 @@ By fake:
 - **The real loop's privileges:** the containment it shares with
   production needs user namespaces and a delegated cgroup on the test
   host.
+
+## 11. Deferred conformance issues
+
+- **The fake provider's Rust subset.** `cued` in
+  `testing/temper-fake-llm-domain/src/respond.rs` uses a `while let` loop
+  to find a script's cue. Each round consumes a byte of the bounded query,
+  so execution terminates, but programming-model.md, sections 3 and 10.3,
+  forbids `while` in step code. Rewriting it as a bounded `for` is deferred;
+  this records the discrepancy rather than granting a general exception.

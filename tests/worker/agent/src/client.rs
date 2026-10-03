@@ -60,6 +60,10 @@ pub struct Script {
 
 /// What the client does next.
 #[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "fixed diagnostic tails keep boundary records bounded without allocation"
+)]
 pub enum Out {
     /// An event for the domain, after a hop.
     Domain(Event),
@@ -179,7 +183,16 @@ impl Client {
                 spawned.calls.remove(&call);
                 let agent = self.agent(client);
                 let reply = if push {
-                    let outcomes = [Push::Done, Push::Moved, Push::Failed, Push::Nothing];
+                    let outcomes = [
+                        Push::Done,
+                        Push::Moved,
+                        Push::Failed {
+                            failure: temper_worker_domain_agent::PushFailure::new(
+                                temper_worker_domain_agent::PushReason::Unknown,
+                            ),
+                        },
+                        Push::Nothing,
+                    ];
                     Reply::Pushed(outcomes[usize::try_from(self.rng.below(4)).expect("fits")])
                 } else if self.rng.chance(self.script.oversized) {
                     self.tally.oversized += 1;

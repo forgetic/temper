@@ -23,6 +23,7 @@ use crate::run::{self, Conversation, Run};
 /// Something that happened in the run `run` (the run's token for it, as
 /// `Admitted` gives it).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[expect(clippy::large_enum_variant, reason = "bounded diagnostics stay inline and are included in worst_case")]
 pub enum Fact {
     /// The run was admitted.
     Admitted { run: Token },
@@ -93,6 +94,7 @@ impl Facts {
     }
 
     /// Keeps `fact` if there is room for it, and counts it otherwise.
+    #[expect(clippy::large_types_passed_by_value, reason = "a bounded fact moves into its fixed-capacity queue")]
     pub(crate) fn push(&mut self, fact: Fact) {
         if self.queue.try_push(fact).is_err() {
             self.lost = self.lost.saturating_add(1);
@@ -167,7 +169,7 @@ fn result_of(result: &Returned) -> Return {
         Returned::Rejected { .. } => Return::Rejected,
         Returned::ChecksFailed { .. } => Return::ChecksFailed,
         Returned::Moved => Return::Moved,
-        Returned::Unpushed => Return::Unpushed,
+        Returned::Unpushed { .. } => Return::Unpushed,
         Returned::Cancelled => Return::Cancelled,
         Returned::TimedOut => Return::TimedOut,
         Returned::Busy => Return::Busy,

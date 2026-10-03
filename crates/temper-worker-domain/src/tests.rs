@@ -559,8 +559,15 @@ fn a_push_the_forge_refuses_fails_and_the_run_is_told() {
     let [Request::Io { op: Op::Push { .. }, .. }] = &*emitted else {
         panic!("expected a push, got {emitted:?}");
     };
-    let refused = git::Done::Failed { fault: git::Fault::Refused };
-    let told = channel::Reply::Pushed(channel::Push::Failed);
+    let diagnostic = git::PushDiagnostic::new(b"remote: branch protection rejected this push", 19);
+    let refused = git::Done::FailedWithOutput { fault: git::Fault::Refused, diagnostic };
+    let told = channel::Reply::Pushed(channel::Push::Failed {
+        failure: channel::PushFailure {
+            repository: Some(0),
+            reason: channel::PushReason::Refused,
+            diagnostic: channel::PushDiagnostic::new(diagnostic.output(), diagnostic.cut()),
+        },
+    });
     let emitted = h.step(Event::Done { owner, done: refused });
     assert_eq!(&*emitted, [send(r, Down::Answer { call: Token::new(7), reply: told })], "a protected branch, say");
 }

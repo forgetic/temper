@@ -97,7 +97,7 @@ pub(crate) fn landings(outcome: checkout::Outcome, repositories: u32) -> Box<[ho
     match outcome {
         checkout::Outcome::Pushed { landings: pushed } => {
             for landed in pushed {
-                landings.push(landing(landed)).expect("one landing for each repository");
+                landings.push(landing(&landed)).expect("one landing for each repository");
             }
         }
         checkout::Outcome::Refused { refusal: _ } => {
@@ -109,8 +109,15 @@ pub(crate) fn landings(outcome: checkout::Outcome, repositories: u32) -> Box<[ho
     landings.into_boxed()
 }
 
-const fn landing(landing: checkout::Landing) -> host::Landing {
+fn landing(landing: &checkout::Landing) -> host::Landing {
     match landing {
+        checkout::Landing::Explained { fault, diagnostic } => host::Landing::Explained {
+            failure: host::PushFailure {
+                repository: None,
+                reason: push_reason(*fault),
+                diagnostic: host::PushDiagnostic::new(diagnostic.output(), diagnostic.cut()),
+            },
+        },
         checkout::Landing::Landed { commit } => host::Landing::Landed { commit: commit.raw() },
         checkout::Landing::Moved => host::Landing::Moved,
         checkout::Landing::Unchanged => host::Landing::Unchanged,
@@ -129,18 +136,18 @@ pub(crate) fn ask(ask: channel::Ask) -> host::Ask {
 pub(crate) fn reply(reply: host::Reply) -> channel::Reply {
     match reply {
         host::Reply::Relayed { answer } => channel::Reply::Relayed { answer },
-        host::Reply::Pushed(push) => channel::Reply::Pushed(self::push(push)),
+        host::Reply::Pushed(push) => channel::Reply::Pushed(self::push(&push)),
         host::Reply::Unavailable => channel::Reply::Unavailable,
         host::Reply::Withdrawn => channel::Reply::Withdrawn,
         host::Reply::Busy => channel::Reply::Busy,
     }
 }
 
-const fn push(push: host::Push) -> channel::Push {
+fn push(push: &host::Push) -> channel::Push {
     match push {
         host::Push::Done => channel::Push::Done,
         host::Push::Moved => channel::Push::Moved,
-        host::Push::Failed => channel::Push::Failed,
+        host::Push::Failed { failure } => channel::Push::Failed { failure: channel_failure(failure) },
         host::Push::Nothing => channel::Push::Nothing,
     }
 }
@@ -187,5 +194,42 @@ pub(crate) const fn phase(phase: host::Phase) -> Phase {
         host::Phase::Active => Phase::Active,
         host::Phase::Waiting => Phase::Waiting,
         host::Phase::Ending => Phase::Ending,
+    }
+}
+
+const fn push_reason(fault: git::Fault) -> host::PushReason {
+    match fault {
+        git::Fault::Missing { missing: git::Missing::Repository } => host::PushReason::MissingRepository,
+        git::Fault::Missing { missing: git::Missing::Branch } => host::PushReason::MissingBranch,
+        git::Fault::Missing { missing: git::Missing::Commit } => host::PushReason::MissingCommit,
+        git::Fault::Refused => host::PushReason::Refused,
+        git::Fault::Unreachable => host::PushReason::Unreachable,
+        git::Fault::Broken => host::PushReason::Broken,
+        git::Fault::TimedOut => host::PushReason::TimedOut,
+        git::Fault::Cancelled => host::PushReason::Cancelled,
+    }
+}
+
+fn channel_failure(failure: &host::PushFailure) -> agent::PushFailure {
+    let host::PushFailure { repository, reason, diagnostic } = failure;
+    let reason = match reason {
+        host::PushReason::MissingRepository => agent::PushReason::MissingRepository,
+        host::PushReason::MissingBranch => agent::PushReason::MissingBranch,
+        host::PushReason::MissingCommit => agent::PushReason::MissingCommit,
+        host::PushReason::Refused => agent::PushReason::Refused,
+        host::PushReason::Unreachable => agent::PushReason::Unreachable,
+        host::PushReason::Broken => agent::PushReason::Broken,
+        host::PushReason::TimedOut => agent::PushReason::TimedOut,
+        host::PushReason::Cancelled => agent::PushReason::Cancelled,
+        host::PushReason::Unavailable => agent::PushReason::Unavailable,
+        host::PushReason::Busy => agent::PushReason::Busy,
+        host::PushReason::TooLarge => agent::PushReason::TooLarge,
+        host::PushReason::Nothing => agent::PushReason::Nothing,
+        host::PushReason::Unknown => agent::PushReason::Unknown,
+    };
+    agent::PushFailure {
+        repository: *repository,
+        reason,
+        diagnostic: agent::PushDiagnostic::new(diagnostic.output(), diagnostic.cut()),
     }
 }

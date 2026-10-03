@@ -77,6 +77,10 @@ pub(super) struct Pending {
 }
 
 #[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "fixed diagnostic tails keep boundary records bounded without allocation"
+)]
 pub(super) enum Work {
     /// It runs when it ends.
     Perform(Op),
@@ -285,7 +289,8 @@ impl World {
             | Done::Committed { .. }
             | Done::Unchanged
             | Done::Exists
-            | Done::Failed { .. } => {}
+            | Done::Failed { .. }
+            | Done::FailedWithOutput { .. } => {}
         }
         done
     }

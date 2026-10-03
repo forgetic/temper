@@ -394,7 +394,7 @@ fn matches_rejected(returned: &run::Returned) -> bool {
         run::Returned::Accepted
         | run::Returned::ChecksFailed { .. }
         | run::Returned::Moved
-        | run::Returned::Unpushed
+        | run::Returned::Unpushed { .. }
         | run::Returned::Cancelled
         | run::Returned::TimedOut
         | run::Returned::Busy

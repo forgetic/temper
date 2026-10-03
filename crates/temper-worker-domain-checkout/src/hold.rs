@@ -118,6 +118,7 @@ pub(crate) struct Tips {
 }
 
 #[derive(Debug)]
+#[expect(clippy::large_enum_variant, reason = "bounded diagnostics stay inline and are included in worst_case")]
 enum State {
     /// Preparing the workspace: `step` is in flight.
     Preparing { step: PrepareStep, asked: Asked },
@@ -181,6 +182,7 @@ enum To {
 
 /// The operation a pushing hold waits for.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[expect(clippy::large_enum_variant, reason = "bounded diagnostics stay inline and are included in worst_case")]
 enum PushStep {
     Commit {
         repository: u32,
@@ -191,6 +193,7 @@ enum PushStep {
     /// The branch a push that may have landed went to.
     Verify {
         repository: u32,
+        failure: Done,
     },
 }
 
@@ -308,11 +311,25 @@ fn ask(domain: &mut Domain, hold: Token, now: Asked, out: &mut Queue<Request>) {
 }
 
 /// Terminal for an operation: what the hold does next.
+#[expect(
+    clippy::large_types_passed_by_value,
+    reason = "owned terminal diagnostics pass through the step without allocation"
+)]
 pub(crate) fn done(domain: &mut Domain, env: &Env<Limits>, owner: Token, done: Done, out: &mut Queue<Request>) {
     let mark = out.len();
     let id = Id::from_token(owner);
     let hold = domain.holds.get_mut(id).expect("a hold lives until its operation has ended");
-    domain.facts.push(Fact::Ended { client: hold.holding.client, done });
+    let told = match done {
+        Done::FailedWithOutput { fault, .. } => Done::Failed { fault },
+        other @ (Done::Failed { .. }
+        | Done::Succeeded
+        | Done::Fetched { .. }
+        | Done::Committed { .. }
+        | Done::Unchanged
+        | Done::Exists
+        | Done::Rejected) => other,
+    };
+    domain.facts.push(Fact::Ended { client: hold.holding.client, done: told });
     if damages(done) {
         domain.cache.spoil(hold.holding.workspace);
     }
@@ -394,12 +411,16 @@ fn follow(holds: &mut Slab<Hold>, cache: &mut Cache, id: Id<Hold>) {
 
 /// Preparing, done: where the prepare goes from the operation `step` that
 /// ended so.
+#[expect(
+    clippy::large_types_passed_by_value,
+    reason = "owned terminal diagnostics pass through the step without allocation"
+)]
 fn prepared(holding: &mut Holding, cache: &mut Cache, step: PrepareStep, done: Done) -> Next {
     let last = count(holding.repositories.len()).checked_sub(1).expect("a spec names a repository");
     match step {
         PrepareStep::Make => match done {
             Done::Succeeded => Next::Step(PrepareStep::Clone { repository: 0 }),
-            Done::Failed { fault: _ } => Next::Failed(Failure::Transient),
+            Done::Failed { fault: _ } | Done::FailedWithOutput { fault: _, .. } => Next::Failed(Failure::Transient),
             Done::Fetched { .. } | Done::Committed { .. } | Done::Unchanged | Done::Exists | Done::Rejected => {
                 unreachable!("io ends a make with its own terminals")
             }
@@ -410,7 +431,7 @@ fn prepared(holding: &mut Holding, cache: &mut Cache, step: PrepareStep, done: D
                 cache.cloned(holding.workspace, &holding.repositories);
                 Next::Step(PrepareStep::Fetch { repository: 0 })
             }
-            Done::Failed { fault } => Next::Failed(failure(repository, fault)),
+            Done::Failed { fault } | Done::FailedWithOutput { fault, .. } => Next::Failed(failure(repository, fault)),
             Done::Fetched { .. } | Done::Committed { .. } | Done::Unchanged | Done::Exists | Done::Rejected => {
                 unreachable!("io ends a clone with its own terminals")
             }
@@ -418,18 +439,19 @@ fn prepared(holding: &mut Holding, cache: &mut Cache, step: PrepareStep, done: D
         PrepareStep::Fetch { repository } => match done {
             Done::Fetched { commit } => Next::Step(PrepareStep::CheckOut { repository, commit }),
             Done::Failed { fault: Fault::Missing { missing: Missing::Branch } }
+            | Done::FailedWithOutput { fault: Fault::Missing { missing: Missing::Branch }, .. }
                 if creates_base(holding, repository) =>
             {
                 Next::Step(PrepareStep::Default { repository })
             }
-            Done::Failed { fault } => Next::Failed(failure(repository, fault)),
+            Done::Failed { fault } | Done::FailedWithOutput { fault, .. } => Next::Failed(failure(repository, fault)),
             Done::Succeeded | Done::Committed { .. } | Done::Unchanged | Done::Exists | Done::Rejected => {
                 unreachable!("io ends a fetch with its own terminals")
             }
         },
         PrepareStep::Default { repository } => match done {
             Done::Fetched { commit } => Next::Step(PrepareStep::Create { repository, commit }),
-            Done::Failed { fault } => Next::Failed(failure(repository, fault)),
+            Done::Failed { fault } | Done::FailedWithOutput { fault, .. } => Next::Failed(failure(repository, fault)),
             Done::Succeeded | Done::Committed { .. } | Done::Unchanged | Done::Exists | Done::Rejected => {
                 unreachable!("io ends a fetch with its own terminals")
             }
@@ -437,7 +459,7 @@ fn prepared(holding: &mut Holding, cache: &mut Cache, step: PrepareStep, done: D
         PrepareStep::Create { repository, commit } => match done {
             Done::Succeeded => Next::Step(PrepareStep::CheckOut { repository, commit }),
             Done::Exists => Next::Step(PrepareStep::Refetch { repository }),
-            Done::Failed { fault } => Next::Failed(failure(repository, fault)),
+            Done::Failed { fault } | Done::FailedWithOutput { fault, .. } => Next::Failed(failure(repository, fault)),
             Done::Fetched { .. } | Done::Committed { .. } | Done::Unchanged | Done::Rejected => {
                 unreachable!("io ends a creation with its own terminals")
             }
@@ -445,8 +467,9 @@ fn prepared(holding: &mut Holding, cache: &mut Cache, step: PrepareStep, done: D
         PrepareStep::Refetch { repository } => match done {
             Done::Fetched { commit } => Next::Step(PrepareStep::CheckOut { repository, commit }),
             // It was there a moment ago: whoever made it removed it since.
-            Done::Failed { fault: Fault::Missing { .. } } => Next::Failed(Failure::Transient),
-            Done::Failed { fault } => Next::Failed(failure(repository, fault)),
+            Done::Failed { fault: Fault::Missing { .. } }
+            | Done::FailedWithOutput { fault: Fault::Missing { .. }, .. } => Next::Failed(Failure::Transient),
+            Done::Failed { fault } | Done::FailedWithOutput { fault, .. } => Next::Failed(failure(repository, fault)),
             Done::Succeeded | Done::Committed { .. } | Done::Unchanged | Done::Exists | Done::Rejected => {
                 unreachable!("io ends a fetch with its own terminals")
             }
@@ -461,7 +484,7 @@ fn prepared(holding: &mut Holding, cache: &mut Cache, step: PrepareStep, done: D
                     Next::Ready
                 }
             }
-            Done::Failed { fault: _ } => Next::Failed(Failure::Transient),
+            Done::Failed { fault: _ } | Done::FailedWithOutput { fault: _, .. } => Next::Failed(Failure::Transient),
             Done::Fetched { .. } | Done::Committed { .. } | Done::Unchanged | Done::Exists | Done::Rejected => {
                 unreachable!("io ends a checkout with its own terminals")
             }
@@ -607,6 +630,10 @@ fn push_from(
 /// Pushing, done: what came of the repository in flight, then the next one,
 /// or the end, which an abort or a release brings forward.
 #[expect(clippy::too_many_arguments, reason = "a cell handler takes the state's parts and the event's")]
+#[expect(
+    clippy::large_types_passed_by_value,
+    reason = "owned terminal diagnostics pass through the step without allocation"
+)]
 fn pushed(
     holding: &mut Holding,
     id: Id<Hold>,
@@ -624,19 +651,24 @@ fn pushed(
                     Some(commit) => return push_commit(holding, id, push, repository, commit, env, out),
                     None => (repository, Landing::Unchanged),
                 },
-                Err(fault) => (repository, landing(fault)),
+                Err(failure) => (repository, failed_landing(failure)),
             },
             // Committed or not, nothing is pushed.
             Asked::Abort | Asked::Release => match committed(holding, repository, done) {
-                Ok(()) | Err(Fault::Cancelled) => (repository, Landing::Aborted),
-                Err(fault) => (repository, landing(fault)),
+                Ok(())
+                | Err(
+                    Done::Failed { fault: Fault::Cancelled } | Done::FailedWithOutput { fault: Fault::Cancelled, .. },
+                ) => (repository, Landing::Aborted),
+                Err(failure) => (repository, failed_landing(failure)),
             },
         },
         PushStep::Push { repository } => match pushed_to(holding, &push.to, repository, done) {
             Some(landing) => (repository, landing),
-            None => return verify(holding, id, push, repository, asked, env, out),
+            None => return verify(holding, id, push, repository, asked, done, env, out),
         },
-        PushStep::Verify { repository } => (repository, verified(holding, &push.to, repository, done)),
+        PushStep::Verify { repository, failure } => {
+            (repository, verified(holding, &push.to, repository, done, failure))
+        }
     };
     push.landings.push(landing).expect("room for each repository's landing");
     match asked {
@@ -647,14 +679,19 @@ fn pushed(
 
 /// Pushing, a commit done: the repository's new head, if it committed, or
 /// why it failed.
-fn committed(holding: &mut Holding, repository: u32, done: Done) -> Result<(), Fault> {
+#[expect(
+    clippy::large_types_passed_by_value,
+    reason = "owned terminal diagnostics pass through the step without allocation"
+)]
+#[expect(clippy::result_large_err, reason = "the fixed diagnostic terminal is returned without allocation")]
+fn committed(holding: &mut Holding, repository: u32, done: Done) -> Result<(), Done> {
     match done {
         Done::Committed { commit } => {
             tips_mut(holding, repository).head = commit;
             Ok(())
         }
         Done::Unchanged => Ok(()),
-        Done::Failed { fault } => Err(fault),
+        failure @ (Done::Failed { .. } | Done::FailedWithOutput { .. }) => Err(failure),
         Done::Succeeded | Done::Fetched { .. } | Done::Exists | Done::Rejected => {
             unreachable!("io ends a commit with its own terminals")
         }
@@ -696,12 +733,23 @@ fn push_commit(
 /// Pushing, a push done: what came of it, or `None` if it may have landed
 /// all the same, to be verified. A commit that landed on its push branch is
 /// the base of the next push.
+#[expect(
+    clippy::large_types_passed_by_value,
+    reason = "owned terminal diagnostics pass through the step without allocation"
+)]
 fn pushed_to(holding: &mut Holding, to: &To, repository: u32, done: Done) -> Option<Landing> {
     match done {
         Done::Succeeded => Some(land(holding, to, repository)),
         Done::Rejected => Some(Landing::Moved),
-        Done::Failed { fault: Fault::TimedOut | Fault::Broken | Fault::Unreachable | Fault::Cancelled } => None,
-        Done::Failed { fault: fault @ (Fault::Missing { .. } | Fault::Refused) } => Some(landing(fault)),
+        Done::Failed { fault: Fault::TimedOut | Fault::Broken | Fault::Unreachable | Fault::Cancelled }
+        | Done::FailedWithOutput {
+            fault: Fault::TimedOut | Fault::Broken | Fault::Unreachable | Fault::Cancelled,
+            ..
+        } => None,
+        failure @ (Done::Failed { fault: Fault::Missing { .. } | Fault::Refused }
+        | Done::FailedWithOutput { fault: Fault::Missing { .. } | Fault::Refused, .. }) => {
+            Some(failed_landing(failure))
+        }
         Done::Fetched { .. } | Done::Committed { .. } | Done::Unchanged | Done::Exists => {
             unreachable!("io ends a push with its own terminals")
         }
@@ -710,12 +758,18 @@ fn pushed_to(holding: &mut Holding, to: &To, repository: u32, done: Done) -> Opt
 
 /// Asks io for the branch a push that may have landed went to, whether the
 /// client asked to abort or not: one more operation, bounded as any.
+#[expect(clippy::too_many_arguments, reason = "a cell handler takes the fields it touches")]
+#[expect(
+    clippy::large_types_passed_by_value,
+    reason = "owned terminal diagnostics pass through the step without allocation"
+)]
 fn verify(
     holding: &Holding,
     id: Id<Hold>,
     push: Push,
     repository: u32,
     asked: Asked,
+    failure: Done,
     env: &Env<Limits>,
     out: &mut Queue<Request>,
 ) -> State {
@@ -725,15 +779,19 @@ fn verify(
     let remote = copy_of(&spec.remote);
     let identity = copy_of(&spec.identity);
     io(id, Op::Fetch { at, remote, want, identity }, env, out);
-    State::Pushing { push, step: PushStep::Verify { repository }, asked }
+    State::Pushing { push, step: PushStep::Verify { repository, failure }, asked }
 }
 
 /// Pushing, a verification done: the push landed if its branch is at the
 /// commit it pushed.
-fn verified(holding: &mut Holding, to: &To, repository: u32, done: Done) -> Landing {
+#[expect(
+    clippy::large_types_passed_by_value,
+    reason = "owned terminal diagnostics pass through the step without allocation"
+)]
+fn verified(holding: &mut Holding, to: &To, repository: u32, done: Done, failure: Done) -> Landing {
     match done {
         Done::Fetched { commit } if commit == tips(holding, repository).head => land(holding, to, repository),
-        Done::Fetched { .. } | Done::Failed { .. } => Landing::Failed,
+        Done::Fetched { .. } | Done::Failed { .. } | Done::FailedWithOutput { .. } => failed_landing(failure),
         Done::Succeeded | Done::Committed { .. } | Done::Unchanged | Done::Exists | Done::Rejected => {
             unreachable!("io ends a fetch with its own terminals")
         }
@@ -808,10 +866,16 @@ fn io(id: Id<Hold>, op: Op, env: &Env<Limits>, out: &mut Queue<Request>) {
 
 /// Whether an operation that ended so may have left its repository damaged:
 /// git was killed, or failed on the worker's side.
+#[expect(
+    clippy::large_types_passed_by_value,
+    reason = "owned terminal diagnostics pass through the step without allocation"
+)]
 const fn damages(done: Done) -> bool {
     match done {
-        Done::Failed { fault: Fault::Broken | Fault::TimedOut | Fault::Cancelled } => true,
+        Done::Failed { fault: Fault::Broken | Fault::TimedOut | Fault::Cancelled }
+        | Done::FailedWithOutput { fault: Fault::Broken | Fault::TimedOut | Fault::Cancelled, .. } => true,
         Done::Failed { fault: Fault::Missing { .. } | Fault::Refused | Fault::Unreachable }
+        | Done::FailedWithOutput { fault: Fault::Missing { .. } | Fault::Refused | Fault::Unreachable, .. }
         | Done::Succeeded
         | Done::Fetched { .. }
         | Done::Committed { .. }
@@ -831,13 +895,21 @@ const fn failure(repository: u32, fault: Fault) -> Failure {
     }
 }
 
-/// What came of a repository whose commit or push failed so, for good.
-const fn landing(fault: Fault) -> Landing {
-    match fault {
-        Fault::Refused => Landing::Refused,
-        Fault::Missing { .. } | Fault::Unreachable | Fault::Broken | Fault::TimedOut | Fault::Cancelled => {
-            Landing::Failed
-        }
+/// What a failed invocation said, retaining its diagnostic output.
+#[expect(
+    clippy::large_types_passed_by_value,
+    reason = "owned terminal diagnostics pass through the step without allocation"
+)]
+fn failed_landing(done: Done) -> Landing {
+    match done {
+        Done::Failed { fault } => Landing::Explained { fault, diagnostic: crate::git::PushDiagnostic::empty() },
+        Done::FailedWithOutput { fault, diagnostic } => Landing::Explained { fault, diagnostic },
+        Done::Succeeded
+        | Done::Fetched { .. }
+        | Done::Committed { .. }
+        | Done::Unchanged
+        | Done::Exists
+        | Done::Rejected => unreachable!("only a failed invocation is explained"),
     }
 }
 
@@ -847,8 +919,8 @@ fn tally(landings: &[Landing]) -> Tally {
         let counted = match landing {
             Landing::Landed { .. } => &mut tally.landed,
             Landing::Moved => &mut tally.moved,
-            Landing::Failed => &mut tally.failed,
-            Landing::Refused => &mut tally.refused,
+            Landing::Refused | Landing::Explained { fault: Fault::Refused, .. } => &mut tally.refused,
+            Landing::Failed | Landing::Explained { .. } => &mut tally.failed,
             Landing::Unchanged => &mut tally.unchanged,
             Landing::Aborted => &mut tally.aborted,
         };

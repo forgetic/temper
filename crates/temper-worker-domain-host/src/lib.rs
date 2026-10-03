@@ -43,6 +43,7 @@ mod domain;
 mod facts;
 mod hosted;
 mod limits;
+mod push;
 #[cfg(test)]
 mod tests;
 
@@ -53,3 +54,5 @@ pub use boundary::{
 pub use domain::{Domain, max_out, resume, step};
 pub use facts::Fact;
 pub use limits::{Limits, worst_case};
+
+pub use push::{PushDiagnostic, PushFailure, PushReason};

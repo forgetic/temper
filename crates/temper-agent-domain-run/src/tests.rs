@@ -634,7 +634,13 @@ fn a_change_that_fails_its_checks_or_its_push_goes_back_to_the_llm() {
     let owner = h.land(conversation, 8);
     drop(h.step(Event::Checked { owner, ran: ran(0, b"") }));
     drop(h.step(Event::Checked { owner, ran: ran(0, b"") }));
-    assert_eq!(&*h.step(Event::Pushed { owner, push: Push::Failed }), &[returned(8, Returned::Unpushed)]);
+    assert_eq!(
+        &*h.step(Event::Pushed {
+            owner,
+            push: Push::Failed { failure: crate::PushFailure::new(crate::PushReason::Unknown) }
+        }),
+        &[returned(8, Returned::Unpushed { failure: crate::PushFailure::new(crate::PushReason::Unknown) })]
+    );
     assert!(h.step(end_turn(conversation)).len() == 1, "the run goes on: a nudge");
 }
 
@@ -1273,4 +1279,56 @@ fn facts_that_do_not_fit_are_dropped_and_counted_and_change_nothing() {
     assert_eq!(answered(emitted), (1, cancelled()));
     assert_eq!(facts(&mut h).len(), 2);
     assert_eq!(h.domain.facts_lost(), 3, "opened, ended and answered did not fit");
+}
+
+#[test]
+fn nothing_to_push_is_specific_feedback_and_the_run_can_retry() {
+    let mut h = Harness::new(LIMITS);
+    let (_, conversation) = h.coding(1, 100);
+    let owner = h.land(conversation, 7);
+    drop(h.step(Event::Checked { owner, ran: ran(0, b"") }));
+    drop(h.step(Event::Checked { owner, ran: ran(0, b"") }));
+    assert_eq!(
+        &*h.step(Event::Pushed { owner, push: Push::Nothing }),
+        &[returned(7, Returned::Unpushed { failure: crate::PushFailure::new(crate::PushReason::Nothing) })]
+    );
+    assert_eq!(h.step(end_turn(conversation)).len(), 1, "a retry is nudged");
+}
+
+#[test]
+fn failed_push_reason_and_diagnostics_return_to_the_finish_caller() {
+    let mut h = Harness::new(LIMITS);
+    let (_, conversation) = h.coding(1, 100);
+    let owner = h.land(conversation, 7);
+    drop(h.step(Event::Checked { owner, ran: ran(0, b"") }));
+    drop(h.step(Event::Checked { owner, ran: ran(0, b"") }));
+    let failure = crate::PushFailure {
+        repository: Some(1),
+        reason: crate::PushReason::Refused,
+        diagnostic: crate::PushDiagnostic::new(b"remote: protected branch", 17),
+    };
+    assert_eq!(
+        &*h.step(Event::Pushed { owner, push: Push::Failed { failure } }),
+        &[returned(7, Returned::Unpushed { failure })]
+    );
+    let mut pushed = None;
+    for fact in facts(&mut h) {
+        match fact {
+            Fact::Pushed { push, .. } => pushed = Some(push),
+            Fact::Admitted { .. }
+            | Fact::Prepared { .. }
+            | Fact::Opened { .. }
+            | Fact::Ended { .. }
+            | Fact::Called { .. }
+            | Fact::Returned { .. }
+            | Fact::CheckStarted { .. }
+            | Fact::CheckFinished { .. }
+            | Fact::Answered { .. } => {}
+        }
+    }
+    let pushed = pushed.expect("push ended fact");
+    let Push::Failed { failure: told } = pushed else {
+        panic!("failed push fact");
+    };
+    assert!(told.diagnostic.output().is_empty(), "facts hold no diagnostic content");
 }

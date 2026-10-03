@@ -12,6 +12,10 @@ use temper_agent_domain_session as session;
 
 /// Something that happened in a child domain.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "fixed diagnostic tails keep boundary records bounded without allocation"
+)]
 pub enum Fact {
     /// In the run child domain.
     Run { fact: run::Fact },

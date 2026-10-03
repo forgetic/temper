@@ -30,6 +30,8 @@
 
 use alloc::boxed::Box;
 
+pub use crate::push::{PushDiagnostic, PushFailure, PushReason};
+
 use skein_lib::{Duration, Token};
 
 /// agent -> worker
@@ -61,6 +63,7 @@ pub enum Up {
 
 /// worker -> agent
 #[derive(PartialEq, Eq, Debug)]
+#[expect(clippy::large_enum_variant, reason = "bounded diagnostics stay inline and are included in worst_case")]
 pub enum Down {
     /// The first message: what the run starts with, passed through. Where the
     /// repositories sit is the protocol layer's to add, from the spawn.
@@ -85,6 +88,7 @@ pub enum Ask {
 
 /// The answer to a host call.
 #[derive(PartialEq, Eq, Hash, Debug)]
+#[expect(clippy::large_enum_variant, reason = "bounded diagnostics stay inline and are included in worst_case")]
 pub enum Reply {
     /// The engine's answer to a relayed call, as it is.
     Relayed { answer: Box<[u8]> },
@@ -103,6 +107,7 @@ pub enum Reply {
 
 /// How a push went, as the run is told.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[expect(clippy::large_enum_variant, reason = "bounded diagnostics stay inline and are included in worst_case")]
 pub enum Push {
     /// Every repository with a change landed it.
     Done,
@@ -110,7 +115,7 @@ pub enum Push {
     /// there.
     Moved,
     /// A push failed, and none moved.
-    Failed,
+    Failed { failure: PushFailure },
     /// No repository had a change.
     Nothing,
 }
