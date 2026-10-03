@@ -312,7 +312,7 @@ fn from_fleet(model: &mut Model, env: &Env<Limits>, request: fleet::Request, out
             fleet::Undelivered::Gone => {}
         },
         fleet::Request::Told { run, attempt: _, fact } => runs::report(model, env, run, fact),
-        fleet::Request::Drop { payload } => runs::forget(model, payload),
+        fleet::Request::Drop { payload } => runs::dropped(model, env, payload),
     }
 }
 

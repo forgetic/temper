@@ -114,11 +114,10 @@ fn a_channel_lost_for_less_than_the_grace_keeps_the_runs() {
     assert!(total(&worlds, |stats| stats.longest_outage.map_or(0, |_| 1)) > 0, "runs went on meanwhile");
 }
 
-/// The channel lost past the grace: the worker cancels its runs. (Past the
+/// The channel lost past the grace: the worker cancels its runs. Past the
 /// engine's grace too, a change's attempt may have pushed before it was
-/// presumed lost, which the engine never learns: see the findings of
-/// tests/fuzzy/worker/model. Such a world runs for a while, and is not asked
-/// to settle.)
+/// presumed lost: the engine learns it from the answer that comes late, and
+/// the world settles.
 #[test]
 fn a_channel_lost_for_longer_than_the_grace_cancels_the_runs() {
     let mut cancelled = 0;
@@ -127,7 +126,7 @@ fn a_channel_lost_for_longer_than_the_grace_cancels_the_runs() {
         let calm = Settings::calm(seed);
         let settings = dropping(calm, Span::millis(20_000, 120_000), Span::millis(90_000, 120_000), 30);
         let mut world = World::new(settings);
-        world.run_for(Duration::from_secs(1_800), ITERATIONS);
+        world.run(ITERATIONS);
         let stats = world.stats();
         cancelled += count(&stats, "cancelled contact");
         longest = longest.max(stats.longest_outage);
@@ -174,11 +173,9 @@ fn a_worker_shutting_down_out_of_reach_delivers_its_answers_if_the_channel_opens
     // The worker is told to shut down with runs live, and the channel drops
     // and stays down past the worker's grace. Some agents wind down at once,
     // and their runs answer; the others ignore the cancel and the terminate,
-    // and are killed only once the channel has opened again. (Out of reach
-    // past the engine's grace too, such a world may meet the findings of
-    // tests/fuzzy/worker/model: it runs for a while, and is not asked to
-    // settle.) The first seed whose world keeps an answer past the grace with
-    // a run left.
+    // and are killed only once the channel has opened again; out of reach
+    // past the engine's grace too, the world settles. The first seed whose
+    // world keeps an answer past the grace with a run left.
     let calm = dropping(Settings::calm(5), Span::millis(60_000, 70_000), Span::millis(62_000, 75_000), 30);
     let limits = calm.worker;
     let mut world = World::new(Settings {
@@ -195,7 +192,7 @@ fn a_worker_shutting_down_out_of_reach_delivers_its_answers_if_the_channel_opens
         shutdown_at: Span::millis(55_000, 65_000),
         ..calm
     });
-    world.run_for(Duration::from_secs(1_800), ITERATIONS);
+    world.run(ITERATIONS);
     let stats = world.stats();
     assert!(stats.done, "{stats:?}");
     assert!(
@@ -316,11 +313,9 @@ fn a_seed_replays_to_the_same_run() {
     assert!(trace.len() > 100, "the world did something");
 }
 
-/// A session whose runs fail until it is held, then released: plan's
-/// release clears the turn it had claimed, so the session waits for a wake
-/// it already had, and never runs again.
+/// A session whose runs fail until it is held, then released: the release
+/// wakes it, though it cleared the turn it had claimed, and it runs again.
 #[test]
-#[ignore = "a session released after its runs failed waits for a wake that came already"]
 fn a_session_released_after_its_runs_failed_runs_again() {
     let settings = fated(Settings::only(5, &[Story::Hello]), Fates { failed: 1, ..NONE });
     let mut world = World::new(Settings { engine: temper_engine_model_tests::deployment::LIMITS, ..settings });

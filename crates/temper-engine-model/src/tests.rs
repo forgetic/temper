@@ -1589,3 +1589,75 @@ fn a_decision_on_what_waits_for_none_is_refused() {
     };
     assert_eq!(record, Some(None), "no acceptance is kept to count for a later proposal");
 }
+
+/// The assignments of `item` the workers were sent, by attempt, and where
+/// each one's checkout starts.
+fn starts(seen: &List<Request>, item: Item) -> List<(u64, crate::boundary::Start)> {
+    let mut found = List::with_capacity(16);
+    for request in seen {
+        if let Request::Assign { assignment, .. } = request
+            && assignment.item == item
+            && let Some(checkout) = assignment.workspace.repositories.first()
+        {
+            found.push((assignment.attempt, checkout.start.clone())).unwrap();
+        }
+    }
+    found
+}
+
+#[test]
+fn a_push_whose_answer_comes_after_its_run_was_presumed_lost_is_learned() {
+    let (mut world, session) = World::session();
+    let tasks = crate::boundary::Outcome::Tasks { tasks: Box::new([change_step(b"fix")]), text: copy_of(b"on it") };
+    world.deliver(Event::Answer { channel: Token::new(1), item: session, attempt: 1, answer: ended(tasks) });
+    let change = Item { repository: 0, number: 2 };
+    assert!(matches_base(starts(&world.seen, change).as_slice()), "the change's first run starts from the base");
+    // Its worker goes out of reach past the grace, and its run pushes
+    // meanwhile.
+    world.deliver(Event::Lost { channel: Token::new(1) });
+    for _ in 0_u32..8 {
+        world.wait(10);
+    }
+    let head = [7; 32];
+    world.forge.branches.push((copy_of(b"temper/2"), head)).unwrap();
+    // It comes back with the answer of the attempt presumed lost.
+    let hosted = crate::boundary::Hosted { item: change, attempt: 1, phase: fleet::Phase::Answered };
+    let hello = Hello { slots: 2, workstreams: Box::new([]), hosting: Box::new([hosted]) };
+    world.deliver(Event::Hello { channel: Token::new(2), hello });
+    let landed = crate::boundary::Landed { repository: 0, commit: head };
+    let outcome = crate::boundary::Outcome::Change { message: copy_of(b"late") };
+    let late = crate::boundary::Answer::Ended { outcome, work: crate::boundary::Work { landed: Box::new([landed]) } };
+    world.deliver(Event::Answer { channel: Token::new(2), item: change, attempt: 1, answer: late });
+    assert!(acknowledged(&world.seen, change, 1), "the late answer is acknowledged, and dropped");
+    // The attempt after it fails: the change is not made again from the
+    // base, its pull request is opened for the branch the late answer said.
+    let (attempt, _) = *starts(&world.seen, change).as_slice().last().expect("the change runs again");
+    let failed = crate::boundary::Answer::Failed {
+        failure: crate::boundary::Failure::Transient,
+        work: crate::boundary::Work { landed: Box::new([]) },
+    };
+    world.deliver(Event::Answer { channel: Token::new(2), item: change, attempt, answer: failed });
+    for _ in 0_u32..8 {
+        world.wait(10);
+    }
+    let branch = {
+        let issue = world.forge.issue(change).unwrap();
+        let mut branch = None;
+        for note in &issue.comments {
+            if let Some(crate::boundary::Decoded::Record { record, .. }) = &note.decoded {
+                branch = record.relations.branch;
+            }
+        }
+        branch
+    };
+    assert_eq!(branch, Some(head), "the record says where the late answer pushed");
+    let pull = Item { repository: 0, number: 3 };
+    assert!(world.forge.change(pull).is_some(), "the change's pull request is opened for it");
+}
+
+fn matches_base(starts: &[(u64, crate::boundary::Start)]) -> bool {
+    match starts {
+        [(1, crate::boundary::Start::Base { .. })] => true,
+        [] | [_, ..] => false,
+    }
+}

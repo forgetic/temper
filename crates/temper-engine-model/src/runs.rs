@@ -661,6 +661,7 @@ pub(crate) fn answered(model: &mut Model, env: &Env<Limits>, to: ReplyTo, run: T
                 let entry = get_mut(model, id);
                 if let Some(head) = landed {
                     entry.relations.branch = Some(head);
+                    entry.landed = attempt;
                 }
                 // A turn that parked is over, as one whose outcome is applied
                 // is: the next waits for its wake, not retried at once.
@@ -734,23 +735,61 @@ pub(crate) fn posted(model: &Model, outcome: Token) -> Option<Box<Posted>> {
     Some(Box::new(Posted { attempt, outcome: outcome.clone(), head }))
 }
 
-/// Forgets what the top level carried for the fleet as `payload`, which
-/// the fleet drops. A run's call it could not pass up is answered at once,
-/// unserved, on the channel it came on (never silently): busy if its
-/// attempt may yet be the live claim (the cold start is not done, or the
-/// fleet had no room for it), failed if it is fenced off.
+/// Forgets what the top level carried for the fleet as `payload`.
 pub(crate) fn forget(model: &mut Model, payload: Token) {
+    take_carried(model, Id::from_token(payload));
+}
+
+/// The fleet drops what the top level carried as `payload`. A run's call it
+/// could not pass up is answered at once, unserved, on the channel it came
+/// on (never silently): busy if its attempt may yet be the live claim (the
+/// cold start is not done, or the fleet had no room for it), failed if it is
+/// fenced off. A run's answer that comes too late (its attempt presumed lost
+/// and fenced off, or kept as a stray past the grace) still says where it
+/// pushed: the item's branch is there on the forge, and its next run starts
+/// from it, unless a later attempt's push is recorded already.
+pub(crate) fn dropped(model: &mut Model, env: &Env<Limits>, payload: Token) {
     let Some(taken) = take_carried(model, Id::from_token(payload)) else { return };
-    let Some(relayed) = taken.call() else { return };
-    let live = match items::find(model, relayed.item) {
-        Some(id) => match get(model, id).live {
-            Some(live) => live.attempt == relayed.attempt,
-            None => false,
-        },
-        None => false,
+    match taken {
+        Carried::Call { channel, item, attempt, call, body } => {
+            let relayed = Relayed { channel, item, attempt, call, body };
+            let live = match items::find(model, item) {
+                Some(id) => match get(model, id).live {
+                    Some(live) => live.attempt == attempt,
+                    None => false,
+                },
+                None => false,
+            };
+            let why = if live || model.loaded.is_none() { Unserved::Busy } else { Unserved::Failed };
+            unrouted(model, &relayed, why);
+        }
+        Carried::Answer { item, attempt, answer } => late(model, env, item, attempt, &answer),
+        Carried::Served { .. } | Carried::Report { .. } | Carried::Done => {}
+    }
+}
+
+/// A run's answer the fleet drops: the push it made, if it is newer than
+/// the one the item records.
+fn late(model: &mut Model, env: &Env<Limits>, item: Item, attempt: u64, answer: &Answer) {
+    let work = match answer {
+        Answer::Ended { work, .. } | Answer::Parked { work, .. } | Answer::Failed { work, .. } => work,
+        Answer::Busy | Answer::Invalid => return,
     };
-    let why = if live || model.loaded.is_none() { Unserved::Busy } else { Unserved::Failed };
-    unrouted(model, &relayed, why);
+    let mut head = None;
+    for landed in &work.landed {
+        if landed.repository == item.repository {
+            head = Some(landed.commit);
+        }
+    }
+    let Some(head) = head else { return };
+    let Some(id) = items::find(model, item) else { return };
+    let entry = get_mut(model, id);
+    if attempt <= entry.landed || entry.relations.branch == Some(head) {
+        return;
+    }
+    entry.relations.branch = Some(head);
+    entry.landed = attempt;
+    items::aside(model, env, id);
 }
 
 /// Answers a run's call at once, on the channel it came on.
