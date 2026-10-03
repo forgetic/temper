@@ -75,13 +75,27 @@ a box of exactly its length.
 **Fix: two more lib containers,** each with its `worst_case`, for what
 happens above the intake:
 
-- **A bounded list of pieces,** capped both in pieces and in bytes. A push
-  moves a piece in and is refused past either cap; joining makes one box
-  of exactly the total length. Each byte is copied once.
+- **A capped buffer that grows by doubling.** It starts small. A write
+  that does not fit grows it to twice its size, or to what the write
+  needs if that is more, but never past the cap; a write past the cap is
+  refused whole, writing nothing, which the caller handles as any other
+  limit. Finishing trims it to a box of exactly its length.
+  - Each byte is copied in once, about once more on average as the buffer
+    grows, and at most once more by the trim: linear in all.
+  - While it fills it holds at most twice what it has received, and never
+    more than the cap. Its worst case is the cap, as for a buffer made at
+    the cap, but a short answer costs only its own length.
+  - A list of pieces joined once at the end copies each byte only once,
+    but a provider's deltas are a few bytes each: it would make one
+    allocation per piece, and need a cap on pieces that is hard to
+    choose.
 - **`ByteRing`,** which `programming-style.md` (10.2) lists in lib and no
-  lib has yet: a fixed buffer that keeps the last N bytes written,
-  overwriting the oldest, where an intake refuses past its cap instead.
-  A command's tail is a ring; its head is a fill.
+  lib has yet: a buffer of fixed size, made once, that keeps the last N
+  bytes written, each write overwriting the oldest, where an intake
+  refuses past its cap instead. A command's output fills its head first,
+  a capped buffer of `shell_head` bytes; the rest goes through a ring of
+  `shell_tail` bytes, and what falls out of the ring is counted as
+  dropped. At exit the ring is read out, oldest first, as the tail.
 
 Both are small modules, written in skein's lib before the first machine
 that joins pieces, and they change no existing code.
