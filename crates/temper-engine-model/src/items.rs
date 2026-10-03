@@ -26,7 +26,7 @@
 use alloc::boxed::Box;
 
 use temper_engine_model_brief as brief;
-use temper_engine_model_forge as forge;
+use temper_engine_model_forge::{self as forge, api};
 use temper_engine_model_plan as plan;
 use temper_engine_model_rules::Permission;
 use temper_engine_model_work::{self as work, Lifecycle};
@@ -113,11 +113,30 @@ pub(crate) struct Entry {
     pub(crate) asides: u32,
     /// A record written on the side waits to go again.
     pub(crate) resave: bool,
+    /// Its records written on the side that the forge failed for a while,
+    /// in a row: each goes again, up to `RECORD_RETRIES`.
+    pub(crate) retries: u32,
+    /// What its application waits for beside its own writes: its goal's
+    /// record, which its growth wrote into.
+    pub(crate) awaiting: Option<Awaiting>,
     /// The person's call that opened it as a session, answered once its
     /// first record is written: a restart before then leaves it unanswered,
     /// and the call made again finds the issue by its key.
     pub(crate) opened: Option<ReplyTo>,
 }
+
+/// What an application waits for beside its own writes.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum Awaiting {
+    /// The record of its goal, whose entry this is, written on the side:
+    /// the application goes on once it is.
+    Goal(Id<Entry>),
+    /// That record could not be written: the application fails.
+    Unwritten,
+}
+
+/// How many times a record write the forge failed for a while goes again.
+pub(crate) const RECORD_RETRIES: u32 = 3;
 
 /// How far an entry is taken in.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -333,6 +352,8 @@ impl Entry {
             holding: None,
             asides: 0,
             resave: false,
+            retries: 0,
+            awaiting: None,
             opened: None,
         }
     }
@@ -561,6 +582,8 @@ pub(crate) fn drop_entry(model: &mut Model, id: Id<Entry>) {
     model.names.remove(&item);
     if !lingers {
         model.items.retire(id);
+        // Its record is done with it: nothing more of it is written.
+        growers(model, id, true);
     }
     if let Some(to) = opened {
         model.requests.push(Request::Reply { to, reply: Reply::Refused(Refusal::Failed) });
@@ -705,26 +728,62 @@ fn handing(model: &Model, item: Item) -> bool {
 }
 
 /// A record written on the side ended. One the forge had no room for goes
-/// again from the ready list; one that failed otherwise is carried by the
-/// item's next record. An entry the hub is done with goes once its last is
-/// out.
+/// again from the ready list, and so does one the forge failed for a while,
+/// as often as a record the hub writes would; one that failed otherwise is
+/// carried by the item's next record. Once the record is as last changed,
+/// or cannot be, the applications whose growth waits for it go on. An entry
+/// the hub is done with goes once its last is out.
 pub(crate) fn aside_written(model: &mut Model, id: Id<Entry>, result: Result<forge::Written, forge::Failure>) {
     let Some(entry) = model.items.get_mut(id) else { return };
     entry.asides = entry.asides.saturating_sub(1);
-    if entry.taking == Taking::Gone {
-        if entry.asides == 0 {
-            model.items.retire(id);
+    let gone = entry.taking == Taking::Gone;
+    let (again, written) = match result {
+        Ok(_) => (false, true),
+        Err(forge::Failure::Busy) => (true, false),
+        Err(forge::Failure::Forge(api::Error::Timeout | api::Error::Unavailable | api::Error::RateLimited { .. }))
+            if entry.retries < RECORD_RETRIES =>
+        {
+            entry.retries = entry.retries.saturating_add(1);
+            (true, false)
         }
-        return;
-    }
-    let busy = match result {
-        Err(forge::Failure::Busy) => true,
-        Ok(_) | Err(_) => false,
+        Err(_) => (false, false),
     };
-    if busy || entry.resave {
+    if !again {
+        entry.retries = 0;
+    }
+    if !gone && (again || entry.resave) {
         entry.resave = true;
         if model.resaves.try_push(id).is_err() {
             unreachable!("the ready list has room for every item's record");
+        }
+        return;
+    }
+    if gone && entry.asides == 0 {
+        model.items.retire(id);
+    }
+    growers(model, id, written);
+}
+
+/// Whether a record of the item is written on the side, or waits to be.
+pub(crate) fn saving(entry: &Entry) -> bool {
+    entry.asides > 0 || entry.resave
+}
+
+/// The applications whose growth waits for the record of `goal` go on, from
+/// the ready list: they fail if it was not `written`.
+fn growers(model: &mut Model, goal: Id<Entry>, written: bool) {
+    let mut found = List::with_capacity(model.names.len());
+    for (_, id) in &model.names {
+        let Some(entry) = model.items.get(*id) else { continue };
+        if entry.awaiting == Some(Awaiting::Goal(goal)) && found.push(*id).is_err() {
+            break;
+        }
+    }
+    for id in &found {
+        let Some(entry) = model.items.get_mut(*id) else { continue };
+        entry.awaiting = if written { None } else { Some(Awaiting::Unwritten) };
+        if model.stalled.try_push(*id).is_err() {
+            unreachable!("the ready list has room for every item");
         }
     }
 }

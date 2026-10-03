@@ -351,6 +351,9 @@ struct Forge {
     /// The next comment's id, and the next item's number.
     comments: u64,
     numbers: u64,
+    /// An item whose record writes time out, without landing, so many times
+    /// more.
+    stuck: Option<(Item, u32)>,
 }
 
 #[derive(Debug)]
@@ -398,6 +401,22 @@ impl Forge {
             now: Time::ZERO,
             comments: 100,
             numbers: 1,
+            stuck: None,
+        }
+    }
+
+    /// Whether a record write on `item` times out, without landing.
+    fn times_out(&mut self, item: Item, body: &api::Body) -> bool {
+        let record = match body {
+            api::Body::Record { .. } => true,
+            api::Body::Text(_) | api::Body::Payload(_) => false,
+        };
+        match self.stuck {
+            Some((stuck, left)) if record && stuck == item && left > 0 => {
+                self.stuck = Some((stuck, left - 1));
+                true
+            }
+            Some(_) | None => false,
         }
     }
 
@@ -546,6 +565,9 @@ impl Forge {
             }
             api::Op::Post { number, key, person, body } => {
                 let item = Item { repository, number };
+                if self.times_out(item, &body) {
+                    return (Err(api::Error::Timeout), decoded);
+                }
                 let mark = match body {
                     api::Body::Record { position, nonce, .. } => api::Mark::Record { position, nonce },
                     api::Body::Text(_) | api::Body::Payload(_) => match key {
@@ -558,6 +580,9 @@ impl Forge {
             }
             api::Op::EditComment { number, id, body } => {
                 let item = Item { repository, number };
+                if self.times_out(item, &body) {
+                    return (Err(api::Error::Timeout), decoded);
+                }
                 let issue = self.issue(item).expect("an edit is on an issue the forge has");
                 let mut revision = 0_u64;
                 for at in 0..issue.comments.len() {
@@ -1785,4 +1810,97 @@ fn news_the_inbox_had_no_room_for_is_told_again_once_a_turn_made_room() {
     world.deliver(Event::Answer { channel: Token::new(1), item: session, attempt: 1, answer: replied_answer() });
     world.wait(60);
     assert_eq!(assigned(world.seen.as_slice(), session).as_slice(), [1, 2], "the message, told again, wakes it");
+}
+
+/// A plan of one agent step, `build`, which may grow the plan by one more
+/// agent step.
+fn growing_plan() -> crate::boundary::Outcome {
+    let charter = plan::Charter {
+        instructions: copy_of(b"split it up"),
+        template: None,
+        grants: plan::Grants { modify: false, shell: false, forge: true, subagents: false, note: false },
+        budget: Budget { tokens: 100, turns: 5, time: Duration::from_secs(60) },
+    };
+    let build = plan::Step {
+        name: copy_of(b"build"),
+        repository: plan::Repository(0),
+        work: plan::Work::Agent(plan::AgentSpec { charter, grows: true }),
+        after: Box::new([]),
+        gates: Box::new([]),
+    };
+    let envelope = plan::Envelope {
+        agents: 1,
+        changes: 0,
+        waits: 0,
+        sessions: 0,
+        repositories: Box::new([plan::Repository(0)]),
+        into: Box::new([]),
+    };
+    let plan = plan::Plan { steps: Box::new([build]), envelope, budget: 500 };
+    crate::boundary::Outcome::Plan { plan, text: copy_of(b"shall we?") }
+}
+
+/// The names of the steps of the goal the record on `item` says.
+fn goal_steps(world: &mut World, item: Item) -> List<Box<[u8]>> {
+    let mut names = List::with_capacity(8);
+    let issue = world.forge.issue(item).unwrap();
+    let mut goal = None;
+    for note in &issue.comments {
+        if let Some(crate::boundary::Decoded::Record { record, .. }) = &note.decoded {
+            goal = record.step.goal.clone();
+        }
+    }
+    for entry in &goal.expect("the record carries the goal").steps {
+        names.push(entry.name.clone()).unwrap();
+    }
+    names
+}
+
+#[test]
+fn a_goals_record_its_growth_wrote_lands_before_the_growing_step_goes_on() {
+    let (mut world, session) = World::session();
+    world.deliver(Event::Answer { channel: Token::new(1), item: session, attempt: 1, answer: ended(growing_plan()) });
+    world.deliver(Event::Ask {
+        reply_to: ReplyTo::new(Token::new(33)),
+        person: ALICE,
+        ask: Ask::Accept { item: session },
+    });
+    let build = Item { repository: 0, number: 2 };
+    assert_eq!(assigned(world.seen.as_slice(), build).as_slice(), [1], "the plan's step runs");
+    assert_eq!(goal_steps(&mut world, session).as_slice(), [copy_of(b"build")], "the goal's plan is written");
+    // The build adds a step, and the goal's record times out for as long as
+    // the forge sub-model tries it, once.
+    world.forge.stuck = Some((session, LIMITS.forge.attempts));
+    let steps = crate::boundary::Outcome::Steps { steps: Box::new([task(b"more")]), text: copy_of(b"and more") };
+    world.deliver(Event::Answer { channel: Token::new(1), item: build, attempt: 1, answer: ended(steps) });
+    let applying = matches_applying(phase(&mut world, build));
+    assert!(applying, "the growing step waits for the goal's record: {:?}", phase(&mut world, build));
+    for _ in 0_u32..8 {
+        world.wait(10);
+    }
+    assert_eq!(world.forge.stuck, Some((session, 0)), "the goal's record timed out");
+    assert!(!matches_applying(phase(&mut world, build)), "then goes on");
+    assert!(acknowledged(&world.seen, build, 1), "the growth is applied");
+    world.restart();
+    let names = goal_steps(&mut world, session);
+    assert_eq!(names.as_slice(), [copy_of(b"build"), copy_of(b"more")], "the goal lists the step it grew by");
+}
+
+#[test]
+fn growth_whose_goals_record_cannot_be_written_is_held_unapplied() {
+    let (mut world, session) = World::session();
+    world.deliver(Event::Answer { channel: Token::new(1), item: session, attempt: 1, answer: ended(growing_plan()) });
+    world.deliver(Event::Ask {
+        reply_to: ReplyTo::new(Token::new(34)),
+        person: ALICE,
+        ask: Ask::Accept { item: session },
+    });
+    let build = Item { repository: 0, number: 2 };
+    world.forge.stuck = Some((session, u32::MAX));
+    let steps = crate::boundary::Outcome::Steps { steps: Box::new([task(b"more")]), text: copy_of(b"and more") };
+    world.deliver(Event::Answer { channel: Token::new(1), item: build, attempt: 1, answer: ended(steps) });
+    for _ in 0_u32..20 {
+        world.wait(10);
+    }
+    assert_eq!(held_for(&mut world, build), Some(work::Hold::Writes), "the growth is held, its outcome kept");
 }

@@ -67,8 +67,12 @@
 //! - **Relations** (dependencies, children, the goal, the pull request) are
 //!   in the record, each marked done as it closes; one not held and not
 //!   known done is read afresh before the plan decides.
-//! - **Growth's two record writes** (the goal's and the growing step's) land
-//!   in either order: the plan recognises a growth it made.
+//! - **Growth's two record writes** (the goal's and the growing step's): the
+//!   goal's goes first, on the side, tried again while the forge fails for
+//!   a while, and the growing step's, the commit point, waits for it to
+//!   land; one that cannot be written fails the application, which is held
+//!   with its outcome. Applied again after a restart, the plan recognises
+//!   a growth it made.
 //! - **People's messages** are written on their behalf, attributed to them,
 //!   and are news from them.
 //! - **A brief whose item stopped** runs to its end, and its answer is

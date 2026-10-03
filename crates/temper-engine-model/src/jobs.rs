@@ -310,9 +310,6 @@ fn count(related: &[Related]) -> plan::Relations {
     relations
 }
 
-/// How many times a record write the forge failed for a while goes again.
-const RECORD_RETRIES: u32 = 3;
-
 /// The hub writes the item's record: its part is `lifecycle`.
 pub(crate) fn write(model: &mut Model, env: &Env<Limits>, owner: Token, item: Item, lifecycle: work::Lifecycle) {
     let id = held(model, item);
@@ -689,6 +686,7 @@ fn next(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) {
         }
         match make(model, env, id) {
             Made::Done => advance(model, id),
+            Made::Holding => return advance(model, id),
             Made::Waiting => return,
             Made::Failed => return finish(model, env, id, Finish::Failed),
         }
@@ -876,6 +874,9 @@ fn landing_read(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, reading: it
 enum Made {
     /// Made at once: the step's own parts, or nothing left to do.
     Done,
+    /// Made at once, and the application waits for what it changed to be
+    /// written elsewhere: it goes on from the ready list.
+    Holding,
     /// Asked of the forge.
     Waiting,
     Failed,
@@ -947,7 +948,9 @@ fn make(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) -> Made {
         }
         plan::Write::Goal(goal) => {
             let goal = plan::Goal::clone(goal);
-            grown(model, env, id, goal);
+            if grown(model, env, id, goal) {
+                return Made::Holding;
+            }
             return Made::Done;
         }
         plan::Write::Release { step } => {
@@ -999,8 +1002,11 @@ fn key_of(item: Item, of: Of, key: &plan::Key) -> Box<[u8]> {
 
 /// The goal's part of a record, written by an outcome: the item's own, if it
 /// proposed the plan or supervises it; else its goal's, which is written
-/// there on the side.
-fn grown(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, goal: plan::Goal) {
+/// there on the side. Whether the application waits for that record to be
+/// written before it goes on: its own record is the commit point, and a
+/// restart before the goal's lands would leave the goal without the steps
+/// it grew by.
+fn grown(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, goal: plan::Goal) -> bool {
     let entry = get_mut(model, id);
     let own = match entry.staged.as_ref() {
         Some(staged) => staged.goal.is_some() || proposes(entry),
@@ -1010,15 +1016,21 @@ fn grown(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, goal: plan::Goal) 
         if let Some(staged) = entry.staged.as_mut() {
             staged.goal = Some(goal);
         }
-        return;
+        return false;
     }
-    let Some(goal_item) = entry.relations.goal else { return };
-    let Some(goal_id) = items::find(model, goal_item) else { return };
-    let Some(goal_entry) = model.items.get_mut(goal_id) else { return };
+    let Some(goal_item) = entry.relations.goal else { return false };
+    let Some(goal_id) = items::find(model, goal_item) else { return false };
+    let Some(goal_entry) = model.items.get_mut(goal_id) else { return false };
     if let Some(record) = goal_entry.step.as_mut() {
         record.goal = Some(goal);
     }
     items::aside(model, env, goal_id);
+    if !items::saving(get(model, goal_id)) {
+        // Nothing of the goal's is written any more: it is done.
+        return false;
+    }
+    get_mut(model, id).awaiting = Some(items::Awaiting::Goal(goal_id));
+    true
 }
 
 /// Whether the outcome being applied proposes a plan.
@@ -1082,6 +1094,7 @@ fn finish(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, finish: Finish) {
         }
     };
     let staged = entry.staged.take();
+    entry.awaiting = None;
     let then = match &applying.doing {
         Doing::Writes(writes) => writes.then,
         Doing::Outcome | Doing::Fresh => plan::Then::Wait,
@@ -1248,7 +1261,7 @@ pub(crate) fn wrote(
                 // it is tried again a few times before the item is held.
                 Err(forge::Failure::Forge(
                     api::Error::Timeout | api::Error::Unavailable | api::Error::RateLimited { .. },
-                )) if retries < RECORD_RETRIES => {
+                )) if retries < items::RECORD_RETRIES => {
                     get_mut(model, id).job = Job::Writing { owner, retries: retries.saturating_add(1) };
                     return stall(model, id);
                 }
@@ -1541,6 +1554,14 @@ pub(crate) fn again(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) {
         Job::Applying(applying) => match &applying.doing {
             Doing::Outcome | Doing::Fresh => go(model, env, id),
             Doing::Writes(writes) => {
+                match entry.awaiting {
+                    Some(items::Awaiting::Goal(_)) => return,
+                    Some(items::Awaiting::Unwritten) => {
+                        get_mut(model, id).awaiting = None;
+                        return finish(model, env, id, Finish::Failed);
+                    }
+                    None => {}
+                }
                 if writes.reading.is_some()
                     && let Some(applying) = items::applying_mut(&mut get_mut(model, id).job)
                     && let Some(writes) = items::writes_mut(&mut applying.doing)
