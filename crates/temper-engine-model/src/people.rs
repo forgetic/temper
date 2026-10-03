@@ -14,8 +14,9 @@
 //! - **Accept, reject:** the decision is the item's, in its record; an item
 //!   held for a person's acceptance is released, and its outcome applied
 //!   again with the decision; any other is told of it.
-//! - **Stop, release:** the hub's; a release asks the plan what it writes
-//!   first, which lifts what held the item.
+//! - **Stop, release:** the hub's; once the hub releases the item, and
+//!   before its record is written, the plan says what the release writes,
+//!   which lifts what held it. A release the hub refuses changes nothing.
 //! - **Watch:** the views'.
 //!
 //! An issue handed in by its label becomes a session (4.6). The working set
@@ -163,7 +164,6 @@ fn permitted(model: &mut Model, env: &Env<Limits>, to: ReplyTo, person: u64, ask
             if !known {
                 return reply(model, to, Reply::Refused(Refusal::Unknown));
             }
-            release_into(model, env, id);
             let reply_to = hub(model, to, person, Ask::Release { item });
             route::work_step(model, env, work::Event::Release { reply_to, item });
         }
@@ -270,9 +270,10 @@ fn waits_for_decision(step: &plan::Step) -> bool {
     gated || waits
 }
 
-/// What a person's release writes into the item's step, as the plan says:
-/// it lifts what held the item. A pull request closed unmerged is opened
-/// again.
+/// What a release writes into the item's step, as the plan says: it lifts
+/// what held the item. A pull request closed unmerged is opened again. Made
+/// only once the hub has released the item, before the record it writes
+/// next: a release the hub refuses (the item is not held) changes nothing.
 pub(crate) fn release_into(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) {
     let Some(entry) = model.items.get(id) else { return };
     let Some(record) = entry.step.as_ref() else { return };
@@ -407,6 +408,23 @@ pub(crate) fn hub_answered(model: &mut Model, env: &Env<Limits>, to: ReplyTo, re
     let Some(wait) = serve::take(model, to.into_token()) else { return };
     match wait {
         Wait::Take { entry, written } => items::taken(model, env, entry, written, result.is_ok()),
+        Wait::Release { entry } => {
+            if result.is_ok() {
+                release_into(model, env, entry);
+            }
+        }
+        Wait::Person { to, ask: Ask::Release { item }, .. } => {
+            if result.is_ok()
+                && let Some(id) = items::find(model, item)
+            {
+                release_into(model, env, id);
+            }
+            let answer = match result {
+                Ok(()) => Reply::Done,
+                Err(refusal) => Reply::Refused(refusal_of(refusal)),
+            };
+            reply(model, to, answer);
+        }
         Wait::Person { to, .. } => {
             let answer = match result {
                 Ok(()) => Reply::Done,

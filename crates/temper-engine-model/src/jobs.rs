@@ -1041,8 +1041,8 @@ fn proposes(entry: &Entry) -> bool {
 }
 
 /// A supervising session releases the step of its goal named `step`, as a
-/// person would: the plan says what the release writes into it, and the hub
-/// releases it.
+/// person would: the hub releases it, and then the plan says what the
+/// release writes into it.
 fn release_step(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, step: &[u8]) {
     let entry = get(model, id);
     let mut found: Option<Item> = None;
@@ -1053,8 +1053,7 @@ fn release_step(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, step: &[u8]
     }
     let Some(child) = found else { return };
     let Some(child_id) = items::find(model, child) else { return };
-    crate::people::release_into(model, env, child_id);
-    let Ok(wait) = model.waits.insert(Wait::Aside { entry: Some(child_id) }) else {
+    let Ok(wait) = model.waits.insert(Wait::Release { entry: child_id }) else {
         unreachable!("the waits have room for every item's call")
     };
     let reply_to = temper_lib::ReplyTo::new(wait.token());

@@ -32,9 +32,12 @@ pub(crate) enum Wait {
     /// An item's record written on the side, as its relations change.
     Record { entry: Id<Entry> },
     /// What changes nothing as it ends: a snapshot put in the store, a pull
-    /// request opened again on a release, a release a supervising session
-    /// made.
+    /// request opened again on a release.
     Aside { entry: Option<Id<Entry>> },
+    /// The hub's answer to a release a supervising session made of the
+    /// item: what the release writes into its step is written once the hub
+    /// releases it.
+    Release { entry: Id<Entry> },
     /// A brief's read of a section's source.
     Brief { owner: Token, bounds: Bounds, source: brief::Source },
     /// A notes' wiki operation.
@@ -113,6 +116,7 @@ impl Wait {
             Wait::Take { .. }
             | Wait::Record { .. }
             | Wait::Aside { .. }
+            | Wait::Release { .. }
             | Wait::Brief { .. }
             | Wait::Wiki { .. }
             | Wait::Relay { .. }
@@ -130,6 +134,7 @@ impl Wait {
             | Wait::Take { .. }
             | Wait::Record { .. }
             | Wait::Aside { .. }
+            | Wait::Release { .. }
             | Wait::Brief { .. }
             | Wait::Wiki { .. }
             | Wait::Person { .. }
@@ -146,6 +151,7 @@ impl Wait {
             | Wait::Take { .. }
             | Wait::Record { .. }
             | Wait::Aside { .. }
+            | Wait::Release { .. }
             | Wait::Wiki { .. }
             | Wait::Relay { .. }
             | Wait::Person { .. }

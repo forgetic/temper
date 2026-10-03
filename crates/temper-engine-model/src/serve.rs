@@ -55,6 +55,7 @@ pub(crate) fn take(model: &mut Model, token: Token) -> Option<Wait> {
         | Wait::Take { .. }
         | Wait::Record { .. }
         | Wait::Aside { .. }
+        | Wait::Release { .. }
         | Wait::Brief { .. }
         | Wait::Wiki { .. }
         | Wait::Relay { .. }
@@ -132,6 +133,7 @@ fn payload(model: &Model, token: Token) -> Option<Payload> {
             Some(Payload::Page(page.clone()))
         }
         Wait::Aside { .. }
+        | Wait::Release { .. }
         | Wait::Wiki { .. }
         | Wait::Brief { .. }
         | Wait::Relay { .. }
@@ -160,7 +162,12 @@ pub(crate) fn read(model: &mut Model, env: &Env<Limits>, owner: Token, result: R
             runs::serve_answer(model, env, to, served);
         }
         Wait::Person { to, person, ask } => people::read(model, env, to, person, ask, result),
-        Wait::Take { .. } | Wait::Record { .. } | Wait::Aside { .. } | Wait::Views { .. } | Wait::Done => {}
+        Wait::Take { .. }
+        | Wait::Record { .. }
+        | Wait::Aside { .. }
+        | Wait::Release { .. }
+        | Wait::Views { .. }
+        | Wait::Done => {}
     }
 }
 
@@ -184,7 +191,12 @@ pub(crate) fn wrote(
         }
         Wait::Person { to, person: _, ask } => people::wrote(model, env, to, ask, result),
         Wait::Record { entry } => items::aside_written(model, entry, result),
-        Wait::Take { .. } | Wait::Aside { .. } | Wait::Brief { .. } | Wait::Views { .. } | Wait::Done => {}
+        Wait::Take { .. }
+        | Wait::Aside { .. }
+        | Wait::Release { .. }
+        | Wait::Brief { .. }
+        | Wait::Views { .. }
+        | Wait::Done => {}
     }
 }
 
@@ -215,6 +227,7 @@ pub(crate) fn stored(model: &mut Model, env: &Env<Limits>, owner: Token, stored:
         Wait::Take { .. }
         | Wait::Record { .. }
         | Wait::Aside { entry: None }
+        | Wait::Release { .. }
         | Wait::Brief { .. }
         | Wait::Wiki { .. }
         | Wait::Relay { .. }

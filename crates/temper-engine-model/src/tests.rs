@@ -1661,3 +1661,35 @@ fn matches_base(starts: &[(u64, crate::boundary::Start)]) -> bool {
         [] | [_, ..] => false,
     }
 }
+
+/// The attempts of `item` the workers were assigned.
+fn assigned(seen: &[Request], item: Item) -> List<u64> {
+    let mut found = List::with_capacity(16);
+    for request in seen {
+        if let Request::Assign { assignment, .. } = request
+            && assignment.item == item
+        {
+            found.push(assignment.attempt).unwrap();
+        }
+    }
+    found
+}
+
+#[test]
+fn a_release_the_hub_refuses_changes_nothing() {
+    let (mut world, item) = World::session();
+    let ask = Ask::Release { item };
+    world.deliver(Event::Ask { reply_to: ReplyTo::new(Token::new(21)), person: ALICE, ask });
+    assert!(replied(&world.seen, Reply::Refused(Refusal::Unheld)), "a running session is not held");
+    let running = world.model.items.get(crate::items::find(&world.model, item).unwrap()).unwrap();
+    let progress = running.step.as_ref().unwrap().progress;
+    assert!(progress.running.is_some() && progress.released.is_none(), "its claim stands: {progress:?}");
+    // Its turn replies, and nothing more is due until a message comes: the
+    // refused release woke nothing.
+    world.deliver(Event::Answer { channel: Token::new(1), item, attempt: 1, answer: replied_answer() });
+    assert!(acknowledged(&world.seen, item, 1), "the turn's answer is applied");
+    for _ in 0_u32..4 {
+        world.wait(30);
+    }
+    assert_eq!(assigned(world.seen.as_slice(), item).as_slice(), [1], "the session takes no turn of its own");
+}
