@@ -13,7 +13,7 @@ fn at(secs: u64) -> Time {
 }
 
 fn referee() -> Referee<Hosting> {
-    Referee::new(Hosting::new(Duration::from_secs(60), vec![Duration::from_secs(30)]))
+    Referee::new(Hosting::new(Duration::from_secs(60), vec![Duration::from_secs(30)], 1))
 }
 
 fn see(referee: &mut Referee<Hosting>, secs: u64, seen: Seen) {
@@ -54,6 +54,18 @@ fn an_acknowledgement_for_an_answer_that_never_came_fails() {
     let mut referee = referee();
     see(&mut referee, 1, Seen::Acknowledged { names: NAMES });
     assert!(why(&referee).contains("only an answer that reached it"), "{}", why(&referee));
+}
+
+/// A refusal that came twice, an assignment sent again and refused again,
+/// the engine may acknowledge as an answer for an attempt it has finished
+/// with.
+#[test]
+fn an_acknowledged_refusal_passes() {
+    let mut referee = referee();
+    see(&mut referee, 1, Seen::Answered { names: NAMES, refused: true });
+    see(&mut referee, 1, Seen::Answered { names: NAMES, refused: true });
+    see(&mut referee, 2, Seen::Acknowledged { names: NAMES });
+    referee.assert_passed(0);
 }
 
 #[test]

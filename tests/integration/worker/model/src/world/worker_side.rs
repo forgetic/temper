@@ -529,7 +529,7 @@ impl World {
                 Up::Call { call, ask: Ask::Relay { body: protocol::call(&content.call()).into_boxed_slice() } }
             }
             Up::Finish { finish: Finish::Ended { .. } } if !garbled.outcome => {
-                let outcome = codec::outcome(content.outcome()).into_boxed_slice();
+                let outcome = codec::outcome(&content.outcome(&self.mirror)).into_boxed_slice();
                 Up::Finish { finish: Finish::Ended { outcome } }
             }
             Up::Call { ask: Ask::Relay { .. } | Ask::Push { .. }, .. }

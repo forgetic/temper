@@ -284,6 +284,17 @@ fn words_no_engine_reads_fail_their_runs_which_are_tried_again() {
     assert!(ending(&stats, "undecoded") > 0 && ending(&stats, "undecodable") > 0, "{:?}", stats.endings);
 }
 
+/// The engine restarts as soon as it posts a run's outcome, three times,
+/// while it applies it: the engine that starts cold reads the outcome posted
+/// and applies it, and the change lands.
+#[test]
+fn an_engine_that_restarts_while_it_applies_an_outcome_resumes_it() {
+    let worlds =
+        worlds(2, |calm| Settings { stories: vec![Story::Fix], applying_restarts: 3, restart_applying: 1000, ..calm });
+    assert_eq!(total(&worlds, |stats| stats.restarts), 6);
+    assert_eq!(total(&worlds, |stats| ending(stats, "merged")), 2, "and each change lands");
+}
+
 #[test]
 fn a_hung_agent_is_stopped_by_the_watchdog() {
     let worlds = worlds(1, |calm| fated(calm, Fates { ended: 2, hang: 1, ..NONE }));

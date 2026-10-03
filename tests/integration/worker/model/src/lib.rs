@@ -38,9 +38,10 @@
 //!   wait for inbound events, park, end, fail and misbehave as their script
 //!   draws; what their words say is their run's, drawn from their charter as
 //!   the engine world's runs draw theirs: their relayed calls, what their
-//!   pushes write in the file CI reads, and the outcome they end with (but
-//!   now and then an outcome, or an agent fated to write garbage its calls,
-//!   are left as their script wrote them, which no engine reads); and
+//!   pushes write in the file CI reads, and the outcome they end with, drawn
+//!   again as they end from their item as the forge shows it then (but now
+//!   and then an outcome, or an agent fated to write garbage its calls, are
+//!   left as their script wrote them, which no engine reads); and
 //!   they edit the working trees of their workspace before they ask to push,
 //!   and now and then as they go, so that what the worker commits is what
 //!   they wrote;
@@ -59,9 +60,10 @@
 //!   down at a drawn moment (the referee injects it), stops it once it is
 //!   done, and starts a new worker, cold, a while later, which may take
 //!   more than the last (an upgrade); and the engine's, which, in some
-//!   worlds, restarts the engine, cold, at drawn moments (the referee
-//!   injects them): its channel closes, people's asks in flight are lost,
-//!   and what the forge answers its last life is dropped.
+//!   worlds, restarts the engine, cold, at drawn moments, and as it applies
+//!   a run's outcome it has just posted (the referee injects them): its
+//!   channel closes, people's asks in flight are lost, and what the forge
+//!   answers its last life is dropped.
 //!
 //! It checks the worker's contracts as it goes: one dial at a time, and one
 //! terminal per git operation; every hello on a channel the worker holds

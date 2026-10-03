@@ -96,9 +96,13 @@ pub struct Settings {
     pub comeback: Span,
     pub upgrade: Option<Limits>,
     /// How often the engine restarts, cold, each at a moment drawn from
-    /// `restart_at`.
+    /// `restart_at`; and how often at most it restarts as soon as it has
+    /// posted a run's outcome, while it applies it, each outcome posted with
+    /// the chance `restart_applying`, per mille.
     pub restarts: u32,
     pub restart_at: Span,
+    pub applying_restarts: u32,
+    pub restart_applying: u32,
 }
 
 impl Settings {
@@ -145,6 +149,8 @@ impl Settings {
             upgrade: None,
             restarts: 0,
             restart_at: Span::millis(10_000, 600_000),
+            applying_restarts: 0,
+            restart_applying: 0,
         }
     }
 
@@ -231,6 +237,8 @@ impl Settings {
             garbled: 20,
             release: rng.chance(500),
             restarts: if rng.chance(300) { 1 + u32::try_from(rng.below(2)).expect("few") } else { 0 },
+            applying_restarts: 1,
+            restart_applying: 30,
             shutdowns: 300,
             ..calm
         }
@@ -909,7 +917,7 @@ impl World {
             wakes: 0,
             first: BTreeSet::new(),
             stories: Referee::new(stories::Engine::new(settings.bounds, settings.stories.len())),
-            hosting: Referee::new(Hosting::new(ACKNOWLEDGED, lives)),
+            hosting: Referee::new(Hosting::new(ACKNOWLEDGED, lives, settings.applying_restarts)),
             stats: Stats::default(),
             trace: Trace::default(),
             settings,
@@ -1089,7 +1097,7 @@ impl World {
     }
 
     /// What the hosting referee injects.
-    fn inject(&mut self, stimulus: referee::Stimulus) {
+    pub(super) fn inject(&mut self, stimulus: referee::Stimulus) {
         match stimulus {
             referee::Stimulus::Drop { epoch } => self.drop_channel(epoch),
             referee::Stimulus::Shutdown => {

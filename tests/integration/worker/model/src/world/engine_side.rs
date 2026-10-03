@@ -266,6 +266,14 @@ impl World {
                 self.hosting.observe(self.now, Seen::Recorded { repository, number, lifecycle }, &mut Vec::new());
                 self.hosting.assert_holding(self.settings.seed);
             }
+            if is_outcome_posted(&observation) {
+                let restarts = self.rng.chance(self.settings.restart_applying);
+                let mut stimuli = Vec::new();
+                self.hosting.observe(self.now, Seen::Posted { restarts }, &mut stimuli);
+                for stimulus in stimuli {
+                    self.inject(stimulus);
+                }
+            }
             match &observation {
                 Observation::Merged { .. } => self.end("merged"),
                 Observation::Reviewed { .. } => self.end("reviewed"),
@@ -450,6 +458,35 @@ impl World {
         let text = b"carry on".to_vec();
         let ask = Ask::Message { item, key: key.clone().into(), message: text.clone().into() };
         self.ask(Asking::Waker(item, key, text), STOPPER, ask);
+    }
+}
+
+/// Whether `observation` is the engine posting a run's outcome.
+fn is_outcome_posted(observation: &Observation) -> bool {
+    match observation {
+        Observation::Commented { id, body, by, .. } if *by == ENGINE => match codec::comment(*id, body) {
+            Some(engine::Decoded::Outcome { .. }) => true,
+            Some(engine::Decoded::Record { .. } | engine::Decoded::Page { .. }) | None => false,
+        },
+        Observation::Commented { .. }
+        | Observation::Edited { .. }
+        | Observation::Moved { .. }
+        | Observation::Deleted { .. }
+        | Observation::Opened { .. }
+        | Observation::Closed { .. }
+        | Observation::Reopened { .. }
+        | Observation::Labelled { .. }
+        | Observation::Revised { .. }
+        | Observation::Depends { .. }
+        | Observation::Requested { .. }
+        | Observation::Defined { .. }
+        | Observation::Removed { .. }
+        | Observation::Reviewed { .. }
+        | Observation::Reported { .. }
+        | Observation::Merged { .. }
+        | Observation::Refused { .. }
+        | Observation::Rejected { .. }
+        | Observation::Wiki { .. } => false,
     }
 }
 

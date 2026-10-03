@@ -21,6 +21,11 @@ use temper_worker_model_agent_tests::script::{Beat, Ending, Plot};
 #[derive(Debug)]
 pub(super) struct Story {
     item: Item,
+    /// What it was started on, and where its changes land, from which its
+    /// outcome is drawn again as it ends.
+    charter: Charter,
+    snapshot: Option<Vec<u8>>,
+    base: Vec<u8>,
     /// The calls its script makes, in order.
     calls: VecDeque<Call>,
     /// What its pushes write in the file CI reads, if it pushes.
@@ -59,7 +64,16 @@ impl Story {
                 Act::Tell { .. } => {}
             }
         }
-        Story { item, calls, cue, outcome, plot: Plot { beats, ending } }
+        Story {
+            item,
+            charter: charter.clone(),
+            snapshot: snapshot.map(<[u8]>::to_vec),
+            base: base.to_vec(),
+            calls,
+            cue,
+            outcome,
+            plot: Plot { beats, ending },
+        }
     }
 
     /// What the run's next call asks: its script's next, then a read of its
@@ -70,9 +84,21 @@ impl Story {
         self.calls.pop_front().unwrap_or(Call::Read(Read::Item { item, after: 0 }))
     }
 
-    /// The outcome the run ends with.
-    pub(super) fn outcome(&self) -> &Outcome {
-        self.outcome.as_ref().expect("a script ends")
+    /// The outcome the run ends with: what its script ends with as the forge
+    /// shows its item now, as a run reads what came in while it ran (a
+    /// child that finished, say), or what it planned as it started if its
+    /// script no longer ends so.
+    pub(super) fn outcome(&self, mirror: &Mirror) -> Outcome {
+        let now = script::acts(self.item, &self.charter, self.snapshot.as_deref(), mirror);
+        let ended = now.into_iter().find_map(|act| match act {
+            Act::End(End::Ended(ended)) => Some(into(ended, &self.base)),
+            Act::End(End::Parked(_) | End::Failed(_))
+            | Act::Call(_)
+            | Act::Push { .. }
+            | Act::Await { .. }
+            | Act::Tell { .. } => None,
+        });
+        ended.unwrap_or_else(|| self.outcome.clone().expect("a script ends"))
     }
 }
 

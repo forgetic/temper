@@ -5,7 +5,11 @@
 //! the channel lost; and the records the engine writes on the forge. Never a
 //! model's state. Safety, on every observation:
 //!
-//! - the engine acknowledges only an answer that reached it; a call
+//! - the engine acknowledges only an answer that reached it (a refusal
+//!   among them: one that comes again, an assignment sent again and
+//!   refused again, is for an attempt the engine has finished with, which it
+//!   acknowledges again, and the worker, which keeps nothing of a refusal,
+//!   ignores); a call
 //!   reaches it once, and it answers only a call that was relayed to it,
 //!   for the same attempt, and once;
 //! - the engine takes each attempt's answer once, however often it came:
@@ -24,7 +28,9 @@
 //! It injects what belongs to neither model: a channel the world says drops
 //! dropping, a drawn while after it opened (how long each lives is drawn
 //! before the run starts); the worker told to shut down; and the engine
-//! restarting, at moments drawn before the run starts.
+//! restarting, at moments drawn before the run starts, and at once as it
+//! posts an outcome the world says it restarts after, so that it restarts
+//! while it applies it.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -69,6 +75,11 @@ pub enum Seen {
     /// The engine heard the channel it held lost; the engine restarted.
     Lost,
     Restarted,
+    /// The engine posted a run's outcome, which it now applies; the world
+    /// says whether the engine is one that restarts then.
+    Posted {
+        restarts: bool,
+    },
     /// The engine wrote the record of the item `number` of `repository`,
     /// which says this of its lifecycle.
     Recorded {
@@ -104,9 +115,13 @@ pub struct Hosting {
     /// Within which an answer that reached the engine is acknowledged, its
     /// channel open.
     bound: Duration,
-    /// How long each channel that drops lives, in the order they open.
+    /// How long each channel that drops lives, in the order they open; and
+    /// how often more the engine restarts as soon as it posts an outcome.
     lives: VecDeque<Duration>,
-    /// The answers that reached the engine, and those it acknowledged.
+    applying: u32,
+    /// The attempts whose answers reached the engine, refusals among them;
+    /// those whose answers, but a refusal, did; and those it acknowledged.
+    reached: BTreeSet<Names>,
     answered: BTreeSet<Names>,
     acknowledged: BTreeSet<Names>,
     relays: BTreeSet<(Names, Token)>,
@@ -117,13 +132,16 @@ pub struct Hosting {
 }
 
 impl Hosting {
-    /// Expectations with answers acknowledged within `bound`, and channels
-    /// that drop each the next of `lives` after they open.
+    /// Expectations with answers acknowledged within `bound`, channels that
+    /// drop each the next of `lives` after they open, and an engine that
+    /// restarts as it applies an outcome up to `applying` times.
     #[must_use]
-    pub fn new(bound: Duration, lives: Vec<Duration>) -> Hosting {
+    pub fn new(bound: Duration, lives: Vec<Duration>, applying: u32) -> Hosting {
         Hosting {
             bound,
             lives: lives.into(),
+            applying,
+            reached: BTreeSet::new(),
             answered: BTreeSet::new(),
             acknowledged: BTreeSet::new(),
             relays: BTreeSet::new(),
@@ -190,13 +208,14 @@ impl Expectations for Hosting {
                 }
             }
             Seen::Answered { names, refused } => {
+                self.reached.insert(names);
                 if !refused && self.answered.insert(names) {
                     judge.expect(Acknowledged(names), self.bound);
                 }
             }
             Seen::Acknowledged { names } => {
                 judge.check(
-                    self.answered.contains(&names),
+                    self.reached.contains(&names),
                     format_args!("the engine acknowledges only an answer that reached it: {names:?}"),
                 );
                 self.acknowledged.insert(names);
@@ -210,6 +229,12 @@ impl Expectations for Hosting {
                 self.relays.remove(&(names, call)),
                 format_args!("the engine answers only a call relayed to it, and once: {names:?} {call:?}"),
             ),
+            Seen::Posted { restarts } => {
+                if restarts && self.applying > 0 {
+                    self.applying -= 1;
+                    judge.inject_now(Stimulus::Restart);
+                }
+            }
             Seen::Lost | Seen::Restarted => {
                 for names in self.unacknowledged() {
                     judge.withdraw(&Acknowledged(names));
