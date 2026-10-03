@@ -321,11 +321,19 @@ pub(crate) fn wrote(
 ) {
     match ask {
         Ask::Open { repository, .. } => {
-            let Ok(forge::Written::Created(number)) = result else {
-                return reply(model, to, Reply::Refused(Refusal::Failed));
+            let created = match result {
+                Ok(forge::Written::Created(number)) => Some(number),
+                Ok(
+                    forge::Written::Commented(_)
+                    | forge::Written::Merged(_)
+                    | forge::Written::Revision(_)
+                    | forge::Written::Reviewed(_)
+                    | forge::Written::Done,
+                )
+                | Err(_) => None,
             };
-            let item = Item { repository, number };
-            opened(model, env, to, item);
+            let Some(number) = created else { return reply(model, to, Reply::Refused(Refusal::Failed)) };
+            opened(model, env, to, Item { repository, number });
         }
         Ask::Message { .. } => match result {
             Ok(_) => reply(model, to, Reply::Done),

@@ -527,11 +527,12 @@ pub(crate) fn deliver(
 /// the hub.
 pub(crate) fn news(model: &mut Model, env: &Env<Limits>, item: forge::Item, seq: u64, news: forge::News) {
     let Some(id) = items::find(model, translate::item_of(item)) else { return };
-    let source = match news {
-        forge::News::Comment { .. } => plan::Source::Message,
-        forge::News::Reviews { .. } | forge::News::Pull { .. } => plan::Source::Own,
+    let (source, pushed) = match news {
+        forge::News::Comment { .. } => (plan::Source::Message, None),
+        forge::News::Reviews { .. } => (plan::Source::Own, None),
+        forge::News::Pull { commit, .. } => (plan::Source::Own, Some(commit)),
     };
-    if let forge::News::Pull { commit, .. } = news {
+    if let Some(commit) = pushed {
         let base = match model.forge.pull(item) {
             Some(level) => level.base,
             None => None,

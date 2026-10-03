@@ -454,9 +454,8 @@ fn applied(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, fresh: Option<pl
     let entry = get(model, id);
     let Some(applying) = items::applying(&entry.job) else { unreachable!("an item applying asks the plan") };
     assert!(items::comment_of(applying.of).is_some(), "an action's writes are decided already");
-    let (Some(record), Some((_, posted))) = (entry.staged.as_ref(), entry.outcome.as_ref()) else {
-        return finish(model, env, id, Finish::Failed);
-    };
+    let Some(record) = entry.staged.as_ref() else { return finish(model, env, id, Finish::Failed) };
+    let Some((_, posted)) = entry.outcome.as_ref() else { return finish(model, env, id, Finish::Failed) };
     let outcome = translate::outcome(posted, record);
     let mut facts = facts(model, env, entry);
     if fresh.is_some() {
