@@ -78,6 +78,7 @@ impl World {
                 let (item, attempt) = (assignment.item, assignment.attempt);
                 let names = protocol::names(item, attempt);
                 let brief = codec::brief_of(&assignment.charter);
+                let grants = Some(assignment.charter.grants);
                 let (assignment, repositories) = protocol::assignment(&assignment);
                 self.assigned.insert(names, repositories);
                 self.end("assigned");
@@ -86,7 +87,11 @@ impl World {
                         && self.attempts.iter().any(|(&(run, other), record)| {
                             run == names.0 && other != names.1 && !record.refused && record.answer.is_none()
                         });
-                    self.stories.observe(self.now, Told::Assigned { item, attempt, live, brief }, &mut Vec::new());
+                    self.stories.observe(
+                        self.now,
+                        Told::Assigned { item, attempt, live, brief, grants },
+                        &mut Vec::new(),
+                    );
                     self.stories.assert_holding(self.settings.seed);
                     if !self.stopping.contains(&item) && self.rng.chance(self.settings.stops) {
                         self.stopping.insert(item);

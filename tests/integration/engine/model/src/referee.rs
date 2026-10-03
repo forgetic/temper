@@ -13,7 +13,10 @@
 //!   once;
 //! - a step's run starts only once its dependencies are done;
 //! - one live run per item, and its attempts only grow;
-//! - nothing of a plan proposed is made before a person accepts it;
+//! - nothing of a plan proposed is made before a person accepts it, and a
+//!   goal's envelope widens only after a person accepted something of it
+//!   since its last record;
+//! - a run's call its grants allow is never answered as ungranted;
 //! - a person's message is never lost: once the engine took it, it reaches
 //!   a run of its item, or wakes the item, or the item is done.
 //!
@@ -23,7 +26,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use temper_engine_model::{Decoded, Item, Refusal, Reply};
+use temper_engine_model::notes::Scope;
+use temper_engine_model::plan::{Envelope, Grants};
+use temper_engine_model::{Decoded, Item, Record, Refusal, Reply};
 use temper_forge_model::Observation;
 use temper_forge_model::api::{Kind, Verdict};
 use temper_lib::Duration;
@@ -41,8 +46,15 @@ pub enum Seen {
     /// A worker was assigned the item's `attempt`; `live` says whether a
     /// worker in contact with the engine hosts another attempt of the item,
     /// not yet answered.
-    /// `brief` is the text its brief carries.
-    Assigned { item: Item, attempt: u64, live: bool, brief: Vec<u8> },
+    /// `brief` is the text its brief carries, and `grants` what its charter
+    /// grants it, if the world knows.
+    Assigned { item: Item, attempt: u64, live: bool, brief: Vec<u8>, grants: Option<Grants> },
+    /// A worker relayed the call `call` of the item's attempt, which needs
+    /// `needs` of its grants.
+    Called { item: Item, attempt: u64, call: u64, needs: Needs },
+    /// A worker was answered the call `call` of the item's attempt:
+    /// `ungranted` if its grants did not allow it.
+    Served { item: Item, attempt: u64, call: u64, ungranted: bool },
     /// A worker was told of news of the item's, for its live run: the
     /// comment `comment`, if it is one.
     Inbound { item: Item, comment: Option<u64> },
@@ -61,6 +73,17 @@ pub enum Seen {
     Restarted,
     /// The world settled.
     Settled,
+}
+
+/// What of its grants a run's call needs.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Needs {
+    /// None: a comment, an escalation, a recall.
+    Nothing,
+    /// To read the forge.
+    Forge,
+    /// To note, in `scope`.
+    Note(Scope),
 }
 
 /// What the referee expects to happen.
@@ -114,6 +137,14 @@ pub struct Engine {
     asked: BTreeMap<Item, u32>,
     /// Goals a person accepted the proposal of.
     accepted: BTreeSet<Item>,
+    /// Each goal's envelope as its last record said, and the acceptances
+    /// of something of it since that a widening may count on.
+    envelopes: BTreeMap<Item, Envelope>,
+    acceptances: BTreeMap<Item, u32>,
+    /// What each attempt assigned was granted, and the calls of attempts
+    /// not answered yet.
+    grants: BTreeMap<(Item, u64), Grants>,
+    calls: BTreeMap<(Item, u64, u64), Needs>,
     pub restarts: u32,
 }
 
@@ -134,6 +165,10 @@ impl Engine {
             messages: BTreeMap::new(),
             asked: BTreeMap::new(),
             accepted: BTreeSet::new(),
+            envelopes: BTreeMap::new(),
+            acceptances: BTreeMap::new(),
+            grants: BTreeMap::new(),
+            calls: BTreeMap::new(),
             restarts: 0,
         }
     }
@@ -189,6 +224,12 @@ impl Engine {
             },
             Observation::Commented { repository, number, id, body, by } if *by == ENGINE => {
                 self.commented(repository, *number, *id, body, observation, judge);
+            }
+            Observation::Edited { repository, number, id, body, by } if *by == ENGINE => {
+                match codec::comment(*id, body) {
+                    Some(Decoded::Record { record, .. }) => self.recorded(repository, *number, &record, judge),
+                    Some(Decoded::Outcome { .. } | Decoded::Page { .. }) | None => {}
+                }
             }
             Observation::Closed { repository, number, .. } => {
                 let Some(index) = deployment::index(repository) else { return };
@@ -247,34 +288,15 @@ impl Engine {
         judge: &mut Judge<Expected, Stimulus>,
     ) {
         let decoded = codec::comment(id, body);
-        if let Some(Decoded::Record { record, .. }) = &decoded
-            && let Some(goal) = record.relations.goal
-            && let Some(index) = deployment::index(repository)
-            && goal != (Item { repository: index, number })
-        {
-            judge.check(
-                self.accepted.contains(&goal),
-                format_args!("nothing of {goal:?}'s plan is made before a person accepts it: {number}"),
-            );
-        }
-        // A goal grown past its envelope only once a person accepted
-        // something of it.
-        if let Some(Decoded::Record { record, .. }) = &decoded
-            && let Some(goal) = &record.step.goal
-            && let Some(index) = deployment::index(repository)
-        {
-            let (envelope, growth) = (&goal.envelope, goal.growth);
-            let beyond = growth.agents > envelope.agents
-                || growth.changes > envelope.changes
-                || growth.waits > envelope.waits
-                || growth.sessions > envelope.sessions;
-            let item = Item { repository: index, number };
-            judge.check(
-                !beyond || self.accepted.contains(&item),
-                format_args!("{item:?}'s plan grows past its envelope only once a person accepts it"),
-            );
-        }
-        if let Some(Decoded::Outcome { posted, .. }) = decoded {
+        let posted = match decoded {
+            Some(Decoded::Record { record, .. }) => {
+                self.recorded(repository, number, &record, judge);
+                None
+            }
+            Some(Decoded::Outcome { posted, .. }) => Some(posted),
+            Some(Decoded::Page { .. }) | None => None,
+        };
+        if let Some(posted) = posted {
             let first = self.outcomes.insert((repository.to_vec(), number, posted.attempt), self.restarts);
             self.once(first, judge, format_args!("an attempt's outcome is posted once: {observation:?}"));
         } else if let Some(key) = temper_engine_model_forge_tests::translate::key_of(body) {
@@ -290,6 +312,51 @@ impl Engine {
             let first = self.comments.insert((repository.to_vec(), number, key), self.restarts);
             self.once(first, judge, format_args!("a keyed comment is posted once: {observation:?}"));
         }
+    }
+
+    /// The engine wrote a record on the item `number`: nothing of a goal's
+    /// plan is made before a person accepts it, and a goal's envelope
+    /// widens, from what its last record said, only once a person accepted
+    /// something of it since (growth beyond the envelope, held for them).
+    fn recorded(&mut self, repository: &[u8], number: u64, record: &Record, judge: &mut Judge<Expected, Stimulus>) {
+        let Some(index) = deployment::index(repository) else { return };
+        let item = Item { repository: index, number };
+        if let Some(goal) = record.relations.goal
+            && goal != item
+        {
+            judge.check(
+                self.accepted.contains(&goal),
+                format_args!("nothing of {goal:?}'s plan is made before a person accepts it: {number}"),
+            );
+        }
+        let Some(goal) = &record.step.goal else { return };
+        let envelope = goal.envelope.clone();
+        let Some(before) = self.envelopes.insert(item, envelope.clone()) else {
+            // Its plan, accepted: what a person accepted is spent on it.
+            self.acceptances.remove(&item);
+            return;
+        };
+        if !widens(&envelope, &before) {
+            return;
+        }
+        let accepted = self.acceptances.get(&item).copied().unwrap_or(0);
+        judge.check(
+            accepted > 0,
+            format_args!(
+                "{item:?}'s envelope widens only once a person accepted its growth: {before:?} to {envelope:?}"
+            ),
+        );
+        self.acceptances.insert(item, accepted.saturating_sub(1));
+    }
+
+    /// The goal of whatever a person accepted on `item`: its own, if it is
+    /// one, or the one its record names.
+    fn goal_of(&self, item: Item) -> Item {
+        let Some(record) = self.mirror.record(deployment::name(item.repository), item.number) else { return item };
+        if record.step.goal.is_some() {
+            return item;
+        }
+        record.relations.goal.unwrap_or(item)
     }
 
     /// The item ended: every message for it has nothing left to reach.
@@ -328,7 +395,10 @@ impl Expectations for Engine {
     fn observe(&mut self, seen: Seen, judge: &mut Judge<Expected, Stimulus>) {
         match seen {
             Seen::Forge(observation) => self.forge(&observation, judge),
-            Seen::Assigned { item, attempt, live, brief } => {
+            Seen::Assigned { item, attempt, live, brief, grants } => {
+                if let Some(grants) = grants {
+                    self.grants.insert((item, attempt), grants);
+                }
                 let last = self.attempts.insert(item, attempt).unwrap_or(0);
                 judge.check(attempt > last, format_args!("attempts of {item:?} only grow: {attempt} after {last}"));
                 judge.check(!live, format_args!("one live run per item: {item:?} at {attempt}"));
@@ -370,6 +440,8 @@ impl Expectations for Engine {
             Seen::Accepted { item, reply } => match reply {
                 Reply::Done => {
                     self.accepted.insert(item);
+                    let goal = self.goal_of(item);
+                    *self.acceptances.entry(goal).or_default() += 1;
                 }
                 // People accept only with the permission the rules want.
                 Reply::Refused(refusal) => judge.check(
@@ -387,9 +459,55 @@ impl Expectations for Engine {
             Seen::Inbound { item, comment: Some(id) } => {
                 self.delivered(item, judge, |pending| pending.comment == Some(id));
             }
+            Seen::Called { item, attempt, call, needs } => {
+                self.calls.insert((item, attempt, call), needs);
+            }
+            Seen::Served { item, attempt, call, ungranted } => {
+                let Some(needs) = self.calls.remove(&(item, attempt, call)) else { return };
+                // An attempt adopted after a restart was not seen assigned.
+                let Some(grants) = self.grants.get(&(item, attempt)) else { return };
+                let granted = match needs {
+                    Needs::Nothing => true,
+                    Needs::Forge => grants.forge,
+                    Needs::Note(scope) => grants.note && self.in_scope(item, scope),
+                };
+                judge.check(
+                    !(ungranted && granted),
+                    format_args!("{item:?}#{attempt}'s call {call}, which its grants allow, is served: {needs:?}"),
+                );
+            }
             Seen::Inbound { comment: None, .. } | Seen::Answered { .. } | Seen::Settled => {}
         }
     }
+}
+
+impl Engine {
+    /// Whether a run of `item` may note in `scope`: the deployment's, its
+    /// repository's, its own, or its goal's.
+    fn in_scope(&self, item: Item, scope: Scope) -> bool {
+        match scope {
+            Scope::Deployment => true,
+            Scope::Repository(repository) => repository == item.repository,
+            Scope::Goal { repository, number } => {
+                let scoped = Item { repository, number };
+                let goal = self
+                    .mirror
+                    .record(deployment::name(item.repository), item.number)
+                    .and_then(|record| record.relations.goal);
+                scoped == item || goal == Some(scoped)
+            }
+        }
+    }
+}
+
+/// Whether `envelope` lets a plan grow further than `before` did.
+fn widens(envelope: &Envelope, before: &Envelope) -> bool {
+    envelope.agents > before.agents
+        || envelope.changes > before.changes
+        || envelope.waits > before.waits
+        || envelope.sessions > before.sessions
+        || envelope.repositories.iter().any(|repository| !before.repositories.contains(repository))
+        || envelope.into.iter().any(|target| !before.into.contains(target))
 }
 
 fn is_person(user: u64) -> bool {

@@ -15,7 +15,7 @@ use crate::deployment::{
 };
 use crate::mirror::Mirror;
 use crate::people::{self, Asker, People, Story};
-use crate::referee::{Bounds, Engine, Seen, Stimulus};
+use crate::referee::{Bounds, Engine, Needs, Seen, Stimulus};
 use crate::store::{self, Store};
 use crate::translate::{self, Asked};
 use crate::workers::{self, Assigned, Down, Effect, Said, Up, Worker};
@@ -642,20 +642,7 @@ impl World {
                     }
                     Down::Acknowledge { .. } => "acknowledged",
                 });
-                if let Down::Inbound { item, event: engine::Inbound::News(news), .. } = &down {
-                    let comment = match news {
-                        engine::forge::News::Comment { id, .. } => Some(*id),
-                        engine::forge::News::Reviews { .. } | engine::forge::News::Pull { .. } => None,
-                    };
-                    self.observe(Seen::Inbound { item: *item, comment });
-                }
-                if let Down::Assign(assigned) = &down {
-                    let item = assigned.item;
-                    let attempt = assigned.attempt;
-                    let live = self.live_elsewhere(worker, item, attempt);
-                    let brief = codec::brief_text(&assigned.charter);
-                    self.observe(Seen::Assigned { item, attempt, live, brief });
-                }
+                self.observe_down(worker, &down);
                 let mut effects = Vec::new();
                 self.workers[worker].down(down, self.now, &self.mirror, &mut effects);
                 self.effects(worker, effects);
@@ -690,6 +677,53 @@ impl World {
                     self.send(self.now.saturating_add(gap), Delivery::People);
                 }
             }
+        }
+    }
+
+    /// What the referee sees of what goes down a worker's channel: news
+    /// for a run, an assignment, a call's answer.
+    fn observe_down(&mut self, worker: usize, down: &Down) {
+        match down {
+            Down::Inbound { item, event, .. } => {
+                // News, and the comment it is, if it is one.
+                let news = match event {
+                    engine::Inbound::News(engine::forge::News::Comment { id, .. }) => Some(Some(*id)),
+                    engine::Inbound::News(engine::forge::News::Reviews { .. } | engine::forge::News::Pull { .. }) => {
+                        Some(None)
+                    }
+                    engine::Inbound::Finished { .. }
+                    | engine::Inbound::Held { .. }
+                    | engine::Inbound::Decided { .. } => None,
+                };
+                if let Some(comment) = news {
+                    self.observe(Seen::Inbound { item: *item, comment });
+                }
+            }
+            Down::Assign(assigned) => {
+                let item = assigned.item;
+                let attempt = assigned.attempt;
+                let live = self.live_elsewhere(worker, item, attempt);
+                let charter = codec::charter_of(&assigned.charter).expect("a charter decodes as it was encoded");
+                let brief = codec::brief_of(&charter);
+                self.observe(Seen::Assigned { item, attempt, live, brief, grants: Some(charter.grants) });
+            }
+            Down::Relayed { item, attempt, call, served } => {
+                let ungranted = match served {
+                    engine::Served::Unserved(engine::Unserved::Ungranted) => true,
+                    engine::Served::Unserved(
+                        engine::Unserved::Busy
+                        | engine::Unserved::Invalid
+                        | engine::Unserved::Refused
+                        | engine::Unserved::Failed,
+                    )
+                    | engine::Served::Read(_)
+                    | engine::Served::Recalled { .. }
+                    | engine::Served::Noted(_)
+                    | engine::Served::Posted { .. } => false,
+                };
+                self.observe(Seen::Served { item: *item, attempt: *attempt, call: call.raw(), ungranted });
+            }
+            Down::Cancel { .. } | Down::Acknowledge { .. } => {}
         }
     }
 
@@ -762,6 +796,16 @@ impl World {
                     }
                     if let Up::Bounced { .. } = &up {
                         self.end("bounced");
+                    }
+                    if let Up::Relay { item, attempt, call, body } = &up {
+                        let needs = match body {
+                            engine::Call::Read(_) => Needs::Forge,
+                            engine::Call::Note { scope, .. } => Needs::Note(*scope),
+                            engine::Call::Recall(_) | engine::Call::Comment { .. } | engine::Call::Escalate { .. } => {
+                                Needs::Nothing
+                            }
+                        };
+                        self.observe(Seen::Called { item: *item, attempt: *attempt, call: call.raw(), needs });
                     }
                     let Some(channel) = self.workers[worker].channel() else { continue };
                     let at = self.channel_time(channel, true);
