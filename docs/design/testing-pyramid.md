@@ -463,8 +463,9 @@ forge did and what the engine assigned, and one of its own where the
 components meet (the worker and its agents; or the channel, over the
 engine's acknowledgements, the calls relayed and answered once, and each
 answer taken once). Their stimuli are an engine restarting cold (at a
-drawn moment, or at once as it posts an outcome, so that it restarts
-while applying it), a worker's channel dropping or a worker vanishing,
+drawn moment; at once as it posts an outcome, so that it restarts while
+applying it; or, in the engine's world, at a moment a scenario chooses
+as the forge shows it), a worker's channel dropping or a worker vanishing,
 and a worker told to shut down. The engine's referee meets a story only
 when its item closes. In the agent's top-level world a story may end
 held, so its own referee ends an item's expectation on a hold the
@@ -591,6 +592,18 @@ The checks:
   and both system worlds. The worker's sub-model worlds, and the agent's
   tools', session's and run's, check theirs inline, beside their
   contracts.
+- **Focused scenarios** in the engine's world tell each of its stories
+  (engine-model.md, section 14) on one seed, among them a tracking label
+  taken off, a garbled record, a run watched and stopped, a supervisor
+  woken once by a burst, and an approval of an earlier head.
+  Some restart the engine at a moment they choose, as the forge shows it
+  (an outcome posted, a plan's first item made, a goal's record grown, a
+  claim written, a label taken off, a record garbled); those between a
+  write and its answer assert that nothing is made twice.
+- **The whole worker's world** has another party delete branches between
+  attempts, and its sweep reaches every way a run's preparation fails.
+- **Findings:** every seed found failing is fixed and replays, passing;
+  no test is ignored.
 
 ## 9. Not built yet
 
@@ -607,7 +620,9 @@ By tier:
 - **The real loop:** a shell that drives every service in one loop, and
   the sandbox.
 - **The referee** in the worlds that still check their scenarios inline,
-  so that those checks run at every tier.
+  so that those checks run at every tier; and nothing made twice across
+  a restart at a drawn moment, which the engine's referee only counts
+  for now (engine-model.md, section 16).
 - **Checks:** transition coverage, fuzzing.
 
 By fake:

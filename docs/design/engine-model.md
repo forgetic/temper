@@ -107,21 +107,22 @@ building it settled, beyond what the sections below record of each flow:
   the forge and the store everything a decision reads, and makes nothing
   twice. The new engine makes no call until a lifetime after it starts
   (4.4). Each item found is taken into the hub as its record says, once
-  the record is found sound (within the limits, its goal's plan one the
-  plan could have made), or held as mangled. A claim is adopted at once,
-  with the grants its step gives the run, and a record's pull request is
-  linked again. The fleet hears that the reading is done only once every
-  claim read has reached it, and nothing new starts before; an item that
-  did not fit the working set is not waited for (its run is a stray,
-  section 8). Every item read waiting is asked what is due afresh, a
-  relation found done counting as news again. What an earlier life may
-  have made is looked for before it is made: an adopted attempt's
-  outcome and comments after its claim's inbox position, an outcome's
-  writes after its comment (the one bound an earlier life leaves), an
-  action's creations and a person's keyed request anywhere. An adopted
-  attempt takes nothing of the new life's inbox, so what it may not have
-  seen goes to the next run. The commit point stays the record's update
-  after an outcome's writes (4.4).
+  the record is found sound, as the plan would have written it (its step,
+  its goal's plan, its relations within the limits), or held as mangled.
+  A claim is adopted at once, with the grants its step gives the run, and
+  a record's pull request is linked again. The fleet hears that the
+  reading is done only once every claim read has reached it; nothing new
+  starts before, nor does an application resumed, which reads its goal's
+  and relations' records. An item that did not fit the working set is
+  not waited for (its run is a stray, section 8). Every item read waiting
+  is asked what is due afresh, a relation found done counting as news
+  again. What an earlier life may have made is looked for before it is
+  made: an adopted attempt's outcome and comments after its claim's
+  inbox position, an outcome's writes after its comment (the one bound an
+  earlier life leaves), an action's creations and a person's keyed
+  request anywhere. An adopted attempt takes nothing of the new life's
+  inbox, so what it may not have seen goes to the next run. The commit
+  point stays the record's update after an outcome's writes (4.4).
 
 ## 4. Items
 
@@ -216,10 +217,13 @@ a person's message; its dependencies and children finishing; CI and
 reviews on its pull request; the items it subscribes to; a timer.
 
 - **Derived, not queued,** from forge state, so it survives anything that
-  happens to the engine. All that is held is where to read from, so what
-  does not fit the working set's bounded inbox stays on the forge. The
-  position moves only past what a run took, so a failed run's events go
-  again to its retry.
+  happens to the engine. All that is held is where to read from, so news
+  that does not fit the working set's bounded inbox stays on the forge,
+  told again once a run's answer has made room. The position moves only
+  past what a run took, so a failed run's events go again to its retry.
+- **Notices of its relations** (one done or held, a decision) merge with
+  one alike, given to a run or not, and keep to a share of the inbox of
+  their own, beyond which they are dropped: they never crowd out news.
 - **Relayed or woken.** A live run gets inbox events as they arrive;
   events the fleet could not deliver yet are kept and relayed again once
   the run is placed. An item without a run is woken by them, as its
@@ -232,9 +236,10 @@ reviews on its pull request; the items it subscribes to; a timer.
 - **A person's message reaches a run.** One from the web is written on
   the item for them, keyed by their request, and is news from them as a
   comment on the forge is. A live run has it relayed, naming the comment;
-  an item without one is woken, a session at once. A run's brief carries
-  the comments since its runs' last turn, required while people's
-  messages wait (section 9), so no run starts without them.
+  an item without one is woken, a session at once. A run's brief
+  requires people's waiting messages, oldest first and whole, as many as
+  fit (section 9); its answer takes the inbox only up to the first one
+  the brief did not carry and no relay gave it.
 
 ### 4.4 Outcomes
 
@@ -257,7 +262,10 @@ reviews on its pull request; the items it subscribes to; a timer.
   proposal is applied until a person accepts it. A decision names what it
   is on, the outcome a hold keeps (by its comment) or the step itself,
   and is taken only by an item held for one or a step that waits for
-  one; a held item is released, to apply its outcome again with it.
+  one; a held item is released, to apply its outcome again with it. An
+  acceptance of the step lasts until it is released or done, covering
+  its runs, actions and outcomes' writes, but not a plan proposed or
+  growth; the permission an acceptance wants is kept in the record.
 - **What may have happened is found, not repeated.** Only a request that
   provably never reached the forge did nothing; any other failure may
   still land until a configured lifetime after it went out. Such a write
@@ -366,11 +374,12 @@ What building the plan settled:
   it waits for those too, and the checks order the whole graph, added
   steps included. A plan's items are made dependencies first, and a step
   waits until every dependency it names is found.
-- **Growth is repeat-safe.** It writes the goal's record and the growing
-  step's, which may land in either order across a restart: applied again,
-  growth finds its steps already joined to the goal (the same names,
-  after the same steps, added by the same run) and asks for the same
-  writes.
+- **Growth is repeat-safe.** The goal's record is written first, tried
+  again while the forge fails for a while; the growing step's, the
+  commit point, waits for it to land; if the goal's cannot be written,
+  the step is held for its writes. Applied again, growth finds its steps
+  joined to the goal (the same names, after the same steps, added by the
+  same run) and asks for the same writes.
 - **An accepted growth widens the envelope** by what it added. A
   supervising session's tasks join its goal's plan within its envelope and
   budget, so tasks are no way around it.
@@ -389,16 +398,21 @@ loses nothing it knew. What building it settled:
   head, a repair run; CI pending or a mergeability not yet known waits;
   a clean head whose reviews and gates hold is merged at exactly that
   head. Merged, the step is done; closed unmerged, it is held.
+- **A branch another party deleted** has the change made again from its
+  base, which counts as a rebase; once it is pushed again, the pull
+  request the deletion closed is reopened.
 - **A merge the forge refuses for a conflict** goes back to the change:
   its base moved since the head was read, so the merge is dropped as
   stale, the head is taken as conflicting, and the change gets a rebase
   run like any other, never a hold for a failed write.
 - **Repairs and rebases are bounded apart,** each held past its limit;
   the rebases' is higher, since a busy base moves often and that is no
-  fault of the change.
-- **Waits on the forge are bounded:** a change that waits for CI, a review
-  or mergeability past a configured stall, counted from its head's push
-  or its last release, is held, its goal's session told first.
+  fault of the change. One whose outcome went stale, its branch moved
+  under it, counts all the same.
+- **Waits on the forge are bounded:** a change that waits for CI, a
+  review, mergeability or a merge the rules hold back, past a configured
+  stall counted from its head's push or its last release, is held, its
+  goal's session told first.
 - **A release lifts what it releases:** repairs and rebases count again
   from it, and a decision made before it counts for nothing, so the item
   is not held again at once for the same cause. A session released after
@@ -525,14 +539,20 @@ The fleet sub-model knows the workers and the runs they host.
   Past the grace the runs are presumed lost, and their items retry. An
   assignment in flight when the channel drops is presumed lost only at
   the grace's end.
-- **A late answer still says where it pushed.** An answer for an attempt
-  presumed lost or fenced off is not taken, but its push is learned: the
-  item's branch is there on the forge, so its next run starts from it
-  rather than from the base, whose push the forge would refuse as moved.
+- **Where a change's branch is** comes from its runs' answers; a late
+  one, its attempt presumed lost or fenced off, is not taken but still
+  gives its push while the record names no branch. The branch is read on
+  the forge before a change is produced again with none recorded (an
+  attempt whose answer never came may have pushed it), before a run
+  starts from it after one failed for good, and before deciding for a
+  change that names one with no open pull request; one gone has the
+  change made again from its base (5.3).
 - **The graces need no order.** Set past the worker's (worker-model.md,
-  section 2), the engine's grace places no run's next attempt while a
-  worker may still host the last; shorter, two attempts may overlap, and
-  the late answer's push is learned as above.
+  section 2), the engine's grace places no next attempt while a worker
+  may still host the last; shorter, attempts may overlap on two workers,
+  but pushes are fast-forwards, so the later push is refused as moved
+  and the earlier one found as above. The whole worker's world draws it
+  on both sides of the worker's, with one worker, so without overlap.
 - **Restarting** (section 3). The engine adopts the claims its records
   hold, then says it has read them all; it never cancels a claim before
   adopting it. A claim no worker reports within the grace is lost. A run
@@ -553,11 +573,12 @@ The fleet sub-model knows the workers and the runs they host.
 ## 9. Briefs
 
 The engine renders the brief of every run (agent-model.md, 4.1) from
-typed sections the step selects: the item and its lineage, the comments
-since the run's last turn, its dependencies' outcomes, the CI failures on
-its head with their output, review comments, its pull request against its
-base, its earlier attempts and why they failed, the plan's status, the
-index of the notes in its scope (section 10), the template it follows.
+typed sections the step selects: the item and its lineage, people's
+comments since the run's last turn, its dependencies' outcomes, the CI
+failures on its head with their output, review comments, its pull
+request against its base, its earlier attempts and why they failed, the
+plan's status, the index of the notes in its scope (section 10), the
+template it follows.
 What the LLM needs reaches it as sections, never folded into its
 instructions. What building the brief sub-model settled:
 
@@ -579,7 +600,8 @@ instructions. What building the brief sub-model settled:
   UTF-8 sequence, and each cut says how much: `[N bytes cut]`.
 - **A section is read as it is cut,** asking for no more than it keeps,
   and a brief gathers within one deadline of its own: what has not
-  arrived by then is missing.
+  arrived by then is missing. People's comments are read oldest first,
+  whole, as many as fit, the first cut if it alone does not (4.3).
 
 ## 10. Notes
 
@@ -729,23 +751,30 @@ wiki pages and for the charters and outcomes a worker carries as bytes;
 one to three scripted workers, which play each run's script, keep
 answers until acknowledged, and lose their channels and come back, or
 vanish; scripted people on the forge and the web; a store, slow or
-failing; and the engine restarting, cold, as its referee injects it. The
-people's stories: a session's hello; a chat that parks and resumes; an
-issue handed in, its change failing CI, repaired, reviewed and landed; a
-note a person corrects and a later run recalls; a plan proposed,
-decided, grown within its envelope or beyond it, and landed; a proposal
-rejected; a change whose CI never reports, stalled and held.
+failing; and the engine restarting, cold, as its referee injects it: at
+drawn moments, or at one a scenario chooses as the forge shows it (a
+claim written, say), before it hears its call answered. The people's
+stories: a session's hello; a chat that parks and resumes; an issue
+handed in, its change failing CI, repaired, reviewed and landed; a note
+a person corrects and a later run recalls; a plan proposed, decided,
+grown within its envelope or beyond it, and landed; a proposal
+rejected; a change whose CI never reports, stalled and held; a session
+whose tracking label a person takes off, whose record they garble, or
+whose run they watch and stop; a supervisor woken once by a burst of
+its steps ending; an approval of an earlier head, which lands nothing.
 
 Its referee holds the engine to what it promises, seen from outside:
 nothing lands on a protected branch without green CI on its exact head
 and a person's approval; writes go only to the deployment's
-repositories; keyed creations and outcomes are made once; attempts only
-grow, one live run per item, its dependencies done; nothing of a plan is
-made before a person accepts it; a person's message reaches a run, or
-its item ends; every story ends within a bound. The engine, workers and
-agents meet in the system worlds (testing-pyramid.md, 2.3), which reuse
-this world's codecs, people, store and referee, and the names runs and
-attempts take on a worker's channel.
+repositories; keyed creations and outcomes are made once (across a
+restart at a drawn moment, counted instead: section 16); attempts only
+grow, one live run per item, its dependencies done; nothing of a plan
+is made, nor a goal's envelope widened, before a person accepts it; a
+call its grants allow is never refused as ungranted; a person's message
+reaches a run, or its item ends; every story ends within a bound. The
+engine, workers and agents meet in the system worlds (testing-pyramid.md,
+2.3), which reuse this world's codecs, people, store and referee, and
+the names runs and attempts take on a worker's channel.
 
 ## 15. Open questions
 
@@ -797,6 +826,12 @@ each to be designed before it is built:
 
 - **A warm start** (section 12): a cache of the working set in the store,
   so that a restart reads only what changed; every start is cold.
+- **Nothing made twice at any moment** (section 3): restarted at a
+  random one, the engine may make a keyed creation again; the worlds
+  count these, and only the restart scenarios assert none.
+- **An item made while the top level's table is full** is not held, nor
+  its first record, the only place its step is, written: a restart could
+  lose the step (suspected).
 - **Subscriptions:** a step names no items it subscribes to, and the
   working set holds no items the engine does not track, so a session's
   wake rule can name the source but nothing feeds it.
@@ -815,9 +850,9 @@ each to be designed before it is built:
   for and never read, so it is always missing.
 - **A CI failure's output** in a brief: the forge sub-model reads
   statuses, their descriptions and links, not the output behind them.
-- **The newest comments first:** the forge's reads page from the oldest,
-  so the newest comments, which a brief's comments section keeps, are
-  reached only through all the older ones.
+- **A message carried whole:** a brief over its total budget may still
+  cut a message its comments section carried, which its run takes all
+  the same.
 - **A message's text** for a live run: the inbound event names the
   comment, which the run reads if its grants let it read the forge.
 - **Spend:** what a run spent does not cross the worker's channel, so the
