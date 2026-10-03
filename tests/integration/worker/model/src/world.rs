@@ -435,7 +435,7 @@ pub struct Stats {
     pub kept_past_grace: u32,
     pub abandoned: u64,
     /// Dials, those that opened a channel and those that failed; channels
-    /// dropped; hellos; frames sent twice, and channels that stalled; and
+    /// dropped; hellos; frames sent again, and channels that stalled; and
     /// what the engine sent that was lost in flight, and the relays,
     /// bounces and facts the worker sent that were, and the copies that
     /// were.
@@ -449,6 +449,11 @@ pub struct Stats {
     pub lost_down: u32,
     pub lost_up: u32,
     pub copies_lost: u32,
+    /// Copies that reached the worker once the attempt they were for had
+    /// answered, by what they were; and cancels sent again on a new channel,
+    /// behind the hello that listed their attempt.
+    pub late: BTreeMap<&'static str, u32>,
+    pub recancels: u32,
     /// The longest the worker went without a channel while it hosted runs.
     pub longest_outage: Option<Duration>,
     /// Agents spawned, started (from a snapshot among them, and in
@@ -530,6 +535,7 @@ enum Delivery {
     Down {
         epoch: u64,
         event: Event,
+        copy: bool,
     },
     /// An event for the engine off the channel: the channel lost, a store's
     /// terminal, a watcher's delivery.
@@ -652,8 +658,10 @@ enum Asking {
 
 pub struct World {
     now: Time,
-    /// Draws the latencies, the faults and the agents' edits.
+    /// Draws the latencies, the faults and the agents' edits; and, apart,
+    /// the copies of frames the network sends again.
     rng: Rng,
+    copies: Rng,
     settings: Settings,
 
     // The worker, its neighbours, and what the world checks of it.
@@ -700,8 +708,13 @@ pub struct World {
     /// How often another party moved each branch, by remote and branch.
     moved: BTreeMap<(Vec<u8>, Vec<u8>), u32>,
 
-    // The channel between them.
+    // The channel between them, the copies of frames held back, and the
+    // acknowledgements sent on each channel.
     wire: Schedule<Delivery>,
+    held: Vec<network::Held>,
+    acknowledged: BTreeSet<(u64, Names)>,
+    /// The attempts the engine cancelled.
+    engine_cancels: BTreeSet<Names>,
     scheduled: u32,
     lanes: [Time; 4],
     channel: Channel,
@@ -768,6 +781,7 @@ impl World {
         let mut world = World {
             now: Time::ZERO,
             rng: Rng::new(rng.next_u64()),
+            copies: Rng::new(rng.next_u64()),
             worker,
             stage: Stage::new(limits, max_out, max_out + SPARE),
             shut: false,
@@ -793,6 +807,9 @@ impl World {
             edits: 0,
             moved: BTreeMap::new(),
             wire: Schedule::new(),
+            held: Vec::new(),
+            acknowledged: BTreeSet::new(),
+            engine_cancels: BTreeSet::new(),
             scheduled: 0,
             lanes: [Time::ZERO; 4],
             channel: Channel::Idle,
@@ -1002,7 +1019,7 @@ impl World {
             }
             Delivery::Dialled { epoch } => self.dialled(epoch),
             Delivery::Up { epoch, event, copy } => self.arrived_up(epoch, event, copy),
-            Delivery::Down { epoch, event } => self.arrived_down(epoch, event),
+            Delivery::Down { epoch, event, copy } => self.arrived_down(epoch, event, copy),
             Delivery::Engine(event) => self.desk.push(event),
             Delivery::Drop { epoch } => self.drop_channel(epoch),
             Delivery::Tree(life, due) => {
@@ -1162,6 +1179,7 @@ impl World {
     /// Checks the invariants of a world with nothing left to happen.
     fn assert_settled(&mut self) {
         let seed = self.settings.seed;
+        self.forget_held();
         assert!(!self.desk.has_events(), "seed {seed}: the engine has taken everything");
         assert!(!self.stage.has_events(), "seed {seed}: the worker has taken everything");
         // The engine's side.

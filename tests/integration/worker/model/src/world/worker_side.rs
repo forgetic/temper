@@ -261,10 +261,16 @@ impl World {
     fn answered(&mut self, names: Names, answer: &host::Answer) {
         assert!(self.up, "an answer goes on a channel open");
         let record = self.attempts.get_mut(&names).expect("an answer is for an attempt the worker was given");
+        let said = format!("{answer:?}");
+        if record.refused && record.answer.as_ref() == Some(&said) {
+            // The same assignment again, a copy that came behind the one it
+            // refused before it could answer, refused the same way.
+            self.stats.answers_sent += 1;
+            return;
+        }
         assert!(self.open.contains(&names), "an answer is for a run neither acknowledged nor given up");
         self.following.remove(&names);
         self.stats.answers_sent += 1;
-        let said = format!("{answer:?}");
         if let Some(first) = &record.answer {
             // Sent again after a hello, the engine's acknowledgement not heard.
             assert_eq!(*first, said, "an answer sent again is the same answer");
@@ -286,6 +292,7 @@ impl World {
             let at = self.now.saturating_add(self.settings.git.advance_after.draw(&mut self.rng));
             self.send(at, Delivery::Delete { remote, branch });
         }
+        self.answered_copies(names);
         let record = self.attempts.get_mut(&names).expect("looked up above");
         *self.stats.answers.entry(translate::answer_kind(answer)).or_default() += 1;
         match answer {

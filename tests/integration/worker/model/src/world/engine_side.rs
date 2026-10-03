@@ -93,7 +93,7 @@ impl World {
                     }
                 }
                 self.hosting.observe(self.now, Seen::Assigned { names }, &mut Vec::new());
-                self.send_down(channel, Event::Assign { assignment }, false);
+                self.send_down(channel, Event::Assign { assignment });
             }
             Request::Inbound { channel, item, attempt, event } => {
                 let names = World::names(item, attempt);
@@ -101,12 +101,13 @@ impl World {
                 let framed = protocol::framed_event(*place, names, &event);
                 *place += 1;
                 self.end("inbound");
-                self.send_down(channel, Event::Inbound { run: names.0, attempt: names.1, event: framed }, false);
+                self.send_down(channel, Event::Inbound { run: names.0, attempt: names.1, event: framed });
             }
             Request::Cancel { channel, item, attempt } => {
                 let (run, attempt) = World::names(item, attempt);
                 self.end("cancelled");
-                self.send_down(channel, Event::Cancel { run, attempt }, true);
+                self.engine_cancels.insert((run, attempt));
+                self.send_down(channel, Event::Cancel { run, attempt });
             }
             Request::Relayed { channel, item, attempt, call, served } => {
                 let names = World::names(item, attempt);
@@ -114,14 +115,14 @@ impl World {
                 self.hosting.observe(self.now, Seen::Relayed { names, call }, &mut Vec::new());
                 self.hosting.assert_holding(self.settings.seed);
                 let answer = protocol::served(&served);
-                self.send_down(channel, Event::Relayed { run: names.0, attempt: names.1, call, answer }, true);
+                self.send_down(channel, Event::Relayed { run: names.0, attempt: names.1, call, answer });
             }
             Request::Acknowledge { channel, item, attempt } => {
                 let names = World::names(item, attempt);
                 self.end("acknowledged");
                 self.hosting.observe(self.now, Seen::Acknowledged { names }, &mut Vec::new());
                 self.hosting.assert_holding(self.settings.seed);
-                self.send_down(channel, Event::Acknowledged { run: names.0, attempt: names.1 }, true);
+                self.send_down(channel, Event::Acknowledged { run: names.0, attempt: names.1 });
             }
             Request::Refuse { channel } => self.refuse(channel),
             Request::Reply { to, reply } => self.replied(to.into_token().raw(), reply),

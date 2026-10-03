@@ -145,12 +145,65 @@ fn an_answer_made_while_the_channel_is_down_follows_the_next_hello() {
     }
 }
 
+/// Frames sent again change nothing: a world whose protocol layers send
+/// frames again, at every moment a frame allows, ends as the same world does
+/// without them, but for the engine acknowledging answers again.
 #[test]
-fn frames_sent_twice_and_stalls_change_no_outcome() {
-    let worlds =
-        worlds(1, |calm| Settings { network: Network { duplicates: 500, stalls: 100, ..calm.network }, ..calm });
-    assert!(total(&worlds, |stats| stats.duplicated) > 0 && total(&worlds, |stats| stats.stalled) > 0);
-    assert!(total(&worlds, |stats| stats.acknowledgements) > total(&worlds, |stats| stats.answers_sent));
+fn frames_sent_again_change_no_outcome() {
+    for seed in 0..2 {
+        let calm = Settings { stops: 1000, stop_after: Span::millis(1_000, 5_000), ..Settings::calm(seed) };
+        let again = run(&Settings { network: Network { duplicates: 1000, ..calm.network }, ..calm.clone() });
+        let once = run(&calm);
+        let (with, without) = (again.stats(), once.stats());
+        assert!(with.answers_copied > 0 && without.duplicated == 0, "{with:?}");
+        assert!(with.late.get("relayed").is_some_and(|late| *late > 0), "some copies come late: {:?}", with.late);
+        assert_eq!(with.answers, without.answers, "seed {seed}: the worker answers the same");
+        let endings = |stats: &Stats| {
+            let mut endings = stats.endings.clone();
+            endings.remove("acknowledged");
+            endings
+        };
+        assert_eq!(endings(&with), endings(&without), "seed {seed}: the engine does the same");
+        let mirror = |world: &World| format!("{:?}", world.mirror());
+        assert_eq!(mirror(&again), mirror(&once), "seed {seed}: the forge ends the same");
+        assert_eq!(again.now(), once.now(), "seed {seed}: at the same moment");
+    }
+}
+
+/// Copies that come late, on a channel that drops and stalls, of runs that
+/// a person stops and that wind down slowly: an engine's cancel, an answer
+/// to a relayed call and an inbound event once the attempt they are for has
+/// answered, and a cancel again behind the hello that lists its attempt. The
+/// worker takes each again harmlessly, and the world settles.
+#[test]
+fn copies_that_come_late_are_taken_again_harmlessly() {
+    let calm = Settings::calm(1);
+    let limits = calm.worker;
+    let world = run(&Settings {
+        worker: Limits {
+            agent: temper_worker_model::agent::Limits { grace: Duration::from_secs(40), ..limits.agent },
+            ..limits
+        },
+        stops: 500,
+        stop_after: Span::millis(1_000, 5_000),
+        network: Network {
+            duplicates: 1000,
+            stalls: 100,
+            drops: 10,
+            drop: 1000,
+            life: Span::millis(3_000, 15_000),
+            outage: Span::millis(1_000, 10_000),
+            ..calm.network
+        },
+        script: script::Script { steps: 20, deaf_to_cancel: 1000, ..calm.script },
+        ..calm
+    });
+    let stats = world.stats();
+    for kind in ["cancel", "inbound", "relayed"] {
+        assert!(stats.late.get(kind).is_some_and(|late| *late > 0), "a late {kind}: {:?}", stats.late);
+    }
+    assert!(stats.recancels > 0, "a cancel again behind a hello");
+    assert!(stats.answers_copied > 0 && stats.stalled > 0, "{stats:?}");
 }
 
 #[test]
@@ -295,7 +348,7 @@ fn relayed_calls_are_answered_or_withdrawn() {
 
 #[test]
 fn a_run_a_person_stops_is_cancelled_and_its_calls_answered_unavailable() {
-    let worlds = worlds(1, |calm| Settings {
+    let worlds = worlds(2, |calm| Settings {
         stories: vec![Story::Fix],
         stops: 1000,
         stop_after: Span::millis(1_000, 10_000),

@@ -16,8 +16,9 @@
 //!   dials, with a latency each way, that drops at drawn moments, after which
 //!   the engine is out of reach for a drawn while, shorter or longer than the
 //!   worker's grace; what is in flight on a channel that drops is lost; a
-//!   frame its receiver takes again harmlessly is sent twice now and then,
-//!   and the channel stalls now and then;
+//!   frame its receiver takes again harmlessly is sent again now and then,
+//!   right behind it or late (once the attempt it is for has answered, or
+//!   behind the next channel's hello), and the channel stalls now and then;
 //! - **the forge:** the fake forge (`temper_forge_model`), as the engine's
 //!   world sets it up: protected default branches, CI cued by content, a
 //!   repository whose CI never reports; reached by the engine through its
