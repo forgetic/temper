@@ -7,8 +7,9 @@
 //!
 //! - an answer reaches the engine only for an attempt the engine assigned:
 //!   nothing for an attempt it never made;
-//! - the engine acknowledges only an answer that reached it, and answers
-//!   only a call that was relayed to it, for the same attempt;
+//! - the engine acknowledges only an answer that reached it; a call
+//!   reaches it once, and it answers only a call that was relayed to it,
+//!   for the same attempt, and once;
 //! - the engine takes each attempt's answer once, however often it came:
 //!   an item's record counts one more failure, in one class, for each of
 //!   its attempts that failed, and never two for one.
@@ -162,12 +163,13 @@ impl Expectations for Hosting {
                 );
                 judge.meet(&Acknowledged(names));
             }
-            Seen::Relay { names, call } => {
-                self.relays.insert((names, call));
-            }
+            Seen::Relay { names, call } => judge.check(
+                self.relays.insert((names, call)),
+                format_args!("a call reaches the engine once: {names:?} {call:?}"),
+            ),
             Seen::Relayed { names, call } => judge.check(
-                self.relays.contains(&(names, call)),
-                format_args!("the engine answers only a call relayed to it: {names:?} {call:?}"),
+                self.relays.remove(&(names, call)),
+                format_args!("the engine answers only a call relayed to it, and once: {names:?} {call:?}"),
             ),
             Seen::Lost => self.lost += 1,
             Seen::Recorded { repository, number, lifecycle } => self.recorded((repository, number), lifecycle, judge),

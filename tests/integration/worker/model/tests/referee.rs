@@ -82,3 +82,37 @@ fn two_failures_counted_at_once_fail() {
     see(&mut referee, 0, recorded(Phase::Retrying(Class::Run), 1, Failures::NONE.and(Class::Run).and(Class::Lost)));
     assert!(why(&referee).contains("one failure at a time"), "{}", why(&referee));
 }
+
+#[test]
+fn a_call_relayed_and_answered_once_passes() {
+    let mut referee = referee();
+    see(&mut referee, 0, Seen::Relay { names: NAMES, call: Token::new(9) });
+    see(&mut referee, 1, Seen::Relayed { names: NAMES, call: Token::new(9) });
+    see(&mut referee, 2, Seen::Relay { names: NAMES, call: Token::new(10) });
+    referee.assert_passed(0);
+}
+
+#[test]
+fn a_call_answered_twice_fails() {
+    let mut referee = referee();
+    see(&mut referee, 0, Seen::Relay { names: NAMES, call: Token::new(9) });
+    see(&mut referee, 1, Seen::Relayed { names: NAMES, call: Token::new(9) });
+    see(&mut referee, 2, Seen::Relayed { names: NAMES, call: Token::new(9) });
+    assert!(why(&referee).contains("and once"), "{}", why(&referee));
+}
+
+#[test]
+fn a_call_answered_for_another_attempt_fails() {
+    let mut referee = referee();
+    see(&mut referee, 0, Seen::Relay { names: NAMES, call: Token::new(9) });
+    see(&mut referee, 1, Seen::Relayed { names: (NAMES.0, Token::new(4)), call: Token::new(9) });
+    assert!(why(&referee).contains("only a call relayed to it"), "{}", why(&referee));
+}
+
+#[test]
+fn a_call_relayed_twice_fails() {
+    let mut referee = referee();
+    see(&mut referee, 0, Seen::Relay { names: NAMES, call: Token::new(9) });
+    see(&mut referee, 1, Seen::Relay { names: NAMES, call: Token::new(9) });
+    assert!(why(&referee).contains("reaches the engine once"), "{}", why(&referee));
+}
