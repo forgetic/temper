@@ -18,7 +18,7 @@ fn run(settings: &Settings) -> World {
 fn random_worlds_settle_and_reach_every_ending() {
     let mut answers = BTreeMap::new();
     let mut endings = BTreeSet::new();
-    for seed in 0..SWEPT {
+    for seed in (0..SWEPT).chain(PINNED) {
         let stats = run(&Settings::rough(seed)).stats();
         for (kind, count) in stats.answers {
             *answers.entry(kind).or_insert(0) += count;
@@ -51,22 +51,10 @@ const SWEPT: u64 = 40;
 /// keeps it).
 const UNREACHED: [&str; 3] = ["run cancelled", "refused invalid", "unprepared missing"];
 
-/// Seeds that find what the engine does not do yet, swept past the seeds
-/// above:
+/// Seeds swept besides those above, each for what it once found:
 ///
 /// - 101: a change's first push lands, but io reports it out of time, and
 ///   the fetch that would verify it fails too, so its run answers that
-///   nothing landed. The engine never learns its branch: every later
-///   attempt starts from the base, its push is rejected as the branch
-///   moved, and its outcome is stale, run after run without bound, until
-///   the forge has no room for the outcomes and holds the change for its
-///   writes.
-const FINDINGS: [u64; 1] = [101];
-
-#[test]
-#[ignore = "until the engine learns a change's branch that no answer said a push landed on"]
-fn the_engine_findings_replay() {
-    for seed in FINDINGS {
-        run(&Settings::rough(seed));
-    }
-}
+///   nothing landed. The engine reads the change's branch on the forge
+///   before it makes the change again, and starts from it.
+const PINNED: [u64; 1] = [101];
