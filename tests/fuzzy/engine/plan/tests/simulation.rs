@@ -1,9 +1,9 @@
-//! The engine's plan sub-model at random: many rough worlds, each settled,
+//! The engine's plan child domain at random: many rough worlds, each settled,
 //! every ending and every path reached among them.
 
 use std::collections::BTreeSet;
 
-use temper_engine_model_plan_tests::{Settings, World};
+use temper_engine_domain_plan_tests::{Settings, World};
 
 const ITERATIONS: u32 = 1_000_000;
 

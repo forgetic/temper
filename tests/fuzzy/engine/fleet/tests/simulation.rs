@@ -1,9 +1,9 @@
-//! The engine's fleet sub-model at random: many random worlds, each settled,
+//! The engine's fleet child domain at random: many random worlds, each settled,
 //! every ending reached among them.
 
 use std::collections::BTreeMap;
 
-use temper_engine_model_fleet_tests::{ENDINGS, Settings, World};
+use temper_engine_domain_fleet_tests::{ENDINGS, Settings, World};
 
 const ITERATIONS: u32 = 400_000;
 

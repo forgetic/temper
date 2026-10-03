@@ -1,7 +1,7 @@
 //! Random settings: small limits, charters that sometimes do not fit them,
 //! faults, cancels, and latencies that race the deadlines.
 
-use temper_agent_model_run::{Budget, Limits};
+use temper_agent_domain_run::{Budget, Limits};
 use temper_lib::{Duration, Rng};
 
 use crate::partner::Script;

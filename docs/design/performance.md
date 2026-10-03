@@ -11,7 +11,7 @@ the document or crate it changes, and moves there when it is made.
 
 - **No significant problem.** temper's time goes to LLM calls, which take
   seconds each, and to forge calls under a rate limit, at modest
-  concurrency. Each agent run is a process of its own (`worker-model.md`,
+  concurrency. Each agent run is a process of its own (`worker-domain.md`,
   section 6), so one process holds one run's sessions. What the memory
   strategy costs is microseconds to milliseconds per turn.
 - **Four things are worth knowing,** each fixable by a contained change
@@ -52,7 +52,7 @@ arrive in pieces with no total announced:
 
 - a provider streams its answer as deltas: text a few tokens at a time,
   and a tool call's input as fragments of JSON, which the service's
-  decoder joins into one block before the model sees it;
+  decoder joins into one block before the domain sees it;
 - a command's output arrives as pipe reads, of which the protocol layer
   keeps the first `shell_head` bytes and the last `shell_tail`;
 - an HTTP body may be chunked.
@@ -63,8 +63,8 @@ copies about 800 MB, and a 32 KB answer in 1,000 deltas about 16 MB.
 Making a `List<u8>` at the cap instead allocates the cap for every call in
 flight, however short its answer.
 
-Nothing does either today. Model code builds bytes in one pass:
-`translate::concat` (`crates/temper-engine-model/src/translate.rs:339`)
+Nothing does either today. Domain code builds bytes in one pass:
+`translate::concat` (`crates/temper-engine-domain/src/translate.rs:339`)
 adds up the lengths, then writes once. The pieces that need joining all
 live in the protocol layer, which is not written yet. Below each machine,
 the carry-over is already safe: skein's lib, where temper's lib is
@@ -102,7 +102,7 @@ that joins pieces, and they change no existing code.
 
 ## 4. Copy at emission, every turn
 
-`complete` (`crates/temper-agent-model-session/src/session.rs:1318`)
+`complete` (`crates/temper-agent-domain-session/src/session.rs:1318`)
 copies the whole transcript on every turn, message by message and block
 by block, as 6.2 of the programming model says it must: the session keeps
 the transcript, and the protocol layer owns the copy. Over a session the
@@ -119,7 +119,7 @@ has.
 held up to three times: the transcript in the session, the prompt in a
 queue or the protocol layer, and the encoded body on its way out through
 io. The session's worst case counts the transcript once
-(`crates/temper-agent-model-session/src/limits.rs:85`); the copy is its
+(`crates/temper-agent-domain-session/src/limits.rs:85`); the copy is its
 receiver's to count. **Fix,** when the protocol layer is written:
 
 - **Count the copies.** Its worst case counts, for each call in flight, a
@@ -226,7 +226,7 @@ fallback (6.3).
   which is the refusal in the middle that section 7 of the programming
   model rules out. Done right, a session is granted bytes from the pool
   when it opens, and perhaps again between turns, where waiting is an
-  ordinary state. That touches the agent model's top level, the session
+  ordinary state. That touches the agent domain's top level, the session
   crate and their worlds: a few days' work, after a design decision.
 
 It is probably never needed: a process holds one run's sessions, and its

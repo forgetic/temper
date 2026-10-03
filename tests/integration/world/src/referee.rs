@@ -11,7 +11,7 @@ use crate::Schedule;
 /// checks of each observation.
 pub trait Expectations {
     /// What the referee observes: what the fakes see, and the facts temper
-    /// emits; never a model's state.
+    /// emits; never a domain's state.
     type Seen;
     /// Names a liveness expectation while it is pending, and in the list of
     /// those pending when the test fails.
@@ -28,7 +28,7 @@ pub trait Expectations {
 /// A scenario's expectations as a step machine of the world's loop
 /// (testing-pyramid.md, 5.2): observations in, stimuli out, and a deadline
 /// table of its own, whose earliest deadline the loop covers as it covers
-/// every model's. It steps only on what it observes and on its own
+/// every domain's. It steps only on what it observes and on its own
 /// deadlines, and its [`Verdict`] ends the test: passed, failed, or stopped
 /// early by the scenario.
 ///

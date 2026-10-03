@@ -1,14 +1,14 @@
 //! Memory stays within the worst case (programming-model.md, 6.3), measured by
-//! a counting allocator: the agent sub-model with every slot holding a spawn
+//! a counting allocator: the agent child domain with every slot holding a spawn
 //! of exactly its limits, then every run's outbox full of what may wait for
 //! it, then every agent ending with as much detail as it may keep, its facts'
 //! queue full; and every entry point along the way. The fill reaches the
 //! worst case, short only of what no agent can hold at once.
 
 use temper_lib::{Duration, Env, Queue, Set, Time, Token};
-use temper_worker_model_agent::channel::{Ask, Finish, Reply, Up};
-use temper_worker_model_agent::{
-    Bounce, End, Event, Fault, Invalid, Limits, MAX_OUT, Model, Request, Signal, Spawn, fire, step, worst_case,
+use temper_worker_domain_agent::channel::{Ask, Finish, Reply, Up};
+use temper_worker_domain_agent::{
+    Bounce, Domain, End, Event, Fault, Invalid, Limits, MAX_OUT, Request, Signal, Spawn, fire, step, worst_case,
 };
 use temper_world::heap::{self, Meter};
 
@@ -56,11 +56,11 @@ enum Asked {
     Other,
 }
 
-/// The agent sub-model under `limits`, measured: each step's peak is checked
+/// The agent child domain under `limits`, measured: each step's peak is checked
 /// against the worst case, less what it handed out in requests, which their
 /// receivers count.
 struct Measured {
-    model: Model,
+    domain: Domain,
     env: Env<Limits>,
     out: Queue<Request>,
     meter: Meter,
@@ -73,23 +73,23 @@ impl Measured {
     fn new(limits: Limits) -> Measured {
         let bound = worst_case(&limits).expect("the test limits fit");
         let meter = Meter::new();
-        let model = Model::new(&limits);
+        let domain = Domain::new(&limits);
         let out = Queue::with_capacity(MAX_OUT);
-        Measured { model, env: Env { now: Time::ZERO, limits }, out, meter, bound, peak: 0 }
+        Measured { domain, env: Env { now: Time::ZERO, limits }, out, meter, bound, peak: 0 }
     }
 
     fn step(&mut self, event: Event) -> Vec<Asked> {
         self.meter.start();
-        step(&mut self.model, &self.env, event, &mut self.out);
+        step(&mut self.domain, &self.env, event, &mut self.out);
         self.drain()
     }
 
     /// Fires what is due at `secs`.
     fn fire(&mut self, secs: u64) -> Vec<Asked> {
         self.env.now = Time::ZERO.saturating_add(Duration::from_secs(secs));
-        assert!(self.model.is_due(self.env.now), "an alarm is due");
+        assert!(self.domain.is_due(self.env.now), "an alarm is due");
         self.meter.start();
-        fire(&mut self.model, &self.env, &mut self.out);
+        fire(&mut self.domain, &self.env, &mut self.out);
         self.drain()
     }
 
@@ -116,7 +116,7 @@ impl Measured {
         self.meter.check(measured, self.bound, self.env.limits);
         self.peak = self.peak.max(self.meter.held());
         // The iteration ends: the reclaim point.
-        self.model.reclaim();
+        self.domain.reclaim();
         asked
     }
 
@@ -190,8 +190,8 @@ fn fill(limits: Limits) {
     for owner in &owners {
         assert_eq!(agent.step(Event::Hangup { owner: *owner }), [Asked::Gone(End::Stopped)]);
     }
-    assert_eq!(agent.model.agents(), 0, "every slot came back");
-    assert!(agent.model.facts_lost() > 0, "{limits:?}: the facts' queue was filled, and more");
+    assert_eq!(agent.domain.agents(), 0, "every slot came back");
+    assert!(agent.domain.facts_lost() > 0, "{limits:?}: the facts' queue was filled, and more");
     // The bound is reached, not only respected: short of it by no more than
     // what no agent holds at once, the detail of its end (kept once its
     // outbox has gone), and the bookkeeping of its three sets of call names
@@ -275,11 +275,11 @@ fn paths(limits: Limits) {
     assert_eq!(agent.say(owner, finish), [Asked::Finished, Asked::Read]);
     assert!(agent.step(Event::Hangup { owner }).is_empty());
     assert_eq!(agent.step(Event::Reaped { owner, detail: bytes(1) }), [Asked::Gone(End::Stopped)]);
-    assert_eq!(agent.model.agents(), 0, "every slot came back");
+    assert_eq!(agent.domain.agents(), 0, "every slot came back");
 }
 
 #[test]
-fn an_agent_sub_model_with_every_slot_full_stays_within_its_worst_case() {
+fn an_agent_child_domain_with_every_slot_full_stays_within_its_worst_case() {
     fill(LIMITS);
     fill(Limits { agents: 16, events: 8, calls: 8, ..LIMITS });
     fill(Limits { agents: 64, charter_bytes: 65_536, snapshot_bytes: 16_384, ..LIMITS });

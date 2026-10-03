@@ -1,14 +1,14 @@
 //! Memory stays within the worst case (programming-model.md, 6.3), measured by
-//! a counting allocator: the run sub-model with every run holding a charter of
-//! exactly its byte limit, and every conversation started and spending.
+//! a counting allocator: the run child domain with every run holding a charter
+//! of exactly its byte limit, and every conversation started and spending.
 
 use std::mem::size_of;
 
-use temper_agent_model_run::charter::{Checkout, Endpoint, Families, Grants, Llm, Outlet, Repository, Tools};
-use temper_agent_model_run::outcome::{Change, ChangeSpec, Children, Declared, OutcomeSpec, VerdictRule};
-use temper_agent_model_run::{
-    Answer, Ask, Budget, Charter, End, Event, Exit, Invalid, Limits, MAX_OUT, Model, Push, Ran, Read, Refusal, Request,
-    Spend, Stop, worst_case,
+use temper_agent_domain_run::charter::{Checkout, Endpoint, Families, Grants, Llm, Outlet, Repository, Tools};
+use temper_agent_domain_run::outcome::{Change, ChangeSpec, Children, Declared, OutcomeSpec, VerdictRule};
+use temper_agent_domain_run::{
+    Answer, Ask, Budget, Charter, Domain, End, Event, Exit, Invalid, Limits, MAX_OUT, Push, Ran, Read, Refusal,
+    Request, Spend, Stop, worst_case,
 };
 use temper_lib::{Duration, Env, Queue, ReplyTo, Time, Token};
 use temper_world::heap::{self, Meter};
@@ -101,7 +101,7 @@ enum Asked {
     Other,
 }
 
-/// Fills every run of a model under `limits` with a charter of exactly its
+/// Fills every run of a domain under `limits` with a charter of exactly its
 /// byte limit and a guide of exactly its limit too, and has each one's main
 /// conversation start, spend, yield, be nudged, ask for a sub-agent that
 /// answers with more than the answer limit, and finish with a change of
@@ -116,13 +116,13 @@ fn fill(limits: Limits) {
     let env = Env { now: Time::ZERO, limits };
     let mut out = Queue::with_capacity(MAX_OUT);
     let meter = Meter::new();
-    let mut model = Model::new(&limits);
+    let mut domain = Domain::new(&limits);
     // The requests are the parent's to route and their receivers' to count:
     // each is dropped, keeping only what it asked for, and the step's peak
     // checked less them.
     let mut step = |event: Event| -> Vec<Asked> {
         meter.start();
-        temper_agent_model_run::step(&mut model, &env, event, &mut out);
+        temper_agent_domain_run::step(&mut domain, &env, event, &mut out);
         let measured = meter.end();
         let mut asked = Vec::new();
         while let Some(request) = out.pop() {
@@ -196,16 +196,16 @@ fn fill(limits: Limits) {
     assert!(held >= full, "{limits:?}: every run holds its byte limit");
 
     // A byte more is refused.
-    let mut model = Model::new(&Limits { runs: 1, conversations: 2, ..limits });
+    let mut domain = Domain::new(&Limits { runs: 1, conversations: 2, ..limits });
     let worker = Token::new(0);
     let start = Event::Start { reply_to: ReplyTo::new(worker), worker, charter: charter(limits.run_bytes + 1) };
-    temper_agent_model_run::step(&mut model, &env, start, &mut out);
+    temper_agent_domain_run::step(&mut domain, &env, start, &mut out);
     let Some(Request::Answer { to: _, answer }) = out.pop() else { panic!("expected an answer") };
     assert_eq!(answer, Answer::Refused(Refusal::Invalid(Invalid::TooLarge)));
 }
 
 #[test]
-fn a_model_with_every_run_full_stays_within_its_worst_case() {
+fn a_domain_with_every_run_full_stays_within_its_worst_case() {
     fill(LIMITS);
     fill(Limits { runs: 64, conversations: 128, calls: 128, run_bytes: 65_536, guide_bytes: 32_768, ..LIMITS });
     fill(Limits { runs: 1000, conversations: 2000, calls: 2000, run_bytes: 2048, guide_bytes: 16, ..LIMITS });

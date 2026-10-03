@@ -1,9 +1,9 @@
-//! The forge sub-model in its world: scenarios, replay, and a sweep of random
-//! worlds.
+//! The forge child domain in its world: scenarios, replay, and a sweep of
+//! random worlds.
 
-use temper_engine_model_forge::Limits;
-use temper_engine_model_forge_tests::{Settings, Stats, World, parent, people};
-use temper_forge_model::{Config, Skew};
+use temper_engine_domain_forge::Limits;
+use temper_engine_domain_forge_tests::{Settings, Stats, World, parent, people};
+use temper_forge_domain::{Config, Skew};
 use temper_lib::Duration;
 use temper_world::assert_replays;
 
@@ -76,7 +76,7 @@ fn restarts_start_cold_and_make_nothing_twice() {
         let settings = Settings {
             forge: Config { timeouts: 100, ..calm.forge },
             restarts: 4,
-            restart_at: temper_engine_model_forge_tests::Span::millis(30_000, 500_000),
+            restart_at: temper_engine_domain_forge_tests::Span::millis(30_000, 500_000),
             ..calm
         };
         let stats = run(&settings).stats();
@@ -95,7 +95,7 @@ fn creations_whose_answers_were_lost_are_found_by_their_keys() {
         let calm = Settings::calm(seed);
         let settings = Settings {
             forge: Config { timeouts: 200, late: 100, ..calm.forge },
-            parent: temper_engine_model_forge_tests::parent::Script { tasks: 500, replies: 600, ..calm.parent },
+            parent: temper_engine_domain_forge_tests::parent::Script { tasks: 500, replies: 600, ..calm.parent },
             ..calm
         };
         let stats = run(&settings).stats();
@@ -110,7 +110,7 @@ fn a_full_working_set_refuses_new_work_which_waits_on_the_forge() {
     let calm = Settings::calm(4);
     let settings = Settings {
         limits: Limits { items: 3, ..calm.limits },
-        parent: temper_engine_model_forge_tests::parent::Script { closes: 300, ..calm.parent },
+        parent: temper_engine_domain_forge_tests::parent::Script { closes: 300, ..calm.parent },
         ..calm
     };
     let stats = run(&settings).stats();
@@ -142,7 +142,7 @@ fn creations_asked_for_again_are_found_after_their_causes_whatever_the_clocks_an
             forge: Config { timeouts: 150, landing: 100, skew, ..calm.forge },
             parent: parent::Script { tasks: 500, replies: 600, verdicts: 500, ..calm.parent },
             restarts: 3,
-            restart_at: temper_engine_model_forge_tests::Span::millis(30_000, 500_000),
+            restart_at: temper_engine_domain_forge_tests::Span::millis(30_000, 500_000),
             ..calm
         };
         let stats = run(&settings).stats();
@@ -195,7 +195,7 @@ fn an_item_no_label_finds_is_found_again_by_the_slow_pass_after_a_restart() {
         let settings = Settings {
             people: people::Script { weights, ..calm.people },
             restarts: 2,
-            restart_at: temper_engine_model_forge_tests::Span::millis(200_000, 600_000),
+            restart_at: temper_engine_domain_forge_tests::Span::millis(200_000, 600_000),
             ..calm
         };
         refound += count(&run(&settings).stats(), "announced: unlabelled");

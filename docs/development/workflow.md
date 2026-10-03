@@ -36,7 +36,7 @@ documentation in this sense: they are code, and clippy checks them.
   random world as a smoke test where one helps. It is what
   `cargo nextest run --workspace` runs, and it takes at most **15 seconds**.
 - **The fuzzy suite** is `tests/fuzzy`: randomized tests, such as sweeps of
-  random worlds and models driven at random, over many seeds. It is not
+  random worlds and domains driven at random, over many seeds. It is not
   run by default, only with `--profile fuzzy`, as the gate before merging
   to main, and it takes at most **1 minute**.
 

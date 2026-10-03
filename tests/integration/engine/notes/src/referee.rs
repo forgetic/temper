@@ -15,7 +15,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use temper_engine_model_notes::{Entry, Line, Page, Scope};
+use temper_engine_domain_notes::{Entry, Line, Page, Scope};
 use temper_lib::Duration;
 use temper_world::{Expectations, Judge};
 

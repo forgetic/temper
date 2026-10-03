@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, VecDeque};
 
-use temper_engine_model_views::{
-    self as views, Capture, Dropped, End, Event, Fact, Kept, Kind, Limits, Lost, Model, Policy, Record, Refusal,
+use temper_engine_domain_views::{
+    self as views, Capture, Domain, Dropped, End, Event, Fact, Kept, Kind, Limits, Lost, Policy, Record, Refusal,
     Request, Subject,
 };
 use temper_lib::{Duration, Rng, Time, Token};
@@ -319,7 +319,7 @@ pub struct World {
     rng: Rng,
     settings: Settings,
 
-    model: Model,
+    domain: Domain,
     stage: Stage<Limits, Event, Request>,
     /// The engine's lives: each restart starts another.
     life: u64,
@@ -385,7 +385,7 @@ impl World {
         let mut world = World {
             now: Time::ZERO,
             rng,
-            model: Model::new(&settings.limits, Time::ZERO),
+            domain: Domain::new(&settings.limits, Time::ZERO),
             stage: Stage::new(settings.limits, max_out, max_out + SLACK),
             life: 0,
             wire: Schedule::new(),
@@ -490,14 +490,14 @@ impl World {
             if let Some(seen) = taken(&event) {
                 self.observe(seen);
             }
-            views::step(&mut self.model, &self.stage.env, event, &mut self.stage.out);
+            views::step(&mut self.domain, &self.stage.env, event, &mut self.stage.out);
             self.route();
         }
-        while self.stage.has_room() && self.model.is_due(now) {
-            views::fire(&mut self.model, &self.stage.env, &mut self.stage.out);
+        while self.stage.has_room() && self.domain.is_due(now) {
+            views::fire(&mut self.domain, &self.stage.env, &mut self.stage.out);
             self.route();
         }
-        while let Some(fact) = self.model.pop_fact() {
+        while let Some(fact) = self.domain.pop_fact() {
             self.stats.facts += 1;
             match fact {
                 Fact::Reported { kept: Kept::Lost, .. } => self.end("lost"),
@@ -519,7 +519,7 @@ impl World {
             }
         }
         // The reclaim point.
-        self.model.reclaim();
+        self.domain.reclaim();
     }
 
     /// The referee sees what a step or an alarm emitted, as it leaves the
@@ -749,14 +749,14 @@ impl World {
     fn restart(&mut self) {
         self.end("restarted");
         self.log("the engine restarts".to_owned());
-        let lost = self.model.lost();
+        let lost = self.domain.lost();
         self.lost.runs += lost.runs;
         self.lost.reports += lost.reports;
         self.lost.chunks += lost.chunks;
         self.lost.records += lost.records;
-        self.batched += u64::from(self.model.batched());
+        self.batched += u64::from(self.domain.batched());
         self.life += 1;
-        self.model = Model::new(&self.settings.limits, self.now);
+        self.domain = Domain::new(&self.settings.limits, self.now);
         let max_out = views::max_out(&self.settings.limits);
         self.stage = Stage::new(self.settings.limits, max_out, max_out + SLACK);
         self.stage.tick(self.now);
@@ -981,11 +981,11 @@ impl World {
         self.stage.has_events()
             || self.wire.is_due(self.now)
             || self.referee.is_due(self.now)
-            || self.model.is_due(self.now)
+            || self.domain.is_due(self.now)
     }
 
     fn next_time(&self) -> Option<Time> {
-        [self.wire.next_time(), self.referee.next_deadline(), self.model.next_deadline()].into_iter().flatten().min()
+        [self.wire.next_time(), self.referee.next_deadline(), self.domain.next_deadline()].into_iter().flatten().min()
     }
 
     /// The invariants of a world where nothing is left to happen: nothing in
@@ -999,15 +999,15 @@ impl World {
         self.watches.assert_settled();
         self.deliveries.assert_settled();
         self.ops.assert_settled();
-        assert_eq!(self.model.runs(), 0, "the views follow no run");
-        assert_eq!(self.model.watchers(), 0, "the views hold no watcher");
-        assert_eq!(self.model.batched(), 0, "the views batch nothing");
-        assert_eq!(self.model.ops(), 0, "the views have no store operation in flight");
-        assert!(!self.model.is_sweeping(), "the views have nothing left to expire");
-        assert_eq!(self.model.next_deadline(), None, "no deadline runs");
+        assert_eq!(self.domain.runs(), 0, "the views follow no run");
+        assert_eq!(self.domain.watchers(), 0, "the views hold no watcher");
+        assert_eq!(self.domain.batched(), 0, "the views batch nothing");
+        assert_eq!(self.domain.ops(), 0, "the views have no store operation in flight");
+        assert!(!self.domain.is_sweeping(), "the views have nothing left to expire");
+        assert_eq!(self.domain.next_deadline(), None, "no deadline runs");
         self.referee.assert_passed(self.settings.seed);
         let seed = self.settings.seed;
-        let now = self.model.lost();
+        let now = self.domain.lost();
         let (runs, reports, chunks, records) = (
             self.lost.runs + now.runs,
             self.lost.reports + now.reports,

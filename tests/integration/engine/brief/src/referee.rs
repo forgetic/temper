@@ -30,7 +30,7 @@
 
 use std::collections::BTreeMap;
 
-use temper_engine_model_brief::{Body, Fit, Keep, Kind, Limits, Part, Refusal, Section, Source, Unread};
+use temper_engine_domain_brief::{Body, Fit, Keep, Kind, Limits, Part, Refusal, Section, Source, Unread};
 use temper_lib::bytes::find_from;
 use temper_lib::{Duration, Time};
 use temper_world::{Expectations, Judge};

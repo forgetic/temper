@@ -13,7 +13,7 @@ is still open.
   function. Each tier above runs more of temper for real and fakes the
   rest, up to every process on the real kernel. A tier is added when the
   layer it makes real is built.
-- **Fakes are models too.** Every fake follows skein's
+- **Fakes are domains too.** Every fake follows skein's
   `programming-model.md`. It shares no domain types with what it stands in
   for, so a world translates between them as a protocol layer would. It
   checks its client as it goes, refusing what the real neighbour would
@@ -22,15 +22,15 @@ is still open.
   forge, people on the web. Their fakes grow into services, with protocol
   and io layers of their own, and meet temper at the wire. The machine
   sits under io: files, processes, and the programs they run. Its fake
-  stays one model, with a face for each layer of temper it can sit under
+  stays one domain, with a face for each layer of temper it can sit under
   (section 3).
 - **Fakes grow with temper.** A fake's protocol and io layers are built
   alongside the temper layers they face, so each tier finds its fakes
   ready.
-- **One fake, every tier.** A fake's model is the same at every tier; only
-  the face it shows changes. A scenario written for the fakes (an LLM's
-  script, repositories on the forge, what people do) runs unchanged at
-  every tier where those fakes appear (section 5).
+- **One fake, every tier.** A fake's domain is the same at every tier;
+  only the face it shows changes. A scenario written for the fakes (an
+  LLM's script, repositories on the forge, what people do) runs unchanged
+  at every tier where those fakes appear (section 5).
 - **The test is a step too.** A scenario's expectations run in the loop
   as a step machine, the referee, which watches what the fakes see, arms
   the test's deadlines and ends the test (section 5.2).
@@ -39,11 +39,11 @@ is still open.
   the same run. The top tier trades replay for the real kernel, the real
   network stack and the real programs.
 - **Focused tests always, fuzzy tests at the gate.** Focused tests check
-  what a model is expected to do, and run on every change in a handful of
+  what a domain is expected to do, and run on every change in a handful of
   seconds; fuzzy tests search many random worlds for what nobody thought
   to check, spend more CPU, and gate merges to main (section 6.1).
 - **Some fakes are temporary.** A fake of one of temper's own components
-  stands in until its real model exists, then retires. The worker's and
+  stands in until its real domain exists, then retires. The worker's and
   the engine's both have.
 
 ## 2. The tiers
@@ -56,9 +56,9 @@ is still open.
         ┌─┴───────────────────┴─┐
         │    protocol worlds    │  protocol real: bytes between layers, no io
       ┌─┴───────────────────────┴─┐
-      │       system worlds       │  several of temper's models together
+      │       system worlds       │  several of temper's domains together
     ┌─┴───────────────────────────┴─┐
-    │         model worlds          │  one model, or one sub-model
+    │         domain worlds         │  one domain, or one child domain
   ┌─┴───────────────────────────────┴─┐
   │            step tests             │  one step function
   └───────────────────────────────────┘
@@ -67,10 +67,10 @@ is still open.
 | Tier | Real | Faked | Replays |
 |---|---|---|---|
 | step tests | one step function | its events, by hand | yes |
-| model worlds | one model with its sub-models, or one sub-model | its parent and neighbours: scripted, or a fake's model | yes |
-| system worlds | the models of several components | the peers and the machine, at their model faces | yes |
-| protocol worlds | each component's model and protocol layer | io and the network; the peers with their protocol layers; the machine at its io face | yes |
-| simulator | every process's service: model, protocol and io | the kernel: the ring, sockets, the clock; the machine at its kernel face | yes |
+| domain worlds | one domain with its child domains, or one child domain | its parent and neighbours: scripted, or a fake's domain | yes |
+| system worlds | the domains of several components | the peers and the machine, at their domain faces | yes |
+| protocol worlds | each component's domain and protocol layer | io and the network; the peers with their protocol layers; the machine at its io face | yes |
+| simulator | every process's service: domain, protocol and io | the kernel: the ring, sockets, the clock; the machine at its kernel face | yes |
 | real loop | everything temper ships, under its shells | the peers, as services on loopback sockets; the machine is real, in a sandbox | no |
 
 ### 2.1 Step tests
@@ -82,26 +82,26 @@ with `cargo fuzz` joins this tier with the protocol machines: each
 machine alone, fed `Bytes` under every demand, and the step functions fed
 recorded event sequences.
 
-### 2.2 Model worlds
+### 2.2 Domain worlds
 
-A model world runs one model in one loop, from a seed: a sub-model with
-the world as its parent (programming-model.md, 4.5), or a component's
-top-level model with its sub-models beneath it. The world plays
-everything else. It scripts the neighbours that are temper's own, taking
-liberties the real ones do not, and uses fakes for the peers and the
-machine. Behaviour is tested here, and most of temper's tests live here.
+A domain world runs one domain in one loop, from a seed: a child domain
+with the world as its parent (programming-model.md, 4.5), or a component's
+root domain with its child domains beneath it. The world plays everything
+else. It scripts the neighbours that are temper's own, taking liberties
+the real ones do not, and uses fakes for the peers and the machine.
+Behaviour is tested here, and most of temper's tests live here.
 
 ### 2.3 System worlds
 
-A system world is a model world where several of temper's components
-meet, each as its real top-level model. Two are built, both with the
+A system world is a domain world where several of temper's components
+meet, each as its real root domain. Two are built, both with the
 real engine driving the real worker: the agent's top-level world, whose
 worker hosts real agents, and the whole worker's world, whose worker
 hosts scripted agents over a channel that fails (4.5). A system world
 aims at what crosses components, which no component's own world can
 see: the tree an agent left is the tree the worker pushes, and the
 outcome the run accepted is the one the engine records. It is still the
-model layer only: where a protocol layer will sit, the world translates.
+domain layer only: where a protocol layer will sit, the world translates.
 
 ### 2.4 Protocol worlds
 
@@ -122,7 +122,7 @@ seeds, and the machine at its kernel face. It runs with tiny limits
 (slabs of capacity 2), and injects cancellation and timeout in every
 state, refusal at every admission point, short reads and writes, and
 completions after a cancel. Processes come and go: a spawn the worker
-asks for starts an agent's service, and a kill ends it. Where the model
+asks for starts an agent's service, and a kill ends it. Where the domain
 worlds test behaviour, the simulator tests mechanics.
 
 ### 2.6 The real loop
@@ -130,13 +130,13 @@ worlds test behaviour, the simulator tests mechanics.
 The top tier runs temper as it ships, with one io_uring loop driving
 everything: the fake peers as services listening on loopback sockets, the
 engine, the worker and the agents it spawns. The machine is real: a
-sandbox directory, inside the containment production uses (agent-model.md,
-section 6; worker-model.md, section 8), with real git, rg and sh. It
-shows what only the real kernel and real programs can: the ring adapter,
-the containment of process trees, git's actual output. The referee
-(section 5.2) judges it and ends it, as at every tier, its deadlines on
-the wall clock. It does not replay. A failure found there is rerun as a
-scenario lower down, where it does.
+sandbox directory, inside the containment production uses
+(agent-domain.md, section 6; worker-domain.md, section 8), with real git,
+rg and sh. It shows what only the real kernel and real programs can: the
+ring adapter, the containment of process trees, git's actual output. The
+referee (section 5.2) judges it and ends it, as at every tier, its
+deadlines on the wall clock. It does not replay. A failure found there is
+rerun as a scenario lower down, where it does.
 
 ## 3. Neighbours and their faces
 
@@ -147,12 +147,12 @@ temper component facing it grows, and each tier joins the two at the
 lowest layer both have:
 
 ```
-agent    model ─ protocol ─ io   ⇄   io ─ protocol ─ model   fake LLM provider
-engine   model ─ protocol ─ io   ⇄   io ─ protocol ─ model   fake forge
-engine   model ─ protocol ─ io   ⇄   io ─ protocol ─ model   fake people, on the web
+agent    domain ─ protocol ─ io   ⇄   io ─ protocol ─ domain   fake LLM provider
+engine   domain ─ protocol ─ io   ⇄   io ─ protocol ─ domain   fake forge
+engine   domain ─ protocol ─ io   ⇄   io ─ protocol ─ domain   fake people, on the web
 ```
 
-In a model world, the world translates between the two models'
+In a domain world, the world translates between the two domains'
 vocabularies. In a protocol world, it passes bytes between the two
 protocol layers. In the simulator, the simulated network joins the two io
 layers, and in the real loop, sockets do. A peer can be a client as well
@@ -163,12 +163,12 @@ the engine.
 
 The machine is not a peer. Files and processes are io's own operations,
 so there is no wire to meet it at, and its fake grows no protocol or io
-layers. It stays one model, and shows a face to whichever layer of temper
+layers. It stays one domain, and shows a face to whichever layer of temper
 sits just above it:
 
 | Temper is real down to | The machine's face | It answers |
 |---|---|---|
-| the model | model face | typed operations: the tools' file operations, commands and searches; the checkout's git operations |
+| the domain | domain face | typed operations: the tools' file operations, commands and searches; the checkout's git operations |
 | the protocol layer | io face | io's records: open, read, store, rename, spawn with an argument vector, bytes on a pipe, an exit |
 | io | kernel face | ring submissions, with completions |
 | everything | none | the real kernel, in a sandbox |
@@ -182,7 +182,7 @@ engine's store.
 What every fake shares:
 
 - **A step crate** under `testing/` when every tier needs it, so the
-  simulator and the real loop can host it as they host temper's models.
+  simulator and the real loop can host it as they host temper's domains.
   What only one world needs stays in that world, as a script specialised
   to what the world aims at.
 - **No shared types.** A fake's vocabulary is its own; a world, or a
@@ -194,7 +194,7 @@ What every fake shares:
 
 ### 4.1 LLM providers
 
-`testing/temper-llm-model` is a provider seen from the inside. It answers
+`testing/temper-llm-domain` is a provider seen from the inside. It answers
 each call after a drawn latency, by a world's script or at random
 (failures by configured chance, a number of tool rounds, then a final
 answer), and rejects conversations a real provider would reject.
@@ -213,20 +213,20 @@ so a branch the worker pushes is the head the engine reads through the
 API, and a merge the engine asks for moves the branch the next fetch
 sees.
 
-- **A model first.** The engine's worlds need one (engine-model.md,
+- **A domain first.** The engine's worlds need one (engine-domain.md,
   section 14): CI that passes, fails or never reports; merges that
   conflict; webhooks that come late or not at all; requests that fail or
   hit a rate limit; people who comment and edit. Its git keeps git's
   rules: a push moves a branch only by a fast-forward, and another party
   can move a branch under a run.
 - **Then a service:** Forgejo's API and GitHub's, the subset temper uses,
-  over one model; signed webhooks sent to the engine; and git over HTTP,
+  over one domain; signed webhooks sent to the engine; and git over HTTP,
   the subset real git needs to clone, fetch and push.
 - **CI follows content.** A repository's CI runs its checks in the shell
   subset (4.3) on the pushed tree, so a change that is wrong fails on the
   forge as it fails in the run.
 
-The model is built, as `testing/temper-forge-model`, a step crate with a
+The domain is built, as `testing/temper-forge-domain`, a step crate with a
 vocabulary of its own. What building it settled:
 
 - **Forgejo-shaped, not better than Forgejo.** It refuses what Forgejo
@@ -295,14 +295,14 @@ The machine is the host temper's processes run on. It has three parts:
   the time they take, on the world's clock; deadlines raced as io races
   them.
 - **Programs,** what a process runs. Each is a small service whose
-  protocol is its command line: a model of what it does to the files, and
+  protocol is its command line: a domain of what it does to the files, and
   a face that takes an argument vector and prints the bytes the real
   program prints. The programs are git, whose working trees are the
   machine's and whose remotes are on the fake forge; rg; sh; and temper's
   own. The agent is a program the worker spawns, with its channel on the
   program's pipes.
 
-At the model face, a world calls what a program does directly: a typed
+At the domain face, a world calls what a program does directly: a typed
 fetch is the git program's fetch, with no argument vector. From the io
 face down, every program runs through its command line. That is what
 tests the protocol layer's invocations and its parsing, and only the
@@ -337,14 +337,14 @@ as named programs of the machine.
 ### 4.4 People
 
 People chat, accept and reject plans, release held work, and write and
-correct notes (engine-model.md, section 14), on the forge and on the
+correct notes (engine-domain.md, section 14), on the forge and on the
 web. Their fake is a scripted actor, drawn from the seed. On the fake
 forge it acts as a forge user. On the web it is a client of the engine's
 web protocol, a peer like the others, and it grows that protocol's client
 side when the web is built.
 
 Today people are scripted in the engine's world, ordinary Rust rather
-than a model: each story's person looks at the forge as observed, never
+than a domain: each story's person looks at the forge as observed, never
 at its store, and does what the story calls for next, one thing at a
 time, so a call lost to a restarting engine is simply tried again. On the
 web they make the engine's own calls, which no protocol carries yet. The
@@ -354,12 +354,12 @@ own, as its agents cannot take a session's turns yet.
 ### 4.5 Temper's own components
 
 A fake of one of temper's components stands in for it in its neighbours'
-worlds until its real model exists, then retires, and the worlds meet the
-real component. A fake worker served until the worker's model was built,
+worlds until its real domain exists, then retires, and the worlds meet the
+real component. A fake worker served until the worker's domain was built,
 and a fake engine until the engine's was. Both have retired: the system
 worlds run the real engine, each wiring it as the protocol layers would.
 
-- **The agent's top-level world** (`tests/integration/agent/model`): the
+- **The agent's top-level world** (`tests/integration/agent/domain`): the
   real engine, worker and agents; the fake LLM provider; one fake forge,
   which the engine reaches through the forge's protocol as the engine's
   world plays it, and io's git through the working trees' transport; the
@@ -368,7 +368,7 @@ worlds run the real engine, each wiring it as the protocol layers would.
   have written it (the agent's side cannot take a session's turns yet), a
   reviewer, and a person who stops a run now and then. Its channel
   between engine and worker keeps its order and never drops.
-- **The whole worker's world** (`tests/integration/worker/model`): the
+- **The whole worker's world** (`tests/integration/worker/domain`): the
   real engine and worker; the fake forge, reached by the engine and by
   the worker's git; the engine's world's people and store; and the
   process trees and scripted agents of the worker's agent world, their
@@ -401,7 +401,7 @@ inject. A scenario cues its scripts through content, as the agent's
 top-level world does today: a repository's files say which script its run
 follows.
 
-Since a fake's model is the same at every tier, a scenario runs at every
+Since a fake's domain is the same at every tier, a scenario runs at every
 tier its fakes reach. A failure found high up, in the real loop say, is
 rerun lower down, where it replays.
 
@@ -476,7 +476,7 @@ held, so its own referee ends an item's expectation on a hold the
 scenario allows (for its runs' failures, a person's stop or its plan's
 reasons, and for its writes or record only where the forge or the store
 were scripted to fail) as well as on a close; the engine's referee could
-take the allowed holds as a parameter. The worker's sub-model worlds,
+take the allowed holds as a parameter. The worker's child domain worlds,
 and the agent's tools', session's and run's, keep their checks inline.
 
 ## 6. What the tiers check
@@ -485,11 +485,11 @@ Every world, and the simulator, checks:
 
 - **Contracts as it goes:** one terminal event per request, one reply per
   call, each operation's deadline and identity, and each component's own
-  (worker-model.md, section 9).
+  (worker-domain.md, section 9).
 - **Invariants once it settles:** no live entities (every slab empty),
   nothing in flight, every process gone and read to its end, every answer
   taken once; and ownership is a tree, with no orphans.
-- **Memory:** a counting allocator measures the most a model held in one
+- **Memory:** a counting allocator measures the most a domain held in one
   step, against its worst case (programming-model.md, 6.3); the simulator
   checks it at every iteration.
 - **Replay:** a seed replays to the same trace.
@@ -510,7 +510,7 @@ cannot write a git directory.
 The tests come in two suites, run by different commands
 (`docs/development/workflow.md`):
 
-- **Focused tests** check the behaviour a model is expected to have: the
+- **Focused tests** check the behaviour a domain is expected to have: the
   step tests, and under `tests/integration` each world's scenarios,
   referee tests, replay, facts changing nothing, and memory at the worst
   case. A scenario that needs randomness runs the few seeds that show its
@@ -519,7 +519,7 @@ The tests come in two suites, run by different commands
   handful of seconds, 15 at most, enforced.
 - **Fuzzy tests**, under `tests/fuzzy`, look for what no scenario names:
   sweeps of many random worlds, each settled under every invariant and
-  every ending reached among them; models driven at random against their
+  every ending reached among them; domains driven at random against their
   worst case; a function against a naive one. They are CPU intensive, and
   may take longer where that is worth it for the bugs they catch: a minute
   at most for the suite, enforced. They gate merges to main, and do not
@@ -538,15 +538,15 @@ be fixed yet is a finding, replayed by an ignored test until it is.
 crates/*/src/tests.rs                       step tests
 testing/                                    fakes, as step crates
 tests/integration/world                     what every world shares: schedule, stage, ledger, trace, heap, referee
-tests/integration/<component>/<sub-model>   sub-model worlds, the engine's in tests/integration/engine
-tests/integration/<component>/model         component and system worlds
+tests/integration/<component>/<child>       child domain worlds, the engine's in tests/integration/engine
+tests/integration/<component>/domain        component and system worlds
 tests/integration/checkout                  the machine and working trees' git, today
 tests/integration/forge                     the fake forge's tests in ordinary Rust: its memory
-tests/fuzzy/<component>/<sub-model>         each world's fuzzy tests: random worlds, models driven at random
+tests/fuzzy/<component>/<child>             each world's fuzzy tests: random worlds, domains driven at random
 tests/fuzzy/lib                             lib's byte search against a naive one
 ```
 
-Under `tests/integration/<component>/model`, the engine's is its own
+Under `tests/integration/<component>/domain`, the engine's is its own
 world, and the agent's and the whole worker's are system worlds (2.3);
 the engine world's crate is a library the system worlds use (4.5).
 
@@ -559,8 +559,8 @@ As of 2026-10-03.
 
 | Tier | Built |
 |---|---|
-| step tests | every model crate, the fakes, and lib |
-| model worlds | the agent's tools, session and run; the worker's checkout, agent and host; the engine's work, plan, forge, fleet, brief, notes and views (the rules, which keep no state, by step tests alone); the engine's own |
+| step tests | every domain crate, the fakes, and lib |
+| domain worlds | the agent's tools, session and run; the worker's checkout, agent and host; the engine's work, plan, forge, fleet, brief, notes and views (the rules, which keep no state, by step tests alone); the engine's own |
 | system worlds | the agent's top-level world: the engine, the worker and agents; the whole worker's: the engine, the worker and scripted agents |
 | protocol worlds | none: no protocol layer exists |
 | simulator | none: no io layer, service or shell exists |
@@ -568,25 +568,25 @@ As of 2026-10-03.
 
 The fakes:
 
-- **LLM provider:** its model, `testing/temper-llm-model`.
+- **LLM provider:** its domain, `testing/temper-llm-domain`.
 - **Engine:** retired; the system worlds run the real one (4.5).
-- **Forge:** its model, `testing/temper-forge-model` (4.2), with its git.
-  The forge sub-model's world, the engine's and the system worlds run
-  against it, the forge sub-model world's translation standing in for
-  the protocol layer; io's git reaches it through the working trees'
-  transport, with no latency or faults of its own there, as io's stand
-  for them. It has no inline review comments, and no description or link
-  on a status, which the worlds answer empty.
+- **Forge:** its domain, `testing/temper-forge-domain` (4.2), with its
+  git. The forge child domain's world, the engine's and the system worlds
+  run against it, the forge child domain world's translation standing in
+  for the protocol layer; io's git reaches it through the working trees'
+  transport, with no latency or faults of its own there, as io's stand for
+  them. It has no inline review comments, and no description or link on a
+  status, which the worlds answer empty.
 - **Machine:** `temper-checkout-fake`, ordinary Rust rather than a step
-  crate, at its model face only, through each world's translation. It has
+  crate, at its domain face only, through each world's translation. It has
   files with versions, links and roots, a search, and the working trees'
   git. A command is matched whole and answered with canned output and
   file changes, whatever the files hold. Agents are programs already, at
-  the model face: the agent's top-level world starts an agent model for
+  the domain face: the agent's top-level world starts an agent domain for
   each spawn, with its channel on the process's pipes.
 - **People:** scripted in the engine's world (4.4), and reused by the
   whole worker's; the agent's top-level world scripts its own, and the
-  engine sub-models' worlds script what people do through the parent
+  engine child domains' worlds script what people do through the parent
   they script.
 
 The checks:
@@ -597,11 +597,11 @@ The checks:
 - **Transition coverage** is not measured, and nothing is fuzzed yet, as
   there is no protocol machine.
 - **Scenario expectations** are a referee's (5.2) in every engine world
-  and both system worlds. The worker's sub-model worlds, and the agent's
-  tools', session's and run's, check theirs inline, beside their
+  and both system worlds. The worker's child domain worlds, and the
+  agent's tools', session's and run's, check theirs inline, beside their
   contracts.
 - **Focused scenarios** in the engine's world tell each of its stories
-  (engine-model.md, section 14) on one seed, among them a tracking label
+  (engine-domain.md, section 14) on one seed, among them a tracking label
   taken off, a garbled record, a run watched and stopped, a supervisor
   woken once by a burst, and an approval of an earlier head.
   Some restart the engine at a moment they choose, as the forge shows it
@@ -618,9 +618,9 @@ The checks:
 By tier:
 
 - **System worlds:** several real workers in one world (the engine's
-  world places runs on scripted ones; worker-model.md, section 11); in
+  world places runs on scripted ones; worker-domain.md, section 11); in
   the agent's top-level world, what the agent's side lacks
-  (agent-model.md, section 10): sessions, inbound events, waiting,
+  (agent-domain.md, section 10): sessions, inbound events, waiting,
   parking and relayed calls; in the whole worker's world, plans' stories,
   which run in the engine's world only.
 - **Protocol worlds,** each with the protocol layer it tests.
@@ -630,7 +630,7 @@ By tier:
 - **The referee** in the worlds that still check their scenarios inline,
   so that those checks run at every tier; and nothing made twice across
   a restart at a drawn moment, which the engine's referee only counts
-  for now (engine-model.md, section 16).
+  for now (engine-domain.md, section 16).
 - **Checks:** transition coverage, fuzzing.
 
 By fake:
@@ -643,7 +643,7 @@ By fake:
 - **Machine:** a step crate; programs as step machines with command-line
   faces; the shell subset; the io face and the kernel face; the real
   loop's sandbox.
-- **People:** a model, then the client side of the web's protocol.
+- **People:** a domain, then the client side of the web's protocol.
 
 ## 10. Open questions
 
@@ -658,7 +658,7 @@ By fake:
 - **Where the shell's interpreter lives,** so that the machine and the
   forge's CI share it.
 - **Differential checks:** whether a scenario must end the same way at
-  every tier it runs at, as a check that the layers below the model
+  every tier it runs at, as a check that the layers below the domain
   decide nothing.
 - **What the referee sees in the real loop:** the machine is real there
   and reports nothing, so an expectation about it, such as what an

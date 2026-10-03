@@ -1,0 +1,226 @@
+//! Routing (4.5): each of the protocol's events to the child domain or the link
+//! it is for, and each child domain's requests to the protocol layer or,
+//! translated, to a sibling.
+//!
+//! Every match is exhaustive, so a variant added to either side's vocabulary
+//! breaks the build here.
+
+use temper_lib::{Env, Queue, ReplyTo};
+use temper_worker_domain_agent as agent;
+use temper_worker_domain_checkout as checkout;
+use temper_worker_domain_host as host;
+
+use crate::boundary::{Event, Request};
+use crate::domain::{self, Domain};
+use crate::facts::Fact;
+use crate::limits::{self, Limits};
+use crate::link::{Bounced, Relay};
+use crate::translate;
+use crate::workspace::{self, Write};
+
+/// What the host reads: this iteration's time, and its own limits.
+pub(crate) const fn host_env(env: &Env<Limits>) -> Env<host::Limits> {
+    Env { now: env.now, limits: env.limits.host }
+}
+
+/// What the checkout reads.
+pub(crate) const fn checkout_env(env: &Env<Limits>) -> Env<checkout::Limits> {
+    Env { now: env.now, limits: env.limits.checkout }
+}
+
+/// What the agent child domain reads.
+pub(crate) const fn agent_env(env: &Env<Limits>) -> Env<agent::Limits> {
+    Env { now: env.now, limits: env.limits.agent }
+}
+
+/// Hands one of the protocol's events to the child domain, or the link, it is
+/// for.
+pub(crate) fn event(domain: &mut Domain, env: &Env<Limits>, event: Event) {
+    let event = match event {
+        Event::Connected => {
+            domain.link.connected();
+            domain::keep(domain, Fact::Connected);
+            // The host reports what it hosts, and the hello follows.
+            return host_step(domain, env, host::Event::Report);
+        }
+        Event::Lost => {
+            let open = domain.link.is_up();
+            domain.link.lost(env);
+            if open {
+                domain::keep(domain, Fact::Lost);
+            }
+            return;
+        }
+        Event::Shutdown => {
+            domain.link.shut();
+            return host_step(domain, env, host::Event::CancelAll { reason: host::Reason::Shutdown });
+        }
+        Event::Assign { assignment } => {
+            domain.link.heard();
+            // The attempt answered, assigned again, is dropped: its one answer
+            // is on its way.
+            if domain.link.holds(assignment.run, assignment.attempt) {
+                return;
+            }
+            let answers = domain.link.held();
+            host_step(domain, env, host::Event::Unacknowledged { answers });
+            let reply_to = ReplyTo::new(assignment.run);
+            return host_step(domain, env, host::Event::Assign { reply_to, assignment });
+        }
+        Event::Acknowledged { run, attempt } => {
+            domain.link.heard();
+            return domain.link.acknowledged(run, attempt);
+        }
+        Event::Inbound { run, attempt, event } => {
+            domain.link.heard();
+            return host_step(domain, env, host::Event::Inbound { run, attempt, event });
+        }
+        Event::Cancel { run, attempt } => {
+            domain.link.heard();
+            return host_step(domain, env, host::Event::Cancel { run, attempt });
+        }
+        Event::Relayed { run, attempt, call, answer } => {
+            domain.link.heard();
+            return host_step(domain, env, host::Event::Relayed { run, attempt, call, answer });
+        }
+        Event::Done { owner, done } => return checkout_step(domain, env, checkout::Event::Done { owner, done }),
+        Event::Spawned { owner, process } => agent::Event::Spawned { owner, process },
+        Event::Unspawned { owner, detail } => agent::Event::Unspawned { owner, detail },
+        Event::Sent { owner } => agent::Event::Sent { owner },
+        Event::Unsent { owner } => agent::Event::Unsent { owner },
+        Event::Received { owner, message } => agent::Event::Received { owner, message },
+        Event::Malformed { owner } => agent::Event::Malformed { owner },
+        Event::Hangup { owner } => agent::Event::Hangup { owner },
+        Event::Signalled { owner } => agent::Event::Signalled { owner },
+        Event::Exited { owner } => agent::Event::Exited { owner },
+        Event::Reaped { owner, detail } => agent::Event::Reaped { owner, detail },
+    };
+    agent_step(domain, env, event);
+}
+
+/// Routes what the child domains emitted, and what that leads to, until all
+/// three have emitted all they will in this entry point.
+pub(crate) fn hand_off(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
+    let bound = limits::routed(&env.limits);
+    for _ in 0..bound {
+        if let Some(request) = domain.agent_out.pop() {
+            from_agent(domain, env, request, out);
+        } else if let Some(request) = domain.checkout_out.pop() {
+            from_checkout(domain, env, request, out);
+        } else if let Some(request) = domain.host_out.pop() {
+            from_host(domain, env, request, out);
+        } else {
+            return;
+        }
+    }
+    assert!(
+        domain.agent_out.is_empty() && domain.checkout_out.is_empty() && domain.host_out.is_empty(),
+        "an entry point's hand-offs end within its bound"
+    );
+}
+
+pub(crate) fn host_step(domain: &mut Domain, env: &Env<Limits>, event: host::Event) {
+    let room = host::max_out(&env.limits.host);
+    assert!(domain.host_out.room() >= room, "an entry point steps the host no more than its bound");
+    host::step(&mut domain.host, &host_env(env), event, &mut domain.host_out);
+}
+
+pub(crate) fn checkout_step(domain: &mut Domain, env: &Env<Limits>, event: checkout::Event) {
+    assert!(
+        domain.checkout_out.room() >= checkout::MAX_OUT,
+        "an entry point steps the checkout no more than its bound"
+    );
+    checkout::step(&mut domain.checkout, &checkout_env(env), event, &mut domain.checkout_out);
+}
+
+pub(crate) fn agent_step(domain: &mut Domain, env: &Env<Limits>, event: agent::Event) {
+    assert!(domain.agent_out.room() >= agent::MAX_OUT, "an entry point steps the agents no more than its bound");
+    agent::step(&mut domain.agent, &agent_env(env), event, &mut domain.agent_out);
+}
+
+/// One of the host's requests: to the engine, or to a capability.
+fn from_host(domain: &mut Domain, env: &Env<Limits>, request: host::Request, out: &mut Queue<Request>) {
+    let event = match request {
+        host::Request::Answer { to, run, attempt, answer } => {
+            assert!(to.into_token() == run, "an answer is its assignment's");
+            return domain.link.answer(run, attempt, answer, out);
+        }
+        host::Request::Relay { run, attempt, call, body } => {
+            return domain.link.relay(Relay { run, attempt, call, body }, &domain.host, out);
+        }
+        host::Request::Bounced { run, attempt, bounce } => {
+            return domain.link.bounce(Bounced { run, attempt, bounce }, out);
+        }
+        host::Request::Hosting { runs } => {
+            return domain.link.hello(&runs, &domain.host, &domain.checkout, &env.limits, out);
+        }
+        host::Request::Prepare { owner, workspace } => return workspace::prepare(domain, env, owner, workspace),
+        host::Request::Abort { owner } => return workspace::abort(domain, env, owner),
+        host::Request::Start { owner, workspace, charter, snapshot } => {
+            return workspace::start(domain, env, owner, workspace, charter, snapshot);
+        }
+        host::Request::Push { owner, workspace, message } => {
+            return workspace::write(domain, env, owner, workspace, Write::Push { message });
+        }
+        host::Request::Save { owner, workspace, branch } => {
+            return workspace::write(domain, env, owner, workspace, Write::Save { branch });
+        }
+        host::Request::Release { workspace } => return workspace::release(domain, env, workspace),
+        host::Request::Deliver { agent, event } => agent::Event::Deliver { agent, event },
+        host::Request::Reply { agent, call, reply } => {
+            agent::Event::Answer { agent, call, reply: translate::reply(reply) }
+        }
+        host::Request::Stop { agent } => agent::Event::Stop { agent },
+    };
+    agent_step(domain, env, event);
+}
+
+/// One of the checkout's requests: out to io, or to the host.
+fn from_checkout(domain: &mut Domain, env: &Env<Limits>, request: checkout::Request, out: &mut Queue<Request>) {
+    match request {
+        checkout::Request::Held { client, hold } => workspace::held(domain, env, client, hold),
+        checkout::Request::Prepared { client, prepared } => workspace::prepared(domain, env, client, prepared),
+        checkout::Request::Pushed { client, outcome } => workspace::wrote(domain, env, client, outcome, true),
+        checkout::Request::Saved { client, outcome } => workspace::wrote(domain, env, client, outcome, false),
+        checkout::Request::Released { client } => workspace::released(domain, env, client),
+        checkout::Request::Io { owner, op, deadline } => out.push(Request::Io { owner, op, deadline }),
+        checkout::Request::Cancel { owner } => out.push(Request::CancelIo { owner }),
+    }
+}
+
+/// One of the agent child domain's requests: out to io, to the host, or a fact
+/// of a run for the engine.
+fn from_agent(domain: &mut Domain, env: &Env<Limits>, request: agent::Request, out: &mut Queue<Request>) {
+    let event = match request {
+        agent::Request::Spawn { owner, workspace, deadline } => {
+            return out.push(Request::Spawn { owner, workspace, deadline });
+        }
+        agent::Request::Send { owner, process, message } => return out.push(Request::Send { owner, process, message }),
+        agent::Request::Read { owner, process } => return out.push(Request::Read { owner, process }),
+        agent::Request::Signal { owner, process, signal } => {
+            return out.push(Request::Signal { owner, process, signal });
+        }
+        agent::Request::Wait { owner, process } => return out.push(Request::Wait { owner, process }),
+        agent::Request::Reap { owner, process } => return out.push(Request::Reap { owner, process }),
+        agent::Request::Told { client, fact } => return domain::tell(domain, client, fact),
+        agent::Request::Started { client, agent } => host::Event::Started { owner: client, agent },
+        agent::Request::Called { client, call, ask } => {
+            host::Event::Called { owner: client, call, ask: translate::ask(ask) }
+        }
+        agent::Request::Withdrawn { client, call } => host::Event::Withdrawn { owner: client, call },
+        agent::Request::Waiting { client } => host::Event::Yielded { owner: client },
+        agent::Request::Finished { client, finish } => {
+            host::Event::Finished { owner: client, finish: translate::finish(finish) }
+        }
+        agent::Request::Faulted { client, fault } => {
+            host::Event::Faulted { owner: client, fault: translate::fault(fault) }
+        }
+        agent::Request::Bounced { client, bounce } => {
+            host::Event::Bounced { owner: client, bounce: translate::bounce(bounce) }
+        }
+        // However it went (refused at the entrance, which the limits rule
+        // out, unspawned, or stopped), the agent has gone.
+        agent::Request::Gone { client, end: _, detail } => host::Event::Gone { owner: client, detail },
+    };
+    host_step(domain, env, event);
+}

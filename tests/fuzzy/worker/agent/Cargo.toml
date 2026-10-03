@@ -1,14 +1,14 @@
 [package]
-name = "temper-worker-model-agent-fuzzy"
-description = "The agent sub-model of the worker at random: sweeps of random worlds"
+name = "temper-worker-domain-agent-fuzzy"
+description = "The agent child domain of the worker at random: sweeps of random worlds"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
 [dev-dependencies]
-temper-worker-model-agent.workspace = true
-temper-worker-model-agent-tests.workspace = true
+temper-worker-domain-agent.workspace = true
+temper-worker-domain-agent-tests.workspace = true
 
 # Ordinary Rust (programming-model.md, 10.2), so not the step crates' lints.
 # tests/fuzzy/clippy.toml bans what would make a run unrepeatable.

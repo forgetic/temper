@@ -4,10 +4,10 @@
 //! as it may, each as large as it may be, the store as many commits, with
 //! calls held, webhooks in flight and observations kept; every step checked.
 
-use temper_forge_model::api::{
+use temper_forge_domain::api::{
     Answer, Check, Checks, Cue, Error, File, Git, Op, Permission, Protection, Read, Setup, Verdict, Write,
 };
-use temper_forge_model::{Config, Event, Limits, MAX_OUT, Model, Request, Skew, fire, step, worst_case};
+use temper_forge_domain::{Config, Domain, Event, Limits, MAX_OUT, Request, Skew, fire, step, worst_case};
 use temper_lib::{Duration, Env, Queue, ReplyTo, Time, Token};
 use temper_world::heap::{self, Meter};
 
@@ -121,7 +121,7 @@ fn setup(index: u64) -> Setup {
 /// The forge, measured: each step's peak is checked against the worst case,
 /// less what it handed out in requests, which their receivers count.
 struct Measured {
-    model: Model,
+    domain: Domain,
     env: Env<Config>,
     out: Queue<Request>,
     meter: Meter,
@@ -133,9 +133,9 @@ impl Measured {
     fn new() -> Measured {
         let bound = worst_case(&LIMITS).expect("the test limits fit");
         let meter = Meter::new();
-        let model = Model::new(&CONFIG, 7);
+        let domain = Domain::new(&CONFIG, 7);
         let out = Queue::with_capacity(MAX_OUT);
-        Measured { model, env: Env { now: Time::ZERO, limits: CONFIG }, out, meter, bound, calls: 0 }
+        Measured { domain, env: Env { now: Time::ZERO, limits: CONFIG }, out, meter, bound, calls: 0 }
     }
 
     /// Steps a call by `user` on `repository`, measured, without answering
@@ -145,7 +145,7 @@ impl Measured {
         let token = Token::new(self.calls);
         let event = Event::Call { reply_to: ReplyTo::new(token), user, repository: repository.into(), op };
         self.meter.start();
-        step(&mut self.model, &self.env, event, &mut self.out);
+        step(&mut self.domain, &self.env, event, &mut self.out);
         let measured = self.meter.end();
         assert!(self.out.is_empty(), "a call is held");
         self.meter.check(measured, self.bound, "a call");
@@ -155,16 +155,16 @@ impl Measured {
     /// Fires the next timer, measured: what it emits is dropped, but for a
     /// reply's outcome.
     fn fire(&mut self) -> Option<(Token, Result<Option<u64>, Error>)> {
-        self.env.now = self.model.next_deadline().expect("a timer is armed");
+        self.env.now = self.domain.next_deadline().expect("a timer is armed");
         self.meter.start();
-        fire(&mut self.model, &self.env, &mut self.out);
+        fire(&mut self.domain, &self.env, &mut self.out);
         let measured = self.meter.end();
         let outcome = match self.out.pop() {
             Some(Request::Reply { to, result }) => Some((to.into_token(), outcome(result))),
             Some(Request::Hook { .. }) | None => None,
         };
         self.meter.check(measured, self.bound, "a timer");
-        self.model.reclaim();
+        self.domain.reclaim();
         outcome
     }
 
@@ -221,7 +221,7 @@ fn fill(forge: &mut Measured, index: u64, first: u64) {
     // Three branches, each a commit of a full tree ahead of the default.
     for branch in 0..3_u64 {
         let content = b'a' + u8::try_from(branch + 3 * index).expect("small");
-        let commit = temper_forge_model::commit(&mut forge.model, &config, first, tree(content))
+        let commit = temper_forge_domain::commit(&mut forge.domain, &config, first, tree(content))
             .expect("room")
             .expect("a change");
         let push = Op::Git(Git::Push { branch: name(b'w', branch), commit });
@@ -278,28 +278,28 @@ fn a_forge_filled_to_its_limits_stays_within_its_worst_case() {
     let config = forge.env.limits;
     let mut firsts = Vec::new();
     for index in 0..u64::from(LIMITS.repositories) {
-        firsts.push(temper_forge_model::repository(&mut forge.model, &config, setup(index)));
+        firsts.push(temper_forge_domain::repository(&mut forge.domain, &config, setup(index)));
         for user in 1..=u64::from(LIMITS.users) {
             let permission = if user == ADMIN { Permission::Admin } else { Permission::Write };
-            temper_forge_model::grant(&mut forge.model, &name(b'r', index), user, permission);
+            temper_forge_domain::grant(&mut forge.domain, &name(b'r', index), user, permission);
         }
     }
     for (index, &first) in firsts.iter().enumerate() {
         fill(&mut forge, u64::try_from(index).expect("small"), first);
     }
-    let room = forge.model.room();
+    let room = forge.domain.room();
     assert_eq!(room.statuses, 0, "every repository holds as many statuses as it may");
     // The store holds as many commits as it may.
     for content in 0..u8::MAX {
-        let made = temper_forge_model::commit(&mut forge.model, &config, firsts[0], tree(content));
+        let made = temper_forge_domain::commit(&mut forge.domain, &config, firsts[0], tree(content));
         if made == Err(Error::Full) {
             break;
         }
     }
-    assert_eq!(forge.model.room().commits, 0);
-    let tally = forge.model.tally();
+    assert_eq!(forge.domain.room().commits, 0);
+    let tally = forge.domain.tally();
     assert_eq!((tally.full, tally.unreported), (0, 0), "nothing was refused for room while filling");
-    assert!(forge.model.observations_lost() > 0, "the observations kept are as many as may be");
+    assert!(forge.domain.observations_lost() > 0, "the observations kept are as many as may be");
     assert!(tally.hooks_dropped > 0, "the webhooks in flight are as many as may be");
     // Calls held, each with as large an answer as there is.
     let repository = name(b'r', 0);
@@ -319,7 +319,7 @@ fn a_forge_filled_to_its_limits_stays_within_its_worst_case() {
     for op in big {
         forge.send(ADMIN, &repository, op);
     }
-    assert_eq!(forge.model.calls(), LIMITS.calls);
+    assert_eq!(forge.domain.calls(), LIMITS.calls);
     let held = forge.meter.held();
     assert!(held * 3 >= forge.bound * 2, "the fill reaches two thirds of the worst case: {held} of {}", forge.bound);
 }

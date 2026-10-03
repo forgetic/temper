@@ -1,6 +1,6 @@
-//! The protocol layer, as the world plays it: the forge sub-model's
+//! The protocol layer, as the world plays it: the forge child domain's
 //! operations as calls to the fake forge, and the fake's answers as the
-//! sub-model's, with what a Forgejo protocol layer would put inside what the
+//! child domain's, with what a Forgejo protocol layer would put inside what the
 //! engine creates and find again when it reads.
 //!
 //! - **Markers.** A key goes at the head of what it keys (an issue's body, a
@@ -9,18 +9,18 @@
 //!   and its write's nonce written out; a body that starts as a record and
 //!   does not decode is a record mangled. A wiki page the engine writes
 //!   starts with its write's nonce. A person's marker is read like any
-//!   other: the sub-model decides whose it is.
+//!   other: the child domain decides whose it is.
 //! - **What the fake does not keep** is answered as Forgejo would answer
 //!   what has none: its statuses describe themselves by their state and
 //!   point nowhere, and its reviews have no inline comments.
-//! - **Payloads** the sub-model names by tokens are filled in by the parent as
-//!   the call goes out ([`Fill`]).
+//! - **Payloads** the child domain names by tokens are filled in by the parent
+//!   as the call goes out ([`Fill`]).
 //! - **Commits** are the fake's counts, in the first 8 bytes, big-endian.
 //! - **A comment's revision** is a digest of its body, so it changes whenever
 //!   the body does, at any resolution of the forge's clock.
-//! - **Pages** are the sub-model's: a listing asks the fake for a page of the
-//!   sub-model's size, and a page of comments is cut to it, and reviews and
-//!   statuses are paged by number out of all the fake shows; and so are
+//! - **Pages** are the child domain's: a listing asks the fake for a page of
+//!   the child domain's size, and a page of comments is cut to it, and reviews
+//!   and statuses are paged by number out of all the fake shows; and so are
 //!   texts, to their limits, once what is marked at their heads is read.
 //! - **CI** on a commit is combined over its contexts as Forgejo combines it:
 //!   failed if any failed, pending if any is pending, passed if all passed.
@@ -29,9 +29,9 @@
 
 use std::collections::BTreeMap;
 
-use temper_engine_model_forge::api as engine;
-use temper_engine_model_forge::{Ci, Limits, Position};
-use temper_forge_model::api as forge;
+use temper_engine_domain_forge::api as engine;
+use temper_engine_domain_forge::{Ci, Limits, Position};
+use temper_forge_domain::api as forge;
 use temper_lib::{Duration, Time, Token};
 
 const KEY: &[u8] = b"<!-- temper:key ";
@@ -175,7 +175,7 @@ pub fn is_record(body: &[u8]) -> bool {
     body.starts_with(RECORD)
 }
 
-/// What a comment's body has at its head, for the sub-model.
+/// What a comment's body has at its head, for the child domain.
 #[must_use]
 pub fn mark(body: &[u8]) -> engine::Mark {
     if let Some(rest) = body.strip_prefix(RECORD) {
@@ -343,13 +343,13 @@ pub fn op(op: engine::Op, page: u32, fill: &Fill) -> (Asked, forge::Op) {
     }
 }
 
-/// The sub-model's answer for what the fake answered, at its time `now`, a
+/// The child domain's answer for what the fake answered, at its time `now`, a
 /// call that asked `asked`, cutting a page of comments, reviews or statuses,
 /// and texts, to `limits`.
 ///
 /// # Errors
 ///
-/// What the call failed with, as the sub-model names it.
+/// What the call failed with, as the child domain names it.
 pub fn answer(
     asked: Asked,
     result: Result<forge::Answer, forge::Error>,
@@ -458,7 +458,7 @@ fn unasked(asked: Asked, answer: &forge::Answer) -> ! {
     panic!("the fake answers {asked:?} as asked: {answer:?}")
 }
 
-/// The sub-model's error for the fake's, answered at its time `now`.
+/// The child domain's error for the fake's, answered at its time `now`.
 #[must_use]
 pub fn error(error: forge::Error, now: Time) -> engine::Error {
     match error {

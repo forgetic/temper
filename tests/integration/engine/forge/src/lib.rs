@@ -1,14 +1,14 @@
-//! A simulated world for the engine's forge sub-model (programming-model.md,
-//! 4.5 and 11; engine-model.md, section 12; testing-pyramid.md, 2.2): the
-//! forge sub-model, with the world as its parent, against the fake forge
-//! (`testing/temper-forge-model`), driven by one loop, deterministically from
+//! A simulated world for the engine's forge child domain (programming-model.md,
+//! 4.5 and 11; engine-domain.md, section 12; testing-pyramid.md, 2.2): the
+//! forge child domain, with the world as its parent, against the fake forge
+//! (`testing/temper-forge-domain`), driven by one loop, deterministically from
 //! a seed.
 //!
 //! The world owns the clock and the seeds, and stands in for everything
-//! around the sub-model:
+//! around the child domain:
 //!
-//! - **the protocol layer** ([`translate`]): the sub-model's calls as the
-//!   fake's, the fake's answers as the sub-model's, with the markers a
+//! - **the protocol layer** ([`translate`]): the child domain's calls as the
+//!   fake's, the fake's answers as the child domain's, with the markers a
 //!   Forgejo protocol layer puts in what the engine creates (keys, records,
 //!   nonces, the person a message is written for) and finds again, payloads
 //!   filled in from the parent's tokens, reviews and statuses paged, CI
@@ -26,7 +26,7 @@
 //!   commenting, labelling and unlabelling, reviewing (some reviews pending,
 //!   submitted later), pushing, closing, and mangling or deleting a record by
 //!   hand; and the workers that push a change's branch;
-//! - **the engine restarting**, injected by the referee: a new sub-model,
+//! - **the engine restarting**, injected by the referee: a new child domain,
 //!   starting cold, while the calls the old one made still land.
 //!
 //! The fake forge's faults are on as the settings say: latency and late
@@ -35,8 +35,8 @@
 //! that may run again, and a clock ahead of or behind the world's.
 //!
 //! It checks the contracts as it goes: every call is ended exactly once, in
-//! the life of the sub-model that made it, and every fresh read and write
-//! answered exactly once. Its referee ([`referee`]) holds the sub-model to
+//! the life of the child domain that made it, and every fresh read and write
+//! answered exactly once. Its referee ([`referee`]) holds the child domain to
 //! what the scenarios expect, from what the fake forge sees: no write the
 //! parent did not plan (or no longer may land), no creation made twice,
 //! labels as the last set written and only those the engine owns, every
@@ -46,7 +46,7 @@
 //! and after a restart an item only the slow pass finds), and no call before
 //! a rate limit's reset. And
 //! the invariants once it settles: nothing in flight, no call, read or write
-//! left in the sub-model, and the referee's verdict passed. Its own state is
+//! left in the child domain, and the referee's verdict passed. Its own state is
 //! bounded too: a world that grows its trace or its deliveries past their
 //! bounds, or does not settle in the iterations it is given, fails with its
 //! seed.

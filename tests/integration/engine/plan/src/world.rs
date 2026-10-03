@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use temper_engine_model_plan::{
+use temper_engine_domain_plan::{
     self as plan, Accept, Applied, Config, Due, Hold, Key, Limits, Outcome, Progress, Record, Repair, Stale, Then,
     Verdict, Waits, Why, Woken, Work, Write,
 };
@@ -916,7 +916,7 @@ impl World {
 
     /// Steps added to the plan of the goal item `number` is under, or
     /// supervises, if it has room.
-    fn growth(&mut self, number: u64) -> Option<Box<[temper_engine_model_plan::Step]>> {
+    fn growth(&mut self, number: u64) -> Option<Box<[temper_engine_domain_plan::Step]>> {
         let goal = self.forge.item(number).goal.unwrap_or(number);
         let plan = self.forge.item(goal).record.goal.as_ref()?;
         let mut done = Vec::new();

@@ -1,6 +1,6 @@
 [package]
-name = "temper-worker-model-host-fuzzy"
-description = "The host sub-model of the worker at random: sweeps of rough worlds"
+name = "temper-worker-domain-host-fuzzy"
+description = "The host child domain of the worker at random: sweeps of rough worlds"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,8 +8,8 @@ publish.workspace = true
 
 [dev-dependencies]
 temper-lib.workspace = true
-temper-worker-model-host.workspace = true
-temper-worker-model-host-tests.workspace = true
+temper-worker-domain-host.workspace = true
+temper-worker-domain-host-tests.workspace = true
 
 # Ordinary Rust (programming-model.md, 10.2), so not the step crates' lints.
 # tests/fuzzy/clippy.toml bans what would make a run unrepeatable.

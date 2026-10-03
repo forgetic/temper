@@ -1,13 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use temper_agent_model_run as run;
+use temper_agent_domain_run as run;
 use temper_lib::{Duration, ReplyTo, Rng, Time, Token};
 use temper_world::{Key, Ledger, Schedule, Span, Stage, Trace};
 
 use crate::host::{self, Host};
 use crate::partner::{Out, Partner, Script, Tally};
 
-/// Room in each model's output queue. Small, so the loop's flow control (take
+/// Room in each domain's output queue. Small, so the loop's flow control (take
 /// an event only while there is room for what it may produce) is exercised.
 const OUT: u32 = 4;
 
@@ -316,7 +316,7 @@ pub struct World {
     rng: Rng,
     settings: Settings,
 
-    run: run::Model,
+    run: run::Domain,
     run_stage: Stage<run::Limits, run::Event, run::Request>,
 
     host: Host,
@@ -389,7 +389,7 @@ impl World {
             now: Time::ZERO,
             rng,
             settings,
-            run: run::Model::new(&settings.run),
+            run: run::Domain::new(&settings.run),
             run_stage: Stage::new(settings.run, run::MAX_OUT, OUT),
             host,
             partner,
@@ -435,7 +435,7 @@ impl World {
         Stats { host: self.host.tally(), partner: self.partner.tally(), ..self.stats }
     }
 
-    /// What crossed between the models and the world, in order, with times.
+    /// What crossed between the domains and the world, in order, with times.
     #[must_use]
     pub fn trace(&self) -> &[String] {
         self.trace.lines()

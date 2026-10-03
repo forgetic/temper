@@ -3,7 +3,7 @@
 //! they make, the outcomes runs finish with, and how people review, decide
 //! and accept. The deployment the plan is configured with is here too.
 
-use temper_engine_model_plan::{
+use temper_engine_domain_plan::{
     AgentSpec, Batch, Budget, ChangeSpec, Charter, Config, Envelope, Gate, Goal, Grants, Plan, Repo, Repository,
     Resume, Review, SessionSpec, Sources, Step, Target, Template, WaitSpec, Wake, Work,
 };

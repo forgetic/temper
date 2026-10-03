@@ -1,6 +1,6 @@
 //! What the tools answered, by name, as the tests count it.
 
-use temper_agent_model_tools::Outcome;
+use temper_agent_domain_tools::Outcome;
 
 /// The name of the kind of `outcome`.
 #[must_use]

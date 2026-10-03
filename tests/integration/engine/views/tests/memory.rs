@@ -3,8 +3,8 @@
 //! watch open with a full backlog and as many ended within the iteration, the
 //! batch full while the store is behind, and every entry point on the way.
 
-use temper_engine_model_views::{
-    Capture, Event, Kind, Limits, Model, Policy, Request, Subject, fire, max_out, step, worst_case,
+use temper_engine_domain_views::{
+    Capture, Domain, Event, Kind, Limits, Policy, Request, Subject, fire, max_out, step, worst_case,
 };
 use temper_lib::{Duration, Env, Queue, Time, Token};
 use temper_world::heap::{self, Meter};
@@ -52,7 +52,7 @@ enum Asked {
 /// the worst case, less what it handed out in requests, which their
 /// receivers count.
 struct Measured {
-    model: Model,
+    domain: Domain,
     env: Env<Limits>,
     out: Queue<Request>,
     meter: Meter,
@@ -63,15 +63,15 @@ impl Measured {
     fn new(limits: Limits) -> Measured {
         let bound = worst_case(&limits).expect("the test limits fit");
         let meter = Meter::new();
-        let model = Model::new(&limits, Time::ZERO);
+        let domain = Domain::new(&limits, Time::ZERO);
         let out = Queue::with_capacity(max_out(&limits));
-        Measured { model, env: Env { now: Time::ZERO, limits }, out, meter, bound }
+        Measured { domain, env: Env { now: Time::ZERO, limits }, out, meter, bound }
     }
 
     /// Steps `event`, and ends the iteration: the reclaim point.
     fn step(&mut self, event: Event) -> Vec<Asked> {
         let asked = self.held(event);
-        self.model.reclaim();
+        self.domain.reclaim();
         asked
     }
 
@@ -79,7 +79,7 @@ impl Measured {
     /// follow.
     fn held(&mut self, event: Event) -> Vec<Asked> {
         self.meter.start();
-        step(&mut self.model, &self.env, event, &mut self.out);
+        step(&mut self.domain, &self.env, event, &mut self.out);
         self.drain()
     }
 
@@ -87,11 +87,11 @@ impl Measured {
     fn fire(&mut self, now: Time) -> Vec<Asked> {
         self.env.now = now;
         let mut asked = Vec::new();
-        while self.model.is_due(now) {
+        while self.domain.is_due(now) {
             self.meter.start();
-            fire(&mut self.model, &self.env, &mut self.out);
+            fire(&mut self.domain, &self.env, &mut self.out);
             asked.extend(self.drain());
-            self.model.reclaim();
+            self.domain.reclaim();
         }
         asked
     }
@@ -164,18 +164,18 @@ fn fill(limits: Limits, share: u64) {
     for &watcher in &watchers {
         assert_eq!(views.watch(watcher, Subject::Run(Token::new(0))), [Asked::Watching, Asked::Deliver]);
         assert!(views.delivered(watcher, true).is_empty());
-        views.model.reclaim();
+        views.domain.reclaim();
     }
     assert_eq!(views.watch(1, Subject::Board(0)), [Asked::Refused], "refused as busy");
     let mut sent = Vec::new();
     for _ in 0..=limits.backlog {
         sent.extend(appends(&views.report(0)));
-        views.model.reclaim();
+        views.domain.reclaim();
     }
     // A report more than the store can take while it is behind.
     for _ in 0..limits.records {
         sent.extend(appends(&views.report(1)));
-        views.model.reclaim();
+        views.domain.reclaim();
     }
     assert!(sent.len() <= usize::try_from(limits.appends).expect("small"), "the store is behind");
     // Within one iteration: every watch ends, and as many are taken and
@@ -196,7 +196,7 @@ fn fill(limits: Limits, share: u64) {
     let fullest = views.meter.held();
     let held = fullest.saturating_mul(1000) > views.bound.saturating_mul(share);
     assert!(held, "{fullest} held of a worst case of {}", views.bound);
-    views.model.reclaim();
+    views.domain.reclaim();
     // One more report overflows every backlog; then each delivery ends, and
     // what waits goes whole.
     views.report(0);
@@ -208,7 +208,7 @@ fn fill(limits: Limits, share: u64) {
     for &watcher in &fresh {
         assert_eq!(views.delivered(watcher, false), [Asked::Ended]);
     }
-    views.model.reclaim();
+    views.domain.reclaim();
     // The store catches up, and is swept.
     for owner in sent {
         let next = appends(&views.step(Event::Appended { owner, done: true }));
@@ -221,7 +221,7 @@ fn fill(limits: Limits, share: u64) {
     }
     let [Asked::Expire(owner)] = views.fire(Time::ZERO.saturating_add(limits.sweep))[..] else { panic!("a sweep") };
     assert!(views.step(Event::Expired { owner, done: true }).is_empty());
-    assert_eq!((views.model.watchers(), views.model.ops(), views.model.batched()), (0, 0, 0));
+    assert_eq!((views.domain.watchers(), views.domain.ops(), views.domain.batched()), (0, 0, 0));
 }
 
 /// Every entry point's other ends: a watch of a run not followed, turned
@@ -259,7 +259,7 @@ fn paths(limits: Limits) {
     assert_eq!(views.delivered(2, false), [Asked::Deliver]);
     assert!(views.delivered(2, true).is_empty());
     assert_eq!(views.step(Event::Unwatch { watcher: Token::new(2) }), [Asked::Ended]);
-    views.model.reclaim();
+    views.domain.reclaim();
     let [Asked::Append(owner)] = views.fire(Time::ZERO.saturating_add(limits.flush))[..] else {
         panic!("the batch goes")
     };

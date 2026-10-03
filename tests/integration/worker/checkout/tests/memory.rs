@@ -6,9 +6,9 @@
 //! holds as live ones.
 
 use temper_lib::{Duration, Env, Queue, Time, Token};
-use temper_worker_model_checkout::git::{Commit, Done, Fault, Kind, Missing};
-use temper_worker_model_checkout::{
-    Event, Limits, MAX_OUT, Message, Model, Outcome, Prepared, Refusal, Repository, Request, Spec, Start, step,
+use temper_worker_domain_checkout::git::{Commit, Done, Fault, Kind, Missing};
+use temper_worker_domain_checkout::{
+    Domain, Event, Limits, MAX_OUT, Message, Outcome, Prepared, Refusal, Repository, Request, Spec, Start, step,
     worst_case,
 };
 use temper_world::heap::{self, Meter};
@@ -78,13 +78,13 @@ fn message(limits: &Limits) -> Message {
     Message { title: bytes(1), body: bytes(limits.message_bytes - 1) }
 }
 
-/// A model under its limits, stepped with each step's peak checked against
+/// A domain under its limits, stepped with each step's peak checked against
 /// the worst case. The requests are the parent's to route and their
 /// receivers' to count: each is dropped, keeping only what it asked for, and
 /// the step's peak checked less them. Nothing is reclaimed until the test
 /// says so.
 struct Fill {
-    model: Model,
+    domain: Domain,
     env: Env<Limits>,
     out: Queue<Request>,
     meter: Meter,
@@ -95,12 +95,12 @@ impl Fill {
     fn new(limits: Limits) -> Fill {
         let bound = worst_case(&limits).expect("the test limits fit");
         let env = Env { now: Time::ZERO, limits };
-        Fill { model: Model::new(&limits), env, out: Queue::with_capacity(MAX_OUT), meter: Meter::new(), bound }
+        Fill { domain: Domain::new(&limits), env, out: Queue::with_capacity(MAX_OUT), meter: Meter::new(), bound }
     }
 
     fn step(&mut self, event: Event) -> Vec<Asked> {
         self.meter.start();
-        step(&mut self.model, &self.env, event, &mut self.out);
+        step(&mut self.domain, &self.env, event, &mut self.out);
         let measured = self.meter.end();
         let mut asked = Vec::new();
         while let Some(request) = self.out.pop() {
@@ -181,7 +181,7 @@ impl Fill {
     }
 }
 
-/// Fills every workspace of a model under `limits` as the module says. The
+/// Fills every workspace of a domain under `limits` as the module says. The
 /// peak of the heap in every step is checked against the worst case.
 fn fill(limits: Limits) {
     let mut fill = Fill::new(limits);
@@ -209,7 +209,7 @@ fn fill(limits: Limits) {
         let hold = fill.prepare(n);
         fill.save(hold, n);
     }
-    assert_eq!(fill.model.holds(), workspaces * 2, "as many released holds as live ones");
+    assert_eq!(fill.domain.holds(), workspaces * 2, "as many released holds as live ones");
     let held = fill.meter.held();
     let name = u64::from(limits.name_bytes);
     let repositories = u64::from(limits.repositories);
@@ -221,22 +221,22 @@ fn fill(limits: Limits) {
     let save = u64::from(limits.message_bytes) + name;
     let least = u64::from(workspaces) * (cache + 2 * spec + save);
     assert!(held >= least, "{limits:?}: every workspace and hold holds its limits: {held} < {least}");
-    fill.model.reclaim();
-    assert_eq!(fill.model.holds(), workspaces, "the released ones are reclaimed");
+    fill.domain.reclaim();
+    assert_eq!(fill.domain.holds(), workspaces, "the released ones are reclaimed");
 
     // A byte more is refused.
-    let mut model = Model::new(&limits);
+    let mut domain = Domain::new(&limits);
     let mut spec = full_spec(&limits, 0);
     spec.key = bytes(limits.name_bytes + 1);
     let mut out = Queue::with_capacity(MAX_OUT);
     let env = Env { now: Time::ZERO, limits };
-    temper_worker_model_checkout::step(&mut model, &env, Event::Prepare { client: Token::new(0), spec }, &mut out);
+    temper_worker_domain_checkout::step(&mut domain, &env, Event::Prepare { client: Token::new(0), spec }, &mut out);
     let Some(Request::Prepared { prepared, .. }) = out.pop() else { panic!("expected an answer") };
     assert_eq!(prepared, Prepared::Refused { refusal: Refusal::Invalid });
 }
 
 #[test]
-fn a_model_with_every_workspace_held_at_its_limits_stays_within_its_worst_case() {
+fn a_domain_with_every_workspace_held_at_its_limits_stays_within_its_worst_case() {
     fill(LIMITS);
     fill(Limits { workspaces: 64, repositories: 8, name_bytes: 256, message_bytes: 65_536, ..LIMITS });
     fill(Limits { workspaces: 1000, repositories: 1, name_bytes: 16, message_bytes: 16, ..LIMITS });

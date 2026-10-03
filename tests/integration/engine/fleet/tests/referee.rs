@@ -2,7 +2,7 @@
 //! would feed them, fails a run that breaks an expectation, and says why; and
 //! passes one that keeps them.
 
-use temper_engine_model_fleet_tests::referee::{Down, End, Fleet, Kind, Said, Seen};
+use temper_engine_domain_fleet_tests::referee::{Down, End, Fleet, Kind, Said, Seen};
 use temper_lib::{Duration, Time};
 use temper_world::{Referee, Verdict};
 

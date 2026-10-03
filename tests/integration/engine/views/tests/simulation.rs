@@ -1,7 +1,7 @@
 //! The views in their world: scenarios, replay, and a sweep of random worlds.
 
-use temper_engine_model_views::Limits;
-use temper_engine_model_views_tests::{LIMITS, Settings, Span, Stats, World};
+use temper_engine_domain_views::Limits;
+use temper_engine_domain_views_tests::{LIMITS, Settings, Span, Stats, World};
 use temper_lib::Duration;
 use temper_world::assert_replays;
 

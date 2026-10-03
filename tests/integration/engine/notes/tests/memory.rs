@@ -3,8 +3,8 @@
 //! lacking, every call holding as much as it may, and every entry point on
 //! the way.
 
-use temper_engine_model_notes::{
-    Author, Change, Event, Fetched, Item, Limits, Listed, Model, Page, Recall, Reference, Request, Scope, Scopes,
+use temper_engine_domain_notes::{
+    Author, Change, Domain, Event, Fetched, Item, Limits, Listed, Page, Recall, Reference, Request, Scope, Scopes,
     Wrote, max_out, resume, step, worst_case,
 };
 use temper_lib::{Env, Queue, ReplyTo, Time, Token};
@@ -39,7 +39,7 @@ enum Asked {
 /// the worst case, less what it handed out in requests, which their
 /// receivers count.
 struct Measured {
-    model: Model,
+    domain: Domain,
     env: Env<Limits>,
     out: Queue<Request>,
     meter: Meter,
@@ -51,20 +51,20 @@ impl Measured {
     fn new(limits: Limits) -> Measured {
         let bound = worst_case(&limits).expect("the test limits fit");
         let meter = Meter::new();
-        let model = Model::new(&limits);
+        let domain = Domain::new(&limits);
         let out = Queue::with_capacity(max_out(&limits));
-        Measured { model, env: Env { now: Time::ZERO, limits }, out, meter, bound, calls: 0 }
+        Measured { domain, env: Env { now: Time::ZERO, limits }, out, meter, bound, calls: 0 }
     }
 
     fn step(&mut self, event: Event) -> Vec<Asked> {
         self.meter.start();
-        step(&mut self.model, &self.env, event, &mut self.out);
+        step(&mut self.domain, &self.env, event, &mut self.out);
         self.drain()
     }
 
     fn resume(&mut self) -> Vec<Asked> {
         self.meter.start();
-        resume(&mut self.model, &self.env, &mut self.out);
+        resume(&mut self.domain, &self.env, &mut self.out);
         self.drain()
     }
 
@@ -87,7 +87,7 @@ impl Measured {
         }
         self.meter.check(measured, self.bound, self.env.limits);
         // The iteration ends: the reclaim point.
-        self.model.reclaim();
+        self.domain.reclaim();
         asked
     }
 
@@ -101,7 +101,7 @@ impl Measured {
     /// with pages of the limits, writes done.
     fn settle(&mut self, mut asked: Vec<Asked>, revision: u64) {
         loop {
-            while self.model.is_ready() {
+            while self.domain.is_ready() {
                 asked.extend(self.resume());
             }
             let Some(next) = asked.pop() else {
@@ -170,7 +170,7 @@ fn fill(limits: Limits) {
         let asked = notes.step(note);
         notes.settle(asked, 1);
     }
-    assert_eq!(notes.model.scopes(), limits.scopes);
+    assert_eq!(notes.domain.scopes(), limits.scopes);
     // Every page lacking again: each scope listed at a revision it does not
     // know, its first read in flight.
     let mut reads = Vec::new();
@@ -222,7 +222,7 @@ fn fill(limits: Limits) {
         most: 8,
     });
     notes.settle(asked, 3);
-    assert_eq!((notes.model.calls(), notes.model.ops()), (0, 0));
+    assert_eq!((notes.domain.calls(), notes.domain.ops()), (0, 0));
 }
 
 /// Every terminal's other ends: a listing, a read and a write that fail, a
@@ -292,7 +292,7 @@ fn paths(limits: Limits) {
         most: 1,
     };
     assert_eq!(notes.step(oversized), [Asked::Answer]);
-    assert_eq!((notes.model.calls(), notes.model.ops()), (0, 0));
+    assert_eq!((notes.domain.calls(), notes.domain.ops()), (0, 0));
 }
 
 #[test]

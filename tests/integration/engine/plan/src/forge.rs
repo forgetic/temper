@@ -6,11 +6,11 @@
 //!
 //! The record is kept as the typed value the plan reads and writes: a codec
 //! that encodes it into a comment and decodes it back stands in its place
-//! (the protocol layer's, below the model).
+//! (the protocol layer's, below the domain).
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use temper_engine_model_plan::Record;
+use temper_engine_domain_plan::Record;
 use temper_lib::Time;
 
 /// An issue the engine tracks.

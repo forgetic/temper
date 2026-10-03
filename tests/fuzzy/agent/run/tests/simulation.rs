@@ -1,10 +1,10 @@
-//! The agent's run sub-model at random: many noisy worlds, each settled with
+//! The agent's run child domain at random: many noisy worlds, each settled with
 //! every start answered once, every way a run ends reached among them.
 
 use std::collections::BTreeSet;
 
-use temper_agent_model_run::{Answer, Exhausted, Failure, Fault, Invalid, Policy, Refusal};
-use temper_agent_model_run_tests::{Settings, World, noisy};
+use temper_agent_domain_run::{Answer, Exhausted, Failure, Fault, Invalid, Policy, Refusal};
+use temper_agent_domain_run_tests::{Settings, World, noisy};
 
 const ITERATIONS: u32 = 1_000_000;
 

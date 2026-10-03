@@ -1,6 +1,6 @@
 [package]
-name = "temper-engine-model-forge-tests"
-description = "The forge sub-model's world: a simulation against the fake forge, with a scripted parent and people"
+name = "temper-engine-domain-forge-tests"
+description = "The forge child domain's world: a simulation against the fake forge, with a scripted parent and people"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,8 +8,8 @@ publish.workspace = true
 
 [dependencies]
 temper-lib.workspace = true
-temper-engine-model-forge.workspace = true
-temper-forge-model.workspace = true
+temper-engine-domain-forge.workspace = true
+temper-forge-domain.workspace = true
 temper-world.workspace = true
 
 # Ordinary Rust (programming-model.md, 10.2), so not the step crates' lints.

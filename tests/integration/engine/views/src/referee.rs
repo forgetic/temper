@@ -30,7 +30,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
-use temper_engine_model_views::{Capture, Chunk, End, Kind, Limits, Policy, Record, Refusal, Subject};
+use temper_engine_domain_views::{Capture, Chunk, End, Kind, Limits, Policy, Record, Refusal, Subject};
 use temper_lib::{Duration, Time, Token};
 use temper_world::{Expectations, Judge};
 

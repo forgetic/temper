@@ -2,7 +2,7 @@
 //! from the forge into the facts a decision reads, and how it names commits
 //! and inbox events to the plan.
 
-use temper_engine_model_plan::{
+use temper_engine_domain_plan::{
     Ci, Commit, Decided, Decision, Envelope, Facts, Inbound, Mergeable, Pull, PullState, Relations, Repair, Source,
     Step, Why,
 };
@@ -163,7 +163,7 @@ fn pull(forge: &Forge, number: u64) -> Option<Pull> {
 /// A step as the referee sees it proposed.
 #[must_use]
 pub fn step_seen(step: &Step) -> StepSeen {
-    use temper_engine_model_plan::{Gate, Review, Work};
+    use temper_engine_domain_plan::{Gate, Review, Work};
     let primitive = match &step.work {
         Work::Agent(_) => Primitive::Agent,
         Work::Change(spec) => Primitive::Change {
@@ -221,7 +221,7 @@ pub fn run_seen(why: Why) -> RunSeen {
 /// it, more if a gate asks for more.
 #[must_use]
 pub fn approvals_needed(step: &Step) -> u32 {
-    use temper_engine_model_plan::{Gate, Review, Work};
+    use temper_engine_domain_plan::{Gate, Review, Work};
     let mut needed = match &step.work {
         Work::Change(spec) => match spec.review {
             Review::Person => 1,

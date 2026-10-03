@@ -1,10 +1,10 @@
-//! A simulated world for the engine's notes sub-model (programming-model.md,
-//! 4.5 and 11; engine-model.md, section 10): the notes, with the world as
+//! A simulated world for the engine's notes child domain (programming-model.md,
+//! 4.5 and 11; engine-domain.md, section 10): the notes, with the world as
 //! their parent, driven by one loop, deterministically from a seed.
 //!
 //! The world owns the clock and the seeds, and stands in for everything
 //! around the notes: the top level that routes to and from them, and the
-//! forge sub-model and the protocol layers below it, as a wiki of pages in
+//! forge child domain and the protocol layers below it, as a wiki of pages in
 //! each scope (the deployment's, two repositories', a goal in each) that
 //! serves listings, reads and writes after a latency, some of them late and
 //! some failing, and cuts a listing at the notes' limit; people who make,

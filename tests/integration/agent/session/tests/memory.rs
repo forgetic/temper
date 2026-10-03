@@ -1,15 +1,15 @@
 //! Memory stays within the worst case (programming-model.md, 6.3), measured by
-//! a counting allocator: the session sub-model with every session filled to its
-//! limits, and lib's containers on their own.
+//! a counting allocator: the session child domain with every session filled to
+//! its limits, and lib's containers on their own.
 
 use std::mem::size_of;
 
-use temper_agent_model_session::llm::{
+use temper_agent_domain_session::llm::{
     Block, Completion, Decoded, Descriptor, Endpoint, Failure, Problem, Stop, Usage,
 };
-use temper_agent_model_session::{Budget, Event, Limits, MAX_PARALLEL, Model, Request, Spec, max_out, worst_case};
-use temper_agent_model_session_tests::TOOLS;
-use temper_agent_model_tools::{Authority, Call, Done, Effect, Grants, Name, Part, Path, Repo, Version};
+use temper_agent_domain_session::{Budget, Domain, Event, Limits, MAX_PARALLEL, Request, Spec, max_out, worst_case};
+use temper_agent_domain_session_tests::TOOLS;
+use temper_agent_domain_tools::{Authority, Call, Done, Effect, Grants, Name, Part, Path, Repo, Version};
 use temper_lib::{Deadlines, Duration, Env, List, Map, Queue, Rng, Set, Slab, Time, Token};
 use temper_world::heap::{self, Meter};
 
@@ -63,7 +63,7 @@ const LIMITS: Limits = Limits {
     facts: 64,
     parallel_tools: 1,
     // Reads answer with the whole file loaded.
-    tools: temper_agent_model_tools::Limits { kits: 1, read_bytes: 1 << 20, file_bytes: 1 << 20, ..TOOLS },
+    tools: temper_agent_domain_tools::Limits { kits: 1, read_bytes: 1 << 20, file_bytes: 1 << 20, ..TOOLS },
 };
 
 /// What a step asked for last, without the payload.
@@ -85,13 +85,13 @@ enum Route {
     Talk,
 }
 
-/// Fills every session of a model under `limits` to exactly its byte limit by
+/// Fills every session of a domain under `limits` to exactly its byte limit by
 /// `route` and leaves it in backoff, the state that also holds both of its
 /// alarms, checking the peak of the heap in every step against the worst case.
 /// Its
 /// tools have a kit for each session, and room for its widest batch.
 fn fill(limits: Limits, route: Route) {
-    let tools = temper_agent_model_tools::Limits {
+    let tools = temper_agent_domain_tools::Limits {
         kits: limits.sessions,
         calls: limits.parallel_tools.max(limits.tools.calls),
         ..limits.tools
@@ -101,13 +101,13 @@ fn fill(limits: Limits, route: Route) {
     let env = Env { now: Time::ZERO, limits };
     let mut out = Queue::with_capacity(max_out(&limits));
     let meter = Meter::new();
-    let mut model = Model::new(&limits, 1);
+    let mut domain = Domain::new(&limits, 1);
     // The requests are the protocol layer's and the opener's to hold and
     // count: each is dropped, keeping only what it asked for, and the step's
     // peak checked less them.
     let mut step = |event: Event| -> Option<Asked> {
         meter.start();
-        temper_agent_model_session::step(&mut model, &env, event, &mut out);
+        temper_agent_domain_session::step(&mut domain, &env, event, &mut out);
         let measured = meter.end();
         let mut asked = None;
         while let Some(request) = out.pop() {
@@ -129,7 +129,7 @@ fn fill(limits: Limits, route: Route) {
     };
     let (block, part) = (size(size_of::<Block>()), size(size_of::<Part>()));
     for opener in 0..limits.sessions {
-        // What the model charges, as it charges it: the spec's names, the
+        // What the domain charges, as it charges it: the spec's names, the
         // tools its opener serves and its prompt; then, by tool, the
         // assistant's message with its call and room for its result with the
         // result's id, then the result's output; by an invalid
@@ -206,7 +206,7 @@ fn fill(limits: Limits, route: Route) {
 }
 
 #[test]
-fn a_model_with_every_session_full_stays_within_its_worst_case() {
+fn a_domain_with_every_session_full_stays_within_its_worst_case() {
     for route in [Route::Tool, Route::Invalid, Route::Talk] {
         fill(LIMITS, route);
         fill(Limits { sessions: 64, session_bytes: 65_536, ..LIMITS }, route);

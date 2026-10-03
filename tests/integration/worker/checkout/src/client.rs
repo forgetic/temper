@@ -9,7 +9,7 @@
 
 use temper_checkout_fake::git::Tree;
 use temper_lib::{Duration, Token};
-use temper_worker_model_checkout::{Landing, Prepared};
+use temper_worker_domain_checkout::{Landing, Prepared};
 
 /// What a client does, from its prepare to its release.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

@@ -34,7 +34,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use temper_engine_model_work::{Item, Lifecycle, Phase};
+use temper_engine_domain_work::{Item, Lifecycle, Phase};
 use temper_lib::Duration;
 use temper_world::{Expectations, Judge};
 

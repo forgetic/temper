@@ -1,13 +1,13 @@
 [package]
-name = "temper-engine-model-plan-fuzzy"
-description = "The plan sub-model of the engine at random: sweeps of rough worlds"
+name = "temper-engine-domain-plan-fuzzy"
+description = "The plan child domain of the engine at random: sweeps of rough worlds"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
 [dev-dependencies]
-temper-engine-model-plan-tests.workspace = true
+temper-engine-domain-plan-tests.workspace = true
 temper-world.workspace = true
 
 # Ordinary Rust (programming-model.md, 10.2), so not the step crates' lints.

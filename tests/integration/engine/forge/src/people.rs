@@ -7,8 +7,8 @@
 //! mangling it, or deletes it. Each picks what to act on from the forge as
 //! it is, read without faults.
 
-use temper_forge_model::api::{Kind, Op, Read, State, Verdict, Write};
-use temper_forge_model::{Config, Model};
+use temper_forge_domain::api::{Kind, Op, Read, State, Verdict, Write};
+use temper_forge_domain::{Config, Domain};
 use temper_lib::{Rng, Time};
 use temper_world::Span;
 
@@ -122,7 +122,7 @@ impl People {
     /// The next action, chosen by weight, on what the forge holds; none if
     /// what was chosen has nothing to act on.
     #[expect(clippy::too_many_lines, reason = "one arm per action")]
-    pub fn act(&mut self, forge: &Model, config: &Config) -> Option<Act> {
+    pub fn act(&mut self, forge: &Domain, config: &Config) -> Option<Act> {
         self.left = self.left.checked_sub(1)?;
         let weights = self.script.weights;
         let choices = [
@@ -232,7 +232,7 @@ impl People {
             6 => {
                 let pulls: Vec<_> = open.iter().filter(|(_, kind, _)| *kind == Kind::Pull).cloned().collect();
                 let (number, _, _) = self.pick(&pulls)?;
-                let Ok(temper_forge_model::api::Answer::Pull(pull)) =
+                let Ok(temper_forge_domain::api::Answer::Pull(pull)) =
                     forge.inspect(config, REPOSITORIES[repository], &Read::Pull { number })
                 else {
                     return None;
@@ -272,7 +272,7 @@ impl People {
 }
 
 /// The open items of a repository: number, kind and labels.
-fn open(forge: &Model, config: &Config, repository: usize) -> Vec<(u64, Kind, Vec<Vec<u8>>)> {
+fn open(forge: &Domain, config: &Config, repository: usize) -> Vec<(u64, Kind, Vec<Vec<u8>>)> {
     let mut items = Vec::new();
     for page in 1..=16 {
         let read = Read::Items {
@@ -284,7 +284,7 @@ fn open(forge: &Model, config: &Config, repository: usize) -> Vec<(u64, Kind, Ve
             page,
             limit: 0,
         };
-        let Ok(temper_forge_model::api::Answer::Items { items: listed, more, .. }) =
+        let Ok(temper_forge_domain::api::Answer::Items { items: listed, more, .. }) =
             forge.inspect(config, REPOSITORIES[repository], &read)
         else {
             break;
@@ -300,11 +300,11 @@ fn open(forge: &Model, config: &Config, repository: usize) -> Vec<(u64, Kind, Ve
 }
 
 /// The engine's record comments on the open items of a repository.
-fn records(forge: &Model, config: &Config, repository: usize, open: &[(u64, Kind, Vec<Vec<u8>>)]) -> Vec<u64> {
+fn records(forge: &Domain, config: &Config, repository: usize, open: &[(u64, Kind, Vec<Vec<u8>>)]) -> Vec<u64> {
     let mut records = Vec::new();
     for (number, _, _) in open {
         let read = Read::Item { number: *number, after: 0 };
-        let Ok(temper_forge_model::api::Answer::Item { comments, .. }) =
+        let Ok(temper_forge_domain::api::Answer::Item { comments, .. }) =
             forge.inspect(config, REPOSITORIES[repository], &read)
         else {
             continue;

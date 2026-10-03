@@ -1,5 +1,5 @@
 [package]
-name = "temper-engine-model-work-fuzzy"
+name = "temper-engine-domain-work-fuzzy"
 description = "The work hub of the engine at random: sweeps of random worlds"
 version.workspace = true
 edition.workspace = true
@@ -7,8 +7,8 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dev-dependencies]
-temper-engine-model-work.workspace = true
-temper-engine-model-work-tests.workspace = true
+temper-engine-domain-work.workspace = true
+temper-engine-domain-work-tests.workspace = true
 temper-world.workspace = true
 
 # Ordinary Rust (programming-model.md, 10.2), so not the step crates' lints.

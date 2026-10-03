@@ -1,11 +1,11 @@
-//! The agent's session sub-model at random: many noisy worlds, each settled
+//! The agent's session child domain at random: many noisy worlds, each settled
 //! with every session ended, every way a session ends reached among them.
 
 use std::collections::BTreeSet;
 
-use temper_agent_model_session::End;
-use temper_agent_model_session::llm::Failure;
-use temper_agent_model_session_tests::{Ended, World, noisy, submit_noisily};
+use temper_agent_domain_session::End;
+use temper_agent_domain_session::llm::Failure;
+use temper_agent_domain_session_tests::{Ended, World, noisy, submit_noisily};
 
 const ITERATIONS: u32 = 100_000;
 

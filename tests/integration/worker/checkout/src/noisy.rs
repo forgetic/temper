@@ -3,7 +3,7 @@
 //! advance, and clients that abort, release, save and push twice.
 
 use temper_lib::{Duration, Rng, Time};
-use temper_worker_model_checkout::Limits;
+use temper_worker_domain_checkout::Limits;
 
 use crate::client::{Interrupt, Plan};
 use crate::{LIMITS, Settings, Span, World};

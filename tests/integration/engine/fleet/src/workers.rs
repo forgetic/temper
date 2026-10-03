@@ -1,4 +1,4 @@
-//! The scripted workers (worker-model.md, sections 2 and 4, as the fleet
+//! The scripted workers (worker-domain.md, sections 2 and 4, as the fleet
 //! meets them): each dials in, says hello with its slots, the workstreams its
 //! checkouts hold, the runs it hosts and the answers it keeps, then sends
 //! those answers again; hosts what it is assigned, refusing as busy beyond its
@@ -8,7 +8,7 @@
 //! chance and tells facts; keeps each answer until it is acknowledged; and,
 //! out of contact past its own grace, cancels its runs itself.
 
-use temper_engine_model_fleet::Phase;
+use temper_engine_domain_fleet::Phase;
 
 use crate::referee::{Kind, Said, Seen};
 use crate::world::{Back, Channel, Delivery, Hosting, Message, Up, World};

@@ -3,9 +3,9 @@
 //! exactly its limits, then every run ending with as much as it may hold.
 
 use temper_lib::{Env, Queue, ReplyTo, Time, Token};
-use temper_worker_model_host::{
-    Access, AgentFailure, Answer, Ask, Assignment, Bounce, Event, Finish, Invalid, Landing, Limits, Model, Preparation,
-    Reason, Refusal, Repository, Request, Start, Workspace, max_out, resume, step, worst_case,
+use temper_worker_domain_host::{
+    Access, AgentFailure, Answer, Ask, Assignment, Bounce, Domain, Event, Finish, Invalid, Landing, Limits,
+    Preparation, Reason, Refusal, Repository, Request, Start, Workspace, max_out, resume, step, worst_case,
 };
 use temper_world::heap::{self, Meter};
 
@@ -48,7 +48,7 @@ enum Asked {
 /// the worst case, less what it handed out in requests, which their
 /// receivers count.
 struct Measured {
-    model: Model,
+    domain: Domain,
     env: Env<Limits>,
     out: Queue<Request>,
     meter: Meter,
@@ -59,20 +59,20 @@ impl Measured {
     fn new(limits: Limits) -> Measured {
         let bound = worst_case(&limits).expect("the test limits fit");
         let meter = Meter::new();
-        let model = Model::new(&limits);
+        let domain = Domain::new(&limits);
         let out = Queue::with_capacity(max_out(&limits));
-        Measured { model, env: Env { now: Time::ZERO, limits }, out, meter, bound }
+        Measured { domain, env: Env { now: Time::ZERO, limits }, out, meter, bound }
     }
 
     fn step(&mut self, event: Event) -> Vec<Asked> {
         self.meter.start();
-        step(&mut self.model, &self.env, event, &mut self.out);
+        step(&mut self.domain, &self.env, event, &mut self.out);
         self.drain()
     }
 
     fn resume(&mut self) -> Vec<Asked> {
         self.meter.start();
-        resume(&mut self.model, &self.env, &mut self.out);
+        resume(&mut self.domain, &self.env, &mut self.out);
         self.drain()
     }
 
@@ -98,7 +98,7 @@ impl Measured {
         }
         self.meter.check(measured, self.bound, self.env.limits);
         // The iteration ends: the reclaim point.
-        self.model.reclaim();
+        self.domain.reclaim();
         asked
     }
 }
@@ -223,7 +223,7 @@ fn fill(limits: Limits) {
     for push in pending {
         owners_push(&mut host, push, &landed);
     }
-    assert_eq!(host.model.hosted(), 0, "every slot came back");
+    assert_eq!(host.domain.hosted(), 0, "every slot came back");
 
     // Beyond the limits: refused, and nothing held.
     let mut beyond = assignment(0, &limits);
@@ -274,7 +274,7 @@ fn paths(limits: Limits) {
         assert!(host.step(Event::Started { owner: *owner, agent: *owner }).is_empty());
     }
     assert!(host.step(Event::CancelAll { reason: Reason::Contact }).is_empty());
-    while host.model.is_ready() {
+    while host.domain.is_ready() {
         host.resume();
     }
     for (index, owner) in owners.iter().enumerate().skip(1) {

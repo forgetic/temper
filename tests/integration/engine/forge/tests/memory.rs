@@ -3,12 +3,12 @@
 //! and write in hand at its limits; and every entry point on the way, under
 //! answers as large as the limits allow and failures of every kind.
 
-use temper_engine_model_forge::api::{
+use temper_engine_domain_forge::api::{
     Answer, Body, Check, Comment, Error, Kind, Mark, Op, Page, PageName, Permission, Pull, Remark, Review, State,
     Status, Summary, Verdict,
 };
-use temper_engine_model_forge::{
-    Cause, Config, Content, Event, Item, Limits, Model, Position, Read, Request, Write, fire, max_out, resume, step,
+use temper_engine_domain_forge::{
+    Cause, Config, Content, Domain, Event, Item, Limits, Position, Read, Request, Write, fire, max_out, resume, step,
     worst_case,
 };
 use temper_lib::{Duration, Env, Queue, Rng, Time, Token};
@@ -48,7 +48,7 @@ const LIMITS: Limits = Limits {
     facts: 16,
 };
 
-/// A call the sub-model made, as the test answers it: what it asked, without
+/// A call the child domain made, as the test answers it: what it asked, without
 /// its payload, which is the protocol layer's to count and is dropped at once.
 #[derive(Clone, Copy, Debug)]
 struct Call {
@@ -114,11 +114,11 @@ fn asked(op: &Op) -> Asked {
     }
 }
 
-/// The sub-model under `limits`, measured: each step's peak is checked
+/// The child domain under `limits`, measured: each step's peak is checked
 /// against the worst case, less what it handed out in requests, which their
 /// receivers count.
 struct Measured {
-    model: Model,
+    domain: Domain,
     env: Env<Limits>,
     out: Queue<Request>,
     meter: Meter,
@@ -136,28 +136,28 @@ impl Measured {
             hand_in: name(&limits, b'h'),
             projected: labels(&limits),
         };
-        let model = Model::new(&limits, config, 7);
+        let domain = Domain::new(&limits, config, 7);
         let out = Queue::with_capacity(max_out(&limits));
-        Measured { model, env: Env { now: Time::ZERO, limits }, out, meter, bound, owners: 0 }
+        Measured { domain, env: Env { now: Time::ZERO, limits }, out, meter, bound, owners: 0 }
     }
 
     fn step(&mut self, event: Event) -> Vec<Call> {
         self.meter.start();
-        step(&mut self.model, &self.env, event, &mut self.out);
+        step(&mut self.domain, &self.env, event, &mut self.out);
         self.drain()
     }
 
     /// Fires the alarms due, and sends the calls ready.
     fn turn(&mut self) -> Vec<Call> {
         let mut calls = Vec::new();
-        while self.model.is_due(self.env.now) {
+        while self.domain.is_due(self.env.now) {
             self.meter.start();
-            fire(&mut self.model, &self.env, &mut self.out);
+            fire(&mut self.domain, &self.env, &mut self.out);
             calls.extend(self.drain());
         }
-        while self.model.is_ready() {
+        while self.domain.is_ready() {
             self.meter.start();
-            resume(&mut self.model, &self.env, &mut self.out);
+            resume(&mut self.domain, &self.env, &mut self.out);
             calls.extend(self.drain());
         }
         calls
@@ -184,7 +184,7 @@ impl Measured {
         }
         self.meter.check(measured, self.bound, self.env.limits);
         // The iteration ends: the reclaim point.
-        self.model.reclaim();
+        self.domain.reclaim();
         calls
     }
 
@@ -240,7 +240,7 @@ fn comments(limits: &Limits, after: u64, record: bool) -> Box<[Comment]> {
                             pull_comment: after,
                             reviews: 0,
                             head: Some([1; 32]),
-                            ci: temper_engine_model_forge::Ci::Pending,
+                            ci: temper_engine_domain_forge::Ci::Pending,
                         },
                         nonce: id,
                     },
@@ -264,7 +264,7 @@ fn pull(limits: &Limits, number: u64, now: u64) -> Pull {
         base_commit: Some([4; 32]),
         merged: None,
         mergeable: true,
-        ci: temper_engine_model_forge::Ci::Pending,
+        ci: temper_engine_domain_forge::Ci::Pending,
     }
 }
 
@@ -313,7 +313,7 @@ fn answer(limits: &Limits, rng: &mut Rng, now: u64, op: Asked) -> Result<Answer,
         Asked::Pull { number } => Answer::Pull(pull(limits, number, now)),
         Asked::Reviews { number: _, page } => reviews(limits, page, now),
         Asked::Statuses => Answer::Statuses {
-            ci: temper_engine_model_forge::Ci::Passed,
+            ci: temper_engine_domain_forge::Ci::Passed,
             statuses: (0..limits.page)
                 .map(|_| Status {
                     context: name(limits, b's'),
@@ -407,24 +407,24 @@ fn reads(limits: &Limits, item: Item) -> Vec<Read> {
     ]
 }
 
-/// Runs the sub-model for `rounds`, answering every call as the limits allow
+/// Runs the child domain for `rounds`, answering every call as the limits allow
 /// and failing some, while the parent tracks, links, takes, hints, reads and
 /// writes at the limits. Returns the most it held between steps.
 fn run(limits: Limits, seed: u64, rounds: u64) -> (Measured, u64) {
-    let mut model = Measured::new(limits);
+    let mut domain = Measured::new(limits);
     let mut rng = Rng::new(seed);
     let mut pending: Vec<Call> = Vec::new();
     let mut fullest = 0;
     for round in 0..rounds {
         let now = round * 2;
-        model.env.now = Time::ZERO.saturating_add(Duration::from_secs(now));
-        pending.extend(model.turn());
+        domain.env.now = Time::ZERO.saturating_add(Duration::from_secs(now));
+        pending.extend(domain.turn());
         // Answer some of what is out, the rest later.
         let mut kept = Vec::new();
         for call in std::mem::take(&mut pending) {
             if rng.chance(700) {
                 let result = answer(&limits, &mut rng, now, call.op);
-                let more = model.step(Event::Answered { call: call.call, result });
+                let more = domain.step(Event::Answered { call: call.call, result });
                 kept.extend(more);
             } else {
                 kept.push(call);
@@ -445,73 +445,73 @@ fn run(limits: Limits, seed: u64, rounds: u64) -> (Measured, u64) {
             5 => {
                 let all = reads(&limits, item);
                 let read = all.into_iter().nth(usize::try_from(rng.below(10)).expect("few")).expect("ten");
-                Event::Read { owner: model.owner(), read }
+                Event::Read { owner: domain.owner(), read }
             }
             _ => {
-                let payload = model.owner();
+                let payload = domain.owner();
                 let all = writes(&limits, item, payload);
                 let write = all.into_iter().nth(usize::try_from(rng.below(14)).expect("few")).expect("fourteen");
                 let resumed =
                     if rng.chance(300) { Some(Cause { comment: rng.below(9), at: Time::ZERO }) } else { None };
-                Event::Write { owner: model.owner(), write, resumed }
+                Event::Write { owner: domain.owner(), write, resumed }
             }
         };
-        pending.extend(model.step(event));
+        pending.extend(domain.step(event));
         if pending.is_empty() {
             // Nothing of the test's own is live: what is held is the
-            // sub-model's.
-            fullest = fullest.max(model.meter.held());
+            // child domain's.
+            fullest = fullest.max(domain.meter.held());
         }
     }
-    (model, fullest)
+    (domain, fullest)
 }
 
 #[test]
 fn every_entry_point_stays_within_the_worst_case() {
     for seed in 0..20 {
-        let (model, fullest) = run(LIMITS, seed, 400);
-        assert!(fullest <= model.bound, "seed {seed}: {fullest} held of a worst case of {}", model.bound);
+        let (domain, fullest) = run(LIMITS, seed, 400);
+        assert!(fullest <= domain.bound, "seed {seed}: {fullest} held of a worst case of {}", domain.bound);
     }
 }
 
 #[test]
-fn the_sub_model_full_to_its_limits_stays_within_its_worst_case() {
+fn the_child_domain_full_to_its_limits_stays_within_its_worst_case() {
     // Room for many news and calls, so the working set, its inboxes and the
     // reads and writes in hand fill up.
     let limits = Limits { inbox: 6, calls: 8, ..LIMITS };
     let mut most = 0;
     let mut bound = 0;
     for seed in 0..10 {
-        let (model, fullest) = run(limits, seed, 600);
+        let (domain, fullest) = run(limits, seed, 600);
         most = most.max(fullest);
-        bound = model.bound;
-        assert!(model.model.items() > 0, "seed {seed}: items were held");
+        bound = domain.bound;
+        assert!(domain.domain.items() > 0, "seed {seed}: items were held");
     }
-    // At its fullest, the sub-model holds a fair share of the bound: it is
+    // At its fullest, the child domain holds a fair share of the bound: it is
     // not a bound by orders of magnitude.
     assert!(most.saturating_mul(4) > bound, "{most} held of a worst case of {bound}");
 }
 
 #[test]
 fn bodies_of_payloads_are_named_not_held() {
-    let mut model = Measured::new(LIMITS);
+    let mut domain = Measured::new(LIMITS);
     // Its first moment, and the wait for what an earlier life asked for.
-    model.turn();
-    model.env.now = Time::ZERO.saturating_add(LIMITS.lifetime);
+    domain.turn();
+    domain.env.now = Time::ZERO.saturating_add(LIMITS.lifetime);
     let write = Write::PutPage {
         repository: 0,
         name: name(&LIMITS, b'p'),
         content: Content::Payload(Token::new(5)),
         revision: None,
     };
-    let owner = model.owner();
-    let calls = model.step(Event::Write { owner, write, resumed: None });
+    let owner = domain.owner();
+    let calls = domain.step(Event::Write { owner, write, resumed: None });
     assert!(calls.is_empty(), "calls go out on resume");
-    let calls = model.turn();
+    let calls = domain.turn();
     let check = calls.iter().find(|call| call.op == Asked::Page).expect("the page read first");
-    let calls = model.step(Event::Answered { call: check.call, result: Err(Error::Missing) });
+    let calls = domain.step(Event::Answered { call: check.call, result: Err(Error::Missing) });
     assert!(calls.is_empty(), "calls go out on resume");
-    let calls = model.turn();
+    let calls = domain.turn();
     let put = calls.iter().find(|call| call.op == Asked::Revision { put: true });
     assert!(put.is_some(), "the write went out, its payload named by its token: {calls:?}");
 }

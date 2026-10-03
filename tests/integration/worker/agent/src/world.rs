@@ -1,15 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use temper_lib::{Duration, Rng, Time, Token};
-use temper_worker_model_agent::channel::{Ask, Down, Finish, Reply, Up};
-use temper_worker_model_agent::{self as agent, Bounce, End, Event, Fact, Fault, Limits, Request, Signal};
+use temper_worker_domain_agent::channel::{Ask, Down, Finish, Reply, Up};
+use temper_worker_domain_agent::{self as agent, Bounce, End, Event, Fact, Fault, Limits, Request, Signal};
 use temper_world::{Schedule, Span, Stage, Trace};
 
 use crate::client::{self, Client};
 use crate::script::{self, Fates, Sizes};
 use crate::tree::{self, Tree};
 
-/// Room in the model's output queue beyond what one step may emit. Small, so
+/// Room in the domain's output queue beyond what one step may emit. Small, so
 /// the loop's flow control (take an event only while there is room for what
 /// it may produce) is exercised.
 const SPARE: u32 = 2;
@@ -26,7 +26,7 @@ pub struct Settings {
     pub client: client::Script,
     pub tree: tree::Script,
     pub script: script::Script,
-    /// One-way latency between the model and its neighbours: the client,
+    /// One-way latency between the domain and its neighbours: the client,
     /// through the top level, and io, through the protocol layer.
     pub hop: Span,
 }
@@ -205,13 +205,13 @@ pub struct Stats {
     pub breaches: BTreeMap<&'static str, u32>,
     /// Inbound events bounced, by why.
     pub bounces: BTreeMap<&'static str, u32>,
-    /// Calls the model answered as busy itself, and answers that went down
+    /// Calls the domain answered as busy itself, and answers that went down
     /// as too large.
     pub busy: u32,
     pub too_large: u32,
     /// Paths taken that the sweep must reach, by name.
     pub paths: BTreeMap<&'static str, u32>,
-    /// Facts the model told, by kind, and how many it dropped.
+    /// Facts the domain told, by kind, and how many it dropped.
     pub facts: BTreeMap<&'static str, u32>,
     pub facts_lost: u64,
     /// The most agents at once.
@@ -221,9 +221,9 @@ pub struct Stats {
 /// Something on its way, delivered at its time.
 #[derive(Debug)]
 enum Delivery {
-    /// An event reaching the model.
-    Model(Event),
-    /// A record of the model's reaching the client.
+    /// An event reaching the domain.
+    Domain(Event),
+    /// A record of the domain's reaching the client.
     Client(Request),
     /// The client's own plan.
     Plan(client::Plan),
@@ -239,8 +239,8 @@ enum Lane {
     Reads,
     /// A process's exit, then its reap.
     Exits,
-    ClientToModel,
-    ModelToClient,
+    ClientToDomain,
+    DomainToClient,
 }
 
 /// io's requests, by kind: each ends with exactly one terminal.
@@ -254,8 +254,8 @@ enum Kind {
     Reap,
 }
 
-/// An agent as the world follows it, from what crossed the model's boundary:
-/// what the model can only be expected to do knowing what it was told.
+/// An agent as the world follows it, from what crossed the domain's boundary:
+/// what the domain can only be expected to do knowing what it was told.
 #[derive(Debug)]
 #[expect(clippy::struct_excessive_bools, reason = "what crossed the boundary, each fact on its own")]
 struct Mirror {
@@ -271,13 +271,13 @@ struct Mirror {
     stopped: bool,
     /// Its tree was terminated.
     terminating: bool,
-    /// The names of its calls in flight, as the model passed them on and sent
+    /// The names of its calls in flight, as the domain passed them on and sent
     /// their answers down; those the client has not answered, and those of
     /// them the run withdrew.
     flight: BTreeSet<Token>,
     asked: BTreeSet<Token>,
     withdrawn: BTreeSet<Token>,
-    /// Inbound events the model sent down.
+    /// Inbound events the domain sent down.
     sent: u64,
     /// When it first had a reason to stop, and when the client stopped it.
     first_stop: Option<Time>,
@@ -288,7 +288,7 @@ struct Mirror {
     pending: BTreeMap<Kind, u32>,
 }
 
-/// What the world judges of a message the model reads, before the model
+/// What the world judges of a message the domain reads, before the domain
 /// does.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Verdict {
@@ -298,7 +298,7 @@ enum Verdict {
     Breach(&'static str),
 }
 
-/// What one step of the model took, for the world to check what it made.
+/// What one step of the domain took, for the world to check what it made.
 #[derive(Clone, Copy, Debug)]
 enum Taken {
     Spawn { client: Token, full: bool, invalid: bool },
@@ -306,7 +306,7 @@ enum Taken {
     Other,
 }
 
-/// What one step of the model made, without its payloads.
+/// What one step of the domain made, without its payloads.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Made {
     Started {
@@ -340,7 +340,7 @@ enum Made {
     Spawn {
         owner: Token,
     },
-    /// A send, with the call it answers, whether the model answered it
+    /// A send, with the call it answers, whether the domain answered it
     /// itself as busy, or as too large; or whether it is an event, or the
     /// cancel.
     Send {
@@ -367,7 +367,7 @@ pub struct World {
     rng: Rng,
     settings: Settings,
 
-    model: agent::Model,
+    domain: agent::Domain,
     stage: Stage<Limits, Event, Request>,
 
     client: Client,
@@ -376,7 +376,7 @@ pub struct World {
     wire: Schedule<Delivery>,
     lanes: [Time; 4],
 
-    /// The agents the model spawned and that have not gone, by its tokens;
+    /// The agents the domain spawned and that have not gone, by its tokens;
     /// and those tokens, by the client's.
     mirrors: BTreeMap<Token, Mirror>,
     owners: BTreeMap<Token, Token>,
@@ -405,7 +405,7 @@ impl World {
             now: Time::ZERO,
             rng: latencies,
             settings,
-            model: agent::Model::new(&limits),
+            domain: agent::Domain::new(&limits),
             stage: Stage::new(limits, agent::MAX_OUT, agent::MAX_OUT + SPARE),
             client,
             tree,
@@ -431,12 +431,12 @@ impl World {
         Stats {
             client: self.client.tally(),
             tree: self.tree.tally(),
-            facts_lost: self.model.facts_lost(),
+            facts_lost: self.domain.facts_lost(),
             ..self.stats.clone()
         }
     }
 
-    /// What crossed between the model and the world, in order, with times.
+    /// What crossed between the domain and the world, in order, with times.
     #[must_use]
     pub fn trace(&self) -> &[String] {
         self.trace.lines()
@@ -470,17 +470,17 @@ impl World {
             self.trace.log(self.now, format!("agent <- {event:?}"));
             let taken = self.take(&event);
             let before = self.stage.out.len();
-            agent::step(&mut self.model, &self.stage.env, event, &mut self.stage.out);
+            agent::step(&mut self.domain, &self.stage.env, event, &mut self.stage.out);
             self.check(taken, before);
         }
-        while self.stage.has_room() && self.model.is_due(self.now) {
+        while self.stage.has_room() && self.domain.is_due(self.now) {
             self.trace.log(self.now, "agent alarm");
             let before = self.stage.out.len();
-            agent::fire(&mut self.model, &self.stage.env, &mut self.stage.out);
+            agent::fire(&mut self.domain, &self.stage.env, &mut self.stage.out);
             self.check(Taken::Other, before);
         }
         // The facts, drained as the shell would write them out.
-        while let Some(fact) = self.model.pop_fact() {
+        while let Some(fact) = self.domain.pop_fact() {
             *self.stats.facts.entry(fact_kind(fact)).or_default() += 1;
         }
         // What the steps asked for, submitted at the end of the iteration.
@@ -488,18 +488,18 @@ impl World {
             self.trace.log(self.now, format!("agent -> {request:?}"));
             self.route(request);
         }
-        self.model.reclaim();
-        let agents = self.model.agents();
+        self.domain.reclaim();
+        let agents = self.domain.agents();
         assert!(agents <= self.settings.agent.agents, "agents stay within their slots");
         self.stats.peak = self.stats.peak.max(agents);
     }
 
-    /// What the model takes as `event`, noted before it takes it.
+    /// What the domain takes as `event`, noted before it takes it.
     fn take(&mut self, event: &Event) -> Taken {
         let limits = self.settings.agent;
         match event {
             Event::Spawn { client, spawn } => {
-                let full = self.model.agents() >= limits.agents;
+                let full = self.domain.agents() >= limits.agents;
                 let snapshot = spawn.snapshot.as_ref().map_or(0, |snapshot| len(snapshot));
                 let invalid = len(&spawn.charter) > limits.charter_bytes || snapshot > limits.snapshot_bytes;
                 Taken::Spawn { client: *client, full, invalid }
@@ -572,7 +572,7 @@ impl World {
         }
     }
 
-    /// Whether what the model reads of an agent breaks the channel's rules,
+    /// Whether what the domain reads of an agent breaks the channel's rules,
     /// as far as the world can tell from what crossed the boundary.
     fn judge(&self, owner: Token, message: Option<&Up>) -> Verdict {
         let mirror = self.mirrors.get(&owner).expect("a read of a spawned agent");
@@ -865,7 +865,7 @@ impl World {
             | Request::Faulted { .. }
             | Request::Bounced { .. }
             | Request::Gone { .. } => {
-                let at = self.lane(Lane::ModelToClient, Duration::ZERO);
+                let at = self.lane(Lane::DomainToClient, Duration::ZERO);
                 self.wire.send(at, Delivery::Client(request));
             }
             Request::Spawn { .. }
@@ -883,7 +883,7 @@ impl World {
     fn tree_outs(&mut self, outs: Vec<tree::Out>) {
         for out in outs {
             match out {
-                tree::Out::Model { after, event } => {
+                tree::Out::Domain { after, event } => {
                     let lane = match event {
                         Event::Received { .. } | Event::Malformed { .. } | Event::Hangup { .. } => Some(Lane::Reads),
                         Event::Exited { .. } | Event::Reaped { .. } => Some(Lane::Exits),
@@ -900,12 +900,12 @@ impl World {
                         Some(lane) => self.lane(lane, after),
                         None => self.now.saturating_add(after).saturating_add(self.settings.hop.draw(&mut self.rng)),
                     };
-                    self.wire.send(at, Delivery::Model(event));
+                    self.wire.send(at, Delivery::Domain(event));
                 }
                 tree::Out::Due { after, due } => {
                     self.wire.send(self.now.saturating_add(after), Delivery::Tree(due));
                 }
-                // What an agent writes reaches the model through the channel.
+                // What an agent writes reaches the domain through the channel.
                 tree::Out::Wrote { .. } => {}
             }
         }
@@ -914,9 +914,9 @@ impl World {
     fn client_outs(&mut self, outs: Vec<client::Out>) {
         for out in outs {
             match out {
-                client::Out::Model(event) => {
-                    let at = self.lane(Lane::ClientToModel, Duration::ZERO);
-                    self.wire.send(at, Delivery::Model(event));
+                client::Out::Domain(event) => {
+                    let at = self.lane(Lane::ClientToDomain, Duration::ZERO);
+                    self.wire.send(at, Delivery::Domain(event));
                 }
                 client::Out::Later { after, plan } => {
                     self.wire.send(self.now.saturating_add(after), Delivery::Plan(plan));
@@ -929,7 +929,7 @@ impl World {
     fn deliver(&mut self) {
         while let Some(delivery) = self.wire.next(self.now) {
             match delivery {
-                Delivery::Model(event) => self.stage.push(event),
+                Delivery::Domain(event) => self.stage.push(event),
                 Delivery::Client(request) => {
                     let outs = self.client.take(request);
                     self.client_outs(outs);
@@ -952,8 +952,8 @@ impl World {
         let index = match lane {
             Lane::Reads => 0,
             Lane::Exits => 1,
-            Lane::ClientToModel => 2,
-            Lane::ModelToClient => 3,
+            Lane::ClientToDomain => 2,
+            Lane::DomainToClient => 3,
         };
         let at = self.now.saturating_add(after).saturating_add(self.settings.hop.draw(&mut self.rng));
         let at = at.max(self.lanes[index]);
@@ -962,23 +962,23 @@ impl World {
     }
 
     fn has_work_now(&self) -> bool {
-        self.stage.has_events() || self.model.is_due(self.now) || self.wire.is_due(self.now)
+        self.stage.has_events() || self.domain.is_due(self.now) || self.wire.is_due(self.now)
     }
 
     fn next_time(&self) -> Option<Time> {
-        [self.wire.next_time(), self.model.next_deadline()].into_iter().flatten().min()
+        [self.wire.next_time(), self.domain.next_deadline()].into_iter().flatten().min()
     }
 
     /// Checks the invariants of a world with nothing left to happen.
     fn assert_settled(&self) {
         assert!(self.wire.is_empty(), "nothing is in flight");
-        assert!(!self.stage.has_events(), "the model has taken everything");
-        assert_eq!(self.model.agents(), 0, "every slot is free");
-        assert_eq!(self.model.next_deadline(), None, "no alarm outlives its agent");
+        assert!(!self.stage.has_events(), "the domain has taken everything");
+        assert_eq!(self.domain.agents(), 0, "every slot is free");
+        assert_eq!(self.domain.next_deadline(), None, "no alarm outlives its agent");
         assert!(self.mirrors.is_empty() && self.owners.is_empty(), "every agent spawned has gone");
         self.client.assert_settled();
         self.tree.assert_settled();
-        if self.model.facts_lost() == 0 {
+        if self.domain.facts_lost() == 0 {
             let facts = &self.stats.facts;
             let count = |kind| facts.get(kind).copied().unwrap_or(0);
             assert_eq!(count("started"), self.client.tally().started, "every start is told");

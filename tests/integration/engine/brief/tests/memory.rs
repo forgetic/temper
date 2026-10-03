@@ -2,8 +2,8 @@
 //! a counting allocator: every brief gathering with every section read in
 //! full, each rendered at its budgets, and every entry point on the way.
 
-use temper_engine_model_brief::{
-    Budgets, Event, Item, Limits, Model, Part, Read, Request, Source, Wanted, fire, max_out, step, worst_case,
+use temper_engine_domain_brief::{
+    Budgets, Domain, Event, Item, Limits, Part, Read, Request, Source, Wanted, fire, max_out, step, worst_case,
 };
 use temper_lib::{Duration, Env, Queue, ReplyTo, Time, Token};
 use temper_world::heap::{self, Meter};
@@ -47,7 +47,7 @@ enum Asked {
 /// the worst case, less what it handed out in requests, which their
 /// receivers count.
 struct Measured {
-    model: Model,
+    domain: Domain,
     env: Env<Limits>,
     out: Queue<Request>,
     meter: Meter,
@@ -59,14 +59,14 @@ impl Measured {
     fn new(limits: Limits) -> Measured {
         let bound = worst_case(&limits).expect("the test limits fit");
         let meter = Meter::new();
-        let model = Model::new(&limits);
+        let domain = Domain::new(&limits);
         let out = Queue::with_capacity(max_out(&limits));
-        Measured { model, env: Env { now: Time::ZERO, limits }, out, meter, bound, calls: 0 }
+        Measured { domain, env: Env { now: Time::ZERO, limits }, out, meter, bound, calls: 0 }
     }
 
     fn step(&mut self, event: Event) -> Vec<Asked> {
         self.meter.start();
-        step(&mut self.model, &self.env, event, &mut self.out);
+        step(&mut self.domain, &self.env, event, &mut self.out);
         self.drain()
     }
 
@@ -74,9 +74,9 @@ impl Measured {
     fn fire(&mut self, now: Time) -> Vec<Asked> {
         self.env.now = now;
         let mut asked = Vec::new();
-        while self.model.is_due(now) {
+        while self.domain.is_due(now) {
             self.meter.start();
-            fire(&mut self.model, &self.env, &mut self.out);
+            fire(&mut self.domain, &self.env, &mut self.out);
             asked.extend(self.drain());
         }
         asked
@@ -94,7 +94,7 @@ impl Measured {
         }
         self.meter.check(measured, self.bound, self.env.limits);
         // The iteration ends: the reclaim point.
-        self.model.reclaim();
+        self.domain.reclaim();
         asked
     }
 
@@ -150,7 +150,7 @@ fn fill(limits: Limits) {
         }
         last.push(*rest);
     }
-    assert_eq!(brief.model.briefs(), limits.briefs);
+    assert_eq!(brief.domain.briefs(), limits.briefs);
     // At its fullest, with sections to spare for their last reads, the brief
     // holds a fair share of the bound: it is not loose past use.
     let fullest = brief.meter.held();
@@ -169,7 +169,7 @@ fn fill(limits: Limits) {
     let rooms = answered.iter().filter(|asked| **asked == Asked::Room).count();
     assert_eq!((answered.len(), rooms), (last.len() + 1, 1), "an answer each, and room told once: {answered:?}");
     assert!(brief.full(*late).is_empty(), "a late read is dropped");
-    assert_eq!((brief.model.briefs(), brief.model.reads()), (0, 0));
+    assert_eq!((brief.domain.briefs(), brief.domain.reads()), (0, 0));
 }
 
 /// Every entry point's other ends: a brief of no sections, a brief past the
@@ -188,7 +188,7 @@ fn paths(limits: Limits) {
     assert!(brief.step(Event::Read { owner: owners[1], read: Read::Failed }).is_empty());
     let owners = reads(&brief.render(1, false));
     assert_eq!(brief.step(Event::Read { owner: owners[0], read: Read::Failed }), [Asked::Answer]);
-    assert_eq!((brief.model.briefs(), brief.model.reads()), (0, 0));
+    assert_eq!((brief.domain.briefs(), brief.domain.reads()), (0, 0));
 }
 
 #[test]

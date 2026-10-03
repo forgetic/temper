@@ -2,8 +2,8 @@
 //! a counting allocator: every item taken in and waiting for an alarm, and
 //! every entry point on the way through an item's lifecycle.
 
-use temper_engine_model_work::{
-    Acted, Answer, Applied, Class, Due, Event, Failures, Hold, Item, Lifecycle, Limits, Model, Phase, Read, Request,
+use temper_engine_domain_work::{
+    Acted, Answer, Applied, Class, Domain, Due, Event, Failures, Hold, Item, Lifecycle, Limits, Phase, Read, Request,
     Retries, Retry, Then, Wrote, fire, max_out, step, worst_case,
 };
 use temper_lib::{Duration, Env, Queue, ReplyTo, Time, Token};
@@ -30,7 +30,7 @@ const NONE: Asked = [None, None, None, None];
 /// The hub under `limits`, measured: each step's peak is checked against the
 /// worst case.
 struct Measured {
-    model: Model,
+    domain: Domain,
     env: Env<Limits>,
     out: Queue<Request>,
     meter: Meter,
@@ -44,22 +44,22 @@ impl Measured {
         // The output queue is its owner's to count: the meter starts after it.
         let out = Queue::with_capacity(max_out(&limits));
         let meter = Meter::new();
-        let model = Model::new(&limits, 1);
-        Measured { model, env: Env { now: Time::ZERO, limits }, out, meter, bound, calls: 0 }
+        let domain = Domain::new(&limits, 1);
+        Measured { domain, env: Env { now: Time::ZERO, limits }, out, meter, bound, calls: 0 }
     }
 
     fn step(&mut self, event: Event) -> Asked {
         self.meter.start();
-        step(&mut self.model, &self.env, event, &mut self.out);
+        step(&mut self.domain, &self.env, event, &mut self.out);
         self.drain()
     }
 
     /// Fires the alarm due by `now`.
     fn fire(&mut self, now: Time) -> Asked {
         self.env.now = now;
-        assert!(self.model.is_due(now), "an alarm is due");
+        assert!(self.domain.is_due(now), "an alarm is due");
         self.meter.start();
-        fire(&mut self.model, &self.env, &mut self.out);
+        fire(&mut self.domain, &self.env, &mut self.out);
         self.drain()
     }
 
@@ -71,7 +71,7 @@ impl Measured {
         }
         self.meter.check(measured, self.bound, self.env.limits);
         // The iteration ends: the reclaim point.
-        self.model.reclaim();
+        self.domain.reclaim();
         asked
     }
 
@@ -168,7 +168,7 @@ fn fill(limits: Limits) {
         let until = Some(at(number + 1));
         assert!(matches!(hub.step(Event::Decided { owner, due: Due::Nothing { until } }), NONE));
     }
-    assert_eq!(hub.model.items(), limits.items);
+    assert_eq!(hub.domain.items(), limits.items);
     let refused = hub.take(item(u64::from(limits.items)), Read::New);
     assert!(matches!(refused, [Some(Request::Refused { .. }), None, None, None]), "{refused:?}");
     // At its fullest, the hub holds a fair share of the bound: it is not
@@ -249,7 +249,7 @@ fn paths(limits: Limits) {
     hub.step(Event::Stop { reply_to, item: item(3) });
     let asked = hub.step(Event::Answered { item: item(3), attempt: 1, answer: Answer::Lost });
     hub.written(asked);
-    assert_eq!(hub.model.items(), 6, "the done one left");
+    assert_eq!(hub.domain.items(), 6, "the done one left");
 }
 
 #[test]

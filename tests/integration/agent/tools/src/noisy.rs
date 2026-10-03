@@ -1,7 +1,7 @@
 //! Random worlds: small limits, faults, latencies that race the deadlines,
 //! and sessions with random scripts on the fixture's checkout.
 
-use temper_agent_model_tools::{Grants, Limits};
+use temper_agent_domain_tools::{Grants, Limits};
 use temper_checkout_fake::Checkout;
 use temper_lib::{Duration, Rng, Time};
 
@@ -120,7 +120,7 @@ fn noisy_script(rng: &mut Rng) -> Vec<Step> {
     script
 }
 
-fn noisy_calls(rng: &mut Rng) -> Vec<temper_agent_model_tools::Call> {
+fn noisy_calls(rng: &mut Rng) -> Vec<temper_agent_domain_tools::Call> {
     let mut calls = Vec::new();
     for _ in 0..rng.between(1, 4) {
         // Half the calls are about a few files, so that kits and changes meet.

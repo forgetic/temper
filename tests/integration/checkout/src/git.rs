@@ -1,6 +1,6 @@
 //! A working tree's git, beside the fake file system: the operations a
 //! protocol layer would run as git invocations, applied to working trees that
-//! are directories of a [`Checkout`]. It shares no types with the model: a
+//! are directories of a [`Checkout`]. It shares no types with the domain: a
 //! world translates between them.
 //!
 //! The remote side is the forge's. git reaches it as real git does, across

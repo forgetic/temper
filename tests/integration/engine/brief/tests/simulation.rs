@@ -1,7 +1,7 @@
 //! The brief in its world: scenarios, replay, and a sweep of random worlds.
 
-use temper_engine_model_brief::Limits;
-use temper_engine_model_brief_tests::{LIMITS, Settings, Span, Stats, World};
+use temper_engine_domain_brief::Limits;
+use temper_engine_domain_brief_tests::{LIMITS, Settings, Span, Stats, World};
 use temper_world::assert_replays;
 
 const ITERATIONS: u32 = 200_000;

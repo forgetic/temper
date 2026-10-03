@@ -3,8 +3,8 @@
 
 use std::collections::BTreeMap;
 
-use temper_engine_model_fleet::Limits;
-use temper_engine_model_fleet_tests::{LIMITS, Settings, Span, Stats, World};
+use temper_engine_domain_fleet::Limits;
+use temper_engine_domain_fleet_tests::{LIMITS, Settings, Span, Stats, World};
 use temper_lib::Duration;
 use temper_world::assert_replays;
 

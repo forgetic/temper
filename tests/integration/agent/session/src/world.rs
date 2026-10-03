@@ -1,19 +1,21 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use temper_agent_model_session as agent;
-use temper_agent_model_session::llm::{Answer, Block, Decoded, Descriptor, Endpoint, Failure, Prompt, Returned, Usage};
-use temper_agent_model_tools::{self as tools, Authority, Done, Effect, Fault, Grants, Op, Repo};
-use temper_agent_model_tools_tests::translate as io;
+use temper_agent_domain_session as agent;
+use temper_agent_domain_session::llm::{
+    Answer, Block, Decoded, Descriptor, Endpoint, Failure, Prompt, Returned, Usage,
+};
+use temper_agent_domain_tools::{self as tools, Authority, Done, Effect, Fault, Grants, Op, Repo};
+use temper_agent_domain_tools_tests::translate as io;
 use temper_checkout_fake::Checkout;
 use temper_lib::{Duration, ReplyTo, Rng, Time, Token};
-use temper_llm_model as provider;
+use temper_llm_domain as provider;
 use temper_world::{Key, Ledger, Schedule, Span, Stage, Trace};
 
 use crate::fixture;
 use crate::tickets::{SERVED, Ticketed, Tickets};
 use crate::translate;
 
-/// Room in each model's output queue beyond what one step may emit. Small, so
+/// Room in each domain's output queue beyond what one step may emit. Small, so
 /// the loop's flow control (take an event only while there is room for what
 /// it may produce) is exercised.
 const SLACK: u32 = 3;
@@ -64,7 +66,7 @@ pub struct Count {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Settings {
-    /// Seeds the world, which seeds both models.
+    /// Seeds the world, which seeds both domains.
     pub seed: u64,
     pub agent: agent::Limits,
     pub provider: provider::Config,
@@ -404,10 +406,10 @@ pub struct World {
     rng: Rng,
     settings: Settings,
 
-    agent: agent::Model,
+    agent: agent::Domain,
     agent_stage: Stage<agent::Limits, agent::Event, agent::Request>,
 
-    provider: provider::Model,
+    provider: provider::Domain,
     provider_stage: Stage<provider::Config, provider::Event, provider::Request>,
 
     /// Deliveries in flight, whose count names openers and calls too.
@@ -461,8 +463,8 @@ impl World {
     pub fn new(settings: Settings) -> World {
         assert!(agent::worst_case(&settings.agent).is_some(), "the shell refuses limits it cannot provision");
         let mut rng = Rng::new(settings.seed);
-        let agent = agent::Model::new(&settings.agent, rng.next_u64());
-        let provider = provider::Model::new(&settings.provider, rng.next_u64());
+        let agent = agent::Domain::new(&settings.agent, rng.next_u64());
+        let provider = provider::Domain::new(&settings.provider, rng.next_u64());
         let max_out = agent::max_out(&settings.agent);
         let mut checkout = Checkout::new();
         fixture::script(&mut checkout);
@@ -517,7 +519,7 @@ impl World {
         (self.told, self.agent.facts_lost())
     }
 
-    /// What crossed between the models and the world, in order, with times.
+    /// What crossed between the domains and the world, in order, with times.
     #[must_use]
     pub fn trace(&self) -> &[String] {
         self.trace.lines()

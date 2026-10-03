@@ -2,7 +2,7 @@
 //! checkout holds that the tools must handle with care, and the programs its
 //! commands run.
 
-use temper_agent_model_tools::{Authority, Grants, Repo};
+use temper_agent_domain_tools::{Authority, Grants, Repo};
 use temper_checkout_fake::{Checkout, Exit, Program};
 
 use crate::{authority, repo};

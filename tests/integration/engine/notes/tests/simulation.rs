@@ -2,8 +2,8 @@
 
 use std::collections::BTreeSet;
 
-use temper_engine_model_notes::{Limits, Scope};
-use temper_engine_model_notes_tests::{LIMITS, RUNS, Settings, Stats, World};
+use temper_engine_domain_notes::{Limits, Scope};
+use temper_engine_domain_notes_tests::{LIMITS, RUNS, Settings, Stats, World};
 use temper_world::assert_replays;
 
 const ITERATIONS: u32 = 200_000;

@@ -1,8 +1,8 @@
 //! What the forge world's scenarios expect, held by a referee
 //! (testing-pyramid.md, 5.2) that sees what the fake forge sees (every change,
-//! by whom), the calls the sub-model makes and the refusals it hears, the
+//! by whom), the calls the child domain makes and the refusals it hears, the
 //! writes the parent plans and how they end, the pull requests it links, and
-//! what the sub-model tells the parent; never the sub-model's state:
+//! what the child domain tells the parent; never the child domain's state:
 //!
 //! - **No write the parent did not plan.** Every change the engine's user
 //!   makes on the forge is one the parent asked for, while it is in hand or
@@ -37,9 +37,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use temper_engine_model_forge::{Ci, Item, News};
-use temper_forge_model::Observation;
-use temper_forge_model::api::{Check, Kind, Verdict};
+use temper_engine_domain_forge::{Ci, Item, News};
+use temper_forge_domain::Observation;
+use temper_forge_domain::api::{Check, Kind, Verdict};
 use temper_lib::{Duration, Time};
 use temper_world::{Expectations, Judge};
 
@@ -81,8 +81,8 @@ pub enum Seen {
     },
     /// A change on the forge.
     Forge(Observation),
-    /// The sub-model told its parent: `item` is announced, with `labels`, its
-    /// record saying the head (the fake's count) and CI taken; news for it;
+    /// The child domain told its parent: `item` is announced, with `labels`,
+    /// its record saying the head (the fake's count) and CI taken; news for it;
     /// its labels are `labels`; it left; an issue is offered.
     Announced {
         item: Item,
@@ -120,7 +120,7 @@ pub enum Seen {
     Limited {
         reset: Time,
     },
-    /// The engine restarted: a new sub-model, starting cold.
+    /// The engine restarted: a new child domain, starting cold.
     Restarted,
     /// The world settled: the checks at the end.
     Settled,
@@ -159,7 +159,7 @@ pub enum Stimulus {
     Restart,
 }
 
-/// The bounds the referee holds the sub-model to.
+/// The bounds the referee holds the child domain to.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Bounds {
     /// How long a change may take to reach the working set; an item the
@@ -187,7 +187,7 @@ struct Head {
 #[derive(Debug)]
 pub struct Forge {
     bounds: Bounds,
-    /// The plans, in the order they reached the sub-model: what each is, and
+    /// The plans, in the order they reached the child domain: what each is, and
     /// whether it was written; each plan's place, by the parent's name; when
     /// a plan answered or abandoned is retired, and when, in the order of
     /// what the forge saw, each was made.
@@ -226,7 +226,7 @@ pub struct Forge {
     /// The items whose record someone else edited since the engine last wrote
     /// it.
     touched: BTreeSet<Item>,
-    /// The items the sub-model holds, as it told them, the labels it last
+    /// The items the child domain holds, as it told them, the labels it last
     /// told of each, the pull request each is linked to, and the head and CI
     /// it last told of it.
     tracked: BTreeSet<Item>,
@@ -789,7 +789,7 @@ impl Forge {
         }
     }
 
-    /// The engine restarted: what the old sub-model had in hand is the cold
+    /// The engine restarted: what the old child domain had in hand is the cold
     /// start's to reach again; what the old parent planned may land for a
     /// lifetime yet; an item tracked once that no label finds is the slow
     /// pass's to find.

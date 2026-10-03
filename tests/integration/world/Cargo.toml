@@ -1,6 +1,6 @@
 [package]
 name = "temper-world"
-description = "What the model worlds share: a delivery schedule, stages driven under flow control, ledgers, traces, a counting allocator and the referee"
+description = "What the domain worlds share: a delivery schedule, stages driven under flow control, ledgers, traces, a counting allocator and the referee"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -44,9 +44,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use temper_agent_model_run::charter::{Checkout, Endpoint, Grants, Llm, Outlet, Repository, Tools};
-use temper_agent_model_run::outcome::{ChangeSpec, Children, OutcomeSpec, VerdictRule};
-use temper_agent_model_run::{Budget, Charter, Event, Push};
+use temper_agent_domain_run::charter::{Checkout, Endpoint, Grants, Llm, Outlet, Repository, Tools};
+use temper_agent_domain_run::outcome::{ChangeSpec, Children, OutcomeSpec, VerdictRule};
+use temper_agent_domain_run::{Budget, Charter, Event, Push};
 use temper_lib::{Duration, ReplyTo, Rng, Time, Token};
 
 use temper_world::Span;

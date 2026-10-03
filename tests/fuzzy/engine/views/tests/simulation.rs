@@ -1,9 +1,9 @@
-//! The engine's views sub-model at random: many random worlds, each settled,
+//! The engine's views child domain at random: many random worlds, each settled,
 //! every ending reached among them.
 
 use std::collections::BTreeSet;
 
-use temper_engine_model_views_tests::{ENDINGS, Settings, World};
+use temper_engine_domain_views_tests::{ENDINGS, Settings, World};
 
 const ITERATIONS: u32 = 400_000;
 

@@ -3,7 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use temper_engine_model_work_tests::{ENDINGS, Settings, World};
+use temper_engine_domain_work_tests::{ENDINGS, Settings, World};
 
 const ITERATIONS: u32 = 200_000;
 

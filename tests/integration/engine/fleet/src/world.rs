@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use temper_engine_model_fleet::{
-    self as fleet, Answer, Event, Fact, Hello, Hosted, Limits, Model, Phase, Request, Undelivered, Withdrawal,
+use temper_engine_domain_fleet::{
+    self as fleet, Answer, Domain, Event, Fact, Hello, Hosted, Limits, Phase, Request, Undelivered, Withdrawal,
 };
 use temper_lib::{Duration, ReplyTo, Rng, Time, Token};
 use temper_world::{Ledger, Referee, Schedule, Span, Stage, Trace};
@@ -471,7 +471,7 @@ pub struct World {
     pub(crate) rng: Rng,
     pub(crate) settings: Settings,
 
-    model: Model,
+    domain: Domain,
     pub(crate) stage: Stage<Limits, Event, Request>,
     /// Counts the engine's restarts: the fleet incarnation.
     pub(crate) epoch: u64,
@@ -516,7 +516,7 @@ impl World {
         let mut world = World {
             now: Time::ZERO,
             rng: Rng::new(settings.seed),
-            model: Model::new(&settings.limits),
+            domain: Domain::new(&settings.limits),
             stage: Stage::new(settings.limits, max_out, max_out + SLACK),
             epoch: 0,
             loaded: true,
@@ -636,46 +636,46 @@ impl World {
                 self.inject(stimulus);
             }
         }
-        while self.stage.has_room() && self.model.is_ready() {
-            fleet::resume(&mut self.model, &self.stage.env, &mut self.stage.out);
+        while self.stage.has_room() && self.domain.is_ready() {
+            fleet::resume(&mut self.domain, &self.stage.env, &mut self.stage.out);
         }
         while let Some(event) = self.stage.next_event() {
             self.log(format!("fleet <- {}", describe(&event)));
-            fleet::step(&mut self.model, &self.stage.env, event, &mut self.stage.out);
+            fleet::step(&mut self.domain, &self.stage.env, event, &mut self.stage.out);
         }
-        while self.stage.has_room() && self.model.is_due(now) {
-            fleet::fire(&mut self.model, &self.stage.env, &mut self.stage.out);
+        while self.stage.has_room() && self.domain.is_due(now) {
+            fleet::fire(&mut self.domain, &self.stage.env, &mut self.stage.out);
         }
         // What the steps asked for, at the end of the iteration.
         while let Some(request) = self.stage.out.pop() {
             self.log(format!("fleet -> {request:?}"));
             self.request(request);
         }
-        while let Some(fact) = self.model.pop_fact() {
+        while let Some(fact) = self.domain.pop_fact() {
             self.stats.facts += 1;
             self.fact(fact);
         }
         self.referee.assert_holding(self.settings.seed);
         self.adopting.clear();
         // The reclaim point.
-        self.model.reclaim();
+        self.domain.reclaim();
     }
 
     fn has_work_now(&self) -> bool {
-        self.stage.has_events() || self.model.is_ready() || self.wire.is_due(self.now)
+        self.stage.has_events() || self.domain.is_ready() || self.wire.is_due(self.now)
     }
 
     fn next_time(&self) -> Option<Time> {
-        [self.wire.next_time(), self.model.next_deadline(), self.referee.next_deadline()].into_iter().flatten().min()
+        [self.wire.next_time(), self.domain.next_deadline(), self.referee.next_deadline()].into_iter().flatten().min()
     }
 
     /// Checks the invariants of a settled world.
     fn assert_settled(&self) {
         let seed = self.settings.seed;
         assert!(self.wire.is_empty() && !self.stage.has_events(), "seed {seed}: nothing is in flight");
-        assert_eq!(self.model.attempts(), 0, "seed {seed}: the fleet tracks no attempt once settled");
-        assert_eq!(self.model.calls(), 0, "seed {seed}: the fleet keeps no relayed call once settled");
-        assert!(self.model.next_deadline().is_none(), "seed {seed}: no alarm is left");
+        assert_eq!(self.domain.attempts(), 0, "seed {seed}: the fleet tracks no attempt once settled");
+        assert_eq!(self.domain.calls(), 0, "seed {seed}: the fleet keeps no relayed call once settled");
+        assert!(self.domain.next_deadline().is_none(), "seed {seed}: no alarm is left");
         self.calls.assert_settled();
         self.relays.assert_settled();
         self.payloads.assert_settled();
@@ -776,7 +776,7 @@ impl World {
         self.stats.restarts += 1;
         self.epoch += 1;
         self.loaded = false;
-        self.model = Model::new(&self.settings.limits);
+        self.domain = Domain::new(&self.settings.limits);
         self.stage.inbox.clear();
         self.calls = Ledger::new("start or adoption");
         self.relays = Ledger::new("relayed call");
@@ -889,7 +889,7 @@ impl World {
             Up::Bounced { run, attempt } => Event::Bounced {
                 run: Token::new(run),
                 attempt: Token::new(attempt),
-                bounce: temper_engine_model_fleet::Bounce::Full,
+                bounce: temper_engine_domain_fleet::Bounce::Full,
             },
             Up::Told { run, attempt } => {
                 let fact = self.payload(Payload::Fact);

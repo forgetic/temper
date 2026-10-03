@@ -1,10 +1,10 @@
-//! The worker's checkout sub-model at random: many noisy worlds, each settled
-//! with every client heard, every way a client ends reached among them.
+//! The worker's checkout child domain at random: many noisy worlds, each
+//! settled with every client heard, every way a client ends reached among them.
 
 use std::collections::BTreeSet;
 
-use temper_worker_model_checkout::{Failure, Landing, Prepared};
-use temper_worker_model_checkout_tests::{World, noisy, submit_noisily};
+use temper_worker_domain_checkout::{Failure, Landing, Prepared};
+use temper_worker_domain_checkout_tests::{World, noisy, submit_noisily};
 
 const ITERATIONS: u32 = 100_000;
 

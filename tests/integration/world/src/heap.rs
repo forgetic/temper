@@ -1,6 +1,6 @@
 //! A counting allocator for the memory tests (testing-pyramid.md, 6): it
 //! records the live heap of each thread and its peak, so that a test can check
-//! the most a model held at once in each step against its worst case
+//! the most a domain held at once in each step against its worst case
 //! (programming-model.md, 6.3).
 //! Each memory test binary declares it its global allocator:
 //!
@@ -232,7 +232,7 @@ pub struct Measured {
     started: u64,
 }
 
-/// Measures the heap of what a test builds after it: a model, a container.
+/// Measures the heap of what a test builds after it: a domain, a container.
 #[derive(Debug)]
 pub struct Meter {
     base: i64,

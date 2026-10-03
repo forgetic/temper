@@ -1,18 +1,18 @@
 //! Memory stays within the worst case (programming-model.md, 6.3), measured by
-//! a counting allocator: the tools sub-model with every kit holding the
+//! a counting allocator: the tools child domain with every kit holding the
 //! longest authority, knowing as many files as it may at the longest paths,
 //! and running as many edits, writes and reads as it may. Driven at random,
 //! it is checked in tests/fuzzy.
 
-use temper_agent_model_tools::{Done, Event, Limits, Model, Request, Version, max_out, worst_case};
-use temper_agent_model_tools_tests::memory::{LIMITS, authority, edit, read, write};
+use temper_agent_domain_tools::{Domain, Done, Event, Limits, Request, Version, max_out, worst_case};
+use temper_agent_domain_tools_tests::memory::{LIMITS, authority, edit, read, write};
 use temper_lib::{Duration, Env, Queue, ReplyTo, Time, Token};
 use temper_world::heap::{self, Meter};
 
 #[global_allocator]
 static HEAP: heap::Counting = heap::Counting;
 
-/// Fills every kit of a model under `limits` to its limits, checking the peak
+/// Fills every kit of a domain under `limits` to its limits, checking the peak
 /// of the heap in every step against the worst case: it knows twice as many
 /// files as it may, the oldest forgotten, then runs as many calls as it may at
 /// once, writes of the files it knows and reads.
@@ -21,14 +21,14 @@ fn fill(limits: Limits) {
     let env = Env { now: Time::ZERO, limits };
     let mut out = Queue::with_capacity(max_out(&limits));
     let meter = Meter::new();
-    let mut model = Model::new(&limits);
+    let mut domain = Domain::new(&limits);
     // Each step is an iteration of its own, ending at the reclaim point. The
     // requests are the session's and io's to hold and count: each is dropped,
     // keeping only the token it names, and the step's peak checked less them.
     let mut step = |event: Event| -> Vec<Token> {
         meter.start();
-        temper_agent_model_tools::step(&mut model, &env, event, &mut out);
-        model.reclaim();
+        temper_agent_domain_tools::step(&mut domain, &env, event, &mut out);
+        domain.reclaim();
         let measured = meter.end();
         let mut named = Vec::new();
         while let Some(request) = out.pop() {
@@ -72,11 +72,11 @@ fn fill(limits: Limits) {
     let held = meter.held();
     let known = u64::from(limits.kits) * u64::from(limits.known_files) * u64::from(limits.path_bytes);
     assert!(held >= known, "{limits:?}: every kit knows as many files as it may, at the longest paths");
-    drop(model);
+    drop(domain);
 }
 
 #[test]
-fn a_model_with_every_kit_full_stays_within_its_worst_case() {
+fn a_domain_with_every_kit_full_stays_within_its_worst_case() {
     fill(LIMITS);
     fill(Limits { kits: 16, calls: 8, repos: 8, known_files: 64, path_bytes: 511, ..LIMITS });
     fill(Limits { kits: 64, calls: 1, repos: 1, known_files: 200, path_bytes: 127, ..LIMITS });

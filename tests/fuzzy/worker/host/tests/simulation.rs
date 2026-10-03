@@ -1,11 +1,11 @@
-//! The worker's host sub-model at random: many rough worlds, each settled,
+//! The worker's host child domain at random: many rough worlds, each settled,
 //! every ending reached among them.
 
 use std::collections::BTreeSet;
 
-use temper_worker_model_host::Limits;
-use temper_worker_model_host_tests::engine::ENDINGS;
-use temper_worker_model_host_tests::{Settings, Span, World};
+use temper_worker_domain_host::Limits;
+use temper_worker_domain_host_tests::engine::ENDINGS;
+use temper_worker_domain_host_tests::{Settings, Span, World};
 
 const ITERATIONS: u32 = 200_000;
 

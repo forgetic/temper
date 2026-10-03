@@ -1,5 +1,5 @@
 //! A scripted conversation partner: what the run's conversations would be,
-//! the session sub-model and the LLM behind it, played from a seed.
+//! the session child domain and the LLM behind it, played from a seed.
 //!
 //! It speaks the run's conversation vocabulary, as the top level will once it
 //! translates the session's, and plays the conversations' contract:
@@ -38,9 +38,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use temper_agent_model_run::charter::Families;
-use temper_agent_model_run::outcome::{Change, Child, Declared, Field, Verdict};
-use temper_agent_model_run::{Ask, Budget, End, Event, Exhausted, Fault, Opening, Returned, Spend, Stop};
+use temper_agent_domain_run::charter::Families;
+use temper_agent_domain_run::outcome::{Change, Child, Declared, Field, Verdict};
+use temper_agent_domain_run::{Ask, Budget, End, Event, Exhausted, Fault, Opening, Returned, Spend, Stop};
 use temper_lib::{Duration, Rng, Time, Token};
 
 use temper_world::Span;

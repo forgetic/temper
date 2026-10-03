@@ -1,13 +1,13 @@
-//! End to end at the run sub-model: runs started by a scripted host, with a
+//! End to end at the run child domain: runs started by a scripted host, with a
 //! scripted partner playing their conversations, in a simulated world.
 //!
 
 use std::collections::BTreeMap;
 
-use temper_agent_model_run::{Answer, Budget, Exhausted, Failure, Fault, Invalid, Limits, Policy, Refusal};
-use temper_agent_model_run_tests::host;
-use temper_agent_model_run_tests::partner::Script;
-use temper_agent_model_run_tests::{Checkouts, Settings, Span, World, noisy};
+use temper_agent_domain_run::{Answer, Budget, Exhausted, Failure, Fault, Invalid, Limits, Policy, Refusal};
+use temper_agent_domain_run_tests::host;
+use temper_agent_domain_run_tests::partner::Script;
+use temper_agent_domain_run_tests::{Checkouts, Settings, Span, World, noisy};
 use temper_lib::Duration;
 
 const ITERATIONS: u32 = 1_000_000;

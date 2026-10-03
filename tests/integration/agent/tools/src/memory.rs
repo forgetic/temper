@@ -1,8 +1,8 @@
 //! What the memory tests build (programming-model.md, 6.3): small limits, and
 //! the largest of each thing they take, an authority, a path and a file, so
-//! that a model holds as much as its worst case allows.
+//! that a domain holds as much as its worst case allows.
 
-use temper_agent_model_tools::{Authority, Call, Grants, Limits, Name, Part, Path, Repo, Var};
+use temper_agent_domain_tools::{Authority, Call, Grants, Limits, Name, Part, Path, Repo, Var};
 use temper_lib::{Duration, Token};
 
 pub const LIMITS: Limits = Limits {

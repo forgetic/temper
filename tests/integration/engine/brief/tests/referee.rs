@@ -1,9 +1,9 @@
 //! The referee of the brief's world, fed observations by hand as the world
 //! would feed them, fails a run that breaks an expectation, and says why.
 
-use temper_engine_model_brief::{Body, Fit, Item, Keep, Kind, Part, Refusal, Section, Source, Unread};
-use temper_engine_model_brief_tests::LIMITS;
-use temper_engine_model_brief_tests::referee::{Briefs, Seen, Served};
+use temper_engine_domain_brief::{Body, Fit, Item, Keep, Kind, Part, Refusal, Section, Source, Unread};
+use temper_engine_domain_brief_tests::LIMITS;
+use temper_engine_domain_brief_tests::referee::{Briefs, Seen, Served};
 use temper_lib::{Duration, Time};
 use temper_world::{Referee, Verdict};
 

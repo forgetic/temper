@@ -3,8 +3,8 @@
 //! keys as it may, every attempt tracked, every relayed call kept, and every
 //! entry point on the way.
 
-use temper_engine_model_fleet::{
-    Answer, Bounce, Event, Hello, Hosted, Limits, Model, Phase, Request, fire, max_out, resume, step, worst_case,
+use temper_engine_domain_fleet::{
+    Answer, Bounce, Domain, Event, Hello, Hosted, Limits, Phase, Request, fire, max_out, resume, step, worst_case,
 };
 use temper_lib::{Duration, Env, Queue, ReplyTo, Time, Token};
 use temper_world::heap::{self, Meter};
@@ -27,7 +27,7 @@ const LIMITS: Limits = Limits {
 /// the worst case, less what it handed out in requests, which their receivers
 /// count.
 struct Measured {
-    model: Model,
+    domain: Domain,
     env: Env<Limits>,
     out: Queue<Request>,
     meter: Meter,
@@ -39,9 +39,9 @@ impl Measured {
     fn new(limits: Limits) -> Measured {
         let bound = worst_case(&limits).expect("the test limits fit");
         let meter = Meter::new();
-        let model = Model::new(&limits);
+        let domain = Domain::new(&limits);
         let out = Queue::with_capacity(max_out(&limits));
-        Measured { model, env: Env { now: Time::ZERO, limits }, out, meter, bound, names: 0 }
+        Measured { domain, env: Env { now: Time::ZERO, limits }, out, meter, bound, names: 0 }
     }
 
     fn name(&mut self) -> Token {
@@ -51,16 +51,16 @@ impl Measured {
 
     fn step(&mut self, event: Event) -> Vec<Request> {
         self.meter.start();
-        step(&mut self.model, &self.env, event, &mut self.out);
+        step(&mut self.domain, &self.env, event, &mut self.out);
         self.drain()
     }
 
     /// Places what can be placed, one resume at a time.
     fn settle(&mut self) -> Vec<Request> {
         let mut requests = Vec::new();
-        while self.model.is_ready() {
+        while self.domain.is_ready() {
             self.meter.start();
-            resume(&mut self.model, &self.env, &mut self.out);
+            resume(&mut self.domain, &self.env, &mut self.out);
             requests.extend(self.drain());
         }
         requests
@@ -70,9 +70,9 @@ impl Measured {
     fn at(&mut self, secs: u64) -> Vec<Request> {
         self.env.now = Time::ZERO.saturating_add(Duration::from_secs(secs));
         let mut requests = Vec::new();
-        while self.model.is_due(self.env.now) {
+        while self.domain.is_due(self.env.now) {
             self.meter.start();
-            fire(&mut self.model, &self.env, &mut self.out);
+            fire(&mut self.domain, &self.env, &mut self.out);
             requests.extend(self.drain());
         }
         requests
@@ -86,8 +86,8 @@ impl Measured {
         }
         self.meter.check(measured, self.bound, self.env.limits);
         // The iteration ends: the reclaim point.
-        self.model.reclaim();
-        while self.model.pop_fact().is_some() {}
+        self.domain.reclaim();
+        while self.domain.pop_fact().is_some() {}
         requests
     }
 
@@ -154,9 +154,9 @@ fn fill(limits: Limits) -> (Measured, Vec<(Token, Token, Token)>, Vec<ReplyTo>) 
         };
         calls.push(reply_to);
     }
-    assert_eq!(fleet.model.workers(), limits.workers);
-    assert_eq!(fleet.model.attempts(), limits.attempts);
-    assert_eq!(fleet.model.calls(), limits.calls);
+    assert_eq!(fleet.domain.workers(), limits.workers);
+    assert_eq!(fleet.domain.attempts(), limits.attempts);
+    assert_eq!(fleet.domain.calls(), limits.calls);
     (fleet, placed, calls)
 }
 
@@ -191,7 +191,7 @@ fn a_fleet_full_to_its_limits_stays_within_its_worst_case() {
         }
         out = self::placed(&fleet.settle());
     }
-    assert_eq!((fleet.model.attempts(), fleet.model.calls()), (0, 0));
+    assert_eq!((fleet.domain.attempts(), fleet.domain.calls()), (0, 0));
 }
 
 #[test]
@@ -249,5 +249,5 @@ fn every_entry_point_stays_within_the_worst_case() {
     fleet.step(Event::Acknowledge { run: r3, attempt: a3 });
     fleet.at(30);
     fleet.settle();
-    assert_eq!((fleet.model.attempts(), fleet.model.calls()), (0, 0));
+    assert_eq!((fleet.domain.attempts(), fleet.domain.calls()), (0, 0));
 }

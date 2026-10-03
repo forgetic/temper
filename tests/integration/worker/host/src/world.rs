@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use temper_lib::{Duration, ReplyTo, Rng, Time, Token};
-use temper_worker_model_host::{
+use temper_worker_domain_host::{
     self as host, AgentFailure, Event, Fact, Failure, Finish, Limits, Reason, Reply, Request, RunFailure,
 };
 use temper_world::{Ledger, Schedule, Span, Stage, Trace};
@@ -310,7 +310,7 @@ pub struct World {
     rng: Rng,
     settings: Settings,
 
-    host: host::Model,
+    host: host::Domain,
     stage: Stage<Limits, Arrival, Request>,
 
     engine: Engine,
@@ -351,7 +351,7 @@ impl World {
             now: Time::ZERO,
             rng: latencies,
             settings,
-            host: host::Model::new(&settings.host),
+            host: host::Domain::new(&settings.host),
             stage: Stage::new(settings.host, max_out, max_out + SPARE),
             engine,
             parent,

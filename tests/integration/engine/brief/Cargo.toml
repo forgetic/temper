@@ -1,6 +1,6 @@
 [package]
-name = "temper-engine-model-brief-tests"
-description = "The brief sub-model's world: a simulation with a scripted parent serving its reads"
+name = "temper-engine-domain-brief-tests"
+description = "The brief child domain's world: a simulation with a scripted parent serving its reads"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,7 +8,7 @@ publish.workspace = true
 
 [dependencies]
 temper-lib.workspace = true
-temper-engine-model-brief.workspace = true
+temper-engine-domain-brief.workspace = true
 temper-world.workspace = true
 
 # Ordinary Rust (programming-model.md, 10.2), so not the step crates' lints.

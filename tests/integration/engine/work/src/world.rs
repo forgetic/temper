@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use temper_engine_model_work::{
-    self as work, Acted, Answer, Applied, Class, Due, Event, Fact, Hold, Item, Lifecycle, Limits, Model, Phase, Read,
+use temper_engine_domain_work::{
+    self as work, Acted, Answer, Applied, Class, Domain, Due, Event, Fact, Hold, Item, Lifecycle, Limits, Phase, Read,
     Refusal, Request, Retries, Retry, Then, Wrote,
 };
 use temper_lib::{Duration, ReplyTo, Rng, Time, Token};
@@ -414,7 +414,7 @@ pub struct World {
     /// dropped.
     generation: u64,
 
-    model: Model,
+    domain: Domain,
     stage: Stage<Limits, Event, Request>,
     /// Deliveries in flight, whose count names everything else, and how many
     /// are on their way.
@@ -487,7 +487,7 @@ impl World {
             now: Time::ZERO,
             rng,
             generation: 0,
-            model: Model::new(&settings.limits, settings.seed),
+            domain: Domain::new(&settings.limits, settings.seed),
             stage: Stage::new(settings.limits, max_out, max_out + SLACK),
             wire: Schedule::new(),
             pending: 0,
@@ -616,25 +616,25 @@ impl World {
         }
         while let Some(event) = self.stage.next_event() {
             self.trace.log(now, format!("work <- {event:?}"));
-            work::step(&mut self.model, &self.stage.env, event, &mut self.stage.out);
+            work::step(&mut self.domain, &self.stage.env, event, &mut self.stage.out);
         }
-        while self.stage.has_room() && self.model.is_due(now) {
+        while self.stage.has_room() && self.domain.is_due(now) {
             self.trace.log(now, "work <- alarm");
-            let before = self.model.next_deadline();
-            work::fire(&mut self.model, &self.stage.env, &mut self.stage.out);
-            let fired = self.model.next_deadline() != before || !self.stage.out.is_empty();
+            let before = self.domain.next_deadline();
+            work::fire(&mut self.domain, &self.stage.env, &mut self.stage.out);
+            let fired = self.domain.next_deadline() != before || !self.stage.out.is_empty();
             assert!(fired, "seed {seed}: an alarm due fires");
         }
         while let Some(request) = self.stage.out.pop() {
             self.trace.log(now, format!("work -> {request:?}"));
             self.request(request);
         }
-        while let Some(fact) = self.model.pop_fact() {
+        while let Some(fact) = self.domain.pop_fact() {
             self.stats.facts += 1;
             self.fact(fact);
         }
         // The reclaim point.
-        self.model.reclaim();
+        self.domain.reclaim();
     }
 
     /// Hands `delivery` to its destination.
@@ -1593,7 +1593,7 @@ impl World {
         }
         // The new process.
         let seed = self.settings.seed ^ self.generation.rotate_left(32);
-        self.model = Model::new(&self.settings.limits, seed);
+        self.domain = Domain::new(&self.settings.limits, seed);
         let max_out = work::max_out(&self.settings.limits);
         let limits = self.settings.limits;
         self.stage = Stage::new(limits, max_out, max_out + SLACK);
@@ -1682,13 +1682,13 @@ impl World {
 
     fn has_work_now(&self) -> bool {
         self.stage.has_events()
-            || self.model.is_due(self.now)
+            || self.domain.is_due(self.now)
             || self.wire.is_due(self.now)
             || self.referee.is_due(self.now)
     }
 
     fn next_time(&self) -> Option<Time> {
-        [self.wire.next_time(), self.referee.next_deadline(), self.model.next_deadline()].into_iter().flatten().min()
+        [self.wire.next_time(), self.referee.next_deadline(), self.domain.next_deadline()].into_iter().flatten().min()
     }
 
     /// The invariants of a world where nothing is left to happen.
@@ -1737,7 +1737,7 @@ impl World {
                 assert!(kept, "seed {seed}: worker {worker} keeps only answers not acknowledged yet: {run:?}");
             }
         }
-        assert_eq!(self.model.next_deadline(), None, "seed {seed}: no item waits for an alarm");
+        assert_eq!(self.domain.next_deadline(), None, "seed {seed}: no item waits for an alarm");
         self.referee.assert_passed(seed);
     }
 }

@@ -1,6 +1,6 @@
 [package]
-name = "temper-engine-model-notes-tests"
-description = "The notes sub-model's world: a simulation with a scripted parent playing the wiki, people and the runs that ask"
+name = "temper-engine-domain-notes-tests"
+description = "The notes child domain's world: a simulation with a scripted parent playing the wiki, people and the runs that ask"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,7 +8,7 @@ publish.workspace = true
 
 [dependencies]
 temper-lib.workspace = true
-temper-engine-model-notes.workspace = true
+temper-engine-domain-notes.workspace = true
 temper-world.workspace = true
 
 # Ordinary Rust (programming-model.md, 10.2), so not the step crates' lints.

@@ -3,10 +3,10 @@
 //! and close twice; and sessions opened at random, with budgets of every
 //! size, some too large and some spent before they start.
 
-use temper_agent_model_session::{Budget, Limits, Spec};
-use temper_agent_model_tools as tools;
+use temper_agent_domain_session::{Budget, Limits, Spec};
+use temper_agent_domain_tools as tools;
 use temper_lib::{Duration, Rng, Time};
-use temper_llm_model::Config;
+use temper_llm_domain::Config;
 
 use crate::{BUDGET, Count, Settings, Span, World, spec};
 

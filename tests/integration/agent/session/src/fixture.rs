@@ -10,7 +10,7 @@
 
 use std::time::Duration;
 
-use temper_agent_model_tools::{Call, Exit, Outcome, Part, Path};
+use temper_agent_domain_tools::{Call, Exit, Outcome, Part, Path};
 use temper_checkout_fake::{self as fake, Checkout, Program};
 
 /// The files each session's repository starts with: their content starts

@@ -1,0 +1,21 @@
+[package]
+name = "temper-engine-domain"
+description = "The domain layer of the temper engine: the engine loop's entry point, sans-io"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+temper-engine-domain-brief.workspace = true
+temper-engine-domain-fleet.workspace = true
+temper-engine-domain-forge.workspace = true
+temper-engine-domain-notes.workspace = true
+temper-engine-domain-plan.workspace = true
+temper-engine-domain-rules.workspace = true
+temper-engine-domain-views.workspace = true
+temper-engine-domain-work.workspace = true
+temper-lib.workspace = true
+
+[lints]
+workspace = true

@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
-use temper_engine_model_notes::{
-    self as notes, Author, Change, Event, Fact, Fetched, Item, Limits, Listed, Model, Noted, Page, Recall, Reference,
+use temper_engine_domain_notes::{
+    self as notes, Author, Change, Domain, Event, Fact, Fetched, Item, Limits, Listed, Noted, Page, Recall, Reference,
     Refusal, Request, Scope, Scopes, Wrote,
 };
 use temper_lib::{Duration, ReplyTo, Rng, Time, Token};
@@ -240,7 +240,7 @@ pub struct World {
     rng: Rng,
     settings: Settings,
 
-    model: Model,
+    domain: Domain,
     stage: Stage<Limits, Event, Request>,
 
     /// Deliveries in flight, whose count names calls too.
@@ -276,7 +276,7 @@ impl World {
         let mut world = World {
             now: Time::ZERO,
             rng: Rng::new(settings.seed),
-            model: Model::new(&settings.limits),
+            domain: Domain::new(&settings.limits),
             stage: Stage::new(settings.limits, max_out, max_out + SLACK),
             wire: Schedule::new(),
             wiki: BTreeMap::new(),
@@ -381,8 +381,8 @@ impl World {
                 inject(stimulus);
             }
         }
-        while self.stage.has_room() && self.model.is_ready() {
-            notes::resume(&mut self.model, &self.stage.env, &mut self.stage.out);
+        while self.stage.has_room() && self.domain.is_ready() {
+            notes::resume(&mut self.domain, &self.stage.env, &mut self.stage.out);
         }
         while let Some(event) = self.stage.next_event() {
             // A listing is taken in as the notes step it: the answers emitted
@@ -403,7 +403,7 @@ impl World {
                 self.taken_in.push((usize::try_from(self.stage.out.len()).expect("small"), listing));
             }
             self.log(format!("notes <- {}", describe(&event)));
-            notes::step(&mut self.model, &self.stage.env, event, &mut self.stage.out);
+            notes::step(&mut self.domain, &self.stage.env, event, &mut self.stage.out);
         }
         // What the steps asked for, at the end of the iteration, in the
         // order they asked, each listing taken in among them where it was.
@@ -419,14 +419,14 @@ impl World {
         for (_, listing) in taken_in {
             self.observe(Seen::TakenIn { listing });
         }
-        while let Some(fact) = self.model.pop_fact() {
+        while let Some(fact) = self.domain.pop_fact() {
             self.stats.facts += 1;
             if fact == (Fact::Kept { evicted: true }) {
                 self.end("evicted");
             }
         }
         // The reclaim point.
-        self.model.reclaim();
+        self.domain.reclaim();
     }
 
     /// Hands `delivery` to its destination.
@@ -807,7 +807,7 @@ impl World {
     }
 
     fn has_work_now(&self) -> bool {
-        self.stage.has_events() || self.model.is_ready() || self.wire.is_due(self.now) || self.referee.is_due(self.now)
+        self.stage.has_events() || self.domain.is_ready() || self.wire.is_due(self.now) || self.referee.is_due(self.now)
     }
 
     fn next_time(&self) -> Option<Time> {
@@ -819,9 +819,9 @@ impl World {
         assert!(self.wire.is_empty() && !self.stage.has_events(), "nothing is on its way");
         self.calls.assert_settled();
         self.ops.assert_settled();
-        assert_eq!(self.model.calls(), 0, "the notes hold no call");
-        assert_eq!(self.model.ops(), 0, "the notes hold no wiki operation");
-        assert!(!self.model.is_ready(), "no call is ready");
+        assert_eq!(self.domain.calls(), 0, "the notes hold no call");
+        assert_eq!(self.domain.ops(), 0, "the notes hold no wiki operation");
+        assert!(!self.domain.is_ready(), "no call is ready");
         self.referee.assert_passed(self.settings.seed);
     }
 }

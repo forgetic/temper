@@ -1,6 +1,6 @@
 //! A scripted agent process: the agent's side of the channel, in its own
-//! terms, played from a seed. It shares no type with the agent sub-model: the
-//! world translates what it writes and reads ([`crate::translate`]), as a
+//! terms, played from a seed. It shares no type with the agent child domain:
+//! the world translates what it writes and reads ([`crate::translate`]), as a
 //! protocol layer would encode and decode them.
 //!
 //! Once it hears its start, a run takes a number of steps, each after a

@@ -2,16 +2,16 @@ use std::collections::VecDeque;
 
 use temper_lib::{Env, Queue, Time};
 
-/// A model as the shell drives it (programming-model.md, 7): its environment,
+/// A domain as the shell drives it (programming-model.md, 7): its environment,
 /// the events on their way to it, and the queue its steps and alarms emit
 /// into. A step or an alarm runs only while the queue has room for the most
 /// one may emit, so a slow consumer holds events back instead of overflowing
 /// the queue.
 ///
-/// The world calls the model itself, with `env` and `out`: for each event
+/// The world calls the domain itself, with `env` and `out`: for each event
 /// [`Stage::next_event`] hands it, then for each alarm due while
 /// [`Stage::has_room`]; and takes what the steps emitted from `out` at the end
-/// of the iteration, before the model's reclaim point.
+/// of the iteration, before the domain's reclaim point.
 #[derive(Debug)]
 pub struct Stage<L, E, R> {
     pub env: Env<L>,
@@ -22,7 +22,7 @@ pub struct Stage<L, E, R> {
 }
 
 impl<L, E, R> Stage<L, E, R> {
-    /// A stage for a model under `limits`, one step or alarm of which emits
+    /// A stage for a domain under `limits`, one step or alarm of which emits
     /// at most `max_out` requests, with a queue of `capacity`.
     #[must_use]
     pub fn new(limits: L, max_out: u32, capacity: u32) -> Stage<L, E, R> {
@@ -36,12 +36,12 @@ impl<L, E, R> Stage<L, E, R> {
         self.env.now = now;
     }
 
-    /// Sends `event` to the model, after those on their way already.
+    /// Sends `event` to the domain, after those on their way already.
     pub fn push(&mut self, event: E) {
         self.inbox.push_back(event);
     }
 
-    /// The next event for the model, if there is one and room for what its
+    /// The next event for the domain, if there is one and room for what its
     /// step may emit.
     pub fn next_event(&mut self) -> Option<E> {
         if self.has_room() { self.inbox.pop_front() } else { None }
@@ -53,7 +53,7 @@ impl<L, E, R> Stage<L, E, R> {
         self.out.room() >= self.max_out
     }
 
-    /// Whether events are waiting for the model.
+    /// Whether events are waiting for the domain.
     #[must_use]
     pub fn has_events(&self) -> bool {
         !self.inbox.is_empty()

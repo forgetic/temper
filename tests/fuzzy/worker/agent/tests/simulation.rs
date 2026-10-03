@@ -1,9 +1,9 @@
-//! The worker's agent sub-model at random: many random worlds, each settled,
+//! The worker's agent child domain at random: many random worlds, each settled,
 //! every ending reached among them.
 
 use std::collections::BTreeSet;
 
-use temper_worker_model_agent_tests::{Settings, Span, Stats, World, tree};
+use temper_worker_domain_agent_tests::{Settings, Span, Stats, World, tree};
 
 const ITERATIONS: u32 = 400_000;
 

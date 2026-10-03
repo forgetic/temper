@@ -1,14 +1,14 @@
 [package]
-name = "temper-engine-model-views-fuzzy"
-description = "The views sub-model of the engine at random: sweeps of random worlds"
+name = "temper-engine-domain-views-fuzzy"
+description = "The views child domain of the engine at random: sweeps of random worlds"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
 [dev-dependencies]
-temper-engine-model-views.workspace = true
-temper-engine-model-views-tests.workspace = true
+temper-engine-domain-views.workspace = true
+temper-engine-domain-views-tests.workspace = true
 temper-lib.workspace = true
 temper-world.workspace = true
 

@@ -1,6 +1,6 @@
-//! The fake forge (`temper_forge_model`) as io's git meets it, across the
+//! The fake forge (`temper_forge_domain`) as io's git meets it, across the
 //! network (testing-pyramid.md, 4.2 and 4.3): the transport a working tree's
-//! git reaches its remotes through ([`Remote`]), routed to the forge's model
+//! git reaches its remotes through ([`Remote`]), routed to the forge's domain
 //! as the worker's calls, and the forge's one store, where git names its
 //! commits and finds their trees. And what a world does to the forge from
 //! outside: its repositories, the faults it scripts on them, and another
@@ -18,8 +18,8 @@
 //! drained by the world as [`Move`]s.
 
 use temper_checkout_fake::git::{self, Created, Fault, Pushed, Remote, Tree, Want};
-use temper_forge_model::api::{Answer, Checks, Error, File, Git, Op, Permission, Read, Setup, What};
-use temper_forge_model::{Config, Event, Limits, MAX_OUT, Model, Observation, Request, Skew};
+use temper_forge_domain::api::{Answer, Checks, Error, File, Git, Op, Permission, Read, Setup, What};
+use temper_forge_domain::{Config, Domain, Event, Limits, MAX_OUT, Observation, Request, Skew};
 use temper_lib::{Duration, Env, Queue, ReplyTo, Time, Token};
 
 /// The forge's users: the worker, whose identity every operation of io acts
@@ -93,7 +93,7 @@ pub struct Move {
 
 #[derive(Debug)]
 pub struct Forge {
-    model: Model,
+    domain: Domain,
     /// The world's clock, as of its last say.
     now: Time,
     /// The calls made, the last naming the latest.
@@ -104,7 +104,7 @@ impl Forge {
     /// An empty forge, drawing from `seed`.
     #[must_use]
     pub fn new(seed: u64) -> Forge {
-        Forge { model: Model::new(&CONFIG, seed), now: Time::ZERO, calls: 0 }
+        Forge { domain: Domain::new(&CONFIG, seed), now: Time::ZERO, calls: 0 }
     }
 
     /// Tells the forge the world's time, for the calls that follow.
@@ -136,21 +136,21 @@ impl Forge {
             protection: None,
             hooked: false,
         };
-        let first = temper_forge_model::repository(&mut self.model, &CONFIG, setup);
-        temper_forge_model::grant(&mut self.model, remote, WORKER, Permission::Write);
-        temper_forge_model::grant(&mut self.model, remote, OTHER, Permission::Write);
+        let first = temper_forge_domain::repository(&mut self.domain, &CONFIG, setup);
+        temper_forge_domain::grant(&mut self.domain, remote, WORKER, Permission::Write);
+        temper_forge_domain::grant(&mut self.domain, remote, OTHER, Permission::Write);
         first
     }
 
     /// Makes the repository at `remote` reachable, or not.
     pub fn set_reachable(&mut self, remote: &[u8], reachable: bool) {
-        temper_forge_model::set_reachable(&mut self.model, remote, reachable);
+        temper_forge_domain::set_reachable(&mut self.domain, remote, reachable);
     }
 
     /// Makes the repository at `remote` refuse what is pushed to it, branches
     /// created included, or not.
     pub fn set_refusing(&mut self, remote: &[u8], refusing: bool) {
-        temper_forge_model::set_refusing(&mut self.model, remote, refusing);
+        temper_forge_domain::set_refusing(&mut self.domain, remote, refusing);
     }
 
     /// Another party commits on `branch` of the repository at `remote`,
@@ -158,7 +158,7 @@ impl Forge {
     /// its own would. Returns the commit.
     pub fn advance(&mut self, remote: &[u8], branch: &[u8], path: &[u8], content: &[u8]) -> u64 {
         let env = Env { now: self.now, limits: CONFIG };
-        let advanced = temper_forge_model::advance(&mut self.model, &env, remote, branch, path, content, OTHER);
+        let advanced = temper_forge_domain::advance(&mut self.domain, &env, remote, branch, path, content, OTHER);
         advanced.expect("the forge has room for another party's commit")
     }
 
@@ -183,7 +183,7 @@ impl Forge {
     #[must_use]
     pub fn branch(&self, remote: &[u8], branch: &[u8]) -> Option<u64> {
         let read = Read::Branch { branch: branch.into() };
-        match self.model.inspect(&CONFIG, remote, &read) {
+        match self.domain.inspect(&CONFIG, remote, &read) {
             Ok(Answer::Commit(commit)) => Some(commit),
             Ok(answer) => panic!("a branch is read as where it is: {answer:?}"),
             Err(_) => None,
@@ -193,13 +193,13 @@ impl Forge {
     /// The branches of the repository at `remote`, in their order.
     #[must_use]
     pub fn branches(&self, remote: &[u8]) -> Vec<Vec<u8>> {
-        self.model.branches(remote).iter().map(|(branch, _)| branch.to_vec()).collect()
+        self.domain.branches(remote).iter().map(|(branch, _)| branch.to_vec()).collect()
     }
 
     /// Whether `ancestor` is `commit` or one of its ancestors.
     #[must_use]
     pub fn is_ancestor(&self, ancestor: u64, commit: u64) -> bool {
-        self.model.is_ancestor(ancestor, commit)
+        self.domain.is_ancestor(ancestor, commit)
     }
 
     /// The branches moved since the world last asked, in order, from the
@@ -207,7 +207,7 @@ impl Forge {
     /// party's. Refused calls and rejected pushes moved nothing.
     pub fn moves(&mut self) -> Vec<Move> {
         let mut moves = Vec::new();
-        while let Some(observation) = self.model.pop_observation() {
+        while let Some(observation) = self.domain.pop_observation() {
             match observation {
                 Observation::Moved { repository, branch, from, to, by: _ } => {
                     moves.push(Move { remote: repository.into(), branch: branch.into(), from, to });
@@ -231,7 +231,7 @@ impl Forge {
                 | Observation::Wiki { .. } => panic!("only git reaches the forge here: {observation:?}"),
             }
         }
-        assert_eq!(self.model.observations_lost(), 0, "the world drains the forge's observations as they come");
+        assert_eq!(self.domain.observations_lost(), 0, "the world drains the forge's observations as they come");
         moves
     }
 
@@ -243,14 +243,14 @@ impl Forge {
         let mut out = Queue::with_capacity(MAX_OUT);
         let reply_to = ReplyTo::new(Token::new(self.calls));
         let event = Event::Call { reply_to, user, repository: remote.into(), op: Op::Git(op) };
-        temper_forge_model::step(&mut self.model, &env, event, &mut out);
-        temper_forge_model::fire(&mut self.model, &env, &mut out);
-        self.model.reclaim();
+        temper_forge_domain::step(&mut self.domain, &env, event, &mut out);
+        temper_forge_domain::fire(&mut self.domain, &env, &mut out);
+        self.domain.reclaim();
         let Some(Request::Reply { to, result }) = out.pop() else {
             panic!("the forge answers a call at once");
         };
         assert_eq!(to.into_token(), Token::new(self.calls), "the forge answers the call made");
-        assert!(out.is_empty() && self.model.calls() == 0, "nothing else is in flight");
+        assert!(out.is_empty() && self.domain.calls() == 0, "nothing else is in flight");
         result.map_err(fault)
     }
 }
@@ -265,9 +265,9 @@ impl Remote for Forge {
 
     fn fetch(&mut self, remote: &[u8], want: Want<'_>) -> Result<u64, Fault> {
         let want = match want {
-            Want::Branch(branch) => temper_forge_model::api::Want::Branch(branch.into()),
-            Want::Commit(commit) => temper_forge_model::api::Want::Commit(commit),
-            Want::Default => temper_forge_model::api::Want::Default,
+            Want::Branch(branch) => temper_forge_domain::api::Want::Branch(branch.into()),
+            Want::Commit(commit) => temper_forge_domain::api::Want::Commit(commit),
+            Want::Default => temper_forge_domain::api::Want::Default,
         };
         let Answer::Commit(commit) = self.call(remote, WORKER, Git::Fetch { want })? else {
             panic!("a fetch is answered with the commit fetched");
@@ -289,22 +289,22 @@ impl Remote for Forge {
             panic!("a push is answered with how it went");
         };
         Ok(match pushed {
-            temper_forge_model::api::Pushed::Pushed => Pushed::Pushed,
-            temper_forge_model::api::Pushed::Rejected => Pushed::Rejected,
+            temper_forge_domain::api::Pushed::Pushed => Pushed::Pushed,
+            temper_forge_domain::api::Pushed::Rejected => Pushed::Rejected,
         })
     }
 
     fn parent(&self, commit: u64) -> Option<u64> {
-        self.model.object(commit).expect("a commit of the store").parent
+        self.domain.object(commit).expect("a commit of the store").parent
     }
 
     fn tree(&self, commit: u64) -> Tree {
-        let object = self.model.object(commit).expect("a commit of the store");
+        let object = self.domain.object(commit).expect("a commit of the store");
         object.tree.iter().map(|(path, content)| (path.to_vec(), content.to_vec())).collect()
     }
 
     fn store(&mut self, parent: u64, tree: Tree) -> Option<u64> {
-        let committed = temper_forge_model::commit(&mut self.model, &CONFIG, parent, files(tree));
+        let committed = temper_forge_domain::commit(&mut self.domain, &CONFIG, parent, files(tree));
         committed.expect("the forge's store has room for every commit")
     }
 }
@@ -313,10 +313,10 @@ fn files(tree: Tree) -> Box<[File]> {
     tree.into_iter().map(|(path, content)| File { path: path.into(), content: content.into() }).collect()
 }
 
-fn created_of(created: temper_forge_model::api::Created) -> Created {
+fn created_of(created: temper_forge_domain::api::Created) -> Created {
     match created {
-        temper_forge_model::api::Created::Created => Created::Created,
-        temper_forge_model::api::Created::Exists => Created::Exists,
+        temper_forge_domain::api::Created::Created => Created::Created,
+        temper_forge_domain::api::Created::Exists => Created::Exists,
     }
 }
 

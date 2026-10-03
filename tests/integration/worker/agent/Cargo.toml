@@ -1,6 +1,6 @@
 [package]
-name = "temper-worker-model-agent-tests"
-description = "The agent sub-model's world: a simulation with scripted agent processes, a process tree and a client"
+name = "temper-worker-domain-agent-tests"
+description = "The agent child domain's world: a simulation with scripted agent processes, a process tree and a client"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,7 +8,7 @@ publish.workspace = true
 
 [dependencies]
 temper-lib.workspace = true
-temper-worker-model-agent.workspace = true
+temper-worker-domain-agent.workspace = true
 temper-world.workspace = true
 
 # Ordinary Rust (programming-model.md, 10.2), so not the step crates' lints.

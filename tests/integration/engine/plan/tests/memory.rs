@@ -3,13 +3,13 @@
 //! exactly its limits, holds no more of its own than `worst_case` says; what
 //! it hands out (writes, runs, problems) is its receiver's.
 
-use temper_engine_model_plan::{
+use temper_engine_domain_plan::{
     AgentSpec, Batch, Budget, ChangeSpec, Charter, Ci, Config, Entry, Envelope, Facts, Gate, Goal, Grants, Growth,
     Inbound, Limits, Mergeable, Outcome, Plan, Progress, Pull, PullState, Record, Relations, Repo, Repository, Resume,
     Review, SessionSpec, Source, Sources, Step, Target, Template, Wake, Work, Write, accept, apply, check, due, grow,
     max_out, wake, worst_case,
 };
-use temper_engine_model_plan_tests::translate::commit;
+use temper_engine_domain_plan_tests::translate::commit;
 use temper_lib::{Duration, Env, List, Queue, Time};
 use temper_world::heap::{self, Meter};
 

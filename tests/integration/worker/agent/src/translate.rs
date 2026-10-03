@@ -1,12 +1,12 @@
-//! The channel between the agent sub-model and a scripted agent, as the
-//! protocol layer would speak it: what the model sends down, decoded into
+//! The channel between the agent child domain and a scripted agent, as the
+//! protocol layer would speak it: what the domain sends down, decoded into
 //! what the scripted agent hears, and what the scripted agent writes, decoded
-//! into what the model reads. Garbage decodes to nothing: the read ends as
+//! into what the domain reads. Garbage decodes to nothing: the read ends as
 //! malformed.
 
 use temper_lib::Token;
-use temper_worker_model_agent::Event;
-use temper_worker_model_agent::channel::{Ask, Down, Finish, Push, Reply, RunFailure, Up};
+use temper_worker_domain_agent::Event;
+use temper_worker_domain_agent::channel::{Ask, Down, Finish, Push, Reply, RunFailure, Up};
 
 use crate::script::{Answer, Heard, Said, Why};
 
@@ -34,7 +34,7 @@ fn answer(reply: Reply) -> Answer {
     }
 }
 
-/// What the model reads of `said`, the read for `owner` ending with it.
+/// What the domain reads of `said`, the read for `owner` ending with it.
 #[must_use]
 pub fn up(owner: Token, said: Said) -> Event {
     let message = match said {

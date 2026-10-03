@@ -1,12 +1,12 @@
 //! The referee of the forge's world, fed observations by hand as the world
 //! would feed them, fails a run that breaks an expectation, and says why.
 
-use temper_engine_model_forge::Item;
-use temper_engine_model_forge::{Ci, News};
-use temper_engine_model_forge_tests::referee::{Bounds, Forge, Planned, Seen};
-use temper_engine_model_forge_tests::{ENGINE, REPOSITORIES, TRACKING, WAITING, WORKING, translate};
-use temper_forge_model::Observation;
-use temper_forge_model::api::Kind;
+use temper_engine_domain_forge::Item;
+use temper_engine_domain_forge::{Ci, News};
+use temper_engine_domain_forge_tests::referee::{Bounds, Forge, Planned, Seen};
+use temper_engine_domain_forge_tests::{ENGINE, REPOSITORIES, TRACKING, WAITING, WORKING, translate};
+use temper_forge_domain::Observation;
+use temper_forge_domain::api::Kind;
 use temper_lib::{Duration, Time};
 use temper_world::{Referee, Verdict};
 
@@ -96,7 +96,7 @@ fn a_creation_made_twice_for_one_key_fails_the_run() {
 fn a_second_record_on_an_item_fails_the_run() {
     let mut referee = referee();
     referee.observe(at(0), Seen::Planned { plan: 1, write: Planned::Record { item: ITEM } }, &mut Vec::new());
-    let record = translate::recorded(temper_engine_model_forge::Position::START, 1, b"the record");
+    let record = translate::recorded(temper_engine_domain_forge::Position::START, 1, b"the record");
     referee.observe(at(1), commented(3, &record, ENGINE), &mut Vec::new());
     referee.observe(at(2), commented(4, &record, ENGINE), &mut Vec::new());
     assert_eq!(why(&referee), "one record per item: Item { repository: 0, number: 5 }");

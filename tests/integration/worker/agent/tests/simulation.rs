@@ -1,11 +1,11 @@
-//! The agent sub-model in its world: scenarios, replay, and a sweep of random
-//! worlds.
+//! The agent child domain in its world: scenarios, replay, and a sweep of
+//! random worlds.
 
 use std::collections::BTreeMap;
 
-use temper_worker_model_agent::Limits;
-use temper_worker_model_agent_tests::script::{self, Fates};
-use temper_worker_model_agent_tests::{Settings, Span, World, client, tree};
+use temper_worker_domain_agent::Limits;
+use temper_worker_domain_agent_tests::script::{self, Fates};
+use temper_worker_domain_agent_tests::{Settings, Span, World, client, tree};
 
 const ITERATIONS: u32 = 400_000;
 

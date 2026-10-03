@@ -3,123 +3,123 @@
 version = 4
 
 [[package]]
-name = "temper-agent-model"
+name = "temper-agent-domain"
 version = "0.0.0"
 dependencies = [
- "temper-agent-model-run",
- "temper-agent-model-session",
- "temper-agent-model-tools",
+ "temper-agent-domain-run",
+ "temper-agent-domain-session",
+ "temper-agent-domain-tools",
  "temper-lib",
 ]
 
 [[package]]
-name = "temper-agent-model-fuzzy"
+name = "temper-agent-domain-fuzzy"
 version = "0.0.0"
 dependencies = [
- "temper-agent-model",
- "temper-agent-model-tests",
- "temper-lib",
- "temper-world",
-]
-
-[[package]]
-name = "temper-agent-model-run"
-version = "0.0.0"
-dependencies = [
- "temper-lib",
-]
-
-[[package]]
-name = "temper-agent-model-run-fuzzy"
-version = "0.0.0"
-dependencies = [
- "temper-agent-model-run",
- "temper-agent-model-run-tests",
- "temper-lib",
-]
-
-[[package]]
-name = "temper-agent-model-run-tests"
-version = "0.0.0"
-dependencies = [
- "temper-agent-model-run",
+ "temper-agent-domain",
+ "temper-agent-domain-tests",
  "temper-lib",
  "temper-world",
 ]
 
 [[package]]
-name = "temper-agent-model-session"
+name = "temper-agent-domain-run"
 version = "0.0.0"
 dependencies = [
- "temper-agent-model-tools",
  "temper-lib",
 ]
 
 [[package]]
-name = "temper-agent-model-session-fuzzy"
+name = "temper-agent-domain-run-fuzzy"
 version = "0.0.0"
 dependencies = [
- "temper-agent-model-session",
- "temper-agent-model-session-tests",
- "temper-agent-model-tools",
+ "temper-agent-domain-run",
+ "temper-agent-domain-run-tests",
  "temper-lib",
- "temper-llm-model",
 ]
 
 [[package]]
-name = "temper-agent-model-session-tests"
+name = "temper-agent-domain-run-tests"
 version = "0.0.0"
 dependencies = [
- "temper-agent-model-session",
- "temper-agent-model-tools",
- "temper-agent-model-tools-tests",
+ "temper-agent-domain-run",
+ "temper-lib",
+ "temper-world",
+]
+
+[[package]]
+name = "temper-agent-domain-session"
+version = "0.0.0"
+dependencies = [
+ "temper-agent-domain-tools",
+ "temper-lib",
+]
+
+[[package]]
+name = "temper-agent-domain-session-fuzzy"
+version = "0.0.0"
+dependencies = [
+ "temper-agent-domain-session",
+ "temper-agent-domain-session-tests",
+ "temper-agent-domain-tools",
+ "temper-lib",
+ "temper-llm-domain",
+]
+
+[[package]]
+name = "temper-agent-domain-session-tests"
+version = "0.0.0"
+dependencies = [
+ "temper-agent-domain-session",
+ "temper-agent-domain-tools",
+ "temper-agent-domain-tools-tests",
  "temper-checkout-fake",
  "temper-lib",
- "temper-llm-model",
+ "temper-llm-domain",
  "temper-world",
 ]
 
 [[package]]
-name = "temper-agent-model-tests"
+name = "temper-agent-domain-tests"
 version = "0.0.0"
 dependencies = [
- "temper-agent-model",
- "temper-agent-model-tools-tests",
+ "temper-agent-domain",
+ "temper-agent-domain-tools-tests",
  "temper-checkout-fake",
- "temper-engine-model",
- "temper-engine-model-forge-tests",
- "temper-engine-model-tests",
- "temper-forge-model",
+ "temper-engine-domain",
+ "temper-engine-domain-forge-tests",
+ "temper-engine-domain-tests",
+ "temper-forge-domain",
  "temper-lib",
- "temper-llm-model",
- "temper-worker-model",
- "temper-worker-model-agent",
- "temper-worker-model-checkout-tests",
+ "temper-llm-domain",
+ "temper-worker-domain",
+ "temper-worker-domain-agent",
+ "temper-worker-domain-checkout-tests",
  "temper-world",
 ]
 
 [[package]]
-name = "temper-agent-model-tools"
+name = "temper-agent-domain-tools"
 version = "0.0.0"
 dependencies = [
  "temper-lib",
 ]
 
 [[package]]
-name = "temper-agent-model-tools-fuzzy"
+name = "temper-agent-domain-tools-fuzzy"
 version = "0.0.0"
 dependencies = [
- "temper-agent-model-tools",
- "temper-agent-model-tools-tests",
+ "temper-agent-domain-tools",
+ "temper-agent-domain-tools-tests",
  "temper-lib",
  "temper-world",
 ]
 
 [[package]]
-name = "temper-agent-model-tools-tests"
+name = "temper-agent-domain-tools-tests"
 version = "0.0.0"
 dependencies = [
- "temper-agent-model-tools",
+ "temper-agent-domain-tools",
  "temper-checkout-fake",
  "temper-lib",
  "temper-world",
@@ -130,236 +130,236 @@ name = "temper-checkout-fake"
 version = "0.0.0"
 
 [[package]]
-name = "temper-engine-model"
+name = "temper-engine-domain"
 version = "0.0.0"
 dependencies = [
- "temper-engine-model-brief",
- "temper-engine-model-fleet",
- "temper-engine-model-forge",
- "temper-engine-model-notes",
- "temper-engine-model-plan",
- "temper-engine-model-rules",
- "temper-engine-model-views",
- "temper-engine-model-work",
+ "temper-engine-domain-brief",
+ "temper-engine-domain-fleet",
+ "temper-engine-domain-forge",
+ "temper-engine-domain-notes",
+ "temper-engine-domain-plan",
+ "temper-engine-domain-rules",
+ "temper-engine-domain-views",
+ "temper-engine-domain-work",
  "temper-lib",
 ]
 
 [[package]]
-name = "temper-engine-model-brief"
+name = "temper-engine-domain-brief"
 version = "0.0.0"
 dependencies = [
  "temper-lib",
 ]
 
 [[package]]
-name = "temper-engine-model-brief-fuzzy"
+name = "temper-engine-domain-brief-fuzzy"
 version = "0.0.0"
 dependencies = [
- "temper-engine-model-brief",
- "temper-engine-model-brief-tests",
+ "temper-engine-domain-brief",
+ "temper-engine-domain-brief-tests",
  "temper-world",
 ]
 
 [[package]]
-name = "temper-engine-model-brief-tests"
+name = "temper-engine-domain-brief-tests"
 version = "0.0.0"
 dependencies = [
- "temper-engine-model-brief",
- "temper-lib",
- "temper-world",
-]
-
-[[package]]
-name = "temper-engine-model-fleet"
-version = "0.0.0"
-dependencies = [
- "temper-lib",
-]
-
-[[package]]
-name = "temper-engine-model-fleet-fuzzy"
-version = "0.0.0"
-dependencies = [
- "temper-engine-model-fleet",
- "temper-engine-model-fleet-tests",
+ "temper-engine-domain-brief",
  "temper-lib",
  "temper-world",
 ]
 
 [[package]]
-name = "temper-engine-model-fleet-tests"
+name = "temper-engine-domain-fleet"
 version = "0.0.0"
 dependencies = [
- "temper-engine-model-fleet",
+ "temper-lib",
+]
+
+[[package]]
+name = "temper-engine-domain-fleet-fuzzy"
+version = "0.0.0"
+dependencies = [
+ "temper-engine-domain-fleet",
+ "temper-engine-domain-fleet-tests",
  "temper-lib",
  "temper-world",
 ]
 
 [[package]]
-name = "temper-engine-model-forge"
+name = "temper-engine-domain-fleet-tests"
 version = "0.0.0"
 dependencies = [
- "temper-lib",
-]
-
-[[package]]
-name = "temper-engine-model-forge-fuzzy"
-version = "0.0.0"
-dependencies = [
- "temper-engine-model-forge",
- "temper-engine-model-forge-tests",
- "temper-forge-model",
+ "temper-engine-domain-fleet",
  "temper-lib",
  "temper-world",
 ]
 
 [[package]]
-name = "temper-engine-model-forge-tests"
+name = "temper-engine-domain-forge"
 version = "0.0.0"
 dependencies = [
- "temper-engine-model-forge",
- "temper-forge-model",
+ "temper-lib",
+]
+
+[[package]]
+name = "temper-engine-domain-forge-fuzzy"
+version = "0.0.0"
+dependencies = [
+ "temper-engine-domain-forge",
+ "temper-engine-domain-forge-tests",
+ "temper-forge-domain",
  "temper-lib",
  "temper-world",
 ]
 
 [[package]]
-name = "temper-engine-model-fuzzy"
+name = "temper-engine-domain-forge-tests"
 version = "0.0.0"
 dependencies = [
- "temper-engine-model-tests",
-]
-
-[[package]]
-name = "temper-engine-model-notes"
-version = "0.0.0"
-dependencies = [
- "temper-lib",
-]
-
-[[package]]
-name = "temper-engine-model-notes-fuzzy"
-version = "0.0.0"
-dependencies = [
- "temper-engine-model-notes",
- "temper-engine-model-notes-tests",
- "temper-world",
-]
-
-[[package]]
-name = "temper-engine-model-notes-tests"
-version = "0.0.0"
-dependencies = [
- "temper-engine-model-notes",
+ "temper-engine-domain-forge",
+ "temper-forge-domain",
  "temper-lib",
  "temper-world",
 ]
 
 [[package]]
-name = "temper-engine-model-plan"
+name = "temper-engine-domain-fuzzy"
+version = "0.0.0"
+dependencies = [
+ "temper-engine-domain-tests",
+]
+
+[[package]]
+name = "temper-engine-domain-notes"
 version = "0.0.0"
 dependencies = [
  "temper-lib",
 ]
 
 [[package]]
-name = "temper-engine-model-plan-fuzzy"
+name = "temper-engine-domain-notes-fuzzy"
 version = "0.0.0"
 dependencies = [
- "temper-engine-model-plan-tests",
+ "temper-engine-domain-notes",
+ "temper-engine-domain-notes-tests",
  "temper-world",
 ]
 
 [[package]]
-name = "temper-engine-model-plan-tests"
+name = "temper-engine-domain-notes-tests"
 version = "0.0.0"
 dependencies = [
- "temper-engine-model-plan",
- "temper-lib",
- "temper-world",
-]
-
-[[package]]
-name = "temper-engine-model-rules"
-version = "0.0.0"
-dependencies = [
- "temper-lib",
-]
-
-[[package]]
-name = "temper-engine-model-tests"
-version = "0.0.0"
-dependencies = [
- "temper-engine-model",
- "temper-engine-model-forge-tests",
- "temper-forge-model",
+ "temper-engine-domain-notes",
  "temper-lib",
  "temper-world",
 ]
 
 [[package]]
-name = "temper-engine-model-views"
+name = "temper-engine-domain-plan"
 version = "0.0.0"
 dependencies = [
  "temper-lib",
 ]
 
 [[package]]
-name = "temper-engine-model-views-fuzzy"
+name = "temper-engine-domain-plan-fuzzy"
 version = "0.0.0"
 dependencies = [
- "temper-engine-model-views",
- "temper-engine-model-views-tests",
+ "temper-engine-domain-plan-tests",
+ "temper-world",
+]
+
+[[package]]
+name = "temper-engine-domain-plan-tests"
+version = "0.0.0"
+dependencies = [
+ "temper-engine-domain-plan",
  "temper-lib",
  "temper-world",
 ]
 
 [[package]]
-name = "temper-engine-model-views-tests"
+name = "temper-engine-domain-rules"
 version = "0.0.0"
 dependencies = [
- "temper-engine-model-views",
+ "temper-lib",
+]
+
+[[package]]
+name = "temper-engine-domain-tests"
+version = "0.0.0"
+dependencies = [
+ "temper-engine-domain",
+ "temper-engine-domain-forge-tests",
+ "temper-forge-domain",
  "temper-lib",
  "temper-world",
 ]
 
 [[package]]
-name = "temper-engine-model-work"
+name = "temper-engine-domain-views"
 version = "0.0.0"
 dependencies = [
  "temper-lib",
 ]
 
 [[package]]
-name = "temper-engine-model-work-fuzzy"
+name = "temper-engine-domain-views-fuzzy"
 version = "0.0.0"
 dependencies = [
- "temper-engine-model-work",
- "temper-engine-model-work-tests",
- "temper-world",
-]
-
-[[package]]
-name = "temper-engine-model-work-tests"
-version = "0.0.0"
-dependencies = [
- "temper-engine-model-work",
+ "temper-engine-domain-views",
+ "temper-engine-domain-views-tests",
  "temper-lib",
  "temper-world",
 ]
 
 [[package]]
-name = "temper-forge-model"
+name = "temper-engine-domain-views-tests"
+version = "0.0.0"
+dependencies = [
+ "temper-engine-domain-views",
+ "temper-lib",
+ "temper-world",
+]
+
+[[package]]
+name = "temper-engine-domain-work"
 version = "0.0.0"
 dependencies = [
  "temper-lib",
 ]
 
 [[package]]
-name = "temper-forge-model-tests"
+name = "temper-engine-domain-work-fuzzy"
 version = "0.0.0"
 dependencies = [
- "temper-forge-model",
+ "temper-engine-domain-work",
+ "temper-engine-domain-work-tests",
+ "temper-world",
+]
+
+[[package]]
+name = "temper-engine-domain-work-tests"
+version = "0.0.0"
+dependencies = [
+ "temper-engine-domain-work",
+ "temper-lib",
+ "temper-world",
+]
+
+[[package]]
+name = "temper-forge-domain"
+version = "0.0.0"
+dependencies = [
+ "temper-lib",
+]
+
+[[package]]
+name = "temper-forge-domain-tests"
+version = "0.0.0"
+dependencies = [
+ "temper-forge-domain",
  "temper-lib",
  "temper-world",
 ]
@@ -376,118 +376,118 @@ dependencies = [
 ]
 
 [[package]]
-name = "temper-llm-model"
+name = "temper-llm-domain"
 version = "0.0.0"
 dependencies = [
  "temper-lib",
 ]
 
 [[package]]
-name = "temper-worker-model"
+name = "temper-worker-domain"
 version = "0.0.0"
 dependencies = [
  "temper-lib",
- "temper-worker-model-agent",
- "temper-worker-model-checkout",
- "temper-worker-model-host",
+ "temper-worker-domain-agent",
+ "temper-worker-domain-checkout",
+ "temper-worker-domain-host",
 ]
 
 [[package]]
-name = "temper-worker-model-agent"
+name = "temper-worker-domain-agent"
 version = "0.0.0"
 dependencies = [
  "temper-lib",
 ]
 
 [[package]]
-name = "temper-worker-model-agent-fuzzy"
+name = "temper-worker-domain-agent-fuzzy"
 version = "0.0.0"
 dependencies = [
- "temper-worker-model-agent",
- "temper-worker-model-agent-tests",
+ "temper-worker-domain-agent",
+ "temper-worker-domain-agent-tests",
 ]
 
 [[package]]
-name = "temper-worker-model-agent-tests"
+name = "temper-worker-domain-agent-tests"
 version = "0.0.0"
 dependencies = [
  "temper-lib",
- "temper-worker-model-agent",
+ "temper-worker-domain-agent",
  "temper-world",
 ]
 
 [[package]]
-name = "temper-worker-model-checkout"
+name = "temper-worker-domain-checkout"
 version = "0.0.0"
 dependencies = [
  "temper-lib",
 ]
 
 [[package]]
-name = "temper-worker-model-checkout-fuzzy"
+name = "temper-worker-domain-checkout-fuzzy"
 version = "0.0.0"
 dependencies = [
  "temper-lib",
- "temper-worker-model-checkout",
- "temper-worker-model-checkout-tests",
+ "temper-worker-domain-checkout",
+ "temper-worker-domain-checkout-tests",
 ]
 
 [[package]]
-name = "temper-worker-model-checkout-tests"
+name = "temper-worker-domain-checkout-tests"
 version = "0.0.0"
 dependencies = [
  "temper-checkout-fake",
- "temper-forge-model",
+ "temper-forge-domain",
  "temper-lib",
- "temper-worker-model-checkout",
+ "temper-worker-domain-checkout",
  "temper-world",
 ]
 
 [[package]]
-name = "temper-worker-model-fuzzy"
+name = "temper-worker-domain-fuzzy"
 version = "0.0.0"
 dependencies = [
- "temper-worker-model-tests",
+ "temper-worker-domain-tests",
 ]
 
 [[package]]
-name = "temper-worker-model-host"
+name = "temper-worker-domain-host"
 version = "0.0.0"
 dependencies = [
  "temper-lib",
 ]
 
 [[package]]
-name = "temper-worker-model-host-fuzzy"
+name = "temper-worker-domain-host-fuzzy"
 version = "0.0.0"
 dependencies = [
  "temper-lib",
- "temper-worker-model-host",
- "temper-worker-model-host-tests",
+ "temper-worker-domain-host",
+ "temper-worker-domain-host-tests",
 ]
 
 [[package]]
-name = "temper-worker-model-host-tests"
+name = "temper-worker-domain-host-tests"
 version = "0.0.0"
 dependencies = [
  "temper-lib",
- "temper-worker-model-host",
+ "temper-worker-domain-host",
  "temper-world",
 ]
 
 [[package]]
-name = "temper-worker-model-tests"
+name = "temper-worker-domain-tests"
 version = "0.0.0"
 dependencies = [
  "temper-checkout-fake",
- "temper-engine-model",
- "temper-engine-model-forge-tests",
- "temper-engine-model-tests",
- "temper-forge-model",
+ "temper-engine-domain",
+ "temper-engine-domain-forge-tests",
+ "temper-engine-domain-tests",
+ "temper-forge-domain",
  "temper-lib",
- "temper-worker-model",
- "temper-worker-model-agent-tests",
- "temper-worker-model-checkout-tests",
+ "temper-worker-domain",
+ "temper-worker-domain-agent-tests",
+ "temper-worker-domain-checkout-tests",
  "temper-world",
 ]
 

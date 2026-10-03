@@ -3,7 +3,7 @@
 //! operations, naming roots and versions) do, without the bytes and the
 //! kernel.
 
-use temper_agent_model_tools::{
+use temper_agent_domain_tools::{
     Done, Entry, Exit, Expect, Fault, Hit, Kind, Name, Op, Part, Path, Place, Root, Var, Version,
 };
 use temper_checkout_fake as fake;

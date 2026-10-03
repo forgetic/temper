@@ -1,11 +1,11 @@
 //! Memory stays within the worst case (programming-model.md, 6.3), measured by
-//! a counting allocator: the tools sub-model driven at random through every
+//! a counting allocator: the tools child domain driven at random through every
 //! terminal io may give, its peak measured in every step.
 
-use temper_agent_model_tools::{
-    Call, Done, Entry, Event, Exit, Expect, Fault, Hit, Kind, Limits, Model, Op, Request, Version, max_out, worst_case,
+use temper_agent_domain_tools::{
+    Call, Domain, Done, Entry, Event, Exit, Expect, Fault, Hit, Kind, Limits, Op, Request, Version, max_out, worst_case,
 };
-use temper_agent_model_tools_tests::memory::{LIMITS, authority, name, path, read, write};
+use temper_agent_domain_tools_tests::memory::{LIMITS, authority, name, path, read, write};
 use temper_lib::{Duration, Env, Queue, ReplyTo, Rng, Time, Token};
 use temper_world::heap::{self, Meter};
 
@@ -22,7 +22,7 @@ enum Asked {
     Search,
 }
 
-/// Drives a model under `limits` at random for `rounds` steps, each an
+/// Drives a domain under `limits` at random for `rounds` steps, each an
 /// iteration of its own: kits open and close, calls of every kind arrive,
 /// some past their deadline, and io ends operations in any terminal it may,
 /// in any order. The peak of the heap in every step is checked against the
@@ -40,7 +40,7 @@ fn churn(limits: Limits, seed: u64, rounds: u32) {
     let mut out = Queue::with_capacity(max_out(&limits));
     let mut counted = [0; 6];
     let meter = Meter::new();
-    let mut model = Model::new(&limits);
+    let mut domain = Domain::new(&limits);
     for round in 0..u64::from(rounds) {
         env.now = Time::from_nanos(round * 1_000_000);
         let event = match rng.below(10) {
@@ -63,24 +63,24 @@ fn churn(limits: Limits, seed: u64, rounds: u32) {
         };
         let Some(event) = event else { continue };
         meter.start();
-        temper_agent_model_tools::step(&mut model, &env, event, &mut out);
-        model.reclaim();
+        temper_agent_domain_tools::step(&mut domain, &env, event, &mut out);
+        domain.reclaim();
         let measured = meter.end();
         drain(&mut out, &mut kits, &mut ops, &mut counted);
         meter.check(measured, bound, limits);
     }
     // Everything settles: every kit closes, and io ends what is in flight.
     while let Some(kit) = kits.pop() {
-        temper_agent_model_tools::step(&mut model, &env, Event::Close { kit }, &mut out);
+        temper_agent_domain_tools::step(&mut domain, &env, Event::Close { kit }, &mut out);
         drain(&mut out, &mut kits, &mut ops, &mut counted);
     }
     while let Some((owner, _)) = ops.pop() {
-        temper_agent_model_tools::step(&mut model, &env, Event::Done { owner, done: Done::Cancelled }, &mut out);
+        temper_agent_domain_tools::step(&mut domain, &env, Event::Done { owner, done: Done::Cancelled }, &mut out);
         drain(&mut out, &mut kits, &mut ops, &mut counted);
-        model.reclaim();
+        domain.reclaim();
     }
-    model.reclaim();
-    assert_eq!((model.kits(), model.jobs()), (0, 0), "{limits:?}: nothing is left");
+    domain.reclaim();
+    assert_eq!((domain.kits(), domain.jobs()), (0, 0), "{limits:?}: nothing is left");
     assert!(counted.iter().all(|count| *count > 10), "{limits:?}: every kind of operation ran: {counted:?}");
 }
 
@@ -179,7 +179,7 @@ fn random_done(limits: &Limits, rng: &mut Rng, asked: Asked) -> Done {
 }
 
 #[test]
-fn a_model_driven_at_random_stays_within_its_worst_case_at_every_step() {
+fn a_domain_driven_at_random_stays_within_its_worst_case_at_every_step() {
     for seed in 0..20 {
         churn(LIMITS, seed, 3_000);
         churn(Limits { kits: 4, calls: 4, known_files: 8, file_bytes: 64, ..LIMITS }, seed, 3_000);

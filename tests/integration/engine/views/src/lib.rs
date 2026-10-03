@@ -1,5 +1,5 @@
-//! A simulated world for the engine's views sub-model (programming-model.md,
-//! 4.5; engine-model.md, section 11): the views, with the world as
+//! A simulated world for the engine's views child domain (programming-model.md,
+//! 4.5; engine-domain.md, section 11): the views, with the world as
 //! their parent, driven by one loop, deterministically from a seed.
 //!
 //! The world owns the clock and the seeds, and stands in for everything

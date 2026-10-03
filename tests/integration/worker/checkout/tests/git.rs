@@ -4,7 +4,7 @@
 
 use temper_checkout_fake::Checkout;
 use temper_checkout_fake::git::{self, Created, Fault, NotFetched, Pushed, Remote, Tree, Want, What};
-use temper_worker_model_checkout_tests::forge::{Forge, Move};
+use temper_worker_domain_checkout_tests::forge::{Forge, Move};
 
 fn tree(files: &[(&[u8], &[u8])]) -> Tree {
     files.iter().map(|(path, content)| (path.to_vec(), content.to_vec())).collect()

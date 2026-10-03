@@ -1,6 +1,6 @@
 [package]
 name = "temper-checkout-fake"
-description = "A fake checkout in memory, standing in for io's files in model worlds"
+description = "A fake checkout in memory, standing in for io's files in domain worlds"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

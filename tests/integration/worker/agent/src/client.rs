@@ -1,5 +1,5 @@
-//! The agent sub-model's client, scripted: it stands in for the parent and,
-//! through it, for the host, and speaks the agent sub-model's vocabulary as
+//! The agent child domain's client, scripted: it stands in for the parent and,
+//! through it, for the host, and speaks the agent child domain's vocabulary as
 //! the top level will once it translates the host's. Played from a seed:
 //!
 //! - It spawns agents now and then, some beyond the limits, some resuming
@@ -23,8 +23,8 @@
 use std::collections::BTreeMap;
 
 use temper_lib::{Duration, Rng, Token};
-use temper_worker_model_agent::channel::{Ask, Push, Reply};
-use temper_worker_model_agent::{Bounce, End, Event, Invalid, Limits, Request, Spawn};
+use temper_worker_domain_agent::channel::{Ask, Push, Reply};
+use temper_worker_domain_agent::{Bounce, End, Event, Invalid, Limits, Request, Spawn};
 use temper_world::Span;
 
 /// How the client behaves.
@@ -61,8 +61,8 @@ pub struct Script {
 /// What the client does next.
 #[derive(Debug)]
 pub enum Out {
-    /// An event for the model, after a hop.
-    Model(Event),
+    /// An event for the domain, after a hop.
+    Domain(Event),
     /// A plan of its own, `after` from now.
     Later { after: Duration, plan: Plan },
 }
@@ -163,12 +163,12 @@ impl Client {
                 if large {
                     self.tally.large += 1;
                 }
-                vec![Out::Model(Event::Deliver { agent, event: event.into_boxed_slice() })]
+                vec![Out::Domain(Event::Deliver { agent, event: event.into_boxed_slice() })]
             }
             Plan::Stop { client } => {
                 let agent = self.agent(client);
                 self.tally.stops += 1;
-                vec![Out::Model(Event::Stop { agent })]
+                vec![Out::Domain(Event::Stop { agent })]
             }
             Plan::Answer { client, call, serial, push } => {
                 let spawned = self.spawned.get_mut(&client).expect("a call of a spawned agent");
@@ -193,7 +193,7 @@ impl Client {
                     let len = self.rng.between(1, self.limits.answer_bytes);
                     Reply::Relayed { answer: vec![b'a'; usize::try_from(len).expect("fits")].into_boxed_slice() }
                 };
-                vec![Out::Model(Event::Answer { agent, call, reply })]
+                vec![Out::Domain(Event::Answer { agent, call, reply })]
             }
         }
     }
@@ -218,14 +218,14 @@ impl Client {
         let spawn = Spawn { workspace: Token::new(1000 + client.raw()), charter, snapshot };
         let spawned = Spawned { invalid, agent: None, told: false, gone: false, calls: BTreeMap::new() };
         self.spawned.insert(client, spawned);
-        let mut outs = vec![Out::Model(Event::Spawn { client, spawn })];
+        let mut outs = vec![Out::Domain(Event::Spawn { client, spawn })];
         if self.tally.spawns < self.script.spawns {
             outs.push(Out::Later { after: self.script.spacing.draw(&mut self.rng), plan: Plan::Spawn });
         }
         outs
     }
 
-    /// Takes a record of the model's for the client.
+    /// Takes a record of the domain's for the client.
     pub fn take(&mut self, request: Request) -> Vec<Out> {
         let mut outs = Vec::new();
         match request {
@@ -276,7 +276,7 @@ impl Client {
                 if !push {
                     spawned.calls.remove(&call);
                     let agent = spawned.agent.expect("started");
-                    outs.push(Out::Model(Event::Answer { agent, call, reply: Reply::Withdrawn }));
+                    outs.push(Out::Domain(Event::Answer { agent, call, reply: Reply::Withdrawn }));
                 }
             }
             Request::Waiting { client } => {
@@ -336,7 +336,7 @@ impl Client {
         let agent = spawned.agent.expect("started");
         if stop {
             self.tally.stops += 1;
-            return vec![Out::Model(Event::Stop { agent })];
+            return vec![Out::Domain(Event::Stop { agent })];
         }
         Vec::new()
     }

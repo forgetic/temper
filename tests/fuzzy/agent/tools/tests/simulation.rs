@@ -1,9 +1,9 @@
-//! The tools sub-model at random: many noisy worlds, each settled with every
+//! The tools child domain at random: many noisy worlds, each settled with every
 //! call answered, every kind of answer and every fault reached among them.
 
 use std::collections::BTreeSet;
 
-use temper_agent_model_tools_tests::{Stats, kind, noisy_world};
+use temper_agent_domain_tools_tests::{Stats, kind, noisy_world};
 
 const ITERATIONS: u32 = 100_000;
 

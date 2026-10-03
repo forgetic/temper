@@ -3,9 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use temper_checkout_fake::Checkout;
 use temper_checkout_fake::git::{Created, Remote, Tree};
 use temper_lib::{Duration, Rng, Time, Token};
-use temper_worker_model_checkout::git::{Done, Fault, Kind, Missing, Op, Want};
-use temper_worker_model_checkout::{
-    Cached, Event, Fact, Failure, Landing, Limits, MAX_OUT, Message, Model, Outcome, Prepared, Refusal, Repository,
+use temper_worker_domain_checkout::git::{Done, Fault, Kind, Missing, Op, Want};
+use temper_worker_domain_checkout::{
+    Cached, Domain, Event, Fact, Failure, Landing, Limits, MAX_OUT, Message, Outcome, Prepared, Refusal, Repository,
     Request, Spec, Start, worst_case,
 };
 use temper_world::{Key, Ledger, Schedule, Span, Stage, Trace};
@@ -14,7 +14,7 @@ use crate::client::{Client, Interrupt, Operation, Pick, Plan, Release, Repo};
 use crate::forge::{Forge, Move};
 use crate::translate;
 
-/// Room in the model's output queue beyond what one step may emit. Small, so
+/// Room in the domain's output queue beyond what one step may emit. Small, so
 /// the loop's flow control (take an event only while there is room for what
 /// it may produce) is exercised.
 const SLACK: u32 = 3;
@@ -170,12 +170,12 @@ pub struct Stats {
     pub exists: u32,
     /// Branches another party advanced.
     pub advances: u32,
-    /// The most workspaces and holds the model had at once.
+    /// The most workspaces and holds the domain had at once.
     pub most_workspaces: u32,
     pub most_holds: u32,
 }
 
-/// The facts the model told, by kind, as the loop drained them.
+/// The facts the domain told, by kind, as the loop drained them.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub struct Told {
     pub refused: u32,
@@ -260,7 +260,7 @@ pub struct World {
     now: Time,
     rng: Rng,
     settings: Settings,
-    model: Model,
+    domain: Domain,
     stage: Stage<Limits, Event, Request>,
     wire: Schedule<Delivery>,
     disk: Checkout,
@@ -320,7 +320,7 @@ impl World {
             now: Time::ZERO,
             rng,
             settings,
-            model: Model::new(&settings.checkout),
+            domain: Domain::new(&settings.checkout),
             stage: Stage::new(settings.checkout, MAX_OUT, MAX_OUT + SLACK),
             wire: Schedule::new(),
             disk,
@@ -351,13 +351,13 @@ impl World {
         self.stats
     }
 
-    /// The facts the model told, and how many it dropped for want of room.
+    /// The facts the domain told, and how many it dropped for want of room.
     #[must_use]
     pub fn told(&self) -> (Told, u64) {
-        (self.told, self.model.facts_lost())
+        (self.told, self.domain.facts_lost())
     }
 
-    /// What crossed between the model and the world, in order, with times.
+    /// What crossed between the domain and the world, in order, with times.
     #[must_use]
     pub fn trace(&self) -> &[String] {
         self.trace.lines()
@@ -425,10 +425,10 @@ impl World {
         self.deliver();
         while let Some(event) = self.stage.next_event() {
             self.log(&format!("checkout <- {}", describe_event(&event)));
-            temper_worker_model_checkout::step(&mut self.model, &self.stage.env, event, &mut self.stage.out);
+            temper_worker_domain_checkout::step(&mut self.domain, &self.stage.env, event, &mut self.stage.out);
         }
         // The facts, drained as the shell would write them out.
-        while let Some(fact) = self.model.pop_fact() {
+        while let Some(fact) = self.domain.pop_fact() {
             self.tell(fact);
         }
         // What the steps asked for, submitted at the end of the iteration.
@@ -437,12 +437,12 @@ impl World {
         }
         // What the iteration held at its most, before the reclaim point.
         let limits = self.settings.checkout;
-        assert!(self.model.workspaces() <= limits.workspaces, "the cache stays within its bound");
-        assert!(self.model.holds() <= limits.workspaces * 2, "holds stay within their slots");
+        assert!(self.domain.workspaces() <= limits.workspaces, "the cache stays within its bound");
+        assert!(self.domain.holds() <= limits.workspaces * 2, "holds stay within their slots");
         assert!(self.workspaces.len() <= usize::try_from(limits.workspaces).expect("small"), "no more directories");
-        self.stats.most_workspaces = self.stats.most_workspaces.max(self.model.workspaces());
-        self.stats.most_holds = self.stats.most_holds.max(self.model.holds());
-        self.model.reclaim();
+        self.stats.most_workspaces = self.stats.most_workspaces.max(self.domain.workspaces());
+        self.stats.most_holds = self.stats.most_holds.max(self.domain.holds());
+        self.domain.reclaim();
     }
 
     fn deliver(&mut self) {
@@ -721,14 +721,14 @@ impl World {
         }
     }
 
-    // What the model asks for.
+    // What the domain asks for.
 
     fn request(&mut self, request: Request) {
         self.log(&format!("checkout -> {}", describe_request(&request)));
         match request {
             Request::Held { client, hold } => {
                 let name = client.raw();
-                let client = self.clients.get_mut(&name).expect("the model answers a client that asked");
+                let client = self.clients.get_mut(&name).expect("the domain answers a client that asked");
                 assert_eq!(client.operation, Some(Operation::Prepare), "a hold is for a prepare in flight");
                 assert!(client.hold.is_none(), "a prepare is held once");
                 client.hold = Some(hold);
@@ -744,7 +744,7 @@ impl World {
     }
 
     fn prepared(&mut self, name: u64, prepared: Prepared) {
-        let client = self.clients.get_mut(&name).expect("the model answers a client that asked");
+        let client = self.clients.get_mut(&name).expect("the domain answers a client that asked");
         assert_eq!(client.operation.take(), Some(Operation::Prepare), "a prepare ends once");
         assert!(client.prepared.is_none(), "a client prepares once");
         client.prepared = Some(prepared);
@@ -813,7 +813,7 @@ impl World {
     }
 
     fn pushed(&mut self, name: u64, outcome: Outcome, saved: bool) {
-        let client = self.clients.get_mut(&name).expect("the model answers a client that asked");
+        let client = self.clients.get_mut(&name).expect("the domain answers a client that asked");
         let landings = match outcome {
             Outcome::Pushed { landings } => landings,
             Outcome::Refused { refusal } => {
@@ -889,7 +889,7 @@ impl World {
     }
 
     fn released(&mut self, name: u64) {
-        let client = self.clients.get_mut(&name).expect("the model answers a client that asked");
+        let client = self.clients.get_mut(&name).expect("the domain answers a client that asked");
         assert_eq!(client.release, Release::Asked, "a release answers one asked for, once");
         assert!(client.operation.is_none(), "an operation ends before its hold is released");
         client.release = Release::Done;
@@ -1147,8 +1147,8 @@ impl World {
 
     /// The invariants of a world where nothing is left to happen.
     fn assert_settled(&self) {
-        assert_eq!(self.model.holds(), 0, "every hold has been released and reclaimed");
-        assert_eq!(self.model.idle(), self.model.workspaces(), "every workspace is idle");
+        assert_eq!(self.domain.holds(), 0, "every hold has been released and reclaimed");
+        assert_eq!(self.domain.idle(), self.domain.workspaces(), "every workspace is idle");
         assert!(self.ops.is_empty() && self.cancel_lost.is_empty(), "every operation has ended, once");
         assert!(self.held_by.is_empty(), "no workspace is held");
         assert!(self.wire.is_empty() && !self.stage.has_events(), "nothing is on its way");
@@ -1165,7 +1165,7 @@ impl World {
                 );
             }
         }
-        if self.model.facts_lost() == 0 {
+        if self.domain.facts_lost() == 0 {
             self.assert_told();
         }
     }

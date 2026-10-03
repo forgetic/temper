@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
 
-use temper_engine_model_forge::{
-    self as sub, Ci, Config as Deployment, Event, Fact, Failure, Item, Limits, Model, News, Record, Request, Why,
+use temper_engine_domain_forge::{
+    self as sub, Ci, Config as Deployment, Domain, Event, Fact, Failure, Item, Limits, News, Record, Request, Why,
     Written,
 };
-use temper_forge_model::api::{self as forge_api, Checks, File, Git, Permission, Protection, Setup};
-use temper_forge_model::{self as forge, Config, Skew};
+use temper_forge_domain::api::{self as forge_api, Checks, File, Git, Permission, Protection, Setup};
+use temper_forge_domain::{self as forge, Config, Skew};
 use temper_lib::{Duration, Env, Queue, ReplyTo, Rng, Time, Token};
 use temper_world::{Key, Ledger, Referee, Schedule, Span, Stage, Trace};
 
@@ -33,7 +33,7 @@ pub const LABELS: [&[u8]; 6] = [TRACKING, HAND_IN, WORKING, WAITING, b"bug", b"f
 /// The labels the engine owns: the only ones it adds or removes.
 pub const OWNED: [&[u8]; 4] = [TRACKING, HAND_IN, WORKING, WAITING];
 
-/// Room in the sub-model's output queue beyond what one step may emit.
+/// Room in the child domain's output queue beyond what one step may emit.
 const SLACK: u32 = 2;
 
 /// The world's own bounds: lines of its trace, and deliveries scheduled at
@@ -41,7 +41,7 @@ const SLACK: u32 = 2;
 const TRACE: usize = 400_000;
 const DELIVERIES: u32 = 20_000;
 
-/// What the sub-model told, by kind: each must be reached by the sweep.
+/// What the child domain told, by kind: each must be reached by the sweep.
 pub const ENDINGS: [&str; 27] = [
     "announced: found",
     "announced: missing",
@@ -72,7 +72,7 @@ pub const ENDINGS: [&str; 27] = [
     "limited",
 ];
 
-/// The sub-model's limits in a calm world: room for everything.
+/// The child domain's limits in a calm world: room for everything.
 const CALM: Limits = Limits {
     repositories: 2,
     items: 16,
@@ -318,7 +318,7 @@ enum Delivery {
     Deadline(u64),
 }
 
-/// An engine call the protocol layer has out: the sub-model's name for it,
+/// An engine call the protocol layer has out: the child domain's name for it,
 /// what it asked, the engine's life it belongs to, its deadline, and whether
 /// it timed out.
 #[derive(Debug)]
@@ -352,12 +352,12 @@ pub struct World {
     rng: Rng,
     settings: Settings,
 
-    model: Model,
+    domain: Domain,
     stage: Stage<Limits, Event, Request>,
     /// The engine's lives: one more each restart.
     life: u64,
 
-    forge: forge::Model,
+    forge: forge::Domain,
     forge_env: Env<Config>,
     forge_out: Queue<forge::Request>,
 
@@ -366,12 +366,12 @@ pub struct World {
     /// The parent's deliveries in flight, which a restart withdraws.
     pending: Vec<Key>,
     /// The engine's calls out, by the protocol layer's names; those of the
-    /// sub-model, by its own (each ended once in a life); people's and
+    /// child domain, by its own (each ended once in a life); people's and
     /// workers' calls.
     calls: Ledger<u64, Out>,
     owned: Ledger<(u64, Token), ()>,
     theirs: Ledger<u64, Theirs>,
-    /// The reads and writes the parent has in the sub-model, each answered
+    /// The reads and writes the parent has in the child domain, each answered
     /// once.
     reads: Ledger<u64, ()>,
     writes: Ledger<u64, ()>,
@@ -390,7 +390,7 @@ impl World {
         let mut rng = Rng::new(settings.seed);
         let max_out = sub::max_out(&settings.limits);
         let forge_seed = rng.next_u64();
-        let mut forge = forge::Model::new(&settings.forge, forge_seed);
+        let mut forge = forge::Domain::new(&settings.forge, forge_seed);
         for name in REPOSITORIES {
             let setup = Setup {
                 name: name.into(),
@@ -433,11 +433,11 @@ impl World {
         for _ in 0..settings.restarts {
             referee.inject(Time::ZERO.saturating_add(settings.restart_at.draw(&mut rng)), Stimulus::Restart);
         }
-        let model_seed = rng.next_u64();
+        let domain_seed = rng.next_u64();
         let mut world = World {
             now: Time::ZERO,
             rng: Rng::new(rng.next_u64()),
-            model: Model::new(&settings.limits, deployment(), model_seed),
+            domain: Domain::new(&settings.limits, deployment(), domain_seed),
             stage: Stage::new(settings.limits, max_out, max_out + SLACK),
             life: 0,
             forge,
@@ -447,7 +447,7 @@ impl World {
             scheduled: 0,
             pending: Vec::new(),
             calls: Ledger::new("engine call"),
-            owned: Ledger::new("sub-model call"),
+            owned: Ledger::new("child domain call"),
             theirs: Ledger::new("person's call"),
             reads: Ledger::new("fresh read"),
             writes: Ledger::new("write"),
@@ -473,12 +473,12 @@ impl World {
             parent: self.parent.tally(),
             people: self.people.tally(),
             forge: Some(self.forge.tally()),
-            facts_lost: self.model.facts_lost(),
+            facts_lost: self.domain.facts_lost(),
             ..self.stats.clone()
         }
     }
 
-    /// What crossed between the sub-model and the world, in order, with
+    /// What crossed between the child domain and the world, in order, with
     /// times.
     #[must_use]
     pub fn trace(&self) -> &[String] {
@@ -506,7 +506,7 @@ impl World {
                 self.assert_settled();
                 return;
             }
-            let next = self.next_time().expect("the sub-model polls, so there is always a next time");
+            let next = self.next_time().expect("the child domain polls, so there is always a next time");
             assert!(next > self.now, "time moves forward");
             self.now = next;
         }
@@ -538,15 +538,15 @@ impl World {
         }
         // The ready list first, at the start of the stage, then the events,
         // then the alarms.
-        while self.stage.has_room() && self.model.is_ready() {
-            sub::resume(&mut self.model, &self.stage.env, &mut self.stage.out);
+        while self.stage.has_room() && self.domain.is_ready() {
+            sub::resume(&mut self.domain, &self.stage.env, &mut self.stage.out);
         }
         while let Some(event) = self.stage.next_event() {
             self.log(format!("forge <- {}", describe(&event)));
-            sub::step(&mut self.model, &self.stage.env, event, &mut self.stage.out);
+            sub::step(&mut self.domain, &self.stage.env, event, &mut self.stage.out);
         }
-        while self.stage.has_room() && self.model.is_due(now) {
-            sub::fire(&mut self.model, &self.stage.env, &mut self.stage.out);
+        while self.stage.has_room() && self.domain.is_due(now) {
+            sub::fire(&mut self.domain, &self.stage.env, &mut self.stage.out);
         }
         while let Some(request) = self.stage.out.pop() {
             self.request(request);
@@ -554,7 +554,7 @@ impl World {
         while let Some(observation) = self.forge.pop_observation() {
             self.observe(Seen::Forge(observation));
         }
-        while let Some(fact) = self.model.pop_fact() {
+        while let Some(fact) = self.domain.pop_fact() {
             self.stats.facts += 1;
             match fact {
                 Fact::Found { .. } => self.end("found"),
@@ -573,9 +573,9 @@ impl World {
             }
         }
         // The reclaim point.
-        self.model.reclaim();
+        self.domain.reclaim();
         self.forge.reclaim();
-        self.stats.peak = self.stats.peak.max(self.model.items());
+        self.stats.peak = self.stats.peak.max(self.domain.items());
     }
 
     /// Hands `delivery` to its destination.
@@ -605,10 +605,10 @@ impl World {
         }
     }
 
-    /// The parent's action reaches the sub-model, or the world.
+    /// The parent's action reaches the child domain, or the world.
     fn act(&mut self, action: Action) {
         match action {
-            Action::Model(event) => {
+            Action::Domain(event) => {
                 match &event {
                     Event::Read { owner, .. } => self.reads.open(owner.raw(), ()),
                     Event::Untrack { item } => self.observe(Seen::Untracked { item: *item }),
@@ -758,13 +758,13 @@ impl World {
         }
     }
 
-    /// Terminal for the sub-model's call `call`.
+    /// Terminal for the child domain's call `call`.
     fn answer(&mut self, call: Token, result: Result<sub::api::Answer, sub::api::Error>) {
         self.owned.end((self.life, call));
         self.stage.push(Event::Answered { call, result });
     }
 
-    /// What the sub-model asked for.
+    /// What the child domain asked for.
     fn request(&mut self, request: Request) {
         self.log(format!("forge -> {}", describe_request(&request)));
         match request {
@@ -800,7 +800,7 @@ impl World {
         }
     }
 
-    /// What the sub-model told its parent: counted, and seen by the referee.
+    /// What the child domain told its parent: counted, and seen by the referee.
     fn tell(&mut self, request: &Request) {
         match request {
             Request::Call { .. } => unreachable!("calls go to the forge"),
@@ -893,7 +893,7 @@ impl World {
         }
     }
 
-    /// The engine restarts: a new sub-model, starting cold, and a parent
+    /// The engine restarts: a new child domain, starting cold, and a parent
     /// that remembers only what the forge holds. The calls the old one had
     /// out still reach the forge; their answers are dropped.
     fn restart(&mut self) {
@@ -901,7 +901,7 @@ impl World {
         self.log("the engine restarts".to_owned());
         self.life += 1;
         let seed = self.rng.next_u64();
-        self.model = Model::new(&self.settings.limits, deployment(), seed);
+        self.domain = Domain::new(&self.settings.limits, deployment(), seed);
         let max_out = sub::max_out(&self.settings.limits);
         self.stage = Stage::new(self.settings.limits, max_out, max_out + SLACK);
         self.stage.tick(self.now);
@@ -912,7 +912,7 @@ impl World {
         for key in std::mem::take(&mut self.pending) {
             self.withdraw(key);
         }
-        self.owned = Ledger::new("sub-model call");
+        self.owned = Ledger::new("child domain call");
         self.reads = Ledger::new("fresh read");
         self.writes = Ledger::new("write");
         self.parent.restart();
@@ -963,30 +963,30 @@ impl World {
 
     fn has_work_now(&self) -> bool {
         self.stage.has_events()
-            || self.model.is_ready()
-            || self.model.is_due(self.now)
+            || self.domain.is_ready()
+            || self.domain.is_due(self.now)
             || self.wire.is_due(self.now)
             || self.forge.is_due(self.now)
             || self.referee.is_due(self.now)
     }
 
     fn next_time(&self) -> Option<Time> {
-        [self.wire.next_time(), self.model.next_deadline(), self.forge.next_deadline(), self.referee.next_deadline()]
+        [self.wire.next_time(), self.domain.next_deadline(), self.forge.next_deadline(), self.referee.next_deadline()]
             .into_iter()
             .flatten()
             .min()
     }
 
-    /// Whether the world has settled between the sub-model's passes: people
+    /// Whether the world has settled between the child domain's passes: people
     /// done, the parent waiting on nothing, nothing in flight anywhere, and
     /// the referee expecting nothing more.
     fn is_quiet(&self) -> bool {
         self.people.is_done()
             && self.wire.is_empty()
             && !self.parent.is_waiting()
-            && self.model.calls() == 0
-            && self.model.reads() == 0
-            && self.model.writes() == 0
+            && self.domain.calls() == 0
+            && self.domain.reads() == 0
+            && self.domain.writes() == 0
             && self.forge.calls() == 0
             && self.forge.deliveries() == 0
             && match self.referee.verdict() {
@@ -1005,7 +1005,7 @@ impl World {
         self.theirs.assert_settled();
         self.reads.assert_settled();
         self.writes.assert_settled();
-        assert_eq!(self.model.calls_out(), 0, "seed {seed}: no call out");
+        assert_eq!(self.domain.calls_out(), 0, "seed {seed}: no call out");
         let tally = self.forge.tally();
         assert_eq!(tally.forgotten, 0, "seed {seed}: the forge kept every call it took: {tally:?}");
         self.observe(Seen::Settled);

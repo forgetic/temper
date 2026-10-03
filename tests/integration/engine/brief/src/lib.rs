@@ -1,18 +1,18 @@
-//! A simulated world for the engine's brief sub-model (programming-model.md,
-//! 4.5 and 11; engine-model.md, section 9): the brief, with the world as its
+//! A simulated world for the engine's brief child domain (programming-model.md,
+//! 4.5 and 11; engine-domain.md, section 9): the brief, with the world as its
 //! parent, driven by one loop, deterministically from a seed.
 //!
 //! The world owns the clock and the seeds, and stands in for everything
 //! around the brief: the top level that asks for briefs (of every kind of
 //! section, some required, some past the limits, with lists of dependencies
 //! longer than a source may name, faster than they are answered), and the
-//! forge sub-model, the notes sub-model and the configuration behind it, as
-//! sources that serve each read after a latency with content drawn (text of
+//! forge child domain, the notes child domain and the configuration behind it,
+//! as sources that serve each read after a latency with content drawn (text of
 //! one- to four-byte characters, in parts; an index of lines for the notes),
 //! fitted to the read's bounds as the read asks, more than a brief's budget
-//! often; some late past a brief's deadline, some just at it, some failing
-//! and some past the read's bounds. A random world draws the brief's limits
-//! too, to their tightest now and then.
+//! often; some late past a brief's deadline, some just at it, some failing and
+//! some past the read's bounds. A random world draws the brief's limits too, to
+//! their tightest now and then.
 //!
 //! It checks the contracts as it goes: every brief is answered exactly once,
 //! and every read ended exactly once. Its referee ([`referee`]) holds the

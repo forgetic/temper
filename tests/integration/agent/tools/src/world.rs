@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use temper_agent_model_tools as tools;
-use temper_agent_model_tools::{Authority, Call, Done, Expect, Fault, Grants, Op, Outcome, Refusal, Repo, Var};
+use temper_agent_domain_tools as tools;
+use temper_agent_domain_tools::{Authority, Call, Done, Expect, Fault, Grants, Op, Outcome, Refusal, Repo, Var};
 use temper_checkout_fake::Checkout;
 use temper_lib::{Duration, ReplyTo, Rng, Time, Token};
 use temper_world::{Key, Ledger, Schedule, Span, Stage, Trace};
@@ -173,7 +173,7 @@ pub struct World {
     settings: Settings,
     checkout: Checkout,
 
-    tools: tools::Model,
+    tools: tools::Domain,
     stage: Stage<tools::Limits, tools::Event, tools::Request>,
 
     /// Deliveries in flight, whose count names sessions and calls too.
@@ -212,7 +212,7 @@ impl World {
             rng: Rng::new(settings.seed),
             settings,
             checkout,
-            tools: tools::Model::new(&settings.tools),
+            tools: tools::Domain::new(&settings.tools),
             stage: Stage::new(settings.tools, tools::max_out(&settings.tools), room),
             wire: Schedule::new(),
             sessions: BTreeMap::new(),

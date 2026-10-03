@@ -1,5 +1,5 @@
-//! The host's parent's capabilities, scripted: what the checkout sub-model
-//! does with workspaces and the agent sub-model with agents and their runs,
+//! The host's parent's capabilities, scripted: what the checkout child domain
+//! does with workspaces and the agent child domain with agents and their runs,
 //! played from a seed. It speaks the host's vocabulary, as the top level will
 //! once it translates the two siblings', and plays their contracts:
 //!
@@ -31,7 +31,7 @@
 use std::collections::BTreeMap;
 
 use temper_lib::{Duration, Rng, Token};
-use temper_worker_model_host::{
+use temper_worker_domain_host::{
     Access, AgentFailure, Ask, Event, Finish, Landing, Limits, Missing, Preparation, Request, RunFailure, Workspace,
 };
 use temper_world::Span;

@@ -1,17 +1,17 @@
 [package]
-name = "temper-agent-model-session-fuzzy"
-description = "The session sub-model of the agent at random: sweeps of noisy worlds"
+name = "temper-agent-domain-session-fuzzy"
+description = "The session child domain of the agent at random: sweeps of noisy worlds"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
 [dev-dependencies]
-temper-agent-model-session.workspace = true
-temper-agent-model-session-tests.workspace = true
-temper-agent-model-tools.workspace = true
+temper-agent-domain-session.workspace = true
+temper-agent-domain-session-tests.workspace = true
+temper-agent-domain-tools.workspace = true
 temper-lib.workspace = true
-temper-llm-model.workspace = true
+temper-llm-domain.workspace = true
 
 # Ordinary Rust (programming-model.md, 10.2), so not the step crates' lints.
 # tests/fuzzy/clippy.toml bans what would make a run unrepeatable.

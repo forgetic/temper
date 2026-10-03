@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Write;
 
-use temper_engine_model_brief::{
-    self as brief, Body, Budgets, Commit, Event, Fact, Fit, Gathered, Item, Keep, Kind, Limits, Model, Part, Read,
+use temper_engine_domain_brief::{
+    self as brief, Body, Budgets, Commit, Domain, Event, Fact, Fit, Gathered, Item, Keep, Kind, Limits, Part, Read,
     Refusal, Request, Source, Unread, Wanted,
 };
 use temper_lib::bytes::find;
@@ -237,7 +237,7 @@ pub struct World {
     rng: Rng,
     settings: Settings,
 
-    model: Model,
+    domain: Domain,
     stage: Stage<Limits, Event, Request>,
     /// The renders on their way to the brief, in order: their brief, and
     /// their sections' sources.
@@ -268,7 +268,7 @@ impl World {
         let mut world = World {
             now: Time::ZERO,
             rng: Rng::new(settings.seed),
-            model: Model::new(&settings.limits),
+            domain: Domain::new(&settings.limits),
             stage: Stage::new(settings.limits, max_out, max_out + SLACK),
             renders: VecDeque::new(),
             wire: Schedule::new(),
@@ -361,19 +361,19 @@ impl World {
             };
             self.log(format!("brief <- {}", describe(&event)));
             let before = self.stage.out.len();
-            brief::step(&mut self.model, &self.stage.env, event, &mut self.stage.out);
+            brief::step(&mut self.domain, &self.stage.env, event, &mut self.stage.out);
             self.stepped(before, render);
         }
-        while self.stage.has_room() && self.model.is_due(now) {
+        while self.stage.has_room() && self.domain.is_due(now) {
             let before = self.stage.out.len();
-            brief::fire(&mut self.model, &self.stage.env, &mut self.stage.out);
+            brief::fire(&mut self.domain, &self.stage.env, &mut self.stage.out);
             self.stepped(before, None);
         }
         // What the steps asked for, at the end of the iteration.
         while let Some(request) = self.stage.out.pop() {
             self.request(request);
         }
-        while let Some(fact) = self.model.pop_fact() {
+        while let Some(fact) = self.domain.pop_fact() {
             self.stats.facts += 1;
             match fact {
                 Fact::Expired { .. } => self.end("expired"),
@@ -386,7 +386,7 @@ impl World {
             }
         }
         // The reclaim point.
-        self.model.reclaim();
+        self.domain.reclaim();
     }
 
     /// A step, or an alarm, has ended: the referee sees what it emitted,
@@ -695,11 +695,11 @@ impl World {
         self.stage.has_events()
             || self.wire.is_due(self.now)
             || self.referee.is_due(self.now)
-            || self.model.is_due(self.now)
+            || self.domain.is_due(self.now)
     }
 
     fn next_time(&self) -> Option<Time> {
-        [self.wire.next_time(), self.referee.next_deadline(), self.model.next_deadline()].into_iter().flatten().min()
+        [self.wire.next_time(), self.referee.next_deadline(), self.domain.next_deadline()].into_iter().flatten().min()
     }
 
     /// The invariants of a world where nothing is left to happen.
@@ -708,9 +708,9 @@ impl World {
         assert!(self.renders.is_empty() && self.asked.is_empty() && self.answering.is_empty(), "nothing is pending");
         self.briefs.assert_settled();
         self.reads.assert_settled();
-        assert_eq!(self.model.briefs(), 0, "the brief holds no brief");
-        assert_eq!(self.model.reads(), 0, "the brief holds no read");
-        assert_eq!(self.model.next_deadline(), None, "no deadline runs");
+        assert_eq!(self.domain.briefs(), 0, "the brief holds no brief");
+        assert_eq!(self.domain.reads(), 0, "the brief holds no read");
+        assert_eq!(self.domain.next_deadline(), None, "no deadline runs");
         self.referee.assert_passed(self.settings.seed);
     }
 }

@@ -1,12 +1,12 @@
-//! End to end at the checkout sub-model: the checkout, its scripted clients,
+//! End to end at the checkout child domain: the checkout, its scripted clients,
 //! a fake forge and a fake disk, talking through a simulated world.
 
 use temper_lib::{Duration, Time};
-use temper_worker_model_checkout::git::Missing;
-use temper_worker_model_checkout::{Failure, Landing, Limits, Prepared, Refusal};
-use temper_worker_model_checkout_tests::client::{Interrupt, Pick, Plan};
-use temper_worker_model_checkout_tests::translate;
-use temper_worker_model_checkout_tests::{LIMITS, Settings, Span, Told, World, noisy, submit_noisily};
+use temper_worker_domain_checkout::git::Missing;
+use temper_worker_domain_checkout::{Failure, Landing, Limits, Prepared, Refusal};
+use temper_worker_domain_checkout_tests::client::{Interrupt, Pick, Plan};
+use temper_worker_domain_checkout_tests::translate;
+use temper_worker_domain_checkout_tests::{LIMITS, Settings, Span, Told, World, noisy, submit_noisily};
 
 const ITERATIONS: u32 = 100_000;
 

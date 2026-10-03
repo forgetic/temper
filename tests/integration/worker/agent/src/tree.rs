@@ -1,7 +1,7 @@
 //! Process trees, standing in for io and the protocol layer below the agent
-//! sub-model: each spawn is a contained tree of a scripted agent process
+//! child domain: each spawn is a contained tree of a scripted agent process
 //! ([`crate::script`]) and the children it started, with a channel over its
-//! pipes. It speaks the agent sub-model's io vocabulary, through the world's
+//! pipes. It speaks the agent child domain's io vocabulary, through the world's
 //! translations of the channel ([`crate::translate`]), and plays io's
 //! contracts:
 //!
@@ -18,7 +18,7 @@
 //!   has gone, after the exit's. What the agent wrote is still read to the
 //!   channel's end, and a request on a process that has gone ends at once.
 //!
-//! io's terminals reach the model each after a latency of its own: only the
+//! io's terminals reach the domain each after a latency of its own: only the
 //! reads of one channel keep their order, and a process's exit comes before
 //! its reap (the world's lanes).
 //!
@@ -28,7 +28,7 @@
 use std::collections::{BTreeMap, VecDeque};
 
 use temper_lib::{Duration, Rng, Time, Token};
-use temper_worker_model_agent::{Event, Request, Signal};
+use temper_worker_domain_agent::{Event, Request, Signal};
 use temper_world::Span;
 
 use crate::script::{self, Act, Agent, Heard, Plot, Said, Sizes, View};
@@ -60,11 +60,11 @@ pub struct Script {
 /// What the tree does next.
 #[derive(Debug)]
 pub enum Out {
-    /// An event for the model, `after` from now, and then a hop.
-    Model { after: Duration, event: Event },
+    /// An event for the domain, `after` from now, and then a hop.
+    Domain { after: Duration, event: Event },
     /// Something of the tree's own falls due `after` from now.
     Due { after: Duration, due: Due },
-    /// The agent the model names `owner` wrote `said` up its channel, now:
+    /// The agent the domain names `owner` wrote `said` up its channel, now:
     /// for a world whose agents do more than talk, such as edit files before
     /// they ask to push.
     Wrote { owner: Token, said: Said },
@@ -75,7 +75,7 @@ pub enum Out {
 pub enum Due {
     /// The agent of `process` wakes, for its wake `serial`.
     Wake { process: u64, serial: u64 },
-    /// What the model sent reaches the agent of `process`.
+    /// What the domain sent reaches the agent of `process`.
     Heard { process: u64, heard: Heard },
     /// A member of `process` exits.
     Exit { process: u64, member: Member },
@@ -123,13 +123,13 @@ struct Child {
 #[derive(Debug)]
 #[expect(clippy::struct_excessive_bools, reason = "what io knows of a process, each fact on its own")]
 struct Proc {
-    /// The model's name for it.
+    /// The domain's name for it.
     owner: Token,
     agent: Agent,
     /// The agent's process runs.
     main: bool,
     children: Vec<Child>,
-    /// What the agent wrote and the model has not read, each with when it is
+    /// What the agent wrote and the domain has not read, each with when it is
     /// through the pipe.
     up: VecDeque<(Time, Said)>,
     /// The agent reads its channel, and writes it; when the last message
@@ -137,7 +137,7 @@ struct Proc {
     stdin: bool,
     stdout: bool,
     down: Time,
-    /// A read is in flight; the channel up ended as the model read it.
+    /// A read is in flight; the channel up ended as the domain read it.
     reading: bool,
     ended: bool,
     /// A wait is in flight; the exit was told.
@@ -180,13 +180,13 @@ impl Tree {
         self.tally
     }
 
-    /// What the world reads of the agent the model names `owner`.
+    /// What the world reads of the agent the domain names `owner`.
     #[must_use]
     pub fn view(&self, owner: Token) -> View {
         self.find(owner).agent.view()
     }
 
-    /// Whether the agent the model names `owner` has stopped talking: its
+    /// Whether the agent the domain names `owner` has stopped talking: its
     /// process exited, it stopped reading its channel, or the channel up
     /// ended.
     #[must_use]
@@ -195,25 +195,25 @@ impl Tree {
         !proc.main || !proc.stdin || proc.ended
     }
 
-    /// Whether the agent the model names `owner` has exited and its tree is
+    /// Whether the agent the domain names `owner` has exited and its tree is
     /// empty.
     #[must_use]
     pub fn is_gone(&self, owner: Token) -> bool {
         self.find(owner).is_empty()
     }
 
-    /// Gives the agent the model names `owner` its world's `plot`, before
+    /// Gives the agent the domain names `owner` its world's `plot`, before
     /// it hears its start.
     pub fn plot(&mut self, owner: Token, plot: Plot) {
-        let proc = self.procs.values_mut().find(|proc| proc.owner == owner).expect("the model names a spawned agent");
+        let proc = self.procs.values_mut().find(|proc| proc.owner == owner).expect("the domain names a spawned agent");
         proc.agent.plot(plot);
     }
 
     fn find(&self, owner: Token) -> &Proc {
-        self.procs.values().find(|proc| proc.owner == owner).expect("the model names a spawned agent")
+        self.procs.values().find(|proc| proc.owner == owner).expect("the domain names a spawned agent")
     }
 
-    /// Takes one of the model's io requests.
+    /// Takes one of the domain's io requests.
     pub fn take(&mut self, now: Time, request: Request) -> Vec<Out> {
         match request {
             Request::Spawn { owner, workspace: _, deadline } => self.spawn(now, owner, deadline),
@@ -223,7 +223,7 @@ impl Tree {
                 let proc = self.proc(owner, process);
                 if !proc.main || !proc.stdin {
                     self.tally.unsent += 1;
-                    return vec![Out::Model { after: Duration::ZERO, event: Event::Unsent { owner } }];
+                    return vec![Out::Domain { after: Duration::ZERO, event: Event::Unsent { owner } }];
                 }
                 // Bytes come through a pipe in the order written.
                 let through = now.saturating_add(pipe).max(proc.down);
@@ -234,7 +234,7 @@ impl Tree {
                         after: through.saturating_since(now),
                         due: Due::Heard { process: process.raw(), heard },
                     },
-                    Out::Model { after: Duration::ZERO, event: Event::Sent { owner } },
+                    Out::Domain { after: Duration::ZERO, event: Event::Sent { owner } },
                 ]
             }
             Request::Read { owner, process } => {
@@ -252,7 +252,7 @@ impl Tree {
                     return Vec::new();
                 }
                 proc.exited = true;
-                vec![Out::Model { after: Duration::ZERO, event: Event::Exited { owner } }]
+                vec![Out::Domain { after: Duration::ZERO, event: Event::Exited { owner } }]
             }
             Request::Reap { owner, process } => {
                 let proc = self.proc(owner, process);
@@ -264,7 +264,7 @@ impl Tree {
                 assert!(proc.exited, "a reap follows its process's wait");
                 proc.reaped = true;
                 let detail = proc.detail.clone().into_boxed_slice();
-                vec![Out::Model { after: Duration::ZERO, event: Event::Reaped { owner, detail } }]
+                vec![Out::Domain { after: Duration::ZERO, event: Event::Reaped { owner, detail } }]
             }
             Request::Started { .. }
             | Request::Called { .. }
@@ -314,17 +314,17 @@ impl Tree {
             self.tally.unspawned += 1;
             self.tally.late_spawns += 1;
             let event = Event::Unspawned { owner, detail: detail.into_boxed_slice() };
-            return vec![Out::Model { after: left, event }];
+            return vec![Out::Domain { after: left, event }];
         }
         if self.rng.chance(self.script.unspawned) {
             self.tally.unspawned += 1;
             let event = Event::Unspawned { owner, detail: detail.into_boxed_slice() };
-            return vec![Out::Model { after, event }];
+            return vec![Out::Domain { after, event }];
         }
         self.names += 1;
         let process = self.names;
         let agent = Agent::new(self.agents, self.sizes, self.rng.next_u64());
-        let mut outs = vec![Out::Model { after, event: Event::Spawned { owner, process: Token::new(process) } }];
+        let mut outs = vec![Out::Domain { after, event: Event::Spawned { owner, process: Token::new(process) } }];
         let mut children = Vec::new();
         let count = self.rng.below(u64::from(self.script.children) + 1);
         for index in 0..usize::try_from(count).expect("fits") {
@@ -360,7 +360,7 @@ impl Tree {
 
     fn signal(&mut self, now: Time, owner: Token, process: Token, signal: Signal) -> Vec<Out> {
         let term = self.script.term.draw(&mut self.rng);
-        let mut outs = vec![Out::Model { after: Duration::ZERO, event: Event::Signalled { owner } }];
+        let mut outs = vec![Out::Domain { after: Duration::ZERO, event: Event::Signalled { owner } }];
         match signal {
             Signal::Terminate => self.tally.terminates += 1,
             Signal::Kill => self.tally.kills += 1,
@@ -436,14 +436,14 @@ impl Tree {
         if member == Member::Main && proc.waiting {
             proc.waiting = false;
             proc.exited = true;
-            outs.push(Out::Model { after: Duration::ZERO, event: Event::Exited { owner } });
+            outs.push(Out::Domain { after: Duration::ZERO, event: Event::Exited { owner } });
         }
         if proc.is_empty() && proc.reaping {
             assert!(proc.exited, "the exit is told before the reap");
             proc.reaping = false;
             proc.reaped = true;
             let detail = proc.detail.clone().into_boxed_slice();
-            outs.push(Out::Model { after: Duration::ZERO, event: Event::Reaped { owner, detail } });
+            outs.push(Out::Domain { after: Duration::ZERO, event: Event::Reaped { owner, detail } });
         }
         outs.extend(self.try_read(now, process));
         outs
@@ -472,13 +472,13 @@ impl Tree {
                     proc.up.clear();
                     self.tally.malformed += 1;
                 }
-                vec![Out::Model { after: Duration::ZERO, event: translate::up(owner, said) }]
+                vec![Out::Domain { after: Duration::ZERO, event: translate::up(owner, said) }]
             }
             None if !proc.writers() => {
                 proc.reading = false;
                 proc.ended = true;
                 self.tally.hangups += 1;
-                vec![Out::Model { after: Duration::ZERO, event: Event::Hangup { owner } }]
+                vec![Out::Domain { after: Duration::ZERO, event: Event::Hangup { owner } }]
             }
             None => Vec::new(),
         }

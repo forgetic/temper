@@ -1,15 +1,15 @@
 [package]
-name = "temper-engine-model-forge-fuzzy"
-description = "The forge sub-model of the engine at random: sweeps of random worlds"
+name = "temper-engine-domain-forge-fuzzy"
+description = "The forge child domain of the engine at random: sweeps of random worlds"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
 [dev-dependencies]
-temper-engine-model-forge.workspace = true
-temper-engine-model-forge-tests.workspace = true
-temper-forge-model.workspace = true
+temper-engine-domain-forge.workspace = true
+temper-engine-domain-forge-tests.workspace = true
+temper-forge-domain.workspace = true
 temper-lib.workspace = true
 temper-world.workspace = true
 

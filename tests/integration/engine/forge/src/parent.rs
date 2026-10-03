@@ -1,5 +1,5 @@
-//! The forge sub-model's parent, scripted: the engine's top level as the
-//! forge sub-model sees it, taking liberties the real one will not.
+//! The forge child domain's parent, scripted: the engine's top level as the
+//! forge child domain sees it, taking liberties the real one will not.
 //!
 //! It takes in what is handed in: it tracks the item, writes its record and
 //! projects its labels (the tracking label on, the hand-in label off). Each
@@ -26,8 +26,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use temper_engine_model_forge::api::{Answer, Error, State, Verdict};
-use temper_engine_model_forge::{
+use temper_engine_domain_forge::api::{Answer, Error, State, Verdict};
+use temper_engine_domain_forge::{
     Cause, Ci, Content, Event, Failure, Item, News, Read, Record, Request, View, Write, Written,
 };
 use temper_lib::{Duration, Rng, Time, Token};
@@ -64,9 +64,9 @@ pub struct Script {
 /// What the parent does, at a moment the world draws.
 #[derive(Debug)]
 pub enum Action {
-    /// An event for the sub-model.
-    Model(Event),
-    /// A write for the sub-model, which the referee hears is planned.
+    /// An event for the child domain.
+    Domain(Event),
+    /// A write for the child domain, which the referee hears is planned.
     Write { owner: u64, write: Write, resumed: Option<Cause>, plan: Planned },
     /// An item's run answers.
     Run(Item),
@@ -295,7 +295,7 @@ impl Parent {
         }
     }
 
-    /// What the sub-model told: what the parent does about it.
+    /// What the child domain told: what the parent does about it.
     pub fn told(&mut self, request: &Request) -> Vec<(Duration, Action)> {
         let mut actions = Vec::new();
         match request {
@@ -304,7 +304,7 @@ impl Parent {
                 if self.takes > 0 && !self.items.contains_key(item) && self.taking.insert(*item) {
                     self.takes -= 1;
                     self.tally.takes += 1;
-                    actions.push((self.soon(), Action::Model(Event::Track { item: *item })));
+                    actions.push((self.soon(), Action::Domain(Event::Track { item: *item })));
                 }
             }
             Request::Full { item } => {
@@ -315,7 +315,7 @@ impl Parent {
                 // What was refused is asked for again.
                 for item in std::mem::take(&mut self.refused) {
                     if !self.items.contains_key(&item) && self.taking.insert(item) {
-                        actions.push((self.soon(), Action::Model(Event::Track { item })));
+                        actions.push((self.soon(), Action::Domain(Event::Track { item })));
                     }
                 }
             }
@@ -394,7 +394,7 @@ impl Parent {
         let labels: Vec<Vec<u8>> = view.labels.iter().map(|label| label.to_vec()).collect();
         self.items.insert(item, Held { labels, through: None, running: false, on_hold: false });
         if let Some(pull) = self.changes.get(&item).and_then(|change| change.pull) {
-            actions.push((Duration::ZERO, Action::Model(Event::Link { item, pull: Some(pull) })));
+            actions.push((Duration::ZERO, Action::Domain(Event::Link { item, pull: Some(pull) })));
         }
         match view.record {
             Record::Missing => actions.push((Duration::ZERO, self.write(Intent::Record { item }))),
@@ -428,7 +428,7 @@ impl Parent {
             self.reads.insert(owner, Reading::Pull(item));
             actions.push((
                 self.soon(),
-                Action::Model(Event::Read { owner: Token::new(owner), read: Read::Pull { item: pull } }),
+                Action::Domain(Event::Read { owner: Token::new(owner), read: Read::Pull { item: pull } }),
             ));
         }
     }
@@ -493,7 +493,7 @@ impl Parent {
                 let owner = self.token();
                 self.reads.insert(owner, Reading::Outcome { comment, then });
                 let read = Read::Item { item, after: comment.saturating_sub(1) };
-                actions.push((Duration::ZERO, Action::Model(Event::Read { owner: Token::new(owner), read })));
+                actions.push((Duration::ZERO, Action::Domain(Event::Read { owner: Token::new(owner), read })));
             }
             Intent::Task { from, .. } => {
                 let Written::Created(number) = written else {
@@ -501,7 +501,7 @@ impl Parent {
                 };
                 let item = Item { repository: from.repository, number };
                 if self.taking.insert(item) {
-                    actions.push((self.soon(), Action::Model(Event::Track { item })));
+                    actions.push((self.soon(), Action::Domain(Event::Track { item })));
                 }
                 // The item it was made from waits on it.
                 let tasks = self.tasks.entry(from).or_default();
@@ -518,7 +518,7 @@ impl Parent {
                     return;
                 };
                 self.changes.insert(item, Change { branch, pull: Some(pull) });
-                actions.push((Duration::ZERO, Action::Model(Event::Link { item, pull: Some(pull) })));
+                actions.push((Duration::ZERO, Action::Domain(Event::Link { item, pull: Some(pull) })));
             }
             Intent::Merge { item, .. } => {
                 self.tally.merges += 1;
@@ -553,7 +553,7 @@ impl Parent {
             return actions;
         };
         self.tally.runs += 1;
-        actions.push((Duration::ZERO, Action::Model(Event::Took { item, through })));
+        actions.push((Duration::ZERO, Action::Domain(Event::Took { item, through })));
         if !held.on_hold {
             actions.push((Duration::ZERO, self.write(Intent::Record { item })));
         }
@@ -602,7 +602,7 @@ impl Parent {
             let owner = self.token();
             self.reads.insert(owner, Reading::Note { repository: item.repository, name: name.clone() });
             let read = Read::Page { repository: item.repository, name: name.into_boxed_slice() };
-            actions.push((self.soon(), Action::Model(Event::Read { owner: Token::new(owner), read })));
+            actions.push((self.soon(), Action::Domain(Event::Read { owner: Token::new(owner), read })));
         }
         if self.rng.chance(self.script.reads) {
             let owner = self.token();
@@ -618,7 +618,7 @@ impl Parent {
                 2 => Read::Statuses { repository: item.repository, commit: translate::commit(1), page: 1 },
                 _ => Read::Remarks { item, review: 1, page: 1 },
             };
-            actions.push((self.soon(), Action::Model(Event::Read { owner: Token::new(owner), read })));
+            actions.push((self.soon(), Action::Domain(Event::Read { owner: Token::new(owner), read })));
         }
         if self.rng.chance(self.script.closes) {
             actions.push((self.soon(), self.write(Intent::Close { item })));
@@ -693,7 +693,7 @@ impl Parent {
         Action::Write { owner, write, resumed: if resumed { Some(cause) } else { None }, plan }
     }
 
-    /// The sub-model's write for `intent`.
+    /// The child domain's write for `intent`.
     fn operation(&mut self, intent: &Intent) -> Write {
         match intent {
             Intent::Record { item } => {

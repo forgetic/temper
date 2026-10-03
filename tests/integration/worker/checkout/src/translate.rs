@@ -1,14 +1,14 @@
 //! Between the checkout's operations and the fakes, as the protocol layer
 //! and io would translate them: io names a workspace's directory by its token,
 //! and a repository's by the workspace's and the repository's name; a commit
-//! is the fake forge's count, in the first bytes of the model's hash.
+//! is the fake forge's count, in the first bytes of the domain's hash.
 
 use temper_checkout_fake::Checkout;
 use temper_checkout_fake::git::{self, Created, Pushed, Remote, What};
 use temper_lib::Token;
-use temper_worker_model_checkout::git::{Commit, Done, Fault, Missing, Op, Place, Want};
+use temper_worker_domain_checkout::git::{Commit, Done, Fault, Missing, Op, Place, Want};
 
-/// The model's name for the fake's commit `fake`.
+/// The domain's name for the fake's commit `fake`.
 #[must_use]
 pub fn commit(fake: u64) -> Commit {
     let mut raw = [0; 32];
@@ -16,7 +16,7 @@ pub fn commit(fake: u64) -> Commit {
     Commit::new(raw)
 }
 
-/// The fake's name for the model's `commit`.
+/// The fake's name for the domain's `commit`.
 #[must_use]
 pub fn fake(commit: Commit) -> u64 {
     let raw = commit.raw();

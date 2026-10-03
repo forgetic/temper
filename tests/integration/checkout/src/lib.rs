@@ -1,11 +1,11 @@
 //! A fake checkout: directories, files, symbolic links and special files in
 //! memory, and scripted commands that run in it, standing in for io's files
-//! and processes in the agent's model worlds (the tools' now, the session's
-//! and the whole agent's later). It shares no types with the model: a world
+//! and processes in the agent's domain worlds (the tools' now, the session's
+//! and the whole agent's later). It shares no types with the domain: a world
 //! translates between them, as a protocol layer would.
 //!
 //! Paths are absolute, as bytes without the leading slash (`work/temper/src`;
-//! the root is empty). The operations io offers the model resolve a path
+//! the root is empty). The operations io offers the domain resolve a path
 //! beneath a registered root as io does with `openat2(RESOLVE_BENEATH)`: a
 //! `..` that would climb above the root, or an absolute symbolic link, escapes
 //! and is refused; relative links are followed, up to a limit. Every change to
@@ -13,7 +13,7 @@
 //! gets a new inode.
 //!
 //! Beside it, [`git`] is git's working trees, directories of the checkout,
-//! for the worker's model worlds: what an agent's tools write there is what
+//! for the worker's domain worlds: what an agent's tools write there is what
 //! the worker commits. Their remotes are on a fake forge, which a world
 //! reaches for them through [`git::Remote`].
 
@@ -425,7 +425,7 @@ impl Checkout {
         }
     }
 
-    // What io does for the model, beneath a root.
+    // What io does for the domain, beneath a root.
 
     /// The content and version of the file at `path` beneath `root`, if it
     /// holds at most `max` bytes.

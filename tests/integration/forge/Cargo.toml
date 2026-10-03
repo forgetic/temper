@@ -1,5 +1,5 @@
 [package]
-name = "temper-forge-model-tests"
+name = "temper-forge-domain-tests"
 description = "The fake forge's tests that need ordinary Rust: its memory against its worst case"
 version.workspace = true
 edition.workspace = true
@@ -8,7 +8,7 @@ publish.workspace = true
 
 [dependencies]
 temper-lib.workspace = true
-temper-forge-model.workspace = true
+temper-forge-domain.workspace = true
 temper-world.workspace = true
 
 # Ordinary Rust (programming-model.md, 10.2), so not the step crates' lints.

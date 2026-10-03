@@ -1,5 +1,5 @@
-//! A simulated world for the worker's host sub-model (programming-model.md,
-//! 4.5 and 11; worker-model.md, sections 4 and 9): the host, with the world as
+//! A simulated world for the worker's host child domain (programming-model.md,
+//! 4.5 and 11; worker-domain.md, sections 4 and 9): the host, with the world as
 //! its parent, a scripted engine assigning it runs ([`engine`]), and the
 //! parent's capabilities scripted ([`parent`]): workspaces that prepare,
 //! push and save, and agents whose runs make host calls, yield, park, end,
@@ -9,7 +9,7 @@
 //! The world owns the clock and the seeds, and stands in for everything around
 //! the host: the top level that will route between it, the engine link and
 //! its siblings (its grace on losing contact, the report on coming back, and
-//! shutdown included), the checkout and agent sub-models, and the protocol
+//! shutdown included), the checkout and agent child domains, and the protocol
 //! layers below. It checks the contracts as it goes: every assignment is
 //! answered exactly once, a refused one at once and never admitted, one beyond
 //! the limits refused for what is beyond them; nothing is saved or released

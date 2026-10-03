@@ -1,7 +1,7 @@
 //! The plan in its world: scenarios, replay, and a sweep of random worlds.
 
-use temper_engine_model_plan_tests::script::Script;
-use temper_engine_model_plan_tests::{Settings, Stats, World};
+use temper_engine_domain_plan_tests::script::Script;
+use temper_engine_domain_plan_tests::{Settings, Stats, World};
 use temper_world::assert_replays;
 
 const ITERATIONS: u32 = 1_000_000;

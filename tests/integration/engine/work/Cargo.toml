@@ -1,5 +1,5 @@
 [package]
-name = "temper-engine-model-work-tests"
+name = "temper-engine-domain-work-tests"
 description = "The work hub's world: a simulation with a scripted parent playing the plan, the forge, the fleet, people and engine restarts"
 version.workspace = true
 edition.workspace = true
@@ -8,7 +8,7 @@ publish.workspace = true
 
 [dependencies]
 temper-lib.workspace = true
-temper-engine-model-work.workspace = true
+temper-engine-domain-work.workspace = true
 temper-world.workspace = true
 
 # Ordinary Rust (programming-model.md, 10.2), so not the step crates' lints.
