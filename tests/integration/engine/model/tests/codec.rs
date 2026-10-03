@@ -129,6 +129,7 @@ fn record() -> Record {
             decision: Some(Decided { decision: Decision::Rejected, at: Time::from_nanos(6) }),
             accepted: Some(Permission::Admin),
             accepting: Some(12),
+            wants: Some(Permission::Admin),
             snapshot: true,
             spent: 900,
         },

@@ -112,12 +112,13 @@ fn act(model: &Model, ask: &Ask) -> (u32, rules::Act) {
     }
 }
 
-/// The permission the rules want of whoever accepts what the item holds: a
-/// writer's, unless they said otherwise.
+/// The permission the rules want of whoever accepts what the item holds, as
+/// its record keeps it across restarts: a writer's, unless they said
+/// otherwise.
 fn wants(model: &Model, item: Item) -> rules::Permission {
     let wanted = match items::find(model, item) {
         Some(id) => match model.items.get(id) {
-            Some(entry) => entry.wants,
+            Some(entry) => entry.relations.wants,
             None => None,
         },
         None => None,
@@ -309,7 +310,7 @@ pub(crate) fn release_into(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) 
     if entry.relations.accepting.is_none() {
         entry.relations.decision = None;
         entry.relations.accepted = None;
-        entry.wants = None;
+        entry.relations.wants = None;
     }
     let item = entry.item;
     if reopen && let Some(pull) = entry.relations.pull {

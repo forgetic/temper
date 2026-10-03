@@ -99,8 +99,6 @@ pub(crate) struct Entry {
     /// The head the forge refused to merge for a conflict, which the
     /// working set may not show yet.
     pub(crate) conflicted: Option<[u8; 32]>,
-    /// The permission the rules want of whoever accepts what it holds.
-    pub(crate) wants: Option<Permission>,
     /// Its run prepared, or its application resumed, before the cold start
     /// was done, waits for it.
     pub(crate) waiting: bool,
@@ -356,7 +354,6 @@ impl Entry {
             blocked: false,
             merged: None,
             conflicted: None,
-            wants: None,
             waiting: false,
             holding: None,
             asides: 0,
@@ -404,6 +401,7 @@ pub(crate) fn relations(now: Time) -> Relations {
         decision: None,
         accepted: None,
         accepting: None,
+        wants: None,
         snapshot: false,
         spent: 0,
     }

@@ -921,6 +921,7 @@ fn put_relations(out: &mut Out, relations: &Relations) {
     out.option(relations.decision, put_decided);
     out.option(relations.accepted, put_permission);
     out.option(relations.accepting, put_u64);
+    out.option(relations.wants, put_permission);
     out.bool(relations.snapshot);
     out.u64(relations.spent);
 }
@@ -937,6 +938,7 @@ fn get_relations(input: &mut In<'_>) -> Option<Relations> {
         decision: input.option(get_decided)?,
         accepted: input.option(get_permission)?,
         accepting: input.option(get_u64)?,
+        wants: input.option(get_permission)?,
         snapshot: input.bool()?,
         spent: input.u64()?,
     })

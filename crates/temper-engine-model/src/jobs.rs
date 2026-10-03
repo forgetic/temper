@@ -168,7 +168,7 @@ fn decide(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) {
         // it is claimed (engine-model.md, section 7).
         plan::Due::Run(run) => match crate::runs::rule(model, env, id, &run) {
             rules::Decision::Accept { permission } => {
-                get_mut(model, id).wants = Some(permission);
+                get_mut(model, id).relations.wants = Some(permission);
                 model::keep(model, Fact::Ruled { item: get(model, id).item, refused: false });
                 work::Due::Hold { reason: translate::RUN_ACCEPTANCE }
             }
@@ -516,7 +516,7 @@ fn applied(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, fresh: Option<pl
                 return reject(model, env, id);
             }
             if person {
-                get_mut(model, id).wants = Some(model.config.rules.plan_acceptance);
+                get_mut(model, id).relations.wants = Some(model.config.rules.plan_acceptance);
                 return finish(model, env, id, Finish::Accepting);
             }
             if let Some((steps, lands, goal)) = made {
@@ -524,7 +524,7 @@ fn applied(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, fresh: Option<pl
                     rules::Decision::Allow => {}
                     rules::Decision::Accept { .. } if rejected => return reject(model, env, id),
                     rules::Decision::Accept { permission } => {
-                        get_mut(model, id).wants = Some(permission);
+                        get_mut(model, id).relations.wants = Some(permission);
                         return finish(model, env, id, Finish::Accepting);
                     }
                     rules::Decision::Wait | rules::Decision::Refuse => return finish(model, env, id, Finish::Failed),
@@ -752,7 +752,7 @@ fn ruled(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, decision: rules::D
         }
         rules::Decision::Accept { .. } if !action && rejected(get(model, id)) => reject(model, env, id),
         rules::Decision::Accept { permission } => {
-            get_mut(model, id).wants = Some(permission);
+            get_mut(model, id).relations.wants = Some(permission);
             finish(model, env, id, Finish::Accepting);
         }
         rules::Decision::Wait | rules::Decision::Refuse => finish(model, env, id, Finish::Failed),
@@ -1144,7 +1144,7 @@ fn finish(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, finish: Finish) {
         entry.relations.decision = None;
         entry.relations.accepted = None;
         entry.relations.accepting = None;
-        entry.wants = None;
+        entry.relations.wants = None;
     }
     if finish == Finish::Made && items::comment_of(applying.of).is_some() {
         entry.outcome = None;

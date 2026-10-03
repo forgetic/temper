@@ -109,6 +109,7 @@ pub fn record(hand: &Hand, created: Time) -> Record {
             decision: None,
             accepted: None,
             accepting: None,
+            wants: None,
             snapshot: false,
             spent: 0,
         },

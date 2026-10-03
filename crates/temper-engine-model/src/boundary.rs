@@ -178,6 +178,10 @@ pub struct Relations {
     /// person's acceptance. `None` for a decision on the step itself (a wait
     /// for one, a gate, a run or an action the rules held).
     pub accepting: Option<u64>,
+    /// The permission the rules want of whoever accepts what the item is
+    /// held for: kept in the record, as a person may accept it after a
+    /// restart.
+    pub wants: Option<Permission>,
     /// Whether the store holds the snapshot of a run that parked.
     pub snapshot: bool,
     /// The tokens its runs have spent.

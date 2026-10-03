@@ -861,17 +861,25 @@ struct World {
     /// How many more forge calls are answered, if the forge stops
     /// answering: those past it are lost.
     calls: Option<u32>,
+    /// The deployment's configuration, at every start.
+    config: fn() -> Config,
 }
 
 impl World {
     fn new() -> World {
+        World::configured(config)
+    }
+
+    /// A world whose deployment is configured as `config` says.
+    fn configured(config: fn() -> Config) -> World {
         World {
-            model: model(),
+            model: Model::new(config(), &LIMITS, 1, Time::ZERO),
             forge: Forge::new(),
             secs: 1,
             seen: List::with_capacity(1024),
             pending: Queue::with_capacity(1024),
             calls: None,
+            config,
         }
     }
 
@@ -946,7 +954,7 @@ impl World {
     /// The engine restarts: everything in memory is lost, and it starts
     /// cold on the forge as it is.
     fn restart(&mut self) {
-        self.model = model();
+        self.model = Model::new((self.config)(), &LIMITS, 1, Time::ZERO);
         self.calls = None;
         self.pending = Queue::with_capacity(1024);
         self.seen = List::with_capacity(1024);
@@ -2323,4 +2331,33 @@ fn a_released_session_takes_the_turn_it_never_had() {
     });
     world.wait(10);
     assert_eq!(assigned(world.seen.as_slice(), session).as_slice(), [1, 2, 3, 4], "released, it runs again");
+}
+
+/// A deployment whose plans landing on a protected branch an admin accepts.
+fn admin_plans() -> Config {
+    let mut config = config();
+    config.rules.plan_acceptance = Permission::Admin;
+    config
+}
+
+#[test]
+fn what_an_admin_must_accept_a_writer_may_not_after_a_restart() {
+    let mut world = World::configured(admin_plans);
+    world.settle();
+    let ask = Ask::Open { repository: 0, key: copy_of(b"k1"), title: copy_of(b"hi"), message: copy_of(b"hello") };
+    world.deliver(Event::Ask { reply_to: ReplyTo::new(Token::new(9)), person: ALICE, ask });
+    let hello = Hello { slots: 2, workstreams: Box::new([]), hosting: Box::new([]) };
+    world.deliver(Event::Hello { channel: Token::new(1), hello });
+    let session = Item { repository: 0, number: 1 };
+    world.deliver(Event::Answer { channel: Token::new(1), item: session, attempt: 1, answer: ended(proposal()) });
+    assert_eq!(held_for(&mut world, session), Some(work::Hold::Acceptance), "it waits for an admin");
+    world.restart();
+    // Alice may only write.
+    world.deliver(Event::Ask {
+        reply_to: ReplyTo::new(Token::new(70)),
+        person: ALICE,
+        ask: Ask::Accept { item: session },
+    });
+    assert!(replied(&world.seen, Reply::Refused(Refusal::Unpermitted)), "a writer may not accept it: {:?}", world.seen);
+    assert_eq!(held_for(&mut world, session), Some(work::Hold::Acceptance), "it still waits");
 }
