@@ -60,7 +60,7 @@ impl World {
         assert!(following.is_empty(), "the answers a hello lists as held follow it: {following:?} did not");
         self.worker.reclaim();
         let hosted = self.worker.host().hosted();
-        assert!(hosted <= self.settings.worker.host.slots, "runs stay within their slots");
+        assert!(hosted <= self.stage.env.limits.host.slots, "runs stay within their slots");
         self.stats.peak = self.stats.peak.max(hosted);
         let abandoned = self.worker.abandoned();
         if abandoned > self.abandoned {
@@ -221,7 +221,7 @@ impl World {
     /// followed by them.
     fn hello(&mut self, hello: &Hello) {
         assert!(self.up, "a hello goes on a channel open");
-        let slots = if self.shut { 0 } else { self.settings.worker.host.slots };
+        let slots = if self.shut { 0 } else { self.stage.env.limits.host.slots };
         assert_eq!(hello.slots, slots, "the hello says the worker's slots, none once it is shutting down");
         let listed: BTreeSet<Names> = hello.hosting.iter().map(|hosted| (hosted.run, hosted.attempt)).collect();
         assert_eq!(listed.len(), hello.hosting.len(), "a hello lists each run once");
@@ -631,7 +631,7 @@ impl World {
         self.stats.abandoned += self.worker.abandoned();
         self.stats.facts_lost += self.worker.facts_lost();
         self.stats.told_lost += self.worker.told_lost();
-        let limits = self.settings.worker;
+        let limits = self.settings.upgrade.unwrap_or(self.settings.worker);
         self.worker = Model::new(&limits, self.rng.next_u64());
         let max_out = worker::max_out(&limits);
         self.stage = Stage::new(limits, max_out, max_out + super::SPARE);

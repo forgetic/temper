@@ -51,7 +51,7 @@
 //! - **the shell:** which drains the facts and the run's facts for the
 //!   engine, and, in some worlds, tells the worker to shut down at a drawn
 //!   moment, stops it once it is done, and starts a new worker, cold, a
-//!   while later.
+//!   while later, which may take more than the last (an upgrade).
 //!
 //! It checks the worker's contracts as it goes: one dial at a time, and one
 //! terminal per git operation; every hello on a channel the worker holds

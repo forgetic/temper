@@ -207,28 +207,41 @@ fn a_hung_agent_is_stopped_by_the_watchdog() {
     assert!(total(&worlds, |stats| count(stats, "agent no progress")) > 0);
 }
 
-/// Another party moves the branch of every change while its run works: the
-/// run's push is rejected, and its run told. (The engine never learns the
-/// branch moved, so such a world does not settle: it runs for a while.)
+/// Another party moves the branch of every change once, while its run
+/// works: the run's push is rejected, and its run told; the engine learns
+/// where the branch went, and a later run lands the change.
 #[test]
 fn a_push_finds_its_branch_moved_by_another_party() {
-    let mut rejected = 0;
-    let mut moved = 0;
-    for seed in 0..1 {
-        let calm = Settings::calm(seed);
-        let mut world = World::new(Settings {
-            stories: vec![Story::Fix],
-            git: Git { advance: 1000, advance_after: Span::millis(0, 1_000), ..calm.git },
-            script: script::Script { step: Span::millis(2_000, 5_000), ..calm.script },
-            ..calm
-        });
-        world.run_for(Duration::from_secs(1_800), ITERATIONS);
-        let stats = world.stats();
-        rejected += stats.rejected;
-        moved += stats.pushed.get("moved").copied().unwrap_or(0);
+    let worlds = worlds(1, |calm| moving(calm.seed, 1));
+    assert!(total(&worlds, |stats| stats.rejected) > 0, "a push is rejected");
+    assert!(total(&worlds, |stats| stats.pushed.get("moved").copied().unwrap_or(0)) > 0, "its run is told");
+    assert_eq!(total(&worlds, |stats| ending(stats, "merged")), 1, "and the change lands");
+}
+
+/// The same, the branch moved under every run: each run's push is rejected
+/// and its outcome is stale. The engine runs the change again, run after
+/// run without bound, until the forge has no room for the outcomes and holds
+/// the change for its writes.
+#[test]
+#[ignore = "until the engine bounds the runs of a change whose outcomes keep going stale"]
+fn a_change_whose_branch_moves_under_every_run_is_run_a_bounded_number_of_times() {
+    let mut world = World::new(moving(0, u32::MAX));
+    world.run_for(Duration::from_secs(3 * 3_600), ITERATIONS);
+    let stats = world.stats();
+    assert!(stats.rejected > 0, "a push is rejected");
+    let assigned = ending(&stats, "assigned");
+    assert!(assigned < 20, "the change runs a bounded number of times, not {assigned}");
+}
+
+/// A fix whose branch another party moves `moves` times, each while one of
+/// its runs works.
+fn moving(seed: u64, moves: u32) -> Settings {
+    let calm = Settings::only(seed, &[Story::Fix]);
+    Settings {
+        git: Git { advance: 1000, advance_after: Span::millis(0, 1_000), moves, ..calm.git },
+        script: script::Script { step: Span::millis(2_000, 5_000), ..calm.script },
+        ..calm
     }
-    assert!(rejected > 0, "a push is rejected");
-    assert!(moved > 0, "its run is told");
 }
 
 /// A change into a base the forge does not have: its first checkout creates
@@ -302,15 +315,24 @@ fn a_run_a_person_stops_is_cancelled_and_its_calls_answered_unavailable() {
     assert!(total(&worlds, |stats| stats.unavailable) > 0);
 }
 
+/// A worker that takes charters smaller than the engine's sessions give
+/// refuses them; it shuts down a while later, and the worker that takes
+/// over takes them.
 #[test]
 fn an_assignment_beyond_the_workers_limits_is_refused_invalid() {
-    // A worker that takes charters smaller than the engine's sessions give.
     let settings = Settings::only(3, &[Story::Hello]);
     let limits = settings.worker;
     let small = Limits { host: temper_worker_model::host::Limits { charter_bytes: 256, ..limits.host }, ..limits };
-    let mut world = World::new(Settings { worker: small, ..settings });
-    world.run_for(Duration::from_secs(600), ITERATIONS);
-    assert!(count(&world.stats(), "refused invalid") > 0, "{:?}", world.stats().answers);
+    let mut world = World::new(Settings {
+        worker: small,
+        upgrade: Some(limits),
+        shutdowns: 1000,
+        shutdown_at: Span::millis(60_000, 90_000),
+        ..settings
+    });
+    world.run(ITERATIONS);
+    let stats = world.stats();
+    assert!(count(&stats, "refused invalid") > 0 && count(&stats, "ended") > 0, "{:?}", stats.answers);
 }
 
 #[test]
@@ -346,12 +368,13 @@ fn a_seed_replays_to_the_same_run() {
 }
 
 /// A session whose runs fail until it is held, then released: the release
-/// wakes it, though it cleared the turn it had claimed, and it runs again.
+/// wakes it, though it cleared the turn it had claimed, and it runs again,
+/// until a run of it ends.
 #[test]
 fn a_session_released_after_its_runs_failed_runs_again() {
-    let settings = fated(Settings::only(5, &[Story::Hello]), Fates { failed: 1, ..NONE });
+    let settings = fated(Settings::only(2, &[Story::Hello]), Fates { ended: 1, failed: 2, ..NONE });
     let mut world = World::new(Settings { engine: temper_engine_model_tests::deployment::LIMITS, ..settings });
-    world.run_for(Duration::from_secs(3 * 3_600), ITERATIONS);
+    world.run(ITERATIONS);
     let stats = world.stats();
     assert!(ending(&stats, "released") > 0, "the caretaker released it: {stats:?}");
     assert!(ending(&stats, "assigned") > 3, "and it ran again: {:?}", stats.endings);

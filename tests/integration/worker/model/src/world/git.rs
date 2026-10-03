@@ -60,6 +60,8 @@ pub struct Git {
     pub advance: u32,
     pub advance_after: Span,
     pub deletes: u32,
+    /// The most times another party moves any one branch.
+    pub moves: u32,
 }
 
 /// The forge user of another party, who moves branches under
@@ -93,7 +95,7 @@ impl World {
 
     pub(super) fn start_op(&mut self, owner: Token, op: Op, deadline: Time) {
         assert!(!self.closed.contains(&owner), "nothing of git runs for a run that has answered");
-        let limits = self.settings.worker.checkout;
+        let limits = self.stage.env.limits.checkout;
         let timeout = if op.is_remote() { limits.remote_timeout } else { limits.local_timeout };
         assert_eq!(deadline, self.now.saturating_add(timeout), "an operation's deadline is by where it runs");
         if let Some(identity) = io::identity(&op) {
@@ -290,9 +292,11 @@ impl World {
 
     /// Another party moves `branch` of `remote`, if it is anywhere.
     pub(super) fn advance(&mut self, remote: &[u8], branch: &[u8]) {
-        if self.forge.branch(remote, branch).is_none() {
+        let moved = self.moved.entry((remote.to_vec(), branch.to_vec())).or_default();
+        if self.forge.branch(remote, branch).is_none() || *moved >= self.settings.git.moves {
             return;
         }
+        *moved += 1;
         self.stats.advanced += 1;
         let content = format!("another party, {}", self.stats.advanced);
         let env = Env { now: self.now, limits: self.settings.forge };

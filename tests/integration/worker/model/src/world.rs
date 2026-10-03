@@ -79,10 +79,11 @@ pub struct Settings {
     pub release: bool,
     /// The chance, per mille, that the shell tells the worker to shut down, at
     /// a moment drawn from `shutdown_at`; once it is done, a new worker starts
-    /// a drawn `comeback` later.
+    /// a drawn `comeback` later, with the limits `upgrade` if it says some.
     pub shutdowns: u32,
     pub shutdown_at: Span,
     pub comeback: Span,
+    pub upgrade: Option<Limits>,
 }
 
 impl Settings {
@@ -125,6 +126,7 @@ impl Settings {
             shutdowns: 0,
             shutdown_at: Span::millis(10_000, 120_000),
             comeback: Span::millis(1_000, 30_000),
+            upgrade: None,
         }
     }
 
@@ -343,6 +345,7 @@ const GIT: Git = Git {
     advance: 0,
     advance_after: Span::millis(0, 10_000),
     deletes: 0,
+    moves: u32::MAX,
 };
 
 /// Calm process trees: no failures, no children.
@@ -694,6 +697,8 @@ pub struct World {
     save_branches: BTreeSet<Vec<u8>>,
     saves: BTreeMap<(Vec<u8>, Vec<u8>), u64>,
     edits: u64,
+    /// How often another party moved each branch, by remote and branch.
+    moved: BTreeMap<(Vec<u8>, Vec<u8>), u32>,
 
     // The channel between them.
     wire: Schedule<Delivery>,
@@ -746,7 +751,9 @@ impl World {
     #[must_use]
     pub fn new(settings: Settings) -> World {
         let limits = settings.worker;
-        assert!(worker::worst_case(&limits).is_some(), "the shell refuses limits it cannot provision");
+        for limits in [Some(limits), settings.upgrade].into_iter().flatten() {
+            assert!(worker::worst_case(&limits).is_some(), "the shell refuses limits it cannot provision");
+        }
         assert!(engine::worst_case(&settings.engine).is_some(), "the shell refuses limits it cannot provision");
         let mut rng = Rng::new(settings.seed);
         let mut forge = forge::Model::new(&settings.forge, rng.next_u64());
@@ -784,6 +791,7 @@ impl World {
             save_branches: BTreeSet::new(),
             saves: BTreeMap::new(),
             edits: 0,
+            moved: BTreeMap::new(),
             wire: Schedule::new(),
             scheduled: 0,
             lanes: [Time::ZERO; 4],
@@ -926,11 +934,18 @@ impl World {
             }
             let next = self.next_time().expect("the engine polls, so there is always a next time");
             if next > until {
+                self.assert_holding();
                 return;
             }
             self.now = next;
         }
         panic!("seed {}: the world did not reach {until:?} in {iterations} iterations", self.settings.seed);
+    }
+
+    /// Checks what holds of a world at any moment: the referees hold.
+    fn assert_holding(&self) {
+        self.stories.assert_holding(self.settings.seed);
+        self.hosting.assert_holding(self.settings.seed);
     }
 
     /// One iteration of the loop: what is due is delivered, then each model's
@@ -951,7 +966,7 @@ impl World {
         }
         self.referee_fire();
         if let Some(since) = self.down_since
-            && self.now >= since.saturating_add(self.settings.worker.grace)
+            && self.now >= since.saturating_add(self.stage.env.limits.grace)
         {
             self.graced = Some(self.now);
         }
