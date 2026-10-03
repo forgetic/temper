@@ -1,11 +1,14 @@
 # Performance
 
 Provisional, 2026-10-03. Whether the memory strategy of skein's
-`programming-model.md` (section 6: counted entities, owned bytes, the
-worst case checked at startup) costs temper anything that matters, where
-it could, and what to do about each case. It reviews the strategy against
-temper's workload; it adds no mechanics of its own. Each fix belongs in
-the document or crate it changes, and moves there when it is made.
+`docs/foundation/programming-model.md` (section 6: counted entities,
+owned bytes, the worst case checked at startup) costs temper anything
+that matters, where it could, and what to do about each case. Why the
+strategy is what it is, what it gives up, and the byte budget it keeps
+in reserve are in skein's `docs/foundation/notes.md`. This document
+reviews the strategy against temper's workload; it adds no mechanics of
+its own. Each fix belongs in the document or crate it changes, and moves
+there when it is made.
 
 ## 1. In one page
 
@@ -22,7 +25,7 @@ the document or crate it changes, and moves there when it is made.
   | Bytes of unknown length (3) | quadratic copying, if done naively | two lib containers | small | before the protocol layer |
   | Copy at emission, every turn (4) | peak memory, up to three copies of a transcript | count the copies; encode in pieces | small | with the protocol layer |
   | The general allocator (5) | page faults, fragmentation | glibc tuning, or another allocator, in the shell | small | after measuring |
-  | A worst case of maximums (6) | memory headroom, not speed | the byte budget of programming-model.md, 6.3 | moderate | only if it bites |
+  | A worst case of maximums (6) | memory headroom, not speed | the byte budget of notes.md | moderate | only if it bites |
 
 - **Only the first needs action before more is built.** The others are
   accounting to add with the protocol layer, or measurements to take once
@@ -67,10 +70,9 @@ Nothing does either today. Domain code builds bytes in one pass:
 `translate::concat` (`crates/temper-engine-domain/src/translate.rs:339`)
 adds up the lengths, then writes once. The pieces that need joining all
 live in the protocol layer, which is not written yet. Below each machine,
-the carry-over is already safe: skein's lib, where temper's lib is
-moving with the stream machines (HTTP, server-sent events, JSON), has an
+the carry-over is already safe: skein's lib, which temper uses, has an
 `Intake`, a buffer allocated once at its cap that delivers each demand as
-a box of exactly its length.
+a box of exactly its length (programming-model.md, 4.3).
 
 **Fix: two more lib containers,** each with its `worst_case`, for what
 happens above the intake:
@@ -89,13 +91,13 @@ happens above the intake:
     but a provider's deltas are a few bytes each: it would make one
     allocation per piece, and need a cap on pieces that is hard to
     choose.
-- **`ByteRing`,** which `programming-model.md` (10.2) lists in lib and no
-  lib has yet: a buffer of fixed size, made once, that keeps the last N
-  bytes written, each write overwriting the oldest, where an intake
-  refuses past its cap instead. A command's output fills its head first,
-  a capped buffer of `shell_head` bytes; the rest goes through a ring of
-  `shell_tail` bytes, and what falls out of the ring is counted as
-  dropped. At exit the ring is read out, oldest first, as the tail.
+- **`ByteRing`,** a container lib does not have yet: a buffer of fixed
+  size, made once, that keeps the last N bytes written, each write
+  overwriting the oldest, where an intake refuses past its cap instead. A
+  command's output fills its head first, a capped buffer of `shell_head`
+  bytes; the rest goes through a ring of `shell_tail` bytes, and what
+  falls out of the ring is counted as dropped. At exit the ring is read
+  out, oldest first, as the tail.
 
 Both are small modules, written in skein's lib before the first machine
 that joins pieces, and they change no existing code.
@@ -104,7 +106,7 @@ that joins pieces, and they change no existing code.
 
 `complete` (`crates/temper-agent-domain-session/src/session.rs:1318`)
 copies the whole transcript on every turn, message by message and block
-by block, as 6.2 of the programming model says it must: the session keeps
+by block, as programming-model.md (6.2) says it must: the session keeps
 the transcript, and the protocol layer owns the copy. Over a session the
 copying grows with the square of the number of turns.
 
@@ -167,9 +169,10 @@ the option to take if memory ever matters.
 
 ## 5. The general allocator
 
-The programming model accepts the general allocator in the hot path (6.1
-and 6.3): allocation time is not constant, and fragmentation can push the
-resident size above the live bytes. With glibc:
+The memory strategy accepts the general allocator in the hot path, and
+notes.md counts it among what the strategy gives up: allocation time is
+not constant, and fragmentation can push the resident size above the
+live bytes. With glibc:
 
 - an allocation above the mmap threshold (128 KB to start) is its own
   `mmap`, page faults as it is filled and a `munmap` when freed;
@@ -182,9 +185,10 @@ resident size above the live bytes. With glibc:
   above the live bytes.
 
 The engine is the process this could affect; an agent process lives for
-one run. **Measure first,** as 6.3 says: the simulator's counting
-allocator gives the live bytes, and a load run of the real shell gives
-the resident size to compare them with. **If the gap matters,** in order:
+one run. **Measure first,** as programming-model.md (6.3) says: the
+simulator's counting allocator gives the live bytes, and a load run of
+the real shell gives the resident size to compare them with. **If the
+gap matters,** in order:
 
 1. tune glibc with no code at all, through its tunables in the service's
    environment: `GLIBC_TUNABLES=glibc.malloc.mmap_threshold=…:glibc.malloc.trim_threshold=…`.
@@ -199,9 +203,9 @@ the resident size to compare them with. **If the gap matters,** in order:
    heap, not only its top;
 4. or give the shell another `#[global_allocator]` (jemalloc, mimalloc),
    which keeps allocations of a size together and returns unused pages
-   over time. It is a one-line change that adds a dependency
-   `programming-model.md` (2.1) does not allow today, so the departure is
-   recorded there.
+   over time. It is a one-line change, but it adds a dependency that
+   programming-model.md (2.1) does not allow today, so taking it starts
+   with a change to that rule, in skein.
 
 None of these touches step code: the binary chooses the allocator, and
 step crates only allocate.
@@ -216,15 +220,16 @@ to about 100 MB. That costs headroom, not speed, and it bites only if one
 process should run many sessions with contexts of a million tokens at
 once.
 
-**Fix, if it bites:** the byte budget the programming model keeps as its
-fallback (6.3).
+**Fix, if it bites:** the byte budget, the fallback notes.md keeps open
+for a worst case too large to provision.
 
-- For io's queued output it is ordinary backpressure: io grants room
-  within a global budget, as the programming model describes.
+- For io's queued output it is ordinary backpressure: io grants room only
+  within a global budget, as notes.md describes, so pressure turns into
+  the backpressure chain (programming-model.md, section 7).
 - For sessions it is harder. If sessions charged a shared pool as they
   grew, one could run out partway through its work because of the others,
-  which is the refusal in the middle that section 7 of the programming
-  model rules out. Done right, a session is granted bytes from the pool
+  which is the refusal in the middle that programming-model.md rules out
+  (section 7). Done right, a session is granted bytes from the pool
   when it opens, and perhaps again between turns, where waiting is an
   ordinary state. That touches the agent domain's top level, the session
   crate and their worlds: a few days' work, after a design decision.
