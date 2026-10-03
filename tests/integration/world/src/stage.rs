@@ -2,11 +2,11 @@ use std::collections::VecDeque;
 
 use skein_lib::{Env, Queue, Time, Wall};
 
-/// A domain as the shell drives it (programming-model.md, 7): its environment,
-/// the events on their way to it, and the queue its steps and alarms emit
-/// into. A step or an alarm runs only while the queue has room for the most
-/// one may emit, so a slow consumer holds events back instead of overflowing
-/// the queue.
+/// A domain as the shell drives it (programming-model.md, section 2): its
+/// environment, the events on their way to it, and the queue its steps and
+/// alarms emit into. A step or an alarm runs only while the queue has room for
+/// the most one may emit, so a slow consumer holds events back instead of
+/// overflowing the queue.
 ///
 /// The world calls the domain itself, with `env` and `out`: for each event
 /// [`Stage::next_event`] hands it, then for each alarm due while

@@ -30,6 +30,9 @@ documentation in this sense: they are code, and clippy checks them.
 
 ## 2. The two test suites
 
+The suites are those of skein's `docs/foundation/testing-strategy.md`
+(section 8); `docs/design/testing.md` (6.1) says what they hold in temper.
+
 - **The default suite** is every crate's unit tests and `tests/integration`:
   focused tests of expected behaviour (scenarios, referee tests, replay,
   facts changing nothing, memory against the worst case), and a cheap

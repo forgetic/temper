@@ -8,15 +8,15 @@
 //! answers at once, an answer that lets the session start its next batch, a
 //! close that withdraws a call whose sub-agent the run closes in turn. Two of
 //! the run's records therefore reach a session only from the ready list
-//! (programming-model.md, 2): a `Return`, which the peer's delegated call
-//! holds as its answer, and a `Close`, which the peer holds. The loop drains
-//! the list with [`resume`] at the start of the domain's stage in a later
-//! iteration, after the reclaim point, so a session starts at most one batch
-//! of delegated calls an iteration, and a close cascades down the sub-agent
-//! tree one level an iteration. A session takes either in any state it can be
-//! in when it comes (it waits for each delegated call's answer, and takes a
-//! close in any state, dropping it once it has ended). The run's `Open` and
-//! `Say` go at once: neither leads back (a session just opened or continued
+//! (programming-model.md, section 2): a `Return`, which the peer's delegated
+//! call holds as its answer, and a `Close`, which the peer holds. The loop
+//! drains the list with [`resume`] at the start of the domain's stage in a
+//! later iteration, after the reclaim point, so a session starts at most one
+//! batch of delegated calls an iteration, and a close cascades down the
+//! sub-agent tree one level an iteration. A session takes either in any state
+//! it can be in when it comes (it waits for each delegated call's answer, and
+//! takes a close in any state, dropping it once it has ended). The run's `Open`
+//! and `Say` go at once: neither leads back (a session just opened or continued
 //! makes no call and does not yield in that step), and a `Say` must reach the
 //! session while it is still yielded, before its time can run out.
 //!

@@ -260,8 +260,8 @@ charters or outcomes.
   from its grants.
 - **No chains within a step.** An answer that comes back in the step that
   asked for it (a call the tools refuse at their entrance, one the run
-  answers at once) waits on the ready list (programming-model.md, 2), so
-  what one step emits and holds stays bounded.
+  answers at once) waits on the ready list (programming-model.md,
+  section 2), so what one step emits and holds stays bounded.
 - **Everything in flight can be stopped.** Every tool call has a deadline,
   and an opener can abort its session, which cancels what is in flight and
   waits for it to settle (programming-model.md, 5.3).

@@ -1,4 +1,4 @@
-# What the step crates may not use: skein's docs/design/programming-model.md, section 10.
+# What the step crates may not use: skein's docs/foundation/programming-model.md, section 10.
 #
 # Applies to every crate below this directory that has no clippy.toml of its
 # own. Ordinary Rust (the simulators and test harnesses) has its own

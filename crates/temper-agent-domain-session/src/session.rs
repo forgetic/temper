@@ -90,14 +90,14 @@
 //! (reclaimed only at the reclaim point) would outgrow its slabs. So a step
 //! starts one batch at most, and a batch the tools answer entirely within the
 //! step that started it rests (Resting): its results are kept, and the
-//! session goes on the domain's ready list (programming-model.md, 2), held as
-//! its state rather than as a queued record. The loop drains the ready list
-//! with [`crate::resume`] at the start of the domain's stage in a later
+//! session goes on the domain's ready list (programming-model.md, section 2),
+//! held as its state rather than as a queued record. The loop drains the ready
+//! list with [`crate::resume`] at the start of the domain's stage in a later
 //! iteration, after the runs the batch ended have been reclaimed; a session
 //! that rests while the list is drained waits for the next iteration, so the
-//! chain never goes on before the reclaim point. A session therefore holds
-//! the runs of two batches at most in an iteration (one ending and the next),
-//! and each step, alarm and resume emits a bounded number of requests.
+//! chain never goes on before the reclaim point. A session therefore holds the
+//! runs of two batches at most in an iteration (one ending and the next), and
+//! each step, alarm and resume emits a bounded number of requests.
 //!
 //! Wherever the table calls the LLM (`complete`), the session first checks its
 //! budget and its transcript, and ends instead: as out of budget, naming the
@@ -280,9 +280,9 @@ pub(crate) enum Alarm {
     Retry { session: Id<Session> },
 }
 
-/// The sessions that rest (programming-model.md, 2), each at most once: those
-/// that rested before the last reclaim point, which [`crate::resume`] starts
-/// again, and those that rested since, which wait for the next.
+/// The sessions that rest (programming-model.md, section 2), each at most once:
+/// those that rested before the last reclaim point, which [`crate::resume`]
+/// starts again, and those that rested since, which wait for the next.
 #[derive(Debug)]
 pub(crate) struct Ready {
     now: Set<Id<Session>>,
