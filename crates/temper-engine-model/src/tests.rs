@@ -391,6 +391,7 @@ struct Note {
     author: u64,
     revision: u64,
     mark: api::Mark,
+    body: Box<[u8]>,
     decoded: Option<crate::boundary::Decoded>,
 }
 
@@ -477,14 +478,21 @@ impl Forge {
         item
     }
 
-    fn post(&mut self, item: Item, author: u64, mark: api::Mark, payload: Option<crate::boundary::Payload>) -> u64 {
+    fn post(
+        &mut self,
+        item: Item,
+        author: u64,
+        mark: api::Mark,
+        body: Box<[u8]>,
+        payload: Option<crate::boundary::Payload>,
+    ) -> u64 {
         self.comments += 1;
         let id = self.comments;
         let decoded = decoded(id, payload);
         let now = self.now;
         let issue = self.issue(item).expect("a comment is on an issue the forge has");
         issue.updated = now;
-        issue.comments.push(Note { id, author, revision: 1, mark, decoded }).unwrap();
+        issue.comments.push(Note { id, author, revision: 1, mark, body, decoded }).unwrap();
         id
     }
 
@@ -540,7 +548,7 @@ impl Forge {
                 created: Time::ZERO,
                 revision: note.revision,
                 mark: copy_mark(&note.mark),
-                body: Box::new([]),
+                body: note.body.clone(),
             };
             comments.push(comment).unwrap();
         }
@@ -571,14 +579,20 @@ impl Forge {
                 if self.times_out(item, &body) {
                     return (Err(api::Error::Timeout), decoded);
                 }
-                let mark = match body {
-                    api::Body::Record { position, nonce, .. } => api::Mark::Record { position, nonce },
-                    api::Body::Text(_) | api::Body::Payload(_) => match key {
-                        Some(key) => api::Mark::Key { key, person },
-                        None => api::Mark::None,
+                let (mark, text) = match body {
+                    api::Body::Record { position, nonce, .. } => {
+                        (api::Mark::Record { position, nonce }, Box::default())
+                    }
+                    api::Body::Text(text) => match key {
+                        Some(key) => (api::Mark::Key { key, person }, text),
+                        None => (api::Mark::None, text),
+                    },
+                    api::Body::Payload(_) => match key {
+                        Some(key) => (api::Mark::Key { key, person }, Box::default()),
+                        None => (api::Mark::None, Box::default()),
                     },
                 };
-                let id = self.post(item, ENGINE, mark, payload);
+                let id = self.post(item, ENGINE, mark, text, payload);
                 Ok(api::Answer::Commented { id, revision: 1 })
             }
             api::Op::EditComment { number, id, body } => {
@@ -2105,4 +2119,43 @@ fn a_late_answer_after_a_restart_never_moves_the_branch_back() {
     let id = crate::items::find(&world.model, change).unwrap();
     let branch = world.model.items.get(id).unwrap().relations.branch;
     assert_eq!(branch, Some([2; 32]), "the branch stays where the repair pushed it");
+}
+
+/// The text of the comments section of the brief of `item`'s attempt
+/// `attempt`, as the workers were sent it.
+fn comments_briefed(seen: &[Request], item: Item, attempt: u64) -> Option<Box<[u8]>> {
+    for request in seen {
+        if let Request::Assign { assignment, .. } = request
+            && assignment.item == item
+            && assignment.attempt == attempt
+        {
+            for section in &assignment.charter.brief {
+                if section.kind == brief::Kind::Comments
+                    && let brief::Body::Text(text) = &section.body
+                {
+                    return Some(text.clone());
+                }
+            }
+        }
+    }
+    None
+}
+
+#[test]
+fn messages_a_brief_has_no_room_for_reach_the_next_turn() {
+    let (mut world, session) = World::session();
+    world.deliver(Event::Answer { channel: Token::new(1), item: session, attempt: 1, answer: replied_answer() });
+    // Two messages, each most of the comments' budget, while no turn runs.
+    let first: Box<[u8]> = Box::from([b'a'; 50].as_slice());
+    let second: Box<[u8]> = Box::from([b'b'; 50].as_slice());
+    for (key, text, reply_to) in [(&b"m1"[..], first.clone(), 40_u64), (&b"m2"[..], second.clone(), 41)] {
+        let ask = Ask::Message { item: session, key: copy_of(key), message: text };
+        world.deliver(Event::Ask { reply_to: ReplyTo::new(Token::new(reply_to)), person: ALICE, ask });
+    }
+    world.deliver(Event::Hint { repository: 0, item: Some(session.number), commit: None, branch: None });
+    world.wait(60);
+    assert_eq!(comments_briefed(world.seen.as_slice(), session, 2), Some(first), "the oldest message, whole");
+    world.deliver(Event::Answer { channel: Token::new(1), item: session, attempt: 2, answer: replied_answer() });
+    world.wait(60);
+    assert_eq!(comments_briefed(world.seen.as_slice(), session, 3), Some(second), "the next turn has the other");
 }

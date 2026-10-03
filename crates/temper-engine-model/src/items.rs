@@ -272,6 +272,9 @@ pub(crate) struct Live {
     /// Whether its worker bounced an event: what it took is then only what
     /// its brief had.
     pub(crate) bounced: bool,
+    /// The last comment its brief carried, if people's comments after it
+    /// did not fit the brief: those are not taken, and go to the next run.
+    pub(crate) comments: Option<u64>,
 }
 
 /// An attempt adopted after a restart, and the inbox position its claim's
@@ -923,8 +926,9 @@ pub(crate) fn pending(entry: &Entry, limits: &Limits) -> List<plan::Inbound> {
 
 /// What the attempt in flight took of the inbox, as its answer came: what
 /// was there when it was claimed, and what was delivered to it in order
-/// after, unless its worker bounced one. Those go; the inbox position moves
-/// past the forge's news among them.
+/// after, unless its worker bounced one, up to the first person's comment
+/// its brief had no room for. Those go; the inbox position moves past the
+/// forge's news among them.
 pub(crate) fn took(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) {
     let Some(entry) = model.items.get_mut(id) else { return };
     let Some(live) = entry.live else { return };
@@ -944,7 +948,7 @@ pub(crate) fn took(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) {
     let mut comment = entry.since;
     for _ in 0..entry.inbox.len() {
         let Some((seq, noted)) = entry.inbox.first() else { break };
-        if *seq > through {
+        if *seq > through || !carried(noted, live.comments) {
             break;
         }
         let seq = *seq;
@@ -970,6 +974,20 @@ pub(crate) fn took(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) {
     }
     if let Some(through) = news {
         route::forge_step(model, env, forge::Event::Took { item, through });
+    }
+}
+
+/// Whether the inbox event `noted` reached a run whose brief carried
+/// people's comments through the comment `comments`, if it did not carry
+/// them all: a comment after it did not, unless it was relayed.
+fn carried(noted: &Noted, comments: Option<u64>) -> bool {
+    let Some(last) = comments else { return true };
+    match noted.inbound {
+        Inbound::News(forge::News::Comment { id, .. }) => noted.delivered || id <= last,
+        Inbound::News(forge::News::Reviews { .. } | forge::News::Pull { .. })
+        | Inbound::Finished { .. }
+        | Inbound::Held { .. }
+        | Inbound::Decided { .. } => true,
     }
 }
 

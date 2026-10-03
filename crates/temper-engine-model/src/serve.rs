@@ -5,9 +5,10 @@
 //!   item's record, composed as the call goes out; an outcome posted; a
 //!   note's page.
 //! - **A brief's reads** (engine-model.md, section 9): the item and the
-//!   comments since its runs' last turn, CI failures and reviews on its pull
-//!   request's head, and how that head stands against its base, read from
-//!   the forge; its earlier attempts and its plan's status from its record;
+//!   comments since its runs' last turn (people's, the oldest first, whole,
+//!   as many as fit: the rest wait for the next run, which takes them), CI
+//!   failures and reviews on its pull request's head, and how that head
+//!   stands against its base, read from the forge; its earlier attempts and its plan's status from its record;
 //!   the notes' index from the notes; a template from the configuration.
 //!   Each is cut to what the brief asked for. Its dependencies' outcomes
 //!   are not read yet: that section is missing.
@@ -355,17 +356,15 @@ fn brief_got(
             let api::Answer::Item { item, .. } = answer else { return failed(model, env, owner) };
             found.push(translate::concat(&[&item.title, b"\n\n", &item.body])).is_ok()
         }
-        brief::Source::Comments { .. } => {
-            let api::Answer::Item { comments, .. } = answer else { return failed(model, env, owner) };
-            for comment in &comments {
-                let theirs = match &comment.mark {
-                    api::Mark::None => comment.author != engine,
-                    api::Mark::Key { person, .. } => person.is_some(),
-                    api::Mark::Record { .. } | api::Mark::Mangled => false,
-                };
-                if theirs && found.push(copy_of(&comment.body)).is_err() {
-                    break;
-                }
+        brief::Source::Comments { item, .. } => {
+            let api::Answer::Item { comments, more, .. } = answer else { return failed(model, env, owner) };
+            let carried = carry(&comments, more, engine, bounds, &mut found);
+            if let Some(id) = items::find(model, translate::from_brief(*item))
+                && let Some(entry) = model.items.get_mut(id)
+                && let Some(live) = entry.live.as_mut()
+                && !live.started
+            {
+                live.comments = carried;
             }
             true
         }
@@ -408,6 +407,43 @@ fn brief_got(
     let slices = slices(&found);
     let got = cut(slices.as_slice(), bounds);
     answer_brief(model, env, owner, got);
+}
+
+/// People's comments in a brief, into `found`: the oldest first, whole, as
+/// many as fit the read's bytes, and at least the first, cut as the brief
+/// cuts it. The last comment carried, if any did not fit or were not read:
+/// a run's answer takes only what its brief carried, and the rest goes to
+/// the next run, so people's messages are never cut from a brief unseen
+/// (the cut keeps the end, which would drop the oldest).
+fn carry(
+    comments: &[api::Comment],
+    more: bool,
+    engine: u64,
+    bounds: Bounds,
+    found: &mut List<Box<[u8]>>,
+) -> Option<u64> {
+    let room = u64::from(bounds.bytes);
+    let mut used: u64 = 0;
+    let mut last: Option<u64> = None;
+    for comment in comments {
+        let theirs = match &comment.mark {
+            api::Mark::None => comment.author != engine,
+            api::Mark::Key { person, .. } => person.is_some(),
+            api::Mark::Record { .. } | api::Mark::Mangled => false,
+        };
+        if !theirs {
+            last = Some(comment.id);
+            continue;
+        }
+        let size = len(&comment.body);
+        let fits = found.is_empty() || used.saturating_add(size) <= room;
+        if !fits || found.push(copy_of(&comment.body)).is_err() {
+            return Some(last.unwrap_or(0));
+        }
+        used = used.saturating_add(size);
+        last = Some(comment.id);
+    }
+    if more { Some(last.unwrap_or(0)) } else { None }
 }
 
 fn slices(found: &List<Box<[u8]>>) -> List<&[u8]> {

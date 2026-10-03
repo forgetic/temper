@@ -50,7 +50,7 @@ pub(crate) fn start(model: &mut Model, env: &Env<Limits>, item: Item, attempt: u
     let entry = get_mut(model, id);
     let Some(due) = entry.due.take() else { unreachable!("the hub starts the run it was told is due") };
     let start = entry.next.saturating_sub(1);
-    entry.live = Some(Live { attempt, start, started: false, bounced: false });
+    entry.live = Some(Live { attempt, start, started: false, bounced: false, comments: None });
     entry.grants = Some(due.grants);
     entry.resumed = None;
     // The rules were asked as the run was decided; what was spent since may
@@ -468,7 +468,7 @@ pub(crate) fn adopt(model: &mut Model, env: &Env<Limits>, item: Item, attempt: u
     // What it took before the restart is what its claim's record says: of
     // what this life's inbox holds, it takes nothing, and the next run has
     // it all again.
-    entry.live = Some(Live { attempt, start, started: true, bounced: true });
+    entry.live = Some(Live { attempt, start, started: true, bounced: true, comments: None });
     // Its grants are what its claim gave it, which the record's step says;
     // what an earlier life made for it comes after its claim's position.
     entry.grants = match entry.step.as_ref() {
