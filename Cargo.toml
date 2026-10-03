@@ -153,13 +153,13 @@ mem_forget = "deny"
 todo = "deny"
 unimplemented = "deny"
 impl_trait_in_params = "deny"
-allow_attributes_without_reason = "deny"
-undocumented_unsafe_blocks = "deny"
-multiple_unsafe_ops_per_block = "deny"
 disallowed_types = "deny"
 disallowed_macros = "deny"
 
 # Beyond the table of 10.3: the rest of what the subset leaves out.
+allow_attributes_without_reason = "deny"
+undocumented_unsafe_blocks = "deny"
+multiple_unsafe_ops_per_block = "deny"
 disallowed_methods = "deny"           # closure-taking combinators, panicking slice ops, ...
 allow_attributes = "deny"             # #[expect(.., reason = "..")], which fails once it is stale
 match_wildcard_for_single_variants = "deny"

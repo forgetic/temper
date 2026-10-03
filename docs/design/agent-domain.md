@@ -352,9 +352,9 @@ domain, to be designed after it:
   file that is not text counts as no guide.
 
 Each layer below is tested against fakes that grow with it
-(testing.md, section 3): the fake LLM provider's own protocol and
-io layers, and the machine's faces for files, processes and the programs
-they run.
+(testing.md, section 3): the fake LLM provider's own protocol layer,
+as a service on skein's io, and the machine's faces for files, processes
+and the programs they run.
 
 ## 9. Open questions
 

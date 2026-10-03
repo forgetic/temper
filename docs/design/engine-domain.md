@@ -426,8 +426,11 @@ a restart loses nothing it knew. What building it settled:
 - **Sessions end** with an outcome that finishes them, or when a person
   closes their item; a supervising session is done once its goal's steps
   are. An item a person closes is done, whatever its step.
-- **Time** in the record and in what the plan reads is the engine's clock;
-  the forge's times are mapped onto it as they are read (section 13).
+- **Time** in the record and in what the plan reads is wall time
+  (`env.wall`, programming-model.md, section 9), so a record means the
+  same after a restart; the forge's times are wall times too. A wait
+  the plan arms is a deadline on the engine's monotonic clock
+  (`env.now`), computed from them.
 
 ### 5.4 Wakes
 
@@ -665,9 +668,9 @@ fact arriving. What building the views settled:
   limits is refused.
 - **Traces** are batched and appended to the store, which takes its
   operations in order; expiry is a periodic sweep by time, so what an
-  earlier engine kept is forgotten too. The views' clock starts again
-  with the engine; the store maps it to wall time. A batch the store fails
-  to take is dropped and counted: traces are expendable.
+  earlier engine kept is forgotten too. Traces carry wall time, so they
+  mean the same across restarts. A batch the store fails to take is
+  dropped and counted: traces are expendable.
 
 ## 12. The forge
 
@@ -723,15 +726,13 @@ What the protocol and io layers owe the domain, to be designed after it:
   body does; markers carrying a creation's key, the person a message is
   written for, and a record's or a wiki page's nonce; and a failure is
   unavailable only when the request provably never reached the forge.
-- **Times:** the forge's, mapped onto the engine's clock as the plan reads
-  them, and the times records keep, mapped so that they mean the same
-  after a restart, whose clock starts again.
+- **Times:** the forge's, decoded as wall times; the domain turns them
+  into deadlines itself (5.3).
 - **Workers:** the authenticated, framed channel of worker-domain.md.
 - **People:** the web: HTTP, live streams, and signing in through the
   forge.
 - **The store:** snapshots, traces, and a cache of the working set, on
-  disk, taking its operations in order and mapping the views' times to
-  wall time.
+  disk, taking its operations in order.
 - **Configuration:** a deployment's repositories, rules, templates and
   limits.
 
@@ -860,6 +861,8 @@ each to be designed before it is built:
 - **Spend:** what a run spent does not cross the worker's channel, so the
   records' spend stays zero, and the rules over spend weigh only the
   budgets runs ask for.
+- **Wall time** (5.3, section 11): records, traces and the forge's
+  times still hold the engine's monotonic clock (`Time`), not `env.wall`.
 - **Notes held for acceptance:** a note the rules want a person to accept
   is refused (section 15).
 - **Reading traces back** for the web: the views keep them, and nothing

@@ -46,7 +46,9 @@ open (section 10).
 | real loop | temper as it ships, on the real kernel and a real machine (2.4) |
 
 Every child domain has a world of its own but the engine's rules, which
-keep no state and are tested by their step tests alone.
+keep no state and are tested by their step tests alone: a departure from
+testing-strategy.md, 2.2, since with no state there is no sequence for a
+world to drive.
 
 ### 2.1 System worlds
 
@@ -117,10 +119,11 @@ engine's store.
 
 ## 4. The fakes
 
-A fake that every tier needs is a step crate under `testing/`; what only
-one world needs stays in that world, as a script specialised to what the
-world aims at. What every fake shares, from its own vocabulary to faults
-drawn from the seed, is the strategy's (testing-strategy.md, section 4).
+A fake that more than one tier needs is a step crate under `testing/`;
+what only one world needs stays in that world, as a script specialised to
+what the world aims at. What every fake shares, from its own vocabulary to
+faults drawn from the seed, is the strategy's (testing-strategy.md,
+section 4).
 
 ### 4.1 LLM providers
 
@@ -470,8 +473,9 @@ The checks:
 - **Memory** is measured in every world, and the fake forge's against its
   worst case in `tests/integration/forge`.
 - **Replay** is checked in every world, by its trace.
-- **Transition coverage** is not measured, and nothing is fuzzed yet, as
-  there is no protocol machine.
+- **Transition coverage** is not measured, and nothing is fuzzed yet:
+  there is no protocol machine or decoder for `cargo fuzz`, and no
+  domain's step functions are fed recorded events.
 - **Scenario expectations** are a referee's (5.2) in every engine world
   and both system worlds. The worker's child domain worlds, and the
   agent's tools', session's and run's, check theirs inline, beside their
@@ -508,7 +512,8 @@ By tier:
   so that those checks run at every tier; and nothing made twice across
   a restart at a drawn moment, which the engine's referee only counts
   for now (engine-domain.md, section 16).
-- **Checks:** transition coverage, fuzzing, and a digest of the state on
+- **Checks:** transition coverage; fuzzing, starting with the domains'
+  step functions fed recorded events; and a digest of the state on
   replay.
 
 By fake:
@@ -528,9 +533,6 @@ By fake:
 - **The forge's git in the real loop:** git over HTTP served by the fake
   forge, or bare repositories on disk that real git and the fake forge
   both reach.
-- **Agents in the real loop:** hosted in the one loop when the worker
-  spawns them, or real processes, each with a loop of its own, as in
-  production.
 - **How much sh:** which commands and syntax the subset takes. It stays a
   subset of POSIX, so that real sh agrees.
 - **Where the shell's interpreter lives,** so that the machine and the
