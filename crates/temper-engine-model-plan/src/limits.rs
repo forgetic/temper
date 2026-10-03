@@ -40,7 +40,7 @@ pub struct Limits {
     pub budget: Budget,
 }
 
-/// The most memory one call holds of its own under `limits`, in bytes (6.4),
+/// The most memory one call holds of its own under `limits`, in bytes (6.3),
 /// or `None` if it does not fit a `u64` or the limits cannot be honoured: a
 /// plan of no steps.
 ///

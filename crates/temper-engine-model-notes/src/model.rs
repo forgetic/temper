@@ -1,4 +1,4 @@
-//! The notes sub-model's state and its entry points (programming-style.md,
+//! The notes sub-model's state and its entry points (programming-model.md,
 //! section 3).
 
 use temper_lib::{Env, Id, Map, Queue, Slab, Token};

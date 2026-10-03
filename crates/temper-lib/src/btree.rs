@@ -1,5 +1,5 @@
 //! The standard library's B-trees, priced: what a bounded map or set takes
-//! (6.4), counted in tree nodes.
+//! (6.3), counted in tree nodes.
 
 use core::mem::size_of;
 

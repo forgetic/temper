@@ -1,4 +1,4 @@
-//! Memory stays within the worst case (programming-style.md, 6.4), measured by
+//! Memory stays within the worst case (programming-model.md, 6.3), measured by
 //! a counting allocator: the engine driven at random through its boundary,
 //! by a forge that answers at once and keeps what the engine wrote (its
 //! records and outcomes, decoded back), workers that dial in, answer with

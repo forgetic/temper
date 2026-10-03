@@ -1,4 +1,4 @@
-//! What waits for an answer (programming-style.md, 4.2): every request the
+//! What waits for an answer (programming-model.md, 4.2): every request the
 //! top level makes of a sub-model or of the protocol layer that is ended
 //! later is named by the token of a [`Wait`], which says what the answer is
 //! for: a step of an item's job, a brief's read, a notes' wiki operation, a

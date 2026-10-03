@@ -1,5 +1,5 @@
 //! The records that cross the boundary with the brief's parent, the engine's
-//! top-level model (programming-style.md, 4.5), which serves the brief's
+//! top-level model (programming-model.md, 4.5), which serves the brief's
 //! reads from the forge sub-model, the notes sub-model or its configuration,
 //! and puts the brief it is answered with into a run's charter. The brief
 //! sub-model defines them; its parent depends on it.

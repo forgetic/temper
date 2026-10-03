@@ -1,4 +1,4 @@
-//! A simulated world for the agent's session sub-model (programming-style.md,
+//! A simulated world for the agent's session sub-model (programming-model.md,
 //! 4.5): the sessions, with the world as their parent, and a fake LLM
 //! provider's model, driven by one loop, deterministically from a seed.
 //!

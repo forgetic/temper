@@ -4,7 +4,7 @@ use crate::boundary::{Class, Item};
 use crate::facts::Fact;
 use crate::tracked::Tracked;
 
-/// The work hub's limits (programming-style.md, section 7), handed by its
+/// The work hub's limits (programming-model.md, section 7), handed by its
 /// parent to every step read-only.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Limits {
@@ -59,7 +59,7 @@ pub struct Retry {
     pub max: Duration,
 }
 
-/// The most memory the model holds under `limits`, in bytes (6.4), or `None`
+/// The most memory the model holds under `limits`, in bytes (6.3), or `None`
 /// if it does not fit a `u64`.
 ///
 /// It counts the containers, their bookkeeping included, and not allocator

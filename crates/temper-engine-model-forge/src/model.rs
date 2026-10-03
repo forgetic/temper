@@ -1,4 +1,4 @@
-//! The forge sub-model's state and its entry points (programming-style.md,
+//! The forge sub-model's state and its entry points (programming-model.md,
 //! section 3).
 
 use alloc::boxed::Box;

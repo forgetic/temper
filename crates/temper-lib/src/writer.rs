@@ -1,4 +1,4 @@
-//! Sized writing (6.3, 8): bytes built into a box of a length computed first.
+//! Sized writing (6.2, 8): bytes built into a box of a length computed first.
 
 #![expect(clippy::disallowed_types, reason = "a writer fills a Vec allocated once, at its final length")]
 

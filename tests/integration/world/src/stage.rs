@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use temper_lib::{Env, Queue, Time};
 
-/// A model as the shell drives it (programming-style.md, 7): its environment,
+/// A model as the shell drives it (programming-model.md, 7): its environment,
 /// the events on their way to it, and the queue its steps and alarms emit
 /// into. A step or an alarm runs only while the queue has room for the most
 /// one may emit, so a slow consumer holds events back instead of overflowing

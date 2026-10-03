@@ -1,5 +1,5 @@
 //! The brief sub-model of the temper engine's model layer
-//! (programming-style.md, 4.5; engine-model.md, sections 3 and 9): it
+//! (programming-model.md, 4.5; engine-model.md, sections 3 and 9): it
 //! renders the brief of every run (agent-model.md, 4.1) from typed sections
 //! the step selects, within byte budgets. A section is the item and its
 //! lineage, the comments since the run's last turn, the outcomes of its

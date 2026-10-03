@@ -1,5 +1,5 @@
 //! The boundary between the fake forge's model and its protocol layer, or a
-//! world standing in for it (programming-style.md, 4.4): one kind of call up,
+//! world standing in for it (programming-model.md, 4.4): one kind of call up,
 //! and its replies and the forge's webhooks down. What the calls ask and
 //! answer is the forge's API, in the `api` module.
 //!

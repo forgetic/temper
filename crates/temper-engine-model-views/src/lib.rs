@@ -1,5 +1,5 @@
 //! The views sub-model of the temper engine's model layer
-//! (programming-style.md, 4.5; engine-model.md, sections 2, 3 and 11): what
+//! (programming-model.md, 4.5; engine-model.md, sections 2, 3 and 11): what
 //! runs report (agent-model.md, section 7), which reaches the engine through
 //! the workers best effort (worker-model.md, section 7), turned into what
 //! people and the engine's store see. Nothing the engine decides depends on

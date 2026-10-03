@@ -13,7 +13,7 @@ use crate::facts::Fact;
 use crate::items::{Entry, Noted};
 use crate::waits::{Carried, Wait};
 
-/// The engine model's limits (programming-style.md, section 7), handed to
+/// The engine model's limits (programming-model.md, section 7), handed to
 /// every step read-only: its sub-models', each handed down to the one it
 /// bounds, and the top level's own.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -40,7 +40,7 @@ pub struct Limits {
 }
 
 /// The most memory the model holds under `limits`, in bytes
-/// (programming-style.md, 6.4), or `None` if it does not fit a `u64` or the
+/// (programming-model.md, 6.3), or `None` if it does not fit a `u64` or the
 /// limits cannot be honoured: the sub-models' own, or limits under which
 /// one sub-model would refuse what another passes it within its own. The
 /// hub and the forge sub-model hold the same working set; the fleet tracks

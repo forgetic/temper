@@ -13,7 +13,7 @@
 //! call beyond the run's limit is answered as busy at the entrance, its answer
 //! going down ahead of the outbox: one busy answer may wait while the run is
 //! read on, and while a second waits behind it nothing more is read, so what
-//! one message may cause always has room (programming-style.md, 7).
+//! one message may cause always has room (programming-model.md, 7).
 //!
 //! The watchdog runs while the run is live. Every message counts as progress,
 //! and silence for `Limits::no_progress` while its clock runs fails the agent.

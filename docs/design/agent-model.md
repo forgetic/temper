@@ -2,10 +2,10 @@
 
 Provisional, 2026-10-02. What the temper agent does, as a model layer: its
 parts, what each is responsible for, and how they fit together. The
-mechanics are those of `programming-style.md`; this document says what the
-agent's model is made of. Each part's details are settled as it is built;
-what is still open is listed in section 9, and what is not built yet in
-section 10. How the agent is tested, and the fakes around it, is in
+mechanics are those of skein's `programming-model.md`; this document says
+what the agent's model is made of. Each part's details are settled as it
+is built; what is still open is listed in section 9, and what is not built
+yet in section 10. How the agent is tested, and the fakes around it, is in
 `testing-pyramid.md`.
 
 ## 1. In one page
@@ -24,7 +24,7 @@ section 10. How the agent is tested, and the fakes around it, is in
   instance: its charter, its sessions, its outcome), `session` (one
   conversation with an LLM) and `tools` (what a session does to the
   checkout), composed by `temper-agent-model`, the agent loop's entry point.
-- **The model is complete** (programming-style.md, section 4). A world of
+- **The model is complete** (programming-model.md, section 4). A world of
   models and fakes runs everything the agent does, with no protocol and no
   io. The protocol layer translates bytes to model entities and back,
   including the JSON an LLM writes as a tool's input, and decides nothing.
@@ -75,7 +75,7 @@ temper-agent-model                 the agent loop's entry point: one step, one f
     └── temper-agent-model-tools   read, list, search, write, edit, shell
 ```
 
-The tree follows programming-style.md, 4.5: each sub-model is a step
+The tree follows programming-model.md, 4.5: each sub-model is a step
 machine of its own with its own world; a parent owns its children's state
 and routes between them; siblings share no domain types, so the run and
 the session meet only through translations in `temper-agent-model`. Its
@@ -258,11 +258,11 @@ charters or outcomes.
   from its grants.
 - **No chains within a step.** An answer that comes back in the step that
   asked for it (a call the tools refuse at their entrance, one the run
-  answers at once) waits on the ready list (programming-style.md, 2), so
+  answers at once) waits on the ready list (programming-model.md, 2), so
   what one step emits and holds stays bounded.
 - **Everything in flight can be stopped.** Every tool call has a deadline,
   and an opener can abort its session, which cancels what is in flight and
-  waits for it to settle (programming-style.md, 5.3).
+  waits for it to settle (programming-model.md, 5.3).
 - **Budgets:** turns, tokens (input, output, cache reads and writes, as the
   provider counts them) and time, given by the run at open; bytes held,
   against the agent's limits. Crossing a budget stops the next completion,
@@ -325,7 +325,7 @@ search, write, edit and shell.
 ## 7. Facts
 
 Not yet discussed in depth. Each sub-model pushes what happened as typed
-facts into a bounded queue (programming-style.md, section 3): a run
+facts into a bounded queue (programming-model.md, section 3): a run
 admitted or ended, an LLM call started, retried or finished, a tool or a
 check started (with its deadline) or finished, the usage of each turn.
 The protocol layer projects them for the worker: a content-free stream for

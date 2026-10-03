@@ -6,7 +6,7 @@ use crate::model::{Op, Run};
 use crate::trace::Alarm;
 use crate::watch::Watcher;
 
-/// The views sub-model's limits (programming-style.md, section 7), handed by
+/// The views sub-model's limits (programming-model.md, section 7), handed by
 /// its parent to every step read-only.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Limits {
@@ -55,7 +55,7 @@ pub(crate) fn ops(limits: &Limits) -> Option<u32> {
     limits.appends.checked_add(1)?.checked_mul(2)
 }
 
-/// The most memory the model holds under `limits`, in bytes (6.4), or `None`
+/// The most memory the model holds under `limits`, in bytes (6.3), or `None`
 /// if it does not fit a `u64`, or the limits cannot work: no run, watcher,
 /// backlog, record or append, a batch with no room for a report, or no time
 /// between sweeps.

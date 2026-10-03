@@ -1,4 +1,4 @@
-//! The model layer of the temper worker (programming-style.md, section 4;
+//! The model layer of the temper worker (programming-model.md, section 4;
 //! worker-model.md, section 3): the worker loop's entry point.
 //!
 //! Sans-io: [`step`], [`fire`] and [`resume`] turn events into requests and

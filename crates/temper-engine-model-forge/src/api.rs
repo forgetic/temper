@@ -226,7 +226,7 @@ pub enum Op {
 }
 
 /// What a write carries: bytes the model carries as they are, or a payload
-/// its parent names and fills in as the call goes out (programming-style.md,
+/// its parent names and fills in as the call goes out (programming-model.md,
 /// 4.2).
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub enum Body {

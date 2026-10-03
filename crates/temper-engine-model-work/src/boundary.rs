@@ -1,5 +1,5 @@
 //! The records that cross the boundary with the work hub's parent, the
-//! engine's top-level model (programming-style.md, 4.5), which routes them to
+//! engine's top-level model (programming-model.md, 4.5), which routes them to
 //! and from the plan, the rules, the forge sub-model, the fleet and people.
 //! The work hub defines them; its parent depends on it.
 //!

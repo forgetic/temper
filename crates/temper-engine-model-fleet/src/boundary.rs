@@ -1,5 +1,5 @@
 //! The records that cross the boundary with the fleet's parent, the engine's
-//! top-level model (programming-style.md, 4.5). The fleet defines them; its
+//! top-level model (programming-model.md, 4.5). The fleet defines them; its
 //! parent depends on it.
 //!
 //! The fleet has two faces, both through its parent:

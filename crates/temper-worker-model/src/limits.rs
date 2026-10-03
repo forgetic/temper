@@ -35,7 +35,7 @@ pub struct Limits {
     pub stalled: u32,
 }
 
-/// The most memory the model holds under `limits`, in bytes (6.4), or `None`
+/// The most memory the model holds under `limits`, in bytes (6.3), or `None`
 /// if it does not fit a `u64` or the limits cannot be honoured: the
 /// sub-models' own, or limits under which one sub-model would refuse what
 /// another passes it within its own. The host's repositories must fit the

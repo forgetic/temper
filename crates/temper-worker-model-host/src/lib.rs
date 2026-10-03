@@ -1,4 +1,4 @@
-//! The host sub-model of the temper worker's model layer (programming-style.md,
+//! The host sub-model of the temper worker's model layer (programming-model.md,
 //! 4.5; worker-model.md, sections 3 and 4): the hub of the worker, as the run
 //! is in the agent. It hosts runs in a fixed number of slots, from the
 //! engine's assignment to the one answer the engine gets: it has each run's

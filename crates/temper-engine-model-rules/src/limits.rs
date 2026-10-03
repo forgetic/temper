@@ -2,7 +2,7 @@ use temper_lib::List;
 
 use crate::rules::Branch;
 
-/// The rules sub-model's limits (programming-style.md, section 7): what its
+/// The rules sub-model's limits (programming-model.md, section 7): what its
 /// configuration may hold, and what a check takes in. A check asked about
 /// more is refused at the entrance.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -37,7 +37,7 @@ pub fn max_out(limits: &Limits) -> u32 {
 }
 
 /// The most memory the sub-model holds under `limits`, in bytes
-/// (programming-style.md, 6.4), or `None` if it does not fit a `u64`: its
+/// (programming-model.md, 6.3), or `None` if it does not fit a `u64`: its
 /// configuration, the protected branches' names included. What a check is
 /// asked is its caller's, and its findings go into the caller's queue.
 #[must_use]

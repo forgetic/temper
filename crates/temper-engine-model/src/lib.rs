@@ -1,4 +1,4 @@
-//! The model layer of the temper engine (programming-style.md, section 4;
+//! The model layer of the temper engine (programming-model.md, section 4;
 //! engine-model.md, section 3): the engine loop's entry point.
 //!
 //! Sans-io: [`step`], [`fire`] and [`resume`] turn events into requests and

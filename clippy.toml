@@ -1,4 +1,4 @@
-# What the step crates may not use: docs/design/programming-style.md, section 10.
+# What the step crates may not use: skein's docs/design/programming-model.md, section 10.
 #
 # Applies to every crate below this directory that has no clippy.toml of its
 # own. temper-lib is held to it too; where lib builds a container on a type that

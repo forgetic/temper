@@ -1,5 +1,5 @@
 //! The plan sub-model of the temper engine's model layer
-//! (programming-style.md, 4.5; engine-model.md, sections 3, 5 and 6): the
+//! (programming-model.md, 4.5; engine-model.md, sections 3, 5 and 6): the
 //! engine's plan policy. It knows the primitives (agent steps, changes, waits
 //! and sessions), plans as graphs of steps under a goal, gates, wake rules,
 //! envelopes and templates, and decides:

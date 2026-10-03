@@ -1,5 +1,5 @@
 //! The records that cross the boundary with the forge sub-model's parent, the
-//! engine's top-level model (programming-style.md, 4.5). The forge sub-model
+//! engine's top-level model (programming-model.md, 4.5). The forge sub-model
 //! defines them; its parent depends on it.
 //!
 //! It has two faces, both through its parent:

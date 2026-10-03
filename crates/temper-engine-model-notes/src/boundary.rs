@@ -1,5 +1,5 @@
 //! The records that cross the boundary with the notes' parent, the engine's
-//! top-level model (programming-style.md, 4.5), which routes them to and
+//! top-level model (programming-model.md, 4.5), which routes them to and
 //! from the forge sub-model, the brief sub-model and runs' relayed calls.
 //! The notes sub-model defines them; its parent depends on it.
 //!

@@ -1,13 +1,13 @@
-//! The agent sub-model of the temper worker's model layer (programming-style.md,
-//! 4.5; worker-model.md, sections 3 and 6): the worker's agent processes, one
-//! per hosted run, each with one channel over its pipes. It spawns an agent in
-//! a contained process tree with what its run starts with; speaks the channel
-//! (agent-model.md, section 8) and holds the run to its rules, passing the
-//! run's host calls, facts and finish up to its client, and the client's
-//! inbound events, answers and cancel down to the run; watches the run's
-//! progress and its wall time; and stops an agent by cancel, then kill,
-//! telling the client it has gone only once io has proved that its process
-//! exited and its tree is empty.
+//! The agent sub-model of the temper worker's model layer
+//! (programming-model.md, 4.5; worker-model.md, sections 3 and 6): the worker's
+//! agent processes, one per hosted run, each with one channel over its pipes.
+//! It spawns an agent in a contained process tree with what its run starts
+//! with; speaks the channel (agent-model.md, section 8) and holds the run to
+//! its rules, passing the run's host calls, facts and finish up to its client,
+//! and the client's inbound events, answers and cancel down to the run; watches
+//! the run's progress and its wall time; and stops an agent by cancel, then
+//! kill, telling the client it has gone only once io has proved that its
+//! process exited and its tree is empty.
 //!
 //! Sans-io: [`step`] and [`fire`] turn events into requests and change nothing
 //! but the [`Model`] they are given. Time is an input; every effect, from

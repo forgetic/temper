@@ -1,4 +1,4 @@
-//! Routing (programming-style.md, 4.5): each of the protocol's events to the
+//! Routing (programming-model.md, 4.5): each of the protocol's events to the
 //! sub-model, or the part of the top level, it is for, and each sub-model's
 //! requests to the protocol layer or, translated, to a sibling.
 //!

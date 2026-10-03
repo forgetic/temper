@@ -1,4 +1,4 @@
-//! The fleet's state and its entry points (programming-style.md, section 3).
+//! The fleet's state and its entry points (programming-model.md, section 3).
 
 use temper_lib::{Deadlines, Env, Id, Map, Queue, Slab, Time, Token};
 

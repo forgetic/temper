@@ -2,12 +2,12 @@
 
 Provisional, 2026-10-02. What the temper engine does, as a model layer:
 its parts, what each is responsible for, and how they fit together. The
-mechanics are those of `programming-style.md`; the worker it drives is
-described in `worker-model.md`, and the agent in `agent-model.md`. Each
-part's details are settled as it is built and kept in its crate's
-documentation; this document keeps the decisions and their reasons.
-What is still open is listed in section 15, and what is not built yet
-in section 16. How the engine is tested is in `testing-pyramid.md`.
+mechanics are those of skein's `programming-model.md`; the worker it
+drives is described in `worker-model.md`, and the agent in
+`agent-model.md`. Each part's details are settled as it is built and kept
+in its crate's documentation; this document keeps the decisions and their
+reasons. What is still open is listed in section 15, and what is not built
+yet in section 16. How the engine is tested is in `testing-pyramid.md`.
 
 ## 1. In one page
 
@@ -38,7 +38,7 @@ in section 16. How the engine is tested is in `testing-pyramid.md`.
 - **Every write is repeat-safe.** Creations are keyed, sets are written as
   sets, and an outcome is recorded before it is applied, so an
   interrupted application resumes where it stopped.
-- **The model is complete** (programming-style.md, section 4): a world of
+- **The model is complete** (programming-model.md, section 4): a world of
   models and fakes runs everything the engine does, with no protocol and
   no io (section 14).
 - **One engine per deployment.** Scaling out is a later problem with known
@@ -81,7 +81,7 @@ temper-engine-model                  the engine loop's entry point: forge, worke
 └── temper-engine-model-views        facts in; live streams and retained traces out
 ```
 
-The tree follows programming-style.md, 4.5: each sub-model has its own
+The tree follows programming-model.md, 4.5: each sub-model has its own
 vocabulary, limits and world; a parent owns its children's state and
 routes between them; siblings share no domain types. `work` is the hub,
 as `host` is in the worker: it knows an item's lifecycle and nothing of

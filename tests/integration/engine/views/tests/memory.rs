@@ -1,4 +1,4 @@
-//! Memory stays within the worst case (programming-style.md, 6.4), measured by
+//! Memory stays within the worst case (programming-model.md, 6.3), measured by
 //! a counting allocator: every run followed and as many turned away, every
 //! watch open with a full backlog and as many ended within the iteration, the
 //! batch full while the store is behind, and every entry point on the way.

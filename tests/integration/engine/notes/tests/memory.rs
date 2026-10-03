@@ -1,4 +1,4 @@
-//! Memory stays within the worst case (programming-style.md, 6.4), measured by
+//! Memory stays within the worst case (programming-model.md, 6.3), measured by
 //! a counting allocator: every scope kept with a full index and as many pages
 //! lacking, every call holding as much as it may, and every entry point on
 //! the way.

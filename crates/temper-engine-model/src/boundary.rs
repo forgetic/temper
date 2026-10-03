@@ -1,5 +1,5 @@
 //! The records that cross the boundary with the protocol layer
-//! (programming-style.md, 4.4). The model defines them; the protocol crate
+//! (programming-model.md, 4.4). The model defines them; the protocol crate
 //! depends on it.
 //!
 //! Four peers are behind it, and each record names which by its variant:

@@ -1,4 +1,4 @@
-//! What the memory tests build (programming-style.md, 6.4): small limits, and
+//! What the memory tests build (programming-model.md, 6.3): small limits, and
 //! the largest of each thing they take, an authority, a path and a file, so
 //! that a model holds as much as its worst case allows.
 

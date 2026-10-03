@@ -1,5 +1,5 @@
 //! The checkout sub-model of the temper worker's model layer
-//! (programming-style.md, 4.5; worker-model.md, 5): the workspaces on the
+//! (programming-model.md, 4.5; worker-model.md, 5): the workspaces on the
 //! worker's disk, a cache keyed by workstream, and the git and file operations
 //! that prepare them, commit what they hold and push it.
 //!

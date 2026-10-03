@@ -1,4 +1,4 @@
-//! A simulated world for the worker's agent sub-model (programming-style.md,
+//! A simulated world for the worker's agent sub-model (programming-model.md,
 //! 4.5 and 11; worker-model.md, sections 6 and 9): the agent sub-model, with
 //! the world as its parent, a scripted client spawning agents ([`client`]),
 //! and process trees standing in for io ([`tree`]), each running a scripted

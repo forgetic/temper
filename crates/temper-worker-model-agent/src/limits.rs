@@ -55,7 +55,7 @@ pub struct Limits {
     pub facts: u32,
 }
 
-/// The most memory the model holds under `limits`, in bytes (6.4), or `None`
+/// The most memory the model holds under `limits`, in bytes (6.3), or `None`
 /// if it does not fit a `u64`.
 ///
 /// It counts the containers, their bookkeeping included, and the payloads, not

@@ -13,7 +13,7 @@ use crate::reads::Fetch;
 use crate::scans::Scan;
 use crate::writes::{Lane, Writing};
 
-/// The forge sub-model's limits (programming-style.md, section 7), handed by
+/// The forge sub-model's limits (programming-model.md, section 7), handed by
 /// its parent to every step read-only.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Limits {
@@ -163,7 +163,7 @@ fn size(bytes: usize) -> Option<u64> {
     u64::try_from(bytes).ok()
 }
 
-/// The most memory the model holds under `limits`, in bytes (6.4), or `None`
+/// The most memory the model holds under `limits`, in bytes (6.3), or `None`
 /// if it does not fit a `u64`, or the limits are not ones it can run under.
 ///
 /// It counts the containers, their bookkeeping included, and the payloads,

@@ -54,7 +54,7 @@ pub struct Limits {
     pub tools: tools::Limits,
 }
 
-/// The most memory the model holds under `limits`, in bytes (6.4), or `None`
+/// The most memory the model holds under `limits`, in bytes (6.3), or `None`
 /// if it does not fit a `u64` or the limits cannot be honoured: a parallel
 /// batch wider than [`MAX_PARALLEL`] or than the tools run for a kit at once
 /// (so that a read never meets `Busy`), fewer kits than sessions, or a

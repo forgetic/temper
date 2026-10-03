@@ -1,4 +1,4 @@
-//! A simulated world for the engine's fleet sub-model (programming-style.md,
+//! A simulated world for the engine's fleet sub-model (programming-model.md,
 //! 4.5 and 11; engine-model.md, section 8): the fleet, with the world as its
 //! parent, driven by one loop, deterministically from a seed.
 //!

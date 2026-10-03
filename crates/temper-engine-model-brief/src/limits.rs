@@ -5,7 +5,7 @@ use crate::brief::{Brief, Reading, Slot};
 use crate::cut::FLOOR;
 use crate::facts::Fact;
 
-/// The brief sub-model's limits (programming-style.md, section 7), handed by
+/// The brief sub-model's limits (programming-model.md, section 7), handed by
 /// its parent to every step read-only.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Limits {
@@ -114,7 +114,7 @@ fn announceable(limits: &Limits) -> bool {
     }
 }
 
-/// The most memory the model holds under `limits`, in bytes (6.4), or `None`
+/// The most memory the model holds under `limits`, in bytes (6.3), or `None`
 /// if it does not fit a `u64`, or the limits cannot work: no brief, section
 /// or part, no time to gather, or a budget too small to say what it cut.
 ///

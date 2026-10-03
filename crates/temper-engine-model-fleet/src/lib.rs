@@ -1,5 +1,5 @@
 //! The fleet sub-model of the temper engine's model layer
-//! (programming-style.md, 4.5; engine-model.md, sections 3 and 8): the
+//! (programming-model.md, 4.5; engine-model.md, sections 3 and 8): the
 //! engine's knowledge of the workers and the runs they host. Workers dial in,
 //! and each says hello first on its channel: its slots, the workstreams it
 //! holds checkouts for, and the runs it hosts with where each is

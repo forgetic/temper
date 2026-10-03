@@ -1,5 +1,5 @@
 //! The forge sub-model of the temper engine's model layer
-//! (programming-style.md, 4.5; engine-model.md, section 12): the engine's
+//! (programming-model.md, 4.5; engine-model.md, section 12): the engine's
 //! knowledge of the forge and its only way to change it. It holds a working
 //! set of live work, not a copy of the forge: the items the engine tracks
 //! that are not done, where each one's record is and the inbox position it

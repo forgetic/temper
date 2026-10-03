@@ -1,4 +1,4 @@
-//! Memory stays within the worst case (programming-style.md, 6.4), measured by
+//! Memory stays within the worst case (programming-model.md, 6.3), measured by
 //! a counting allocator: the top level driven at random through runs on
 //! charters as large as they may be, their conversations' completions (calls
 //! to the tools, finishes and sub-agents among them, at sizes up to what a

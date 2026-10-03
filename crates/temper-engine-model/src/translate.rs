@@ -1,5 +1,5 @@
 //! The translations between the sub-models' vocabularies, and between theirs
-//! and the boundary's (programming-style.md, 4.5): siblings share no types,
+//! and the boundary's (programming-model.md, 4.5): siblings share no types,
 //! so the hub's items meet the forge's, the brief's and the fleet's names
 //! here, the plan's decisions the hub's and the rules' terms, and the
 //! fleet's and the views' tokens the boundary's items, through small total

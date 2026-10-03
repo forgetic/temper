@@ -6,5 +6,8 @@
 - The default test suite (unit tests and `tests/integration`) takes at most
   15 seconds; the fuzzy suite (`tests/fuzzy`, randomized tests) at most 1
   minute. Keep new tests within these budgets: see the same document.
-- Design documents are in `docs/design/`; `programming-style.md` is the
-  style every crate follows, and `testing-pyramid.md` how temper is tested.
+- Every crate follows skein's programming model,
+  `~/src/rust/skein/docs/design/programming-model.md`, which temper's code
+  and documents cite as `programming-model.md`. temper's own design
+  documents are in `docs/design/`; `testing-pyramid.md` is how temper is
+  tested.

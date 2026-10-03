@@ -1,5 +1,5 @@
 //! The records that cross the boundary with the views' parent, the engine's
-//! top-level model (programming-style.md, 4.5), which routes them to and from
+//! top-level model (programming-model.md, 4.5), which routes them to and from
 //! the people watching on the web and the engine's store. The views sub-model
 //! defines them; its parent depends on it.
 //!

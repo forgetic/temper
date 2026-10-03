@@ -1,4 +1,4 @@
-//! A simulated world for the worker's host sub-model (programming-style.md,
+//! A simulated world for the worker's host sub-model (programming-model.md,
 //! 4.5 and 11; worker-model.md, sections 4 and 9): the host, with the world as
 //! its parent, a scripted engine assigning it runs ([`engine`]), and the
 //! parent's capabilities scripted ([`parent`]): workspaces that prepare,

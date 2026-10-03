@@ -1,5 +1,5 @@
 //! The notes sub-model of the temper engine's model layer
-//! (programming-style.md, 4.5; engine-model.md, sections 3 and 10): what
+//! (programming-model.md, 4.5; engine-model.md, sections 3 and 10): what
 //! temper learns over time and passes on, kept in the forge's wiki, a page
 //! per entry. It holds the index of each scope in use (the deployment's, a
 //! repository's, a goal's), one line per entry (its name, description, who

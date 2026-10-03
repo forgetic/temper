@@ -1,4 +1,4 @@
-//! A simulated world for the engine's plan sub-model (programming-style.md,
+//! A simulated world for the engine's plan sub-model (programming-model.md,
 //! 4.5 and 11; engine-model.md, sections 4 to 6): the plan, with a scripted
 //! engine as its parent, which holds the items of a few goals on an abstract
 //! forge ([`forge`]), asks the plan what is due for each, runs what is due

@@ -1,4 +1,4 @@
-//! A simulated world for the engine's forge sub-model (programming-style.md,
+//! A simulated world for the engine's forge sub-model (programming-model.md,
 //! 4.5 and 11; engine-model.md, section 12; testing-pyramid.md, 2.2): the
 //! forge sub-model, with the world as its parent, against the fake forge
 //! (`testing/temper-forge-model`), driven by one loop, deterministically from

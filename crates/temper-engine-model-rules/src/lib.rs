@@ -1,5 +1,5 @@
 //! The rules sub-model of the temper engine's model layer
-//! (programming-style.md, 4.5; engine-model.md, sections 3 and 7): the
+//! (programming-model.md, 4.5; engine-model.md, sections 3 and 7): the
 //! deployment's rules, which every run the engine starts and every write it
 //! makes must satisfy, whatever a plan says. A plan's gates add to them, and
 //! never take from them.

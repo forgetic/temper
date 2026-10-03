@@ -2,11 +2,11 @@
 
 Provisional, 2026-10-02. What the temper worker does, as a model layer:
 its parts, what each is responsible for, and how they fit together. The
-mechanics are those of `programming-style.md`, and the agent it hosts is
-described in `agent-model.md`. Each part's details are settled as it is
-built; what is still open is listed in section 10, and what is not built
-yet in section 11. How the worker is tested, and the fakes around it, is
-in `testing-pyramid.md`.
+mechanics are those of skein's `programming-model.md`, and the agent it
+hosts is described in `agent-model.md`. Each part's details are settled as
+it is built; what is still open is listed in section 10, and what is not
+built yet in section 11. How the worker is tested, and the fakes around
+it, is in `testing-pyramid.md`.
 
 ## 1. In one page
 
@@ -34,7 +34,7 @@ in `testing-pyramid.md`.
 - **Every run is supervised.** A watchdog on progress, a bound on wall
   time, cancel that goes polite then kills, and a slot that comes back only
   once the run's process tree is gone.
-- **The model is complete** (programming-style.md, section 4). A world of
+- **The model is complete** (programming-model.md, section 4). A world of
   models and fakes runs everything the worker does, with no protocol and
   no io (section 9).
 
@@ -101,7 +101,7 @@ temper-worker-model                 the worker loop's entry point: the engine li
 └── temper-worker-model-agent       agent processes: spawn, channel, watchdog, cancel then kill
 ```
 
-The tree follows programming-style.md, 4.5: each sub-model is a step
+The tree follows programming-model.md, 4.5: each sub-model is a step
 machine with its own vocabulary, limits and world; a parent owns its
 children's state and routes between them; siblings share no domain types.
 `host` is the hub, as the run is in the agent: it knows a hosted run's

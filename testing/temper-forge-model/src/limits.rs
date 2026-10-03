@@ -1,5 +1,5 @@
-//! What the forge holds at most (programming-style.md, section 7), and the
-//! memory that takes (6.4).
+//! What the forge holds at most (programming-model.md, section 7), and the
+//! memory that takes (6.3).
 
 use alloc::boxed::Box;
 use core::mem::size_of;
@@ -75,7 +75,7 @@ pub(crate) fn comments(limits: &Limits) -> Option<u32> {
     limits.items.checked_mul(limits.comments)
 }
 
-/// The most memory the forge holds under `limits`, in bytes (6.4), or `None`
+/// The most memory the forge holds under `limits`, in bytes (6.3), or `None`
 /// if it does not fit a `u64`.
 ///
 /// It counts the containers, their bookkeeping included, the payloads, the

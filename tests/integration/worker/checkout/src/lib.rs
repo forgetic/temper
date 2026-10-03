@@ -1,5 +1,5 @@
 //! A simulated world for the worker's checkout sub-model
-//! (programming-style.md, 4.5; worker-model.md, 9): the checkout, with the
+//! (programming-model.md, 4.5; worker-model.md, 9): the checkout, with the
 //! world as its parent, against a fake forge and a fake disk, driven by one
 //! loop, deterministically from a seed.
 //!

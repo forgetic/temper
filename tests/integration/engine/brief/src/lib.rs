@@ -1,4 +1,4 @@
-//! A simulated world for the engine's brief sub-model (programming-style.md,
+//! A simulated world for the engine's brief sub-model (programming-model.md,
 //! 4.5 and 11; engine-model.md, section 9): the brief, with the world as its
 //! parent, driven by one loop, deterministically from a seed.
 //!

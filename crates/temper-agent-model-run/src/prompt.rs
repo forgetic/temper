@@ -8,7 +8,7 @@
 //! charter's data, its labels verbatim.
 //!
 //! A text is rendered twice: once to measure it, then into a [`Writer`] of
-//! exactly that length (programming-style.md, 8).
+//! exactly that length (programming-model.md, 8).
 
 use alloc::boxed::Box;
 

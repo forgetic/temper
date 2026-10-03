@@ -1,4 +1,4 @@
-//! A simulated world for the engine's work hub (programming-style.md, 4.5 and
+//! A simulated world for the engine's work hub (programming-model.md, 4.5 and
 //! 11; engine-model.md, sections 4, 8 and 12): the hub, with the world as its
 //! parent, driven by one loop, deterministically from a seed.
 //!

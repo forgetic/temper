@@ -1,4 +1,4 @@
-//! A simulated world for the engine's notes sub-model (programming-style.md,
+//! A simulated world for the engine's notes sub-model (programming-model.md,
 //! 4.5 and 11; engine-model.md, section 10): the notes, with the world as
 //! their parent, driven by one loop, deterministically from a seed.
 //!

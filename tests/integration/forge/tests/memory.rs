@@ -1,4 +1,4 @@
-//! Memory stays within the worst case (programming-style.md, 6.4), measured by
+//! Memory stays within the worst case (programming-model.md, 6.3), measured by
 //! a counting allocator: the forge filled to its limits, every repository
 //! holding as many items, comments, reviews, branches, statuses and wiki pages
 //! as it may, each as large as it may be, the store as many commits, with

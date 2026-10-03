@@ -1,7 +1,7 @@
 //! The model's state and its entry points (engine-model.md, section 3). Each
 //! hands what it is given to the sub-model, or the part of the top level,
 //! it is for, then completes the hand-offs between the sub-models
-//! (programming-style.md, 4.5) before it returns, routing what is for the
+//! (programming-model.md, 4.5) before it returns, routing what is for the
 //! protocol layer out (the `route` module).
 
 use alloc::boxed::Box;

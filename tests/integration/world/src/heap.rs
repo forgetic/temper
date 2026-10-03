@@ -1,7 +1,7 @@
 //! A counting allocator for the memory tests (testing-pyramid.md, 6): it
 //! records the live heap of each thread and its peak, so that a test can check
 //! the most a model held at once in each step against its worst case
-//! (programming-style.md, 6.4).
+//! (programming-model.md, 6.3).
 //! Each memory test binary declares it its global allocator:
 //!
 //! ```ignore
@@ -279,7 +279,7 @@ impl Meter {
 
     /// Checks `step` against `bound`, a worst case: the most it held of its
     /// own at once, which is what was live less what it had handed out by
-    /// then and its receivers count (6.4: what travels in requests is the
+    /// then and its receivers count (6.3: what travels in requests is the
     /// layer's that holds it). What it handed out is what has been freed
     /// since it ended, as the test took its requests and dropped them: the
     /// test frees nothing else in between.

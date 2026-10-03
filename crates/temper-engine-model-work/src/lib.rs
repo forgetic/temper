@@ -1,4 +1,4 @@
-//! The work sub-model of the temper engine's model layer (programming-style.md,
+//! The work sub-model of the temper engine's model layer (programming-model.md,
 //! 4.5; engine-model.md, sections 3 and 4): the engine's hub, as the host is
 //! the worker's. It knows an item's lifecycle (waiting, due, claimed, running,
 //! applying, held, done, and parked runs) and keeps, per item taken in, its

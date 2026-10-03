@@ -1,5 +1,5 @@
 //! The run sub-model of the temper coding agent's model layer
-//! (programming-style.md, 4.5; agent-model.md, section 4): one agent instance.
+//! (programming-model.md, 4.5; agent-model.md, section 4): one agent instance.
 //! A run takes its charter from the worker, opens the conversation that does
 //! the work, accounts what it spends against one budget, and answers once.
 //!

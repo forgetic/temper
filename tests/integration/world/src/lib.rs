@@ -13,7 +13,7 @@
 //! - [`Trace`]: what crossed the world's boundaries, with times, and
 //!   [`assert_replays`], that a seed replays to the same run;
 //! - [`heap`]: a counting allocator that records the peak of live heap, for
-//!   the memory tests' check against the worst case (6.4);
+//!   the memory tests' check against the worst case (6.3);
 //! - [`Referee`]: a scenario's [`Expectations`] as a step machine of the
 //!   world's loop (testing-pyramid.md, 5.2), safety checked on every
 //!   observation and liveness armed as deadlines of its own, which injects

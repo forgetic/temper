@@ -13,10 +13,11 @@ is still open.
   function. Each tier above runs more of temper for real and fakes the
   rest, up to every process on the real kernel. A tier is added when the
   layer it makes real is built.
-- **Fakes are models too.** Every fake follows `programming-style.md`. It
-  shares no domain types with what it stands in for, so a world
-  translates between them as a protocol layer would. It checks its client
-  as it goes, refusing what the real neighbour would refuse.
+- **Fakes are models too.** Every fake follows skein's
+  `programming-model.md`. It shares no domain types with what it stands in
+  for, so a world translates between them as a protocol layer would. It
+  checks its client as it goes, refusing what the real neighbour would
+  refuse.
 - **Two kinds of neighbour.** Peers sit across a wire: LLM providers, the
   forge, people on the web. Their fakes grow into services, with protocol
   and io layers of their own, and meet temper at the wire. The machine
@@ -84,7 +85,7 @@ recorded event sequences.
 ### 2.2 Model worlds
 
 A model world runs one model in one loop, from a seed: a sub-model with
-the world as its parent (programming-style.md, 4.5), or a component's
+the world as its parent (programming-model.md, 4.5), or a component's
 top-level model with its sub-models beneath it. The world plays
 everything else. It scripts the neighbours that are temper's own, taking
 liberties the real ones do not, and uses fakes for the peers and the
@@ -418,7 +419,7 @@ observations ──► referee ──► a verdict: passed, failed and why, or s
 - **The same shape as every step:** its own state, `env.now`, events in,
   requests out, and a deadline table of its own, whose earliest deadline
   the shell's one ring timeout covers as it covers every layer's
-  (programming-style.md, section 9). In the tiers that replay, its
+  (programming-model.md, section 9). In the tiers that replay, its
   deadlines are simulated time, so "within two hours" takes milliseconds;
   in the real loop the same deadline is wall time.
 - **It steps on what it observes,** and on its own timers, not on every
@@ -489,11 +490,11 @@ Every world, and the simulator, checks:
   nothing in flight, every process gone and read to its end, every answer
   taken once; and ownership is a tree, with no orphans.
 - **Memory:** a counting allocator measures the most a model held in one
-  step, against its worst case (programming-style.md, 6.4); the simulator
+  step, against its worst case (programming-model.md, 6.3); the simulator
   checks it at every iteration.
 - **Replay:** a seed replays to the same trace.
 - **Transition coverage:** each cell is a handler function
-  (programming-style.md, 5.4), so function coverage of the handlers over
+  (programming-model.md, 5.4), so function coverage of the handlers over
   a run (`cargo llvm-cov`) lists the transitions exercised and those never
   reached.
 

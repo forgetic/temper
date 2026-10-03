@@ -1,4 +1,4 @@
-//! Memory stays within the worst case (programming-style.md, 6.4), measured by
+//! Memory stays within the worst case (programming-model.md, 6.3), measured by
 //! a counting allocator: the working set full, every inbox full, every read
 //! and write in hand at its limits; and every entry point on the way, under
 //! answers as large as the limits allow and failures of every kind.

@@ -1,4 +1,4 @@
-//! The brief sub-model's state and its entry points (programming-style.md,
+//! The brief sub-model's state and its entry points (programming-model.md,
 //! section 3).
 
 use temper_lib::{Deadlines, Env, Id, Queue, Slab, Time};

@@ -1,4 +1,4 @@
-//! A simulated world for the agent's tools sub-model (programming-style.md,
+//! A simulated world for the agent's tools sub-model (programming-model.md,
 //! 4.5): the tools, with the world as their parent, over a fake checkout,
 //! driven by one loop, deterministically from a seed.
 //!

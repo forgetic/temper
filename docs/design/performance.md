@@ -1,7 +1,7 @@
 # Performance
 
-Provisional, 2026-10-03. Whether the memory strategy of
-`programming-style.md` (section 6: counted entities, owned bytes, the
+Provisional, 2026-10-03. Whether the memory strategy of skein's
+`programming-model.md` (section 6: counted entities, owned bytes, the
 worst case checked at startup) costs temper anything that matters, where
 it could, and what to do about each case. It reviews the strategy against
 temper's workload; it adds no mechanics of its own. Each fix belongs in
@@ -22,7 +22,7 @@ the document or crate it changes, and moves there when it is made.
   | Bytes of unknown length (3) | quadratic copying, if done naively | two lib containers | small | before the protocol layer |
   | Copy at emission, every turn (4) | peak memory, up to three copies of a transcript | count the copies; encode in pieces | small | with the protocol layer |
   | The general allocator (5) | page faults, fragmentation | glibc tuning, or another allocator, in the shell | small | after measuring |
-  | A worst case of maximums (6) | memory headroom, not speed | the byte budget of style 6.4 | moderate | only if it bites |
+  | A worst case of maximums (6) | memory headroom, not speed | the byte budget of programming-model.md, 6.3 | moderate | only if it bites |
 
 - **Only the first needs action before more is built.** The others are
   accounting to add with the protocol layer, or measurements to take once
@@ -89,7 +89,7 @@ happens above the intake:
     but a provider's deltas are a few bytes each: it would make one
     allocation per piece, and need a cap on pieces that is hard to
     choose.
-- **`ByteRing`,** which `programming-style.md` (10.2) lists in lib and no
+- **`ByteRing`,** which `programming-model.md` (10.2) lists in lib and no
   lib has yet: a buffer of fixed size, made once, that keeps the last N
   bytes written, each write overwriting the oldest, where an intake
   refuses past its cap instead. A command's output fills its head first,
@@ -104,8 +104,8 @@ that joins pieces, and they change no existing code.
 
 `complete` (`crates/temper-agent-model-session/src/session.rs:1318`)
 copies the whole transcript on every turn, message by message and block
-by block, as 6.3 of the style says it must: the session keeps the
-transcript, and the protocol layer owns the copy. Over a session the
+by block, as 6.2 of the programming model says it must: the session keeps
+the transcript, and the protocol layer owns the copy. Over a session the
 copying grows with the square of the number of turns.
 
 **The time does not matter.** A session of 200 turns whose transcript
@@ -145,15 +145,15 @@ receiver's to count. **Fix,** when the protocol layer is written:
   makes memory worse, not better: the second copy would live as long as
   the session, not only while a call is in flight.
 - The session could instead lend its transcript by move, as io lends a
-  buffer to the kernel (style, 6.3). `Complete` moves the prompt down,
-  and every terminal event of the call (`Completed`, `Failed`,
-  `Cancelled`) moves it back. The session does not touch its transcript
-  while a call is in flight (the answer is appended, and its tools run,
-  once the call has ended), so the reason for copying at emission does
-  not apply. The bytes are then held once, plus the piece being
-  encoded. The price is a change to the contract between the session and
-  the protocol layer, the fake LLM and their worlds, and a session that
-  cannot be snapshotted while a call is in flight.
+  buffer to the kernel (programming-model.md, 6.2). `Complete` moves the
+  prompt down, and every terminal event of the call (`Completed`,
+  `Failed`, `Cancelled`) moves it back. The session does not touch its
+  transcript while a call is in flight (the answer is appended, and its
+  tools run, once the call has ended), so the reason for copying at
+  emission does not apply. The bytes are then held once, plus the piece
+  being encoded. The price is a change to the contract between the session
+  and the protocol layer, the fake LLM and their worlds, and a session
+  that cannot be snapshotted while a call is in flight.
 
 | Approach | Held for each call in flight |
 |---|---|
@@ -167,9 +167,9 @@ the option to take if memory ever matters.
 
 ## 5. The general allocator
 
-The style accepts the general allocator in the hot path (6.2): allocation
-time is not constant, and fragmentation can push the resident size above
-the live bytes. With glibc:
+The programming model accepts the general allocator in the hot path (6.1
+and 6.3): allocation time is not constant, and fragmentation can push the
+resident size above the live bytes. With glibc:
 
 - an allocation above the mmap threshold (128 KB to start) is its own
   `mmap`, page faults as it is filled and a `munmap` when freed;
@@ -182,7 +182,7 @@ the live bytes. With glibc:
   above the live bytes.
 
 The engine is the process this could affect; an agent process lives for
-one run. **Measure first,** as 6.4 says: the simulator's counting
+one run. **Measure first,** as 6.3 says: the simulator's counting
 allocator gives the live bytes, and a load run of the real shell gives
 the resident size to compare them with. **If the gap matters,** in order:
 
@@ -200,7 +200,7 @@ the resident size to compare them with. **If the gap matters,** in order:
 4. or give the shell another `#[global_allocator]` (jemalloc, mimalloc),
    which keeps allocations of a size together and returns unused pages
    over time. It is a one-line change that adds a dependency
-   `programming-style.md` (2.1) does not allow today, so the departure is
+   `programming-model.md` (2.1) does not allow today, so the departure is
    recorded there.
 
 None of these touches step code: the binary chooses the allocator, and
@@ -208,25 +208,26 @@ step crates only allocate.
 
 ## 6. A worst case of maximums
 
-The worst case (style, 6.4) is every entity at its cap at once. Transcript
-sizes have a long tail: most sessions stay small and a few approach
-`session_bytes`. With the copies of section 4 a process sets aside about
-sessions × `session_bytes` × 3, so eight sessions of 4 MB come to about
-100 MB. That costs headroom, not speed, and it bites only if one process
-should run many sessions with contexts of a million tokens at once.
+The worst case (programming-model.md, 6.3) is every entity at its cap at
+once. Transcript sizes have a long tail: most sessions stay small and a
+few approach `session_bytes`. With the copies of section 4 a process sets
+aside about sessions × `session_bytes` × 3, so eight sessions of 4 MB come
+to about 100 MB. That costs headroom, not speed, and it bites only if one
+process should run many sessions with contexts of a million tokens at
+once.
 
-**Fix, if it bites:** the byte budget the style keeps as its fallback
-(6.4).
+**Fix, if it bites:** the byte budget the programming model keeps as its
+fallback (6.3).
 
 - For io's queued output it is ordinary backpressure: io grants room
-  within a global budget, as the style describes.
+  within a global budget, as the programming model describes.
 - For sessions it is harder. If sessions charged a shared pool as they
   grew, one could run out partway through its work because of the others,
-  which is the refusal in the middle that section 7 of the style rules
-  out. Done right, a session is granted bytes from the pool when it opens,
-  and perhaps again between turns, where waiting is an ordinary state.
-  That touches the agent model's top level, the session crate and their
-  worlds: a few days' work, after a design decision.
+  which is the refusal in the middle that section 7 of the programming
+  model rules out. Done right, a session is granted bytes from the pool
+  when it opens, and perhaps again between turns, where waiting is an
+  ordinary state. That touches the agent model's top level, the session
+  crate and their worlds: a few days' work, after a design decision.
 
 It is probably never needed: a process holds one run's sessions, and its
 limits are that run's.
@@ -242,6 +243,6 @@ limits are that run's.
   not its bytes.
 - **Copying out of io's buffers.** One copy of each byte received, which
   exact-size reads remove later without touching anything above io
-  (style, 6.6).
+  (programming-model.md, section 8).
 - **Retiring at the reclaim point.** A mark during the iteration and a
   push onto a free list at its end.
