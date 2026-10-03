@@ -1,7 +1,8 @@
 # Development workflow
 
 How work reaches main. Work happens on local branches; main moves only by
-merging a branch that passed every check below.
+merging a branch that passed every check below, or that changes only
+documentation.
 
 ## 1. Before merging to main
 
@@ -21,6 +22,11 @@ Then, once all four pass:
 git checkout main
 git merge --ff-only <branch>
 ```
+
+A branch that changes only Markdown files (the documents under `docs/`,
+`AGENTS.md`) skips the four checks, since nothing it touches is built or
+tested, and is merged the same way. Doc comments in `.rs` files are not
+documentation in this sense: they are code, and clippy checks them.
 
 ## 2. The two test suites
 
