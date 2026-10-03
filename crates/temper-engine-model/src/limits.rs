@@ -197,11 +197,11 @@ pub(crate) fn notices(limits: &Limits) -> Option<u32> {
     limits.plan.steps.checked_mul(3)?.checked_add(2)
 }
 
-/// What may wait for an answer at once: a step of each item's job and its
-/// take, a record written on the side of each entry, a read
-/// of each section of each brief, an operation of the notes', a call of each
-/// run, people's calls, and the store's operations for snapshots and
-/// traces.
+/// What may wait for an answer at once: three steps of each item's job (a
+/// run prepared renders its brief, gets its snapshot and reads its branch)
+/// or its take, a record written on the side of each entry, a read of each
+/// section of each brief, an operation of the notes', a call of each run,
+/// people's calls, and the store's operations for snapshots and traces.
 pub(crate) fn waits(limits: &Limits) -> Option<u32> {
     let briefs = limits.brief.briefs.checked_mul(limits.brief.sections)?;
     let notes = limits.notes.scopes.checked_add(limits.notes.calls)?.checked_mul(2)?;
@@ -209,8 +209,8 @@ pub(crate) fn waits(limits: &Limits) -> Option<u32> {
     limits
         .work
         .items
+        .checked_mul(3)?
         .checked_add(entries(limits)?)?
-        .checked_add(limits.work.items)?
         .checked_add(briefs)?
         .checked_add(notes)?
         .checked_add(limits.fleet.calls)?

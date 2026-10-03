@@ -2062,3 +2062,47 @@ fn a_record_whose_step_the_plan_could_not_have_written_is_held_not_run() {
     assert_eq!(hold_told(&mut world, change), Some(work::Hold::Record), "the change is held for a person");
     assert!(assigned(world.seen.as_slice(), change).is_empty(), "and runs nothing");
 }
+
+#[test]
+fn a_change_made_again_starts_from_a_push_whose_answer_never_came() {
+    let (mut world, session) = World::session();
+    let tasks = crate::boundary::Outcome::Tasks { tasks: Box::new([change_step(b"fix")]), text: copy_of(b"on it") };
+    world.deliver(Event::Answer { channel: Token::new(1), item: session, attempt: 1, answer: ended(tasks) });
+    let change = Item { repository: 0, number: 2 };
+    assert!(matches_base(starts(&world.seen, change).as_slice()), "the change's first run starts from the base");
+    // Its run pushes, and its worker is lost for good, its answer with it.
+    world.forge.branches.push((copy_of(b"temper/2"), [7; 32])).unwrap();
+    world.deliver(Event::Lost { channel: Token::new(1) });
+    for _ in 0_u32..8 {
+        world.wait(10);
+    }
+    let hello = Hello { slots: 2, workstreams: Box::new([]), hosting: Box::new([]) };
+    world.deliver(Event::Hello { channel: Token::new(2), hello });
+    world.wait(10);
+    let starts = starts(&world.seen, change);
+    let Some((attempt, start)) = starts.as_slice().last() else { panic!("the change runs again") };
+    assert!(*attempt > 1, "a later attempt: {:?}", starts.as_slice());
+    assert_eq!(*start, crate::boundary::Start::Branch { branch: copy_of(b"temper/2") }, "it starts from the push");
+}
+
+#[test]
+fn a_late_answer_after_a_restart_never_moves_the_branch_back() {
+    let (mut world, change, pull, _) = opened_change();
+    // CI fails on the first push, and a repair pushes again.
+    pushed(&mut world, b"temper/2", pull, [1; 32], forge::Ci::Failed);
+    world.wait(60);
+    let (attempt, _) = *starts(&world.seen, change).as_slice().last().expect("a repair runs");
+    pushed(&mut world, b"temper/2", pull, [2; 32], forge::Ci::Passed);
+    world.deliver(Event::Answer { channel: Token::new(1), item: change, attempt, answer: changed([2; 32]) });
+    world.restart();
+    // The first attempt's answer comes again, from a worker that never heard
+    // it was taken.
+    let hosted = crate::boundary::Hosted { item: change, attempt: 1, phase: fleet::Phase::Answered };
+    let hello = Hello { slots: 2, workstreams: Box::new([]), hosting: Box::new([hosted]) };
+    world.deliver(Event::Hello { channel: Token::new(3), hello });
+    world.deliver(Event::Answer { channel: Token::new(3), item: change, attempt: 1, answer: changed([1; 32]) });
+    world.wait(30);
+    let id = crate::items::find(&world.model, change).unwrap();
+    let branch = world.model.items.get(id).unwrap().relations.branch;
+    assert_eq!(branch, Some([2; 32]), "the branch stays where the repair pushed it");
+}

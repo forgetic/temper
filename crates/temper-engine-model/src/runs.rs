@@ -22,7 +22,7 @@ use core::mem;
 
 use temper_engine_model_brief as brief;
 use temper_engine_model_fleet as fleet;
-use temper_engine_model_forge as forge;
+use temper_engine_model_forge::{self as forge, api};
 use temper_engine_model_plan as plan;
 use temper_engine_model_rules as rules;
 use temper_engine_model_views as views;
@@ -75,10 +75,60 @@ pub(crate) fn start(model: &mut Model, env: &Env<Limits>, item: Item, attempt: u
     } else {
         None
     };
-    let starting = Starting { attempt, run: due, brief: None, rendering: Some(rendering), fetching, snapshot: None };
+    // A change made again after an earlier attempt starts from that
+    // attempt's push, if one landed whose answer never came (its worker lost
+    // holding it): the item's branch is read on the forge first.
+    let produces = match due.why {
+        plan::Why::Produce => true,
+        plan::Why::Work | plan::Why::Repair(_) | plan::Why::Review { .. } | plan::Why::Turn => false,
+    };
+    let branching = if produces && attempt > 1 && get(model, id).relations.branch.is_none() {
+        let Ok(branching) = model.waits.insert(Wait::Job { entry: id }) else {
+            unreachable!("the waits have room for every item's job")
+        };
+        Some(branching)
+    } else {
+        None
+    };
+    let starting =
+        Starting { attempt, run: due, brief: None, rendering: Some(rendering), fetching, branching, snapshot: None };
     get_mut(model, id).job = Job::Starting(Box::new(starting));
+    if let Some(branching) = branching {
+        let branch = translate::branch(&model.config.branches, item);
+        let read = forge::Read::Branch { repository: item.repository, branch };
+        route::forge_step(model, env, forge::Event::Read { owner: branching.token(), read });
+    }
     let reply_to = ReplyTo::new(rendering.token());
     route::brief_step(model, env, brief::Event::Render { reply_to, sections });
+}
+
+/// The forge answered the read of the item's branch, before its change is
+/// made again: a push found there is the item's branch, and the run starts
+/// from it.
+pub(crate) fn branched(
+    model: &mut Model,
+    env: &Env<Limits>,
+    id: Id<Entry>,
+    wait: Id<Wait>,
+    result: Result<api::Answer, forge::Failure>,
+) {
+    let Some(entry) = model.items.get_mut(id) else { return };
+    let Some(starting) = items::starting_mut(&mut entry.job) else { return };
+    if starting.branching != Some(wait) {
+        return;
+    }
+    starting.branching = None;
+    let pushed = match result {
+        Ok(api::Answer::Commit(commit)) => Some(commit),
+        Ok(_) | Err(_) => None,
+    };
+    if let Some(commit) = pushed
+        && entry.relations.branch.is_none()
+    {
+        entry.relations.branch = Some(commit);
+        items::aside(model, env, id);
+    }
+    ready(model, env, id);
 }
 
 /// The rules on a run: its budget against what was spent, by the item's
@@ -272,7 +322,7 @@ pub(crate) fn fetched(
 fn ready(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) {
     let entry = get_mut(model, id);
     let Some(starting) = items::starting_mut(&mut entry.job) else { return };
-    if starting.rendering.is_some() || starting.fetching.is_some() {
+    if starting.rendering.is_some() || starting.fetching.is_some() || starting.branching.is_some() {
         return;
     }
     let starting = match mem::replace(&mut entry.job, Job::Idle) {
@@ -662,7 +712,6 @@ pub(crate) fn answered(model: &mut Model, env: &Env<Limits>, to: ReplyTo, run: T
                 let entry = get_mut(model, id);
                 if let Some(head) = landed {
                     entry.relations.branch = Some(head);
-                    entry.landed = attempt;
                 }
                 // A turn that parked is over, as one whose outcome is applied
                 // is: the next waits for its wake, not retried at once.
@@ -748,7 +797,7 @@ pub(crate) fn forget(model: &mut Model, payload: Token) {
 /// fenced off. A run's answer that comes too late (its attempt presumed lost
 /// and fenced off, or kept as a stray past the grace) still says where it
 /// pushed: the item's branch is there on the forge, and its next run starts
-/// from it, unless a later attempt's push is recorded already.
+/// from it, unless the item records a branch already.
 pub(crate) fn dropped(model: &mut Model, env: &Env<Limits>, payload: Token) {
     let Some(taken) = take_carried(model, Id::from_token(payload)) else { return };
     match taken {
@@ -764,14 +813,15 @@ pub(crate) fn dropped(model: &mut Model, env: &Env<Limits>, payload: Token) {
             let why = if live || model.loaded.is_none() { Unserved::Busy } else { Unserved::Failed };
             unrouted(model, &relayed, why);
         }
-        Carried::Answer { item, attempt, answer } => late(model, env, item, attempt, &answer),
+        Carried::Answer { item, attempt: _, answer } => late(model, env, item, &answer),
         Carried::Served { .. } | Carried::Report { .. } | Carried::Done => {}
     }
 }
 
-/// A run's answer the fleet drops: the push it made, if it is newer than
-/// the one the item records.
-fn late(model: &mut Model, env: &Env<Limits>, item: Item, attempt: u64, answer: &Answer) {
+/// A run's answer the fleet drops: the push it made, if the item records
+/// none. One it records is a later answer's, or what was read on the forge,
+/// either newer than this push: only the record says so after a restart.
+fn late(model: &mut Model, env: &Env<Limits>, item: Item, answer: &Answer) {
     let work = match answer {
         Answer::Ended { work, .. } | Answer::Parked { work, .. } | Answer::Failed { work, .. } => work,
         Answer::Busy | Answer::Invalid => return,
@@ -785,11 +835,10 @@ fn late(model: &mut Model, env: &Env<Limits>, item: Item, attempt: u64, answer: 
     let Some(head) = head else { return };
     let Some(id) = items::find(model, item) else { return };
     let entry = get_mut(model, id);
-    if attempt <= entry.landed || entry.relations.branch == Some(head) {
+    if entry.relations.branch.is_some() {
         return;
     }
     entry.relations.branch = Some(head);
-    entry.landed = attempt;
     items::aside(model, env, id);
 }
 

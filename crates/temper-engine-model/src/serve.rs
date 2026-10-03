@@ -147,7 +147,7 @@ fn payload(model: &Model, token: Token) -> Option<Payload> {
 pub(crate) fn read(model: &mut Model, env: &Env<Limits>, owner: Token, result: Result<api::Answer, forge::Failure>) {
     let Some(wait) = take(model, owner) else { return };
     match wait {
-        Wait::Job { entry } => jobs::read(model, env, entry, result),
+        Wait::Job { entry } => jobs::read(model, env, entry, Id::from_token(owner), result),
         Wait::Brief { owner, bounds, source } => {
             brief_got(model, env, owner, bounds, &source, result);
         }

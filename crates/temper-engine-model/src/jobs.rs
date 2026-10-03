@@ -1148,7 +1148,13 @@ fn finish(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, finish: Finish) {
 }
 
 /// A forge read for the item's job ended.
-pub(crate) fn read(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, result: Result<api::Answer, forge::Failure>) {
+pub(crate) fn read(
+    model: &mut Model,
+    env: &Env<Limits>,
+    id: Id<Entry>,
+    wait: Id<Wait>,
+    result: Result<api::Answer, forge::Failure>,
+) {
     let Some(entry) = model.items.get(id) else { return };
     match &entry.job {
         Job::Asking { .. } => related(model, env, id, result),
@@ -1157,7 +1163,8 @@ pub(crate) fn read(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, result: 
             Doing::Fresh => fresh_read(model, env, id, result),
             Doing::Writes(_) => landing_answer(model, env, id, result),
         },
-        Job::Idle | Job::Writing { .. } | Job::Recording { .. } | Job::Starting(_) => {}
+        Job::Starting(_) => crate::runs::branched(model, env, id, wait, result),
+        Job::Idle | Job::Writing { .. } | Job::Recording { .. } => {}
     }
 }
 

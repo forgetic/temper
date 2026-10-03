@@ -101,9 +101,6 @@ pub(crate) struct Entry {
     pub(crate) conflicted: Option<[u8; 32]>,
     /// The permission the rules want of whoever accepts what it holds.
     pub(crate) wants: Option<Permission>,
-    /// The attempt whose push the record's branch is, as far as this life
-    /// knows: a later answer's push replaces it, an earlier one's does not.
-    pub(crate) landed: u64,
     /// Its run, prepared before the cold start was done, waits for it.
     pub(crate) waiting: bool,
     /// The application that created it, waiting for its first record to be
@@ -256,9 +253,11 @@ pub(crate) struct Starting {
     pub(crate) attempt: u64,
     pub(crate) run: Box<plan::Run>,
     pub(crate) brief: Option<Box<[brief::Section]>>,
-    /// The brief's render in flight, and the store's get.
+    /// The brief's render in flight, the store's get, and the read of the
+    /// item's branch.
     pub(crate) rendering: Option<Id<Wait>>,
     pub(crate) fetching: Option<Id<Wait>>,
+    pub(crate) branching: Option<Id<Wait>>,
     pub(crate) snapshot: Option<Box<[u8]>>,
 }
 
@@ -347,7 +346,6 @@ impl Entry {
             merged: None,
             conflicted: None,
             wants: None,
-            landed: 0,
             waiting: false,
             holding: None,
             asides: 0,
