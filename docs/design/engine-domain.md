@@ -739,13 +739,13 @@ What the protocol and io layers owe the domain, to be designed after it:
 ## 14. The world
 
 Each child domain has a world of its own,
-`tests/integration/engine/<name>`, its parent and neighbours scripted in
+`tests/engine/<name>`, its parent and neighbours scripted in
 it and its scenario's expectations in a referee (testing.md, 5.2).
 The rules, decisions over data, are tested by their step tests, with a
 sweep checked against an independent statement of the protected-landing
 rule.
 
-The engine's world, `tests/integration/engine/domain`, runs the top level
+The engine's world, `tests/engine/domain`, runs the top level
 with every child domain beneath it against fakes that share none of its
 types (testing-strategy.md, section 4): the fake forge, its faults
 drawn from the seed, reached through its protocol layer as the world

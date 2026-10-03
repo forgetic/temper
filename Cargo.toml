@@ -20,43 +20,27 @@ members = [
     "crates/temper-worker-domain-agent",
     "crates/temper-worker-domain-checkout",
     "crates/temper-worker-domain-host",
-    "testing/temper-forge-domain",
-    "testing/temper-llm-domain",
-    "tests/integration/agent/domain",
-    "tests/integration/agent/run",
-    "tests/integration/agent/session",
-    "tests/integration/agent/tools",
-    "tests/integration/checkout",
-    "tests/integration/engine/brief",
-    "tests/integration/engine/fleet",
-    "tests/integration/engine/forge",
-    "tests/integration/engine/domain",
-    "tests/integration/engine/notes",
-    "tests/integration/engine/plan",
-    "tests/integration/engine/views",
-    "tests/integration/engine/work",
-    "tests/integration/forge",
-    "tests/integration/worker/agent",
-    "tests/integration/worker/checkout",
-    "tests/integration/worker/host",
-    "tests/integration/worker/domain",
-    "tests/integration/world",
-    "tests/fuzzy/agent/domain",
-    "tests/fuzzy/agent/run",
-    "tests/fuzzy/agent/session",
-    "tests/fuzzy/agent/tools",
-    "tests/fuzzy/engine/brief",
-    "tests/fuzzy/engine/fleet",
-    "tests/fuzzy/engine/forge",
-    "tests/fuzzy/engine/domain",
-    "tests/fuzzy/engine/notes",
-    "tests/fuzzy/engine/plan",
-    "tests/fuzzy/engine/views",
-    "tests/fuzzy/engine/work",
-    "tests/fuzzy/worker/agent",
-    "tests/fuzzy/worker/checkout",
-    "tests/fuzzy/worker/host",
-    "tests/fuzzy/worker/domain",
+    "testing/temper-fake-forge-domain",
+    "testing/temper-fake-llm-domain",
+    "tests/agent/domain",
+    "tests/agent/run",
+    "tests/agent/session",
+    "tests/agent/tools",
+    "tests/fake-checkout",
+    "tests/engine/brief",
+    "tests/engine/fleet",
+    "tests/engine/forge",
+    "tests/engine/domain",
+    "tests/engine/notes",
+    "tests/engine/plan",
+    "tests/engine/views",
+    "tests/engine/work",
+    "tests/fake-forge",
+    "tests/worker/agent",
+    "tests/worker/checkout",
+    "tests/worker/host",
+    "tests/worker/domain",
+    "tests/world",
 ]
 
 [workspace.package]
@@ -84,26 +68,26 @@ temper-worker-domain = { path = "crates/temper-worker-domain" }
 temper-worker-domain-agent = { path = "crates/temper-worker-domain-agent" }
 temper-worker-domain-checkout = { path = "crates/temper-worker-domain-checkout" }
 temper-worker-domain-host = { path = "crates/temper-worker-domain-host" }
-temper-forge-domain = { path = "testing/temper-forge-domain" }
-temper-llm-domain = { path = "testing/temper-llm-domain" }
-temper-checkout-fake = { path = "tests/integration/checkout" }
-temper-engine-domain-forge-tests = { path = "tests/integration/engine/forge" }
-temper-engine-domain-tests = { path = "tests/integration/engine/domain" }
-temper-agent-domain-tools-tests = { path = "tests/integration/agent/tools" }
-temper-worker-domain-agent-tests = { path = "tests/integration/worker/agent" }
-temper-worker-domain-checkout-tests = { path = "tests/integration/worker/checkout" }
-temper-worker-domain-tests = { path = "tests/integration/worker/domain" }
-temper-agent-domain-tests = { path = "tests/integration/agent/domain" }
-temper-agent-domain-run-tests = { path = "tests/integration/agent/run" }
-temper-agent-domain-session-tests = { path = "tests/integration/agent/session" }
-temper-engine-domain-brief-tests = { path = "tests/integration/engine/brief" }
-temper-engine-domain-fleet-tests = { path = "tests/integration/engine/fleet" }
-temper-engine-domain-notes-tests = { path = "tests/integration/engine/notes" }
-temper-engine-domain-plan-tests = { path = "tests/integration/engine/plan" }
-temper-engine-domain-views-tests = { path = "tests/integration/engine/views" }
-temper-engine-domain-work-tests = { path = "tests/integration/engine/work" }
-temper-worker-domain-host-tests = { path = "tests/integration/worker/host" }
-temper-world = { path = "tests/integration/world" }
+temper-fake-forge-domain = { path = "testing/temper-fake-forge-domain" }
+temper-fake-llm-domain = { path = "testing/temper-fake-llm-domain" }
+temper-fake-checkout = { path = "tests/fake-checkout" }
+temper-engine-forge-world = { path = "tests/engine/forge" }
+temper-engine-domain-world = { path = "tests/engine/domain" }
+temper-agent-tools-world = { path = "tests/agent/tools" }
+temper-worker-agent-world = { path = "tests/worker/agent" }
+temper-worker-checkout-world = { path = "tests/worker/checkout" }
+temper-worker-domain-world = { path = "tests/worker/domain" }
+temper-agent-domain-world = { path = "tests/agent/domain" }
+temper-agent-run-world = { path = "tests/agent/run" }
+temper-agent-session-world = { path = "tests/agent/session" }
+temper-engine-brief-world = { path = "tests/engine/brief" }
+temper-engine-fleet-world = { path = "tests/engine/fleet" }
+temper-engine-notes-world = { path = "tests/engine/notes" }
+temper-engine-plan-world = { path = "tests/engine/plan" }
+temper-engine-views-world = { path = "tests/engine/views" }
+temper-engine-work-world = { path = "tests/engine/work" }
+temper-worker-host-world = { path = "tests/worker/host" }
+temper-world = { path = "tests/world" }
 
 # Panics are fail-stop and overflow traps, in every profile. (The test harness
 # needs unwinding, so cargo ignores `panic` for test targets.)

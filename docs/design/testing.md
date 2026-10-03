@@ -127,8 +127,8 @@ section 4).
 
 ### 4.1 LLM providers
 
-`testing/temper-llm-domain` is a provider seen from the inside. It answers
-each call after a drawn latency, by a world's script or at random
+`testing/temper-fake-llm-domain` is a provider seen from the inside. It
+answers each call after a drawn latency, by a world's script or at random
 (failures by configured chance, a number of tool rounds, then a final
 answer), and rejects conversations a real provider would reject.
 
@@ -159,8 +159,8 @@ sees.
   subset (4.3) on the pushed tree, so a change that is wrong fails on the
   forge as it fails in the run.
 
-The domain is built, as `testing/temper-forge-domain`, a step crate with a
-vocabulary of its own. What building it settled:
+The domain is built, as `testing/temper-fake-forge-domain`, a step crate
+with a vocabulary of its own. What building it settled:
 
 - **Forgejo-shaped, not better than Forgejo.** It refuses what Forgejo
   refuses (too little permission, a label not defined, an empty title or
@@ -204,7 +204,7 @@ vocabulary of its own. What building it settled:
 - **Its git is the only forge git.** Commits live in the forge's one
   store, named by a count so a seed replays to the same names, each a
   parent and a tree; they carry no message. A working tree's git
-  (`temper-checkout-fake`) reaches the forge through a typed transport,
+  (`temper-fake-checkout`) reaches the forge through a typed transport,
   as real git reaches a remote across the network (4.3): the worker's and
   the agent's worlds route it to the fake forge directly, answered in the
   same instant, since io's latency already stands for the network and the
@@ -244,7 +244,7 @@ invocations temper makes need a face.
 The forge's git is not the machine's. The git program reaches the fake
 forge as real git does, across the network: through a typed transport
 that the world or the simulator routes, and over HTTP in the real loop.
-That split is built: `temper-checkout-fake` keeps working trees and
+That split is built: `temper-fake-checkout` keeps working trees and
 their git directories, the commits a tree cloned, fetched or made among
 its files, while the forge keeps the repositories, and the transport
 carries git's calls between them (where a repository's branches are, a
@@ -290,7 +290,7 @@ A fake worker served until the worker's domain was built, and a fake
 engine until the engine's was. Both have retired: the system worlds run
 the real engine, each wiring it as the protocol layers would.
 
-- **The agent's top-level world** (`tests/integration/agent/domain`): the
+- **The agent's top-level world** (`tests/agent/domain`): the
   real engine, worker and agents; the fake LLM provider; one fake forge,
   which the engine reaches through the forge's protocol as the engine's
   world plays it, and io's git through the working trees' transport; the
@@ -299,7 +299,7 @@ the real engine, each wiring it as the protocol layers would.
   have written it (the agent's side cannot take a session's turns yet), a
   reviewer, and a person who stops a run now and then. Its channel
   between engine and worker keeps its order and never drops.
-- **The whole worker's world** (`tests/integration/worker/domain`): the
+- **The whole worker's world** (`tests/worker/domain`): the
   real engine and worker; the fake forge, reached by the engine and by
   the worker's git; the engine's world's people and store; and the
   process trees and scripted agents of the worker's agent world, their
@@ -347,7 +347,7 @@ the hour. What temper adds:
 - **A failure in the real loop** is reported with the trace, since the
   seed does not replay there.
 
-The referee is built in the shared harness, `tests/integration/world`,
+The referee is built in the shared harness, `tests/world`,
 as ordinary Rust. Each world writes its scenario's expectations: what
 its referee observes, the names of what it expects to happen, the
 stimuli it may inject, and what it checks of each observation. Through
@@ -398,31 +398,35 @@ Every world checks what the strategy lists (testing-strategy.md, section
 The two suites are the strategy's (testing-strategy.md, section 8), run
 by the commands in `docs/development/workflow.md`. In temper:
 
-- **Focused tests** are the step tests, and under `tests/integration`
-  each world's scenarios, referee tests, replay, facts changing nothing
-  (a run is the same whether its facts are kept or dropped), and memory
-  at the worst case.
-- **Fuzzy tests** are under `tests/fuzzy`. A sweep settles each random
-  world under every invariant, and reaches every ending among them.
+- **Focused tests** are the step tests, and each world's scenarios,
+  referee tests, replay, facts changing nothing (a run is the same
+  whether its facts are kept or dropped), and memory at the worst case:
+  every test binary of a world but its fuzzy ones.
+- **Fuzzy tests** are each world's `tests/fuzzy_*.rs` binaries. A sweep
+  settles each random world under every invariant, and reaches every
+  ending among them.
 
-A fuzzy test lives in a package of its own under `tests/fuzzy`, beside
-its world's under `tests/integration`, and uses that world: a world's
-settings, random ones included, are the world's, not either suite's.
+A fuzzy test lives in its world's crate, beside the focused ones, and
+uses that world: a world's settings, random ones included, are the
+world's, not either suite's. The suites are told apart by binary name.
+Each fuzzy file is a binary of its own, so a memory test's counting
+allocator never runs under a sweep.
 
 ## 7. Layout
 
 ```
-crates/*/src/tests.rs                       step tests
-testing/                                    fakes, as step crates
-tests/integration/world                     the world harness: schedule, stage, ledger, trace, heap, referee
-tests/integration/<component>/<child>       child domain worlds, the engine's in tests/integration/engine
-tests/integration/<component>/domain        component and system worlds
-tests/integration/checkout                  the machine and working trees' git, today
-tests/integration/forge                     the fake forge's tests in ordinary Rust: its memory
-tests/fuzzy/<component>/<child>             each world's fuzzy tests: random worlds, domains driven at random
+crates/*/src/tests.rs           step tests
+testing/temper-fake-*           fakes, as step crates: the forge and the LLM provider
+tests/world                     the world harness: schedule, stage, ledger, trace, heap, referee
+tests/<component>/<child>       a child domain's world, temper-<component>-<child>-world
+tests/<component>/domain        a component's world: the engine's, and the system worlds
+tests/*/*/tests/*.rs            a world's focused tests
+tests/*/*/tests/fuzzy_*.rs      its fuzzy tests: random worlds, domains driven at random
+tests/fake-checkout             the machine and working trees' git, today
+tests/fake-forge                the fake forge's tests in ordinary Rust: its memory
 ```
 
-Under `tests/integration/<component>/domain`, the engine's is its own
+Under `tests/<component>/domain`, the engine's is its own
 world, and the agent's and the whole worker's are system worlds (2.1);
 the engine world's crate is a library the system worlds use (4.5). The
 world harness is temper's until a second service needs it
@@ -447,16 +451,16 @@ As of 2026-10-03.
 
 The fakes:
 
-- **LLM provider:** its domain, `testing/temper-llm-domain`.
+- **LLM provider:** its domain, `testing/temper-fake-llm-domain`.
 - **Engine:** retired; the system worlds run the real one (4.5).
-- **Forge:** its domain, `testing/temper-forge-domain` (4.2), with its
-  git. The forge child domain's world, the engine's and the system worlds
-  run against it, the forge child domain world's translation standing in
-  for the protocol layer; io's git reaches it through the working trees'
-  transport, with no latency or faults of its own there, as io's stand for
-  them. It has no inline review comments, and no description or link on a
-  status, which the worlds answer empty.
-- **Machine:** `temper-checkout-fake`, ordinary Rust rather than a step
+- **Forge:** its domain, `testing/temper-fake-forge-domain` (4.2), with
+  its git. The forge child domain's world, the engine's and the system
+  worlds run against it, the forge child domain world's translation
+  standing in for the protocol layer; io's git reaches it through the
+  working trees' transport, with no latency or faults of its own there, as
+  io's stand for them. It has no inline review comments, and no
+  description or link on a status, which the worlds answer empty.
+- **Machine:** `temper-fake-checkout`, ordinary Rust rather than a step
   crate, at its domain face only, through each world's translation. It has
   files with versions, links and roots, a search, and the working trees'
   git. A command is matched whole and answered with canned output and
@@ -471,7 +475,7 @@ The fakes:
 The checks:
 
 - **Memory** is measured in every world, and the fake forge's against its
-  worst case in `tests/integration/forge`.
+  worst case in `tests/fake-forge`.
 - **Replay** is checked in every world, by its trace.
 - **Transition coverage** is not measured, and nothing is fuzzed yet:
   there is no protocol machine or decoder for `cargo fuzz`, and no

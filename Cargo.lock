@@ -18,38 +18,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "temper-agent-domain-fuzzy"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-agent-domain",
- "temper-agent-domain-tests",
- "temper-world",
-]
-
-[[package]]
 name = "temper-agent-domain-run"
 version = "0.0.0"
 dependencies = [
  "skein-lib",
-]
-
-[[package]]
-name = "temper-agent-domain-run-fuzzy"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-agent-domain-run",
- "temper-agent-domain-run-tests",
-]
-
-[[package]]
-name = "temper-agent-domain-run-tests"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-agent-domain-run",
- "temper-world",
 ]
 
 [[package]]
@@ -61,49 +33,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "temper-agent-domain-session-fuzzy"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-agent-domain-session",
- "temper-agent-domain-session-tests",
- "temper-agent-domain-tools",
- "temper-llm-domain",
-]
-
-[[package]]
-name = "temper-agent-domain-session-tests"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-agent-domain-session",
- "temper-agent-domain-tools",
- "temper-agent-domain-tools-tests",
- "temper-checkout-fake",
- "temper-llm-domain",
- "temper-world",
-]
-
-[[package]]
-name = "temper-agent-domain-tests"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-agent-domain",
- "temper-agent-domain-tools-tests",
- "temper-checkout-fake",
- "temper-engine-domain",
- "temper-engine-domain-forge-tests",
- "temper-engine-domain-tests",
- "temper-forge-domain",
- "temper-llm-domain",
- "temper-worker-domain",
- "temper-worker-domain-agent",
- "temper-worker-domain-checkout-tests",
- "temper-world",
-]
-
-[[package]]
 name = "temper-agent-domain-tools"
 version = "0.0.0"
 dependencies = [
@@ -111,28 +40,64 @@ dependencies = [
 ]
 
 [[package]]
-name = "temper-agent-domain-tools-fuzzy"
+name = "temper-agent-domain-world"
 version = "0.0.0"
 dependencies = [
  "skein-lib",
- "temper-agent-domain-tools",
- "temper-agent-domain-tools-tests",
+ "temper-agent-domain",
+ "temper-agent-tools-world",
+ "temper-engine-domain",
+ "temper-engine-domain-world",
+ "temper-engine-forge-world",
+ "temper-fake-checkout",
+ "temper-fake-forge-domain",
+ "temper-fake-llm-domain",
+ "temper-worker-checkout-world",
+ "temper-worker-domain",
+ "temper-worker-domain-agent",
  "temper-world",
 ]
 
 [[package]]
-name = "temper-agent-domain-tools-tests"
+name = "temper-agent-run-world"
 version = "0.0.0"
 dependencies = [
  "skein-lib",
- "temper-agent-domain-tools",
- "temper-checkout-fake",
+ "temper-agent-domain-run",
  "temper-world",
 ]
 
 [[package]]
-name = "temper-checkout-fake"
+name = "temper-agent-session-world"
 version = "0.0.0"
+dependencies = [
+ "skein-lib",
+ "temper-agent-domain-session",
+ "temper-agent-domain-tools",
+ "temper-agent-tools-world",
+ "temper-fake-checkout",
+ "temper-fake-llm-domain",
+ "temper-world",
+]
+
+[[package]]
+name = "temper-agent-tools-world"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+ "temper-agent-domain-tools",
+ "temper-fake-checkout",
+ "temper-world",
+]
+
+[[package]]
+name = "temper-engine-brief-world"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+ "temper-engine-domain-brief",
+ "temper-world",
+]
 
 [[package]]
 name = "temper-engine-domain"
@@ -157,47 +122,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "temper-engine-domain-brief-fuzzy"
-version = "0.0.0"
-dependencies = [
- "temper-engine-domain-brief",
- "temper-engine-domain-brief-tests",
- "temper-world",
-]
-
-[[package]]
-name = "temper-engine-domain-brief-tests"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-engine-domain-brief",
- "temper-world",
-]
-
-[[package]]
 name = "temper-engine-domain-fleet"
 version = "0.0.0"
 dependencies = [
  "skein-lib",
-]
-
-[[package]]
-name = "temper-engine-domain-fleet-fuzzy"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-engine-domain-fleet",
- "temper-engine-domain-fleet-tests",
- "temper-world",
-]
-
-[[package]]
-name = "temper-engine-domain-fleet-tests"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-engine-domain-fleet",
- "temper-world",
 ]
 
 [[package]]
@@ -208,56 +136,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "temper-engine-domain-forge-fuzzy"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-engine-domain-forge",
- "temper-engine-domain-forge-tests",
- "temper-forge-domain",
- "temper-world",
-]
-
-[[package]]
-name = "temper-engine-domain-forge-tests"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-engine-domain-forge",
- "temper-forge-domain",
- "temper-world",
-]
-
-[[package]]
-name = "temper-engine-domain-fuzzy"
-version = "0.0.0"
-dependencies = [
- "temper-engine-domain-tests",
-]
-
-[[package]]
 name = "temper-engine-domain-notes"
 version = "0.0.0"
 dependencies = [
  "skein-lib",
-]
-
-[[package]]
-name = "temper-engine-domain-notes-fuzzy"
-version = "0.0.0"
-dependencies = [
- "temper-engine-domain-notes",
- "temper-engine-domain-notes-tests",
- "temper-world",
-]
-
-[[package]]
-name = "temper-engine-domain-notes-tests"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-engine-domain-notes",
- "temper-world",
 ]
 
 [[package]]
@@ -268,38 +150,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "temper-engine-domain-plan-fuzzy"
-version = "0.0.0"
-dependencies = [
- "temper-engine-domain-plan-tests",
- "temper-world",
-]
-
-[[package]]
-name = "temper-engine-domain-plan-tests"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-engine-domain-plan",
- "temper-world",
-]
-
-[[package]]
 name = "temper-engine-domain-rules"
 version = "0.0.0"
 dependencies = [
  "skein-lib",
-]
-
-[[package]]
-name = "temper-engine-domain-tests"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-engine-domain",
- "temper-engine-domain-forge-tests",
- "temper-forge-domain",
- "temper-world",
 ]
 
 [[package]]
@@ -310,25 +164,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "temper-engine-domain-views-fuzzy"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-engine-domain-views",
- "temper-engine-domain-views-tests",
- "temper-world",
-]
-
-[[package]]
-name = "temper-engine-domain-views-tests"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-engine-domain-views",
- "temper-world",
-]
-
-[[package]]
 name = "temper-engine-domain-work"
 version = "0.0.0"
 dependencies = [
@@ -336,44 +171,116 @@ dependencies = [
 ]
 
 [[package]]
-name = "temper-engine-domain-work-fuzzy"
+name = "temper-engine-domain-world"
 version = "0.0.0"
 dependencies = [
+ "skein-lib",
+ "temper-engine-domain",
+ "temper-engine-forge-world",
+ "temper-fake-forge-domain",
+ "temper-world",
+]
+
+[[package]]
+name = "temper-engine-fleet-world"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+ "temper-engine-domain-fleet",
+ "temper-world",
+]
+
+[[package]]
+name = "temper-engine-forge-world"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+ "temper-engine-domain-forge",
+ "temper-fake-forge-domain",
+ "temper-world",
+]
+
+[[package]]
+name = "temper-engine-notes-world"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+ "temper-engine-domain-notes",
+ "temper-world",
+]
+
+[[package]]
+name = "temper-engine-plan-world"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+ "temper-engine-domain-plan",
+ "temper-world",
+]
+
+[[package]]
+name = "temper-engine-views-world"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+ "temper-engine-domain-views",
+ "temper-world",
+]
+
+[[package]]
+name = "temper-engine-work-world"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
  "temper-engine-domain-work",
- "temper-engine-domain-work-tests",
  "temper-world",
 ]
 
 [[package]]
-name = "temper-engine-domain-work-tests"
+name = "temper-fake-checkout"
+version = "0.0.0"
+
+[[package]]
+name = "temper-fake-forge-domain"
 version = "0.0.0"
 dependencies = [
  "skein-lib",
- "temper-engine-domain-work",
+]
+
+[[package]]
+name = "temper-fake-forge-tests"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+ "temper-fake-forge-domain",
  "temper-world",
 ]
 
 [[package]]
-name = "temper-forge-domain"
+name = "temper-fake-llm-domain"
 version = "0.0.0"
 dependencies = [
  "skein-lib",
 ]
 
 [[package]]
-name = "temper-forge-domain-tests"
+name = "temper-worker-agent-world"
 version = "0.0.0"
 dependencies = [
  "skein-lib",
- "temper-forge-domain",
+ "temper-worker-domain-agent",
  "temper-world",
 ]
 
 [[package]]
-name = "temper-llm-domain"
+name = "temper-worker-checkout-world"
 version = "0.0.0"
 dependencies = [
  "skein-lib",
+ "temper-fake-checkout",
+ "temper-fake-forge-domain",
+ "temper-worker-domain-checkout",
+ "temper-world",
 ]
 
 [[package]]
@@ -394,54 +301,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "temper-worker-domain-agent-fuzzy"
-version = "0.0.0"
-dependencies = [
- "temper-worker-domain-agent",
- "temper-worker-domain-agent-tests",
-]
-
-[[package]]
-name = "temper-worker-domain-agent-tests"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-worker-domain-agent",
- "temper-world",
-]
-
-[[package]]
 name = "temper-worker-domain-checkout"
 version = "0.0.0"
 dependencies = [
  "skein-lib",
-]
-
-[[package]]
-name = "temper-worker-domain-checkout-fuzzy"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-worker-domain-checkout",
- "temper-worker-domain-checkout-tests",
-]
-
-[[package]]
-name = "temper-worker-domain-checkout-tests"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-checkout-fake",
- "temper-forge-domain",
- "temper-worker-domain-checkout",
- "temper-world",
-]
-
-[[package]]
-name = "temper-worker-domain-fuzzy"
-version = "0.0.0"
-dependencies = [
- "temper-worker-domain-tests",
 ]
 
 [[package]]
@@ -452,36 +315,27 @@ dependencies = [
 ]
 
 [[package]]
-name = "temper-worker-domain-host-fuzzy"
+name = "temper-worker-domain-world"
 version = "0.0.0"
 dependencies = [
  "skein-lib",
- "temper-worker-domain-host",
- "temper-worker-domain-host-tests",
-]
-
-[[package]]
-name = "temper-worker-domain-host-tests"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-worker-domain-host",
+ "temper-engine-domain",
+ "temper-engine-domain-world",
+ "temper-engine-forge-world",
+ "temper-fake-checkout",
+ "temper-fake-forge-domain",
+ "temper-worker-agent-world",
+ "temper-worker-checkout-world",
+ "temper-worker-domain",
  "temper-world",
 ]
 
 [[package]]
-name = "temper-worker-domain-tests"
+name = "temper-worker-host-world"
 version = "0.0.0"
 dependencies = [
  "skein-lib",
- "temper-checkout-fake",
- "temper-engine-domain",
- "temper-engine-domain-forge-tests",
- "temper-engine-domain-tests",
- "temper-forge-domain",
- "temper-worker-domain",
- "temper-worker-domain-agent-tests",
- "temper-worker-domain-checkout-tests",
+ "temper-worker-domain-host",
  "temper-world",
 ]
 
