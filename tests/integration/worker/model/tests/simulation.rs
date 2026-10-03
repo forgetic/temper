@@ -229,7 +229,7 @@ fn a_worker_shutting_down_out_of_reach_delivers_its_answers_if_the_channel_opens
     // and are killed only once the channel has opened again; out of reach
     // past the engine's grace too, the world settles. The first seed whose
     // world keeps an answer past the grace with a run left.
-    let calm = dropping(Settings::calm(5), Span::millis(60_000, 70_000), Span::millis(62_000, 75_000), 30);
+    let calm = dropping(Settings::calm(3), Span::millis(60_000, 70_000), Span::millis(62_000, 75_000), 30);
     let limits = calm.worker;
     let mut world = World::new(Settings {
         worker: Limits {
@@ -252,6 +252,22 @@ fn a_worker_shutting_down_out_of_reach_delivers_its_answers_if_the_channel_opens
         stats.kept_past_grace > 0 && stats.abandoned == 0,
         "answers kept past the grace, with a run left, are delivered once the channel opens: {stats:?}"
     );
+}
+
+/// The engine restarts, cold, twice while runs are live: the worker dials
+/// the new engine, says what it hosts and sends again what the last did not
+/// acknowledge, and the world settles.
+#[test]
+fn an_engine_that_restarts_takes_the_runs_back_from_the_worker() {
+    let worlds = worlds(2, |calm| Settings {
+        restarts: 2,
+        restart_at: Span::millis(30_000, 300_000),
+        script: script::Script { steps: 20, ..calm.script },
+        ..calm
+    });
+    assert_eq!(total(&worlds, |stats| stats.restarts), 4);
+    assert!(total(&worlds, |stats| stats.hellos) > 4, "the worker says hello to each engine");
+    assert!(total(&worlds, |stats| ending(stats, "story closed")) > 0);
 }
 
 #[test]

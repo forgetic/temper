@@ -301,7 +301,9 @@ impl World {
         let content = format!("another party, {}", self.stats.advanced);
         let env = Env { now: self.now, limits: self.settings.forge };
         let advanced = forge::advance(&mut self.forge, &env, remote, branch, b"OTHER", content.as_bytes(), OTHER);
-        advanced.expect("the forge has room for another party's commit");
+        let commit = advanced.expect("the forge has room for another party's commit");
+        let (remote, branch) = (String::from_utf8_lossy(remote), String::from_utf8_lossy(branch));
+        self.log(format!("another party moves {branch} of {remote} to {commit:?}"));
     }
 }
 
@@ -313,6 +315,8 @@ impl World {
             return;
         }
         self.stats.deleted += 1;
+        let (name, gone) = (String::from_utf8_lossy(remote), String::from_utf8_lossy(branch));
+        self.log(format!("another party deletes {gone} of {name}"));
         let name = self.wire.name();
         self.theirs.open(name, super::Theirs::Person { tale: None });
         let op = ForgeOp::Write(Write::DeleteBranch { branch: branch.into() });

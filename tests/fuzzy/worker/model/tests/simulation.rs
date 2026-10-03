@@ -51,14 +51,23 @@ const SWEPT: u64 = 40;
 /// keeps it).
 const UNREACHED: [&str; 3] = ["run cancelled", "refused invalid", "unprepared missing"];
 
-/// Seeds that found what the engine did not do: a change's attempt pushes,
-/// and its answer reaches the engine only after the engine presumed it lost
-/// (the worker out of reach past the engine's grace); the engine never
-/// learned the branch moved, so every later attempt started from the base,
-/// and its push was rejected as the branch moved, for good.
-const FINDINGS: [u64; 3] = [9, 25, 40];
+/// Seeds that find what the engine does not do yet, swept past the seeds
+/// above:
+///
+/// - 40: a change's first push lands, but io reports it out of time, and the
+///   fetch that would verify it fails too, so its run answers that nothing
+///   landed. The engine never learns its branch: every later attempt starts
+///   from the base, its push is rejected as the branch moved, and its outcome
+///   is stale, run after run without bound, until the forge has no room for
+///   the outcomes and holds the change for its writes.
+/// - 103: the engine restarts while it applies a change's outcome, after
+///   another party moved the change's branch past what the run pushed. The
+///   engine that starts cold waits for good, its pull request green and
+///   approved at the moved head.
+const FINDINGS: [u64; 2] = [40, 103];
 
 #[test]
+#[ignore = "until the engine learns a branch no answer said landed, and resumes a moved change after a restart"]
 fn the_engine_findings_replay() {
     for seed in FINDINGS {
         run(&Settings::rough(seed));

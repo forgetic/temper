@@ -5,7 +5,7 @@
 use temper_engine_model::work::{Class, Failures, Lifecycle, Phase};
 use temper_lib::{Duration, Time, Token};
 use temper_worker_model_tests::protocol::Names;
-use temper_worker_model_tests::referee::{Hosting, Seen};
+use temper_worker_model_tests::referee::{Hosting, Seen, Stimulus};
 use temper_world::{Referee, Verdict};
 
 fn at(secs: u64) -> Time {
@@ -13,7 +13,7 @@ fn at(secs: u64) -> Time {
 }
 
 fn referee() -> Referee<Hosting> {
-    Referee::new(Hosting::new(Duration::from_secs(60)))
+    Referee::new(Hosting::new(Duration::from_secs(60), vec![Duration::from_secs(30)]))
 }
 
 fn see(referee: &mut Referee<Hosting>, secs: u64, seen: Seen) {
@@ -35,7 +35,6 @@ fn recorded(phase: Phase, attempts: u64, failures: Failures) -> Seen {
 #[test]
 fn an_answer_taken_and_acknowledged_passes() {
     let mut referee = referee();
-    see(&mut referee, 0, Seen::Assigned { names: NAMES });
     see(&mut referee, 1, Seen::Answered { names: NAMES, refused: false });
     see(&mut referee, 2, Seen::Answered { names: NAMES, refused: false });
     see(&mut referee, 3, Seen::Acknowledged { names: NAMES });
@@ -45,10 +44,76 @@ fn an_answer_taken_and_acknowledged_passes() {
 #[test]
 fn an_answer_not_acknowledged_in_time_fails() {
     let mut referee = referee();
-    see(&mut referee, 0, Seen::Assigned { names: NAMES });
     see(&mut referee, 1, Seen::Answered { names: NAMES, refused: false });
     referee.fire(at(62), &mut Vec::new());
     assert!(why(&referee).contains("was not met"), "{}", why(&referee));
+}
+
+#[test]
+fn an_acknowledgement_for_an_answer_that_never_came_fails() {
+    let mut referee = referee();
+    see(&mut referee, 1, Seen::Acknowledged { names: NAMES });
+    assert!(why(&referee).contains("only an answer that reached it"), "{}", why(&referee));
+}
+
+#[test]
+fn a_refusal_is_not_acknowledged() {
+    let mut referee = referee();
+    see(&mut referee, 1, Seen::Answered { names: NAMES, refused: true });
+    referee.fire(at(120), &mut Vec::new());
+    referee.assert_passed(0);
+}
+
+/// The channel lost, or the engine restarting, withdraws the bound; the
+/// next hello that lists the answer arms it again.
+#[test]
+fn an_answer_is_acknowledged_within_the_bound_of_the_hello_that_lists_it_again() {
+    for loss in [Seen::Lost, Seen::Restarted] {
+        let mut referee = referee();
+        see(&mut referee, 1, Seen::Answered { names: NAMES, refused: false });
+        see(&mut referee, 30, loss);
+        referee.fire(at(300), &mut Vec::new());
+        see(&mut referee, 300, Seen::Hello { answered: vec![NAMES] });
+        see(&mut referee, 340, Seen::Acknowledged { names: NAMES });
+        referee.assert_passed(0);
+    }
+}
+
+#[test]
+fn an_answer_listed_again_and_not_acknowledged_in_time_fails() {
+    let mut referee = referee();
+    see(&mut referee, 1, Seen::Answered { names: NAMES, refused: false });
+    see(&mut referee, 30, Seen::Lost);
+    see(&mut referee, 300, Seen::Hello { answered: vec![NAMES] });
+    referee.fire(at(361), &mut Vec::new());
+    assert!(why(&referee).contains("was not met"), "{}", why(&referee));
+}
+
+#[test]
+fn an_answer_the_worker_gave_up_is_not_acknowledged() {
+    let mut referee = referee();
+    see(&mut referee, 1, Seen::Answered { names: NAMES, refused: false });
+    see(&mut referee, 30, Seen::Stopped { given_up: vec![NAMES] });
+    referee.fire(at(300), &mut Vec::new());
+    referee.assert_passed(0);
+}
+
+/// A channel the world says drops drops as long after it opened as the next
+/// life drawn says; the others, and those past the lives drawn, stay open.
+#[test]
+fn a_channel_that_drops_drops_a_life_after_it_opened() {
+    let mut referee = referee();
+    let mut stimuli = Vec::new();
+    see(&mut referee, 1, Seen::Opened { epoch: 1, drops: false });
+    see(&mut referee, 2, Seen::Opened { epoch: 2, drops: true });
+    see(&mut referee, 40, Seen::Opened { epoch: 3, drops: true });
+    referee.fire(at(31), &mut stimuli);
+    assert!(stimuli.is_empty());
+    referee.fire(at(32), &mut stimuli);
+    assert_eq!(stimuli, [Stimulus::Drop { epoch: 2 }]);
+    referee.fire(at(600), &mut stimuli);
+    assert_eq!(stimuli.len(), 1, "no life is left for the third channel");
+    referee.assert_passed(0);
 }
 
 #[test]

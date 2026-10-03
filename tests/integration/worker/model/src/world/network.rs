@@ -124,16 +124,13 @@ impl World {
         self.channel = Channel::Open { epoch, hello: false };
         self.stats.connects += 1;
         self.stage.push(Event::Connected);
-        let network = self.settings.network;
-        if self.drops > 0 && self.rng.chance(network.drop) {
-            self.drops -= 1;
-            let at = self.now.saturating_add(network.life.draw(&mut self.rng));
-            self.send(at, Delivery::Drop { epoch });
-        }
+        let drops = self.rng.chance(self.settings.network.drop);
+        self.hosting.observe(self.now, Seen::Opened { epoch, drops }, &mut Vec::new());
     }
 
-    /// The channel `epoch` drops: what is in flight on it is lost, both ends
-    /// hear of it, and the engine is out of reach for a while.
+    /// The channel `epoch` drops, if it is still the one open: what is in
+    /// flight on it is lost, both ends hear of it, and the engine is out of
+    /// reach for a while.
     pub(super) fn drop_channel(&mut self, epoch: u64) {
         let hello = match self.channel {
             Channel::Open { epoch: open, hello } if open == epoch => hello,
@@ -155,7 +152,8 @@ impl World {
     /// came up it before.
     fn lose(&mut self, epoch: u64) {
         let at = self.lane(Lane::Up, Duration::ZERO);
-        self.send(at, Delivery::Engine(engine::Event::Lost { channel: token(epoch) }));
+        let event = engine::Event::Lost { channel: token(epoch) };
+        self.send(at, Delivery::Engine { life: self.engine_life, event });
         self.hosting.observe(self.now, Seen::Lost, &mut Vec::new());
     }
 
@@ -268,7 +266,7 @@ impl World {
     }
 
     /// The channel `epoch` closed: the copies held on it go with it.
-    fn lose_held(&mut self, epoch: u64) {
+    pub(super) fn lose_held(&mut self, epoch: u64) {
         self.acknowledged.retain(|(on, _)| *on != epoch);
         let (lost, held): (Vec<Held>, Vec<Held>) =
             std::mem::take(&mut self.held).into_iter().partition(|held| held.epoch == epoch);
@@ -327,6 +325,16 @@ impl World {
                     engine::Event::Hello { hello, .. } => {
                         let hosting = hello.hosting.iter().map(|hosted| protocol::names(hosted.item, hosted.attempt));
                         listed = Some(hosting.collect::<Vec<Names>>());
+                        let answered = hello.hosting.iter().filter_map(|hosted| match hosted.phase {
+                            engine::fleet::Phase::Answered => Some(protocol::names(hosted.item, hosted.attempt)),
+                            engine::fleet::Phase::Preparing
+                            | engine::fleet::Phase::Starting
+                            | engine::fleet::Phase::Active
+                            | engine::fleet::Phase::Waiting
+                            | engine::fleet::Phase::Ending => None,
+                        });
+                        let answered = answered.collect();
+                        self.hosting.observe(self.now, Seen::Hello { answered }, &mut Vec::new());
                         true
                     }
                     engine::Event::Answer { item, attempt, answer, .. } => {

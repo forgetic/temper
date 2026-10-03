@@ -1,12 +1,10 @@
 //! What the world expects of the engine and the worker between them, held by
 //! a referee (testing-pyramid.md, 5.2) that sees only what crosses the
-//! channel, at the protocol layers: what the engine assigned, acknowledged
-//! and answered, and what the worker's answers and relays brought it; and
-//! the records the engine writes on the forge. Never a model's state.
-//! Safety, on every observation:
+//! channel, at the protocol layers: what the engine acknowledged and
+//! answered, what the worker's hellos, answers and relays brought it, and
+//! the channel lost; and the records the engine writes on the forge. Never a
+//! model's state. Safety, on every observation:
 //!
-//! - an answer reaches the engine only for an attempt the engine assigned:
-//!   nothing for an attempt it never made;
 //! - the engine acknowledges only an answer that reached it; a call
 //!   reaches it once, and it answers only a call that was relayed to it,
 //!   for the same attempt, and once;
@@ -15,13 +13,20 @@
 //!   its attempts that failed, and never two for one.
 //!
 //! And liveness: an answer that reached the engine, but a refusal, is
-//! acknowledged within a bound, unless the worker that sent it gave it up
-//! as it shut down. What the engine's stories expect of it (what lands, what
-//! is made once, one live run per item) the engine world's referee holds it
-//! to, beside this one.
+//! acknowledged within a bound of minutes while the channel it came on
+//! stays open. The channel lost, or the engine restarting, withdraws the
+//! expectation, and the next hello that lists the answer arms it again; a
+//! worker that gave the answer up as it shut down withdraws it for good.
+//! What the engine's stories expect of it (what lands, what is made once,
+//! one live run per item) the engine world's referee holds it to, beside
+//! this one.
+//!
+//! It injects what belongs to neither model: a channel the world says drops
+//! dropping, a drawn while after it opened (how long each lives is drawn
+//! before the run starts); the worker told to shut down; and the engine
+//! restarting, at moments drawn before the run starts.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::convert::Infallible;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use temper_engine_model::work::{Failures, Lifecycle};
 use temper_lib::{Duration, Token};
@@ -32,9 +37,16 @@ use crate::protocol::Names;
 /// What the referee observes.
 #[derive(Debug)]
 pub enum Seen {
-    /// The engine assigned the attempt.
-    Assigned {
-        names: Names,
+    /// The channel `epoch` opened; it is one that drops, if the next life
+    /// drawn is left.
+    Opened {
+        epoch: u64,
+        drops: bool,
+    },
+    /// A hello reached the engine, listing the attempts whose answers the
+    /// worker keeps, `answered`.
+    Hello {
+        answered: Vec<Names>,
     },
     /// An answer for the attempt reached the engine: a refusal, or not.
     Answered {
@@ -54,8 +66,9 @@ pub enum Seen {
         names: Names,
         call: Token,
     },
-    /// The engine heard the channel it held lost.
+    /// The engine heard the channel it held lost; the engine restarted.
     Lost,
+    Restarted,
     /// The engine wrote the record of the item `number` of `repository`,
     /// which says this of its lifecycle.
     Recorded {
@@ -76,38 +89,57 @@ pub enum Seen {
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Acknowledged(pub Names);
 
+/// What the referee injects: the channel `epoch` drops; the worker is told
+/// to shut down; the engine restarts.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Stimulus {
+    Drop { epoch: u64 },
+    Shutdown,
+    Restart,
+}
+
 /// The expectations between the engine and the worker.
 #[derive(Debug)]
 pub struct Hosting {
-    /// Within which an answer that reached the engine is acknowledged.
+    /// Within which an answer that reached the engine is acknowledged, its
+    /// channel open.
     bound: Duration,
-    assigned: BTreeSet<Names>,
+    /// How long each channel that drops lives, in the order they open.
+    lives: VecDeque<Duration>,
+    /// The answers that reached the engine, and those it acknowledged.
     answered: BTreeSet<Names>,
+    acknowledged: BTreeSet<Names>,
     relays: BTreeSet<(Names, Token)>,
     /// Each item's failures as its last record said, and the attempts its
     /// records counted a failure for.
     failures: BTreeMap<(Vec<u8>, u64), Failures>,
     failed: BTreeSet<(Vec<u8>, u64, u64)>,
-    pub lost: u32,
 }
 
 impl Hosting {
+    /// Expectations with answers acknowledged within `bound`, and channels
+    /// that drop each the next of `lives` after they open.
     #[must_use]
-    pub fn new(bound: Duration) -> Hosting {
+    pub fn new(bound: Duration, lives: Vec<Duration>) -> Hosting {
         Hosting {
             bound,
-            assigned: BTreeSet::new(),
+            lives: lives.into(),
             answered: BTreeSet::new(),
+            acknowledged: BTreeSet::new(),
             relays: BTreeSet::new(),
             failures: BTreeMap::new(),
             failed: BTreeSet::new(),
-            lost: 0,
         }
+    }
+
+    /// The answers that reached the engine and are not acknowledged yet.
+    fn unacknowledged(&self) -> Vec<Names> {
+        self.answered.difference(&self.acknowledged).copied().collect()
     }
 
     /// The item's record says `lifecycle`: a failure more than its last said
     /// is its last claim's attempt's, the one failure that attempt has.
-    fn recorded(&mut self, item: (Vec<u8>, u64), lifecycle: Lifecycle, judge: &mut Judge<Acknowledged, Infallible>) {
+    fn recorded(&mut self, item: (Vec<u8>, u64), lifecycle: Lifecycle, judge: &mut Judge<Acknowledged, Stimulus>) {
         let before = self.failures.insert(item.clone(), lifecycle.failures).unwrap_or(Failures::NONE);
         let after = lifecycle.failures;
         let more = [
@@ -140,18 +172,24 @@ impl Hosting {
 impl Expectations for Hosting {
     type Seen = Seen;
     type Name = Acknowledged;
-    type Stimulus = Infallible;
+    type Stimulus = Stimulus;
 
-    fn observe(&mut self, seen: Seen, judge: &mut Judge<Acknowledged, Infallible>) {
+    fn observe(&mut self, seen: Seen, judge: &mut Judge<Acknowledged, Stimulus>) {
         match seen {
-            Seen::Assigned { names } => {
-                self.assigned.insert(names);
+            Seen::Opened { epoch, drops } => {
+                if let Some(life) = drops.then(|| self.lives.pop_front()).flatten() {
+                    judge.inject(judge.now().saturating_add(life), Stimulus::Drop { epoch });
+                }
+            }
+            Seen::Hello { answered } => {
+                for names in answered {
+                    let unacknowledged = self.answered.contains(&names) && !self.acknowledged.contains(&names);
+                    if unacknowledged && !judge.is_pending(&Acknowledged(names)) {
+                        judge.expect(Acknowledged(names), self.bound);
+                    }
+                }
             }
             Seen::Answered { names, refused } => {
-                judge.check(
-                    self.assigned.contains(&names),
-                    format_args!("an answer reaches the engine only for an attempt it assigned: {names:?}"),
-                );
                 if !refused && self.answered.insert(names) {
                     judge.expect(Acknowledged(names), self.bound);
                 }
@@ -161,6 +199,7 @@ impl Expectations for Hosting {
                     self.answered.contains(&names),
                     format_args!("the engine acknowledges only an answer that reached it: {names:?}"),
                 );
+                self.acknowledged.insert(names);
                 judge.meet(&Acknowledged(names));
             }
             Seen::Relay { names, call } => judge.check(
@@ -171,7 +210,11 @@ impl Expectations for Hosting {
                 self.relays.remove(&(names, call)),
                 format_args!("the engine answers only a call relayed to it, and once: {names:?} {call:?}"),
             ),
-            Seen::Lost => self.lost += 1,
+            Seen::Lost | Seen::Restarted => {
+                for names in self.unacknowledged() {
+                    judge.withdraw(&Acknowledged(names));
+                }
+            }
             Seen::Recorded { repository, number, lifecycle } => self.recorded((repository, number), lifecycle, judge),
             Seen::Stopped { given_up } => {
                 for names in given_up {

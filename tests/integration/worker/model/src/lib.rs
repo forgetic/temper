@@ -13,12 +13,14 @@
 //!   engine world's codecs (charters, outcomes) and the world's own (relayed
 //!   calls and their answers);
 //! - **the network** between them: one channel at a time, which the worker
-//!   dials, with a latency each way, that drops at drawn moments, after which
-//!   the engine is out of reach for a drawn while, shorter or longer than the
-//!   worker's grace; what is in flight on a channel that drops is lost; a
-//!   frame its receiver takes again harmlessly is sent again now and then,
-//!   right behind it or late (once the attempt it is for has answered, or
-//!   behind the next channel's hello), and the channel stalls now and then;
+//!   dials, with a latency each way, that drops a drawn while after some
+//!   channels open (the referee injects it), after which the engine is out
+//!   of reach for a drawn while, shorter or longer than the worker's grace,
+//!   and that closes when the engine restarts; what is in flight on a
+//!   channel that closes is lost; a frame its receiver takes again
+//!   harmlessly is sent again now and then, right behind it or late (once
+//!   the attempt it is for has answered, or behind the next channel's
+//!   hello), and the channel stalls now and then;
 //! - **the forge:** the fake forge (`temper_forge_model`), as the engine's
 //!   world sets it up: protected default branches, CI cued by content, a
 //!   repository whose CI never reports; reached by the engine through its
@@ -50,10 +52,14 @@
 //!   first checkout creates it. The engine starts a checkout only from a
 //!   base or from its item's branch, never from saved work or a commit
 //!   (worker-model.md, 4.1), so no preparation here starts from either;
-//! - **the shell:** which drains the facts and the run's facts for the
-//!   engine, and, in some worlds, tells the worker to shut down at a drawn
-//!   moment, stops it once it is done, and starts a new worker, cold, a
-//!   while later, which may take more than the last (an upgrade).
+//! - **the shells:** the worker's, which drains the facts and the run's
+//!   facts for the engine, and, in some worlds, tells the worker to shut
+//!   down at a drawn moment (the referee injects it), stops it once it is
+//!   done, and starts a new worker, cold, a while later, which may take
+//!   more than the last (an upgrade); and the engine's, which, in some
+//!   worlds, restarts the engine, cold, at drawn moments (the referee
+//!   injects them): its channel closes, people's asks in flight are lost,
+//!   and what the forge answers its last life is dropped.
 //!
 //! It checks the worker's contracts as it goes: one dial at a time, and one
 //! terminal per git operation; every hello on a channel the worker holds
@@ -80,9 +86,12 @@
 //! protected branch without green CI and a person's approval, keyed
 //! creations made once, attempts that only grow, one live run per item,
 //! a person's message reaching a run, where its agent hears it), and this
-//! world's ([`referee`]), over what crosses the channel (nothing answered
-//! for an attempt the engine never made, an acknowledgement only for an
-//! answer it took, every answer it took acknowledged). Once it settles: every story's item closed;
+//! world's ([`referee`]), over what crosses the channel and the records the
+//! engine writes (an acknowledgement only for an answer it took, every
+//! answer it took acknowledged within minutes of the channel it came on, or
+//! of the hello that listed it again; each call reaching it once and
+//! answered once; each attempt's answer taken once, and a failure counted
+//! once). Once it settles: every story's item closed;
 //! nothing in flight; every open item the engine tracks held; every process
 //! tree gone and read to its end; and the worker with nothing live in any
 //! sub-model, no alarm armed, every slot free and every answer acknowledged

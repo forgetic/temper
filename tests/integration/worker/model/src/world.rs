@@ -45,6 +45,10 @@ const DELIVERIES: u32 = 20_000;
 /// The store's bound on the traces it keeps.
 const TRACES: usize = 100_000;
 
+/// Within which the engine acknowledges an answer that reached it, the
+/// channel it came on open.
+const ACKNOWLEDGED: Duration = Duration::from_secs(10 * 60);
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Settings {
     /// Seeds the world, which seeds the engine, the worker, the process trees
@@ -86,6 +90,10 @@ pub struct Settings {
     pub shutdown_at: Span,
     pub comeback: Span,
     pub upgrade: Option<Limits>,
+    /// How often the engine restarts, cold, each at a moment drawn from
+    /// `restart_at`.
+    pub restarts: u32,
+    pub restart_at: Span,
 }
 
 impl Settings {
@@ -129,6 +137,8 @@ impl Settings {
             shutdown_at: Span::millis(10_000, 120_000),
             comeback: Span::millis(1_000, 30_000),
             upgrade: None,
+            restarts: 0,
+            restart_at: Span::millis(10_000, 600_000),
         }
     }
 
@@ -140,7 +150,8 @@ impl Settings {
     /// knows; people who stop runs; an engine whose grace for a lost worker
     /// is shorter than the worker's in some worlds, longer in others, and
     /// which retries a failed run as often as the engine's world in some;
-    /// and, in some worlds, a shutdown. A world for the random sweep.
+    /// and, in some worlds, a shutdown, and the engine restarting once or
+    /// twice. A world for the random sweep.
     #[must_use]
     pub fn rough(seed: u64) -> Settings {
         let calm = Settings::calm(seed);
@@ -212,6 +223,7 @@ impl Settings {
                 ..calm.script
             },
             release: rng.chance(500),
+            restarts: if rng.chance(300) { 1 + u32::try_from(rng.below(2)).expect("few") } else { 0 },
             shutdowns: 300,
             ..calm
         }
@@ -422,7 +434,7 @@ const SCRIPT: script::Script = script::Script {
 
 /// What the world counted, by name, that the sweep must reach on the
 /// engine's side.
-pub const ENDINGS: [&str; 11] = [
+pub const ENDINGS: [&str; 12] = [
     "acknowledged",
     "assigned",
     "cancelled",
@@ -430,6 +442,7 @@ pub const ENDINGS: [&str; 11] = [
     "merged",
     "relayed",
     "released",
+    "restarted",
     "reviewed",
     "stopped",
     "story closed",
@@ -520,6 +533,8 @@ pub struct Stats {
     pub facts_lost: u64,
     pub told: u32,
     pub told_lost: u64,
+    /// The engine restarted.
+    pub restarts: u32,
     /// The worker was told to shut down, and was done; and how often a new
     /// one started after.
     pub shutdown: bool,
@@ -559,12 +574,11 @@ enum Delivery {
         event: Event,
         copy: bool,
     },
-    /// An event for the engine off the channel: the channel lost, a store's
-    /// terminal, a watcher's delivery.
-    Engine(engine::Event),
-    /// The channel `epoch` drops.
-    Drop {
-        epoch: u64,
+    /// An event for the engine of life `life` off the channel: the channel
+    /// lost, a store's terminal, a watcher's delivery.
+    Engine {
+        life: u64,
+        event: engine::Event,
     },
     /// Something of the process trees of the worker of life `.0` falls due.
     Tree(u64, tree::Due),
@@ -581,8 +595,7 @@ enum Delivery {
         remote: Vec<u8>,
         branch: Vec<u8>,
     },
-    /// The shell tells the worker to shut down; a new worker starts.
-    Shutdown,
+    /// A new worker starts.
     Comeback,
     /// The protocol layer's deadline for the engine's forge call it names.
     Deadline(u64),
@@ -655,6 +668,8 @@ struct Space {
 /// An engine call the forge protocol layer has out.
 #[derive(Debug)]
 struct Out {
+    /// The life of the engine that made it.
+    life: u64,
     call: Token,
     asked: Asked,
     deadline: Key,
@@ -744,7 +759,6 @@ pub struct World {
     lanes: [Time; 4],
     channel: Channel,
     epochs: u64,
-    drops: u32,
     /// Until when every dial fails.
     outage: Time,
     /// The worker holds the channel open, from its own point of view: told
@@ -761,7 +775,9 @@ pub struct World {
     places: Places,
     assigned: BTreeMap<Names, Vec<u32>>,
 
-    // The engine and its neighbours.
+    // The engine and its neighbours: the engines started so far, a new one
+    // after each restart.
+    engine_life: u64,
     engine: engine::Model,
     desk: Stage<engine::Limits, engine::Event, engine::Request>,
     forge: forge::Model,
@@ -774,10 +790,14 @@ pub struct World {
     people: People,
     store: Store,
     mirror: Mirror,
-    /// The items whose runs a person stopped, or will, once each; and the
-    /// sessions they stopped, which they wake with a message once released.
+    /// The items whose runs a person stopped, or will, once each; the
+    /// sessions they stopped, which they wake with a message once released;
+    /// and those released, to wake until the engine takes the message, and
+    /// those with a message on its way.
     stopping: BTreeSet<Item>,
     stopped_sessions: BTreeSet<Item>,
+    waking: BTreeSet<Item>,
+    wakers: BTreeSet<Item>,
     wakes: u64,
     /// The first assignment of each attempt the engine made.
     first: BTreeSet<(Item, u64)>,
@@ -806,6 +826,8 @@ impl World {
         let tree = Tree::new(settings.tree, settings.script, sizes(&limits), rng.next_u64());
         let max_out = worker::max_out(&limits);
         let desk_out = engine::max_out(&settings.engine);
+        // How long each channel that drops lives.
+        let lives = (0..settings.network.drops).map(|_| settings.network.life.draw(&mut rng)).collect();
         let mut world = World {
             now: Time::ZERO,
             rng: Rng::new(rng.next_u64()),
@@ -842,7 +864,6 @@ impl World {
             lanes: [Time::ZERO; 4],
             channel: Channel::Idle,
             epochs: 0,
-            drops: settings.network.drops,
             outage: Time::ZERO,
             up: false,
             down_since: None,
@@ -850,6 +871,7 @@ impl World {
             abandoned: 0,
             places: Places::new(),
             assigned: BTreeMap::new(),
+            engine_life: 0,
             engine,
             desk: Stage::new(settings.engine, desk_out, desk_out + SPARE),
             forge,
@@ -864,10 +886,12 @@ impl World {
             mirror: Mirror::default(),
             stopping: BTreeSet::new(),
             stopped_sessions: BTreeSet::new(),
+            waking: BTreeSet::new(),
+            wakers: BTreeSet::new(),
             wakes: 0,
             first: BTreeSet::new(),
             stories: Referee::new(stories::Engine::new(settings.bounds, settings.stories.len())),
-            hosting: Referee::new(Hosting::new(settings.bounds.story)),
+            hosting: Referee::new(Hosting::new(ACKNOWLEDGED, lives)),
             stats: Stats::default(),
             trace: Trace::default(),
             settings,
@@ -879,7 +903,11 @@ impl World {
         world.send(Time::ZERO, Delivery::People);
         if world.rng.chance(world.settings.shutdowns) {
             let at = Time::ZERO.saturating_add(world.settings.shutdown_at.draw(&mut world.rng));
-            world.send(at, Delivery::Shutdown);
+            world.hosting.inject(at, referee::Stimulus::Shutdown);
+        }
+        for _ in 0..world.settings.restarts {
+            let at = Time::ZERO.saturating_add(world.settings.restart_at.draw(&mut world.rng));
+            world.hosting.inject(at, referee::Stimulus::Restart);
         }
         world
     }
@@ -1036,6 +1064,23 @@ impl World {
             let mut stimuli = Vec::new();
             self.hosting.fire(self.now, &mut stimuli);
             self.hosting.assert_holding(self.settings.seed);
+            for stimulus in stimuli {
+                self.inject(stimulus);
+            }
+        }
+    }
+
+    /// What the hosting referee injects.
+    fn inject(&mut self, stimulus: referee::Stimulus) {
+        match stimulus {
+            referee::Stimulus::Drop { epoch } => self.drop_channel(epoch),
+            referee::Stimulus::Shutdown => {
+                if !self.done {
+                    self.stats.shutdown = true;
+                    self.stage.push(Event::Shutdown);
+                }
+            }
+            referee::Stimulus::Restart => self.restart(),
         }
     }
 
@@ -1050,8 +1095,11 @@ impl World {
             Delivery::Dialled { epoch } => self.dialled(epoch),
             Delivery::Up { epoch, event, copy } => self.arrived_up(epoch, event, copy),
             Delivery::Down { epoch, event, copy } => self.arrived_down(epoch, event, copy),
-            Delivery::Engine(event) => self.desk.push(event),
-            Delivery::Drop { epoch } => self.drop_channel(epoch),
+            Delivery::Engine { life, event } => {
+                if life == self.engine_life {
+                    self.desk.push(event);
+                }
+            }
             Delivery::Tree(life, due) => {
                 if life != self.lives {
                     return;
@@ -1062,12 +1110,6 @@ impl World {
             Delivery::Ran { owner } => self.ran(owner),
             Delivery::Advance { remote, branch } => self.advance(&remote, &branch),
             Delivery::Delete { remote, branch } => self.delete(&remote, &branch),
-            Delivery::Shutdown => {
-                if !self.done {
-                    self.stats.shutdown = true;
-                    self.stage.push(Event::Shutdown);
-                }
-            }
             Delivery::Comeback => self.come_back(),
             Delivery::Deadline(name) => self.deadline(name),
             Delivery::People => self.look(),

@@ -16,7 +16,9 @@ use temper_forge_model::api as forge_api;
 use temper_forge_model::{self as forge, Observation};
 use temper_lib::{ReplyTo, Token};
 use temper_worker_model::Event;
+use temper_world::{Key, Ledger, Stage};
 
+use super::network::Channel;
 use super::{Asking, Delivery, Out, Theirs, World};
 use crate::protocol;
 use crate::referee::Seen;
@@ -66,7 +68,7 @@ impl World {
                 let (asked, op) = translate::op(op, payload.as_ref(), self.settings.engine.forge.page);
                 let name = self.wire.name();
                 let deadline = self.send(self.now.saturating_add(self.settings.timeout), Delivery::Deadline(name));
-                self.calls.open(name, Out { call, asked, deadline, expired: false });
+                self.calls.open(name, Out { life: self.engine_life, call, asked, deadline, expired: false });
                 let reply_to = ReplyTo::new(Token::new(name));
                 let repository = deployment::name(repository).into();
                 let event = forge::Event::Call { reply_to, user: ENGINE, repository, op };
@@ -92,7 +94,6 @@ impl World {
                         self.send(at, Delivery::Stop(item));
                     }
                 }
-                self.hosting.observe(self.now, Seen::Assigned { names }, &mut Vec::new());
                 self.send_down(channel, Event::Assign { assignment });
             }
             Request::Inbound { channel, item, attempt, event } => {
@@ -128,7 +129,8 @@ impl World {
             Request::Reply { to, reply } => self.replied(to.into_token().raw(), reply),
             Request::Deliver { watcher, .. } => {
                 let at = self.now.saturating_add(self.settings.network.hop.draw(&mut self.rng));
-                self.send(at, Delivery::Engine(engine::Event::Delivered { watcher, done: true }));
+                let event = engine::Event::Delivered { watcher, done: true };
+                self.send(at, Delivery::Engine { life: self.engine_life, event });
             }
             Request::Ended { .. } => {}
             Request::Store { owner, op } => {
@@ -136,7 +138,7 @@ impl World {
                 let (stored, after) = self.store.apply(op);
                 self.stores.end(owner);
                 let event = engine::Event::Stored { owner, stored };
-                self.send(self.now.saturating_add(after), Delivery::Engine(event));
+                self.send(self.now.saturating_add(after), Delivery::Engine { life: self.engine_life, event });
             }
         }
     }
@@ -160,7 +162,7 @@ impl World {
                 {
                     self.end("released");
                     if self.stopped_sessions.remove(&item) {
-                        self.wake(item);
+                        self.waking.insert(item);
                     }
                 }
                 self.people.replied(asker, reply, messaged);
@@ -174,7 +176,9 @@ impl World {
                 }
             }
             Asking::Waker(item, key, text) => {
+                self.wakers.remove(&item);
                 if reply == Reply::Done {
+                    self.waking.remove(&item);
                     self.end("woken");
                     self.stories.observe(self.now, Told::Messaged { item, key, text }, &mut Vec::new());
                     self.stories.assert_holding(self.settings.seed);
@@ -186,6 +190,7 @@ impl World {
     /// The protocol layer's deadline for the engine's call `name` passed.
     pub(super) fn deadline(&mut self, name: u64) {
         let Some(out) = self.calls.get_mut(name) else { return };
+        assert_eq!(out.life, self.engine_life, "a restart withdraws its calls' deadlines");
         out.expired = true;
         let call = out.call;
         self.end("timed out");
@@ -228,7 +233,9 @@ impl World {
     fn forge_reply(&mut self, name: u64, result: Result<forge_api::Answer, forge_api::Error>) {
         if self.calls.contains(name) {
             let out = self.calls.end(name);
-            if out.expired {
+            // Answered after its deadline, or to an engine that has restarted
+            // since: no one takes it.
+            if out.expired || out.life != self.engine_life {
                 return;
             }
             self.withdraw(out.deadline);
@@ -309,12 +316,22 @@ impl World {
         for act in acts {
             self.person(act);
         }
+        // A session the stopper would wake that has closed meanwhile needs
+        // no message.
+        let mirror = &self.mirror;
+        self.waking.retain(|item| {
+            mirror.issue(deployment::name(item.repository), item.number).is_some_and(|issue| issue.open)
+        });
+        let waking: Vec<Item> = self.waking.difference(&self.wakers).copied().collect();
+        for item in waking {
+            self.wake(item);
+        }
         for tale in 0..self.settings.stories.len() {
             if let Some(item) = self.people.item(tale) {
                 self.stories.observe(self.now, Told::Story { tale, item }, &mut Vec::new());
             }
         }
-        if !self.people.is_done(&self.mirror) {
+        if !self.people.is_done(&self.mirror) || !self.waking.is_empty() {
             let gap = self.settings.people.draw(&mut self.rng);
             self.send(self.now.saturating_add(gap), Delivery::People);
         }
@@ -381,6 +398,45 @@ impl World {
         })
     }
 
+    /// The engine restarts: a new model, starting cold from what the forge
+    /// holds. Its channel closes, and the worker dials the new one; people's
+    /// asks in flight are lost, and they ask again; the calls it made still
+    /// reach the forge, their answers dropped, and what was on its way to it
+    /// is dropped.
+    pub(super) fn restart(&mut self) {
+        self.stats.restarts += 1;
+        self.end("restarted");
+        self.log("the engine restarts");
+        self.engine_life += 1;
+        self.engine = engine::Model::new(super::config(), &self.settings.engine, self.rng.next_u64(), self.now);
+        let desk_out = engine::max_out(&self.settings.engine);
+        self.desk = Stage::new(self.settings.engine, desk_out, desk_out + super::SPARE);
+        self.desk.tick(self.now);
+        let deadlines: Vec<Key> = self.calls.values().map(|out| out.deadline).collect();
+        for key in deadlines {
+            self.withdraw(key);
+        }
+        self.owned = Ledger::new("engine's forge call");
+        let asks: Vec<u64> = self.asks.keys().copied().collect();
+        for name in asks {
+            match self.asks.end(name) {
+                Asking::People(asker, ..) => self.people.lost(asker),
+                Asking::Stopper(_) => {}
+                Asking::Waker(item, ..) => {
+                    self.wakers.remove(&item);
+                }
+            }
+        }
+        if let Channel::Open { epoch, .. } = self.channel {
+            self.channel = Channel::Idle;
+            self.lose_held(epoch);
+            let at = self.now.saturating_add(self.settings.network.hop.draw(&mut self.rng));
+            self.send(at, Delivery::Worker(self.lives, Event::Lost));
+        }
+        self.stories.observe(self.now, Told::Restarted, &mut Vec::new());
+        self.hosting.observe(self.now, Seen::Restarted, &mut Vec::new());
+    }
+
     /// A person stops the item's run.
     pub(super) fn stop_run(&mut self, item: Item) {
         self.ask(Asking::Stopper(item), STOPPER, Ask::Stop { item });
@@ -388,6 +444,7 @@ impl World {
 
     /// The person who stopped a session wakes it, released, with a message.
     fn wake(&mut self, item: Item) {
+        self.wakers.insert(item);
         self.wakes += 1;
         let key = format!("wake-{}", self.wakes).into_bytes();
         let text = b"carry on".to_vec();
