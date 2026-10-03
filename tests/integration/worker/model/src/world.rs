@@ -79,6 +79,11 @@ pub struct Settings {
     /// under way, so that what it asked to push is what lands.
     pub edits: u32,
     pub scribbles: u32,
+    /// The chance, per mille, that an agent ends with the outcome its script
+    /// wrote, which no engine reads, so that its run fails. (An agent fated
+    /// to write garbage, whose run fails so, relays the calls its script
+    /// wrote, which no engine reads either.)
+    pub garbled: u32,
     /// Whether the changes sessions ask for land into [`RELEASE`], which the
     /// forge does not have until a change's first checkout creates it from
     /// the default branch, rather than into the default branch.
@@ -132,6 +137,7 @@ impl Settings {
             script: SCRIPT,
             edits: 800,
             scribbles: 200,
+            garbled: 0,
             release: false,
             shutdowns: 0,
             shutdown_at: Span::millis(10_000, 120_000),
@@ -222,6 +228,7 @@ impl Settings {
                 stubborn: 100,
                 ..calm.script
             },
+            garbled: 20,
             release: rng.chance(500),
             restarts: if rng.chance(300) { 1 + u32::try_from(rng.below(2)).expect("few") } else { 0 },
             shutdowns: 300,
@@ -434,7 +441,7 @@ const SCRIPT: script::Script = script::Script {
 
 /// What the world counted, by name, that the sweep must reach on the
 /// engine's side.
-pub const ENDINGS: [&str; 12] = [
+pub const ENDINGS: [&str; 14] = [
     "acknowledged",
     "assigned",
     "cancelled",
@@ -446,6 +453,8 @@ pub const ENDINGS: [&str; 12] = [
     "reviewed",
     "stopped",
     "story closed",
+    "undecodable",
+    "undecoded",
     "woken",
 ];
 
@@ -635,6 +644,13 @@ struct Repository {
     push: Option<Vec<u8>>,
 }
 
+/// What of an agent's words are left as its script wrote them.
+#[derive(Clone, Copy, Debug, Default)]
+struct Garbled {
+    calls: bool,
+    outcome: bool,
+}
+
 /// An agent the worker spawned.
 #[derive(Debug)]
 struct Agent {
@@ -646,8 +662,10 @@ struct Agent {
     unspawned: bool,
     /// Its push calls not answered yet.
     pushes: BTreeSet<u64>,
-    /// What its words say, once it started.
+    /// What its words say, once it started; whether its relayed calls are
+    /// left as its script wrote them, and its outcome.
     content: Option<Content>,
+    garbled: Garbled,
 }
 
 /// A workspace on io's disk, by io's name for it.

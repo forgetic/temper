@@ -270,6 +270,20 @@ fn an_engine_that_restarts_takes_the_runs_back_from_the_worker() {
     assert!(total(&worlds, |stats| ending(stats, "story closed")) > 0);
 }
 
+/// Agents that say what no engine reads: some end with the outcome their
+/// script wrote, and some, fated to write garbage, relay the calls their
+/// script wrote. The protocol layer answers such a call itself, and takes
+/// such an outcome as the agent's failure; their runs are tried again, and
+/// the world settles.
+#[test]
+fn words_no_engine_reads_fail_their_runs_which_are_tried_again() {
+    let calm = Settings::calm(0);
+    let fates = Fates { garbage: 2, ..calm.script.fates };
+    let world = run(&Settings { garbled: 300, script: script::Script { fates, ..calm.script }, ..calm });
+    let stats = world.stats();
+    assert!(ending(&stats, "undecoded") > 0 && ending(&stats, "undecodable") > 0, "{:?}", stats.endings);
+}
+
 #[test]
 fn a_hung_agent_is_stopped_by_the_watchdog() {
     let worlds = worlds(1, |calm| fated(calm, Fates { ended: 2, hang: 1, ..NONE }));

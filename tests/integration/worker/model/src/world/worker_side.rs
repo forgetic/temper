@@ -12,13 +12,13 @@ use temper_lib::Token;
 use temper_worker_model::agent::channel::{Ask, Down, Finish, Reply, Up};
 use temper_worker_model::checkout::git::Place;
 use temper_worker_model::{self as worker, Event, Hello, Model, Phase, Request, agent, host};
-use temper_worker_model_agent_tests::script::Said;
+use temper_worker_model_agent_tests::script::{self, Said};
 use temper_worker_model_agent_tests::tree::{self, Tree};
 use temper_worker_model_checkout_tests::translate as io;
 use temper_world::Stage;
 
 use super::git::{files, tree as forge_tree};
-use super::{Agent, Attempt, Content, Delivery, Lane, RELEASE, Repository, World, gone, sizes};
+use super::{Agent, Attempt, Content, Delivery, Garbled, Lane, RELEASE, Repository, World, gone, sizes};
 use crate::protocol::{self, IDENTITY, Names};
 use crate::referee;
 use crate::translate;
@@ -183,6 +183,7 @@ impl World {
                 let Some(body) = protocol::call_of(&body) else {
                     // Nothing the engine reads: the protocol layer answers it
                     // itself.
+                    self.end("undecoded");
                     let answer = protocol::UNDECODED.into();
                     let at = self.now.saturating_add(self.settings.network.hop.draw(&mut self.rng));
                     self.send(at, Delivery::Worker(self.lives, Event::Relayed { run, attempt, call, answer }));
@@ -292,6 +293,13 @@ impl World {
             let at = self.now.saturating_add(self.settings.git.advance_after.draw(&mut self.rng));
             self.send(at, Delivery::Delete { remote, branch });
         }
+        if let host::Answer::Ended { outcome, .. } = answer
+            && codec::outcome_of(outcome).is_none()
+        {
+            // An outcome no engine reads: the protocol layer says the agent
+            // failed.
+            self.end("undecodable");
+        }
         self.answered_copies(names);
         let record = self.attempts.get_mut(&names).expect("looked up above");
         *self.stats.answers.entry(translate::answer_kind(answer)).or_default() += 1;
@@ -349,6 +357,7 @@ impl World {
             unspawned: false,
             pushes: BTreeSet::new(),
             content: None,
+            garbled: Garbled::default(),
         };
         assert!(self.agents.insert(owner, agent).is_none(), "an agent is spawned once");
         self.stats.spawns += 1;
@@ -410,10 +419,13 @@ impl World {
         let base = if self.settings.release { RELEASE } else { MAIN };
         let content = Content::new(protocol::item(names.0), &charter, snapshot, &self.mirror, base);
         self.tree.plot(owner, content.plot.clone());
+        let calls = self.tree.view(owner).fate == script::Fate::Garbage;
+        let garbled = Garbled { calls, outcome: self.rng.chance(self.settings.garbled) };
         let agent = self.agents.get_mut(&owner).expect("a start goes to an agent spawned");
         assert_eq!(agent.attempt, None, "an agent starts once");
         agent.attempt = Some(names);
         agent.content = Some(content);
+        agent.garbled = garbled;
         let workspace = agent.workspace;
         let record = self.attempts.get_mut(&names).expect("an agent starts for an attempt the worker was given");
         assert!(record.answer.is_none(), "no agent starts for a run answered");
@@ -499,24 +511,28 @@ impl World {
     }
 
     /// What the agent's message says: its relayed calls and its outcome are
-    /// its run's.
+    /// its run's, unless they are left as its script wrote them.
     fn content_of(&mut self, event: agent::Event) -> agent::Event {
         let agent::Event::Received { owner, message } = event else {
             return event;
         };
-        let Some(content) = self.agents.get_mut(&owner).and_then(|agent| agent.content.as_mut()) else {
+        let Some(agent) = self.agents.get_mut(&owner) else {
+            return agent::Event::Received { owner, message };
+        };
+        let garbled = agent.garbled;
+        let Some(content) = agent.content.as_mut() else {
             return agent::Event::Received { owner, message };
         };
         let message = match message {
-            Up::Call { call, ask: Ask::Relay { .. } } => {
+            Up::Call { call, ask: Ask::Relay { .. } } if !garbled.calls => {
                 Up::Call { call, ask: Ask::Relay { body: protocol::call(&content.call()).into_boxed_slice() } }
             }
-            Up::Finish { finish: Finish::Ended { .. } } => {
+            Up::Finish { finish: Finish::Ended { .. } } if !garbled.outcome => {
                 let outcome = codec::outcome(content.outcome()).into_boxed_slice();
                 Up::Finish { finish: Finish::Ended { outcome } }
             }
-            Up::Call { ask: Ask::Push { .. }, .. }
-            | Up::Finish { finish: Finish::Parked { .. } | Finish::Failed { .. } }
+            Up::Call { ask: Ask::Relay { .. } | Ask::Push { .. }, .. }
+            | Up::Finish { finish: Finish::Ended { .. } | Finish::Parked { .. } | Finish::Failed { .. } }
             | Up::Withdraw { .. }
             | Up::Fact { .. }
             | Up::Long { .. }
