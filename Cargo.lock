@@ -13,9 +13,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-agent-model-fuzzy"
+version = "0.0.0"
+dependencies = [
+ "temper-agent-model",
+ "temper-agent-model-tests",
+ "temper-lib",
+ "temper-world",
+]
+
+[[package]]
 name = "temper-agent-model-run"
 version = "0.0.0"
 dependencies = [
+ "temper-lib",
+]
+
+[[package]]
+name = "temper-agent-model-run-fuzzy"
+version = "0.0.0"
+dependencies = [
+ "temper-agent-model-run",
+ "temper-agent-model-run-tests",
  "temper-lib",
 ]
 
@@ -34,6 +53,17 @@ version = "0.0.0"
 dependencies = [
  "temper-agent-model-tools",
  "temper-lib",
+]
+
+[[package]]
+name = "temper-agent-model-session-fuzzy"
+version = "0.0.0"
+dependencies = [
+ "temper-agent-model-session",
+ "temper-agent-model-session-tests",
+ "temper-agent-model-tools",
+ "temper-lib",
+ "temper-llm-model",
 ]
 
 [[package]]
@@ -76,6 +106,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-agent-model-tools-fuzzy"
+version = "0.0.0"
+dependencies = [
+ "temper-agent-model-tools",
+ "temper-agent-model-tools-tests",
+ "temper-lib",
+ "temper-world",
+]
+
+[[package]]
 name = "temper-agent-model-tools-tests"
 version = "0.0.0"
 dependencies = [
@@ -112,6 +152,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-engine-model-brief-fuzzy"
+version = "0.0.0"
+dependencies = [
+ "temper-engine-model-brief",
+ "temper-engine-model-brief-tests",
+ "temper-world",
+]
+
+[[package]]
 name = "temper-engine-model-brief-tests"
 version = "0.0.0"
 dependencies = [
@@ -125,6 +174,16 @@ name = "temper-engine-model-fleet"
 version = "0.0.0"
 dependencies = [
  "temper-lib",
+]
+
+[[package]]
+name = "temper-engine-model-fleet-fuzzy"
+version = "0.0.0"
+dependencies = [
+ "temper-engine-model-fleet",
+ "temper-engine-model-fleet-tests",
+ "temper-lib",
+ "temper-world",
 ]
 
 [[package]]
@@ -144,6 +203,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-engine-model-forge-fuzzy"
+version = "0.0.0"
+dependencies = [
+ "temper-engine-model-forge",
+ "temper-engine-model-forge-tests",
+ "temper-forge-model",
+ "temper-lib",
+ "temper-world",
+]
+
+[[package]]
 name = "temper-engine-model-forge-tests"
 version = "0.0.0"
 dependencies = [
@@ -154,10 +224,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-engine-model-fuzzy"
+version = "0.0.0"
+dependencies = [
+ "temper-engine-model-tests",
+]
+
+[[package]]
 name = "temper-engine-model-notes"
 version = "0.0.0"
 dependencies = [
  "temper-lib",
+]
+
+[[package]]
+name = "temper-engine-model-notes-fuzzy"
+version = "0.0.0"
+dependencies = [
+ "temper-engine-model-notes",
+ "temper-engine-model-notes-tests",
+ "temper-world",
 ]
 
 [[package]]
@@ -174,6 +260,14 @@ name = "temper-engine-model-plan"
 version = "0.0.0"
 dependencies = [
  "temper-lib",
+]
+
+[[package]]
+name = "temper-engine-model-plan-fuzzy"
+version = "0.0.0"
+dependencies = [
+ "temper-engine-model-plan-tests",
+ "temper-world",
 ]
 
 [[package]]
@@ -211,6 +305,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-engine-model-views-fuzzy"
+version = "0.0.0"
+dependencies = [
+ "temper-engine-model-views",
+ "temper-engine-model-views-tests",
+ "temper-lib",
+ "temper-world",
+]
+
+[[package]]
 name = "temper-engine-model-views-tests"
 version = "0.0.0"
 dependencies = [
@@ -224,6 +328,15 @@ name = "temper-engine-model-work"
 version = "0.0.0"
 dependencies = [
  "temper-lib",
+]
+
+[[package]]
+name = "temper-engine-model-work-fuzzy"
+version = "0.0.0"
+dependencies = [
+ "temper-engine-model-work",
+ "temper-engine-model-work-tests",
+ "temper-world",
 ]
 
 [[package]]
@@ -256,6 +369,13 @@ name = "temper-lib"
 version = "0.0.0"
 
 [[package]]
+name = "temper-lib-fuzzy"
+version = "0.0.0"
+dependencies = [
+ "temper-lib",
+]
+
+[[package]]
 name = "temper-llm-model"
 version = "0.0.0"
 dependencies = [
@@ -280,6 +400,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-worker-model-agent-fuzzy"
+version = "0.0.0"
+dependencies = [
+ "temper-worker-model-agent",
+ "temper-worker-model-agent-tests",
+]
+
+[[package]]
 name = "temper-worker-model-agent-tests"
 version = "0.0.0"
 dependencies = [
@@ -296,6 +424,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-worker-model-checkout-fuzzy"
+version = "0.0.0"
+dependencies = [
+ "temper-lib",
+ "temper-worker-model-checkout",
+ "temper-worker-model-checkout-tests",
+]
+
+[[package]]
 name = "temper-worker-model-checkout-tests"
 version = "0.0.0"
 dependencies = [
@@ -307,10 +444,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-worker-model-fuzzy"
+version = "0.0.0"
+dependencies = [
+ "temper-worker-model-tests",
+]
+
+[[package]]
 name = "temper-worker-model-host"
 version = "0.0.0"
 dependencies = [
  "temper-lib",
+]
+
+[[package]]
+name = "temper-worker-model-host-fuzzy"
+version = "0.0.0"
+dependencies = [
+ "temper-lib",
+ "temper-worker-model-host",
+ "temper-worker-model-host-tests",
 ]
 
 [[package]]

@@ -324,12 +324,14 @@ mod tests {
         }
     }
 
+    /// A smoke of the search's agreement with a naive one; tests/fuzzy/lib
+    /// runs it many more times.
     #[test]
     fn the_search_agrees_with_a_naive_one() {
         let mut rng = Rng::new(0x5EA2_C4ED);
         let mut haystack_buffer = [0_u8; 64];
         let mut needle_buffer = [0_u8; 12];
-        for round in 0_u32..20_000 {
+        for round in 0_u32..1_000 {
             let letters = rng.between(1, 4);
             let len = up_to(&mut rng, haystack_buffer.len());
             fill(&mut rng, &mut haystack_buffer[..len], letters);

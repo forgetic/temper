@@ -21,9 +21,11 @@
 //! crossed the boundary unless some were dropped).
 
 pub mod fixture;
+mod noisy;
 pub mod tickets;
 pub mod translate;
 mod world;
 
+pub use noisy::{noisy, submit_noisily};
 pub use temper_world::Span;
 pub use world::{BUDGET, Count, Ended, Session, Settings, Stats, TOOLS, Told, World, spec};

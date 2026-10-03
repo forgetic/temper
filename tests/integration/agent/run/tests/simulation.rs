@@ -2,13 +2,13 @@
 //! scripted partner playing their conversations, in a simulated world.
 //!
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use temper_agent_model_run::{Answer, Budget, Exhausted, Failure, Fault, Invalid, Limits, Policy, Refusal};
 use temper_agent_model_run_tests::host;
 use temper_agent_model_run_tests::partner::Script;
-use temper_agent_model_run_tests::{Checkouts, Settings, Span, World};
-use temper_lib::{Duration, Rng};
+use temper_agent_model_run_tests::{Checkouts, Settings, Span, World, noisy};
+use temper_lib::Duration;
 
 const ITERATIONS: u32 = 1_000_000;
 
@@ -268,159 +268,6 @@ fn a_seed_replays_to_the_same_run() {
         (world.trace().to_vec(), (world.stats(), world.now()))
     });
     assert!(trace.len() > 50, "the runs did something");
-}
-
-/// Hundreds of worlds with random limits, scripts, faults and schedules: each
-/// settles with its invariants holding (checked by `World::run`), and between
-/// them they reach every way a run can end in this batch.
-#[test]
-fn random_worlds_settle_with_every_start_answered_once() {
-    let mut seen = BTreeSet::new();
-    let (mut cancels, mut races, mut stale, mut expired) = (0, 0, 0, 0);
-    for seed in 0..300 {
-        let world = settled(&noisy(seed));
-        let stats = world.stats();
-        cancels += stats.cancels;
-        races += stats.partner.races;
-        stale += stats.partner.stale;
-        expired += stats.partner.expired;
-        for answer in answers(&world) {
-            let kind = match answer {
-                Answer::Accepted { .. } => "accepted",
-                Answer::Refused(Refusal::Busy) => "busy",
-                Answer::Refused(Refusal::Invalid(Invalid::Conversation)) => "conversation invalid",
-                Answer::Refused(Refusal::Invalid(_)) => "invalid",
-                Answer::Failed { failure, .. } => match failure {
-                    Failure::Model(Fault::Provider | Fault::ContextFull) => "fault",
-                    Failure::Model(Fault::Truncated | Fault::Refused | Fault::Malformed) => "stopped",
-                    Failure::Budget(Exhausted::Turns) => "turns",
-                    Failure::Budget(Exhausted::Time) => "time",
-                    Failure::Budget(_) => "tokens",
-                    Failure::Policy(Policy::Unfinished { .. }) => "unfinished",
-                    Failure::Cancelled => "cancelled",
-                    Failure::Stale => "stale",
-                },
-            };
-            seen.insert(kind);
-        }
-    }
-    let mut expected = vec![
-        "accepted",
-        "busy",
-        "cancelled",
-        "conversation invalid",
-        "fault",
-        "invalid",
-        "stale",
-        "stopped",
-        "time",
-        "tokens",
-        "turns",
-        "unfinished",
-    ];
-    expected.sort_unstable();
-    assert_eq!(seen.into_iter().collect::<Vec<_>>(), expected);
-    // And the races: turns spent after a close, a close or nudge crossing a
-    // conversation's own end, conversations out of time, cancels.
-    assert!(cancels > 0 && races > 0 && stale > 0 && expired > 0, "{cancels} {races} {stale} {expired}");
-}
-
-/// Settings drawn from `seed`: small limits, charters that sometimes do not fit
-/// them, faults, cancels, and latencies that race the deadlines.
-fn noisy(seed: u64) -> Settings {
-    let mut rng = Rng::new(seed);
-    let calm = Settings::calm(seed);
-    let mut pick = |low: u64, high: u64| rng.between(low, high);
-    let small = |n: u64| u32::try_from(n).expect("small numbers");
-    let run = Limits {
-        runs: small(pick(1, 4)),
-        conversations: small(pick(1, 4)),
-        run_bytes: pick(1_000, 6_000),
-        nudges: small(pick(0, 3)),
-        budget: Budget { turns: 30, time: Duration::from_secs(3600), ..calm.run.budget },
-        ..calm.run
-    };
-    let host = host::Script {
-        jobs: small(pick(1, 8)),
-        window: Duration::from_secs(pick(0, 120)),
-        cancels: small(pick(0, 300)),
-        cancel: Span { min: Duration::ZERO, max: Duration::from_secs(pick(1, 300)) },
-        brief_min: 0,
-        brief_max: small(pick(100, 4_000)),
-        turns_min: 1,
-        turns_max: small(pick(5, 35)),
-        tokens_min: 500,
-        tokens_max: pick(1_000, 200_000),
-        time: Span { min: Duration::from_secs(5), max: Duration::from_secs(pick(60, 4_000)) },
-        ..calm.host
-    };
-    let host = host::Script {
-        recancels: small(pick(0, 300)),
-        late_cancels: small(pick(0, 300)),
-        push: Span::millis(0, pick(0, 3_000)),
-        moved: small(pick(0, 300)),
-        push_failures: small(pick(0, 200)),
-        ..host
-    };
-    let partner = Script {
-        conversations: small(pick(0, 4)),
-        invalid: small(pick(0, 30)),
-        turn: Span::millis(10, pick(100, 20_000)),
-        input: pick(1, 4_000),
-        output: pick(1, 1_000),
-        cache: pick(0, 2_000),
-        faults: small(pick(0, 100)),
-        finishes: small(pick(0, 300)),
-        asks: small(pick(0, 300)),
-        bad_asks: small(pick(0, 300)),
-        shares: small(pick(0, 500)),
-        parallel: small(pick(1, 4)),
-        changes: small(pick(0, 1000)),
-        good: small(pick(0, 1000)),
-        yields: small(pick(0, 500)),
-        odd_stops: small(pick(0, 300)),
-        settle: Span::millis(0, pick(0, 2_000)),
-        races: small(pick(0, 1000)),
-    };
-    let checkout = Checkouts {
-        guides: small(pick(0, 1000)),
-        guide_max: small(pick(1, 3000)),
-        checks: small(pick(0, 1000)),
-        check_failures: small(pick(0, 3)),
-        not_text: small(pick(0, 300)),
-        io: Span::millis(0, pick(0, 6_000)),
-        io_failures: small(pick(0, 200)),
-        check: Span::millis(0, pick(0, 20_000)),
-    };
-    let run = Limits { guide_bytes: small(pick(1, 2000)), io_timeout: Duration::from_secs(pick(1, 5)), ..run };
-    let run = Limits {
-        outcome_bytes: pick(10, 400),
-        check_timeout: Duration::from_millis(pick(1_000, 30_000)),
-        check_tail: small(pick(0, 300)),
-        ..run
-    };
-    let inject = small(pick(0, 150));
-    // Sub-agents: room for a few, nested a little.
-    let run = Limits {
-        conversations: run.conversations.saturating_mul(small(pick(1, 3))),
-        calls: small(pick(1, 8)),
-        depth: small(pick(0, 3)),
-        run_conversations: small(pick(1, 4)),
-        answer_bytes: small(pick(0, 200)),
-        facts: small(pick(0, 64)),
-        ..run
-    };
-    let host = host::Script { agents: small(pick(0, 1000)), ..host };
-    Settings {
-        run,
-        host,
-        partner,
-        hop: Span::millis(0, pick(0, 50)),
-        checkout,
-        races: small(pick(0, 1000)),
-        inject,
-        ..calm
-    }
 }
 
 /// Adds what `world` counted of the states cancels and deadlines found runs in.

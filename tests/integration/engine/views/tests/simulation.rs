@@ -1,9 +1,7 @@
 //! The views in their world: scenarios, replay, and a sweep of random worlds.
 
-use std::collections::BTreeSet;
-
 use temper_engine_model_views::Limits;
-use temper_engine_model_views_tests::{ENDINGS, LIMITS, Settings, Span, Stats, World};
+use temper_engine_model_views_tests::{LIMITS, Settings, Span, Stats, World};
 use temper_lib::Duration;
 use temper_world::assert_replays;
 
@@ -212,19 +210,4 @@ fn facts_change_nothing() {
         let many = run(&Settings { limits: Limits { facts: 4096, ..settings.limits }, ..settings });
         assert!(none.trace() == many.trace(), "seed {seed}: the same run whatever facts are kept");
     }
-}
-
-#[test]
-fn random_worlds_settle_with_every_ending_reached() {
-    let mut endings = BTreeSet::new();
-    let (mut chunks, mut missed, mut records) = (0, 0, 0);
-    for seed in 0..100 {
-        let world = run(&Settings::random(seed));
-        endings.extend(world.stats().endings.keys().copied());
-        let judged = world.judged();
-        (chunks, missed, records) = (chunks + judged.0, missed + judged.2, records + judged.3);
-    }
-    let unreached: Vec<&str> = ENDINGS.iter().copied().filter(|ending| !endings.contains(ending)).collect();
-    assert!(unreached.is_empty(), "every ending was reached: {unreached:?} were not");
-    assert!(chunks > 5000 && missed > 100 && records > 5000, "the referee judged: {chunks}, {missed}, {records}");
 }

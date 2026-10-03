@@ -31,8 +31,10 @@
 
 pub mod client;
 pub mod forge;
+mod noisy;
 pub mod translate;
 mod world;
 
+pub use noisy::{noisy, submit_noisily};
 pub use temper_world::Span;
 pub use world::{IDENTITY, LIMITS, Settings, Stats, Told, World};

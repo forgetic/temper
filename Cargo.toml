@@ -42,6 +42,23 @@ members = [
     "tests/integration/worker/host",
     "tests/integration/worker/model",
     "tests/integration/world",
+    "tests/fuzzy/agent/model",
+    "tests/fuzzy/agent/run",
+    "tests/fuzzy/agent/session",
+    "tests/fuzzy/agent/tools",
+    "tests/fuzzy/engine/brief",
+    "tests/fuzzy/engine/fleet",
+    "tests/fuzzy/engine/forge",
+    "tests/fuzzy/engine/model",
+    "tests/fuzzy/engine/notes",
+    "tests/fuzzy/engine/plan",
+    "tests/fuzzy/engine/views",
+    "tests/fuzzy/engine/work",
+    "tests/fuzzy/lib",
+    "tests/fuzzy/worker/agent",
+    "tests/fuzzy/worker/checkout",
+    "tests/fuzzy/worker/host",
+    "tests/fuzzy/worker/model",
 ]
 
 [workspace.package]
@@ -78,6 +95,16 @@ temper-agent-model-tools-tests = { path = "tests/integration/agent/tools" }
 temper-worker-model-agent-tests = { path = "tests/integration/worker/agent" }
 temper-worker-model-checkout-tests = { path = "tests/integration/worker/checkout" }
 temper-worker-model-tests = { path = "tests/integration/worker/model" }
+temper-agent-model-tests = { path = "tests/integration/agent/model" }
+temper-agent-model-run-tests = { path = "tests/integration/agent/run" }
+temper-agent-model-session-tests = { path = "tests/integration/agent/session" }
+temper-engine-model-brief-tests = { path = "tests/integration/engine/brief" }
+temper-engine-model-fleet-tests = { path = "tests/integration/engine/fleet" }
+temper-engine-model-notes-tests = { path = "tests/integration/engine/notes" }
+temper-engine-model-plan-tests = { path = "tests/integration/engine/plan" }
+temper-engine-model-views-tests = { path = "tests/integration/engine/views" }
+temper-engine-model-work-tests = { path = "tests/integration/engine/work" }
+temper-worker-model-host-tests = { path = "tests/integration/worker/host" }
 temper-world = { path = "tests/integration/world" }
 
 # Panics are fail-stop and overflow traps, in every profile. (The test harness

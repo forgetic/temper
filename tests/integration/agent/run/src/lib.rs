@@ -20,8 +20,10 @@
 //! answer).
 
 pub mod host;
+mod noisy;
 pub mod partner;
 mod world;
 
+pub use noisy::noisy;
 pub use temper_world::Span;
 pub use world::{Checkouts, Settings, Stats, World};

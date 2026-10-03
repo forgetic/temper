@@ -1,13 +1,11 @@
 //! The whole worker in its world, against the engine: scenarios, replay,
 //! and a sweep of random worlds.
 
-use std::collections::{BTreeMap, BTreeSet};
-
 use temper_engine_model_tests::people::Story;
 use temper_lib::Duration;
 use temper_worker_model::Limits;
 use temper_worker_model_agent_tests::script::{self, Fates};
-use temper_worker_model_tests::{ENDINGS, Git, Network, Settings, Span, Stats, World, translate};
+use temper_worker_model_tests::{Git, Network, Settings, Span, Stats, World};
 
 const ITERATIONS: u32 = 300_000;
 
@@ -107,7 +105,7 @@ fn a_chatting_session_parks_and_resumes_from_its_snapshot() {
 
 #[test]
 fn a_channel_lost_for_less_than_the_grace_keeps_the_runs() {
-    let worlds = worlds(8, |calm| dropping(calm, Span::millis(20_000, 120_000), Span::millis(1_000, 20_000), 20));
+    let worlds = worlds(1, |calm| dropping(calm, Span::millis(20_000, 120_000), Span::millis(1_000, 20_000), 20));
     assert!(total(&worlds, |stats| stats.drops) > 0);
     for stats in &worlds {
         assert_eq!(count(stats, "cancelled contact"), 0, "{stats:?}");
@@ -118,13 +116,14 @@ fn a_channel_lost_for_less_than_the_grace_keeps_the_runs() {
 
 /// The channel lost past the grace: the worker cancels its runs. (Past the
 /// engine's grace too, a change's attempt may have pushed before it was
-/// presumed lost, which the engine never learns: see `FINDINGS`. Such a
-/// world runs for a while, and is not asked to settle.)
+/// presumed lost, which the engine never learns: see the findings of
+/// tests/fuzzy/worker/model. Such a world runs for a while, and is not asked
+/// to settle.)
 #[test]
 fn a_channel_lost_for_longer_than_the_grace_cancels_the_runs() {
     let mut cancelled = 0;
     let mut longest = None;
-    for seed in 0..8 {
+    for seed in 0..1 {
         let calm = Settings::calm(seed);
         let settings = dropping(calm, Span::millis(20_000, 120_000), Span::millis(90_000, 120_000), 30);
         let mut world = World::new(settings);
@@ -140,7 +139,7 @@ fn a_channel_lost_for_longer_than_the_grace_cancels_the_runs() {
 
 #[test]
 fn an_answer_made_while_the_channel_is_down_follows_the_next_hello() {
-    let worlds = worlds(12, |calm| dropping(calm, Span::millis(1_000, 20_000), Span::millis(10_000, 40_000), 4));
+    let worlds = worlds(1, |calm| dropping(calm, Span::millis(1_000, 20_000), Span::millis(10_000, 40_000), 4));
     assert!(total(&worlds, |stats| stats.held) > 0, "some answer was held");
     for stats in &worlds {
         assert_eq!(stats.answers_sent, stats.answers_taken + stats.answers_lost, "{stats:?}");
@@ -150,14 +149,14 @@ fn an_answer_made_while_the_channel_is_down_follows_the_next_hello() {
 #[test]
 fn frames_sent_twice_and_stalls_change_no_outcome() {
     let worlds =
-        worlds(6, |calm| Settings { network: Network { duplicates: 500, stalls: 100, ..calm.network }, ..calm });
+        worlds(1, |calm| Settings { network: Network { duplicates: 500, stalls: 100, ..calm.network }, ..calm });
     assert!(total(&worlds, |stats| stats.duplicated) > 0 && total(&worlds, |stats| stats.stalled) > 0);
     assert!(total(&worlds, |stats| stats.acknowledgements) > total(&worlds, |stats| stats.answers_sent));
 }
 
 #[test]
 fn a_shutdown_cancels_the_live_runs_and_a_new_worker_takes_over() {
-    let worlds = worlds(8, |calm| Settings {
+    let worlds = worlds(1, |calm| Settings {
         shutdowns: 1000,
         shutdown_at: Span::millis(20_000, 40_000),
         script: script::Script { steps: 20, ..calm.script },
@@ -176,39 +175,38 @@ fn a_worker_shutting_down_out_of_reach_delivers_its_answers_if_the_channel_opens
     // and stays down past the worker's grace. Some agents wind down at once,
     // and their runs answer; the others ignore the cancel and the terminate,
     // and are killed only once the channel has opened again. (Out of reach
-    // past the engine's grace too, such a world may meet `FINDINGS`: it runs
-    // for a while, and is not asked to settle.)
-    let mut delivered = 0;
-    for seed in 0..16 {
-        let calm = dropping(Settings::calm(seed), Span::millis(60_000, 70_000), Span::millis(62_000, 75_000), 30);
-        let limits = calm.worker;
-        let mut world = World::new(Settings {
-            worker: Limits {
-                agent: temper_worker_model::agent::Limits {
-                    grace: Duration::from_secs(80),
-                    kill_after: Duration::from_secs(30),
-                    ..limits.agent
-                },
-                ..limits
+    // past the engine's grace too, such a world may meet the findings of
+    // tests/fuzzy/worker/model: it runs for a while, and is not asked to
+    // settle.) The first seed whose world keeps an answer past the grace with
+    // a run left.
+    let calm = dropping(Settings::calm(5), Span::millis(60_000, 70_000), Span::millis(62_000, 75_000), 30);
+    let limits = calm.worker;
+    let mut world = World::new(Settings {
+        worker: Limits {
+            agent: temper_worker_model::agent::Limits {
+                grace: Duration::from_secs(80),
+                kill_after: Duration::from_secs(30),
+                ..limits.agent
             },
-            script: script::Script { deaf_to_cancel: 500, stubborn: 1000, ..calm.script },
-            shutdowns: 1000,
-            shutdown_at: Span::millis(55_000, 65_000),
-            ..calm
-        });
-        world.run_for(Duration::from_secs(1_800), ITERATIONS);
-        let stats = world.stats();
-        assert!(stats.done, "{stats:?}");
-        if stats.kept_past_grace > 0 && stats.abandoned == 0 {
-            delivered += 1;
-        }
-    }
-    assert!(delivered > 0, "answers kept past the grace, with a run left, are delivered once the channel opens");
+            ..limits
+        },
+        script: script::Script { deaf_to_cancel: 500, stubborn: 1000, ..calm.script },
+        shutdowns: 1000,
+        shutdown_at: Span::millis(55_000, 65_000),
+        ..calm
+    });
+    world.run_for(Duration::from_secs(1_800), ITERATIONS);
+    let stats = world.stats();
+    assert!(stats.done, "{stats:?}");
+    assert!(
+        stats.kept_past_grace > 0 && stats.abandoned == 0,
+        "answers kept past the grace, with a run left, are delivered once the channel opens: {stats:?}"
+    );
 }
 
 #[test]
 fn a_hung_agent_is_stopped_by_the_watchdog() {
-    let worlds = worlds(4, |calm| fated(calm, Fates { ended: 2, hang: 1, ..NONE }));
+    let worlds = worlds(1, |calm| fated(calm, Fates { ended: 2, hang: 1, ..NONE }));
     assert!(total(&worlds, |stats| count(stats, "agent no progress")) > 0);
 }
 
@@ -219,7 +217,7 @@ fn a_hung_agent_is_stopped_by_the_watchdog() {
 fn a_push_finds_its_branch_moved_by_another_party() {
     let mut rejected = 0;
     let mut moved = 0;
-    for seed in 0..4 {
+    for seed in 0..1 {
         let calm = Settings::calm(seed);
         let mut world = World::new(Settings {
             stories: vec![Story::Fix],
@@ -238,7 +236,7 @@ fn a_push_finds_its_branch_moved_by_another_party() {
 
 #[test]
 fn relayed_calls_are_answered_or_withdrawn() {
-    let worlds = worlds(8, |calm| Settings {
+    let worlds = worlds(1, |calm| Settings {
         script: script::Script {
             calls: 800,
             pushes: 0,
@@ -255,7 +253,7 @@ fn relayed_calls_are_answered_or_withdrawn() {
 
 #[test]
 fn a_run_a_person_stops_is_cancelled_and_its_calls_answered_unavailable() {
-    let worlds = worlds(8, |calm| Settings {
+    let worlds = worlds(1, |calm| Settings {
         stories: vec![Story::Fix],
         stops: 1000,
         stop_after: Span::millis(1_000, 10_000),
@@ -316,56 +314,6 @@ fn a_seed_replays_to_the_same_run() {
         (world.trace().to_vec(), (world.stats(), world.now()))
     });
     assert!(trace.len() > 100, "the world did something");
-}
-
-#[test]
-fn random_worlds_settle_and_reach_every_ending() {
-    let mut answers = BTreeMap::new();
-    let mut endings = BTreeSet::new();
-    for seed in (0..SWEPT).filter(|seed| !FINDINGS.contains(seed)) {
-        let stats = run(&Settings::rough(seed)).stats();
-        for (kind, count) in stats.answers {
-            *answers.entry(kind).or_insert(0) += count;
-        }
-        endings.extend(stats.endings.keys().copied());
-    }
-    println!("answers {answers:?}");
-    // A run says it was cancelled only once something cancelled it, and the
-    // worker reports that cancel as its own: the engine's, lost contact, a
-    // shutdown, or the wall time of its agent.
-    assert!(!answers.contains_key("run cancelled"), "no run's cancel is its own: {answers:?}");
-    let missed: Vec<&str> = translate::ANSWER_KINDS
-        .into_iter()
-        .filter(|kind| !UNREACHED.contains(kind) && !answers.contains_key(kind))
-        .collect();
-    assert!(missed.is_empty(), "some run is answered each way: {missed:?} were not, of {answers:?}");
-    let missed: Vec<&str> = ENDINGS.iter().copied().filter(|ending| !endings.contains(ending)).collect();
-    assert!(missed.is_empty(), "every ending was reached: {missed:?} were not");
-}
-
-/// How many random worlds the sweep runs, but those of the findings.
-const SWEPT: u64 = 40;
-
-/// Answers the sweep does not reach: a run's cancel is never its own; the
-/// engine names no start the forge lacks, so no preparation finds one
-/// missing, nor creates a branch the forge could refuse; and an assignment
-/// beyond the worker's limits, which a scenario above reaches.
-const UNREACHED: [&str; 4] = ["run cancelled", "unprepared refused", "refused invalid", "unprepared missing"];
-
-/// Seeds that find what the engine does not do yet, run by
-/// `the_engine_findings_replay` until it does: a change's attempt pushes,
-/// and its answer reaches the engine only after the engine presumed it lost
-/// (the worker out of reach past the engine's grace), so the engine never
-/// learns the branch moved; every later attempt starts from the base, and
-/// its push is rejected as the branch moved, for good.
-const FINDINGS: [u64; 3] = [9, 25, 40];
-
-#[test]
-#[ignore = "the engine does not learn of a branch pushed by an attempt it presumed lost"]
-fn the_engine_findings_replay() {
-    for seed in FINDINGS {
-        run(&Settings::rough(seed));
-    }
 }
 
 /// A session whose runs fail until it is held, then released: plan's

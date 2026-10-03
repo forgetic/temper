@@ -1,14 +1,12 @@
 //! End to end at the checkout sub-model: the checkout, its scripted clients,
 //! a fake forge and a fake disk, talking through a simulated world.
 
-use std::collections::BTreeSet;
-
-use temper_lib::{Duration, Rng, Time};
+use temper_lib::{Duration, Time};
 use temper_worker_model_checkout::git::Missing;
 use temper_worker_model_checkout::{Failure, Landing, Limits, Prepared, Refusal};
 use temper_worker_model_checkout_tests::client::{Interrupt, Pick, Plan};
 use temper_worker_model_checkout_tests::translate;
-use temper_worker_model_checkout_tests::{LIMITS, Settings, Span, Told, World};
+use temper_worker_model_checkout_tests::{LIMITS, Settings, Span, Told, World, noisy, submit_noisily};
 
 const ITERATIONS: u32 = 100_000;
 
@@ -248,156 +246,5 @@ fn facts_change_nothing_the_checkout_does() {
         let (silent, same, (none, dropped)) = run(0);
         assert!(silent == trace && same == stats, "seed {seed}: the same requests, at the same times");
         assert_eq!((none, dropped > 0), (Told::default(), true), "seed {seed}: every fact dropped");
-    }
-}
-
-/// A thousand worlds with random limits, faults, schedules and clients: each
-/// settles, with every client's every request ended once and nothing left
-/// held or in flight (checked by `World::run`), and between them they reach
-/// every way a prepare, a push and a save can end, and every way the cache
-/// can find a workspace.
-#[test]
-fn random_worlds_settle_with_every_client_heard() {
-    let mut prepares = BTreeSet::new();
-    let mut lands = BTreeSet::new();
-    let (mut cached, mut races) = ([0; 4], [0; 9]);
-    for seed in 0..1000 {
-        let settings = noisy(seed);
-        let mut world = World::new(settings);
-        submit_noisily(&mut world, &settings, seed);
-        world.run(ITERATIONS);
-        let (told, stats) = (world.told().0, world.stats());
-        for (count, more) in cached.iter_mut().zip([told.new, told.reused, told.rebuilt, told.evicted]) {
-            *count += more;
-        }
-        let won = [
-            stats.cancels_lost,
-            stats.cancels_crossed,
-            stats.op_timeouts,
-            stats.stale,
-            stats.exists,
-            stats.op_broken,
-            stats.ambiguous,
-            stats.verified,
-            stats.made_over,
-        ];
-        for (count, more) in races.iter_mut().zip(won) {
-            *count += more;
-        }
-        for (_, client) in world.clients() {
-            let kind = match client.prepared.expect("every prepare ends") {
-                Prepared::Ready { .. } => "ready".to_string(),
-                Prepared::Refused { refusal } => format!("{refusal:?}"),
-                Prepared::Failed { failure: Failure::Missing { missing, .. } } => format!("missing {missing:?}"),
-                Prepared::Failed { failure } => format!("{failure:?}"),
-                Prepared::Aborted => "aborted".to_string(),
-            };
-            prepares.insert(kind);
-            for (saved, landings) in &client.landings {
-                for landing in landings {
-                    let kind = match landing {
-                        Landing::Landed { .. } => "landed",
-                        Landing::Moved => "moved",
-                        Landing::Failed => "failed",
-                        Landing::Refused => "refused",
-                        Landing::Unchanged => "unchanged",
-                        Landing::Aborted => "aborted",
-                    };
-                    lands.insert(format!("{} {kind}", if *saved { "save" } else { "push" }));
-                }
-            }
-        }
-    }
-    let expected = [
-        "ready",
-        "Busy",
-        "Full",
-        "Invalid",
-        "Transient",
-        "Refused { repository: 0 }",
-        "missing Repository",
-        "missing Branch",
-        "missing Commit",
-        "aborted",
-    ];
-    for kind in expected {
-        assert!(prepares.contains(kind), "some prepare ended {kind}: {prepares:?}");
-    }
-    for verb in ["push", "save"] {
-        for kind in ["landed", "moved", "failed", "refused", "unchanged", "aborted"] {
-            let kind = format!("{verb} {kind}");
-            assert!(lands.contains(&kind), "some repository's {kind}: {lands:?}");
-        }
-    }
-    assert!(cached.iter().all(|&count| count > 0), "workspaces new, reused, rebuilt and evicted: {cached:?}");
-    assert!(
-        races.iter().all(|&count| count > 0),
-        "cancels lost and crossed, deadlines passed, stale handles, base branches created meanwhile, io failed, \
-         io in doubt, pushes verified, workspaces made over something: {races:?}"
-    );
-}
-
-/// Settings drawn from `seed`: small limits, faults, and latencies that race
-/// the deadlines.
-fn noisy(seed: u64) -> Settings {
-    let mut rng = Rng::new(seed);
-    let calm = Settings::calm(seed);
-    let mut millis = |low: u64, high: u64| Duration::from_millis(rng.between(low, high));
-    let remote_timeout = millis(300, 3_000);
-    let local_timeout = millis(50, 600);
-    let mut rng = Rng::new(seed.wrapping_add(1));
-    let mut pick = |low: u64, high: u64| u32::try_from(rng.between(low, high)).expect("small numbers");
-    Settings {
-        checkout: Limits {
-            workspaces: pick(1, 3),
-            repositories: pick(1, 3),
-            remote_timeout,
-            local_timeout,
-            facts: pick(0, 32),
-            ..LIMITS
-        },
-        repositories: pick(2, 5),
-        workstreams: pick(1, 6),
-        local: Span::millis(1, 300),
-        remote: Span::millis(10, 2_000),
-        think: Span::millis(0, 3_000),
-        network: Span::millis(1, 50),
-        broken: pick(0, 40),
-        ambiguous: pick(0, 60),
-        leftovers: pick(0, 1000),
-        unreachable: pick(0, 60),
-        refusing: pick(0, 60),
-        missing: pick(0, 60),
-        advance: pick(0, 400),
-        reshape: pick(0, 150),
-        edit: pick(300, 1000),
-        cancels_lost: pick(0, 500),
-        granule: if pick(0, 1) == 1 { Duration::from_millis(100) } else { Duration::ZERO },
-        ..calm
-    }
-}
-
-/// Clients drawn from `seed`: a few, arriving within a minute, on the
-/// workstreams of `settings`, pushing, saving, interrupting and erring.
-fn submit_noisily(world: &mut World, settings: &Settings, seed: u64) {
-    let mut rng = Rng::new(seed.wrapping_add(2));
-    for _ in 0..rng.between(3, 12) {
-        let at = Time::ZERO.saturating_add(Duration::from_millis(rng.between(0, 60_000)));
-        let interrupt = if rng.chance(300) {
-            let how = if rng.chance(500) { Interrupt::Abort } else { Interrupt::Release };
-            Some((Duration::from_millis(rng.between(0, 6_000)), how))
-        } else {
-            None
-        };
-        let plan = Plan {
-            workstream: u32::try_from(rng.below(u64::from(settings.workstreams))).expect("small"),
-            start: None,
-            pushes: u32::try_from(rng.between(0, 3)).expect("small"),
-            save: rng.chance(400),
-            interrupt,
-            invalid: rng.chance(30),
-            twice: rng.chance(80),
-        };
-        world.submit(at, plan);
     }
 }

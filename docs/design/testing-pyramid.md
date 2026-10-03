@@ -37,6 +37,10 @@ section 9 what is not built yet, and section 10 what is still open.
   the clock, the seeds and everything around temper, so a seed replays to
   the same run. The top tier trades replay for the real kernel, the real
   network stack and the real programs.
+- **Focused tests always, fuzzy tests at the gate.** Focused tests check
+  what a model is expected to do, and run on every change in a handful of
+  seconds; fuzzy tests search many random worlds for what nobody thought
+  to check, spend more CPU, and gate merges to main (section 6.1).
 - **Some fakes are temporary.** A fake of one of temper's own components
   stands in until its real model exists, then retires. The worker's
   already has, and the engine's will.
@@ -440,6 +444,33 @@ add fuzzing of each machine. The real loop adds that production's
 containment holds: a stopped run's process tree is empty, and a command
 cannot write a git directory.
 
+### 6.1 Focused tests and fuzzy tests
+
+The tests come in two suites, run by different commands
+(`docs/development/workflow.md`):
+
+- **Focused tests** check the behaviour a model is expected to have: the
+  step tests, and under `tests/integration` each world's scenarios,
+  referee tests, replay, facts changing nothing, and memory at the worst
+  case. A scenario that needs randomness runs the few seeds that show its
+  behaviour; a cheap random world may stand as a smoke test. They run by
+  default, on every change, and must be fast: the whole suite takes a
+  handful of seconds, 15 at most, enforced.
+- **Fuzzy tests**, under `tests/fuzzy`, look for what no scenario names:
+  sweeps of many random worlds, each settled under every invariant and
+  every ending reached among them; models driven at random against their
+  worst case; a function against a naive one. They are CPU intensive, and
+  may take longer where that is worth it for the bugs they catch: a minute
+  at most for the suite, enforced. They gate merges to main, and do not
+  run on every change.
+
+A fuzzy test lives in a package of its own under `tests/fuzzy`, beside
+its world's under `tests/integration`, and uses that world: a world's
+settings, random ones included, are the world's, not either suite's. A
+seed a fuzzy test finds failing is fixed and kept, as a scenario if it
+shows behaviour worth naming, or among the sweep's seeds; one that cannot
+be fixed yet is a finding, replayed by an ignored test until it is.
+
 ## 7. Layout
 
 ```
@@ -450,6 +481,8 @@ tests/integration/<component>/<sub-model>   sub-model worlds, the engine's in te
 tests/integration/<component>/model         component and system worlds
 tests/integration/checkout                  the machine and working trees' git, today
 tests/integration/forge                     the fake forge's tests in ordinary Rust: its memory
+tests/fuzzy/<component>/<sub-model>         each world's fuzzy tests: random worlds, models driven at random
+tests/fuzzy/lib                             lib's byte search against a naive one
 ```
 
 The protocol worlds, the simulator (`sim/`, programming-style.md,

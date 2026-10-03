@@ -1,0 +1,27 @@
+# The two test suites (docs/development/workflow.md): the default one, every
+# crate's unit tests and tests/integration, within 15 seconds; and the fuzzy
+# one, tests/fuzzy, within a minute. A suite past its budget fails, naming the
+# tests it stopped; a test past its slow period is flagged SLOW as it runs.
+
+[profile.default]
+default-filter = "not package(/-fuzzy$/)"
+global-timeout = "15s"
+slow-timeout = { period = "3s" }
+
+# The worlds' tests first, the longest, then the many short unit tests behind
+# them, so that the run ends close to its total over the threads.
+[[profile.default.overrides]]
+filter = "kind(test)"
+priority = 10
+
+[profile.fuzzy]
+default-filter = "package(/-fuzzy$/)"
+global-timeout = "60s"
+slow-timeout = { period = "20s" }
+
+# Measuring, not gating: no budget. With -j 1, each test's own time:
+#   cargo nextest run --workspace --profile measure -j 1
+#   cargo nextest run --workspace --profile measure -j 1 --ignore-default-filter -E 'package(/-fuzzy$/)'
+[profile.measure]
+global-timeout = "1h"
+slow-timeout = { period = "60s" }

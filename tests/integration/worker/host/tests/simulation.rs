@@ -1,10 +1,7 @@
 //! The host in its world: scenarios, replay, and a sweep of random worlds.
 
-use std::collections::BTreeSet;
-
 use temper_lib::Duration;
 use temper_worker_model_host::Limits;
-use temper_worker_model_host_tests::engine::ENDINGS;
 use temper_worker_model_host_tests::{Outage, Settings, Span, Stats, World};
 
 const ITERATIONS: u32 = 200_000;
@@ -170,56 +167,4 @@ fn facts_change_nothing_when_none_are_kept() {
     let none = run(&Settings { host: Limits { facts: 0, ..settings.host }, ..settings });
     assert_eq!(kept.trace(), none.trace(), "nothing depends on whether a fact is kept");
     assert!(none.stats().facts_lost > 0);
-}
-
-#[test]
-fn random_worlds_settle_and_reach_every_ending() {
-    let mut reached = BTreeSet::new();
-    let mut seen = BTreeSet::new();
-    for seed in 0..300 {
-        let stats = run(&rough(seed)).stats();
-        for ending in stats.endings.keys() {
-            reached.insert(*ending);
-        }
-        let paths = [
-            ("busy calls", stats.busy),
-            ("calls unavailable", stats.unavailable),
-            ("late calls", stats.parent.late_calls),
-            ("relays unanswered", stats.engine.unanswered),
-            ("events too large", stats.engine.too_large),
-            ("events past the hold", stats.engine.full),
-            ("events to a run ending", stats.engine.ending),
-            ("stale messages", stats.stale),
-            ("reports", stats.reports),
-            ("cancels of every run", stats.cancel_alls),
-            ("runs forgotten on reconnecting", stats.engine.forgotten),
-            ("requests to agents gone", stats.parent.dropped),
-            ("saves with a branch moved", stats.parent.saves_moved),
-            ("saves with a push failed", stats.parent.saves_failed),
-            ("prepares aborted", stats.parent.aborts),
-        ];
-        for (path, count) in paths {
-            if count > 0 {
-                seen.insert(path);
-            }
-        }
-        for path in stats.paths.keys() {
-            seen.insert(path);
-        }
-    }
-    let missing: Vec<&str> = ENDINGS.iter().copied().filter(|ending| !reached.contains(ending)).collect();
-    assert!(missing.is_empty(), "every ending is reached: {missing:?} are not");
-    let paths = [
-        "duplicate assignments",
-        "oversized snapshots",
-        "endings said during a stop",
-        "pushes settled during a stop",
-        "cancels as a workspace was prepared",
-        "cancels as a workspace failed to prepare",
-        "cancels as an agent failed to start",
-        "cancels as an agent started",
-    ];
-    let missing: Vec<&str> = paths.iter().copied().filter(|path| !seen.contains(path)).collect();
-    assert!(missing.is_empty(), "every path is taken: {missing:?} are not");
-    assert_eq!(seen.len(), 15 + paths.len(), "every path is taken: only {seen:?} are");
 }
