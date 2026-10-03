@@ -101,13 +101,6 @@ impl World {
                 let framed = protocol::framed_event(*place, names, &event);
                 *place += 1;
                 self.end("inbound");
-                if let engine::Inbound::News(news) = &event {
-                    let comment = match news {
-                        engine::forge::News::Comment { id, .. } => Some(*id),
-                        engine::forge::News::Reviews { .. } | engine::forge::News::Pull { .. } => None,
-                    };
-                    self.stories.observe(self.now, Told::Inbound { item, comment }, &mut Vec::new());
-                }
                 self.send_down(channel, Event::Inbound { run: names.0, attempt: names.1, event: framed }, false);
             }
             Request::Cancel { channel, item, attempt } => {

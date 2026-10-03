@@ -15,16 +15,17 @@
 //! What the worker passes through unread is encoded on its way in, and
 //! framed as a protocol layer may: a charter is the codec's, after the names
 //! of the run and the attempt it is for; an inbound event says what it is,
-//! after its place among the events sent to its attempt, then the attempt's
-//! names. So the world can tell, at the agent, which attempt a message was
-//! meant for, and the scripted agent that its events come once each, in
-//! order. A run's outcome is the codec's; a relayed call, and its answer,
+//! and which comment it is news of if it is, after its place among the
+//! events sent to its attempt, then the attempt's names. So the world can
+//! tell, at the agent, which attempt a message was meant for and which
+//! person's message it heard, and the scripted agent that its events come
+//! once each, in order. A run's outcome is the codec's; a relayed call, and its answer,
 //! are this module's own small encoding ([`call`], [`call_of`], [`served`]).
 
 use std::collections::BTreeMap;
 
 use temper_engine_model::fleet::Bounce;
-use temper_engine_model::forge::Read;
+use temper_engine_model::forge::{News, Read};
 use temper_engine_model::notes::{Change, Recall, Scope};
 use temper_engine_model::views::Kind;
 use temper_engine_model::{
@@ -136,24 +137,37 @@ fn frame_names(frame: &[u8]) -> Names {
 }
 
 /// The inbound `event` for the run `run`'s attempt `attempt`, framed with its
-/// place among the events sent to it.
+/// place among the events sent to it: what it is, in a word, and the
+/// comment it is news of, if it is one.
 #[must_use]
 pub fn framed_event(place: u64, (run, attempt): Names, event: &Inbound) -> Box<[u8]> {
-    let word: &[u8] = match event {
-        Inbound::News(_) => b"news",
-        Inbound::Finished { .. } => b"finished",
-        Inbound::Held { .. } => b"held",
-        Inbound::Decided { accepted: true } => b"accepted",
-        Inbound::Decided { accepted: false } => b"rejected",
+    let (word, comment): (&[u8], Option<u64>) = match event {
+        Inbound::News(News::Comment { id, .. }) => (COMMENT, Some(*id)),
+        Inbound::News(News::Reviews { .. } | News::Pull { .. }) => (b"news", None),
+        Inbound::Finished { .. } => (b"finished", None),
+        Inbound::Held { .. } => (b"held", None),
+        Inbound::Decided { accepted: true } => (b"accepted", None),
+        Inbound::Decided { accepted: false } => (b"rejected", None),
     };
     let frame = [place.to_be_bytes(), run.raw().to_be_bytes(), attempt.raw().to_be_bytes()].concat();
-    [frame.as_slice(), word].concat().into_boxed_slice()
+    let comment = comment.map(u64::to_be_bytes).unwrap_or_default();
+    [frame.as_slice(), word, &comment[..]].concat().into_boxed_slice()
 }
+
+/// The word of an inbound event that is news of a comment.
+const COMMENT: &[u8] = b"comment";
 
 /// The names of the attempt a framed inbound event was sent to.
 #[must_use]
 pub fn event_names(event: &[u8]) -> Names {
     frame_names(event.get(8..24).expect("an event begins with its frame"))
+}
+
+/// The comment a framed inbound event is news of, if it is.
+#[must_use]
+pub fn event_comment(event: &[u8]) -> Option<u64> {
+    let id = event.get(24..)?.strip_prefix(COMMENT)?;
+    Some(u64::from_be_bytes(id.try_into().expect("a comment's id")))
 }
 
 /// The engine's hello for the worker's.

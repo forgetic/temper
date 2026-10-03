@@ -7,6 +7,7 @@ use std::collections::BTreeSet;
 use temper_engine_model as engine;
 use temper_engine_model_tests::codec;
 use temper_engine_model_tests::deployment::CUE;
+use temper_engine_model_tests::referee as stories;
 use temper_lib::Token;
 use temper_worker_model::agent::channel::{Ask, Down, Finish, Reply, Up};
 use temper_worker_model::checkout::git::Place;
@@ -343,12 +344,13 @@ impl World {
             Down::Start { charter, snapshot } => self.start(owner, charter, snapshot.as_deref()),
             Down::Event { event } => {
                 let agent = self.agents.get(&owner).expect("an event goes to an agent spawned");
-                assert_eq!(
-                    agent.attempt,
-                    Some(protocol::event_names(event)),
-                    "an inbound event reaches its attempt's agent"
-                );
+                let names = protocol::event_names(event);
+                assert_eq!(agent.attempt, Some(names), "an inbound event reaches its attempt's agent");
                 self.stats.events += 1;
+                // A person's message reaches a run where its agent hears it.
+                let (item, comment) = (protocol::item(names.0), protocol::event_comment(event));
+                self.stories.observe(self.now, stories::Seen::Inbound { item, comment }, &mut Vec::new());
+                self.stories.assert_holding(self.settings.seed);
             }
             Down::Answer { call, reply } => {
                 let agent = self.agents.get_mut(&owner).expect("an answer goes to an agent spawned");

@@ -72,10 +72,10 @@
 //! over what the forge did and what the engine assigned (nothing lands on a
 //! protected branch without green CI and a person's approval, keyed
 //! creations made once, attempts that only grow, one live run per item,
-//! a person's message reaching a run), and this world's ([`referee`]), over
-//! what crosses the channel (nothing answered for an attempt the engine
-//! never made, an acknowledgement only for an answer it took, every answer
-//! it took acknowledged). Once it settles: every story's item closed;
+//! a person's message reaching a run, where its agent hears it), and this
+//! world's ([`referee`]), over what crosses the channel (nothing answered
+//! for an attempt the engine never made, an acknowledgement only for an
+//! answer it took, every answer it took acknowledged). Once it settles: every story's item closed;
 //! nothing in flight; every open item the engine tracks held; every process
 //! tree gone and read to its end; and the worker with nothing live in any
 //! sub-model, no alarm armed, every slot free and every answer acknowledged
