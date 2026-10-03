@@ -764,7 +764,7 @@ fn rule(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, write: &plan::Write
     let entry = get(model, id);
     let gates = gates(entry);
     let accepted = match items::applying(&entry.job) {
-        Some(applying) => items::accepted(entry, items::comment_of(applying.of)),
+        Some(applying) => items::accepted_write(entry, items::comment_of(applying.of)),
         None => None,
     };
     let mut findings = Queue::with_capacity(rules::max_out(&env.limits.rules));
@@ -1103,9 +1103,14 @@ fn finish(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, finish: Finish) {
         entry.step = staged;
     }
     // A decision on the outcome counts for its application, however it
-    // ends; one on the step, until an outcome is made.
+    // ends, and one on another outcome for nothing once an outcome is made.
+    // An acceptance of the step counts until it is released or done; a
+    // rejection of it, until an outcome is made.
     let decided = match applying.of {
-        Of::Outcome { comment, .. } => finish == Finish::Made || entry.relations.accepting == Some(comment),
+        Of::Outcome { comment, .. } => match entry.relations.accepting {
+            Some(accepting) => accepting == comment || finish == Finish::Made,
+            None => finish == Finish::Made && entry.relations.accepted.is_none(),
+        },
         Of::Action | Of::Done => false,
     };
     if decided {

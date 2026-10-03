@@ -367,9 +367,19 @@ impl Entry {
 
 /// The permission of the person who accepted what is applied now: the
 /// outcome posted as the comment `outcome`, or, if `None`, the step itself
-/// (its run, its action). An acceptance of anything else counts for nothing.
+/// (its run, its action). An acceptance of anything else counts for nothing:
+/// what a person accepts anew, a plan proposed or growth, counts only its
+/// own.
 pub(crate) fn accepted(entry: &Entry, outcome: Option<u64>) -> Option<Permission> {
     if entry.relations.accepting == outcome { entry.relations.accepted } else { None }
+}
+
+/// The permission a write of what is applied now is accepted at: by an
+/// acceptance of the outcome posted as the comment `outcome`, or of the step
+/// itself, which counts for everything the step writes, its outcomes' writes
+/// included, until it is released or done (engine-model.md, 5.1).
+pub(crate) fn accepted_write(entry: &Entry, outcome: Option<u64>) -> Option<Permission> {
+    accepted(entry, outcome).or(accepted(entry, None))
 }
 
 /// Relations of an item taken in at `now`, with none yet.

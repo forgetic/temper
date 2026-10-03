@@ -13,7 +13,9 @@
 //!   now).
 //! - **Accept, reject:** the decision is the item's, in its record; an item
 //!   held for a person's acceptance is released, and its outcome applied
-//!   again with the decision; any other is told of it.
+//!   again with the decision; any other is told of it. An acceptance of an
+//!   outcome counts for it alone; one of the step, for everything the step
+//!   runs and writes until it is released or done (engine-model.md, 5.1).
 //! - **Stop, release:** the hub's; once the hub releases the item, and
 //!   before its record is written, the plan says what the release writes,
 //!   which lifts what held it. A release the hub refuses changes nothing.
@@ -302,6 +304,13 @@ pub(crate) fn release_into(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) 
     }
     let Some(entry) = model.items.get_mut(id) else { return };
     entry.blocked = false;
+    // A decision on the step made before the release counts for nothing
+    // after it (engine-model.md, 5.3).
+    if entry.relations.accepting.is_none() {
+        entry.relations.decision = None;
+        entry.relations.accepted = None;
+        entry.wants = None;
+    }
     let item = entry.item;
     if reopen && let Some(pull) = entry.relations.pull {
         let Ok(wait) = model.waits.insert(Wait::Aside { entry: None }) else {

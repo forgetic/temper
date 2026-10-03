@@ -1904,3 +1904,105 @@ fn growth_whose_goals_record_cannot_be_written_is_held_unapplied() {
     }
     assert_eq!(held_for(&mut world, build), Some(work::Hold::Writes), "the growth is held, its outcome kept");
 }
+
+/// Moves the change's pull request to `head`, pushed to its branch, with CI
+/// `ci` on it.
+fn pushed(world: &mut World, branch: &[u8], pull: Item, head: [u8; 32], ci: forge::Ci) {
+    for at in 0..world.forge.branches.len() {
+        let (name, commit) = world.forge.branches.get_mut(at).unwrap();
+        if **name == *branch {
+            *commit = head;
+        }
+    }
+    let change = world.forge.change(pull).unwrap();
+    change.commit = head;
+    change.ci = ci;
+    world.forge.issue(pull).unwrap().updated = world.env().now;
+    world.deliver(Event::Hint { repository: 0, item: Some(pull.number), commit: Some(head), branch: None });
+    world.wait(5);
+}
+
+/// The answer of a run that pushed `head` to the first repository.
+fn changed(head: [u8; 32]) -> crate::boundary::Answer {
+    let landed = crate::boundary::Landed { repository: 0, commit: head };
+    let outcome = crate::boundary::Outcome::Change { message: copy_of(b"fixed") };
+    crate::boundary::Answer::Ended { outcome, work: crate::boundary::Work { landed: Box::new([landed]) } }
+}
+
+#[test]
+fn a_change_gated_on_acceptance_is_repaired_and_lands_on_one_acceptance() {
+    let (mut world, session) = World::session();
+    let gated = plan::Step { gates: Box::new([plan::Gate::Accepted]), ..change_step(b"fix") };
+    let tasks = crate::boundary::Outcome::Tasks { tasks: Box::new([gated]), text: copy_of(b"on it") };
+    world.deliver(Event::Answer { channel: Token::new(1), item: session, attempt: 1, answer: ended(tasks) });
+    let change = Item { repository: 0, number: 2 };
+    assert!(assigned(world.seen.as_slice(), change).is_empty(), "nothing runs before a person accepts the step");
+    world.deliver(Event::Ask {
+        reply_to: ReplyTo::new(Token::new(35)),
+        person: ALICE,
+        ask: Ask::Accept { item: change },
+    });
+    assert_eq!(assigned(world.seen.as_slice(), change).as_slice(), [1], "accepted, the change is made");
+    world.forge.branches.push((copy_of(b"temper/2"), [1; 32])).unwrap();
+    world.deliver(Event::Answer { channel: Token::new(1), item: change, attempt: 1, answer: changed([1; 32]) });
+    let pull = Item { repository: 0, number: 3 };
+    assert!(world.forge.change(pull).is_some(), "its pull request is opened on the same acceptance");
+    // CI fails on it: it is repaired, on the same acceptance.
+    pushed(&mut world, b"temper/2", pull, [1; 32], forge::Ci::Failed);
+    world.wait(60);
+    let attempts = assigned(world.seen.as_slice(), change);
+    assert_eq!(attempts.as_slice(), [1, 2], "the change is repaired: {:?}", held_for(&mut world, change));
+    pushed(&mut world, b"temper/2", pull, [2; 32], forge::Ci::Passed);
+    world.deliver(Event::Answer { channel: Token::new(1), item: change, attempt: 2, answer: changed([2; 32]) });
+    let review = api::Review {
+        id: 501,
+        author: ALICE,
+        verdict: api::Verdict::Approve,
+        commit: [2; 32],
+        key: None,
+        body: copy_of(b"lgtm"),
+    };
+    world.forge.change(pull).unwrap().reviews.push(review).unwrap();
+    world.forge.issue(pull).unwrap().updated = world.env().now;
+    world.deliver(Event::Hint { repository: 0, item: Some(pull.number), commit: None, branch: None });
+    for _ in 0_u32..10 {
+        world.wait(30);
+    }
+    let held = held_for(&mut world, change);
+    assert_eq!(world.forge.change(pull).unwrap().merged, Some([8; 32]), "it lands: {held:?}");
+    assert_eq!(assigned(world.seen.as_slice(), change).as_slice(), [1, 2], "made, then repaired once");
+}
+
+#[test]
+fn a_step_accepted_and_then_released_waits_to_be_accepted_again() {
+    let (mut world, session) = World::session();
+    let gated = plan::Step { gates: Box::new([plan::Gate::Accepted]), ..change_step(b"fix") };
+    let tasks = crate::boundary::Outcome::Tasks { tasks: Box::new([gated]), text: copy_of(b"on it") };
+    world.deliver(Event::Answer { channel: Token::new(1), item: session, attempt: 1, answer: ended(tasks) });
+    let change = Item { repository: 0, number: 2 };
+    world.deliver(Event::Ask {
+        reply_to: ReplyTo::new(Token::new(36)),
+        person: ALICE,
+        ask: Ask::Accept { item: change },
+    });
+    // Its runs fail until it is held.
+    for attempt in 1_u64..=3 {
+        assert_eq!(assigned(world.seen.as_slice(), change).as_slice().last(), Some(&attempt), "attempt {attempt} runs");
+        let failed = crate::boundary::Answer::Failed {
+            failure: crate::boundary::Failure::Run,
+            work: crate::boundary::Work { landed: Box::new([]) },
+        };
+        world.deliver(Event::Answer { channel: Token::new(1), item: change, attempt, answer: failed });
+        world.wait(10);
+    }
+    assert_eq!(held_for(&mut world, change), Some(work::Hold::Failures(work::Class::Run)), "held for its failures");
+    world.deliver(Event::Ask {
+        reply_to: ReplyTo::new(Token::new(37)),
+        person: ALICE,
+        ask: Ask::Release { item: change },
+    });
+    world.wait(10);
+    let accepting = work::Hold::Plan { reason: translate::RUN_ACCEPTANCE };
+    assert_eq!(held_for(&mut world, change), Some(accepting), "released, it waits for its acceptance again");
+    assert_eq!(assigned(world.seen.as_slice(), change).len(), 3, "and runs nothing before");
+}
