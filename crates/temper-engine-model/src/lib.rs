@@ -63,7 +63,17 @@
 //!   record is written. A run's call that reaches no live claim is answered
 //!   at once, unserved: busy before the cold start is done, failed after.
 //! - **Hold reasons** are the plan's, coded as small integers that keep
-//!   their meaning across restarts (zero: the record carries no step).
+//!   their meaning across restarts, and the top level's own past them:
+//!   zero, the record carries no step; seven, the rules want a person to
+//!   accept the run due; eight, the rules refuse it.
+//! - **Where a change's branch is** is in its record, as a run's answer
+//!   says it pushed. A late answer, its attempt presumed lost, says so too,
+//!   while the record names no branch; and before a change is made again
+//!   with no branch recorded, the branch is read on the forge, where an
+//!   attempt whose answer never came may have pushed it.
+//! - **A merge refused for a conflict** marks the head it was refused at as
+//!   conflicting, whatever the working set read of it, for as long as it is
+//!   the pull request's head: the plan sends the change back for a rebase.
 //! - **Relations** (dependencies, children, the goal, the pull request) are
 //!   in the record, each marked done as it closes; one not held and not
 //!   known done is read afresh before the plan decides.

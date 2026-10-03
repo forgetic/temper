@@ -304,7 +304,11 @@ fn hold_reasons_keep_their_codes() {
         translate::hold(plan::Hold::Stalled),
     ];
     assert_eq!(codes, [1, 2, 3, 4, 5, 6], "a stored code means the same after a restart");
-    assert!(!codes.contains(&translate::NO_STEP), "no plan reason is the top level's own");
+    let own = [translate::NO_STEP, translate::RUN_ACCEPTANCE, translate::RUN_REFUSED];
+    assert_eq!(own, [0, 7, 8], "the top level's own codes mean the same after a restart");
+    for code in own {
+        assert!(!codes.contains(&code), "no plan reason is the top level's own: {code}");
+    }
 }
 
 #[test]

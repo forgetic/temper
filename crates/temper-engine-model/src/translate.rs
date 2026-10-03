@@ -386,3 +386,51 @@ pub(crate) fn grants_of(record: &plan::Record) -> Option<plan::Grants> {
         }
     }
 }
+
+/// The pull request a forge's answer carries, if it is one.
+pub(crate) fn pull_answered(answer: api::Answer) -> Option<api::Pull> {
+    match answer {
+        api::Answer::Pull(pull) => Some(pull),
+        api::Answer::Items { .. }
+        | api::Answer::Item { .. }
+        | api::Answer::Comment(_)
+        | api::Answer::Reviews { .. }
+        | api::Answer::Statuses { .. }
+        | api::Answer::Remarks { .. }
+        | api::Answer::Permission(_)
+        | api::Answer::Commit(_)
+        | api::Answer::Pages { .. }
+        | api::Answer::Page(_)
+        | api::Answer::Created(_)
+        | api::Answer::Commented { .. }
+        | api::Answer::Edited { .. }
+        | api::Answer::Reviewed(_)
+        | api::Answer::Merged(_)
+        | api::Answer::Revision(_)
+        | api::Answer::Done => None,
+    }
+}
+
+/// The permission a forge's answer carries, if it is one.
+pub(crate) fn permission_answered(answer: api::Answer) -> Option<api::Permission> {
+    match answer {
+        api::Answer::Permission(permission) => Some(permission),
+        api::Answer::Items { .. }
+        | api::Answer::Item { .. }
+        | api::Answer::Comment(_)
+        | api::Answer::Pull(_)
+        | api::Answer::Reviews { .. }
+        | api::Answer::Statuses { .. }
+        | api::Answer::Remarks { .. }
+        | api::Answer::Commit(_)
+        | api::Answer::Pages { .. }
+        | api::Answer::Page(_)
+        | api::Answer::Created(_)
+        | api::Answer::Commented { .. }
+        | api::Answer::Edited { .. }
+        | api::Answer::Reviewed(_)
+        | api::Answer::Merged(_)
+        | api::Answer::Revision(_)
+        | api::Answer::Done => None,
+    }
+}

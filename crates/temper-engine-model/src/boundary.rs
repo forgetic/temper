@@ -27,8 +27,9 @@
 //!   there is no room for it; else once served, on the channel hosting the
 //!   attempt then, unless the attempt is fenced off or out of contact by
 //!   then. [`Event::Bounced`] and [`Event::Told`] are notices.
-//!   [`Request::Refuse`] turns a worker away at its hello: its channel is to
-//!   be closed.
+//!   [`Request::Refuse`] closes a worker's channel: turned away at its
+//!   hello, or, later, when the engine has no room to carry an answer it
+//!   sent, which it sends again after its next hello.
 //! - People, through the web (engine-model.md, sections 2, 6 and 11): an
 //!   [`Event::Ask`] is a call, answered by exactly one [`Request::Reply`]
 //!   echoing its `reply_to`, at once or once what it asked is done. A watch
@@ -120,8 +121,9 @@ pub enum Request {
     /// To a worker: the engine has the answer of the item's attempt
     /// `attempt`, durably or not wanted, and the worker forgets it.
     Acknowledge { channel: Token, item: Item, attempt: u64 },
-    /// About a worker: no room for it, or its hello is beyond the limits.
-    /// Close its channel; it dials again later.
+    /// About a worker: no room for it, its hello is beyond the limits, or
+    /// there is no room to carry an answer it sent. Close its channel; it
+    /// dials again later, and sends its answers again.
     Refuse { channel: Token },
     /// To a person, the one answer to an `Ask`.
     Reply { to: ReplyTo, reply: Reply },

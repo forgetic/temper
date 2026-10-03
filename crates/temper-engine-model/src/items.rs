@@ -219,9 +219,9 @@ pub(crate) struct Writes {
     pub(crate) list: Box<[plan::Write]>,
     pub(crate) next: u32,
     pub(crate) then: plan::Then,
-    /// The reviews on the head a merge lands, with their reviewers'
-    /// permissions as read so far.
-    pub(crate) reviews: List<temper_engine_model_rules::Review>,
+    /// The permissions of the reviewers of the head a merge lands, as read
+    /// so far.
+    pub(crate) reviewers: List<Reviewer>,
     /// The write in flight was tried once already and timed out.
     pub(crate) retried: bool,
     /// The pull request as read afresh for a merge: where it lands, and
@@ -229,6 +229,13 @@ pub(crate) struct Writes {
     pub(crate) landing: Option<Fresh>,
     /// What is being read for the write in hand.
     pub(crate) reading: Option<Reading>,
+}
+
+/// A reviewer's permission on the repository, as read for a merge.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) struct Reviewer {
+    pub(crate) person: u64,
+    pub(crate) permission: Permission,
 }
 
 /// A pull request read afresh before it is merged.

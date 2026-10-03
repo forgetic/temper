@@ -427,7 +427,7 @@ pub(crate) fn act(model: &mut Model, env: &Env<Limits>, owner: Token, item: Item
         list: writes,
         next: 0,
         then: plan::Then::Wait,
-        reviews: List::with_capacity(env.limits.forge.reviewers),
+        reviewers: List::with_capacity(env.limits.forge.reviewers),
         retried: false,
         landing: None,
         reading: None,
@@ -534,7 +534,7 @@ fn applied(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, fresh: Option<pl
                 list: drain(&mut writes, &env.limits),
                 next: 0,
                 then,
-                reviews: List::with_capacity(env.limits.forge.reviewers),
+                reviewers: List::with_capacity(env.limits.forge.reviewers),
                 retried: false,
                 landing: None,
                 reading: None,
@@ -576,7 +576,7 @@ fn reject(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) {
         list: Box::new([]),
         next: 0,
         then,
-        reviews: List::with_capacity(env.limits.forge.reviewers),
+        reviewers: List::with_capacity(env.limits.forge.reviewers),
         retried: false,
         landing: None,
         reading: None,
@@ -863,9 +863,9 @@ fn lands_as_planned(entry: &Entry) -> bool {
 
 /// The permission read of `person`, among those a merge read.
 fn permission_of(writes: &Writes, person: u64) -> Option<rules::Permission> {
-    for review in &writes.reviews {
-        if review.person == person {
-            return Some(review.permission);
+    for reviewer in &writes.reviewers {
+        if reviewer.person == person {
+            return Some(reviewer.permission);
         }
     }
     None
@@ -1252,9 +1252,17 @@ fn fresh_read(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, result: Resul
 /// What a merge read before the rules decide ended: the pull request
 /// afresh, or a reviewer's permission.
 fn landing_answer(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, result: Result<api::Answer, forge::Failure>) {
-    if let Err(forge::Failure::Busy) = result {
-        return stall(model, id);
-    }
+    let answer = match result {
+        Ok(answer) => Some(answer),
+        Err(forge::Failure::Busy) => return stall(model, id),
+        Err(
+            forge::Failure::Invalid
+            | forge::Failure::Unknown
+            | forge::Failure::Edited { .. }
+            | forge::Failure::Revised { .. }
+            | forge::Failure::Forge(_),
+        ) => None,
+    };
     let Some(applying) = items::applying_mut(&mut get_mut(model, id).job) else {
         unreachable!("an item applying reads for its merge")
     };
@@ -1264,17 +1272,24 @@ fn landing_answer(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, result: R
     };
     match writes.reading.take() {
         Some(items::Reading::Pull) => {
-            let Ok(api::Answer::Pull(pull)) = result else { return finish(model, env, id, Finish::Failed) };
+            let pull = match answer {
+                Some(answer) => translate::pull_answered(answer),
+                None => None,
+            };
+            let Some(pull) = pull else { return finish(model, env, id, Finish::Failed) };
             let ci = translate::plan_ci(pull.ci);
             writes.landing = Some(items::Fresh { base: pull.base, head: pull.commit, ci });
         }
         Some(items::Reading::Permission { person }) => {
-            let permission = match result {
-                Ok(api::Answer::Permission(permission)) => translate::permission(permission),
-                Ok(_) | Err(_) => rules::Permission::None,
+            let read = match answer {
+                Some(answer) => translate::permission_answered(answer),
+                None => None,
             };
-            let review = rules::Review { person, permission, head: [0; 32], stance: rules::Stance::Approve };
-            writes.reviews.push(review).expect("room for each of them");
+            let permission = match read {
+                Some(permission) => translate::permission(permission),
+                None => rules::Permission::None,
+            };
+            writes.reviewers.push(items::Reviewer { person, permission }).expect("room for each of them");
         }
         None => {}
     }
