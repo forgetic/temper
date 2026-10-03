@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use temper_engine_model::forge::api as engine_api;
 use temper_engine_model::{
-    self as engine, Answer, Assignment, Event, Fact, Hello, Item, Landed, Limits, Model, Request, Start, Work,
+    self as engine, Answer, Assignment, Event, Fact, Hello, Item, Landed, Limits, Model, Request, Start, Work, plan,
 };
 use temper_forge_model::api::{self as forge_api, Checks, Cue, File, Git, Permission, Protection, Setup};
 use temper_forge_model::{self as forge, Skew};
@@ -15,7 +15,7 @@ use crate::deployment::{
 };
 use crate::mirror::Mirror;
 use crate::people::{self, Asker, People, Story};
-use crate::referee::{Bounds, Engine, Needs, Seen, Stimulus};
+use crate::referee::{Bounds, Engine, Moment, Needs, Seen, Stimulus};
 use crate::store::{self, Store};
 use crate::translate::{self, Asked};
 use crate::workers::{self, Assigned, Down, Effect, Said, Up, Worker};
@@ -57,6 +57,15 @@ pub struct Settings {
     /// Workers whose channel drops and who never come back: their runs and
     /// the answers they kept go with them.
     pub vanishes: u32,
+    /// Moments at which the engine restarts besides, each once, as the
+    /// forge shows them.
+    pub restart_on: Vec<Moment>,
+    /// How a session's wake rule batches what wakes it.
+    pub batch: plan::Batch,
+    /// Whether the protected branches' rules dismiss an approval of an
+    /// earlier head: if not, only the engine keeps a stale one from
+    /// counting.
+    pub dismiss_stale: bool,
     pub bounds: Bounds,
 }
 
@@ -132,6 +141,9 @@ impl Settings {
             drops: 0,
             drop_at: Span::millis(5_000, 200_000),
             vanishes: 0,
+            restart_on: Vec::new(),
+            batch: deployment::session().wake.batch,
+            dismiss_stale: true,
             bounds: Bounds { story: Duration::from_secs(4 * 3_600), message: Duration::from_secs(3_600) },
         }
     }
@@ -359,6 +371,9 @@ pub struct World {
     referee: Referee<Engine>,
     stats: Stats,
     trace: Trace,
+    /// When each attempt was assigned, and each item closed, in order.
+    assignments: Vec<(Time, Item, u64)>,
+    closings: Vec<(Time, Item)>,
 }
 
 impl World {
@@ -368,9 +383,10 @@ impl World {
         let mut rng = Rng::new(settings.seed);
         let mut forge = forge::Model::new(&settings.forge, rng.next_u64());
         for name in REPOSITORIES.iter().chain([&ELSEWHERE]) {
-            setup(&mut forge, &settings.forge, name);
+            setup(&mut forge, &settings.forge, name, settings.dismiss_stale);
         }
-        let mut referee = Referee::new(Engine::new(settings.bounds, settings.stories.len()));
+        let expectations = Engine::new(settings.bounds, settings.stories.len()).restarting_at(&settings.restart_on);
+        let mut referee = Referee::new(expectations);
         for _ in 0..settings.restarts {
             referee.inject(Time::ZERO.saturating_add(settings.restart_at.draw(&mut rng)), Stimulus::Restart);
         }
@@ -382,7 +398,7 @@ impl World {
             referee.inject(Time::ZERO.saturating_add(settings.drop_at.draw(&mut rng)), Stimulus::Vanish { worker });
         }
         let max_out = engine::max_out(&settings.limits);
-        let model = Model::new(deployment::config(), &settings.limits, rng.next_u64(), Time::ZERO);
+        let model = Model::new(config(&settings), &settings.limits, rng.next_u64(), Time::ZERO);
         let workers =
             (0..settings.workers).map(|_| Worker::new(settings.worker, rng.next_u64())).collect::<Vec<Worker>>();
         let mut world = World {
@@ -411,6 +427,8 @@ impl World {
             referee,
             stats: Stats::default(),
             trace: Trace::default(),
+            assignments: Vec::new(),
+            closings: Vec::new(),
             settings,
         };
         world.observe(Seen::Start);
@@ -473,6 +491,24 @@ impl World {
     #[must_use]
     pub fn item(&self, tale: usize) -> Option<Item> {
         self.people.item(tale)
+    }
+
+    /// Keyed creations an engine made again after a restart.
+    #[must_use]
+    pub fn again(&self) -> u32 {
+        self.referee.expectations().again
+    }
+
+    /// When each attempt was assigned to a worker, in order.
+    #[must_use]
+    pub fn assignments(&self) -> &[(Time, Item, u64)] {
+        &self.assignments
+    }
+
+    /// When each item of the deployment's was closed, in order.
+    #[must_use]
+    pub fn closings(&self) -> &[(Time, Item)] {
+        &self.closings
     }
 
     /// Runs until the stories are done and nothing is in flight, then checks
@@ -566,13 +602,17 @@ impl World {
             self.mirror.observe(&observation);
             match &observation {
                 forge::Observation::Merged { .. } => self.end("merged"),
+                forge::Observation::Closed { repository, number, .. } => {
+                    if let Some(index) = deployment::index(repository) {
+                        self.closings.push((self.now, Item { repository: index, number: *number }));
+                    }
+                }
                 forge::Observation::Wiki { by, .. } if *by != ENGINE => self.end("corrected"),
                 forge::Observation::Reviewed { .. } => self.end("reviewed"),
                 forge::Observation::Wiki { .. }
                 | forge::Observation::Moved { .. }
                 | forge::Observation::Deleted { .. }
                 | forge::Observation::Opened { .. }
-                | forge::Observation::Closed { .. }
                 | forge::Observation::Reopened { .. }
                 | forge::Observation::Labelled { .. }
                 | forge::Observation::Revised { .. }
@@ -705,6 +745,7 @@ impl World {
                 let live = self.live_elsewhere(worker, item, attempt);
                 let charter = codec::charter_of(&assigned.charter).expect("a charter decodes as it was encoded");
                 let brief = codec::brief_of(&charter);
+                self.assignments.push((self.now, item, attempt));
                 self.observe(Seen::Assigned { item, attempt, live, brief, grants: Some(charter.grants) });
             }
             Down::Relayed { item, attempt, call, served } => {
@@ -932,7 +973,7 @@ impl World {
             people::Act::Forge { tale, user, repository, op } => {
                 self.log(format!("person {user} calls {op:?}"));
                 let theirs = match &op {
-                    forge_api::Op::Write(forge_api::Write::Review { number, .. }) => {
+                    forge_api::Op::Write(forge_api::Write::Review { number, .. }) if tale.is_none() => {
                         let head = self.mirror_head(repository, *number);
                         Theirs::Review { repository, number: *number, head }
                     }
@@ -1134,7 +1175,7 @@ impl World {
         self.log("the engine restarts".to_owned());
         self.life += 1;
         let seed = self.rng.next_u64();
-        self.model = Model::new(deployment::config(), &self.settings.limits, seed, self.now);
+        self.model = Model::new(config(&self.settings), &self.settings.limits, seed, self.now);
         let max_out = engine::max_out(&self.settings.limits);
         self.stage = Stage::new(self.settings.limits, max_out, max_out + SLACK);
         self.stage.tick(self.now);
@@ -1294,10 +1335,19 @@ fn answer_of(said: Said) -> Answer {
     }
 }
 
+/// The deployment's configuration, its sessions' wake rule batching as the
+/// settings say.
+fn config(settings: &Settings) -> engine::Config {
+    let mut config = deployment::config();
+    config.session.wake.batch = settings.batch;
+    config
+}
+
 /// Sets up a repository of the fake forge: its default branch holding a
-/// file CI reads as green, CI cued by it, its default branch protected,
-/// and its users.
-fn setup(forge: &mut forge::Model, config: &forge::Config, name: &[u8]) {
+/// file CI reads as green, CI cued by it, its default branch protected
+/// (dismissing approvals of earlier heads if `dismiss_stale`), and its
+/// users.
+fn setup(forge: &mut forge::Model, config: &forge::Config, name: &[u8], dismiss_stale: bool) {
     let setup = Setup {
         name: name.into(),
         default: MAIN.into(),
@@ -1320,7 +1370,7 @@ fn setup(forge: &mut forge::Model, config: &forge::Config, name: &[u8]) {
             branch: MAIN.into(),
             contexts: Box::new([b"ci".as_slice().into()]),
             approvals: 1,
-            dismiss_stale: true,
+            dismiss_stale,
         }),
         hooked: true,
     };

@@ -22,12 +22,17 @@
 //!
 //! And liveness: every story's item ends (is closed) within a bound.
 //! A restart of the engine changes none of it: every check is over what
-//! happened, not over the engine that did it.
+//! happened, not over the engine that did it. A scenario may have the
+//! engine restart at a chosen moment, as the forge shows it (an outcome
+//! posted, a plan's first item made, a goal's record grown, a claim
+//! written, a person's edit of the engine's labels or record), before the
+//! engine hears its call answered.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use temper_engine_model::notes::Scope;
 use temper_engine_model::plan::{Envelope, Grants};
+use temper_engine_model::work::Phase;
 use temper_engine_model::{Decoded, Item, Record, Refusal, Reply};
 use temper_forge_model::Observation;
 use temper_forge_model::api::{Kind, Verdict};
@@ -95,6 +100,26 @@ pub enum Expected {
     Message(Item, u32),
 }
 
+/// A moment, as the forge shows it, at which a scenario has the engine
+/// restart, once: before the engine hears that what it asked was done.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Moment {
+    /// An outcome is posted, and its record does not say yet that it is
+    /// applied.
+    Outcome,
+    /// The first item of a plan accepted is made, and the others not yet.
+    PlanItem,
+    /// A goal's record lists the steps its plan grew by, and the growing
+    /// step's record does not say yet that its outcome is applied.
+    Growth,
+    /// A record says its item is claimed, and no worker has the run yet.
+    Claim,
+    /// A person takes the tracking label off an item.
+    Unlabelled,
+    /// A person edits a comment of the engine's.
+    Mangled,
+}
+
 /// What the referee injects: the engine restarting, a worker's channel
 /// dropping.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -145,6 +170,10 @@ pub struct Engine {
     /// not answered yet.
     grants: BTreeMap<(Item, u64), Grants>,
     calls: BTreeMap<(Item, u64, u64), Needs>,
+    /// The moments at which the engine restarts, and how many steps each
+    /// goal's record lists.
+    moments: Vec<Moment>,
+    steps: BTreeMap<Item, usize>,
     pub restarts: u32,
 }
 
@@ -169,7 +198,24 @@ impl Engine {
             acceptances: BTreeMap::new(),
             grants: BTreeMap::new(),
             calls: BTreeMap::new(),
+            moments: Vec::new(),
+            steps: BTreeMap::new(),
             restarts: 0,
+        }
+    }
+
+    /// The same expectations, with the engine restarting at `moments`.
+    #[must_use]
+    pub fn restarting_at(self, moments: &[Moment]) -> Engine {
+        Engine { moments: moments.to_vec(), ..self }
+    }
+
+    /// The engine restarts at `moment`, if a scenario wants it to and it
+    /// has not yet.
+    fn at(&mut self, moment: Moment, judge: &mut Judge<Expected, Stimulus>) {
+        if let Some(at) = self.moments.iter().position(|wanted| *wanted == moment) {
+            self.moments.remove(at);
+            judge.inject_now(Stimulus::Restart);
         }
     }
 
@@ -210,8 +256,12 @@ impl Engine {
             Observation::Opened { repository, kind, body, branches, by, number, .. } if *by == ENGINE => match kind {
                 Kind::Issue => {
                     if let Some(key) = temper_engine_model_forge_tests::translate::key_of(body) {
+                        let step = key.windows(b"/step/".len()).any(|window| window == b"/step/");
                         let first = self.issues.insert((repository.to_vec(), key), self.restarts);
                         self.once(first, judge, format_args!("an issue is created once per key: {observation:?}"));
+                        if step {
+                            self.at(Moment::PlanItem, judge);
+                        }
                     }
                 }
                 Kind::Pull => {
@@ -229,6 +279,12 @@ impl Engine {
                 match codec::comment(*id, body) {
                     Some(Decoded::Record { record, .. }) => self.recorded(repository, *number, &record, judge),
                     Some(Decoded::Outcome { .. } | Decoded::Page { .. }) | None => {}
+                }
+            }
+            Observation::Edited { .. } => self.at(Moment::Mangled, judge),
+            Observation::Labelled { labels, by, .. } if is_person(*by) => {
+                if !labels.iter().any(|label| **label == *deployment::TRACKING) {
+                    self.at(Moment::Unlabelled, judge);
                 }
             }
             Observation::Closed { repository, number, .. } => {
@@ -249,7 +305,6 @@ impl Engine {
             | Observation::Depends { .. }
             | Observation::Requested { .. }
             | Observation::Defined { .. }
-            | Observation::Edited { .. }
             | Observation::Removed { .. }
             | Observation::Reviewed { .. }
             | Observation::Reported { .. }
@@ -261,10 +316,10 @@ impl Engine {
 
     /// A keyed creation is made once: `first` is the life of the engine that
     /// made it first, if one did. Made again by the same engine, the test
-    /// fails. Made again by an engine that restarted since, it is counted:
-    /// the engine's top level does not yet look for what an earlier life
-    /// created before creating it again, so a restart between a creation
-    /// and the record that would say it was made repeats it.
+    /// fails. Made again by an engine that restarted since, it is counted,
+    /// and the restart scenarios hold it to none: an engine looks for what
+    /// an earlier life may have made before making it, from where the cause
+    /// it knows says, which a restart at a random moment may leave short.
     fn once(&mut self, first: Option<u32>, judge: &mut Judge<Expected, Stimulus>, why: std::fmt::Arguments<'_>) {
         match first {
             None => judge.check(true, why),
@@ -299,6 +354,7 @@ impl Engine {
         if let Some(posted) = posted {
             let first = self.outcomes.insert((repository.to_vec(), number, posted.attempt), self.restarts);
             self.once(first, judge, format_args!("an attempt's outcome is posted once: {observation:?}"));
+            self.at(Moment::Outcome, judge);
         } else if let Some(key) = temper_engine_model_forge_tests::translate::key_of(body) {
             // A person's message, written: the comment it is.
             if let Some(index) = deployment::index(repository) {
@@ -321,6 +377,15 @@ impl Engine {
     fn recorded(&mut self, repository: &[u8], number: u64, record: &Record, judge: &mut Judge<Expected, Stimulus>) {
         let Some(index) = deployment::index(repository) else { return };
         let item = Item { repository: index, number };
+        match record.lifecycle.phase {
+            Phase::Claimed => self.at(Moment::Claim, judge),
+            Phase::Waiting
+            | Phase::Parked
+            | Phase::Retrying(_)
+            | Phase::Applying { .. }
+            | Phase::Held { .. }
+            | Phase::Done => {}
+        }
         if let Some(goal) = record.relations.goal
             && goal != item
         {
@@ -330,6 +395,10 @@ impl Engine {
             );
         }
         let Some(goal) = &record.step.goal else { return };
+        let before = self.steps.insert(item, goal.steps.len());
+        if before.is_some_and(|before| before < goal.steps.len()) {
+            self.at(Moment::Growth, judge);
+        }
         let envelope = goal.envelope.clone();
         let Some(before) = self.envelopes.insert(item, envelope.clone()) else {
             // Its plan, accepted: what a person accepted is spent on it.

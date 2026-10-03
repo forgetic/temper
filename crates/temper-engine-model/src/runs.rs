@@ -445,7 +445,8 @@ pub(crate) fn is_loaded(model: &Model) -> bool {
 }
 
 /// The cold start is done: every claim the records hold is adopted. The
-/// fleet starts the strays' graces, and the runs prepared meanwhile start.
+/// fleet starts the strays' graces, the runs prepared meanwhile start, and
+/// the applications resumed meanwhile go on, from the ready list.
 pub(crate) fn loaded(model: &mut Model, env: &Env<Limits>) {
     model.loaded = Some(env.now);
     model::keep(model, Fact::Loaded);
@@ -456,6 +457,8 @@ pub(crate) fn loaded(model: &mut Model, env: &Env<Limits>) {
         entry.waiting = false;
         if entry.assignment.is_some() && entry.live.is_some() {
             place(model, env, id);
+        } else if items::applying(&entry.job).is_some() && model.stalled.try_push(id).is_err() {
+            unreachable!("the ready list has room for every item");
         }
     }
 }

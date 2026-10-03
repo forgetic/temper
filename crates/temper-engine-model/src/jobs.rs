@@ -401,6 +401,18 @@ pub(crate) fn apply(model: &mut Model, env: &Env<Limits>, owner: Token, item: It
     entry.staged = entry.step.clone();
     let news = entry.next;
     entry.job = Job::Applying(Box::new(Applying { owner, of, doing, wait: None, resumed: !kept, news }));
+    // One resumed after a restart reads what its goal's and its relations'
+    // records say, which the cold start reads: it goes once that is done.
+    if model.loaded.is_none() {
+        let entry = get_mut(model, id);
+        if !entry.waiting {
+            entry.waiting = true;
+            if model.held.try_push(id).is_err() {
+                unreachable!("the held jobs have room for every item");
+            }
+        }
+        return;
+    }
     go(model, env, id);
 }
 

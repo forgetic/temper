@@ -97,7 +97,7 @@ fn session(item: Item, cue: &[u8], supervising: bool, snapshot: Option<&[u8]>, m
             }
         }
         b"#note" => note(item, mirror, acts),
-        b"#plan" | b"#grow" | b"#reject" => {
+        b"#plan" | b"#grow" | b"#reject" | b"#burst" => {
             // Rejected, as its record counts until a release, or as its
             // person said after.
             let rejected = record.as_ref().is_some_and(|record| record.step.progress.rejections > 0)
@@ -116,8 +116,12 @@ fn session(item: Item, cue: &[u8], supervising: bool, snapshot: Option<&[u8]>, m
                 Outcome::Plan { plan, text: text(b"here is a plan") }
             }
         }
-        // A session that says hello, and finishes once it is answered.
+        // A session that says hello, and finishes once it is answered; one
+        // to be stopped takes its time first.
         _ => {
+            if cue == b"#stop" {
+                acts.push(Act::Await { within: Duration::from_secs(60) });
+            }
             if messages > 0 {
                 Outcome::Finished { text: text(b"glad to help") }
             } else {
@@ -153,10 +157,13 @@ pub const NOTE: &[u8] = b"slow-build";
 fn agent(item: Item, cue: &[u8], grows: bool, acts: &mut Vec<Act>) {
     let outcome = if grows {
         // Two changes: within `#plan`'s envelope, beyond `#grow`'s.
-        let _ = cue;
         let steps = (0..2).map(|at| change_step(item, &[b'c', b'0' + at], b"#part", &[])).collect();
         Outcome::Steps { steps, text: text(b"the changes it takes") }
     } else {
+        // A slow spike takes a minute longer than its sibling.
+        if cue == b"#slow" {
+            acts.push(Act::Await { within: Duration::from_secs(60) });
+        }
         Outcome::Report { text: text(b"done: it fits") }
     };
     acts.push(Act::End(End::Ended(outcome)));
@@ -181,9 +188,11 @@ fn proposal(item: Item, cue: &[u8]) -> plan::Plan {
         after: Box::new([text(b"spike-a"), text(b"spike-b")]),
         gates: Box::new([]),
     };
+    // `#burst`'s second spike is slow: the spikes end a minute apart.
+    let by_hand: &[u8] = if cue == b"#burst" { b"#slow spike by hand" } else { b"#spike by hand" };
     let steps = vec![
         agent(b"spike-a", b"#spike with a library", false, &[]),
-        agent(b"spike-b", b"#spike by hand", false, &[]),
+        agent(b"spike-b", by_hand, false, &[]),
         decide,
         change_step(item, b"design", b"#design write it down", &[b"decide"]),
         agent(b"build", b"#build split it", true, &[b"design"]),

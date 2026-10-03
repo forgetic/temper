@@ -47,6 +47,21 @@ pub enum Story {
     /// held, the caretaker releases it, it stalls again, and its person
     /// closes the session, leaving the change held.
     Stall,
+    /// A session from the web whose person takes the tracking label off it
+    /// once it replied, then thanks it: the engine finds it all the same.
+    Unlabel,
+    /// A session from the web whose person garbles the engine's record on
+    /// it once it replied, which holds it for them; then closes it.
+    Mangle,
+    /// A session from the web whose person watches it, and stops its run
+    /// once one is live: held, the caretaker releases it, and it goes on
+    /// as `Hello` does.
+    Stop,
+    /// The fix's story, whose person approves the change's first head, red
+    /// as it is: once it is repaired, that approval is of an earlier head.
+    Stale,
+    /// The plan's story, whose second spike ends a minute after the first.
+    Burst,
 }
 
 /// The stories random worlds draw from. A plan's (`Plan`, `Grow`) makes a
@@ -68,6 +83,10 @@ fn matches_held(phase: temper_engine_model::work::Phase) -> bool {
         }
     }
 }
+
+/// How many looks at the forge a person who garbled a record lets pass
+/// before they give up on its session.
+const MANGLED_LOOKS: u32 = 12;
 
 /// Who asks the engine: a story's person, or the caretaker, who releases
 /// a held item.
@@ -104,6 +123,9 @@ struct Tale {
     /// How many messages it has sent, and whether it corrected its note.
     sent: u32,
     corrected: bool,
+    /// How many of its story's own acts it has done: for `Unlabel`, `Mangle`,
+    /// `Stop` and `Stale`, in their order.
+    acts: u32,
 }
 
 /// What people did, counted.
@@ -115,6 +137,9 @@ pub struct Tally {
     pub calls: u32,
     pub reviews: u32,
     pub releases: u32,
+    /// Watches taken, and runs stopped.
+    pub watches: u32,
+    pub stops: u32,
 }
 
 #[derive(Debug)]
@@ -142,6 +167,7 @@ impl People {
                 pending: false,
                 sent: 0,
                 corrected: false,
+                acts: 0,
             })
             .collect();
         People {
@@ -233,7 +259,9 @@ impl People {
     /// A story's item, found on the forge by what its person made there.
     fn find(&mut self, at: usize, mirror: &Mirror) {
         let tale = &mut self.tales[at];
-        if tale.item.is_some() || !(tale.story == Story::Fix || tale.story == Story::Stall) {
+        if tale.item.is_some()
+            || !(tale.story == Story::Fix || tale.story == Story::Stall || tale.story == Story::Stale)
+        {
             return;
         }
         // The first it made: a call that timed out may have made one too.
@@ -251,7 +279,7 @@ impl People {
         let person = tale.person;
         let Some(item) = tale.item else {
             return Some(match tale.story {
-                Story::Fix | Story::Stall => {
+                Story::Fix | Story::Stall | Story::Stale => {
                     let op = forge::Op::Write(Write::CreateIssue {
                         title: b"#fix the build".as_slice().into(),
                         body: tale.key.clone().into(),
@@ -261,14 +289,27 @@ impl People {
                     let repository = usize::from(tale.story == Story::Stall);
                     Act::Forge { tale: Some(at), user: person, repository, op }
                 }
-                Story::Hello | Story::Chat | Story::Notes | Story::Plan | Story::Grow | Story::Reject => {
+                Story::Hello
+                | Story::Chat
+                | Story::Notes
+                | Story::Plan
+                | Story::Grow
+                | Story::Reject
+                | Story::Burst
+                | Story::Unlabel
+                | Story::Mangle
+                | Story::Stop => {
                     let title: &[u8] = match tale.story {
                         Story::Hello => b"#hello",
                         Story::Chat => b"#chat",
-                        Story::Notes | Story::Fix | Story::Stall => b"#note",
+                        Story::Notes | Story::Fix | Story::Stall | Story::Stale => b"#note",
                         Story::Plan => b"#plan",
                         Story::Grow => b"#grow",
                         Story::Reject => b"#reject",
+                        Story::Burst => b"#burst",
+                        Story::Unlabel => b"#unlabel",
+                        Story::Mangle => b"#mangle",
+                        Story::Stop => b"#stop",
                     };
                     let ask = Ask::Open {
                         repository: 0,
@@ -304,14 +345,7 @@ impl People {
                     Act::Forge { tale: Some(at), user: person, repository, op }
                 })
             }
-            Story::Fix => mirror.items().find_map(|(repository, number, issue)| {
-                let twice = issue.by == person && issue.body == tale.key && issue.open && number != item.number;
-                twice.then(|| {
-                    let repository = REPOSITORIES.iter().position(|name| **name == *repository).expect("ours");
-                    let op = forge::Op::Write(Write::Close { number });
-                    Act::Forge { tale: Some(at), user: person, repository, op }
-                })
-            }),
+            Story::Fix | Story::Stale => self.fix(at, item, mirror),
             Story::Hello => {
                 let replied = !mirror.outcomes(name, item.number).is_empty();
                 (replied && tale.sent == 0).then(|| self.message(at, item, b"thanks"))
@@ -326,7 +360,7 @@ impl People {
                 let due = (tale.sent == 0 && words > 0) || (tale.sent == 1 && parked);
                 due.then(|| self.message(at, item, b"more"))
             }
-            Story::Plan | Story::Grow | Story::Reject => self.decide(at, item, mirror),
+            Story::Plan | Story::Grow | Story::Reject | Story::Burst => self.decide(at, item, mirror),
             Story::Notes => {
                 // Corrects the note once it is in the wiki; and asks the
                 // session again each time it has answered, to note it while
@@ -347,6 +381,108 @@ impl People {
                 let message: &[u8] = if page.is_some() { b"what did you learn?" } else { b"please note it" };
                 (replies > tale.sent).then(|| self.message(at, item, message))
             }
+            Story::Unlabel | Story::Mangle | Story::Stop => self.own(at, item, mirror),
+        }
+    }
+
+    /// What the person of a fix does next: closes an issue it handed in
+    /// twice, its first call made though it failed; and, for `Stale`,
+    /// approves the change's head as soon as its pull request is open.
+    fn fix(&self, at: usize, item: Item, mirror: &Mirror) -> Option<Act> {
+        let tale = &self.tales[at];
+        let person = tale.person;
+        let twice = mirror.items().find_map(|(repository, number, issue)| {
+            let twice = issue.by == person && issue.body == tale.key && issue.open && number != item.number;
+            twice.then(|| {
+                let repository = REPOSITORIES.iter().position(|name| **name == *repository).expect("ours");
+                let op = forge::Op::Write(Write::Close { number });
+                Act::Forge { tale: Some(at), user: person, repository, op }
+            })
+        });
+        if twice.is_some() || tale.story == Story::Fix || tale.acts > 0 {
+            return twice;
+        }
+        // Approves the change's head as soon as its pull request is
+        // open, whatever CI says of it.
+        mirror.items().find_map(|(repository, number, issue)| {
+            let open = issue.kind == Kind::Pull && issue.open && issue.by == ENGINE;
+            open.then(|| {
+                let repository = REPOSITORIES.iter().position(|name| **name == *repository).expect("ours");
+                let review = Write::Review { number, verdict: Some(Verdict::Approve), body: b"go".as_slice().into() };
+                Act::Forge { tale: Some(at), user: person, repository, op: forge::Op::Write(review) }
+            })
+        })
+    }
+
+    /// What the person of a story that edits the forge under the engine, or
+    /// stops its runs, does next: `Unlabel`, `Mangle` and `Stop`.
+    fn own(&mut self, at: usize, item: Item, mirror: &Mirror) -> Option<Act> {
+        let tale = &self.tales[at];
+        let person = tale.person;
+        let name = deployment::name(item.repository);
+        let issue = mirror.issue(name, item.number)?;
+        match tale.story {
+            Story::Unlabel => {
+                let replied = !mirror.outcomes(name, item.number).is_empty();
+                let repository = usize::try_from(item.repository).expect("few");
+                if replied && tale.acts == 0 {
+                    let labels = Box::new([deployment::TRACKING.into()]);
+                    let op = forge::Op::Write(Write::RemoveLabels { number: item.number, labels });
+                    return Some(Act::Forge { tale: Some(at), user: person, repository, op });
+                }
+                (tale.acts > 0 && tale.sent == 0).then(|| self.message(at, item, b"thanks"))
+            }
+            Story::Mangle => {
+                let replied = !mirror.outcomes(name, item.number).is_empty();
+                let repository = usize::try_from(item.repository).expect("few");
+                match tale.acts {
+                    0 if replied => {
+                        // Cut in half: still the engine's record by its head,
+                        // which no longer decodes.
+                        let record = issue.comments.iter().find(|comment| codec::is_whole_record(&comment.body))?;
+                        let body = record.body[..record.body.len() / 2].into();
+                        let op = forge::Op::Write(Write::EditComment { id: record.id, body });
+                        Some(Act::Forge { tale: Some(at), user: person, repository, op })
+                    }
+                    // Some looks after, once the engine has read it (a new
+                    // one makes no call for a while): it gives up on it.
+                    0 => None,
+                    1..MANGLED_LOOKS => {
+                        self.tales[at].acts += 1;
+                        None
+                    }
+                    _ => {
+                        let op = forge::Op::Write(Write::Close { number: item.number });
+                        Some(Act::Forge { tale: Some(at), user: person, repository, op })
+                    }
+                }
+            }
+            Story::Stop => {
+                let claimed = mirror
+                    .record(name, item.number)
+                    .is_some_and(|record| record.lifecycle.phase == temper_engine_model::work::Phase::Claimed);
+                match tale.acts {
+                    0 => {
+                        let subject = temper_engine_model::Watched::Item { item };
+                        Some(Act::Ask { asker: Asker::Tale(at), person, ask: Ask::Watch { subject } })
+                    }
+                    1 => claimed.then_some(Act::Ask { asker: Asker::Tale(at), person, ask: Ask::Stop { item } }),
+                    _ => {
+                        let replied = !mirror.outcomes(name, item.number).is_empty();
+                        (replied && tale.sent == 0).then(|| self.message(at, item, b"thanks"))
+                    }
+                }
+            }
+            Story::Hello
+            | Story::Fix
+            | Story::Chat
+            | Story::Notes
+            | Story::Plan
+            | Story::Grow
+            | Story::Reject
+            | Story::Stall
+            | Story::Stale
+            | Story::Burst => None,
         }
     }
 
@@ -477,9 +613,15 @@ impl People {
             Reply::Done => {
                 if message {
                     tale.sent += 1;
+                } else if tale.story == Story::Stop && tale.acts == 1 {
+                    tale.acts += 1;
+                    self.tally.stops += 1;
                 }
             }
-            Reply::Watching { .. } => {}
+            Reply::Watching { .. } => {
+                tale.acts += 1;
+                self.tally.watches += 1;
+            }
             Reply::Refused(refusal) => {
                 self.tally.refused += 1;
                 match refusal {
@@ -487,6 +629,8 @@ impl People {
                     // have read it back yet: asked again later.
                     // Or no longer held, as a person decided meanwhile.
                     Refusal::Busy | Refusal::Failed | Refusal::Unknown | Refusal::Unheld => {}
+                    // A run stopped as it answered: stopped again later.
+                    Refusal::Idle if tale.story == Story::Stop => {}
                     Refusal::Unpermitted | Refusal::Idle | Refusal::Unfollowed => {
                         panic!("a story asks only what it may: {refusal:?}")
                     }
@@ -513,6 +657,10 @@ impl People {
         tale.pending = false;
         if made && tale.story == Story::Notes {
             tale.corrected = true;
+        }
+        let own = tale.story == Story::Unlabel || tale.story == Story::Mangle || tale.story == Story::Stale;
+        if made && own && tale.item.is_some() {
+            tale.acts += 1;
         }
     }
 }

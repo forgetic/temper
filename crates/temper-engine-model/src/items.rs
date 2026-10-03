@@ -101,7 +101,8 @@ pub(crate) struct Entry {
     pub(crate) conflicted: Option<[u8; 32]>,
     /// The permission the rules want of whoever accepts what it holds.
     pub(crate) wants: Option<Permission>,
-    /// Its run, prepared before the cold start was done, waits for it.
+    /// Its run prepared, or its application resumed, before the cold start
+    /// was done, waits for it.
     pub(crate) waiting: bool,
     /// The application that created it, waiting for its first record to be
     /// written before it goes on.
