@@ -41,8 +41,9 @@ change that breaks a budget is fixed by making tests cheaper, or by moving
 randomized ones to `tests/fuzzy`. Raising a budget is a decision to take
 explicitly, not a fix.
 
-The budgets are wall time on the development machine (4 cores, 8 threads),
-with nothing else building. Run the checks on an idle machine.
+The budgets are wall time on the development machine (4 cores, 8 threads,
+which nextest uses all of), with nothing else building. Run the checks on
+an idle machine.
 
 ## 3. When a fuzzy seed fails
 
