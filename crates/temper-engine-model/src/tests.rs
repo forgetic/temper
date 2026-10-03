@@ -2361,3 +2361,21 @@ fn what_an_admin_must_accept_a_writer_may_not_after_a_restart() {
     assert!(replied(&world.seen, Reply::Refused(Refusal::Unpermitted)), "a writer may not accept it: {:?}", world.seen);
     assert_eq!(held_for(&mut world, session), Some(work::Hold::Acceptance), "it still waits");
 }
+
+#[test]
+fn a_change_whose_branch_was_deleted_is_made_again_from_its_base() {
+    let (mut world, session) = World::session();
+    let tasks = crate::boundary::Outcome::Tasks { tasks: Box::new([change_step(b"fix")]), text: copy_of(b"on it") };
+    world.deliver(Event::Answer { channel: Token::new(1), item: session, attempt: 1, answer: ended(tasks) });
+    let change = Item { repository: 0, number: 2 };
+    // Its run pushes, and another party deletes the branch before its pull
+    // request is opened.
+    world.deliver(Event::Answer { channel: Token::new(1), item: change, attempt: 1, answer: changed([1; 32]) });
+    world.wait(10);
+    assert!(world.forge.change(Item { repository: 0, number: 3 }).is_none(), "no pull request for a branch gone");
+    let starts = starts(&world.seen, change);
+    let Some((attempt, start)) = starts.as_slice().last() else { panic!("the change runs") };
+    assert_eq!(*attempt, 2, "it is made again: {:?}", starts.as_slice());
+    let base = crate::boundary::Start::Base { branch: copy_of(b"main") };
+    assert_eq!(*start, base, "from its base");
+}

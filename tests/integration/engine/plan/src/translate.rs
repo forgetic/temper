@@ -67,6 +67,7 @@ pub fn facts(forge: &Forge, number: u64, snapshot: bool, woken: bool) -> Facts {
         dependencies: relations(forge, &dependencies(forge, number)),
         children: relations(forge, &children(forge, number)),
         branch: item.branch.map(|pushed| commit(pushed.head)),
+        gone: false,
         pull: pull(forge, number),
         decision: item.decision.map(|(accepted, at)| Decided {
             decision: if accepted { Decision::Accepted } else { Decision::Rejected },

@@ -60,7 +60,7 @@ pub struct Git {
     pub advance: u32,
     pub advance_after: Span,
     pub deletes: u32,
-    /// The most times another party moves any one branch.
+    /// The most times another party moves, or deletes, any one branch.
     pub moves: u32,
 }
 
@@ -311,9 +311,11 @@ impl World {
     /// Another party deletes `branch` of `remote`, if it is there: the open
     /// pull requests from it close.
     pub(super) fn delete(&mut self, remote: &[u8], branch: &[u8]) {
-        if self.forge.branch(remote, branch).is_none() {
+        let moved = self.moved.entry((remote.to_vec(), branch.to_vec())).or_default();
+        if self.forge.branch(remote, branch).is_none() || *moved >= self.settings.git.moves {
             return;
         }
+        *moved += 1;
         self.stats.deleted += 1;
         let (name, gone) = (String::from_utf8_lossy(remote), String::from_utf8_lossy(branch));
         self.log(format!("another party deletes {gone} of {name}"));

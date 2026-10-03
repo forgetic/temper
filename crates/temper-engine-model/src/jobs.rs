@@ -71,13 +71,72 @@ fn ask(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, from: u32) {
         }
         index = index.saturating_add(1);
     }
-    let Some((index, related)) = found else { return decide(model, env, id) };
+    let Some((index, related)) = found else { return branch(model, env, id) };
     let Ok(wait) = model.waits.insert(Wait::Job { entry: id }) else {
         unreachable!("the waits have room for every item's job")
     };
     let read = forge::Read::Item { item: translate::forge_item(related), after: u64::MAX };
     asking_at(model, id, index);
     route::forge_step(model, env, forge::Event::Read { owner: wait.token(), read });
+}
+
+/// Where an asking item's branch is among what it reads afresh: after
+/// every relation.
+const BRANCH: u32 = u32::MAX;
+
+/// Reads afresh the branch of a change whose record names one, if what is
+/// due next takes it to be there (its pull request opened, or reopened
+/// once closed), then decides: another party may have deleted it, and its
+/// pull request with it.
+fn branch(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) {
+    let entry = get_mut(model, id);
+    entry.gone = false;
+    if !needs_branch(model, id) {
+        return decide(model, env, id);
+    }
+    let entry = get(model, id);
+    let item = entry.item;
+    let read =
+        forge::Read::Branch { repository: item.repository, branch: translate::branch(&model.config.branches, item) };
+    let Ok(wait) = model.waits.insert(Wait::Job { entry: id }) else {
+        unreachable!("the waits have room for every item's job")
+    };
+    asking_at(model, id, BRANCH);
+    route::forge_step(model, env, forge::Event::Read { owner: wait.token(), read });
+}
+
+/// Whether the item's change has a branch the record names, and no pull
+/// request open, as the working set shows it.
+fn needs_branch(model: &Model, id: Id<Entry>) -> bool {
+    let entry = get(model, id);
+    let change = match entry.step.as_ref() {
+        Some(record) => match record.step.work {
+            plan::Work::Change(_) => true,
+            plan::Work::Agent(_) | plan::Work::Wait(_) | plan::Work::Session(_) => false,
+        },
+        None => false,
+    };
+    if !change || entry.relations.branch.is_none() {
+        return false;
+    }
+    match entry.relations.pull {
+        Some(_) => match model.forge.pull(translate::forge_item(entry.item)) {
+            Some(level) => !level.open && level.merged.is_none(),
+            None => false,
+        },
+        None => true,
+    }
+}
+
+/// The change's branch read afresh: gone if the forge has none.
+fn branched(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, result: Result<api::Answer, forge::Failure>) {
+    let gone = match result {
+        Err(forge::Failure::Forge(api::Error::Missing)) => true,
+        Err(forge::Failure::Busy) => return stall(model, id),
+        Ok(_) | Err(_) => false,
+    };
+    get_mut(model, id).gone = gone;
+    decide(model, env, id);
 }
 
 /// Remembers which relation an asking item reads, so the next starts after
@@ -275,6 +334,7 @@ pub(crate) fn facts(model: &Model, env: &Env<Limits>, entry: &Entry) -> plan::Fa
         dependencies: count(&relations.dependencies),
         children: count(&relations.children),
         branch: head(relations.branch),
+        gone: entry.gone,
         pull,
         decision: relations.decision,
         closed: entry.closed,
@@ -1195,6 +1255,7 @@ pub(crate) fn read(
 ) {
     let Some(entry) = model.items.get(id) else { return };
     match &entry.job {
+        Job::Asking { .. } if entry.asking == BRANCH => branched(model, env, id, result),
         Job::Asking { .. } => related(model, env, id, result),
         Job::Applying(applying) => match &applying.doing {
             Doing::Outcome => outcome_read(model, env, id, result),
@@ -1387,6 +1448,11 @@ fn written(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, result: Result<f
             return again(model, env, id);
         }
         Err(forge::Failure::Forge(api::Error::Missing)) if deleting(model, id) => forge::Written::Done,
+        // The branch of the pull request it opens or reopens is gone: what
+        // is due is asked again, which finds it gone.
+        Err(forge::Failure::Forge(api::Error::Missing)) if opening(model, id) => {
+            return finish(model, env, id, Finish::Stale);
+        }
         // The pull request moved on, or closed, since the merge was decided.
         Err(forge::Failure::Forge(api::Error::Stale | api::Error::Closed)) => {
             return finish(model, env, id, Finish::Stale);
@@ -1421,6 +1487,21 @@ fn deleting(model: &Model, id: Id<Entry>) -> bool {
         | plan::Write::ReopenPull
         | plan::Write::Merge { .. }
         | plan::Write::Close
+        | plan::Write::Progress(_)
+        | plan::Write::Goal(_)
+        | plan::Write::Release { .. } => false,
+    }
+}
+
+/// Whether the write in hand opens the change's pull request, or reopens it.
+fn opening(model: &Model, id: Id<Entry>) -> bool {
+    let Some(write) = in_hand(model, id) else { return false };
+    match write {
+        plan::Write::OpenPull { .. } | plan::Write::ReopenPull => true,
+        plan::Write::Create { .. }
+        | plan::Write::Merge { .. }
+        | plan::Write::Close
+        | plan::Write::DeleteBranch
         | plan::Write::Progress(_)
         | plan::Write::Goal(_)
         | plan::Write::Release { .. } => false,
@@ -1601,7 +1682,11 @@ pub(crate) fn again(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) {
     match &entry.job {
         Job::Asking { .. } => {
             let index = entry.asking;
-            ask(model, env, id, index);
+            if index == BRANCH {
+                branch(model, env, id);
+            } else {
+                ask(model, env, id, index);
+            }
         }
         Job::Writing { .. } => {
             let Ok(wait) = model.waits.insert(Wait::Job { entry: id }) else {

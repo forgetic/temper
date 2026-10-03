@@ -12,8 +12,10 @@
 //!            ─► its children done ─► done
 //!          gate: accepted? ─► its first turn, a retry, or woken ─► run
 //! change   no branch ─► run: produce
+//!          branch gone ─► run: produce, from its base, as a rebase
 //!          branch, no pull request ─► open it
 //!          pull request merged ─► done | closed unmerged ─► hold
+//!          closed, its branch pushed since ─► reopen it
 //!          open:  conflicts, base moved ─► run: rebase
 //!                 CI failed ─► run: repair
 //!                 CI pending or not reported ─► wait
@@ -27,7 +29,10 @@
 //! A change repaired for failures (CI, changes asked for) as many times as
 //! the limits allow is held for a person when it needs another such repair;
 //! one rebased onto a moved base as many times as they allow (a higher
-//! limit: a busy base moves often), when it needs another rebase. A change
+//! limit: a busy base moves often), when it needs another rebase; a change
+//! whose branch another party deleted is made again from its base, its pull
+//! request reopened once it is pushed again, and that counts as a rebase. A
+//! change
 //! that waits on the forge (CI, a review, mergeability) longer than the
 //! limits' stall, counted from its head's push or its last release, is held
 //! too; its parent tells its goal's session first, if it has one. A person's
@@ -103,6 +108,8 @@ pub enum Waits {
 pub enum Action {
     /// Open the pull request of a pushed change.
     OpenPull,
+    /// Reopen the pull request of a change made again since it closed.
+    ReopenPull,
     /// Merge a change whose gates hold, at exactly its head.
     Merge,
 }
@@ -338,6 +345,9 @@ fn change(
     facts: &Facts,
     out: &mut Queue<Write>,
 ) -> Due {
+    if facts.gone {
+        return start_over(config, env, record, spec, facts, out);
+    }
     let Some(pull) = facts.pull else {
         if facts.branch.is_none() {
             let finish = Finish::Change { checks: spec.checks };
@@ -354,8 +364,35 @@ fn change(
             out.push(Write::DeleteBranch);
             Due::Done
         }
+        // Its branch pushed again since it closed: it was made again, its
+        // branch having been deleted under it.
+        PullState::Closed if facts.branch.is_some() && facts.branch != Some(pull.head) => {
+            out.push(Write::ReopenPull);
+            Due::Act(Action::ReopenPull)
+        }
         PullState::Closed => Due::Hold(Hold::PullClosed),
     }
+}
+
+/// A change whose branch another party deleted, its pull request with it:
+/// made again from its base, which counts as a rebase.
+fn start_over(
+    config: &Config,
+    env: &Env<Limits>,
+    record: &Record,
+    spec: &ChangeSpec,
+    facts: &Facts,
+    out: &mut Queue<Write>,
+) -> Due {
+    let rebases = record.progress.rebases;
+    if rebases >= env.limits.rebases {
+        return Due::Hold(Hold::Rebases);
+    }
+    let counted =
+        Record { progress: Progress { rebases: rebases.saturating_add(1), ..record.progress }, ..record.clone() };
+    let finish = Finish::Change { checks: spec.checks };
+    let run = run(config, Why::Produce, &spec.produce, finish, sections(facts), false);
+    claim(env, &counted, run, out)
 }
 
 /// What is due for a change whose pull request is open.

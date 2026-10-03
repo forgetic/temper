@@ -157,13 +157,13 @@ impl Settings {
     /// A world where everything that can go wrong does, now and then: a
     /// forge late and losing webhooks; a channel that drops, for less and
     /// more than the worker's grace, duplicates frames and stalls; git that
-    /// fails, refuses and finds branches moved; process trees that fail to
-    /// spawn and leave children; agents that misbehave every way the script
-    /// knows; people who stop runs; an engine whose grace for a lost worker
-    /// is shorter than the worker's in some worlds, longer in others, and
-    /// which retries a failed run as often as the engine's world in some;
-    /// and, in some worlds, a shutdown, and the engine restarting once or
-    /// twice. A world for the random sweep.
+    /// fails, refuses and finds branches moved or deleted; process trees
+    /// that fail to spawn and leave children; agents that misbehave every
+    /// way the script knows; people who stop runs; an engine whose grace for
+    /// a lost worker is shorter than the worker's in some worlds, longer in
+    /// others, and which retries a failed run as often as the engine's world
+    /// in some; and, in some worlds, a shutdown, and the engine restarting
+    /// once or twice. A world for the random sweep.
     #[must_use]
     pub fn rough(seed: u64) -> Settings {
         let calm = Settings::calm(seed);
@@ -210,6 +210,7 @@ impl Settings {
                 refusing_creates: 300,
                 cancels_lost: 200,
                 advance: 100,
+                deletes: 50,
                 ..calm.git
             },
             tree: tree::Script { unspawned: 30, children: 2, lingering: 200, holding: 200, stubborn: 200, ..calm.tree },

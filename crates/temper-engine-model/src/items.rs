@@ -99,6 +99,9 @@ pub(crate) struct Entry {
     /// The head the forge refused to merge for a conflict, which the
     /// working set may not show yet.
     pub(crate) conflicted: Option<[u8; 32]>,
+    /// Its branch, which its record names, was found gone from the forge as
+    /// it was last asked what is due: another party deleted it.
+    pub(crate) gone: bool,
     /// Its run prepared, or its application resumed, before the cold start
     /// was done, waits for it.
     pub(crate) waiting: bool,
@@ -354,6 +357,7 @@ impl Entry {
             blocked: false,
             merged: None,
             conflicted: None,
+            gone: false,
             waiting: false,
             holding: None,
             asides: 0,

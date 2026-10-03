@@ -13,6 +13,7 @@ use crate::plan::Commit;
 /// What the forge shows about an item, and what its record says beyond the
 /// plan's part.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[expect(clippy::struct_excessive_bools, reason = "independent facts of an item, each read on its own")]
 pub struct Facts {
     /// When the item was made.
     pub created: Time,
@@ -24,6 +25,9 @@ pub struct Facts {
     pub children: Relations,
     /// The head of the item's branch, once a run has pushed a change to it.
     pub branch: Option<Commit>,
+    /// Whether that branch is gone from the forge: another party deleted
+    /// it, and its pull request, if it had one, closed with it.
+    pub gone: bool,
     /// The item's pull request, once it is open.
     pub pull: Option<Pull>,
     /// A person's latest decision on the step itself: on its gate of

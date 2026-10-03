@@ -75,14 +75,20 @@ pub(crate) fn start(model: &mut Model, env: &Env<Limits>, item: Item, attempt: u
     } else {
         None
     };
-    // A change made again after an earlier attempt starts from that
-    // attempt's push, if one landed whose answer never came (its worker lost
-    // holding it): the item's branch is read on the forge first.
+    // The item's branch is read on the forge first when a change is made
+    // again after an earlier attempt, with no branch recorded: it starts
+    // from that attempt's push, if one landed whose answer never came (its
+    // worker lost holding it). So it is when a run is to start from the
+    // branch recorded after a run failed for good (a start the forge did not
+    // have, as one another party deleted): it starts from its base then.
     let produces = match due.why {
         plan::Why::Produce => true,
         plan::Why::Work | plan::Why::Repair(_) | plan::Why::Review { .. } | plan::Why::Turn => false,
     };
-    let branching = if produces && attempt > 1 && get(model, id).relations.branch.is_none() {
+    let entry = get(model, id);
+    let unknown = produces && entry.relations.branch.is_none();
+    let doubtful = entry.relations.branch.is_some() && !entry.gone && entry.lifecycle.failures.permanent > 0;
+    let branching = if attempt > 1 && (unknown || doubtful) {
         let Ok(branching) = model.waits.insert(Wait::Job { entry: id }) else {
             unreachable!("the waits have room for every item's job")
         };
@@ -102,9 +108,10 @@ pub(crate) fn start(model: &mut Model, env: &Env<Limits>, item: Item, attempt: u
     route::brief_step(model, env, brief::Event::Render { reply_to, sections });
 }
 
-/// The forge answered the read of the item's branch, before its change is
-/// made again: a push found there is the item's branch, and the run starts
-/// from it.
+/// The forge answered the read of the item's branch, before a run starts:
+/// a push found there, where none is recorded, is the item's branch, and the
+/// run starts from it; a branch recorded and not found is gone, and the run
+/// starts from its base.
 pub(crate) fn branched(
     model: &mut Model,
     env: &Env<Limits>,
@@ -120,6 +127,10 @@ pub(crate) fn branched(
     starting.branching = None;
     let pushed = match result {
         Ok(api::Answer::Commit(commit)) => Some(commit),
+        Err(forge::Failure::Forge(api::Error::Missing)) => {
+            entry.gone = entry.relations.branch.is_some();
+            None
+        }
         Ok(_) | Err(_) => None,
     };
     if let Some(commit) = pushed
@@ -360,9 +371,10 @@ fn assignment(
     let entry = get(model, id);
     let item = entry.item;
     let branch = translate::branch(&model.config.branches, item);
+    // A change made again, its branch gone, starts over from its base.
     let start = match entry.relations.branch {
-        Some(_) => Start::Branch { branch: copy_of(&branch) },
-        None => Start::Base { branch: base(model, entry) },
+        Some(_) if !entry.gone => Start::Branch { branch: copy_of(&branch) },
+        Some(_) | None => Start::Base { branch: base(model, entry) },
     };
     let push = if run.grants.modify { Some(copy_of(&branch)) } else { None };
     let save = if run.grants.modify { Some(translate::branch(&model.config.saved, item)) } else { None };
@@ -715,6 +727,7 @@ pub(crate) fn answered(model: &mut Model, env: &Env<Limits>, to: ReplyTo, run: T
                 let entry = get_mut(model, id);
                 if let Some(head) = landed {
                     entry.relations.branch = Some(head);
+                    entry.gone = false;
                 }
                 // A turn that parked is over, as one whose outcome is applied
                 // is: the next waits for its wake, not retried at once.

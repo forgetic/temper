@@ -566,6 +566,7 @@ fn facts() -> Facts {
         dependencies: Relations::NONE,
         children: Relations::NONE,
         branch: None,
+        gone: false,
         pull: None,
         decision: None,
         closed: false,
@@ -1004,6 +1005,28 @@ fn a_change_whose_landing_waits_on_the_rules_stalls_as_a_wait_on_the_forge_does(
     assert_eq!(stall(&env(), &released, &merged), None, "a change landed waits on nothing");
     assert_eq!(stall(&env(), &released, &facts()), None, "nor one without a pull request");
     assert_eq!(stall(&env(), &record(agent("b", &[])), &open), None, "nor anything but a change");
+}
+
+#[test]
+fn a_change_whose_branch_was_deleted_is_made_again_from_its_base_as_a_rebase() {
+    let gone = Facts { gone: true, ..pulled(Pull { state: PullState::Closed, ..ready(head(1)) }) };
+    let change = record(change("a", &[]));
+    let (due, writes) = decide(&change, &gone);
+    let Due::Run(run) = due else { panic!("a run is due, not {due:?}") };
+    assert_eq!(run.why, Why::Produce, "it is made again");
+    let Some(Write::Progress(claimed)) = writes.first() else { panic!("the claim is written: {writes:?}") };
+    assert_eq!((claimed.rebases, claimed.running), (1, Some(Why::Produce)), "as a rebase");
+    let spent = Record { progress: Progress { rebases: LIMITS.rebases, ..Progress::NEW }, ..change.clone() };
+    assert_eq!(decided(&spent, &gone), Due::Hold(Hold::Rebases), "as often as rebases may be");
+    let unopened = Facts { gone: true, branch: Some(head(1)), ..facts() };
+    let (due, _) = decide(&change, &unopened);
+    let Due::Run(run) = due else { panic!("one gone before its pull request opened is made again too: {due:?}") };
+    assert_eq!(run.why, Why::Produce);
+    // Pushed again, its pull request closed with the branch is reopened.
+    let pushed = Facts { branch: Some(head(2)), ..pulled(Pull { state: PullState::Closed, ..ready(head(1)) }) };
+    assert_eq!(decide(&change, &pushed), (Due::Act(Action::ReopenPull), Box::from([Write::ReopenPull])));
+    let closed = pulled(Pull { state: PullState::Closed, ..ready(head(1)) });
+    assert_eq!(decided(&change, &closed), Due::Hold(Hold::PullClosed), "one a person closed is held");
 }
 
 #[test]

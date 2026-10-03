@@ -141,6 +141,7 @@ fn facts() -> Facts {
         dependencies: Relations::NONE,
         children: Relations::NONE,
         branch: None,
+        gone: false,
         pull: None,
         decision: None,
         closed: false,
