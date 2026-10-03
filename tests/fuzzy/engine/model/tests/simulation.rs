@@ -1,6 +1,6 @@
 //! The engine's world at random: many random worlds, each settled, every
-//! ending reached among them; and the seeds that find what the engine does
-//! not do yet.
+//! ending reached among them; and the seeds that once found what the engine
+//! did not do, kept now that it does.
 
 use std::collections::BTreeSet;
 
