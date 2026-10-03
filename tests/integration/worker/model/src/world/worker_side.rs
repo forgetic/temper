@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 
 use temper_engine_model as engine;
 use temper_engine_model_tests::codec;
-use temper_engine_model_tests::deployment::CUE;
+use temper_engine_model_tests::deployment::{CUE, MAIN};
 use temper_engine_model_tests::referee as stories;
 use temper_lib::Token;
 use temper_worker_model::agent::channel::{Ask, Down, Finish, Reply, Up};
@@ -18,7 +18,7 @@ use temper_worker_model_checkout_tests::translate as io;
 use temper_world::Stage;
 
 use super::git::{files, tree as forge_tree};
-use super::{Agent, Attempt, Content, Delivery, Lane, Repository, World, gone, sizes};
+use super::{Agent, Attempt, Content, Delivery, Lane, RELEASE, Repository, World, gone, sizes};
 use crate::protocol::{self, IDENTITY, Names};
 use crate::referee;
 use crate::translate;
@@ -274,6 +274,19 @@ impl World {
         record.answer = Some(said);
         let assigned = record.at;
         let agent = record.agent;
+        // Another party may delete a push branch before the next attempt.
+        let pushes: Vec<(Vec<u8>, Vec<u8>)> = record
+            .repositories
+            .iter()
+            .filter_map(|repository| Some((repository.remote.clone(), repository.push.clone()?)))
+            .collect();
+        if !pushes.is_empty() && self.rng.chance(self.settings.git.deletes) {
+            let index = usize::try_from(self.rng.below(u64::try_from(pushes.len()).expect("fits"))).expect("fits");
+            let (remote, branch) = pushes[index].clone();
+            let at = self.now.saturating_add(self.settings.git.advance_after.draw(&mut self.rng));
+            self.send(at, Delivery::Delete { remote, branch });
+        }
+        let record = self.attempts.get_mut(&names).expect("looked up above");
         *self.stats.answers.entry(translate::answer_kind(answer)).or_default() += 1;
         match answer {
             host::Answer::Failed { failure: host::Failure::Cancelled(reason), .. } => match reason {
@@ -387,7 +400,8 @@ impl World {
     /// its item now.
     fn start(&mut self, owner: Token, charter: &[u8], snapshot: Option<&[u8]>) {
         let (names, charter) = protocol::charter_of(charter);
-        let content = Content::new(protocol::item(names.0), &charter, snapshot, &self.mirror);
+        let base = if self.settings.release { RELEASE } else { MAIN };
+        let content = Content::new(protocol::item(names.0), &charter, snapshot, &self.mirror, base);
         self.tree.plot(owner, content.plot.clone());
         let agent = self.agents.get_mut(&owner).expect("a start goes to an agent spawned");
         assert_eq!(agent.attempt, None, "an agent starts once");

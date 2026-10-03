@@ -191,7 +191,7 @@ impl World {
     }
 
     /// A call to the forge, made now.
-    fn forge_call(&mut self, event: forge::Event) {
+    pub(super) fn forge_call(&mut self, event: forge::Event) {
         let env = temper_lib::Env { now: self.now, limits: self.settings.forge };
         forge::step(&mut self.forge, &env, event, &mut self.forge_out);
         self.drain_forge();

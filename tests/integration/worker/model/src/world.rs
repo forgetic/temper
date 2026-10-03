@@ -73,6 +73,10 @@ pub struct Settings {
     /// under way, so that what it asked to push is what lands.
     pub edits: u32,
     pub scribbles: u32,
+    /// Whether the changes sessions ask for land into [`RELEASE`], which the
+    /// forge does not have until a change's first checkout creates it from
+    /// the default branch, rather than into the default branch.
+    pub release: bool,
     /// The chance, per mille, that the shell tells the worker to shut down, at
     /// a moment drawn from `shutdown_at`; once it is done, a new worker starts
     /// a drawn `comeback` later.
@@ -117,6 +121,7 @@ impl Settings {
             script: SCRIPT,
             edits: 800,
             scribbles: 200,
+            release: false,
             shutdowns: 0,
             shutdown_at: Span::millis(10_000, 120_000),
             comeback: Span::millis(1_000, 30_000),
@@ -133,6 +138,7 @@ impl Settings {
     #[must_use]
     pub fn rough(seed: u64) -> Settings {
         let calm = Settings::calm(seed);
+        let mut rng = Rng::new(seed ^ 0x5eed);
         Settings {
             worker: Limits {
                 agent: agent::Limits { wall_time: Duration::from_secs(300), ..calm.worker.agent },
@@ -155,6 +161,7 @@ impl Settings {
                 ambiguous: 20,
                 unreachable: 30,
                 refusing: 30,
+                refusing_creates: 300,
                 cancels_lost: 200,
                 advance: 100,
                 ..calm.git
@@ -181,6 +188,7 @@ impl Settings {
                 stubborn: 100,
                 ..calm.script
             },
+            release: rng.chance(500),
             shutdowns: 300,
             ..calm
         }
@@ -330,9 +338,11 @@ const GIT: Git = Git {
     ambiguous: 0,
     unreachable: 0,
     refusing: 0,
+    refusing_creates: 0,
     cancels_lost: 0,
     advance: 0,
     advance_after: Span::millis(0, 10_000),
+    deletes: 0,
 };
 
 /// Calm process trees: no failures, no children.
@@ -469,6 +479,7 @@ pub struct Stats {
     pub refusals: u32,
     pub rejected: u32,
     pub advanced: u32,
+    pub deleted: u32,
     /// Repositories that landed a change, and saved work, each checked
     /// against what the agent left.
     pub landed: u32,
@@ -530,8 +541,12 @@ enum Delivery {
     Ran {
         owner: Token,
     },
-    /// Another party moves a branch.
+    /// Another party moves a branch, or deletes one.
     Advance {
+        remote: Vec<u8>,
+        branch: Vec<u8>,
+    },
+    Delete {
         remote: Vec<u8>,
         branch: Vec<u8>,
     },
@@ -738,7 +753,7 @@ impl World {
         for name in deployment::REPOSITORIES.iter().chain([&ELSEWHERE]) {
             setup(&mut forge, &settings.forge, name);
         }
-        let engine = engine::Model::new(deployment::config(), &settings.engine, rng.next_u64(), Time::ZERO);
+        let engine = engine::Model::new(config(), &settings.engine, rng.next_u64(), Time::ZERO);
         let worker = Model::new(&limits, rng.next_u64());
         let tree = Tree::new(settings.tree, settings.script, sizes(&limits), rng.next_u64());
         let max_out = worker::max_out(&limits);
@@ -984,6 +999,7 @@ impl World {
             }
             Delivery::Ran { owner } => self.ran(owner),
             Delivery::Advance { remote, branch } => self.advance(&remote, &branch),
+            Delivery::Delete { remote, branch } => self.delete(&remote, &branch),
             Delivery::Shutdown => {
                 if !self.done {
                     self.stats.shutdown = true;
@@ -1214,6 +1230,19 @@ fn sizes(limits: &Limits) -> Sizes {
 /// empty.
 fn gone(tree: &Tree, agent: &Agent) -> bool {
     agent.unspawned || (agent.spawned && tree.is_gone(agent.owner))
+}
+
+/// A base changes may land into besides the default branch, which the forge
+/// does not have until a run's checkout creates it.
+pub const RELEASE: &[u8] = b"release";
+
+/// The deployment's configuration, as the engine's world has it, with
+/// [`RELEASE`] a base of every repository after its default branch.
+fn config() -> engine::Config {
+    let mut config = deployment::config();
+    let repo = engine::plan::Repo { bases: Box::new([MAIN.into(), RELEASE.into()]) };
+    config.plan.repositories = config.plan.repositories.iter().map(|_| repo.clone()).collect();
+    config
 }
 
 /// Sets up a repository of the fake forge, as the engine's world does: its

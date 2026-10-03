@@ -15,7 +15,7 @@
 use temper_checkout_fake::git::{self as fake, Created, Pushed, Remote, Tree as Files};
 use temper_checkout_fake::{Checkout, in_git};
 use temper_engine_model_tests::deployment::WORKER;
-use temper_forge_model::api::{Answer, Error, File, Git as Call, Op as ForgeOp, What};
+use temper_forge_model::api::{Answer, Error, File, Git as Call, Op as ForgeOp, What, Write};
 use temper_forge_model::{self as forge, Config};
 use temper_lib::{Env, Queue, ReplyTo, Time, Token};
 use temper_worker_model::Event;
@@ -45,17 +45,21 @@ pub struct Git {
     pub broken: u32,
     pub ambiguous: u32,
     /// The chance, per mille, that an operation that reaches the forge finds
-    /// its repository unreachable, and that a push or a branch's creation is
-    /// refused.
+    /// its repository unreachable, and that a push, or a branch's creation,
+    /// is refused.
     pub unreachable: u32,
     pub refusing: u32,
+    pub refusing_creates: u32,
     /// The chance, per mille, that a cancel loses its race: the operation ends
     /// of itself, and that is its terminal event.
     pub cancels_lost: u32,
     /// The chance, per mille, that another party moves a push branch of a run
-    /// that has started, a drawn `advance_after` later.
+    /// that has started, a drawn `advance_after` later; and that it deletes
+    /// the push branch of a run that has answered, so that its item's next
+    /// attempt finds it missing.
     pub advance: u32,
     pub advance_after: Span,
+    pub deletes: u32,
 }
 
 /// The forge user of another party, who moves branches under
@@ -200,10 +204,13 @@ impl World {
     fn perform(&mut self, owner: Token, op: Op) -> Done {
         let workspace = io::workspace(&op);
         let remote = io::remote(&op).map(<[u8]>::to_vec);
-        let writes = op.kind() == Kind::Create || op.kind() == Kind::Push;
         if let Some(remote) = &remote {
             let reachable = !self.rng.chance(self.settings.git.unreachable);
-            let refusing = writes && self.rng.chance(self.settings.git.refusing);
+            let refusing = match op.kind() {
+                Kind::Create => self.rng.chance(self.settings.git.refusing_creates),
+                Kind::Push => self.rng.chance(self.settings.git.refusing),
+                Kind::Make | Kind::Clone | Kind::Fetch | Kind::CheckOut | Kind::Commit => false,
+            };
             forge::set_reachable(&mut self.forge, remote, reachable);
             forge::set_refusing(&mut self.forge, remote, refusing);
         }
@@ -291,6 +298,22 @@ impl World {
         let env = Env { now: self.now, limits: self.settings.forge };
         let advanced = forge::advance(&mut self.forge, &env, remote, branch, b"OTHER", content.as_bytes(), OTHER);
         advanced.expect("the forge has room for another party's commit");
+    }
+}
+
+impl World {
+    /// Another party deletes `branch` of `remote`, if it is there: the open
+    /// pull requests from it close.
+    pub(super) fn delete(&mut self, remote: &[u8], branch: &[u8]) {
+        if self.forge.branch(remote, branch).is_none() {
+            return;
+        }
+        self.stats.deleted += 1;
+        let name = self.wire.name();
+        self.theirs.open(name, super::Theirs::Person { tale: None });
+        let op = ForgeOp::Write(Write::DeleteBranch { branch: branch.into() });
+        let reply_to = ReplyTo::new(Token::new(name));
+        self.forge_call(forge::Event::Call { reply_to, user: OTHER, repository: remote.into(), op });
     }
 }
 

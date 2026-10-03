@@ -231,6 +231,38 @@ fn a_push_finds_its_branch_moved_by_another_party() {
     assert!(moved > 0, "its run is told");
 }
 
+/// A change into a base the forge does not have: its first checkout creates
+/// the base from the default branch, and the forge refuses some creations,
+/// which the engine tries again; the change lands into the base.
+#[test]
+fn a_change_into_a_base_the_forge_lacks_creates_it_and_lands_there() {
+    let worlds = worlds(3, |calm| Settings {
+        stories: vec![Story::Fix],
+        release: true,
+        git: Git { refusing_creates: 500, ..calm.git },
+        ..calm
+    });
+    assert!(total(&worlds, |stats| count(stats, "unprepared refused")) > 0, "a creation was refused");
+    assert_eq!(total(&worlds, |stats| ending(stats, "merged")), 3, "and each change lands");
+}
+
+/// Another party deletes a change's branch between its attempts. The engine
+/// holds the change for good, however often a person releases it: for its
+/// writes, when it cannot open the pull request of a branch that is gone, or
+/// for its pull request, which the branch's deletion closed. It never starts
+/// the change over from its base, so the story never ends.
+#[test]
+#[ignore = "until the engine starts a change over when its branch is deleted"]
+fn a_change_whose_branch_another_party_deleted_starts_over() {
+    let worlds = worlds(4, |calm| Settings {
+        stories: vec![Story::Fix],
+        git: Git { deletes: 1000, advance_after: Span::millis(0, 1_000), ..calm.git },
+        ..calm
+    });
+    assert!(total(&worlds, |stats| stats.deleted) > 0);
+    assert_eq!(total(&worlds, |stats| ending(stats, "merged")), 4, "each change lands all the same");
+}
+
 #[test]
 fn relayed_calls_are_answered_or_withdrawn() {
     let worlds = worlds(1, |calm| Settings {

@@ -42,11 +42,14 @@ fn random_worlds_settle_and_reach_every_ending() {
 /// How many random worlds the sweep runs.
 const SWEPT: u64 = 40;
 
-/// Answers the sweep does not reach: a run's cancel is never its own; the
-/// engine names no start the forge lacks, so no preparation finds one
-/// missing, nor creates a branch the forge could refuse; and an assignment
-/// beyond the worker's limits, which a scenario above reaches.
-const UNREACHED: [&str; 4] = ["run cancelled", "unprepared refused", "refused invalid", "unprepared missing"];
+/// Answers the sweep does not reach: a run's cancel is never its own; an
+/// assignment beyond the worker's limits, which a scenario reaches; and a
+/// start the forge lacks. The engine starts a checkout from its base, which
+/// is created if the forge lacks it, or from its item's branch: only that
+/// branch deleted under a change could be missing, and the engine holds such
+/// a change for good before another attempt starts (an ignored scenario
+/// keeps it).
+const UNREACHED: [&str; 3] = ["run cancelled", "refused invalid", "unprepared missing"];
 
 /// Seeds that found what the engine did not do: a change's attempt pushes,
 /// and its answer reaches the engine only after the engine presumed it lost

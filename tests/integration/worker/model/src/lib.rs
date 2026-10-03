@@ -42,7 +42,12 @@
 //!   through the checkout world's translation of the checkout's operations,
 //!   after a latency, racing their deadlines and the cancels of an aborted
 //!   prepare, with the faults the world scripts: unreachable repositories,
-//!   refused pushes, and another party moving a push branch;
+//!   refused pushes and branch creations, and another party moving a push
+//!   branch, or deleting one between attempts; and, in some worlds, a base
+//!   the changes land into that the forge does not have until a change's
+//!   first checkout creates it. The engine starts a checkout only from a
+//!   base or from its item's branch, never from saved work or a commit
+//!   (worker-model.md, 4.1), so no preparation here starts from either;
 //! - **the shell:** which drains the facts and the run's facts for the
 //!   engine, and, in some worlds, tells the worker to shut down at a drawn
 //!   moment, stops it once it is done, and starts a new worker, cold, a
@@ -89,4 +94,4 @@ pub mod translate;
 mod world;
 
 pub use temper_world::Span;
-pub use world::{ENDINGS, ENGINE_LIMITS, Git, LIMITS, Network, Settings, Stats, World};
+pub use world::{ENDINGS, ENGINE_LIMITS, Git, LIMITS, Network, RELEASE, Settings, Stats, World};

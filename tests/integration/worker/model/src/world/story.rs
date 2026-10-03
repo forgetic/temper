@@ -32,8 +32,8 @@ pub(super) struct Story {
 
 impl Story {
     /// The content of the run of `item` on `charter`, resuming `snapshot` if
-    /// it was given one.
-    pub(super) fn new(item: Item, charter: &Charter, snapshot: Option<&[u8]>, mirror: &Mirror) -> Story {
+    /// it was given one; the changes it asks for land into `base`.
+    pub(super) fn new(item: Item, charter: &Charter, snapshot: Option<&[u8]>, mirror: &Mirror, base: &[u8]) -> Story {
         let mut calls = VecDeque::new();
         let mut cue = None;
         let mut outcome = None;
@@ -50,7 +50,7 @@ impl Story {
                     beats.push_back(Beat::Call { push: true });
                 }
                 Act::Await { within } => beats.push_back(Beat::Await { within }),
-                Act::End(End::Ended(ended)) => outcome = Some(ended),
+                Act::End(End::Ended(ended)) => outcome = Some(into(ended, base)),
                 Act::End(End::Parked(snapshot)) => {
                     outcome = Some(fallback(charter.finish));
                     ending = Ending::Parked { snapshot };
@@ -74,6 +74,19 @@ impl Story {
     pub(super) fn outcome(&self) -> &Outcome {
         self.outcome.as_ref().expect("a script ends")
     }
+}
+
+/// `outcome`, the changes it asks for landing into `base`.
+fn into(outcome: Outcome, base: &[u8]) -> Outcome {
+    let Outcome::Tasks { tasks, text } = outcome else { return outcome };
+    let tasks = tasks.into_iter().map(|step| {
+        let work = match step.work {
+            plan::Work::Change(change) => plan::Work::Change(plan::ChangeSpec { base: base.into(), ..change }),
+            work @ (plan::Work::Agent(_) | plan::Work::Wait(_) | plan::Work::Session(_)) => work,
+        };
+        plan::Step { work, ..step }
+    });
+    Outcome::Tasks { tasks: tasks.collect(), text }
 }
 
 /// What a run whose script parks or fails ends with when its agent ends it
