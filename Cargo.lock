@@ -370,17 +370,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "temper-lib"
-version = "0.0.0"
-
-[[package]]
-name = "temper-lib-fuzzy"
-version = "0.0.0"
-dependencies = [
- "temper-lib",
-]
-
-[[package]]
 name = "temper-llm-domain"
 version = "0.0.0"
 dependencies = [

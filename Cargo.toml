@@ -3,7 +3,6 @@
 [workspace]
 resolver = "3"
 members = [
-    "crates/temper-lib",
     "crates/temper-agent-domain",
     "crates/temper-agent-domain-run",
     "crates/temper-agent-domain-session",
@@ -54,7 +53,6 @@ members = [
     "tests/fuzzy/engine/plan",
     "tests/fuzzy/engine/views",
     "tests/fuzzy/engine/work",
-    "tests/fuzzy/lib",
     "tests/fuzzy/worker/agent",
     "tests/fuzzy/worker/checkout",
     "tests/fuzzy/worker/host",
@@ -69,7 +67,6 @@ publish = false
 
 [workspace.dependencies]
 skein-lib = { git = "https://git.ekanayaka.io/ai/skein.git" }
-temper-lib = { path = "crates/temper-lib" }
 temper-agent-domain = { path = "crates/temper-agent-domain" }
 temper-agent-domain-run = { path = "crates/temper-agent-domain-run" }
 temper-agent-domain-session = { path = "crates/temper-agent-domain-session" }

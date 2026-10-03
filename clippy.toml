@@ -1,10 +1,8 @@
 # What the step crates may not use: skein's docs/design/programming-model.md, section 10.
 #
 # Applies to every crate below this directory that has no clippy.toml of its
-# own. temper-lib is held to it too; where lib builds a container on a type that
-# is out (Vec, VecDeque, PhantomData), the module says so with a scoped
-# #[expect(clippy::disallowed_types, reason = "...")]. Ordinary Rust (the
-# simulators and test harnesses) has its own clippy.toml.
+# own. Ordinary Rust (the simulators and test harnesses) has its own
+# clippy.toml.
 #
 # panic! is out through the clippy::panic lint rather than here, and
 # format_args! is not listed: unreachable!("why") and assertion messages expand
