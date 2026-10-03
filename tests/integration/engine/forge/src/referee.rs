@@ -334,16 +334,14 @@ impl Forge {
                 match kind {
                     Kind::Issue => {
                         let key = translate::key_of(body).unwrap_or_default();
-                        let planned =
-                            self.planned(now, &Planned::CreateIssue { repository, key: key.clone() });
+                        let planned = self.planned(now, &Planned::CreateIssue { repository, key: key.clone() });
                         judge.check(planned.is_some(), format_args!("an issue the parent planned: {key:?}"));
                         let fresh = self.issues.insert((repository, key.clone()));
                         judge.check(fresh, format_args!("one issue per key: {}", String::from_utf8_lossy(&key)));
                     }
                     Kind::Pull => {
                         let head = branches.as_ref().map(|branches| branches.head.to_vec()).unwrap_or_default();
-                        let planned =
-                            self.planned(now, &Planned::OpenPull { repository, head: head.clone() });
+                        let planned = self.planned(now, &Planned::OpenPull { repository, head: head.clone() });
                         judge.check(planned.is_some(), "a pull request the parent planned");
                         let fresh = self.pulls.insert((repository, head.clone()));
                         judge.check(
@@ -411,8 +409,7 @@ impl Forge {
             }
             Observation::Deleted { repository, branch, at: _, by: _ } => {
                 let repository = index(repository);
-                let planned =
-                    self.planned(now, &Planned::DeleteBranch { repository, branch: branch.to_vec() });
+                let planned = self.planned(now, &Planned::DeleteBranch { repository, branch: branch.to_vec() });
                 judge.check(planned.is_some(), "a branch deletion the parent planned");
             }
             Observation::Wiki { repository, name, content: _, revision: _, by: _ } => {

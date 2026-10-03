@@ -33,24 +33,24 @@ pub struct Reviewer {
 impl Reviewer {
     /// The reviews due now, as the forge is observed.
     pub fn look(&mut self, mirror: &Mirror, out: &mut Vec<Review>) {
-        for ((repository, number), issue) in &mirror.issues {
+        for (repository, number, issue) in mirror.items() {
             let Some(pull) = &issue.pull else { continue };
             if issue.kind != Kind::Pull || !issue.open || issue.by != ENGINE || pull.merged.is_some() {
                 continue;
             }
-            let Some(at) = REPOSITORIES.iter().position(|name| **name == **repository) else { continue };
+            let Some(at) = REPOSITORIES.iter().position(|name| **name == *repository) else { continue };
             let head = pull.commit;
             let reviewed = issue.reviews.iter().any(|review| review.by == REVIEWER && review.commit == head);
-            if reviewed || !mirror.is_green(repository, head) || !self.reviewing.insert((at, *number, head)) {
+            if reviewed || !mirror.is_green(repository, head) || !self.reviewing.insert((at, number, head)) {
                 continue;
             }
             self.reviews += 1;
             let op = Op::Write(Write::Review {
-                number: *number,
+                number,
                 verdict: Some(Verdict::Approve),
                 body: b"looks good".as_slice().into(),
             });
-            out.push(Review { repository: at, number: *number, head, op });
+            out.push(Review { repository: at, number, head, op });
         }
     }
 

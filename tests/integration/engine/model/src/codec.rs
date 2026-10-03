@@ -183,9 +183,15 @@ fn line(text: &[u8]) -> Option<(&[u8], &[u8])> {
 
 /// A typed block: `payload` and its digest, in hex.
 fn block(payload: &[u8]) -> Vec<u8> {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut bytes = payload.to_vec();
     bytes.extend_from_slice(&digest(payload).to_be_bytes());
-    bytes.iter().flat_map(|byte| format!("{byte:02x}").into_bytes()).collect()
+    let mut text = Vec::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        text.push(DIGITS[usize::from(byte >> 4)]);
+        text.push(DIGITS[usize::from(byte & 0x0f)]);
+    }
+    text
 }
 
 /// The payload of a typed block, if its digest holds.
@@ -194,8 +200,8 @@ fn unblock(text: &[u8]) -> Option<Vec<u8>> {
         return None;
     }
     let mut bytes = Vec::with_capacity(text.len() / 2);
-    for pair in text.chunks(2) {
-        bytes.push(u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?);
+    for pair in text.chunks_exact(2) {
+        bytes.push(hex_pair(pair[0], pair[1])?);
     }
     let split = bytes.len().checked_sub(8)?;
     let (payload, sum) = bytes.split_at(split);
@@ -205,6 +211,25 @@ fn unblock(text: &[u8]) -> Option<Vec<u8>> {
         return None;
     }
     Some(payload.to_vec())
+}
+
+/// The byte two hex digits spell, as `u8::from_str_radix(.., 16)` reads
+/// them: a sign before a single digit is one too.
+fn hex_pair(high: u8, low: u8) -> Option<u8> {
+    let low = hex_digit(low)?;
+    if high == b'+' {
+        return Some(low);
+    }
+    Some(hex_digit(high)? << 4 | low)
+}
+
+fn hex_digit(digit: u8) -> Option<u8> {
+    match digit {
+        b'0'..=b'9' => Some(digit - b'0'),
+        b'a'..=b'f' => Some(digit - b'a' + 10),
+        b'A'..=b'F' => Some(digit - b'A' + 10),
+        _ => None,
+    }
 }
 
 /// FNV-1a.

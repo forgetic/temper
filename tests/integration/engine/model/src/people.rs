@@ -203,13 +203,13 @@ impl People {
     /// The caretaker releases what is held for failures or a stall.
     fn release(&mut self, mirror: &Mirror, out: &mut Vec<Act>) {
         use temper_engine_model::work::{Hold, Phase};
-        for ((repository, number), issue) in &mirror.issues {
+        for (repository, number, issue) in mirror.items() {
             let Some(index) = deployment::index(repository) else { continue };
-            let item = Item { repository: index, number: *number };
+            let item = Item { repository: index, number };
             if !issue.open || self.releasing.contains(&item) {
                 continue;
             }
-            let Some(record) = mirror.record(repository, *number) else { continue };
+            let Some(record) = mirror.record(repository, number) else { continue };
             let releasable = match record.lifecycle.phase {
                 Phase::Held { why, .. } => match why {
                     Hold::Failures(_) | Hold::Plan { .. } | Hold::Stopped => true,
@@ -238,10 +238,10 @@ impl People {
             return;
         }
         // The first it made: a call that timed out may have made one too.
-        for ((repository, number), issue) in &mirror.issues {
+        for (repository, number, issue) in mirror.items() {
             if issue.by == tale.person && issue.body == tale.key {
                 let repository = deployment::index(repository).expect("one of the deployment's");
-                tale.item = Some(Item { repository, number: *number });
+                tale.item = Some(Item { repository, number });
                 return;
             }
         }
@@ -292,8 +292,8 @@ impl People {
             Story::Stall => {
                 // Once its change stalled again after a release, the person
                 // gives up on it: closes the session.
-                let stalled_again = mirror.issues.keys().any(|(repository, number)| {
-                    mirror.record(repository, *number).is_some_and(|record| {
+                let stalled_again = mirror.items().any(|(repository, number, _)| {
+                    mirror.record(repository, number).is_some_and(|record| {
                         record.relations.parent == Some(item)
                             && record.step.progress.released.is_some()
                             && matches_held(record.lifecycle.phase)
@@ -305,11 +305,11 @@ impl People {
                     Act::Forge { tale: Some(at), user: person, repository, op }
                 })
             }
-            Story::Fix => mirror.issues.iter().find_map(|((repository, number), issue)| {
-                let twice = issue.by == person && issue.body == tale.key && issue.open && *number != item.number;
+            Story::Fix => mirror.items().find_map(|(repository, number, issue)| {
+                let twice = issue.by == person && issue.body == tale.key && issue.open && number != item.number;
                 twice.then(|| {
-                    let repository = REPOSITORIES.iter().position(|name| **name == **repository).expect("ours");
-                    let op = forge::Op::Write(Write::Close { number: *number });
+                    let repository = REPOSITORIES.iter().position(|name| **name == *repository).expect("ours");
+                    let op = forge::Op::Write(Write::Close { number });
                     Act::Forge { tale: Some(at), user: person, repository, op }
                 })
             }),
@@ -384,9 +384,9 @@ impl People {
                 if tale.story == Story::Reject { Ask::Reject { item: session } } else { Ask::Accept { item: session } };
             return Some(Act::Ask { asker: Asker::Tale(at), person: tale.person, ask });
         }
-        for ((repository, number), issue) in &mirror.issues {
+        for (repository, number, issue) in mirror.items() {
             let Some(index) = deployment::index(repository) else { continue };
-            let Some(record) = mirror.record(repository, *number) else { continue };
+            let Some(record) = mirror.record(repository, number) else { continue };
             if !issue.open || record.relations.goal != Some(session) || record.relations.decision.is_some() {
                 continue;
             }
@@ -396,7 +396,7 @@ impl People {
             });
             let decision = record.step.step.work == Work::Wait(WaitSpec::Decision);
             if (decision && ready) || held(record) {
-                let item = Item { repository: index, number: *number };
+                let item = Item { repository: index, number };
                 return Some(Act::Ask { asker: Asker::Tale(at), person: tale.person, ask: Ask::Accept { item } });
             }
         }
@@ -414,20 +414,20 @@ impl People {
     /// The reviewer approves each pull request the engine opened, once CI
     /// passed on its head.
     fn review(&mut self, mirror: &Mirror, out: &mut Vec<Act>) {
-        for ((repository, number), issue) in &mirror.issues {
+        for (repository, number, issue) in mirror.items() {
             let Some(pull) = &issue.pull else { continue };
             if issue.kind != Kind::Pull || !issue.open || issue.by != ENGINE || pull.merged.is_some() {
                 continue;
             }
-            let Some(at) = REPOSITORIES.iter().position(|name| **name == **repository) else { continue };
+            let Some(at) = REPOSITORIES.iter().position(|name| **name == *repository) else { continue };
             let head = pull.commit;
             let reviewed = issue.reviews.iter().any(|review| review.by == REVIEWER && review.commit == head);
-            if reviewed || !mirror.is_green(repository, head) || !self.reviewing.insert((at, *number, head)) {
+            if reviewed || !mirror.is_green(repository, head) || !self.reviewing.insert((at, number, head)) {
                 continue;
             }
             self.tally.reviews += 1;
             let op = forge::Op::Write(Write::Review {
-                number: *number,
+                number,
                 verdict: Some(Verdict::Approve),
                 body: b"looks good".as_slice().into(),
             });

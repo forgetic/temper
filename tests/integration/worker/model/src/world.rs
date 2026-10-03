@@ -1099,12 +1099,12 @@ impl World {
     /// The open items the engine tracks, with a record, that are not held.
     fn unsettled(&self) -> Vec<u64> {
         let mut unsettled = Vec::new();
-        for ((repository, number), issue) in &self.mirror.issues {
+        for (repository, number, issue) in self.mirror.items() {
             let tracked = issue.labels.iter().any(|label| **label == *deployment::TRACKING);
             if !tracked || !issue.open || deployment::index(repository).is_none() {
                 continue;
             }
-            let Some(record) = self.mirror.record(repository, *number) else { continue };
+            let Some(record) = self.mirror.record(repository, number) else { continue };
             match record.lifecycle.phase {
                 engine::work::Phase::Held { .. } => {}
                 engine::work::Phase::Waiting
@@ -1112,7 +1112,7 @@ impl World {
                 | engine::work::Phase::Retrying(_)
                 | engine::work::Phase::Claimed
                 | engine::work::Phase::Applying { .. }
-                | engine::work::Phase::Done => unsettled.push(*number),
+                | engine::work::Phase::Done => unsettled.push(number),
             }
         }
         unsettled

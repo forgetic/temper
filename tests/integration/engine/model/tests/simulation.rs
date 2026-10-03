@@ -37,7 +37,7 @@ fn an_issue_handed_in_is_fixed_through_a_red_change_repaired_reviewed_and_landed
     assert!(pushes >= 2, "the change was made, then repaired: {stats:?}");
     assert!(stats.people.reviews >= 1, "a person reviewed it: {stats:?}");
     let merged =
-        world.mirror().issues.values().filter(|issue| issue.pull.as_ref().is_some_and(|pull| pull.merged.is_some()));
+        world.mirror().items().filter(|(_, _, issue)| issue.pull.as_ref().is_some_and(|pull| pull.merged.is_some()));
     assert_eq!(merged.count(), 1, "the change landed");
 }
 
@@ -62,7 +62,7 @@ fn a_plan_is_proposed_accepted_decided_grown_and_landed() {
     let world = run(Settings::only(6, &[Story::Plan]));
     assert!(closed(&world, 0), "the goal's session is done");
     let merged =
-        world.mirror().issues.values().filter(|issue| issue.pull.as_ref().is_some_and(|pull| pull.merged.is_some()));
+        world.mirror().items().filter(|(_, _, issue)| issue.pull.as_ref().is_some_and(|pull| pull.merged.is_some()));
     assert_eq!(merged.count(), 3, "the design and the two changes the build added landed");
 }
 
@@ -76,7 +76,7 @@ fn growth_beyond_the_envelope_waits_for_acceptance() {
 fn a_rejected_proposal_is_dropped() {
     let world = run(Settings::only(8, &[Story::Reject]));
     assert!(closed(&world, 0), "the session is done");
-    assert_eq!(world.mirror().issues.len(), 1, "nothing of the plan was made");
+    assert_eq!(world.mirror().items().count(), 1, "nothing of the plan was made");
 }
 
 #[test]

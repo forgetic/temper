@@ -60,7 +60,8 @@ pub struct Review {
 /// The forge as observed, by repository's name.
 #[derive(Default, Debug)]
 pub struct Mirror {
-    pub issues: BTreeMap<(Vec<u8>, u64), Issue>,
+    /// The issues and pull requests, by repository's name, then number.
+    pub issues: BTreeMap<Vec<u8>, BTreeMap<u64, Issue>>,
     /// Each commit's latest state per context, by repository.
     pub statuses: BTreeMap<(Vec<u8>, u64), BTreeMap<Vec<u8>, Check>>,
     pub branches: BTreeMap<(Vec<u8>, Vec<u8>), u64>,
@@ -90,7 +91,7 @@ impl Mirror {
                     pull,
                     reviews: Vec::new(),
                 };
-                self.issues.insert((repository.to_vec(), *number), issue);
+                self.issues.entry(repository.to_vec()).or_default().insert(*number, issue);
             }
             Observation::Closed { repository, number, .. } => {
                 if let Some(issue) = self.issue_mut(repository, *number) {
@@ -148,8 +149,8 @@ impl Mirror {
             }
             Observation::Moved { repository, branch, to, .. } => {
                 self.branches.insert((repository.to_vec(), branch.to_vec()), *to);
-                for ((name, _), issue) in &mut self.issues {
-                    if **name != **repository || !issue.open {
+                for issue in self.issues.get_mut(&**repository).into_iter().flat_map(BTreeMap::values_mut) {
+                    if !issue.open {
                         continue;
                     }
                     if let Some(pull) = &mut issue.pull
@@ -180,11 +181,19 @@ impl Mirror {
 
     #[must_use]
     pub fn issue(&self, repository: &[u8], number: u64) -> Option<&Issue> {
-        self.issues.get(&(repository.to_vec(), number))
+        self.issues.get(repository)?.get(&number)
     }
 
     fn issue_mut(&mut self, repository: &[u8], number: u64) -> Option<&mut Issue> {
-        self.issues.get_mut(&(repository.to_vec(), number))
+        self.issues.get_mut(repository)?.get_mut(&number)
+    }
+
+    /// Every issue and pull request, with its repository's name and its
+    /// number, in that order.
+    pub fn items(&self) -> impl Iterator<Item = (&[u8], u64, &Issue)> {
+        self.issues.iter().flat_map(|(repository, issues)| {
+            issues.iter().map(move |(number, issue)| (repository.as_slice(), *number, issue))
+        })
     }
 
     /// The record the engine keeps on an item, if it has one that decodes:
@@ -225,11 +234,7 @@ impl Mirror {
         issue
             .comments
             .iter()
-            .filter(|comment| {
-                comment.by == engine
-                    && comment.decoded.is_none()
-                    && !is_for_person(&comment.body)
-            })
+            .filter(|comment| comment.by == engine && comment.decoded.is_none() && !is_for_person(&comment.body))
             .count()
     }
 
