@@ -1356,6 +1356,13 @@ fn a_session_makes_tasks_keyed_by_their_place() {
     assert_eq!(apply_to(&chatting, None, &facts(), &many), invalid(Problem::TooManyTasks { max: LIMITS.tasks }));
     assert_eq!(apply_to(&chatting, None, &facts(), &Outcome::Tasks(Box::new([]))), invalid(Problem::NoSteps));
     assert_eq!(apply_to(&record(agent("a", &[])), None, &facts(), &tasks), invalid(Problem::NotAllowed));
+    // It keeps its tasks until they are done, as many as a plan's steps.
+    let busy = Facts { children: Relations { total: LIMITS.steps + 2, done: 3, last_done: None }, ..facts() };
+    let (applied, _) = apply_to(&chatting, None, &busy, &Outcome::Tasks(Box::new([agent("a", &[])])));
+    assert_eq!(applied, writes_of(Accept::Rules, 100), "one more fits beside those not done");
+    let tasks = Outcome::Tasks(Box::new([agent("a", &[]), agent("b", &[])]));
+    let refused = invalid(Problem::TooManyChildren { max: LIMITS.steps });
+    assert_eq!(apply_to(&chatting, None, &busy, &tasks), refused, "two do not");
 }
 
 #[test]

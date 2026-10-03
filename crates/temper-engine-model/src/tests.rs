@@ -31,7 +31,7 @@ const BUDGET: Budget = Budget { tokens: 1_000, turns: 20, time: Duration::from_s
 
 const LIMITS: Limits = Limits {
     work: work::Limits {
-        items: 4,
+        items: 12,
         retries: Retries { transient: RETRY, permanent: RETRY, run: RETRY, agent: RETRY, lost: RETRY, invalid: RETRY },
         undelivered: 2,
         facts: 64,
@@ -54,7 +54,7 @@ const LIMITS: Limits = Limits {
     rules: rules::Limits { repositories: 2, protected: 2, branch_bytes: 16, grants: 4, reviews: 4, gates: 4, lands: 4 },
     forge: forge::Limits {
         repositories: 2,
-        items: 4,
+        items: 12,
         labels: 3,
         members: 3,
         inbox: 4,
@@ -85,7 +85,7 @@ const LIMITS: Limits = Limits {
         slots: 2,
         workstreams: 2,
         workstream_bytes: 16,
-        attempts: 8,
+        attempts: 16,
         calls: 4,
         grace: Duration::from_secs(10),
         facts: 64,
@@ -2173,4 +2173,33 @@ fn a_plan_proposed_beyond_what_its_goal_may_spend_is_refused() {
         ask: Ask::Accept { item: session },
     });
     assert!(world.forge.issue(Item { repository: 0, number: 2 }).is_none(), "nothing of it is made");
+}
+
+/// A task that waits for a person's decision, and so is not done.
+fn waiting_task(name: &[u8]) -> plan::Step {
+    plan::Step {
+        name: copy_of(name),
+        repository: plan::Repository(0),
+        work: plan::Work::Wait(plan::WaitSpec::Decision),
+        after: Box::new([]),
+        gates: Box::new([]),
+    }
+}
+
+#[test]
+fn a_task_past_those_a_session_may_keep_is_refused_not_made() {
+    let (mut world, session) = World::session();
+    let turns: [&[&[u8]]; 4] = [&[b"w1", b"w2", b"w3"], &[b"w4", b"w5", b"w6"], &[b"w7", b"w8"], &[b"w9"]];
+    for (turn, names) in turns.iter().enumerate() {
+        let attempt = u64::try_from(turn).unwrap() + 1;
+        let mut tasks = List::with_capacity(3);
+        for name in *names {
+            tasks.push(waiting_task(name)).unwrap();
+        }
+        let tasks = crate::boundary::Outcome::Tasks { tasks: tasks.into_boxed(), text: copy_of(b"on it") };
+        world.deliver(Event::Answer { channel: Token::new(1), item: session, attempt, answer: ended(tasks) });
+        message(&mut world, session, &[b'm', b'0' + u8::try_from(turn).unwrap()], 50 + attempt);
+    }
+    assert!(world.forge.issue(Item { repository: 0, number: 9 }).is_some(), "eight tasks are made");
+    assert!(world.forge.issue(Item { repository: 0, number: 10 }).is_none(), "the ninth is refused, not made");
 }

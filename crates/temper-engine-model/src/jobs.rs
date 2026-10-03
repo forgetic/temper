@@ -1505,8 +1505,10 @@ fn resolve(model: &Model, goal: Option<Item>, after: &[Box<[u8]>], limits: &Limi
 }
 
 /// `item`, of the step `name`, joins the steps of `to`, which keeps as many
-/// as a plan holds: past them, the one done first makes room, and if none
-/// is done, it does not join (its own record names its parent and goal).
+/// as a plan holds: past them, the one done first makes room. The plan
+/// refuses an outcome that would leave none: its plan's size bounds a goal's
+/// steps, and a session's tasks not done (`TooManyChildren`); were it to
+/// happen, it does not join (its own record names its parent and goal).
 fn join(model: &mut Model, to: Item, name: &[u8], item: Item, most: u32) {
     let Some(id) = items::find(model, to) else { return };
     let Some(entry) = model.items.get_mut(id) else { return };

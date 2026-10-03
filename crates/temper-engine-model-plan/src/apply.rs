@@ -40,7 +40,7 @@ use crate::accept::{Growing, accept, grow, reaccepted};
 use crate::check::{Among, Found, Problem, Problems, check_steps, count, entry_named};
 use crate::config::Config;
 use crate::due::{Hold, Repair, Why};
-use crate::facts::{Facts, PullState};
+use crate::facts::{Facts, PullState, Relations};
 use crate::limits::Limits;
 use crate::plan::{Commit, Plan, Review, Step, Work};
 use crate::record::{Goal, Progress, Record, Reviewed, Verdict};
@@ -188,7 +188,7 @@ pub fn apply(
         Outcome::Tasks(tasks) => match &step.work {
             Work::Session(_) => match goal {
                 Some(goal) if supervising => supervised(config, env, goal, tasks, cleared, out),
-                Some(_) | None => tasked(config, env, tasks, cleared, out),
+                Some(_) | None => tasked(config, env, tasks, facts.children, cleared, out),
             },
             Work::Agent(_) | Work::Change(_) | Work::Wait(_) => not_allowed(),
         },
@@ -367,10 +367,23 @@ fn reaccepted_plan(record: &Record, plan: &Plan, out: &mut Queue<Write>) -> Opti
 
 /// Tasks a chatting session makes: items on their own, keyed by their place
 /// among the outcome's tasks.
-fn tasked(config: &Config, env: &Env<Limits>, tasks: &[Step], cleared: Progress, out: &mut Queue<Write>) -> Applied {
+fn tasked(
+    config: &Config,
+    env: &Env<Limits>,
+    tasks: &[Step],
+    children: Relations,
+    cleared: Progress,
+    out: &mut Queue<Write>,
+) -> Applied {
     let mut found = Found::new();
     if tasks.is_empty() {
         found.add(Problem::NoSteps);
+    }
+    // The session is done only once its tasks are, so it keeps them, as
+    // many as a plan's steps that are not done.
+    let live = children.total.saturating_sub(children.done).saturating_add(count(tasks.len()));
+    if live > env.limits.steps {
+        found.add(Problem::TooManyChildren { max: env.limits.steps });
     }
     let checked = check_steps(config, &env.limits, &[], None, tasks, Among::Alone, &mut found);
     if !found.is_empty() {

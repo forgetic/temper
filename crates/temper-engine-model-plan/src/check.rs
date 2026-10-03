@@ -40,6 +40,9 @@ pub enum Problem {
     TooManySteps { max: u32 },
     /// The outcome creates more than `max` tasks.
     TooManyTasks { max: u32 },
+    /// The item would have more than `max` items it made not done yet, the
+    /// tasks the outcome creates among them.
+    TooManyChildren { max: u32 },
     /// The step has no name.
     EmptyName { step: u32 },
     /// The step's name is longer than `max` bytes.
