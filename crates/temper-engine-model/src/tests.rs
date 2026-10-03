@@ -144,9 +144,10 @@ const LIMITS: Limits = Limits {
     facts: 64,
 };
 
-/// The engine's forge user, and a person.
+/// The engine's forge user, and people.
 const ENGINE: u64 = 99;
 const ALICE: u64 = 1;
+const BOB: u64 = 2;
 
 const ITEM: Item = Item { repository: 0, number: 7 };
 
@@ -357,6 +358,8 @@ struct Forge {
     /// An item whose record writes time out, without landing, so many times
     /// more.
     stuck: Option<(Item, u32)>,
+    /// The people who may only read; the rest may write.
+    readers: List<u64>,
 }
 
 #[derive(Debug)]
@@ -406,6 +409,7 @@ impl Forge {
             comments: 100,
             numbers: 1,
             stuck: None,
+            readers: List::with_capacity(4),
         }
     }
 
@@ -569,7 +573,10 @@ impl Forge {
                 Ok(self.listing(repository, state, label.as_deref(), since, page))
             }
             api::Op::Item { number, after } => self.read(Item { repository, number }, after, &mut decoded),
-            api::Op::Permission { .. } => Ok(api::Answer::Permission(api::Permission::Write)),
+            api::Op::Permission { user, .. } => {
+                let reads = self.readers.as_slice().contains(&user);
+                Ok(api::Answer::Permission(if reads { api::Permission::Read } else { api::Permission::Write }))
+            }
             api::Op::CreateIssue { labels, .. } => {
                 let item = self.open(repository, labels);
                 Ok(api::Answer::Created(item.number))
@@ -2202,4 +2209,29 @@ fn a_task_past_those_a_session_may_keep_is_refused_not_made() {
     }
     assert!(world.forge.issue(Item { repository: 0, number: 9 }).is_some(), "eight tasks are made");
     assert!(world.forge.issue(Item { repository: 0, number: 10 }).is_none(), "the ninth is refused, not made");
+}
+
+#[test]
+fn a_change_whose_landing_waits_on_the_rules_stalls_at_its_deadline() {
+    let (mut world, change, pull, head) = opened_change();
+    // Only Bob approves, who may only read: the rules want a writer's
+    // approval, which never comes.
+    world.forge.readers.push(BOB).unwrap();
+    let review = api::Review {
+        id: 502,
+        author: BOB,
+        verdict: api::Verdict::Approve,
+        commit: head,
+        key: None,
+        body: copy_of(b"ok"),
+    };
+    world.forge.change(pull).unwrap().reviews.push(review).unwrap();
+    world.forge.issue(pull).unwrap().updated = world.env().now;
+    world.deliver(Event::Hint { repository: 0, item: Some(pull.number), commit: None, branch: None });
+    world.wait(30);
+    assert!(world.forge.change(pull).unwrap().merged.is_none(), "nothing lands on a reader's approval");
+    assert_eq!(held_for(&mut world, change), None, "it waits");
+    world.wait(3600);
+    let stalled = work::Hold::Plan { reason: translate::hold(plan::Hold::Stalled) };
+    assert_eq!(held_for(&mut world, change), Some(stalled), "held as stalled at its deadline");
 }

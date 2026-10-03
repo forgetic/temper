@@ -137,7 +137,7 @@ fn decide(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) {
     let blocked = entry.blocked;
     let entry = get(model, id);
     let unread = entry.relations.pull.is_some() && model.forge.pull(translate::forge_item(entry.item)).is_none();
-    if blocked || unread {
+    if unread {
         let due = work::Due::Nothing { until: None };
         return route::work_step(model, env, work::Event::Decided { owner, due });
     }
@@ -147,6 +147,18 @@ fn decide(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) {
         return route::work_step(model, env, work::Event::Decided { owner, due });
     };
     let facts = facts(model, env, entry);
+    // The rules wait on facts before its action: news wakes it, and a change
+    // waiting so on the forge stalls as any wait on the forge does.
+    if blocked {
+        let due = match plan::stall(&route::plan_env(env), record, &facts) {
+            Some(stall) if env.now >= stall => {
+                escalate(model, env, id, plan::Hold::Stalled);
+                work::Due::Hold { reason: translate::hold(plan::Hold::Stalled) }
+            }
+            until @ (Some(_) | None) => work::Due::Nothing { until },
+        };
+        return route::work_step(model, env, work::Event::Decided { owner, due });
+    }
     let mut writes = Queue::with_capacity(plan::max_out(&env.limits.plan));
     let decided = plan::due(&model.config.plan, &route::plan_env(env), record, &facts, &mut writes);
     let token = id.token();

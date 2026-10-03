@@ -11,7 +11,7 @@ use crate::{
     Outcome, Plan, Problem, Problems, Progress, Pull, PullState, Record, Relations, Repair, Repo, Repository, Resume,
     Review, Reviewed, Run, Sections, SessionSpec, Source, Sources, Stale, Step, Target, Template, Then, Verdict,
     WaitSpec, Waits, Wake, Why, Woken, Work, Write, accept, apply, check, check_goal, check_record, due, grow, max_out,
-    rejected, release, wake, worst_case,
+    rejected, release, stall, wake, worst_case,
 };
 
 /// The most a run may ask for.
@@ -991,6 +991,19 @@ fn a_change_waiting_on_the_forge_past_the_stall_is_held() {
         due(&config(), &late, &released, &pending, &mut out),
         Due::Nothing { waits: Waits::Ci, until: Some(Time::from_nanos(15_000)) }
     );
+}
+
+#[test]
+fn a_change_whose_landing_waits_on_the_rules_stalls_as_a_wait_on_the_forge_does() {
+    let change = record(change("a", &[]));
+    let open = pulled(ready(head(1)));
+    assert_eq!(stall(&env(), &change, &open), Some(Time::from_nanos(10_900)), "from its head's push");
+    let released = Record { progress: Progress { released: Some(Time::from_nanos(5_000)), ..Progress::NEW }, ..change };
+    assert_eq!(stall(&env(), &released, &open), Some(Time::from_nanos(15_000)), "or its last release");
+    let merged = pulled(Pull { state: PullState::Merged, ..ready(head(1)) });
+    assert_eq!(stall(&env(), &released, &merged), None, "a change landed waits on nothing");
+    assert_eq!(stall(&env(), &released, &facts()), None, "nor one without a pull request");
+    assert_eq!(stall(&env(), &record(agent("b", &[])), &open), None, "nor anything but a change");
 }
 
 #[test]

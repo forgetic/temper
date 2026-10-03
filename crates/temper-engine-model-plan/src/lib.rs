@@ -9,7 +9,8 @@
 //!   person's acceptance ([`grow`]) (5.2);
 //! - what is due for an item, from its step and the facts about it: nothing
 //!   yet, a run and the parts of its charter, an engine action, done, or a
-//!   hold for a person ([`due`], 5.3 and 4.5);
+//!   hold for a person ([`due`], 5.3 and 4.5), and when a change whose
+//!   landing waits on what it does not read stalls ([`stall`]);
 //! - whether the events in a session's inbox wake it ([`wake`], 5.4);
 //! - what a run's outcome writes, or that it is stale or invalid
 //!   ([`apply`], 4.4);
@@ -56,7 +57,7 @@ pub use accept::{Growing, Grown, accept, grow};
 pub use apply::{Accept, Applied, Outcome, Stale, Then, apply, rejected, release};
 pub use check::{Problem, Problems, check, check_goal, check_record};
 pub use config::{Config, Repo, Template};
-pub use due::{Action, Due, Finish, Hold, Repair, Run, Sections, Waits, Why, due};
+pub use due::{Action, Due, Finish, Hold, Repair, Run, Sections, Waits, Why, due, stall};
 pub use facts::{Ci, Decided, Decision, Facts, Mergeable, Pull, PullState, Relations};
 pub use limits::{Limits, max_out, worst_case};
 pub use plan::{

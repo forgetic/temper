@@ -376,12 +376,7 @@ fn open(
     if pull.base_moved {
         return repair(config, env, record, spec, facts, Repair::BaseMoved, out);
     }
-    // Waits on the forge count from the head's push, or the last release.
-    let from = match record.progress.released {
-        Some(released) => released.max(pull.pushed),
-        None => pull.pushed,
-    };
-    let stall = from.saturating_add(env.limits.stall);
+    let stall = stalls_at(env, record, pull);
     match pull.ci {
         Ci::Failed => return repair(config, env, record, spec, facts, Repair::CiFailed, out),
         Ci::None | Ci::Pending => return forge(env, Waits::Ci, stall),
@@ -428,6 +423,38 @@ fn open(
     }
     out.push(Write::Merge { head: pull.head });
     Due::Act(Action::Merge)
+}
+
+/// When a change whose pull request is `pull` is held for waiting on the
+/// forge: waits count from its head's push, or the last release.
+fn stalls_at(env: &Env<Limits>, record: &Record, pull: Pull) -> Time {
+    let from = match record.progress.released {
+        Some(released) => released.max(pull.pushed),
+        None => pull.pushed,
+    };
+    from.saturating_add(env.limits.stall)
+}
+
+/// When the item's change, its pull request open, is held for waiting on
+/// the forge: its parent asks this of a change whose landing waits on what
+/// the plan does not read (the rules wanting more of it), which is held as
+/// stalled at the same time as any wait on the forge. `None` for anything
+/// else.
+#[must_use]
+pub fn stall(env: &Env<Limits>, record: &Record, facts: &Facts) -> Option<Time> {
+    let change = match &record.step.work {
+        Work::Change(_) => true,
+        Work::Agent(_) | Work::Wait(_) | Work::Session(_) => false,
+    };
+    let pull = facts.pull?;
+    let open = match pull.state {
+        PullState::Open => true,
+        PullState::Merged | PullState::Closed => false,
+    };
+    if !change || !open {
+        return None;
+    }
+    Some(stalls_at(env, record, pull))
 }
 
 /// A wait on the forge, until `stall`; past it, a hold.
