@@ -1,4 +1,4 @@
-//! What the model worlds share (programming-style.md, 11). Each world keeps
+//! What the model worlds share (testing-pyramid.md, 2.2). Each world keeps
 //! its own fakes, translations, settings, invariants and scenarios; this is the
 //! machinery under them, the same in every world:
 //!

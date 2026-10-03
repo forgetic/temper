@@ -744,7 +744,7 @@ independent statement of the protected-landing rule.
 
 The engine's world, `tests/integration/engine/model`, runs the top level
 with every sub-model beneath it against fakes that share none of its
-types (programming-style.md, section 11): the fake forge, its faults
+types (testing-pyramid.md, section 4): the fake forge, its faults
 drawn from the seed, reached through its protocol layer as the world
 plays it, with codecs for what the engine writes inside comments and
 wiki pages and for the charters and outcomes a worker carries as bytes;

@@ -1,4 +1,4 @@
-# Profiles and lints follow docs/design/programming-style.md, section 10.4.
+# Profiles and lints follow docs/design/programming-style.md, section 10.
 
 [workspace]
 resolver = "3"
@@ -143,7 +143,7 @@ missing_panics_doc = "allow"          # panics are assertions, named by expect("
 needless_pass_by_value = "allow"      # cell handlers take the source state by value
 single_match_else = "allow"           # a two-armed match on Option is as clear as if let
 
-# programming-style.md, section 10.4.
+# programming-style.md, section 10.3.
 wildcard_enum_match_arm = "deny"
 indexing_slicing = "deny"
 arithmetic_side_effects = "deny"
@@ -161,7 +161,7 @@ multiple_unsafe_ops_per_block = "deny"
 disallowed_types = "deny"
 disallowed_macros = "deny"
 
-# Beyond section 10.4: the rest of what the subset leaves out.
+# Beyond the table of 10.3: the rest of what the subset leaves out.
 disallowed_methods = "deny"           # closure-taking combinators, panicking slice ops, ...
 allow_attributes = "deny"             # #[expect(.., reason = "..")], which fails once it is stale
 match_wildcard_for_single_variants = "deny"

@@ -1,12 +1,11 @@
-//! The agent's top-level world (programming-style.md, 11; testing-pyramid.md,
-//! 2.3; agent-model.md, section 3), where it meets the worker's
-//! (worker-model.md, section 9) and the engine's (engine-model.md, section
-//! 14): the engine's top-level model, with every sub-model beneath it,
-//! assigning the steps of the issues people hand in; the worker's top-level
-//! model hosting their runs, each in an agent process that is a fresh agent
-//! model, with the run and the sessions beneath it and the tools beneath
-//! those; and fakes for every other neighbour, driven by one loop,
-//! deterministically from a seed.
+//! The agent's top-level world (testing-pyramid.md, 2.3; agent-model.md,
+//! section 3), where it meets the worker's (worker-model.md, section 9) and the
+//! engine's (engine-model.md, section 14): the engine's top-level model, with
+//! every sub-model beneath it, assigning the steps of the issues people hand
+//! in; the worker's top-level model hosting their runs, each in an agent
+//! process that is a fresh agent model, with the run and the sessions beneath
+//! it and the tools beneath those; and fakes for every other neighbour, driven
+//! by one loop, deterministically from a seed.
 //!
 //! The world owns the clock and the seeds, and stands in for:
 //!

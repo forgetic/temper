@@ -1,8 +1,8 @@
-//! A simulated world for the whole worker (programming-style.md, 11;
-//! worker-model.md, section 9; testing-pyramid.md, 2.3): the worker's
-//! top-level model (`temper_worker_model`) run against the engine's
-//! (`temper_engine_model`), each with everything around it, with no protocol
-//! and no io. One loop drives both, deterministically from a seed.
+//! A simulated world for the whole worker (worker-model.md, section 9;
+//! testing-pyramid.md, 2.3): the worker's top-level model
+//! (`temper_worker_model`) run against the engine's (`temper_engine_model`),
+//! each with everything around it, with no protocol and no io. One loop drives
+//! both, deterministically from a seed.
 //!
 //! The world owns the clock and the seeds, and stands in for:
 //!

@@ -3,9 +3,9 @@
 Provisional, 2026-10-02. How temper is tested, from one step function to
 the whole system under one io_uring loop: the tiers, what is real and
 what is fake in each, and the fakes that stand in for temper's
-neighbours as they grow. The checks themselves are those of
-`programming-style.md`, section 11. Section 8 says where things stand,
-section 9 what is not built yet, and section 10 what is still open.
+neighbours as they grow. Section 6 says what the tiers check, section 8
+where things stand, section 9 what is not built yet, and section 10 what
+is still open.
 
 ## 1. In one page
 
@@ -77,9 +77,9 @@ section 9 what is not built yet, and section 10 what is still open.
 A crate's own tests feed its step functions events and inspect the
 requests they emit: one transition, a full queue, a stale handle, a
 refusal at the entrance. lib's containers are tested hard here. Fuzzing
-joins this tier with the protocol machines: each machine alone, fed
-`Bytes` under every demand, and the step functions fed recorded event
-sequences (programming-style.md, 11).
+with `cargo fuzz` joins this tier with the protocol machines: each
+machine alone, fed `Bytes` under every demand, and the step functions fed
+recorded event sequences.
 
 ### 2.2 Model worlds
 
@@ -114,12 +114,15 @@ the parsing of their output. The machine sits there at its io face
 ### 2.5 The simulator
 
 The simulator drives `service::iterate` of every process in the scenario,
-the function each shell runs, and plays the kernel under them
-(programming-style.md, 11): the ring, the network between the processes'
-sockets, the clock, the seeds, and the machine at its kernel face. It
-runs with tiny limits, and injects cancels, timeouts, short reads and
-writes, and completions after a cancel. Processes come and go: a spawn
-the worker asks for starts an agent's service, and a kill ends it.
+the function each shell runs, and plays the kernel under them: the ring
+(it reads submissions, fills op buffers through io's API, and produces
+completions), the network between the processes' sockets, the clock, the
+seeds, and the machine at its kernel face. It runs with tiny limits
+(slabs of capacity 2), and injects cancellation and timeout in every
+state, refusal at every admission point, short reads and writes, and
+completions after a cancel. Processes come and go: a spawn the worker
+asks for starts an agent's service, and a kill ends it. Where the model
+worlds test behaviour, the simulator tests mechanics.
 
 ### 2.6 The real loop
 
@@ -477,17 +480,22 @@ and the agent's tools', session's and run's, keep their checks inline.
 
 ## 6. What the tiers check
 
-Every world, and the simulator, checks (programming-style.md, 11):
+Every world, and the simulator, checks:
 
 - **Contracts as it goes:** one terminal event per request, one reply per
   call, each operation's deadline and identity, and each component's own
   (worker-model.md, section 9).
-- **Invariants once it settles:** no live entities, nothing in flight,
-  every process gone and read to its end, every answer taken once.
+- **Invariants once it settles:** no live entities (every slab empty),
+  nothing in flight, every process gone and read to its end, every answer
+  taken once; and ownership is a tree, with no orphans.
 - **Memory:** a counting allocator measures the most a model held in one
-  step, against its worst case (programming-style.md, 6.4).
+  step, against its worst case (programming-style.md, 6.4); the simulator
+  checks it at every iteration.
 - **Replay:** a seed replays to the same trace.
-- **Transition coverage:** function coverage of the handlers over a run.
+- **Transition coverage:** each cell is a handler function
+  (programming-style.md, 5.4), so function coverage of the handlers over
+  a run (`cargo llvm-cov`) lists the transitions exercised and those never
+  reached.
 
 These are the harness's. The referee checks the scenario's expectations
 on top, at every tier, the real loop included (section 5.2), and the
@@ -541,9 +549,8 @@ Under `tests/integration/<component>/model`, the engine's is its own
 world, and the agent's and the whole worker's are system worlds (2.3);
 the engine world's crate is a library the system worlds use (4.5).
 
-The protocol worlds, the simulator (`sim/`, programming-style.md,
-section 12) and the real loop find their homes when the first of each is
-built.
+The protocol worlds, the simulator and the real loop find their homes
+when the first of each is built.
 
 ## 8. Where things stand
 

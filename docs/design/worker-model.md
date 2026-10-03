@@ -355,7 +355,7 @@ What the protocol and io layers owe the model, to be designed after it:
 ## 9. The world
 
 The worker's worlds run the model against neighbours that share none of
-its types (programming-style.md, section 11):
+its types (testing-pyramid.md, section 4):
 
 - **an engine:** the real one, the engine's top-level model, which
   assigns, sends inbound events, cancels, answers relayed calls and

@@ -3,14 +3,14 @@
 Provisional, 2026-10-01. The shape a network service on Linux io_uring
 should have when it is written in Rust.
 
-**How to read this.** This is the language-agnostic model (saf's
-`PROGRAMMING-MODEL-AGNOSTIC-RELAXED.md`) with its open choices made for
-Rust: the memory strategy (section 6), the subset of the language (section
-10), the crate layout (section 12), and what checks each rule. It stands
-alone; section 13 lists where it departs from the agnostic model. The
-subset is deliberately small: Rust is used for ownership and borrow
-checking, enums with data and exhaustive matching, and crate boundaries,
-and for little else. Where the compiler or clippy can check a rule, the
+**How to read this.** Section 1 is the whole model in one page. The
+sections after it take each part in turn: the loop and step functions,
+the layers, entities and their lifecycle, memory, flow control,
+protocols, and time; then the subset of Rust the model is written in
+(section 10), and what is still open (section 11). The subset is
+deliberately small: Rust is used for ownership and borrow checking, enums
+with data and exhaustive matching, and crate boundaries, and for little
+else. Where the compiler or clippy can check a rule, the
 check is named; where neither can, the rule is a convention held in
 review. Section 10.1 says which is which.
 
@@ -235,11 +235,11 @@ sim        service
 - **The model is complete.** Everything a peer can cause arrives as a
   model entity, and everything the model wants done leaves as one, so a
   world of models and fakes runs the service's whole behaviour with no
-  protocol and no io (section 11). The protocol layer only translates
-  between bytes and model entities: it decides nothing, and it never sits
-  between two pieces of model logic. Structure the domain acts on is
-  decoded on the way in, all of it: a tool call inside an LLM's answer
-  reaches the model as a typed call, not as JSON to be sent back down for
+  protocol and no io. The protocol layer only translates between bytes
+  and model entities: it decides nothing, and it never sits between two
+  pieces of model logic. Structure the domain acts on is decoded on the
+  way in, all of it: a JSON document carried inside a message's field
+  reaches the model as typed values, not as text to be sent back down for
   decoding later.
 - **Policy above, mechanism below.** The model decides the deadline and
   whether to retry; the protocol layer runs the timer and the attempt.
@@ -390,8 +390,8 @@ top-level model crate.
   change on either side break the build in one place.
 - **Only the top-level model faces the protocol layer,** and its worst case
   is the sum of its sub-models'.
-- **Each sub-model has a world of its own** (section 11), and so does the
-  top-level model.
+- **Each sub-model has a world of its own,** which plays its parent and
+  its neighbours, and so does the top-level model.
 
 ## 5. Entities, handles and lifecycle
 
@@ -485,7 +485,7 @@ Layers above see one event.
 - **One small handler per cell:** a free function that takes the source
   state's data by value and returns the target state. Small handlers are
   easier to test, fuzz and review, and function coverage of the handlers
-  is transition coverage (section 11).
+  is transition coverage.
 
 ```rust
 enum ConnState {
@@ -589,8 +589,7 @@ on per-entity caps instead of quotas, and keeps accounting as the fallback
 What it gives up: running out of heap aborts rather than refuses, so the
 worst case must fit (6.4); and the general allocator sits in the hot path,
 so allocation time is not constant, and fragmentation can push the
-resident size above the live bytes. What these costs come to for temper's
-workload, and what to do if they show, is in `performance.md`.
+resident size above the live bytes.
 
 ### 6.3 What holds
 
@@ -616,8 +615,8 @@ workload, and what to do if they show, is in `performance.md`.
   or snapshot.
 - **Layers share nothing by reference; a move is the copy.** Records are
   owned values. A payload that crosses a boundary is moved into the
-  record, and the emitter cannot reach it afterwards, so the move gives
-  what the agnostic model gets from copying, at no cost. A body io reads
+  record, and the emitter cannot reach it afterwards, so the move keeps
+  the layers apart as a copy would, at no cost. A body io reads
   is moved into the protocol's message, then into the model's `Call`, then
   into the model's store, and is copied nowhere on the way.
 - **Copy at emission.** Data the model keeps and also sends goes out as a
@@ -651,8 +650,9 @@ report, not `size_of` times a capacity: each lib container has its own
 `Deadlines`), which counts its bookkeeping too: a slab's slot tags and
 free lists, the tree nodes of a map, a set or a deadline table. The
 formula counts containers and payload bytes, not allocator overhead: leave
-headroom, and measure the resident size under load before trusting it. The
-simulator checks the formula at every iteration (section 11).
+headroom, and measure the resident size under load before trusting it. In
+the simulator, a counting allocator checks at every iteration that the
+live heap stays within the formula.
 
 If the worst case forces the limits too low for a service, the fallback is
 a byte budget for the large consumers, each kept in the layer that owns
@@ -838,6 +838,12 @@ the state, and one place arms and re-arms it (5.4), not every handler.
 | State is plain | no closures, function pointers or `dyn` | review |
 | No leaks; ownership is a tree | | simulator |
 
+The workspace's `Cargo.toml` and `clippy.toml` hold the lints and the
+disallowed types, macros and methods, and warnings are errors. Each step
+crate's root starts with `#![cfg_attr(not(test), no_std)]` (unit tests get
+std) and `#![forbid(unsafe_code)]`. Stable Rust, edition 2024; nightly
+only for fuzz targets.
+
 ### 10.2 What is in
 
 Step code (io, protocol, model, service) uses:
@@ -873,8 +879,8 @@ containers, and `while` loops bounded by a container's capacity. It is
 written once and tested hard. Application code does not hand-roll data
 structures: what is missing goes into lib.
 
-The shell, the simulator and tests are ordinary Rust, within the habits of
-12.1, with `unsafe` confined to the ring adapter.
+The shell, the simulator and tests are ordinary Rust, with `unsafe`
+confined to the ring adapter.
 
 ### 10.3 What is out
 
@@ -909,72 +915,7 @@ Integers go through `checked_*`, or through `wrapping_*` and
 `overflow-checks = true` in every profile traps whatever the lint does not
 see, in lib and the shell.
 
-### 10.4 Configuration
-
-```toml
-# Cargo.toml (workspace)
-[profile.dev]
-panic = "abort"
-overflow-checks = true
-
-[profile.release]
-panic = "abort"
-overflow-checks = true
-
-[workspace.lints.rust]
-unsafe_code = "deny"                  # forbid in every crate root but the shell's
-elided_lifetimes_in_paths = "deny"    # a type that borrows says so: Reader<'_>
-unused_must_use = "deny"
-
-[workspace.lints.clippy]
-wildcard_enum_match_arm = "deny"
-indexing_slicing = "deny"
-arithmetic_side_effects = "deny"
-as_conversions = "deny"
-float_arithmetic = "deny"
-unwrap_used = "deny"
-let_underscore_must_use = "deny"
-mem_forget = "deny"
-todo = "deny"
-unimplemented = "deny"
-impl_trait_in_params = "deny"
-allow_attributes_without_reason = "deny"
-undocumented_unsafe_blocks = "deny"
-multiple_unsafe_ops_per_block = "deny"
-disallowed_types = "deny"
-disallowed_macros = "deny"
-```
-
-```toml
-# clippy.toml (workspace root: applies to the step crates)
-disallowed-types = [
-  { path = "alloc::vec::Vec",              reason = "Box<[u8]> for bytes, lib::Queue for sequences" },
-  { path = "alloc::collections::VecDeque", reason = "lib::Queue" },
-  { path = "alloc::string::String",        reason = "bytes are Box<[u8]>" },
-  { path = "alloc::rc::Rc",                reason = "one owner" },
-  { path = "alloc::sync::Arc",             reason = "one owner" },
-  { path = "core::cell::Cell",             reason = "no interior mutability" },
-  { path = "core::cell::RefCell",          reason = "no interior mutability" },
-  { path = "core::sync::atomic::AtomicU64", reason = "no global state" },
-  # ... and every other atomic type
-]
-disallowed-macros = [
-  { path = "alloc::format", reason = "no formatting in step code" },
-  { path = "alloc::vec",    reason = "no Vec in step code" },
-  { path = "core::matches", reason = "a catch-all match in disguise" },
-]
-```
-
-- Each step crate's root starts with `#![cfg_attr(not(test), no_std)]`
-  (unit tests get std) and `#![forbid(unsafe_code)]`, and lib's does the
-  same. The shell allows `unsafe` in its ring adapter module only, with
-  the reason stated.
-- lib and the shell have their own `clippy.toml`; clippy reads the one
-  nearest the crate, so lib may use `Vec` inside its containers.
-- Warnings are errors: `cargo clippy --all-targets -- -D warnings` in CI.
-- Stable Rust, edition 2024. Nightly is used only for the fuzz targets.
-
-### 10.5 Discipline
+### 10.4 Discipline
 
 - **Errors are values.** Expected outcomes (busy, full, not found,
   refused) are enum variants, never panics. Every fallible operation
@@ -987,122 +928,7 @@ disallowed-macros = [
   the ring adapter, the one place that could have some, is tested against
   the real kernel.
 
-## 11. Testing
-
-- **Model worlds.** Each model, and each sub-model (4.5), runs in a world
-  of its own: the model, the clock, the seeds, and fakes standing in for
-  its neighbours (another party's model, a filesystem), with no protocol
-  and no io. A fake shares no domain types with what it stands in for; the
-  world translates between them, as a protocol layer would. Model worlds
-  come first and test behaviour; the simulator below comes with the lower
-  layers and tests mechanics.
-- **Deterministic simulation.** The simulator drives `service::iterate`,
-  the function the shell runs, and plays everything around it: the ring
-  (it reads submissions, writes into op buffers through io's API, and
-  produces completions), the clock and the seeds. It runs with tiny limits
-  (slabs of capacity 2) and injects cancellation and timeout in every
-  state, completions after cancel, refusal at every admission point, and
-  short reads and short writes.
-- **Universal invariants,** checked by the simulator: no live entities at
-  quiescence (every slab empty); ownership is a tree with no orphans; one
-  terminal event per request; every `ReplyTo` answered.
-- **Transition coverage.** Each cell is a handler function, so function
-  coverage of the handlers (`cargo llvm-cov` over a simulation run) is the
-  list of transitions exercised and of those never reached.
-- **Memory.** A counting `#[global_allocator]` in the simulator records
-  the peak of live heap bytes, and the simulator asserts at every
-  iteration that it stays within the worst case of 6.4.
-- **Fuzzing** each protocol machine alone with `cargo fuzz`, feeding
-  `Bytes` events under every demand, and each step function with recorded
-  event sequences.
-- **Replay:** a recorded run replays to the same state. State types derive
-  `Hash`, and lib's fixed-key hasher gives a field-wise digest of the
-  logical state, independent of its layout in memory.
-
-## 12. Starting a new service
-
-Before code:
-
-1. The wire protocol, sized, with every length and limit.
-2. The limits of each layer, and the worst case they imply (6.4).
-3. The entities of each layer, who owns each, and how they bind.
-4. The state machines: states, what each holds, the total transition
-   table, demands and deadlines per state.
-
-Then, in order: lib (handles, slabs, queues, cursors, deadline table);
-the model, unit-tested by feeding events and inspecting requests, and run
-in model worlds (section 11); the protocol layer, fuzzed alone; the io
-layer, the service and the shell last, with the simulator standing in for
-the kernel until then.
-
-```
-Cargo.toml     workspace: profiles and lints
-clippy.toml    disallowed types and macros for the step crates
-lib/           Id, Slab, Token, ReplyTo, Queue, List, Map, Set, Stack, ByteRing,
-               Reader, Writer, bytes, Deadlines, Time, Duration, Rng, Env
-io/            io::up, io::down: sockets, operations, transit memory
-protocol/      protocol::up, protocol::down: machines, codecs
-model/         model::step: domain machines, with any sub-models below it (4.5)
-service/       the three layers wired together; service::iterate
-shell/         main, the ring adapter (the only unsafe), clock, seed, spawn
-sim/           simulated ring and clock, fault schedules, counting allocator
-fuzz/          one target per protocol machine
-```
-
-### 12.1 Habits to avoid
-
-| Habit | Why it is wrong | Instead |
-|---|---|---|
-| An `async fn` handler, a runtime | the runtime schedules instead of the loop; state hides in generated futures | an enum state machine driven by the loop |
-| Registering a `Box<dyn FnMut>` with the loop | hidden control flow, captured state | events in, requests out |
-| `Rc<RefCell<T>>` to share an entity | reachability decides lifetime; borrow errors become panics | one owner; everyone else holds an `Id<T>` |
-| A struct with a lifetime parameter to hold `&Conn` | a stored borrow drags lifetimes through every type | store the `Id<T>`; look it up when needed |
-| `&mut self` methods on the whole layer | the borrow checker cannot split the borrow; `clone` or `RefCell` follow | free functions over the fields they touch |
-| `.clone()` on entity state to calm the borrow checker | now the entity exists twice | copy the handle out, end the borrow, look it up again |
-| `Instant::now()` or `rand` in a step | not replayable | `env.now`, the layer's `Rng` |
-| `HashMap` | iteration order depends on a random seed | `BTreeMap` |
-| `unwrap()` or `[]` on something a peer sent | a remote crash | `Reader`, `try_from`, a framing error |
-| `as u32` on a length | silent truncation | `u32::try_from`, and refuse |
-| `impl Drop` that closes or frees | a hidden effect outside the lifecycle | request *close*; reclaim on *closed* |
-| `OwnedFd`, `File`, `TcpStream` in io | closes on drop, outside the ring | an `Fd(i32)`, closed by a ring `close` |
-| Retiring a connection on end of stream | *closed* has not arrived; the kernel may hold its buffers | go to *closing*; retire on *closed* |
-| A `_` arm, `matches!` or `if let` over states or events | a new case builds silently | an exhaustive `match` |
-| `match (state, event)` | a `_` in a tuple escapes the lint | match one, then the other |
-| A placeholder that is a live state in `mem::replace` | a forgotten assignment leaves a plausible state | the terminal state, with the match as the right-hand side |
-| Queuing output without a cap | a peer that never reads grows it without bound | cap queued output; check room before parsing |
-| Parsing every request available in one loop | one in flight; flow control overshoots | one request per delivery |
-| Recursive descent on peer input | the peer chooses the depth; a remote crash | `lib::Stack` |
-| `Vec::push` while reading a body | the peer chooses the size | validate the length, then demand exactly it |
-| Sharing stored data with a reply through `Arc` | the kernel would hold model memory | copy at emission |
-| Asserting on input a peer can send | a remote crash | handle the cell |
-| Re-arming the idle timeout by hand in every handler | one forgotten re-arm closes a connection mid-body | derive the deadline from the state, in one place |
-| One ring timeout per timer | cancel races, settling, two completions per reset | the layer's `Deadlines` |
-
-## 13. Departures and open questions
-
-Where this document departs from the agnostic model:
-
-1. **Timers live in each layer,** not in io (section 9). Arm and cancel
-   never cross a boundary, and the expiry reaches the layer that armed it
-   without routing; in Rust, io could not name the model's queue anyway.
-   io's vocabulary loses *arm timer* and *cancel timer*.
-2. **io delivers the demanded bytes in the event,** as an owned
-   `Box<[u8]>`, instead of the protocol layer reading io's buffers through
-   a cursor in place (4.3). Every boundary record is then self-contained,
-   and exact-size reads later become a move.
-3. **A move replaces the copy at every boundary** (6.3). Copy at emission
-   still applies to data the model keeps.
-4. **A step returns nothing** (section 3). Each entry point declares
-   `MAX_OUT` and the loop reserves the room, so there is no status left to
-   return.
-5. **The random generator lives in each layer's state,** and the limits
-   reach the step read-only through `&Env<Limits>`.
-6. **One opaque `Token` crosses every boundary** (4.2), and reply tokens
-   are affine (`ReplyTo`).
-7. **The memory strategy is chosen:** counted entities and owned bytes,
-   with the worst case checked at startup (section 6).
-
-Open questions:
+## 11. Open questions
 
 - **Affine owner handles.** An `Owned<T>`, neither `Copy` nor `Clone`,
   returned by `insert` and consumed by `retire`, would let only an
