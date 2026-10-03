@@ -109,6 +109,9 @@ calls inside channel messages (section 4).
 - **Limits and the worst case.** Each protocol crate exports its `Limits`
   and `worst_case`: its connections, intake and output caps, the largest
   message of each kind, and its decoders' stack depths.
+- **What outlives a process carries a version:** the engine's blocks in
+  forge comments and wiki pages, the store's records and the credentials
+  file. A new engine reads what the one before it wrote.
 - **Configuration is data,** read by the shell at startup: peers'
   addresses (names are resolved then: skein's io connects to addresses),
   certificates and the credentials file (section 5).
@@ -131,10 +134,19 @@ with each agent it spawns (worker-domain.md, section 6).
   in one message. A version or a secret the other end does not accept is
   refused with a small fixed-size refusal, and the connection closes
   before either domain hears of it.
-- **One version per release,** covering the frames and the payload
-  schemas; the engine, its workers and their agents upgrade together.
-  Since the version is agreed at the hello, a kind it does not define is
-  a framing error, not a newer peer to be tolerated.
+- **The version is agreed at the hello.** The hello's layout never
+  changes, so any two releases can read each other's. Each side says the
+  range of versions it speaks, and the channel uses the highest both
+  speak, or is refused if there is none. Every frame and payload schema
+  is then read and written under that version.
+  - **For now, one version per release.** The engine, its workers and
+    their agents upgrade together.
+  - **Rolling upgrades later.** A release that speaks two versions adds
+    codecs; the handshake stays as it is.
+  - **An agent speaks its worker's version.** The engine learns that
+    version at the hello and encodes the run's payloads for it.
+  - **Unknown kinds are framing errors.** Since the version is agreed at
+    the hello, a kind it does not define cannot come from a newer peer.
 - **Liveness, on the engine's link only.** A side that has sent nothing
   for an interval sends a ping; a link that has heard nothing for longer
   is lost, and the domains' graces begin. On an agent's channel, a process
@@ -321,8 +333,6 @@ What the domains owe this layer, found while designing it:
 
 ## 11. Open questions
 
-- **Rolling upgrades:** whether the channels should accept two versions
-  at once, so workers can be upgraded after the engine.
 - **Credit on the channels:** whether everything the domains send on a
   channel is bounded by their slots, so its output cap can be sized never
   to refuse, or some of it (facts) needs credit the domain sees.
