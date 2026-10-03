@@ -385,7 +385,7 @@ fn answers_the_engine_has_yet_to_acknowledge_keep_their_slots() {
     assert!(h.step(Event::Unacknowledged { answers: 1 }).is_empty());
     let busy = Names { run: Token::new(2), attempt: token(2, 1000), ..hosted };
     assert_eq!(&*h.assign(assignment(2)), [answer(busy, Answer::Refused(Refusal::Busy))], "no slot is free");
-    assert!(h.assign(assignment(1)).is_empty(), "the attempt hosted, sent again, is still dropped");
+    assert_eq!(&*h.assign(assignment(1)), [answer(hosted, Answer::Refused(Refusal::Busy))]);
     let invalid = Assignment { charter: Box::from([0_u8; 65]), ..assignment(2) };
     let refused = Answer::Refused(Refusal::Invalid(Invalid::Charter));
     assert_eq!(&*h.assign(invalid), [answer(busy, refused)], "invalid, room or not");
@@ -404,12 +404,12 @@ fn an_assignment_for_a_run_hosted_already_under_another_attempt_is_refused_as_bu
 }
 
 #[test]
-fn the_attempt_hosted_assigned_again_is_dropped() {
+fn a_fresh_call_for_an_attempt_hosted_already_is_answered_busy() {
     let mut h = Harness::new(LIMITS);
     let hosted = h.admit(1);
-    assert!(h.assign(assignment(1)).is_empty(), "its one answer is the hosted run's");
+    assert_eq!(&*h.assign(assignment(1)), [answer(hosted, Answer::Refused(Refusal::Busy))]);
     let invalid = Assignment { charter: Box::from([0_u8; 65]), ..assignment(1) };
-    assert!(h.assign(invalid).is_empty(), "whatever it holds");
+    assert_eq!(&*h.assign(invalid), [answer(hosted, Answer::Refused(Refusal::Busy))]);
     assert_eq!(h.domain.hosted(), 1);
     let unprepared = Event::Unprepared { owner: hosted.owner, failure: Preparation::Transient, detail: bytes(b"") };
     assert_eq!(h.step(unprepared).len(), 1, "answered once");
@@ -616,9 +616,9 @@ fn an_agent_that_exits_without_a_word_fails_the_run_and_is_not_stopped() {
     let hosted = h.live(1);
     let relayed = h.relay(hosted, 7);
     let emitted = h.gone(hosted, b"segfault");
-    assert_eq!(&*emitted, [reply(hosted, 7, Reply::Unavailable), save(hosted)], "its call is answered as it leaves");
+    assert_eq!(&*emitted, [reply(hosted, 7, Reply::Unavailable), Request::CancelRelay { call: relayed }]);
     let answer_late = Event::Relayed { run: hosted.run, attempt: hosted.attempt, call: relayed, answer: bytes(b"a") };
-    assert!(h.step(answer_late).is_empty(), "the engine's late answer is dropped");
+    assert_eq!(&*h.step(answer_late), [save(hosted)], "the losing answer settles the relay before saving");
     let saved = Event::Saved { owner: hosted.owner, save: Box::new([Landing::Unchanged, Landing::Unchanged]) };
     let work = Work { landed: Box::new([]), saved: Some(Box::new([Landing::Unchanged, Landing::Unchanged])) };
     let exited = failed(Failure::Agent(AgentFailure::Exited), b"segfault", work);
@@ -651,10 +651,14 @@ fn a_run_that_yields_waits_and_an_inbound_event_wakes_it() {
     assert_eq!(&*h.inbound(hosted, b"next"), [deliver(hosted, b"next")]);
     assert_eq!(h.report()[0].phase, Phase::Active);
     assert!(h.step(Event::Yielded { owner: hosted.owner }).is_empty());
-    h.relay(hosted, 7);
+    let relay = h.relay(hosted, 7);
     assert_eq!(h.report()[0].phase, Phase::Active, "a run that calls is at work");
     assert!(h.step(Event::Yielded { owner: hosted.owner }).is_empty());
-    assert_eq!(&*h.cancel(hosted), [reply(hosted, 7, Reply::Unavailable), stop(hosted)], "waiting, as active");
+    assert_eq!(
+        &*h.cancel(hosted),
+        [reply(hosted, 7, Reply::Unavailable), Request::CancelRelay { call: relay }, stop(hosted)],
+        "waiting, as active"
+    );
 }
 
 // Host calls.
@@ -671,8 +675,7 @@ fn a_relayed_call_goes_to_the_engine_and_its_answer_back_to_the_run() {
     assert!(h.step(unknown).is_empty(), "nor a run not hosted");
     let relayed = Event::Relayed { run: hosted.run, attempt: hosted.attempt, call, answer: bytes(b"page") };
     assert_eq!(&*h.step(relayed), [reply(hosted, 7, Reply::Relayed { answer: bytes(b"page") })]);
-    let again = Event::Relayed { run: hosted.run, attempt: hosted.attempt, call, answer: bytes(b"page") };
-    assert!(h.step(again).is_empty(), "a call is answered once");
+    assert!(!h.domain.is_relayed_for(hosted.run, hosted.attempt, call), "the wire layer suppresses duplicates");
     h.domain.reclaim();
     assert_eq!(h.domain.calls(), 0);
 }
@@ -687,7 +690,8 @@ fn an_answer_for_a_call_of_another_run_is_dropped() {
     assert!(h.step(wrong).is_empty());
     let push = h.push(first, 8);
     let wrong = Event::Relayed { run: first.run, attempt: first.attempt, call: push, answer: bytes(b"x") };
-    assert!(h.step(wrong).is_empty(), "a push is not the engine's to answer");
+    assert!(!h.domain.is_relayed_for(first.run, first.attempt, push), "the wire layer rejects a push token");
+    drop(wrong);
 }
 
 #[test]
@@ -782,7 +786,7 @@ fn a_withdrawn_relay_is_answered_at_once_and_the_engines_answer_dropped() {
     let first = h.relay(hosted, 7);
     let second = h.relay(hosted, 8);
     let withdrawn = Event::Withdrawn { owner: hosted.owner, call: Token::new(8) };
-    assert_eq!(&*h.step(withdrawn), [reply(hosted, 8, Reply::Withdrawn)]);
+    assert_eq!(&*h.step(withdrawn), [reply(hosted, 8, Reply::Withdrawn), Request::CancelRelay { call: second }]);
     let again = Event::Withdrawn { owner: hosted.owner, call: Token::new(8) };
     assert!(h.step(again).is_empty(), "answered already: nothing happens");
     let late = Event::Relayed { run: hosted.run, attempt: hosted.attempt, call: second, answer: bytes(b"late") };
@@ -804,7 +808,7 @@ fn a_relayed_call_waits_for_the_engine_until_it_is_answered_or_withdrawn() {
     assert!(h.domain.is_relayed(first) && h.domain.is_relayed(second));
     let relayed = Event::Relayed { run: hosted.run, attempt: hosted.attempt, call: first, answer: bytes(b"page") };
     assert_eq!(h.step(relayed).len(), 1);
-    assert!(h.step(Event::Withdrawn { owner: hosted.owner, call: Token::new(8) }).len() == 1);
+    assert!(h.step(Event::Withdrawn { owner: hosted.owner, call: Token::new(8) }).len() == 2);
     assert!(!h.domain.is_relayed(first) && !h.domain.is_relayed(second), "answered, and withdrawn");
     let push = h.push(hosted, 9);
     assert!(!h.domain.is_relayed(push), "a push is not relayed");
@@ -824,8 +828,11 @@ fn a_withdrawn_push_goes_on_and_is_answered_with_how_it_went() {
 fn a_call_withdrawn_as_its_run_leaves_live_was_answered_already() {
     let mut h = Harness::new(LIMITS);
     let hosted = h.live(1);
-    h.relay(hosted, 7);
-    assert_eq!(&*h.cancel(hosted), [reply(hosted, 7, Reply::Unavailable), stop(hosted)]);
+    let relay = h.relay(hosted, 7);
+    assert_eq!(
+        &*h.cancel(hosted),
+        [reply(hosted, 7, Reply::Unavailable), Request::CancelRelay { call: relay }, stop(hosted)]
+    );
     assert!(h.step(Event::Withdrawn { owner: hosted.owner, call: Token::new(7) }).is_empty());
     assert!(h.step(Event::Withdrawn { owner: hosted.owner, call: Token::new(9) }).is_empty(), "never made");
 }
@@ -867,7 +874,7 @@ fn a_cancelled_run_answers_its_relayed_calls_as_unavailable_and_waits_for_its_pu
     let push = h.push(hosted, 7);
     let relayed = h.relay(hosted, 8);
     let emitted = h.cancel(hosted);
-    assert_eq!(&*emitted, [reply(hosted, 8, Reply::Unavailable), stop(hosted)]);
+    assert_eq!(&*emitted, [reply(hosted, 8, Reply::Unavailable), Request::CancelRelay { call: relayed }, stop(hosted)]);
     assert!(h.cancel(hosted).is_empty(), "decided already");
     assert_eq!(&*h.call(hosted, 9, Ask::Relay { body: bytes(b"b") }), [reply(hosted, 9, Reply::Unavailable)]);
     let late = Event::Relayed { run: hosted.run, attempt: hosted.attempt, call: relayed, answer: bytes(b"a") };
@@ -1019,9 +1026,9 @@ fn every_slot_comes_back_once_every_run_has_answered() {
 
 #[test]
 fn max_out_covers_the_hold_and_the_calls() {
-    assert_eq!(max_out(&LIMITS), 4);
+    assert_eq!(max_out(&LIMITS), 6);
     assert_eq!(max_out(&Limits { held: 10, ..LIMITS }), 12);
-    assert_eq!(max_out(&Limits { run_calls: 7, ..LIMITS }), 9);
+    assert_eq!(max_out(&Limits { run_calls: 7, ..LIMITS }), 16);
 }
 
 #[test]
@@ -1159,4 +1166,66 @@ fn a_repository_name_that_is_not_one_path_component_is_refused() {
         assert_eq!(h.assign(assignment).len(), 1);
         assert_eq!(h.domain.hosted(), 1, "{name:?} is a name");
     }
+}
+
+#[test]
+fn a_withdrawn_relay_keeps_its_binding_until_cancellation_settles() {
+    let mut h = Harness::new(Limits { held: 0, ..LIMITS });
+    let hosted = h.live(1);
+    let call = h.relay(hosted, 7);
+    let emitted = h.step(Event::Withdrawn { owner: hosted.owner, call: Token::new(7) });
+    assert_eq!(&*emitted, [reply(hosted, 7, Reply::Withdrawn), Request::CancelRelay { call }]);
+    h.domain.reclaim();
+    assert_eq!(h.domain.calls(), 1, "the lower delivery still holds the binding");
+    assert_eq!(&*h.finish(hosted, Finish::Ended { outcome: bytes(b"done") }), [stop(hosted)]);
+    assert!(h.gone(hosted, b"").is_empty(), "a stopped run still waits for its relay");
+    assert_eq!(h.domain.hosted(), 1);
+    assert_eq!(&*h.step(Event::RelayCancelled { call }), [save(hosted)], "only its terminal releases the binding");
+    h.domain.reclaim();
+    assert_eq!(h.domain.calls(), 0);
+}
+
+#[test]
+fn each_fresh_assignment_reply_to_is_answered_once() {
+    let mut h = Harness::new(LIMITS);
+    let hosted = h.admit(1);
+    let duplicate_to = Token::new(987);
+    let emitted = h.step(Event::Assign { reply_to: ReplyTo::new(duplicate_to), assignment: assignment(1) });
+    let [Request::Answer { to, answer: Answer::Refused(Refusal::Busy), .. }] = &*emitted else {
+        panic!("duplicate is refused");
+    };
+    assert_eq!(*to, ReplyTo::new(duplicate_to));
+    let emitted =
+        h.step(Event::Unprepared { owner: hosted.owner, failure: Preparation::Transient, detail: bytes(b"") });
+    let [Request::Answer { to, .. }] = &*emitted else {
+        panic!("original answers");
+    };
+    assert_eq!(*to, ReplyTo::new(hosted.run));
+}
+
+#[test]
+fn cancelling_a_full_run_reserves_room_for_replies_and_cancels() {
+    let limits = Limits { run_calls: 7, ..LIMITS };
+    let mut h = Harness::new(limits);
+    let hosted = h.live(1);
+    let mut relays = List::with_capacity(limits.run_calls);
+    for call in 0..limits.run_calls {
+        relays.push(h.relay(hosted, u64::from(call))).expect("room");
+    }
+    let emitted = h.cancel(hosted);
+    assert_eq!(emitted.len(), usize::try_from(limits.run_calls * 2 + 1).expect("fits"));
+    assert!(emitted.len() <= usize::try_from(max_out(&limits)).expect("fits"));
+    h.domain.reclaim();
+    assert_eq!(h.domain.calls(), limits.run_calls, "every cancelled binding still awaits its terminal");
+    for call in &relays {
+        assert!(h.step(Event::RelayCancelled { call: *call }).is_empty());
+    }
+    h.domain.reclaim();
+    assert_eq!(h.domain.calls(), 0);
+}
+
+#[test]
+fn output_bounds_that_overflow_are_refused_before_startup() {
+    assert_eq!(worst_case(&Limits { slots: 1, run_calls: u32::MAX, ..LIMITS }), None);
+    assert_eq!(worst_case(&Limits { held: u32::MAX, ..LIMITS }), None);
 }

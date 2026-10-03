@@ -196,9 +196,10 @@ pub(crate) fn assign(
     assignment: Assignment,
     out: &mut Queue<Request>,
 ) {
-    // The attempt hosted, sent again: dropped. Its one answer is the hosted
-    // run's, and an answer under its names now would read as that one.
+    // A fresh child call always consumes its own ReplyTo. Wire retries are
+    // deduplicated by the parent before it creates such a call.
     if fenced(&domain.names, &domain.hosted, assignment.run, assignment.attempt).is_some() {
+        refuse(reply_to, &assignment, Refusal::Busy, out);
         return;
     }
     let Domain { hosted, names, facts, shut, unacknowledged, .. } = domain;
@@ -281,6 +282,26 @@ pub(crate) fn cancel(domain: &mut Domain, env: &Env<Limits>, run: Token, attempt
     stop(domain, env, id, Reason::Engine, out);
 }
 
+pub(crate) fn is_hosting(domain: &Domain, run: Token, attempt: Token) -> bool {
+    fenced(&domain.names, &domain.hosted, run, attempt).is_some()
+}
+
+pub(crate) fn is_relayed_for(domain: &Domain, run: Token, attempt: Token, call: Token) -> bool {
+    let Some(id) = fenced(&domain.names, &domain.hosted, run, attempt) else {
+        return false;
+    };
+    let Some(entry) = domain.calls.get(Id::<Call>::from_token(call)) else {
+        return false;
+    };
+    if entry.hosted != id {
+        return false;
+    }
+    match entry.state {
+        call::State::Relayed { .. } | call::State::Settling { .. } => true,
+        call::State::Pushing { .. } | call::State::Closed => false,
+    }
+}
+
 pub(crate) fn relayed(
     domain: &mut Domain,
     run: Token,
@@ -292,27 +313,42 @@ pub(crate) fn relayed(
     let Some(id) = fenced(&domain.names, &domain.hosted, run, attempt) else {
         return;
     };
-    let Domain { hosted, calls, .. } = domain;
-    // The engine echoes the host's name for the call, which may be of a call
-    // answered already, or not of this run.
     let call_id = Id::<Call>::from_token(call);
-    let Some(entry) = calls.get_mut(call_id) else {
-        return;
-    };
+    let entry = domain.calls.get_mut(call_id).expect("a relay lives until its terminal");
     if entry.hosted != id {
         return;
     }
     match entry.state {
         call::State::Relayed { agent, call } => {
             out.push(Request::Reply { agent, call, reply: Reply::Relayed { answer } });
-            entry.state = call::State::Closed;
-            calls.retire(call_id);
-            let entry = hosted.get_mut(id).expect("a named run is hosted");
-            entry.relays.remove(&call_id);
         }
-        // Not a relayed call, or answered already: dropped.
-        call::State::Pushing { .. } | call::State::Closed => {}
+        call::State::Settling { .. } => {}
+        call::State::Pushing { .. } | call::State::Closed => unreachable!("only a live relay receives an answer"),
     }
+    relay_ended(domain, call_id, out);
+}
+
+pub(crate) fn relay_cancelled(domain: &mut Domain, call: Token, out: &mut Queue<Request>) {
+    let call_id = Id::<Call>::from_token(call);
+    let entry = domain.calls.get(call_id).expect("a cancelled relay lives until its terminal");
+    match entry.state {
+        call::State::Settling { .. } => {}
+        call::State::Relayed { .. } | call::State::Pushing { .. } | call::State::Closed => {
+            unreachable!("a relay is cancelled only after its cancel request")
+        }
+    }
+    relay_ended(domain, call_id, out);
+}
+
+fn relay_ended(domain: &mut Domain, call_id: Id<Call>, out: &mut Queue<Request>) {
+    let entry = domain.calls.get_mut(call_id).expect("a relay lives until its terminal");
+    let id = entry.hosted;
+    entry.state = call::State::Closed;
+    domain.calls.retire(call_id);
+    let entry = domain.hosted.get_mut(id).expect("a run lives until every relay settles");
+    let removed = entry.relays.remove(&call_id);
+    assert!(removed, "a relay belongs to its run until it settles");
+    conclude(domain, id, out);
 }
 
 pub(crate) fn cancel_all(domain: &mut Domain, reason: Reason) {
@@ -539,7 +575,7 @@ pub(crate) fn finished(domain: &mut Domain, env: &Env<Limits>, owner: Token, fin
     entry.state = match state {
         State::Active { reply_to, workspace, agent } | State::Waiting { reply_to, workspace, agent } => {
             let ending = said(finish, Failure::Run(RunFailure::Cancelled), &env.limits);
-            leave(&mut entry.relays, calls, &env.limits, out);
+            leave(&entry.relays, calls, out);
             out.push(Request::Stop { agent });
             State::Stopping { reply_to, workspace, agent, ending, gone: false }
         }
@@ -565,7 +601,7 @@ pub(crate) fn finished(domain: &mut Domain, env: &Env<Limits>, owner: Token, fin
 
 pub(crate) fn faulted(
     domain: &mut Domain,
-    env: &Env<Limits>,
+    _env: &Env<Limits>,
     owner: Token,
     fault: AgentFailure,
     out: &mut Queue<Request>,
@@ -577,7 +613,7 @@ pub(crate) fn faulted(
     entry.state = match state {
         State::Active { reply_to, workspace, agent } | State::Waiting { reply_to, workspace, agent } => {
             let ending = Ending::Stopped { failure: Failure::Agent(fault), detail: Box::new([]) };
-            leave(&mut entry.relays, calls, &env.limits, out);
+            leave(&entry.relays, calls, out);
             out.push(Request::Stop { agent });
             State::Stopping { reply_to, workspace, agent, ending, gone: false }
         }
@@ -612,7 +648,7 @@ pub(crate) fn gone(domain: &mut Domain, env: &Env<Limits>, owner: Token, detail:
         // It exited without saying how its run finishes.
         State::Active { reply_to, workspace, agent } | State::Waiting { reply_to, workspace, agent } => {
             let ending = Ending::Failed { failure: Failure::Agent(AgentFailure::Exited), detail };
-            leave(&mut entry.relays, calls, &env.limits, out);
+            leave(&entry.relays, calls, out);
             State::Stopping { reply_to, workspace, agent, ending, gone: true }
         }
         State::Stopping { reply_to, workspace, agent, ending, gone } => {
@@ -653,7 +689,9 @@ pub(crate) fn pushed(domain: &mut Domain, owner: Token, push: Box<[Landing]>, ou
         call::State::Pushing { agent, call } => {
             out.push(Request::Reply { agent, call, reply: Reply::Pushed(told(&push)) });
         }
-        call::State::Relayed { .. } | call::State::Closed => unreachable!("a push ends once, and only a push's call"),
+        call::State::Relayed { .. } | call::State::Settling { .. } | call::State::Closed => {
+            unreachable!("a push ends once, and only a push's call")
+        }
     }
     conclude(domain, id, out);
 }
@@ -706,7 +744,7 @@ fn fenced(names: &Map<Token, Id<Hosted>>, hosted: &Slab<Hosted>, run: Token, att
 }
 
 /// Cancels the run `id` for `reason`: the cancel cells.
-fn stop(domain: &mut Domain, env: &Env<Limits>, id: Id<Hosted>, reason: Reason, out: &mut Queue<Request>) {
+fn stop(domain: &mut Domain, _env: &Env<Limits>, id: Id<Hosted>, reason: Reason, out: &mut Queue<Request>) {
     let Domain { hosted, calls, .. } = domain;
     let entry = hosted.get_mut(id).expect("a run on the names or the ready list is hosted");
     let state = mem::replace(&mut entry.state, State::Closed);
@@ -719,7 +757,7 @@ fn stop(domain: &mut Domain, env: &Env<Limits>, id: Id<Hosted>, reason: Reason, 
         State::Starting { reply_to, workspace, held: _ } => State::Unwanted { reply_to, workspace, reason },
         State::Active { reply_to, workspace, agent } | State::Waiting { reply_to, workspace, agent } => {
             let ending = Ending::Stopped { failure: Failure::Cancelled(reason), detail: Box::new([]) };
-            leave(&mut entry.relays, calls, &env.limits, out);
+            leave(&entry.relays, calls, out);
             out.push(Request::Stop { agent });
             State::Stopping { reply_to, workspace, agent, ending, gone: false }
         }
@@ -739,7 +777,7 @@ fn conclude(domain: &mut Domain, id: Id<Hosted>, out: &mut Queue<Request>) {
     let Domain { hosted, names, ready, facts, .. } = domain;
     let entry = hosted.get_mut(id).expect("a run lives until it is retired");
     let settled = match &entry.state {
-        State::Stopping { gone, .. } => *gone && entry.push.is_none(),
+        State::Stopping { gone, .. } => *gone && entry.push.is_none() && entry.relays.is_empty(),
         State::Preparing { .. }
         | State::Cancelling { .. }
         | State::Starting { .. }
@@ -927,6 +965,7 @@ fn withdraw(entry: &mut Hosted, calls: &mut Slab<Call>, call: Token, out: &mut Q
         let relayed = calls.get(*call_id).expect("a run's calls live until they close");
         let named = match relayed.state {
             call::State::Relayed { agent: _, call: named } => named,
+            call::State::Settling { .. } => continue,
             call::State::Pushing { .. } | call::State::Closed => unreachable!("a run's relays are relayed calls"),
         };
         if named == call {
@@ -937,31 +976,33 @@ fn withdraw(entry: &mut Hosted, calls: &mut Slab<Call>, call: Token, out: &mut Q
         return;
     };
     let relayed = calls.get_mut(call_id).expect("found above");
-    let state = mem::replace(&mut relayed.state, call::State::Closed);
-    match state {
-        call::State::Relayed { agent, call } => out.push(Request::Reply { agent, call, reply: Reply::Withdrawn }),
-        call::State::Pushing { .. } | call::State::Closed => unreachable!("found among the run's relays"),
+    match relayed.state {
+        call::State::Relayed { agent, call } => {
+            out.push(Request::Reply { agent, call, reply: Reply::Withdrawn });
+            relayed.state = call::State::Settling { call };
+            out.push(Request::CancelRelay { call: call_id.token() });
+        }
+        call::State::Settling { .. } | call::State::Pushing { .. } | call::State::Closed => {
+            unreachable!("found among the active relays")
+        }
     }
-    calls.retire(call_id);
-    entry.relays.remove(&call_id);
 }
 
-/// The run leaves live: each of its relayed calls in flight is answered as
-/// unavailable, and closes. Its push in flight, if it has one, is waited for.
-fn leave(relays: &mut Set<Id<Call>>, calls: &mut Slab<Call>, limits: &Limits, out: &mut Queue<Request>) {
-    for call_id in relays.iter() {
-        let entry = calls.get_mut(*call_id).expect("a run's calls live until they close");
-        let state = mem::replace(&mut entry.state, call::State::Closed);
-        match state {
+/// Leaving live answers each relay's agent at once, then waits for the
+/// cancellation of local delivery. Each binding ends with a terminal event.
+fn leave(relays: &Set<Id<Call>>, calls: &mut Slab<Call>, out: &mut Queue<Request>) {
+    for call_id in relays {
+        let entry = calls.get_mut(*call_id).expect("a run's relays live until their terminals");
+        match entry.state {
             call::State::Relayed { agent, call } => {
                 out.push(Request::Reply { agent, call, reply: Reply::Unavailable });
+                entry.state = call::State::Settling { call };
+                out.push(Request::CancelRelay { call: call_id.token() });
             }
-            call::State::Pushing { .. } | call::State::Closed => unreachable!("a run's relays are relayed calls"),
+            call::State::Settling { .. } => {}
+            call::State::Pushing { .. } | call::State::Closed => unreachable!("the run holds only its pending relays"),
         }
-        calls.retire(*call_id);
     }
-    // An empty set takes no heap.
-    *relays = Set::with_capacity(limits.run_calls);
 }
 
 /// How the run ends, as it says it finishes; a cancel it reports is

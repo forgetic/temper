@@ -232,6 +232,7 @@ fn sort(requests: Box<[Request]>, changed: bool, pending: &mut Queue<(Token, git
             | Request::Signal { .. }
             | Request::Wait { .. }
             | Request::Reap { .. }
+            | Request::CancelRelay { .. }
             | Request::CancelIo { .. }) => others.push(other).expect("room for what a test makes"),
         }
     }
@@ -513,7 +514,12 @@ fn a_withdrawn_relay_is_answered_at_once_and_the_engines_late_answer_dropped() {
     let call = *call;
     let emitted = h.say(r, Up::Withdraw { call: Token::new(7) });
     let withdrawn = Down::Answer { call: Token::new(7), reply: channel::Reply::Withdrawn };
-    assert_eq!(&*emitted, [read(r), send(r, withdrawn)]);
+    assert_eq!(&*emitted, [read(r), send(r, withdrawn), Request::CancelRelay { call }]);
+    h.domain.reclaim();
+    assert_eq!(h.domain.host().calls(), 1, "the wire delivery is still settling");
+    assert!(h.step(Event::RelayCancelled { call }).is_empty());
+    h.domain.reclaim();
+    assert_eq!(h.domain.host().calls(), 0);
     let late = Event::Relayed { run: r.run, attempt: r.attempt, call, answer: bytes(b"page") };
     assert!(h.step(late).is_empty(), "the engine's answer to a withdrawn call is dropped");
 }
@@ -697,10 +703,13 @@ fn relays_made_while_the_channel_is_down_follow_the_hello_while_their_calls_wait
         assert_eq!(&*h.say(r, Up::Call { call: Token::new(call), ask }), [read(r)], "kept");
         if call <= 3 {
             withdraw(&mut h, r, call);
+            assert_eq!(h.domain.stalled(), 0, "a queued relay cancels without a wire request");
+            assert_eq!(h.domain.host().calls(), 0, "its local terminal releases the binding");
         }
     }
-    assert_eq!(h.domain.stalled(), 2, "room is made by dropping the relays withdrawn");
+    assert_eq!(h.domain.stalled(), 2, "only the two still waiting retain their bytes");
     withdraw(&mut h, r, 5);
+    assert_eq!(h.domain.stalled(), 1, "cancellation removes queued bytes immediately");
     h.at(5);
     let emitted = h.connect();
     let [Request::Hello { .. }, Request::Relay { .. }] = &*emitted else {
@@ -894,6 +903,7 @@ fn out_of_reach_until(h: &mut Harness, secs: u64) {
                 | Request::Wait { .. }
                 | Request::Reap { .. }
                 | Request::Io { .. }
+                | Request::CancelRelay { .. }
                 | Request::CancelIo { .. }) => panic!("only dials and signals: {other:?}"),
             };
             assert!(emitted.is_empty(), "nothing follows: {emitted:?}");
@@ -997,14 +1007,30 @@ fn the_worst_case_is_bounded_or_refused() {
 
 #[test]
 fn max_out_follows_the_longest_chain_of_hand_offs() {
-    // The host emits 4 a step at most here (two calls, then a stop and an
-    // answer). An agent's step tells the host two things at most, each a
-    // host step whose 4 requests may each be answered at once, so an entry
-    // point takes 2 * (1 + 4) host steps; 1 + 2 * 4 * 3 of each capability
-    // (the first, those answering the first host steps, two for each that
-    // follows), and one more of the checkout. On connecting, 2 answers, 4
-    // relays and the bounces of 2 runs' 2 held and 4 waiting events follow
-    // the hello.
-    assert_eq!(host::max_out(&LIMITS.host), 4);
-    assert_eq!(max_out(&LIMITS), 10 * 4 + 26 * checkout::MAX_OUT + 25 * agent::MAX_OUT + 2 + 4 + 2 * (2 + 4));
+    // Cancelling two relays emits two replies and two cancels, with room
+    // for the stop and answer. Immediate child terminals extend the chain.
+    assert_eq!(host::max_out(&LIMITS.host), 6);
+    assert_eq!(max_out(&LIMITS), 14 * 6 + 38 * checkout::MAX_OUT + 37 * agent::MAX_OUT + 2 + 4 + 2 * (2 + 4));
+}
+
+#[test]
+fn wire_assignment_retries_create_no_second_child_call() {
+    let mut h = Harness::new(&LIMITS);
+    h.connect();
+    let r = h.live(1);
+    assert!(h.step(Event::Assign { assignment: assignment(1) }).is_empty());
+    assert_eq!(h.domain.host().hosted(), 1);
+    assert_eq!(h.domain.host().unanswered(), 1);
+    let ask = channel::Ask::Relay { body: bytes(b"read") };
+    let emitted = h.say(r, Up::Call { call: Token::new(7), ask });
+    let [_, Request::Relay { call, .. }] = &*emitted else {
+        panic!("expected relay");
+    };
+    let call = *call;
+    for (run, attempt) in [(Token::new(999), r.attempt), (r.run, Token::new(999))] {
+        assert!(h.step(Event::Relayed { run, attempt, call, answer: bytes(b"bad") }).is_empty());
+    }
+    assert!(h.domain.host().is_relayed_for(r.run, r.attempt, call));
+    let answered = Event::Relayed { run: r.run, attempt: r.attempt, call, answer: bytes(b"ok") };
+    assert_eq!(h.step(answered).len(), 1, "the valid terminal still arrives");
 }

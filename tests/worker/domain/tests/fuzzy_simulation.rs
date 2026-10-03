@@ -48,8 +48,11 @@ const UNREACHED: [&str; 2] = ["run cancelled", "refused invalid"];
 
 /// Seeds swept besides those above, each for what it once found:
 ///
+/// - 34: asynchronous relay cancellation changes the schedule, and a
+///   reopened pull request must refresh its observed head so scripted
+///   reviewers stop once they have approved the new commit.
 /// - 101: a change's first push lands, but io reports it out of time, and
 ///   the fetch that would verify it fails too, so its run answers that
 ///   nothing landed. The engine reads the change's branch on the forge
 ///   before it makes the change again, and starts from it.
-const PINNED: [u64; 1] = [101];
+const PINNED: [u64; 2] = [34, 101];

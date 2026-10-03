@@ -734,7 +734,11 @@ What the protocol and io layers owe the domain, to be designed after it:
 - **The store:** snapshots, traces, and a cache of the working set, on
   disk, taking its operations in order.
 - **Configuration:** a deployment's repositories, rules, templates and
-  limits.
+  limits. Configuration is checked before the domain starts: model bytes,
+  template count and guidance, landing branches per repository and their
+  names, and forge labels all fit their limits. The memory bound includes
+  the retained configuration, the forge child's copy, and model bytes in
+  every assignment.
 
 ## 14. The world
 
@@ -769,8 +773,8 @@ its steps ending; an approval of an earlier head, which lands nothing.
 Its referee holds the engine to what it promises, seen from outside:
 nothing lands on a protected branch without green CI on its exact head
 and a person's approval; writes go only to the deployment's
-repositories; keyed creations and outcomes are made once (across a
-restart at a drawn moment, counted instead: section 16); attempts only
+repositories; keyed creations and outcomes are made once, including
+across a restart at a drawn moment; attempts only
 grow, one live run per item, its dependencies done; nothing of a plan
 is made, nor a goal's envelope widened, before a person accepts it; a
 call its grants allow is never refused as ungranted; a person's message
@@ -829,9 +833,6 @@ each to be designed before it is built:
 
 - **A warm start** (section 12): a cache of the working set in the store,
   so that a restart reads only what changed; every start is cold.
-- **Nothing made twice at any moment** (section 3): restarted at a
-  random one, the engine may make a keyed creation again; the worlds
-  count these, and only the restart scenarios assert none.
 - **An item made while the top level's table is full** is not held, nor
   its first record, the only place its step is, written: a restart could
   lose the step (suspected).

@@ -39,6 +39,7 @@ enum Asked {
 /// An io terminal owed, to be stepped in turn.
 #[derive(Debug)]
 enum Owed {
+    RelayCancelled { call: Token },
     Done { owner: Token, done: Done },
     Spawned { owner: Token },
     Sent { owner: Token },
@@ -131,6 +132,7 @@ impl Measured {
                 }
                 Request::Answer { run, attempt, answer: _ } => self.asked.push(Asked::Answer { run, attempt }),
                 Request::Relay { .. } => self.asked.push(Asked::Relay),
+                Request::CancelRelay { call } => self.owed.push_back(Owed::RelayCancelled { call }),
                 Request::Bounced { .. } => self.asked.push(Asked::Bounced),
                 Request::Spawn { owner, .. } => {
                     self.agents.push(owner);
@@ -168,6 +170,7 @@ impl Measured {
     fn settle(&mut self) {
         while let Some(owed) = self.owed.pop_front() {
             let event = match owed {
+                Owed::RelayCancelled { call } => Event::RelayCancelled { call },
                 Owed::Done { owner, done } => Event::Done { owner, done },
                 Owed::Spawned { owner } => Event::Spawned { owner, process: owner },
                 Owed::Sent { owner } => Event::Sent { owner },

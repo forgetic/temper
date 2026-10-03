@@ -20,6 +20,7 @@ pub struct Limits {
     pub repos: u32,
     /// The longest path the tools take, in bytes, as an absolute path's names
     /// joined by `/`: a path a call names, a mount, the working directory.
+    /// A call's spelling before normalisation must also fit, including dots.
     pub path_bytes: u32,
     /// Files a kit remembers the LLM read. Past them, the one read longest
     /// ago is forgotten, and must be read again before it is changed.
@@ -70,7 +71,14 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     let jobs = Slab::<Job>::worst_case(job::slots(limits)?)?.checked_add(running.checked_mul(job::held(limits)?)?)?;
     // Facts own nothing beyond their queue.
     let facts = Queue::<Fact>::worst_case(limits.facts)?;
-    kits.checked_add(jobs)?.checked_add(facts)
+    // One call normalises a path at a time: flags for its raw components,
+    // references to those and the working directory, then the joined path
+    // and its copy beneath the chosen repository.
+    let parts = limits.path_bytes.checked_add(1)? / 2;
+    let scratch = List::<bool>::worst_case(parts)?
+        .checked_add(List::<&Name>::worst_case(parts.checked_mul(2)?)?)?
+        .checked_add(u64::from(limits.path_bytes).checked_mul(2)?)?;
+    kits.checked_add(jobs)?.checked_add(facts)?.checked_add(scratch)
 }
 
 /// What one kit holds beyond its slot: its authority, each path in it at most

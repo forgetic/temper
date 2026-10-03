@@ -513,7 +513,6 @@ fn operations_that_end_within_an_iteration_hold_a_batch_and_a_sweep_for_the_next
         h.held(Event::Reported { run: RUN, kind: Kind::Text, content: Box::from(*b"a") });
         let Some(Request::Append { owner, .. }) = h.out.pop() else { panic!("a batch of one goes at once") };
         h.held(Event::Appended { owner, done: true });
-        h.held(Event::Appended { owner, done: true });
     }
     h.held(Event::Reported { run: RUN, kind: Kind::Text, content: Box::from(*b"b") });
     assert_eq!(h.domain.batched(), 1, "no slot is free");
@@ -562,7 +561,6 @@ fn the_store_is_swept_while_it_may_hold_records_and_no_longer() {
     assert_eq!(before, Time::ZERO);
     assert_eq!(h.domain.next_deadline(), None, "no sweep while one is in flight");
     assert!(h.step(Event::Expired { owner, done: true }).is_empty());
-    assert!(h.step(Event::Expired { owner, done: true }).is_empty(), "a second end is dropped");
     assert_eq!(h.domain.next_deadline(), Some(at(20)), "the record is not covered yet");
     for secs in [20, 30, 40, 50, 60] {
         let (owner, _) = expire(&h.at(secs));
@@ -601,18 +599,30 @@ fn a_batch_sent_while_an_expire_is_in_flight_keeps_the_sweep_going() {
 }
 
 #[test]
-fn a_terminal_that_names_no_operation_in_flight_is_dropped() {
+#[should_panic(expected = "each store operation receives exactly one terminal")]
+fn a_duplicate_store_terminal_before_reclaim_is_a_boundary_bug() {
     let mut h = Harness::following(LIMITS, policy(Capture::Shape));
     h.report(RUN, b"a");
     let (append, _) = appended(&h.at(1));
-    // A duplicate, within the iteration and after it.
     h.held(Event::Appended { owner: append, done: true });
     h.held(Event::Appended { owner: append, done: false });
-    assert!(h.drain().is_empty());
-    assert!(h.step(Event::Appended { owner: append, done: true }).is_empty(), "ended, and reclaimed");
+}
+
+#[test]
+#[should_panic(expected = "a terminal's upward token names an outstanding store operation")]
+fn a_stale_store_terminal_after_reclaim_is_a_boundary_bug() {
+    let mut h = Harness::following(LIMITS, policy(Capture::Shape));
+    h.report(RUN, b"a");
+    let (append, _) = appended(&h.at(1));
+    h.step(Event::Appended { owner: append, done: true });
+    h.step(Event::Appended { owner: append, done: false });
+}
+
+#[test]
+fn events_to_watchers_already_gone_are_dropped() {
+    let mut h = Harness::following(LIMITS, policy(Capture::Shape));
     assert!(h.delivered(9).is_empty(), "a delivery to no watch");
     assert!(h.step(Event::Unwatch { watcher: Token::new(9) }).is_empty());
-    assert_eq!((h.domain.ops(), h.domain.lost()), (0, lost(0, 0, 0, 0)));
 }
 
 /// What a watcher of a run that reports four times sees, with room for

@@ -58,6 +58,8 @@ pub const LIMITS: Limits = Limits {
         facts: 64,
     },
     plan: plan::Limits {
+        templates: 4,
+        bases: 4,
         steps: 8,
         name_bytes: 16,
         dependencies: 4,
@@ -163,6 +165,7 @@ pub const LIMITS: Limits = Limits {
     },
     asks: 8,
     text_bytes: 256,
+    models_bytes: 64,
     steps: 32,
     facts: 256,
 };

@@ -36,6 +36,7 @@ members = [
     "tests/engine/views",
     "tests/engine/work",
     "tests/fake-forge",
+    "tests/fake-llm",
     "tests/worker/agent",
     "tests/worker/checkout",
     "tests/worker/host",

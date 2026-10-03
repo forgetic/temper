@@ -312,6 +312,23 @@ impl Link {
         self.relays.try_push(relay).expect("room for every relay that waits for the engine");
     }
 
+    /// Cancels local delivery and its wait, without undoing any remote effect.
+    /// Queued bytes are released now and return true; a submitted delivery
+    /// returns false, so its cancel goes down and its terminal arrives later.
+    pub(crate) fn cancel_relay(&mut self, call: Token) -> bool {
+        let mut cancelled = false;
+        let queued = self.relays.len();
+        for _ in 0..queued {
+            let relay = self.relays.pop().expect("the queue held this many relays");
+            if relay.call == call {
+                cancelled = true;
+            } else {
+                self.relays.push(relay);
+            }
+        }
+        cancelled
+    }
+
     /// A bounce for the engine: now if the channel is open, kept until it is
     /// otherwise.
     pub(crate) fn bounce(&mut self, bounced: Bounced, out: &mut Queue<Request>) {

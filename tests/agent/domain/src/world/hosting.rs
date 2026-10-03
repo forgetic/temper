@@ -110,7 +110,9 @@ impl World {
                 let answer = protocol::answer(answer, &places);
                 self.send_up(engine::Event::Answer { channel, item, attempt: count, answer });
             }
-            worker::Request::Relay { .. } => unreachable!("the agent's run relays no calls"),
+            worker::Request::Relay { .. } | worker::Request::CancelRelay { .. } => {
+                unreachable!("the agent's run relays no calls")
+            }
             worker::Request::Bounced { run: _, attempt, bounce } => {
                 let (item, attempt) = protocol::attempt_of(attempt);
                 let bounce = protocol::bounce(bounce);
@@ -598,6 +600,7 @@ pub(super) fn describe_event(event: &worker::Event) -> String {
         worker::Event::Inbound { attempt, .. } => format!("inbound for {}", attempt.raw()),
         worker::Event::Cancel { attempt, .. } => format!("cancel {}", attempt.raw()),
         worker::Event::Relayed { attempt, call, .. } => format!("relayed {} for {}", call.raw(), attempt.raw()),
+        worker::Event::RelayCancelled { call } => format!("relay cancelled {}", call.raw()),
         worker::Event::Acknowledged { attempt, .. } => format!("acknowledged {}", attempt.raw()),
         worker::Event::Shutdown => "shutdown".to_owned(),
         worker::Event::Spawned { owner, process } => format!("spawned {} as {}", owner.raw(), process.raw()),
@@ -622,6 +625,7 @@ fn describe_request(request: &worker::Request) -> String {
             format!("answer {} {}", attempt.raw(), protocol::answer_kind(answer))
         }
         worker::Request::Relay { attempt, call, .. } => format!("relay {} for {}", call.raw(), attempt.raw()),
+        worker::Request::CancelRelay { call } => format!("cancel relay {}", call.raw()),
         worker::Request::Bounced { attempt, bounce, .. } => format!("bounced {bounce:?} for {}", attempt.raw()),
         worker::Request::Spawn { owner, workspace, .. } => format!("spawn {} in {}", owner.raw(), workspace.raw()),
         worker::Request::Send { owner, message, .. } => format!("send {} {}", owner.raw(), describe_down(message)),

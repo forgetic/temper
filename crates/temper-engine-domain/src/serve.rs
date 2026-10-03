@@ -45,13 +45,13 @@ use crate::translate;
 use crate::waits::{Bounds, Wait, Wiki};
 
 /// Takes the wait `token` names, which is answered: it goes at the reclaim
-/// point. `None` if it was answered already.
-pub(crate) fn take(domain: &mut Domain, token: Token) -> Option<Wait> {
+/// point. Missing or already answered tokens are boundary-contract bugs.
+pub(crate) fn take(domain: &mut Domain, token: Token) -> Wait {
     let id = Id::from_token(token);
-    let wait = domain.waits.get_mut(id)?;
+    let wait = domain.waits.get_mut(id).expect("a terminal's upward token names an outstanding wait");
     let answered = mem::replace(wait, Wait::Done);
     match answered {
-        Wait::Done => None,
+        Wait::Done => unreachable!("each wait receives exactly one terminal"),
         Wait::Job { .. }
         | Wait::Take { .. }
         | Wait::Record { .. }
@@ -63,7 +63,7 @@ pub(crate) fn take(domain: &mut Domain, token: Token) -> Option<Wait> {
         | Wait::Person { .. }
         | Wait::Views { .. } => {
             domain.waits.retire(id);
-            Some(answered)
+            answered
         }
     }
 }
@@ -146,7 +146,7 @@ fn payload(domain: &Domain, token: Token) -> Option<Payload> {
 
 /// A forge read ended: to whoever asked.
 pub(crate) fn read(domain: &mut Domain, env: &Env<Limits>, owner: Token, result: Result<api::Answer, forge::Failure>) {
-    let Some(wait) = take(domain, owner) else { return };
+    let wait = take(domain, owner);
     match wait {
         Wait::Job { entry } => jobs::read(domain, env, entry, Id::from_token(owner), result),
         Wait::Brief { owner, bounds, source } => {
@@ -179,7 +179,7 @@ pub(crate) fn wrote(
     owner: Token,
     result: Result<forge::Written, forge::Failure>,
 ) {
-    let Some(wait) = take(domain, owner) else { return };
+    let wait = take(domain, owner);
     match wait {
         Wait::Job { entry } => jobs::wrote(domain, env, entry, result),
         Wait::Wiki { owner, op } => wiki_wrote(domain, env, owner, op, result),
@@ -203,7 +203,7 @@ pub(crate) fn wrote(
 
 /// The store answered.
 pub(crate) fn stored(domain: &mut Domain, env: &Env<Limits>, owner: Token, stored: Stored) {
-    let Some(wait) = take(domain, owner) else { return };
+    let wait = take(domain, owner);
     match wait {
         Wait::Job { entry } => {
             let snapshot = match stored {
@@ -637,7 +637,7 @@ fn ordered(kept: List<brief::Part>, keep: brief::Keep) -> Box<[brief::Part]> {
 
 /// The notes answered an index, for a brief, or a search.
 pub(crate) fn indexed(domain: &mut Domain, env: &Env<Limits>, reply_to: ReplyTo, lines: Box<[notes::Line]>, more: u32) {
-    let Some(wait) = take(domain, reply_to.into_token()) else { return };
+    let wait = take(domain, reply_to.into_token());
     let Some((owner, bounds)) = wait.brief() else { return };
     let count = u32::try_from(lines.len()).unwrap_or(u32::MAX).saturating_add(1);
     let mut found: List<Box<[u8]>> = List::with_capacity(count);
@@ -655,7 +655,7 @@ pub(crate) fn indexed(domain: &mut Domain, env: &Env<Limits>, reply_to: ReplyTo,
 
 /// The notes answered a run's call.
 pub(crate) fn relay_served(domain: &mut Domain, env: &Env<Limits>, reply_to: ReplyTo, served: Served) {
-    let Some(taken) = take(domain, reply_to.into_token()) else { return };
+    let taken = take(domain, reply_to.into_token());
     let Some(to) = taken.relay() else { return };
     runs::serve_answer(domain, env, to, served);
 }
@@ -663,15 +663,23 @@ pub(crate) fn relay_served(domain: &mut Domain, env: &Env<Limits>, reply_to: Rep
 /// The notes refused a call at their entrance.
 pub(crate) fn notes_refused(domain: &mut Domain, env: &Env<Limits>, reply_to: ReplyTo, refusal: notes::Refusal) {
     match take(domain, reply_to.into_token()) {
-        Some(Wait::Brief { owner, .. }) => answer_brief(domain, env, owner, brief::Read::Failed),
-        Some(Wait::Relay { to, .. }) => {
+        Wait::Brief { owner, .. } => answer_brief(domain, env, owner, brief::Read::Failed),
+        Wait::Relay { to, .. } => {
             let why = match refusal {
                 notes::Refusal::Busy => Unserved::Busy,
                 notes::Refusal::Oversized => Unserved::Invalid,
             };
             runs::serve_answer(domain, env, to, Served::Unserved(why));
         }
-        Some(_) | None => {}
+        Wait::Job { .. }
+        | Wait::Take { .. }
+        | Wait::Record { .. }
+        | Wait::Aside { .. }
+        | Wait::Release { .. }
+        | Wait::Wiki { .. }
+        | Wait::Person { .. }
+        | Wait::Views { .. }
+        | Wait::Done => unreachable!("a notes refusal ends a brief or a relayed call"),
     }
 }
 

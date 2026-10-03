@@ -99,8 +99,20 @@ impl Mirror {
                 }
             }
             Observation::Reopened { repository, number, .. } => {
+                // Closed pull requests keep their old head. Reopening follows
+                // the branch again, including pushes observed while closed.
+                let head = self
+                    .issue(repository, *number)
+                    .and_then(|issue| issue.pull.as_ref())
+                    .and_then(|pull| self.branches.get(&(repository.to_vec(), pull.head.clone())))
+                    .copied();
                 if let Some(issue) = self.issue_mut(repository, *number) {
                     issue.open = true;
+                    if let Some(pull) = &mut issue.pull
+                        && let Some(head) = head
+                    {
+                        pull.commit = head;
+                    }
                 }
             }
             Observation::Labelled { repository, number, labels, .. } => {

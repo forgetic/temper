@@ -1183,3 +1183,13 @@ fn a_command_of_a_kit_without_modify_sees_every_repository_read_only() {
         }
     }
 }
+
+#[test]
+fn raw_paths_are_bounded_before_normalisation_erases_components() {
+    let dotted = Path { absolute: true, parts: Box::new([const { Part::Current }; 33]) };
+    assert_eq!(path::normalise(&[], &dotted, 64), None);
+    let parents = Path { absolute: true, parts: Box::new([const { Part::Parent }; 22]) };
+    assert_eq!(path::normalise(&[], &parents, 64), None);
+    let exact = Path { absolute: true, parts: Box::new([const { Part::Current }; 32]) };
+    assert_eq!(path::normalise(&[], &exact, 63), Some(Box::from(&b""[..])));
+}

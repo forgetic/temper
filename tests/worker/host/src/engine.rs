@@ -207,6 +207,7 @@ impl Engine {
                 Vec::new()
             }
             Request::Hosting { .. }
+            | Request::CancelRelay { .. }
             | Request::Prepare { .. }
             | Request::Abort { .. }
             | Request::Start { .. }

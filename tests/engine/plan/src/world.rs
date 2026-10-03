@@ -49,6 +49,8 @@ impl Settings {
         Settings {
             seed,
             limits: Limits {
+                templates: 4,
+                bases: 4,
                 steps: 12,
                 name_bytes: 32,
                 dependencies: 3,

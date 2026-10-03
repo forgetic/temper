@@ -289,7 +289,7 @@ pub(crate) fn rendered(
     sections: Result<Box<[brief::Section]>, work::Answer>,
 ) {
     let token = reply_to.into_token();
-    let Some(answered) = crate::serve::take(domain, token) else { return };
+    let answered = crate::serve::take(domain, token);
     let Some(id) = answered.job() else { return };
     let Some(entry) = domain.items.get_mut(id) else { return };
     let Some(starting) = items::starting_mut(&mut entry.job) else { return };
@@ -993,7 +993,7 @@ pub(crate) fn report(domain: &mut Domain, env: &Env<Limits>, run: Token, fact: T
 
 /// A run's call that cannot be served: answered at once.
 pub(crate) fn unserved(domain: &mut Domain, env: &Env<Limits>, wait: Id<Wait>, why: Unserved) {
-    let Some(taken) = crate::serve::take(domain, wait.token()) else { return };
+    let taken = crate::serve::take(domain, wait.token());
     let Some(to) = taken.relay() else { return };
     serve_answer(domain, env, to, Served::Unserved(why));
 }

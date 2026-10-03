@@ -277,7 +277,11 @@ impl Parent {
             Request::Push { owner, workspace, message: _ } => self.push(owner, workspace),
             Request::Save { owner, workspace, branch: _ } => self.save(owner, workspace),
             Request::Release { workspace } => self.release(workspace),
-            Request::Answer { .. } | Request::Relay { .. } | Request::Bounced { .. } | Request::Hosting { .. } => {
+            Request::Answer { .. }
+            | Request::Relay { .. }
+            | Request::CancelRelay { .. }
+            | Request::Bounced { .. }
+            | Request::Hosting { .. } => {
                 unreachable!("for the engine or the top level")
             }
         }

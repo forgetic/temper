@@ -264,6 +264,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-fake-llm-tests"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+ "temper-fake-llm-domain",
+ "temper-world",
+]
+
+[[package]]
 name = "temper-worker-agent-world"
 version = "0.0.0"
 dependencies = [

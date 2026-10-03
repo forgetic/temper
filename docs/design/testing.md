@@ -424,6 +424,7 @@ tests/*/*/tests/*.rs            a world's focused tests
 tests/*/*/tests/fuzzy_*.rs      its fuzzy tests: random worlds, domains driven at random
 tests/fake-checkout             the machine and working trees' git, today
 tests/fake-forge                the fake forge's tests in ordinary Rust: its memory
+tests/fake-llm                  the fake provider's tests in ordinary Rust: its memory
 ```
 
 Under `tests/<component>/domain`, the engine's is its own
@@ -474,8 +475,10 @@ The fakes:
 
 The checks:
 
-- **Memory** is measured in every world, and the fake forge's against its
-  worst case in `tests/fake-forge`.
+- **Memory** is measured in every world, and the fake forge's and provider's
+  against their worst cases in `tests/fake-forge` and `tests/fake-llm`.
+  The provider caps queries, stored scripts and delayed answers, counting
+  their arrays and payloads, and checks reply sizes before making them.
 - **Replay** is checked in every world, by its trace.
 - **Transition coverage** is not measured, and nothing is fuzzed yet:
   there is no protocol machine or decoder for `cargo fuzz`, and no
@@ -483,7 +486,8 @@ The checks:
 - **Scenario expectations** are a referee's (5.2) in every engine world
   and both system worlds. The worker's child domain worlds, and the
   agent's tools', session's and run's, check theirs inline, beside their
-  contracts.
+  contracts. The engine's referee rejects repeated keyed creations across
+  a restart at a drawn moment as well as within one life.
 - **Focused scenarios** in the engine's world tell each of its stories
   (engine-domain.md, section 14) on one seed, among them a tracking label
   taken off, a garbled record, a run watched and stopped, a supervisor
@@ -513,9 +517,7 @@ By tier:
 - **The real loop:** a shell that drives every service in one loop, and
   the sandbox.
 - **The referee** in the worlds that still check their scenarios inline,
-  so that those checks run at every tier; and nothing made twice across
-  a restart at a drawn moment, which the engine's referee only counts
-  for now (engine-domain.md, section 16).
+  so that those checks run at every tier.
 - **Checks:** transition coverage; fuzzing, starting with the domains'
   step functions fed recorded events; and a digest of the state on
   replay.

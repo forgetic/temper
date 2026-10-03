@@ -37,6 +37,8 @@ const LIMITS: Limits = Limits {
         facts: 64,
     },
     plan: plan::Limits {
+        templates: 4,
+        bases: 4,
         steps: 8,
         name_bytes: 16,
         dependencies: 4,
@@ -140,6 +142,7 @@ const LIMITS: Limits = Limits {
     },
     asks: 4,
     text_bytes: 256,
+    models_bytes: 64,
     steps: 16,
     facts: 64,
 };
@@ -2378,4 +2381,96 @@ fn a_change_whose_branch_was_deleted_is_made_again_from_its_base() {
     assert_eq!(*attempt, 2, "it is made again: {:?}", starts.as_slice());
     let base = crate::boundary::Start::Base { branch: copy_of(b"main") };
     assert_eq!(*start, base, "from its base");
+}
+
+#[test]
+fn every_owned_configuration_collection_is_bounded() {
+    let mut configured = config();
+    configured.models = copies(b'm', usize::try_from(LIMITS.models_bytes).unwrap());
+    assert!(accepts(&configured, &LIMITS));
+    configured.models = copies(b'm', usize::try_from(LIMITS.models_bytes).unwrap() + 1);
+    assert!(!accepts(&configured, &LIMITS));
+
+    let mut configured = config();
+    configured.plan.templates = copies(
+        plan::Template { name: copy_of(b"t"), guidance: copy_of(b"g") },
+        usize::try_from(LIMITS.plan.templates).unwrap() + 1,
+    );
+    assert!(!accepts(&configured, &LIMITS));
+    configured.plan.templates = Box::new([plan::Template {
+        name: copy_of(b"t"),
+        guidance: copies(b'g', usize::try_from(LIMITS.plan.instruction_bytes).unwrap() + 1),
+    }]);
+    assert!(!accepts(&configured, &LIMITS));
+    configured.plan.templates = Box::new([plan::Template {
+        name: copies(b't', usize::try_from(LIMITS.plan.name_bytes).unwrap() + 1),
+        guidance: copy_of(b"g"),
+    }]);
+    assert!(!accepts(&configured, &LIMITS));
+
+    let mut configured = config();
+    configured.plan.repositories[0].bases = copies(copy_of(b"b"), usize::try_from(LIMITS.plan.bases).unwrap() + 1);
+    assert!(!accepts(&configured, &LIMITS));
+    configured.plan.repositories[0].bases =
+        Box::new([copies(b'b', usize::try_from(LIMITS.plan.name_bytes).unwrap() + 1)]);
+    assert!(!accepts(&configured, &LIMITS));
+
+    let mut configured = config();
+    configured.forge.tracking = copies(b'l', usize::try_from(LIMITS.forge.name_bytes).unwrap() + 1);
+    assert!(!accepts(&configured, &LIMITS));
+}
+
+#[test]
+fn every_forge_configuration_cap_is_checked_before_construction() {
+    let mut configured = config();
+    configured.forge.hand_in = copies(b'l', usize::try_from(LIMITS.forge.name_bytes).unwrap() + 1);
+    assert!(!accepts(&configured, &LIMITS));
+    let mut configured = config();
+    configured.forge.projected = copies(copy_of(b"l"), usize::try_from(LIMITS.forge.labels).unwrap() + 1);
+    assert!(!accepts(&configured, &LIMITS));
+    let mut configured = config();
+    configured.forge.projected = Box::new([copies(b'l', usize::try_from(LIMITS.forge.name_bytes).unwrap() + 1)]);
+    assert!(!accepts(&configured, &LIMITS));
+    let mut configured = config();
+    configured.branches = copies(b'b', usize::try_from(LIMITS.forge.name_bytes).unwrap() + 1);
+    assert!(!accepts(&configured, &LIMITS));
+    let mut configured = config();
+    configured.saved = copies(b'b', usize::try_from(LIMITS.forge.name_bytes).unwrap() + 1);
+    assert!(!accepts(&configured, &LIMITS));
+}
+
+#[test]
+fn configured_model_bytes_are_counted_in_the_root_and_each_assignment() {
+    let bound = worst_case(&LIMITS).unwrap();
+    let extra = Limits { models_bytes: LIMITS.models_bytes + 1, ..LIMITS };
+    assert_eq!(worst_case(&extra).unwrap() - bound, 1 + u64::from(crate::limits::entries(&LIMITS).unwrap()));
+}
+
+#[test]
+#[should_panic(expected = "each wait receives exactly one terminal")]
+fn a_duplicate_terminal_before_reclaim_is_a_boundary_bug() {
+    let mut domain = domain();
+    let id = domain.waits.insert(crate::waits::Wait::Aside { entry: None }).unwrap();
+    crate::serve::take(&mut domain, id.token());
+    crate::serve::take(&mut domain, id.token());
+}
+
+#[test]
+#[should_panic(expected = "a terminal's upward token names an outstanding wait")]
+fn a_stale_terminal_after_reclaim_is_a_boundary_bug() {
+    let mut domain = domain();
+    let id = domain.waits.insert(crate::waits::Wait::Aside { entry: None }).unwrap();
+    crate::serve::take(&mut domain, id.token());
+    domain.reclaim();
+    crate::serve::take(&mut domain, id.token());
+}
+
+/// Exact-size owned arrays for configuration boundary tests.
+fn copies<T: Clone>(value: T, count: usize) -> Box<[T]> {
+    let mut values = List::with_capacity(u32::try_from(count).unwrap());
+    for _ in 0..count {
+        let pushed = values.push(value.clone());
+        assert!(pushed.is_ok());
+    }
+    values.into_boxed()
 }

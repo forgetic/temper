@@ -59,7 +59,9 @@ pub(crate) fn event(domain: &mut Domain, env: &Env<Limits>, event: Event) {
             domain.link.heard();
             // The attempt answered, assigned again, is dropped: its one answer
             // is on its way.
-            if domain.link.holds(assignment.run, assignment.attempt) {
+            if domain.link.holds(assignment.run, assignment.attempt)
+                || domain.host.is_hosting(assignment.run, assignment.attempt)
+            {
                 return;
             }
             let answers = domain.link.held();
@@ -81,7 +83,13 @@ pub(crate) fn event(domain: &mut Domain, env: &Env<Limits>, event: Event) {
         }
         Event::Relayed { run, attempt, call, answer } => {
             domain.link.heard();
-            return host_step(domain, env, host::Event::Relayed { run, attempt, call, answer });
+            if domain.host.is_relayed_for(run, attempt, call) {
+                return host_step(domain, env, host::Event::Relayed { run, attempt, call, answer });
+            }
+            return;
+        }
+        Event::RelayCancelled { call } => {
+            return host_step(domain, env, host::Event::RelayCancelled { call });
         }
         Event::Done { owner, done } => return checkout_step(domain, env, checkout::Event::Done { owner, done }),
         Event::Spawned { owner, process } => agent::Event::Spawned { owner, process },
@@ -147,6 +155,12 @@ fn from_host(domain: &mut Domain, env: &Env<Limits>, request: host::Request, out
         }
         host::Request::Relay { run, attempt, call, body } => {
             return domain.link.relay(Relay { run, attempt, call, body }, &domain.host, out);
+        }
+        host::Request::CancelRelay { call } => {
+            if domain.link.cancel_relay(call) {
+                return host_step(domain, env, host::Event::RelayCancelled { call });
+            }
+            return out.push(Request::CancelRelay { call });
         }
         host::Request::Bounced { run, attempt, bounce } => {
             return domain.link.bounce(Bounced { run, attempt, bounce }, out);

@@ -18,6 +18,8 @@ use crate::{
 const BUDGET: Budget = Budget { tokens: 1_000, turns: 20, time: Duration::from_secs(600) };
 
 const LIMITS: Limits = Limits {
+    templates: 4,
+    bases: 4,
     steps: 8,
     name_bytes: 16,
     dependencies: 4,
@@ -1537,4 +1539,10 @@ fn the_worst_case_is_bounded_or_refused() {
     );
     assert_eq!(worst_case(&Limits { steps: 0, ..LIMITS }), None);
     assert_eq!(max_out(&LIMITS), LIMITS.steps + 2);
+}
+
+#[test]
+fn a_configuration_memory_bound_refuses_overflow() {
+    let enormous = Limits { bases: u32::MAX, name_bytes: u32::MAX, ..LIMITS };
+    assert_eq!(crate::config_worst_case(u32::MAX, &enormous), None);
 }

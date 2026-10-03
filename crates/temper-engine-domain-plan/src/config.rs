@@ -2,7 +2,9 @@
 //! branches changes may land into, and the templates a step may name.
 
 use alloc::boxed::Box;
+use core::mem::size_of;
 
+use crate::limits::Limits;
 use crate::plan::Repository;
 
 /// The deployment's configuration, all the plan keeps between calls
@@ -31,6 +33,32 @@ pub struct Template {
 }
 
 impl Config {
+    /// Whether every configured name and collection is within its limits.
+    #[must_use]
+    pub fn fits(&self, repositories: u32, limits: &Limits) -> bool {
+        if !within(self.repositories.len(), repositories) || !within(self.templates.len(), limits.templates) {
+            return false;
+        }
+        for repo in &self.repositories {
+            if !within(repo.bases.len(), limits.bases) {
+                return false;
+            }
+            for base in &repo.bases {
+                if !within(base.len(), limits.name_bytes) {
+                    return false;
+                }
+            }
+        }
+        for template in &self.templates {
+            if !within(template.name.len(), limits.name_bytes)
+                || !within(template.guidance.len(), limits.instruction_bytes)
+            {
+                return false;
+            }
+        }
+        true
+    }
+
     /// The index of the template named `name`.
     #[must_use]
     pub fn template(&self, name: &[u8]) -> Option<u32> {
@@ -55,6 +83,27 @@ impl Config {
             Some(repo) => names(&repo.bases, base),
             None => false,
         }
+    }
+}
+
+/// The configuration's owned heap: exact-size arrays and their bytes.
+/// The parent adds this to its own bound, since it owns the configuration.
+#[must_use]
+pub fn config_worst_case(repositories: u32, limits: &Limits) -> Option<u64> {
+    let pointer = u64::try_from(size_of::<Box<[u8]>>()).ok()?;
+    let bases = u64::from(limits.bases).checked_mul(pointer.checked_add(u64::from(limits.name_bytes))?)?;
+    let repos = u64::from(repositories).checked_mul(u64::try_from(size_of::<Repo>()).ok()?.checked_add(bases)?)?;
+    let template = u64::try_from(size_of::<Template>())
+        .ok()?
+        .checked_add(u64::from(limits.name_bytes))?
+        .checked_add(u64::from(limits.instruction_bytes))?;
+    repos.checked_add(u64::from(limits.templates).checked_mul(template)?)
+}
+
+fn within(len: usize, most: u32) -> bool {
+    match u32::try_from(len) {
+        Ok(len) => len <= most,
+        Err(_) => false,
     }
 }
 

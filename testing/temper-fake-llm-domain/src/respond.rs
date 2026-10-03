@@ -31,6 +31,7 @@ use skein_lib::{List, Rng};
 
 use crate::api::{Answer, Error, Finish, Line, Message, Part, Query, Role, Script, Turn, Usage};
 use crate::domain::Config;
+use crate::limits;
 
 pub(crate) fn respond(
     rng: &mut Rng,
@@ -75,12 +76,18 @@ pub(crate) fn respond(
     if let Some(script) = cued(scripts, &query.system) {
         let turns = &scripts.get(script).expect("found among the scripts").turns;
         if let Some(turn) = turns.get(said(&query.messages)) {
+            if !limits::fits(limits::scripted_answer(turn), config.answer_bytes) {
+                return Err(Error::ContextTooLong);
+            }
             return Ok(scripted(minted, query, turn));
         }
         return Ok(answer(query, Box::new([Part::Text { text: copy_of(b"done") }]), Finish::Stop, 1, cut_text()));
     }
     if tool_rounds(&query.messages) < config.tool_rounds && !query.tools.is_empty() {
         let count = u32::try_from(rng.between(1, config.calls_per_answer.max(1).into())).expect("drawn below a u32");
+        if !limits::fits(limits::random_answer(query, count), config.answer_bytes) {
+            return Err(Error::ContextTooLong);
+        }
         let mut calls = List::with_capacity(count);
         for _ in 0..count {
             calls.push(call(rng, minted, config, query)).expect("room for every call");
@@ -265,7 +272,7 @@ fn answers(parts: &[Part], calls: &[Part]) -> bool {
     for part in parts {
         match part {
             Part::ToolOutput { id, .. } => {
-                if !calls_with(calls, id) {
+                if calls_with(calls, id) != 1 || outputs_for(parts, id) != 1 {
                     return false;
                 }
             }
@@ -275,7 +282,7 @@ fn answers(parts: &[Part], calls: &[Part]) -> bool {
     for part in calls {
         match part {
             Part::ToolCall { id, .. } => {
-                if !outputs_for(parts, id) {
+                if outputs_for(parts, id) != 1 || calls_with(calls, id) != 1 {
                     return false;
                 }
             }
@@ -285,32 +292,34 @@ fn answers(parts: &[Part], calls: &[Part]) -> bool {
     true
 }
 
-fn calls_with(parts: &[Part], wanted: &[u8]) -> bool {
+fn calls_with(parts: &[Part], wanted: &[u8]) -> u32 {
+    let mut count: u32 = 0;
     for part in parts {
         match part {
             Part::ToolCall { id, .. } => {
                 if **id == *wanted {
-                    return true;
+                    count = count.saturating_add(1);
                 }
             }
             Part::Text { .. } | Part::ToolOutput { .. } => {}
         }
     }
-    false
+    count
 }
 
-fn outputs_for(parts: &[Part], wanted: &[u8]) -> bool {
+fn outputs_for(parts: &[Part], wanted: &[u8]) -> u32 {
+    let mut count: u32 = 0;
     for part in parts {
         match part {
             Part::ToolOutput { id, .. } => {
                 if **id == *wanted {
-                    return true;
+                    count = count.saturating_add(1);
                 }
             }
             Part::Text { .. } | Part::ToolCall { .. } => {}
         }
     }
-    false
+    count
 }
 
 /// Assistant messages that call tools, since the last user message that the
@@ -398,6 +407,9 @@ mod tests {
 
     const CONFIG: Config = Config {
         calls: 4,
+        query_bytes: 1 << 20,
+        script_bytes: 1 << 20,
+        answer_bytes: 1 << 20,
         latency_min: Duration::ZERO,
         latency_max: Duration::ZERO,
         overloaded: 0,
@@ -448,6 +460,8 @@ mod tests {
         assert!(valid(&[asked.clone(), user(Box::new([output(b"b"), output(b"a")]))]));
         assert!(!valid(&[asked.clone(), user(Box::new([output(b"a")]))]));
         assert!(!valid(&[asked.clone(), user(Box::new([output(b"a"), output(b"b"), output(b"c")]))]));
+        assert!(!valid(&[assistant(Box::new([call(b"a")])), user(Box::new([output(b"a"), output(b"a")]))]));
+        assert!(!valid(&[assistant(Box::new([call(b"a"), call(b"a")])), user(Box::new([output(b"a")]))]));
         // Further back too: a call left unanswered, an output answering none.
         let answered = user(Box::new([output(b"a"), output(b"b")]));
         let later = [assistant(Box::new([text()])), user(Box::new([text()]))];

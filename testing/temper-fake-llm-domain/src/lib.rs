@@ -22,6 +22,9 @@ extern crate alloc;
 
 pub mod api;
 mod domain;
+mod limits;
 mod respond;
+
+pub use limits::worst_case;
 
 pub use domain::{Config, Domain, Event, MAX_OUT, Request, fire, step};

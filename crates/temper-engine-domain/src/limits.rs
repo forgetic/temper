@@ -1,3 +1,6 @@
+use alloc::boxed::Box;
+use core::mem::size_of;
+
 use skein_lib::{Env, Id, List, Map, Queue, Slab, Time, Token, Wall};
 use temper_engine_domain_brief as brief;
 use temper_engine_domain_fleet as fleet;
@@ -31,6 +34,8 @@ pub struct Limits {
     /// The most bytes of what the domain writes on the forge from a person
     /// or a run: a message, a title, a comment, an outcome's words.
     pub text_bytes: u32,
+    /// The configured model selection copied into each run's charter.
+    pub models_bytes: u32,
     /// The most child domain steps an entry point takes of each child domain,
     /// as its hand-offs cascade (the `route` module): what sizes the queues
     /// that hold their requests until they are routed.
@@ -101,6 +106,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         Queue::<crate::boundary::Request>::worst_case(routed(limits))?
             .checked_add(Map::<Token, skein_lib::ReplyTo>::worst_case(limits.asks)?)?;
     children
+        .checked_add(config_bytes(limits)?)?
         .checked_add(table)?
         .checked_add(waited)?
         .checked_add(retried)?
@@ -126,9 +132,48 @@ pub fn accepts(config: &Config, limits: &Limits) -> bool {
         && repositories <= limits.forge.repositories
         && config.home < repositories
         && config.rules.fits(&limits.rules)
+        && config.plan.fits(limits.forge.repositories, &limits.plan)
+        && within(config.models.len(), limits.models_bytes)
+        && forge_config_fits(&config.forge, &limits.forge)
+        && within(config.session.charter.instructions.len(), limits.plan.instruction_bytes)
+        && match &config.session.charter.template {
+            Some(name) => within(name.len(), limits.plan.name_bytes),
+            None => true,
+        }
         && within(config.branches.len(), limits.forge.name_bytes)
         && within(config.saved.len(), limits.forge.name_bytes)
         && plan::check_record(&config.plan, &env, &config.session_step(0)).is_ok()
+}
+
+fn forge_config_fits(config: &forge::Config, limits: &forge::Limits) -> bool {
+    if !within(config.tracking.len(), limits.name_bytes)
+        || !within(config.hand_in.len(), limits.name_bytes)
+        || !within(config.projected.len(), limits.labels)
+    {
+        return false;
+    }
+    for label in &config.projected {
+        if !within(label.len(), limits.name_bytes) {
+            return false;
+        }
+    }
+    true
+}
+
+/// The root's retained configuration. Rules are counted by their child;
+/// the forge child counts its own copy, so count the root's copy here too.
+fn config_bytes(limits: &Limits) -> Option<u64> {
+    let name = u64::from(limits.forge.name_bytes);
+    let label = u64::try_from(size_of::<Box<[u8]>>()).ok()?.checked_add(name)?;
+    let forge = name.checked_mul(2)?.checked_add(u64::from(limits.forge.labels).checked_mul(label)?)?;
+    // The retained session and the temporary step made to validate it.
+    let session =
+        u64::from(limits.plan.instruction_bytes).checked_add(u64::from(limits.plan.name_bytes))?.checked_mul(2)?;
+    plan::config_worst_case(limits.forge.repositories, &limits.plan)?
+        .checked_add(forge)?
+        .checked_add(session)?
+        .checked_add(u64::from(limits.models_bytes))?
+        .checked_add(name.checked_mul(2)?)
 }
 
 pub(crate) fn within(len: usize, most: u32) -> bool {
@@ -153,6 +198,7 @@ fn entry_bytes(limits: &Limits) -> Option<u64> {
     let inbox = List::<Noted>::worst_case(inbox(limits)?)?;
     let charter = u64::from(limits.brief.brief_bytes)
         .checked_add(u64::from(plan.instruction_bytes))?
+        .checked_add(u64::from(limits.models_bytes))?
         .checked_add(u64::from(limits.fleet.workstream_bytes))?;
     let writes = u64::from(plan::max_out(plan)).checked_mul(step)?;
     // The outcome being applied: its words, and a plan or steps as large as

@@ -19,6 +19,8 @@ static HEAP: heap::Counting = heap::Counting;
 const BUDGET: Budget = Budget { tokens: 1_000, turns: 20, time: Duration::from_secs(600) };
 
 const LIMITS: Limits = Limits {
+    templates: 4,
+    bases: 4,
     steps: 16,
     name_bytes: 24,
     dependencies: 4,

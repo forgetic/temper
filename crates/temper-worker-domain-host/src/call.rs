@@ -10,8 +10,9 @@
 //! Pushing   pushed                 Closed    reply: how it went
 //!           withdrawn              Pushing
 //! Relayed   relayed                Closed    reply: the engine's answer
-//!           withdrawn              Closed    reply: withdrawn
-//!           its run leaves live    Closed    reply: unavailable
+//!           withdrawn              Settling  reply: withdrawn, cancel relay
+//!           its run leaves live    Settling  reply: unavailable, cancel relay
+//! Settling  relayed, cancelled     Closed    (the agent already has its answer)
 //! ```
 //!
 //! A push cannot be abandoned half way, and it touches the workspace, so it
@@ -20,7 +21,9 @@
 //! then drops it), and what it landed counts. A relayed call is the engine's
 //! to answer, which a cancelled attempt never is: once its run leaves live, or
 //! withdraws it, the host answers it, and drops whatever the engine sends for
-//! it after. A call is retired as it closes.
+//! it after the local delivery has terminated. The relay is retained in
+//! Settling until that terminal arrives, then retired. Cancelling delivery
+//! does not roll back anything the engine already did.
 
 use skein_lib::{Id, Token};
 
@@ -39,6 +42,8 @@ pub(crate) enum State {
     Pushing { agent: Token, call: Token },
     /// Relayed to the engine, for the call `call` of the agent `agent`.
     Relayed { agent: Token, call: Token },
+    /// The agent has its answer; local delivery is being cancelled.
+    Settling { call: Token },
     /// Terminal: holds nothing.
     Closed,
 }

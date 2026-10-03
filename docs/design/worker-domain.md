@@ -69,7 +69,9 @@ agent    LLM work: one run per agent process, reporting to the worker
   engine has cancelled or reassigned an attempt, whatever it still sends
   is dropped; on the worker, a cancelled run's host calls are answered as
   unavailable, and an attempt assigned again while the worker hosts it is
-  dropped. A stale attempt can never act over a newer one.
+  dropped by the root before it becomes another host call. A fresh call to
+  the host for an attempt already hosted is refused as busy, consuming its
+  own reply token. A stale attempt can never act over a newer one.
 - **Answers are acknowledged.** The worker keeps each answer until the
   engine acknowledges it, and sends it again after every hello. The
   engine acknowledges an answer only once it has made it durable on the
@@ -165,7 +167,11 @@ cancel, from any state ──────────────► stop ─►
    more is answered as busy. Pushes are served by the worker (section 5);
    forge reads and outlets go to the engine and their answers come back.
    A call the run withdraws, past its own deadline for it, is answered as
-   withdrawn at once if relayed; a push goes on to its end. A run that
+   withdrawn at once if relayed. The host cancels its delivery through the
+   engine link and keeps the call until the link reports cancellation or
+   the answer that won the race. The link filters later wire answers;
+   cancellation does not undo an outlet already delivered to the engine.
+   A push goes on to its end. A run that
    yields waits for its next inbound event, and holds its slot while it
    waits.
 5. **Park or end,** as the run decides, its last word. A run that parks
@@ -173,7 +179,8 @@ cancel, from any state ──────────────► stop ─►
 6. **Stop:** answer the run's relayed calls as unavailable, and wait until
    the agent process and everything it started are gone, killing them if
    they outstay the grace (section 6), and until a push in flight has
-   settled: a push cannot be abandoned half way, and what it lands counts.
+   settled and every cancelled relay has its terminal event: a push cannot
+   be abandoned half way, and what it lands counts.
    Nothing touches the checkout while anything of the run is still
    running.
 7. **Save** unfinished work, if the assignment asks: at park, at an

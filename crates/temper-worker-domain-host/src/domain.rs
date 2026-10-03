@@ -15,7 +15,8 @@ use crate::limits::{self, Limits};
 /// reserves this much room in `out` before calling it.
 #[must_use]
 pub const fn max_out(limits: &Limits) -> u32 {
-    let most = if limits.held > limits.run_calls { limits.held } else { limits.run_calls };
+    let cancelling = limits.run_calls.saturating_mul(2);
+    let most = if limits.held > cancelling { limits.held } else { cancelling };
     most.saturating_add(2)
 }
 
@@ -82,6 +83,19 @@ impl Domain {
         hosted::hosting(self, owner)
     }
 
+    /// Whether the attempt is already hosted: wire retries are deduplicated
+    /// before constructing a new call and its `ReplyTo`.
+    #[must_use]
+    pub fn is_hosting(&self, run: Token, attempt: Token) -> bool {
+        hosted::is_hosting(self, run, attempt)
+    }
+
+    /// Whether a wire answer names a pending relay of this exact attempt.
+    #[must_use]
+    pub fn is_relayed_for(&self, run: Token, attempt: Token, call: Token) -> bool {
+        hosted::is_relayed_for(self, run, attempt, call)
+    }
+
     /// Whether the relayed call `call`, as the host names it, still waits for
     /// the engine's answer: neither answered, withdrawn, nor answered as
     /// unavailable as its run left live.
@@ -90,7 +104,7 @@ impl Domain {
         match self.calls.get(Id::from_token(call)) {
             Some(entry) => match entry.state {
                 call::State::Relayed { .. } => true,
-                call::State::Pushing { .. } | call::State::Closed => false,
+                call::State::Pushing { .. } | call::State::Settling { .. } | call::State::Closed => false,
             },
             None => false,
         }
@@ -131,6 +145,7 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
         Event::Inbound { run, attempt, event } => hosted::inbound(domain, env, run, attempt, event, out),
         Event::Cancel { run, attempt } => hosted::cancel(domain, env, run, attempt, out),
         Event::Relayed { run, attempt, call, answer } => hosted::relayed(domain, run, attempt, call, answer, out),
+        Event::RelayCancelled { call } => hosted::relay_cancelled(domain, call, out),
         Event::CancelAll { reason } => hosted::cancel_all(domain, reason),
         Event::Report => hosted::report(domain, out),
         Event::Unacknowledged { answers } => domain.unacknowledged = answers,

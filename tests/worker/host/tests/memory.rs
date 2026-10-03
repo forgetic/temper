@@ -58,9 +58,10 @@ struct Measured {
 impl Measured {
     fn new(limits: Limits) -> Measured {
         let bound = worst_case(&limits).expect("the test limits fit");
+        // The output queue belongs to the parent, not the measured child.
+        let out = Queue::with_capacity(max_out(&limits));
         let meter = Meter::new();
         let domain = Domain::new(&limits);
-        let out = Queue::with_capacity(max_out(&limits));
         Measured { domain, env: Env { now: Time::ZERO, wall: Wall::EPOCH, limits }, out, meter, bound }
     }
 
@@ -79,6 +80,7 @@ impl Measured {
     fn drain(&mut self) -> Vec<Asked> {
         let measured = self.meter.end();
         let mut asked = Vec::new();
+        let mut cancelled = Vec::new();
         while let Some(request) = self.out.pop() {
             asked.push(match request {
                 Request::Prepare { owner, .. } => Asked::Prepare { owner },
@@ -89,6 +91,10 @@ impl Measured {
                 Request::Answer { answer, .. } => Asked::Answer { answer },
                 Request::Bounced { bounce, .. } => Asked::Bounced { bounce },
                 Request::Hosting { runs } => Asked::Hosting { runs: runs.len() },
+                Request::CancelRelay { call } => {
+                    cancelled.push(call);
+                    continue;
+                }
                 Request::Abort { .. }
                 | Request::Deliver { .. }
                 | Request::Reply { .. }
@@ -99,6 +105,9 @@ impl Measured {
         self.meter.check(measured, self.bound, self.env.limits);
         // The iteration ends: the reclaim point.
         self.domain.reclaim();
+        for call in cancelled {
+            asked.extend(self.step(Event::RelayCancelled { call }));
+        }
         asked
     }
 }

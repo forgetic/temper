@@ -6,7 +6,7 @@ use core::mem;
 use skein_lib::{Deadlines, Duration, Env, Id, Queue, ReplyTo, Rng, Slab, Time};
 
 use crate::api::{Answer, Error, Query, Script};
-use crate::respond;
+use crate::{limits, respond};
 
 /// The most requests an entry point emits per call.
 pub const MAX_OUT: u32 = 1;
@@ -16,6 +16,12 @@ pub const MAX_OUT: u32 = 1;
 pub struct Config {
     /// Calls held at once. A call beyond them is refused as overloaded.
     pub calls: u32,
+    /// Owned query bytes, including message and part arrays.
+    pub query_bytes: u32,
+    /// Owned script bytes, including their arrays, held at startup.
+    pub script_bytes: u32,
+    /// Owned bytes in each answer held until its timer fires.
+    pub answer_bytes: u32,
     /// The time to answer is drawn from `latency_min..=latency_max`.
     pub latency_min: Duration,
     pub latency_max: Duration,
@@ -79,7 +85,7 @@ pub struct Domain {
 
 /// A call being answered.
 #[derive(Debug)]
-struct Call {
+pub(crate) struct Call {
     state: State,
 }
 
@@ -101,13 +107,21 @@ impl Domain {
     /// the others at random.
     #[must_use]
     pub fn scripted(config: &Config, seed: u64, scripts: Box<[Script]>) -> Domain {
-        Domain {
+        Domain::try_scripted(config, seed, scripts).expect("scripts fit the provider limits")
+    }
+
+    /// Refuses a script collection exceeding the configured owned-byte cap.
+    pub fn try_scripted(config: &Config, seed: u64, scripts: Box<[Script]>) -> Result<Domain, Error> {
+        if !limits::fits(limits::scripts(&scripts), config.script_bytes) {
+            return Err(Error::ContextTooLong);
+        }
+        Ok(Domain {
             calls: Slab::with_capacity(config.calls),
             timers: Deadlines::with_capacity(config.calls),
             rng: Rng::new(seed),
             minted: 0,
             scripts,
-        }
+        })
     }
 
     /// Calls present, answered ones included until they are reclaimed.
@@ -161,7 +175,15 @@ fn call(domain: &mut Domain, env: &Env<Config>, reply_to: ReplyTo, query: &Query
         return;
     }
     let config = &env.limits;
-    let result = respond::respond(&mut domain.rng, &mut domain.minted, config, &domain.scripts, query);
+    let result = if limits::fits(limits::query(query), config.query_bytes) {
+        match respond::respond(&mut domain.rng, &mut domain.minted, config, &domain.scripts, query) {
+            Ok(answer) if limits::fits(limits::answer(&answer), config.answer_bytes) => Ok(answer),
+            Ok(_) => Err(Error::ContextTooLong),
+            Err(error) => Err(error),
+        }
+    } else {
+        Err(Error::ContextTooLong)
+    };
     let latency = domain.rng.between(config.latency_min.as_nanos(), config.latency_max.as_nanos());
     let call = Call { state: State::Thinking { reply_to, result } };
     let id = domain.calls.insert(call).expect("checked for room above");

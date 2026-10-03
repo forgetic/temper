@@ -7,10 +7,10 @@
 //!   [`Event::Assign`] is a call, answered by exactly one [`Request::Answer`].
 //!   Everything else the engine sends names the run and the attempt, and is
 //!   dropped unless that attempt is hosted (worker-domain.md, section 2:
-//!   attempts are fenced). A [`Request::Relay`] is answered by at most one
-//!   [`Event::Relayed`]: the host stops waiting for it once the run is no
-//!   longer live, having answered the run's call itself, and drops an answer
-//!   that comes after. [`Event::Report`] is answered by one
+//!   attempts are fenced). A [`Request::Relay`] is answered by exactly one
+//!   [`Event::Relayed`] or [`Event::RelayCancelled`]. Cancelling answers the
+//!   agent at once, but retains the relay until its terminal arrives.
+//!   [`Event::Report`] is answered by one
 //!   [`Request::Hosting`].
 //! - The workspace's, which the parent translates to and from the checkout
 //!   child domain's vocabulary. A [`Request::Prepare`] is ended by exactly one
@@ -45,8 +45,8 @@ use skein_lib::{ReplyTo, Token};
 #[derive(PartialEq, Eq, Debug)]
 pub enum Event {
     /// From the engine, a call: host the run of `assignment`, and answer once
-    /// it has ended. The attempt hosted, assigned again, is dropped: its one
-    /// answer is the hosted run's.
+    /// it has ended. A fresh call for an already hosted attempt is refused
+    /// as busy; its parent deduplicates wire retransmissions before calling.
     Assign { reply_to: ReplyTo, assignment: Assignment },
     /// From the engine: an inbound event for the run `run`'s attempt
     /// `attempt`, which goes down to the run as it arrives.
@@ -56,6 +56,8 @@ pub enum Event {
     /// From the engine: the answer to the relayed call `call` of the run
     /// `run`'s attempt `attempt`.
     Relayed { run: Token, attempt: Token, call: Token, answer: Box<[u8]> },
+    /// Terminal for a cancelled relay: its local delivery and wait have ended.
+    RelayCancelled { call: Token },
     /// From the top level: cancel every run hosted now, for `reason` (lost
     /// contact with the engine past its grace, or shutdown). The runs are
     /// cancelled one at a time, from the ready list. A worker shutting down
@@ -112,6 +114,10 @@ pub enum Request {
     /// To the engine: a host call of the run `run`'s attempt `attempt`, which
     /// the host names `call`, relayed as it is.
     Relay { run: Token, attempt: Token, call: Token, body: Box<[u8]> },
+    /// Cancel the local delivery and wait of a relay. Exactly one terminal
+    /// follows: `RelayCancelled`, or `Relayed` if its answer won. Remote
+    /// effects are not rolled back.
+    CancelRelay { call: Token },
     /// To the engine: an inbound event for the run `run`'s attempt `attempt`
     /// was not passed on, for `bounce`.
     Bounced { run: Token, attempt: Token, bounce: Bounce },

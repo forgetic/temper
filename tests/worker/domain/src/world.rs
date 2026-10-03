@@ -762,6 +762,8 @@ pub struct World {
     stopped: BTreeSet<Names>,
     /// The worker's requests routed so far.
     routed: u64,
+    /// Relay delivery waits, retained until exactly one lower terminal wins.
+    relay_waits: BTreeMap<Token, (Names, bool)>,
     agents: BTreeMap<Token, Agent>,
     spaces: BTreeMap<Token, Space>,
     ops: Ledger<Token, Pending>,
@@ -875,6 +877,7 @@ impl World {
             cancelled: BTreeMap::new(),
             stopped: BTreeSet::new(),
             routed: 0,
+            relay_waits: BTreeMap::new(),
             agents: BTreeMap::new(),
             spaces: BTreeMap::new(),
             ops: Ledger::new("git operation"),
@@ -1116,7 +1119,7 @@ impl World {
         match delivery {
             Delivery::Worker(life, event) => {
                 if !self.done && life == self.lives {
-                    self.stage.push(event);
+                    self.push_worker_event(event);
                 }
             }
             Delivery::Dialled { epoch } => self.dialled(epoch),
@@ -1241,6 +1244,7 @@ impl World {
             (self.worker.host().hosted() > 0, "runs hosted"),
             (self.worker.held() > 0, "answers held"),
             (!self.calls.is_empty(), "the engine's calls"),
+            (!self.relay_waits.is_empty(), "relay terminals"),
             (!self.theirs.is_empty(), "people's calls"),
             (!self.asks.is_empty(), "people's asks"),
             (self.forge.calls() > 0 || self.forge.deliveries() > 0, "the forge"),
@@ -1314,6 +1318,7 @@ impl World {
         let host = self.worker.host();
         assert_eq!(host.hosted(), 0, "seed {seed}: every slot is free");
         assert_eq!(host.calls(), 0, "seed {seed}: no host call is open");
+        assert!(self.relay_waits.is_empty(), "seed {seed}: every relay received one lower terminal");
         assert_eq!(self.worker.checkout().holds(), 0, "seed {seed}: no workspace is held");
         assert_eq!(self.worker.workspaces(), 0, "seed {seed}: every workspace asked for was released");
         assert_eq!(self.worker.agent().agents(), 0, "seed {seed}: no agent is left");
@@ -1418,4 +1423,61 @@ fn setup(forge: &mut forge::Domain, config: &forge::Config, name: &[u8]) {
         forge::grant(forge, name, *user, Permission::Write);
     }
     forge::grant(forge, name, deployment::STRANGER, Permission::Read);
+}
+
+#[cfg(test)]
+mod relay_terminal_tests {
+    use super::{Event, Settings, Token, World};
+
+    #[test]
+    fn the_first_relay_terminal_wins_and_late_wire_replies_are_filtered() {
+        for cancellation_first in [false, true] {
+            let mut world = World::new(Settings::calm(7));
+            world.stage.tick(world.now);
+            let call = Token::new(123);
+            world.relay_waits.insert(call, ((Token::new(1), Token::new(2)), true));
+            let reply = Event::Relayed { run: Token::new(1), attempt: Token::new(2), call, answer: Box::new([]) };
+            let cancelled = Event::RelayCancelled { call };
+            let (first, second) = if cancellation_first { (cancelled, reply) } else { (reply, cancelled) };
+            world.push_worker_event(first);
+            world.push_worker_event(second);
+            world.push_worker_event(Event::Relayed {
+                run: Token::new(1),
+                attempt: Token::new(2),
+                call,
+                answer: Box::new([]),
+            });
+            let terminal = world.stage.next_event().expect("one terminal wins");
+            assert_eq!(matches!(terminal, Event::RelayCancelled { .. }), cancellation_first);
+            assert!(
+                world.stage.next_event().is_none(),
+                "late replies and the losing cancellation do not reach the domain"
+            );
+            assert!(world.relay_waits.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_reply_for_another_attempt_does_not_finish_the_relay_wait() {
+        let mut world = World::new(Settings::calm(7));
+        world.stage.tick(world.now);
+        let call = Token::new(123);
+        world.relay_waits.insert(call, ((Token::new(1), Token::new(2)), false));
+        world.push_worker_event(Event::Relayed {
+            run: Token::new(1),
+            attempt: Token::new(3),
+            call,
+            answer: Box::new([]),
+        });
+        assert!(world.stage.next_event().is_none());
+        assert!(world.relay_waits.contains_key(&call));
+        world.push_worker_event(Event::Relayed {
+            run: Token::new(1),
+            attempt: Token::new(2),
+            call,
+            answer: Box::new([]),
+        });
+        assert!(world.stage.next_event().is_some());
+        assert!(world.relay_waits.is_empty());
+    }
 }

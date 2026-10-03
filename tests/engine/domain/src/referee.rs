@@ -149,8 +149,7 @@ pub struct Engine {
     branches: BTreeSet<(Vec<u8>, Vec<u8>)>,
     comments: BTreeMap<(Vec<u8>, u64, Vec<u8>), u32>,
     outcomes: BTreeMap<(Vec<u8>, u64, u64), u32>,
-    /// Keyed creations made again by an engine that restarted since the
-    /// first: counted, not failed (see `once`).
+    /// Duplicate keyed creations, including those across engine restarts.
     pub again: u32,
     /// The latest attempt assigned per item.
     attempts: BTreeMap<Item, u64>,
@@ -314,21 +313,12 @@ impl Engine {
         }
     }
 
-    /// A keyed creation is made once: `first` is the life of the engine that
-    /// made it first, if one did. Made again by the same engine, the test
-    /// fails. Made again by an engine that restarted since, it is counted,
-    /// and the restart scenarios hold it to none: an engine looks for what
-    /// an earlier life may have made before making it, from where the cause
-    /// it knows says, which a restart at a random moment may leave short.
+    /// A keyed creation is made once across every life of the engine.
     fn once(&mut self, first: Option<u32>, judge: &mut Judge<Expected, Stimulus>, why: std::fmt::Arguments<'_>) {
-        match first {
-            None => judge.check(true, why),
-            Some(life) if life < self.restarts => {
-                self.again += 1;
-                judge.check(true, why);
-            }
-            Some(_) => judge.check(false, why),
+        if first.is_some() {
+            self.again += 1;
         }
+        judge.check(first.is_none(), why);
     }
 
     /// Every message waiting for the item has reached it.

@@ -7,6 +7,11 @@ use crate::plan::Budget;
 /// read-only.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Limits {
+    /// Configured templates, each with a name within `name_bytes` and
+    /// guidance within `instruction_bytes`.
+    pub templates: u32,
+    /// Configured landing branches per repository, within `name_bytes`.
+    pub bases: u32,
     /// Steps a plan holds, the steps it grows by included.
     pub steps: u32,
     /// The most bytes of a name: a step's, a branch's or a template's.

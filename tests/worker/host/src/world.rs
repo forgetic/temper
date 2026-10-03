@@ -329,6 +329,8 @@ pub struct World {
     agents: BTreeMap<Token, Token>,
     left: BTreeSet<Token>,
     calls: Ledger<(Token, Token), Open>,
+    /// Engine deliveries still awaited by the host, cancelled at this boundary.
+    relays: BTreeMap<Token, (Token, Token)>,
     /// Pushes in flight as their runs left live: answered with how they went.
     kept: BTreeSet<(Token, Token)>,
     /// Whether the host has taken a shutdown.
@@ -363,6 +365,7 @@ impl World {
             agents: BTreeMap::new(),
             left: BTreeSet::new(),
             calls: Ledger::new("host call"),
+            relays: BTreeMap::new(),
             kept: BTreeSet::new(),
             shut: false,
             stats: Stats::default(),
@@ -454,7 +457,8 @@ impl World {
                     self.stats.stale += 1;
                 }
                 Taken::Duplicate => {
-                    assert_eq!(count, 0, "the attempt hosted, assigned again, is dropped");
+                    assert_eq!(count, 1, "a fresh duplicate assignment call is answered once");
+                    self.duplicate_answered();
                     self.path("duplicate assignments");
                 }
                 Taken::Assign { run, attempt } => {
@@ -538,6 +542,14 @@ impl World {
         *self.stats.paths.entry(path).or_default() += 1;
     }
 
+    fn duplicate_answered(&mut self) {
+        let request = self.stage.out.pop().expect("counted");
+        assert!(
+            matches!(request, Request::Answer { answer: host::Answer::Refused(host::Refusal::Busy), .. }),
+            "a duplicate call is refused without changing its hosted attempt: {request:?}"
+        );
+    }
+
     /// What the host takes as `event`, for the world to note.
     fn take(&mut self, event: &Event, stale: bool) -> Taken {
         if stale {
@@ -589,6 +601,7 @@ impl World {
             | Event::Cancel { .. }
             | Event::Unacknowledged { .. }
             | Event::Relayed { .. }
+            | Event::RelayCancelled { .. }
             | Event::Withdrawn { .. }
             | Event::Bounced { .. }
             | Event::Yielded { .. }
@@ -683,6 +696,7 @@ impl World {
                 assert!(self.admitted.insert((run, attempt), *owner).is_none(), "an attempt is admitted once");
             }
             Request::Relay { .. }
+            | Request::CancelRelay { .. }
             | Request::Bounced { .. }
             | Request::Hosting { .. }
             | Request::Abort { .. }
@@ -714,7 +728,17 @@ impl World {
                 }
                 self.send_engine(Request::Answer { to, run, attempt, answer });
             }
-            Request::Relay { .. } | Request::Bounced { .. } => self.send_engine(request),
+            Request::Relay { run, attempt, call, body } => {
+                assert!(self.relays.insert(call, (run, attempt)).is_none(), "a relay starts once");
+                self.send_engine(Request::Relay { run, attempt, call, body });
+            }
+            Request::CancelRelay { call } => {
+                if self.relays.remove(&call).is_some() {
+                    let event = Event::RelayCancelled { call };
+                    self.stage.push(Arrival { event, stale: false, duplicate: false });
+                }
+            }
+            Request::Bounced { .. } => self.send_engine(request),
             Request::Hosting { runs } => {
                 let mut hosting = BTreeSet::new();
                 for entry in &runs {
@@ -820,8 +844,21 @@ impl World {
     fn deliver(&mut self) {
         while let Some(delivery) = self.wire.next(self.now) {
             match delivery {
-                Delivery::Host { event, stale } => self.stage.push(Arrival { event, stale, duplicate: false }),
+                Delivery::Host { event, stale } => {
+                    if let Event::Relayed { run, attempt, call, .. } = &event {
+                        if stale || self.relays.get(call) != Some(&(*run, *attempt)) {
+                            continue;
+                        }
+                        self.relays.remove(call);
+                    }
+                    self.stage.push(Arrival { event, stale, duplicate: false });
+                }
                 Delivery::Engine(request) => {
+                    if let Request::Relay { call, .. } = &request
+                        && !self.relays.contains_key(call)
+                    {
+                        continue;
+                    }
                     let acts = self.engine.take(request);
                     self.acts(acts);
                 }
@@ -881,6 +918,7 @@ impl World {
         assert_eq!(self.host.calls(), 0, "no host call is in flight");
         assert!(self.admitted.is_empty(), "every admitted run has answered");
         self.calls.assert_settled();
+        assert!(self.relays.is_empty(), "every engine delivery ended or was cancelled");
         self.engine.assert_settled();
         self.parent.assert_settled();
         let facts = &self.stats.facts;

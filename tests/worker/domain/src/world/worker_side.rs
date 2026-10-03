@@ -74,6 +74,25 @@ impl World {
         }
     }
 
+    /// The protocol boundary turns raw wire replies and cancellation races
+    /// into one terminal per emitted relay. Late duplicates are filtered here,
+    /// before they enter the domain's event stream.
+    pub(super) fn push_worker_event(&mut self, event: Event) {
+        if let Event::Relayed { run, attempt, call, .. } = &event {
+            let Some((names, _)) = self.relay_waits.get(call) else { return };
+            if *names != (*run, *attempt) {
+                return;
+            }
+            self.relay_waits.remove(call);
+        }
+        if let Event::RelayCancelled { call } = &event
+            && self.relay_waits.remove(call).is_none()
+        {
+            return;
+        }
+        self.stage.push(event);
+    }
+
     /// Notes what the worker takes as `event`, before it takes it.
     fn take(&mut self, event: &Event) {
         match event {
@@ -147,6 +166,7 @@ impl World {
             }
             Event::Inbound { .. }
             | Event::Relayed { .. }
+            | Event::RelayCancelled { .. }
             | Event::Spawned { .. }
             | Event::Unspawned { .. }
             | Event::Sent { .. }
@@ -180,6 +200,10 @@ impl World {
             Request::Relay { run, attempt, call, body } => {
                 assert!(self.up, "a relay goes on a channel open");
                 self.stats.relays += 1;
+                assert!(
+                    self.relay_waits.insert(call, ((run, attempt), false)).is_none(),
+                    "relay wait names are unique"
+                );
                 let Some(body) = protocol::call_of(&body) else {
                     // Nothing the engine reads: the protocol layer answers it
                     // itself.
@@ -191,6 +215,17 @@ impl World {
                 };
                 let (item, attempt) = protocol::attempt_of(attempt);
                 self.send_up(move |channel| engine::Event::Relay { channel, item, attempt, call, body });
+            }
+            Request::CancelRelay { call } => {
+                // A response already handed to the inbox wins its race with
+                // cancellation. Otherwise cancellation competes with any raw
+                // wire response still in flight; only the first is delivered.
+                if let Some((_, cancelled)) = self.relay_waits.get_mut(&call) {
+                    assert!(!*cancelled, "a relay delivery is cancelled once");
+                    *cancelled = true;
+                    let at = self.now.saturating_add(self.settings.network.hop.draw(&mut self.rng));
+                    self.send(at, Delivery::Worker(self.lives, Event::RelayCancelled { call }));
+                }
             }
             Request::Bounced { run, attempt, bounce } => {
                 assert!(self.up, "a bounce goes on a channel open");

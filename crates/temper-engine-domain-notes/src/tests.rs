@@ -591,13 +591,13 @@ fn a_scope_idle_is_evicted_for_another_and_one_in_use_never_is() {
 }
 
 #[test]
-fn a_terminal_that_names_no_operation_in_flight_is_dropped() {
+#[should_panic(expected = "a terminal's upward token names an outstanding operation")]
+fn a_terminal_that_names_no_operation_in_flight_is_a_boundary_bug() {
     let mut h = read(&[b"aa"], &[]);
     let asked = h.step(Event::Changed { scope: REPO, name: Box::from(*b"aa") });
     let fetch = owner(&asked);
     assert!(h.read(fetch, b"aa", 2).is_empty());
-    assert!(h.read(fetch, b"aa", 3).is_empty(), "its operation ended, and was reclaimed");
-    assert_eq!(h.domain.ops(), 0);
+    h.read(fetch, b"aa", 3);
 }
 
 #[test]
@@ -612,4 +612,15 @@ fn the_worst_case_is_bounded_or_refused() {
     assert_eq!(worst_case(&Limits { scopes: 0, ..LIMITS }), None);
     assert_eq!(worst_case(&Limits { calls: 0, ..LIMITS }), None);
     assert_eq!(worst_case(&Limits { entries: u32::MAX, name_bytes: u32::MAX, ..LIMITS }), None);
+}
+
+#[test]
+#[should_panic(expected = "an entity is retired once")]
+fn a_duplicate_terminal_before_reclaim_is_a_boundary_bug() {
+    let mut h = read(&[b"aa"], &[]);
+    let asked = h.step(Event::Changed { scope: REPO, name: Box::from(*b"aa") });
+    let owner = owner(&asked);
+    let event = || Event::Fetched { owner, fetched: Fetched::Gone };
+    step(&mut h.domain, &h.env, event(), &mut h.out);
+    step(&mut h.domain, &h.env, event(), &mut h.out);
 }

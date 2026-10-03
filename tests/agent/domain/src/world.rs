@@ -359,6 +359,9 @@ impl Settings {
             },
             provider: provider::Config {
                 calls: 64,
+                query_bytes: 1 << 20,
+                script_bytes: 1 << 20,
+                answer_bytes: 1 << 20,
                 latency_min: Duration::from_millis(100),
                 latency_max: Duration::from_millis(1000),
                 overloaded: 0,

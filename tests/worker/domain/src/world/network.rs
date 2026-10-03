@@ -428,7 +428,8 @@ impl World {
                         &[Moment::Now, Moment::Behind, Moment::Answered((*run, *attempt))]
                     }
                     Event::Inbound { run, attempt, .. } => &[Moment::Answered((*run, *attempt))],
-                    Event::Connected
+                    Event::RelayCancelled { .. }
+                    | Event::Connected
                     | Event::Lost
                     | Event::Shutdown
                     | Event::Spawned { .. }
@@ -451,6 +452,7 @@ impl World {
                     | Event::Cancel { .. }
                     | Event::Relayed { .. }
                     | Event::Inbound { .. }
+                    | Event::RelayCancelled { .. }
                     | Event::Connected
                     | Event::Lost
                     | Event::Shutdown
@@ -495,7 +497,7 @@ impl World {
                 if copy {
                     self.late(&event);
                 }
-                self.stage.push(event);
+                self.push_worker_event(event);
             }
             Channel::Open { .. } | Channel::Idle | Channel::Dialling { .. } | Channel::Shut if copy => {
                 self.stats.copies_lost += 1;
@@ -514,7 +516,8 @@ impl World {
             Event::Relayed { run, attempt, .. } => ("relayed", (*run, *attempt)),
             Event::Inbound { run, attempt, .. } => ("inbound", (*run, *attempt)),
             Event::Acknowledged { .. } | Event::Assign { .. } => return,
-            Event::Connected
+            Event::RelayCancelled { .. }
+            | Event::Connected
             | Event::Lost
             | Event::Shutdown
             | Event::Spawned { .. }
@@ -576,7 +579,8 @@ fn copy_down(event: &Event) -> Event {
         }
         Event::Assign { assignment } => Event::Assign { assignment: copy_assignment(assignment) },
         Event::Inbound { run, attempt, event } => Event::Inbound { run: *run, attempt: *attempt, event: event.clone() },
-        Event::Connected
+        Event::RelayCancelled { .. }
+        | Event::Connected
         | Event::Lost
         | Event::Shutdown
         | Event::Spawned { .. }

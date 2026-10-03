@@ -56,7 +56,7 @@ mod write;
 pub use accept::{Growing, Grown, accept, grow};
 pub use apply::{Accept, Applied, Outcome, Stale, Then, apply, rejected, release};
 pub use check::{Problem, Problems, check, check_goal, check_record};
-pub use config::{Config, Repo, Template};
+pub use config::{Config, Repo, Template, config_worst_case};
 pub use due::{Action, Due, Finish, Hold, Repair, Run, Sections, Waits, Why, due, stall};
 pub use facts::{Ci, Decided, Decision, Facts, Mergeable, Pull, PullState, Relations};
 pub use limits::{Limits, max_out, worst_case};

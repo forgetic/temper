@@ -77,6 +77,20 @@ pub struct Place {
 pub(crate) fn normalise(cwd: &[Name], path: &Path, max: u32) -> Option<Box<[u8]>> {
     // Which parts are kept, found from the last: each `..` takes out the
     // nearest name before it that is still kept.
+    // Bound the spelling before allocating scratch space. Normalisation can
+    // erase arbitrarily many dots or parent components.
+    let mut raw: usize = 0;
+    for part in &path.parts {
+        let len = match part {
+            Part::Name { name } => name.as_bytes().len(),
+            Part::Current => 1,
+            Part::Parent => 2,
+        };
+        raw = raw.checked_add(len)?.checked_add(1)?;
+        if raw.saturating_sub(1) > usize::try_from(max).ok()? {
+            return None;
+        }
+    }
     let parts = u32::try_from(path.parts.len()).ok()?;
     let mut kept = List::with_capacity(parts);
     for _ in 0..parts {

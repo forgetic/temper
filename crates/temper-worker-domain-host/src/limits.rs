@@ -59,6 +59,12 @@ pub(crate) fn calls(limits: &Limits) -> Option<u32> {
 /// receiver's to count.
 #[must_use]
 pub fn worst_case(limits: &Limits) -> Option<u64> {
+    // The reserved output bound must be representable without saturation.
+    // Cancelling each relay emits its reply and its cancellation request.
+    let cancellations = limits.run_calls.checked_mul(2)?;
+    if cancellations.checked_add(2).is_none() || limits.held.checked_add(2).is_none() {
+        return None;
+    }
     let hosted = Slab::<Hosted>::worst_case(limits.slots)?;
     let names = Map::<Token, Id<Hosted>>::worst_case(limits.slots)?;
     let ready = Map::<Id<Hosted>, Reason>::worst_case(limits.slots)?;

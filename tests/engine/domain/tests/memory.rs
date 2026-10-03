@@ -67,6 +67,7 @@ struct Driver {
     channels: Vec<Token>,
     assigned: Vec<(Token, Item, u64)>,
     calls: u64,
+    assignments: u32,
     asks: u64,
     watchers: Vec<Token>,
     pending: Vec<Event>,
@@ -92,12 +93,19 @@ struct Measured {
 impl Measured {
     /// The engine measured against its worst case and `margin` more.
     fn new(limits: &Limits, margin: u64) -> Measured {
+        Measured::configured(limits, margin, normal_config)
+    }
+
+    fn configured(limits: &Limits, margin: u64, config: fn(&Limits) -> temper_engine_domain::Config) -> Measured {
         let bound = worst_case(limits).expect("the test limits fit");
-        // The shell's queue and the configuration are the shell's.
+        // The shell owns its output queue; the domain owns the configuration.
         let out = Queue::with_capacity(max_out(limits));
-        let config = deployment::config();
         let meter = Meter::new();
+        meter.start();
+        let config = config(limits);
         let domain = Domain::new(config, limits, 7, Time::ZERO);
+        let measured = meter.end();
+        meter.check(measured, bound, "configuration and constructor");
         let excess = meter.held().saturating_sub(bound);
         let bound = bound + margin;
         Measured {
@@ -164,6 +172,7 @@ impl Driver {
             channels: Vec::with_capacity(8),
             assigned: Vec::with_capacity(64),
             calls: 0,
+            assignments: 0,
             asks: 0,
             watchers: Vec::with_capacity(8),
             pending: Vec::with_capacity(64),
@@ -202,6 +211,8 @@ impl Driver {
                 self.pending.push(Event::Stored { owner, stored });
             }
             Request::Assign { channel, assignment } => {
+                self.assignments += 1;
+                assert!(assignment.charter.models.len() <= usize::try_from(self.limits.models_bytes).expect("fits"));
                 if self.assigned.len() < 64 {
                     self.assigned.push((channel, assignment.item, assignment.attempt));
                 }
@@ -597,10 +608,20 @@ fn envelope() -> plan::Envelope {
 /// Drives the engine at random for `rounds`, and says the most it held at
 /// once between entry points.
 fn run(limits: &Limits, seed: u64, rounds: u32, margin: u64) -> (Measured, Driver) {
+    run_configured(limits, seed, rounds, margin, normal_config)
+}
+
+fn run_configured(
+    limits: &Limits,
+    seed: u64,
+    rounds: u32,
+    margin: u64,
+    config: fn(&Limits) -> temper_engine_domain::Config,
+) -> (Measured, Driver) {
     // The driver's containers first: what they hold later is counted with
     // the engine's, their room is not.
     let mut driver = Driver::new(limits, seed);
-    let mut domain = Measured::new(limits, margin);
+    let mut domain = Measured::configured(limits, margin, config);
     for round in 0..rounds {
         domain.env.now = Time::ZERO.saturating_add(Duration::from_secs(u64::from(round)));
         domain.turn(&mut driver);
@@ -652,4 +673,79 @@ fn the_engine_full_to_its_limits_stays_within_its_worst_case() {
 fn a_new_engine_holds_no_more_than_its_worst_case() {
     let domain = Measured::new(&SMALL, 0);
     assert_eq!(domain.excess, 0, "a new engine holds {} bytes beyond its worst case", domain.excess);
+}
+
+fn normal_config(_limits: &Limits) -> temper_engine_domain::Config {
+    deployment::config()
+}
+
+/// Fill every retained configuration array and byte limit. Keep the
+/// tracking labels used by the driver's forge during the run.
+fn full_config(limits: &Limits) -> temper_engine_domain::Config {
+    let mut config = deployment::config();
+    config.models = bytes(limits.models_bytes, b'm');
+    config.plan.templates = (0..limits.plan.templates)
+        .map(|_| plan::Template {
+            name: bytes(limits.plan.name_bytes, b't'),
+            guidance: bytes(limits.plan.instruction_bytes, b'g'),
+        })
+        .collect();
+    for repo in &mut config.plan.repositories {
+        repo.bases = (0..limits.plan.bases)
+            .map(|index| if index == 0 { deployment::MAIN.into() } else { bytes(limits.plan.name_bytes, b'b') })
+            .collect();
+    }
+    config.forge.projected = (0..limits.forge.labels).map(|_| bytes(limits.forge.name_bytes, b'p')).collect();
+    config.session.charter.instructions = bytes(limits.plan.instruction_bytes, b'i');
+    config.session.charter.template = config.plan.templates.first().map(|template| template.name.clone());
+    assert!(temper_engine_domain::accepts(&config, limits));
+    config
+}
+
+#[test]
+fn full_configuration_and_large_model_copies_stay_within_the_bound() {
+    let limits = Limits { models_bytes: 65_536, ..SMALL };
+    let (domain, driver) = run_configured(&limits, 7, 600, 0, full_config);
+    assert_eq!(domain.excess, 0);
+    assert!(driver.assignments > 1, "the engine copied its models into multiple assignments");
+    assert!(domain.peak > u64::from(limits.models_bytes).saturating_mul(2), "the model copies were measured");
+}
+
+fn constructor_config(limits: &Limits) -> temper_engine_domain::Config {
+    let mut config = full_config(limits);
+    config.forge.tracking = bytes(limits.forge.name_bytes, b'l');
+    config.forge.hand_in = bytes(limits.forge.name_bytes, b'h');
+    config.branches = bytes(limits.forge.name_bytes, b'b');
+    config.saved = bytes(limits.forge.name_bytes, b's');
+    for repo in &mut config.plan.repositories {
+        for base in &mut repo.bases {
+            *base = bytes(limits.plan.name_bytes, b'b');
+        }
+    }
+    assert!(temper_engine_domain::accepts(&config, limits));
+    config
+}
+
+#[test]
+fn a_constructor_counts_every_configuration_array_filled_to_its_limit() {
+    let limits = Limits {
+        models_bytes: 65_536,
+        plan: plan::Limits { templates: 64, bases: 64, ..SMALL.plan },
+        forge: temper_engine_domain::forge::Limits { labels: 64, ..SMALL.forge },
+        ..SMALL
+    };
+    let domain = Measured::configured(&limits, 0, constructor_config);
+    assert_eq!(domain.excess, 0);
+}
+
+#[test]
+fn an_oversized_session_is_refused_without_copying_its_bytes() {
+    let mut config = deployment::config();
+    config.session.charter.instructions = bytes(SMALL.plan.instruction_bytes.saturating_add(1), b'i');
+    let meter = Meter::new();
+    meter.start();
+    let accepted = temper_engine_domain::accepts(&config, &SMALL);
+    let measured = meter.end();
+    assert!(!accepted);
+    assert_eq!(measured.peak, 0, "configuration validation allocated before checking its byte limit");
 }

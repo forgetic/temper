@@ -227,8 +227,7 @@ fn fill(limits: Limits, share: u64) {
 /// Every entry point's other ends: a watch of a run not followed, turned
 /// away, or with a snapshot past the limits; a report past them or of a run
 /// not followed; a phase change; a watch stopped idle or with a delivery in
-/// flight; a delivery its stream did not take; the store failing, and
-/// answering twice.
+/// flight; a delivery its stream did not take; and the store failing.
 fn paths(limits: Limits) {
     let mut views = Measured::new(limits);
     let run = Token::new(0);
@@ -264,7 +263,7 @@ fn paths(limits: Limits) {
         panic!("the batch goes")
     };
     assert!(views.held(Event::Appended { owner, done: false }).is_empty());
-    assert!(views.step(Event::Appended { owner, done: false }).is_empty(), "twice");
+    views.domain.reclaim();
     let [Asked::Expire(owner)] = views.fire(Time::ZERO.saturating_add(limits.sweep))[..] else { panic!("a sweep") };
     assert!(views.step(Event::Expired { owner, done: false }).is_empty());
 }

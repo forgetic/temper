@@ -177,16 +177,16 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
         Event::Watch { watcher, subject, snapshot } => watch::watch(domain, env, watcher, subject, snapshot, out),
         Event::Unwatch { watcher } => watch::unwatch(domain, watcher, out),
         Event::Delivered { watcher, done } => watch::delivered(domain, watcher, done, out),
-        // A terminal that names nothing in flight is dropped.
+        // Every store terminal names an operation still in flight.
         Event::Appended { owner, done } => match end(domain, owner) {
-            Some(Op::Append { records }) => trace::appended(domain, records, done),
-            Some(Op::Expire) => unreachable!("an expire ends as expired"),
-            Some(Op::Ended) | None => {}
+            Op::Append { records } => trace::appended(domain, records, done),
+            Op::Expire => unreachable!("an expire ends as expired"),
+            Op::Ended => unreachable!("end rejects duplicate terminals"),
         },
         Event::Expired { owner, done } => match end(domain, owner) {
-            Some(Op::Expire) => trace::expired(domain, env, done),
-            Some(Op::Append { .. }) => unreachable!("an append ends as appended"),
-            Some(Op::Ended) | None => {}
+            Op::Expire => trace::expired(domain, env, done),
+            Op::Append { .. } => unreachable!("an append ends as appended"),
+            Op::Ended => unreachable!("end rejects duplicate terminals"),
         },
     }
     trace::follow(domain, env, out);
@@ -273,17 +273,17 @@ fn changed(domain: &mut Domain, env: &Env<Limits>, item: Token, repository: u32,
     domain.facts.push(Fact::Changed { watchers });
 }
 
-/// Ends the store operation `owner` names: what it was, or `None` if it
-/// names none in flight, as a duplicate terminal does.
-fn end(domain: &mut Domain, owner: Token) -> Option<Op> {
+/// Ends the store operation `owner` names. Stale or duplicate upward
+/// tokens violate the boundary contract.
+fn end(domain: &mut Domain, owner: Token) -> Op {
     let id = Id::from_token(owner);
-    let op = domain.ops.get_mut(id)?;
+    let op = domain.ops.get_mut(id).expect("a terminal's upward token names an outstanding store operation");
     let ended = mem::replace(op, Op::Ended);
     match ended {
         Op::Append { .. } | Op::Expire => {
             domain.ops.retire(id);
-            Some(ended)
+            ended
         }
-        Op::Ended => None,
+        Op::Ended => unreachable!("each store operation receives exactly one terminal"),
     }
 }

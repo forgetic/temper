@@ -116,21 +116,18 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
         Event::Note { reply_to, scope, name, change } => call::note(domain, env, reply_to, scope, name, change, out),
         Event::Refresh { scope } => kept::refresh(domain, scope, out),
         Event::Changed { scope, name } => kept::changed(domain, env, scope, name, out),
-        // A terminal that names no operation in flight is dropped.
+        // Every upward terminal names the operation that is still in flight.
         Event::Listed { owner, pages } => match end(domain, owner) {
-            Some(Op::Scope(kept)) => kept::listed(domain, env, kept, pages, out),
-            Some(Op::Recall(_)) => unreachable!("a recall lists nothing"),
-            None => {}
+            Op::Scope(kept) => kept::listed(domain, env, kept, pages, out),
+            Op::Recall(_) => unreachable!("a recall lists nothing"),
         },
         Event::Fetched { owner, fetched } => match end(domain, owner) {
-            Some(Op::Scope(kept)) => kept::fetched(domain, env, kept, fetched, out),
-            Some(Op::Recall(call)) => call::fetched(domain, env, call, fetched, out),
-            None => {}
+            Op::Scope(kept) => kept::fetched(domain, env, kept, fetched, out),
+            Op::Recall(call) => call::fetched(domain, env, call, fetched, out),
         },
         Event::Wrote { owner, wrote } => match end(domain, owner) {
-            Some(Op::Scope(kept)) => kept::wrote(domain, kept, wrote, out),
-            Some(Op::Recall(_)) => unreachable!("a recall writes nothing"),
-            None => {}
+            Op::Scope(kept) => kept::wrote(domain, kept, wrote, out),
+            Op::Recall(_) => unreachable!("a recall writes nothing"),
         },
     }
 }
@@ -148,11 +145,10 @@ pub(crate) fn start(domain: &mut Domain, op: Op) -> Id<Op> {
     domain.ops.insert(op).expect("room for an operation for each scope and each call, twice over")
 }
 
-/// Ends the operation `owner` names: whom it was for, or `None` if it names
-/// none in flight.
-fn end(domain: &mut Domain, owner: Token) -> Option<Op> {
+/// Ends the operation `owner` names. A stale upward token is a boundary bug.
+fn end(domain: &mut Domain, owner: Token) -> Op {
     let id = Id::from_token(owner);
-    let op = *domain.ops.get(id)?;
+    let op = *domain.ops.get(id).expect("a terminal's upward token names an outstanding operation");
     domain.ops.retire(id);
-    Some(op)
+    op
 }

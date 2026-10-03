@@ -425,7 +425,7 @@ pub(crate) fn room(domain: &mut Domain, env: &Env<Limits>) {
 /// The hub answered a call the top level made of it: a take, or a person's
 /// stop or release.
 pub(crate) fn hub_answered(domain: &mut Domain, env: &Env<Limits>, to: ReplyTo, result: Result<(), work::Refusal>) {
-    let Some(wait) = serve::take(domain, to.into_token()) else { return };
+    let wait = serve::take(domain, to.into_token());
     match wait {
         Wait::Take { entry, written } => items::taken(domain, env, entry, written, result.is_ok()),
         Wait::Release { entry } => {

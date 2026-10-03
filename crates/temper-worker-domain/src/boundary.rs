@@ -19,8 +19,9 @@
 //!   answered and not acknowledged, assigned again, is dropped: its one answer
 //!   is the hosted run's. Everything else the engine sends names the run and
 //!   the attempt, and is dropped unless that attempt is hosted (attempts are
-//!   fenced). A [`Request::Relay`] is answered by at most one
-//!   [`Event::Relayed`]; [`Request::Bounced`] is a notice. Either may still
+//!   fenced). A [`Request::Relay`] is answered by exactly one
+//!   [`Event::Relayed`] or [`Event::RelayCancelled`]; [`Request::Bounced`] is
+//!   a notice. Either may still
 //!   come after its attempt's answer, as may the run's facts ([`Told`]): the
 //!   engine drops them.
 //! - io's agent processes and their channels, as the agent child domain defines
@@ -69,6 +70,8 @@ pub enum Event {
     /// From the engine: the answer to the relayed call `call` of the run
     /// `run`'s attempt `attempt`.
     Relayed { run: Token, attempt: Token, call: Token, answer: Box<[u8]> },
+    /// Terminal for a cancelled relay delivery and wait.
+    RelayCancelled { call: Token },
     /// From the engine: it has the answer for the run `run`'s attempt
     /// `attempt`, which the worker forgets. One it has forgotten already, or
     /// a refusal's, changes nothing.
@@ -113,6 +116,9 @@ pub enum Request {
     /// To the engine: a host call of the run `run`'s attempt `attempt`, which
     /// the worker names `call`, relayed as it is.
     Relay { run: Token, attempt: Token, call: Token, body: Box<[u8]> },
+    /// Cancel a relay delivery and wait. Its original request still ends
+    /// exactly once with `Relayed` or `RelayCancelled`; remote effects remain.
+    CancelRelay { call: Token },
     /// To the engine: an inbound event for the run `run`'s attempt `attempt`
     /// was not passed on, for `bounce`.
     Bounced { run: Token, attempt: Token, bounce: host::Bounce },

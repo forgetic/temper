@@ -97,6 +97,12 @@ pub(crate) fn admit(authority: Authority, limits: &Limits) -> Option<Checkout> {
     if repos > limits.repos {
         return None;
     }
+    // Each component needs at least one byte plus its separating slash.
+    // Refuse before allocating references to an overlong input.
+    let names = limits.path_bytes.checked_add(1)? / 2;
+    if u32::try_from(authority.cwd.len()).ok()? > names {
+        return None;
+    }
     let cwd = path::refs(&authority.cwd)?;
     if path::joined(cwd.as_slice())? > usize::try_from(limits.path_bytes).ok()? {
         return None;
@@ -107,6 +113,9 @@ pub(crate) fn admit(authority: Authority, limits: &Limits) -> Option<Checkout> {
     let mut mounts: List<Mount> = List::with_capacity(repos);
     let mut roots = List::with_capacity(repos);
     for repo in &authority.repos {
+        if u32::try_from(repo.mount.len()).ok()? > names {
+            return None;
+        }
         let names = path::refs(&repo.mount)?;
         let at = path::join(names.as_slice(), limits.path_bytes)?;
         for other in mounts.as_slice() {
