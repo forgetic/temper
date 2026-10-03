@@ -175,21 +175,36 @@ the live bytes. With glibc:
   `mmap`, page faults as it is filled and a `munmap` when freed;
 - after such a free, glibc raises the threshold to its size, up to 32 MB;
   large boxes then come from the heap, where a long-lived process making
-  boxes of mixed sizes can fragment.
+  boxes of mixed sizes can fragment: the heap returns memory to the
+  system only from its top, so a small box that outlives large ones
+  freed below it keeps them resident. They are reused by later boxes
+  that fit, so it is not a leak, but the resident size can stay well
+  above the live bytes.
 
 The engine is the process this could affect; an agent process lives for
 one run. **Measure first,** as 6.4 says: the simulator's counting
 allocator gives the live bytes, and a load run of the real shell gives
 the resident size to compare them with. **If the gap matters,** in order:
 
-1. tune glibc once at startup with `mallopt`, through `libc`, which the
-   shell already depends on: a fixed mmap threshold and trim threshold
-   suited to temper's sizes;
-2. or give the shell another `#[global_allocator]`, a one-line change that
-   adds a dependency `programming-style.md` (2.1) does not allow today, so
-   the departure is recorded there.
+1. tune glibc with no code at all, through its tunables in the service's
+   environment: `GLIBC_TUNABLES=glibc.malloc.mmap_threshold=…:glibc.malloc.trim_threshold=…`.
+   A fixed mmap threshold stops the raising, so large boxes always have
+   mappings of their own and go back to the system when freed, and only
+   small ones share the heap;
+2. or make the same settings once at startup with `mallopt`, through
+   `libc`, which the shell already depends on, so they travel with the
+   binary;
+3. and have the shell call `malloc_trim(0)` when it is about to block
+   with nothing to do, which returns free pages from anywhere in the
+   heap, not only its top;
+4. or give the shell another `#[global_allocator]` (jemalloc, mimalloc),
+   which keeps allocations of a size together and returns unused pages
+   over time. It is a one-line change that adds a dependency
+   `programming-style.md` (2.1) does not allow today, so the departure is
+   recorded there.
 
-Neither touches step code.
+None of these touches step code: the binary chooses the allocator, and
+step crates only allocate.
 
 ## 6. A worst case of maximums
 
