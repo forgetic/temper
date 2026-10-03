@@ -249,6 +249,10 @@ impl World {
     pub(super) fn observe_forge(&mut self) {
         while let Some(observation) = self.forge.pop_observation() {
             self.mirror.observe(&observation);
+            if let Some((repository, number, lifecycle)) = record_written(&observation) {
+                self.hosting.observe(self.now, Seen::Recorded { repository, number, lifecycle }, &mut Vec::new());
+                self.hosting.assert_holding(self.settings.seed);
+            }
             match &observation {
                 Observation::Merged { .. } => self.end("merged"),
                 Observation::Reviewed { .. } => self.end("reviewed"),
@@ -375,6 +379,42 @@ impl World {
     /// A person stops the item's run.
     pub(super) fn stop_run(&mut self, item: Item) {
         self.ask(Asking::Stopper(item), STOPPER, Ask::Stop { item });
+    }
+}
+
+/// The record the engine wrote, if `observation` is the engine writing one:
+/// the item's, and what it says of its lifecycle.
+fn record_written(observation: &Observation) -> Option<(Vec<u8>, u64, engine::work::Lifecycle)> {
+    let (repository, number, id, body) = match observation {
+        Observation::Commented { repository, number, id, body, by }
+        | Observation::Edited { repository, number, id, body, by }
+            if *by == ENGINE =>
+        {
+            (repository, number, id, body)
+        }
+        Observation::Commented { .. }
+        | Observation::Edited { .. }
+        | Observation::Moved { .. }
+        | Observation::Deleted { .. }
+        | Observation::Opened { .. }
+        | Observation::Closed { .. }
+        | Observation::Reopened { .. }
+        | Observation::Labelled { .. }
+        | Observation::Revised { .. }
+        | Observation::Depends { .. }
+        | Observation::Requested { .. }
+        | Observation::Defined { .. }
+        | Observation::Removed { .. }
+        | Observation::Reviewed { .. }
+        | Observation::Reported { .. }
+        | Observation::Merged { .. }
+        | Observation::Refused { .. }
+        | Observation::Rejected { .. }
+        | Observation::Wiki { .. } => return None,
+    };
+    match codec::comment(*id, body)? {
+        engine::Decoded::Record { record, .. } => Some((repository.to_vec(), *number, record.lifecycle)),
+        engine::Decoded::Outcome { .. } | engine::Decoded::Page { .. } => None,
     }
 }
 

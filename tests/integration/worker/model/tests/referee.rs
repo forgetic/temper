@@ -1,0 +1,84 @@
+//! The referee of the whole worker's world, fed observations by hand as the
+//! world would feed them, fails a run that breaks an expectation, and says
+//! why; and passes one that keeps them.
+
+use temper_engine_model::work::{Class, Failures, Lifecycle, Phase};
+use temper_lib::{Duration, Time, Token};
+use temper_worker_model_tests::protocol::Names;
+use temper_worker_model_tests::referee::{Hosting, Seen};
+use temper_world::{Referee, Verdict};
+
+fn at(secs: u64) -> Time {
+    Time::ZERO.saturating_add(Duration::from_secs(secs))
+}
+
+fn referee() -> Referee<Hosting> {
+    Referee::new(Hosting::new(Duration::from_secs(60)))
+}
+
+fn see(referee: &mut Referee<Hosting>, secs: u64, seen: Seen) {
+    referee.observe(at(secs), seen, &mut Vec::new());
+}
+
+fn why(referee: &Referee<Hosting>) -> String {
+    let Verdict::Failed(failure) = referee.verdict() else { panic!("the referee failed the run") };
+    failure.why
+}
+
+const NAMES: Names = (Token::new(1), Token::new(3));
+
+/// The item 1's record, at its attempt `attempts`, with `failures`.
+fn recorded(phase: Phase, attempts: u64, failures: Failures) -> Seen {
+    Seen::Recorded { repository: b"ai/one".to_vec(), number: 1, lifecycle: Lifecycle { phase, attempts, failures } }
+}
+
+#[test]
+fn an_answer_taken_and_acknowledged_passes() {
+    let mut referee = referee();
+    see(&mut referee, 0, Seen::Assigned { names: NAMES });
+    see(&mut referee, 1, Seen::Answered { names: NAMES, refused: false });
+    see(&mut referee, 2, Seen::Answered { names: NAMES, refused: false });
+    see(&mut referee, 3, Seen::Acknowledged { names: NAMES });
+    referee.assert_passed(0);
+}
+
+#[test]
+fn an_answer_not_acknowledged_in_time_fails() {
+    let mut referee = referee();
+    see(&mut referee, 0, Seen::Assigned { names: NAMES });
+    see(&mut referee, 1, Seen::Answered { names: NAMES, refused: false });
+    referee.fire(at(62), &mut Vec::new());
+    assert!(why(&referee).contains("was not met"), "{}", why(&referee));
+}
+
+#[test]
+fn failures_counted_once_per_attempt_pass() {
+    let mut referee = referee();
+    let once = Failures::NONE.and(Class::Agent);
+    see(&mut referee, 0, recorded(Phase::Claimed, 1, Failures::NONE));
+    see(&mut referee, 1, recorded(Phase::Retrying(Class::Agent), 1, once));
+    // Written again, as a write in doubt is.
+    see(&mut referee, 2, recorded(Phase::Retrying(Class::Agent), 1, once));
+    see(&mut referee, 3, recorded(Phase::Claimed, 2, once));
+    see(&mut referee, 4, recorded(Phase::Retrying(Class::Lost), 2, once.and(Class::Lost)));
+    // Forgiven, and failing again.
+    see(&mut referee, 5, recorded(Phase::Waiting, 2, Failures::NONE));
+    see(&mut referee, 6, recorded(Phase::Retrying(Class::Agent), 3, once));
+    referee.assert_passed(0);
+}
+
+#[test]
+fn an_attempt_failed_twice_fails() {
+    let mut referee = referee();
+    let once = Failures::NONE.and(Class::Run);
+    see(&mut referee, 0, recorded(Phase::Retrying(Class::Run), 1, once));
+    see(&mut referee, 1, recorded(Phase::Retrying(Class::Run), 1, once.and(Class::Run)));
+    assert!(why(&referee).contains("an attempt fails once"), "{}", why(&referee));
+}
+
+#[test]
+fn two_failures_counted_at_once_fail() {
+    let mut referee = referee();
+    see(&mut referee, 0, recorded(Phase::Retrying(Class::Run), 1, Failures::NONE.and(Class::Run).and(Class::Lost)));
+    assert!(why(&referee).contains("one failure at a time"), "{}", why(&referee));
+}

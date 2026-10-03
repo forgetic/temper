@@ -151,13 +151,13 @@ impl World {
                 if twice && self.rng.chance(self.settings.network.duplicates) {
                     self.stats.duplicated += 1;
                     let copy = copy(&event);
-                    self.send(at, Delivery::Up { epoch, event: copy });
+                    self.send(at, Delivery::Up { epoch, event: copy, copy: true });
                 }
-                self.send(at, Delivery::Up { epoch, event });
+                self.send(at, Delivery::Up { epoch, event, copy: false });
             }
             Channel::Idle | Channel::Dialling { .. } | Channel::Shut => {
                 let event = make(token(0));
-                self.lost_up(&event);
+                self.lost_up(&event, false);
             }
         }
     }
@@ -175,7 +175,12 @@ impl World {
         self.lane(lane, stall)
     }
 
-    fn lost_up(&mut self, event: &engine::Event) {
+    /// What went up the channel is lost: the frame, or a copy of it.
+    fn lost_up(&mut self, event: &engine::Event, copy: bool) {
+        if copy {
+            self.stats.copies_lost += 1;
+            return;
+        }
         match event {
             engine::Event::Answer { .. } => self.stats.answers_lost += 1,
             engine::Event::Hello { .. }
@@ -192,14 +197,20 @@ impl World {
         }
     }
 
-    pub(super) fn arrived_up(&mut self, epoch: u64, event: engine::Event) {
+    /// What went up the channel `epoch` reaches the engine's protocol layer,
+    /// if the channel is still open: the frame, or a copy of it.
+    pub(super) fn arrived_up(&mut self, epoch: u64, event: engine::Event, copy: bool) {
         match self.channel {
             Channel::Open { epoch: open, hello } if open == epoch => {
                 let hello = match &event {
                     engine::Event::Hello { .. } => true,
                     engine::Event::Answer { item, attempt, answer, .. } => {
                         let names = protocol::names(*item, *attempt);
-                        self.stats.answers_taken += 1;
+                        if copy {
+                            self.stats.answers_copied += 1;
+                        } else {
+                            self.stats.answers_taken += 1;
+                        }
                         self.reached.insert(names);
                         let refused = refusal(answer);
                         self.hosting.observe(self.now, Seen::Answered { names, refused }, &mut Vec::new());
@@ -229,7 +240,9 @@ impl World {
                 self.channel = Channel::Open { epoch, hello };
                 self.desk.push(event);
             }
-            Channel::Open { .. } | Channel::Idle | Channel::Dialling { .. } | Channel::Shut => self.lost_up(&event),
+            Channel::Open { .. } | Channel::Idle | Channel::Dialling { .. } | Channel::Shut => {
+                self.lost_up(&event, copy);
+            }
         }
     }
 

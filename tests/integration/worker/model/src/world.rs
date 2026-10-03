@@ -405,11 +405,13 @@ pub const ENDINGS: [&str; 10] = [
 #[derive(Clone, Default, PartialEq, Eq, Debug)]
 pub struct Stats {
     /// Answers the worker made, by kind; sent, taken by the engine, and lost
-    /// in flight with their channel; listed held in a hello; and given up.
+    /// in flight with their channel; copies of them the network made that
+    /// reached the engine; listed held in a hello; and given up.
     pub answers: BTreeMap<&'static str, u32>,
     pub answers_sent: u32,
     pub answers_taken: u32,
     pub answers_lost: u32,
+    pub answers_copied: u32,
     pub held: u32,
     /// Answers sent again, the engine's acknowledgement not heard, and the
     /// acknowledgements the worker heard.
@@ -422,7 +424,8 @@ pub struct Stats {
     /// Dials, those that opened a channel and those that failed; channels
     /// dropped; hellos; frames sent twice, and channels that stalled; and
     /// what the engine sent that was lost in flight, and the relays,
-    /// bounces and facts the worker sent that were.
+    /// bounces and facts the worker sent that were, and the copies that
+    /// were.
     pub dials: u32,
     pub connects: u32,
     pub failed_dials: u32,
@@ -432,6 +435,7 @@ pub struct Stats {
     pub stalled: u32,
     pub lost_down: u32,
     pub lost_up: u32,
+    pub copies_lost: u32,
     /// The longest the worker went without a channel while it hosted runs.
     pub longest_outage: Option<Duration>,
     /// Agents spawned, started (from a snapshot among them, and in
@@ -502,11 +506,12 @@ enum Delivery {
         epoch: u64,
     },
     /// What the worker sent up the channel `epoch`, as the engine's protocol
-    /// layer hands it on; and what the engine sent down it, as the worker's
-    /// does.
+    /// layer hands it on, or a copy the network made of it; and what the
+    /// engine sent down it, as the worker's does.
     Up {
         epoch: u64,
         event: engine::Event,
+        copy: bool,
     },
     Down {
         epoch: u64,
@@ -966,7 +971,7 @@ impl World {
                 }
             }
             Delivery::Dialled { epoch } => self.dialled(epoch),
-            Delivery::Up { epoch, event } => self.arrived_up(epoch, event),
+            Delivery::Up { epoch, event, copy } => self.arrived_up(epoch, event, copy),
             Delivery::Down { epoch, event } => self.arrived_down(epoch, event),
             Delivery::Engine(event) => self.desk.push(event),
             Delivery::Drop { epoch } => self.drop_channel(epoch),
@@ -1139,6 +1144,13 @@ impl World {
         // The worker.
         self.assert_worker_settled();
         assert_eq!(self.worker.next_deadline(), None, "seed {seed}: no alarm is armed");
+        // Between them: every answer sent reached the engine or was lost in
+        // flight, its copies apart.
+        assert_eq!(
+            self.stats.answers_sent,
+            self.stats.answers_taken + self.stats.answers_lost,
+            "seed {seed}: every answer sent reached the engine, or was lost in flight with its channel"
+        );
         // The referees' verdicts.
         let mut stimuli = Vec::new();
         self.stories.observe(self.now, stories::Seen::Settled, &mut stimuli);
