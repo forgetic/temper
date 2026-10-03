@@ -174,7 +174,7 @@ impl World {
                 self.answered((run, attempt), &answer);
                 let repositories = self.assigned.get(&(run, attempt)).cloned().unwrap_or_default();
                 let answer = protocol::answer(&answer, &repositories);
-                let (item, attempt) = (protocol::item(run), attempt.raw());
+                let (item, attempt) = protocol::attempt_of(attempt);
                 self.send_up(move |channel| engine::Event::Answer { channel, item, attempt, answer });
             }
             Request::Relay { run, attempt, call, body } => {
@@ -189,13 +189,14 @@ impl World {
                     self.send(at, Delivery::Worker(self.lives, Event::Relayed { run, attempt, call, answer }));
                     return;
                 };
-                let (item, attempt) = (protocol::item(run), attempt.raw());
+                let (item, attempt) = protocol::attempt_of(attempt);
                 self.send_up(move |channel| engine::Event::Relay { channel, item, attempt, call, body });
             }
             Request::Bounced { run, attempt, bounce } => {
                 assert!(self.up, "a bounce goes on a channel open");
                 self.stats.bounces += 1;
-                let (item, attempt, bounce) = (protocol::item(run), attempt.raw(), protocol::bounce(bounce));
+                let ((item, attempt), bounce) = (protocol::attempt_of(attempt), protocol::bounce(bounce));
+                assert_eq!(protocol::item(run), item, "a bounce names an attempt of its run");
                 self.send_up(move |_| engine::Event::Bounced { item, attempt, bounce });
             }
             Request::Spawn { owner, workspace, deadline } => {

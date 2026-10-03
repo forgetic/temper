@@ -21,14 +21,12 @@
 //! Relay                              - (asserted against: the agent's runs relay no calls)
 //! ```
 //!
-//! Names are packed into the channel's tokens: a run is its item's, the
-//! repository's index in the high half and the item's number in the low; an
-//! attempt is its item's and its count, the repository in the top byte, the
-//! number in the next three and the count in the low half, so that every
-//! attempt of every item has a name of its own. A repository of a workspace
-//! is the deployment's, by its forge name: the worker puts it in a directory
-//! named for its last component, and reaches it as the one identity the
-//! deployment gives its workers, [`IDENTITY`].
+//! Names are packed into the channel's tokens as the engine's world packs
+//! them for every system world ([`temper_engine_model_tests::names`]), so
+//! that every attempt of every item has a name of its own. A repository of a
+//! workspace is the deployment's, by its forge name: the worker puts it in a
+//! directory named for its last component, and reaches it as the one
+//! identity the deployment gives its workers, [`IDENTITY`].
 //!
 //! The charter goes as the engine's codec writes it ([`codec::charter`]),
 //! framed on its way in with the name of the attempt it is for, which the
@@ -50,7 +48,7 @@
 //! - A fact goes up as its kind: progress, a call, a tool or a check, usage.
 
 use temper_engine_model::views::Kind;
-use temper_engine_model::{self as engine, Assignment, Item};
+use temper_engine_model::{self as engine, Assignment};
 use temper_engine_model_tests::{codec, deployment};
 use temper_lib::Token;
 use temper_worker_model::{self as worker, Told, host};
@@ -61,28 +59,7 @@ pub const IDENTITY: &[u8] = b"worker";
 /// The bytes a frame adds to a charter.
 pub const CHARTER_FRAME: usize = 8;
 
-/// The channel's name for the item's run.
-#[must_use]
-pub fn run(item: Item) -> Token {
-    assert!(item.number < 1 << 24, "an item's number fits its place in a name");
-    Token::new(u64::from(item.repository) << 32 | item.number)
-}
-
-/// The channel's name for the item's attempt `attempt`.
-#[must_use]
-pub fn attempt(item: Item, attempt: u64) -> Token {
-    assert!(item.repository < 1 << 8 && item.number < 1 << 24, "an item fits its place in a name");
-    assert!(attempt < 1 << 32, "an attempt's count fits its place in a name");
-    Token::new(u64::from(item.repository) << 56 | item.number << 32 | attempt)
-}
-
-/// The item and the attempt's count an attempt's name stands for.
-#[must_use]
-pub fn attempt_of(attempt: Token) -> (Item, u64) {
-    let raw = attempt.raw();
-    let repository = u32::try_from(raw >> 56).expect("a byte");
-    (Item { repository, number: (raw >> 32) & 0xFF_FFFF }, raw & 0xFFFF_FFFF)
-}
+pub use temper_engine_model_tests::names::{attempt, attempt_of, run};
 
 /// The directory a repository of the deployment sits in: the last component
 /// of its forge name.

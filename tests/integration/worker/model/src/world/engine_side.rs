@@ -76,7 +76,7 @@ impl World {
             }
             Request::Assign { channel, assignment } => {
                 let (item, attempt) = (assignment.item, assignment.attempt);
-                let names = World::names(item, attempt);
+                let names = protocol::names(item, attempt);
                 let brief = codec::brief_of(&assignment.charter);
                 let (assignment, repositories) = protocol::assignment(&assignment);
                 self.assigned.insert(names, repositories);
@@ -97,7 +97,7 @@ impl World {
                 self.send_down(channel, Event::Assign { assignment });
             }
             Request::Inbound { channel, item, attempt, event } => {
-                let names = World::names(item, attempt);
+                let names = protocol::names(item, attempt);
                 let place = self.places.entry(names).or_default();
                 let framed = protocol::framed_event(*place, names, &event);
                 *place += 1;
@@ -105,13 +105,13 @@ impl World {
                 self.send_down(channel, Event::Inbound { run: names.0, attempt: names.1, event: framed });
             }
             Request::Cancel { channel, item, attempt } => {
-                let (run, attempt) = World::names(item, attempt);
+                let (run, attempt) = protocol::names(item, attempt);
                 self.end("cancelled");
                 self.engine_cancels.insert((run, attempt));
                 self.send_down(channel, Event::Cancel { run, attempt });
             }
             Request::Relayed { channel, item, attempt, call, served } => {
-                let names = World::names(item, attempt);
+                let names = protocol::names(item, attempt);
                 self.end("relayed");
                 self.hosting.observe(self.now, Seen::Relayed { names, call }, &mut Vec::new());
                 self.hosting.assert_holding(self.settings.seed);
@@ -119,7 +119,7 @@ impl World {
                 self.send_down(channel, Event::Relayed { run: names.0, attempt: names.1, call, answer });
             }
             Request::Acknowledge { channel, item, attempt } => {
-                let names = World::names(item, attempt);
+                let names = protocol::names(item, attempt);
                 self.end("acknowledged");
                 self.hosting.observe(self.now, Seen::Acknowledged { names }, &mut Vec::new());
                 self.hosting.assert_holding(self.settings.seed);

@@ -4,9 +4,9 @@
 //! each in its own terms, with what crosses opaque on the worker's side
 //! encoded and decoded here, by the engine world's codecs where it has them.
 //!
-//! Names are packed: a run is named by its item, its repository in the high
-//! bits of the worker's token and its number below; an attempt by the
-//! engine's count, as it is. A repository is named on the worker's side by
+//! Names are packed as the engine's world packs them for every system world
+//! ([`temper_engine_model_tests::names`]): a run by its item, an attempt by
+//! its item and its count. A repository is named on the worker's side by
 //! its forge name (its remote) and a directory of its own (its name in the
 //! deployment, less the owner), and reaches the forge as the one identity
 //! the deployment gives its workers, [`IDENTITY`]. A commit is the engine's
@@ -42,22 +42,7 @@ pub const IDENTITY: &[u8] = b"temper-worker-identity";
 /// The bytes a frame adds to a charter: the run's name, and the attempt's.
 pub const CHARTER_FRAME: usize = 16;
 
-/// The bits of a run's name below its repository.
-const NUMBER_BITS: u32 = 40;
-
-/// The worker's name for the run of `item`.
-#[must_use]
-pub fn run(item: Item) -> Token {
-    assert!(item.number < 1 << NUMBER_BITS, "an item's number fits below its repository");
-    Token::new((u64::from(item.repository) << NUMBER_BITS) | item.number)
-}
-
-/// The item the worker's run `run` is of.
-#[must_use]
-pub fn item(run: Token) -> Item {
-    let repository = u32::try_from(run.raw() >> NUMBER_BITS).expect("a repository's index");
-    Item { repository, number: run.raw() & ((1 << NUMBER_BITS) - 1) }
-}
+pub use temper_engine_model_tests::names::{attempt_of, item, run};
 
 /// A run and an attempt, as the worker names them.
 pub type Names = (Token, Token);
@@ -65,7 +50,7 @@ pub type Names = (Token, Token);
 /// The worker's names for the item's attempt `attempt`.
 #[must_use]
 pub fn names(item: Item, attempt: u64) -> Names {
-    (run(item), Token::new(attempt))
+    (run(item), temper_engine_model_tests::names::attempt(item, attempt))
 }
 
 /// The directory a repository of the deployment sits in: its name, less
@@ -175,7 +160,7 @@ pub fn event_comment(event: &[u8]) -> Option<u64> {
 pub fn hello(hello: &worker::Hello) -> Hello {
     let hosting = hello.hosting.iter().map(|hosted| Hosted {
         item: item(hosted.run),
-        attempt: hosted.attempt.raw(),
+        attempt: attempt_of(hosted.attempt).1,
         phase: phase(hosted.phase),
     });
     Hello { slots: hello.slots, workstreams: hello.workstreams.clone(), hosting: hosting.collect() }
@@ -248,7 +233,7 @@ pub fn bounce(bounce: host::Bounce) -> Bounce {
 /// What the engine hears of a fact a run told: its progress, as it is.
 #[must_use]
 pub fn told(told: &worker::Told) -> engine::Event {
-    let (item, attempt) = (item(told.run), told.attempt.raw());
+    let (item, attempt) = attempt_of(told.attempt);
     engine::Event::Told { item, attempt, kind: Kind::Progress, content: told.fact.clone() }
 }
 

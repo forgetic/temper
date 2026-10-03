@@ -533,12 +533,6 @@ impl World {
             *self.stats.late.entry(kind).or_default() += 1;
         }
     }
-
-    /// The worker's names for the item's attempt, as the protocol layer
-    /// packs them.
-    pub(super) fn names(item: engine::Item, attempt: u64) -> Names {
-        protocol::names(item, attempt)
-    }
 }
 
 /// Whether `answer` refuses its assignment: one the engine does not take

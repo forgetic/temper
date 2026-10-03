@@ -29,7 +29,9 @@
 //!   starting cold from the forge and the store.
 //!
 //! Workers and people read the forge as observed ([`mirror`]): what the fake
-//! forge reports it did, never its store, decoded with the codecs.
+//! forge reports it did, never its store, decoded with the codecs. The
+//! system worlds reuse the codecs, and the [`names`] their protocol layers
+//! give runs and attempts on a worker's channel.
 //!
 //! It checks the contracts as it goes: every forge call ended once, in the
 //! life of the engine that made it; every person's ask answered once, by
@@ -50,6 +52,7 @@
 pub mod codec;
 pub mod deployment;
 pub mod mirror;
+pub mod names;
 pub mod people;
 pub mod referee;
 pub mod script;
