@@ -115,7 +115,7 @@ overflow-checks = true
 panic = "abort"
 overflow-checks = true
 
-# The lints for the step crates (lib and every domain, protocol and io layer).
+# The lints for the step crates (every domain, protocol and io layer: lib is skein's).
 # Disallowed types, macros and methods are listed in clippy.toml. Ordinary Rust
 # (simulators, test harnesses) declares its own [lints] table.
 [workspace.lints.rust]
