@@ -25,7 +25,6 @@ fn random_worlds_settle_and_reach_every_ending() {
         }
         endings.extend(stats.endings.keys().copied());
     }
-    println!("answers {answers:?}");
     // A run says it was cancelled only once something cancelled it, and the
     // worker reports that cancel as its own: the engine's, lost contact, a
     // shutdown, or the wall time of its agent.
@@ -39,7 +38,8 @@ fn random_worlds_settle_and_reach_every_ending() {
     assert!(missed.is_empty(), "every ending was reached: {missed:?} were not");
 }
 
-/// How many random worlds the sweep runs.
+/// How many random worlds the sweep runs: as many as take about six
+/// seconds on their own, within the fuzzy suite's budget.
 const SWEPT: u64 = 40;
 
 /// Answers the sweep does not reach: a run's cancel is never its own; an
