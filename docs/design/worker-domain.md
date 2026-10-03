@@ -296,8 +296,8 @@ own.
 
 - **One process per run.** Its process tree is the run's containment
   boundary: stopping a run means that tree is gone, which io proves. Its
-  environment holds the LLM provider credentials the agent is configured
-  with, and no forge credentials. It is spawned within a deadline, and a
+  environment holds no credentials: the tokens its LLM calls use come as
+  grants on its channel (credentials.md, section 7). It is spawned within a deadline, and a
   run whose agent could not be started fails as such. It has gone only
   once its process has exited, its tree is empty and its channel has been
   read to the end, so what it said before it went is heard.
@@ -340,7 +340,10 @@ arriving, and no fact holds a slot.
 
 ## 8. Below the domain
 
-What the protocol and io layers owe the domain, to be designed after it:
+What the protocol and io layers owe the domain. The protocol layer is
+designed in protocol.md, with the channels in channel.md and credentials
+in credentials.md; what that design asks of this domain is channel.md's
+section 14 and credentials.md's section 9.
 
 - **The engine:** one framed channel, dialled by the worker and
   authenticated, carrying assignments, inbound events, cancels, host calls
@@ -461,9 +464,9 @@ yet, each to be designed before it is built:
   saves at park, at an unfinished end and at cancel only.
 - **Checks-only runs and code-graph indexing** (section 10).
 - **Agent configuration in a spawn:** a spawn carries the charter, the
-  snapshot and where the repositories sit; what the agent is configured
-  with (its LLM endpoints, their credentials, its limits) is not part of
-  it yet.
+  snapshot and where the repositories sit. Its LLM endpoints and its
+  grants are designed (channel.md, 6.1; credentials.md, section 7), not
+  built.
 - **Several workers in one world:** the whole worker's world runs one;
   the engine's placement across several, preferring one that holds the
   workstream's checkout, is exercised with scripted workers in the

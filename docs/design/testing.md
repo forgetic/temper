@@ -133,9 +133,13 @@ answers each call after a drawn latency, by a world's script or at random
 answer), and rejects conversations a real provider would reject.
 
 It grows the server side of each provider API the agent speaks: HTTP,
-server-sent events, the provider's JSON, its errors and rate limits. Its
-faults move down with it: a stream cut mid-event, a malformed chunk, a
-slow trickle.
+server-sent events, the provider's JSON, its errors and rate limits, and
+an OAuth server that rotates refresh tokens (llm.md, section 11;
+credentials.md, section 10). It checks its client as the providers do:
+the bearer, ChatGPT's account id, Anthropic's identity, and the opaque
+blocks it gave coming back unchanged. Its faults move down with it: a
+stream cut mid-event or between events, a malformed event, a chunk size
+that lies, a slow trickle, a stall with pings only.
 
 ### 4.2 The forge
 
@@ -154,7 +158,10 @@ sees.
   can move a branch under a run.
 - **Then a service:** Forgejo's API and GitHub's, the subset temper uses,
   over one domain; signed webhooks sent to the engine; and git over HTTP,
-  the subset real git needs to clone, fetch and push.
+  the subset real git needs to clone, fetch and push. It keeps Forgejo's
+  quirks (its default order, its page cap, its unpaged threads) and
+  counts the requests it serves, which the engine's cost checks hold to
+  ceilings (forge.md, sections 9 and 10).
 - **CI follows content.** A repository's CI runs its checks in the shell
   subset (4.3) on the pushed tree, so a change that is wrong fails on the
   forge as it fails in the run.
@@ -433,8 +440,12 @@ the engine world's crate is a library the system worlds use (4.5). The
 world harness is temper's until a second service needs it
 (testing-strategy.md, section 7).
 
-The protocol worlds, the simulated worlds and the real loop find their
-homes when the first of each is built.
+The protocol worlds find their homes beside the system worlds they
+replay: the link (the engine and a worker) and an agent's channel
+(a worker and its agents), then an agent against the fake provider, and
+the engine against the fake forge (channel.md, section 15; llm.md,
+section 12; forge.md, section 10). The simulated worlds and the real loop
+find theirs when the first of each is built.
 
 ## 8. Where things stand
 
@@ -511,7 +522,12 @@ By tier:
   (agent-domain.md, section 10): sessions, inbound events, waiting,
   parking and relayed calls; in the whole worker's world, plans' stories,
   which run in the engine's world only.
-- **Protocol worlds,** each with the protocol layer it tests.
+- **Protocol worlds,** each with the protocol layer it tests, and the
+  engine's cost checks through bytes (forge.md, section 10).
+- **Transcripts** of the real peers for the machines and decoders:
+  LLM providers' streams, captured through their own clients, and
+  Forgejo's answers and webhooks, recorded by the real Forgejo check
+  (llm.md, section 12; forge.md, section 10).
 - **Simulated worlds,** with the services and the shells, on skein's io
   and simulator.
 - **The real loop:** a shell that drives every service in one loop, and

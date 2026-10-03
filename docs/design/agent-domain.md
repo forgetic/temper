@@ -349,8 +349,9 @@ Nothing the agent decides depends on whether a fact is delivered.
 
 ## 8. Below the domain
 
-Not yet discussed in depth. What the protocol and io layers owe the
-domain, to be designed after it:
+What the protocol and io layers owe the domain. The protocol layer is
+designed in protocol.md, with the LLM providers in llm.md, the channel in
+channel.md and credentials in credentials.md; io is skein's:
 
 - **LLM providers:** HTTP, server-sent events and JSON for each provider
   API; tool schemas and decoding; classifying failures; refreshing
@@ -400,6 +401,17 @@ yet, each to be designed before it is built:
 - **The layers below the domain** (section 8), including one io vocabulary
   for the tools' and the run's operations, which the top level carries as
   two families for now.
+- **What the protocol layer's design asks of the domain** (llm.md,
+  section 13; channel.md, section 14; credentials.md, section 9):
+  - opaque blocks, the provider's thinking or reasoning kept in place and
+    sent back verbatim;
+  - grants held by name, each completion naming the one to use, with
+    `Rejected` and `Exhausted` told up;
+  - `Unauthorized` made transient, and an exhausted account as a failure
+    of its own;
+  - the token budget's split across input, output and cache taken by the
+    domain, not the translation;
+  - a refusal of its own, for a charter it cannot take.
 
 What the tests lack, from the fakes' layers below the domain to the tiers
 above the domain worlds, is tracked in testing.md, section 9.

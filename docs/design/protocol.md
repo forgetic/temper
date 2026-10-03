@@ -9,9 +9,18 @@ entities this layer carries are those of `agent-domain.md`,
 `worker-domain.md` and `engine-domain.md`, whose "Below the domain"
 sections say what each domain is owed. skein's machines (TLS, HTTP,
 server-sent events, JSON) are designed in skein's `docs/design`. This
-document is the overview: each boundary is designed in depth before it is
-built, in its section here until it outgrows it. What is open is listed
-in section 11.
+document is the overview; each boundary is designed in depth in a
+document of its own:
+
+- `channel.md`: temper's channel, between the engine and a worker and
+  between a worker and an agent;
+- `credentials.md`: where secrets live, LLM accounts and their grants;
+- `llm.md`: the agent's LLM client, and the fake provider's server;
+- `forge.md`: the engine's forge client, its blocks and webhooks, and the
+  fake forge's server.
+
+Each lists what the domains owe it and what is open in it; what is open
+across them is in section 11.
 
 ## 1. In one page
 
@@ -110,11 +119,13 @@ calls inside channel messages (section 4).
   and `worst_case`: its connections, intake and output caps, the largest
   message of each kind, and its decoders' stack depths.
 - **What outlives a process carries a version:** the engine's blocks in
-  forge comments and wiki pages, the store's records and the credentials
-  file. A new engine reads what the one before it wrote.
-- **Configuration is data,** read by the shell at startup: peers'
-  addresses (names are resolved then: skein's io connects to addresses),
-  certificates and the credentials file (section 5).
+  forge comments and wiki pages, the store's records and the LLM
+  accounts' rotated tokens. A new engine reads what the one before it
+  wrote.
+- **Configuration is in memory at startup:** peers' addresses (names are
+  resolved then: skein's io connects to addresses), certificates and
+  secrets. Where it comes from is the shell's business, not this
+  layer's.
 
 ## 4. temper's channel
 
@@ -128,13 +139,15 @@ with each agent it spawns (worker-domain.md, section 6).
   fixed-width integers and length-prefixed bytes, read with a `Reader`
   into a plain struct and written with a `Writer` of its exact length.
   Both ends are temper's, so there is no JSON on the channels.
-- **The hello opens each channel.** The first message each way says the
-  protocol version; on the engine's link, the worker's also carries its
-  name and secret, and the domain's hello (worker-domain.md, section 2),
-  in one message. A version or a secret the other end does not accept is
-  refused with a small fixed-size refusal, and the connection closes
-  before either domain hears of it.
-- **The version is agreed at the hello.** The hello's layout never
+- **Opening comes before the domains' hello.** The side that starts the
+  channel sends `Open` (the versions it speaks, and on the engine's link
+  the worker's name and secret); the other answers `Accept` with the
+  version, or `Refuse`. Each side then sends its `Terms`, the largest
+  body it accepts per kind, so a mismatch of limits is refused at once
+  rather than on the first large message. Only then does either domain
+  hear of the channel, and the domains' hello (worker-domain.md, section
+  2) is the first versioned message (channel.md, section 4).
+- **The version is agreed at opening.** The opening's layout never
   changes, so any two releases can read each other's. Each side says the
   range of versions it speaks, and the channel uses the highest both
   speak, or is refused if there is none. Every frame and payload schema
@@ -144,9 +157,9 @@ with each agent it spawns (worker-domain.md, section 6).
   - **Rolling upgrades later.** A release that speaks two versions adds
     codecs; the handshake stays as it is.
   - **An agent speaks its worker's version.** The engine learns that
-    version at the hello and encodes the run's payloads for it.
+    version at opening and encodes the run's payloads for it.
   - **Unknown kinds are framing errors.** Since the version is agreed at
-    the hello, a kind it does not define cannot come from a newer peer.
+    opening, a kind it does not define cannot come from a newer peer.
 - **Liveness, on the engine's link only.** A side that has sent nothing
   for an interval sends a ping; a link that has heard nothing for longer
   is lost, and the domains' graces begin. On an agent's channel, a process
@@ -203,9 +216,9 @@ with each agent it spawns (worker-domain.md, section 6).
   refresh token, and the access token it last bought with its expiry.
 - **One process refreshes an account.** A provider may rotate the refresh
   token each time it is used, so two processes refreshing one account
-  would spend it twice. The engine refreshes, and writes each rotated
-  token to its credentials file, atomically, before the access token it
-  bought is handed out, so a crash between the two loses neither.
+  would spend it twice. The engine refreshes, and makes each rotated
+  token durable before the access token it bought is handed out, so a
+  crash between the two loses neither.
 - **Accounts are the engine's domain's.** The domain decides when to
   refresh (a margin before expiry), which account a run uses, and what a
   failed refresh or an exhausted account means: the runs that need it
@@ -225,8 +238,8 @@ with each agent it spawns (worker-domain.md, section 6).
   sends. An entry goes once its token has expired or its name is
   released.
 - **Logging in** comes later, through the web. For now an account starts
-  from a grant made by the provider's own login and imported once into
-  the credentials file.
+  from a grant made by the provider's own login, which the engine is
+  given at startup.
 
 ## 6. LLM providers
 
@@ -243,10 +256,11 @@ with each agent it spawns (worker-domain.md, section 6).
   limits. Nothing goes up as JSON text.
 - **Failures, classified** by status and by the provider's error type into
   the session's failures: rate limited with when to try again,
-  overloaded, unauthorized (renew the grant), the account exhausted (the
-  account is spent, not the run), refused, malformed, and cut short (a
-  stream that ends without its last event). Whether to try again is the
-  session's decision.
+  overloaded, unauthorized (the engine is told, and a fresh grant
+  follows), the account exhausted (the account is spent, not the run),
+  invalid, and unavailable, which a malformed or cut stream is too. A
+  refusal is a stop reason, not a failure. Whether to try again is the
+  session's decision (llm.md, section 7).
 - **A provider's identity in one place.** Anthropic's OAuth route admits
   only requests shaped like its own command-line client's (its headers
   and its system prompt), and has changed that shape before; each
@@ -295,9 +309,13 @@ rate of change.
   reads from the forge (`/settings/api`) at startup: a listing without
   both a page and its size is never sent, since Forgejo's Actions
   listings ignore the size without the page and answer with everything.
-- **Listings decoded into summaries.** An item's body is skipped as it
-  streams past; a read fetches one item, or one page of what it asks
-  for, never a whole thread to search.
+- **Listings carry no text.** Of each item, only the head of its body is
+  captured, for the engine's key; titles and bodies come with an item's
+  read. A read of an item's comments starts from a time, since Forgejo
+  does not page them, so only a cold read streams a whole thread, once
+  (forge.md, section 3).
+- **Every call reports its cost:** the requests it took, so the domain's
+  budget charges what the forge served, not one per call.
 - **No retries** (section 3). A refusal for the rate goes up with its
   reset, and the domain's budget stops every call until then.
 - **A few persistent connections,** one exchange each, under a cap on
@@ -359,7 +377,9 @@ In order, each boundary designed in depth first:
 1. **temper's channel:** `temper-channel`, then the engine's, the
    worker's and the agent's protocol layers for it, and protocol worlds
    running the system worlds' scenarios through bytes. It needs nothing
-   new from skein.
+   new from skein while workers share the engine's host, the link in
+   plaintext on loopback; workers on other hosts wait for skein's TLS
+   server side.
 2. **LLM providers and credentials:** accounts in the engine's domain and
    grants on the channels (below); both providers; the fake LLM
    provider's protocol layer; and from skein, its first pull: the TLS
@@ -368,16 +388,30 @@ In order, each boundary designed in depth first:
    layer, the call counts and the real Forgejo check.
 4. **People, git, MCP and the store.**
 
-What the domains owe this layer, found while designing it:
+What the domains owe this layer is listed where it was found:
+channel.md, section 14; credentials.md, section 9; llm.md, section 13;
+forge.md, section 12. Each is built with the boundary that needs it.
 
-- **The engine:** LLM accounts, with their refresh, their failures and
-  their exhaustion; a grant in each assignment; renewing a grant as a
-  relayed call.
-- **The agent:** grants held by name, renewed before they expire and
-  after an unauthorized call; an exhausted account as a failure of its
-  own.
-- **The worker:** grants relayed by name, with the rest of a run's calls.
+What skein owes it, beyond the machines its documents plan:
+
+- **TLS's server side,** for the engine's link with workers on other
+  hosts, and its webhooks;
+- **JSON:** skipping a value on demand, and taking a long string in
+  pieces (a head kept, the whole digested, the rest skipped);
+- **HTTP:** a server that answers before the domain hears, and a client
+  that says whether any byte of a request was written;
+- **server-sent events** large enough for ChatGPT's echoes of a request.
 
 ## 11. Open questions
 
-None yet beyond the domains' own (section 4 names the one it meets).
+Each document keeps its own; these cross them:
+
+- **Names while running.** io connects to addresses, resolved at
+  startup, while workers and the engine live long and providers' and
+  forges' addresses move behind their CDNs. skein's DNS client would
+  mend it (llm.md, section 15).
+- **HTTP/1.1 only.** Both LLM providers and Forgejo serve it today; a
+  peer that required HTTP/2 would need skein to grow it.
+- **Recording real traffic,** from the LLM providers and the forge, as
+  transcripts: room is left for it at each boundary (llm.md, section 14;
+  forge.md, section 11), and it is not built yet.

@@ -715,7 +715,9 @@ forge's history.
 
 ## 13. Below the domain
 
-What the protocol and io layers owe the domain, to be designed after it:
+What the protocol and io layers owe the domain. The protocol layer is
+designed in protocol.md, with the forge in forge.md, the workers' channel
+in channel.md and credentials in credentials.md:
 
 - **The forge:** each provider's HTTP API, Forgejo first; pagination;
   webhooks and their signatures; the record and outcome blocks inside
@@ -794,8 +796,10 @@ the names runs and attempts take on a worker's channel.
   did not take, while the inbox position must move only past what the
   run took (4.3; worker-domain.md, section 10). The same holds for
   events relayed on a channel that is then lost: the engine counts them
-  as delivered (protocol.md, section 4). A bounce naming the event, or an
-  answer saying how many the run read, would settle both.
+  as delivered (protocol.md, section 4). channel.md settles both on the
+  wire: each event is named, a bounce names it, and a run's waiting names
+  the last one it read; what the domains must change for it is that
+  document's section 14.
 - **An item closed under a live run:** the run is told its item is done,
   and the hub learns it once the run has answered; whether a person's
   close should cancel the run at once.
@@ -873,3 +877,14 @@ each to be designed before it is built:
 - **Templates in the wiki,** and provisioning a repository (section 15).
 - **Plans in the whole worker's world:** it runs every story but the
   plans' (testing.md, section 9).
+- **What the protocol layer's design asks of the domain** (forge.md,
+  section 12; channel.md, section 14; credentials.md, section 9):
+  - LLM accounts, a child domain of their own, and grants to the
+    attempts that use them;
+  - typed models in a charter, so the engine knows which accounts a run
+    needs;
+  - inbound events named, and landings by the repository's tag;
+  - an item's comments read from a time;
+  - each call's cost, charged to the request budget;
+  - hints naming who caused them, so the engine's own echoes are dropped;
+  - listings without text, and the wiki's listing by an opaque cursor.
