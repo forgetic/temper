@@ -20,7 +20,7 @@ the document or crate it changes, and moves there when it is made.
   | Concern | What it costs | Fix | Effort | When |
   |---|---|---|---|---|
   | Bytes of unknown length (3) | quadratic copying, if done naively | two lib containers | small | before the protocol layer |
-  | Copy at emission, every turn (4) | peak memory, up to three copies of a transcript | count the copies; drop the prompt once encoded | small | with the protocol layer |
+  | Copy at emission, every turn (4) | peak memory, up to three copies of a transcript | count the copies; encode in pieces | small | with the protocol layer |
   | The general allocator (5) | page faults, fragmentation | glibc tuning, or another allocator, in the shell | small | after measuring |
   | A worst case of maximums (6) | memory headroom, not speed | the byte budget of style 6.4 | moderate | only if it bites |
 
@@ -122,21 +122,48 @@ io. The session's worst case counts the transcript once
 (`crates/temper-agent-model-session/src/limits.rs:85`); the copy is its
 receiver's to count. **Fix,** when the protocol layer is written:
 
-- its worst case counts, for each call in flight, a prompt at the session
-  byte limit and an encoded body at its escaped worst case (a control
-  byte escapes to six), or caps the encoded body with a limit of its own;
-- it drops the prompt as soon as it has encoded it, so for most of a call
-  the session's bytes are held twice;
-- or it measures the whole body first (the sized writer does), sends the
-  length, and encodes the rest piece by piece as io grants room, so the
-  encoded body never exists whole.
+- **Count the copies.** Its worst case counts, for each call in flight, a
+  prompt at the session byte limit and an encoded body. JSON escaping can
+  make a body up to six times its raw bytes (a control byte escapes to
+  `\u0000`), though text grows by a few percent, so a limit of its own on
+  the encoded body is better than counting six times. The JSON writer
+  measures before it writes, so a prompt over that limit is refused
+  before anything is allocated for it.
+- **Encode in pieces.** The protocol layer measures the whole prompt for
+  the length it sends in the head, then encodes the next piece each time
+  io grants room, so the encoded body never exists whole. This also
+  keeps a send within io's cap on queued output, which a body of a
+  megabyte sent at once could exceed.
+- Dropping the prompt as soon as it is encoded whole is the lesser
+  option: the bytes are held twice for most of a call, but the worst
+  case still counts the moment they are held three times.
 
-**Removing the copy** is possible but not worth doing unless measured: the
-transcript only grows at its end, so the protocol layer could keep each
-session's encoded transcript and the session send only the messages
-added since the last call. That changes the contract between the session
-and the protocol layer, the fake LLM and their worlds: moderate work,
-for a cost that does not show.
+**Removing the copy** is possible, and not worth doing unless measured.
+
+- The protocol layer could keep each session's encoded transcript, and
+  the session send only the messages added since the last call. That
+  makes memory worse, not better: the second copy would live as long as
+  the session, not only while a call is in flight.
+- The session could instead lend its transcript by move, as io lends a
+  buffer to the kernel (style, 6.3). `Complete` moves the prompt down,
+  and every terminal event of the call (`Completed`, `Failed`,
+  `Cancelled`) moves it back. The session does not touch its transcript
+  while a call is in flight (the answer is appended, and its tools run,
+  once the call has ended), so the reason for copying at emission does
+  not apply. The bytes are then held once, plus the piece being
+  encoded. The price is a change to the contract between the session and
+  the protocol layer, the fake LLM and their worlds, and a session that
+  cannot be snapshotted while a call is in flight.
+
+| Approach | Held for each call in flight |
+|---|---|
+| Copy; encode the whole body | about three times the transcript |
+| Copy; drop the prompt once encoded | three times briefly, then twice |
+| Copy; encode in pieces | twice, plus a piece |
+| Lend by move; encode in pieces | once, plus a piece |
+
+Counting the copies and encoding in pieces is enough for now; lending is
+the option to take if memory ever matters.
 
 ## 5. The general allocator
 
