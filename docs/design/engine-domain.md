@@ -792,8 +792,10 @@ the names runs and attempts take on a worker's channel.
 - **Bounced inbox events:** a worker's bounce says why, not which event
   it was, so the engine cannot tell which of the events it relayed a run
   did not take, while the inbox position must move only past what the
-  run took (4.3; worker-domain.md, section 10). A bounce naming the event,
-  or an answer saying how many the run read, would settle it.
+  run took (4.3; worker-domain.md, section 10). The same holds for
+  events relayed on a channel that is then lost: the engine counts them
+  as delivered (protocol.md, section 4). A bounce naming the event, or an
+  answer saying how many the run read, would settle both.
 - **An item closed under a live run:** the run is told its item is done,
   and the hub learns it once the run has answered; whether a person's
   close should cancel the run at once.

@@ -163,16 +163,29 @@ with each agent it spawns (worker-domain.md, section 6).
   channel: that would stall every other peer behind it. Three things keep
   the cap from being reached:
   - **Most messages are bounded by the domains' own limits.** These are
-    assignments, cancels, acknowledgements, relayed calls and their
-    answers, and inbound events. Their counts follow from slots, calls in
-    flight and inboxes, so each channel's cap is sized from those
-    limits.
+    assignments, cancels, acknowledgements, and relayed calls with their
+    answers. Their counts follow from slots and calls in flight, so each
+    channel's cap is sized from those limits.
+  - **Inbound events are bounded in bursts.** An item's inbox keeps what
+    it relayed until the run answers, so a burst to one run is at most an
+    inbox. A notice replaced after a run was given it goes again. Those
+    repeats come only as fast as decisions are made, and a peer that is
+    reading drains them.
   - **Facts are pulled.** They are the one stream with no such bound, so
     they wait in a bounded queue of the domain's until the protocol layer
     has room for them. Past that queue, they are dropped and counted
     (worker-domain.md, section 2).
-  - **A channel that still fills its cap is closed.** Its peer has stopped
-    reading, so the domains see it as lost, which they already survive.
+  - **A channel that stops draining is closed.** If its output has not
+    drained a chunk within its progress deadline, or still fills its cap,
+    its peer has stopped reading. The domains then see the channel as
+    lost, which they already survive.
+
+  So there is no credit for the domains to track. Credit would add state
+  and events to three domains, for traffic that moves at the pace of the
+  forge and people, and its only gain would be over a peer the deadline
+  closes anyway. What a run was relayed on a channel that is lost,
+  however it is lost, is the engine's open question of inbound events
+  (engine-domain.md, section 15).
 - **Names.** A run goes by its item, and an attempt by its item and its
   count, as the system worlds already name them (testing.md, 4.5); the
   protocol layers pack them into the domains' tokens.
@@ -367,8 +380,4 @@ What the domains owe this layer, found while designing it:
 
 ## 11. Open questions
 
-- **Sizing the channels' caps:** whether the domains' limits bound every
-  message on a channel tightly enough. Inbound events are the one to
-  check: an event, once sent, is no longer held by the engine.
-  Otherwise, a peer that is slow but still reading could have its channel
-  closed in normal running.
+None yet beyond the domains' own (section 4 names the one it meets).
