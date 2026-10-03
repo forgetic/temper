@@ -57,7 +57,9 @@ pub struct Settings {
     pub stories: Vec<Story>,
     pub people: Span,
     /// The chance, per mille, that a person stops a run they see assigned,
-    /// a drawn `stop_after` later.
+    /// a drawn `stop_after` later, if they have not stopped its item's runs
+    /// before; a session they stopped they wake with a message once it is
+    /// released.
     pub stops: u32,
     pub stop_after: Span,
     pub store: store::Script,
@@ -135,13 +137,32 @@ impl Settings {
     /// more than the worker's grace, duplicates frames and stalls; git that
     /// fails, refuses and finds branches moved; process trees that fail to
     /// spawn and leave children; agents that misbehave every way the script
-    /// knows; people who stop runs; and, in some worlds, a shutdown. A world
-    /// for the random sweep.
+    /// knows; people who stop runs; an engine whose grace for a lost worker
+    /// is shorter than the worker's in some worlds, longer in others, and
+    /// which retries a failed run as often as the engine's world in some;
+    /// and, in some worlds, a shutdown. A world for the random sweep.
     #[must_use]
     pub fn rough(seed: u64) -> Settings {
         let calm = Settings::calm(seed);
         let mut rng = Rng::new(seed ^ 0x5eed);
+        // The engine's grace for a lost worker on either side of the
+        // worker's own, the deployment's default among them; and its retries
+        // the engine world's in some worlds, more in the others.
+        let graces = [
+            deployment::LIMITS.fleet.grace,
+            Duration::from_secs(45),
+            Duration::from_secs(70),
+            Duration::from_secs(120),
+        ];
+        let grace = graces[usize::try_from(rng.below(4)).expect("few")];
+        let retries = if rng.chance(300) { deployment::LIMITS.work.retries } else { calm.engine.work.retries };
+        let engine = engine::Limits {
+            work: engine::work::Limits { retries, ..calm.engine.work },
+            fleet: engine::fleet::Limits { grace, ..calm.engine.fleet },
+            ..calm.engine
+        };
         Settings {
+            engine,
             worker: Limits {
                 agent: agent::Limits { wall_time: Duration::from_secs(300), ..calm.worker.agent },
                 ..calm.worker
@@ -401,7 +422,7 @@ const SCRIPT: script::Script = script::Script {
 
 /// What the world counted, by name, that the sweep must reach on the
 /// engine's side.
-pub const ENDINGS: [&str; 10] = [
+pub const ENDINGS: [&str; 11] = [
     "acknowledged",
     "assigned",
     "cancelled",
@@ -412,6 +433,7 @@ pub const ENDINGS: [&str; 10] = [
     "reviewed",
     "stopped",
     "story closed",
+    "woken",
 ];
 
 /// What the world counted.
@@ -652,8 +674,11 @@ enum Asking {
     /// A story's person, or the caretaker; the item a message was for, its
     /// key and its text; and the item an acceptance was for.
     People(Asker, Option<(Item, Vec<u8>, Vec<u8>)>, Option<Item>),
-    /// A person stopping the item's run.
+    /// A person stopping the item's run; and waking the item, a session
+    /// they stopped that was released since, with a message: its key and
+    /// its text.
     Stopper(Item),
+    Waker(Item, Vec<u8>, Vec<u8>),
 }
 
 pub struct World {
@@ -749,8 +774,11 @@ pub struct World {
     people: People,
     store: Store,
     mirror: Mirror,
-    /// The items whose runs a person stopped, or will.
+    /// The items whose runs a person stopped, or will, once each; and the
+    /// sessions they stopped, which they wake with a message once released.
     stopping: BTreeSet<Item>,
+    stopped_sessions: BTreeSet<Item>,
+    wakes: u64,
     /// The first assignment of each attempt the engine made.
     first: BTreeSet<(Item, u64)>,
 
@@ -835,6 +863,8 @@ impl World {
             store: Store::new(settings.store, rng.next_u64(), TRACES),
             mirror: Mirror::default(),
             stopping: BTreeSet::new(),
+            stopped_sessions: BTreeSet::new(),
+            wakes: 0,
             first: BTreeSet::new(),
             stories: Referee::new(stories::Engine::new(settings.bounds, settings.stories.len())),
             hosting: Referee::new(Hosting::new(settings.bounds.story)),

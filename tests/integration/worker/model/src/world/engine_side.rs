@@ -86,7 +86,7 @@ impl World {
                         });
                     self.stories.observe(self.now, Told::Assigned { item, attempt, live, brief }, &mut Vec::new());
                     self.stories.assert_holding(self.settings.seed);
-                    if self.is_change(item) && !self.stopping.contains(&item) && self.rng.chance(self.settings.stops) {
+                    if !self.stopping.contains(&item) && self.rng.chance(self.settings.stops) {
                         self.stopping.insert(item);
                         let at = self.now.saturating_add(self.settings.stop_after.draw(&mut self.rng));
                         self.send(at, Delivery::Stop(item));
@@ -155,17 +155,29 @@ impl World {
                     self.stories.observe(self.now, Told::Messaged { item, key, text }, &mut Vec::new());
                     self.stories.assert_holding(self.settings.seed);
                 }
-                if let Asker::Caretaker(_) = asker
+                if let Asker::Caretaker(item) = asker
                     && reply == Reply::Done
                 {
                     self.end("released");
+                    if self.stopped_sessions.remove(&item) {
+                        self.wake(item);
+                    }
                 }
                 self.people.replied(asker, reply, messaged);
             }
             Asking::Stopper(item) => {
-                self.stopping.remove(&item);
                 if reply == Reply::Done {
                     self.end("stopped");
+                    if self.is_session(item) {
+                        self.stopped_sessions.insert(item);
+                    }
+                }
+            }
+            Asking::Waker(item, key, text) => {
+                if reply == Reply::Done {
+                    self.end("woken");
+                    self.stories.observe(self.now, Told::Messaged { item, key, text }, &mut Vec::new());
+                    self.stories.assert_holding(self.settings.seed);
                 }
             }
         }
@@ -359,20 +371,28 @@ impl World {
         self.desk.push(engine::Event::Ask { reply_to: ReplyTo::new(Token::new(name)), person, ask });
     }
 
-    /// Whether the item carries a change: a run a person may stop, whose
-    /// item a release makes due again. (A session stopped waits, once
-    /// released, for its person's next message, which no story sends.)
-    fn is_change(&self, item: Item) -> bool {
+    /// Whether the item carries a session: one stopped waits, once released,
+    /// for its person's next message.
+    fn is_session(&self, item: Item) -> bool {
         let record = self.mirror.record(deployment::name(item.repository), item.number);
         record.is_some_and(|record| match record.step.step.work {
-            engine::plan::Work::Change(_) => true,
-            engine::plan::Work::Agent(_) | engine::plan::Work::Wait(_) | engine::plan::Work::Session(_) => false,
+            engine::plan::Work::Session(_) => true,
+            engine::plan::Work::Agent(_) | engine::plan::Work::Wait(_) | engine::plan::Work::Change(_) => false,
         })
     }
 
     /// A person stops the item's run.
     pub(super) fn stop_run(&mut self, item: Item) {
         self.ask(Asking::Stopper(item), STOPPER, Ask::Stop { item });
+    }
+
+    /// The person who stopped a session wakes it, released, with a message.
+    fn wake(&mut self, item: Item) {
+        self.wakes += 1;
+        let key = format!("wake-{}", self.wakes).into_bytes();
+        let text = b"carry on".to_vec();
+        let ask = Ask::Message { item, key: key.clone().into(), message: text.clone().into() };
+        self.ask(Asking::Waker(item, key, text), STOPPER, ask);
     }
 }
 

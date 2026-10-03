@@ -371,6 +371,20 @@ fn a_run_a_person_stops_is_cancelled_and_its_calls_answered_unavailable() {
 /// A worker that takes charters smaller than the engine's sessions give
 /// refuses them; it shuts down a while later, and the worker that takes
 /// over takes them.
+/// Sessions a person stops: each is held, released by the caretaker, and
+/// woken by its person's message, and it finishes.
+#[test]
+fn a_session_a_person_stops_is_released_and_woken_by_a_message() {
+    let worlds = worlds(2, |calm| Settings {
+        stories: vec![Story::Hello, Story::Chat],
+        stops: 1000,
+        stop_after: Span::millis(1_000, 5_000),
+        ..calm
+    });
+    assert!(total(&worlds, |stats| ending(stats, "stopped")) > 0);
+    assert!(total(&worlds, |stats| ending(stats, "woken")) > 0, "and woken once released");
+}
+
 #[test]
 fn an_assignment_beyond_the_workers_limits_is_refused_invalid() {
     let settings = Settings::only(3, &[Story::Hello]);

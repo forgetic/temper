@@ -28,7 +28,8 @@
 //! - **people** (the engine world's [`temper_engine_model_tests::people`]),
 //!   who hand issues in, open sessions and message them, review what CI
 //!   passed, correct notes, release what is held and close what they gave
-//!   up on; and a person who now and then stops a run;
+//!   up on; and a person who now and then stops a run, once an item, and
+//!   wakes a session they stopped with a message once it is released;
 //! - **the engine's store**: snapshots and traces, in memory;
 //! - **agent processes:** the agent world's process trees and scripted agents
 //!   (`temper_worker_model_agent_tests`), which work, call the host, push,
