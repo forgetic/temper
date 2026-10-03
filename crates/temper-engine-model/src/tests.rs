@@ -2056,6 +2056,18 @@ fn hold_told(world: &mut World, item: Item) -> Option<work::Hold> {
     why
 }
 
+/// Gives a change's review a megabyte of instructions.
+fn wordy_review(record: &mut crate::boundary::Record) {
+    if let plan::Work::Change(spec) = &mut record.step.step.work {
+        let mut instructions = List::with_capacity(1 << 20);
+        for _ in 0_u32..1 << 20_u32 {
+            instructions.push(b'x').unwrap();
+        }
+        let instructions = instructions.into_boxed();
+        spec.review = plan::Review::Agent(plan::Charter { instructions, ..spec.produce.clone() });
+    }
+}
+
 #[test]
 fn a_record_whose_step_the_plan_could_not_have_written_is_held_not_run() {
     let (mut world, session) = World::session();
@@ -2064,16 +2076,7 @@ fn a_record_whose_step_the_plan_could_not_have_written_is_held_not_run() {
     let change = Item { repository: 0, number: 2 };
     assert_eq!(assigned(world.seen.as_slice(), change).as_slice(), [1], "the change runs");
     // A person gives its review a megabyte of instructions.
-    edit_record(&mut world, change, |record| {
-        if let plan::Work::Change(spec) = &mut record.step.step.work {
-            let mut instructions = List::with_capacity(1 << 20);
-            for _ in 0_u32..1 << 20_u32 {
-                instructions.push(b'x').unwrap();
-            }
-            let instructions = instructions.into_boxed();
-            spec.review = plan::Review::Agent(plan::Charter { instructions, ..spec.produce.clone() });
-        }
-    });
+    edit_record(&mut world, change, wordy_review);
     world.restart();
     let hello = Hello { slots: 2, workstreams: Box::new([]), hosting: Box::new([]) };
     world.deliver(Event::Hello { channel: Token::new(2), hello });
@@ -2234,4 +2237,86 @@ fn a_change_whose_landing_waits_on_the_rules_stalls_at_its_deadline() {
     world.wait(3600);
     let stalled = work::Hold::Plan { reason: translate::hold(plan::Hold::Stalled) };
     assert_eq!(held_for(&mut world, change), Some(stalled), "held as stalled at its deadline");
+}
+
+#[test]
+fn a_run_the_rules_refuse_is_held_under_the_top_levels_own_code() {
+    let (mut world, session) = World::session();
+    world.deliver(Event::Answer { channel: Token::new(1), item: session, attempt: 1, answer: replied_answer() });
+    // The deployment's runs have spent nearly all it may: the next turn
+    // would spend past it.
+    world.model.spent = 99_500;
+    message(&mut world, session, b"m1", 60);
+    let refused = work::Hold::Plan { reason: translate::RUN_REFUSED };
+    assert_eq!(held_for(&mut world, session), Some(refused), "held before it is claimed");
+    assert_eq!(assigned(world.seen.as_slice(), session).as_slice(), [1], "and nothing runs");
+}
+
+#[test]
+fn a_pull_request_retargeted_since_its_change_was_planned_is_not_merged() {
+    let (mut world, change, pull, head) = opened_change();
+    world.forge.change(pull).unwrap().base = copy_of(b"feat");
+    let review = api::Review {
+        id: 503,
+        author: ALICE,
+        verdict: api::Verdict::Approve,
+        commit: head,
+        key: None,
+        body: copy_of(b"ok"),
+    };
+    world.forge.change(pull).unwrap().reviews.push(review).unwrap();
+    world.forge.issue(pull).unwrap().updated = world.env().now;
+    while world.model.pop_fact().is_some() {}
+    world.deliver(Event::Hint { repository: 0, item: Some(pull.number), commit: None, branch: None });
+    world.wait(30);
+    assert!(world.forge.change(pull).unwrap().merged.is_none(), "it lands nowhere it was not planned to");
+    let mut refused = false;
+    while let Some(fact) = world.model.pop_fact() {
+        refused |= fact == (crate::facts::Fact::Ruled { item: change, refused: true });
+    }
+    assert!(refused, "the rules refused the merge");
+}
+
+/// An agent step that may spend 400 tokens.
+fn costly(name: &[u8]) -> plan::Step {
+    let charter = plan::Charter {
+        instructions: copy_of(b"look into it"),
+        template: None,
+        grants: plan::Grants { modify: false, shell: false, forge: true, subagents: false, note: false },
+        budget: Budget { tokens: 400, turns: 5, time: Duration::from_secs(60) },
+    };
+    plan::Step { work: plan::Work::Agent(plan::AgentSpec { charter, grows: false }), ..task(name) }
+}
+
+#[test]
+fn tasks_spending_past_what_a_plan_may_without_acceptance_wait_for_it() {
+    let (mut world, session) = World::session();
+    let tasks = crate::boundary::Outcome::Tasks {
+        tasks: Box::new([costly(b"a"), costly(b"b"), costly(b"c")]),
+        text: copy_of(b"on it"),
+    };
+    world.deliver(Event::Answer { channel: Token::new(1), item: session, attempt: 1, answer: ended(tasks) });
+    assert_eq!(held_for(&mut world, session), Some(work::Hold::Acceptance), "the rules want a person to accept them");
+    assert!(world.forge.issue(Item { repository: 0, number: 2 }).is_none(), "and none is made before");
+}
+
+#[test]
+fn a_released_session_takes_the_turn_it_never_had() {
+    let (mut world, session) = World::session();
+    for attempt in 1_u64..=3 {
+        let failed = crate::boundary::Answer::Failed {
+            failure: crate::boundary::Failure::Run,
+            work: crate::boundary::Work { landed: Box::new([]) },
+        };
+        world.deliver(Event::Answer { channel: Token::new(1), item: session, attempt, answer: failed });
+        world.wait(10);
+    }
+    assert_eq!(held_for(&mut world, session), Some(work::Hold::Failures(work::Class::Run)), "held for its failures");
+    world.deliver(Event::Ask {
+        reply_to: ReplyTo::new(Token::new(61)),
+        person: ALICE,
+        ask: Ask::Release { item: session },
+    });
+    world.wait(10);
+    assert_eq!(assigned(world.seen.as_slice(), session).as_slice(), [1, 2, 3, 4], "released, it runs again");
 }
