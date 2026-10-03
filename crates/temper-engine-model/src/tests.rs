@@ -451,7 +451,7 @@ impl Forge {
         let item = Item { repository, number: self.numbers };
         self.numbers += 1;
         let updated = self.now;
-        self.issues.push(Issue { item, labels, open: true, updated, comments: List::with_capacity(32) }).unwrap();
+        self.issues.push(Issue { item, labels, open: true, updated, comments: List::with_capacity(128) }).unwrap();
         item
     }
 
@@ -504,7 +504,7 @@ impl Forge {
         decoded: &mut List<crate::boundary::Decoded>,
     ) -> Result<api::Answer, api::Error> {
         let Some(issue) = self.issue(item) else { return Err(api::Error::Missing) };
-        let mut comments = List::with_capacity(32);
+        let mut comments = List::with_capacity(128);
         for note in &issue.comments {
             if note.id <= after {
                 continue;
@@ -533,7 +533,7 @@ impl Forge {
         op: api::Op,
         payload: Option<crate::boundary::Payload>,
     ) -> (Result<api::Answer, api::Error>, List<crate::boundary::Decoded>) {
-        let mut decoded = List::with_capacity(32);
+        let mut decoded = List::with_capacity(128);
         let answer = match op {
             api::Op::Items { state, label, since, page, .. } => {
                 Ok(self.listing(repository, state, label.as_deref(), since, page))
@@ -1692,4 +1692,97 @@ fn a_release_the_hub_refuses_changes_nothing() {
         world.wait(30);
     }
     assert_eq!(assigned(world.seen.as_slice(), item).as_slice(), [1], "the session takes no turn of its own");
+}
+
+/// Whether a message reached the attempt `attempt` of `item`, in what the
+/// workers were sent: a comment relayed to it.
+fn relayed_comment(seen: &[Request], item: Item, attempt: u64) -> bool {
+    for request in seen {
+        if let Request::Inbound { item: of, attempt: at, event: crate::boundary::Inbound::News(news), .. } = request
+            && *of == item
+            && *at == attempt
+            && let forge::News::Comment { .. } = news
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// A person's message on `item`, which the forge sub-model is hinted at and
+/// reads.
+fn message(world: &mut World, item: Item, key: &[u8], reply_to: u64) {
+    let ask = Ask::Message { item, key: copy_of(key), message: copy_of(b"and another thing") };
+    world.deliver(Event::Ask { reply_to: ReplyTo::new(Token::new(reply_to)), person: ALICE, ask });
+    world.deliver(Event::Hint { repository: 0, item: Some(item.number), commit: None, branch: None });
+    world.wait(60);
+}
+
+#[test]
+fn a_message_reaches_a_supervisor_whatever_its_steps_escalated_meanwhile() {
+    let (mut world, session) = World::session();
+    world.deliver(Event::Answer { channel: Token::new(1), item: session, attempt: 1, answer: ended(proposal()) });
+    world.deliver(Event::Ask {
+        reply_to: ReplyTo::new(Token::new(29)),
+        person: ALICE,
+        ask: Ask::Accept { item: session },
+    });
+    let task = Item { repository: 0, number: 2 };
+    assert_eq!(assigned(world.seen.as_slice(), task).as_slice(), [1], "the plan's step runs");
+    message(&mut world, session, b"m1", 30);
+    assert_eq!(assigned(world.seen.as_slice(), session).as_slice(), [1, 2], "the message wakes the session");
+    // The task escalates, again and again, while the session's turn is live:
+    // the session hears of each.
+    let from = world.seen.len();
+    for call in 1_u64..=40 {
+        let escalate = crate::boundary::Call::Escalate { text: copy_of(b"stuck") };
+        world.deliver(Event::Relay {
+            channel: Token::new(1),
+            item: task,
+            attempt: 1,
+            call: Token::new(call),
+            body: escalate,
+        });
+    }
+    let mut held = 0_u32;
+    for request in world.since(from) {
+        if let Request::Inbound { item: of, attempt: 2, event: crate::boundary::Inbound::Held { .. }, .. } = request {
+            held += u32::from(*of == session);
+        }
+    }
+    assert_eq!(held, 40, "the session hears of each escalation");
+    let from = world.seen.len();
+    message(&mut world, session, b"m2", 31);
+    assert!(
+        relayed_comment(world.since(from), session, 2),
+        "the message reaches the live turn: {:?}",
+        world.since(from)
+    );
+}
+
+#[test]
+fn news_the_inbox_had_no_room_for_is_told_again_once_a_turn_made_room() {
+    let (mut world, session) = World::session();
+    // The limits leave room for every news the forge sub-model holds: an
+    // inbox filled by hand stands for one that held more than it says.
+    let id = crate::items::find(&world.model, session).unwrap();
+    let entry = world.model.items.get_mut(id).unwrap();
+    for _ in 0..crate::limits::inbox(&LIMITS).unwrap() {
+        let seq = entry.next;
+        entry.next += 1;
+        let noted = crate::items::Noted {
+            inbound: crate::boundary::Inbound::Decided { accepted: true },
+            news: None,
+            source: plan::Source::Message,
+            at: Time::ZERO,
+            delivered: true,
+        };
+        entry.inbox.insert(seq, noted).unwrap();
+    }
+    let from = world.seen.len();
+    message(&mut world, session, b"m1", 32);
+    assert!(!relayed_comment(world.since(from), session, 1), "no room for the message");
+    world.deliver(Event::Answer { channel: Token::new(1), item: session, attempt: 1, answer: replied_answer() });
+    world.wait(60);
+    assert_eq!(assigned(world.seen.as_slice(), session).as_slice(), [1, 2], "the message, told again, wakes it");
 }

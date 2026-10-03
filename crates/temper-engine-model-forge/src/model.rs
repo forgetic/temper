@@ -256,6 +256,7 @@ pub fn step(model: &mut Model, env: &Env<Limits>, event: Event, out: &mut Queue<
         Event::Untrack { item } => items::untrack(model, env, item),
         Event::Link { item, pull } => items::link(model, env, item, pull),
         Event::Took { item, through } => items::took(model, env, item, through, out),
+        Event::Retell { item, from } => items::retell(model, item, from, out),
         Event::Hint { repository, item: _, commit, branch } => {
             scans::hint(model, env, repository, commit, branch.as_deref());
         }

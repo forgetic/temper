@@ -436,7 +436,8 @@ fn run(limits: Limits, seed: u64, rounds: u64) -> (Measured, u64) {
             0 => Event::Track { item },
             1 => Event::Untrack { item },
             2 => Event::Link { item, pull: Some(2 + 2 * rng.below(3)) },
-            3 => Event::Took { item, through: rng.below(6) },
+            3 if rng.chance(500) => Event::Took { item, through: rng.below(6) },
+            3 => Event::Retell { item, from: rng.below(6) },
             4 => {
                 let branch = if rng.chance(500) { Some(name(&limits, b'b')) } else { None };
                 Event::Hint { repository: item.repository, item: Some(item.number), commit: Some([1; 32]), branch }

@@ -17,7 +17,7 @@
 //!   made: the parent asks for it again, `resumed`, if it still wants it.
 //!   Everything else it tells unasked, as the forge changes: an item handed
 //!   in ([`Request::Offered`]), news for an item's inbox
-//!   ([`Request::Inbox`]), its labels changing ([`Request::Changed`]), its
+//!   ([`Request::Inbox`]: told again on [`Event::Retell`]), its labels changing ([`Request::Changed`]), its
 //!   leaving ([`Request::Left`]), an item the forge keeps refusing to show
 //!   ([`Request::Forbidden`]), room in the working set after a refusal
 //!   ([`Request::Room`]), and the end of the cold start
@@ -64,6 +64,10 @@ pub enum Event {
     /// The parent took `item`'s news up to and including `through`: the
     /// inbox position moves past them, and the next record written carries it.
     Took { item: Item, through: u64 },
+    /// The parent had no room for `item`'s news from the `from`th on, and
+    /// has room again: each of them still held, untaken, is told again, as
+    /// it was first told.
+    Retell { item: Item, from: u64 },
     /// A webhook: something changed in `repository`, about the item `item`,
     /// the commit `commit` (a status, a push) or the branch `branch` (a
     /// push) if it names one.

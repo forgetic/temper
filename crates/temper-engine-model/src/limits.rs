@@ -181,10 +181,17 @@ pub(crate) fn entries(limits: &Limits) -> Option<u32> {
 }
 
 /// The inbox an entry keeps: as much news as the forge sub-model holds for
-/// an item, and its notices, merged: one for each related item done (its
-/// dependencies and its children), one for each child held, and a decision.
+/// an item, and its notices' share beside it.
 pub(crate) fn inbox(limits: &Limits) -> Option<u32> {
-    limits.forge.inbox.checked_add(limits.plan.steps.checked_mul(3)?)?.checked_add(1)
+    limits.forge.inbox.checked_add(notices(limits)?)
+}
+
+/// The notices an entry's inbox keeps, merged, one of each kind: one for
+/// each related item done (its dependencies and its children, as many as a
+/// plan's steps each) and for the item itself, one for each child held, and
+/// a decision. One beyond them is dropped, never news.
+pub(crate) fn notices(limits: &Limits) -> Option<u32> {
+    limits.plan.steps.checked_mul(3)?.checked_add(2)
 }
 
 /// What may wait for an answer at once: a step of each item's job and its

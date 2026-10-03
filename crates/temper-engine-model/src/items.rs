@@ -80,7 +80,8 @@ pub(crate) struct Entry {
     /// The number the next inbox event gets.
     pub(crate) next: u64,
     /// The forge's number of the first news the inbox had no room for: the
-    /// inbox position stays before it.
+    /// inbox position stays before it, and the forge sub-model tells it
+    /// again once a run's answer made room.
     pub(crate) unkept: Option<u64>,
     /// The last comment the item's runs have taken, for a brief's comments.
     pub(crate) since: u64,
@@ -744,7 +745,16 @@ pub(crate) fn inbox(
     source: plan::Source,
 ) {
     let Some(entry) = model.items.get_mut(id) else { return };
-    if news.is_none() && !noticed(entry, inbound) {
+    let kept = match news {
+        // News after news the inbox had no room for waits on the forge with
+        // it, to be told again in order.
+        Some(number) => match entry.unkept {
+            Some(unkept) => number < unkept,
+            None => true,
+        },
+        None => noticed(entry, inbound, &env.limits),
+    };
+    if !kept {
         return;
     }
     let seq = entry.next;
@@ -752,10 +762,11 @@ pub(crate) fn inbox(
     entry.blocked = false;
     let noted = Noted { inbound, news, source, at: env.now, delivered: false };
     if entry.inbox.insert(seq, noted).is_err() {
-        // The forge sub-model holds no more news of an item than the inbox
-        // has room for beside its notices, which are merged: the limits rule
-        // this out. Were it to happen, the news stays on the forge: the
-        // inbox position never passes it, and a restart reads it again.
+        // Notices keep to their share, so the news the forge sub-model holds
+        // of an item fits beside them. News that still finds no room (were
+        // the forge sub-model to hold more than it says) stays on the forge:
+        // the inbox position stays before it, and once a run's answer has
+        // made room, the forge sub-model tells it again (`took`).
         if let Some(number) = news {
             entry.unkept = Some(match entry.unkept {
                 Some(unkept) => unkept.min(number),
@@ -772,16 +783,21 @@ pub(crate) fn inbox(
     route::work_step(model, env, work::Event::Inbox { item, event: Token::new(seq), wake });
 }
 
-/// Makes room for a notice of the item's relations among those no run has
-/// been given, merging it with one alike: whether it is to be put in. A
-/// related item done, or held, is noticed once until a run is given it; a
-/// decision replaces the one before.
-fn noticed(entry: &mut Entry, inbound: Inbound) -> bool {
+/// Makes room for a notice of the item's relations, merging it with one
+/// alike, whether a run was given that one or not: whether it is to be put
+/// in. A related item done, or held, is noticed once until a run is given
+/// it, and again once one was; a decision replaces the one before. So the
+/// notices keep to their share of the inbox (`limits::notices`), and one
+/// beyond it is dropped, never news.
+fn noticed(entry: &mut Entry, inbound: Inbound, limits: &Limits) -> bool {
     let mut earlier: Option<u64> = None;
+    let mut given = false;
+    let mut notices: u32 = 0;
     for (seq, noted) in &entry.inbox {
-        if noted.news.is_some() || noted.delivered {
+        if noted.news.is_some() {
             continue;
         }
+        notices = notices.saturating_add(1);
         let alike = match noted.inbound {
             Inbound::Decided { .. } => match inbound {
                 Inbound::Decided { .. } => true,
@@ -791,16 +807,24 @@ fn noticed(entry: &mut Entry, inbound: Inbound) -> bool {
         };
         if alike {
             earlier = Some(*seq);
+            given = noted.delivered;
         }
     }
-    let Some(seq) = earlier else { return true };
-    match inbound {
-        Inbound::Decided { .. } => {
-            entry.inbox.remove(&seq);
-            true
-        }
-        Inbound::News(_) | Inbound::Finished { .. } | Inbound::Held { .. } => false,
+    let Some(seq) = earlier else {
+        return match limits::notices(limits) {
+            Some(share) => notices < share,
+            None => false,
+        };
+    };
+    let replaces = given
+        || match inbound {
+            Inbound::Decided { .. } => true,
+            Inbound::News(_) | Inbound::Finished { .. } | Inbound::Held { .. } => false,
+        };
+    if replaces {
+        entry.inbox.remove(&seq);
     }
+    replaces
 }
 
 /// When the item's inbox wakes it: a session's wake rule says, from what its
@@ -865,13 +889,7 @@ pub(crate) fn took(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) {
         }
         let seq = *seq;
         if let Some(number) = noted.news {
-            let kept = match entry.unkept {
-                Some(unkept) => number < unkept,
-                None => true,
-            };
-            if kept {
-                news = Some(number);
-            }
+            news = Some(number);
         }
         match noted.inbound {
             Inbound::News(forge::News::Comment { id: taken, .. }) => comment = comment.max(taken),
@@ -884,6 +902,12 @@ pub(crate) fn took(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) {
     }
     entry.since = comment;
     let item = translate::forge_item(entry.item);
+    // News the inbox had no room for is told again, now that the answer
+    // made room, before the position moves: what the forge sub-model tells
+    // as it moves comes after it.
+    if let Some(from) = entry.unkept.take() {
+        route::forge_step(model, env, forge::Event::Retell { item, from });
+    }
     if let Some(through) = news {
         route::forge_step(model, env, forge::Event::Took { item, through });
     }

@@ -615,6 +615,7 @@ impl World {
                     Event::Link { item, pull } => self.observe(Seen::Linked { item: *item, pull: *pull }),
                     Event::Track { .. }
                     | Event::Took { .. }
+                    | Event::Retell { .. }
                     | Event::Hint { .. }
                     | Event::Write { .. }
                     | Event::Answered { .. } => {}
@@ -1093,6 +1094,7 @@ fn describe(event: &Event) -> String {
         | Event::Untrack { .. }
         | Event::Link { .. }
         | Event::Took { .. }
+        | Event::Retell { .. }
         | Event::Hint { .. }
         | Event::Read { .. }
         | Event::Write { .. } => format!("{event:?}"),

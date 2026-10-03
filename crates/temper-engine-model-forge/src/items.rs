@@ -15,7 +15,8 @@
 //! state and verdicts when they differ from what was taken. The inbox holds
 //! `Limits::inbox` news, its last place kept for its pull request's state and
 //! verdicts; what does not fit waits on the forge until the parent takes some
-//! ([`took`]), as nothing of it is queued but where to read from.
+//! ([`took`]), as nothing of it is queued but where to read from. News the
+//! parent had no room for is told again when it asks ([`retell`]).
 //!
 //! **Level state.** An item's pull request is read whatever room its inbox
 //! has, so [`crate::Model::pull`] is as fresh as the forge allows: its head,
@@ -391,6 +392,20 @@ pub(crate) fn took(model: &mut Model, env: &Env<Limits>, item: Item, through: u6
     }
     kick(&mut model.entries, &mut model.calls, id);
     follow(model, env, id);
+}
+
+/// The parent had no room for `item`'s news from the `from`th on: the news
+/// still held from it is told again, unchanged.
+pub(crate) fn retell(model: &Model, item: Item, from: u64, out: &mut Queue<Request>) {
+    let Some(&id) = model.index.get(&item) else {
+        return;
+    };
+    let entry = model.entries.get(id).expect("the index names live entries");
+    for held in &entry.inbox {
+        if held.seq >= from {
+            out.push(Request::Inbox { item: entry.item, seq: held.seq, news: held.news });
+        }
+    }
 }
 
 /// A listing made at `now` shows `summary`, an item of the working set.

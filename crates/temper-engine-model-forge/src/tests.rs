@@ -826,6 +826,26 @@ fn a_pull_request_is_read_whatever_room_the_inbox_has_and_told_when_there_is() {
 }
 
 #[test]
+fn news_the_parent_had_no_room_for_is_told_again_as_it_was() {
+    let mut h = Harness::new(LIMITS);
+    h.start(&[issue(5, &[TRACKING], 1)], &[]);
+    linked(&mut h, Ci::Pending);
+    let (_, sent) = h.pass(30, &[issue(5, &[TRACKING], 20)]);
+    let (_, others) = pull_reads(&mut h, sent, HEAD, Ci::Pending);
+    let read = others.get(0).expect("the item read");
+    let page = comments(&[comment(101, PERSON)]);
+    let first = h.answer(read, item_page(issue(5, &[TRACKING], 20), page, false));
+    let message = News::Comment { on: 5, id: 101, author: PERSON };
+    assert!(first.contains(&news(5, 2, message)), "the message is told: {first:?}");
+    // The parent took the first, and had no room for the message: it is
+    // told again, as it was, and nothing it took.
+    h.step(Event::Took { item: item(5), through: 1 });
+    let told = h.step(Event::Retell { item: item(5), from: 2 });
+    assert_eq!(*told, [news(5, 2, message)], "told again from where the parent had no room");
+    assert!(h.step(Event::Retell { item: item(5), from: 3 }).is_empty(), "nothing held from there");
+}
+
+#[test]
 fn the_verdicts_on_the_head_are_level_state_told_when_they_move() {
     let mut h = Harness::new(LIMITS);
     h.start(&[issue(5, &[TRACKING], 1)], &[]);
