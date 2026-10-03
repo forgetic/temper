@@ -463,14 +463,16 @@ fn applied(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, fresh: Option<pl
     let mut writes = Queue::with_capacity(plan::max_out(&env.limits.plan));
     let decided = plan::apply(&model.config.plan, &route::plan_env(env), record, goal, &facts, &outcome, &mut writes);
     // What the outcome makes, for the rules on plans: a plan proposed, the
-    // steps it grows its goal by, or the tasks it creates. Where a plan's
-    // changes land is accepted with it; growth lands within the envelope
-    // accepted, and a task's change lands only as the rules let a merge:
-    // their size and spend are checked, not where they land.
+    // steps it grows its goal by, or the tasks it creates, each against
+    // what its goal's runs have spent. Where a plan's changes land is
+    // accepted with it; growth lands within the envelope accepted, and a
+    // task's change lands only as the rules let a merge: their size and
+    // spend are checked, not where they land.
+    let spent = goal_spent(model, entry);
     let made = match &outcome {
-        plan::Outcome::Plan(proposed) => Some((proposed.steps.clone(), true, rules::Goal::Outside)),
-        plan::Outcome::Steps(steps) => Some((steps.clone(), false, goal_spent(model, entry))),
-        plan::Outcome::Tasks(tasks) => Some((tasks.clone(), false, rules::Goal::Outside)),
+        plan::Outcome::Plan(proposed) => Some((proposed.steps.clone(), true, spent)),
+        plan::Outcome::Steps(steps) => Some((steps.clone(), false, spent)),
+        plan::Outcome::Tasks(tasks) => Some((tasks.clone(), false, spent)),
         plan::Outcome::Change { .. }
         | plan::Outcome::Verdict { .. }
         | plan::Outcome::Report
@@ -591,8 +593,9 @@ fn goal_of(model: &Model, entry: &Entry) -> Option<plan::Goal> {
     Some(model.items.get(goal)?.step.as_ref()?.goal.as_ref()?.clone())
 }
 
-/// What the runs of the goal the item's outcome grows have spent: its own,
-/// if it proposed the plan or supervises it, else its goal's.
+/// What the runs of the goal the item's outcome makes steps for have spent:
+/// its own, if it proposes the plan or supervises it, else its goal's;
+/// outside any goal, a session's tasks.
 fn goal_spent(model: &Model, entry: &Entry) -> rules::Goal {
     let own = match entry.staged.as_ref() {
         Some(staged) => staged.goal.is_some() || proposes(entry),

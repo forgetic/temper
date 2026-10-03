@@ -2159,3 +2159,18 @@ fn messages_a_brief_has_no_room_for_reach_the_next_turn() {
     world.wait(60);
     assert_eq!(comments_briefed(world.seen.as_slice(), session, 3), Some(second), "the next turn has the other");
 }
+
+#[test]
+fn a_plan_proposed_beyond_what_its_goal_may_spend_is_refused() {
+    let (mut world, session) = World::session();
+    // Its runs have spent nearly all a goal may.
+    let id = crate::items::find(&world.model, session).unwrap();
+    world.model.items.get_mut(id).unwrap().relations.spent = 9_950;
+    world.deliver(Event::Answer { channel: Token::new(1), item: session, attempt: 1, answer: ended(proposal()) });
+    world.deliver(Event::Ask {
+        reply_to: ReplyTo::new(Token::new(42)),
+        person: ALICE,
+        ask: Ask::Accept { item: session },
+    });
+    assert!(world.forge.issue(Item { repository: 0, number: 2 }).is_none(), "nothing of it is made");
+}
