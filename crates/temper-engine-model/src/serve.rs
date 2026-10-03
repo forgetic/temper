@@ -706,6 +706,8 @@ pub(crate) fn serve(
             let mut findings = Queue::with_capacity(rules::max_out(&env.limits.rules));
             let decision =
                 rules::check_write(&model.config.rules, &env.limits.rules, &checked, None, &[], &mut findings);
+            // A note the rules want a person to accept is refused too: a
+            // call that waited on a person could outlive its run.
             if decision != rules::Decision::Allow {
                 return runs::unserved(model, env, wait, Unserved::Refused);
             }

@@ -78,6 +78,11 @@
 //! - **A brief whose item stopped** runs to its end, and its answer is
 //!   dropped; its reads are bounded by the brief's own deadline.
 //!
+//! Not built yet, against engine-model.md: a run's `note` the rules want a
+//! person to accept (one of a wide scope, section 10) is refused, not held
+//! for a person, as a call that waited on one could outlive its run, and
+//! nothing yet holds a call that waits so.
+//!
 //! What happens is also told as content-free [`Fact`]s, the sub-models' and
 //! its own, gathered into one bounded queue the loop drains
 //! ([`Model::pop_fact`]).
