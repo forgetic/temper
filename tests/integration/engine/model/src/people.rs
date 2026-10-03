@@ -378,7 +378,7 @@ impl People {
             return Some(self.message(at, session, b"not now, thanks"));
         }
         if let Some(record) = record
-            && held(&record)
+            && held(record)
         {
             let ask =
                 if tale.story == Story::Reject { Ask::Reject { item: session } } else { Ask::Accept { item: session } };
@@ -395,7 +395,7 @@ impl People {
                 mirror.issue(name, dependency.item.number).is_some_and(|issue| !issue.open)
             });
             let decision = record.step.step.work == Work::Wait(WaitSpec::Decision);
-            if (decision && ready) || held(&record) {
+            if (decision && ready) || held(record) {
                 let item = Item { repository: index, number: *number };
                 return Some(Act::Ask { asker: Asker::Tale(at), person: tale.person, ask: Ask::Accept { item } });
             }

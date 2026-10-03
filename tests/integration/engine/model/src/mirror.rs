@@ -32,6 +32,14 @@ pub struct Comment {
     pub id: u64,
     pub body: Vec<u8>,
     pub by: u64,
+    /// What the body holds of the engine's, decoded once as it was observed.
+    pub decoded: Option<Decoded>,
+}
+
+impl Comment {
+    fn new(id: u64, body: &[u8], by: u64) -> Comment {
+        Comment { id, body: body.to_vec(), by, decoded: codec::comment(id, body) }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -107,14 +115,14 @@ impl Mirror {
             }
             Observation::Commented { repository, number, id, body, by } => {
                 if let Some(issue) = self.issue_mut(repository, *number) {
-                    issue.comments.push(Comment { id: *id, body: body.to_vec(), by: *by });
+                    issue.comments.push(Comment::new(*id, body, *by));
                 }
             }
             Observation::Edited { repository, number, id, body, .. } => {
                 if let Some(issue) = self.issue_mut(repository, *number)
                     && let Some(comment) = issue.comments.iter_mut().find(|comment| comment.id == *id)
                 {
-                    comment.body = body.to_vec();
+                    *comment = Comment::new(*id, body, comment.by);
                 }
             }
             Observation::Removed { repository, number, id, .. } => {
@@ -182,10 +190,10 @@ impl Mirror {
     /// The record the engine keeps on an item, if it has one that decodes:
     /// the last of its comments that holds one.
     #[must_use]
-    pub fn record(&self, repository: &[u8], number: u64) -> Option<Record> {
+    pub fn record(&self, repository: &[u8], number: u64) -> Option<&Record> {
         let issue = self.issue(repository, number)?;
-        issue.comments.iter().rev().find_map(|comment| match codec::comment(comment.id, &comment.body)? {
-            Decoded::Record { record, .. } => Some(*record),
+        issue.comments.iter().rev().find_map(|comment| match comment.decoded.as_ref()? {
+            Decoded::Record { record, .. } => Some(&**record),
             Decoded::Outcome { .. } | Decoded::Page { .. } => None,
         })
     }
@@ -199,8 +207,8 @@ impl Mirror {
         issue
             .comments
             .iter()
-            .filter_map(|comment| match codec::comment(comment.id, &comment.body)? {
-                Decoded::Outcome { posted, .. } => Some(*posted),
+            .filter_map(|comment| match comment.decoded.as_ref()? {
+                Decoded::Outcome { posted, .. } => Some(Posted::clone(posted)),
                 Decoded::Record { .. } | Decoded::Page { .. } => None,
             })
             .collect()
@@ -219,7 +227,7 @@ impl Mirror {
             .iter()
             .filter(|comment| {
                 comment.by == engine
-                    && codec::comment(comment.id, &comment.body).is_none()
+                    && comment.decoded.is_none()
                     && !is_for_person(&comment.body)
             })
             .count()

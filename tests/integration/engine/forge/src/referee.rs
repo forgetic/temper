@@ -48,7 +48,7 @@ use crate::world::{ENGINE, HAND_IN, OWNED, REPOSITORIES, TRACKING};
 
 /// A write the parent planned, as the referee matches it to what the forge
 /// sees.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Planned {
     CreateIssue { repository: u32, key: Vec<u8> },
     Comment { item: Item, key: Vec<u8> },
@@ -192,6 +192,10 @@ pub struct Forge {
     /// a plan answered or abandoned is retired, and when, in the order of
     /// what the forge saw, each was made.
     plans: BTreeMap<u64, (Planned, Option<bool>)>,
+    /// The places of the plans, by what each is; and of the label sets
+    /// planned, by item.
+    by_write: BTreeMap<Planned, BTreeSet<u64>>,
+    by_labels: BTreeMap<Item, BTreeSet<u64>>,
     places: BTreeMap<u64, u64>,
     retire: BTreeMap<u64, Time>,
     planned_at: BTreeMap<u64, u64>,
@@ -254,6 +258,8 @@ impl Forge {
         Forge {
             bounds,
             plans: BTreeMap::new(),
+            by_write: BTreeMap::new(),
+            by_labels: BTreeMap::new(),
             places: BTreeMap::new(),
             retire: BTreeMap::new(),
             planned_at: BTreeMap::new(),
@@ -301,9 +307,20 @@ impl Forge {
         }
     }
 
-    /// The first live plan that `matches`, if one does.
-    fn planned(&self, now: Time, matches: impl Fn(&Planned) -> bool) -> Option<u64> {
-        self.plans.iter().find(|(place, (plan, _))| self.live(**place, now) && matches(plan)).map(|(place, _)| *place)
+    /// The first live plan that is `write`, if one is.
+    fn planned(&self, now: Time, write: &Planned) -> Option<u64> {
+        let places = self.by_write.get(write)?;
+        places.iter().copied().find(|place| self.live(*place, now))
+    }
+
+    /// The first live label set planned for `item` from the place `from` on
+    /// that explains the labels `added` and `removed`, if one does.
+    fn planned_labels(&self, now: Time, item: Item, from: u64, added: &[Vec<u8>], removed: &[Vec<u8>]) -> Option<u64> {
+        let places = self.by_labels.get(&item)?;
+        places.range(from..).copied().find(|place| {
+            self.live(*place, now)
+                && self.plans.get(place).is_some_and(|(plan, _)| explains(plan, item, added, removed))
+        })
     }
 
     /// The engine changed the forge: as the parent planned, and once per
@@ -318,7 +335,7 @@ impl Forge {
                     Kind::Issue => {
                         let key = translate::key_of(body).unwrap_or_default();
                         let planned =
-                            self.planned(now, |plan| *plan == Planned::CreateIssue { repository, key: key.clone() });
+                            self.planned(now, &Planned::CreateIssue { repository, key: key.clone() });
                         judge.check(planned.is_some(), format_args!("an issue the parent planned: {key:?}"));
                         let fresh = self.issues.insert((repository, key.clone()));
                         judge.check(fresh, format_args!("one issue per key: {}", String::from_utf8_lossy(&key)));
@@ -326,7 +343,7 @@ impl Forge {
                     Kind::Pull => {
                         let head = branches.as_ref().map(|branches| branches.head.to_vec()).unwrap_or_default();
                         let planned =
-                            self.planned(now, |plan| *plan == Planned::OpenPull { repository, head: head.clone() });
+                            self.planned(now, &Planned::OpenPull { repository, head: head.clone() });
                         judge.check(planned.is_some(), "a pull request the parent planned");
                         let fresh = self.pulls.insert((repository, head.clone()));
                         judge.check(
@@ -339,7 +356,7 @@ impl Forge {
             Observation::Commented { repository, number, id, body, by: _ } => {
                 let item = Item { repository: index(repository), number: *number };
                 if translate::is_record(body) {
-                    let planned = self.planned(now, |plan| *plan == Planned::Record { item });
+                    let planned = self.planned(now, &Planned::Record { item });
                     judge.check(planned.is_some(), format_args!("a record the parent planned: {item:?}"));
                     let fresh = self.records.insert(item);
                     judge.check(fresh, format_args!("one record per item: {item:?}"));
@@ -347,7 +364,7 @@ impl Forge {
                     self.touched.remove(&item);
                 } else {
                     let key = translate::key_of(body).unwrap_or_default();
-                    let planned = self.planned(now, |plan| *plan == Planned::Comment { item, key: key.clone() });
+                    let planned = self.planned(now, &Planned::Comment { item, key: key.clone() });
                     judge.check(planned.is_some(), format_args!("a comment the parent planned: {item:?}"));
                     let fresh = self.comments.insert((item, key.clone()));
                     judge.check(fresh, format_args!("one comment per key: {}", String::from_utf8_lossy(&key)));
@@ -355,7 +372,7 @@ impl Forge {
             }
             Observation::Edited { repository, number, id: _, body: _, by: _ } => {
                 let item = Item { repository: index(repository), number: *number };
-                let planned = self.planned(now, |plan| *plan == Planned::Record { item });
+                let planned = self.planned(now, &Planned::Record { item });
                 judge.check(planned.is_some(), format_args!("a record edit the parent planned: {item:?}"));
                 self.touched.remove(&item);
             }
@@ -367,40 +384,40 @@ impl Forge {
             Observation::Reviewed { repository, number, id: _, commit: _, verdict: _, body, by: _ } => {
                 let item = Item { repository: index(repository), number: *number };
                 let key = translate::key_of(body).unwrap_or_default();
-                let planned = self.planned(now, |plan| *plan == Planned::Review { item, key: key.clone() });
+                let planned = self.planned(now, &Planned::Review { item, key: key.clone() });
                 judge.check(planned.is_some(), format_args!("a review the parent planned: {item:?}"));
                 let fresh = self.reviews.insert((item, key.clone()));
                 judge.check(fresh, format_args!("one review per key: {}", String::from_utf8_lossy(&key)));
             }
             Observation::Requested { repository, number, reviewers: _, by: _ } => {
                 let item = Item { repository: index(repository), number: *number };
-                let planned = self.planned(now, |plan| *plan == Planned::SetReviewers { item });
+                let planned = self.planned(now, &Planned::SetReviewers { item });
                 judge.check(planned.is_some(), format_args!("reviewers the parent planned: {item:?}"));
             }
             Observation::Depends { repository, number, dependencies: _, by: _ } => {
                 let item = Item { repository: index(repository), number: *number };
-                let planned = self.planned(now, |plan| *plan == Planned::SetDependencies { item });
+                let planned = self.planned(now, &Planned::SetDependencies { item });
                 judge.check(planned.is_some(), format_args!("dependencies the parent planned: {item:?}"));
             }
             Observation::Closed { repository, number, by: _ } => {
                 let item = Item { repository: index(repository), number: *number };
-                let planned = self.planned(now, |plan| *plan == Planned::Close { item });
+                let planned = self.planned(now, &Planned::Close { item });
                 judge.check(planned.is_some(), format_args!("a close the parent planned: {item:?}"));
             }
             Observation::Merged { repository, number, base: _, head, commit: _, by: _ } => {
                 let item = Item { repository: index(repository), number: *number };
-                let planned = self.planned(now, |plan| *plan == Planned::Merge { item, head: *head });
+                let planned = self.planned(now, &Planned::Merge { item, head: *head });
                 judge.check(planned.is_some(), format_args!("a merge the parent planned: {item:?}"));
             }
             Observation::Deleted { repository, branch, at: _, by: _ } => {
                 let repository = index(repository);
                 let planned =
-                    self.planned(now, |plan| *plan == Planned::DeleteBranch { repository, branch: branch.to_vec() });
+                    self.planned(now, &Planned::DeleteBranch { repository, branch: branch.to_vec() });
                 judge.check(planned.is_some(), "a branch deletion the parent planned");
             }
             Observation::Wiki { repository, name, content: _, revision: _, by: _ } => {
                 let repository = index(repository);
-                let planned = self.planned(now, |plan| *plan == Planned::PutPage { repository, name: name.to_vec() });
+                let planned = self.planned(now, &Planned::PutPage { repository, name: name.to_vec() });
                 judge.check(planned.is_some(), "a wiki page the parent planned");
             }
             Observation::Reopened { .. }
@@ -707,21 +724,18 @@ impl Forge {
         if by == ENGINE {
             let theirs: Vec<&Vec<u8>> = added.iter().chain(&removed).filter(|label| !owned(label)).collect();
             judge.check(theirs.is_empty(), format_args!("the engine changes only labels it owns: {item:?} {theirs:?}"));
-            let planned = self.planned(now, |plan| explains(plan, item, &added, &removed));
+            let planned = self.planned_labels(now, item, 0, &added, &removed);
             judge.check(planned.is_some(), format_args!("labels the parent planned: {item:?} +{added:?} -{removed:?}"));
             // The plan this change is part of: the earliest live one that
             // explains it, not older than the last one seen.
             let last = self.labelled.get(&item).copied().unwrap_or(0);
-            let plan = self
-                .plans
-                .range(last..)
-                .find(|(place, (plan, _))| self.live(**place, now) && explains(plan, item, &added, &removed));
+            let plan = self.planned_labels(now, item, last, &added, &removed);
             judge.check(
                 plan.is_some(),
                 format_args!("labels land in the order planned: {item:?} +{added:?} -{removed:?}"),
             );
-            if let Some((plan, _)) = plan {
-                self.labelled.insert(item, *plan);
+            if let Some(plan) = plan {
+                self.labelled.insert(item, plan);
             }
         }
         self.labels.insert(item, labels);
@@ -947,6 +961,10 @@ impl Expectations for Forge {
                 };
                 let place = u64::try_from(self.places.len()).expect("fits") + 1;
                 self.places.insert(plan, place);
+                if let Planned::SetLabels { item, .. } = &write {
+                    self.by_labels.entry(*item).or_default().insert(place);
+                }
+                self.by_write.entry(write.clone()).or_default().insert(place);
                 self.plans.insert(place, (write, None));
                 self.planned_at.insert(place, self.seen);
             }

@@ -26,7 +26,7 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::bytes::{copy_of, find};
+use temper_lib::bytes::copy_of;
 use temper_lib::{List, Rng};
 
 use crate::api::{Answer, Error, Finish, Line, Message, Part, Query, Role, Script, Turn, Usage};
@@ -152,18 +152,22 @@ fn answer(query: &Query, parts: Box<[Part]>, finish: Finish, tokens: u64, cut: B
 /// Which of `scripts` cues the conversation of `system`: the one whose cue
 /// comes first in it, the first listed of those that come at once.
 fn cued(scripts: &[Script], system: &[u8]) -> Option<usize> {
-    let mut first = None;
-    let mut earliest = usize::MAX;
-    for (index, script) in scripts.iter().enumerate() {
-        match find(system, &script.cue) {
-            Some(at) if at < earliest => {
-                first = Some(index);
-                earliest = at;
+    // One pass, from each place in the text on, the scripts in order at each.
+    // Bounded by the text: each round drops a byte of it.
+    let mut rest = Some(system);
+    while let Some(text) = rest {
+        for (index, script) in scripts.iter().enumerate() {
+            let leads = match script.cue.first() {
+                Some(first) => text.first() == Some(first),
+                None => true,
+            };
+            if leads && text.starts_with(&script.cue) {
+                return Some(index);
             }
-            Some(_) | None => {}
         }
+        rest = text.get(1..);
     }
-    first
+    None
 }
 
 /// The scripted answer `turn`, its calls named afresh; cut short past the

@@ -32,9 +32,11 @@ use std::ptr;
 pub struct Counting;
 
 /// A moment a step's heap reached a new high: the last allocation made by
-/// then, by number, what was live, and how much of that the step handed out.
-/// A high that stands for several moments (see [`Highs`]) is the first's,
-/// with the heap of the last, and `low` the first's.
+/// then, by number, what was live, and of what the step handed out, how much
+/// was allocated after the high before it and by this one (so that what it
+/// handed out by a high is the sum of these up to it). A high that stands
+/// for several moments (see [`Highs`]) is the first's, with the heap of the
+/// last, and `low` the first's.
 #[derive(Clone, Copy)]
 struct High {
     made: u64,
@@ -147,12 +149,13 @@ impl Highs {
     }
 
     /// The block numbered `number`, of `bytes`, was handed out: by each high
-    /// it was allocated by.
+    /// it was allocated by, from the first on, as the highs are in the order
+    /// of their numbers.
     fn hand(&mut self, number: u64, bytes: u64) {
-        for high in &mut self.at[..self.len] {
-            if number <= high.made {
-                high.handed = high.handed.saturating_add(bytes);
-            }
+        let highs = &mut self.at[..self.len];
+        let first = highs.partition_point(|high| high.made < number);
+        if let Some(high) = highs.get_mut(first) {
+            high.handed = high.handed.saturating_add(bytes);
         }
     }
 }
@@ -286,8 +289,10 @@ impl Meter {
                 "a step is checked once it has ended, before the next starts"
             );
             let mut own = 0;
+            let mut handed: u64 = 0;
             for high in &highs.at[..highs.len] {
-                let held = self.since(high.live).checked_sub(high.handed);
+                handed = handed.saturating_add(high.handed);
+                let held = self.since(high.live).checked_sub(handed);
                 own = own.max(held.expect("what a step handed out by a high was live at it"));
             }
             own
