@@ -158,6 +158,21 @@ with each agent it spawns (worker-domain.md, section 6).
   secret, compared in constant time. On one host it may run in plaintext
   over loopback. An agent's channel is its pipes, which only its worker
   holds, and needs neither.
+- **A slow reader never holds up the rest.** Each channel's output is
+  capped, and the protocol layer never makes the domain wait on one
+  channel: that would stall every other peer behind it. Three things keep
+  the cap from being reached:
+  - **Most messages are bounded by the domains' own limits.** These are
+    assignments, cancels, acknowledgements, relayed calls and their
+    answers, and inbound events. Their counts follow from slots, calls in
+    flight and inboxes, so each channel's cap is sized from those
+    limits.
+  - **Facts are pulled.** They are the one stream with no such bound, so
+    they wait in a bounded queue of the domain's until the protocol layer
+    has room for them. Past that queue, they are dropped and counted
+    (worker-domain.md, section 2).
+  - **A channel that still fills its cap is closed.** Its peer has stopped
+    reading, so the domains see it as lost, which they already survive.
 - **Names.** A run goes by its item, and an attempt by its item and its
   count, as the system worlds already name them (testing.md, 4.5); the
   protocol layers pack them into the domains' tokens.
@@ -231,8 +246,27 @@ with each agent it spawns (worker-domain.md, section 6).
 ## 7. The forge
 
 Forgejo first: its REST API, over HTTP and JSON, and its webhooks to an
-HTTP server in the engine, whose signatures (HMAC-SHA256) are checked
-before anything else is read. GitHub comes later.
+HTTP server in the engine. A webhook's signature (HMAC-SHA256) is checked
+before anything else in it is read.
+
+**SHA-256 and HMAC come from RustCrypto's `sha2` and `hmac`.** This is a
+second outside dependency in step code, besides TLS
+(programming-model.md, section 3). Unlike TLS, it is pure Rust, `no_std`
+and deterministic, so it costs nothing in the replaying tiers.
+
+**GitHub comes later, and the design leaves room for its strengths.**
+The forge child domain asks for what it needs, not how to get it.
+Each provider's protocol layer answers in the cheapest way its API allows,
+for example:
+
+- conditional requests, keeping each resource's validator in a bounded
+  table, since GitHub does not count an unchanged answer against its rate
+  limit;
+- several reads in one query;
+- CI from GitHub's own checks.
+
+The protocol layer reports the provider's rate limit as it stands, so the
+domain's budget follows whatever the provider counts.
 
 **What the domain does about load** (engine-domain.md, section 12): one
 listing per repository of what changed since the last pass, never one
@@ -333,11 +367,8 @@ What the domains owe this layer, found while designing it:
 
 ## 11. Open questions
 
-- **Credit on the channels:** whether everything the domains send on a
-  channel is bounded by their slots, so its output cap can be sized never
-  to refuse, or some of it (facts) needs credit the domain sees.
-- **SHA-256 and HMAC in step code,** for webhooks' signatures: the crypto
-  provider TLS already brings, or a small implementation of temper's own.
-- **GitHub's differences:** its conditional requests, which cost nothing
-  against the rate limit when nothing changed, and its labels on pull
-  requests.
+- **Sizing the channels' caps:** whether the domains' limits bound every
+  message on a channel tightly enough. Inbound events are the one to
+  check: an event, once sent, is no longer held by the engine.
+  Otherwise, a peer that is slow but still reading could have its channel
+  closed in normal running.
