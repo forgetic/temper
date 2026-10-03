@@ -1,4 +1,4 @@
-//! Scripted people (testing-pyramid.md, 4.4; engine-domain.md, sections 6
+//! Scripted people (testing.md, 4.4; engine-domain.md, sections 6
 //! and 14): forge users who hand issues in, review, and correct notes in
 //! the wiki; and clients of the engine's web who open sessions and message
 //! them. Each story has its person, who looks at the forge as observed

@@ -1,4 +1,4 @@
-//! Faults, drawn from the seed per call (testing-pyramid.md, 4): a rate limit
+//! Faults, drawn from the seed per call (testing.md, 4): a rate limit
 //! per user per window, failures before a call is made and after, and the
 //! latency of its answer, sometimes late.
 

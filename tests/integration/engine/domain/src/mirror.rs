@@ -1,5 +1,5 @@
 //! What the forge shows, as the world sees it from outside: built only from
-//! the fake forge's observations (testing-pyramid.md, 5.2), never from its
+//! the fake forge's observations (testing.md, 5.2), never from its
 //! store or from the engine's state. People and the scripted workers look
 //! at it to decide what to do, as a person looks at the forge's pages, and
 //! the referee judges against it.

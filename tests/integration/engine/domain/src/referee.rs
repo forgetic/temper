@@ -1,5 +1,5 @@
 //! What the scenarios expect of the engine, held by a referee
-//! (testing-pyramid.md, 5.2) that sees only what is seen from outside: what
+//! (testing.md, 5.2) that sees only what is seen from outside: what
 //! the fake forge did, what the scripted workers were assigned and
 //! answered, what people asked and were told, and the store. Never the
 //! engine's state. Safety, on every observation:

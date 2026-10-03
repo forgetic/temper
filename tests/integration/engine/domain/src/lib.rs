@@ -1,5 +1,5 @@
 //! A simulated world for the engine's domain (engine-domain.md, section 14;
-//! testing-pyramid.md, 2.2): the engine's root domain, with all its
+//! testing.md, 2.2): the engine's root domain, with all its
 //! child domains beneath it, in one loop, deterministically from a seed,
 //! against fakes for everything else.
 //!

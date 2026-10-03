@@ -5,7 +5,7 @@ use skein_lib::{Duration, Time};
 
 use crate::Schedule;
 
-/// A scenario's expectations (testing-pyramid.md, 5.2), which a [`Referee`]
+/// A scenario's expectations (testing.md, 5.2), which a [`Referee`]
 /// holds a world to. Each world writes its own: what its referee observes,
 /// the names of what it expects to happen, what it injects, and what it
 /// checks of each observation.
@@ -26,7 +26,7 @@ pub trait Expectations {
 }
 
 /// A scenario's expectations as a step machine of the world's loop
-/// (testing-pyramid.md, 5.2): observations in, stimuli out, and a deadline
+/// (testing.md, 5.2): observations in, stimuli out, and a deadline
 /// table of its own, whose earliest deadline the loop covers as it covers
 /// every domain's. It steps only on what it observes and on its own
 /// deadlines, and its [`Verdict`] ends the test: passed, failed, or stopped

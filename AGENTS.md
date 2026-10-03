@@ -9,5 +9,5 @@
 - Every crate follows skein's programming model,
   `~/src/rust/skein/docs/design/programming-model.md`, which temper's code
   and documents cite as `programming-model.md`. temper's own design
-  documents are in `docs/design/`; `testing-pyramid.md` is how temper is
+  documents are in `docs/design/`; `testing.md` is how temper is
   tested.

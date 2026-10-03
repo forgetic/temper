@@ -1,4 +1,4 @@
-//! What a world does to the forge from outside its API (testing-pyramid.md,
+//! What a world does to the forge from outside its API (testing.md,
 //! 5.1): it sets up repositories and their users, makes a repository
 //! unreachable or refusing, commits as a working tree's git does, and has
 //! another party advance a branch.

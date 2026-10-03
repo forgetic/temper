@@ -1,4 +1,4 @@
-//! What the brief's scenarios expect, held by a referee (testing-pyramid.md,
+//! What the brief's scenarios expect, held by a referee (testing.md,
 //! 5.2) that sees what the parent asks for, what the brief asks its sources
 //! and what they serve, and what the brief answers, each as the step that
 //! made it ends; never the brief's state:

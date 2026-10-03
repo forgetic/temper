@@ -1,4 +1,4 @@
-# Temper's testing pyramid
+# Testing temper
 
 Provisional, 2026-10-02. How temper is tested, from one step function to
 the whole system under one io_uring loop: the tiers, what is real and

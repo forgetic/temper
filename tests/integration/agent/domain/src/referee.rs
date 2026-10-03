@@ -1,5 +1,5 @@
 //! What the world's scenarios expect of the worker and the agent together,
-//! held by a referee (testing-pyramid.md, 5.2) that sees only what the fakes
+//! held by a referee (testing.md, 5.2) that sees only what the fakes
 //! see: the engine's assignments and the answers it hears, what comes and
 //! goes through each agent process's pipes and signals, the disk under the
 //! agents' tools, and the forge's branches. Safety, on every observation:

@@ -1,4 +1,4 @@
-//! What the domain worlds share (testing-pyramid.md, 2.2). Each world keeps
+//! What the domain worlds share (testing.md, 2.2). Each world keeps
 //! its own fakes, translations, settings, invariants and scenarios; this is the
 //! machinery under them, the same in every world:
 //!
@@ -15,7 +15,7 @@
 //! - [`heap`]: a counting allocator that records the peak of live heap, for
 //!   the memory tests' check against the worst case (6.3);
 //! - [`Referee`]: a scenario's [`Expectations`] as a step machine of the
-//!   world's loop (testing-pyramid.md, 5.2), safety checked on every
+//!   world's loop (testing.md, 5.2), safety checked on every
 //!   observation and liveness armed as deadlines of its own, which injects
 //!   what belongs to no fake and ends the test with a [`Verdict`].
 

@@ -1,4 +1,4 @@
-//! Scripted people on the forge (testing-pyramid.md, 4.4): a reviewer, who
+//! Scripted people on the forge (testing.md, 4.4): a reviewer, who
 //! looks at the forge as observed ([`Mirror`]) every so often and approves
 //! every pull request the engine opens once CI passed on its exact head,
 //! once per head. What people hand in is the desk's ([`crate::desk`]); a

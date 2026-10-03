@@ -1,4 +1,4 @@
-//! People acting on the fake forge as forge users (testing-pyramid.md, 4.4),
+//! People acting on the fake forge as forge users (testing.md, 4.4),
 //! scripted: they open issues, some handed to temper, comment, label and
 //! unlabel (the tracking label among them), review pull requests (some
 //! reviews started pending and submitted later, landing before those

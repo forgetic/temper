@@ -1,4 +1,4 @@
-//! What the notes' scenarios expect, held by a referee (testing-pyramid.md,
+//! What the notes' scenarios expect, held by a referee (testing.md,
 //! 5.2) that sees what the wiki sees (its pages changing, the listings it
 //! serves) and what the notes answer, never the notes' state:
 //!

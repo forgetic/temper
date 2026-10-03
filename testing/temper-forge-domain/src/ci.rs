@@ -2,7 +2,7 @@
 //! branch's or a pull request's head, each context of the repository's checks
 //! is pending at once, then passes or fails after a drawn latency, or never
 //! reports, by the repository's chances; or, where a cue is configured, as the
-//! commit's content says (testing-pyramid.md, 4.2: the stand-in until CI
+//! commit's content says (testing.md, 4.2: the stand-in until CI
 //! follows content for real). CI runs once per commit and repository; a
 //! context that reported may be run again once, by the repository's chance:
 //! pending again at once, then a verdict drawn again, so a head's CI can

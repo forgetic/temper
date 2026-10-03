@@ -6,7 +6,7 @@ mechanics are those of skein's `programming-model.md`; this document says
 what the agent's domain is made of. Each part's details are settled as it
 is built; what is still open is listed in section 9, and what is not built
 yet in section 10. How the agent is tested, and the fakes around it, is in
-`testing-pyramid.md`.
+`testing.md`.
 
 ## 1. In one page
 
@@ -124,7 +124,7 @@ assignment:
 The engine's charter is typed in its own terms (engine-domain.md, 5.3
 and section 9), and the protocol layer is to map it onto this one. Until
 that layer exists, the agent's top-level world maps it as follows
-(testing-pyramid.md, 4.5):
+(testing.md, 4.5):
 
 - **The brief** is the engine's sections as text: the plan's guidance
   first, then why the run is due, then each section under a heading.
@@ -351,7 +351,7 @@ domain, to be designed after it:
   file that is not text counts as no guide.
 
 Each layer below is tested against fakes that grow with it
-(testing-pyramid.md, section 3): the fake LLM provider's own protocol and
+(testing.md, section 3): the fake LLM provider's own protocol and
 io layers, and the machine's faces for files, processes and the programs
 they run.
 
@@ -388,4 +388,4 @@ yet, each to be designed before it is built:
   two families for now.
 
 What the tests lack, from the fakes' layers below the domain to the tiers
-above the domain worlds, is tracked in testing-pyramid.md, section 9.
+above the domain worlds, is tracked in testing.md, section 9.

@@ -1,5 +1,5 @@
 //! What the forge world's scenarios expect, held by a referee
-//! (testing-pyramid.md, 5.2) that sees what the fake forge sees (every change,
+//! (testing.md, 5.2) that sees what the fake forge sees (every change,
 //! by whom), the calls the child domain makes and the refusals it hears, the
 //! writes the parent plans and how they end, the pull requests it links, and
 //! what the child domain tells the parent; never the child domain's state:

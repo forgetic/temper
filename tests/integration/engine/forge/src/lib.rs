@@ -1,5 +1,5 @@
 //! A simulated world for the engine's forge child domain (programming-model.md,
-//! 4.5 and 11; engine-domain.md, section 12; testing-pyramid.md, 2.2): the
+//! 4.5 and 11; engine-domain.md, section 12; testing.md, 2.2): the
 //! forge child domain, with the world as its parent, against the fake forge
 //! (`testing/temper-forge-domain`), driven by one loop, deterministically from
 //! a seed.

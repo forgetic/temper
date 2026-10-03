@@ -1,4 +1,4 @@
-//! The agent's top-level world (testing-pyramid.md, 2.3; agent-domain.md,
+//! The agent's top-level world (testing.md, 2.3; agent-domain.md,
 //! section 3), where it meets the worker's (worker-domain.md, section 9) and
 //! the engine's (engine-domain.md, section 14): the engine's root domain, with
 //! every child domain beneath it, assigning the steps of the issues people hand
@@ -78,7 +78,7 @@
 //! its deliveries past their bounds, or does not settle in the iterations it
 //! is given, fails with its seed.
 //!
-//! What the scenarios expect is held by two referees (testing-pyramid.md,
+//! What the scenarios expect is held by two referees (testing.md,
 //! 5.2), which see only what the fakes see and end each run with their
 //! verdicts. Where the worker and the agent meet ([`referee`]): the worker
 //! commits exactly the tree the agent left; the engine hears the outcome the

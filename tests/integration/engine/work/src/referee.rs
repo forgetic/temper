@@ -1,5 +1,5 @@
 //! What the work hub's scenarios expect, held by a referee
-//! (testing-pyramid.md, 5.2) that sees what the fakes see (the records on the
+//! (testing.md, 5.2) that sees what the fakes see (the records on the
 //! forge and the writes it refuses, its keyed creations, the plan asked, the
 //! runs on the workers) and people's answers, never the hub's state:
 //!

@@ -7,7 +7,7 @@ drives is described in `worker-domain.md`, and the agent in
 `agent-domain.md`. Each part's details are settled as it is built and kept
 in its crate's documentation; this document keeps the decisions and their
 reasons. What is still open is listed in section 15, and what is not built
-yet in section 16. How the engine is tested is in `testing-pyramid.md`.
+yet in section 16. How the engine is tested is in `testing.md`.
 
 ## 1. In one page
 
@@ -738,14 +738,14 @@ What the protocol and io layers owe the domain, to be designed after it:
 
 Each child domain has a world of its own,
 `tests/integration/engine/<name>`, its parent and neighbours scripted in
-it and its scenario's expectations in a referee (testing-pyramid.md, 5.2).
+it and its scenario's expectations in a referee (testing.md, 5.2).
 The rules, decisions over data, are tested by their step tests, with a
 sweep checked against an independent statement of the protected-landing
 rule.
 
 The engine's world, `tests/integration/engine/domain`, runs the top level
 with every child domain beneath it against fakes that share none of its
-types (testing-pyramid.md, section 4): the fake forge, its faults
+types (testing.md, section 4): the fake forge, its faults
 drawn from the seed, reached through its protocol layer as the world
 plays it, with codecs for what the engine writes inside comments and
 wiki pages and for the charters and outcomes a worker carries as bytes;
@@ -773,7 +773,7 @@ grow, one live run per item, its dependencies done; nothing of a plan
 is made, nor a goal's envelope widened, before a person accepts it; a
 call its grants allow is never refused as ungranted; a person's message
 reaches a run, or its item ends; every story ends within a bound. The
-engine, workers and agents meet in the system worlds (testing-pyramid.md,
+engine, workers and agents meet in the system worlds (testing.md,
 2.3), which reuse this world's codecs, people, store and referee, and
 the names runs and attempts take on a worker's channel.
 
@@ -865,4 +865,4 @@ each to be designed before it is built:
   reads them.
 - **Templates in the wiki,** and provisioning a repository (section 15).
 - **Plans in the whole worker's world:** it runs every story but the
-  plans' (testing-pyramid.md, section 9).
+  plans' (testing.md, section 9).

@@ -1,4 +1,4 @@
-//! What a scripted run does (testing-pyramid.md, 5.1): its acts, drawn from
+//! What a scripted run does (testing.md, 5.1): its acts, drawn from
 //! its charter and from what the forge shows, as an agent would read them.
 //! A scenario cues each run through content: a session by its item's title,
 //! a step by the instructions its plan wrote, each starting with a cue

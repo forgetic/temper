@@ -1,5 +1,5 @@
 //! What the world expects of the engine and the worker between them, held by
-//! a referee (testing-pyramid.md, 5.2) that sees only what crosses the
+//! a referee (testing.md, 5.2) that sees only what crosses the
 //! channel, at the protocol layers: what the engine acknowledged and
 //! answered, what the worker's hellos, answers and relays brought it, and
 //! the channel lost; and the records the engine writes on the forge. Never a

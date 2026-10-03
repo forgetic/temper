@@ -5,7 +5,7 @@
 //!
 //! The remote side is the forge's. git reaches it as real git does, across
 //! the network: through a typed transport, [`Remote`], that a world routes to
-//! a fake forge (testing-pyramid.md, 4.3), carrying git's calls (where a
+//! a fake forge (testing.md, 4.3), carrying git's calls (where a
 //! repository's branches are, a fetch, a push, a branch created for a base)
 //! and their answers. Commits are named in the forge's one store, by a
 //! count, so a seed replays to the same names: a working tree commits into

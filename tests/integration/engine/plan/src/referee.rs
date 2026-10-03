@@ -1,4 +1,4 @@
-//! The scenario's expectations (testing-pyramid.md, 5.2), held by the shared
+//! The scenario's expectations (testing.md, 5.2), held by the shared
 //! [`Referee`](temper_world::Referee): what they observe is what the forge
 //! and the runs see (the steps a run proposed, the items made, CI, reviews,
 //! decisions, verdicts as runs give them, merges, holds and releases), never

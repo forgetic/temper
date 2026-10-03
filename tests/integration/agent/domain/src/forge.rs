@@ -1,4 +1,4 @@
-//! The one fake forge (`temper_forge_domain`, testing-pyramid.md, 4.2) that
+//! The one fake forge (`temper_forge_domain`, testing.md, 4.2) that
 //! everyone in the world meets: the engine's calls, through its protocol
 //! layer as the world plays it, at the forge's latency and with its faults;
 //! people's calls; and the git of io's working trees, the worker's clones,

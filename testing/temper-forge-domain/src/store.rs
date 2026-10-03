@@ -1,4 +1,4 @@
-//! The store: repositories and what they hold (testing-pyramid.md, 4.2).
+//! The store: repositories and what they hold (testing.md, 4.2).
 //!
 //! A repository has its users' permissions, its labels, its items (issues and
 //! pull requests, numbered together from one), its branches and the commits

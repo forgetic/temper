@@ -1,4 +1,4 @@
-//! What the views' scenarios expect, held by a referee (testing-pyramid.md,
+//! What the views' scenarios expect, held by a referee (testing.md,
 //! 5.2) that sees what the parent tells the views, what they emit, and what
 //! the store keeps and forgets, never the views' state:
 //!

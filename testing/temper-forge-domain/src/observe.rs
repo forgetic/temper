@@ -1,5 +1,5 @@
 //! What happened on the forge, content and all, for a referee
-//! (testing-pyramid.md, 5.2): every change a call, CI or another party made,
+//! (testing.md, 5.2): every change a call, CI or another party made,
 //! in a bounded queue a world drains at its own pace.
 //!
 //! A refused write or git call is observed too, so that a referee sees what

@@ -1,4 +1,4 @@
-//! What the fleet's scenarios expect, held by a referee (testing-pyramid.md,
+//! What the fleet's scenarios expect, held by a referee (testing.md,
 //! 5.2) that sees what the scripted workers see and do, what goes down their
 //! channels, and what the scripted parent asks and hears; never the fleet's
 //! state.

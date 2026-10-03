@@ -1,6 +1,6 @@
 //! The domain layer of a fake forge, for simulations.
 //!
-//! A forge seen from the inside (testing-pyramid.md, 4.2), Forgejo-shaped:
+//! A forge seen from the inside (testing.md, 4.2), Forgejo-shaped:
 //! repositories with their users' permissions, labels, issues and pull
 //! requests sharing one numbering, comments, reviews, CI statuses, merges, a
 //! wiki, and the git a worker clones, fetches and pushes, all in one store,
@@ -30,7 +30,7 @@
 //! and acts on it from outside its API, with free functions (the `scenario`
 //! module: [`repository`], [`grant`], [`commit`], [`advance`], ...).
 //! Everything that changes is observed, content and all, and so is every
-//! write the forge refused, for a referee (testing-pyramid.md, 5.2): a
+//! write the forge refused, for a referee (testing.md, 5.2): a
 //! bounded queue a world drains ([`Domain::pop_observation`]).
 //! [`Domain::inspect`] reads the store at settle, [`Domain::tally`] counts
 //! what the forge did and refused, and [`Domain::room`] says what room is
