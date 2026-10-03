@@ -3,10 +3,10 @@
 use alloc::boxed::Box;
 use core::mem::size_of;
 
+use skein_lib::{Duration, Env, List, Queue, Time, Token, Wall};
 use temper_agent_domain_tools::{
     self as tools, Authority, Call, Done, Effect, Grants, Name, Op, Outcome, Part, Path, Place, Repo, Version,
 };
-use temper_lib::{Duration, Env, List, Queue, Time, Token};
 
 use crate::llm::{
     Answer, Block, Completion, Decoded, Descriptor, Endpoint, Failure, Message, Problem, Prompt, Returned, Role, Stop,
@@ -83,7 +83,7 @@ impl Harness {
     fn new(limits: Limits) -> Harness {
         Harness {
             domain: Domain::new(&limits, 1),
-            env: Env { now: Time::ZERO, limits },
+            env: Env { now: Time::ZERO, wall: Wall::EPOCH, limits },
             out: Queue::with_capacity(max_out(&limits)),
             turns: 0,
             usage: Usage::ZERO,

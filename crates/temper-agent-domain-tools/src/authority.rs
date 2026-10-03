@@ -5,8 +5,8 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::bytes::copy_of;
-use temper_lib::{List, Token};
+use skein_lib::bytes::copy_of;
+use skein_lib::{List, Token};
 
 use crate::boundary::Root;
 use crate::call::{Call, Outcome};

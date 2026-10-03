@@ -5,7 +5,7 @@
 //! queue full; and every entry point along the way. The fill reaches the
 //! worst case, short only of what no agent can hold at once.
 
-use temper_lib::{Duration, Env, Queue, Set, Time, Token};
+use skein_lib::{Duration, Env, Queue, Set, Time, Token, Wall};
 use temper_worker_domain_agent::channel::{Ask, Finish, Reply, Up};
 use temper_worker_domain_agent::{
     Bounce, Domain, End, Event, Fault, Invalid, Limits, MAX_OUT, Request, Signal, Spawn, fire, step, worst_case,
@@ -75,7 +75,7 @@ impl Measured {
         let meter = Meter::new();
         let domain = Domain::new(&limits);
         let out = Queue::with_capacity(MAX_OUT);
-        Measured { domain, env: Env { now: Time::ZERO, limits }, out, meter, bound, peak: 0 }
+        Measured { domain, env: Env { now: Time::ZERO, wall: Wall::EPOCH, limits }, out, meter, bound, peak: 0 }
     }
 
     fn step(&mut self, event: Event) -> Vec<Asked> {

@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 
+use skein_lib::{Duration, Env, Queue, Rng, Time, Wall};
 use temper_engine_domain_plan::{
     self as plan, Accept, Applied, Config, Due, Hold, Key, Limits, Outcome, Progress, Record, Repair, Stale, Then,
     Verdict, Waits, Why, Woken, Work, Write,
 };
-use temper_lib::{Duration, Env, Queue, Rng, Time};
 use temper_world::{Ledger, Referee, Schedule, Span, Trace};
 
 use crate::forge::{Forge, Item, Keyed, Made, Pull, Pushed, State};
@@ -311,7 +311,7 @@ impl World {
             rng,
             settings,
             config: script::config(),
-            env: Env { now: Time::ZERO, limits: settings.limits },
+            env: Env { now: Time::ZERO, wall: Wall::EPOCH, limits: settings.limits },
             forge: Forge::new(&script::BASES),
             lives: BTreeMap::new(),
             wire: Schedule::new(),

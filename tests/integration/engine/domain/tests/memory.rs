@@ -18,11 +18,11 @@ use temper_engine_domain::{
     Watched, Work, fire, fleet, max_out, resume, step, worst_case,
 };
 
+use skein_lib::{Duration, Env, Queue, ReplyTo, Rng, Time, Token, Wall};
 use temper_engine_domain::forge::Position;
 use temper_engine_domain_forge_tests::translate;
 use temper_engine_domain_tests::codec;
 use temper_engine_domain_tests::deployment::{self, BUDGET, LIMITS};
-use temper_lib::{Duration, Env, Queue, ReplyTo, Rng, Time, Token};
 use temper_world::heap::{self, Meter};
 
 #[global_allocator]
@@ -102,7 +102,7 @@ impl Measured {
         let bound = bound + margin;
         Measured {
             domain,
-            env: Env { now: Time::ZERO, limits: *limits },
+            env: Env { now: Time::ZERO, wall: Wall::EPOCH, limits: *limits },
             out,
             meter,
             bound,

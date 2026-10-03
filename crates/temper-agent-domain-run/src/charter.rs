@@ -8,7 +8,7 @@
 use alloc::boxed::Box;
 use core::mem::size_of;
 
-use temper_lib::Token;
+use skein_lib::Token;
 
 use crate::boundary::Invalid;
 use crate::budget::Budget;

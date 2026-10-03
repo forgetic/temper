@@ -9,8 +9,8 @@
 //! half, so that every attempt of every item has a name of its own, and the
 //! item can be read back from it.
 
+use skein_lib::Token;
 use temper_engine_domain::Item;
-use temper_lib::Token;
 
 /// The channel's name for the item's run.
 #[must_use]

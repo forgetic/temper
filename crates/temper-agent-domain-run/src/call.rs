@@ -14,7 +14,7 @@
 //! A conversation withdraws a call only as it closes, and a call its deadline
 //! stopped first stays stopped for that.
 
-use temper_lib::{Id, Map, Slab, Token};
+use skein_lib::{Id, Map, Slab, Token};
 
 use crate::agent::Child;
 use crate::boundary::Returned;

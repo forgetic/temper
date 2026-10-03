@@ -1,12 +1,12 @@
 use std::collections::BTreeMap;
 
+use skein_lib::{Duration, Env, Queue, ReplyTo, Rng, Time, Token, Wall};
 use temper_engine_domain_forge::{
     self as sub, Ci, Config as Deployment, Domain, Event, Fact, Failure, Item, Limits, News, Record, Request, Why,
     Written,
 };
 use temper_forge_domain::api::{self as forge_api, Checks, File, Git, Permission, Protection, Setup};
 use temper_forge_domain::{self as forge, Config, Skew};
-use temper_lib::{Duration, Env, Queue, ReplyTo, Rng, Time, Token};
 use temper_world::{Key, Ledger, Referee, Schedule, Span, Stage, Trace};
 
 use crate::parent::{self, Action, Parent};
@@ -441,7 +441,7 @@ impl World {
             stage: Stage::new(settings.limits, max_out, max_out + SLACK),
             life: 0,
             forge,
-            forge_env: Env { now: Time::ZERO, limits: settings.forge },
+            forge_env: Env { now: Time::ZERO, wall: Wall::EPOCH, limits: settings.forge },
             forge_out: Queue::with_capacity(16),
             wire: Schedule::new(),
             scheduled: 0,

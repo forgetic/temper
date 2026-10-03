@@ -15,7 +15,7 @@
 use alloc::boxed::Box;
 use core::mem;
 
-use temper_lib::{Env, Id, List, Queue, ReplyTo, bytes};
+use skein_lib::{Env, Id, List, Queue, ReplyTo, bytes};
 
 use crate::boundary::{
     Author, Change, Entry, Fetched, Line, Noted, Page, Recall, Reference, Refusal, Request, Scope, Scopes, Wrote,

@@ -6,8 +6,8 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::bytes::copy_of;
-use temper_lib::{Env, Id, Map, Set};
+use skein_lib::bytes::copy_of;
+use skein_lib::{Env, Id, Map, Set};
 
 use crate::api::{Answer, Change, Error, Kind, Permission, State, What};
 use crate::ci;

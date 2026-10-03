@@ -1,6 +1,6 @@
 //! The run child domain's state and its entry points (section 3).
 
-use temper_lib::{Deadlines, Env, Queue, Slab, Time};
+use skein_lib::{Deadlines, Env, Queue, Slab, Time};
 
 use crate::boundary::{Event, Request};
 use crate::call::Calls;

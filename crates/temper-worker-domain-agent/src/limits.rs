@@ -1,4 +1,4 @@
-use temper_lib::{Deadlines, Duration, Queue, Set, Slab, Token};
+use skein_lib::{Deadlines, Duration, Queue, Set, Slab, Token};
 
 use crate::agent::{Agent, Alarm};
 use crate::channel::Down;

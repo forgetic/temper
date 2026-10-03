@@ -1,10 +1,10 @@
 //! The forge child domain in its world: scenarios, replay, and a sweep of
 //! random worlds.
 
+use skein_lib::Duration;
 use temper_engine_domain_forge::Limits;
 use temper_engine_domain_forge_tests::{Settings, Stats, World, parent, people};
 use temper_forge_domain::{Config, Skew};
-use temper_lib::Duration;
 use temper_world::assert_replays;
 
 const ITERATIONS: u32 = 2_000_000;

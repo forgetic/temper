@@ -112,8 +112,8 @@
 use alloc::boxed::Box;
 use core::mem;
 
-use temper_lib::bytes::copy_of;
-use temper_lib::{Env, Id, List, Map, Queue, ReplyTo, Set, Slab, Token};
+use skein_lib::bytes::copy_of;
+use skein_lib::{Env, Id, List, Map, Queue, ReplyTo, Set, Slab, Token};
 
 use crate::assignment::{self, len};
 use crate::boundary::{

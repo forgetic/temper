@@ -1,6 +1,6 @@
 use core::mem::size_of;
 
-use temper_lib::{Deadlines, Duration, Id, Map, Queue, Slab, Token};
+use skein_lib::{Deadlines, Duration, Id, Map, Queue, Slab, Token};
 use temper_worker_domain_agent as agent;
 use temper_worker_domain_checkout as checkout;
 use temper_worker_domain_host as host;

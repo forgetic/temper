@@ -130,8 +130,8 @@
 use alloc::boxed::Box;
 use core::mem;
 
-use temper_lib::bytes::copy_of;
-use temper_lib::{Deadlines, Env, Id, Queue, Set, Slab, Time, Token};
+use skein_lib::bytes::copy_of;
+use skein_lib::{Deadlines, Env, Id, Queue, Set, Slab, Time, Token};
 
 use crate::boundary::{Bounce, End, Fault, Invalid, Request, Signal, Spawn};
 use crate::channel::{Ask, Down, Finish, Reply, RunFailure, Up};

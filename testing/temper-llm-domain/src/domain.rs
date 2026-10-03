@@ -3,7 +3,7 @@
 use alloc::boxed::Box;
 use core::mem;
 
-use temper_lib::{Deadlines, Duration, Env, Id, Queue, ReplyTo, Rng, Slab, Time};
+use skein_lib::{Deadlines, Duration, Env, Id, Queue, ReplyTo, Rng, Slab, Time};
 
 use crate::api::{Answer, Error, Query, Script};
 use crate::respond;

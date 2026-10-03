@@ -121,7 +121,7 @@
 
 use core::mem;
 
-use temper_lib::{Duration, Env, Id, Queue, ReplyTo, Rng, Time, Token};
+use skein_lib::{Duration, Env, Id, Queue, ReplyTo, Rng, Time, Token};
 
 use crate::boundary::{
     Acted, Answer, Applied, Class, Due, Failures, Hold, Item, Lifecycle, Phase, Read, Refusal, Request, Then, Wrote,

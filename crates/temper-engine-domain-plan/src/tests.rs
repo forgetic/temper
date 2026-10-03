@@ -3,7 +3,7 @@
 use alloc::boxed::Box;
 use core::mem::size_of;
 
-use temper_lib::{Duration, Env, List, Queue, Time};
+use skein_lib::{Duration, Env, List, Queue, Time, Wall};
 
 use crate::{
     Accept, Action, AgentSpec, Applied, Batch, Budget, ChangeSpec, Charter, Ci, Commit, Config, Decided, Decision, Due,
@@ -34,7 +34,7 @@ const LIMITS: Limits = Limits {
 };
 
 fn env() -> Env<Limits> {
-    Env { now: Time::from_nanos(1_000), limits: LIMITS }
+    Env { now: Time::from_nanos(1_000), wall: Wall::EPOCH, limits: LIMITS }
 }
 
 fn bytes(text: &str) -> Box<[u8]> {
@@ -747,7 +747,7 @@ fn a_wait_on_a_decision_ends_when_a_person_accepts() {
 fn a_wait_on_a_time_counts_from_its_last_dependency_or_its_making() {
     let alone = record(wait("a", WaitSpec::Time(Duration::from_nanos(1_000)), &[]));
     assert_eq!(decided(&alone, &facts()), Due::Nothing { waits: Waits::Time, until: Some(Time::from_nanos(1_100)) });
-    let later = Env { now: Time::from_nanos(1_100), limits: LIMITS };
+    let later = Env { now: Time::from_nanos(1_100), wall: Wall::EPOCH, limits: LIMITS };
     let mut out = out();
     assert_eq!(due(&config(), &later, &alone, &facts(), &mut out), Due::Done);
     assert_eq!(*writes(&mut out), [Write::Close]);
@@ -975,7 +975,7 @@ fn a_change_rebased_to_its_limit_is_held_when_its_base_moves_again() {
 #[test]
 fn a_change_waiting_on_the_forge_past_the_stall_is_held() {
     let change = record(change("a", &[]));
-    let late = Env { now: Time::from_nanos(10_900), limits: LIMITS };
+    let late = Env { now: Time::from_nanos(10_900), wall: Wall::EPOCH, limits: LIMITS };
     for pull in [
         Pull { ci: Ci::Pending, ..ready(head(1)) },
         Pull { approvals: 0, ..ready(head(1)) },

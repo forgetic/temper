@@ -25,8 +25,8 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::bytes::copy_of;
-use temper_lib::{Id, List, Time};
+use skein_lib::bytes::copy_of;
+use skein_lib::{Id, List, Time};
 
 use crate::api::{Answer, Error, File, Kind, Read, State, Summary, What};
 use crate::domain::{self, Config, Domain};

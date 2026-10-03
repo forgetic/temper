@@ -4,7 +4,7 @@
 use alloc::boxed::Box;
 use core::mem::size_of;
 
-use temper_lib::{Deadlines, Id, List, Map, Queue, Set, Slab, Time};
+use skein_lib::{Deadlines, Id, List, Map, Queue, Set, Slab, Time};
 
 use crate::api::{Comment, File, Head, PageName, Permission, Review, Status as StatusView, Summary};
 use crate::domain::{Alarm, Call};

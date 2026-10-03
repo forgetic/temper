@@ -21,7 +21,7 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::{Env, List, Queue};
+use skein_lib::{Env, List, Queue};
 
 use crate::config::Config;
 use crate::limits::Limits;

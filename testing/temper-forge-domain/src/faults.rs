@@ -2,7 +2,7 @@
 //! per user per window, failures before a call is made and after, and the
 //! latency of its answer, sometimes late.
 
-use temper_lib::{Duration, Env, Time};
+use skein_lib::{Duration, Env, Time};
 
 use crate::api::{Answer, Error};
 use crate::domain::{self, Config, Domain};

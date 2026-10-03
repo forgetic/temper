@@ -13,7 +13,7 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::{List, Token, Writer};
+use skein_lib::{List, Token, Writer};
 
 /// One component of a path: the name of a file or a directory. Never empty,
 /// `.` or `..`, and free of `/` and NUL, so names joined by `/` read back as

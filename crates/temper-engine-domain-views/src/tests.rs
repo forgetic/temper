@@ -2,7 +2,7 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::{Duration, Env, List, Queue, Time, Token};
+use skein_lib::{Duration, Env, List, Queue, Time, Token, Wall};
 
 use crate::{
     Capture, Chunk, Domain, Dropped, End, Event, Fact, Kept, Kind, Limits, Lost, Policy, Record, Refusal, Request,
@@ -48,7 +48,11 @@ impl Harness {
         // Room for what steps within one iteration emit, before the reclaim
         // point drains it.
         let out = Queue::with_capacity(max_out(&limits).saturating_mul(16));
-        Harness { domain: Domain::new(&limits, Time::ZERO), env: Env { now: Time::ZERO, limits }, out }
+        Harness {
+            domain: Domain::new(&limits, Time::ZERO),
+            env: Env { now: Time::ZERO, wall: Wall::EPOCH, limits },
+            out,
+        }
     }
 
     /// A harness following `RUN`, for `ITEM`, under `policy`.

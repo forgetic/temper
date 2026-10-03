@@ -30,13 +30,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use skein_lib::Duration;
 use temper_engine_domain::notes::Scope;
 use temper_engine_domain::plan::{Envelope, Grants};
 use temper_engine_domain::work::Phase;
 use temper_engine_domain::{Decoded, Item, Record, Refusal, Reply};
 use temper_forge_domain::Observation;
 use temper_forge_domain::api::{Kind, Verdict};
-use temper_lib::Duration;
 use temper_world::{Expectations, Judge};
 
 use crate::codec;

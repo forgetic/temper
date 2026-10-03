@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use skein_lib::{Duration, Env, Queue, Rng, Time, Token, Wall};
 use temper_checkout_fake::Checkout;
 use temper_checkout_fake::git::Tree as Files;
 use temper_engine_domain::{self as engine, Item};
@@ -11,7 +12,6 @@ use temper_engine_domain_tests::store::{self, Store};
 use temper_engine_domain_tests::translate::Asked;
 use temper_forge_domain::api::{Checks, Cue, File, Permission, Protection, Setup};
 use temper_forge_domain::{self as forge, Skew};
-use temper_lib::{Duration, Env, Queue, Rng, Time, Token};
 use temper_worker_domain::{self as worker, Domain, Event, Limits, Request, agent, host};
 use temper_worker_domain_agent_tests::script::{self, Fates, Sizes};
 use temper_worker_domain_agent_tests::tree::{self, Tree};
@@ -1061,7 +1061,7 @@ impl World {
             self.deliver(delivery);
         }
         self.drain_forge();
-        let env = Env { now, limits: self.settings.forge };
+        let env = Env { now, wall: Wall::EPOCH, limits: self.settings.forge };
         while self.forge.is_due(now) {
             forge::fire(&mut self.forge, &env, &mut self.forge_out);
             self.drain_forge();

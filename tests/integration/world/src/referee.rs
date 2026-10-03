@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Debug, Display};
 
-use temper_lib::{Duration, Time};
+use skein_lib::{Duration, Time};
 
 use crate::Schedule;
 

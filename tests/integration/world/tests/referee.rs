@@ -2,7 +2,7 @@
 //! observation, liveness as deadlines of its own, stimuli at their moments,
 //! and a verdict once it has seen enough.
 
-use temper_lib::{Duration, Time};
+use skein_lib::{Duration, Time};
 use temper_world::{Expectations, Judge, Referee, Verdict};
 
 /// What a toy scenario's referee observes: a request sent, its reply, and a

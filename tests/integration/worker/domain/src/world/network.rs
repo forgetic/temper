@@ -20,8 +20,8 @@
 //! world draws, so that a world with copies and one without draw the same
 //! for the rest.
 
+use skein_lib::{Duration, Time, Token};
 use temper_engine_domain as engine;
-use temper_lib::{Duration, Time, Token};
 use temper_worker_domain::{Event, host};
 use temper_world::Span;
 

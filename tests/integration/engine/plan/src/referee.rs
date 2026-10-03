@@ -30,7 +30,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use temper_lib::{Duration, Rng};
+use skein_lib::{Duration, Rng};
 use temper_world::{Expectations, Judge};
 
 /// The deployment, as the scenario sets it up: for each repository, the

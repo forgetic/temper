@@ -10,8 +10,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use skein_lib::Time;
 use temper_engine_domain_plan::Record;
-use temper_lib::Time;
 
 /// An issue the engine tracks.
 #[derive(Debug)]

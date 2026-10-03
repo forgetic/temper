@@ -30,8 +30,8 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
+use skein_lib::{Duration, Time, Token};
 use temper_engine_domain_views::{Capture, Chunk, End, Kind, Limits, Policy, Record, Refusal, Subject};
-use temper_lib::{Duration, Time, Token};
 use temper_world::{Expectations, Judge};
 
 /// What the referee observes.

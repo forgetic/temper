@@ -4,13 +4,13 @@
 
 use std::mem::size_of;
 
+use skein_lib::{Deadlines, Duration, Env, List, Map, Queue, Rng, Set, Slab, Time, Token, Wall};
 use temper_agent_domain_session::llm::{
     Block, Completion, Decoded, Descriptor, Endpoint, Failure, Problem, Stop, Usage,
 };
 use temper_agent_domain_session::{Budget, Domain, Event, Limits, MAX_PARALLEL, Request, Spec, max_out, worst_case};
 use temper_agent_domain_session_tests::TOOLS;
 use temper_agent_domain_tools::{Authority, Call, Done, Effect, Grants, Name, Part, Path, Repo, Version};
-use temper_lib::{Deadlines, Duration, Env, List, Map, Queue, Rng, Set, Slab, Time, Token};
 use temper_world::heap::{self, Meter};
 
 #[global_allocator]
@@ -98,7 +98,7 @@ fn fill(limits: Limits, route: Route) {
     };
     let limits = Limits { tools, ..limits };
     let bound = worst_case(&limits).expect("the test limits fit");
-    let env = Env { now: Time::ZERO, limits };
+    let env = Env { now: Time::ZERO, wall: Wall::EPOCH, limits };
     let mut out = Queue::with_capacity(max_out(&limits));
     let meter = Meter::new();
     let mut domain = Domain::new(&limits, 1);

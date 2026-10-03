@@ -4,11 +4,11 @@
 //! as it may, each as large as it may be, the store as many commits, with
 //! calls held, webhooks in flight and observations kept; every step checked.
 
+use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
 use temper_forge_domain::api::{
     Answer, Check, Checks, Cue, Error, File, Git, Op, Permission, Protection, Read, Setup, Verdict, Write,
 };
 use temper_forge_domain::{Config, Domain, Event, Limits, MAX_OUT, Request, Skew, fire, step, worst_case};
-use temper_lib::{Duration, Env, Queue, ReplyTo, Time, Token};
 use temper_world::heap::{self, Meter};
 
 #[global_allocator]
@@ -135,7 +135,14 @@ impl Measured {
         let meter = Meter::new();
         let domain = Domain::new(&CONFIG, 7);
         let out = Queue::with_capacity(MAX_OUT);
-        Measured { domain, env: Env { now: Time::ZERO, limits: CONFIG }, out, meter, bound, calls: 0 }
+        Measured {
+            domain,
+            env: Env { now: Time::ZERO, wall: Wall::EPOCH, limits: CONFIG },
+            out,
+            meter,
+            bound,
+            calls: 0,
+        }
     }
 
     /// Steps a call by `user` on `repository`, measured, without answering

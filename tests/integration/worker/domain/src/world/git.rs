@@ -12,12 +12,12 @@
 //! repository unreachable, or refusing what is pushed to it). What a push
 //! moves, the forge observes, and its webhooks go out, as for any change.
 
+use skein_lib::{Env, Queue, ReplyTo, Time, Token, Wall};
 use temper_checkout_fake::git::{self as fake, Created, Pushed, Remote, Tree as Files};
 use temper_checkout_fake::{Checkout, in_git};
 use temper_engine_domain_tests::deployment::WORKER;
 use temper_forge_domain::api::{Answer, Error, File, Git as Call, Op as ForgeOp, What, Write};
 use temper_forge_domain::{self as forge, Config};
-use temper_lib::{Env, Queue, ReplyTo, Time, Token};
 use temper_worker_domain::Event;
 use temper_worker_domain::checkout::git::{Done, Fault, Kind, Op, Place, Want};
 use temper_worker_domain_checkout_tests::translate as io;
@@ -240,7 +240,7 @@ impl World {
         let mut spill = Vec::new();
         let mut line = Line {
             forge: &mut self.forge,
-            env: Env { now: self.now, limits: self.settings.forge },
+            env: Env { now: self.now, wall: Wall::EPOCH, limits: self.settings.forge },
             spill: &mut spill,
             calls: &mut self.git_calls,
         };
@@ -299,7 +299,7 @@ impl World {
         *moved += 1;
         self.stats.advanced += 1;
         let content = format!("another party, {}", self.stats.advanced);
-        let env = Env { now: self.now, limits: self.settings.forge };
+        let env = Env { now: self.now, wall: Wall::EPOCH, limits: self.settings.forge };
         let advanced = forge::advance(&mut self.forge, &env, remote, branch, b"OTHER", content.as_bytes(), OTHER);
         let commit = advanced.expect("the forge has room for another party's commit");
         let (remote, branch) = (String::from_utf8_lossy(remote), String::from_utf8_lossy(branch));
@@ -350,8 +350,8 @@ impl Line<'_> {
         // The world's names for its own calls are below; git's above.
         let name = Token::new(u64::MAX - *self.calls);
         let direct = Config {
-            latency_min: temper_lib::Duration::ZERO,
-            latency_max: temper_lib::Duration::ZERO,
+            latency_min: skein_lib::Duration::ZERO,
+            latency_max: skein_lib::Duration::ZERO,
             late: 0,
             unavailable: 0,
             timeouts: 0,
@@ -361,7 +361,7 @@ impl Line<'_> {
         };
         let mut out = Queue::with_capacity(forge::MAX_OUT);
         let event = forge::Event::Call { reply_to: ReplyTo::new(name), user, repository: remote.into(), op };
-        forge::step(self.forge, &Env { now: self.env.now, limits: direct }, event, &mut out);
+        forge::step(self.forge, &Env { now: self.env.now, wall: self.env.wall, limits: direct }, event, &mut out);
         let mut answered = None;
         while answered.is_none() {
             while let Some(request) = out.pop() {

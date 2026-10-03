@@ -30,7 +30,7 @@
 
 use std::collections::BTreeMap;
 
-use temper_lib::{Duration, Rng, Token};
+use skein_lib::{Duration, Rng, Token};
 use temper_worker_domain_host::{
     Access, AgentFailure, Ask, Event, Finish, Landing, Limits, Missing, Preparation, Request, RunFailure, Workspace,
 };

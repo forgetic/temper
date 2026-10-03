@@ -6,8 +6,8 @@
 
 use std::collections::BTreeMap;
 
+use skein_lib::Token;
 use temper_agent_domain_tools::Effect;
-use temper_lib::Token;
 
 /// The tools the fake opener serves: a finish, which writes, and a lookup,
 /// which only reads and is slow.

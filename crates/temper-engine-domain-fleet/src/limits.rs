@@ -1,6 +1,6 @@
 use alloc::boxed::Box;
 
-use temper_lib::{Deadlines, Duration, Id, Map, Queue, Set, Slab, Token};
+use skein_lib::{Deadlines, Duration, Id, Map, Queue, Set, Slab, Token};
 
 use crate::attempt::{Attempt, Run};
 use crate::call::Call;

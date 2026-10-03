@@ -2,7 +2,7 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::{List, Queue, Rng};
+use skein_lib::{List, Queue, Rng};
 
 use crate::{
     Act, Acts, Bound, Branch, Ci, Decision, Finding, Gate, Goal, Grant, Landing, Limits, Oversized, Permission, Plan,

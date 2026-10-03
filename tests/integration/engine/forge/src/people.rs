@@ -7,9 +7,9 @@
 //! mangling it, or deletes it. Each picks what to act on from the forge as
 //! it is, read without faults.
 
+use skein_lib::{Rng, Time};
 use temper_forge_domain::api::{Kind, Op, Read, State, Verdict, Write};
 use temper_forge_domain::{Config, Domain};
-use temper_lib::{Rng, Time};
 use temper_world::Span;
 
 use crate::translate;
@@ -115,7 +115,7 @@ impl People {
     }
 
     /// The time to the next action.
-    pub fn gap(&mut self) -> temper_lib::Duration {
+    pub fn gap(&mut self) -> skein_lib::Duration {
         self.script.gap.draw(&mut self.rng)
     }
 

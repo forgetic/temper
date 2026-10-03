@@ -174,7 +174,7 @@ fn withdrawn_calls_are_answered_once() {
 #[test]
 fn runs_that_keep_making_progress_are_stopped_only_by_their_wall_time() {
     let mut settings = only(Fates { overrun: 1, ..NONE });
-    settings.agent.wall_time = temper_lib::Duration::from_secs(200);
+    settings.agent.wall_time = skein_lib::Duration::from_secs(200);
     // Some wind down when cancelled; the rest are faulted past the grace.
     settings.script.deaf_to_cancel = 500;
     let stats = run(&settings).stats();

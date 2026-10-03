@@ -5,7 +5,7 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::Time;
+use skein_lib::Time;
 
 use crate::due::Why;
 use crate::plan::{Commit, Envelope, Growth, Step};

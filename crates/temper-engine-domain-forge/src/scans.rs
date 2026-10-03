@@ -48,8 +48,8 @@
 //! A listing that fails is tried again after a backoff, from the page it
 //! failed on; a slow pass that fails waits for its next page.
 
-use temper_lib::bytes::copy_of;
-use temper_lib::{Env, Id, List, Queue, Time};
+use skein_lib::bytes::copy_of;
+use skein_lib::{Env, Id, List, Queue, Time};
 
 use crate::api::{self, Answer, Error, Kind, Mark, Op, State as Open, Summary};
 use crate::boundary::{Item, Request};

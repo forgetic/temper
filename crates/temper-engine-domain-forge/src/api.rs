@@ -51,7 +51,7 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::{Duration, Time, Token};
+use skein_lib::{Duration, Time, Token};
 
 use crate::boundary::{Ci, Position};
 

@@ -18,8 +18,8 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::bytes::copy_of;
-use temper_lib::{Env, List, Queue};
+use skein_lib::bytes::copy_of;
+use skein_lib::{Env, List, Queue};
 
 use crate::check::{
     Among, Checked, Found, Problem, Problems, check_plan, check_steps, cost, count, entry_named, place,

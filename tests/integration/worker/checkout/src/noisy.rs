@@ -2,7 +2,7 @@
 //! that is unreachable, refuses or lacks what is asked, branches others
 //! advance, and clients that abort, release, save and push twice.
 
-use temper_lib::{Duration, Rng, Time};
+use skein_lib::{Duration, Rng, Time};
 use temper_worker_domain_checkout::Limits;
 
 use crate::client::{Interrupt, Plan};

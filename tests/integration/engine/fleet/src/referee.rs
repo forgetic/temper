@@ -27,7 +27,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use temper_lib::Duration;
+use skein_lib::Duration;
 use temper_world::{Expectations, Judge};
 
 /// How a worker's run answered, as the referee compares it: its kind and the

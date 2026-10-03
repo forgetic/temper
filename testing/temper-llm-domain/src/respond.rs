@@ -26,8 +26,8 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::bytes::copy_of;
-use temper_lib::{List, Rng};
+use skein_lib::bytes::copy_of;
+use skein_lib::{List, Rng};
 
 use crate::api::{Answer, Error, Finish, Line, Message, Part, Query, Role, Script, Turn, Usage};
 use crate::domain::Config;
@@ -389,8 +389,8 @@ fn call_id(n: u64) -> Box<[u8]> {
 mod tests {
     use alloc::boxed::Box;
 
-    use temper_lib::bytes::copy_of;
-    use temper_lib::{Duration, Rng};
+    use skein_lib::bytes::copy_of;
+    use skein_lib::{Duration, Rng};
 
     use super::{call_id, respond, valid};
     use crate::api::{Error, Finish, Line, Message, Part, Query, Role, Script, ToolSpec, Turn};

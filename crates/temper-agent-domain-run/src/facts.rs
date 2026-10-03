@@ -15,7 +15,7 @@
 //! to the run without a request (a conversation ending, a call made, checks
 //! or a push ending) are told where they happen.
 
-use temper_lib::{Queue, Slab, Time, Token};
+use skein_lib::{Queue, Slab, Time, Token};
 
 use crate::boundary::{Answer, End, Exit, Failure, Push, Refusal, Request, Returned};
 use crate::run::{self, Conversation, Run};

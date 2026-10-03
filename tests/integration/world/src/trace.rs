@@ -1,6 +1,6 @@
 use std::fmt::{Debug, Display};
 
-use temper_lib::Time;
+use skein_lib::Time;
 
 /// What crossed a world's boundaries, in order, each line with the time it
 /// crossed at: a seed replays to the same trace (testing-pyramid.md, 6).

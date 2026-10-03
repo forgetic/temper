@@ -1,7 +1,7 @@
 use alloc::boxed::Box;
 use core::mem::size_of;
 
-use temper_lib::{Deadlines, Duration, Id, List, Map, Queue, Slab};
+use skein_lib::{Deadlines, Duration, Id, List, Map, Queue, Slab};
 
 use crate::api::{Answer, Comment, PageName, Pull, Remark, Review, Status, Summary};
 use crate::boundary::{Item, Reviewed};

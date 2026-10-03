@@ -22,7 +22,7 @@
 //! finding, so a check with gates answers at least as strictly as one
 //! without, and finds everything that one finds.
 
-use temper_lib::Queue;
+use skein_lib::Queue;
 
 use crate::boundary::{
     Act, Bound, Ci, Decision, Finding, Gate, Goal, Grant, Landing, Oversized, Permission, Plan, Repository, Request,

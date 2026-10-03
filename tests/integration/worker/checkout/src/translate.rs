@@ -3,9 +3,9 @@
 //! and a repository's by the workspace's and the repository's name; a commit
 //! is the fake forge's count, in the first bytes of the domain's hash.
 
+use skein_lib::Token;
 use temper_checkout_fake::Checkout;
 use temper_checkout_fake::git::{self, Created, Pushed, Remote, What};
-use temper_lib::Token;
 use temper_worker_domain_checkout::git::{Commit, Done, Fault, Missing, Op, Place, Want};
 
 /// The domain's name for the fake's commit `fake`.

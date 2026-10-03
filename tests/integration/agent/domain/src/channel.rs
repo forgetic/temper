@@ -81,6 +81,7 @@
 //! them (`Waiting`); parking and snapshots; relayed calls (forge reads and
 //! outlets) and their answers (agent-domain.md, section 10).
 
+use skein_lib::{ReplyTo, Time, Token};
 use temper_agent_domain::run::charter::{self, Checkout};
 use temper_agent_domain::run::facts as run_facts;
 use temper_agent_domain::run::outcome::VerdictRule;
@@ -93,7 +94,6 @@ use temper_engine_domain::brief::{Body, Section};
 use temper_engine_domain::plan::{self, Why};
 use temper_engine_domain::{self as engine, Outcome};
 use temper_engine_domain_tests::codec;
-use temper_lib::{ReplyTo, Time, Token};
 use temper_worker_domain_agent::channel::{Ask, Down, Finish, Push, Reply, RunFailure, Up};
 
 /// What the agent's protocol layer holds for an agent process's channel.

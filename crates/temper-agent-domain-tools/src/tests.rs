@@ -3,7 +3,7 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::{Duration, Env, Id, List, Queue, ReplyTo, Time, Token};
+use skein_lib::{Duration, Env, Id, List, Queue, ReplyTo, Time, Token, Wall};
 
 use crate::authority::{self, Located};
 use crate::edit::{self, Edit};
@@ -52,7 +52,7 @@ impl Harness {
     fn new(limits: Limits) -> Harness {
         Harness {
             domain: Domain::new(&limits),
-            env: Env { now: Time::ZERO, limits },
+            env: Env { now: Time::ZERO, wall: Wall::EPOCH, limits },
             out: Queue::with_capacity(max_out(&limits)),
         }
     }

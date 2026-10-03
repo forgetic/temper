@@ -1,5 +1,5 @@
+use skein_lib::{Deadlines, Duration, List, Queue, Slab};
 use temper_agent_domain_tools as tools;
-use temper_lib::{Deadlines, Duration, List, Queue, Slab};
 
 use crate::boundary::Budget;
 use crate::facts::Fact;

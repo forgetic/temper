@@ -13,8 +13,8 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::bytes::copy_of;
-use temper_lib::{Env, Id, List, Map, Set};
+use skein_lib::bytes::copy_of;
+use skein_lib::{Env, Id, List, Map, Set};
 
 use crate::api::{
     Answer, Change, Check, Error, Kind, Permission, Pull as PullView, Review, State, Status as StatusView, Verdict,

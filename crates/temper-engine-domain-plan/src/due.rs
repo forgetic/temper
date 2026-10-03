@@ -46,8 +46,8 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::bytes::copy_of;
-use temper_lib::{Env, Queue, Time};
+use skein_lib::bytes::copy_of;
+use skein_lib::{Env, Queue, Time};
 
 use crate::check::count;
 use crate::config::Config;

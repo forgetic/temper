@@ -24,7 +24,7 @@
 //! its terminal before it is retired, so there is never more than one call
 //! per owner, and the queues never hold more calls than there are owners.
 
-use temper_lib::{Env, Id, Queue, Slab, Time, Token};
+use skein_lib::{Env, Id, Queue, Slab, Time, Token};
 
 use crate::api::{Answer, Error, Op};
 use crate::boundary::Request;

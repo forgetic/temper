@@ -12,7 +12,7 @@
 //! come from sources the rule does not name, so no message is lost behind
 //! them; the parent bounds the inbox it keeps.
 
-use temper_lib::{Env, Time};
+use skein_lib::{Env, Time};
 
 use crate::limits::Limits;
 use crate::plan::Wake;

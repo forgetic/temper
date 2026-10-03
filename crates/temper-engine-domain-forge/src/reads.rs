@@ -22,8 +22,8 @@
 
 use core::mem;
 
-use temper_lib::bytes::copy_of;
-use temper_lib::{Env, Id, Queue, Time, Token};
+use skein_lib::bytes::copy_of;
+use skein_lib::{Env, Id, Queue, Time, Token};
 
 use crate::api::{Answer, Error, Op};
 use crate::boundary::{Failure, Read, Request};

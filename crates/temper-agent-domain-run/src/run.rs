@@ -92,8 +92,8 @@
 use alloc::boxed::Box;
 use core::mem;
 
-use temper_lib::bytes::copy_of;
-use temper_lib::{Deadlines, Duration, Env, Id, Queue, ReplyTo, Slab, Time, Token};
+use skein_lib::bytes::copy_of;
+use skein_lib::{Deadlines, Duration, Env, Id, Queue, ReplyTo, Slab, Time, Token};
 
 use crate::agent::{self, Child, Means};
 use crate::boundary::{

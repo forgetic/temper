@@ -4,13 +4,13 @@
 
 use std::mem::size_of;
 
+use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
 use temper_agent_domain_run::charter::{Checkout, Endpoint, Families, Grants, Llm, Outlet, Repository, Tools};
 use temper_agent_domain_run::outcome::{Change, ChangeSpec, Children, Declared, OutcomeSpec, VerdictRule};
 use temper_agent_domain_run::{
     Answer, Ask, Budget, Charter, Domain, End, Event, Exit, Invalid, Limits, MAX_OUT, Push, Ran, Read, Refusal,
     Request, Spend, Stop, worst_case,
 };
-use temper_lib::{Duration, Env, Queue, ReplyTo, Time, Token};
 use temper_world::heap::{self, Meter};
 
 #[global_allocator]
@@ -113,7 +113,7 @@ enum Asked {
 /// against the worst case.
 fn fill(limits: Limits) {
     let bound = worst_case(&limits).expect("the test limits fit");
-    let env = Env { now: Time::ZERO, limits };
+    let env = Env { now: Time::ZERO, wall: Wall::EPOCH, limits };
     let mut out = Queue::with_capacity(MAX_OUT);
     let meter = Meter::new();
     let mut domain = Domain::new(&limits);

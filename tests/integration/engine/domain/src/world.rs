@@ -1,12 +1,12 @@
 use std::collections::BTreeMap;
 
+use skein_lib::{Duration, Env, Queue, ReplyTo, Rng, Time, Token, Wall};
 use temper_engine_domain::forge::api as engine_api;
 use temper_engine_domain::{
     self as engine, Answer, Assignment, Domain, Event, Fact, Hello, Item, Landed, Limits, Request, Start, Work, plan,
 };
 use temper_forge_domain::api::{self as forge_api, Checks, Cue, File, Git, Permission, Protection, Setup};
 use temper_forge_domain::{self as forge, Skew};
-use temper_lib::{Duration, Env, Queue, ReplyTo, Rng, Time, Token};
 use temper_world::{Key, Ledger, Referee, Schedule, Span, Stage, Trace};
 
 use crate::codec;
@@ -408,7 +408,7 @@ impl World {
             stage: Stage::new(settings.limits, max_out, max_out + SLACK),
             life: 0,
             forge,
-            forge_env: Env { now: Time::ZERO, limits: settings.forge },
+            forge_env: Env { now: Time::ZERO, wall: Wall::EPOCH, limits: settings.forge },
             forge_out: Queue::with_capacity(64),
             wire: Schedule::new(),
             scheduled: 0,

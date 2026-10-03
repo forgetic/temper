@@ -12,7 +12,7 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::Writer;
+use skein_lib::Writer;
 
 use crate::boundary::Stop;
 use crate::charter::{Charter, Families, Llm, Repository, Tools};
@@ -307,7 +307,7 @@ impl Text {
 mod tests {
     use alloc::boxed::Box;
 
-    use temper_lib::Token;
+    use skein_lib::Token;
 
     use super::{Text, child, nudge, system};
     use crate::boundary::Stop;

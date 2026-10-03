@@ -1,7 +1,7 @@
 //! End to end at the checkout child domain: the checkout, its scripted clients,
 //! a fake forge and a fake disk, talking through a simulated world.
 
-use temper_lib::{Duration, Time};
+use skein_lib::{Duration, Time};
 use temper_worker_domain_checkout::git::Missing;
 use temper_worker_domain_checkout::{Failure, Landing, Limits, Prepared, Refusal};
 use temper_worker_domain_checkout_tests::client::{Interrupt, Pick, Plan};

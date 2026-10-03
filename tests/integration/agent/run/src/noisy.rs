@@ -1,8 +1,8 @@
 //! Random settings: small limits, charters that sometimes do not fit them,
 //! faults, cancels, and latencies that race the deadlines.
 
+use skein_lib::{Duration, Rng};
 use temper_agent_domain_run::{Budget, Limits};
-use temper_lib::{Duration, Rng};
 
 use crate::partner::Script;
 use crate::{Checkouts, Settings, Span, host};

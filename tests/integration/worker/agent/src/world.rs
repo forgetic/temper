@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use temper_lib::{Duration, Rng, Time, Token};
+use skein_lib::{Duration, Rng, Time, Token};
 use temper_worker_domain_agent::channel::{Ask, Down, Finish, Reply, Up};
 use temper_worker_domain_agent::{self as agent, Bounce, End, Event, Fact, Fault, Limits, Request, Signal};
 use temper_world::{Schedule, Span, Stage, Trace};

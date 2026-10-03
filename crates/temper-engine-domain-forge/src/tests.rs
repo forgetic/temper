@@ -2,7 +2,7 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::{Duration, Env, List, Queue, Time, Token};
+use skein_lib::{Duration, Env, List, Queue, Time, Token, Wall};
 
 use crate::api::{Answer, Body, Comment, Error, Kind, Mark, Op, Page, Pull, Remark, Review, State, Summary, Verdict};
 use crate::{
@@ -77,7 +77,11 @@ struct Sent {
 impl Harness {
     fn new(limits: Limits) -> Harness {
         let out = Queue::with_capacity(max_out(&limits));
-        Harness { domain: Domain::new(&limits, config(), 7), env: Env { now: Time::ZERO, limits }, out }
+        Harness {
+            domain: Domain::new(&limits, config(), 7),
+            env: Env { now: Time::ZERO, wall: Wall::EPOCH, limits },
+            out,
+        }
     }
 
     /// A domain whose cold start is done, with nothing tracked.

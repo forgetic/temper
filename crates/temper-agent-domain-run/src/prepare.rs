@@ -14,8 +14,8 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::bytes::copy_of;
-use temper_lib::{List, Time, Token};
+use skein_lib::bytes::copy_of;
+use skein_lib::{List, Time, Token};
 
 use crate::boundary::{Place, Read, Request};
 use crate::charter::{Charter, Repository, count};

@@ -1,9 +1,9 @@
 //! The referee of the notes' world, fed observations by hand as the world
 //! would feed them, fails a run that breaks an expectation, and says why.
 
+use skein_lib::{Duration, Time};
 use temper_engine_domain_notes::{Author, Entry, Line, Page, Scope};
 use temper_engine_domain_notes_tests::referee::{Notes, Seen};
-use temper_lib::{Duration, Time};
 use temper_world::{Referee, Verdict};
 
 const REPO: Scope = Scope::Repository(0);

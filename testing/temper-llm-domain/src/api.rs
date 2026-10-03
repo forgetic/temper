@@ -3,7 +3,7 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::Duration;
+use skein_lib::Duration;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Role {

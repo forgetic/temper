@@ -23,6 +23,7 @@
 //! the outcome, is mangled. Every decoder refuses trailing bytes, counts
 //! beyond what is left, and tags it does not know.
 
+use skein_lib::{Duration, Time};
 use temper_engine_domain::brief::{self, Body, Section, Unread};
 use temper_engine_domain::notes::{Author, Page, Reference};
 use temper_engine_domain::plan::{
@@ -34,7 +35,6 @@ use temper_engine_domain::rules::Permission;
 use temper_engine_domain::views::{Capture, Policy};
 use temper_engine_domain::work::{Class, Failures, Hold, Lifecycle, Phase};
 use temper_engine_domain::{Charter, Decoded, Item, Outcome, Posted, Record, Related, Relations};
-use temper_lib::{Duration, Time};
 
 /// The markers at the head of what the engine writes, as the forge
 /// child domain's world writes them.

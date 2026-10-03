@@ -3,8 +3,8 @@
 use alloc::boxed::Box;
 use core::mem::size_of;
 
-use temper_lib::bytes::copy_of;
-use temper_lib::{Duration, Env, List, Queue, Time, Token, Writer};
+use skein_lib::bytes::copy_of;
+use skein_lib::{Duration, Env, List, Queue, Time, Token, Wall, Writer};
 
 use crate::git::{Commit, Done, Fault, Kind, Missing, Op, Place, Want};
 use crate::{
@@ -34,7 +34,11 @@ struct Harness {
 impl Harness {
     fn new(limits: Limits) -> Harness {
         assert!(worst_case(&limits).is_some(), "the test limits fit");
-        Harness { domain: Domain::new(&limits), env: Env { now: NOW, limits }, out: Queue::with_capacity(MAX_OUT) }
+        Harness {
+            domain: Domain::new(&limits),
+            env: Env { now: NOW, wall: Wall::EPOCH, limits },
+            out: Queue::with_capacity(MAX_OUT),
+        }
     }
 
     /// Steps the domain with `event`, and takes what it emitted, at most

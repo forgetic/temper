@@ -12,7 +12,7 @@
 //! worker in contact. A call beyond the room for calls is dropped, and its
 //! run withdraws it past its own deadline.
 
-use temper_lib::{Id, Queue, ReplyTo, Token};
+use skein_lib::{Id, Queue, ReplyTo, Token};
 
 use crate::attempt::{Attempt, State, Where};
 use crate::boundary::{Bounce, Request, Undelivered};

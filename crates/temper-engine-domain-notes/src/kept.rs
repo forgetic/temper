@@ -41,7 +41,7 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::{Env, Id, List, Map, Queue, Set};
+use skein_lib::{Env, Id, List, Map, Queue, Set};
 
 use crate::boundary::{Author, Fetched, Listed, Page, Reference, Refusal, Request, Scope, Wrote};
 use crate::call::{self, Call};

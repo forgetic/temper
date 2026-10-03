@@ -43,7 +43,7 @@
 //! hold reasons, deadlines; never a token, which means nothing after a
 //! restart.
 
-use temper_lib::{ReplyTo, Time, Token};
+use skein_lib::{ReplyTo, Time, Token};
 
 /// parent -> work
 #[derive(PartialEq, Eq, Debug)]

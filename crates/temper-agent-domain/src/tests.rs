@@ -5,11 +5,11 @@
 
 use alloc::boxed::Box;
 
+use skein_lib::{Duration, Env, List, Queue, ReplyTo, Time, Token, Wall};
 use temper_agent_domain_run::charter::{Checkout, Endpoint, Families, Grants, Llm, Repository, Tools};
 use temper_agent_domain_run::outcome::{Change, ChangeSpec, Children, Declared, OutcomeSpec, Verdict, VerdictRule};
 use temper_agent_domain_run::{self as run, Ask, Charter};
 use temper_agent_domain_session as session;
-use temper_lib::{Duration, Env, List, Queue, ReplyTo, Time, Token};
 
 use crate::limits;
 use crate::llm::{Block, Completion, Decoded, Message, Problem, Prompt, Returned, Role, Said, Served, Stop, Usage};
@@ -118,7 +118,7 @@ impl Harness {
     fn with(limits: &Limits) -> Harness {
         Harness {
             domain: Domain::new(limits, 1),
-            env: Env { now: Time::ZERO, limits: *limits },
+            env: Env { now: Time::ZERO, wall: Wall::EPOCH, limits: *limits },
             out: Queue::with_capacity(max_out(limits)),
         }
     }

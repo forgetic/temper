@@ -9,7 +9,7 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::Duration;
+use skein_lib::Duration;
 
 use crate::path::{Name, Path};
 

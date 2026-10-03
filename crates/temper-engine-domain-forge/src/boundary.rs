@@ -35,7 +35,7 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::{Time, Token};
+use skein_lib::{Time, Token};
 
 use crate::api::{Answer, Error, Kind, Op, Verdict};
 

@@ -22,7 +22,7 @@
 
 use std::collections::BTreeMap;
 
-use temper_lib::{Duration, Rng, Token};
+use skein_lib::{Duration, Rng, Token};
 use temper_worker_domain_agent::channel::{Ask, Push, Reply};
 use temper_worker_domain_agent::{Bounce, End, Event, Invalid, Limits, Request, Spawn};
 use temper_world::Span;

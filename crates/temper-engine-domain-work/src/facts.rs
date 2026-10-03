@@ -8,7 +8,7 @@
 //! Nothing the hub decides depends on whether a fact was kept. An item refused
 //! at the entrance tells nothing: it was not taken in.
 
-use temper_lib::Queue;
+use skein_lib::Queue;
 
 use crate::boundary::{Class, Hold, Item};
 

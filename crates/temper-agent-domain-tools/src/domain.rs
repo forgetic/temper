@@ -1,6 +1,6 @@
 //! The tools child domain's state and its entry point (section 3).
 
-use temper_lib::{Env, Queue, Slab};
+use skein_lib::{Env, Queue, Slab};
 
 use crate::boundary::{Event, Request};
 use crate::facts::{Fact, Facts};

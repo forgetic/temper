@@ -1,7 +1,7 @@
 //! One budget per run (agent-domain.md, 4.2): turns, tokens and time, across
 //! every conversation the run opens.
 
-use temper_lib::Duration;
+use skein_lib::Duration;
 
 /// What a run may spend across all its conversations: completions, tokens of
 /// each kind as providers count them, and time from its admission.

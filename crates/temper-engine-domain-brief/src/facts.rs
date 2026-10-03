@@ -7,7 +7,7 @@
 //! take no room in `out`, and when the queue is full they are dropped and
 //! counted. Nothing the brief decides depends on whether a fact was kept.
 
-use temper_lib::Queue;
+use skein_lib::Queue;
 
 use crate::boundary::{Kind, Refusal};
 

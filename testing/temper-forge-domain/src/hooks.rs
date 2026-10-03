@@ -9,8 +9,8 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::bytes::copy_of;
-use temper_lib::{Env, Id, Queue};
+use skein_lib::bytes::copy_of;
+use skein_lib::{Env, Id, Queue};
 
 use crate::api::Change;
 use crate::boundary::Request;

@@ -3,6 +3,7 @@
 //! engine assigns, as its codec carries them, decoded into ones the agent's
 //! run admits.
 
+use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
 use temper_agent_domain::run::charter::{self, Checkout, Endpoint, Llm, Outlet, Repository};
 use temper_agent_domain::run::facts::{self as run_facts, Answered, Asked, Return};
 use temper_agent_domain::run::outcome::{Change, ChangeSpec, Child, Children, Declared, Field, OutcomeSpec, Verdict};
@@ -16,7 +17,6 @@ use temper_engine_domain::plan::{self, Finish, Grants, Why};
 use temper_engine_domain::views::{Capture, Policy as Capturing};
 use temper_engine_domain::{Charter, Outcome};
 use temper_engine_domain_tests::codec;
-use temper_lib::{Duration, Env, Queue, ReplyTo, Time, Token};
 use temper_worker_domain_agent::channel::{Ask, Down, Finish as Finished, Push, Reply, RunFailure, Up};
 
 const WORKER: Token = Token::new(7);
@@ -368,7 +368,7 @@ fn charters_the_engine_assigns_decode_into_ones_the_run_admits() {
         };
         let encoded = codec::charter(&charter);
         let mut agent = temper_agent_domain::Domain::new(&LIMITS, seed);
-        let env = Env { now: Time::ZERO, limits: LIMITS };
+        let env = Env { now: Time::ZERO, wall: Wall::EPOCH, limits: LIMITS };
         let mut out = Queue::with_capacity(temper_agent_domain::max_out(&LIMITS));
         let start = Down::Start { charter: encoded.into(), snapshot: None };
         let event = channel::down(start, &link(None)).expect("a start is heard");

@@ -11,7 +11,7 @@
 
 use std::collections::VecDeque;
 
-use temper_lib::{Duration, Env, Queue, Time, Token};
+use skein_lib::{Duration, Env, Queue, Time, Token, Wall};
 use temper_worker_domain::agent::channel::{Ask, Finish, RunFailure, Up};
 use temper_worker_domain::checkout::git::{Commit, Done, Op};
 use temper_worker_domain::host::{Access, Assignment, Repository, Start, Workspace};
@@ -82,7 +82,7 @@ impl Measured {
         let out = Queue::with_capacity(max_out(limits));
         let meter = Meter::new();
         let domain = Domain::new(limits, 7);
-        let env = Env { now: Time::ZERO, limits: *limits };
+        let env = Env { now: Time::ZERO, wall: Wall::EPOCH, limits: *limits };
         Measured {
             domain,
             env,

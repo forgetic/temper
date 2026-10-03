@@ -6,8 +6,8 @@
 
 use std::collections::BTreeMap;
 
+use skein_lib::{Duration, Rng, Time};
 use temper_engine_domain::{Item, Store as Op, Stored, Trace};
-use temper_lib::{Duration, Rng, Time};
 use temper_world::Span;
 
 /// How the store behaves.

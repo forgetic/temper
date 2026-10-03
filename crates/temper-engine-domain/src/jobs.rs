@@ -28,12 +28,12 @@
 use alloc::boxed::Box;
 use core::mem;
 
+use skein_lib::bytes::copy_of;
+use skein_lib::{Env, Id, List, Queue, Time, Token};
 use temper_engine_domain_forge::{self as forge, api};
 use temper_engine_domain_plan as plan;
 use temper_engine_domain_rules as rules;
 use temper_engine_domain_work as work;
-use temper_lib::bytes::copy_of;
-use temper_lib::{Env, Id, List, Queue, Time, Token};
 
 use crate::boundary::{Inbound, Item, Phase, Related};
 use crate::domain::{self, Domain};
@@ -1172,7 +1172,7 @@ fn release_step(domain: &mut Domain, env: &Env<Limits>, id: Id<Entry>, step: &[u
     let Ok(wait) = domain.waits.insert(Wait::Release { entry: child_id }) else {
         unreachable!("the waits have room for every item's call")
     };
-    let reply_to = temper_lib::ReplyTo::new(wait.token());
+    let reply_to = skein_lib::ReplyTo::new(wait.token());
     route::work_step(domain, env, work::Event::Release { reply_to, item: child });
 }
 

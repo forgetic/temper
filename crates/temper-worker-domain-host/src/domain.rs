@@ -1,6 +1,6 @@
 //! The host child domain's state and its entry points (section 3).
 
-use temper_lib::{Env, Id, Map, Queue, Slab, Token};
+use skein_lib::{Env, Id, Map, Queue, Slab, Token};
 
 use crate::boundary::{Event, Hosting, Reason, Request};
 use crate::call::{self, Call};

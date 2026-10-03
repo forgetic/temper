@@ -11,8 +11,8 @@
 
 use alloc::boxed::Box;
 
+use skein_lib::{Duration, Token};
 use temper_agent_domain_tools as tools;
-use temper_lib::{Duration, Token};
 
 /// A provider endpoint the protocol layer is configured with: which provider,
 /// where, with which credentials. The domain only names it.

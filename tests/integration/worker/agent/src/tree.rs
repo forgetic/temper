@@ -27,7 +27,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
-use temper_lib::{Duration, Rng, Time, Token};
+use skein_lib::{Duration, Rng, Time, Token};
 use temper_worker_domain_agent::{Event, Request, Signal};
 use temper_world::Span;
 

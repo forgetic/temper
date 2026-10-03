@@ -52,7 +52,7 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::{Decimal, List, Token, Writer};
+use skein_lib::{Decimal, List, Token, Writer};
 
 use crate::boundary::{Body, Fit, Keep, Kind, Part, Request, Section, Source};
 use crate::brief::{Content, Slot};

@@ -13,7 +13,7 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::Queue;
+use skein_lib::Queue;
 
 use crate::api::{Check, Error, Git, Kind, Op, Verdict, Write};
 

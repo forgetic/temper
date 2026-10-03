@@ -36,7 +36,7 @@
 use alloc::boxed::Box;
 use core::mem;
 
-use temper_lib::{Env, Id, List, Queue, ReplyTo, Slab, Time, Token};
+use skein_lib::{Env, Id, List, Queue, ReplyTo, Slab, Time, Token};
 
 use crate::boundary::{Kind, Part, Read, Refusal, Request, Source, Unread, Wanted};
 use crate::cut;

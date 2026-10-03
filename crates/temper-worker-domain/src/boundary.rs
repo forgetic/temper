@@ -46,7 +46,7 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::{Time, Token};
+use skein_lib::{Time, Token};
 use temper_worker_domain_agent::{self as agent, channel};
 use temper_worker_domain_checkout::git;
 use temper_worker_domain_host as host;

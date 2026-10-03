@@ -8,7 +8,7 @@
 //! Nothing the views decide depends on whether a fact was kept. What the
 //! views lose is also counted in [`Lost`], which drops nothing.
 
-use temper_lib::Queue;
+use skein_lib::Queue;
 
 use crate::boundary::{End, Refusal};
 

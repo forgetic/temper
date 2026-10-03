@@ -1,6 +1,6 @@
 //! The fleet's state and its entry points (programming-model.md, section 3).
 
-use temper_lib::{Deadlines, Env, Id, Map, Queue, Slab, Time, Token};
+use skein_lib::{Deadlines, Env, Id, Map, Queue, Slab, Time, Token};
 
 use crate::attempt::{self, Attempt, Run};
 use crate::boundary::{Event, Request};

@@ -2,7 +2,7 @@
 //! a counting allocator: the host with every slot holding an assignment of
 //! exactly its limits, then every run ending with as much as it may hold.
 
-use temper_lib::{Env, Queue, ReplyTo, Time, Token};
+use skein_lib::{Env, Queue, ReplyTo, Time, Token, Wall};
 use temper_worker_domain_host::{
     Access, AgentFailure, Answer, Ask, Assignment, Bounce, Domain, Event, Finish, Invalid, Landing, Limits,
     Preparation, Reason, Refusal, Repository, Request, Start, Workspace, max_out, resume, step, worst_case,
@@ -61,7 +61,7 @@ impl Measured {
         let meter = Meter::new();
         let domain = Domain::new(&limits);
         let out = Queue::with_capacity(max_out(&limits));
-        Measured { domain, env: Env { now: Time::ZERO, limits }, out, meter, bound }
+        Measured { domain, env: Env { now: Time::ZERO, wall: Wall::EPOCH, limits }, out, meter, bound }
     }
 
     fn step(&mut self, event: Event) -> Vec<Asked> {

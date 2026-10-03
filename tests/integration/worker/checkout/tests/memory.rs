@@ -5,7 +5,7 @@
 //! again for other workstreams, so that the hold slab holds as many released
 //! holds as live ones.
 
-use temper_lib::{Duration, Env, Queue, Time, Token};
+use skein_lib::{Duration, Env, Queue, Time, Token, Wall};
 use temper_worker_domain_checkout::git::{Commit, Done, Fault, Kind, Missing};
 use temper_worker_domain_checkout::{
     Domain, Event, Limits, MAX_OUT, Message, Outcome, Prepared, Refusal, Repository, Request, Spec, Start, step,
@@ -94,7 +94,7 @@ struct Fill {
 impl Fill {
     fn new(limits: Limits) -> Fill {
         let bound = worst_case(&limits).expect("the test limits fit");
-        let env = Env { now: Time::ZERO, limits };
+        let env = Env { now: Time::ZERO, wall: Wall::EPOCH, limits };
         Fill { domain: Domain::new(&limits), env, out: Queue::with_capacity(MAX_OUT), meter: Meter::new(), bound }
     }
 
@@ -229,7 +229,7 @@ fn fill(limits: Limits) {
     let mut spec = full_spec(&limits, 0);
     spec.key = bytes(limits.name_bytes + 1);
     let mut out = Queue::with_capacity(MAX_OUT);
-    let env = Env { now: Time::ZERO, limits };
+    let env = Env { now: Time::ZERO, wall: Wall::EPOCH, limits };
     temper_worker_domain_checkout::step(&mut domain, &env, Event::Prepare { client: Token::new(0), spec }, &mut out);
     let Some(Request::Prepared { prepared, .. }) = out.pop() else { panic!("expected an answer") };
     assert_eq!(prepared, Prepared::Refused { refusal: Refusal::Invalid });

@@ -9,7 +9,7 @@
 //! The run's own facts are not these: they go to the client as they are
 //! (`Request::Told`), for the parent to forward.
 
-use temper_lib::{Queue, Token};
+use skein_lib::{Queue, Token};
 
 use crate::boundary::{End, Fault};
 

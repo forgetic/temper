@@ -14,6 +14,7 @@
 //! Whatever else the forge emits meanwhile, answers to others' calls whose
 //! time came and webhooks, is kept for the world to route.
 
+use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
 use temper_checkout_fake::git::{self, Created, Fault, Pushed, Remote, Tree, Want};
 use temper_engine_domain::forge::Position;
 use temper_engine_domain_forge_tests::translate::recorded;
@@ -25,7 +26,6 @@ use temper_forge_domain::api::{
     Answer, Checks, Cue, Error, File, Git, Op, Permission, Protection, Read, Setup, What, Write,
 };
 use temper_forge_domain::{self as forge, Config, Domain, Event, MAX_OUT, Request};
-use temper_lib::{Duration, Env, Queue, ReplyTo, Time, Token};
 
 use crate::desk::{self, Hand};
 use crate::fixture;
@@ -194,7 +194,7 @@ impl Direct<'_> {
                 return false;
             }
         }
-        let env = Env { now: self.env.now, limits: self.env.limits };
+        let env = Env { now: self.env.now, wall: self.env.wall, limits: self.env.limits };
         forge::advance(self.domain, &env, remote, branch, path, content, OTHER).is_ok()
     }
 }
@@ -283,7 +283,7 @@ pub fn branch(domain: &Domain, config: &Config, repository: &[u8], branch: &[u8]
 /// The world's clock, as the forge's direct calls take it.
 #[must_use]
 pub fn env(config: &Config, now: Time) -> Env<Config> {
-    Env { now, limits: direct(config) }
+    Env { now, wall: Wall::EPOCH, limits: direct(config) }
 }
 
 /// git's fault for what the forge refused: only what the world scripts, or

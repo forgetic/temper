@@ -1,6 +1,6 @@
 //! The host in its world: scenarios, replay, and a sweep of random worlds.
 
-use temper_lib::Duration;
+use skein_lib::Duration;
 use temper_worker_domain_host::Limits;
 use temper_worker_domain_host_tests::{Outage, Settings, Span, Stats, World};
 

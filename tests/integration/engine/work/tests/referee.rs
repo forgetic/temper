@@ -1,9 +1,9 @@
 //! The referee of the work hub's world, fed observations by hand as the world
 //! would feed them, fails a run that breaks an expectation, and says why.
 
+use skein_lib::{Duration, Time};
 use temper_engine_domain_work::{Failures, Hold, Item, Lifecycle, Phase};
 use temper_engine_domain_work_tests::referee::{Key, Seen, Stimulus, Work};
-use temper_lib::{Duration, Time};
 use temper_world::{Referee, Verdict};
 
 const ITEM: Item = Item { repository: 0, number: 7 };

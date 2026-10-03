@@ -5,8 +5,8 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::bytes::{count, find_from};
-use temper_lib::{List, Writer};
+use skein_lib::bytes::{count, find_from};
+use skein_lib::{List, Writer};
 
 use crate::call::Outcome;
 use crate::limits::Limits;

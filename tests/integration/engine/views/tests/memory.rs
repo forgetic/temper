@@ -3,10 +3,10 @@
 //! watch open with a full backlog and as many ended within the iteration, the
 //! batch full while the store is behind, and every entry point on the way.
 
+use skein_lib::{Duration, Env, Queue, Time, Token, Wall};
 use temper_engine_domain_views::{
     Capture, Domain, Event, Kind, Limits, Policy, Request, Subject, fire, max_out, step, worst_case,
 };
-use temper_lib::{Duration, Env, Queue, Time, Token};
 use temper_world::heap::{self, Meter};
 
 #[global_allocator]
@@ -65,7 +65,7 @@ impl Measured {
         let meter = Meter::new();
         let domain = Domain::new(&limits, Time::ZERO);
         let out = Queue::with_capacity(max_out(&limits));
-        Measured { domain, env: Env { now: Time::ZERO, limits }, out, meter, bound }
+        Measured { domain, env: Env { now: Time::ZERO, wall: Wall::EPOCH, limits }, out, meter, bound }
     }
 
     /// Steps `event`, and ends the iteration: the reclaim point.

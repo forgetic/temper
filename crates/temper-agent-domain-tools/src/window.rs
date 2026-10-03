@@ -5,7 +5,7 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::bytes::{self, copy_of};
+use skein_lib::bytes::{self, copy_of};
 
 use crate::call::Outcome;
 

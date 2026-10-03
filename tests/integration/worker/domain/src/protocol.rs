@@ -24,6 +24,7 @@
 
 use std::collections::BTreeMap;
 
+use skein_lib::Token;
 use temper_engine_domain::fleet::Bounce;
 use temper_engine_domain::forge::{News, Read};
 use temper_engine_domain::notes::{Change, Recall, Scope};
@@ -32,7 +33,6 @@ use temper_engine_domain::{
     self as engine, Answer, Call, Charter, Failure, Hello, Hosted, Inbound, Item, Landed, Served, Start, Unserved, Work,
 };
 use temper_engine_domain_tests::{codec, deployment};
-use temper_lib::Token;
 use temper_worker_domain::{self as worker, host};
 
 /// Who a worker is to the forge, for every repository: the deployment's

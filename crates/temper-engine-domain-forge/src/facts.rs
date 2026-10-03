@@ -7,7 +7,7 @@
 //! no room in `out`, and when the queue is full they are dropped and counted.
 //! Nothing the child domain decides depends on whether a fact was kept.
 
-use temper_lib::{Queue, Time, Token};
+use skein_lib::{Queue, Time, Token};
 
 use crate::api::Error;
 use crate::boundary::Item;

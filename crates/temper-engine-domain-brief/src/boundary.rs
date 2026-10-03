@@ -26,7 +26,7 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::{ReplyTo, Token};
+use skein_lib::{ReplyTo, Token};
 
 /// An issue or pull request of one of the deployment's repositories: the
 /// repository's index in the deployment's list, and the item's number there.

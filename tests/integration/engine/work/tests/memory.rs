@@ -2,11 +2,11 @@
 //! a counting allocator: every item taken in and waiting for an alarm, and
 //! every entry point on the way through an item's lifecycle.
 
+use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
 use temper_engine_domain_work::{
     Acted, Answer, Applied, Class, Domain, Due, Event, Failures, Hold, Item, Lifecycle, Limits, Phase, Read, Request,
     Retries, Retry, Then, Wrote, fire, max_out, step, worst_case,
 };
-use temper_lib::{Duration, Env, Queue, ReplyTo, Time, Token};
 use temper_world::heap::{self, Meter};
 
 #[global_allocator]
@@ -45,7 +45,7 @@ impl Measured {
         let out = Queue::with_capacity(max_out(&limits));
         let meter = Meter::new();
         let domain = Domain::new(&limits, 1);
-        Measured { domain, env: Env { now: Time::ZERO, limits }, out, meter, bound, calls: 0 }
+        Measured { domain, env: Env { now: Time::ZERO, wall: Wall::EPOCH, limits }, out, meter, bound, calls: 0 }
     }
 
     fn step(&mut self, event: Event) -> Asked {

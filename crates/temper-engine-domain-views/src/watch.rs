@@ -52,8 +52,8 @@
 use alloc::boxed::Box;
 use core::mem;
 
-use temper_lib::bytes::copy_of;
-use temper_lib::{Env, Id, List, Queue, Time, Token};
+use skein_lib::bytes::copy_of;
+use skein_lib::{Env, Id, List, Queue, Time, Token};
 
 use crate::boundary::{Chunk, End, Kind, Refusal, Request, Subject};
 use crate::domain::Domain;

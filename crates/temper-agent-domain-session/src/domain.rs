@@ -1,7 +1,7 @@
 //! The session child domain's state and its entry points (section 3).
 
+use skein_lib::{Deadlines, Env, Queue, Rng, Slab, Time};
 use temper_agent_domain_tools as tools;
-use temper_lib::{Deadlines, Env, Queue, Rng, Slab, Time};
 
 use crate::boundary::{Event, Request};
 use crate::facts::{Fact, Facts};

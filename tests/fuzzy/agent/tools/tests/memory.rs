@@ -2,11 +2,11 @@
 //! a counting allocator: the tools child domain driven at random through every
 //! terminal io may give, its peak measured in every step.
 
+use skein_lib::{Duration, Env, Queue, ReplyTo, Rng, Time, Token, Wall};
 use temper_agent_domain_tools::{
     Call, Domain, Done, Entry, Event, Exit, Expect, Fault, Hit, Kind, Limits, Op, Request, Version, max_out, worst_case,
 };
 use temper_agent_domain_tools_tests::memory::{LIMITS, authority, name, path, read, write};
-use temper_lib::{Duration, Env, Queue, ReplyTo, Rng, Time, Token};
 use temper_world::heap::{self, Meter};
 
 #[global_allocator]
@@ -30,7 +30,7 @@ enum Asked {
 /// left.
 fn churn(limits: Limits, seed: u64, rounds: u32) {
     let bound = worst_case(&limits).expect("the test limits fit");
-    let mut env = Env { now: Time::ZERO, limits };
+    let mut env = Env { now: Time::ZERO, wall: Wall::EPOCH, limits };
     let mut rng = Rng::new(seed);
     // The driver's own containers are allocated before the base, and never
     // grow past their capacity.

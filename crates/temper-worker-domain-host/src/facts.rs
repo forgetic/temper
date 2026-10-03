@@ -9,7 +9,7 @@
 //! refused at the entrance tells nothing: no run was hosted. What the run
 //! itself reports is not the host's: the top level forwards it.
 
-use temper_lib::{Queue, Token};
+use skein_lib::{Queue, Token};
 
 use crate::boundary::Failure;
 

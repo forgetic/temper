@@ -14,7 +14,7 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::{Duration, Time};
+use skein_lib::{Duration, Time};
 
 /// A user's permission on a repository. Each grants what the ones before it
 /// do.

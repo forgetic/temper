@@ -2,8 +2,8 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::bytes::copy_of;
-use temper_lib::{Duration, Env, List, Queue, Time, Token};
+use skein_lib::bytes::copy_of;
+use skein_lib::{Duration, Env, List, Queue, Time, Token, Wall};
 
 use crate::channel::{Ask, Down, Finish, Push, Reply, RunFailure, Up};
 use crate::{
@@ -55,7 +55,7 @@ impl Harness {
     fn new(limits: Limits) -> Harness {
         Harness {
             domain: Domain::new(&limits),
-            env: Env { now: Time::ZERO, limits },
+            env: Env { now: Time::ZERO, wall: Wall::EPOCH, limits },
             out: Queue::with_capacity(MAX_OUT),
         }
     }

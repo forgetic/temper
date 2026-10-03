@@ -68,6 +68,7 @@ rust-version = "1.95"
 publish = false
 
 [workspace.dependencies]
+skein-lib = { git = "https://git.ekanayaka.io/ai/skein.git" }
 temper-lib = { path = "crates/temper-lib" }
 temper-agent-domain = { path = "crates/temper-agent-domain" }
 temper-agent-domain-run = { path = "crates/temper-agent-domain-run" }

@@ -36,7 +36,7 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::{Time, Token};
+use skein_lib::{Time, Token};
 
 /// What a run reports, as the parent names it (agent-domain.md, section 7):
 /// the views pass its content on and keep it, and never parse it.

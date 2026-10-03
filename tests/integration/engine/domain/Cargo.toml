@@ -7,7 +7,7 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
-temper-lib.workspace = true
+skein-lib.workspace = true
 temper-engine-domain.workspace = true
 temper-engine-domain-forge-tests.workspace = true
 temper-forge-domain.workspace = true

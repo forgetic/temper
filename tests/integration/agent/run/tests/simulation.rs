@@ -4,11 +4,11 @@
 
 use std::collections::BTreeMap;
 
+use skein_lib::Duration;
 use temper_agent_domain_run::{Answer, Budget, Exhausted, Failure, Fault, Invalid, Limits, Policy, Refusal};
 use temper_agent_domain_run_tests::host;
 use temper_agent_domain_run_tests::partner::Script;
 use temper_agent_domain_run_tests::{Checkouts, Settings, Span, World, noisy};
-use temper_lib::Duration;
 
 const ITERATIONS: u32 = 1_000_000;
 

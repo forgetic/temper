@@ -14,8 +14,8 @@
 use alloc::boxed::Box;
 use core::mem;
 
-use temper_lib::bytes::copy_of;
-use temper_lib::{Deadlines, Duration, Env, Id, Map, Queue, ReplyTo, Rng, Set, Slab, Time};
+use skein_lib::bytes::copy_of;
+use skein_lib::{Deadlines, Duration, Env, Id, Map, Queue, ReplyTo, Rng, Set, Slab, Time};
 
 use crate::boundary::{Event, Request};
 

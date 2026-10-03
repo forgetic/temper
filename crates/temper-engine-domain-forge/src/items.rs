@@ -83,8 +83,8 @@
 use alloc::boxed::Box;
 use core::mem;
 
-use temper_lib::bytes::copy_of;
-use temper_lib::{Duration, Env, Id, List, Queue, Rng, Slab, Time};
+use skein_lib::bytes::copy_of;
+use skein_lib::{Duration, Env, Id, List, Queue, Rng, Slab, Time};
 
 use crate::api::{self, Answer, Comment, Error, Kind, Mark, Op, State as Open, Summary, Verdict};
 use crate::boundary::{Ci, Item, Level, News, Position, Record, Request, Reviewed, View, Why};

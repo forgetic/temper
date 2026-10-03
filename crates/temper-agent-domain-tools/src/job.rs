@@ -60,7 +60,7 @@
 use alloc::boxed::Box;
 use core::mem;
 
-use temper_lib::{Duration, Env, Id, Queue, ReplyTo, Slab, Time, Token};
+use skein_lib::{Duration, Env, Id, Queue, ReplyTo, Slab, Time, Token};
 
 use crate::authority::Var;
 use crate::boundary::{Done, Expect, Op, Request, Root};

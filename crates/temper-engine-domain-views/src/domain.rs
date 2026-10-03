@@ -4,7 +4,7 @@
 use alloc::boxed::Box;
 use core::mem;
 
-use temper_lib::{Deadlines, Env, Id, List, Map, Queue, Slab, Time, Token};
+use skein_lib::{Deadlines, Env, Id, List, Map, Queue, Slab, Time, Token};
 
 use crate::boundary::{Event, Kind, Policy, Request, Subject};
 use crate::facts::{Dropped, Fact, Facts, Loss, Lost};

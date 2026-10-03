@@ -38,7 +38,7 @@
 use alloc::boxed::Box;
 use core::mem;
 
-use temper_lib::{Duration, Env, List, Queue, Time, Token};
+use skein_lib::{Duration, Env, List, Queue, Time, Token};
 
 use crate::boundary::{Capture, Kind, Record, Request};
 use crate::domain::{Domain, Op};

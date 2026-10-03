@@ -1,7 +1,7 @@
 //! The brief child domain's state and its entry points (programming-model.md,
 //! section 3).
 
-use temper_lib::{Deadlines, Env, Id, Queue, Slab, Time};
+use skein_lib::{Deadlines, Env, Id, Queue, Slab, Time};
 
 use crate::boundary::{Event, Request};
 use crate::brief::{self, Brief, Reading};

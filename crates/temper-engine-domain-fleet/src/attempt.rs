@@ -101,7 +101,7 @@
 use alloc::boxed::Box;
 use core::mem;
 
-use temper_lib::{Env, Id, Queue, ReplyTo, Slab, Time, Token};
+use skein_lib::{Env, Id, Queue, ReplyTo, Slab, Time, Token};
 
 use crate::boundary::{Answer, Refusal, Request, Withdrawal};
 use crate::channel::{self, Channel};

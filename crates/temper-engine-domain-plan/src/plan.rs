@@ -5,7 +5,7 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::Duration;
+use skein_lib::Duration;
 
 /// One of the deployment's repositories, named by its index in the list the
 /// deployment configures. A plan writes to no other.

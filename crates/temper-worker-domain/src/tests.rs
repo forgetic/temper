@@ -4,7 +4,7 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::{Duration, Env, List, Queue, Time, Token};
+use skein_lib::{Duration, Env, List, Queue, Time, Token, Wall};
 use temper_worker_domain_agent::channel::{self, Down, Up};
 use temper_worker_domain_checkout::git::{self, Commit, Op};
 
@@ -90,7 +90,11 @@ impl Harness {
     fn new(limits: &Limits) -> Harness {
         assert!(worst_case(limits).is_some(), "the test's limits are honoured");
         let out = Queue::with_capacity(max_out(limits));
-        Harness { domain: Domain::new(limits, 7), env: Env { now: Time::ZERO, limits: *limits }, out }
+        Harness {
+            domain: Domain::new(limits, 7),
+            env: Env { now: Time::ZERO, wall: Wall::EPOCH, limits: *limits },
+            out,
+        }
     }
 
     /// Steps `event`, returning what it emitted, oldest first.

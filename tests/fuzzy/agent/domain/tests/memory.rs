@@ -5,6 +5,7 @@
 //! session holds), what io and the worker answer, and cancels; its peak
 //! measured in every entry point, as the loop calls them.
 
+use skein_lib::{Duration, Env, Queue, ReplyTo, Rng, Time, Token, Wall};
 use temper_agent_domain::llm::{Completion, Decoded, Failure, Problem, Prompt, Said, Served, Stop, Usage};
 use temper_agent_domain::run::charter::{Checkout, Endpoint, Families, Grants, Llm, Repository, Tools};
 use temper_agent_domain::run::outcome::{Change, ChangeSpec, Child, Children, Declared, Field, OutcomeSpec};
@@ -13,7 +14,6 @@ use temper_agent_domain::run::{self, Ask, Charter};
 use temper_agent_domain::tools::{Call, Done, Entry, Exit, Fault, Hit, Kind, Name, Op, Part, Path, Version};
 use temper_agent_domain::{Domain, Event, Limits, Request, fire, max_out, resume, step, worst_case};
 use temper_agent_domain_tests::TIGHT;
-use temper_lib::{Duration, Env, Queue, ReplyTo, Rng, Time, Token};
 use temper_world::heap::{self, Meter};
 
 #[global_allocator]
@@ -394,7 +394,7 @@ fn served(prompt: &Prompt) -> (bool, bool) {
 fn churn(limits: &Limits, seed: u64, rounds: u32) -> [u32; 6] {
     let limits = *limits;
     let bound = worst_case(&limits).expect("the test limits fit");
-    let mut env = Env { now: Time::ZERO, limits };
+    let mut env = Env { now: Time::ZERO, wall: Wall::EPOCH, limits };
     let mut out = Queue::with_capacity(max_out(&limits));
     let mut driver = Driver {
         rng: Rng::new(seed),

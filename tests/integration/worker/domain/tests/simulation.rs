@@ -1,8 +1,8 @@
 //! The whole worker in its world, against the engine: scenarios, replay,
 //! and a sweep of random worlds.
 
+use skein_lib::Duration;
 use temper_engine_domain_tests::people::Story;
-use temper_lib::Duration;
 use temper_worker_domain::Limits;
 use temper_worker_domain_agent_tests::script::{self, Fates};
 use temper_worker_domain_tests::{Git, Network, Settings, Span, Stats, World};

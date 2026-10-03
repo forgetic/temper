@@ -28,8 +28,8 @@
 use alloc::boxed::Box;
 use core::mem;
 
-use temper_lib::bytes::copy_of;
-use temper_lib::{Env, Id, Map, Queue, Set, Slab, Token};
+use skein_lib::bytes::copy_of;
+use skein_lib::{Env, Id, Map, Queue, Set, Slab, Token};
 
 use crate::attempt::{self, Attempt};
 use crate::boundary::{Hello, Hosted, Phase, Request};

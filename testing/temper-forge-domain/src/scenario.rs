@@ -8,8 +8,8 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::Env;
-use temper_lib::bytes::copy_of;
+use skein_lib::Env;
+use skein_lib::bytes::copy_of;
 
 use crate::api::{Error, File, Permission, Setup, What};
 use crate::domain::{Config, Domain};

@@ -30,7 +30,7 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::{Duration, Token};
+use skein_lib::{Duration, Token};
 
 /// agent -> worker
 #[derive(PartialEq, Eq, Debug)]

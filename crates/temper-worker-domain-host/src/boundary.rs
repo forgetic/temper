@@ -39,7 +39,7 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::{ReplyTo, Token};
+use skein_lib::{ReplyTo, Token};
 
 /// parent -> host
 #[derive(PartialEq, Eq, Debug)]

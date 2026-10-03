@@ -2,8 +2,8 @@
 //! the largest of each thing they take, an authority, a path and a file, so
 //! that a domain holds as much as its worst case allows.
 
+use skein_lib::{Duration, Token};
 use temper_agent_domain_tools::{Authority, Call, Grants, Limits, Name, Part, Path, Repo, Var};
-use temper_lib::{Duration, Token};
 
 pub const LIMITS: Limits = Limits {
     kits: 2,

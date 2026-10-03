@@ -32,7 +32,7 @@ pub use schedule::{Key, Schedule};
 pub use stage::Stage;
 pub use trace::{Trace, assert_replays};
 
-use temper_lib::{Duration, Rng};
+use skein_lib::{Duration, Rng};
 
 /// Durations drawn uniformly from `min..=max`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

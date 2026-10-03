@@ -5,7 +5,7 @@
 //! Every match is exhaustive, so a variant added to either side's vocabulary
 //! breaks the build here.
 
-use temper_lib::{Env, Queue, ReplyTo};
+use skein_lib::{Env, Queue, ReplyTo};
 use temper_worker_domain_agent as agent;
 use temper_worker_domain_checkout as checkout;
 use temper_worker_domain_host as host;
@@ -18,19 +18,19 @@ use crate::link::{Bounced, Relay};
 use crate::translate;
 use crate::workspace::{self, Write};
 
-/// What the host reads: this iteration's time, and its own limits.
+/// What the host reads: this iteration's times, and its own limits.
 pub(crate) const fn host_env(env: &Env<Limits>) -> Env<host::Limits> {
-    Env { now: env.now, limits: env.limits.host }
+    Env { now: env.now, wall: env.wall, limits: env.limits.host }
 }
 
 /// What the checkout reads.
 pub(crate) const fn checkout_env(env: &Env<Limits>) -> Env<checkout::Limits> {
-    Env { now: env.now, limits: env.limits.checkout }
+    Env { now: env.now, wall: env.wall, limits: env.limits.checkout }
 }
 
 /// What the agent child domain reads.
 pub(crate) const fn agent_env(env: &Env<Limits>) -> Env<agent::Limits> {
-    Env { now: env.now, limits: env.limits.agent }
+    Env { now: env.now, wall: env.wall, limits: env.limits.agent }
 }
 
 /// Hands one of the protocol's events to the child domain, or the link, it is

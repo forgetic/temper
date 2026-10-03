@@ -3,11 +3,11 @@
 //! operations, naming roots and versions) do, without the bytes and the
 //! kernel.
 
+use skein_lib::Token;
 use temper_agent_domain_tools::{
     Done, Entry, Exit, Expect, Fault, Hit, Kind, Name, Op, Part, Path, Place, Root, Var, Version,
 };
 use temper_checkout_fake as fake;
-use temper_lib::Token;
 
 /// The path the LLM wrote, split at its slashes, as the protocol layer does.
 #[must_use]

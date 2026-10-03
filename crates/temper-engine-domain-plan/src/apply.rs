@@ -33,8 +33,8 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::bytes::copy_of;
-use temper_lib::{Env, Queue};
+use skein_lib::bytes::copy_of;
+use skein_lib::{Env, Queue};
 
 use crate::accept::{Growing, accept, grow, reaccepted};
 use crate::check::{Among, Found, Problem, Problems, check_steps, count, entry_named};

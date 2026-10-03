@@ -128,8 +128,8 @@
 use alloc::boxed::Box;
 use core::mem::{self, size_of};
 
+use skein_lib::{Deadlines, Duration, Env, Id, List, Queue, ReplyTo, Rng, Set, Slab, Time, Token, Writer};
 use temper_agent_domain_tools::{self as tools, Call, Effect, Entry, Grants, Outcome, Part, Path};
-use temper_lib::{Deadlines, Duration, Env, Id, List, Queue, ReplyTo, Rng, Set, Slab, Time, Token, Writer};
 
 use crate::boundary::{Budget, Dimension, End, Request, Spec, Yield};
 use crate::domain::Domain;
@@ -732,7 +732,7 @@ enum News {
 /// at most one call: an open, a close or an operation's end concerns one kit,
 /// and a call is answered at the entrance or later.
 fn tools_step(calls: &mut Calls, env: &Env<Limits>, event: tools::Event, out: &mut Queue<Request>) -> Heard {
-    let tools_env = Env { now: env.now, limits: env.limits.tools };
+    let tools_env = Env { now: env.now, wall: env.wall, limits: env.limits.tools };
     tools::step(&mut calls.tools, &tools_env, event, &mut calls.out);
     let mut heard = Heard { answer: None, kit: None };
     for _ in 0..tools::max_out(&env.limits.tools) {

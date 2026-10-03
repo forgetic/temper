@@ -2,8 +2,8 @@
 //! world would feed them, fails a run that breaks an expectation, and says
 //! why; and passes one that keeps them.
 
+use skein_lib::{Duration, Time, Token};
 use temper_engine_domain::work::{Class, Failures, Lifecycle, Phase};
-use temper_lib::{Duration, Time, Token};
 use temper_worker_domain_tests::protocol::Names;
 use temper_worker_domain_tests::referee::{Hosting, Seen, Stimulus};
 use temper_world::{Referee, Verdict};

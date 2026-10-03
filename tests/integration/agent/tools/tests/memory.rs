@@ -4,9 +4,9 @@
 //! and running as many edits, writes and reads as it may. Driven at random,
 //! it is checked in tests/fuzzy.
 
+use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
 use temper_agent_domain_tools::{Domain, Done, Event, Limits, Request, Version, max_out, worst_case};
 use temper_agent_domain_tools_tests::memory::{LIMITS, authority, edit, read, write};
-use temper_lib::{Duration, Env, Queue, ReplyTo, Time, Token};
 use temper_world::heap::{self, Meter};
 
 #[global_allocator]
@@ -18,7 +18,7 @@ static HEAP: heap::Counting = heap::Counting;
 /// once, writes of the files it knows and reads.
 fn fill(limits: Limits) {
     let bound = worst_case(&limits).expect("the test limits fit");
-    let env = Env { now: Time::ZERO, limits };
+    let env = Env { now: Time::ZERO, wall: Wall::EPOCH, limits };
     let mut out = Queue::with_capacity(max_out(&limits));
     let meter = Meter::new();
     let mut domain = Domain::new(&limits);

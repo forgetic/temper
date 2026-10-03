@@ -17,10 +17,10 @@
 //! What moved on the forge is what it observed: every move of a branch,
 //! drained by the world as [`Move`]s.
 
+use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
 use temper_checkout_fake::git::{self, Created, Fault, Pushed, Remote, Tree, Want};
 use temper_forge_domain::api::{Answer, Checks, Error, File, Git, Op, Permission, Read, Setup, What};
 use temper_forge_domain::{Config, Domain, Event, Limits, MAX_OUT, Observation, Request, Skew};
-use temper_lib::{Duration, Env, Queue, ReplyTo, Time, Token};
 
 /// The forge's users: the worker, whose identity every operation of io acts
 /// as; another party, who moves branches under it; and CI, which reports
@@ -157,7 +157,7 @@ impl Forge {
     /// writing `path` with `content`, and moves the branch to it, as a push of
     /// its own would. Returns the commit.
     pub fn advance(&mut self, remote: &[u8], branch: &[u8], path: &[u8], content: &[u8]) -> u64 {
-        let env = Env { now: self.now, limits: CONFIG };
+        let env = Env { now: self.now, wall: Wall::EPOCH, limits: CONFIG };
         let advanced = temper_forge_domain::advance(&mut self.domain, &env, remote, branch, path, content, OTHER);
         advanced.expect("the forge has room for another party's commit")
     }
@@ -239,7 +239,7 @@ impl Forge {
     /// the forge answers at once.
     fn call(&mut self, remote: &[u8], user: u64, op: Git) -> Result<Answer, Fault> {
         self.calls += 1;
-        let env = Env { now: self.now, limits: CONFIG };
+        let env = Env { now: self.now, wall: Wall::EPOCH, limits: CONFIG };
         let mut out = Queue::with_capacity(MAX_OUT);
         let reply_to = ReplyTo::new(Token::new(self.calls));
         let event = Event::Call { reply_to, user, repository: remote.into(), op: Op::Git(op) };

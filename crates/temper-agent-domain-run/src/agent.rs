@@ -37,8 +37,8 @@
 use alloc::boxed::Box;
 use core::mem;
 
-use temper_lib::bytes::copy_of;
-use temper_lib::{Duration, Id};
+use skein_lib::bytes::copy_of;
+use skein_lib::{Duration, Id};
 
 use crate::boundary::{AskRefusal, End, Returned, Stop};
 use crate::budget::{Budget, Spend};

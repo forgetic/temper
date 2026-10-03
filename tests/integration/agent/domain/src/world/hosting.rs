@@ -7,12 +7,12 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+use skein_lib::{Time, Token};
 use temper_agent_domain::run::charter::{Checkout, Repository as Placed};
 use temper_agent_domain::run::{self, Spend};
 use temper_agent_domain::{self as agent};
 use temper_engine_domain as engine;
 use temper_engine_domain_tests::referee as engine_referee;
-use temper_lib::{Time, Token};
 use temper_worker_domain::agent::channel::{Down, Reply, Up};
 use temper_worker_domain::checkout::git::{Commit, Done, Op, Place, Want};
 use temper_worker_domain::{self as worker, host};

@@ -34,8 +34,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use skein_lib::Duration;
 use temper_engine_domain_work::{Item, Lifecycle, Phase};
-use temper_lib::Duration;
 use temper_world::{Expectations, Judge};
 
 /// What the referee observes.

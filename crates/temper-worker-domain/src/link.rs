@@ -57,8 +57,8 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::bytes::copy_of;
-use temper_lib::{Deadlines, Duration, Env, List, Map, Queue, Rng, Time, Token};
+use skein_lib::bytes::copy_of;
+use skein_lib::{Deadlines, Duration, Env, List, Map, Queue, Rng, Time, Token};
 use temper_worker_domain_checkout as checkout;
 use temper_worker_domain_host as host;
 

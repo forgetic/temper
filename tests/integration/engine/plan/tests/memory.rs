@@ -3,6 +3,7 @@
 //! exactly its limits, holds no more of its own than `worst_case` says; what
 //! it hands out (writes, runs, problems) is its receiver's.
 
+use skein_lib::{Duration, Env, List, Queue, Time, Wall};
 use temper_engine_domain_plan::{
     AgentSpec, Batch, Budget, ChangeSpec, Charter, Ci, Config, Entry, Envelope, Facts, Gate, Goal, Grants, Growth,
     Inbound, Limits, Mergeable, Outcome, Plan, Progress, Pull, PullState, Record, Relations, Repo, Repository, Resume,
@@ -10,7 +11,6 @@ use temper_engine_domain_plan::{
     max_out, wake, worst_case,
 };
 use temper_engine_domain_plan_tests::translate::commit;
-use temper_lib::{Duration, Env, List, Queue, Time};
 use temper_world::heap::{self, Meter};
 
 #[global_allocator]
@@ -164,7 +164,7 @@ impl Measured {
         let bound = worst_case(&limits).expect("the test limits fit");
         Measured {
             config: config(&limits),
-            env: Env { now: Time::ZERO, limits },
+            env: Env { now: Time::ZERO, wall: Wall::EPOCH, limits },
             out: Queue::with_capacity(max_out(&limits)),
             bound,
         }

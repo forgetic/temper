@@ -8,6 +8,8 @@
 
 use alloc::boxed::Box;
 
+use skein_lib::bytes::copy_of;
+use skein_lib::{Duration, Env, List, Queue, ReplyTo, Time, Token, Wall};
 use temper_engine_domain_brief::{self as brief, Budgets};
 use temper_engine_domain_fleet as fleet;
 use temper_engine_domain_forge::{self as forge, api};
@@ -16,8 +18,6 @@ use temper_engine_domain_plan::{self as plan, Budget};
 use temper_engine_domain_rules::{self as rules, Acts, Permission, Rules};
 use temper_engine_domain_views::{self as views, Capture, Policy};
 use temper_engine_domain_work::{self as work, Retries, Retry};
-use temper_lib::bytes::copy_of;
-use temper_lib::{Duration, Env, List, Queue, ReplyTo, Time, Token};
 
 use crate::boundary::{Ask, Event, Hello, Item, Refusal, Reply, Request};
 use crate::config::Config;
@@ -213,7 +213,7 @@ fn config() -> Config {
 }
 
 const fn env(secs: u64) -> Env<Limits> {
-    Env { now: Time::from_nanos(secs.saturating_mul(1_000_000_000)), limits: LIMITS }
+    Env { now: Time::from_nanos(secs.saturating_mul(1_000_000_000)), wall: Wall::EPOCH, limits: LIMITS }
 }
 
 fn domain() -> Domain {

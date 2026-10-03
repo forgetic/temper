@@ -30,9 +30,9 @@
 
 use std::collections::BTreeMap;
 
+use skein_lib::bytes::find_from;
+use skein_lib::{Duration, Time};
 use temper_engine_domain_brief::{Body, Fit, Keep, Kind, Limits, Part, Refusal, Section, Source, Unread};
-use temper_lib::bytes::find_from;
-use temper_lib::{Duration, Time};
 use temper_world::{Expectations, Judge};
 
 /// The longest cut line, and items line: the brief's floor for a budget.

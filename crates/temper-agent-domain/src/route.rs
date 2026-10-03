@@ -5,9 +5,9 @@
 //! Every match is exhaustive, so a variant added to either side's vocabulary
 //! breaks the build here.
 
+use skein_lib::{Env, Id, Queue, Token};
 use temper_agent_domain_run::{self as run, Spend};
 use temper_agent_domain_session as session;
-use temper_lib::{Env, Id, Queue, Token};
 
 use crate::boundary::{Event, Request};
 use crate::domain::{Domain, Due, Flight, Handoff};
@@ -15,14 +15,14 @@ use crate::limits::{self, Limits};
 use crate::peer::Peer;
 use crate::translate;
 
-/// What the run reads: this iteration's time, and its own limits.
+/// What the run reads: this iteration's times, and its own limits.
 pub(crate) const fn run_env(env: &Env<Limits>) -> Env<run::Limits> {
-    Env { now: env.now, limits: env.limits.run }
+    Env { now: env.now, wall: env.wall, limits: env.limits.run }
 }
 
 /// What the session child domain reads.
 pub(crate) const fn session_env(env: &Env<Limits>) -> Env<session::Limits> {
-    Env { now: env.now, limits: env.limits.session }
+    Env { now: env.now, wall: env.wall, limits: env.limits.session }
 }
 
 /// Hands one of the protocol's events to the child domain it is for.

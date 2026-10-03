@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use temper_lib::{Env, Queue, Time};
+use skein_lib::{Env, Queue, Time, Wall};
 
 /// A domain as the shell drives it (programming-model.md, 7): its environment,
 /// the events on their way to it, and the queue its steps and alarms emit
@@ -27,7 +27,7 @@ impl<L, E, R> Stage<L, E, R> {
     #[must_use]
     pub fn new(limits: L, max_out: u32, capacity: u32) -> Stage<L, E, R> {
         assert!(capacity >= max_out, "the queue has room for what one step may emit");
-        let env = Env { now: Time::ZERO, limits };
+        let env = Env { now: Time::ZERO, wall: Wall::EPOCH, limits };
         Stage { env, inbox: VecDeque::new(), out: Queue::with_capacity(capacity), max_out }
     }
 

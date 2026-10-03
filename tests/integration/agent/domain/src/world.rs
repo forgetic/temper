@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+use skein_lib::{Duration, Env, Queue, Rng, Time, Token, Wall};
 use temper_agent_domain::run::outcome::Declared;
 use temper_agent_domain::run::{self, Spend};
 use temper_agent_domain::{self as agent, Event, Fact, Limits, Request, session, tools};
@@ -13,7 +14,6 @@ use temper_engine_domain_tests::referee as engine_referee;
 use temper_engine_domain_tests::store::{self, Store};
 use temper_engine_domain_tests::translate::Asked;
 use temper_forge_domain::{self as forge, Skew};
-use temper_lib::{Duration, Env, Queue, Rng, Time, Token};
 use temper_llm_domain as provider;
 use temper_worker_domain::checkout::git::Op;
 use temper_worker_domain::{self as worker, host};
@@ -1089,7 +1089,7 @@ impl World {
             attempts: BTreeMap::new(),
             save_branches: BTreeSet::new(),
             forge,
-            forge_env: Env { now: Time::ZERO, limits: settings.forge },
+            forge_env: Env { now: Time::ZERO, wall: Wall::EPOCH, limits: settings.forge },
             forge_out: Queue::with_capacity(forge::MAX_OUT),
             direct: 0,
             stray: Vec::new(),
@@ -1377,7 +1377,7 @@ impl World {
                 Delivery::Agent { process, event } => self.agent_event(process, event),
                 Delivery::Query { call, query } => {
                     self.serving.open(call, ());
-                    let reply_to = temper_lib::ReplyTo::new(Token::new(call));
+                    let reply_to = skein_lib::ReplyTo::new(Token::new(call));
                     self.provider_stage.push(provider::Event::Call { reply_to, query });
                     self.stats.provider_calls += 1;
                 }

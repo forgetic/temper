@@ -6,7 +6,7 @@
 //! It is bounded: past `Limits::known_files`, the file read longest ago is
 //! forgotten, and must be read again before it is changed.
 
-use temper_lib::Map;
+use skein_lib::Map;
 
 use crate::boundary::Version;
 use crate::path::Place;

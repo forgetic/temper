@@ -29,7 +29,7 @@
 //! types, which return their decisions, and write the writes they ask for
 //! into a bounded queue the caller gives, with room for [`max_out`] of them.
 //!
-//! Sans-io: time is an input, in the [`Env`](temper_lib::Env) every entry
+//! Sans-io: time is an input, in the [`Env`](skein_lib::Env) every entry
 //! point reads. Its parent is the root domain (`temper-engine-domain`),
 //! which gathers the facts a decision reads from the working set and
 //! translates what the plan decides into the vocabularies of its siblings.

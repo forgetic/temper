@@ -4,7 +4,7 @@
 //! into what the domain reads. Garbage decodes to nothing: the read ends as
 //! malformed.
 
-use temper_lib::Token;
+use skein_lib::Token;
 use temper_worker_domain_agent::Event;
 use temper_worker_domain_agent::channel::{Ask, Down, Finish, Push, Reply, RunFailure, Up};
 

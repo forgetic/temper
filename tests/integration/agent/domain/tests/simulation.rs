@@ -4,6 +4,7 @@
 //! tools at work in the checkout the worker prepared, with a fake LLM
 //! provider and a fake forge, talking through a simulated world.
 
+use skein_lib::Duration;
 use temper_agent_domain::run::outcome::Declared;
 use temper_agent_domain::run::{Answer, Exhausted, Failure, Push};
 use temper_agent_domain_tests::desk::{CODING, Hand, Reviewer, Work};
@@ -12,7 +13,6 @@ use temper_engine_domain::Outcome;
 use temper_engine_domain::plan::{Budget, Verdict};
 use temper_engine_domain::work::{Hold, Phase};
 use temper_engine_domain_tests::deployment;
-use temper_lib::Duration;
 use temper_world::assert_replays;
 
 const ITERATIONS: u32 = 400_000;

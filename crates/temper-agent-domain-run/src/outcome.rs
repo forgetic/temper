@@ -6,8 +6,8 @@
 use alloc::boxed::Box;
 use core::mem::size_of;
 
-use temper_lib::List;
-use temper_lib::bytes::copy_of;
+use skein_lib::List;
+use skein_lib::bytes::copy_of;
 
 use crate::charter::{count, len};
 use crate::limits::Limits;
@@ -354,7 +354,7 @@ fn labels(labels: &[Box<[u8]>]) -> Option<u64> {
 mod tests {
     use alloc::boxed::Box;
 
-    use temper_lib::bytes::copy_of;
+    use skein_lib::bytes::copy_of;
 
     use super::{
         Change, ChangeSpec, Child, Children, Declared, Field, OutcomeSpec, Problem, Problems, Verdict, VerdictRule,
@@ -362,7 +362,7 @@ mod tests {
     };
 
     fn labels(names: &[&[u8]]) -> Box<[Box<[u8]>]> {
-        let mut labels = temper_lib::List::with_capacity(4);
+        let mut labels = skein_lib::List::with_capacity(4);
         for name in names {
             labels.push(copy_of(name)).expect("a few labels");
         }
@@ -396,7 +396,7 @@ mod tests {
     }
 
     fn child(kind: &[u8], fields: &[&[u8]]) -> Child {
-        let mut list = temper_lib::List::with_capacity(4);
+        let mut list = skein_lib::List::with_capacity(4);
         for name in fields {
             list.push(Field { name: copy_of(name), value: copy_of(b"...") }).expect("a few fields");
         }
@@ -512,7 +512,7 @@ mod tests {
 
     #[test]
     fn the_problems_listed_are_bounded_and_the_rest_counted() {
-        let mut children = temper_lib::List::with_capacity(5);
+        let mut children = skein_lib::List::with_capacity(5);
         for _ in 0_u32..5 {
             children.push(child(b"praise", &[])).expect("room for five");
         }

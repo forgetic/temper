@@ -78,8 +78,8 @@
 use alloc::boxed::Box;
 use core::mem;
 
-use temper_lib::bytes::{copy_of, find};
-use temper_lib::{Env, Id, List, Queue, Slab, Token};
+use skein_lib::bytes::{copy_of, find};
+use skein_lib::{Env, Id, List, Queue, Slab, Token};
 
 use crate::boundary::{Failure, Landing, Message, Outcome, Prepared, Refusal, Repository, Request, Spec, Start};
 use crate::cache::{Cache, Workspace, count};

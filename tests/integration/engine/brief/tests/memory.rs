@@ -2,10 +2,10 @@
 //! a counting allocator: every brief gathering with every section read in
 //! full, each rendered at its budgets, and every entry point on the way.
 
+use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
 use temper_engine_domain_brief::{
     Budgets, Domain, Event, Item, Limits, Part, Read, Request, Source, Wanted, fire, max_out, step, worst_case,
 };
-use temper_lib::{Duration, Env, Queue, ReplyTo, Time, Token};
 use temper_world::heap::{self, Meter};
 
 #[global_allocator]
@@ -61,7 +61,7 @@ impl Measured {
         let meter = Meter::new();
         let domain = Domain::new(&limits);
         let out = Queue::with_capacity(max_out(&limits));
-        Measured { domain, env: Env { now: Time::ZERO, limits }, out, meter, bound, calls: 0 }
+        Measured { domain, env: Env { now: Time::ZERO, wall: Wall::EPOCH, limits }, out, meter, bound, calls: 0 }
     }
 
     fn step(&mut self, event: Event) -> Vec<Asked> {

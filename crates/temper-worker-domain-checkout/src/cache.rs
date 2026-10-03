@@ -21,8 +21,8 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::bytes::copy_of;
-use temper_lib::{Id, List, Map, Slab};
+use skein_lib::bytes::copy_of;
+use skein_lib::{Id, List, Map, Slab};
 
 use crate::boundary::{Refusal, Repository};
 use crate::facts::Cached;

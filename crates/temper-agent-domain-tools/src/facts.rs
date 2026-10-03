@@ -7,7 +7,7 @@
 //! no room in `out`, and when the queue is full they are dropped and counted.
 //! Nothing the tools decide depends on whether a fact was kept.
 
-use temper_lib::{Queue, Token};
+use skein_lib::{Queue, Token};
 
 use crate::boundary::Refusal;
 use crate::call::{Exit, Fault, Outcome, Tool};

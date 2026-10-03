@@ -1,13 +1,13 @@
 //! End to end at the session child domain: the agent's sessions, their opener
 //! and a fake provider's domain, talking through a simulated world.
 
+use skein_lib::{Duration, Time};
 use temper_agent_domain_session::llm::Failure;
 use temper_agent_domain_session::{Budget, Dimension, End, Limits, Spec, Yield};
 use temper_agent_domain_session_tests::{
     BUDGET, Count, Ended, Settings, Span, Told, World, noisy, spec, submit_noisily,
 };
 use temper_agent_domain_tools::{self as tools, Authority, Grants};
-use temper_lib::{Duration, Time};
 use temper_llm_domain::Config;
 
 const ITERATIONS: u32 = 100_000;

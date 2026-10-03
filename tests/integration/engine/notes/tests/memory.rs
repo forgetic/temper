@@ -3,11 +3,11 @@
 //! lacking, every call holding as much as it may, and every entry point on
 //! the way.
 
+use skein_lib::{Env, Queue, ReplyTo, Time, Token, Wall};
 use temper_engine_domain_notes::{
     Author, Change, Domain, Event, Fetched, Item, Limits, Listed, Page, Recall, Reference, Request, Scope, Scopes,
     Wrote, max_out, resume, step, worst_case,
 };
-use temper_lib::{Env, Queue, ReplyTo, Time, Token};
 use temper_world::heap::{self, Meter};
 
 #[global_allocator]
@@ -53,7 +53,7 @@ impl Measured {
         let meter = Meter::new();
         let domain = Domain::new(&limits);
         let out = Queue::with_capacity(max_out(&limits));
-        Measured { domain, env: Env { now: Time::ZERO, limits }, out, meter, bound, calls: 0 }
+        Measured { domain, env: Env { now: Time::ZERO, wall: Wall::EPOCH, limits }, out, meter, bound, calls: 0 }
     }
 
     fn step(&mut self, event: Event) -> Vec<Asked> {

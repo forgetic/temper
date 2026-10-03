@@ -7,8 +7,8 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::bytes::copy_of;
-use temper_lib::{List, Map, Set, Time};
+use skein_lib::bytes::copy_of;
+use skein_lib::{List, Map, Set, Time};
 
 use crate::api::{
     Check, Checks, Comment as CommentView, Error, Kind, Permission, Protection, Review, State, Summary, What,

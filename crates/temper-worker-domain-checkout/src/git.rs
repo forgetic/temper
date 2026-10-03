@@ -21,7 +21,7 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::Token;
+use skein_lib::Token;
 
 /// A commit, as git names it: its object id, in a fixed-size value the
 /// protocol layer makes from git's output, the full id in 32 bytes (a SHA-256

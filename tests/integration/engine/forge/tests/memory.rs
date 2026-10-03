@@ -3,6 +3,7 @@
 //! and write in hand at its limits; and every entry point on the way, under
 //! answers as large as the limits allow and failures of every kind.
 
+use skein_lib::{Duration, Env, Queue, Rng, Time, Token, Wall};
 use temper_engine_domain_forge::api::{
     Answer, Body, Check, Comment, Error, Kind, Mark, Op, Page, PageName, Permission, Pull, Remark, Review, State,
     Status, Summary, Verdict,
@@ -11,7 +12,6 @@ use temper_engine_domain_forge::{
     Cause, Config, Content, Domain, Event, Item, Limits, Position, Read, Request, Write, fire, max_out, resume, step,
     worst_case,
 };
-use temper_lib::{Duration, Env, Queue, Rng, Time, Token};
 use temper_world::heap::{self, Meter};
 
 #[global_allocator]
@@ -138,7 +138,7 @@ impl Measured {
         };
         let domain = Domain::new(&limits, config, 7);
         let out = Queue::with_capacity(max_out(&limits));
-        Measured { domain, env: Env { now: Time::ZERO, limits }, out, meter, bound, owners: 0 }
+        Measured { domain, env: Env { now: Time::ZERO, wall: Wall::EPOCH, limits }, out, meter, bound, owners: 0 }
     }
 
     fn step(&mut self, event: Event) -> Vec<Call> {

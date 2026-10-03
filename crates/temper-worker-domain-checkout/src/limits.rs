@@ -1,6 +1,6 @@
 use alloc::boxed::Box;
 
-use temper_lib::{Duration, Id, List, Map, Queue, Slab};
+use skein_lib::{Duration, Id, List, Map, Queue, Slab};
 
 use crate::boundary::{Landing, Repository};
 use crate::cache::{Cloned, Workspace};

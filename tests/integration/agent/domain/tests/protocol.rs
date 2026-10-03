@@ -2,13 +2,13 @@
 //! both sides translate it: names packed into tokens and back, an assignment
 //! with its workspace and charter, and every answer and failure.
 
+use skein_lib::{Duration, Token};
 use temper_agent_domain_tests::protocol::{self, IDENTITY};
 use temper_engine_domain::brief::{Body, Kind, Section};
 use temper_engine_domain::plan::{self, Finish, Grants, Why};
 use temper_engine_domain::views::{Capture, Policy};
 use temper_engine_domain::{self as engine, Assignment, Charter, Checkout, Item, Outcome, Start, Workspace};
 use temper_engine_domain_tests::codec;
-use temper_lib::{Duration, Token};
 use temper_worker_domain::{self as worker, host};
 
 fn bytes(text: &[u8]) -> Box<[u8]> {

@@ -3,8 +3,8 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::bytes::copy_of;
-use temper_lib::{Deadlines, Env, Id, List, Map, Queue, Rng, Slab, Time};
+use skein_lib::bytes::copy_of;
+use skein_lib::{Deadlines, Env, Id, List, Map, Queue, Rng, Slab, Time};
 
 use crate::boundary::{Event, Item, Level, Request, Reviewed};
 use crate::calls::{self, Calls};

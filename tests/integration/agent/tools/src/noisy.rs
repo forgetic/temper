@@ -1,9 +1,9 @@
 //! Random worlds: small limits, faults, latencies that race the deadlines,
 //! and sessions with random scripts on the fixture's checkout.
 
+use skein_lib::{Duration, Rng, Time};
 use temper_agent_domain_tools::{Grants, Limits};
 use temper_checkout_fake::Checkout;
-use temper_lib::{Duration, Rng, Time};
 
 use crate::calls::{edit, list, read, read_lines, search, shell, write};
 use crate::fixture::Fixture;

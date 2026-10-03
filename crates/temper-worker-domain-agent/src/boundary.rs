@@ -55,7 +55,7 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::{Time, Token};
+use skein_lib::{Time, Token};
 
 use crate::channel::{Ask, Down, Finish, Reply, Up};
 

@@ -31,7 +31,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
-use temper_lib::{Duration, Rng, Time};
+use skein_lib::{Duration, Rng, Time};
 use temper_world::Span;
 
 /// What a scripted agent writes up its channel.

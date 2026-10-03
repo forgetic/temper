@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use skein_lib::{Duration, Rng, Time, Token};
 use temper_checkout_fake::Checkout;
 use temper_checkout_fake::git::{Created, Remote, Tree};
-use temper_lib::{Duration, Rng, Time, Token};
 use temper_worker_domain_checkout::git::{Done, Fault, Kind, Missing, Op, Want};
 use temper_worker_domain_checkout::{
     Cached, Domain, Event, Fact, Failure, Landing, Limits, MAX_OUT, Message, Outcome, Prepared, Refusal, Repository,

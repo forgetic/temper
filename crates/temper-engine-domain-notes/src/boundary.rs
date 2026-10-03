@@ -25,7 +25,7 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::{ReplyTo, Token};
+use skein_lib::{ReplyTo, Token};
 
 /// Where notes are kept (engine-domain.md, section 10): the deployment's, in
 /// the wiki of its home repository; a repository's, in its wiki, by its place

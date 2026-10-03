@@ -2,12 +2,12 @@
 //! plays, running their calls on a fake checkout through the io the world
 //! plays.
 
+use skein_lib::{Duration, Time};
 use temper_agent_domain_tools::{self as tools, Entry, Fault, Grants, Hit, Kind, Limits, Name, Outcome, Refusal};
 use temper_agent_domain_tools_tests::calls::{edit, list, read, read_lines, search, shell, write};
 use temper_agent_domain_tools_tests::fixture::{FORMATTED, Fixture, LIB, long, test_log};
 use temper_agent_domain_tools_tests::{Settings, Span, Step, World, kind, noisy_world};
 use temper_checkout_fake::Checkout;
-use temper_lib::{Duration, Time};
 
 const ITERATIONS: u32 = 100_000;
 

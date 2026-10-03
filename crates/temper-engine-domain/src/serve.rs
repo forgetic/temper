@@ -23,6 +23,8 @@
 use alloc::boxed::Box;
 use core::mem;
 
+use skein_lib::bytes::copy_of;
+use skein_lib::{Env, Id, List, Queue, ReplyTo, Time, Token};
 use temper_engine_domain_brief as brief;
 use temper_engine_domain_forge::{self as forge, api};
 use temper_engine_domain_notes as notes;
@@ -30,8 +32,6 @@ use temper_engine_domain_plan as plan;
 use temper_engine_domain_rules as rules;
 use temper_engine_domain_views as views;
 use temper_engine_domain_work as work;
-use temper_lib::bytes::copy_of;
-use temper_lib::{Env, Id, List, Queue, ReplyTo, Time, Token};
 
 use crate::boundary::{Call, Decoded, Inbound, Item, Payload, Request, Served, Store, Stored, Unserved};
 use crate::domain::Domain;
@@ -812,7 +812,7 @@ fn in_scope(scope: notes::Scope, path: &[u8]) -> Option<Box<[u8]>> {
     let prefix = match scope {
         notes::Scope::Deployment => copy_of(DEPLOYMENT),
         notes::Scope::Repository(_) => {
-            if temper_lib::bytes::find(path, b"/").is_some() {
+            if skein_lib::bytes::find(path, b"/").is_some() {
                 return None;
             }
             return Some(copy_of(path));
@@ -820,7 +820,7 @@ fn in_scope(scope: notes::Scope, path: &[u8]) -> Option<Box<[u8]>> {
         notes::Scope::Goal { number, .. } => translate::concat(&[GOALS, &translate::decimal(number), b"/"]),
     };
     let rest = path.strip_prefix(&prefix[..])?;
-    if rest.is_empty() || temper_lib::bytes::find(rest, b"/").is_some() {
+    if rest.is_empty() || skein_lib::bytes::find(rest, b"/").is_some() {
         return None;
     }
     Some(copy_of(rest))

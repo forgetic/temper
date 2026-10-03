@@ -1,6 +1,6 @@
 //! The work hub's state and its entry points (engine-domain.md, section 3).
 
-use temper_lib::{Deadlines, Env, Id, Map, Queue, Rng, Slab, Time};
+use skein_lib::{Deadlines, Env, Id, Map, Queue, Rng, Slab, Time};
 
 use crate::boundary::{Event, Item, Request};
 use crate::facts::{Fact, Facts};

@@ -3,11 +3,11 @@
 //! they make, the outcomes runs finish with, and how people review, decide
 //! and accept. The deployment the plan is configured with is here too.
 
+use skein_lib::{Duration, Rng};
 use temper_engine_domain_plan::{
     AgentSpec, Batch, Budget, ChangeSpec, Charter, Config, Envelope, Gate, Goal, Grants, Plan, Repo, Repository,
     Resume, Review, SessionSpec, Sources, Step, Target, Template, WaitSpec, Wake, Work,
 };
-use temper_lib::{Duration, Rng};
 use temper_world::Span;
 
 /// How often each thing happens, per mille, and how long things take.

@@ -7,10 +7,10 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dev-dependencies]
+skein-lib.workspace = true
 temper-agent-domain-session.workspace = true
 temper-agent-domain-session-tests.workspace = true
 temper-agent-domain-tools.workspace = true
-temper-lib.workspace = true
 temper-llm-domain.workspace = true
 
 # Ordinary Rust (programming-model.md, 10.2), so not the step crates' lints.

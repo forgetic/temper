@@ -16,7 +16,7 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::{Env, Id, Map, Queue, Slab, Time, Token};
+use skein_lib::{Env, Id, Map, Queue, Slab, Time, Token};
 use temper_worker_domain_agent as agent;
 use temper_worker_domain_checkout as checkout;
 use temper_worker_domain_host as host;

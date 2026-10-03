@@ -2,7 +2,7 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::{Duration, Env, List, Queue, ReplyTo, Time, Token};
+use skein_lib::{Duration, Env, List, Queue, ReplyTo, Time, Token, Wall};
 
 use crate::charter::{Checkout, Endpoint, Grants, Llm, Outlet, Repository, Tools};
 use crate::facts::{Answered, Asked, Fact, Return};
@@ -65,7 +65,7 @@ impl Harness {
     fn new(limits: Limits) -> Harness {
         Harness {
             domain: Domain::new(&limits),
-            env: Env { now: Time::ZERO, limits },
+            env: Env { now: Time::ZERO, wall: Wall::EPOCH, limits },
             out: Queue::with_capacity(MAX_OUT),
         }
     }
@@ -250,7 +250,7 @@ fn a_run_looks_for_checks_in_writable_repositories_when_a_change_must_pass_them(
     };
     let system = &opening.system;
     let marked = b"- `temper`, which you may change, with checks (`.temper/pre-pr`)\n";
-    assert!(temper_lib::bytes::find(system, marked).is_some(), "the checkout says which has checks");
+    assert!(skein_lib::bytes::find(system, marked).is_some(), "the checkout says which has checks");
 }
 
 #[test]

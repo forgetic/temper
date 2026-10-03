@@ -1,4 +1,4 @@
-use temper_lib::{Duration, Id, List, Map, Queue, Set, Slab};
+use skein_lib::{Duration, Id, List, Map, Queue, Set, Slab};
 
 use crate::authority::{Mount, Var};
 use crate::boundary::Root;

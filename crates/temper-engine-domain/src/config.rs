@@ -8,11 +8,11 @@
 
 use alloc::boxed::Box;
 
+use skein_lib::bytes::copy_of;
 use temper_engine_domain_forge as forge;
 use temper_engine_domain_plan as plan;
 use temper_engine_domain_rules as rules;
 use temper_engine_domain_views::Policy;
-use temper_lib::bytes::copy_of;
 
 /// A deployment's configuration, handed to [`crate::Domain::new`].
 #[derive(Debug)]

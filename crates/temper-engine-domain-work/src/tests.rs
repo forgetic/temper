@@ -2,7 +2,7 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::{Duration, Env, List, Queue, ReplyTo, Time, Token};
+use skein_lib::{Duration, Env, List, Queue, ReplyTo, Time, Token, Wall};
 
 use crate::{
     Acted, Answer, Applied, Class, Domain, Due, Event, Fact, Failures, Hold, Item, Lifecycle, Limits, Phase, Read,
@@ -58,7 +58,12 @@ impl Harness {
 
     fn seeded(limits: Limits, seed: u64) -> Harness {
         let out = Queue::with_capacity(max_out(&limits));
-        Harness { domain: Domain::new(&limits, seed), env: Env { now: Time::ZERO, limits }, out, calls: 0 }
+        Harness {
+            domain: Domain::new(&limits, seed),
+            env: Env { now: Time::ZERO, wall: Wall::EPOCH, limits },
+            out,
+            calls: 0,
+        }
     }
 
     /// Steps `event`, returning what it emitted, oldest first.

@@ -23,10 +23,10 @@ allow-indexing-slicing-in-tests = true
 
 disallowed-types = [
     # Growth without a check.
-    { path = "alloc::vec::Vec", reason = "Box<[T]> for owned sequences, temper_lib::List or Queue for bounded ones" },
-    { path = "alloc::collections::VecDeque", reason = "temper_lib::Queue" },
-    { path = "alloc::collections::BinaryHeap", reason = "temper_lib::Deadlines, or a BTreeMap" },
-    { path = "alloc::collections::LinkedList", reason = "temper_lib::List" },
+    { path = "alloc::vec::Vec", reason = "Box<[T]> for owned sequences, skein_lib::List or Queue for bounded ones" },
+    { path = "alloc::collections::VecDeque", reason = "skein_lib::Queue" },
+    { path = "alloc::collections::BinaryHeap", reason = "skein_lib::Deadlines, or a BTreeMap" },
+    { path = "alloc::collections::LinkedList", reason = "skein_lib::List" },
     { path = "alloc::string::String", reason = "text is UTF-8 in a Box<[u8]>, checked by the protocol layer" },
     { path = "alloc::borrow::Cow", reason = "one owner: borrow or move, never maybe-clone" },
     # Shared ownership, interior mutability, global state.
@@ -66,16 +66,16 @@ disallowed-types = [
     { path = "core::ops::FnMut", reason = "events in, requests out: no callbacks" },
     { path = "core::ops::FnOnce", reason = "events in, requests out: no callbacks" },
     { path = "core::any::Any", reason = "concrete types only" },
-    { path = "core::marker::PhantomData", reason = "only temper_lib::Id needs it" },
+    { path = "core::marker::PhantomData", reason = "only skein_lib::Id needs it" },
     # Floats: no total order, and nothing in this domain needs them.
     { path = "f32", reason = "integers, with a stated unit" },
     { path = "f64", reason = "integers, with a stated unit" },
     # Formatting. (Not fmt::Arguments: assertion messages are made of it.)
     { path = "core::fmt::Write", reason = "no formatting in step code; diagnostics are enum values" },
     # Time and hashing that the step does not control (reachable in unit tests, which have std).
-    { path = "core::time::Duration", reason = "temper_lib::Duration" },
-    { path = "std::time::Instant", reason = "env.now, a temper_lib::Time" },
-    { path = "std::time::SystemTime", reason = "env.now, a temper_lib::Time" },
+    { path = "core::time::Duration", reason = "skein_lib::Duration" },
+    { path = "std::time::Instant", reason = "env.now, a skein_lib::Time" },
+    { path = "std::time::SystemTime", reason = "env.wall, a skein_lib::Wall" },
     { path = "std::collections::HashMap", reason = "iteration order depends on a random seed: BTreeMap" },
     { path = "std::collections::HashSet", reason = "iteration order depends on a random seed: BTreeSet" },
 ]
@@ -185,15 +185,15 @@ disallowed-methods = [
     { path = "alloc::collections::btree::map::Entry::or_insert_with_key", reason = "no closures: or_insert, or match" },
     { path = "alloc::collections::btree::map::Entry::and_modify", reason = "no closures: match" },
     # Allocation behind the reader's back.
-    { path = "core::iter::Iterator::collect", reason = "allocates a container the limits do not bound: temper_lib::List" },
+    { path = "core::iter::Iterator::collect", reason = "allocates a container the limits do not bound: skein_lib::List" },
     { path = "core::iter::Iterator::sum", reason = "unchecked arithmetic: a for loop with checked_add" },
     { path = "core::iter::Iterator::product", reason = "unchecked arithmetic: a for loop with checked_mul" },
-    { path = "slice::to_vec", reason = "no Vec in step code: temper_lib::bytes::copy_of" },
+    { path = "slice::to_vec", reason = "no Vec in step code: skein_lib::bytes::copy_of" },
     { path = "slice::into_vec", reason = "no Vec in step code" },
     { path = "slice::concat", reason = "no Vec in step code" },
     { path = "slice::join", reason = "no Vec in step code" },
     { path = "slice::repeat", reason = "no Vec in step code" },
-    { path = "alloc::borrow::ToOwned::to_owned", reason = "temper_lib::bytes::copy_of, or clone" },
+    { path = "alloc::borrow::ToOwned::to_owned", reason = "skein_lib::bytes::copy_of, or clone" },
     { path = "alloc::string::ToString::to_string", reason = "no String in step code" },
     # Panics a peer could trigger: the checked forms return Option.
     { path = "slice::split_at", reason = "split_at_checked" },

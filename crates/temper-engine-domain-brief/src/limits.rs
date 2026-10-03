@@ -1,4 +1,4 @@
-use temper_lib::{Deadlines, Duration, Id, List, Queue, Slab};
+use skein_lib::{Deadlines, Duration, Id, List, Queue, Slab};
 
 use crate::boundary::{Item, Kind, Part, Section, Wanted};
 use crate::brief::{Brief, Reading, Slot};

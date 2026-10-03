@@ -14,6 +14,7 @@
 //! Every match is exhaustive, so a variant added to either side's vocabulary
 //! breaks the build here.
 
+use skein_lib::{Env, Queue};
 use temper_engine_domain_brief as brief;
 use temper_engine_domain_fleet as fleet;
 use temper_engine_domain_forge as forge;
@@ -21,7 +22,6 @@ use temper_engine_domain_notes as notes;
 use temper_engine_domain_plan as plan;
 use temper_engine_domain_views as views;
 use temper_engine_domain_work as work;
-use temper_lib::{Env, Queue};
 
 use crate::boundary::{Event, Request};
 use crate::domain::Domain;
@@ -34,31 +34,31 @@ use crate::serve;
 use crate::translate;
 
 pub(crate) const fn work_env(env: &Env<Limits>) -> Env<work::Limits> {
-    Env { now: env.now, limits: env.limits.work }
+    Env { now: env.now, wall: env.wall, limits: env.limits.work }
 }
 
 pub(crate) const fn plan_env(env: &Env<Limits>) -> Env<plan::Limits> {
-    Env { now: env.now, limits: env.limits.plan }
+    Env { now: env.now, wall: env.wall, limits: env.limits.plan }
 }
 
 pub(crate) const fn forge_env(env: &Env<Limits>) -> Env<forge::Limits> {
-    Env { now: env.now, limits: env.limits.forge }
+    Env { now: env.now, wall: env.wall, limits: env.limits.forge }
 }
 
 pub(crate) const fn fleet_env(env: &Env<Limits>) -> Env<fleet::Limits> {
-    Env { now: env.now, limits: env.limits.fleet }
+    Env { now: env.now, wall: env.wall, limits: env.limits.fleet }
 }
 
 pub(crate) const fn brief_env(env: &Env<Limits>) -> Env<brief::Limits> {
-    Env { now: env.now, limits: env.limits.brief }
+    Env { now: env.now, wall: env.wall, limits: env.limits.brief }
 }
 
 pub(crate) const fn notes_env(env: &Env<Limits>) -> Env<notes::Limits> {
-    Env { now: env.now, limits: env.limits.notes }
+    Env { now: env.now, wall: env.wall, limits: env.limits.notes }
 }
 
 pub(crate) const fn views_env(env: &Env<Limits>) -> Env<views::Limits> {
-    Env { now: env.now, limits: env.limits.views }
+    Env { now: env.now, wall: env.wall, limits: env.limits.views }
 }
 
 /// Hands one of the protocol's events to the child domain, or the part of the

@@ -6,8 +6,8 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::List;
-use temper_lib::bytes::copy_of;
+use skein_lib::List;
+use skein_lib::bytes::copy_of;
 use temper_worker_domain_agent::{self as agent, channel};
 use temper_worker_domain_checkout::{self as checkout, git};
 use temper_worker_domain_host as host;

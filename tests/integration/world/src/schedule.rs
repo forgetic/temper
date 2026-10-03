@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use temper_lib::Time;
+use skein_lib::Time;
 
 /// Where a delivery stands on a [`Schedule`]: the time it is due at, and its
 /// place among those due then. It withdraws the delivery while it is in

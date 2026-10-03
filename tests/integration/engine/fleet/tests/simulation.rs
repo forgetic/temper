@@ -3,9 +3,9 @@
 
 use std::collections::BTreeMap;
 
+use skein_lib::Duration;
 use temper_engine_domain_fleet::Limits;
 use temper_engine_domain_fleet_tests::{LIMITS, Settings, Span, Stats, World};
-use temper_lib::Duration;
 use temper_world::assert_replays;
 
 const ITERATIONS: u32 = 400_000;

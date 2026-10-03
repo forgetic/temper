@@ -1,6 +1,6 @@
 use alloc::boxed::Box;
 
-use temper_lib::{Id, Map, Queue, Set, Slab, Token};
+use skein_lib::{Id, Map, Queue, Set, Slab, Token};
 
 use crate::boundary::Reason;
 use crate::call::Call;

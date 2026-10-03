@@ -7,8 +7,8 @@
 //! operation at a time, but for the pushes its plan sends twice, which are
 //! refused as busy.
 
+use skein_lib::{Duration, Token};
 use temper_checkout_fake::git::Tree;
-use temper_lib::{Duration, Token};
 use temper_worker_domain_checkout::{Landing, Prepared};
 
 /// What a client does, from its prepare to its release.

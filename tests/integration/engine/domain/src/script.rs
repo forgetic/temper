@@ -7,11 +7,11 @@
 //! wrote), so a run retried, resumed or started after a restart does what
 //! is due from there.
 
+use skein_lib::Duration;
 use temper_engine_domain::notes::{Author, Change, Page, Recall, Scope};
 use temper_engine_domain::plan::{self, ChangeSpec, Finish, Repository, Review, Step, Why, Work};
 use temper_engine_domain::views::Kind;
 use temper_engine_domain::{Call, Charter, Failure, Item, Outcome};
-use temper_lib::Duration;
 
 use crate::deployment::{self, BUDGET, ENGINE, GREEN, MAIN};
 use crate::mirror::Mirror;

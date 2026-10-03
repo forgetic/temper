@@ -22,7 +22,7 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::{ReplyTo, Time, Token};
+use skein_lib::{ReplyTo, Time, Token};
 
 use crate::authority::{Authority, Var};
 use crate::call::{Call, Entry, Exit, Fault, Hit, Outcome};

@@ -2,8 +2,8 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::bytes::copy_of;
-use temper_lib::{Duration, Env, List, Queue, ReplyTo, Time, Token};
+use skein_lib::bytes::copy_of;
+use skein_lib::{Duration, Env, List, Queue, ReplyTo, Time, Token, Wall};
 
 use crate::api::{
     Answer, Change, Check, Checks, Comment, Created, Cue, Error, File, Git, Head, Kind, Op, Page, PageName, Permission,
@@ -219,7 +219,7 @@ impl Harness {
         }
         Harness {
             domain,
-            env: Env { now: Time::ZERO, limits: config },
+            env: Env { now: Time::ZERO, wall: Wall::EPOCH, limits: config },
             out: Queue::with_capacity(MAX_OUT),
             hooks: Queue::with_capacity(64),
             answered: Queue::with_capacity(LIMITS.calls),
@@ -403,7 +403,7 @@ impl Harness {
 
     /// Takes what the forge emitted, noting each answer's token, which must
     /// be new.
-    fn drain(&mut self, answered: &mut temper_lib::Set<u64>) {
+    fn drain(&mut self, answered: &mut skein_lib::Set<u64>) {
         while let Some(request) = self.out.pop() {
             match request {
                 Request::Reply { to, result: _ } => {
@@ -1968,9 +1968,9 @@ fn every_call_is_answered_once_under_every_fault() {
             ..CALM
         };
         let mut h = Harness::seeded(config, setup(), seed);
-        let mut rng = temper_lib::Rng::new(seed);
+        let mut rng = skein_lib::Rng::new(seed);
         let work = h.commit(FIRST, &[(b"src", b"one")]);
-        let mut answered: temper_lib::Set<u64> = temper_lib::Set::with_capacity(256);
+        let mut answered: skein_lib::Set<u64> = skein_lib::Set::with_capacity(256);
         let mut sent: u64 = 0;
         for _ in 0..64_u32 {
             for _ in 0..rng.between(0, 3) {

@@ -26,7 +26,7 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::{Env, Id, Queue, ReplyTo, Set, Slab, Time, Token};
+use skein_lib::{Env, Id, Queue, ReplyTo, Set, Slab, Time, Token};
 
 use crate::authority::{self, Authority, Checkout, Located};
 use crate::boundary::{Expect, Refusal, Request};

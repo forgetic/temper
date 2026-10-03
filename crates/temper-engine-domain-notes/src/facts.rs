@@ -7,7 +7,7 @@
 //! no room in `out`, and when the queue is full they are dropped and counted.
 //! Nothing the notes decide depends on whether a fact was kept.
 
-use temper_lib::Queue;
+use skein_lib::Queue;
 
 use crate::boundary::{Refusal, Wrote};
 

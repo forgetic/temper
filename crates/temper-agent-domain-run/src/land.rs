@@ -46,8 +46,8 @@
 
 use core::mem;
 
-use temper_lib::bytes::copy_of;
-use temper_lib::{Env, Id, Queue, Token};
+use skein_lib::bytes::copy_of;
+use skein_lib::{Env, Id, Queue, Token};
 
 use crate::boundary::{Exit, Place, Push, Ran, Request, Returned};
 use crate::call::{self, Call, Withdrawal};

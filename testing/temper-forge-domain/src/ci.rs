@@ -14,8 +14,8 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::bytes::{copy_of, find};
-use temper_lib::{Env, Id, Map};
+use skein_lib::bytes::{copy_of, find};
+use skein_lib::{Env, Id, Map};
 
 use crate::api::{Answer, Check, Error, Permission, What};
 use crate::domain::{self, Alarm, Config, Domain};

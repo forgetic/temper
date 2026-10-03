@@ -22,7 +22,7 @@
 //! withdraws it, the host answers it, and drops whatever the engine sends for
 //! it after. A call is retired as it closes.
 
-use temper_lib::{Id, Token};
+use skein_lib::{Id, Token};
 
 use crate::hosted::Hosted;
 
