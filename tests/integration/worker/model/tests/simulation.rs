@@ -313,11 +313,9 @@ fn a_push_finds_its_branch_moved_by_another_party() {
 }
 
 /// The same, the branch moved under every run: each run's push is rejected
-/// and its outcome is stale. The engine runs the change again, run after
-/// run without bound, until the forge has no room for the outcomes and holds
-/// the change for its writes.
+/// and its outcome is stale. A repair whose outcome went stale counts all
+/// the same, so the change is held once its repairs are spent.
 #[test]
-#[ignore = "until the engine bounds the runs of a change whose outcomes keep going stale"]
 fn a_change_whose_branch_moves_under_every_run_is_run_a_bounded_number_of_times() {
     let mut world = World::new(moving(0, u32::MAX));
     world.run_for(Duration::from_secs(3 * 3_600), ITERATIONS);

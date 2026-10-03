@@ -84,7 +84,10 @@ pub enum Applied {
     /// says. `estimate` is the tokens the steps they make are estimated to
     /// spend, for the rules' bounds on spending.
     Writes { accept: Accept, then: Then, estimate: u64 },
-    /// The item moved on while the run worked: nothing of it is applied.
+    /// The item moved on while the run worked: nothing of it is applied,
+    /// save the step's progress in the caller's queue, if any: a repair or
+    /// a rebase whose change went stale counts all the same, so a change
+    /// whose branch moves under every run is held once they are spent.
     Stale(Stale),
     /// It breaks the step's spec: feedback for the run.
     Invalid(Problems),
@@ -265,9 +268,6 @@ fn changed(progress: Progress, facts: &Facts, head: Commit, out: &mut Queue<Writ
             PullState::Closed => return Applied::Stale(Stale::Closed),
         }
     }
-    if facts.branch != Some(head) {
-        return Applied::Stale(Stale::Moved);
-    }
     let cleared = Progress { running: None, ..progress };
     let Progress { repairs, rebases, .. } = cleared;
     let counted = match repair_of(progress) {
@@ -275,6 +275,14 @@ fn changed(progress: Progress, facts: &Facts, head: Commit, out: &mut Queue<Writ
         Some(Repair::BaseMoved | Repair::Conflicts) => Progress { rebases: rebases.saturating_add(1), ..cleared },
         None => cleared,
     };
+    if facts.branch != Some(head) {
+        // Its push went nowhere, the branch moved under it: a repair or a
+        // rebase counts all the same.
+        if counted != cleared {
+            out.push(Write::Progress(counted));
+        }
+        return Applied::Stale(Stale::Moved);
+    }
     written(counted, Accept::Rules, 0, out)
 }
 

@@ -1187,6 +1187,17 @@ fn a_change_the_item_moved_on_from_is_stale() {
     assert_eq!(apply_to(&change, None, &merged, &outcome), stale(Stale::Landed));
     let closed = pulled(Pull { state: PullState::Closed, ..ready(head(1)) });
     assert_eq!(apply_to(&change, None, &closed, &outcome), stale(Stale::Closed));
+    // A repair or a rebase whose push the branch moved under counts all the
+    // same; a change produced does not.
+    let moved = pulled(ready(head(3)));
+    let repair = claimed(self::change("a", &[]), Why::Repair(Repair::CiFailed));
+    let repaired = Box::from([Write::Progress(Progress { repairs: 1, ..Progress::NEW })]);
+    assert_eq!(apply_to(&repair, None, &moved, &outcome), (Applied::Stale(Stale::Moved), repaired));
+    let rebase = claimed(self::change("a", &[]), Why::Repair(Repair::BaseMoved));
+    let rebased = Box::from([Write::Progress(Progress { rebases: 1, ..Progress::NEW })]);
+    assert_eq!(apply_to(&rebase, None, &moved, &outcome), (Applied::Stale(Stale::Moved), rebased));
+    let produced = claimed(self::change("a", &[]), Why::Produce);
+    assert_eq!(apply_to(&produced, None, &moved, &outcome), stale(Stale::Moved));
 }
 
 #[test]

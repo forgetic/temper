@@ -544,7 +544,18 @@ fn applied(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, fresh: Option<pl
             }
             next(model, env, id);
         }
-        plan::Applied::Stale(_) => finish(model, env, id, Finish::Stale),
+        plan::Applied::Stale(_) => {
+            // Nothing of the outcome is applied, save what the plan still
+            // counts of its run in the step's progress.
+            let entry = get_mut(model, id);
+            if !writes.is_empty()
+                && let Some(mut counted) = entry.staged.take()
+            {
+                stage(&mut counted, &mut writes);
+                entry.step = Some(counted);
+            }
+            finish(model, env, id, Finish::Stale);
+        }
         plan::Applied::Invalid(_) => finish(model, env, id, Finish::Invalid),
     }
 }
