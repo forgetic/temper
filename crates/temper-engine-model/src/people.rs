@@ -376,13 +376,7 @@ fn session(model: &mut Model, env: &Env<Limits>, item: Item) -> Option<Id<Entry>
     if entry.step.is_some() {
         return Some(id);
     }
-    let step = plan::Step {
-        name: copy_of(b"session"),
-        repository: plan::Repository(item.repository),
-        work: plan::Work::Session(model.config.session.clone()),
-        after: Box::new([]),
-        gates: Box::new([]),
-    };
+    let step = model.config.session_step(item.repository);
     entry.step = Some(plan::Record { step, progress: plan::Progress::NEW, goal: None });
     Some(id)
 }

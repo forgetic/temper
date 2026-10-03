@@ -269,6 +269,9 @@ fn the_worst_case_is_bounded_or_refused() {
     assert!(accepts(&config(), &LIMITS), "the configuration fits");
     let elsewhere = Config { home: 2, ..config() };
     assert!(!accepts(&elsewhere, &LIMITS), "the home is one of the deployment's repositories");
+    let mut wordy = config();
+    wordy.session.charter.instructions = Box::from([b'x'; 65].as_slice());
+    assert!(!accepts(&wordy, &LIMITS), "a session's step is one the plan could have written");
 }
 
 #[test]
@@ -2005,4 +2008,57 @@ fn a_step_accepted_and_then_released_waits_to_be_accepted_again() {
     let accepting = work::Hold::Plan { reason: translate::RUN_ACCEPTANCE };
     assert_eq!(held_for(&mut world, change), Some(accepting), "released, it waits for its acceptance again");
     assert_eq!(assigned(world.seen.as_slice(), change).len(), 3, "and runs nothing before");
+}
+
+/// Edits the record on `item`, as a person might, so that it still decodes.
+fn edit_record(world: &mut World, item: Item, edit: fn(&mut crate::boundary::Record)) {
+    let issue = world.forge.issue(item).unwrap();
+    for at in 0..issue.comments.len() {
+        let note = issue.comments.get_mut(at).unwrap();
+        if let Some(crate::boundary::Decoded::Record { record, .. }) = &mut note.decoded {
+            edit(record);
+        }
+    }
+}
+
+/// Why the hub last held `item`, as its facts tell, among those not drained
+/// yet.
+fn hold_told(world: &mut World, item: Item) -> Option<work::Hold> {
+    let mut why = None;
+    while let Some(fact) = world.model.pop_fact() {
+        if let crate::facts::Fact::Work { fact: work::Fact::Held { item: of, why: held } } = fact
+            && of == item
+        {
+            why = Some(held);
+        }
+    }
+    why
+}
+
+#[test]
+fn a_record_whose_step_the_plan_could_not_have_written_is_held_not_run() {
+    let (mut world, session) = World::session();
+    let tasks = crate::boundary::Outcome::Tasks { tasks: Box::new([change_step(b"fix")]), text: copy_of(b"on it") };
+    world.deliver(Event::Answer { channel: Token::new(1), item: session, attempt: 1, answer: ended(tasks) });
+    let change = Item { repository: 0, number: 2 };
+    assert_eq!(assigned(world.seen.as_slice(), change).as_slice(), [1], "the change runs");
+    // A person gives its review a megabyte of instructions.
+    edit_record(&mut world, change, |record| {
+        if let plan::Work::Change(spec) = &mut record.step.step.work {
+            let mut instructions = List::with_capacity(1 << 20);
+            for _ in 0_u32..1 << 20_u32 {
+                instructions.push(b'x').unwrap();
+            }
+            let instructions = instructions.into_boxed();
+            spec.review = plan::Review::Agent(plan::Charter { instructions, ..spec.produce.clone() });
+        }
+    });
+    world.restart();
+    let hello = Hello { slots: 2, workstreams: Box::new([]), hosting: Box::new([]) };
+    world.deliver(Event::Hello { channel: Token::new(2), hello });
+    for _ in 0_u32..4 {
+        world.wait(30);
+    }
+    assert_eq!(hold_told(&mut world, change), Some(work::Hold::Record), "the change is held for a person");
+    assert!(assigned(world.seen.as_slice(), change).is_empty(), "and runs nothing");
 }

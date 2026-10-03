@@ -15,8 +15,9 @@
 //!   ([`apply`], 4.4);
 //! - what a person's release of a held item writes ([`release`]), and their
 //!   rejection of one of its proposals ([`rejected`]);
-//! - whether a goal's record, as read, is one it could have written
-//!   ([`check_goal`]): records are forge data, and a person may edit them.
+//! - whether a goal's part of a record, or a step's, as read, is one it
+//!   could have written ([`check_goal`], [`check_record`]): records are forge
+//!   data, and a person may edit them.
 //!
 //! It knows nothing of the forge's API, the workers, the record's encoding or
 //! the mechanics of an item's lifecycle, and it never checks the rules: it
@@ -53,7 +54,7 @@ mod write;
 
 pub use accept::{Growing, Grown, accept, grow};
 pub use apply::{Accept, Applied, Outcome, Stale, Then, apply, rejected, release};
-pub use check::{Problem, Problems, check, check_goal};
+pub use check::{Problem, Problems, check, check_goal, check_record};
 pub use config::{Config, Repo, Template};
 pub use due::{Action, Due, Finish, Hold, Repair, Run, Sections, Waits, Why, due};
 pub use facts::{Ci, Decided, Decision, Facts, Mergeable, Pull, PullState, Relations};

@@ -143,6 +143,20 @@ pub fn check_goal(env: &Env<Limits>, goal: &Goal) -> Result<(), Problems> {
     Err(found.into_problems())
 }
 
+/// Whether `step`, read from its item's record, is one the plan could have
+/// written: its parent runs this as it reads the record, as it runs
+/// [`check_goal`] on a goal's part, and holds the item for a person if it is
+/// not. The steps it comes after are its goal's, which it is not read with:
+/// their names are checked within the limits only.
+pub fn check_record(config: &Config, env: &Env<Limits>, step: &Step) -> Result<(), Problems> {
+    let mut found = Found::new();
+    check_step(config, &env.limits, &[], core::slice::from_ref(step), 0, Among::Record, &mut found);
+    if found.is_empty() {
+        return Ok(());
+    }
+    Err(found.into_problems())
+}
+
 pub(crate) fn check_plan(config: &Config, limits: &Limits, plan: &Plan, found: &mut Found) -> Checked {
     if plan.steps.is_empty() {
         found.add(Problem::NoSteps);
@@ -171,6 +185,9 @@ pub(crate) enum Among {
     Plan,
     /// They are tasks, each an item on its own, after nothing.
     Alone,
+    /// It is a step read from its item's record, without its goal's steps:
+    /// what it comes after is named within the limits.
+    Record,
 }
 
 /// Checks `steps`, to join a plan that has the steps `existing` (added by
@@ -197,7 +214,7 @@ pub(crate) fn check_steps(
                 return none;
             }
         }
-        Among::Alone => {
+        Among::Alone | Among::Record => {
             if count(steps.len()) > limits.tasks {
                 found.add(Problem::TooManyTasks { max: limits.tasks });
                 return none;
@@ -271,7 +288,7 @@ fn check_step(
         Work::Agent(spec) => {
             check_charter(config, limits, &spec.charter, at, found);
             match among {
-                Among::Plan => {}
+                Among::Plan | Among::Record => {}
                 Among::Alone => {
                     if spec.grows {
                         found.add(Problem::GrowingTask { step: at });
@@ -314,6 +331,7 @@ fn check_after(limits: &Limits, existing: &[Entry], steps: &[Step], at: u32, amo
         let known = match among {
             Among::Plan => resolve(existing, steps, name).is_some(),
             Among::Alone => false,
+            Among::Record => !name.is_empty() && count(name.len()) <= limits.name_bytes,
         };
         if !known {
             found.add(Problem::UnknownDependency { step: at, dependency: count(dependency) });

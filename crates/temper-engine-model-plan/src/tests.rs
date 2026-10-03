@@ -10,8 +10,8 @@ use crate::{
     Entry, Envelope, Facts, Finish, Gate, Goal, Grants, Growing, Grown, Growth, Hold, Inbound, Key, Limits, Mergeable,
     Outcome, Plan, Problem, Problems, Progress, Pull, PullState, Record, Relations, Repair, Repo, Repository, Resume,
     Review, Reviewed, Run, Sections, SessionSpec, Source, Sources, Stale, Step, Target, Template, Then, Verdict,
-    WaitSpec, Waits, Wake, Why, Woken, Work, Write, accept, apply, check, check_goal, due, grow, max_out, rejected,
-    release, wake, worst_case,
+    WaitSpec, Waits, Wake, Why, Woken, Work, Write, accept, apply, check, check_goal, check_record, due, grow, max_out,
+    rejected, release, wake, worst_case,
 };
 
 /// The most a run may ask for.
@@ -228,6 +228,40 @@ fn charters_name_known_templates_and_fit_the_limits() {
             Problem::LargeBudget { step: 3 },
         ]
     );
+}
+
+fn record_problems(step: &Step) -> Box<[Problem]> {
+    match check_record(&config(), &env(), step) {
+        Ok(()) => Box::new([]),
+        Err(problems) => problems.listed,
+    }
+}
+
+#[test]
+fn a_step_read_from_its_record_is_checked_as_the_plan_would_write_it() {
+    for written in [
+        change("a", &["b", "c"]),
+        session("chat"),
+        Step { work: Work::Agent(AgentSpec { charter: charter(1), grows: true }), ..agent("d", &[]) },
+    ] {
+        assert_eq!(*record_problems(&written), [], "{written:?} is one the plan writes, its dependencies not read");
+    }
+    let reviewed = change_with(
+        "a",
+        ChangeSpec {
+            review: Review::Agent(Charter { instructions: Box::from([b'x'; 65].as_slice()), ..charter(1) }),
+            ..change_spec()
+        },
+    );
+    assert_eq!(*record_problems(&reviewed), [Problem::LongInstructions { step: 0, max: LIMITS.instruction_bytes }]);
+    let long = change_with("b", ChangeSpec { base: bytes("a-branch-past-sixteen"), ..change_spec() });
+    assert_eq!(*record_problems(&long), [Problem::LongBase { step: 0, max: LIMITS.name_bytes }]);
+    let unknown = agent_with("c", Charter { template: Some(bytes("refactor")), ..charter(1) });
+    assert_eq!(*record_problems(&unknown), [Problem::UnknownTemplate { step: 0 }]);
+    let after = agent("d", &["", "a-name-past-sixteen"]);
+    let unnamed =
+        [Problem::UnknownDependency { step: 0, dependency: 0 }, Problem::UnknownDependency { step: 0, dependency: 1 }];
+    assert_eq!(*record_problems(&after), unnamed, "what it comes after is named within the limits");
 }
 
 #[test]

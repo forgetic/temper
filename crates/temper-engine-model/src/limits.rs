@@ -6,7 +6,7 @@ use temper_engine_model_plan as plan;
 use temper_engine_model_rules as rules;
 use temper_engine_model_views as views;
 use temper_engine_model_work as work;
-use temper_lib::{Id, List, Map, Queue, Slab, Token};
+use temper_lib::{Env, Id, List, Map, Queue, Slab, Time, Token};
 
 use crate::config::Config;
 use crate::facts::Fact;
@@ -115,10 +115,12 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
 
 /// Whether `config` is one the model can work under `limits`: the same
 /// repositories for the plan, the rules and the forge, a home among them,
-/// and the rules within their own limits.
+/// the rules within their own limits, and a session's step one the plan
+/// could have written, so a session's record reads back sound.
 #[must_use]
 pub fn accepts(config: &Config, limits: &Limits) -> bool {
     let repositories = config.repositories();
+    let env = Env { now: Time::ZERO, limits: limits.plan };
     repositories > 0
         && repositories == config.rules.repositories
         && repositories <= limits.forge.repositories
@@ -126,6 +128,7 @@ pub fn accepts(config: &Config, limits: &Limits) -> bool {
         && config.rules.fits(&limits.rules)
         && within(config.branches.len(), limits.forge.name_bytes)
         && within(config.saved.len(), limits.forge.name_bytes)
+        && plan::check_record(&config.plan, &env, &config.session_step(0)).is_ok()
 }
 
 pub(crate) fn within(len: usize, most: u32) -> bool {

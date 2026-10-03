@@ -449,7 +449,7 @@ pub(crate) fn announced(model: &mut Model, env: &Env<Limits>, item: forge::Item,
         forge::Record::Found { comment, position, .. } => {
             entry.since = position.comment;
             match decoded_record(model, comment) {
-                Some(record) if sound(&record, env) => {
+                Some(record) if sound(&record, &model.config.plan, env) => {
                     let Record { lifecycle, step, relations } = record;
                     let pull = relations.pull;
                     let Some(entry) = model.items.get_mut(id) else { unreachable!("an entry named is held") };
@@ -470,32 +470,25 @@ pub(crate) fn announced(model: &mut Model, env: &Env<Limits>, item: forge::Item,
     }
 }
 
-/// Whether a record read is one the engine could have written: its parts
-/// within the limits, and its goal's plan one the plan could have made
-/// (`plan::check_goal`). One that is not is held for a person, as a record
-/// that does not decode is.
-fn sound(record: &Record, env: &Env<Limits>) -> bool {
+/// Whether a record read is one the engine could have written: its step one
+/// the plan could have written (`plan::check_record`), its goal's plan one
+/// the plan could have made (`plan::check_goal`), and its relations within
+/// the limits. One that is not is held for a person, as a record that does
+/// not decode is.
+fn sound(record: &Record, config: &plan::Config, env: &Env<Limits>) -> bool {
     let plan = &env.limits.plan;
-    let step = &record.step.step;
-    let mut fits = limits::within(step.name.len(), plan.name_bytes)
-        && limits::within(step.after.len(), plan.dependencies)
-        && limits::within(step.gates.len(), plan.gates)
-        && limits::within(record.relations.dependencies.len(), plan.steps)
+    let plan_env = route::plan_env(env);
+    let mut fits = limits::within(record.relations.dependencies.len(), plan.steps)
         && limits::within(record.relations.children.len(), plan.steps);
-    for after in &step.after {
-        fits = fits && limits::within(after.len(), plan.name_bytes);
-    }
     for related in record.relations.dependencies.iter().chain(record.relations.children.iter()) {
         fits = fits && limits::within(related.name.len(), plan.name_bytes);
     }
-    if let Some(charter) = translate::charter_of(&step.work) {
-        fits = fits && limits::within(charter.instructions.len(), plan.instruction_bytes);
-    }
+    let step = plan::check_record(config, &plan_env, &record.step.step).is_ok();
     let goal = match &record.step.goal {
-        Some(goal) => plan::check_goal(&route::plan_env(env), goal).is_ok(),
+        Some(goal) => plan::check_goal(&plan_env, goal).is_ok(),
         None => true,
     };
-    fits && goal
+    fits && step && goal
 }
 
 /// An entry for an item the forge sub-model announced that the top level did

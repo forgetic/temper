@@ -12,6 +12,7 @@ use temper_engine_model_forge as forge;
 use temper_engine_model_plan as plan;
 use temper_engine_model_rules as rules;
 use temper_engine_model_views::Policy;
+use temper_lib::bytes::copy_of;
 
 /// A deployment's configuration, handed to [`crate::Model::new`].
 #[derive(Debug)]
@@ -42,5 +43,16 @@ impl Config {
     #[must_use]
     pub fn repositories(&self) -> u32 {
         u32::try_from(self.plan.repositories.len()).unwrap_or(u32::MAX)
+    }
+
+    /// The step a session in `repository` carries.
+    pub(crate) fn session_step(&self, repository: u32) -> plan::Step {
+        plan::Step {
+            name: copy_of(b"session"),
+            repository: plan::Repository(repository),
+            work: plan::Work::Session(self.session.clone()),
+            after: Box::new([]),
+            gates: Box::new([]),
+        }
     }
 }
