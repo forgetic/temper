@@ -45,10 +45,6 @@ const DELIVERIES: u32 = 20_000;
 /// The store's bound on the traces it keeps.
 const TRACES: usize = 100_000;
 
-/// The stories this world tells: every one of the engine's world but the
-/// plans' (`Plan`, `Grow`), whose scripts this world's workers do not play.
-pub const STORIES: [Story; 6] = [Story::Hello, Story::Fix, Story::Chat, Story::Notes, Story::Reject, Story::Stall];
-
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Settings {
     /// Seeds the world, which seeds the engine, the worker, the process trees
@@ -98,7 +94,7 @@ impl Settings {
             worker: LIMITS,
             engine: ENGINE_LIMITS,
             forge: FORGE,
-            stories: STORIES.to_vec(),
+            stories: people::SWEPT.to_vec(),
             people: Span::millis(1_000, 10_000),
             stops: 0,
             stop_after: Span::millis(1_000, 30_000),
@@ -801,6 +797,10 @@ impl World {
             trace: Trace::default(),
             settings,
         };
+        // Every story's end is expected within its bound, from the start:
+        // a story that does not end fails at its bound rather than at the
+        // world's caps.
+        world.stories.observe(Time::ZERO, stories::Seen::Start, &mut Vec::new());
         world.send(Time::ZERO, Delivery::People);
         if world.rng.chance(world.settings.shutdowns) {
             let at = Time::ZERO.saturating_add(world.settings.shutdown_at.draw(&mut world.rng));

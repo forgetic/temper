@@ -164,6 +164,19 @@ impl Settings {
     /// A world drawn from `seed`, between calm and rough.
     #[must_use]
     pub fn random(seed: u64) -> Settings {
+        Settings::drawn(seed, &people::SWEPT)
+    }
+
+    /// A random world whose stories are drawn from all of them, plans'
+    /// included.
+    #[must_use]
+    pub fn planning(seed: u64) -> Settings {
+        Settings::drawn(seed, &people::STORIES)
+    }
+
+    /// A world drawn from `seed`, between calm and rough, its stories drawn
+    /// from `told`.
+    fn drawn(seed: u64, told: &[Story]) -> Settings {
         let mut rng = Rng::new(seed ^ 0x5eed);
         let calm = Settings::calm(seed);
         let skew = match rng.below(3) {
@@ -184,9 +197,9 @@ impl Settings {
             ..calm.forge
         };
         let mut stories = Vec::new();
-        for story in people::STORIES {
+        for story in told {
             if rng.chance(600) {
-                stories.push(story);
+                stories.push(*story);
             }
         }
         let store = store::Script { latency: Span::millis(1, 2_000), failures: small(&mut rng, 80), done_anyway: 300 };

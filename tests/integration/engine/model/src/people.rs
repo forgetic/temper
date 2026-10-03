@@ -49,7 +49,12 @@ pub enum Story {
     Stall,
 }
 
-/// Every story, which random worlds draw from.
+/// The stories random worlds draw from. A plan's (`Plan`, `Grow`) makes a
+/// world several times longer: they are swept apart, over fewer seeds
+/// (`Settings::planning`).
+pub const SWEPT: [Story; 6] = [Story::Hello, Story::Fix, Story::Chat, Story::Notes, Story::Reject, Story::Stall];
+
+/// Every story.
 pub const STORIES: [Story; 8] =
     [Story::Hello, Story::Fix, Story::Chat, Story::Notes, Story::Plan, Story::Grow, Story::Reject, Story::Stall];
 

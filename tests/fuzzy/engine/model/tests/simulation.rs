@@ -34,6 +34,15 @@ fn random_worlds_settle_with_every_ending_reached() {
     assert!(judged.0 > 5_000 && judged.1 > 300, "the referee judged: {judged:?}");
 }
 
+/// Random worlds whose stories include plans', over fewer seeds: a plan's
+/// world is several times longer.
+#[test]
+fn random_worlds_with_plans_settle() {
+    for seed in 0..12 {
+        run(Settings::planning(seed));
+    }
+}
+
 /// The engine restarting at drawn moments: it rebuilds from the forge and
 /// the store what it decides on, and makes nothing twice.
 #[test]
