@@ -106,6 +106,9 @@ temper-engine-domain-forge              the connector's top: resources, write ho
   enough for context; write access lets temper push its branches and open
   pull requests; protection that keeps temper from merging makes landing
   a wait for someone else's merge (section 13).
+  Forgejo 15 refuses protection reads to a write collaborator (section
+  20): adoption records protection as unknown, never as absent. A refused
+  merge narrows what temper may do, as connectors.md, section 11 says.
 - **The project names, per repository:** its landing branches; temper's
   branch prefix, `temper/` by default, which protection can reserve to
   temper's user; the merge style, the repository's own by default,
@@ -262,6 +265,13 @@ each subscribed goal (connectors.md, 5.3), without an LLM:
 The files are read from the forge (a pull request's files, or the
 comparison of the branch's old and new tips), cached per head and cut at
 a limit past which the overlap is unknown.
+Forgejo 15 pages pull-request files, but its comparison ignores paging
+(section 20). The protocol bounds the comparison's bytes, files and
+commits before domain allocation; reaching a bound, an unusable response
+or uncertain completeness makes overlap unknown and wakes every affected
+subscriber. It never fetches another comparison page as a continuation.
+Pull-request pages are accepted only while fresh reads bracket them with
+the same head; a head change invalidates that listing.
 
 ## 8. The change procedure
 
@@ -375,6 +385,9 @@ starts from current code. It never updates only because its base moved.
   head; a gate's remarks; or, for a clean update whose CI then fails (a
   semantic conflict), the base merged in and what landed in it. It pushes
   a new head, and the change is checked again.
+  On Forgejo 15 the supported REST API has no job-log read (section 20);
+  the brief carries the failed status's description and link instead of
+  promising a log. An adapter may add output when a supported read exists.
 - **A resolution** is a task for an agent whose workspace starts from a
   merge in progress: the base merged into the branch, the conflicting
   files marked. The agent edits them and runs the checks, with no git
@@ -668,7 +681,7 @@ answered first, the fake forge's protocol layer, the load rules) stands.
   caused them.
 - **Goes too:** the person a key's marker names, since people's words
   no longer pass through the forge, and the wiki's webhook.
-- **New calls,** each a fact to check on Forgejo (section 20):
+- **New calls,** with the groundwork facts and fallbacks in section 20:
   - a pull request's files and its diff at its head, and a comparison's
     files and commits, for the landings on a branch since a commit;
   - updating a pull request from its base, with the merge style, and how
@@ -677,7 +690,8 @@ answered first, the fake forge's protocol layer, the load rules) stands.
   - editing a pull request's or an issue's title and body;
   - branch protection, read at adoption;
   - creating a branch at a commit;
-  - a failed CI job's output, from Actions;
+  - a failed CI job's description and link from commit statuses; its
+    output only when the provider has a supported log read (section 20);
   - the repository's settings at adoption: its merge styles, its
     default branch; and its collaborators with their permissions, to seed
     people's roles (people.md, section 4).
@@ -764,13 +778,39 @@ idle are bounded by the limits.
   in progress, several gates with their carry-over, landings as news
   with overlap, adoption at runtime, branch naming after the tree.
 
-## 20. Open questions
+## 20. Forgejo facts and open questions
 
-- **Facts to check on Forgejo:** the update's answer to a conflict, and
-  whether the push it makes starts CI; listing a pull request's files and
-  a comparison's; whether Actions' job output is readable through the
-  API; creating a branch at a commit; reading branch protection with
-  temper's permission.
+### 20.1 Groundwork observations
+
+Checked against the verified Forgejo 15.0.0 binary, in disposable SQLite
+state on loopback, with a non-admin write collaborator and an isolated
+Forgejo runner v3.5.1. The shell-only workflow prints a fixed marker and
+exits unsuccessfully; it downloads no actions and performs no checkout.
+The actual exchanges and signed update webhooks are in
+`tests/forge/forgejo/fixtures/v15/next-domain-observations.json`, captured
+by `tools/forgejo-conformance/run.py --next-domain`. Each case below names
+an exchange there. These are facts about this version and configuration,
+not a claim about every Forgejo deployment.
+
+| Question | Observed fact and consequence | Evidence cases |
+|---|---|---|
+| Conflicting merge-style update | `POST .../pulls/{n}/update?style=merge` returns `409`, with message `merge failed because of conflict`; the head is unchanged. This specific refusal is a conflict resolution. Other failures still require a fresh read before deciding what happened. | `00a-conflicting-update`, `00a-conflict-head-after` |
+| Clean update and CI | Update returns `200` with an empty body, moves the head, emits push and synchronized pull-request webhooks, and starts the configured push workflow on exactly that new head. Its deliberate failure appears in both Actions and the combined commit status, with a description and job link. CI must be checked again at that head. | `00a-clean-update`, `00a-clean-pull-after`, `00a-runs-after-update`, `00a-updated-head-status`; both retained webhooks |
+| File and commit listing | Pull-request files page correctly: with `limit=1`, three pages contain distinct files and the fourth is empty; their commit URLs name the current head. Comparison returns all three files and commits on every `page=1..4&limit=1`, even with `MAX_RESPONSE_ITEMS=2`; paging is ignored. Apply the bounded, conservative handling of section 7.3. | `00a-pull-files-page-1` through `-4`, `00a-comparison-page-1` through `-4` |
+| Failed Actions log | A real failed job and its status are readable with the write token. The running binary's REST Swagger has no job-log route; attempted run `jobs` and `logs` routes both return `404`. This establishes no supported REST log read, not that every web or internal route is unreadable. The repair brief uses the status description and link (8.4). | `00a-run-at-updated-head`, `00a-tasks-after-update`, `00a-probe-jobs`, `00a-probe-logs`; extracted `next_domain.actions_api_paths` |
+| Branch at a commit | `POST .../branches` with `old_ref_name` equal to a full commit id returns `201` and creates the branch at exactly that commit. No worker push is needed to create or recreate it. | `00a-main`, `00a-create-commit-origin` |
+| Protection with write permission | Both listing protections and reading the existing `main` protection return `403`: `user should be an owner or a collaborator with admin write of a repository`. Adoption records protection as unknown (section 4). The token's user is non-admin and its repository permission is `write`. | `00a-writer-user`, `00a-writer-permission`, `00a-protect-main`, `00a-protection-list-as-writer`, `00a-protection-as-writer` |
+| Conditional merge and retarget | A merge naming the old head returns `409`, with message `head out of date`. After retargeting, merging the current head returns `200` with an empty body, records the retargeted base and merge commit, advances only that base and leaves `main` unchanged. Read the current base and head before landing. | `00a-merge-stale-head`, `00a-retarget-pull`, `00a-merge-retargeted-current-head`, `00a-retargeted-merged-pull`, `00a-retarget-base-after`, `00a-main-after-retarget` |
+
+Every prerequisite of step 00a is resolved by an observation or its
+specified fallback. Large comparison completeness, other workflow
+configurations and unsupported log routes are not inferred from this
+small fixture. The retarget probe changes the base before the merge; it
+does not establish an atomic condition on both base and head, or behavior
+when a person retargets concurrently with the merge.
+
+### 20.2 Open questions
+
 - **A queue's throughput:** landings into one branch wait on CI one after
   another. If that binds, landings are batched: tested together, and
   bisected when they fail.

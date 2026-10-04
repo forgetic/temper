@@ -29,6 +29,7 @@ def port():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--next-domain', action='store_true', help='also check step 00a with an isolated host runner')
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix='temper-forgejo-version-') as version_scratch:
         version_env = dict(os.environ, GIT_CONFIG_GLOBAL=str(Path(version_scratch)/'gitconfig'), GIT_CONFIG_NOSYSTEM='1')
@@ -36,6 +37,8 @@ def main():
     if not version.lower().startswith('forgejo version 15.0.0'):
         raise RuntimeError('only the verified isolated v15 binary is authorized')
     digest = hashlib.sha256(BINARY.read_bytes()).hexdigest()
+    if digest != '3919f10a7845f3b71bacc2c7a3bfa2cd71aed58a0b8be6ab5e95f2e150b4ded7':
+        raise RuntimeError('isolated v15 binary checksum differs from the verified release')
     password = secrets.token_urlsafe(32)
     hooks = []
     class Receiver(http.server.BaseHTTPRequestHandler):
@@ -81,6 +84,10 @@ INTERNAL_TOKEN = {secrets.token_hex(32)}
 DISABLE_REGISTRATION = true
 [webhook]
 ALLOWED_HOST_LIST = 127.0.0.1
+[actions]
+ENABLED = true
+[api]
+MAX_RESPONSE_ITEMS = 2
 [log]
 MODE = console
 LEVEL = Error
@@ -88,13 +95,13 @@ LEVEL = Error
         base = [str(BINARY), '--work-path', str(scratch), '--config', str(config)]
         subprocess.run(base + ['migrate'], check=True, stdout=subprocess.DEVNULL, env=isolated_env)
         for name in ('fixture', 'reviewer'):
-            made = subprocess.run(base + ['admin', 'user', 'create', '--username', name, '--password', password, '--email', name+'@example.invalid', '--admin', '--must-change-password=false'], stdout=subprocess.DEVNULL, env=isolated_env)
+            made = subprocess.run(base + ['admin', 'user', 'create', '--username', name, '--password', password, '--email', name+'@example.invalid', *(['--admin'] if name == 'fixture' else []), '--must-change-password=false'], stdout=subprocess.DEVNULL, env=isolated_env)
             if made.returncode:
                 raise RuntimeError('isolated fixture user creation failed')
         log = (scratch / 'server.log').open('w')
         process = subprocess.Popen(base + ['web'], stdout=log, stderr=log, env=isolated_env)
         url = f'http://127.0.0.1:{listener}/api/v1'
-        def call(name, method, route, body=None, token=None, basic=None, expect=None, capture=True):
+        def call(name, method, route, body=None, token=None, basic=None, expect=None, capture=True, raw=False):
             encoded = None if body is None else json.dumps(body, separators=(',',':')).encode()
             headers = {'Content-Type':'application/json'}
             if token:
@@ -111,7 +118,8 @@ LEVEL = Error
                 records.append({'case':name, 'request':{'method':method,'target':'/api/v1'+route,'body':encoded.decode() if encoded else None},'response':{'status':result.status,'headers':{k:v for k,v in result.headers.items() if k.lower() in ('content-type','date','x-total-count')},'body':response}})
             if expect is not None and result.status not in expect:
                 raise RuntimeError(f'{name}: expected {expect}, got {result.status}: {response}')
-            return json.loads(response) if response.strip() else None
+            return response if raw else (json.loads(response) if response.strip() else None)
+        tokens = {}
         try:
             for _ in range(200):
                 if process.poll() is not None:
@@ -172,6 +180,10 @@ LEVEL = Error
             call('stale-label','POST',itemroute+'/labels',{'labels':['not defined']},token=token)
             call('stale-label-id','POST',itemroute+'/labels',{'labels':[999999]},token=token)
             call('create-issue-stale-label-id','POST',route+'/issues',{'title':'Unknown ID','body':'probe','labels':[999999]},token=token)
+            facts = None
+            if args.next_domain:
+                from next_domain import observe
+                facts = observe(call, route, token, tokens['reviewer'], scratch, isolated_env, url)
             time.sleep(0.5)
         finally:
             process.terminate()
@@ -181,9 +193,19 @@ LEVEL = Error
                 process.kill()
                 process.wait()
             receiver.shutdown()
+            args.output.mkdir(parents=True, exist_ok=True)
+            partial = json.dumps({'http':records,'webhooks':hooks},indent=2)+'\n'
+            if any(secret in partial for secret in [password, *tokens.values()]):
+                raise RuntimeError('secret appeared in observation; refusing fixture output')
+            (args.output/'partial-observations.json').write_text(partial)
         args.output.mkdir(parents=True, exist_ok=True)
-        result = {'provenance':{'binary':str(BINARY),'version':version,'sha256':digest,'captured_at_utc':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),'isolation':'new temporary directory, SQLite, loopback only; destroyed after capture','actions':'not run; source-derived metadata fixtures only'},'http':records,'webhooks':hooks}
-        (args.output/'observations.json').write_text(json.dumps(result,indent=2)+'\n')
+        result = {'provenance':{'binary':str(BINARY),'version':version,'sha256':digest,'captured_at_utc':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),'isolation':'new temporary directory, SQLite, loopback only; destroyed after capture','actions':'isolated host runner; inline shell workflow only' if args.next_domain else 'not run; source-derived metadata fixtures only'},'http':records,'webhooks':hooks}
+        if facts is not None:
+            result['next_domain'] = facts
+        serialized = json.dumps(result,indent=2)+'\n'
+        if any(secret in serialized for secret in [password, *tokens.values()]):
+            raise RuntimeError('secret appeared in observation; refusing fixture output')
+        (args.output/'observations.json').write_text(serialized)
         print(f'captured {len(records)} HTTP exchanges and {len(hooks)} webhook deliveries in {args.output}')
 
 if __name__ == '__main__':
