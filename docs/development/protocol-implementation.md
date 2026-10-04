@@ -38,9 +38,9 @@ disjoint areas until explicitly reassigned:
 
 | Agent | Current assignment |
 |---|---|
-| `channel` | `temper-worker-protocol` and its worlds; worker system-world translation; retains channel and worker domain ownership |
-| `llm_dialects` | `temper-agent-protocol`, fake provider documents and agent protocol worlds; agent system-world translation and canonical script fixtures; retains dialect/OAuth codecs |
-| `domain_prerequisites` | engine connection and credential/OAuth execution in `temper-engine-protocol`; retains engine/agent domain ownership |
+| `channel` | Forgejo documents, webhooks, fake forge protocol and isolated conformance tooling; retains channel and worker ownership |
+| `llm_dialects` | Agent HTTP/SSE/JSON client, fake provider service and agent protocol worlds; retains dialect/OAuth codecs |
+| `domain_prerequisites` | Engine credential tables, OAuth execution and keeper boundary; then forge domain prerequisites and engine call plans; retains engine/agent domain ownership |
 
 All work shares the feature branch. Agents do not independently commit or
 merge, or change global manifests. The coordinator reviews completed
@@ -117,9 +117,8 @@ and agent stream bridge, and the agent channel owner. Socket replacements
 wait for actual closure; credential values remain in bounded protocol
 tables; fact traffic leaves owed output capacity. Agent tool grammar,
 result rendering, provider documents and current-run charter/outcome
-translation replace the corresponding system-world copies. Scoped byte,
-lifecycle, memory and replay checks pass; the integrated gate remains to
-run before this checkpoint moves main.
+translation replace the corresponding system-world copies. The integrated
+byte, lifecycle, memory and replay checkpoint is verified on local main.
 
 ## Verified milestone
 
@@ -129,6 +128,14 @@ formatting, workspace strict Clippy, the focused suite (1,662 tests in
 15-second and 60-second budgets remain unchanged. The complete protocol
 goal is still active; this commit supplies schemas, document codecs,
 domain prerequisites and pure engine translation.
+
+`3ccdd2d` is on local main after formatting, workspace strict Clippy,
+the focused suite (1,722 tests in 9.742 seconds), and the fuzzy suite
+(25 tests in 26.518 seconds, one ignored finding replay) passed on that
+exact tip. It adds engine and worker socket owners, the agent pipe
+boundary, credential tables, and agent tool/document translation.
+The existing test budgets remain unchanged. HTTP execution, durable
+OAuth rotation and forge implementation are the next increment.
 
 ## Integration decisions to hold in review
 
