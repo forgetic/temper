@@ -437,7 +437,7 @@ impl World {
     /// asks in flight are lost, and they ask again; the calls it made still
     /// reach the forge, their answers dropped, and what was on its way to it
     /// is dropped.
-    pub(super) fn restart(&mut self) {
+    pub fn restart(&mut self) {
         self.stats.restarts += 1;
         self.end("restarted");
         self.log("the engine restarts");

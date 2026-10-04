@@ -490,8 +490,22 @@ fn a_session_released_after_its_runs_failed_runs_again() {
 /// cross-restart namespace or worker-to-engine Waiting record to repair it.
 #[test]
 fn finding_12_replays_same_attempt_name_reuse_across_engine_restart() {
-    let mut world = World::new(Settings::rough(12));
-    world.run(ITERATIONS);
+    // The first restart leaves the plan repairing a live pull. The next
+    // two cross its head/CI updates while an attempt is still hosted, so a
+    // newly read event receives a name the old engine gave different bytes.
+    let calm = Settings::only(12, &[Story::Plan]);
+    let mut world = World::new(Settings {
+        engine: temper_engine_domain_world::deployment::LIMITS,
+        restarts: 1,
+        restart_at: Span::millis(180_000, 180_000),
+        script: script::Script { steps: 20, ..calm.script },
+        ..calm
+    });
+    world.run_for(Duration::from_secs(490), ITERATIONS);
+    world.restart();
+    world.run_for(Duration::from_secs(540), ITERATIONS);
+    world.restart();
+    world.run_for(Duration::from_secs(600), ITERATIONS);
     assert!(world.stats().restarts > 0);
     assert!(world.stats().reused_inbound_names > 0);
 }

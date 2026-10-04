@@ -361,7 +361,9 @@ fn a_merge_refused_for_a_conflict_sends_the_change_back_for_repair() {
         grants: CODING,
         budget: CALM,
     };
-    let mut world = World::new(Settings { hands: vec![hand(false), hand(true)], ..Settings::calm(2) });
+    // This seed keeps the second merge's fresh check ahead of the first's
+    // landing, so the forge itself refuses it before the repair runs.
+    let mut world = World::new(Settings { hands: vec![hand(false), hand(true)], ..Settings::calm(9) });
     world.run(ITERATIONS);
 
     assert_eq!(world.stats().merged, 1, "the second merge was refused\n{}", trace(&world));
