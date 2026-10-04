@@ -224,7 +224,7 @@ impl World {
         decoded: Box<[engine::Decoded]>,
     ) {
         self.owned.end(call);
-        self.desk.push(engine::Event::Answered { call, result, decoded });
+        self.desk.push(engine::Event::Answered { call, result, decoded, cost: 1 });
     }
 
     /// A call to the forge, made now.
@@ -239,10 +239,17 @@ impl World {
         while let Some(request) = self.forge_out.pop() {
             match request {
                 forge::Request::Reply { to, result } => self.forge_reply(to.into_token().raw(), result),
-                forge::Request::Hook { repository, change: _, number, branch, commit } => {
+                forge::Request::Hook { repository, change, number, branch, commit, by } => {
                     let Some(repository) = deployment::index(&repository) else { continue };
                     let commit = commit.map(translate::commit);
-                    self.desk.push(engine::Event::Hint { repository, item: number, commit, branch });
+                    self.desk.push(engine::Event::Hint {
+                        repository,
+                        item: number,
+                        commit,
+                        branch,
+                        by,
+                        wiki: change == forge_api::Change::Wiki,
+                    });
                 }
             }
         }
@@ -547,7 +554,7 @@ fn record_written(observation: &Observation) -> Option<(Vec<u8>, u64, engine::wo
 
 fn describe(event: &engine::Event) -> String {
     match event {
-        engine::Event::Answered { call, result, decoded } => {
+        engine::Event::Answered { call, result, decoded, cost: _ } => {
             let result = match result {
                 Ok(answer) => format!("{:?}", std::mem::discriminant(answer)),
                 Err(error) => format!("{error:?}"),

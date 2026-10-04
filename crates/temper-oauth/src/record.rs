@@ -12,7 +12,8 @@ pub enum AccountKind {
 }
 /// Metadata needed for Starting or the next refresh; access tokens are optional
 /// in the owner's table and are not required to ask for the first refresh.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, Hash)]
+#[expect(missing_debug_implementations, reason = "credential values must never occur in traces")]
 pub struct RefreshState {
     pub account: u32,
     pub generation: u64,
@@ -20,7 +21,8 @@ pub struct RefreshState {
 }
 /// Kept as one versioned record before `Refreshed` crosses a domain boundary.
 /// `expires_at` is restart metadata, never a cross-host grant deadline.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, Hash)]
+#[expect(missing_debug_implementations, reason = "credential values must never occur in traces")]
 pub struct SavedToken {
     pub account: u32,
     pub generation: u64,

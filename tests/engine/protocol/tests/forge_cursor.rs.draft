@@ -1,0 +1,26 @@
+use temper_engine_protocol::forge_cursor::{self, Cursor};
+
+#[test]
+fn wiki_cursors_are_opaque_versioned_and_bound_to_the_page_size() {
+    let cursor = Cursor { page: 7, size: 30 };
+    let encoded = forge_cursor::encode(cursor).expect("positive cursor");
+    assert_eq!(encoded.len(), usize::try_from(forge_cursor::BYTES).expect("fixed small length"));
+    assert_eq!(forge_cursor::decode(&encoded, 30), Some(cursor));
+    assert_eq!(forge_cursor::decode(&encoded, 50), None);
+    assert_eq!(forge_cursor::decode(&encoded, 0), None);
+    assert_eq!(forge_cursor::encode(Cursor { page: 0, size: 30 }), None);
+    assert_eq!(forge_cursor::encode(Cursor { page: 1, size: 0 }), None);
+    for cut in 0..encoded.len() {
+        assert_eq!(forge_cursor::decode(&encoded[..cut], 30), None);
+    }
+    let mut unknown = encoded.to_vec();
+    unknown[0] = 2;
+    assert_eq!(forge_cursor::decode(&unknown, 30), None);
+    let mut trailing = encoded.to_vec();
+    trailing.push(0);
+    assert_eq!(forge_cursor::decode(&trailing, 30), None);
+    let mut zero_page = encoded.to_vec();
+    zero_page[1..5].fill(0);
+    assert_eq!(forge_cursor::decode(&zero_page, 30), None);
+    assert_eq!(forge_cursor::decode(&[0xff; 10], 30), None);
+}

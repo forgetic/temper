@@ -186,11 +186,12 @@ impl World {
     fn forge_request(&mut self, request: forge::Request) {
         match request {
             forge::Request::Reply { to, result } => self.reply(to.into_token().raw(), result),
-            forge::Request::Hook { repository, change: _, number, branch, commit } => {
+            forge::Request::Hook { repository, change, number, branch, commit, by } => {
                 let Some(repository) = deployment::index(&repository) else { return };
                 self.stats.hints += 1;
                 let commit = commit.map(translate::commit);
-                let event = Event::Hint { repository, item: number, commit, branch };
+                let wiki = matches!(change, forge::api::Change::Wiki);
+                let event = Event::Hint { repository, item: number, commit, branch, by, wiki };
                 self.engine_stage.push(event);
             }
         }
@@ -250,7 +251,8 @@ impl World {
         decoded: Box<[engine::Decoded]>,
     ) {
         self.owned.end(call);
-        self.engine_stage.push(Event::Answered { call, result, decoded });
+        // This domain-tier peer models one logical Forge call.
+        self.engine_stage.push(Event::Answered { call, result, decoded, cost: 1 });
     }
 
     /// What the fake forge did: the mirror and the referees see it.
@@ -370,12 +372,12 @@ impl World {
 /// The engine's `event`, for the trace.
 pub(super) fn describe_event(event: &Event) -> String {
     match event {
-        Event::Answered { call, result, decoded } => {
+        Event::Answered { call, result, decoded, cost } => {
             let result = match result {
                 Ok(_) => "ok".to_owned(),
                 Err(error) => format!("{error:?}"),
             };
-            format!("answered {} {result} ({} decoded)", call.raw(), decoded.len())
+            format!("answered {} {result} ({} decoded, cost {cost})", call.raw(), decoded.len())
         }
         Event::Told { item, attempt, kind, .. } => format!("told {item:?}#{attempt} {kind:?}"),
         Event::Hint { .. }

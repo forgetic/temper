@@ -25,27 +25,28 @@ pub(crate) struct Hook {
     number: Option<u64>,
     branch: Option<Box<[u8]>>,
     commit: Option<u64>,
+    by: Option<u64>,
 }
 
 impl Hook {
     /// A change of `change` to the item `number`.
-    pub(crate) fn item(change: Change, number: u64) -> Hook {
-        Hook { change, number: Some(number), branch: None, commit: None }
+    pub(crate) fn item(change: Change, number: u64, by: u64) -> Hook {
+        Hook { change, number: Some(number), branch: None, commit: None, by: Some(by) }
     }
 
     /// `branch` moved to `commit`, or was deleted.
-    pub(crate) fn push(branch: &[u8], commit: Option<u64>) -> Hook {
-        Hook { change: Change::Push, number: None, branch: Some(copy_of(branch)), commit }
+    pub(crate) fn push(branch: &[u8], commit: Option<u64>, by: u64) -> Hook {
+        Hook { change: Change::Push, number: None, branch: Some(copy_of(branch)), commit, by: Some(by) }
     }
 
     /// A status reported on `commit`.
-    pub(crate) fn status(commit: u64) -> Hook {
-        Hook { change: Change::Status, number: None, branch: None, commit: Some(commit) }
+    pub(crate) fn status(commit: u64, by: u64) -> Hook {
+        Hook { change: Change::Status, number: None, branch: None, commit: Some(commit), by: Some(by) }
     }
 
     /// A wiki page written or deleted.
-    pub(crate) fn wiki() -> Hook {
-        Hook { change: Change::Wiki, number: None, branch: None, commit: None }
+    pub(crate) fn wiki(by: u64) -> Hook {
+        Hook { change: Change::Wiki, number: None, branch: None, commit: None, by: Some(by) }
     }
 }
 
@@ -88,13 +89,14 @@ pub(crate) fn notify(domain: &mut Domain, env: &Env<Config>, repository: Id<Repo
 pub(crate) fn deliver(domain: &mut Domain, id: Id<Delivery>, out: &mut Queue<Request>) {
     let delivery = domain.deliveries.get(id).expect("a delivery lives until its timer fires");
     let repository = domain.repositories.get(delivery.repository).expect("a repository of the forge");
-    let Hook { change, number, branch, commit } = &delivery.hook;
+    let Hook { change, number, branch, commit, by } = &delivery.hook;
     let hook = Request::Hook {
         repository: copy_of(&repository.name),
         change: *change,
         number: *number,
         branch: branch.clone(),
         commit: *commit,
+        by: *by,
     };
     out.push(hook);
     domain.deliveries.retire(id);

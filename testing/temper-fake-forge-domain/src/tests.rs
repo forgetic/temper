@@ -246,7 +246,7 @@ impl Harness {
                         self.domain.reclaim();
                         return result;
                     }
-                    Request::Hook { repository: _, change, number, branch, commit } => {
+                    Request::Hook { repository: _, change, number, branch, commit, by: _ } => {
                         self.hooks.push((change, number, branch, commit));
                     }
                 }
@@ -273,7 +273,7 @@ impl Harness {
             fire(&mut self.domain, &self.env, &mut self.out);
             if let Some(request) = self.out.pop() {
                 match request {
-                    Request::Hook { repository: _, change, number, branch, commit } => {
+                    Request::Hook { repository: _, change, number, branch, commit, by: _ } => {
                         self.hooks.push((change, number, branch, commit));
                     }
                     Request::Reply { to, result: _ } => self.answered.push(to.into_token()),
@@ -298,7 +298,7 @@ impl Harness {
             fire(&mut self.domain, &self.env, &mut self.out);
             if let Some(request) = self.out.pop() {
                 match request {
-                    Request::Hook { repository: _, change, number, branch, commit } => {
+                    Request::Hook { repository: _, change, number, branch, commit, by: _ } => {
                         self.hooks.push((change, number, branch, commit));
                     }
                     Request::Reply { to, result: _ } => self.answered.push(to.into_token()),

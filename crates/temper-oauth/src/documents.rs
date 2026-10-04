@@ -3,12 +3,14 @@ use alloc::boxed::Box;
 use skein_json::writer::Encoder;
 use skein_lib::bytes;
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, Hash)]
+#[expect(missing_debug_implementations, reason = "credential values must never occur in traces")]
 pub struct RefreshRequest {
     pub client_id: Box<[u8]>,
     pub refresh_token: Box<[u8]>,
 }
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, Hash)]
+#[expect(missing_debug_implementations, reason = "credential values must never occur in traces")]
 pub struct TokenResponse {
     pub access_token: Box<[u8]>,
     pub refresh_token: Option<Box<[u8]>>,

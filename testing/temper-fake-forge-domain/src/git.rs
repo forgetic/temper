@@ -272,7 +272,7 @@ pub(crate) fn delete(
     let closing = repository.on_branch(branch);
     let observation =
         Observation::Deleted { repository: copy_of(&repository.name), branch: copy_of(branch), at, by: user };
-    domain::changed(domain, env, id, observation, Hook::push(branch, None));
+    domain::changed(domain, env, id, observation, Hook::push(branch, None, user));
     // As Forgejo does, the open pull requests from or into it close.
     for &number in &closing {
         issues::shut(domain, env, id, number, user);
@@ -301,9 +301,9 @@ pub(crate) fn moved(
         pull.commit = to;
         repository.touch(number, domain::clock(env));
     }
-    domain::changed(domain, env, id, observation, Hook::push(branch, Some(to)));
+    domain::changed(domain, env, id, observation, Hook::push(branch, Some(to), by));
     for &number in &following {
-        hooks::notify(domain, env, id, Hook::item(Change::Pull, number));
+        hooks::notify(domain, env, id, Hook::item(Change::Pull, number, by));
     }
     ci::start(domain, env, id, to);
 }

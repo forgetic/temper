@@ -714,11 +714,18 @@ impl World {
         while let Some(request) = self.forge_out.pop() {
             match request {
                 forge::Request::Reply { to, result } => self.reply(to.into_token().raw(), result),
-                forge::Request::Hook { repository, change: _, number, branch, commit } => {
+                forge::Request::Hook { repository, change, number, branch, commit, by } => {
                     let repository = REPOSITORIES.iter().position(|name| **name == *repository).expect("ours");
                     let repository = u32::try_from(repository).expect("few repositories");
                     let commit = commit.map(translate::commit);
-                    self.stage.push(Event::Hint { repository, item: number, commit, branch });
+                    self.stage.push(Event::Hint {
+                        repository,
+                        item: number,
+                        commit,
+                        branch,
+                        by,
+                        wiki: matches!(change, forge_api::Change::Wiki),
+                    });
                 }
             }
         }
@@ -761,7 +768,7 @@ impl World {
     /// Terminal for the child domain's call `call`.
     fn answer(&mut self, call: Token, result: Result<sub::api::Answer, sub::api::Error>) {
         self.owned.end((self.life, call));
-        self.stage.push(Event::Answered { call, result });
+        self.stage.push(Event::Answered { cost: 1, call, result });
     }
 
     /// What the child domain asked for.
@@ -792,6 +799,7 @@ impl World {
             | Request::Left { .. }
             | Request::Forbidden { .. }
             | Request::Room
+            | Request::Wiki { .. }
             | Request::Loaded) => {
                 self.tell(&told);
                 let actions = self.parent.told(&told);
@@ -886,6 +894,7 @@ impl World {
             }
             Request::Forbidden { .. } => self.end("forbidden"),
             Request::Room => self.end("room"),
+            Request::Wiki { .. } => self.end("wiki changed"),
             Request::Loaded => {
                 self.end("loaded");
                 self.observe(Seen::Loaded);
@@ -1086,9 +1095,9 @@ fn deployment() -> Deployment {
 
 fn describe(event: &Event) -> String {
     match event {
-        Event::Answered { call, result } => match result {
-            Ok(answer) => format!("answered {} {}", call.raw(), describe_answer(answer)),
-            Err(error) => format!("answered {} {error:?}", call.raw()),
+        Event::Answered { cost, call, result } => match result {
+            Ok(answer) => format!("answered {} cost={cost} {}", call.raw(), describe_answer(answer)),
+            Err(error) => format!("answered {} cost={cost} {error:?}", call.raw()),
         },
         Event::Track { .. }
         | Event::Untrack { .. }

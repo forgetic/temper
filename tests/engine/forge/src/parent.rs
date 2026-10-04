@@ -319,7 +319,7 @@ impl Parent {
                     }
                 }
             }
-            Request::Forbidden { .. } => {}
+            Request::Forbidden { .. } | Request::Wiki { .. } => {}
             Request::Announced { item, view } => self.announced(*item, view, &mut actions),
             Request::Inbox { item, seq, news } => self.news(*item, *seq, *news, &mut actions),
             Request::Changed { item, labels } => {

@@ -278,7 +278,11 @@ Mechanism only, bounded, and rebuilt by asking again:
 - **Labels:** each repository's label names and ids, read with
   `GET R/labels?page&limit` at startup, and again when a `CreateIssue`
   names one it does not know; a label still unknown then fails the call
-  as `Missing`.
+  as `Missing`. Forgejo v15 silently omits unknown ids or names on label
+  writes, so a successful status alone does not prove they were applied.
+  The client checks the returned labels. A creation with omitted labels
+  is ambiguous to the domain, whose key recovery finds the created issue
+  and reconciles its labels before reporting it complete.
 - **Users:** a table of logins by user id, filled from every user object
   an answer carries (the engine's own from `GET /user` at startup); an id
   the table does not hold is looked up with
@@ -358,15 +362,17 @@ section 3).
 
   | Event | `Hint` |
   |---|---|
-  | `issues`, `issue_comment`, `issue_label`, `pull_request` and its kinds (`_label`, `_comment`, `_review_*`, `_sync`) | the repository, the item's number |
+  | `issues`, `issue_comment`, `pull_request`, `pull_request_comment`, `pull_request_approved`, `pull_request_rejected` | the repository, the item's number |
   | `push` | the repository, the branch, the commit it moved to |
   | `create`, `delete` of a branch | the repository, the branch |
-  | `status`, an Actions run's end, where Forgejo sends them | the repository, the commit |
+  | `status`, `action_run_failure`, `action_run_recover`, `action_run_success` | the repository, the commit |
   | `wiki` | the repository (section 12) |
   | anything else, or a repository the deployment does not hold | nothing |
 
   Each hint also names the user who caused it (`sender.id`), so the
-  domain drops its own writes' echoes (section 12).
+  domain drops its own writes' echoes (section 12). Actions deliveries
+  carry these fields inside `run`: `repository`, `trigger_user.id`, and
+  `commit_sha`; they have no top-level repository or sender.
 - **Bounded.** Connections, the head's size and the body's are capped; a
   body past its cap is answered `413` and hints nothing, and polling
   finds what it told of. Push payloads list commits, which the decoder
@@ -621,6 +627,28 @@ Checked on 2026-10-03 against the deployment's Forgejo
 - A repository says its `object_format_name` (`sha1` or `sha256`).
 - The API is not open without a token: the public repositories answer
   `404` to an anonymous call, so the rest waits for the conformance check.
+
+Checked on 2026-10-04 against the tagged v15.0.0 primary sources:
+
+- The event headers and nested Actions fields in section 5 match
+  [the event mapping](https://codeberg.org/forgejo/forgejo/src/tag/v15.0.0/modules/webhook/type.go),
+  [ActionPayload](https://codeberg.org/forgejo/forgejo/src/tag/v15.0.0/modules/structs/hook.go),
+  and [ActionRun](https://codeberg.org/forgejo/forgejo/src/tag/v15.0.0/modules/structs/action.go).
+  Source-derived fixtures check extraction; an actual runner's delivery
+  remains part of the live conformance work.
+
+Checked on 2026-10-04 against a disposable v15.0.0 SQLite instance,
+with loopback HTTP and a separate Git configuration:
+
+- `CreateIssue` with an unknown label id returns `201` with no labels.
+  `AddLabels` with an unknown name or id returns `200` and omits it.
+- Removing a label by its percent-encoded name returns `204`; removing
+  its id again also returns `204`.
+- The direct `pulls/{base}/{head}` lookup accepts a percent-encoded slash
+  in the head branch and returns one pull document. It is separate from
+  the collection listing, which has no advertised base/head filters.
+- Actual responses and signed webhook bodies are retained under
+  `tests/forge/forgejo/fixtures/v15/`, with their capture provenance.
 
 To check (section 10), each before the client relies on it:
 

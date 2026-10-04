@@ -95,7 +95,7 @@ pub(crate) fn open(
         branches: Some(Branches { head: copy_of(&pull.head), base: copy_of(&pull.base), commit }),
         by: user,
     };
-    domain::changed(domain, env, id, observation, Hook::item(Change::Pull, number));
+    domain::changed(domain, env, id, observation, Hook::item(Change::Pull, number, user));
     ci::start(domain, env, id, commit);
     Ok(Answer::Created(number))
 }
@@ -137,7 +137,7 @@ pub(crate) fn request(
     repository.touch(number, domain::clock(env));
     let observation =
         Observation::Requested { repository: copy_of(&repository.name), number, reviewers: observed, by: user };
-    domain::changed(domain, env, id, observation, Hook::item(Change::Pull, number));
+    domain::changed(domain, env, id, observation, Hook::item(Change::Pull, number, user));
     Ok(Answer::Done)
 }
 
@@ -272,7 +272,7 @@ fn shown(domain: &mut Domain, env: &Env<Config>, id: Id<Repository>, number: u64
         body: shown.body,
         by: shown.author,
     };
-    domain::changed(domain, env, id, observation, Hook::item(Change::Review, number));
+    domain::changed(domain, env, id, observation, Hook::item(Change::Review, number, shown.author));
 }
 
 /// Merges the pull request `number` if its head is still `head`.
@@ -327,7 +327,7 @@ pub(crate) fn merge(
         commit,
         by: user,
     };
-    domain::changed(domain, env, id, observation, Hook::item(Change::Pull, number));
+    domain::changed(domain, env, id, observation, Hook::item(Change::Pull, number, user));
     git::moved(domain, env, id, &base, Some(onto), commit, user);
     Ok(Answer::Merged(commit))
 }

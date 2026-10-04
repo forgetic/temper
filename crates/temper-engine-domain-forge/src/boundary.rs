@@ -71,7 +71,14 @@ pub enum Event {
     /// A webhook: something changed in `repository`, about the item `item`,
     /// the commit `commit` (a status, a push) or the branch `branch` (a
     /// push) if it names one.
-    Hint { repository: u32, item: Option<u64>, commit: Option<[u8; 32]>, branch: Option<Box<[u8]>> },
+    Hint {
+        repository: u32,
+        item: Option<u64>,
+        commit: Option<[u8; 32]>,
+        branch: Option<Box<[u8]>>,
+        by: Option<u64>,
+        wiki: bool,
+    },
     /// A fresh read, answered by one [`Request::Read`].
     Read { owner: Token, read: Read },
     /// A write, answered by one [`Request::Wrote`]. `resumed` names its
@@ -82,7 +89,7 @@ pub enum Event {
     Write { owner: Token, write: Write, resumed: Option<Cause> },
     /// Terminal for [`Request::Call`]: what the forge answered, or why it did
     /// not.
-    Answered { call: Token, result: Result<Answer, Error> },
+    Answered { call: Token, cost: u32, result: Result<Answer, Error> },
 }
 
 /// forge -> parent
@@ -119,6 +126,8 @@ pub enum Request {
     /// The cold start is done: every item that carried the tracking label as
     /// it began has been read and announced, or did not fit.
     Loaded,
+    /// The repository's wiki changed: refresh held notes scopes there.
+    Wiki { repository: u32 },
 }
 
 /// What caused a write, as the forge knows it: the comment `comment` (an

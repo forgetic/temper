@@ -1025,10 +1025,17 @@ impl World {
         while let Some(request) = self.forge_out.pop() {
             match request {
                 forge::Request::Reply { to, result } => self.reply(to.into_token().raw(), result),
-                forge::Request::Hook { repository, change: _, number, branch, commit } => {
+                forge::Request::Hook { repository, change, number, branch, commit, by } => {
                     let Some(repository) = deployment::index(&repository) else { continue };
                     let commit = commit.map(translate::commit);
-                    self.stage.push(Event::Hint { repository, item: number, commit, branch });
+                    self.stage.push(Event::Hint {
+                        repository,
+                        item: number,
+                        commit,
+                        branch,
+                        by,
+                        wiki: matches!(change, forge_api::Change::Wiki),
+                    });
                 }
             }
         }
@@ -1087,7 +1094,7 @@ impl World {
         decoded: Box<[engine::Decoded]>,
     ) {
         self.owned.end((self.life, call));
-        self.stage.push(Event::Answered { call, result, decoded });
+        self.stage.push(Event::Answered { cost: 1, call, result, decoded });
     }
 
     /// What the engine asked for.
@@ -1449,8 +1456,8 @@ fn setup(forge: &mut forge::Domain, config: &forge::Config, name: &[u8], dismiss
 
 fn describe(event: &Event) -> String {
     match event {
-        Event::Answered { call, result, decoded } => {
-            format!("answered {} {} ({} decoded)", call.raw(), short(result), decoded.len())
+        Event::Answered { cost, call, result, decoded } => {
+            format!("answered {} cost={cost} {} ({} decoded)", call.raw(), short(result), decoded.len())
         }
         Event::Hint { .. }
         | Event::Hello { .. }

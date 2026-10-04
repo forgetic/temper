@@ -1,0 +1,20 @@
+[package]
+name = "temper-fake-llm-protocol"
+description = "Provider document adapters for bounded LLM byte worlds"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+skein-lib.workspace = true
+skein-io.workspace = true
+skein-http.workspace = true
+skein-json.workspace = true
+temper-llm-anthropic.workspace = true
+temper-llm-openai.workspace = true
+temper-fake-llm-domain.workspace = true
+temper-oauth.workspace = true
+
+[lints]
+workspace = true

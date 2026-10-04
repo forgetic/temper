@@ -113,6 +113,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
             limits.work.items.checked_mul(grant_accounts(limits)?)?,
         )?)?
         .checked_add(skein_lib::Set::<Id<Entry>>::worst_case(limits.work.items)?)?
+        .checked_add(skein_lib::Set::<notes::Scope>::worst_case(limits.notes.scopes)?)?
         .checked_add(config_bytes(limits)?)?
         .checked_add(table)?
         .checked_add(waited)?

@@ -942,7 +942,7 @@ impl World {
                 }
                 self.forge.now = self.env().now;
                 let (result, decoded) = self.forge.answer(repository, op, payload);
-                self.pending.push(Event::Answered { call, result, decoded: decoded.into_boxed() });
+                self.pending.push(Event::Answered { cost: 1, call, result, decoded: decoded.into_boxed() });
             }
             Request::Store { owner, op } => {
                 let stored = match op {
@@ -1249,7 +1249,14 @@ fn a_persons_message_reaches_the_live_run() {
     world.deliver(Event::Ask { reply_to: ReplyTo::new(Token::new(12)), person: ALICE, ask });
     assert!(replied(&world.seen, Reply::Done), "the message is written: {:?}", world.seen.as_slice());
     let from = world.seen.len();
-    world.deliver(Event::Hint { repository: 0, item: Some(item.number), commit: None, branch: None });
+    world.deliver(Event::Hint {
+        by: None,
+        wiki: false,
+        repository: 0,
+        item: Some(item.number),
+        commit: None,
+        branch: None,
+    });
     world.wait(60);
     let mut relayed = false;
     for request in world.since(from) {
@@ -1397,7 +1404,14 @@ fn a_merge_refused_for_a_conflict_sends_the_change_back_for_a_rebase() {
     };
     world.forge.change(pull).unwrap().reviews.push(review).unwrap();
     world.forge.issue(pull).unwrap().updated = world.env().now;
-    world.deliver(Event::Hint { repository: 0, item: Some(pull.number), commit: None, branch: None });
+    world.deliver(Event::Hint {
+        by: None,
+        wiki: false,
+        repository: 0,
+        item: Some(pull.number),
+        commit: None,
+        branch: None,
+    });
     for _ in 0_u32..10 {
         world.wait(30);
     }
@@ -1440,7 +1454,14 @@ fn a_change_is_pushed_opened_reviewed_and_merged_into_a_protected_branch() {
     };
     world.forge.change(pull).unwrap().reviews.push(review).unwrap();
     world.forge.issue(pull).unwrap().updated = world.env().now;
-    world.deliver(Event::Hint { repository: 0, item: Some(pull.number), commit: None, branch: None });
+    world.deliver(Event::Hint {
+        by: None,
+        wiki: false,
+        repository: 0,
+        item: Some(pull.number),
+        commit: None,
+        branch: None,
+    });
     for _ in 0_u32..10 {
         world.wait(30);
     }
@@ -1792,7 +1813,14 @@ fn relayed_comment(seen: &[Request], item: Item, attempt: u64) -> bool {
 fn message(world: &mut World, item: Item, key: &[u8], reply_to: u64) {
     let ask = Ask::Message { item, key: copy_of(key), message: copy_of(b"and another thing") };
     world.deliver(Event::Ask { reply_to: ReplyTo::new(Token::new(reply_to)), person: ALICE, ask });
-    world.deliver(Event::Hint { repository: 0, item: Some(item.number), commit: None, branch: None });
+    world.deliver(Event::Hint {
+        by: None,
+        wiki: false,
+        repository: 0,
+        item: Some(item.number),
+        commit: None,
+        branch: None,
+    });
     world.wait(60);
 }
 
@@ -1971,7 +1999,14 @@ fn pushed(world: &mut World, branch: &[u8], pull: Item, head: [u8; 32], ci: forg
     change.commit = head;
     change.ci = ci;
     world.forge.issue(pull).unwrap().updated = world.env().now;
-    world.deliver(Event::Hint { repository: 0, item: Some(pull.number), commit: Some(head), branch: None });
+    world.deliver(Event::Hint {
+        by: None,
+        wiki: false,
+        repository: 0,
+        item: Some(pull.number),
+        commit: Some(head),
+        branch: None,
+    });
     world.wait(5);
 }
 
@@ -2017,7 +2052,14 @@ fn a_change_gated_on_acceptance_is_repaired_and_lands_on_one_acceptance() {
     };
     world.forge.change(pull).unwrap().reviews.push(review).unwrap();
     world.forge.issue(pull).unwrap().updated = world.env().now;
-    world.deliver(Event::Hint { repository: 0, item: Some(pull.number), commit: None, branch: None });
+    world.deliver(Event::Hint {
+        by: None,
+        wiki: false,
+        repository: 0,
+        item: Some(pull.number),
+        commit: None,
+        branch: None,
+    });
     for _ in 0_u32..10 {
         world.wait(30);
     }
@@ -2191,7 +2233,14 @@ fn messages_a_brief_has_no_room_for_reach_the_next_turn() {
         let ask = Ask::Message { item: session, key: copy_of(key), message: text };
         world.deliver(Event::Ask { reply_to: ReplyTo::new(Token::new(reply_to)), person: ALICE, ask });
     }
-    world.deliver(Event::Hint { repository: 0, item: Some(session.number), commit: None, branch: None });
+    world.deliver(Event::Hint {
+        by: None,
+        wiki: false,
+        repository: 0,
+        item: Some(session.number),
+        commit: None,
+        branch: None,
+    });
     world.wait(60);
     assert_eq!(comments_briefed(world.seen.as_slice(), session, 2), Some(first), "the oldest message, whole");
     world.deliver(Event::Answer { channel: Token::new(1), item: session, attempt: 2, answer: replied_answer() });
@@ -2259,7 +2308,14 @@ fn a_change_whose_landing_waits_on_the_rules_stalls_at_its_deadline() {
     };
     world.forge.change(pull).unwrap().reviews.push(review).unwrap();
     world.forge.issue(pull).unwrap().updated = world.env().now;
-    world.deliver(Event::Hint { repository: 0, item: Some(pull.number), commit: None, branch: None });
+    world.deliver(Event::Hint {
+        by: None,
+        wiki: false,
+        repository: 0,
+        item: Some(pull.number),
+        commit: None,
+        branch: None,
+    });
     world.wait(30);
     assert!(world.forge.change(pull).unwrap().merged.is_none(), "nothing lands on a reader's approval");
     assert_eq!(held_for(&mut world, change), None, "it waits");
@@ -2296,7 +2352,14 @@ fn a_pull_request_retargeted_since_its_change_was_planned_is_not_merged() {
     world.forge.change(pull).unwrap().reviews.push(review).unwrap();
     world.forge.issue(pull).unwrap().updated = world.env().now;
     while world.domain.pop_fact().is_some() {}
-    world.deliver(Event::Hint { repository: 0, item: Some(pull.number), commit: None, branch: None });
+    world.deliver(Event::Hint {
+        by: None,
+        wiki: false,
+        repository: 0,
+        item: Some(pull.number),
+        commit: None,
+        branch: None,
+    });
     world.wait(30);
     assert!(world.forge.change(pull).unwrap().merged.is_none(), "it lands nowhere it was not planned to");
     let mut refused = false;
@@ -2660,4 +2723,69 @@ fn copies<T: Clone>(value: T, count: usize) -> Box<[T]> {
         assert!(pushed.is_ok());
     }
     values.into_boxed()
+}
+
+#[test]
+fn wiki_hints_coalesce_only_held_scopes_of_the_repository() {
+    let limits = Limits { notes: notes::Limits { scopes: 5, ..LIMITS.notes }, ..LIMITS };
+    let mut domain = Domain::new(config(), &limits, 7, Time::ZERO);
+    let environment = Env { limits, ..env(0) };
+    let note_env = Env { now: environment.now, wall: environment.wall, limits: limits.notes };
+    let mut note_out = Queue::with_capacity(notes::MAX_OUT);
+    for repository in 0..2 {
+        notes::step(
+            &mut domain.notes,
+            &note_env,
+            notes::Event::Index {
+                reply_to: ReplyTo::new(Token::new(u64::from(repository) + 1)),
+                scopes: notes::Scopes { repository, goal: Some(notes::Item { repository, number: 7 }) },
+                budget: 100,
+            },
+            &mut note_out,
+        );
+        for _ in 0..note_out.len() {
+            assert!(note_out.pop().is_some());
+        }
+    }
+    assert_eq!(domain.notes.scopes(), 5);
+    let mut out = Queue::with_capacity(max_out(&limits));
+
+    step(&mut domain, &environment, wiki_hint(1, None), &mut out);
+    for _ in 0..out.len() {
+        assert!(out.pop().is_some());
+    }
+    assert_eq!(domain.wiki_pending.len(), 2, "a non-home wiki affects its repository and goal scopes");
+    step(&mut domain, &environment, wiki_hint(1, None), &mut out);
+    for _ in 0..out.len() {
+        assert!(out.pop().is_some());
+    }
+    assert_eq!(domain.wiki_pending.len(), 2, "duplicate hints collapse");
+    step(&mut domain, &environment, wiki_hint(0, Some(ENGINE)), &mut out);
+    for _ in 0..out.len() {
+        assert!(out.pop().is_some());
+    }
+    step(&mut domain, &environment, wiki_hint(limits.forge.repositories, None), &mut out);
+    for _ in 0..out.len() {
+        assert!(out.pop().is_some());
+    }
+    assert_eq!(domain.wiki_pending.len(), 2, "own and foreign hints are ignored");
+    step(&mut domain, &environment, wiki_hint(0, None), &mut out);
+    assert_eq!(domain.wiki_pending.len(), 5, "the home wiki also refreshes the deployment's scope");
+    assert!(domain.wiki_pending.first() == Some(&notes::Scope::Deployment));
+    for _ in 0..limits.notes.scopes {
+        crate::route::wiki_resume(&mut domain, &environment);
+        // The current listings still own their terminal; a refresh only
+        // records another pass and cannot manufacture a second operation.
+        assert!(domain.notes_out.is_empty());
+    }
+    assert!(domain.wiki_pending.is_empty());
+    assert_eq!(domain.notes.scopes(), 5);
+    domain.wiki_pending.insert(notes::Scope::Goal { repository: 1, number: 999 }).expect("one pending scope fits");
+    crate::route::wiki_resume(&mut domain, &environment);
+    assert_eq!(domain.notes.scopes(), 5, "a queued scope no longer held is not reopened");
+    assert!(domain.notes_out.is_empty());
+}
+
+fn wiki_hint(repository: u32, by: Option<u64>) -> Event {
+    Event::Hint { repository, item: None, commit: None, branch: None, by, wiki: true }
 }

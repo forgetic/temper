@@ -42,7 +42,7 @@ pub(crate) fn put(
         return Err(Error::Full);
     }
     repository.revisions = revision;
-    domain::changed(domain, env, id, observation, Hook::wiki());
+    domain::changed(domain, env, id, observation, Hook::wiki(user));
     Ok(Answer::Revision(revision))
 }
 
@@ -68,7 +68,7 @@ pub(crate) fn delete(
         revision,
         by: user,
     };
-    domain::changed(domain, env, id, observation, Hook::wiki());
+    domain::changed(domain, env, id, observation, Hook::wiki(user));
     Ok(Answer::Done)
 }
 

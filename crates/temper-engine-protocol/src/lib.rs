@@ -4,10 +4,14 @@
 extern crate alloc;
 
 pub mod connection;
+pub mod credentials;
 pub mod limits;
 pub mod listener;
 mod memory;
 pub mod names;
+pub mod oauth;
+mod oauth_exchange;
+mod oauth_time;
 pub mod payload;
 pub mod translate;
 

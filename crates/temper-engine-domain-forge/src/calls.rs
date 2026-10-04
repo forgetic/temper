@@ -41,6 +41,7 @@ pub(crate) struct Call {
     purpose: Purpose,
     priority: Priority,
     state: State,
+    window: Time,
 }
 
 /// What a call is for: its owner.
@@ -116,6 +117,10 @@ impl Calls {
     pub(crate) fn out(&self) -> u32 {
         self.out
     }
+    #[cfg(test)]
+    pub(crate) const fn remaining(&self) -> (u32, u32) {
+        (self.budget.left, self.budget.first)
+    }
 
     /// Whether a call may go out: see the module doc.
     pub(crate) fn is_ready(&self) -> bool {
@@ -130,7 +135,7 @@ impl Calls {
 
 /// Queues a call for `purpose` in the class `priority`, and returns it.
 pub(crate) fn queue(calls: &mut Calls, purpose: Purpose, priority: Priority) -> Id<Call> {
-    let call = Call { purpose, priority, state: State::Queued };
+    let call = Call { purpose, priority, state: State::Queued, window: Time::ZERO };
     let id = calls.slab.insert(call).expect("a call per owner fits");
     let queue = match priority {
         Priority::Fresh => &mut calls.fresh,
@@ -160,6 +165,7 @@ pub(crate) fn send(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Reque
     let (purpose, priority) = (call.purpose, call.priority);
     domain.calls.out = domain.calls.out.saturating_add(1);
     spend(domain, env, priority);
+    domain.calls.slab.get_mut(id).expect("the sent call remains").window = domain.calls.budget.ends;
     let (repository, op) = build(domain, env, purpose);
     match purpose {
         Purpose::Write(owner) => writes::sent(domain, owner, env.now),
@@ -211,6 +217,50 @@ fn spend(domain: &mut Domain, env: &Env<Limits>, priority: Priority) {
     }
 }
 
+/// Reserve one at admission, settle the actual HTTP cost at its terminal.
+/// Concurrent multi-step calls can overshoot before their costs are known.
+/// Extra cost arriving after rollover debits the current window; a refund
+/// never credits a window other than the one that held its reservation.
+fn settle(domain: &mut Domain, env: &Env<Limits>, priority: Priority, window: Time, cost: u32) {
+    let budget = &mut domain.calls.budget;
+    if cost == 0 {
+        if window == budget.ends && env.now < budget.ends {
+            budget.left = budget.left.saturating_add(1).min(env.limits.rate);
+            match priority {
+                Priority::Fresh | Priority::Write => budget.first = budget.first.saturating_sub(1),
+                Priority::Keep | Priority::Slow => {}
+            }
+            if budget.spent && budget.left > 0 {
+                budget.spent = false;
+                domain.alarms.cancel(Alarm::Window);
+            }
+        }
+        return;
+    }
+    let extra = cost.saturating_sub(1);
+    if extra == 0 {
+        return;
+    }
+    if env.now >= budget.ends {
+        budget.left = env.limits.rate;
+        budget.ends = env.now.saturating_add(env.limits.window);
+        budget.first = 0;
+        budget.spent = false;
+        domain.alarms.cancel(Alarm::Window);
+    }
+    match priority {
+        Priority::Fresh | Priority::Write => budget.first = budget.first.saturating_add(extra),
+        Priority::Keep | Priority::Slow => {}
+    }
+    budget.left = budget.left.saturating_sub(extra);
+    if budget.left == 0 && !budget.spent {
+        budget.spent = true;
+        let until = budget.ends;
+        domain.alarms.arm(Alarm::Window, until).expect("budget timer fits");
+        domain.facts.push(Fact::Spent { until });
+    }
+}
+
 /// What a call asks, from its owner's state as it goes out.
 fn build(domain: &Domain, env: &Env<Limits>, purpose: Purpose) -> (u32, Op) {
     match purpose {
@@ -256,6 +306,7 @@ pub(crate) fn answered(
     domain: &mut Domain,
     env: &Env<Limits>,
     token: Token,
+    cost: u32,
     result: Result<Answer, Error>,
     out: &mut Queue<Request>,
 ) {
@@ -266,8 +317,9 @@ pub(crate) fn answered(
         State::Queued | State::Closed => unreachable!("one terminal per call, once it is out"),
     }
     call.state = State::Closed;
-    let (purpose, priority) = (call.purpose, call.priority);
+    let (purpose, priority, window) = (call.purpose, call.priority, call.window);
     domain.calls.slab.retire(id);
+    settle(domain, env, priority, window, cost);
     domain.calls.out = domain.calls.out.saturating_sub(1);
     if let Err(error) = &result {
         domain.facts.push(Fact::Failed { priority, error: *error });

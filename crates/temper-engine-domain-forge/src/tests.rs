@@ -177,7 +177,10 @@ impl Harness {
             }
             other => other,
         };
-        self.step(Event::Answered { call: sent.call, result })
+        self.answer_cost(sent, 1, result)
+    }
+    fn answer_cost(&mut self, sent: &Sent, cost: u32, result: Result<Answer, Error>) -> Box<[Request]> {
+        self.step(Event::Answered { cost, call: sent.call, result })
     }
 
     fn drain(&mut self) -> Box<[Request]> {
@@ -630,7 +633,7 @@ fn a_listing_made_in_the_same_second_does_not_settle_what_it_shows() {
     // Another pass, a hint after, in the same second as the change, by the
     // forge's clock: it settles nothing.
     h.at(32);
-    h.step(Event::Hint { repository: 0, item: Some(5), commit: None, branch: None });
+    h.step(Event::Hint { by: None, wiki: false, repository: 0, item: Some(5), commit: None, branch: None });
     h.fire();
     let listing = h.send_for(&changes(30, 1));
     let made = Time::ZERO.saturating_add(Duration::from_millis(30_500));
@@ -711,12 +714,12 @@ fn a_hint_brings_the_next_pass_forward_and_a_pass_running_is_followed_soon() {
     h.start(&[], &[]);
     assert_eq!(h.domain.next_deadline(), Some(at(30)), "a poll after the start began");
     h.at(10);
-    h.step(Event::Hint { repository: 0, item: Some(3), commit: None, branch: None });
+    h.step(Event::Hint { by: None, wiki: false, repository: 0, item: Some(3), commit: None, branch: None });
     assert_eq!(h.domain.next_deadline(), Some(at(10)), "at once: the last pass began long enough ago");
     h.fire();
     let listing = h.send_one();
     h.at(11);
-    h.step(Event::Hint { repository: 0, item: None, commit: None, branch: None });
+    h.step(Event::Hint { by: None, wiki: false, repository: 0, item: None, commit: None, branch: None });
     h.answer(&listing, page(Box::new([]), false));
     assert_eq!(h.domain.next_deadline(), Some(at(12)), "the next follows soon after the one that ran");
 }
@@ -765,14 +768,21 @@ fn a_pull_request_is_read_on_a_backoff_of_its_own_and_on_a_hint_whatever_its_sta
     let told = h.answer(&sent[0], Ok(Answer::Pull(moved)));
     let level = News::Pull { commit: HEAD, ci: Ci::Passed, open: true, merged: None, mergeable: false };
     assert_eq!(*told, [news(5, 3, level)], "its base moved: it no longer merges cleanly");
-    h.step(Event::Hint { repository: 0, item: None, commit: Some(HEAD), branch: None });
+    h.step(Event::Hint { by: None, wiki: false, repository: 0, item: None, commit: Some(HEAD), branch: None });
     let read = h.send_one();
     assert_eq!(read.op, Op::Pull { number: 9 }, "a status on its head reads it again");
     h.answer(&read, Ok(Answer::Pull(pull(9, HEAD, Ci::Failed))));
     let level =
         Level { number: 9, commit: HEAD, base: Some(BASE), ci: Ci::Failed, open: true, merged: None, mergeable: true };
     assert_eq!(h.domain.pull(item(5)), Some(level), "the level as last read");
-    h.step(Event::Hint { repository: 0, item: None, commit: None, branch: Some(bytes(b"main")) });
+    h.step(Event::Hint {
+        by: None,
+        wiki: false,
+        repository: 0,
+        item: None,
+        commit: None,
+        branch: Some(bytes(b"main")),
+    });
     assert_eq!(h.send_one().op, Op::Pull { number: 9 }, "a push to its base reads it again");
 }
 
@@ -813,13 +823,13 @@ fn a_pull_request_is_read_whatever_room_the_inbox_has_and_told_when_there_is() {
     let page = comments(&[comment(101, PERSON)]);
     h.answer(read, item_page(issue(5, &[TRACKING], 20), page, false));
     // The inbox's last place is the level's.
-    h.step(Event::Hint { repository: 0, item: None, commit: Some(HEAD), branch: None });
+    h.step(Event::Hint { by: None, wiki: false, repository: 0, item: None, commit: Some(HEAD), branch: None });
     let read = h.send_one();
     let told = h.answer(&read, Ok(Answer::Pull(pull(9, HEAD, Ci::Failed))));
     let failed = News::Pull { commit: HEAD, ci: Ci::Failed, open: true, merged: None, mergeable: true };
     assert_eq!(*told, [news(5, 3, failed)], "told in the place kept for it");
     // The inbox is full: the pull request is read all the same.
-    h.step(Event::Hint { repository: 0, item: None, commit: Some(HEAD), branch: None });
+    h.step(Event::Hint { by: None, wiki: false, repository: 0, item: None, commit: Some(HEAD), branch: None });
     let read = h.send_one();
     assert!(h.answer(&read, Ok(Answer::Pull(pull(9, HEAD, Ci::Passed)))).is_empty(), "no room to tell it");
     let level = h.domain.pull(item(5)).expect("read");
@@ -2028,6 +2038,69 @@ fn a_rate_limit_refusal_holds_every_call_until_its_reset() {
 // Bounds.
 
 #[test]
+fn actual_http_cost_including_failed_calls_settles_total_and_priority_share() {
+    for writing in [false, true] {
+        for cost in [0_u32, 1, 4] {
+            let mut h = Harness::started(LIMITS);
+            h.env.limits.rate = 4;
+            h.env.limits.reserve = 2;
+            h.at(100);
+            if writing {
+                h.step(Event::Write { owner: Token::new(90), write: Write::Close { item: item(2) }, resumed: None });
+            } else {
+                h.step(Event::Read { owner: Token::new(90), read: Read::Pull { item: item(2) } });
+            }
+            let sent = h.send_one();
+            assert_eq!(h.domain.calls.remaining(), (3, 1), "one HTTP request reserved");
+            h.answer_cost(&sent, cost, Err(Error::Forbidden));
+            assert_eq!(
+                h.domain.calls.remaining(),
+                (4_u32.saturating_sub(cost), cost),
+                "failed HTTP requests cost as much as successes"
+            );
+            h.step(Event::Read { owner: Token::new(91), read: Read::Pull { item: item(3) } });
+            assert_eq!(h.send().is_empty(), cost == 4, "actual cost stops new admissions");
+        }
+    }
+}
+
+#[test]
+fn a_late_refund_never_credits_a_new_window_and_extra_cost_debits_it() {
+    for cost in [0_u32, 4] {
+        let mut h = Harness::started(LIMITS);
+        h.env.limits.rate = 4;
+        h.at(100);
+        h.step(Event::Read { owner: Token::new(90), read: Read::Pull { item: item(2) } });
+        let old = h.send_one();
+        h.at(161);
+        h.step(Event::Read { owner: Token::new(91), read: Read::Pull { item: item(3) } });
+        let current = h.send_one();
+        assert_eq!(h.domain.calls.remaining(), (3, 1), "new reservation started a fresh window");
+        h.answer_cost(&old, cost, Err(Error::Forbidden));
+        assert_eq!(
+            h.domain.calls.remaining(),
+            if cost == 0 { (3, 1) } else { (0, 4) },
+            "settlement respects reservation window"
+        );
+        h.answer_cost(&current, 1, Err(Error::Forbidden));
+    }
+}
+
+#[test]
+fn a_zero_http_cost_refunds_the_last_reservation_and_reopens_admission() {
+    let mut h = Harness::started(LIMITS);
+    h.env.limits.rate = 1;
+    h.at(100);
+    h.step(Event::Read { owner: Token::new(90), read: Read::Pull { item: item(2) } });
+    let sent = h.send_one();
+    h.step(Event::Read { owner: Token::new(91), read: Read::Pull { item: item(3) } });
+    assert!(h.send().is_empty());
+    h.answer_cost(&sent, 0, Err(Error::Forbidden));
+    assert_eq!(h.domain.calls.remaining(), (1, 0));
+    assert_eq!(h.send_one().op, Op::Pull { number: 3 });
+}
+
+#[test]
 fn the_worst_case_is_bounded_or_refused() {
     assert!(worst_case(&LIMITS).is_some(), "the test limits fit");
     assert!(worst_case(&Limits { rate: 0, ..LIMITS }).is_none(), "a budget of no calls is refused");
@@ -2081,4 +2154,22 @@ fn a_record_edit_that_gave_up_after_a_timeout_leaves_the_record_its_own_to_the_n
     let edit = h.send_one();
     let body = Body::Record { payload, position: Position::START, nonce: nonce(&edit.op) };
     assert_eq!(edit.op, Op::EditComment { number: 5, id: 100, body }, "its own: edited, not held");
+}
+
+#[test]
+fn hints_ignore_own_echoes_and_foreign_wikis_and_route_other_wiki_changes() {
+    let mut h = Harness::started(LIMITS);
+    h.at(2);
+
+    assert!(h.step(webhook_hint(0, Some(ENGINE), false)).is_empty());
+    assert!(h.step(webhook_hint(0, Some(ENGINE), true)).is_empty());
+    assert!(h.step(webhook_hint(LIMITS.repositories, None, true)).is_empty());
+    assert_eq!(*h.step(webhook_hint(1, Some(PERSON), true)), [Request::Wiki { repository: 1 }]);
+    assert_eq!(h.domain.next_deadline(), Some(at(30)), "wiki changes and echoes do not accelerate item scans");
+    h.step(webhook_hint(0, Some(PERSON), false));
+    assert_eq!(h.domain.next_deadline(), Some(at(2)), "a person's item hint accelerates its repository scan");
+}
+
+fn webhook_hint(repository: u32, by: Option<u64>, wiki: bool) -> Event {
+    Event::Hint { repository, item: None, commit: None, branch: None, by, wiki }
 }

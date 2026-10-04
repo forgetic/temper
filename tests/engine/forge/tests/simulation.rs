@@ -37,9 +37,13 @@ fn a_calm_world_keeps_up_and_settles() {
     ] {
         assert!(count(&stats, ending) > 0, "{ending}: {stats:?}");
     }
-    for ending in ["timed out", "limited", "full", "wrote: failed"] {
+    for ending in ["timed out", "limited", "full"] {
         assert_eq!(count(&stats, ending), 0, "{ending}: {stats:?}");
     }
+    // Reviews queued while a pull was open can arrive after a concurrent
+    // merge. A calm transport still permits the forge to refuse them closed.
+    assert!(stats.failures.keys().all(|failure| failure == "Forge(Closed)"), "{stats:?}");
+    assert_eq!(count(&stats, "wrote: failed"), stats.failures.get("Forge(Closed)").copied().unwrap_or(0));
     let (reached, writes) = world.judged();
     assert!(reached > 10 && writes > 10, "the referee judged: {reached}, {writes}");
 }

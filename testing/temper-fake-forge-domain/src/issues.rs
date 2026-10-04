@@ -67,7 +67,7 @@ pub(crate) fn create(
         branches: None,
         by: user,
     };
-    domain::changed(domain, env, id, observation, Hook::item(Change::Issue, number));
+    domain::changed(domain, env, id, observation, Hook::item(Change::Issue, number, user));
     Ok(Answer::Created(number))
 }
 
@@ -98,7 +98,7 @@ pub(crate) fn comment(
     domain.comments = comment;
     let observation =
         Observation::Commented { repository: copy_of(&repository.name), number, id: comment, body: observed, by: user };
-    domain::changed(domain, env, id, observation, Hook::item(Change::Comment, number));
+    domain::changed(domain, env, id, observation, Hook::item(Change::Comment, number, user));
     Ok(Answer::Commented(comment))
 }
 
@@ -141,7 +141,7 @@ pub(crate) fn revise(
         by: user,
     };
     repository.touch(number, domain::clock(env));
-    domain::changed(domain, env, id, observation, Hook::item(change, number));
+    domain::changed(domain, env, id, observation, Hook::item(change, number, user));
     Ok(Answer::Done)
 }
 
@@ -175,7 +175,7 @@ pub(crate) fn depend(
     repository.touch(number, domain::clock(env));
     let observation =
         Observation::Depends { repository: copy_of(&repository.name), number, dependencies: observed, by: user };
-    domain::changed(domain, env, id, observation, Hook::item(change, number));
+    domain::changed(domain, env, id, observation, Hook::item(change, number, user));
     Ok(Answer::Done)
 }
 
@@ -210,7 +210,7 @@ pub(crate) fn edit(
     }
     let observation =
         Observation::Edited { repository: copy_of(&repository.name), number, id: comment, body: observed, by: user };
-    domain::changed(domain, env, id, observation, Hook::item(Change::Comment, number));
+    domain::changed(domain, env, id, observation, Hook::item(Change::Comment, number, user));
     Ok(Answer::Done)
 }
 
@@ -238,7 +238,7 @@ pub(crate) fn remove(
         repository.touch(number, domain::clock(env));
     }
     let observation = Observation::Removed { repository: copy_of(&repository.name), number, id: comment, by: user };
-    domain::changed(domain, env, id, observation, Hook::item(Change::Comment, number));
+    domain::changed(domain, env, id, observation, Hook::item(Change::Comment, number, user));
     Ok(Answer::Done)
 }
 
@@ -264,7 +264,7 @@ pub(crate) fn label(
     repository.touch(number, domain::clock(env));
     let observation =
         Observation::Labelled { repository: copy_of(&repository.name), number, labels: observed, by: user };
-    domain::changed(domain, env, id, observation, Hook::item(change, number));
+    domain::changed(domain, env, id, observation, Hook::item(change, number, user));
     Ok(Answer::Done)
 }
 
@@ -338,7 +338,7 @@ fn relabelled(domain: &mut Domain, env: &Env<Config>, id: Id<Repository>, user: 
     repository.touch(number, domain::clock(env));
     let observation =
         Observation::Labelled { repository: copy_of(&repository.name), number, labels: observed, by: user };
-    domain::changed(domain, env, id, observation, Hook::item(change, number));
+    domain::changed(domain, env, id, observation, Hook::item(change, number, user));
 }
 
 /// Defines the label `name`.
@@ -390,7 +390,7 @@ pub(crate) fn shut(domain: &mut Domain, env: &Env<Config>, id: Id<Repository>, n
     let change = change(item.kind());
     repository.touch(number, domain::clock(env));
     let observation = Observation::Closed { repository: copy_of(&repository.name), number, by };
-    domain::changed(domain, env, id, observation, Hook::item(change, number));
+    domain::changed(domain, env, id, observation, Hook::item(change, number, by));
 }
 
 /// Reopens the item `number`: the user's own, or any with write permission.
@@ -434,7 +434,7 @@ pub(crate) fn reopen(
     let change = change(item.kind());
     repository.touch(number, domain::clock(env));
     let observation = Observation::Reopened { repository: copy_of(&repository.name), number, by: user };
-    domain::changed(domain, env, id, observation, Hook::item(change, number));
+    domain::changed(domain, env, id, observation, Hook::item(change, number, user));
     if let Some(head) = head {
         ci::start(domain, env, id, head);
     }

@@ -3,6 +3,8 @@
 #![forbid(unsafe_code)]
 extern crate alloc;
 pub mod channel;
+pub mod client;
+pub mod exchange;
 pub mod grants;
 pub mod limits;
 pub mod payload;

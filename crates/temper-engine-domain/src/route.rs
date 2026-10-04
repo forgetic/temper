@@ -93,12 +93,12 @@ pub(crate) fn event(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &
                 retry_after,
             },
         ),
-        Event::Answered { call, result, decoded } => {
+        Event::Answered { call, cost, result, decoded } => {
             domain.decoded = decoded;
-            forge_step(domain, env, forge::Event::Answered { call, result });
+            forge_step(domain, env, forge::Event::Answered { call, cost, result });
         }
-        Event::Hint { repository, item, commit, branch } => {
-            forge_step(domain, env, forge::Event::Hint { repository, item, commit, branch });
+        Event::Hint { repository, item, commit, branch, by, wiki } => {
+            forge_step(domain, env, forge::Event::Hint { repository, item, commit, branch, by, wiki });
         }
         Event::Hello { channel, hello } => {
             runs::hello(domain, &hello);
@@ -228,6 +228,30 @@ pub(crate) fn notes_resume(domain: &mut Domain, env: &Env<Limits>) {
     notes::resume(&mut domain.notes, &notes_env(env), &mut domain.notes_out);
 }
 
+/// Coalesces a wiki hint over the scopes the notes already hold. The
+/// deployment's scope belongs only to its configured home repository.
+fn wiki_changed(domain: &mut Domain, env: &Env<Limits>, repository: u32) {
+    for index in 0..env.limits.notes.scopes {
+        let Some(scope) = domain.notes.scope(index) else { break };
+        let matches = match scope {
+            notes::Scope::Deployment => repository == domain.config.home,
+            notes::Scope::Repository(held) | notes::Scope::Goal { repository: held, number: _ } => held == repository,
+        };
+        if matches && domain.wiki_pending.insert(scope).is_err() {
+            // A hint is advisory. Old queued scopes may still occupy the
+            // bounded set after an eviction; periodic reads catch up.
+            break;
+        }
+    }
+}
+
+pub(crate) fn wiki_resume(domain: &mut Domain, env: &Env<Limits>) {
+    let Some(scope) = domain.wiki_pending.pop_first() else { return };
+    if domain.notes.holds(scope) {
+        notes_step(domain, env, notes::Event::Refresh { scope });
+    }
+}
+
 pub(crate) fn views_step(domain: &mut Domain, env: &Env<Limits>, event: views::Event) {
     count(&mut domain.steps.views, &env.limits);
     let room = views::max_out(&env.limits.views);
@@ -292,6 +316,7 @@ fn from_forge(domain: &mut Domain, env: &Env<Limits>, request: forge::Request, o
         forge::Request::Changed { item: _, labels: _ } | forge::Request::Forbidden { item: _ } => {}
         forge::Request::Left { item, why: _ } => items::left(domain, env, item),
         forge::Request::Loaded => runs::read(domain),
+        forge::Request::Wiki { repository } => wiki_changed(domain, env, repository),
     }
 }
 

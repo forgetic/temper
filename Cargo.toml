@@ -20,6 +20,7 @@ members = [
     "crates/temper-engine-domain-views",
     "crates/temper-engine-domain-work",
     "crates/temper-engine-protocol",
+    "crates/temper-forge-forgejo",
     "crates/temper-llm-anthropic",
     "crates/temper-llm-openai",
     "crates/temper-oauth",
@@ -29,7 +30,9 @@ members = [
     "crates/temper-worker-domain-host",
     "crates/temper-worker-protocol",
     "testing/temper-fake-forge-domain",
+    "testing/temper-fake-forge-protocol",
     "testing/temper-fake-llm-domain",
+    "testing/temper-fake-llm-protocol",
     "tests/agent/domain",
     "tests/agent/run",
     "tests/agent/session",
@@ -48,6 +51,8 @@ members = [
     "tests/engine/views",
     "tests/engine/work",
     "tests/fake-forge",
+    "tests/fake-forge/protocol",
+    "tests/forge/forgejo",
     "tests/fake-llm",
     "tests/worker/agent",
     "tests/worker/checkout",
@@ -70,6 +75,9 @@ skein-http = { git = "https://git.ekanayaka.io/ai/skein.git" }
 skein-json = { git = "https://git.ekanayaka.io/ai/skein.git" }
 skein-sim = { git = "https://git.ekanayaka.io/ai/skein.git" }
 subtle = { version = "=2.6.1", default-features = false, features = ["core_hint_black_box"] }
+sha2 = { version = "=0.10.9", default-features = false }
+hmac = { version = "=0.12.1", default-features = false }
+base64 = { version = "=0.22.1", default-features = false, features = ["alloc"] }
 temper-agent-protocol = { path = "crates/temper-agent-protocol" }
 temper-agent-protocol-world = { path = "tests/agent/protocol" }
 temper-worker-protocol = { path = "crates/temper-worker-protocol" }
@@ -78,6 +86,8 @@ temper-channel = { path = "crates/temper-channel" }
 temper-llm-anthropic = { path = "crates/temper-llm-anthropic" }
 temper-llm-openai = { path = "crates/temper-llm-openai" }
 temper-oauth = { path = "crates/temper-oauth" }
+temper-forge-forgejo = { path = "crates/temper-forge-forgejo" }
+temper-forge-forgejo-world = { path = "tests/forge/forgejo" }
 temper-engine-domain-accounts = { path = "crates/temper-engine-domain-accounts" }
 temper-engine-protocol = { path = "crates/temper-engine-protocol" }
 temper-engine-protocol-world = { path = "tests/engine/protocol" }
@@ -101,7 +111,10 @@ temper-worker-domain-agent = { path = "crates/temper-worker-domain-agent" }
 temper-worker-domain-checkout = { path = "crates/temper-worker-domain-checkout" }
 temper-worker-domain-host = { path = "crates/temper-worker-domain-host" }
 temper-fake-forge-domain = { path = "testing/temper-fake-forge-domain" }
+temper-fake-forge-protocol = { path = "testing/temper-fake-forge-protocol" }
+temper-fake-forge-protocol-world = { path = "tests/fake-forge/protocol" }
 temper-fake-llm-domain = { path = "testing/temper-fake-llm-domain" }
+temper-fake-llm-protocol = { path = "testing/temper-fake-llm-protocol" }
 temper-fake-checkout = { path = "tests/fake-checkout" }
 temper-engine-forge-world = { path = "tests/engine/forge" }
 temper-engine-domain-world = { path = "tests/engine/domain" }

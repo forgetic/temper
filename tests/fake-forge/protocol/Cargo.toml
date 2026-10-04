@@ -1,0 +1,21 @@
+[package]
+name = "temper-fake-forge-protocol-world"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+skein-lib.workspace = true
+skein-http.workspace = true
+skein-json.workspace = true
+skein-io.workspace = true
+skein-sim.workspace = true
+temper-forge-forgejo.workspace = true
+temper-fake-forge-domain.workspace = true
+temper-fake-forge-protocol.workspace = true
+temper-world.workspace = true
+
+[lints.rust]
+unsafe_code = "deny"
+unused_must_use = "deny"

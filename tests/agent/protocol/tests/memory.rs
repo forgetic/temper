@@ -170,3 +170,113 @@ fn overflowing_owner_limits_are_refused_before_allocating() {
     assert!(channel::worst_case(&limits).is_none());
     assert!(Channel::new(Token::new(1), Time::ZERO, &limits, Duration::ZERO).is_none());
 }
+
+#[test]
+fn provider_owned_headers_answer_and_one_measured_event_fit_bound() {
+    use temper_agent_protocol_world::{http, provider as peer};
+    use temper_fake_llm_domain as fake;
+    use temper_fake_llm_protocol::{documents, provider};
+    for dialect in [wire::Provider::Anthropic, wire::Provider::OpenAi] {
+        let limits = peer::limits();
+        let issuer = peer::issued();
+        let mut client =
+            http::World::with(http::prepared_value(dialect.clone(), 1, peer::ACCESS, peer::ACCOUNT), Vec::new(), 4096);
+        client.drive();
+        let split = client.sent.windows(4).position(|bytes| bytes == b"\r\n\r\n").expect("whole request head") + 4;
+        let body = &client.sent[split..];
+        let configured: Box<[_]> = (0..limits.http.headers - 5)
+            .map(|index| skein_http::Header {
+                name: format!("x-identity-{index}").into_bytes().into(),
+                value: vec![b'a'; 8].into(),
+            })
+            .collect();
+        let mut request = format!("POST /responses HTTP/1.1\r\nHost: localhost:8000\r\nContent-Type: application/json\r\nAuthorization: Bearer {}\r\nChatGPT-Account-Id: acct-7\r\nContent-Length: {}\r\n", String::from_utf8_lossy(peer::ACCESS), body.len()).into_bytes();
+        for header in &configured {
+            request.extend_from_slice(&header.name);
+            request.extend_from_slice(b": ");
+            request.extend_from_slice(&header.value);
+            request.extend_from_slice(b"\r\n");
+        }
+        request.extend_from_slice(b"\r\n");
+        request.extend_from_slice(body);
+        // These byte-peer buffers and the handed-in source are outside the
+        // provider owner's measurement, just as an Io owner counts its own.
+        let mut ledger = peer::Ledger::new(limits.http.head, 4096);
+        ledger.output = Vec::with_capacity(32_768);
+        ledger.append(&request);
+        let mut upper = Queue::with_capacity(provider::MAX_UP);
+        let mut lower = Queue::with_capacity(provider::MAX_DOWN);
+        let env = Env { now: Time::ZERO, wall: Wall::EPOCH, limits };
+        let answer = provider_answer(limits.documents.openai.parts, limits.documents.openai.answer_bytes);
+        let meter = Meter::new();
+        meter.start();
+        let mut service = provider::Service::new(
+            provider::Config {
+                provider: match dialect {
+                    wire::Provider::Anthropic => documents::Provider::Anthropic,
+                    wire::Provider::OpenAi => documents::Provider::OpenAi,
+                },
+                path: b"/responses".as_slice().into(),
+                headers: configured.clone(),
+            },
+            &limits,
+        )
+        .expect("occupied configured headers");
+        let mut server = provider::Server::new(Token::new(1), &limits).expect("provider owner");
+        provider::start(&mut server, &mut service, &issuer, &env, &mut upper, &mut lower);
+        let mut call = None;
+        for _step in 0..100_000 {
+            ledger.collect(&mut lower);
+            if let Some(provider::Event::Domain(fake::Event::Call { reply_to, query: _ })) = upper.pop() {
+                call = Some(reply_to);
+                break;
+            }
+            if server.has_work() {
+                provider::resume(&mut server, &mut service, &issuer, &env, &mut upper, &mut lower);
+            } else if let Some(event) = ledger.delivery() {
+                provider::up(&mut server, &mut service, &issuer, &env, event, &mut upper, &mut lower);
+            } else {
+                break;
+            }
+        }
+        provider::down(
+            &mut server,
+            &mut service,
+            &issuer,
+            &env,
+            fake::Request::Reply { to: call.expect("decoded request"), result: Ok(answer.clone()) },
+            &mut upper,
+            &mut lower,
+        );
+        for _step in 0..32 {
+            ledger.collect(&mut lower);
+            if server.has_work() {
+                provider::resume(&mut server, &mut service, &issuer, &env, &mut upper, &mut lower);
+            } else if let Some(event) = ledger.delivery() {
+                provider::up(&mut server, &mut service, &issuer, &env, event, &mut upper, &mut lower);
+            } else {
+                break;
+            }
+        }
+        let measured = meter.end();
+        meter.check(
+            measured,
+            provider::worst_case(&limits).expect("provider heap bound"),
+            "configured provider and maximal retained answer/event",
+        );
+        provider::close(&mut server, &mut service, &env, &mut upper, &mut lower);
+    }
+}
+
+fn provider_answer(parts: u32, bytes: u32) -> temper_fake_llm_domain::api::Answer {
+    use temper_fake_llm_domain::api;
+    api::Answer {
+        parts: (0..parts)
+            .map(|index| api::Part::Text {
+                text: if index == 0 { vec![b'x'; bytes as usize].into() } else { Box::new([]) },
+            })
+            .collect(),
+        finish: api::Finish::Stop,
+        usage: api::Usage { prompt_tokens: 1, cached_tokens: 0, cache_creation_tokens: 0, completion_tokens: 1 },
+    }
+}

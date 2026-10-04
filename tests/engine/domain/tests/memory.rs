@@ -190,7 +190,7 @@ impl Driver {
         match request {
             Request::Forge { call, repository: _, op, payload } => {
                 let (result, decoded) = self.forge(op, payload);
-                self.pending.push(Event::Answered { call, result, decoded });
+                self.pending.push(Event::Answered { call, cost: 1, result, decoded });
             }
             Request::Store { owner, op } => {
                 let stored = match op {
@@ -434,7 +434,14 @@ impl Driver {
                 let at = self.index(self.issues.len());
                 let number = self.issues.get(at)?.number;
                 let _ = domain;
-                Some(Event::Hint { repository: 0, item: Some(number), commit: None, branch: None })
+                Some(Event::Hint {
+                    by: None,
+                    wiki: false,
+                    repository: 0,
+                    item: Some(number),
+                    commit: None,
+                    branch: None,
+                })
             }
         }
     }

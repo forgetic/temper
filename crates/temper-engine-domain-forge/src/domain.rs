@@ -257,12 +257,18 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
         Event::Link { item, pull } => items::link(domain, env, item, pull),
         Event::Took { item, through } => items::took(domain, env, item, through, out),
         Event::Retell { item, from } => items::retell(domain, item, from, out),
-        Event::Hint { repository, item: _, commit, branch } => {
-            scans::hint(domain, env, repository, commit, branch.as_deref());
+        Event::Hint { repository, item: _, commit, branch, by, wiki } => {
+            if repository < env.limits.repositories && by != Some(domain.config.engine) {
+                if wiki {
+                    out.push(Request::Wiki { repository });
+                } else {
+                    scans::hint(domain, env, repository, commit, branch.as_deref());
+                }
+            }
         }
         Event::Read { owner, read } => reads::read(domain, env, owner, read, out),
         Event::Write { owner, write, resumed } => writes::write(domain, env, owner, write, resumed, out),
-        Event::Answered { call, result } => calls::answered(domain, env, call, result, out),
+        Event::Answered { call, cost, result } => calls::answered(domain, env, call, cost, result, out),
     }
     loaded(domain, out);
     roomy(domain, out);

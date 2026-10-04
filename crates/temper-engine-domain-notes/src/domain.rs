@@ -60,6 +60,25 @@ impl Domain {
         self.scopes.len()
     }
 
+    /// The indexed held scope, in the map's stable order. Enumerate only
+    /// `0..scopes()`; no private entry identity crosses the boundary.
+    #[must_use]
+    pub fn scope(&self, index: u32) -> Option<Scope> {
+        let index = usize::try_from(index).ok()?;
+        for (at, (scope, _)) in self.scopes.iter().enumerate() {
+            if at == index {
+                return Some(*scope);
+            }
+        }
+        None
+    }
+
+    /// Whether `scope` is still held. A queued hint cannot recreate one.
+    #[must_use]
+    pub fn holds(&self, scope: Scope) -> bool {
+        self.scopes.contains_key(&scope)
+    }
+
     /// Calls in flight, answered ones included until they are reclaimed.
     #[must_use]
     pub fn calls(&self) -> u32 {

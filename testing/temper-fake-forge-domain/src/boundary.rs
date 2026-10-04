@@ -38,5 +38,12 @@ pub enum Request {
     /// about the item `number` if it names one; a push names its `branch`
     /// and the `commit` it moved to (none if it was deleted), and a status
     /// its `commit`. No event answers it.
-    Hook { repository: Box<[u8]>, change: Change, number: Option<u64>, branch: Option<Box<[u8]>>, commit: Option<u64> },
+    Hook {
+        repository: Box<[u8]>,
+        change: Change,
+        number: Option<u64>,
+        branch: Option<Box<[u8]>>,
+        commit: Option<u64>,
+        by: Option<u64>,
+    },
 }

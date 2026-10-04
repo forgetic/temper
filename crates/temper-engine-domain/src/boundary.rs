@@ -96,6 +96,8 @@ pub enum Event {
     /// the answer marks it mangled.
     Answered {
         call: Token,
+        /// HTTP requests actually served, including cache misses and failures.
+        cost: u32,
         result: Result<api::Answer, api::Error>,
         decoded: Box<[Decoded]>,
     },
@@ -106,6 +108,8 @@ pub enum Event {
         item: Option<u64>,
         commit: Option<[u8; 32]>,
         branch: Option<Box<[u8]>>,
+        by: Option<u64>,
+        wiki: bool,
     },
     /// From a worker, first on its channel: its slots, the workstreams it
     /// holds checkouts for, and the runs it hosts or holds answers of.

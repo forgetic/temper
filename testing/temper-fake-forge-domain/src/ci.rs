@@ -232,5 +232,5 @@ fn reported(
         }
     }
     let observation = Observation::Reported { repository: copy_of(&repository.name), commit, context, state, by };
-    domain::changed(domain, env, id, observation, Hook::status(commit));
+    domain::changed(domain, env, id, observation, Hook::status(commit, by));
 }

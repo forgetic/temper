@@ -31,6 +31,13 @@ use crate::{ci, issues, pulls, reads, wiki};
 /// The most requests an entry point emits per call.
 pub const MAX_OUT: u32 = 1;
 
+/// Provider-neutral repository metadata, read without referee observations.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Metadata {
+    pub name: Box<[u8]>,
+    pub default_branch: Box<[u8]>,
+}
+
 /// How the forge behaves, handed to every step read-only. Chances are per
 /// mille.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -302,6 +309,23 @@ impl Domain {
             return Err(Error::Missing(What::Repository));
         };
         reads::read(self, config, id, read)
+    }
+
+    /// Metadata for the protocol's provider-specific repository document.
+    pub fn metadata(&self, repository: &[u8]) -> Result<Metadata, Error> {
+        let Some(&id) = self.names.get(repository) else {
+            return Err(Error::Missing(What::Repository));
+        };
+        let stored = self.repositories.get(id).expect("live repository name");
+        Ok(Metadata { name: copy_of(&stored.name), default_branch: copy_of(&stored.default) })
+    }
+
+    /// A stored user's permission, with no rate, fault or observation effect.
+    pub fn permission(&self, repository: &[u8], user: u64) -> Result<Permission, Error> {
+        let Some(&id) = self.names.get(repository) else {
+            return Err(Error::Missing(What::Repository));
+        };
+        Ok(self.repositories.get(id).expect("live repository name").permission(user))
     }
 
     /// The next observation, oldest first.

@@ -50,6 +50,7 @@ pub struct Domain {
     pub(crate) fleet: fleet::Domain,
     pub(crate) brief: brief::Domain,
     pub(crate) notes: notes::Domain,
+    pub(crate) wiki_pending: Set<notes::Scope>,
     pub(crate) views: views::Domain,
     /// The items held, by their names.
     pub(crate) items: Slab<Entry>,
@@ -144,6 +145,7 @@ impl Domain {
             fleet: fleet::Domain::new(&limits.fleet),
             brief: brief::Domain::new(&limits.brief),
             notes: notes::Domain::new(&limits.notes),
+            wiki_pending: Set::with_capacity(limits.notes.scopes),
             views: views::Domain::new(&limits.views, now),
             config,
             items: Slab::with_capacity(limits::entries(limits).expect("worst_case accepted the limits")),
@@ -271,6 +273,7 @@ impl Domain {
             || !self.grant_pending.is_empty()
             || self.forge.is_ready()
             || self.fleet.is_ready()
+            || !self.wiki_pending.is_empty()
             || self.notes.is_ready()
             || !self.stalled.is_empty()
             || !self.resaves.is_empty()
@@ -367,6 +370,8 @@ pub fn resume(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) 
     domain.steps = Steps::NONE;
     if crate::credentials::ready(domain) {
         crate::credentials::resume(domain, env);
+    } else if !domain.wiki_pending.is_empty() {
+        route::wiki_resume(domain, env);
     } else if domain.forge.is_ready() {
         route::forge_resume(domain, env);
     } else if domain.fleet.is_ready() {

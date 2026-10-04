@@ -5,6 +5,51 @@ The design authority is `docs/design/protocol.md`, with the detailed
 `channel.md`, `credentials.md`, `llm.md` and `forge.md` taking precedence
 over their overview where the overview has not caught up.
 
+## Paused handoff: 2026-10-04, 12:58 UTC
+
+The user requested a graceful pause after disconnecting the network. All
+three implementation agents are idle; no task build, conformance runner
+or scratch Forgejo server remains active. Resume only at the user's request.
+
+The verified local main is `8a13dde`; the shared `protocol-layer` branch
+has the next increment saved as uncommitted changes and untracked files.
+Nothing is staged. The proposed isolated checkpoint and full workspace
+gate have not run, and no new merge was made during this pause.
+
+Ready for the next checkpoint, with scoped checks passed:
+
+- Engine credential/OAuth owner, keeper boundary and worlds: 19 focused
+  tests, a 12-seed socket sweep, occupied memory and strict lint.
+- Agent HTTP/SSE exchange, rotating fake OAuth issuer and fake provider:
+  five exchange tests, four paired provider tests, three occupied-memory
+  tests and strict lint.
+- Forgejo documents, signed webhooks and live v15 fixtures; fake HTTP
+  translation and bounded comment-row streaming: observed fixture and
+  occupied-memory tests, four fake HTTP tests and strict lint.
+- Forge costs, own-echo filtering and coalesced wiki refreshes: root/forge
+  unit, focused, memory and fuzzy checks, plus strict lint. The calm-world
+  closed-write trace is `/tmp/temper-forge-closed-evidence.txt`.
+
+Keep these later drafts out of that checkpoint until tested:
+
+- `crates/temper-agent-protocol/src/client.rs` compiles and passes scoped
+  lint, but needs actual Io/simulator lifecycle and memory worlds. Its
+  `pub mod client` export remains in the working tree; omit that export
+  from a checkpoint that excludes the file.
+- The fake forge's `acceptor.rs` is unexported. Socket acceptance,
+  outbound signed hooks and the engine webhook receiver are next.
+- Engine `forge_cursor.rs` and `forge_blocks.rs` are unexported and
+  unchecked. `tests/engine/protocol/tests/forge_cursor.rs.draft` is
+  deliberately excluded from automatic test discovery.
+- Item comment times, explicit cursor bounds, keyed-creation label
+  reconciliation, typed record blocks and bounded Forge call plans are
+  still to implement and validate.
+
+The lockfile pins cached skein `78a07ec`; the local skein checkout remains
+read only. Use offline Cargo on resume. TLS integration still waits for
+the stream-contract decision described below; file/process facilities
+and streaming JSON prerequisites remain pending.
+
 ## Scope and sequence
 
 Implement the three currently designed boundaries, in the order of
@@ -61,6 +106,12 @@ SSE writer and TLS client. The channel checkpoint still uses `d873f985`.
 The HTTP-server merge `78a07ec` is a main ancestor whose stream contract
 is unchanged; it can unlock the server work while the following TLS
 contract change is reconciled.
+
+The next increment pins
+`78a07ec16d935e47ed921083f127798a8f3a3f22`, imported from that same local
+checkout into Cargo's git cache. This enables the fake services and
+webhook HTTP stack. Client and server protocol worlds use plain streams;
+production off-host use still requires the TLS boundary.
 
 That TLS merge restricts each `Room` grant to one `Send`. The current
 channel's documented whole-cap fallback reuses byte credit across several
@@ -141,12 +192,27 @@ OAuth rotation and forge implementation are the next increment.
 
 - Tokens and provider account-id bytes never enter domain records. Grant names remain
   `(account, generation)` and generation survives restart.
+- OAuth request, response, claims and saved-record types omit `Debug`;
+  typed failure diagnostics carry no secret values.
 - A failed durable save retries keeping the pending token, not rotating
   OAuth again. The old granted generation may stay usable while valid;
   the candidate is not handed out before its save succeeds. This follows
   the explicit durability ordering in `credentials.md`, section 6; its
   "usable but at risk" wording needs reconciliation if it was intended
   to expose the unsaved candidate instead.
+- A save timeout remains `Unsaved` after keeper cancellation settles.
+  Only an explicit account cancellation yields `Cancelled`. A successful
+  save that wins that race installs the durable generation before the
+  cancellation terminal. Token validity is anchored to response completion
+  and does not grow while waiting for persistence.
+- The OAuth owner exposes an atomic keeper effect. The future file owner
+  must replace the versioned record and sync both the file and directory
+  before reporting `Kept`; pure and socket worlds do not establish actual
+  filesystem durability.
+- Component-local operation tokens need a bounded whole-engine io router.
+  It must allocate global names, route them to tagged local owners and
+  retain every binding through actual io `Closed`, including terminal
+  operations whose old sockets are still settling.
 - Forge timestamps on the channel are source metadata. They are not
   local monotonic deadlines; validity and retry times cross as durations.
 - Fixture provenance is explicit. Generated examples must not be called
@@ -154,6 +220,21 @@ OAuth rotation and forge implementation are the next increment.
   inspecting their provenance.
 - Protocol translation owns mechanics and formats. Retry, token budget
   allocation and account admission decisions stay in domains.
+- Forge calls reserve one HTTP request at admission and settle their
+  actual cost at the terminal, including failures. Refunds belong only
+  to the reservation's window; extra costs also charge the priority share.
+  Concurrent multi-step calls can overshoot before their costs arrive;
+  this terminal accounting does not enforce a hard per-request rate cap.
+  Startup HTTP costs must be reported exactly once as well.
+- Wiki hints refresh only currently held notes scopes for their
+  repository, with deployment notes restricted to the home repository.
+  A bounded set coalesces hints and dispatches one scope per turn. The
+  configured engine's own echoes are dropped before hint routing.
+- Real Forgejo v15 omits unknown labels on successful create/add writes.
+  The protocol must inspect returned labels; keyed creation recovery
+  needs a repeat-safe label reconciliation phase before returning Created.
+  The retained live fixtures and tagged-source examples identify their
+  separate provenance.
 - Every worker-origin attempt input is checked against its current hosting
   channel in the fleet, including relays, facts, bounces and credential
   notices. Retired and foreign channels cannot act on a live attempt.

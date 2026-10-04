@@ -1,0 +1,8 @@
+{
+  "binary": "/tmp/temper-forgejo-15/forgejo-15.0.0-linux-amd64",
+  "version": "forgejo version 15.0.0+gitea-1.22.0 (release name 15.0.0) built with GNU Make 4.4.1, go1.26.2 : bindata, timetzdata, sqlite, sqlite_unlock_notify",
+  "sha256": "3919f10a7845f3b71bacc2c7a3bfa2cd71aed58a0b8be6ab5e95f2e150b4ded7",
+  "captured_at_utc": "2026-10-04T12:20:24Z",
+  "isolation": "new temporary directory, SQLite, loopback only; destroyed after capture",
+  "actions": "not run; source-derived metadata fixtures only"
+}

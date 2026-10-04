@@ -179,6 +179,7 @@ impl Measured {
                 | Request::Changed { .. }
                 | Request::Left { .. }
                 | Request::Forbidden { .. }
+                | Request::Wiki { .. }
                 | Request::Loaded => {}
             }
         }
@@ -424,7 +425,7 @@ fn run(limits: Limits, seed: u64, rounds: u64) -> (Measured, u64) {
         for call in std::mem::take(&mut pending) {
             if rng.chance(700) {
                 let result = answer(&limits, &mut rng, now, call.op);
-                let more = domain.step(Event::Answered { call: call.call, result });
+                let more = domain.step(Event::Answered { cost: 1, call: call.call, result });
                 kept.extend(more);
             } else {
                 kept.push(call);
@@ -440,7 +441,14 @@ fn run(limits: Limits, seed: u64, rounds: u64) -> (Measured, u64) {
             3 => Event::Retell { item, from: rng.below(6) },
             4 => {
                 let branch = if rng.chance(500) { Some(name(&limits, b'b')) } else { None };
-                Event::Hint { repository: item.repository, item: Some(item.number), commit: Some([1; 32]), branch }
+                Event::Hint {
+                    by: None,
+                    wiki: false,
+                    repository: item.repository,
+                    item: Some(item.number),
+                    commit: Some([1; 32]),
+                    branch,
+                }
             }
             5 => {
                 let all = reads(&limits, item);
@@ -509,7 +517,7 @@ fn bodies_of_payloads_are_named_not_held() {
     assert!(calls.is_empty(), "calls go out on resume");
     let calls = domain.turn();
     let check = calls.iter().find(|call| call.op == Asked::Page).expect("the page read first");
-    let calls = domain.step(Event::Answered { call: check.call, result: Err(Error::Missing) });
+    let calls = domain.step(Event::Answered { cost: 1, call: check.call, result: Err(Error::Missing) });
     assert!(calls.is_empty(), "calls go out on resume");
     let calls = domain.turn();
     let put = calls.iter().find(|call| call.op == Asked::Revision { put: true });
