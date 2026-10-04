@@ -38,6 +38,7 @@ use crate::translate::{self, FINISH, FIRST, Offered, SUB_AGENT};
 pub(crate) struct Peer {
     /// The run's token for the conversation, which is its session's opener.
     pub(crate) conversation: Token,
+    pub(crate) account: u32,
     /// The session's token for itself, once it has opened.
     pub(crate) session: Option<Token>,
     offered: Offered,
@@ -52,9 +53,10 @@ pub(crate) struct Peer {
 }
 
 impl Peer {
-    pub(crate) fn new(conversation: Token, offered: Offered, limits: &session::Limits) -> Peer {
+    pub(crate) fn new(conversation: Token, account: u32, offered: Offered, limits: &session::Limits) -> Peer {
         Peer {
             conversation,
+            account,
             session: None,
             offered,
             asks: Map::with_capacity(asks(limits)),
@@ -78,6 +80,7 @@ impl Peer {
         for said in content {
             let block = match said {
                 Said::Text { text } => sllm::Block::Text { text },
+                Said::Opaque { bytes } => sllm::Block::Opaque { bytes },
                 Said::ToolCall { id, name, input, call } => {
                     sllm::Block::ToolCall { id, name, input, call: self.decoded(call, limit) }
                 }
@@ -175,6 +178,7 @@ impl Peer {
     fn block(&self, block: sllm::Block) -> Block {
         match block {
             sllm::Block::Text { text } => Block::Text { text },
+            sllm::Block::Opaque { bytes } => Block::Opaque { bytes },
             sllm::Block::ToolCall { id, name, input, call: _ } => Block::ToolCall { id, name, input },
             sllm::Block::ToolResult { id, result } => {
                 let result = match result {

@@ -97,7 +97,7 @@ pub(crate) fn respond(
             Some(Part::ToolCall { id, name, arguments: _ }) => {
                 Part::ToolCall { id: id.clone(), name: name.clone(), arguments: copy_of(br#"{"pa"#) }
             }
-            Some(Part::Text { .. } | Part::ToolOutput { .. }) | None => {
+            Some(Part::Opaque { .. } | Part::Text { .. } | Part::ToolOutput { .. }) | None => {
                 unreachable!("an answer that calls tools starts with a call")
             }
         };
@@ -197,7 +197,7 @@ fn scripted(minted: &mut u64, query: &Query, turn: &Turn) -> Answer {
         Some(Part::ToolCall { id, name, arguments: _ }) => {
             Box::new([Part::ToolCall { id: id.clone(), name: name.clone(), arguments: copy_of(br#"{"pa"#) }])
         }
-        Some(Part::Text { .. } | Part::ToolOutput { .. }) | None => cut_text(),
+        Some(Part::Opaque { .. } | Part::Text { .. } | Part::ToolOutput { .. }) | None => cut_text(),
     };
     answer(query, parts.into_boxed(), turn.finish, turn.tokens, cut)
 }
@@ -276,7 +276,7 @@ fn answers(parts: &[Part], calls: &[Part]) -> bool {
                     return false;
                 }
             }
-            Part::Text { .. } | Part::ToolCall { .. } => {}
+            Part::Opaque { .. } | Part::Text { .. } | Part::ToolCall { .. } => {}
         }
     }
     for part in calls {
@@ -286,7 +286,7 @@ fn answers(parts: &[Part], calls: &[Part]) -> bool {
                     return false;
                 }
             }
-            Part::Text { .. } | Part::ToolOutput { .. } => {}
+            Part::Opaque { .. } | Part::Text { .. } | Part::ToolOutput { .. } => {}
         }
     }
     true
@@ -301,7 +301,7 @@ fn calls_with(parts: &[Part], wanted: &[u8]) -> u32 {
                     count = count.saturating_add(1);
                 }
             }
-            Part::Text { .. } | Part::ToolOutput { .. } => {}
+            Part::Opaque { .. } | Part::Text { .. } | Part::ToolOutput { .. } => {}
         }
     }
     count
@@ -316,7 +316,7 @@ fn outputs_for(parts: &[Part], wanted: &[u8]) -> u32 {
                     count = count.saturating_add(1);
                 }
             }
-            Part::Text { .. } | Part::ToolCall { .. } => {}
+            Part::Opaque { .. } | Part::Text { .. } | Part::ToolCall { .. } => {}
         }
     }
     count
@@ -347,7 +347,7 @@ fn says_any(parts: &[Part]) -> bool {
     for part in parts {
         match part {
             Part::Text { .. } => return true,
-            Part::ToolCall { .. } | Part::ToolOutput { .. } => {}
+            Part::Opaque { .. } | Part::ToolCall { .. } | Part::ToolOutput { .. } => {}
         }
     }
     false
@@ -357,7 +357,7 @@ fn calls_any(parts: &[Part]) -> bool {
     for part in parts {
         match part {
             Part::ToolCall { .. } => return true,
-            Part::Text { .. } | Part::ToolOutput { .. } => {}
+            Part::Opaque { .. } | Part::Text { .. } | Part::ToolOutput { .. } => {}
         }
     }
     false
@@ -369,6 +369,7 @@ fn text_of(message: &Message) -> u64 {
     for part in &message.parts {
         let size = match part {
             Part::Text { text } => len(text),
+            Part::Opaque { bytes } => len(bytes),
             Part::ToolCall { id: _, name, arguments } => len(name).saturating_add(len(arguments)),
             Part::ToolOutput { id: _, output, is_error: _ } => len(output),
         };

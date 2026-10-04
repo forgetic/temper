@@ -541,7 +541,7 @@ fn prepare_step(
         PrepareStep::Clone { repository } => {
             let repository = nth(holding, repository);
             let remote = copy_of(&repository.remote);
-            let identity = copy_of(&repository.identity);
+            let identity = repository.identity;
             Op::Clone { at: place(workspace, repository), remote, identity }
         }
         PrepareStep::Fetch { repository } | PrepareStep::Refetch { repository } => {
@@ -553,13 +553,13 @@ fn prepare_step(
                 Start::Commit { commit } => Want::Commit { commit: *commit },
             };
             let remote = copy_of(&repository.remote);
-            let identity = copy_of(&repository.identity);
+            let identity = repository.identity;
             Op::Fetch { at: place(workspace, repository), remote, want, identity }
         }
         PrepareStep::Default { repository } => {
             let repository = nth(holding, repository);
             let remote = copy_of(&repository.remote);
-            let identity = copy_of(&repository.identity);
+            let identity = repository.identity;
             Op::Fetch { at: place(workspace, repository), remote, want: Want::Default, identity }
         }
         PrepareStep::Create { repository, commit } => {
@@ -571,7 +571,7 @@ fn prepare_step(
                 }
             };
             let remote = copy_of(&repository.remote);
-            let identity = copy_of(&repository.identity);
+            let identity = repository.identity;
             Op::Create { at: place(workspace, repository), remote, branch, commit, identity }
         }
         PrepareStep::CheckOut { repository, commit } => {
@@ -620,7 +620,7 @@ fn push_from(
         let parent = tips(holding, repository).head;
         let title = copy_of(&push.message.title);
         let body = copy_of(&push.message.body);
-        io(id, Op::Commit { at, parent, title, body, identity: copy_of(&spec.identity) }, env, out);
+        io(id, Op::Commit { at, parent, title, body, identity: spec.identity }, env, out);
         return State::Pushing { push, step: PushStep::Commit { repository }, asked: Asked::Nothing };
     }
     answer(holding.client, &push.to, Outcome::Pushed { landings: push.landings.into_boxed() }, out);
@@ -725,7 +725,7 @@ fn push_commit(
     let branch = branch_of(spec, &push.to);
     let at = place(holding.workspace.token(), spec);
     let remote = copy_of(&spec.remote);
-    let identity = copy_of(&spec.identity);
+    let identity = spec.identity;
     io(id, Op::Push { at, remote, commit, branch, identity }, env, out);
     State::Pushing { push, step: PushStep::Push { repository }, asked: Asked::Nothing }
 }
@@ -777,7 +777,7 @@ fn verify(
     let want = Want::Branch { branch: branch_of(spec, &push.to) };
     let at = place(holding.workspace.token(), spec);
     let remote = copy_of(&spec.remote);
-    let identity = copy_of(&spec.identity);
+    let identity = spec.identity;
     io(id, Op::Fetch { at, remote, want, identity }, env, out);
     State::Pushing { push, step: PushStep::Verify { repository, failure }, asked }
 }
@@ -950,7 +950,7 @@ fn fits(spec: &Spec, limits: &Limits) -> bool {
             None => true,
         };
         let directory = named(&repository.name, limits) && component(&repository.name);
-        let reached = named(&repository.remote, limits) && named(&repository.identity, limits);
+        let reached = named(&repository.remote, limits);
         if !directory || !reached || !start || !push {
             return false;
         }

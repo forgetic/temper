@@ -117,8 +117,8 @@ use skein_lib::{Env, Id, List, Map, Queue, ReplyTo, Set, Slab, Token};
 
 use crate::assignment::{self, len};
 use crate::boundary::{
-    AgentFailure, Answer, Ask, Assignment, Bounce, Failure, Finish, Hosting, Landed, Landing, Phase, Preparation, Push,
-    Reason, Refusal, Reply, Request, RunFailure, Work,
+    AgentFailure, Answer, Ask, Assignment, Bounce, Failure, Finish, Grant, Hosting, Landed, Landing, Phase,
+    Preparation, Push, Reason, Refusal, Reply, Request, RunFailure, Work,
 };
 use crate::call::{self, Call};
 use crate::domain::Domain;
@@ -132,6 +132,9 @@ pub(crate) struct Hosted {
     attempt: Token,
     /// How many repositories its workspace lists.
     repositories: u32,
+    tags: Box<[u32]>,
+    grants: Box<[Grant]>,
+    refreshed: bool,
     /// The saved-work branch, if its unfinished work is saved; taken as it is.
     save: Option<Box<[u8]>>,
     /// The repositories its pushes landed in, by their place in the workspace,
@@ -146,15 +149,21 @@ pub(crate) struct Hosted {
 }
 
 #[derive(Debug)]
+pub(crate) struct NamedEvent {
+    name: Token,
+    event: Box<[u8]>,
+}
+
+#[derive(Debug)]
 enum State {
     /// Its workspace is being prepared. The charter and the snapshot wait for
     /// the agent, and inbound events in `held`.
-    Preparing { reply_to: ReplyTo, charter: Box<[u8]>, snapshot: Option<Box<[u8]>>, held: Queue<Box<[u8]>> },
+    Preparing { reply_to: ReplyTo, charter: Box<[u8]>, snapshot: Option<Box<[u8]>>, held: Queue<NamedEvent> },
     /// Cancelled for `reason` as it was prepared: it answers once the prepare
     /// has settled.
     Cancelling { reply_to: ReplyTo, reason: Reason },
     /// Its agent is starting in `workspace`.
-    Starting { reply_to: ReplyTo, workspace: Token, held: Queue<Box<[u8]>> },
+    Starting { reply_to: ReplyTo, workspace: Token, held: Queue<NamedEvent> },
     /// Cancelled for `reason` as its agent started: the agent is stopped once
     /// it has started.
     Unwanted { reply_to: ReplyTo, workspace: Token, reason: Reason },
@@ -216,13 +225,20 @@ pub(crate) fn assign(
         refuse(reply_to, &assignment, Refusal::Busy, out);
         return;
     }
-    let Assignment { run, attempt, workspace, save, charter, snapshot } = assignment;
+    let Assignment { run, attempt, workspace, save, charter, snapshot, grants } = assignment;
     let repositories = u32::try_from(workspace.repositories.len()).expect("checked against the limits");
+    let mut tags = List::with_capacity(repositories);
+    for repository in &workspace.repositories {
+        tags.push(repository.tag).expect("room for every repository tag");
+    }
     let held = Queue::with_capacity(env.limits.held);
     let entry = Hosted {
         run,
         attempt,
         repositories,
+        tags: tags.into_boxed(),
+        grants,
+        refreshed: false,
         save,
         landed: Map::with_capacity(repositories),
         relays: Set::with_capacity(env.limits.run_calls),
@@ -241,6 +257,7 @@ pub(crate) fn inbound(
     env: &Env<Limits>,
     run: Token,
     attempt: Token,
+    name: Token,
     event: Box<[u8]>,
     out: &mut Queue<Request>,
 ) {
@@ -248,26 +265,26 @@ pub(crate) fn inbound(
         return;
     };
     if len(&event) > env.limits.event_bytes {
-        out.push(Request::Bounced { run, attempt, bounce: Bounce::TooLarge });
+        out.push(Request::Bounced { run, attempt, name, bounce: Bounce::TooLarge });
         return;
     }
     let entry = domain.hosted.get_mut(id).expect("a named run is hosted");
     let state = mem::replace(&mut entry.state, State::Closed);
     entry.state = match state {
         State::Preparing { reply_to, charter, snapshot, mut held } => {
-            hold(&mut held, event, run, attempt, out);
+            hold(&mut held, NamedEvent { name, event }, run, attempt, out);
             State::Preparing { reply_to, charter, snapshot, held }
         }
         State::Starting { reply_to, workspace, mut held } => {
-            hold(&mut held, event, run, attempt, out);
+            hold(&mut held, NamedEvent { name, event }, run, attempt, out);
             State::Starting { reply_to, workspace, held }
         }
         State::Active { reply_to, workspace, agent } | State::Waiting { reply_to, workspace, agent } => {
-            out.push(Request::Deliver { agent, event });
+            out.push(Request::Deliver { agent, name, event });
             State::Active { reply_to, workspace, agent }
         }
         state @ (State::Cancelling { .. } | State::Unwanted { .. } | State::Stopping { .. } | State::Saving { .. }) => {
-            out.push(Request::Bounced { run, attempt, bounce: Bounce::Ending });
+            out.push(Request::Bounced { run, attempt, name, bounce: Bounce::Ending });
             state
         }
         State::Closed => unreachable!("a closed run has left the names"),
@@ -394,7 +411,12 @@ pub(crate) fn prepared(domain: &mut Domain, owner: Token, workspace: Token, out:
     let state = mem::replace(&mut entry.state, State::Closed);
     entry.state = match state {
         State::Preparing { reply_to, charter, snapshot, held } => {
-            out.push(Request::Start { owner, workspace, charter, snapshot });
+            let mut grants = List::with_capacity(u32::try_from(entry.grants.len()).expect("validated grants"));
+            for grant in &entry.grants {
+                grants.push(*grant).expect("room for every grant");
+            }
+            out.push(Request::Start { owner, workspace, charter, snapshot, grants: grants.into_boxed() });
+            entry.refreshed = false;
             State::Starting { reply_to, workspace, held }
         }
         State::Cancelling { reply_to, reason } => {
@@ -455,12 +477,18 @@ pub(crate) fn started(domain: &mut Domain, env: &Env<Limits>, owner: Token, agen
     let state = mem::replace(&mut entry.state, State::Closed);
     entry.state = match state {
         State::Starting { reply_to, workspace, mut held } => {
+            if entry.refreshed {
+                for grant in &entry.grants {
+                    out.push(Request::Grant { agent, grant: *grant });
+                }
+                entry.refreshed = false;
+            }
             // Bounded: the hold has room for the limit, and no more.
             for _ in 0..env.limits.held {
                 let Some(event) = held.pop() else {
                     break;
                 };
-                out.push(Request::Deliver { agent, event });
+                out.push(Request::Deliver { agent, name: event.name, event: event.event });
             }
             State::Active { reply_to, workspace, agent }
         }
@@ -531,12 +559,12 @@ pub(crate) fn withdrawn(domain: &mut Domain, owner: Token, call: Token, out: &mu
     conclude(domain, id, out);
 }
 
-pub(crate) fn bounced(domain: &mut Domain, owner: Token, bounce: Bounce, out: &mut Queue<Request>) {
+pub(crate) fn bounced(domain: &mut Domain, owner: Token, name: Token, bounce: Bounce, out: &mut Queue<Request>) {
     let id = Id::<Hosted>::from_token(owner);
     let entry = domain.hosted.get(id).expect("a run lives until its agent has gone");
     match &entry.state {
         State::Active { .. } | State::Waiting { .. } | State::Stopping { .. } => {
-            out.push(Request::Bounced { run: entry.run, attempt: entry.attempt, bounce });
+            out.push(Request::Bounced { run: entry.run, attempt: entry.attempt, name, bounce });
         }
         State::Preparing { .. }
         | State::Cancelling { .. }
@@ -678,7 +706,16 @@ pub(crate) fn pushed(domain: &mut Domain, owner: Token, push: Box<[Landing]>, ou
     for (landing, index) in push.iter().zip(0..repositories) {
         match landing {
             Landing::Landed { commit } => {
-                entry.landed.insert(index, *commit).expect("room for every repository");
+                entry
+                    .landed
+                    .insert(
+                        *entry
+                            .tags
+                            .get(usize::try_from(index).expect("a repository index fits"))
+                            .expect("every repository has a tag"),
+                        *commit,
+                    )
+                    .expect("room for every repository");
             }
             Landing::Moved | Landing::Failed | Landing::Refused | Landing::Explained { .. } | Landing::Unchanged => {}
         }
@@ -878,7 +915,7 @@ fn answer(
     let (run, attempt) = (entry.run, entry.attempt);
     let mut landed = List::with_capacity(entry.landed.len());
     for (repository, commit) in &entry.landed {
-        let last = Landed { repository: *repository, commit: *commit };
+        let last = Landed { tag: *repository, commit: *commit };
         landed.push(last).expect("room for every repository landed in");
     }
     let work = Work { landed: landed.into_boxed(), saved };
@@ -906,9 +943,10 @@ fn refuse(reply_to: ReplyTo, assignment: &Assignment, refusal: Refusal, out: &mu
 }
 
 /// Holds `event` until the run is live, or bounces it if the hold is full.
-fn hold(held: &mut Queue<Box<[u8]>>, event: Box<[u8]>, run: Token, attempt: Token, out: &mut Queue<Request>) {
+fn hold(held: &mut Queue<NamedEvent>, event: NamedEvent, run: Token, attempt: Token, out: &mut Queue<Request>) {
+    let name = event.name;
     if held.try_push(event).is_err() {
-        out.push(Request::Bounced { run, attempt, bounce: Bounce::Full });
+        out.push(Request::Bounced { run, attempt, name, bounce: Bounce::Full });
     }
 }
 
@@ -1087,5 +1125,34 @@ fn phase(state: &State) -> Phase {
             Phase::Ending
         }
         State::Closed => unreachable!("a closed run has left the names"),
+    }
+}
+
+/// A refresh is fenced to the attempt and to one of its admitted accounts.
+pub(crate) fn grant(domain: &mut Domain, run: Token, attempt: Token, grant: Grant, out: &mut Queue<Request>) {
+    let Some(id) = fenced(&domain.names, &domain.hosted, run, attempt) else {
+        return;
+    };
+    let entry = domain.hosted.get_mut(id).expect("a named run is hosted");
+    let mut accepted = false;
+    for current in &mut entry.grants {
+        if current.account == grant.account && current.generation <= grant.generation {
+            *current = grant;
+            accepted = true;
+        }
+    }
+    if !accepted {
+        return;
+    }
+    entry.refreshed = true;
+    match entry.state {
+        State::Active { agent, .. } | State::Waiting { agent, .. } => out.push(Request::Grant { agent, grant }),
+        State::Preparing { .. }
+        | State::Starting { .. }
+        | State::Cancelling { .. }
+        | State::Unwanted { .. }
+        | State::Stopping { .. }
+        | State::Saving { .. }
+        | State::Closed => {}
     }
 }

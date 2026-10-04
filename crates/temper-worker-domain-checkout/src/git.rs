@@ -62,27 +62,27 @@ pub enum Op {
     /// Clone the repository at `remote` on the forge into its directory, which
     /// does not exist yet, without checking a tree out. Fails `Missing` if the
     /// forge has no such repository.
-    Clone { at: Place, remote: Box<[u8]>, identity: Box<[u8]> },
+    Clone { at: Place, remote: Box<[u8]>, identity: u32 },
     /// Fetch `want` from the repository at `remote` into the repository. Ends
     /// in `Fetched`, or fails `Missing` if the forge has no such branch or
     /// commit, or no default branch.
-    Fetch { at: Place, remote: Box<[u8]>, want: Want, identity: Box<[u8]> },
+    Fetch { at: Place, remote: Box<[u8]>, want: Want, identity: u32 },
     /// Create `branch` on the forge at `commit`, only if it does not exist:
     /// a branch that does is left where it is, and the operation ends in
     /// `Exists`.
-    Create { at: Place, remote: Box<[u8]>, branch: Box<[u8]>, commit: Commit, identity: Box<[u8]> },
+    Create { at: Place, remote: Box<[u8]>, branch: Box<[u8]>, commit: Commit, identity: u32 },
     /// Make the repository's working tree exactly `commit`'s tree: what is not
     /// in it is removed, and the git directory is left as it is.
     CheckOut { at: Place, commit: Commit },
     /// Commit the working tree exactly as it is, on `parent`, with the message
     /// `title` and `body`, authored as `identity`. Ends in `Committed`, or in
     /// `Unchanged` if the tree is `parent`'s.
-    Commit { at: Place, parent: Commit, title: Box<[u8]>, body: Box<[u8]>, identity: Box<[u8]> },
+    Commit { at: Place, parent: Commit, title: Box<[u8]>, body: Box<[u8]>, identity: u32 },
     /// Push `commit` to `branch` on the forge, as a fast-forward, never forced:
     /// a branch that does not exist is created, and one that is not an
     /// ancestor of `commit` is left where it is, and the operation ends in
     /// `Rejected`.
-    Push { at: Place, remote: Box<[u8]>, commit: Commit, branch: Box<[u8]>, identity: Box<[u8]> },
+    Push { at: Place, remote: Box<[u8]>, commit: Commit, branch: Box<[u8]>, identity: u32 },
 }
 
 /// What a fetch asks for.

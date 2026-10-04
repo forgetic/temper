@@ -315,6 +315,8 @@ pub enum End {
 /// What kept an LLM from going on.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Fault {
+    /// The account spent its provider allowance. The engine retries after cooldown.
+    Exhausted,
     /// Its provider failed for good: unreachable, overloaded past the
     /// retries, or refusing the call or its credentials.
     Provider,

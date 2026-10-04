@@ -82,6 +82,7 @@ pub enum Heard {
     /// An inbound event; its first eight bytes are its place in the order
     /// the client sent them.
     Event {
+        name: u64,
         event: Vec<u8>,
     },
     Answer {
@@ -89,6 +90,7 @@ pub enum Heard {
         answer: Answer,
     },
     Cancel,
+    Grant,
 }
 
 /// An answer, as the scripted agent reads it.
@@ -411,18 +413,19 @@ impl Agent {
     pub fn hear(&mut self, now: Time, heard: Heard) -> Vec<Act> {
         let mut acts = Vec::new();
         match heard {
+            Heard::Grant => {}
             Heard::Start { .. } => {
                 assert_eq!(self.phase, Phase::Unstarted, "the start comes first, once");
                 self.phase = Phase::Working;
                 self.next(&mut acts);
             }
-            Heard::Event { event } => {
+            Heard::Event { name, event } => {
                 assert!(self.phase != Phase::Unstarted, "events come after the start");
                 let place: [u8; 8] = event.get(..8).expect("an event begins with its place").try_into().expect("eight");
                 let place = u64::from_be_bytes(place);
                 assert!(self.last_event < Some(place), "inbound events come once each, in the order sent");
                 self.last_event = Some(place);
-                self.heard += 1;
+                self.heard = name;
                 if self.phase == Phase::Waiting {
                     self.write(now, Said::Fact { text: b"woken".to_vec() }, &mut acts);
                     self.phase = Phase::Working;

@@ -463,10 +463,6 @@ yet, each to be designed before it is built:
 - **Saving periodically** (4.2), so a dying worker loses less: a run
   saves at park, at an unfinished end and at cancel only.
 - **Checks-only runs and code-graph indexing** (section 10).
-- **Agent configuration in a spawn:** a spawn carries the charter, the
-  snapshot and where the repositories sit. Its LLM endpoints and its
-  grants are designed (channel.md, 6.1; credentials.md, section 7), not
-  built.
 - **Several workers in one world:** the whole worker's world runs one;
   the engine's placement across several, preferring one that holds the
   workstream's checkout, is exercised with scripted workers in the
@@ -474,6 +470,14 @@ yet, each to be designed before it is built:
 - **A workspace's repositories in parallel:** a checkout runs one
   operation at a time, so its repositories are cloned, fetched and pushed
   one after another.
+
+The domain now carries repository tags, identities and agent metadata,
+named inbound acknowledgements and bounces, and LLM grant names in spawns
+and later notices. The protocol supplies endpoint descriptors and secret
+grant values at the boundary (channel.md, 6.1; credentials.md, section 7).
+Static git identities remain in the worker. Integration below this domain
+is tracked in
+[protocol-implementation.md](../development/protocol-implementation.md).
 
 ## 12. Deferred conformance issues
 

@@ -35,6 +35,8 @@ const CEILING: session::Budget = session::Budget {
 };
 
 const LIMITS: Limits = Limits {
+    accounts: 4,
+    skew: Duration::ZERO,
     run: run::Limits {
         runs: 2,
         conversations: 4,
@@ -166,8 +168,15 @@ impl Harness {
     /// Starts a run of `charter` for call `call`, and has it find no guide:
     /// the run's token, and main's first call to its LLM.
     fn admit(&mut self, call: u64, charter: Charter) -> (Token, Token, Prompt) {
-        let emitted =
-            self.step(Event::Start { reply_to: ReplyTo::new(Token::new(call)), worker: Token::new(call), charter });
+        let emitted = self.step(Event::Start {
+            grants: Box::new([crate::Grant {
+                name: crate::GrantName { account: 0, generation: 0 },
+                valid: Duration::from_secs(100_000),
+            }]),
+            reply_to: ReplyTo::new(Token::new(call)),
+            worker: Token::new(call),
+            charter,
+        });
         let [Request::Admitted { worker: _, run }, Request::Read { owner, .. }] = &*emitted else {
             panic!("expected an admitted run, got {emitted:?}");
         };
@@ -204,7 +213,7 @@ fn charter() -> Charter {
         grants: Grants { tools: TOOLS, forge: false, agents: true, outlets: Box::new([]) },
         outcome: OutcomeSpec { change: None, verdicts: Box::new([rule(b"approve")]) },
         budget: BUDGET,
-        llm: Llm { endpoint: Endpoint(1), model: bytes(b"model-a"), max_tokens: 512 },
+        llm: Llm { account: 0, endpoint: Endpoint(1), model: bytes(b"model-a"), max_tokens: 512 },
         models: Box::new([]),
     }
 }
@@ -248,7 +257,7 @@ fn completing(emitted: Box<[Request]>) -> (Token, Prompt) {
     let Ok(one) = Box::<[Request; 1]>::try_from(emitted) else {
         panic!("expected one request");
     };
-    let [Request::Complete { owner, prompt, timeout }] = *one else {
+    let [Request::Complete { owner, prompt, timeout, grant: _ }] = *one else {
         panic!("expected a call to an LLM");
     };
     assert_eq!(timeout, LIMITS.session.call_timeout);
@@ -258,6 +267,106 @@ fn completing(emitted: Box<[Request]>) -> (Token, Prompt) {
 /// The blocks of `prompt`'s last message.
 fn last(prompt: &Prompt) -> &[Block] {
     &prompt.messages.last().expect("a prompt has messages").content
+}
+
+#[test]
+fn opaque_reasoning_returns_in_its_position_without_becoming_text() {
+    let mut h = Harness::new();
+    let (_, owner, _) = h.admit(7, charter());
+    let content = Box::new([
+        Said::Opaque { bytes: bytes(b"provider reasoning") },
+        owned(b"r", Call::Read { path: path(false, &[b"src"]), skip: 0, lines: Some(1) }),
+    ]);
+    let emitted = h.answer(owner, content);
+    let [Request::Io { owner: tool, .. }] = &*emitted else { panic!("expected read") };
+    let done = tools::Done::Loaded { content: bytes(b"line"), version: tools::Version::new([1; 4]) };
+    let (_, prompt) = completing(h.step(Event::Done { owner: *tool, done }));
+    let assistant = prompt.messages.get(1).expect("assistant message kept");
+    let Some(Block::Opaque { bytes: value }) = assistant.content.first() else { panic!("opaque block preserved") };
+    assert_eq!(value.as_ref(), b"provider reasoning");
+    let Some(crate::Content::Call { input, .. }) = h.domain.pop_content() else { panic!("call content is available") };
+    assert_eq!(input.as_ref(), b"{}", "call arguments remain content");
+    let Some(crate::Content::Usage { usage, .. }) = h.domain.pop_content() else { panic!("usage fact") };
+    assert_eq!(usage, USAGE);
+    let Some(crate::Content::Tool { done: tools::Done::Loaded { content, .. }, .. }) = h.domain.pop_content() else {
+        panic!("tool output content")
+    };
+    assert_eq!(content.as_ref(), b"line");
+}
+
+#[test]
+fn content_overflow_drops_and_counts_without_changing_decisions() {
+    let mut keeping = Harness::new();
+    let limits = Limits { session: session::Limits { facts: 0, ..LIMITS.session }, ..LIMITS };
+    let mut dropping = Harness::with(&limits);
+    let (_, kept, _) = keeping.admit(7, charter());
+    let (_, dropped, _) = dropping.admit(7, charter());
+    assert_eq!(keeping.says(kept, b"working"), dropping.says(dropped, b"working"));
+    assert!(keeping.domain.pop_content().is_some());
+    assert!(dropping.domain.pop_content().is_none());
+    assert!(dropping.domain.facts_lost() > keeping.domain.facts_lost(), "content loss is counted");
+}
+
+#[test]
+fn grant_updates_do_not_change_a_call_in_flight_and_rejections_are_once_per_generation() {
+    let limits = Limits { session: session::Limits { retries: 3, ..LIMITS.session }, ..LIMITS };
+    let mut h = Harness::with(&limits);
+    let (_, owner, _) = h.admit(7, charter());
+    let next = crate::Grant { name: crate::GrantName { account: 0, generation: 1 }, valid: Duration::from_secs(60) };
+    assert!(h.step(Event::Grant { grant: next }).is_empty());
+    assert_eq!(
+        &*h.step(Event::Failed { owner, failure: crate::llm::Failure::Unauthorized }),
+        &[Request::Rejected { grant: crate::GrantName { account: 0, generation: 0 } }]
+    );
+    h.env.now = h.domain.next_deadline().expect("unauthorized retry backoff");
+    let emitted = h.fire();
+    let [Request::Complete { grant, .. }] = &*emitted else { panic!("expected retry") };
+    assert_eq!(*grant, next.name);
+    assert_eq!(
+        &*h.step(Event::Failed { owner, failure: crate::llm::Failure::Unauthorized }),
+        &[Request::Rejected { grant: next.name }]
+    );
+    h.env.now = h.domain.next_deadline().expect("second retry");
+    drop(h.fire());
+    assert!(h.step(Event::Failed { owner, failure: crate::llm::Failure::Unauthorized }).is_empty());
+}
+
+#[test]
+fn no_grant_fails_locally_and_exhaustion_reports_the_account() {
+    let mut h = Harness::new();
+    let mut ungranted = charter();
+    ungranted.llm.account = 9;
+    let emitted = h.step(Event::Start {
+        reply_to: ReplyTo::new(Token::new(7)),
+        worker: Token::new(7),
+        charter: ungranted,
+        grants: Box::new([]),
+    });
+    let [Request::Admitted { run, .. }, Request::Read { .. }] = &*emitted else { panic!("expected admission") };
+    assert!(
+        h.step(Event::Read { owner: *run, read: run::Read::Missing }).is_empty(),
+        "no provider request without a grant"
+    );
+    assert!(h.domain.next_deadline().is_some(), "local unauthorized waits for a grant");
+    let mut h = Harness::new();
+    let (_, owner, _) = h.admit(7, charter());
+    let retry_after = Duration::from_secs(30);
+    let emitted = h.step(Event::Failed { owner, failure: crate::llm::Failure::Exhausted { retry_after } });
+    let Some(Request::Exhausted { account: 0, retry_after: span }) = emitted.first() else {
+        panic!("exhaustion notice")
+    };
+    assert_eq!(*span, retry_after);
+    let mut failed = false;
+    for request in &emitted {
+        if let Request::Answer {
+            answer: run::Answer::Failed { failure: run::Failure::Model(run::Fault::Exhausted), .. },
+            ..
+        } = request
+        {
+            failed = true;
+        }
+    }
+    assert!(failed, "the exhausted account ends the run");
 }
 
 #[test]
@@ -272,13 +381,13 @@ fn the_limits_fit_and_a_session_must_take_what_the_run_asks() {
 
 #[test]
 fn what_an_entry_point_may_emit_grows_with_the_tools_cancels_only_once() {
-    assert_eq!(max_out(&LIMITS), 144);
+    assert_eq!(max_out(&LIMITS), 145);
     // A kit's close cancels as many operations as the tools run, which go out
     // to io and lead nowhere else: what the run is sent does not grow with
     // them.
     let tools = tools::Limits { calls: 256, ..LIMITS.session.tools };
     let wide = Limits { session: session::Limits { parallel_tools: 8, tools, ..LIMITS.session }, ..LIMITS };
-    assert_eq!(max_out(&wide), 6006);
+    assert_eq!(max_out(&wide), 6007);
     let wider =
         Limits { session: session::Limits { tools: tools::Limits { calls: 512, ..tools }, ..wide.session }, ..wide };
     assert_eq!(max_out(&wider) - max_out(&wide), 21 * 256, "a kit's cancels for each session step");
@@ -324,6 +433,10 @@ fn a_checkout_the_tools_cannot_lay_out_refuses_main_as_invalid() {
         repositories: Box::new([Repository { name: bytes(b"ai/temper"), root: Token::new(900), writable: true }]),
     };
     let emitted = h.step(Event::Start {
+        grants: Box::new([crate::Grant {
+            name: crate::GrantName { account: 0, generation: 0 },
+            valid: Duration::from_secs(100_000),
+        }]),
         reply_to: ReplyTo::new(Token::new(7)),
         worker: Token::new(7),
         charter: Charter { checkout, ..charter() },
@@ -348,6 +461,10 @@ fn an_opening_larger_than_a_session_holds_refuses_main_as_invalid() {
     let mut h = Harness::with(&limits);
     let brief = filler(2048);
     let emitted = h.step(Event::Start {
+        grants: Box::new([crate::Grant {
+            name: crate::GrantName { account: 0, generation: 0 },
+            valid: Duration::from_secs(100_000),
+        }]),
         reply_to: ReplyTo::new(Token::new(7)),
         worker: Token::new(7),
         charter: Charter { brief, ..charter() },

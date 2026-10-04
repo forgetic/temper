@@ -167,7 +167,7 @@ fn repository(name: &[u8], writable: bool) -> Repository {
         name: bytes(name),
         remote: remote(name),
         start: Start::Branch { branch: bytes(b"main") },
-        identity: bytes(b"bot"),
+        identity: 0,
         push,
     }
 }
@@ -264,13 +264,12 @@ fn a_new_workspace_is_made_then_each_repository_cloned_fetched_and_checked_out()
     let mut h = Harness::new(LIMITS);
     let (hold, op) = h.prepare(7, two(b"issue-1"));
     let Op::Make { workspace } = op else { panic!("a new workspace is made: {op:?}") };
-    let identity = bytes(b"bot");
-    let clone_a = Op::Clone { at: place(workspace, b"a"), remote: remote(b"a"), identity: identity.clone() };
+    let identity = 0;
+    let clone_a = Op::Clone { at: place(workspace, b"a"), remote: remote(b"a"), identity };
     assert_eq!(h.next(hold, Done::Succeeded), clone_a);
-    let clone_b = Op::Clone { at: place(workspace, b"b"), remote: remote(b"b"), identity: identity.clone() };
+    let clone_b = Op::Clone { at: place(workspace, b"b"), remote: remote(b"b"), identity };
     assert_eq!(h.next(hold, Done::Succeeded), clone_b);
-    let fetch_a =
-        Op::Fetch { at: place(workspace, b"a"), remote: remote(b"a"), want: want_main(), identity: identity.clone() };
+    let fetch_a = Op::Fetch { at: place(workspace, b"a"), remote: remote(b"a"), want: want_main(), identity };
     assert_eq!(h.next(hold, Done::Succeeded), fetch_a);
     let check_out_a = Op::CheckOut { at: place(workspace, b"a"), commit: commit(1) };
     assert_eq!(h.next(hold, Done::Fetched { commit: commit(1) }), check_out_a);
@@ -375,7 +374,6 @@ fn a_spec_beyond_the_limits_is_refused_at_the_entrance() {
         spec(&long, Box::new([repository(b"a", true)])),
         spec(b"w", Box::new([repository(&long, true)])),
         spec(b"w", Box::new([repository(b"", true)])),
-        spec(b"w", Box::new([Repository { identity: bytes(&long), ..repository(b"a", true) }])),
         spec(b"w", Box::new([Repository { push: Some(bytes(b"")), ..repository(b"a", true) }])),
         spec(b"w", Box::new([Repository { start: Start::Base { branch: bytes(&long) }, ..repository(b"a", true) }])),
         spec(b"w", Box::new([Repository { remote: bytes(b""), ..repository(b"a", true) }])),
@@ -397,7 +395,7 @@ fn a_spec_beyond_the_limits_is_refused_at_the_entrance() {
     assert_eq!((h.domain.workspaces(), h.domain.holds()), (0, 0), "nothing is held");
     // At the limits, it is admitted; and a name may look like a git
     // directory's or have dots, so long as it is not one.
-    let at = Repository { identity: bytes(&long[..16]), remote: bytes(&long[..16]), ..repository(&long[..16], true) };
+    let at = Repository { identity: 0, remote: bytes(&long[..16]), ..repository(&long[..16], true) };
     h.prepare(1, spec(&long[..16], Box::new([at, repository(b".gitx", false)])));
     h.prepare(2, spec(b"v", Box::new([repository(b"...", true), repository(b".git.", false)])));
 }
@@ -414,13 +412,8 @@ fn a_missing_base_branch_is_created_from_the_default_branch() {
     let default = h.next(hold, failed(Fault::Missing { missing: Missing::Branch }));
     let Op::Fetch { want: Want::Default, .. } = default else { panic!("then the default branch: {default:?}") };
     let create = h.next(hold, Done::Fetched { commit: commit(9) });
-    let expected = Op::Create {
-        at: at.clone(),
-        remote: remote(b"a"),
-        branch: bytes(b"temper/1"),
-        commit: commit(9),
-        identity: bytes(b"bot"),
-    };
+    let expected =
+        Op::Create { at: at.clone(), remote: remote(b"a"), branch: bytes(b"temper/1"), commit: commit(9), identity: 0 };
     assert_eq!(create, expected, "created at the default branch's tip");
     let check_out = h.next(hold, Done::Succeeded);
     assert_eq!(check_out, Op::CheckOut { at, commit: commit(9) });
@@ -527,10 +520,9 @@ fn a_push_commits_the_tree_on_its_start_and_pushes_it_to_the_push_branch() {
     let commit_op = io(h.one(Event::Push { hold, message: message() }), hold);
     let Op::Commit { at, parent, title, body, identity } = commit_op else { panic!("a commit: {commit_op:?}") };
     assert_eq!((&*at.repository, parent), (&b"a"[..], commit(1)), "the writable one, on its start");
-    assert_eq!((&*title, &*body, &*identity), (&b"Fix it"[..], &b"Because."[..], &b"bot"[..]));
+    assert_eq!((&*title, &*body, identity), (&b"Fix it"[..], &b"Because."[..], 0));
     let push = h.next(hold, Done::Committed { commit: commit(11) });
-    let expected =
-        Op::Push { at, remote: remote(b"a"), commit: commit(11), branch: bytes(b"main"), identity: bytes(b"bot") };
+    let expected = Op::Push { at, remote: remote(b"a"), commit: commit(11), branch: bytes(b"main"), identity: 0 };
     assert_eq!(push, expected);
     let end = h.one(Event::Done { owner: hold, done: Done::Succeeded });
     assert_eq!(

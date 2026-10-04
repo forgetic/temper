@@ -278,6 +278,8 @@ impl Tree {
             | Request::Finished { .. }
             | Request::Faulted { .. }
             | Request::Bounced { .. }
+            | Request::Rejected { .. }
+            | Request::Exhausted { .. }
             | Request::Gone { .. } => unreachable!("the client's records go to the client"),
         }
     }

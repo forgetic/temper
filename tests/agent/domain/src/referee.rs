@@ -512,7 +512,14 @@ impl Expectations for Meeting {
 /// The worker's word for how a run failed, as it reports it.
 fn run_failure(failure: run::Failure) -> host::RunFailure {
     match failure {
-        run::Failure::Model(_) => host::RunFailure::Model,
+        run::Failure::Model(run::Fault::Exhausted) => host::RunFailure::Exhausted,
+        run::Failure::Model(
+            run::Fault::Provider
+            | run::Fault::ContextFull
+            | run::Fault::Refused
+            | run::Fault::Truncated
+            | run::Fault::Malformed,
+        ) => host::RunFailure::Model,
         run::Failure::Budget(_) => host::RunFailure::Budget,
         run::Failure::Policy(_) => host::RunFailure::Policy,
         run::Failure::Cancelled => host::RunFailure::Cancelled,

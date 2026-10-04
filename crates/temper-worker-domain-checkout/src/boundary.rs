@@ -106,7 +106,7 @@ pub struct Repository {
     pub start: Start,
     /// Who the worker is to the forge for this repository, and who commits to
     /// it: a name the protocol layer maps to credentials and an author.
-    pub identity: Box<[u8]>,
+    pub identity: u32,
     /// The branch a change is pushed to, if the repository may be written.
     pub push: Option<Box<[u8]>>,
 }

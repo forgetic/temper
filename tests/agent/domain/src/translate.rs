@@ -86,6 +86,7 @@ fn message(message: agent::Message) -> provider::Message {
 fn part(block: agent::Block) -> provider::Part {
     match block {
         agent::Block::Text { text } => provider::Part::Text { text },
+        agent::Block::Opaque { bytes } => provider::Part::Opaque { bytes },
         // The call goes back as the LLM wrote it.
         agent::Block::ToolCall { id, name, input } => provider::Part::ToolCall { id, name, arguments: input },
         agent::Block::ToolResult { id, result } => {
@@ -188,6 +189,7 @@ pub fn completion(answer: provider::Answer) -> agent::Completion {
 fn said(part: provider::Part) -> agent::Said {
     match part {
         provider::Part::Text { text } => agent::Said::Text { text },
+        provider::Part::Opaque { bytes } => agent::Said::Opaque { bytes },
         provider::Part::ToolCall { id, name, arguments } => {
             let call = decode(&name, &arguments);
             agent::Said::ToolCall { id, name, input: arguments, call }
@@ -205,6 +207,7 @@ pub fn failure(error: provider::Error) -> agent::Failure {
         provider::Error::Unavailable => agent::Failure::Unavailable,
         provider::Error::ContextTooLong => agent::Failure::ContextTooLong,
         provider::Error::Unauthorized => agent::Failure::Unauthorized,
+        provider::Error::Exhausted { retry_after } => agent::Failure::Exhausted { retry_after },
         provider::Error::InvalidRequest => agent::Failure::Invalid,
     }
 }

@@ -1037,7 +1037,7 @@ fn advance(
                 let result = Block::ToolResult { id: call.clone(), result: answer };
                 tools.slots.push(Slot::Done { result }).expect("a slot for every call");
             }
-            Block::Text { .. } | Block::ToolResult { .. } => {}
+            Block::Opaque { .. } | Block::Text { .. } | Block::ToolResult { .. } => {}
         }
     }
     tools.next = next;
@@ -1125,7 +1125,7 @@ fn unrun(conversation: &Conversation, text: Box<[u8]>) -> Box<[Block]> {
                 let result = Block::ToolResult { id: id.clone(), result: Returned::NotRun };
                 content.push(result).expect("room for a result per call");
             }
-            Block::Text { .. } | Block::ToolResult { .. } => {}
+            Block::Opaque { .. } | Block::Text { .. } | Block::ToolResult { .. } => {}
         }
     }
     content.push(Block::Text { text }).expect("room for the message after the results");
@@ -1344,7 +1344,9 @@ fn call_id(conversation: &Conversation, block: u32) -> Box<[u8]> {
     let index = usize::try_from(block).expect("a u32 fits in a usize");
     match message.content.get(index).expect("the call in flight is a block of the message") {
         Block::ToolCall { id, .. } => id.clone(),
-        Block::Text { .. } | Block::ToolResult { .. } => unreachable!("the call in flight is a tool call"),
+        Block::Opaque { .. } | Block::Text { .. } | Block::ToolResult { .. } => {
+            unreachable!("the call in flight is a tool call")
+        }
     }
 }
 
@@ -1356,14 +1358,14 @@ fn text_of(content: &[Block]) -> Box<[u8]> {
     for block in content {
         match block {
             Block::Text { text } => len = len.checked_add(text.len()).expect("bytes held fit in a usize"),
-            Block::ToolCall { .. } | Block::ToolResult { .. } => {}
+            Block::Opaque { .. } | Block::ToolCall { .. } | Block::ToolResult { .. } => {}
         }
     }
     let mut text = Writer::new(len);
     for block in content {
         match block {
             Block::Text { text: part } => text.put(part).expect("the length was counted above"),
-            Block::ToolCall { .. } | Block::ToolResult { .. } => {}
+            Block::Opaque { .. } | Block::ToolCall { .. } | Block::ToolResult { .. } => {}
         }
     }
     text.finish()
@@ -1385,7 +1387,7 @@ fn tally(content: &[Block]) -> (u32, u32) {
                 calls = calls.saturating_add(1);
                 invalid = invalid.saturating_add(1);
             }
-            Block::Text { .. } | Block::ToolResult { .. } => {}
+            Block::Opaque { .. } | Block::Text { .. } | Block::ToolResult { .. } => {}
         }
     }
     (calls, invalid)
@@ -1395,9 +1397,9 @@ fn tally(content: &[Block]) -> (u32, u32) {
 /// `attempt` retries, or `None` if it is not to be retried.
 fn backoff(failure: Failure, attempt: u32, limits: &Limits, rng: &mut Rng) -> Option<Duration> {
     let floor = match failure {
-        Failure::Overloaded | Failure::Unavailable | Failure::TimedOut => Duration::ZERO,
+        Failure::Overloaded | Failure::Unavailable | Failure::TimedOut | Failure::Unauthorized => Duration::ZERO,
         Failure::RateLimited { retry_after } => retry_after,
-        Failure::ContextTooLong | Failure::Invalid | Failure::Unauthorized => return None,
+        Failure::ContextTooLong | Failure::Invalid | Failure::Exhausted { .. } => return None,
     };
     if attempt >= limits.retries {
         return None;
@@ -1452,7 +1454,7 @@ fn held(content: &[Block], calls: u32) -> Option<u64> {
             Block::ToolCall { id, name: _, input: _, call: Decoded::Owned { .. } | Decoded::Delegated { .. } } => {
                 cost = cost.checked_add(len(id)?)?;
             }
-            Block::Text { .. } | Block::ToolResult { .. } => {}
+            Block::Opaque { .. } | Block::Text { .. } | Block::ToolResult { .. } => {}
         }
     }
     Some(cost)
@@ -1476,6 +1478,7 @@ fn block_cost(block: &Block) -> Option<u64> {
 fn payload_cost(block: &Block) -> Option<u64> {
     match block {
         Block::Text { text } => len(text),
+        Block::Opaque { bytes } => len(bytes),
         Block::ToolCall { id, name, input, call } => {
             // A delegated call is the opener's to hold.
             let decoded = match call {

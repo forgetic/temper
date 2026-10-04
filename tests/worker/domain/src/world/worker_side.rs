@@ -19,7 +19,7 @@ use temper_world::Stage;
 
 use super::git::{files, tree as forge_tree};
 use super::{Agent, Attempt, Content, Delivery, Garbled, Lane, RELEASE, Repository, World, gone, sizes};
-use crate::protocol::{self, IDENTITY, Names};
+use crate::protocol::{self, Names};
 use crate::referee;
 use crate::translate;
 
@@ -47,8 +47,7 @@ impl World {
         }
         while let Some(told) = self.worker.pop_told() {
             self.stats.told += 1;
-            let event = protocol::told(&told);
-            self.send_up(move |_| event);
+            self.send_up(move |channel| protocol::told(channel, &told));
         }
         // What the steps asked for, submitted at the end of the iteration.
         while let Some(request) = self.stage.out.pop() {
@@ -165,6 +164,7 @@ impl World {
                 }
             }
             Event::Inbound { .. }
+            | Event::Grant { .. }
             | Event::Relayed { .. }
             | Event::RelayCancelled { .. }
             | Event::Spawned { .. }
@@ -227,12 +227,20 @@ impl World {
                     self.send(at, Delivery::Worker(self.lives, Event::RelayCancelled { call }));
                 }
             }
-            Request::Bounced { run, attempt, bounce } => {
+            Request::Bounced { name, run, attempt, bounce } => {
                 assert!(self.up, "a bounce goes on a channel open");
                 self.stats.bounces += 1;
                 let ((item, attempt), bounce) = (protocol::attempt_of(attempt), protocol::bounce(bounce));
                 assert_eq!(protocol::item(run), item, "a bounce names an attempt of its run");
-                self.send_up(move |_| engine::Event::Bounced { item, attempt, bounce });
+                self.send_up(move |channel| engine::Event::Bounced { channel, name, item, attempt, bounce });
+            }
+            Request::Rejected { run: _, attempt, account, generation } => {
+                let (item, attempt) = protocol::attempt_of(attempt);
+                self.send_up(move |channel| engine::Event::Rejected { channel, item, attempt, account, generation });
+            }
+            Request::Exhausted { run: _, attempt, account, retry_after } => {
+                let (item, attempt) = protocol::attempt_of(attempt);
+                self.send_up(move |channel| engine::Event::Exhausted { channel, item, attempt, account, retry_after });
             }
             Request::Spawn { owner, workspace, deadline } => {
                 self.spawn(owner, workspace);
@@ -401,13 +409,11 @@ impl World {
 
     /// What the worker sends down to its agent `owner`.
     fn down(&mut self, owner: Token, message: &Down) {
-        for bytes in translate::down_bytes(message) {
-            let leaks = bytes.windows(IDENTITY.len()).any(|window| window == IDENTITY);
-            assert!(!leaks, "nothing an agent hears holds the forge identity");
-        }
         match message {
-            Down::Start { charter, snapshot } => self.start(owner, charter, snapshot.as_deref()),
-            Down::Event { event } => {
+            Down::Start { repositories: _, grants: _, charter, snapshot } => {
+                self.start(owner, charter, snapshot.as_deref());
+            }
+            Down::Event { name: _, event } => {
                 let agent = self.agents.get(&owner).expect("an event goes to an agent spawned");
                 let names = protocol::event_names(event);
                 assert_eq!(agent.attempt, Some(names), "an inbound event reaches its attempt's agent");
@@ -434,6 +440,7 @@ impl World {
                     Reply::TooLarge => {}
                 }
             }
+            Down::Grant { .. } => {}
             Down::Cancel => {
                 let agent = self.agents.get(&owner).expect("a cancel goes to an agent spawned");
                 if let Some(attempt) = agent.attempt
@@ -527,7 +534,8 @@ impl World {
                         agent::Event::Spawn { .. }
                         | agent::Event::Deliver { .. }
                         | agent::Event::Answer { .. }
-                        | agent::Event::Stop { .. } => unreachable!("io ends requests"),
+                        | agent::Event::Stop { .. }
+                        | agent::Event::Grant { .. } => unreachable!("io ends requests"),
                     };
                     let at = match lane {
                         Some(lane) => self.lane(lane, after),
@@ -573,7 +581,9 @@ impl World {
             | Up::Fact { .. }
             | Up::Long { .. }
             | Up::LongDone
-            | Up::Waiting { .. } => message,
+            | Up::Waiting { .. }
+            | Up::Rejected { .. }
+            | Up::Exhausted { .. } => message,
         };
         agent::Event::Received { owner, message }
     }

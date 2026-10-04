@@ -51,7 +51,14 @@
 
 use alloc::boxed::Box;
 
-use skein_lib::{ReplyTo, Token};
+use skein_lib::{Duration, ReplyTo, Token};
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Grant {
+    pub account: u32,
+    pub generation: u64,
+    pub valid: Duration,
+}
 
 /// parent -> fleet
 #[derive(PartialEq, Eq, Debug)]
@@ -61,45 +68,114 @@ pub enum Event {
     /// and assign it; then answer once it has ended. It waits for a slot, and
     /// for its run's earlier attempts to be gone; a newer attempt of the run
     /// withdraws it.
-    Start { reply_to: ReplyTo, run: Token, attempt: Token, workstream: Box<[u8]> },
+    Start {
+        reply_to: ReplyTo,
+        run: Token,
+        attempt: Token,
+        workstream: Box<[u8]>,
+    },
     /// From the parent, a call: the attempt `attempt` of the run `run` was
     /// claimed before the engine restarted. A worker is to say it hosts it
     /// within the grace, or it is presumed lost; answer once it has ended.
-    Adopt { reply_to: ReplyTo, run: Token, attempt: Token },
+    Adopt {
+        reply_to: ReplyTo,
+        run: Token,
+        attempt: Token,
+    },
     /// From the parent: cancel the attempt `attempt` of the run `run`. Its
     /// call is still ended by its answer, unless it was never placed.
-    Cancel { run: Token, attempt: Token },
+    Cancel {
+        run: Token,
+        attempt: Token,
+    },
     /// From the parent: an inbound event for the attempt `attempt` of the run
     /// `run`, to pass to its worker.
-    Inbound { run: Token, attempt: Token, event: Token },
+    Inbound {
+        run: Token,
+        attempt: Token,
+        event: Token,
+    },
     /// From the parent, the one answer to a `Relay`.
-    Relayed { to: ReplyTo, answer: Token },
+    Relayed {
+        to: ReplyTo,
+        answer: Token,
+    },
     /// From the parent, the one answer to an `Answered`: the answer of the
     /// attempt `attempt` of the run `run` is durable, or not wanted, and its
     /// worker may forget it.
-    Acknowledge { run: Token, attempt: Token },
+    Acknowledge {
+        run: Token,
+        attempt: Token,
+    },
     /// From the parent: its cold read after a restart is done, every claim
     /// its records hold adopted. Attempts workers list that no claim adopts
     /// wait to be adopted for the grace from now on, and those listed later
     /// for the grace from their listing.
     Loaded,
+    Grant {
+        run: Token,
+        attempt: Token,
+        grant: Grant,
+    },
+    Rejected {
+        channel: Token,
+        run: Token,
+        attempt: Token,
+        account: u32,
+        generation: u64,
+    },
+    Exhausted {
+        channel: Token,
+        run: Token,
+        attempt: Token,
+        account: u32,
+        retry_after: Duration,
+    },
     /// From a worker, first on its channel: its slots, the workstreams it
     /// holds checkouts for, and the runs it hosts or holds answers of.
-    Hello { channel: Token, hello: Hello },
+    Hello {
+        channel: Token,
+        hello: Hello,
+    },
     /// From the protocol: the channel of a worker closed.
-    Lost { channel: Token },
+    Lost {
+        channel: Token,
+    },
     /// From a worker, the answer to an `Assign`: sent at once, and again
     /// after every hello until it is acknowledged. Taken only from a channel
     /// in contact.
-    Answer { channel: Token, run: Token, attempt: Token, answer: Answer, payload: Token },
+    Answer {
+        channel: Token,
+        run: Token,
+        attempt: Token,
+        answer: Answer,
+        payload: Token,
+    },
     /// From a worker, a host call of the attempt `attempt` of the run `run`,
     /// which the worker names `call`, relayed as it is.
-    Relay { run: Token, attempt: Token, call: Token, body: Token },
+    Relay {
+        channel: Token,
+        run: Token,
+        attempt: Token,
+        call: Token,
+        body: Token,
+    },
     /// From a worker: an inbound event for the attempt `attempt` of the run
     /// `run` was not passed on, for `bounce`.
-    Bounced { run: Token, attempt: Token, bounce: Bounce },
+    Bounced {
+        channel: Token,
+        run: Token,
+        attempt: Token,
+        name: Token,
+        bounce: Bounce,
+    },
     /// From a worker: a fact the run told, best effort.
-    Told { run: Token, attempt: Token, fact: Token },
+    Told {
+        channel: Token,
+        run: Token,
+        attempt: Token,
+        fact: Token,
+    },
 }
 
 /// fleet -> parent
@@ -107,56 +183,146 @@ pub enum Event {
 pub enum Request {
     /// To a worker, a call: host the attempt `attempt` of the run `run`, with
     /// the assignment the parent keeps for it.
-    Assign { channel: Token, run: Token, attempt: Token },
+    Assign {
+        channel: Token,
+        run: Token,
+        attempt: Token,
+    },
+    Grant {
+        channel: Token,
+        run: Token,
+        attempt: Token,
+        grant: Grant,
+    },
+    Rejected {
+        run: Token,
+        attempt: Token,
+        account: u32,
+        generation: u64,
+    },
+    Exhausted {
+        run: Token,
+        attempt: Token,
+        account: u32,
+        retry_after: Duration,
+    },
     /// To a worker: an inbound event for the attempt it hosts.
-    Inbound { channel: Token, run: Token, attempt: Token, event: Token },
+    Inbound {
+        channel: Token,
+        run: Token,
+        attempt: Token,
+        event: Token,
+    },
     /// To a worker: cancel the attempt `attempt` of the run `run`. Sent
     /// again on every channel whose hello lists it unanswered, the first
     /// having maybe been lost.
-    Cancel { channel: Token, run: Token, attempt: Token },
+    Cancel {
+        channel: Token,
+        run: Token,
+        attempt: Token,
+    },
     /// To a worker: the answer to its relayed call `call`.
-    Relayed { channel: Token, run: Token, attempt: Token, call: Token, answer: Token },
+    Relayed {
+        channel: Token,
+        run: Token,
+        attempt: Token,
+        call: Token,
+        answer: Token,
+    },
     /// To a worker: the engine has the answer of the attempt `attempt` of the
     /// run `run` durably, or does not want it, and the worker forgets it.
-    Acknowledge { channel: Token, run: Token, attempt: Token },
+    Acknowledge {
+        channel: Token,
+        run: Token,
+        attempt: Token,
+    },
     /// About a worker: the fleet has no room for it, or its hello is beyond
     /// the limits. Close its channel; it dials again later.
-    Refuse { channel: Token },
+    Refuse {
+        channel: Token,
+    },
     /// To the parent: the attempt is on a worker, assigned or found there.
-    Placed { run: Token, attempt: Token },
+    Placed {
+        run: Token,
+        attempt: Token,
+    },
     /// To the parent: a worker lists the attempt `attempt` of the run `run`,
     /// which no claim adopts. It waits to be adopted for the grace, from the
     /// parent's `Loaded` at the earliest, and is then cancelled.
-    Listed { run: Token, attempt: Token },
+    Listed {
+        run: Token,
+        attempt: Token,
+    },
     /// To the parent, terminal for `Start` and `Adopt`: the worker's answer,
     /// never `Busy`. Each gets the parent's `Acknowledge`, until which its
     /// worker keeps it (a refusal keeps nothing, and the fleet forgets it at
     /// once).
-    Answered { to: ReplyTo, run: Token, attempt: Token, answer: Answer, payload: Token },
+    Answered {
+        to: ReplyTo,
+        run: Token,
+        attempt: Token,
+        answer: Answer,
+        payload: Token,
+    },
     /// To the parent, terminal for `Start` and `Adopt`: the attempt is
     /// presumed lost, its worker out of contact past the grace or none
     /// having said it hosts it. Whatever still comes for it is dropped.
-    Lost { to: ReplyTo, run: Token, attempt: Token },
+    Lost {
+        to: ReplyTo,
+        run: Token,
+        attempt: Token,
+    },
     /// To the parent, terminal for `Start` and `Adopt`: the attempt was
     /// withdrawn, for `withdrawal`.
-    Withdrawn { to: ReplyTo, run: Token, attempt: Token, withdrawal: Withdrawal },
+    Withdrawn {
+        to: ReplyTo,
+        run: Token,
+        attempt: Token,
+        withdrawal: Withdrawal,
+    },
     /// To the parent, terminal for `Start` and `Adopt`: refused at the
     /// entrance, nothing done.
-    Refused { to: ReplyTo, run: Token, attempt: Token, refusal: Refusal },
+    Refused {
+        to: ReplyTo,
+        run: Token,
+        attempt: Token,
+        refusal: Refusal,
+    },
     /// To the parent, a call: a host call of the run's, relayed as it is.
-    Relay { reply_to: ReplyTo, run: Token, attempt: Token, body: Token },
+    Relay {
+        reply_to: ReplyTo,
+        run: Token,
+        attempt: Token,
+        body: Token,
+    },
     /// To the parent: an inbound event its worker did not pass on, for
     /// `bounce`.
-    Bounced { run: Token, attempt: Token, bounce: Bounce },
+    Bounced {
+        run: Token,
+        attempt: Token,
+        name: Token,
+        bounce: Bounce,
+    },
     /// To the parent: the inbound event `event` reached no worker, for
     /// `undelivered`. The parent keeps it.
-    Undelivered { run: Token, attempt: Token, event: Token, undelivered: Undelivered },
+    Undelivered {
+        run: Token,
+        attempt: Token,
+        event: Token,
+        undelivered: Undelivered,
+    },
     /// To the parent: a fact the run told.
-    Told { run: Token, attempt: Token, fact: Token },
+    Told {
+        run: Token,
+        attempt: Token,
+        fact: Token,
+    },
     /// To the parent: forget `payload`, which goes no further: it was for an
     /// attempt fenced off or gone, a duplicate, or a call the fleet had no
     /// room for.
-    Drop { payload: Token },
+    Drop {
+        payload: Token,
+    },
 }
 
 /// What a worker says first on every channel (engine-domain.md, section 8).

@@ -40,6 +40,20 @@ use temper_agent_domain_run as run;
 use temper_agent_domain_tools as tools;
 
 use crate::llm::{Completion, Failure, Prompt};
+use alloc::boxed::Box;
+
+/// A credential name, never its value.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct GrantName {
+    pub account: u32,
+    pub generation: u64,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Grant {
+    pub name: GrantName,
+    pub valid: Duration,
+}
 
 /// protocol -> domain
 #[derive(PartialEq, Eq, Debug)]
@@ -51,7 +65,9 @@ pub enum Event {
     /// From the worker, a call: start a run on `charter`, and answer once it
     /// has ended. `worker` is the worker's name for the run, echoed on
     /// `Admitted`.
-    Start { reply_to: ReplyTo, worker: Token, charter: run::Charter },
+    Start { reply_to: ReplyTo, worker: Token, charter: run::Charter, grants: Box<[Grant]> },
+    /// A refreshed credential, pushed by the engine through the worker.
+    Grant { grant: Grant },
     /// From the worker: end the run `run` as cancelled. A run that has already
     /// answered, or decided how it ends, ignores it.
     Cancel { run: Token },
@@ -83,40 +99,91 @@ pub enum Event {
 pub enum Request {
     /// To the worker: the run it names `worker` was admitted, and is `run`
     /// from now on.
-    Admitted { worker: Token, run: Token },
+    Admitted {
+        worker: Token,
+        run: Token,
+    },
     /// To the worker, the answer to a `Start`: exactly one per start.
-    Answer { to: ReplyTo, answer: run::Answer },
+    Answer {
+        to: ReplyTo,
+        answer: run::Answer,
+    },
     /// To the worker: checks of the run it names `worker` are running until
     /// `deadline` at the latest, so its watchdog waits that long.
-    Checking { worker: Token, deadline: Time },
+    Checking {
+        worker: Token,
+        deadline: Time,
+    },
     /// To the worker, a host call: commit what the checkout of the run it
     /// names `worker` holds, exactly as it is, and push it, with `change`'s
     /// title and body.
-    Push { worker: Token, owner: Token, change: run::outcome::Change },
+    Push {
+        worker: Token,
+        owner: Token,
+        change: run::outcome::Change,
+    },
     /// Abandon the host call in flight for `owner`. Its terminal still comes:
     /// `HostCancelled`, or whichever outcome won the race.
-    CancelHost { owner: Token },
+    CancelHost {
+        owner: Token,
+    },
     /// Ask an LLM for the next assistant message, giving up after `timeout`.
-    Complete { owner: Token, prompt: Prompt, timeout: Duration },
+    Complete {
+        owner: Token,
+        grant: GrantName,
+        prompt: Prompt,
+        timeout: Duration,
+    },
+    Rejected {
+        grant: GrantName,
+    },
+    Exhausted {
+        account: u32,
+        retry_after: Duration,
+    },
     /// Abandon the `Complete` in flight for `owner`. Its terminal event still
     /// comes: `Cancelled`, or whichever outcome won the race.
-    Cancel { owner: Token },
+    Cancel {
+        owner: Token,
+    },
     /// Ask io for `op` for a session's tools, giving up at `deadline`.
-    Io { owner: Token, op: tools::Op, deadline: Time },
+    Io {
+        owner: Token,
+        op: tools::Op,
+        deadline: Time,
+    },
     /// Abandon the `Io` in flight for `owner`. Its terminal event still comes:
     /// `Done` with `Cancelled`, or whichever outcome won the race.
-    CancelIo { owner: Token },
+    CancelIo {
+        owner: Token,
+    },
     /// Read the first `max` bytes of the regular file at `at`, following
     /// symbolic links within its root, giving up at `deadline`.
-    Read { owner: Token, at: run::Place, max: u32, deadline: Time },
+    Read {
+        owner: Token,
+        at: run::Place,
+        max: u32,
+        deadline: Time,
+    },
     /// Find out whether an executable file is at `at`, giving up at
     /// `deadline`.
-    Probe { owner: Token, at: run::Place, deadline: Time },
+    Probe {
+        owner: Token,
+        at: run::Place,
+        deadline: Time,
+    },
     /// Run the executable at `program`, in its repository's root, as a
     /// contained process, stopping it at `deadline`; keep the last `tail`
     /// bytes of what it writes.
-    Check { owner: Token, program: run::Place, deadline: Time, tail: u32 },
+    Check {
+        owner: Token,
+        program: run::Place,
+        deadline: Time,
+        tail: u32,
+    },
     /// Stop the `Check` in flight for `owner`. Its terminal still comes:
     /// `Aborted`, or `Checked` if the checks ended first.
-    Abort { owner: Token },
+    Abort {
+        owner: Token,
+    },
 }

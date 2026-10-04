@@ -38,6 +38,8 @@ fn index(rng: &mut Rng, len: usize) -> usize {
 /// Small limits, so that every bound is met often: few runs and sessions,
 /// few bytes each.
 const LIMITS: Limits = Limits {
+    accounts: 4,
+    skew: Duration::ZERO,
     run: run::Limits {
         runs: 2,
         conversations: 4,
@@ -91,7 +93,7 @@ fn charter(brief: u64) -> Charter {
         grants: Grants { tools: all, forge: false, agents: true, outlets: Box::new([]) },
         outcome: OutcomeSpec { change: Some(ChangeSpec { checks: true }), verdicts: Box::new([rule]) },
         budget: run::Budget { turns: 12, ..TIGHT.run.budget },
-        llm: Llm { endpoint: Endpoint(0), model: (*b"m").into(), max_tokens: 256 },
+        llm: Llm { account: 0, endpoint: Endpoint(0), model: (*b"m").into(), max_tokens: 256 },
         models: Box::new([]),
     }
 }
@@ -167,13 +169,13 @@ impl Driver {
             match request {
                 Request::Admitted { worker: _, run } => self.runs.push(run),
                 Request::Answer { .. } => self.seen[5] += 1,
-                Request::Checking { .. } => {}
+                Request::Checking { .. } | Request::Rejected { .. } | Request::Exhausted { .. } => {}
                 Request::Push { owner, .. } => {
                     self.seen[4] += 1;
                     self.ask(Asked::Push { owner, cancelled: false });
                 }
                 Request::CancelHost { owner } => self.cancel(Family::Push, owner),
-                Request::Complete { owner, prompt, timeout: _ } => {
+                Request::Complete { owner, prompt, timeout: _, grant: _ } => {
                     self.seen[0] += 1;
                     let (finish, agents) = served(&prompt);
                     self.ask(Asked::Complete { owner, finish, agents, cancelled: false });
@@ -241,7 +243,15 @@ impl Driver {
             let worker = Token::new(self.workers);
             // Most charters as large as a run may hold, some a byte larger.
             let brief = limits.run.run_bytes - 900 + self.rng.below(901);
-            return Some(Event::Start { reply_to: ReplyTo::new(worker), worker, charter: charter(brief) });
+            return Some(Event::Start {
+                grants: Box::new([temper_agent_domain::Grant {
+                    name: temper_agent_domain::GrantName { account: 0, generation: 0 },
+                    valid: Duration::from_secs(100_000),
+                }]),
+                reply_to: ReplyTo::new(worker),
+                worker,
+                charter: charter(brief),
+            });
         }
         if roll == 1 && !self.runs.is_empty() && self.rng.chance(100) {
             return self.cancel_run();
@@ -454,6 +464,8 @@ enum Point {
 #[test]
 fn a_domain_driven_at_random_stays_within_its_worst_case_at_every_entry_point() {
     let wider = Limits {
+        accounts: LIMITS.accounts,
+        skew: LIMITS.skew,
         run: run::Limits { runs: 3, conversations: 8, run_conversations: 4, calls: 8, ..LIMITS.run },
         session: temper_agent_domain::session::Limits {
             sessions: 8,

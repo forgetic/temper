@@ -386,10 +386,11 @@ fn assignment(
         grants: run.grants,
         finish: run.finish,
         budget: run.budget,
-        models: copy_of(&domain.config.models),
+        models: domain.config.models.clone(),
         policy: domain.config.policy,
     };
     Assignment {
+        grants: Box::new([]),
         item,
         attempt,
         workspace: Workspace { key: translate::workstream(item), repositories: Box::new([checkout]) },
@@ -419,7 +420,16 @@ fn base(domain: &Domain, entry: &Entry) -> Box<[u8]> {
 }
 
 /// Asks the fleet to place the item's attempt, and the views to follow it.
-fn place(domain: &mut Domain, env: &Env<Limits>, id: Id<Entry>) {
+pub(crate) fn place(domain: &mut Domain, env: &Env<Limits>, id: Id<Entry>) {
+    if !crate::credentials::can_start(domain, id, env.now) {
+        domain.account_waiting.insert(id).expect("one waiting run per item");
+        return;
+    }
+    domain.account_waiting.remove(&id);
+    let grants = crate::credentials::grants(domain, id, env.now);
+    if let Some(assignment) = get_mut(domain, id).assignment.as_mut() {
+        assignment.grants = grants;
+    }
     let entry = get_mut(domain, id);
     let item = entry.item;
     let Some(live) = entry.live.as_mut() else { return };
@@ -505,6 +515,12 @@ pub(crate) fn hello(domain: &mut Domain, hello: &crate::boundary::Hello) {
             fleet::Phase::Preparing | fleet::Phase::Starting | fleet::Phase::Active | fleet::Phase::Waiting => false,
         };
         let Some(id) = items::find(domain, hosted.item) else { continue };
+        if !ending
+            && let Some(live) = get(domain, id).live
+            && live.attempt == hosted.attempt
+        {
+            crate::credentials::redial(domain, id);
+        }
         if let Some(live) = get_mut(domain, id).live.as_mut()
             && live.attempt == hosted.attempt
             && ending
@@ -530,6 +546,7 @@ pub(crate) fn cancel(domain: &mut Domain, env: &Env<Limits>, item: Item, attempt
     entry.job = Job::Idle;
     entry.assignment = None;
     entry.grants = None;
+    crate::credentials::forget(domain, id);
     end(domain, env, id, attempt, work::Answer::Refused);
 }
 
@@ -585,7 +602,7 @@ pub(crate) fn deliver(
     let Some(noted) = get_mut(domain, id).inbox.get_mut(&event.raw()) else { return };
     noted.delivered = true;
     let inbound = noted.inbound;
-    out.push(Request::Inbound { channel, item, attempt: attempt.raw(), event: inbound });
+    out.push(Request::Inbound { channel, item, attempt: attempt.raw(), name: event, event: inbound });
 }
 
 /// News of the item, from the forge child domain: kept in its inbox, and told
@@ -895,7 +912,7 @@ pub(crate) fn relay(
             return;
         }
     };
-    let event = fleet::Event::Relay { run, attempt: Token::new(attempt), call, body: payload.token() };
+    let event = fleet::Event::Relay { channel, run, attempt: Token::new(attempt), call, body: payload.token() };
     route::fleet_step(domain, env, event);
 }
 
@@ -951,20 +968,29 @@ pub(crate) fn serve_answer(domain: &mut Domain, env: &Env<Limits>, to: ReplyTo, 
 }
 
 /// A worker bounced an inbound event.
-pub(crate) fn bounced(domain: &mut Domain, env: &Env<Limits>, item: Item, attempt: u64, bounce: fleet::Bounce) {
+pub(crate) fn bounced(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    channel: Token,
+    item: Item,
+    attempt: u64,
+    name: Token,
+    bounce: fleet::Bounce,
+) {
     let Some(run) = translate::run(item) else { return };
-    route::fleet_step(domain, env, fleet::Event::Bounced { run, attempt: Token::new(attempt), bounce });
+    route::fleet_step(domain, env, fleet::Event::Bounced { channel, run, attempt: Token::new(attempt), name, bounce });
 }
 
 /// The fleet passes a bounce up: what the attempt took is then only what its
 /// brief had.
-pub(crate) fn bounce(domain: &mut Domain, run: Token, attempt: Token) {
+pub(crate) fn bounce(domain: &mut Domain, run: Token, attempt: Token, name: Token) {
     let Some(id) = items::find(domain, translate::item(run)) else { return };
     let entry = get_mut(domain, id);
     if let Some(live) = entry.live.as_mut()
         && live.attempt == attempt.raw()
+        && let Some(noted) = entry.inbox.get_mut(&name.raw())
     {
-        live.bounced = true;
+        noted.delivered = false;
     }
 }
 
@@ -973,6 +999,7 @@ pub(crate) fn bounce(domain: &mut Domain, run: Token, attempt: Token) {
 pub(crate) fn told(
     domain: &mut Domain,
     env: &Env<Limits>,
+    channel: Token,
     item: Item,
     attempt: u64,
     kind: views::Kind,
@@ -980,7 +1007,11 @@ pub(crate) fn told(
 ) {
     let Some(run) = translate::run(item) else { return };
     let Ok(payload) = domain.carried.insert(Carried::Report { kind, content }) else { return };
-    route::fleet_step(domain, env, fleet::Event::Told { run, attempt: Token::new(attempt), fact: payload.token() });
+    route::fleet_step(
+        domain,
+        env,
+        fleet::Event::Told { channel, run, attempt: Token::new(attempt), fact: payload.token() },
+    );
 }
 
 /// The fleet passes a run's report up: to the views.

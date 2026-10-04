@@ -270,13 +270,14 @@ impl Parent {
                 self.tally.aborts += 1;
                 Vec::new()
             }
-            Request::Start { owner, workspace, charter: _, snapshot: _ } => self.start(owner, workspace),
-            Request::Deliver { agent, event: _ } => self.deliver(agent),
+            Request::Start { owner, workspace, charter: _, snapshot: _, grants: _ } => self.start(owner, workspace),
+            Request::Deliver { agent, name: _, event: _ } => self.deliver(agent),
             Request::Reply { agent, call: _, reply: _ } => self.reply(agent),
             Request::Stop { agent } => self.stop(agent),
             Request::Push { owner, workspace, message: _ } => self.push(owner, workspace),
             Request::Save { owner, workspace, branch: _ } => self.save(owner, workspace),
             Request::Release { workspace } => self.release(workspace),
+            Request::Grant { .. } => Vec::new(),
             Request::Answer { .. }
             | Request::Relay { .. }
             | Request::CancelRelay { .. }

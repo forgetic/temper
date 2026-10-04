@@ -27,6 +27,7 @@ fn parts(items: &[Part]) -> Option<u64> {
     for part in items {
         let owned = match part {
             Part::Text { text } => bytes(text)?,
+            Part::Opaque { bytes: value } => bytes(value)?,
             Part::ToolCall { id, name, arguments } => {
                 bytes(id)?.checked_add(bytes(name)?)?.checked_add(bytes(arguments)?)?
             }

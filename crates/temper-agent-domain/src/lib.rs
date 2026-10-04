@@ -52,9 +52,9 @@ mod route;
 mod tests;
 mod translate;
 
-pub use boundary::{Event, Request};
+pub use boundary::{Event, Grant, GrantName, Request};
 pub use domain::{Domain, fire, max_out, resume, step};
-pub use facts::Fact;
+pub use facts::{Content, Fact};
 pub use limits::{Limits, worst_case};
 // The payloads are the children's: a parent may use its children's types.
 pub use temper_agent_domain_run as run;

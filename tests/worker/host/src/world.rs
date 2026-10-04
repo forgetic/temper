@@ -56,6 +56,7 @@ impl Settings {
         Settings {
             seed,
             host: Limits {
+                accounts: 4,
                 slots: 4,
                 repositories: 3,
                 name_bytes: 64,
@@ -133,7 +134,7 @@ impl Settings {
     pub const fn rough(seed: u64) -> Settings {
         let calm = Settings::calm(seed);
         Settings {
-            host: Limits { slots: 2, held: 1, run_calls: 1, facts: 8, ..calm.host },
+            host: Limits { accounts: 4, slots: 2, held: 1, run_calls: 1, facts: 8, ..calm.host },
             engine: engine::Script {
                 assignments: 12,
                 spacing: Span::millis(0, 10_000),
@@ -529,6 +530,7 @@ impl World {
         for (run, attempt) in hosted {
             if self.rng.chance(self.settings.duplicates) {
                 let assignment = host::Assignment {
+                    grants: Box::new([]),
                     run,
                     attempt,
                     workspace: host::Workspace { key: Box::from(&b"again"[..]), repositories: Box::new([]) },
@@ -602,6 +604,7 @@ impl World {
                 Taken::Other
             }
             Event::Inbound { .. }
+            | Event::Grant { .. }
             | Event::Cancel { .. }
             | Event::Unacknowledged { .. }
             | Event::Relayed { .. }
@@ -702,6 +705,7 @@ impl World {
             Request::Relay { .. }
             | Request::CancelRelay { .. }
             | Request::Bounced { .. }
+            | Request::Grant { .. }
             | Request::Hosting { .. }
             | Request::Abort { .. }
             | Request::Start { .. }
@@ -753,7 +757,7 @@ impl World {
                 let acts = self.engine.reconnected(&runs);
                 self.acts(acts);
             }
-            Request::Deliver { agent, event } => {
+            Request::Deliver { agent, name, event } => {
                 let owner = *self.agents.get(&agent).expect("a delivery is to a started agent");
                 let len = u64::try_from(event.len()).expect("fits");
                 assert!(len <= self.settings.host.event_bytes, "an event within the limits");
@@ -762,7 +766,7 @@ impl World {
                 let place = u64::from_be_bytes(head.try_into().expect("eight bytes"));
                 assert!(hosted.delivered < Some(place), "inbound events are delivered once, in the order sent");
                 hosted.delivered = Some(place);
-                self.parcel(Request::Deliver { agent, event });
+                self.parcel(Request::Deliver { agent, name, event });
             }
             Request::Reply { agent, call, reply } => {
                 self.calls.end((agent, call));
@@ -801,7 +805,9 @@ impl World {
                 self.hosted.get_mut(&owner).expect("a start is of a hosted run").launch = Launch::Asked;
                 self.parcel(request);
             }
-            Request::Push { .. } | Request::Save { .. } | Request::Release { .. } => self.parcel(request),
+            Request::Push { .. } | Request::Save { .. } | Request::Release { .. } | Request::Grant { .. } => {
+                self.parcel(request);
+            }
         }
     }
 

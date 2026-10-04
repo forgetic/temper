@@ -146,9 +146,9 @@ fn fill(limits: Limits) -> (Measured, Vec<(Token, Token, Token)>, Vec<ReplyTo>) 
     let placed = placed(&fleet.settle());
     assert_eq!(u32::try_from(placed.len()).expect("a few"), limits.workers * limits.slots, "every slot taken");
     let mut calls = Vec::new();
-    for (nth, &(_, run, attempt)) in placed.iter().enumerate().take(limits.calls as usize) {
+    for (nth, &(channel, run, attempt)) in placed.iter().enumerate().take(limits.calls as usize) {
         let call = Token::new(nth as u64);
-        let up = fleet.step(Event::Relay { run, attempt, call, body: Token::new(nth as u64) });
+        let up = fleet.step(Event::Relay { channel, run, attempt, call, body: Token::new(nth as u64) });
         let Some(Request::Relay { reply_to, .. }) = up.into_iter().next() else {
             panic!("a call relayed up");
         };
@@ -172,8 +172,13 @@ fn a_fleet_full_to_its_limits_stays_within_its_worst_case() {
     let workstream = key(&LIMITS, run.raw());
     let refused = fleet.step(Event::Start { reply_to: ReplyTo::new(attempt), run, attempt, workstream });
     assert!(matches!(refused[..], [Request::Refused { .. }]), "{refused:?}");
-    let up =
-        fleet.step(Event::Relay { run: placed[5].1, attempt: placed[5].2, call: Token::new(9), body: Token::new(9) });
+    let up = fleet.step(Event::Relay {
+        channel: placed[5].0,
+        run: placed[5].1,
+        attempt: placed[5].2,
+        call: Token::new(9),
+        body: Token::new(9),
+    });
     assert!(matches!(up[..], [Request::Drop { .. }]), "a call beyond the room is dropped: {up:?}");
     // Drained: every call answered, every attempt answered or lost.
     for (nth, to) in calls.into_iter().enumerate() {
@@ -217,14 +222,26 @@ fn every_entry_point_stays_within_the_worst_case() {
     let placed = placed(&fleet.settle());
     assert_eq!(placed.len(), 1);
     // Calls, answers, inbound events, bounces and facts.
-    let up = fleet.step(Event::Relay { run: r3, attempt: a3, call: Token::new(1), body: Token::new(2) });
+    let up = fleet.step(Event::Relay {
+        channel: placed[0].0,
+        run: r3,
+        attempt: a3,
+        call: Token::new(1),
+        body: Token::new(2),
+    });
     let Some(Request::Relay { reply_to, .. }) = up.into_iter().next() else {
         panic!("a call relayed up");
     };
     fleet.step(Event::Relayed { to: reply_to, answer: Token::new(3) });
     fleet.step(Event::Inbound { run: r3, attempt: a3, event: Token::new(4) });
-    fleet.step(Event::Bounced { run: r3, attempt: a3, bounce: Bounce::Full });
-    fleet.step(Event::Told { run: r3, attempt: a3, fact: Token::new(5) });
+    fleet.step(Event::Bounced {
+        channel: placed[0].0,
+        name: Token::new(0),
+        run: r3,
+        attempt: a3,
+        bounce: Bounce::Full,
+    });
+    fleet.step(Event::Told { channel: placed[0].0, run: r3, attempt: a3, fact: Token::new(5) });
     fleet.step(Event::Cancel { run: r1, attempt: a1 });
     // A busy refusal, placed again.
     let (channel_of, ..) = placed[0];

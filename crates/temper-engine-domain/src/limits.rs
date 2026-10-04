@@ -21,6 +21,7 @@ use crate::waits::{Carried, Wait};
 /// bounds, and the top level's own.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Limits {
+    pub accounts: crate::accounts::Limits,
     pub work: work::Limits,
     pub plan: plan::Limits,
     pub rules: rules::Limits,
@@ -106,6 +107,12 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         Queue::<crate::boundary::Request>::worst_case(routed(limits))?
             .checked_add(Map::<Token, skein_lib::ReplyTo>::worst_case(limits.asks)?)?;
     children
+        .checked_add(crate::accounts::worst_case(&limits.accounts)?)?
+        .checked_add(Queue::<crate::accounts::Request>::worst_case(account_out(limits))?)?
+        .checked_add(skein_lib::Set::<(Id<Entry>, u32)>::worst_case(
+            limits.work.items.checked_mul(grant_accounts(limits)?)?,
+        )?)?
+        .checked_add(skein_lib::Set::<Id<Entry>>::worst_case(limits.work.items)?)?
         .checked_add(config_bytes(limits)?)?
         .checked_add(table)?
         .checked_add(waited)?
@@ -128,12 +135,14 @@ pub fn accepts(config: &Config, limits: &Limits) -> bool {
     let repositories = config.repositories();
     let env = Env { now: Time::ZERO, wall: Wall::EPOCH, limits: limits.plan };
     repositories > 0
+        && repositories <= 256
         && repositories == config.rules.repositories
         && repositories <= limits.forge.repositories
         && config.home < repositories
         && config.rules.fits(&limits.rules)
         && config.plan.fits(limits.forge.repositories, &limits.plan)
-        && within(config.models.len(), limits.models_bytes)
+        && models_fit(&config.models, limits.models_bytes)
+        && accounts_fit(config, limits)
         && forge_config_fits(&config.forge, &limits.forge)
         && within(config.session.charter.instructions.len(), limits.plan.instruction_bytes)
         && match &config.session.charter.template {
@@ -173,7 +182,12 @@ fn config_bytes(limits: &Limits) -> Option<u64> {
         .checked_add(forge)?
         .checked_add(session)?
         .checked_add(u64::from(limits.models_bytes))?
-        .checked_add(name.checked_mul(2)?)
+        .checked_add(name.checked_mul(2)?)?
+        .checked_add(
+            u64::from(limits.accounts.accounts).checked_mul(u64::try_from(size_of::<crate::Account>()).ok()?)?,
+        )?
+        .checked_add(u64::from(limits.models_bytes).checked_mul(4)?)?
+        .checked_add(u64::from(limits.forge.repositories).checked_mul(4)?)
 }
 
 pub(crate) fn within(len: usize, most: u32) -> bool {
@@ -196,7 +210,9 @@ fn entry_bytes(limits: &Limits) -> Option<u64> {
     let goal = u64::from(plan.steps).checked_mul(step)?;
     let relations = u64::from(plan.steps).checked_mul(name.checked_add(64)?)?.checked_mul(2)?;
     let inbox = List::<Noted>::worst_case(inbox(limits)?)?;
-    let charter = u64::from(limits.brief.brief_bytes)
+    let charter = u64::from(limits.accounts.accounts.checked_add(limits.forge.repositories)?)
+        .checked_mul(u64::try_from(size_of::<crate::accounts::Grant>()).ok()?)?
+        .checked_add(u64::from(limits.brief.brief_bytes))?
         .checked_add(u64::from(plan.instruction_bytes))?
         .checked_add(u64::from(limits.models_bytes))?
         .checked_add(u64::from(limits.fleet.workstream_bytes))?;
@@ -283,7 +299,8 @@ pub(crate) fn facts(limits: &Limits) -> Option<u32> {
         .checked_add(limits.brief.facts)?
         .checked_add(limits.notes.facts)?
         .checked_add(limits.views.facts)?
-        .checked_add(limits.facts)
+        .checked_add(limits.facts)?
+        .checked_add(limits.accounts.facts)
 }
 
 /// Room for what the hub emits in an entry point: its steps, each within its
@@ -321,4 +338,71 @@ pub(crate) const fn routed(limits: &Limits) -> u32 {
         .saturating_add(brief_out(limits))
         .saturating_add(notes_out(limits))
         .saturating_add(views_out(limits))
+        .saturating_add(account_out(limits))
+}
+
+fn models_fit(models: &[crate::Model], most: u32) -> bool {
+    let mut bytes = 0_u64;
+    let fixed = u64::try_from(core::mem::size_of::<crate::Model>()).expect("a model size fits");
+    for model in models {
+        if model.model.is_empty() || model.max_tokens == 0 {
+            return false;
+        }
+        let payload = u64::try_from(model.model.len()).expect("model bytes fit");
+        bytes = bytes.saturating_add(fixed).saturating_add(payload);
+    }
+    !models.is_empty() && bytes <= u64::from(most)
+}
+
+pub(crate) const fn account_out(limits: &Limits) -> u32 {
+    limits.steps.saturating_mul(crate::accounts::MAX_OUT)
+}
+fn accounts_fit(config: &Config, limits: &Limits) -> bool {
+    if u32::try_from(config.accounts.len()).unwrap_or(u32::MAX) > limits.accounts.accounts
+        || config.identities.len() != config.plan.repositories.len()
+        || !within(config.endpoints.len(), limits.models_bytes)
+    {
+        return false;
+    }
+    for account in &config.endpoints {
+        let mut found = false;
+        for entry in &config.accounts {
+            if entry.account == *account {
+                found = true;
+            }
+        }
+        if !found {
+            return false;
+        }
+    }
+    for model in &config.models {
+        let index = usize::try_from(model.endpoint).expect("endpoint index fits");
+        let Some(account) = config.endpoints.get(index) else {
+            return false;
+        };
+        let mut found = false;
+        for entry in &config.accounts {
+            if entry.account == *account {
+                found = true;
+            }
+        }
+        if !found {
+            return false;
+        }
+    }
+    for (index, account) in config.accounts.iter().enumerate() {
+        if account.generation == u64::MAX || config.identities.contains(&account.account) {
+            return false;
+        }
+        for other in config.accounts.iter().skip(index.saturating_add(1)) {
+            if account.account == other.account {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+pub(crate) fn grant_accounts(limits: &Limits) -> Option<u32> {
+    limits.accounts.accounts.checked_add(limits.forge.repositories)
 }

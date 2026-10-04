@@ -224,7 +224,9 @@ impl Driver {
                 }
             }
             Request::Refuse { channel } => self.channels.retain(|open| *open != channel),
-            Request::Inbound { .. }
+            Request::Account { .. }
+            | Request::Grant { .. }
+            | Request::Inbound { .. }
             | Request::Cancel { .. }
             | Request::Relayed { .. }
             | Request::Acknowledge { .. }
@@ -418,9 +420,9 @@ impl Driver {
             }
             9 => {
                 let at = self.index(self.assigned.len());
-                let &(_, item, attempt) = self.assigned.get(at)?;
+                let &(channel, item, attempt) = self.assigned.get(at)?;
                 let content = bytes(limits.views.report_bytes.saturating_mul(2), b'r');
-                Some(Event::Told { item, attempt, kind: Report::Text, content })
+                Some(Event::Told { channel, item, attempt, kind: Report::Text, content })
             }
             10 => {
                 let at = self.index(self.watchers.len());
@@ -683,7 +685,16 @@ fn normal_config(_limits: &Limits) -> temper_engine_domain::Config {
 /// tracking labels used by the driver's forge during the run.
 fn full_config(limits: &Limits) -> temper_engine_domain::Config {
     let mut config = deployment::config();
-    config.models = bytes(limits.models_bytes, b'm');
+    config.models = Box::new([temper_engine_domain::Model {
+        endpoint: 0,
+        model: bytes(
+            limits.models_bytes.saturating_sub(
+                u32::try_from(core::mem::size_of::<temper_engine_domain::Model>()).expect("model size fits"),
+            ),
+            b'm',
+        ),
+        max_tokens: 1024,
+    }]);
     config.plan.templates = (0..limits.plan.templates)
         .map(|_| plan::Template {
             name: bytes(limits.plan.name_bytes, b't'),

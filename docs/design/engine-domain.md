@@ -879,12 +879,14 @@ each to be designed before it is built:
   plans' (testing.md, section 9).
 - **What the protocol layer's design asks of the domain** (forge.md,
   section 12; channel.md, section 14; credentials.md, section 9):
-  - LLM accounts, a child domain of their own, and grants to the
-    attempts that use them;
-  - typed models in a charter, so the engine knows which accounts a run
-    needs;
-  - inbound events named, and landings by the repository's tag;
   - an item's comments read from a time;
   - each call's cost, charged to the request budget;
   - hints naming who caused them, so the engine's own echoes are dropped;
   - listings without text, and the wiki's listing by an opaque cursor.
+
+The channel and credential prerequisites are now implemented: an accounts
+child domain, grants scoped to attempts that use them, typed models in a
+charter, named inbound events and bounces, and landings by repository tag.
+Token values stay below the domain. The remaining forge prerequisites
+above and protocol integration are tracked in
+[protocol-implementation.md](../development/protocol-implementation.md).

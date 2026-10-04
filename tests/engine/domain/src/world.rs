@@ -581,7 +581,7 @@ impl World {
 
     fn fact(&mut self, fact: &Fact) {
         let ending = match fact {
-            Fact::Loaded => "loaded",
+            Fact::Accounts { .. } | Fact::Loaded => "loaded",
             Fact::Mangled { .. } => "mangled",
             Fact::Untracked { .. } => "untracked",
             Fact::Ruled { refused: true, .. } => "ruled: refused",
@@ -654,6 +654,10 @@ impl World {
                     Event::Answered { .. }
                     | Event::Hint { .. }
                     | Event::Hello { .. }
+                    | Event::Refreshed { .. }
+                    | Event::RefreshFailed { .. }
+                    | Event::Rejected { .. }
+                    | Event::Exhausted { .. }
                     | Event::Lost { .. }
                     | Event::Answer { .. }
                     | Event::Relay { .. }
@@ -879,9 +883,26 @@ impl World {
                 hello: Hello { slots, workstreams: workstreams.into(), hosting: hosting.into() },
             },
             Up::Answer { item, attempt, said } => Event::Answer { channel, item, attempt, answer: answer_of(said) },
-            Up::Relay { item, attempt, call, body } => Event::Relay { channel, item, attempt, call, body },
-            Up::Bounced { item, attempt, bounce } => Event::Bounced { item, attempt, bounce },
-            Up::Told { item, attempt, kind, content } => Event::Told { item, attempt, kind, content: content.into() },
+            Up::Relay { item, attempt, call, body } => {
+                let bytes = temper_engine_protocol::payload::encode_call(body, &temper_channel::Sizes::STARTING)
+                    .expect("the world's call fits v1");
+                let body = temper_engine_protocol::payload::decode_call(&bytes, &temper_channel::Sizes::STARTING)
+                    .expect("the production call schema reads back");
+                Event::Relay { channel, item, attempt, call, body }
+            }
+            Up::Bounced { item, attempt, name, bounce } => Event::Bounced { channel, item, attempt, name, bounce },
+            Up::Told { item, attempt, kind, content } => {
+                let bytes = temper_engine_protocol::payload::encode_fact(
+                    kind,
+                    content.into(),
+                    &temper_channel::Sizes::STARTING,
+                )
+                .expect("the world's fact fits v1");
+                let (kind, content) =
+                    temper_engine_protocol::payload::decode_fact(&bytes, &temper_channel::Sizes::STARTING)
+                        .expect("the production fact schema reads back");
+                Event::Told { channel, item, attempt, kind, content }
+            }
         }
     }
 
@@ -1086,17 +1107,26 @@ impl World {
                 forge::step(&mut self.forge, &self.forge_env, event, &mut self.forge_out);
                 self.drain_forge();
             }
+            Request::Account { request } => self.account_request(request),
             Request::Assign { channel, assignment } => {
-                let Assignment { item, attempt, workspace, save: _, charter, snapshot } = assignment;
+                let Assignment { item, attempt, workspace, save: _, charter, snapshot, grants: _ } = assignment;
                 let charter = crate::codec::charter(&charter);
                 let assigned = Assigned { item, attempt, workspace, charter, snapshot };
                 self.down(channel, Down::Assign(assigned));
             }
-            Request::Inbound { channel, item, attempt, event } => {
-                self.down(channel, Down::Inbound { item, attempt, event });
+            Request::Inbound { channel, item, attempt, name, event } => {
+                let bytes = temper_engine_protocol::payload::encode_inbound(event, &temper_channel::Sizes::STARTING)
+                    .expect("the world's inbound fits v1");
+                let event = temper_engine_protocol::payload::decode_inbound(&bytes, &temper_channel::Sizes::STARTING)
+                    .expect("the production inbound schema reads back");
+                self.down(channel, Down::Inbound { item, attempt, name, event });
             }
             Request::Cancel { channel, item, attempt } => self.down(channel, Down::Cancel { item, attempt }),
             Request::Relayed { channel, item, attempt, call, served } => {
+                let bytes = temper_engine_protocol::payload::encode_served(served, &temper_channel::Sizes::STARTING)
+                    .expect("the world's served record fits v1");
+                let served = temper_engine_protocol::payload::decode_served(&bytes, &temper_channel::Sizes::STARTING)
+                    .expect("the production served schema reads back");
                 self.down(channel, Down::Relayed { item, attempt, call, served });
             }
             Request::Acknowledge { channel, item, attempt } => {
@@ -1139,7 +1169,7 @@ impl World {
                 let at = self.now.saturating_add(self.settings.channel.draw(&mut self.rng));
                 self.send(at, Delivery::Engine { life: self.life, event: Event::Delivered { watcher, done: true } });
             }
-            Request::Ended { .. } => {}
+            Request::Grant { .. } | Request::Ended { .. } => {}
             Request::Store { owner, op } => {
                 self.stores.open((self.life, owner), ());
                 let (stored, after) = self.store.apply(op);
@@ -1149,6 +1179,38 @@ impl World {
                 let event = Event::Stored { owner, stored };
                 self.send(self.now.saturating_add(after), Delivery::Engine { life: self.life, event });
             }
+        }
+    }
+
+    fn account_request(&mut self, request: engine::accounts::Request) {
+        match request {
+            engine::accounts::Request::Refresh { account, generation }
+            | engine::accounts::Request::Keep { account, generation } => {
+                self.send(
+                    self.now,
+                    Delivery::Engine {
+                        life: self.life,
+                        event: Event::Refreshed { account, generation, valid: Duration::from_nanos(u64::MAX) },
+                    },
+                );
+            }
+            engine::accounts::Request::Cancel { account, generation } => {
+                self.send(
+                    self.now,
+                    Delivery::Engine {
+                        life: self.life,
+                        event: Event::RefreshFailed {
+                            account,
+                            generation,
+                            failure: engine::accounts::Failure::Cancelled,
+                        },
+                    },
+                );
+            }
+            engine::accounts::Request::Granted { .. }
+            | engine::accounts::Request::Availability { .. }
+            | engine::accounts::Request::Refused { .. }
+            | engine::accounts::Request::Closed { .. } => unreachable!("only account effects leave the domain"),
         }
     }
 
@@ -1392,6 +1454,10 @@ fn describe(event: &Event) -> String {
         }
         Event::Hint { .. }
         | Event::Hello { .. }
+        | Event::Refreshed { .. }
+        | Event::RefreshFailed { .. }
+        | Event::Rejected { .. }
+        | Event::Exhausted { .. }
         | Event::Lost { .. }
         | Event::Answer { .. }
         | Event::Relay { .. }
@@ -1424,7 +1490,9 @@ fn describe_request(request: &Request) -> String {
         Request::Assign { channel, assignment } => {
             format!("assign {:?}#{} on {}", assignment.item, assignment.attempt, channel.raw())
         }
-        Request::Forge { .. }
+        Request::Account { .. }
+        | Request::Grant { .. }
+        | Request::Forge { .. }
         | Request::Inbound { .. }
         | Request::Cancel { .. }
         | Request::Relayed { .. }

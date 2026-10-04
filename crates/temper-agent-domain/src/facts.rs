@@ -7,8 +7,61 @@
 //! theirs by their opener's, which is the same token: the facts of a
 //! conversation and of its session go together.
 
+use alloc::boxed::Box;
+use skein_lib::Token;
 use temper_agent_domain_run::facts as run;
 use temper_agent_domain_session as session;
+
+/// Content the protocol projects into the channel's fact payload. The engine
+/// applies capture policy; the agent's queue drops and counts overflow.
+#[derive(PartialEq, Eq, Debug)]
+pub enum Content {
+    Text { owner: Token, text: Box<[u8]> },
+    Call { owner: Token, id: Box<[u8]>, name: Box<[u8]>, input: Box<[u8]> },
+    Tool { owner: Token, done: crate::tools::Done },
+    Usage { owner: Token, usage: crate::llm::Usage },
+}
+
+pub(crate) fn done_bytes(done: &crate::tools::Done) -> u64 {
+    use crate::tools::Done;
+    match done {
+        Done::Loaded { content, .. } => bytes(content),
+        Done::Scanned { entries, .. } => {
+            let mut held = fixed(entries.len(), size_of::<crate::tools::Entry>());
+            for entry in entries {
+                held = held.saturating_add(bytes(entry.name.as_bytes()));
+            }
+            held
+        }
+        Done::Exited { head, tail, .. } => bytes(head).saturating_add(bytes(tail)),
+        Done::Found { hits, .. } => {
+            let mut held = fixed(hits.len(), size_of::<crate::tools::Hit>());
+            for hit in hits {
+                held = held.saturating_add(bytes(&hit.path)).saturating_add(bytes(&hit.text));
+            }
+            held
+        }
+        Done::Stored { .. }
+        | Done::Conflict { .. }
+        | Done::Missing
+        | Done::NotFile
+        | Done::Linked
+        | Done::NotDirectory
+        | Done::TooLarge { .. }
+        | Done::Escapes
+        | Done::Failed { .. }
+        | Done::TimedOut
+        | Done::Cancelled => 0,
+    }
+}
+
+pub(crate) fn bytes(value: &[u8]) -> u64 {
+    u64::try_from(value.len()).unwrap_or(u64::MAX)
+}
+
+fn fixed(count: usize, size: usize) -> u64 {
+    u64::try_from(count).unwrap_or(u64::MAX).saturating_mul(u64::try_from(size).unwrap_or(u64::MAX))
+}
 
 /// Something that happened in a child domain.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]

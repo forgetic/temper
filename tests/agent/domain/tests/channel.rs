@@ -50,7 +50,10 @@ fn engine_charter(finish: Finish) -> Charter {
         grants: Grants { modify: false, shell: true, forge: false, subagents: true, note: true },
         finish,
         budget: plan::Budget { tokens: 11, turns: 7, time: Duration::from_secs(23) },
-        models: bytes(b"main small large"),
+        models: [b"main".as_slice(), b"small".as_slice(), b"large".as_slice()]
+            .into_iter()
+            .map(|model| temper_engine_domain::Model { endpoint: 0, model: bytes(model), max_tokens: MAX_TOKENS })
+            .collect(),
         policy: Capturing {
             text: Capture::Content,
             progress: Capture::Shape,
@@ -63,7 +66,7 @@ fn engine_charter(finish: Finish) -> Charter {
 
 /// The run's charter for [`engine_charter`] of a change, in [`checkout`].
 fn run_charter() -> run::Charter {
-    let llm = |model: &[u8]| Llm { endpoint: Endpoint(0), model: bytes(model), max_tokens: MAX_TOKENS };
+    let llm = |model: &[u8]| Llm { account: 0, endpoint: Endpoint(0), model: bytes(model), max_tokens: MAX_TOKENS };
     let brief = b"@coding Keep it small.\n\nWhy: Produce\n\n## Item\nFix the parser.\n\n## Ci\n[unread: Failed]\n";
     run::Charter {
         brief: bytes(brief),
@@ -139,11 +142,22 @@ fn a_charter_cut_short_is_asserted_against() {
 #[test]
 fn every_message_down_reaches_the_agent_as_it_should() {
     let encoded = codec::charter(&engine_charter(Finish::Change { checks: true }));
-    let start = Down::Start { charter: encoded.into(), snapshot: None };
-    let started = Event::Start { reply_to: ReplyTo::new(WORKER), worker: WORKER, charter: run_charter() };
+    let start = Down::Start { charter: encoded.into(), snapshot: None, repositories: repositories(), grants: grants() };
+    let started = Event::Start {
+        grants: Box::new([temper_agent_domain::Grant {
+            name: temper_agent_domain::GrantName { account: 0, generation: 0 },
+            valid: Duration::from_secs(100_000),
+        }]),
+        reply_to: ReplyTo::new(WORKER),
+        worker: WORKER,
+        charter: run_charter(),
+    };
     assert_eq!(channel::down(start, &link(None)), Some(started));
 
-    assert_eq!(channel::down(Down::Event { event: bytes(b"a human said hello") }, &link(Some(RUN))), None);
+    assert_eq!(
+        channel::down(Down::Event { name: Token::new(1), event: bytes(b"a human said hello") }, &link(Some(RUN))),
+        None
+    );
 
     let answer = Down::Answer { call: CALL, reply: Reply::Pushed(Push::Done) };
     let pushed = Event::Pushed { owner: CALL, push: run::Push::Done };
@@ -157,7 +171,15 @@ fn every_message_down_reaches_the_agent_as_it_should() {
 #[should_panic(expected = "the agent never parks")]
 fn a_start_from_a_snapshot_is_asserted_against() {
     let encoded = codec::charter(&engine_charter(Finish::Verdict));
-    let _ = channel::down(Down::Start { charter: encoded.into(), snapshot: Some(bytes(b"parked")) }, &link(None));
+    let _ = channel::down(
+        Down::Start {
+            charter: encoded.into(),
+            snapshot: Some(bytes(b"parked")),
+            repositories: repositories(),
+            grants: grants(),
+        },
+        &link(None),
+    );
 }
 
 #[test]
@@ -298,7 +320,12 @@ fn below(deadline: Time) -> [Request; 8] {
     let place = || Place { root: Token::new(1), path: bytes(b".temper/pre-pr") };
     let tool_place = tools::Place { root: Token::new(1), path: bytes(b"src/lib.rs") };
     [
-        Request::Complete { owner: CALL, prompt, timeout: Duration::from_secs(60) },
+        Request::Complete {
+            owner: CALL,
+            grant: temper_agent_domain::GrantName { account: 0, generation: 0 },
+            prompt,
+            timeout: Duration::from_secs(60),
+        },
         Request::Cancel { owner: CALL },
         Request::Io { owner: CALL, op: tools::Op::Load { at: tool_place, max: 4096 }, deadline },
         Request::CancelIo { owner: CALL },
@@ -378,7 +405,8 @@ fn charters_the_engine_assigns_decode_into_ones_the_run_admits() {
         let mut agent = temper_agent_domain::Domain::new(&LIMITS, seed);
         let env = Env { now: Time::ZERO, wall: Wall::EPOCH, limits: LIMITS };
         let mut out = Queue::with_capacity(temper_agent_domain::max_out(&LIMITS));
-        let start = Down::Start { charter: encoded.into(), snapshot: None };
+        let start =
+            Down::Start { charter: encoded.into(), snapshot: None, repositories: repositories(), grants: grants() };
         let event = channel::down(start, &link(None)).expect("a start is heard");
         temper_agent_domain::step(&mut agent, &env, event, &mut out);
         let admitted = out.iter().filter(|request| matches!(request, Request::Admitted { .. })).count();
@@ -437,4 +465,22 @@ fn a_push_failure_reaches_the_llm_as_its_reason_and_actual_diagnostic_output() {
         output.as_ref(),
         b"push failed: Refused (repository 2); 37 diagnostic bytes omitted\nremote: hook declined: missing changelog"
     );
+}
+
+fn repositories() -> Box<[temper_worker_domain_agent::channel::Repository]> {
+    checkout()
+        .repositories
+        .iter()
+        .map(|placed| temper_worker_domain_agent::channel::Repository {
+            name: placed.name.clone(),
+            writable: placed.writable,
+        })
+        .collect()
+}
+fn grants() -> Box<[temper_worker_domain_agent::channel::Grant]> {
+    Box::new([temper_worker_domain_agent::channel::Grant {
+        account: 0,
+        generation: 0,
+        valid: Duration::from_secs(100_000),
+    }])
 }

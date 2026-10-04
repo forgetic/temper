@@ -147,7 +147,7 @@ impl Harness {
     /// The run's call `call` with the body `raw`, relayed: the parent's
     /// right to answer it.
     fn relay(&mut self, run: Token, attempt: Token, call: Token, raw: u64) -> ReplyTo {
-        let mut up = self.step(Event::Relay { run, attempt, call, body: payload(raw) }).into_iter();
+        let mut up = self.step(Event::Relay { channel: C1, run, attempt, call, body: payload(raw) }).into_iter();
         let Some(Request::Relay { reply_to, run: of, attempt: by, body }) = up.next() else {
             panic!("a call is relayed up");
         };
@@ -471,9 +471,15 @@ fn a_cancelled_attempt_is_fenced_but_its_answer_ends_its_call() {
         &*h.step(Event::Inbound { run: R1, attempt: A1, event }),
         &[Request::Undelivered { run: R1, attempt: A1, event, undelivered: Undelivered::Gone }]
     );
-    assert_eq!(&*h.step(Event::Relay { run: R1, attempt: A1, call: Token::new(7), body: payload(6) }), &[drop(6)]);
-    assert!(h.step(Event::Bounced { run: R1, attempt: A1, bounce: Bounce::Ending }).is_empty());
-    assert_eq!(&*h.step(Event::Told { run: R1, attempt: A1, fact: payload(7) }), &[drop(7)]);
+    assert_eq!(
+        &*h.step(Event::Relay { channel: C1, run: R1, attempt: A1, call: Token::new(7), body: payload(6) }),
+        &[drop(6)]
+    );
+    assert!(
+        h.step(Event::Bounced { channel: C1, name: Token::new(0), run: R1, attempt: A1, bounce: Bounce::Ending })
+            .is_empty()
+    );
+    assert_eq!(&*h.step(Event::Told { channel: C1, run: R1, attempt: A1, fact: payload(7) }), &[drop(7)]);
     assert_eq!(&*h.answer(C1, R1, A1, Answer::Failed, 8), &[answered(A1, R1, Answer::Failed, 8)]);
     // Answered: a cancel changes nothing.
     assert!(h.step(Event::Cancel { run: R1, attempt: A1 }).is_empty());
@@ -500,7 +506,10 @@ fn a_newer_attempt_replaces_the_claim_and_waits_for_it_to_be_gone() {
     assert_eq!(&*h.start(R1, A2, b"w1"), &[cancel(C1, R1, A1), withdrawn(R1, A1, Withdrawal::Replaced)]);
     // Never two attempts of a run on the workers: A2 waits for A1.
     assert!(h.settle().is_empty());
-    assert_eq!(&*h.step(Event::Relay { run: R1, attempt: A1, call: Token::new(7), body: payload(1) }), &[drop(1)]);
+    assert_eq!(
+        &*h.step(Event::Relay { channel: C1, run: R1, attempt: A1, call: Token::new(7), body: payload(1) }),
+        &[drop(1)]
+    );
     assert_eq!(&*h.answer(C1, R1, A1, Answer::Ended, 2), &[ack(C1, R1, A1), drop(2)]);
     assert_eq!(&*h.settle(), &[assign(C1, R1, A2), placed(R1, A2)]);
 }
@@ -557,7 +566,71 @@ fn a_relayed_call_beyond_the_room_is_dropped() {
     for raw in 0..2 {
         let _call: ReplyTo = h.relay(R1, A1, Token::new(raw), raw);
     }
-    assert_eq!(&*h.step(Event::Relay { run: R1, attempt: A1, call: Token::new(9), body: payload(9) }), &[drop(9)]);
+    assert_eq!(
+        &*h.step(Event::Relay { channel: C1, run: R1, attempt: A1, call: Token::new(9), body: payload(9) }),
+        &[drop(9)]
+    );
+}
+
+fn unowned_worker_inputs(h: &mut Harness, channel: Token) {
+    assert_eq!(
+        &*h.step(Event::Relay { channel, run: R1, attempt: A1, call: Token::new(8), body: payload(8) }),
+        &[drop(8)]
+    );
+    assert_eq!(&*h.step(Event::Told { channel, run: R1, attempt: A1, fact: payload(9) }), &[drop(9)]);
+    assert!(
+        h.step(Event::Bounced { channel, run: R1, attempt: A1, name: Token::new(3), bounce: Bounce::Full }).is_empty()
+    );
+    assert!(h.step(Event::Rejected { channel, run: R1, attempt: A1, account: 7, generation: 4 }).is_empty());
+    assert!(
+        h.step(Event::Exhausted { channel, run: R1, attempt: A1, account: 7, retry_after: Duration::from_secs(5) })
+            .is_empty()
+    );
+}
+
+fn owned_worker_notices(h: &mut Harness, channel: Token) {
+    assert_eq!(
+        &*h.step(Event::Told { channel, run: R1, attempt: A1, fact: payload(9) }),
+        &[Request::Told { run: R1, attempt: A1, fact: payload(9) }]
+    );
+    assert_eq!(
+        &*h.step(Event::Bounced { channel, run: R1, attempt: A1, name: Token::new(3), bounce: Bounce::Full }),
+        &[Request::Bounced { run: R1, attempt: A1, name: Token::new(3), bounce: Bounce::Full }]
+    );
+    assert_eq!(
+        &*h.step(Event::Rejected { channel, run: R1, attempt: A1, account: 7, generation: 4 }),
+        &[Request::Rejected { run: R1, attempt: A1, account: 7, generation: 4 }]
+    );
+    assert_eq!(
+        &*h.step(Event::Exhausted { channel, run: R1, attempt: A1, account: 7, retry_after: Duration::from_secs(5) }),
+        &[Request::Exhausted { run: R1, attempt: A1, account: 7, retry_after: Duration::from_secs(5) }]
+    );
+}
+
+#[test]
+fn worker_inputs_require_the_current_host_but_accepted_calls_survive_its_channel() {
+    let mut h = Harness::new(LIMITS);
+    h.hello(C1, 2, &[], &[]);
+    assert_eq!(h.place(R1, A1, b"w1"), C1);
+    h.hello(C2, 2, &[], &[]);
+    unowned_worker_inputs(&mut h, C2);
+    owned_worker_notices(&mut h, C1);
+    let call = Token::new(7);
+    let in_flight = h.relay(R1, A1, call, 1);
+    h.step(Event::Lost { channel: C1 });
+    unowned_worker_inputs(&mut h, C1);
+    unowned_worker_inputs(&mut h, C2);
+    h.hello(C3, 2, &[], &[hosted(R1, A1, Phase::Active)]);
+    unowned_worker_inputs(&mut h, C1);
+    unowned_worker_inputs(&mut h, C2);
+    owned_worker_notices(&mut h, C3);
+    assert_eq!(
+        &*h.step(Event::Relayed { to: in_flight, answer: payload(2) }),
+        &[Request::Relayed { channel: C3, run: R1, attempt: A1, call, answer: payload(2) }]
+    );
+    let up = h.step(Event::Relay { channel: C3, run: R1, attempt: A1, call: Token::new(8), body: payload(8) });
+    let [Request::Relay { run, attempt, body, .. }] = &*up else { panic!("the current host's call is relayed") };
+    assert_eq!((*run, *attempt, *body), (R1, A1, payload(8)));
 }
 
 #[test]
@@ -576,11 +649,11 @@ fn inbound_events_bounces_and_facts_pass_while_the_claim_is_live() {
         &[Request::Inbound { channel: C1, run: R1, attempt: A1, event }]
     );
     assert_eq!(
-        &*h.step(Event::Bounced { run: R1, attempt: A1, bounce: Bounce::Full }),
-        &[Request::Bounced { run: R1, attempt: A1, bounce: Bounce::Full }]
+        &*h.step(Event::Bounced { channel: C1, name: Token::new(0), run: R1, attempt: A1, bounce: Bounce::Full }),
+        &[Request::Bounced { name: Token::new(0), run: R1, attempt: A1, bounce: Bounce::Full }]
     );
     assert_eq!(
-        &*h.step(Event::Told { run: R1, attempt: A1, fact: payload(2) }),
+        &*h.step(Event::Told { channel: C1, run: R1, attempt: A1, fact: payload(2) }),
         &[Request::Told { run: R1, attempt: A1, fact: payload(2) }]
     );
     h.step(Event::Lost { channel: C1 });

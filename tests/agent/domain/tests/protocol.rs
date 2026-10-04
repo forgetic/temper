@@ -25,7 +25,11 @@ fn charter() -> Charter {
         grants: Grants { modify: true, shell: true, forge: false, subagents: false, note: false },
         finish: Finish::Change { checks: true },
         budget: plan::Budget { tokens: 100, turns: 3, time: Duration::from_secs(60) },
-        models: bytes(b"fake-1"),
+        models: Box::new([temper_engine_domain::Model {
+            endpoint: 0,
+            model: bytes(b"fake-1"),
+            max_tokens: temper_agent_domain_world::channel::MAX_TOKENS,
+        }]),
         policy: Policy {
             text: Capture::Content,
             progress: Capture::Shape,
@@ -56,6 +60,7 @@ fn every_attempt_of_every_item_has_a_name_of_its_own() {
 #[test]
 fn an_assignment_reaches_the_worker_with_its_workspace_and_its_charter_framed() {
     let assignment = Assignment {
+        grants: Box::new([]),
         item: ITEM,
         attempt: 3,
         workspace: Workspace {
@@ -74,11 +79,12 @@ fn an_assignment_reaches_the_worker_with_its_workspace_and_its_charter_framed() 
     assert_eq!(places, [1]);
     assert_eq!((assignment.run, assignment.attempt), (protocol::run(ITEM), protocol::attempt(ITEM, 3)));
     let repository = host::Repository {
+        tag: 1,
         name: bytes(b"two"),
         remote: bytes(b"acme/two"),
         start: host::Start::Branch { branch: bytes(b"temper/42") },
         access: host::Access::Writable { push: bytes(b"temper/42") },
-        identity: bytes(IDENTITY),
+        identity: IDENTITY,
     };
     assert_eq!(*assignment.workspace.repositories, [repository]);
     assert_eq!(assignment.save.as_deref(), Some(&b"temper-saved/42"[..]));
@@ -93,11 +99,11 @@ fn an_assignment_reaches_the_worker_with_its_workspace_and_its_charter_framed() 
 fn every_answer_reaches_the_engine_as_its_protocol_layer_decodes_it() {
     let commit = [9; 32];
     let work = |landed: &[u32]| host::Work {
-        landed: landed.iter().map(|place| host::Landed { repository: *place, commit }).collect(),
+        landed: landed.iter().map(|place| host::Landed { tag: *place, commit }).collect(),
         saved: None,
     };
     let outcome = Outcome::Change { message: bytes(b"Fix it") };
-    let ended = host::Answer::Ended { outcome: codec::outcome(&outcome).into(), work: work(&[0]) };
+    let ended = host::Answer::Ended { outcome: codec::outcome(&outcome).into(), work: work(&[1]) };
     let landed = engine::Work { landed: Box::new([engine::Landed { repository: 1, commit }]) };
     assert_eq!(protocol::answer(ended, &[1]), engine::Answer::Ended { outcome, work: landed });
     assert_eq!(protocol::answer(host::Answer::Refused(host::Refusal::Busy), &[1]), engine::Answer::Busy);
@@ -146,8 +152,9 @@ fn what_the_engine_sends_a_run_reaches_the_worker_under_the_runs_names() {
     let expected = worker::Event::Acknowledged { run: protocol::run(ITEM), attempt: protocol::attempt(ITEM, 2) };
     assert_eq!(protocol::down(&acknowledge), Some(expected));
     let finished = engine::Inbound::Finished { item: ITEM };
-    let inbound = engine::Request::Inbound { channel, item: ITEM, attempt: 2, event: finished };
+    let inbound = engine::Request::Inbound { name: Token::new(1), channel, item: ITEM, attempt: 2, event: finished };
     let expected = worker::Event::Inbound {
+        name: Token::new(1),
         run: protocol::run(ITEM),
         attempt: protocol::attempt(ITEM, 2),
         event: bytes(b"finished"),

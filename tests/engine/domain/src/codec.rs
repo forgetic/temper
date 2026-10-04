@@ -24,15 +24,13 @@
 //! beyond what is left, and tags it does not know.
 
 use skein_lib::{Duration, Time};
-use temper_engine_domain::brief::{self, Body, Section, Unread};
 use temper_engine_domain::notes::{Author, Page, Reference};
 use temper_engine_domain::plan::{
-    self, AgentSpec, Batch, Budget, ChangeSpec, Commit, Decided, Decision, Envelope, Finish, Gate, Goal, Grants,
-    Growth, Plan, Progress, Repair, Repository, Resume, Review, Reviewed, SessionSpec, Sources, Step, Target, WaitSpec,
-    Wake, Why, Work,
+    self, AgentSpec, Batch, Budget, ChangeSpec, Commit, Decided, Decision, Envelope, Gate, Goal, Grants, Growth, Plan,
+    Progress, Repair, Repository, Resume, Review, Reviewed, SessionSpec, Sources, Step, Target, WaitSpec, Wake, Why,
+    Work,
 };
 use temper_engine_domain::rules::Permission;
-use temper_engine_domain::views::{Capture, Policy};
 use temper_engine_domain::work::{Class, Failures, Hold, Lifecycle, Phase};
 use temper_engine_domain::{Charter, Decoded, Item, Outcome, Posted, Record, Related, Relations};
 
@@ -136,15 +134,15 @@ pub fn page_of(content: &[u8]) -> Option<Page> {
 /// A charter, as a worker carries it.
 #[must_use]
 pub fn charter(charter: &Charter) -> Vec<u8> {
-    let mut out = Out::default();
-    put_charter(&mut out, charter);
-    out.0
+    temper_engine_protocol::payload::encode_charter(charter, &temper_channel::Sizes::STARTING)
+        .expect("the world's charter fits v1")
+        .into_vec()
 }
 
 /// The charter `bytes` carry, if they decode.
 #[must_use]
 pub fn charter_of(bytes: &[u8]) -> Option<Charter> {
-    whole(bytes, get_charter)
+    temper_engine_protocol::payload::decode_charter(bytes, &temper_channel::Sizes::STARTING)
 }
 
 /// The text of every section a charter's brief carries, one after another:
@@ -171,15 +169,15 @@ pub fn brief_text(bytes: &[u8]) -> Vec<u8> {
 /// An outcome, as a run answers with it.
 #[must_use]
 pub fn outcome(outcome: &Outcome) -> Vec<u8> {
-    let mut out = Out::default();
-    put_outcome(&mut out, outcome);
-    out.0
+    temper_engine_protocol::payload::encode_outcome(outcome, &temper_channel::Sizes::STARTING)
+        .expect("the world's outcome fits v1")
+        .into_vec()
 }
 
 /// The outcome `bytes` carry, if they decode.
 #[must_use]
 pub fn outcome_of(bytes: &[u8]) -> Option<Outcome> {
-    whole(bytes, get_outcome)
+    temper_engine_protocol::payload::decode_outcome(bytes, &temper_channel::Sizes::STARTING)
 }
 
 fn record_of(bytes: &[u8]) -> Option<Record> {
@@ -1074,125 +1072,4 @@ fn put_plan(out: &mut Out, plan: &Plan) {
 
 fn get_plan(input: &mut In<'_>) -> Option<Plan> {
     Some(Plan { steps: input.list(get_step)?, envelope: get_envelope(input)?, budget: input.u64()? })
-}
-
-fn put_charter(out: &mut Out, charter: &Charter) {
-    put_why(out, charter.why);
-    out.list(&charter.brief, put_section);
-    out.bytes(&charter.instructions);
-    put_grants(out, charter.grants);
-    match charter.finish {
-        Finish::Report { grows } => {
-            out.u8(0);
-            out.bool(grows);
-        }
-        Finish::Change { checks } => {
-            out.u8(1);
-            out.bool(checks);
-        }
-        Finish::Verdict => out.u8(2),
-        Finish::Turn { supervising } => {
-            out.u8(3);
-            out.bool(supervising);
-        }
-    }
-    put_budget(out, charter.budget);
-    out.bytes(&charter.models);
-    let policy = charter.policy;
-    for capture in [policy.text, policy.progress, policy.calls, policy.tools, policy.usage] {
-        out.u8(match capture {
-            Capture::Nothing => 0,
-            Capture::Shape => 1,
-            Capture::Content => 2,
-        });
-    }
-}
-
-fn get_charter(input: &mut In<'_>) -> Option<Charter> {
-    let why = get_why(input)?;
-    let brief = input.list(get_section)?;
-    let instructions = input.bytes()?;
-    let grants = get_grants(input)?;
-    let finish = match input.u8()? {
-        0 => Finish::Report { grows: input.bool()? },
-        1 => Finish::Change { checks: input.bool()? },
-        2 => Finish::Verdict,
-        3 => Finish::Turn { supervising: input.bool()? },
-        _ => return None,
-    };
-    let budget = get_budget(input)?;
-    let models = input.bytes()?;
-    let policy = Policy {
-        text: get_capture(input)?,
-        progress: get_capture(input)?,
-        calls: get_capture(input)?,
-        tools: get_capture(input)?,
-        usage: get_capture(input)?,
-    };
-    Some(Charter { why, brief, instructions, grants, finish, budget, models, policy })
-}
-
-fn get_capture(input: &mut In<'_>) -> Option<Capture> {
-    Some(match input.u8()? {
-        0 => Capture::Nothing,
-        1 => Capture::Shape,
-        2 => Capture::Content,
-        _ => return None,
-    })
-}
-
-fn put_section(out: &mut Out, section: &Section) {
-    out.u8(match section.kind {
-        brief::Kind::Item => 0,
-        brief::Kind::Comments => 1,
-        brief::Kind::Dependencies => 2,
-        brief::Kind::Ci => 3,
-        brief::Kind::Reviews => 4,
-        brief::Kind::Pull => 5,
-        brief::Kind::Attempts => 6,
-        brief::Kind::Plan => 7,
-        brief::Kind::Notes => 8,
-        brief::Kind::Template => 9,
-    });
-    match &section.body {
-        Body::Text(text) => {
-            out.u8(0);
-            out.bytes(text);
-        }
-        Body::Missing(unread) => {
-            out.u8(1);
-            out.u8(match unread {
-                Unread::Failed => 0,
-                Unread::Late => 1,
-                Unread::Oversized => 2,
-            });
-        }
-    }
-}
-
-fn get_section(input: &mut In<'_>) -> Option<Section> {
-    let kind = match input.u8()? {
-        0 => brief::Kind::Item,
-        1 => brief::Kind::Comments,
-        2 => brief::Kind::Dependencies,
-        3 => brief::Kind::Ci,
-        4 => brief::Kind::Reviews,
-        5 => brief::Kind::Pull,
-        6 => brief::Kind::Attempts,
-        7 => brief::Kind::Plan,
-        8 => brief::Kind::Notes,
-        9 => brief::Kind::Template,
-        _ => return None,
-    };
-    let body = match input.u8()? {
-        0 => Body::Text(input.bytes()?),
-        1 => Body::Missing(match input.u8()? {
-            0 => Unread::Failed,
-            1 => Unread::Late,
-            2 => Unread::Oversized,
-            _ => return None,
-        }),
-        _ => return None,
-    };
-    Some(Section { kind, body })
 }

@@ -30,7 +30,7 @@ use skein_lib::{Env, Id, Map, Queue, Rng, Set, Slab, Time, Token};
 use temper_agent_domain_run as run;
 use temper_agent_domain_session::{self as session, llm as sllm};
 
-use crate::boundary::{Event, Request};
+use crate::boundary::{Event, GrantName, Request};
 use crate::facts::Fact;
 use crate::limits::{self, Limits};
 use crate::peer::Peer;
@@ -42,7 +42,7 @@ use crate::route;
 /// much room in `out` before calling it.
 #[must_use]
 pub const fn max_out(limits: &Limits) -> u32 {
-    limits::run_out(limits).saturating_add(limits::session_out(limits))
+    limits::run_out(limits).saturating_add(limits::session_out(limits)).saturating_add(1)
 }
 
 /// The agent domain's state: its child domains', what it keeps of each
@@ -60,6 +60,9 @@ pub struct Domain {
     /// Delegated calls between a session's `Delegate` and its answer, by the
     /// session's token for them.
     pub(crate) flights: Map<Token, Flight>,
+    pub(crate) grants: Map<u32, Credential>,
+    pub(crate) completions: Map<Token, GrantName>,
+    pub(crate) notices: Queue<Request>,
     pub(crate) ready: Ready,
     /// Tickets the peers hold.
     pub(crate) tickets: u32,
@@ -68,7 +71,16 @@ pub struct Domain {
     pub(crate) run_out: Queue<run::Request>,
     pub(crate) session_out: Queue<session::Request>,
     facts: Queue<Fact>,
+    pub(crate) content: Queue<crate::Content>,
+    pub(crate) content_lost: u64,
     lost: u64,
+}
+
+#[derive(Debug)]
+pub(crate) struct Credential {
+    pub(crate) name: GrantName,
+    pub(crate) expires: Time,
+    pub(crate) rejected: Option<u64>,
 }
 
 /// A delegated call in flight: the run serves it, and the peer's session
@@ -169,11 +181,16 @@ impl Domain {
             conversations: Map::with_capacity(peers),
             sessions: Map::with_capacity(peers),
             flights: Map::with_capacity(flights),
+            grants: Map::with_capacity(limits.accounts),
+            completions: Map::with_capacity(limits.run.conversations),
+            notices: Queue::with_capacity(1),
             ready: Ready::with_capacity(handoffs),
             tickets: 0,
             run_out: Queue::with_capacity(limits::run_out(limits)),
             session_out: Queue::with_capacity(limits::session_out(limits)),
             facts: Queue::with_capacity(facts),
+            content: Queue::with_capacity(limits.session.facts),
+            content_lost: 0,
             lost: 0,
         }
     }
@@ -244,11 +261,19 @@ impl Domain {
         self.facts.pop()
     }
 
+    /// Channel facts with content; capture policy remains the engine's.
+    pub fn pop_content(&mut self) -> Option<crate::Content> {
+        self.content.pop()
+    }
+
     /// How many facts were dropped for want of room, the child domains'
     /// included.
     #[must_use]
     pub fn facts_lost(&self) -> u64 {
-        self.lost.saturating_add(self.run.facts_lost()).saturating_add(self.session.facts_lost())
+        self.lost
+            .saturating_add(self.content_lost)
+            .saturating_add(self.run.facts_lost())
+            .saturating_add(self.session.facts_lost())
     }
 
     /// The reclaim point: frees what closed in this iteration.

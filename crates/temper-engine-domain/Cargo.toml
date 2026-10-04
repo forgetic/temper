@@ -8,6 +8,7 @@ publish.workspace = true
 
 [dependencies]
 skein-lib.workspace = true
+temper-engine-domain-accounts.workspace = true
 temper-engine-domain-brief.workspace = true
 temper-engine-domain-fleet.workspace = true
 temper-engine-domain-forge.workspace = true

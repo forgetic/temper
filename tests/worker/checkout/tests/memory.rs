@@ -67,7 +67,7 @@ fn full_spec(limits: &Limits, n: u32) -> Spec {
             name: name(limits.name_bytes, place),
             remote: name(limits.name_bytes, place),
             start: Start::Base { branch: name(limits.name_bytes, place) },
-            identity: bytes(limits.name_bytes),
+            identity: 0,
             push: Some(bytes(limits.name_bytes)),
         });
     }

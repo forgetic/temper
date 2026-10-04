@@ -20,7 +20,7 @@ use crate::translate;
 const SLACK: u32 = 3;
 
 /// Who the worker is to the forge, in every spec.
-pub const IDENTITY: &[u8] = b"temper-bot";
+pub const IDENTITY: u32 = 0;
 
 /// What a client's pushes and saves are committed with.
 const TITLE: &[u8] = b"Change the notes";
@@ -536,7 +536,7 @@ impl World {
                 }
             };
             let push = if writable { Some(base.clone().into()) } else { None };
-            let identity = IDENTITY.into();
+            let identity = IDENTITY;
             let spec = Repository { name: name.clone().into(), remote: remote.clone().into(), start, identity, push };
             repositories.push(spec);
             repos.push(Repo { name, remote, writable, commit });
@@ -561,7 +561,7 @@ impl World {
                     name: first.clone(),
                     remote: first,
                     start: Start::Branch { branch: b"main".as_slice().into() },
-                    identity: IDENTITY.into(),
+                    identity: IDENTITY,
                     push: None,
                 }),
                 way => repositories[0].name = names[usize::try_from(way - 2).expect("small")].into(),

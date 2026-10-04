@@ -20,6 +20,16 @@ pub(crate) fn check(assignment: &Assignment, limits: &Limits) -> Result<(), Inva
     if let Some(branch) = &assignment.save {
         name(branch, limits)?;
     }
+    if u64::try_from(assignment.grants.len()).expect("a length fits") > u64::from(limits.accounts) {
+        return Err(Invalid::Grants);
+    }
+    for (index, grant) in assignment.grants.iter().enumerate() {
+        for other in assignment.grants.iter().skip(index.saturating_add(1)) {
+            if grant.account == other.account {
+                return Err(Invalid::Grants);
+            }
+        }
+    }
     let workspace = &assignment.workspace;
     name(&workspace.key, limits)?;
     let count = u64::try_from(workspace.repositories.len()).expect("a length fits in a u64");
@@ -44,7 +54,6 @@ fn repository(repository: &Repository, limits: &Limits) -> Result<(), Invalid> {
     name(&repository.name, limits)?;
     component(&repository.name)?;
     name(&repository.remote, limits)?;
-    name(&repository.identity, limits)?;
     match &repository.start {
         Start::Base { branch } | Start::Branch { branch } | Start::Saved { branch } => name(branch, limits)?,
         Start::Commit { .. } => {}

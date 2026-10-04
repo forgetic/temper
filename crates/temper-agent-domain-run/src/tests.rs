@@ -160,7 +160,7 @@ pub(crate) fn charter() -> Charter {
         },
         outcome: OutcomeSpec { change: None, verdicts: Box::new([rule(b"approve", 0, 0), rule(b"request", 1, 8)]) },
         budget: BUDGET,
-        llm: Llm { endpoint: Endpoint(1), model: bytes(b"model-a"), max_tokens: 1024 },
+        llm: Llm { account: 0, endpoint: Endpoint(1), model: bytes(b"model-a"), max_tokens: 1024 },
         models: Box::new([]),
     }
 }
@@ -283,7 +283,7 @@ fn charters_beyond_the_limits_are_refused_as_invalid() {
     let three = Box::new([repository(b"a"), repository(b"b"), repository(b"c")]);
     let twins = Box::new([repository(b"a"), repository(b"a")]);
     let outlets = Box::new([Outlet { name: bytes(b"reply") }, Outlet { name: bytes(b"reply") }]);
-    let llm = Llm { endpoint: Endpoint(2), model: bytes(b"model-b"), max_tokens: 512 };
+    let llm = Llm { account: 0, endpoint: Endpoint(2), model: bytes(b"model-b"), max_tokens: 512 };
     let models = Box::new([llm.clone(), Llm { endpoint: Endpoint(3), ..llm }]);
     let cases = [
         (Charter { budget: Budget { turns: 101, ..BUDGET }, ..charter() }, Invalid::Budget),
@@ -968,7 +968,7 @@ fn families(inspect: bool, modify: bool, agents: bool) -> crate::charter::Famili
 /// The test charter, granting sub-agents and listing one LLM for them.
 fn agents() -> Charter {
     let grants = Grants { agents: true, ..charter().grants };
-    let models = Box::new([Llm { endpoint: Endpoint(2), model: bytes(b"model-b"), max_tokens: 512 }]);
+    let models = Box::new([Llm { account: 0, endpoint: Endpoint(2), model: bytes(b"model-b"), max_tokens: 512 }]);
     Charter { grants, models, ..charter() }
 }
 

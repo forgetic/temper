@@ -5,6 +5,8 @@
 //! attempt cancelled, replaced, lost or answered is dropped (attempts are
 //! fenced), and an inbound event that reaches no worker goes back to the
 //! parent, which keeps it.
+//! Worker inputs also require the live claim's current hosting channel;
+//! foreign channels and channels lost or replaced cannot originate them.
 //!
 //! A relayed call is the parent's to answer, exactly once: the fleet keeps it
 //! until the parent does, whatever becomes of its attempt meanwhile, and
@@ -70,17 +72,27 @@ fn named(domain: &Domain, run: Token, attempt: Token) -> Option<Id<Attempt>> {
     }
 }
 
+/// Only the worker currently hosting the live claim may originate inputs.
+fn owned(domain: &Domain, channel: Token, run: Token, attempt: Token) -> Option<Id<Attempt>> {
+    let id = named(domain, run, attempt)?;
+    match live(domain, id) {
+        Live::On(held) if held == channel => Some(id),
+        Live::On(_) | Live::Adrift | Live::Not => None,
+    }
+}
+
 /// A run's host call, from its worker: passed to the parent as a call of the
 /// fleet's, if its attempt is the live claim and there is room.
 pub(crate) fn relay(
     domain: &mut Domain,
+    channel: Token,
     run: Token,
     attempt: Token,
     call: Token,
     body: Token,
     out: &mut Queue<Request>,
 ) {
-    let Some(id) = named(domain, run, attempt) else {
+    let Some(id) = owned(domain, channel, run, attempt) else {
         domain.facts.push(Fact::Dropped);
         out.push(Request::Drop { payload: body });
         return;
@@ -140,9 +152,17 @@ pub(crate) fn inbound(domain: &mut Domain, run: Token, attempt: Token, event: To
 
 /// A bounce, from a worker: up to the parent, if its attempt is the live
 /// claim.
-pub(crate) fn bounced(domain: &mut Domain, run: Token, attempt: Token, bounce: Bounce, out: &mut Queue<Request>) {
-    if named(domain, run, attempt).is_some() {
-        out.push(Request::Bounced { run, attempt, bounce });
+pub(crate) fn bounced(
+    domain: &mut Domain,
+    channel: Token,
+    run: Token,
+    attempt: Token,
+    name: Token,
+    bounce: Bounce,
+    out: &mut Queue<Request>,
+) {
+    if owned(domain, channel, run, attempt).is_some() {
+        out.push(Request::Bounced { run, attempt, name, bounce });
     } else {
         domain.facts.push(Fact::Dropped);
     }
@@ -150,11 +170,45 @@ pub(crate) fn bounced(domain: &mut Domain, run: Token, attempt: Token, bounce: B
 
 /// A fact a run told, from its worker: up to the parent, if its attempt is
 /// the live claim.
-pub(crate) fn told(domain: &mut Domain, run: Token, attempt: Token, fact: Token, out: &mut Queue<Request>) {
-    if named(domain, run, attempt).is_some() {
+pub(crate) fn told(
+    domain: &mut Domain,
+    channel: Token,
+    run: Token,
+    attempt: Token,
+    fact: Token,
+    out: &mut Queue<Request>,
+) {
+    if owned(domain, channel, run, attempt).is_some() {
         out.push(Request::Told { run, attempt, fact });
     } else {
         domain.facts.push(Fact::Dropped);
         out.push(Request::Drop { payload: fact });
+    }
+}
+
+/// A grant follows only the live claimed attempt's worker.
+pub(crate) fn grant(domain: &mut Domain, run: Token, attempt: Token, grant: crate::Grant, out: &mut Queue<Request>) {
+    let Some(id) = named(domain, run, attempt) else {
+        return;
+    };
+    match live(domain, id) {
+        Live::On(channel) => out.push(Request::Grant { channel, run, attempt, grant }),
+        Live::Adrift | Live::Not => {}
+    }
+}
+
+/// Credential notices require the live claim's current hosting channel.
+pub(crate) fn credential_notice(
+    domain: &mut Domain,
+    channel: Token,
+    run: Token,
+    attempt: Token,
+    notice: Request,
+    out: &mut Queue<Request>,
+) {
+    if owned(domain, channel, run, attempt).is_some() {
+        out.push(notice);
+    } else {
+        domain.facts.push(Fact::Dropped);
     }
 }

@@ -37,7 +37,7 @@ use temper_worker_domain::{self as worker, host};
 
 /// Who a worker is to the forge, for every repository: the deployment's
 /// worker user's credentials.
-pub const IDENTITY: &[u8] = b"temper-worker-identity";
+pub const IDENTITY: u32 = 1;
 
 /// The bytes a frame adds to a charter: the run's name, and the attempt's.
 pub const CHARTER_FRAME: usize = 16;
@@ -66,7 +66,7 @@ pub fn directory(repository: u32) -> Box<[u8]> {
 /// of its repositories in its order, for its answer's work.
 #[must_use]
 pub fn assignment(assignment: &engine::Assignment) -> (host::Assignment, Vec<u32>) {
-    let engine::Assignment { item, attempt, workspace, save, charter, snapshot } = assignment;
+    let engine::Assignment { grants, item, attempt, workspace, save, charter, snapshot } = assignment;
     let (run, attempt) = names(*item, *attempt);
     let repositories = workspace.repositories.iter().map(|checkout| {
         let start = match &checkout.start {
@@ -80,15 +80,20 @@ pub fn assignment(assignment: &engine::Assignment) -> (host::Assignment, Vec<u32
             None => host::Access::ReadOnly,
         };
         host::Repository {
+            tag: checkout.repository,
             name: directory(checkout.repository),
             remote: deployment::name(checkout.repository).into(),
             start,
             access,
-            identity: IDENTITY.into(),
+            identity: IDENTITY,
         }
     });
     let indexes = workspace.repositories.iter().map(|checkout| checkout.repository).collect();
     let assignment = host::Assignment {
+        grants: grants
+            .iter()
+            .map(|grant| host::Grant { account: grant.account, generation: grant.generation, valid: grant.valid })
+            .collect(),
         run,
         attempt,
         workspace: host::Workspace { key: workspace.key.clone(), repositories: repositories.collect() },
@@ -182,12 +187,9 @@ fn phase(phase: worker::Phase) -> engine::fleet::Phase {
 /// deployment's `repositories` in the assignment's order. An outcome that
 /// does not decode is the agent's failure: it said what no engine reads.
 #[must_use]
-pub fn answer(answer: &host::Answer, repositories: &[u32]) -> Answer {
+pub fn answer(answer: &host::Answer, _repositories: &[u32]) -> Answer {
     let work = |work: &host::Work| {
-        let landed = work.landed.iter().map(|landed| Landed {
-            repository: repositories[usize::try_from(landed.repository).expect("a place")],
-            commit: landed.commit,
-        });
+        let landed = work.landed.iter().map(|landed| Landed { repository: landed.tag, commit: landed.commit });
         Work { landed: landed.collect() }
     };
     match answer {
@@ -211,7 +213,9 @@ pub fn answer(answer: &host::Answer, repositories: &[u32]) -> Answer {
 /// does not have, or refuses, is permanent.
 fn failure(failure: host::Failure) -> Failure {
     match failure {
-        host::Failure::Unprepared(host::Preparation::Transient) | host::Failure::Cancelled(_) => Failure::Transient,
+        host::Failure::Run(host::RunFailure::Exhausted)
+        | host::Failure::Unprepared(host::Preparation::Transient)
+        | host::Failure::Cancelled(_) => Failure::Transient,
         host::Failure::Unprepared(host::Preparation::Missing { .. } | host::Preparation::Refused { .. }) => {
             Failure::Permanent
         }
@@ -232,9 +236,9 @@ pub fn bounce(bounce: host::Bounce) -> Bounce {
 
 /// What the engine hears of a fact a run told: its progress, as it is.
 #[must_use]
-pub fn told(told: &worker::Told) -> engine::Event {
+pub fn told(channel: Token, told: &worker::Told) -> engine::Event {
     let (item, attempt) = attempt_of(told.attempt);
-    engine::Event::Told { item, attempt, kind: Kind::Progress, content: told.fact.clone() }
+    engine::Event::Told { channel, item, attempt, kind: Kind::Progress, content: told.fact.clone() }
 }
 
 /// The bytes of a run's call: one of those the world's runs make.

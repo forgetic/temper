@@ -134,6 +134,7 @@ pub(crate) const fn end(end: session::End) -> run::End {
         session::End::Invalid => run::End::Invalid,
         session::End::Closed => run::End::Closed,
         session::End::Failed { failure } => match failure {
+            llm::Failure::Exhausted { .. } => run::End::Fault(run::Fault::Exhausted),
             llm::Failure::ContextTooLong => run::End::Fault(run::Fault::ContextFull),
             llm::Failure::Overloaded
             | llm::Failure::RateLimited { .. }

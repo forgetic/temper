@@ -59,6 +59,10 @@ pub struct Message {
     reason = "fixed diagnostic tails keep boundary records bounded without allocation"
 )]
 pub enum Block {
+    /// Provider-owned reasoning, preserved in position and replayed verbatim.
+    Opaque {
+        bytes: Box<[u8]>,
+    },
     Text {
         text: Box<[u8]>,
     },
@@ -108,6 +112,10 @@ pub struct Completion {
 /// A piece of an assistant message.
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub enum Said {
+    /// Provider-owned reasoning, preserved in position and replayed verbatim.
+    Opaque {
+        bytes: Box<[u8]>,
+    },
     Text {
         text: Box<[u8]>,
     },

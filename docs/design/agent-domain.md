@@ -401,17 +401,16 @@ yet, each to be designed before it is built:
 - **The layers below the domain** (section 8), including one io vocabulary
   for the tools' and the run's operations, which the top level carries as
   two families for now.
-- **What the protocol layer's design asks of the domain** (llm.md,
-  section 13; channel.md, section 14; credentials.md, section 9):
-  - opaque blocks, the provider's thinking or reasoning kept in place and
-    sent back verbatim;
-  - grants held by name, each completion naming the one to use, with
-    `Rejected` and `Exhausted` told up;
-  - `Unauthorized` made transient, and an exhausted account as a failure
-    of its own;
-  - the token budget's split across input, output and cache taken by the
-    domain, not the translation;
-  - a refusal of its own, for a charter it cannot take.
+
+The protocol prerequisites in llm.md, section 13, channel.md, section 14,
+and credentials.md, section 9, are now implemented in the domain: opaque
+provider blocks, grants held by name and named on completions, rejection
+and exhaustion notices, transient unauthorized failures, and the token
+budget's split. The run's refusal remains distinct in the domain; carrying
+it and spend over the channel still needs the schema decision above. The
+bounded content stream is available for the protocol's fact projection.
+The integration status is tracked in
+[protocol-implementation.md](../development/protocol-implementation.md).
 
 What the tests lack, from the fakes' layers below the domain to the tiers
 above the domain worlds, is tracked in testing.md, section 9.

@@ -51,6 +51,15 @@ const RETRY: Retry = Retry { retries: 2, base: Duration::from_secs(1), max: Dura
 
 /// The engine's limits in a calm world: room for every story at once.
 pub const LIMITS: Limits = Limits {
+    accounts: temper_engine_domain::accounts::Limits {
+        accounts: 2,
+        refresh_margin: Duration::from_secs(10),
+        backoff_base: Duration::from_secs(1),
+        backoff_max: Duration::from_secs(8),
+        rejected_interval: Duration::from_secs(3),
+        spent_attention: Duration::from_secs(30),
+        facts: 16,
+    },
     work: work::Limits {
         items: 24,
         retries: Retries { transient: RETRY, permanent: RETRY, run: RETRY, agent: RETRY, lost: RETRY, invalid: RETRY },
@@ -198,6 +207,13 @@ pub fn config() -> Config {
     }
     let repo = plan::Repo { bases: Box::new([MAIN.into()]) };
     Config {
+        accounts: Box::new([temper_engine_domain::Account {
+            account: 0,
+            generation: 1,
+            valid: Some(Duration::from_nanos(u64::MAX)),
+        }]),
+        endpoints: Box::new([0]),
+        identities: Box::new([1, 1]),
         plan: plan::Config { repositories: Box::new([repo.clone(), repo]), templates: Box::new([]) },
         home: 0,
         forge: forge::Config {
@@ -229,7 +245,11 @@ pub fn config() -> Config {
             },
         },
         session: session(),
-        models: b"model".as_slice().into(),
+        models: Box::new([temper_engine_domain::Model {
+            endpoint: 0,
+            model: b"model".as_slice().into(),
+            max_tokens: 1024,
+        }]),
         policy: Policy {
             text: Capture::Content,
             progress: Capture::Shape,

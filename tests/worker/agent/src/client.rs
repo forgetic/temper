@@ -167,7 +167,11 @@ impl Client {
                 if large {
                     self.tally.large += 1;
                 }
-                vec![Out::Domain(Event::Deliver { agent, event: event.into_boxed_slice() })]
+                vec![Out::Domain(Event::Deliver {
+                    name: Token::new(place + 1),
+                    agent,
+                    event: event.into_boxed_slice(),
+                })]
             }
             Plan::Stop { client } => {
                 let agent = self.agent(client);
@@ -228,7 +232,13 @@ impl Client {
             self.tally.invalid += 1;
         }
         let charter = vec![b'c'; usize::try_from(charter_len).expect("fits")].into_boxed_slice();
-        let spawn = Spawn { workspace: Token::new(1000 + client.raw()), charter, snapshot };
+        let spawn = Spawn {
+            repositories: Box::new([]),
+            grants: Box::new([]),
+            workspace: Token::new(1000 + client.raw()),
+            charter,
+            snapshot,
+        };
         let spawned = Spawned { invalid, agent: None, told: false, gone: false, calls: BTreeMap::new() };
         self.spawned.insert(client, spawned);
         let mut outs = vec![Out::Domain(Event::Spawn { client, spawn })];
@@ -296,11 +306,13 @@ impl Client {
                 self.started(client);
                 self.tally.waiting += 1;
             }
-            Request::Told { client, fact: _ } => {
+            Request::Rejected { client, .. }
+            | Request::Exhausted { client, .. }
+            | Request::Told { client, fact: _ } => {
                 self.started(client);
             }
             Request::Finished { client, .. } | Request::Faulted { client, .. } => outs.extend(self.told(client)),
-            Request::Bounced { client, bounce } => {
+            Request::Bounced { name: _, client, bounce } => {
                 self.started(client);
                 match bounce {
                     Bounce::TooLarge | Bounce::Full | Bounce::Ending => {}
@@ -318,7 +330,7 @@ impl Client {
                         assert!(spawned.agent.is_some(), "an agent that ran was named");
                         assert!(!spawned.invalid, "a spawn beyond the limits never runs");
                     }
-                    End::Invalid(Invalid::Charter | Invalid::Snapshot) => {
+                    End::Invalid(Invalid::Charter | Invalid::Snapshot | Invalid::Repositories | Invalid::Grants) => {
                         assert!(spawned.invalid, "a spawn is refused as invalid only if it is beyond the limits");
                     }
                     End::Unspawned => {

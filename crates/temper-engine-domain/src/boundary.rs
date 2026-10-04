@@ -66,74 +66,200 @@ pub use temper_engine_domain_work::Item;
 /// protocol -> domain
 #[derive(PartialEq, Eq, Debug)]
 pub enum Event {
+    Refreshed {
+        account: u32,
+        generation: u64,
+        valid: skein_lib::Duration,
+    },
+    RefreshFailed {
+        account: u32,
+        generation: u64,
+        failure: crate::accounts::Failure,
+    },
+    Rejected {
+        channel: Token,
+        item: Item,
+        attempt: u64,
+        account: u32,
+        generation: u64,
+    },
+    Exhausted {
+        channel: Token,
+        item: Item,
+        attempt: u64,
+        account: u32,
+        retry_after: skein_lib::Duration,
+    },
     /// Terminal for `Forge`: what the forge answered, or why it did not, and
     /// the engine's payloads the protocol layer found inside the answer and
     /// decoded. A record or a page that does not decode is not among them:
     /// the answer marks it mangled.
-    Answered { call: Token, result: Result<api::Answer, api::Error>, decoded: Box<[Decoded]> },
+    Answered {
+        call: Token,
+        result: Result<api::Answer, api::Error>,
+        decoded: Box<[Decoded]>,
+    },
     /// A webhook: something changed in `repository`, about the item `item`,
     /// the commit `commit` or the branch `branch`, if it names one.
-    Hint { repository: u32, item: Option<u64>, commit: Option<[u8; 32]>, branch: Option<Box<[u8]>> },
+    Hint {
+        repository: u32,
+        item: Option<u64>,
+        commit: Option<[u8; 32]>,
+        branch: Option<Box<[u8]>>,
+    },
     /// From a worker, first on its channel: its slots, the workstreams it
     /// holds checkouts for, and the runs it hosts or holds answers of.
-    Hello { channel: Token, hello: Hello },
+    Hello {
+        channel: Token,
+        hello: Hello,
+    },
     /// From the protocol: the channel of a worker closed.
-    Lost { channel: Token },
+    Lost {
+        channel: Token,
+    },
     /// From a worker, the answer to an `Assign` of the item's attempt
     /// `attempt`: sent at once, and again after every hello until it is
     /// acknowledged.
-    Answer { channel: Token, item: Item, attempt: u64, answer: Answer },
+    Answer {
+        channel: Token,
+        item: Item,
+        attempt: u64,
+        answer: Answer,
+    },
     /// From a worker, on its channel `channel`, a call of the item's run, at
     /// its attempt `attempt`, which the worker names `call`.
-    Relay { channel: Token, item: Item, attempt: u64, call: Token, body: Call },
+    Relay {
+        channel: Token,
+        item: Item,
+        attempt: u64,
+        call: Token,
+        body: Call,
+    },
     /// From a worker: an inbound event for the item's attempt `attempt` was
     /// not passed on, for `bounce`.
-    Bounced { item: Item, attempt: u64, bounce: Bounce },
+    Bounced {
+        channel: Token,
+        item: Item,
+        attempt: u64,
+        name: Token,
+        bounce: Bounce,
+    },
     /// From a worker: a fact the item's run told at its attempt `attempt`
     /// (agent-domain.md, section 7), of `kind`, as the protocol layer decodes
     /// it.
-    Told { item: Item, attempt: u64, kind: Kind, content: Box<[u8]> },
+    Told {
+        channel: Token,
+        item: Item,
+        attempt: u64,
+        kind: Kind,
+        content: Box<[u8]>,
+    },
     /// From a person on the web, a call: answered by exactly one `Reply`.
-    Ask { reply_to: ReplyTo, person: u64, ask: Ask },
+    Ask {
+        reply_to: ReplyTo,
+        person: u64,
+        ask: Ask,
+    },
     /// The person watching as `watcher` stopped, or their stream closed.
-    Unwatch { watcher: Token },
+    Unwatch {
+        watcher: Token,
+    },
     /// Terminal for `Deliver`: the stream of `watcher` took it, or did not in
     /// the time the protocol layer gives a delivery.
-    Delivered { watcher: Token, done: bool },
+    Delivered {
+        watcher: Token,
+        done: bool,
+    },
     /// Terminal for `Store`.
-    Stored { owner: Token, stored: Stored },
+    Stored {
+        owner: Token,
+        stored: Stored,
+    },
 }
 
 /// domain -> protocol
 #[derive(PartialEq, Eq, Debug)]
 pub enum Request {
+    /// Only Refresh, Keep, or Cancel; availability/grants are routed inside the domain.
+    Account {
+        request: crate::accounts::Request,
+    },
+    Grant {
+        channel: Token,
+        item: Item,
+        attempt: u64,
+        grant: crate::accounts::Grant,
+    },
     /// To the forge: do `op` on `repository`, its payload `payload`, which
     /// the op names by token, filled in. Ended by one `Answered`.
-    Forge { call: Token, repository: u32, op: api::Op, payload: Option<Payload> },
+    Forge {
+        call: Token,
+        repository: u32,
+        op: api::Op,
+        payload: Option<Payload>,
+    },
     /// To a worker, a call: host the run of `assignment`.
-    Assign { channel: Token, assignment: Assignment },
+    Assign {
+        channel: Token,
+        assignment: Assignment,
+    },
     /// To a worker: an inbound event for the item's attempt it hosts.
-    Inbound { channel: Token, item: Item, attempt: u64, event: Inbound },
+    Inbound {
+        channel: Token,
+        item: Item,
+        attempt: u64,
+        name: Token,
+        event: Inbound,
+    },
     /// To a worker: cancel the item's attempt `attempt`.
-    Cancel { channel: Token, item: Item, attempt: u64 },
+    Cancel {
+        channel: Token,
+        item: Item,
+        attempt: u64,
+    },
     /// To a worker: the answer to the call `call` of the item's attempt.
-    Relayed { channel: Token, item: Item, attempt: u64, call: Token, served: Served },
+    Relayed {
+        channel: Token,
+        item: Item,
+        attempt: u64,
+        call: Token,
+        served: Served,
+    },
     /// To a worker: the engine has the answer of the item's attempt
     /// `attempt`, durably or not wanted, and the worker forgets it.
-    Acknowledge { channel: Token, item: Item, attempt: u64 },
+    Acknowledge {
+        channel: Token,
+        item: Item,
+        attempt: u64,
+    },
     /// About a worker: no room for it, its hello is beyond the limits, or
     /// there is no room to carry an answer it sent. Close its channel; it
     /// dials again later, and sends its answers again.
-    Refuse { channel: Token },
+    Refuse {
+        channel: Token,
+    },
     /// To a person, the one answer to an `Ask`.
-    Reply { to: ReplyTo, reply: Reply },
+    Reply {
+        to: ReplyTo,
+        reply: Reply,
+    },
     /// To the stream of `watcher`: `missed` chunks were dropped since its last
     /// delivery, right before these. Ended by one `Delivered`.
-    Deliver { watcher: Token, missed: u64, chunks: Box<[Chunk]> },
+    Deliver {
+        watcher: Token,
+        missed: u64,
+        chunks: Box<[Chunk]>,
+    },
     /// The watch of `watcher` is over: nothing more comes to it.
-    Ended { watcher: Token, end: End },
+    Ended {
+        watcher: Token,
+        end: End,
+    },
     /// To the store. Ended by one `Stored`.
-    Store { owner: Token, op: Store },
+    Store {
+        owner: Token,
+        op: Store,
+    },
 }
 
 /// The engine's record of an item (engine-domain.md, 4.1; seams: "The
@@ -341,6 +467,7 @@ pub enum Failure {
 /// unfinished work is saved, its charter and the snapshot it resumes.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Assignment {
+    pub grants: Box<[crate::accounts::Grant]>,
     pub item: Item,
     pub attempt: u64,
     pub workspace: Workspace,
@@ -392,9 +519,17 @@ pub struct Charter {
     pub finish: Finish,
     pub budget: Budget,
     /// The models it runs with, as configured.
-    pub models: Box<[u8]>,
+    pub models: Box<[Model]>,
     /// What its trace keeps of what it reports.
     pub policy: Policy,
+}
+
+/// An LLM selection, understood by the engine so it can name its account.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct Model {
+    pub endpoint: u32,
+    pub model: Box<[u8]>,
+    pub max_tokens: u32,
 }
 
 /// An inbound event for a live run (engine-domain.md, 4.3).

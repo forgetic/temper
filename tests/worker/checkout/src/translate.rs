@@ -54,13 +54,13 @@ pub fn workspace(op: &Op) -> Token {
 
 /// The identity an operation acts as, if it names one.
 #[must_use]
-pub fn identity(op: &Op) -> Option<&[u8]> {
+pub fn identity(op: &Op) -> Option<u32> {
     match op {
         Op::Clone { identity, .. }
         | Op::Fetch { identity, .. }
         | Op::Create { identity, .. }
         | Op::Commit { identity, .. }
-        | Op::Push { identity, .. } => Some(identity),
+        | Op::Push { identity, .. } => Some(*identity),
         Op::Make { .. } | Op::CheckOut { .. } => None,
     }
 }

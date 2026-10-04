@@ -65,46 +65,98 @@ pub enum Event {
     Lost,
     /// From the engine, a call: host the run of `assignment`, and answer once
     /// it has ended.
-    Assign { assignment: host::Assignment },
+    Assign {
+        assignment: host::Assignment,
+    },
     /// From the engine: an inbound event for the run `run`'s attempt
     /// `attempt`.
-    Inbound { run: Token, attempt: Token, event: Box<[u8]> },
+    Inbound {
+        run: Token,
+        attempt: Token,
+        name: Token,
+        event: Box<[u8]>,
+    },
     /// From the engine: cancel the run `run`'s attempt `attempt`.
-    Cancel { run: Token, attempt: Token },
+    Cancel {
+        run: Token,
+        attempt: Token,
+    },
+    Grant {
+        run: Token,
+        attempt: Token,
+        grant: host::Grant,
+    },
     /// From the engine: the answer to the relayed call `call` of the run
     /// `run`'s attempt `attempt`.
-    Relayed { run: Token, attempt: Token, call: Token, answer: Box<[u8]> },
+    Relayed {
+        run: Token,
+        attempt: Token,
+        call: Token,
+        answer: Box<[u8]>,
+    },
     /// Terminal for a cancelled relay delivery and wait.
-    RelayCancelled { call: Token },
+    RelayCancelled {
+        call: Token,
+    },
     /// From the engine: it has the answer for the run `run`'s attempt
     /// `attempt`, which the worker forgets. One it has forgotten already, or
     /// a refusal's, changes nothing.
-    Acknowledged { run: Token, attempt: Token },
+    Acknowledged {
+        run: Token,
+        attempt: Token,
+    },
     /// From the shell: cancel every run, admit no more, and be done once every
     /// answer is delivered.
     Shutdown,
     /// Terminal for `Spawn`: the agent's process runs as `process`.
-    Spawned { owner: Token, process: Token },
+    Spawned {
+        owner: Token,
+        process: Token,
+    },
     /// Terminal for `Spawn`: the process could not be spawned by its deadline.
-    Unspawned { owner: Token, detail: Box<[u8]> },
+    Unspawned {
+        owner: Token,
+        detail: Box<[u8]>,
+    },
     /// Terminal for `Send`: the message went down.
-    Sent { owner: Token },
+    Sent {
+        owner: Token,
+    },
     /// Terminal for `Send`: the agent no longer reads its channel.
-    Unsent { owner: Token },
+    Unsent {
+        owner: Token,
+    },
     /// Terminal for `Read`: the next message up.
-    Received { owner: Token, message: channel::Up },
+    Received {
+        owner: Token,
+        message: channel::Up,
+    },
     /// Terminal for `Read`: what came up is not a message.
-    Malformed { owner: Token },
+    Malformed {
+        owner: Token,
+    },
     /// Terminal for `Read`: the agent's end of the channel closed.
-    Hangup { owner: Token },
+    Hangup {
+        owner: Token,
+    },
     /// Terminal for `Signal`.
-    Signalled { owner: Token },
+    Signalled {
+        owner: Token,
+    },
     /// Terminal for `Wait`: the agent's process exited.
-    Exited { owner: Token },
+    Exited {
+        owner: Token,
+    },
     /// Terminal for `Reap`: the process's tree is empty.
-    Reaped { owner: Token, detail: Box<[u8]> },
+    Reaped {
+        owner: Token,
+        detail: Box<[u8]>,
+    },
     /// Terminal for `Io`.
-    Done { owner: Token, done: git::Done },
+    Done {
+        owner: Token,
+        done: git::Done,
+    },
 }
 
 /// domain -> protocol
@@ -118,36 +170,93 @@ pub enum Request {
     /// `Connected` if it opened.
     Dial,
     /// To the engine, first on every channel: what the worker is and hosts.
-    Hello { hello: Hello },
+    Hello {
+        hello: Hello,
+    },
     /// To the engine, the answer to an `Assign`: exactly one per assignment.
-    Answer { run: Token, attempt: Token, answer: host::Answer },
+    Answer {
+        run: Token,
+        attempt: Token,
+        answer: host::Answer,
+    },
     /// To the engine: a host call of the run `run`'s attempt `attempt`, which
     /// the worker names `call`, relayed as it is.
-    Relay { run: Token, attempt: Token, call: Token, body: Box<[u8]> },
+    Relay {
+        run: Token,
+        attempt: Token,
+        call: Token,
+        body: Box<[u8]>,
+    },
     /// Cancel a relay delivery and wait. Its original request still ends
     /// exactly once with `Relayed` or `RelayCancelled`; remote effects remain.
-    CancelRelay { call: Token },
+    CancelRelay {
+        call: Token,
+    },
+    Rejected {
+        run: Token,
+        attempt: Token,
+        account: u32,
+        generation: u64,
+    },
+    Exhausted {
+        run: Token,
+        attempt: Token,
+        account: u32,
+        retry_after: skein_lib::Duration,
+    },
     /// To the engine: an inbound event for the run `run`'s attempt `attempt`
     /// was not passed on, for `bounce`.
-    Bounced { run: Token, attempt: Token, bounce: host::Bounce },
+    Bounced {
+        run: Token,
+        attempt: Token,
+        name: Token,
+        bounce: host::Bounce,
+    },
     /// Spawn an agent in a contained process tree, in the workspace io names
     /// `workspace`, giving up at `deadline`.
-    Spawn { owner: Token, workspace: Token, deadline: Time },
+    Spawn {
+        owner: Token,
+        workspace: Token,
+        deadline: Time,
+    },
     /// Send `message` down the channel of `process`.
-    Send { owner: Token, process: Token, message: channel::Down },
+    Send {
+        owner: Token,
+        process: Token,
+        message: channel::Down,
+    },
     /// Read the next message up the channel of `process`.
-    Read { owner: Token, process: Token },
+    Read {
+        owner: Token,
+        process: Token,
+    },
     /// Send `signal` to every member of the tree of `process`.
-    Signal { owner: Token, process: Token, signal: agent::Signal },
+    Signal {
+        owner: Token,
+        process: Token,
+        signal: agent::Signal,
+    },
     /// Wait for `process` to exit.
-    Wait { owner: Token, process: Token },
+    Wait {
+        owner: Token,
+        process: Token,
+    },
     /// Wait for the tree of `process` to be empty.
-    Reap { owner: Token, process: Token },
+    Reap {
+        owner: Token,
+        process: Token,
+    },
     /// Ask io for the git or file operation `op`, giving up at `deadline`.
-    Io { owner: Token, op: git::Op, deadline: Time },
+    Io {
+        owner: Token,
+        op: git::Op,
+        deadline: Time,
+    },
     /// Abandon the `Io` in flight for `owner`. Its terminal event still comes:
     /// `Done` with `Cancelled`, or whichever outcome won the race.
-    CancelIo { owner: Token },
+    CancelIo {
+        owner: Token,
+    },
 }
 
 /// What the worker says first on every channel to the engine (engine-domain.md,

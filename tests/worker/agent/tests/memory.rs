@@ -16,6 +16,9 @@ use temper_world::heap::{self, Meter};
 static HEAP: heap::Counting = heap::Counting;
 
 const LIMITS: Limits = Limits {
+    accounts: 4,
+    repositories: 8,
+    name_bytes: 256,
     agents: 2,
     charter_bytes: 1024,
     snapshot_bytes: 512,
@@ -109,9 +112,12 @@ impl Measured {
                 Request::Finished { .. } => Asked::Finished,
                 Request::Faulted { fault, .. } => Asked::Faulted(fault),
                 Request::Bounced { bounce, .. } => Asked::Bounced(bounce),
-                Request::Waiting { .. } | Request::Told { .. } | Request::Wait { .. } | Request::Reap { .. } => {
-                    Asked::Other
-                }
+                Request::Rejected { .. }
+                | Request::Exhausted { .. }
+                | Request::Waiting { .. }
+                | Request::Told { .. }
+                | Request::Wait { .. }
+                | Request::Reap { .. } => Asked::Other,
             });
         }
         self.meter.check(measured, self.bound, self.env.limits);
@@ -125,6 +131,19 @@ impl Measured {
     fn spawn(&mut self, client: u64) -> Token {
         let limits = self.env.limits;
         let spawn = Spawn {
+            repositories: (0..limits.repositories)
+                .map(|_| temper_worker_domain_agent::channel::Repository {
+                    name: bytes(u64::from(limits.name_bytes)),
+                    writable: true,
+                })
+                .collect(),
+            grants: (0..limits.accounts)
+                .map(|account| temper_worker_domain_agent::channel::Grant {
+                    account,
+                    generation: 1,
+                    valid: Duration::from_secs(100),
+                })
+                .collect(),
             workspace: Token::new(client),
             charter: bytes(limits.charter_bytes),
             snapshot: Some(bytes(limits.snapshot_bytes)),
@@ -153,7 +172,13 @@ fn fill(limits: Limits) {
     let owners: Vec<Token> = (0..u64::from(limits.agents)).map(|client| agent.spawn(client)).collect();
     let spawning = u64::from(limits.agents) * (limits.charter_bytes + limits.snapshot_bytes);
     assert!(agent.meter.held() >= spawning, "{limits:?}: every slot holds what it may as it spawns");
-    let busy = Spawn { workspace: Token::new(99), charter: bytes(1), snapshot: None };
+    let busy = Spawn {
+        repositories: Box::new([]),
+        grants: Box::new([]),
+        workspace: Token::new(99),
+        charter: bytes(1),
+        snapshot: None,
+    };
     assert_eq!(agent.step(Event::Spawn { client: Token::new(99), spawn: busy }), [Asked::Gone(End::Busy)]);
 
     // Every run's outbox full: the start in flight, an answer for every call
@@ -169,9 +194,13 @@ fn fill(limits: Limits) {
             assert!(agent.step(Event::Answer { agent: *owner, call: Token::new(call), reply }).is_empty());
         }
         for _ in 0..limits.events {
-            assert!(agent.step(Event::Deliver { agent: *owner, event: bytes(limits.event_bytes) }).is_empty());
+            assert!(
+                agent
+                    .step(Event::Deliver { name: Token::new(1), agent: *owner, event: bytes(limits.event_bytes) })
+                    .is_empty()
+            );
         }
-        let full = agent.step(Event::Deliver { agent: *owner, event: bytes(1) });
+        let full = agent.step(Event::Deliver { name: Token::new(1), agent: *owner, event: bytes(1) });
         assert_eq!(full, [Asked::Bounced(Bounce::Full)]);
     }
     let waiting = u64::from(limits.calls) * limits.answer_bytes + u64::from(limits.events) * limits.event_bytes;
@@ -197,13 +226,24 @@ fn fill(limits: Limits) {
     // what no agent holds at once, the detail of its end (kept once its
     // outbox has gone), and the bookkeeping of its three sets of call names
     // (those in flight, those the client has to answer, those withdrawn),
-    // which the worst case counts at its most. Every payload is reached.
+    // and its admitted account-name set, whose tree-node maximum need not be
+    // reached by this monotone fill. Every byte payload is reached.
     let names = Set::<Token>::worst_case(limits.calls).expect("fits");
-    let apart = u64::from(limits.agents) * (u64::from(limits.detail_bytes) + 3 * names);
+    let accounts = Set::<u32>::worst_case(limits.accounts).expect("fits");
+    let apart = u64::from(limits.agents) * (u64::from(limits.detail_bytes) + 3 * names + accounts);
     let (peak, bound) = (agent.peak, agent.bound);
-    assert!(peak + apart >= bound, "{limits:?}: {peak} held at the most, short of the worst case of {bound}");
+    assert!(
+        peak + apart >= bound,
+        "{limits:?}: {peak} held at the most, short of the worst case of {bound}, apart {apart}, names {names}"
+    );
 
-    let beyond = Spawn { workspace: Token::new(0), charter: bytes(limits.charter_bytes + 1), snapshot: None };
+    let beyond = Spawn {
+        repositories: Box::new([]),
+        grants: Box::new([]),
+        workspace: Token::new(0),
+        charter: bytes(limits.charter_bytes + 1),
+        snapshot: None,
+    };
     let refused = agent.step(Event::Spawn { client: Token::new(0), spawn: beyond });
     assert_eq!(refused, [Asked::Gone(End::Invalid(Invalid::Charter))]);
 }
@@ -247,7 +287,7 @@ fn paths(limits: Limits) {
     assert_eq!(agent.step(Event::Sent { owner }), [Asked::Send, Asked::Read], "a busy answer goes down");
     assert_eq!(agent.step(Event::Sent { owner }), [Asked::Send], "and the other");
     assert_eq!(
-        agent.step(Event::Deliver { agent: owner, event: bytes(limits.event_bytes + 1) }),
+        agent.step(Event::Deliver { name: Token::new(1), agent: owner, event: bytes(limits.event_bytes + 1) }),
         [Asked::Bounced(Bounce::TooLarge)]
     );
     // Spawned at 12s, after the hung agent's kill.

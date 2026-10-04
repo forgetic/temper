@@ -884,16 +884,24 @@ impl World {
             }
             Up::Relay { run, attempt, call } => {
                 let body = self.payload(Payload::Body { call });
-                Event::Relay { run: Token::new(run), attempt: Token::new(attempt), call: Token::new(call), body }
+                Event::Relay {
+                    channel: token,
+                    run: Token::new(run),
+                    attempt: Token::new(attempt),
+                    call: Token::new(call),
+                    body,
+                }
             }
             Up::Bounced { run, attempt } => Event::Bounced {
+                channel: token,
+                name: Token::new(0),
                 run: Token::new(run),
                 attempt: Token::new(attempt),
                 bounce: temper_engine_domain_fleet::Bounce::Full,
             },
             Up::Told { run, attempt } => {
                 let fact = self.payload(Payload::Fact);
-                Event::Told { run: Token::new(run), attempt: Token::new(attempt), fact }
+                Event::Told { channel: token, run: Token::new(run), attempt: Token::new(attempt), fact }
             }
         };
         self.stage.push(event);
@@ -913,6 +921,7 @@ impl World {
 
     fn request(&mut self, request: Request) {
         match request {
+            Request::Grant { .. } | Request::Rejected { .. } | Request::Exhausted { .. } => {}
             Request::Assign { channel, run, attempt } => {
                 self.stats.assigned += 1;
                 self.sent(run, attempt, Down::Assign);
@@ -1248,7 +1257,10 @@ fn describe(event: &Event) -> String {
         Event::Hello { channel, hello } => {
             format!("Hello {} slots {} hosting {:?}", channel.raw(), hello.slots, hello.hosting)
         }
-        Event::Adopt { .. }
+        Event::Grant { .. }
+        | Event::Rejected { .. }
+        | Event::Exhausted { .. }
+        | Event::Adopt { .. }
         | Event::Cancel { .. }
         | Event::Inbound { .. }
         | Event::Relayed { .. }

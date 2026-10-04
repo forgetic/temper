@@ -1,0 +1,16 @@
+[package]
+name = "temper-engine-protocol"
+description = "The engine's bounded channel translation and connections"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+skein-lib.workspace = true
+skein-io.workspace = true
+temper-channel.workspace = true
+temper-engine-domain.workspace = true
+
+[lints]
+workspace = true

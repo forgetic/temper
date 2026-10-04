@@ -182,7 +182,7 @@ impl Engine {
                 let attempt = self.name();
                 let event = Box::from(&b"stale"[..]);
                 vec![
-                    Self::host(Event::Inbound { run, attempt, event }, true),
+                    Self::host(Event::Inbound { name: Token::new(1), run, attempt, event }, true),
                     Self::host(Event::Cancel { run, attempt }, true),
                 ]
             }
@@ -198,7 +198,7 @@ impl Engine {
                 Vec::new()
             }
             Request::Relay { run, attempt, call, body: _ } => self.relay(run, attempt, call),
-            Request::Bounced { run: _, attempt: _, bounce } => {
+            Request::Bounced { name: _, run: _, attempt: _, bounce } => {
                 match bounce {
                     Bounce::TooLarge => self.tally.too_large += 1,
                     Bounce::Full => self.tally.full += 1,
@@ -216,7 +216,8 @@ impl Engine {
             | Request::Stop { .. }
             | Request::Push { .. }
             | Request::Save { .. }
-            | Request::Release { .. } => unreachable!("for the top level or the parent"),
+            | Request::Release { .. }
+            | Request::Grant { .. } => unreachable!("for the top level or the parent"),
         }
     }
 
@@ -290,6 +291,7 @@ impl Engine {
         };
         let save = if self.rng.chance(self.script.saves) { Some(Box::from(&b"saved/work"[..])) } else { None };
         let mut assignment = Assignment {
+            grants: Box::new([]),
             run,
             attempt,
             workspace: Workspace { key: Box::from(&b"issue-1"[..]), repositories: repositories.into_boxed_slice() },
@@ -344,7 +346,14 @@ impl Engine {
             Access::ReadOnly
         };
         let remote = format!("org/repo-{index}").into_bytes().into_boxed_slice();
-        Repository { name, remote, start, access, identity: Box::from(&b"bot"[..]) }
+        Repository {
+            tag: u32::try_from(index).expect("a repository index fits"),
+            name,
+            remote,
+            start,
+            access,
+            identity: 0,
+        }
     }
 
     fn inbound(&mut self, run: Token, attempt: Token) -> Vec<Act> {
@@ -362,7 +371,7 @@ impl Engine {
             event.extend_from_slice(b"event");
             event.into_boxed_slice()
         };
-        vec![Self::host(Event::Inbound { run, attempt, event }, false)]
+        vec![Self::host(Event::Inbound { name: Token::new(1), run, attempt, event }, false)]
     }
 
     fn cancel(&mut self, run: Token, attempt: Token) -> Vec<Act> {
@@ -415,10 +424,10 @@ impl Engine {
         if let Some(work) = work {
             let mut last = None;
             for landed in &work.landed {
-                let place = usize::try_from(landed.repository).expect("fits");
+                let place = usize::try_from(landed.tag).expect("fits");
                 assert!(place < assigned.repositories, "a landing names a repository of the workspace");
-                assert!(last < Some(landed.repository), "landings are ascending");
-                last = Some(landed.repository);
+                assert!(last < Some(landed.tag), "landings are ascending");
+                last = Some(landed.tag);
             }
             if let Some(saved) = &work.saved {
                 assert_eq!(saved.len(), assigned.repositories, "a save says what became of each repository");
@@ -468,6 +477,7 @@ pub fn failure_kind(failure: Failure) -> &'static str {
         Failure::Run(RunFailure::Policy) => "failed: run, policy",
         Failure::Run(RunFailure::Cancelled) => "failed: run, cancelled",
         Failure::Run(RunFailure::Stale) => "failed: run, stale",
+        Failure::Run(RunFailure::Exhausted) => "failed: run, exhausted",
         Failure::Agent(AgentFailure::Unstarted) => "failed: agent, unstarted",
         Failure::Agent(AgentFailure::Exited) => "failed: agent, exited",
         Failure::Agent(AgentFailure::Rules) => "failed: agent, rules",

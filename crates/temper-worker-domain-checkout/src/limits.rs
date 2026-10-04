@@ -60,7 +60,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     let hold_slots = holds(limits)?;
     let holds = Slab::<Hold>::worst_case(hold_slots)?;
     // A repository's name, remote, identity, starting branch and push branch.
-    let repository = name.checked_mul(5)?;
+    let repository = name.checked_mul(4)?;
     let spec = List::<Repository>::worst_case(limits.repositories)?
         .checked_add(u64::from(limits.repositories).checked_mul(repository)?)?;
     let push = List::<Landing>::worst_case(limits.repositories)?

@@ -134,7 +134,7 @@ use skein_lib::bytes::copy_of;
 use skein_lib::{Deadlines, Env, Id, Queue, Set, Slab, Time, Token};
 
 use crate::boundary::{Bounce, End, Fault, Invalid, Request, Signal, Spawn};
-use crate::channel::{Ask, Down, Finish, Reply, RunFailure, Up};
+use crate::channel::{Ask, Down, Finish, Grant, Reply, RunFailure, Up};
 use crate::domain::Domain;
 use crate::facts::{Fact, Facts};
 use crate::limits::{self, BUSY, Limits};
@@ -158,9 +158,17 @@ pub(crate) enum Alarm {
 }
 
 #[derive(Debug)]
+struct First {
+    charter: Box<[u8]>,
+    snapshot: Option<Box<[u8]>>,
+    repositories: Box<[crate::channel::Repository]>,
+    grants: Box<[Grant]>,
+}
+
+#[derive(Debug)]
 enum State {
     /// Its process is being spawned; what its run starts with waits for it.
-    Spawning { charter: Box<[u8]>, snapshot: Option<Box<[u8]>> },
+    Spawning { start: First },
     /// Its run is live: the channel is open both ways, and the watchdog and
     /// the wall time run.
     Live { process: Process, channel: Channel, watch: Watch },
@@ -220,8 +228,10 @@ struct Channel {
     outbox: Queue<Down>,
     /// Inbound events among them.
     events: u32,
-    /// Inbound events sent down so far.
-    sent: u64,
+    accounts: Set<u32>,
+    /// Sent event names awaiting an acknowledgement, in delivery order.
+    sent: Queue<Token>,
+    acknowledged: Option<Token>,
     /// Calls answered as busy at the entrance: their answers go down ahead of
     /// the outbox, and while two wait, nothing more is read. Their names stay
     /// in flight here until the answers go down, separately from admitted
@@ -262,7 +272,7 @@ struct Names {
 // state ([`follow`]).
 
 pub(crate) fn spawn(domain: &mut Domain, env: &Env<Limits>, client: Token, spawn: Spawn, out: &mut Queue<Request>) {
-    let Spawn { workspace, charter, snapshot } = spawn;
+    let Spawn { workspace, charter, snapshot, repositories, grants } = spawn;
     let limits = &env.limits;
     let refusal = if domain.agents.is_full() {
         Some(End::Busy)
@@ -270,6 +280,12 @@ pub(crate) fn spawn(domain: &mut Domain, env: &Env<Limits>, client: Token, spawn
         Some(End::Invalid(Invalid::Charter))
     } else if !within_optional(snapshot.as_deref(), limits.snapshot_bytes) {
         Some(End::Invalid(Invalid::Snapshot))
+    } else if u64::try_from(repositories.len()).expect("a length fits") > u64::from(limits.repositories)
+        || !repository_names(&repositories, limits.name_bytes)
+    {
+        Some(End::Invalid(Invalid::Repositories))
+    } else if !grant_names(&grants, limits.accounts) {
+        Some(End::Invalid(Invalid::Grants))
     } else {
         None
     };
@@ -278,7 +294,7 @@ pub(crate) fn spawn(domain: &mut Domain, env: &Env<Limits>, client: Token, spawn
         out.push(Request::Gone { client, end, detail: Box::new([]) });
         return;
     }
-    let agent = Agent { client, state: State::Spawning { charter, snapshot } };
+    let agent = Agent { client, state: State::Spawning { start: First { charter, snapshot, repositories, grants } } };
     let id = domain.agents.insert(agent).expect("checked for room above");
     let deadline = env.now.saturating_add(limits.spawn_timeout);
     out.push(Request::Spawn { owner: id.token(), workspace, deadline });
@@ -288,6 +304,7 @@ pub(crate) fn deliver(
     domain: &mut Domain,
     env: &Env<Limits>,
     agent: Token,
+    name: Token,
     event: Box<[u8]>,
     out: &mut Queue<Request>,
 ) {
@@ -298,14 +315,14 @@ pub(crate) fn deliver(
     let client = entry.client;
     let state = mem::replace(&mut entry.state, State::Closed);
     entry.state = match state {
-        State::Live { process, channel, watch } => delivered(client, process, channel, watch, event, env, out),
+        State::Live { process, channel, watch } => delivered(client, process, channel, watch, name, event, env, out),
         // It no longer listens.
         state @ (State::Cancelled { .. }
         | State::Draining { .. }
         | State::Exiting { .. }
         | State::Terminating { .. }
         | State::Killing { .. }) => {
-            out.push(Request::Bounced { client, bounce: Bounce::Ending });
+            out.push(Request::Bounced { client, name, bounce: Bounce::Ending });
             state
         }
         State::Spawning { .. } | State::Closed => unreachable!("an addressed agent has started and not gone"),
@@ -378,7 +395,7 @@ pub(crate) fn spawned(domain: &mut Domain, env: &Env<Limits>, owner: Token, proc
     let names = Names { owner, client: entry.client };
     let state = mem::replace(&mut entry.state, State::Closed);
     entry.state = match state {
-        State::Spawning { charter, snapshot } => start(names, process, charter, snapshot, env, facts, out),
+        State::Spawning { start: first } => start(names, process, first, env, facts, out),
         State::Live { .. }
         | State::Cancelled { .. }
         | State::Draining { .. }
@@ -403,7 +420,7 @@ pub(crate) fn unspawned(
     let client = entry.client;
     let state = mem::replace(&mut entry.state, State::Closed);
     entry.state = match state {
-        State::Spawning { charter: _, snapshot: _ } => {
+        State::Spawning { start: _ } => {
             facts.push(Fact::Gone { client, end: End::Unspawned });
             out.push(Request::Gone { client, end: End::Unspawned, detail: tail(detail, &env.limits) });
             State::Closed
@@ -751,15 +768,15 @@ fn send_next(owner: Token, process: &mut Process, channel: &mut Channel, out: &m
 /// sent; an answer's call is no longer in flight.
 fn leaving(channel: &mut Channel, message: &Down) {
     match message {
-        Down::Event { .. } => {
+        Down::Event { name, .. } => {
             channel.events = channel.events.checked_sub(1).expect("the events waiting are counted");
-            channel.sent = channel.sent.saturating_add(1);
+            channel.sent.push(*name);
         }
         Down::Answer { call, reply: _ } => {
             let flying = channel.flight.remove(call);
             assert!(flying, "a call is in flight until its answer goes down");
         }
-        Down::Cancel => {}
+        Down::Cancel | Down::Grant { .. } => {}
         Down::Start { .. } => unreachable!("the start message goes down first, never from the outbox"),
     }
 }
@@ -839,8 +856,7 @@ fn set(alarms: &mut Deadlines<Alarm>, alarm: Alarm, at: Option<Time>) {
 fn start(
     names: Names,
     process: Token,
-    charter: Box<[u8]>,
-    snapshot: Option<Box<[u8]>>,
+    first: First,
     env: &Env<Limits>,
     facts: &mut Facts,
     out: &mut Queue<Request>,
@@ -850,7 +866,12 @@ fn start(
     out.push(Request::Started { client: names.client, agent: owner });
     out.push(Request::Wait { owner, process });
     out.push(Request::Reap { owner, process });
-    out.push(Request::Send { owner, process, message: Down::Start { charter, snapshot } });
+    let mut accounts = Set::with_capacity(limits.accounts);
+    for grant in &first.grants {
+        accounts.insert(grant.account).expect("validated grant accounts");
+    }
+    let First { charter, snapshot, repositories, grants } = first;
+    out.push(Request::Send { owner, process, message: Down::Start { charter, snapshot, repositories, grants } });
     facts.push(Fact::Started { client: names.client });
     let outbox = limits::outbox(limits).expect("worst_case accepted the limits");
     let process =
@@ -858,7 +879,9 @@ fn start(
     let channel = Channel {
         outbox: Queue::with_capacity(outbox),
         events: 0,
-        sent: 0,
+        accounts,
+        sent: Queue::with_capacity(limits.events),
+        acknowledged: None,
         busy: Queue::with_capacity(BUSY),
         flight: Set::with_capacity(limits.calls),
         asked: Set::with_capacity(limits.calls),
@@ -871,25 +894,27 @@ fn start(
 
 /// Live, deliver: the event waits to go down, or is bounced; a run that
 /// waited for it resumes its clock.
+#[expect(clippy::too_many_arguments, reason = "a cell handler takes the fields it touches")]
 fn delivered(
     client: Token,
     process: Process,
     mut channel: Channel,
     watch: Watch,
+    name: Token,
     event: Box<[u8]>,
     env: &Env<Limits>,
     out: &mut Queue<Request>,
 ) -> State {
     let limits = &env.limits;
     if !within(&event, limits.event_bytes) {
-        out.push(Request::Bounced { client, bounce: Bounce::TooLarge });
+        out.push(Request::Bounced { client, name, bounce: Bounce::TooLarge });
         return State::Live { process, channel, watch };
     }
-    if channel.events >= limits.events {
-        out.push(Request::Bounced { client, bounce: Bounce::Full });
+    if channel.events.saturating_add(channel.sent.len()) >= limits.events {
+        out.push(Request::Bounced { client, name, bounce: Bounce::Full });
         return State::Live { process, channel, watch };
     }
-    channel.outbox.push(Down::Event { event });
+    channel.outbox.push(Down::Event { name, event });
     channel.events = channel.events.checked_add(1).expect("no more events wait than the limits allow");
     let watch = if watch.waiting { Watch { seen: env.now, waiting: false, ..watch } } else { watch };
     State::Live { process, channel, watch }
@@ -937,6 +962,8 @@ fn heard(
         }
         Up::Withdraw { call } => withdrew(client, &mut channel, call, out),
         Up::Fact { fact } => out.push(Request::Told { client, fact }),
+        Up::Rejected { account, generation } => out.push(Request::Rejected { client, account, generation }),
+        Up::Exhausted { account, retry_after } => out.push(Request::Exhausted { client, account, retry_after }),
         Up::Long { span } => {
             watch.waiting = false;
             watch.held = watch.held.max(now.saturating_add(span));
@@ -945,7 +972,8 @@ fn heard(
         Up::Waiting { heard } => {
             // A wait that crossed an event on its way is no wait: the run is
             // about to read it.
-            watch.waiting = heard == channel.sent && channel.events == 0;
+            acknowledge(&mut channel, Token::new(heard));
+            watch.waiting = channel.sent.is_empty() && channel.events == 0;
             out.push(Request::Waiting { client });
         }
         Up::Finish { finish } => {
@@ -972,6 +1000,8 @@ fn wound(
         Up::Call { call, ask } => called(client, &mut channel, call, ask, out),
         Up::Withdraw { call } => withdrew(client, &mut channel, call, out),
         Up::Fact { fact } => out.push(Request::Told { client, fact }),
+        Up::Rejected { account, generation } => out.push(Request::Rejected { client, account, generation }),
+        Up::Exhausted { account, retry_after } => out.push(Request::Exhausted { client, account, retry_after }),
         Up::Long { span: _ } | Up::LongDone | Up::Waiting { heard: _ } => {}
         Up::Finish { finish } => return finished(client, process, finish, until, owed, facts, out),
     }
@@ -992,6 +1022,8 @@ fn drained(
     match message {
         Up::Call { .. } | Up::Withdraw { .. } | Up::Long { .. } | Up::LongDone | Up::Waiting { .. } => {}
         Up::Fact { fact } => out.push(Request::Told { client, fact }),
+        Up::Rejected { account, generation } => out.push(Request::Rejected { client, account, generation }),
+        Up::Exhausted { account, retry_after } => out.push(Request::Exhausted { client, account, retry_after }),
         Up::Finish { finish } => return finished(client, process, finish, until, owed, facts, out),
     }
     State::Draining { process, until, owed }
@@ -1015,7 +1047,9 @@ fn late(client: Token, told: bool, message: Up, limits: &Limits, facts: &mut Fac
         | Up::Fact { .. }
         | Up::Long { .. }
         | Up::LongDone
-        | Up::Waiting { .. } => told,
+        | Up::Waiting { .. }
+        | Up::Rejected { .. }
+        | Up::Exhausted { .. } => told,
     }
 }
 
@@ -1127,7 +1161,7 @@ fn signal(owner: Token, process: &mut Process, signal: Signal, out: &mut Queue<R
 /// Whether a message breaks the channel's rules: a payload or a span beyond
 /// the limits, or, while the run listens on `channel`, a call reusing a name
 /// in flight, a call withdrawn twice before its answer, or a wait that claims
-/// more events than were sent down.
+/// an event name that was never sent down.
 fn broken(message: &Up, channel: Option<&Channel>, limits: &Limits) -> bool {
     match message {
         Up::Call { call, ask } => {
@@ -1147,9 +1181,9 @@ fn broken(message: &Up, channel: Option<&Channel>, limits: &Limits) -> bool {
         },
         Up::Fact { fact } => !within(fact, limits.fact_bytes),
         Up::Long { span } => *span > limits.long_span,
-        Up::LongDone => false,
+        Up::LongDone | Up::Rejected { .. } | Up::Exhausted { .. } => false,
         Up::Waiting { heard } => match channel {
-            Some(channel) => *heard > channel.sent,
+            Some(channel) => !known(channel, Token::new(*heard)),
             None => false,
         },
         Up::Finish { finish } => match finish {
@@ -1227,4 +1261,96 @@ fn tail(detail: Box<[u8]>, limits: &Limits) -> Box<[u8]> {
         Some(cut) if cut > 0 => copy_of(detail.get(cut..).expect("cut within the detail")),
         Some(_) | None => detail,
     }
+}
+
+/// Names are opaque. Their bounded delivery queue defines acknowledgement order.
+fn known(channel: &Channel, heard: Token) -> bool {
+    if channel.acknowledged == Some(heard) || (heard.raw() == 0 && channel.acknowledged.is_none()) {
+        return true;
+    }
+    for name in &channel.sent {
+        if *name == heard {
+            return true;
+        }
+    }
+    false
+}
+
+fn acknowledge(channel: &mut Channel, heard: Token) {
+    if channel.acknowledged == Some(heard) || heard.raw() == 0 {
+        return;
+    }
+    let count = channel.sent.len();
+    for _ in 0..count {
+        let name = channel.sent.pop().expect("an acknowledgement names a sent event");
+        channel.acknowledged = Some(name);
+        if name == heard {
+            return;
+        }
+    }
+    unreachable!("validated acknowledgement names a sent event");
+}
+
+fn repository_names(repositories: &[crate::channel::Repository], bytes: u32) -> bool {
+    for repository in repositories {
+        if repository.name.is_empty() || !within(&repository.name, u64::from(bytes)) {
+            return false;
+        }
+    }
+    true
+}
+
+fn grant_names(grants: &[Grant], accounts: u32) -> bool {
+    if u64::try_from(grants.len()).expect("a length fits") > u64::from(accounts) {
+        return false;
+    }
+    for (index, grant) in grants.iter().enumerate() {
+        for other in grants.iter().skip(index.saturating_add(1)) {
+            if grant.account == other.account {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Refreshes replace a queued refresh of the same account, so the queue is bounded.
+pub(crate) fn grant(domain: &mut Domain, env: &Env<Limits>, agent: Token, grant: Grant, out: &mut Queue<Request>) {
+    let Some(id) = addressed(&domain.agents, agent) else {
+        return;
+    };
+    let entry = domain.agents.get_mut(id).expect("addressed above");
+    let channel = match &mut entry.state {
+        State::Live { channel, .. } | State::Cancelled { channel, .. } => channel,
+        State::Spawning { .. }
+        | State::Draining { .. }
+        | State::Exiting { .. }
+        | State::Terminating { .. }
+        | State::Killing { .. }
+        | State::Closed => return,
+    };
+    if !channel.accounts.contains(&grant.account) {
+        return;
+    }
+    let count = channel.outbox.len();
+    let mut replaced = false;
+    for _ in 0..count {
+        let old = channel.outbox.pop().expect("the queue length is stable");
+        let next = match old {
+            Down::Grant { grant: old } if old.account == grant.account => {
+                replaced = true;
+                Down::Grant { grant }
+            }
+            old @ (Down::Start { .. }
+            | Down::Event { .. }
+            | Down::Answer { .. }
+            | Down::Cancel
+            | Down::Grant { .. }) => old,
+        };
+        channel.outbox.push(next);
+    }
+    if !replaced {
+        channel.outbox.push(Down::Grant { grant });
+    }
+    follow(domain, env, id, out);
 }

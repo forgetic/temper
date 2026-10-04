@@ -1,0 +1,6 @@
+# Wire transcripts retain framing, CRLF and terminal empty lines exactly.
+crates/temper-llm-anthropic/tests/fixtures/**/response.sse binary
+crates/temper-llm-openai/tests/fixtures/**/response.sse binary
+crates/temper-llm-anthropic/tests/fixtures/**/response.headers -text
+crates/temper-llm-openai/tests/fixtures/**/response.headers -text
+tests/channel/transcripts/*.bin binary

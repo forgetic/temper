@@ -162,7 +162,7 @@ impl Measured {
                     self.owed.push_back(Owed::Done { owner, done });
                 }
                 // Its operation's end is owed already: it lost the race.
-                Request::CancelIo { .. } => {}
+                Request::CancelIo { .. } | Request::Rejected { .. } | Request::Exhausted { .. } => {}
             }
         }
         self.meter.check(measured, self.bound, self.env.limits);
@@ -251,16 +251,18 @@ fn assignment(run: u64, limits: &Limits) -> Assignment {
     for index in 0..host.repositories {
         let letter = b'a' + u8::try_from(index).expect("few repositories");
         repositories.push(Repository {
+            tag: index,
             name: name(letter),
             remote: name(b'r'),
             start: Start::Branch { branch: name(b'b') },
             access: Access::Writable { push: name(b'p') },
-            identity: name(b'i'),
+            identity: 0,
         });
     }
     let mut key = name(b'k');
     key[0] = u8::try_from(run).expect("few runs");
     Assignment {
+        grants: Box::new([]),
         run: Token::new(run),
         attempt: Token::new(run + 1000),
         workspace: Workspace { key, repositories: repositories.into_boxed_slice() },
@@ -284,7 +286,12 @@ fn admit(worker: &mut Measured) -> Vec<Token> {
         worker.step(Event::Assign { assignment: assignment(run, &limits) });
         for _ in 0..host.held {
             let event = bytes(host.event_bytes);
-            worker.step(Event::Inbound { run: Token::new(run), attempt: Token::new(run + 1000), event });
+            worker.step(Event::Inbound {
+                name: Token::new(1),
+                run: Token::new(run),
+                attempt: Token::new(run + 1000),
+                event,
+            });
         }
     }
     let starting = host.charter_bytes + host.snapshot_bytes + u64::from(host.held) * host.event_bytes;

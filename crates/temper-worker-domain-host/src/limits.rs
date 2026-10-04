@@ -1,11 +1,9 @@
-use alloc::boxed::Box;
-
 use skein_lib::{Id, Map, Queue, Set, Slab, Token};
 
 use crate::boundary::{Landing, Reason};
 use crate::call::Call;
 use crate::facts::Fact;
-use crate::hosted::Hosted;
+use crate::hosted::{Hosted, NamedEvent};
 
 /// The host child domain's limits (section 7), handed by its parent to every
 /// step read-only.
@@ -16,8 +14,10 @@ pub struct Limits {
     pub slots: u32,
     /// Repositories a workspace may list.
     pub repositories: u32,
+    /// Distinct grants retained for a hosted attempt.
+    pub accounts: u32,
     /// The most bytes of a workstream key, a repository name or remote, a
-    /// branch or an identity.
+    /// branch.
     pub name_bytes: u32,
     /// The most bytes of a charter.
     pub charter_bytes: u64,
@@ -64,7 +64,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     // The reserved output bound must be representable without saturation.
     // Cancelling each relay emits its reply and its cancellation request.
     let cancellations = limits.run_calls.checked_mul(2)?;
-    if cancellations.checked_add(2).is_none() || limits.held.checked_add(2).is_none() {
+    if cancellations.checked_add(2).is_none() || limits.held.checked_add(limits.accounts)?.checked_add(2).is_none() {
         return None;
     }
     let hosted = Slab::<Hosted>::worst_case(limits.slots)?;
@@ -75,7 +75,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     // Until its agent starts, a run holds its charter, its snapshot and the
     // inbound events that came meanwhile; from when it is told how the run
     // finishes, the outcome, the snapshot or the detail of the failure.
-    let held = Queue::<Box<[u8]>>::worst_case(limits.held)?
+    let held = Queue::<NamedEvent>::worst_case(limits.held)?
         .checked_add(u64::from(limits.held).checked_mul(limits.event_bytes)?)?;
     let starting = limits.charter_bytes.checked_add(limits.snapshot_bytes)?.checked_add(held)?;
     let ending = limits.outcome_bytes.max(limits.snapshot_bytes).max(u64::from(limits.detail_bytes));
@@ -84,8 +84,13 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     // (its push is held inline).
     let landed = Map::<u32, [u8; 32]>::worst_case(limits.repositories)?;
     let run_calls = Set::<Id<Call>>::worst_case(limits.run_calls)?;
-    let run =
-        starting.max(ending).checked_add(u64::from(limits.name_bytes))?.checked_add(landed)?.checked_add(run_calls)?;
+    let run = starting
+        .max(ending)
+        .checked_add(u64::from(limits.name_bytes))?
+        .checked_add(landed)?
+        .checked_add(run_calls)?
+        .checked_add(u64::from(limits.repositories).checked_mul(4)?)?
+        .checked_add(u64::from(limits.accounts).checked_mul(u64::try_from(size_of::<crate::Grant>()).ok()?)?)?;
     let runs = u64::from(limits.slots).checked_mul(run)?;
     // One terminal arrives per step. Push feedback consumes this array
     // instead of handing it on; its fixed diagnostic payload is included.

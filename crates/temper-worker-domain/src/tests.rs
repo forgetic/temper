@@ -15,6 +15,7 @@ use crate::{
 
 const LIMITS: Limits = Limits {
     host: host::Limits {
+        accounts: 4,
         slots: 2,
         repositories: 2,
         name_bytes: 16,
@@ -37,6 +38,9 @@ const LIMITS: Limits = Limits {
         facts: 64,
     },
     agent: agent::Limits {
+        accounts: 4,
+        repositories: 8,
+        name_bytes: 256,
         agents: 2,
         charter_bytes: 64,
         snapshot_bytes: 32,
@@ -158,7 +162,12 @@ impl Harness {
         let process = Token::new(run.saturating_add(500));
         let emitted = self.step(Event::Spawned { owner: agent, process });
         let r = Names { run: Token::new(run), attempt: attempt(run), agent, process };
-        let start = Down::Start { charter: bytes(b"charter"), snapshot: None };
+        let start = Down::Start {
+            repositories: Box::new([channel::Repository { name: bytes(b"app"), writable: true }]),
+            grants: Box::new([]),
+            charter: bytes(b"charter"),
+            snapshot: None,
+        };
         let expected = [
             Request::Wait { owner: agent, process },
             Request::Reap { owner: agent, process },
@@ -226,6 +235,8 @@ fn sort(requests: Box<[Request]>, changed: bool, pending: &mut Queue<(Token, git
             | Request::Answer { .. }
             | Request::Relay { .. }
             | Request::Bounced { .. }
+            | Request::Rejected { .. }
+            | Request::Exhausted { .. }
             | Request::Spawn { .. }
             | Request::Send { .. }
             | Request::Read { .. }
@@ -269,13 +280,15 @@ fn attempt(run: u64) -> Token {
 /// work saved, no snapshot.
 fn assignment(run: u64) -> host::Assignment {
     let repository = host::Repository {
+        tag: 0,
         name: bytes(b"app"),
         remote: bytes(b"org/app"),
         start: host::Start::Base { branch: bytes(b"main") },
         access: host::Access::Writable { push: bytes(b"fix") },
-        identity: bytes(b"bot"),
+        identity: 0,
     };
     host::Assignment {
+        grants: Box::new([]),
         run: Token::new(run),
         attempt: attempt(run),
         workspace: host::Workspace { key: key(run), repositories: Box::new([repository]) },
@@ -291,7 +304,7 @@ fn key(run: u64) -> Box<[u8]> {
 }
 
 fn inbound(r: Names, event: &[u8]) -> Event {
-    Event::Inbound { run: r.run, attempt: r.attempt, event: bytes(event) }
+    Event::Inbound { name: Token::new(1), run: r.run, attempt: r.attempt, event: bytes(event) }
 }
 
 fn read(r: Names) -> Request {
@@ -331,7 +344,7 @@ fn a_run_goes_from_its_assignment_to_its_answer_through_all_three_child_domains(
     let emitted = h.goes(r);
     let ended = host::Answer::Ended {
         outcome: bytes(b"done"),
-        work: work(&[host::Landed { repository: 0, commit: COMMITTED }], None),
+        work: work(&[host::Landed { tag: 0, commit: COMMITTED }], None),
     };
     assert_eq!(&*emitted, [answer(r, ended)], "it ended with its change landed: nothing to save; released");
     h.domain.reclaim();
@@ -381,7 +394,12 @@ fn a_run_cancelled_as_its_agent_starts_is_stopped_once_started_and_its_work_save
     let process = Token::new(501);
     let r = Names { run: Token::new(1), attempt: attempt(1), agent, process };
     let emitted = h.step(Event::Spawned { owner: agent, process });
-    let start = Down::Start { charter: bytes(b"charter"), snapshot: None };
+    let start = Down::Start {
+        repositories: Box::new([channel::Repository { name: bytes(b"app"), writable: true }]),
+        grants: Box::new([]),
+        charter: bytes(b"charter"),
+        snapshot: None,
+    };
     let expected =
         [Request::Wait { owner: agent, process }, Request::Reap { owner: agent, process }, send(r, start), read(r)];
     assert_eq!(&*emitted, expected);
@@ -576,15 +594,15 @@ fn a_push_the_forge_refuses_fails_and_the_run_is_told() {
 fn an_inbound_event_the_agent_cannot_take_is_bounced_to_the_engine() {
     let limits = Limits {
         host: host::Limits { held: 1, ..LIMITS.host },
-        agent: agent::Limits { events: 1, ..LIMITS.agent },
+        agent: agent::Limits { events: 2, ..LIMITS.agent },
         ..LIMITS
     };
     let mut h = Harness::new(&limits);
     h.connect();
     let r = h.live(1);
-    assert_eq!(&*h.step(inbound(r, b"one")), [send(r, Down::Event { event: bytes(b"one") })]);
+    assert_eq!(&*h.step(inbound(r, b"one")), [send(r, Down::Event { name: Token::new(1), event: bytes(b"one") })]);
     assert!(h.step(inbound(r, b"two")).is_empty(), "waits behind the first");
-    let bounced = Request::Bounced { run: r.run, attempt: r.attempt, bounce: host::Bounce::Full };
+    let bounced = Request::Bounced { name: Token::new(1), run: r.run, attempt: r.attempt, bounce: host::Bounce::Full };
     assert_eq!(&*h.step(inbound(r, b"three")), [bounced], "the engine keeps it");
 }
 
@@ -904,6 +922,8 @@ fn out_of_reach_until(h: &mut Harness, secs: u64) {
                 | Request::Answer { .. }
                 | Request::Relay { .. }
                 | Request::Bounced { .. }
+                | Request::Rejected { .. }
+                | Request::Exhausted { .. }
                 | Request::Spawn { .. }
                 | Request::Send { .. }
                 | Request::Read { .. }
@@ -1016,8 +1036,8 @@ fn the_worst_case_is_bounded_or_refused() {
 fn max_out_follows_the_longest_chain_of_hand_offs() {
     // Cancelling two relays emits two replies and two cancels, with room
     // for the stop and answer. Immediate child terminals extend the chain.
-    assert_eq!(host::max_out(&LIMITS.host), 6);
-    assert_eq!(max_out(&LIMITS), 14 * 6 + 38 * checkout::MAX_OUT + 37 * agent::MAX_OUT + 2 + 4 + 2 * (2 + 4));
+    assert_eq!(host::max_out(&LIMITS.host), 8);
+    assert_eq!(max_out(&LIMITS), 18 * 8 + 50 * checkout::MAX_OUT + 49 * agent::MAX_OUT + 2 + 4 + 2 * (2 + 4));
 }
 
 #[test]
@@ -1040,4 +1060,42 @@ fn wire_assignment_retries_create_no_second_child_call() {
     assert!(h.domain.host().is_relayed_for(r.run, r.attempt, call));
     let answered = Event::Relayed { run: r.run, attempt: r.attempt, call, answer: bytes(b"ok") };
     assert_eq!(h.step(answered).len(), 1, "the valid terminal still arrives");
+}
+
+#[test]
+fn initial_git_grant_names_stay_on_the_worker() {
+    let mut h = Harness::new(&LIMITS);
+    h.connect();
+    let git = host::Grant { account: 0, generation: 0, valid: Duration::from_secs(60) };
+    let llm = host::Grant { account: 7, generation: 1, valid: Duration::from_secs(60) };
+    let assigned = host::Assignment { grants: Box::new([git, llm]), ..assignment(1) };
+    let emitted = h.step(Event::Assign { assignment: assigned });
+    let emitted = h.git(emitted, true);
+    let [Request::Spawn { owner, .. }] = &*emitted else {
+        panic!("spawn");
+    };
+    let owner = *owner;
+    let started = h.step(Event::Spawned { owner, process: Token::new(200) });
+    let mut found = false;
+    for request in &started {
+        if let Request::Send { message: Down::Start { grants, repositories, .. }, .. } = request {
+            assert_eq!(
+                &**grants,
+                [channel::Grant { account: llm.account, generation: llm.generation, valid: llm.valid }]
+            );
+            assert_eq!(&**repositories, [channel::Repository { name: bytes(b"app"), writable: true }]);
+            found = true;
+        }
+    }
+    assert!(found, "the agent receives its start metadata");
+    let sent = h.step(Event::Sent { owner });
+    assert!(sent.is_empty());
+    let rejected = h.step(Event::Received { owner, message: Up::Rejected { account: 7, generation: 1 } });
+    assert_eq!(
+        &*rejected,
+        [
+            Request::Rejected { run: Token::new(1), attempt: attempt(1), account: 7, generation: 1 },
+            Request::Read { owner, process: Token::new(200) }
+        ]
+    );
 }

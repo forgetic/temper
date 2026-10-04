@@ -16,6 +16,7 @@ const COMMIT: [u8; 32] = [9; 32];
 const LANDED: Landing = Landing::Landed { commit: COMMIT };
 
 const LIMITS: Limits = Limits {
+    accounts: 4,
     slots: 2,
     repositories: 2,
     name_bytes: 16,
@@ -103,6 +104,7 @@ impl Harness {
         let hosted = self.admit(run);
         let emitted = self.step(Event::Prepared { owner: hosted.owner, workspace: hosted.workspace });
         let start = Request::Start {
+            grants: Box::new([]),
             owner: hosted.owner,
             workspace: hosted.workspace,
             charter: bytes(b"charter"),
@@ -120,7 +122,7 @@ impl Harness {
     }
 
     fn inbound(&mut self, hosted: Names, event: &[u8]) -> Box<[Request]> {
-        self.step(Event::Inbound { run: hosted.run, attempt: hosted.attempt, event: bytes(event) })
+        self.step(Event::Inbound { name: Token::new(1), run: hosted.run, attempt: hosted.attempt, event: bytes(event) })
     }
 
     fn cancel(&mut self, hosted: Names) -> Box<[Request]> {
@@ -191,18 +193,20 @@ fn workspace() -> Workspace {
         key: bytes(b"issue-7"),
         repositories: Box::new([
             Repository {
+                tag: 0,
                 name: bytes(b"app"),
                 remote: bytes(b"org/app"),
                 start: Start::Base { branch: bytes(b"main") },
                 access: Access::Writable { push: bytes(b"fix-7") },
-                identity: bytes(b"bot"),
+                identity: 0,
             },
             Repository {
+                tag: 1,
                 name: bytes(b"lib"),
                 remote: bytes(b"org/lib"),
                 start: Start::Commit { commit: [7; 32] },
                 access: Access::ReadOnly,
-                identity: bytes(b"reader"),
+                identity: 0,
             },
         ]),
     }
@@ -212,6 +216,7 @@ fn workspace() -> Workspace {
 /// and no snapshot.
 fn assignment(run: u64) -> Assignment {
     Assignment {
+        grants: Box::new([]),
         run: Token::new(run),
         attempt: token(run, 1000),
         workspace: workspace(),
@@ -254,11 +259,11 @@ fn stop(hosted: Names) -> Request {
 }
 
 fn bounced(hosted: Names, bounce: Bounce) -> Request {
-    Request::Bounced { run: hosted.run, attempt: hosted.attempt, bounce }
+    Request::Bounced { name: Token::new(1), run: hosted.run, attempt: hosted.attempt, bounce }
 }
 
 fn deliver(hosted: Names, event: &[u8]) -> Request {
-    Request::Deliver { agent: hosted.agent, event: bytes(event) }
+    Request::Deliver { name: Token::new(1), agent: hosted.agent, event: bytes(event) }
 }
 
 /// Ends the stopping run's tail with its agent gone and nothing to save, or
@@ -289,6 +294,7 @@ fn an_assignment_beyond_the_limits_is_refused_as_invalid() {
         ),
         (
             Assignment {
+                grants: Box::new([]),
                 workspace: Workspace {
                     key: bytes(b"k"),
                     repositories: Box::new([repository(b"a"), repository(b"b"), repository(b"c")]),
@@ -303,6 +309,7 @@ fn an_assignment_beyond_the_limits_is_refused_as_invalid() {
         ),
         (
             Assignment {
+                grants: Box::new([]),
                 workspace: Workspace { key: bytes(b"k"), repositories: Box::new([repository(b"a"), repository(b"a")]) },
                 ..assignment(1)
             },
@@ -310,9 +317,10 @@ fn an_assignment_beyond_the_limits_is_refused_as_invalid() {
         ),
         (
             Assignment {
+                grants: Box::new([]),
                 workspace: Workspace {
                     key: bytes(b"k"),
-                    repositories: Box::new([Repository { identity: bytes(b""), ..repository(b"a") }]),
+                    repositories: Box::new([Repository { tag: 0, remote: bytes(b""), ..repository(b"a") }]),
                 },
                 ..assignment(1)
             },
@@ -320,9 +328,11 @@ fn an_assignment_beyond_the_limits_is_refused_as_invalid() {
         ),
         (
             Assignment {
+                grants: Box::new([]),
                 workspace: Workspace {
                     key: bytes(b"k"),
                     repositories: Box::new([Repository {
+                        tag: 0,
                         start: Start::Saved { branch: Box::from([0_u8; 17]) },
                         ..repository(b"a")
                     }]),
@@ -344,11 +354,12 @@ fn an_assignment_beyond_the_limits_is_refused_as_invalid() {
 
 fn repository(name: &[u8]) -> Repository {
     Repository {
+        tag: 0,
         name: bytes(name),
         remote: bytes(b"org/repo"),
         start: Start::Branch { branch: bytes(b"b") },
         access: Access::ReadOnly,
-        identity: bytes(b"bot"),
+        identity: 0,
     }
 }
 
@@ -428,6 +439,7 @@ fn a_charter_and_snapshot_of_exactly_the_limits_are_admitted_and_passed_on() {
     let [Request::Prepare { owner, .. }] = &*emitted else { panic!("admitted: {emitted:?}") };
     let emitted = h.step(Event::Prepared { owner: *owner, workspace: Token::new(9) });
     let start = Request::Start {
+        grants: Box::new([]),
         owner: *owner,
         workspace: Token::new(9),
         charter: Box::from([7_u8; 64]),
@@ -739,7 +751,7 @@ fn a_run_that_landed_a_change_has_nothing_to_save_and_says_what_landed() {
     let push = Event::Pushed { owner, push: Box::new([Landing::Unchanged, LANDED]) };
     assert_eq!(&*h.step(push), [reply(hosted, 7, Reply::Pushed(Push::Done))]);
     assert_eq!(&*h.finish(hosted, Finish::Ended { outcome: bytes(b"pr") }), [stop(hosted)]);
-    let work = Work { landed: Box::new([Landed { repository: 1, commit: COMMIT }]), saved: None };
+    let work = Work { landed: Box::new([Landed { tag: 1, commit: COMMIT }]), saved: None };
     let ended = Answer::Ended { outcome: bytes(b"pr"), work };
     assert_eq!(&*h.gone(hosted, b""), [release(hosted), answer(hosted, ended)], "it ended with a landed change");
 }
@@ -755,7 +767,7 @@ fn the_work_of_a_run_says_the_last_commit_landed_in_each_repository() {
     let landed = Landing::Landed { commit: [2; 32] };
     assert_eq!(h.step(Event::Pushed { owner: second, push: Box::new([landed, Landing::Refused]) }).len(), 1);
     assert_eq!(&*h.finish(hosted, Finish::Ended { outcome: bytes(b"pr") }), [stop(hosted)]);
-    let work = Work { landed: Box::new([Landed { repository: 0, commit: [2; 32] }]), saved: None };
+    let work = Work { landed: Box::new([Landed { tag: 0, commit: [2; 32] }]), saved: None };
     let ended = Answer::Ended { outcome: bytes(b"pr"), work };
     assert_eq!(&*h.gone(hosted, b""), [release(hosted), answer(hosted, ended)]);
 }
@@ -872,14 +884,14 @@ fn a_call_withdrawn_as_its_run_leaves_live_was_answered_already() {
 fn an_event_the_agent_could_not_take_is_bounced_to_the_engine() {
     let mut h = Harness::new(LIMITS);
     let hosted = h.live(1);
-    let emitted = h.step(Event::Bounced { owner: hosted.owner, bounce: Bounce::Full });
+    let emitted = h.step(Event::Bounced { name: Token::new(1), owner: hosted.owner, bounce: Bounce::Full });
     assert_eq!(&*emitted, [bounced(hosted, Bounce::Full)]);
     assert!(h.step(Event::Yielded { owner: hosted.owner }).is_empty());
-    let emitted = h.step(Event::Bounced { owner: hosted.owner, bounce: Bounce::Ending });
+    let emitted = h.step(Event::Bounced { name: Token::new(1), owner: hosted.owner, bounce: Bounce::Ending });
     assert_eq!(&*emitted, [bounced(hosted, Bounce::Ending)], "waiting, as active");
     assert_eq!(h.report()[0].phase, Phase::Waiting, "a bounce leaves the run where it is");
     assert_eq!(&*h.cancel(hosted), [stop(hosted)]);
-    let emitted = h.step(Event::Bounced { owner: hosted.owner, bounce: Bounce::Ending });
+    let emitted = h.step(Event::Bounced { name: Token::new(1), owner: hosted.owner, bounce: Bounce::Ending });
     assert_eq!(&*emitted, [bounced(hosted, Bounce::Ending)], "stopping");
 }
 
@@ -916,7 +928,7 @@ fn a_cancelled_run_answers_its_relayed_calls_as_unavailable_and_waits_for_its_pu
     assert_eq!(&*emitted, [reply(hosted, 7, Reply::Pushed(Push::Done)), save(hosted)], "told how it went; saved");
     let saved = Event::Saved { owner: hosted.owner, save: Box::new([Landing::Unchanged, Landing::Unchanged]) };
     let work = Work {
-        landed: Box::new([Landed { repository: 0, commit: COMMIT }]),
+        landed: Box::new([Landed { tag: 0, commit: COMMIT }]),
         saved: Some(Box::new([Landing::Unchanged, Landing::Unchanged])),
     };
     let cancelled = failed(Failure::Cancelled(Reason::Engine), b"", work);
@@ -1057,8 +1069,8 @@ fn every_slot_comes_back_once_every_run_has_answered() {
 
 #[test]
 fn max_out_covers_the_hold_and_the_calls() {
-    assert_eq!(max_out(&LIMITS), 6);
-    assert_eq!(max_out(&Limits { held: 10, ..LIMITS }), 12);
+    assert_eq!(max_out(&LIMITS), 8);
+    assert_eq!(max_out(&Limits { held: 10, ..LIMITS }), 16);
     assert_eq!(max_out(&Limits { run_calls: 7, ..LIMITS }), 16);
 }
 
@@ -1085,7 +1097,7 @@ fn a_run_that_landed_a_change_mid_run_and_parks_still_saves() {
     assert_eq!(&*h.gone(hosted, b""), [save(hosted)], "it did not end with its change");
     let saved = Event::Saved { owner: hosted.owner, save: Box::new([Landing::Unchanged, Landing::Unchanged]) };
     let work = Work {
-        landed: Box::new([Landed { repository: 0, commit: COMMIT }]),
+        landed: Box::new([Landed { tag: 0, commit: COMMIT }]),
         saved: Some(Box::new([Landing::Unchanged, Landing::Unchanged])),
     };
     let parked = Answer::Parked { snapshot: None, work };
@@ -1105,7 +1117,7 @@ fn a_cancelled_run_that_lands_its_change_as_it_winds_down_ends_with_it() {
     assert!(h.cancel(hosted).is_empty());
     let ended = Answer::Ended {
         outcome: bytes(b"pr"),
-        work: Work { landed: Box::new([Landed { repository: 0, commit: COMMIT }]), saved: None },
+        work: Work { landed: Box::new([Landed { tag: 0, commit: COMMIT }]), saved: None },
     };
     assert_eq!(&*h.gone(hosted, b"bye"), [release(hosted), answer(hosted, ended)], "nothing left to save");
 }
@@ -1185,7 +1197,7 @@ fn a_repository_name_that_is_not_one_path_component_is_refused() {
     }
     for remote in [&b""[..], &[b'r'; 17][..]] {
         let mut h = Harness::new(LIMITS);
-        let repositories = Box::new([Repository { remote: Box::from(remote), ..repository(b"a") }]);
+        let repositories = Box::new([Repository { tag: 0, remote: Box::from(remote), ..repository(b"a") }]);
         let assignment = Assignment { workspace: Workspace { key: bytes(b"k"), repositories }, ..assignment(1) };
         let refused = answer(run_of(1), Answer::Refused(Refusal::Invalid(Invalid::Name)));
         assert_eq!(&*h.assign(assignment), [refused]);

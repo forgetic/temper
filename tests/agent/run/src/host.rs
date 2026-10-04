@@ -398,7 +398,12 @@ impl Host {
             time: script.time.draw(&mut self.rng),
         };
         let agents = self.rng.chance(script.agents);
-        let llm = |model: &[u8]| Llm { endpoint: Endpoint(0), model: Box::from(model), max_tokens: script.max_tokens };
+        let llm = |model: &[u8]| Llm {
+            account: 0,
+            endpoint: Endpoint(0),
+            model: Box::from(model),
+            max_tokens: script.max_tokens,
+        };
         Charter {
             brief,
             checkout: Checkout { repositories: repositories.into() },

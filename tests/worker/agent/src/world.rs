@@ -41,6 +41,9 @@ impl Settings {
         Settings {
             seed,
             agent: Limits {
+                accounts: 4,
+                repositories: 8,
+                name_bytes: 256,
                 agents: 4,
                 charter_bytes: 256,
                 snapshot_bytes: 128,
@@ -134,6 +137,9 @@ impl Settings {
         let calm = Settings::calm(seed);
         Settings {
             agent: Limits {
+                accounts: 4,
+                repositories: 8,
+                name_bytes: 256,
                 agents: 2,
                 events: 1,
                 calls: 1,
@@ -278,7 +284,7 @@ struct Mirror {
     asked: BTreeSet<Token>,
     withdrawn: BTreeSet<Token>,
     /// Inbound events the domain sent down.
-    sent: u64,
+    sent: BTreeSet<u64>,
     /// When it first had a reason to stop, and when the client stopped it.
     first_stop: Option<Time>,
     stopped_at: Option<Time>,
@@ -349,6 +355,7 @@ enum Made {
         busy: bool,
         too_large: bool,
         event: bool,
+        name: Option<u64>,
         cancel: bool,
     },
     Io {
@@ -521,7 +528,7 @@ impl World {
                 }
                 Taken::Other
             }
-            Event::Deliver { .. } => Taken::Other,
+            Event::Deliver { .. } | Event::Grant { .. } => Taken::Other,
             Event::Spawned { owner, .. } | Event::Unspawned { owner, .. } => {
                 self.ended(*owner, Kind::Spawn);
                 Taken::Other
@@ -594,14 +601,16 @@ impl World {
         match message {
             Up::Call { call, .. } if mirror.flight.contains(call) => Verdict::Breach("reused name"),
             Up::Withdraw { call } if mirror.withdrawn.contains(call) => Verdict::Breach("withdrawn twice"),
-            Up::Waiting { heard } if *heard > mirror.sent => Verdict::Breach("heard too much"),
+            Up::Waiting { heard } if *heard != 0 && !mirror.sent.contains(heard) => Verdict::Breach("heard too much"),
             Up::Call { .. }
             | Up::Withdraw { .. }
             | Up::Fact { .. }
             | Up::Long { .. }
             | Up::LongDone
             | Up::Waiting { .. }
-            | Up::Finish { .. } => Verdict::Fine,
+            | Up::Finish { .. }
+            | Up::Rejected { .. }
+            | Up::Exhausted { .. } => Verdict::Fine,
         }
     }
 
@@ -681,6 +690,7 @@ impl World {
     }
 
     /// Notes what a step made, checking what it may.
+    #[expect(clippy::too_many_lines, reason = "each finite emitted record has its own referee transition")]
     fn note(&mut self, made: Made) {
         let now = self.now;
         let limits = self.settings.agent;
@@ -757,13 +767,15 @@ impl World {
                 }
             }
             Made::Spawn { owner } => self.opened(owner, Kind::Spawn),
-            Made::Send { owner, answer, busy, too_large, event, cancel } => {
+            Made::Send { owner, answer, busy, too_large, event: _, name, cancel } => {
                 self.opened(owner, Kind::Send);
                 let mirror = self.mirrors.get_mut(&owner).expect("mirrored");
                 if let Some(call) = answer {
                     mirror.flight.remove(&call);
                 }
-                mirror.sent += u64::from(event);
+                if let Some(name) = name {
+                    mirror.sent.insert(name);
+                }
                 if cancel {
                     mirror.first_stop.get_or_insert(now);
                 }
@@ -864,6 +876,8 @@ impl World {
             | Request::Finished { .. }
             | Request::Faulted { .. }
             | Request::Bounced { .. }
+            | Request::Rejected { .. }
+            | Request::Exhausted { .. }
             | Request::Gone { .. } => {
                 let at = self.lane(Lane::DomainToClient, Duration::ZERO);
                 self.wire.send(at, Delivery::Client(request));
@@ -892,7 +906,11 @@ impl World {
                         | Event::Sent { .. }
                         | Event::Unsent { .. }
                         | Event::Signalled { .. } => None,
-                        Event::Spawn { .. } | Event::Deliver { .. } | Event::Answer { .. } | Event::Stop { .. } => {
+                        Event::Spawn { .. }
+                        | Event::Deliver { .. }
+                        | Event::Answer { .. }
+                        | Event::Stop { .. }
+                        | Event::Grant { .. } => {
                             unreachable!("io ends requests")
                         }
                     };
@@ -1019,7 +1037,7 @@ impl Mirror {
             flight: BTreeSet::new(),
             asked: BTreeSet::new(),
             withdrawn: BTreeSet::new(),
-            sent: 0,
+            sent: BTreeSet::new(),
             first_stop: None,
             stopped_at: None,
             fault: None,
@@ -1033,7 +1051,9 @@ fn made(request: &Request) -> Made {
         Request::Started { client, agent } => Made::Started { client: *client, agent: *agent },
         Request::Called { client, call, ask: _ } => Made::Called { client: *client, call: *call },
         Request::Withdrawn { client, call } => Made::Withdrawn { client: *client, call: *call },
-        Request::Waiting { .. } | Request::Told { .. } => Made::Said,
+        Request::Waiting { .. } | Request::Told { .. } | Request::Rejected { .. } | Request::Exhausted { .. } => {
+            Made::Said
+        }
         Request::Finished { client, finish } => {
             let kind = match finish {
                 Finish::Ended { .. } => "ended",
@@ -1043,7 +1063,7 @@ fn made(request: &Request) -> Made {
             Made::Finished { client: *client, kind }
         }
         Request::Faulted { client, fault } => Made::Faulted { client: *client, fault: *fault },
-        Request::Bounced { client: _, bounce } => Made::Bounced { bounce: *bounce },
+        Request::Bounced { name: _, client: _, bounce } => Made::Bounced { bounce: *bounce },
         Request::Gone { client, end, detail: _ } => Made::Gone { client: *client, end: *end },
         Request::Spawn { owner, workspace: _, deadline: _ } => Made::Spawn { owner: *owner },
         Request::Send { owner, process: _, message } => {
@@ -1055,14 +1075,25 @@ fn made(request: &Request) -> Made {
                         (Some(*call), false, false)
                     }
                 },
-                Down::Start { .. } | Down::Event { .. } | Down::Cancel => (None, false, false),
+                Down::Start { .. } | Down::Event { .. } | Down::Cancel | Down::Grant { .. } => (None, false, false),
             };
             let (event, cancel) = match message {
                 Down::Event { .. } => (true, false),
                 Down::Cancel => (false, true),
-                Down::Start { .. } | Down::Answer { .. } => (false, false),
+                Down::Start { .. } | Down::Answer { .. } | Down::Grant { .. } => (false, false),
             };
-            Made::Send { owner: *owner, answer, busy, too_large, event, cancel }
+            Made::Send {
+                owner: *owner,
+                answer,
+                busy,
+                too_large,
+                event,
+                name: match message {
+                    Down::Event { name, .. } => Some(name.raw()),
+                    Down::Start { .. } | Down::Answer { .. } | Down::Cancel | Down::Grant { .. } => None,
+                },
+                cancel,
+            }
         }
         Request::Read { owner, .. } => Made::Io { owner: *owner, kind: Kind::Read },
         Request::Signal { owner, process: _, signal } => Made::Signal { owner: *owner, signal: *signal },
@@ -1082,7 +1113,7 @@ fn oversized(message: &Up, limits: &Limits) -> bool {
         }
         Up::Fact { fact } => len(fact) > limits.fact_bytes,
         Up::Long { span } => *span > limits.long_span,
-        Up::Withdraw { .. } | Up::LongDone | Up::Waiting { .. } => false,
+        Up::Withdraw { .. } | Up::LongDone | Up::Waiting { .. } | Up::Rejected { .. } | Up::Exhausted { .. } => false,
         Up::Finish { finish } => match finish {
             Finish::Ended { outcome } => len(outcome) > limits.outcome_bytes,
             Finish::Parked { snapshot } => {

@@ -57,7 +57,7 @@ use alloc::boxed::Box;
 
 use skein_lib::{Time, Token};
 
-use crate::channel::{Ask, Down, Finish, Reply, Up};
+use crate::channel::{Ask, Down, Finish, Grant, Reply, Repository, Up};
 
 /// parent -> agent
 #[derive(PartialEq, Eq, Debug)]
@@ -65,44 +65,85 @@ use crate::channel::{Ask, Down, Finish, Reply, Up};
 pub enum Event {
     /// From the client: spawn an agent process for `spawn`, and start its run.
     /// Ended by exactly one `Gone`.
-    Spawn { client: Token, spawn: Spawn },
+    Spawn {
+        client: Token,
+        spawn: Spawn,
+    },
     /// From the client: an inbound event for the run of `agent`, which goes
     /// down as it arrives, or is bounced.
-    Deliver { agent: Token, event: Box<[u8]> },
+    Deliver {
+        agent: Token,
+        name: Token,
+        event: Box<[u8]>,
+    },
     /// From the client: the one answer to the host call `call` of the run of
     /// `agent`.
-    Answer { agent: Token, call: Token, reply: Reply },
+    Answer {
+        agent: Token,
+        call: Token,
+        reply: Reply,
+    },
     /// From the client: stop `agent`. Its run is cancelled and winds down;
     /// past the grace its tree is terminated, then killed. Its `Gone` says
     /// when it has all gone.
-    Stop { agent: Token },
+    Stop {
+        agent: Token,
+    },
+    Grant {
+        agent: Token,
+        grant: Grant,
+    },
     /// Terminal for `Spawn`: the process runs, and `process` names it from now
     /// on.
-    Spawned { owner: Token, process: Token },
+    Spawned {
+        owner: Token,
+        process: Token,
+    },
     /// Terminal for `Spawn`: the process could not be spawned by its
     /// deadline, and nothing of it is held. `detail` is for operators.
-    Unspawned { owner: Token, detail: Box<[u8]> },
+    Unspawned {
+        owner: Token,
+        detail: Box<[u8]>,
+    },
     /// Terminal for `Send`: the message went down.
-    Sent { owner: Token },
+    Sent {
+        owner: Token,
+    },
     /// Terminal for `Send`: the message could not go down, as the agent no
     /// longer reads its channel.
-    Unsent { owner: Token },
+    Unsent {
+        owner: Token,
+    },
     /// Terminal for `Read`: the next message up.
-    Received { owner: Token, message: Up },
+    Received {
+        owner: Token,
+        message: Up,
+    },
     /// Terminal for `Read`: what came up is not a message the protocol layer
     /// can decode, or is larger than a message may be. Nothing more is read.
-    Malformed { owner: Token },
+    Malformed {
+        owner: Token,
+    },
     /// Terminal for `Read`: the agent's end of the channel closed.
-    Hangup { owner: Token },
+    Hangup {
+        owner: Token,
+    },
     /// Terminal for `Signal`, whatever the signal reached.
-    Signalled { owner: Token },
+    Signalled {
+        owner: Token,
+    },
     /// Terminal for `Wait`: the agent's process exited. Things it started may
     /// still run.
-    Exited { owner: Token },
+    Exited {
+        owner: Token,
+    },
     /// Terminal for `Reap`: the process exited and its tree is empty, which io
     /// proves. `detail` is for operators, such as the tail of its error
     /// output.
-    Reaped { owner: Token, detail: Box<[u8]> },
+    Reaped {
+        owner: Token,
+        detail: Box<[u8]>,
+    },
 }
 
 /// agent -> parent
@@ -111,42 +152,102 @@ pub enum Event {
 pub enum Request {
     /// To the client: the agent for `client` was spawned and its run started,
     /// and `agent` names it from now on.
-    Started { client: Token, agent: Token },
+    Started {
+        client: Token,
+        agent: Token,
+    },
     /// To the client: a host call of the run, `call` being the run's name for
     /// it. Answered by exactly one `Answer`.
-    Called { client: Token, call: Token, ask: Ask },
+    Called {
+        client: Token,
+        call: Token,
+        ask: Ask,
+    },
     /// To the client: the run withdrew its call `call`, not yet answered. The
     /// client answers it all the same, once: at once as withdrawn, or with
     /// what came of it once that has settled.
-    Withdrawn { client: Token, call: Token },
+    Withdrawn {
+        client: Token,
+        call: Token,
+    },
     /// To the client: the run waits for its next inbound event.
-    Waiting { client: Token },
+    Waiting {
+        client: Token,
+    },
+    Rejected {
+        client: Token,
+        account: u32,
+        generation: u64,
+    },
+    Exhausted {
+        client: Token,
+        account: u32,
+        retry_after: skein_lib::Duration,
+    },
     /// To the client: a fact of the run, as it is, to forward best effort.
-    Told { client: Token, fact: Box<[u8]> },
+    Told {
+        client: Token,
+        fact: Box<[u8]>,
+    },
     /// To the client: how the run says it finishes. Its process exits next.
-    Finished { client: Token, finish: Finish },
+    Finished {
+        client: Token,
+        finish: Finish,
+    },
     /// To the client: the agent failed while its run was live, and is being
     /// stopped.
-    Faulted { client: Token, fault: Fault },
+    Faulted {
+        client: Token,
+        fault: Fault,
+    },
     /// To the client: an inbound event was not passed on, for `bounce`.
-    Bounced { client: Token, bounce: Bounce },
+    Bounced {
+        client: Token,
+        name: Token,
+        bounce: Bounce,
+    },
     /// To the client, terminal for `Spawn`: the agent has gone, for `end`.
     /// `detail` is for operators, never for an LLM.
-    Gone { client: Token, end: End, detail: Box<[u8]> },
+    Gone {
+        client: Token,
+        end: End,
+        detail: Box<[u8]>,
+    },
     /// Spawn the agent in a contained process tree, in the workspace
     /// `workspace`, where the client's repositories sit, giving up at
     /// `deadline`.
-    Spawn { owner: Token, workspace: Token, deadline: Time },
+    Spawn {
+        owner: Token,
+        workspace: Token,
+        deadline: Time,
+    },
     /// Send `message` down the channel of `process`.
-    Send { owner: Token, process: Token, message: Down },
+    Send {
+        owner: Token,
+        process: Token,
+        message: Down,
+    },
     /// Read the next message up the channel of `process`.
-    Read { owner: Token, process: Token },
+    Read {
+        owner: Token,
+        process: Token,
+    },
     /// Send `signal` to every member of the tree of `process`.
-    Signal { owner: Token, process: Token, signal: Signal },
+    Signal {
+        owner: Token,
+        process: Token,
+        signal: Signal,
+    },
     /// Wait for `process` to exit.
-    Wait { owner: Token, process: Token },
+    Wait {
+        owner: Token,
+        process: Token,
+    },
     /// Wait for the tree of `process` to be empty.
-    Reap { owner: Token, process: Token },
+    Reap {
+        owner: Token,
+        process: Token,
+    },
 }
 
 /// What a client asks an agent to be spawned for.
@@ -159,6 +260,8 @@ pub struct Spawn {
     pub charter: Box<[u8]>,
     /// The state of a parked run to resume from, passed through.
     pub snapshot: Option<Box<[u8]>>,
+    pub repositories: Box<[Repository]>,
+    pub grants: Box<[Grant]>,
 }
 
 /// How an agent failed (worker-domain.md, 4.3).
@@ -207,6 +310,8 @@ pub enum Invalid {
     Charter,
     /// The snapshot holds more bytes than a run may be given.
     Snapshot,
+    Repositories,
+    Grants,
 }
 
 /// A signal for a process tree.

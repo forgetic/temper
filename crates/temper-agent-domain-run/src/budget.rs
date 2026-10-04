@@ -66,6 +66,17 @@ impl Spend {
 }
 
 impl Budget {
+    /// The engine's token allowance, allocated by the agent: half input,
+    /// quarter output, eighth cache reads, and the remainder cache writes.
+    #[must_use]
+    pub const fn from_tokens(turns: u32, tokens: u64, time: Duration) -> Budget {
+        let input = tokens / 2;
+        let output = tokens / 4;
+        let cache_read = tokens / 8;
+        let cache_write = tokens.saturating_sub(input).saturating_sub(output).saturating_sub(cache_read);
+        Budget { turns, input, output, cache_read, cache_write, time }
+    }
+
     /// Whether this budget asks for no more than `limit`, part by part.
     pub(crate) fn within(&self, limit: &Budget) -> bool {
         self.turns <= limit.turns

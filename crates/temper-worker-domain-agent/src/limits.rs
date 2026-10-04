@@ -11,14 +11,19 @@ pub struct Limits {
     /// Agent processes at once: the process slots. A spawn beyond them is
     /// refused as busy.
     pub agents: u32,
+    /// Repository descriptors admitted with a spawn.
+    pub repositories: u32,
+    pub name_bytes: u32,
+    /// Distinct credential accounts an agent may use.
+    pub accounts: u32,
     /// The most bytes of a charter.
     pub charter_bytes: u64,
     /// The most bytes of a snapshot: a spawn's, or a parked run's.
     pub snapshot_bytes: u64,
     /// The most bytes of an inbound event. A larger one is bounced.
     pub event_bytes: u64,
-    /// Inbound events that may wait to go down to one run. Beyond them, an
-    /// event is bounced.
+    /// Inbound events queued or awaiting the run's named acknowledgement.
+    /// Beyond them, an event is bounced.
     pub events: u32,
     /// Host calls a run may have in flight, from the call until its answer is
     /// sent down. A call beyond them is answered as busy.
@@ -62,7 +67,7 @@ pub struct Limits {
 /// allocator overhead. An agent holds its charter and snapshot until its
 /// process has spawned, then, while its run listens, the messages waiting to
 /// go down, the busy answers, and the names of its calls in flight, those the
-/// client has not answered and those the run withdrew; and the detail of its
+/// client has not answered and those the run withdrew; and sent event names awaiting acknowledgement; and the detail of its
 /// end once its tree is empty. What comes up (host calls, facts, how the run
 /// finishes) is moved into a request in the step it arrives in, and what goes
 /// down is moved into a send: either is its receiver's to count.
@@ -71,13 +76,24 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     let agents = Slab::<Agent>::worst_case(limits.agents)?;
     let alarms = Deadlines::<Alarm>::worst_case(alarms(limits)?)?;
     let facts = Queue::<Fact>::worst_case(limits.facts)?;
-    let spawning = limits.charter_bytes.checked_add(limits.snapshot_bytes)?;
+    let descriptors = u64::from(limits.repositories).checked_mul(
+        u64::try_from(size_of::<crate::channel::Repository>()).ok()?.checked_add(u64::from(limits.name_bytes))?,
+    )?;
+    let grants = u64::from(limits.accounts).checked_mul(u64::try_from(size_of::<crate::channel::Grant>()).ok()?)?;
+    let spawning =
+        limits.charter_bytes.checked_add(limits.snapshot_bytes)?.checked_add(descriptors)?.checked_add(grants)?;
     let events = u64::from(limits.events).checked_mul(limits.event_bytes)?;
     let answers = u64::from(limits.calls).checked_mul(limits.answer_bytes)?;
     let names = Set::<Token>::worst_case(limits.calls)?.checked_mul(3)?;
     let busy = Queue::<Token>::worst_case(BUSY)?;
     let outbox = Queue::<Down>::worst_case(outbox(limits)?)?;
-    let listening = outbox.checked_add(busy)?.checked_add(names)?.checked_add(events)?.checked_add(answers)?;
+    let listening = outbox
+        .checked_add(Set::<u32>::worst_case(limits.accounts)?)?
+        .checked_add(Queue::<Token>::worst_case(limits.events)?)?
+        .checked_add(busy)?
+        .checked_add(names)?
+        .checked_add(events)?
+        .checked_add(answers)?;
     let agent = spawning.max(listening).checked_add(u64::from(limits.detail_bytes))?;
     let held = u64::from(limits.agents).checked_mul(agent)?;
     agents.checked_add(alarms)?.checked_add(facts)?.checked_add(held)
@@ -98,5 +114,5 @@ pub(crate) fn alarms(limits: &Limits) -> Option<u32> {
 /// The room of a run's outbox: every inbound event that may wait, an answer
 /// for every call in flight, and the cancel.
 pub(crate) fn outbox(limits: &Limits) -> Option<u32> {
-    limits.events.checked_add(limits.calls)?.checked_add(1)
+    limits.events.checked_add(limits.calls)?.checked_add(limits.accounts)?.checked_add(1)
 }

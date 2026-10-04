@@ -31,6 +31,7 @@ pub fn failure_kind(failure: host::Failure) -> &'static str {
         host::Failure::Run(host::RunFailure::Policy) => "run policy",
         host::Failure::Run(host::RunFailure::Cancelled) => "run cancelled",
         host::Failure::Run(host::RunFailure::Stale) => "run stale",
+        host::Failure::Run(host::RunFailure::Exhausted) => "run exhausted",
         host::Failure::Agent(host::AgentFailure::Unstarted) => "agent unstarted",
         host::Failure::Agent(host::AgentFailure::Exited) => "agent exited",
         host::Failure::Agent(host::AgentFailure::Rules) => "agent rules",
@@ -83,7 +84,8 @@ pub fn from_agent_io(event: agent::Event) -> Event {
         agent::Event::Spawn { .. }
         | agent::Event::Deliver { .. }
         | agent::Event::Answer { .. }
-        | agent::Event::Stop { .. } => {
+        | agent::Event::Stop { .. }
+        | agent::Event::Grant { .. } => {
             unreachable!("io ends requests")
         }
     }
@@ -93,8 +95,10 @@ pub fn from_agent_io(event: agent::Event) -> Event {
 #[must_use]
 pub fn down_bytes(message: &Down) -> Vec<&[u8]> {
     match message {
-        Down::Start { charter, snapshot } => [Some(&**charter), snapshot.as_deref()].into_iter().flatten().collect(),
-        Down::Event { event } => vec![event],
+        Down::Start { repositories: _, grants: _, charter, snapshot } => {
+            [Some(&**charter), snapshot.as_deref()].into_iter().flatten().collect()
+        }
+        Down::Event { name: _, event } => vec![event],
         Down::Answer { reply, .. } => match reply {
             agent::channel::Reply::Relayed { answer } => vec![answer],
             agent::channel::Reply::Pushed(_)
@@ -103,6 +107,6 @@ pub fn down_bytes(message: &Down) -> Vec<&[u8]> {
             | agent::channel::Reply::Withdrawn
             | agent::channel::Reply::TooLarge => Vec::new(),
         },
-        Down::Cancel => Vec::new(),
+        Down::Cancel | Down::Grant { .. } => Vec::new(),
     }
 }

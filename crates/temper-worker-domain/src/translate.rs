@@ -30,7 +30,7 @@ pub(crate) fn spec(workspace: host::Workspace) -> checkout::Spec {
 }
 
 fn repository(repository: host::Repository) -> checkout::Repository {
-    let host::Repository { name, remote, start, access, identity } = repository;
+    let host::Repository { tag: _, name, remote, start, access, identity } = repository;
     let push = match access {
         host::Access::ReadOnly => None,
         host::Access::Writable { push } => Some(push),
@@ -167,6 +167,7 @@ const fn run_failure(failure: channel::RunFailure) -> host::RunFailure {
         channel::RunFailure::Policy => host::RunFailure::Policy,
         channel::RunFailure::Cancelled => host::RunFailure::Cancelled,
         channel::RunFailure::Stale => host::RunFailure::Stale,
+        channel::RunFailure::Exhausted => host::RunFailure::Exhausted,
     }
 }
 

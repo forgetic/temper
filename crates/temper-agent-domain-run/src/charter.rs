@@ -111,6 +111,8 @@ pub struct Outlet {
 /// An LLM to talk to.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Llm {
+    /// The credential account configured for the endpoint.
+    pub account: u32,
     pub endpoint: Endpoint,
     /// The provider's name for the model.
     pub model: Box<[u8]>,
@@ -161,7 +163,7 @@ pub(crate) fn check(charter: &Charter, limits: &Limits) -> Result<(), Invalid> {
 pub(crate) fn cost(charter: &Charter) -> Option<u64> {
     let mut cost = len(&charter.brief)?.checked_add(len(&charter.llm.model)?)?;
     let llm = u64::try_from(size_of::<Llm>()).ok()?;
-    for Llm { endpoint: _, model, max_tokens: _ } in &charter.models {
+    for Llm { account: _, endpoint: _, model, max_tokens: _ } in &charter.models {
         cost = cost.checked_add(llm)?.checked_add(len(model)?)?;
     }
     let repository = u64::try_from(size_of::<Repository>()).ok()?;

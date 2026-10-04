@@ -6,7 +6,7 @@
 
 use alloc::boxed::Box;
 
-use skein_lib::{Env, Id, Map, Queue, Slab, Time, Token};
+use skein_lib::{Env, Id, Map, Queue, Set, Slab, Time, Token};
 use temper_engine_domain_brief as brief;
 use temper_engine_domain_fleet as fleet;
 use temper_engine_domain_forge as forge;
@@ -38,6 +38,13 @@ pub const fn max_out(limits: &Limits) -> u32 {
 #[derive(Debug)]
 pub struct Domain {
     pub(crate) config: Config,
+    pub(crate) accounts: crate::accounts::Domain,
+    pub(crate) account_out: Queue<crate::accounts::Request>,
+    pub(crate) account_start: usize,
+    pub(crate) account_epoch: Time,
+    pub(crate) account_waiting: Set<Id<Entry>>,
+    pub(crate) grant_pending: Set<(Id<Entry>, u32)>,
+    pub(crate) account_wake: bool,
     pub(crate) work: work::Domain,
     pub(crate) forge: forge::Domain,
     pub(crate) fleet: fleet::Domain,
@@ -119,6 +126,19 @@ impl Domain {
         let items = limits.work.items;
         let forge = forge::Domain::new(&limits.forge, config.forge.clone(), seed.rotate_left(17));
         Domain {
+            accounts: crate::accounts::Domain::new(&limits.accounts),
+            account_out: Queue::with_capacity(limits::account_out(limits)),
+            account_start: 0,
+            account_epoch: now,
+            account_waiting: Set::with_capacity(limits.work.items),
+            grant_pending: Set::with_capacity(
+                limits
+                    .work
+                    .items
+                    .checked_mul(limits::grant_accounts(limits).expect("account counts fit"))
+                    .expect("worst_case accepted account fanout"),
+            ),
+            account_wake: false,
             work: work::Domain::new(&limits.work, seed),
             forge,
             fleet: fleet::Domain::new(&limits.fleet),
@@ -220,6 +240,7 @@ impl Domain {
     pub fn next_deadline(&self) -> Option<Time> {
         let mut next = self.work.next_deadline();
         for at in [
+            self.accounts.next_deadline(),
             self.forge.next_deadline(),
             self.fleet.next_deadline(),
             self.brief.next_deadline(),
@@ -245,7 +266,10 @@ impl Domain {
     /// events.
     #[must_use]
     pub fn is_ready(&self) -> bool {
-        self.forge.is_ready()
+        self.account_start < self.config.accounts.len()
+            || self.account_wake
+            || !self.grant_pending.is_empty()
+            || self.forge.is_ready()
             || self.fleet.is_ready()
             || self.notes.is_ready()
             || !self.stalled.is_empty()
@@ -262,6 +286,7 @@ impl Domain {
     #[must_use]
     pub fn facts_lost(&self) -> u64 {
         self.lost
+            .saturating_add(self.accounts.facts_lost())
             .saturating_add(self.work.facts_lost())
             .saturating_add(self.forge.facts_lost())
             .saturating_add(self.fleet.facts_lost())
@@ -326,6 +351,8 @@ pub fn fire(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
         route::fleet_fire(domain, env);
     } else if domain.brief.next_deadline() == Some(at) {
         route::brief_fire(domain, env);
+    } else if domain.accounts.next_deadline() == Some(at) {
+        crate::credentials::fire(domain, env);
     } else {
         route::views_fire(domain, env);
     }
@@ -338,7 +365,9 @@ pub fn fire(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
 /// forge refused as busy.
 pub fn resume(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
     domain.steps = Steps::NONE;
-    if domain.forge.is_ready() {
+    if crate::credentials::ready(domain) {
+        crate::credentials::resume(domain, env);
+    } else if domain.forge.is_ready() {
         route::forge_resume(domain, env);
     } else if domain.fleet.is_ready() {
         route::fleet_resume(domain, env);
@@ -366,6 +395,10 @@ fn settle(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
 /// Drains the child domains' facts into the domain's own queue, counting what
 /// does not fit.
 fn gather(domain: &mut Domain, limits: &Limits) {
+    for _ in 0..limits.accounts.facts {
+        let Some(fact) = domain.accounts.pop_fact() else { break };
+        keep(domain, Fact::Accounts { fact });
+    }
     for _ in 0..limits.work.facts {
         let Some(fact) = domain.work.pop_fact() else { break };
         keep(domain, Fact::Work { fact });

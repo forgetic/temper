@@ -2,9 +2,9 @@
 //! a counting allocator: the host with every slot holding an assignment of
 //! exactly its limits, then every run ending with as much as it may hold.
 
-use skein_lib::{Env, Queue, ReplyTo, Time, Token, Wall};
+use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
 use temper_worker_domain_host::{
-    Access, AgentFailure, Answer, Ask, Assignment, Bounce, Domain, Event, Finish, Invalid, Landing, Limits,
+    Access, AgentFailure, Answer, Ask, Assignment, Bounce, Domain, Event, Finish, Grant, Invalid, Landing, Limits,
     Preparation, Reason, Refusal, Repository, Request, Start, Workspace, max_out, resume, step, worst_case,
 };
 use temper_world::heap::{self, Meter};
@@ -13,6 +13,7 @@ use temper_world::heap::{self, Meter};
 static HEAP: heap::Counting = heap::Counting;
 
 const LIMITS: Limits = Limits {
+    accounts: 4,
     slots: 2,
     repositories: 2,
     name_bytes: 32,
@@ -99,7 +100,8 @@ impl Measured {
                 | Request::Deliver { .. }
                 | Request::Reply { .. }
                 | Request::Stop { .. }
-                | Request::Release { .. } => Asked::Other,
+                | Request::Release { .. }
+                | Request::Grant { .. } => Asked::Other,
             });
         }
         self.meter.check(measured, self.bound, self.env.limits);
@@ -120,14 +122,18 @@ fn assignment(run: u64, limits: &Limits) -> Assignment {
     for index in 0..limits.repositories {
         let letter = b'a' + u8::try_from(index).expect("few repositories");
         repositories.push(Repository {
+            tag: index,
             name: name(letter),
             remote: name(b'r'),
             start: Start::Branch { branch: name(b'b') },
             access: Access::Writable { push: name(b'p') },
-            identity: name(b'i'),
+            identity: 0,
         });
     }
     Assignment {
+        grants: (0..limits.accounts)
+            .map(|account| Grant { account, generation: 7, valid: Duration::from_secs(300) })
+            .collect(),
         run: Token::new(run),
         attempt: Token::new(run + 1000),
         workspace: Workspace { key: name(b'k'), repositories: repositories.into_boxed_slice() },
@@ -159,6 +165,7 @@ fn fill(limits: Limits) {
         };
         for _ in 0..limits.held {
             let event = Event::Inbound {
+                name: Token::new(1),
                 run: Token::new(run),
                 attempt: Token::new(run + 1000),
                 event: bytes(limits.event_bytes),
@@ -237,17 +244,27 @@ fn fill(limits: Limits) {
     }
     assert_eq!(host.domain.hosted(), 0, "every slot came back");
 
+    beyond(&mut host, &limits);
+}
+
+/// Entrance refusals consume the supplied payload without retaining it.
+fn beyond(host: &mut Measured, limits: &Limits) {
     // Beyond the limits: refused, and nothing held.
-    let mut beyond = assignment(0, &limits);
+    let mut beyond = assignment(0, limits);
     beyond.charter = bytes(limits.charter_bytes + 1);
     let refused = host.step(Event::Assign { reply_to: ReplyTo::new(Token::new(0)), assignment: beyond });
     assert_eq!(refused, [Asked::Answer { answer: Answer::Refused(Refusal::Invalid(Invalid::Charter)) }]);
     let [Asked::Prepare { owner: _ }] =
-        host.step(Event::Assign { reply_to: ReplyTo::new(Token::new(0)), assignment: assignment(0, &limits) })[..]
+        host.step(Event::Assign { reply_to: ReplyTo::new(Token::new(0)), assignment: assignment(0, limits) })[..]
     else {
         panic!("admitted");
     };
-    let large = Event::Inbound { run: Token::new(0), attempt: Token::new(1000), event: bytes(limits.event_bytes + 1) };
+    let large = Event::Inbound {
+        name: Token::new(1),
+        run: Token::new(0),
+        attempt: Token::new(1000),
+        event: bytes(limits.event_bytes + 1),
+    };
     assert_eq!(host.step(large), [Asked::Bounced { bounce: Bounce::TooLarge }]);
 }
 

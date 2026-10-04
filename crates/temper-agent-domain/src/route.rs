@@ -10,7 +10,7 @@ use temper_agent_domain_run::{self as run, Spend};
 use temper_agent_domain_session as session;
 
 use crate::boundary::{Event, Request};
-use crate::domain::{Domain, Due, Flight, Handoff};
+use crate::domain::{Credential, Domain, Due, Flight, Handoff};
 use crate::limits::{self, Limits};
 use crate::peer::Peer;
 use crate::translate;
@@ -28,7 +28,20 @@ pub(crate) const fn session_env(env: &Env<Limits>) -> Env<session::Limits> {
 /// Hands one of the protocol's events to the child domain it is for.
 pub(crate) fn event(domain: &mut Domain, env: &Env<Limits>, event: Event) {
     let event = match event {
-        Event::Start { reply_to, worker, charter } => run::Event::Start { reply_to, worker, charter },
+        Event::Start { reply_to, worker, charter, grants } => {
+            if !takes_grants(domain, &grants, env.limits.accounts) {
+                domain.notices.push(Request::Answer {
+                    to: reply_to,
+                    answer: run::Answer::Refused(run::Refusal::Invalid(run::Invalid::Grants)),
+                });
+                return;
+            }
+            for grant in grants {
+                granted(domain, env, grant);
+            }
+            run::Event::Start { reply_to, worker, charter }
+        }
+        Event::Grant { grant } => return granted(domain, env, grant),
         Event::Cancel { run } => run::Event::Cancel { run },
         Event::Pushed { owner, push } => run::Event::Pushed { owner, push },
         Event::HostCancelled { owner } => run::Event::HostCancelled { owner },
@@ -37,6 +50,9 @@ pub(crate) fn event(domain: &mut Domain, env: &Env<Limits>, event: Event) {
         Event::Checked { owner, ran } => run::Event::Checked { owner, ran },
         Event::Aborted { owner } => run::Event::Aborted { owner },
         Event::Completed { owner, completion } => {
+            capture(domain, env, owner, &completion);
+            let ended = domain.completions.remove(&owner);
+            assert!(ended.is_some(), "completed calls were emitted");
             let id = *domain.sessions.get(&owner).expect("a session lives until its call has ended");
             let peer = domain.peers.get_mut(id).expect("a peer lives as its session");
             let before = peer.tickets();
@@ -45,10 +61,39 @@ pub(crate) fn event(domain: &mut Domain, env: &Env<Limits>, event: Event) {
             return session_step(domain, env, session::Event::Completed { owner, completion });
         }
         Event::Failed { owner, failure } => {
+            let grant = domain.completions.remove(&owner).expect("failed calls were emitted");
+            match failure {
+                crate::llm::Failure::Unauthorized => {
+                    if let Some(held) = domain.grants.get_mut(&grant.account)
+                        && !was_rejected(held, grant.generation)
+                    {
+                        held.rejected = Some(grant.generation);
+                        domain.notices.push(Request::Rejected { grant });
+                    }
+                }
+                crate::llm::Failure::Exhausted { retry_after } => {
+                    domain.notices.push(Request::Exhausted { account: grant.account, retry_after });
+                }
+                crate::llm::Failure::Overloaded
+                | crate::llm::Failure::RateLimited { .. }
+                | crate::llm::Failure::Unavailable
+                | crate::llm::Failure::TimedOut
+                | crate::llm::Failure::ContextTooLong
+                | crate::llm::Failure::Invalid => {}
+            }
             return session_step(domain, env, session::Event::Failed { owner, failure });
         }
-        Event::Cancelled { owner } => return session_step(domain, env, session::Event::Cancelled { owner }),
-        Event::Done { owner, done } => return session_step(domain, env, session::Event::Done { owner, done }),
+        Event::Cancelled { owner } => {
+            let ended = domain.completions.remove(&owner);
+            assert!(ended.is_some(), "cancelled calls were emitted");
+            return session_step(domain, env, session::Event::Cancelled { owner });
+        }
+        Event::Done { owner, done } => {
+            if room_for_content(domain, env, crate::facts::done_bytes(&done)) {
+                domain.content.push(crate::Content::Tool { owner, done: done.clone() });
+            }
+            return session_step(domain, env, session::Event::Done { owner, done });
+        }
     };
     run_step(domain, env, event);
 }
@@ -76,6 +121,9 @@ pub(crate) fn deliver(domain: &mut Domain, env: &Env<Limits>, handoff: Handoff) 
 /// Routes what the child domains emitted, and what that leads to, until both
 /// have emitted all they will in this entry point.
 pub(crate) fn hand_off(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
+    if let Some(notice) = domain.notices.pop() {
+        out.push(notice);
+    }
     let bound = limits::run_out(&env.limits).saturating_add(limits::session_out(&env.limits));
     for _ in 0..bound {
         if let Some(request) = domain.session_out.pop() {
@@ -113,8 +161,21 @@ fn from_session(domain: &mut Domain, env: &Env<Limits>, request: session::Reques
             // it never will.
             let forgotten = peer.forget_asks(&env.limits.session);
             domain.tickets = domain.tickets.saturating_sub(forgotten);
+            let account = peer.account;
+            let grant = match domain.grants.get(&account) {
+                Some(held) if held.expires > env.now => held.name,
+                Some(_) | None => {
+                    return session_step(
+                        domain,
+                        env,
+                        session::Event::Failed { owner, failure: crate::llm::Failure::Unauthorized },
+                    );
+                }
+            };
             let prompt = peer.prompt(prompt);
-            return out.push(Request::Complete { owner, prompt, timeout });
+            let inserted = domain.completions.insert(owner, grant).expect("one completion per session");
+            assert!(inserted.is_none(), "the previous completion ended");
+            return out.push(Request::Complete { owner, grant, prompt, timeout });
         }
         session::Request::Cancel { owner } => return out.push(Request::Cancel { owner }),
         session::Request::Io { owner, op, deadline } => return out.push(Request::Io { owner, op, deadline }),
@@ -182,12 +243,13 @@ fn from_run(domain: &mut Domain, env: &Env<Limits>, request: run::Request, out: 
         }
         run::Request::Abort { owner } => return out.push(Request::Abort { owner }),
         run::Request::Open { conversation, opening } => {
+            let account = opening.llm.account;
             let Some((spec, offered)) = translate::spec(opening) else {
                 // Refused at the conversations' entrance, in the run's terms.
                 let ended = run::Event::Ended { conversation, end: run::End::Invalid, spend: Spend::ZERO };
                 return run_step(domain, env, ended);
             };
-            let peer = Peer::new(conversation, offered, &env.limits.session);
+            let peer = Peer::new(conversation, account, offered, &env.limits.session);
             let id = domain.peers.insert(peer).expect("a peer for every conversation the run has");
             let fresh = domain.conversations.insert(conversation, id).expect("a peer for every conversation");
             assert!(fresh.is_none(), "the run names its conversations apart");
@@ -233,4 +295,90 @@ fn free(domain: &mut Domain, id: Id<Peer>) {
     domain.conversations.remove(&conversation);
     domain.ready.forget(Handoff::Close { peer: id });
     domain.peers.retire(id);
+}
+
+fn granted(domain: &mut Domain, env: &Env<Limits>, grant: crate::Grant) {
+    if let Some(old) = domain.grants.get(&grant.name.account)
+        && old.name.generation >= grant.name.generation
+    {
+        return;
+    }
+    let valid = grant.valid.as_nanos().saturating_sub(env.limits.skew.as_nanos());
+    let rejected = match domain.grants.get(&grant.name.account) {
+        Some(old) => old.rejected,
+        None => None,
+    };
+    let entry = Credential {
+        name: grant.name,
+        expires: env.now.saturating_add(skein_lib::Duration::from_nanos(valid)),
+        rejected,
+    };
+    if domain.grants.contains_key(&grant.name.account) || domain.grants.len() < env.limits.accounts {
+        let inserted = domain.grants.insert(grant.name.account, entry);
+        assert!(inserted.is_ok(), "known account or checked room");
+    }
+}
+
+fn takes_grants(domain: &Domain, grants: &[crate::Grant], most: u32) -> bool {
+    if u32::try_from(grants.len()).unwrap_or(u32::MAX) > most {
+        return false;
+    }
+    let mut adding = 0_u32;
+    for (index, grant) in grants.iter().enumerate() {
+        let mut seen = domain.grants.contains_key(&grant.name.account);
+        for old in grants.get(..index).unwrap_or_default() {
+            if old.name.account == grant.name.account {
+                seen = true;
+            }
+        }
+        if !seen {
+            adding = adding.saturating_add(1);
+        }
+    }
+    domain.grants.len().saturating_add(adding) <= most
+}
+
+fn was_rejected(credential: &Credential, generation: u64) -> bool {
+    match credential.rejected {
+        Some(reported) => reported >= generation,
+        None => false,
+    }
+}
+
+fn room_for_content(domain: &mut Domain, env: &Env<Limits>, bytes: u64) -> bool {
+    if domain.content.room() == 0 || bytes > env.limits.session.session_bytes {
+        domain.content_lost = domain.content_lost.saturating_add(1);
+        false
+    } else {
+        true
+    }
+}
+
+fn capture(domain: &mut Domain, env: &Env<Limits>, owner: Token, completion: &crate::llm::Completion) {
+    for said in &completion.content {
+        match said {
+            crate::llm::Said::Text { text } => {
+                if room_for_content(domain, env, crate::facts::bytes(text)) {
+                    domain.content.push(crate::Content::Text { owner, text: text.clone() });
+                }
+            }
+            crate::llm::Said::ToolCall { id, name, input, call: _ } => {
+                let bytes = crate::facts::bytes(id)
+                    .saturating_add(crate::facts::bytes(name))
+                    .saturating_add(crate::facts::bytes(input));
+                if room_for_content(domain, env, bytes) {
+                    domain.content.push(crate::Content::Call {
+                        owner,
+                        id: id.clone(),
+                        name: name.clone(),
+                        input: input.clone(),
+                    });
+                }
+            }
+            crate::llm::Said::Opaque { .. } => {}
+        }
+    }
+    if room_for_content(domain, env, 0) {
+        domain.content.push(crate::Content::Usage { owner, usage: completion.usage });
+    }
 }

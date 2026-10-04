@@ -85,8 +85,8 @@ fn charter(held: u64) -> Charter {
             }]),
         },
         budget: BUDGET,
-        llm: Llm { endpoint: Endpoint(0), model: bytes(1), max_tokens: 1 },
-        models: Box::new([Llm { endpoint: Endpoint(0), model: bytes(1), max_tokens: 1 }]),
+        llm: Llm { account: 0, endpoint: Endpoint(0), model: bytes(1), max_tokens: 1 },
+        models: Box::new([Llm { account: 0, endpoint: Endpoint(0), model: bytes(1), max_tokens: 1 }]),
     }
 }
 

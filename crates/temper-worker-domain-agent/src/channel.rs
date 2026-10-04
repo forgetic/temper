@@ -20,7 +20,7 @@
 //!   no call waiting for the client crossed its answer on the way, and is
 //!   dropped.
 //! - A long operation announces at most `Limits::long_span`, and a run that
-//!   waits says it has read no more inbound events than were sent down to it.
+//!   waits names an inbound event that was sent down to it.
 //! - [`Up::Finish`] (ended, parked or failed) is the run's last word: anything
 //!   after it breaks the rules.
 //! - Every payload is within the agent child domain's limits, and a message the
@@ -39,26 +39,47 @@ use skein_lib::{Duration, Token};
 pub enum Up {
     /// A host call, which the run names `call`: answered by exactly one
     /// [`Down::Answer`].
-    Call { call: Token, ask: Ask },
+    Call {
+        call: Token,
+        ask: Ask,
+    },
     /// The run withdraws its call `call`, its own deadline for it having
     /// passed. The call stays in flight until its answer, which still comes,
     /// once: as withdrawn, or with what came of it.
-    Withdraw { call: Token },
+    Withdraw {
+        call: Token,
+    },
     /// A fact of the run, for the engine: passed on as it is, best effort. It
     /// counts as progress.
-    Fact { fact: Box<[u8]> },
+    Fact {
+        fact: Box<[u8]>,
+    },
     /// The run started an operation that may run for up to `span`, such as
     /// the repository's checks: the watchdog waits until then, or until the
     /// run says it is done, and its no-progress clock runs from there.
-    Long { span: Duration },
+    Long {
+        span: Duration,
+    },
     /// The long operation the run reported is done.
     LongDone,
-    /// The run waits for its next inbound event, having read `heard` of those
-    /// sent down to it: the watchdog's clock pauses until one is delivered,
+    /// The run waits for its next inbound event, having read through the opaque event name
+    /// `heard` (zero before the first): the watchdog's clock pauses until one is delivered,
     /// if it has read them all.
-    Waiting { heard: u64 },
+    Waiting {
+        heard: u64,
+    },
     /// How the run finishes: its last word. Its process exits next.
-    Finish { finish: Finish },
+    Finish {
+        finish: Finish,
+    },
+    Rejected {
+        account: u32,
+        generation: u64,
+    },
+    Exhausted {
+        account: u32,
+        retry_after: Duration,
+    },
 }
 
 /// worker -> agent
@@ -67,13 +88,27 @@ pub enum Up {
 pub enum Down {
     /// The first message: what the run starts with, passed through. Where the
     /// repositories sit is the protocol layer's to add, from the spawn.
-    Start { charter: Box<[u8]>, snapshot: Option<Box<[u8]>> },
+    Start {
+        charter: Box<[u8]>,
+        snapshot: Option<Box<[u8]>>,
+        repositories: Box<[Repository]>,
+        grants: Box<[Grant]>,
+    },
     /// An inbound event for the run, passed through.
-    Event { event: Box<[u8]> },
+    Event {
+        name: Token,
+        event: Box<[u8]>,
+    },
     /// The one answer to the run's host call `call`.
-    Answer { call: Token, reply: Reply },
+    Answer {
+        call: Token,
+        reply: Reply,
+    },
     /// The worker cancels the run: it winds down and says how it finishes.
     Cancel,
+    Grant {
+        grant: Grant,
+    },
 }
 
 /// What a host call asks.
@@ -144,4 +179,21 @@ pub enum RunFailure {
     Cancelled,
     /// The branch a change is pushed to moved since the run started.
     Stale,
+    /// Provider quota was exhausted; a later attempt may succeed.
+    Exhausted,
+}
+
+/// Repository roots the agent is permitted to read or write.
+#[derive(PartialEq, Eq, Hash, Debug)]
+pub struct Repository {
+    pub name: Box<[u8]>,
+    pub writable: bool,
+}
+
+/// Credential identity and relative validity; values belong to the protocol.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Grant {
+    pub account: u32,
+    pub generation: u64,
+    pub valid: Duration,
 }

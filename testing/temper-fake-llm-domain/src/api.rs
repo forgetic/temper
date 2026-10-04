@@ -13,6 +13,9 @@ pub enum Role {
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Part {
+    Opaque {
+        bytes: Box<[u8]>,
+    },
     Text {
         text: Box<[u8]>,
     },
@@ -91,6 +94,9 @@ pub enum Error {
     ContextTooLong,
     /// The client's credentials were refused.
     Unauthorized,
+    Exhausted {
+        retry_after: Duration,
+    },
     InvalidRequest,
 }
 

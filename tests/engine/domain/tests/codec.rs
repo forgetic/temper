@@ -225,7 +225,11 @@ fn a_charter_crosses_a_channel() {
         grants: GRANTS,
         finish: Finish::Turn { supervising: true },
         budget: BUDGET,
-        models: b"m".as_slice().into(),
+        models: Box::new([temper_engine_domain::Model {
+            endpoint: 0,
+            model: b"m".as_slice().into(),
+            max_tokens: 1024,
+        }]),
         policy: Policy {
             text: Capture::Content,
             progress: Capture::Shape,

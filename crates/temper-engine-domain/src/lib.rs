@@ -104,6 +104,7 @@ extern crate alloc;
 
 mod boundary;
 mod config;
+mod credentials;
 mod domain;
 mod facts;
 mod items;
@@ -118,12 +119,14 @@ mod tests;
 mod translate;
 mod waits;
 
+pub use temper_engine_domain_accounts as accounts;
+
 pub use boundary::{
     Answer, Ask, Assignment, Call, Charter, Checkout, Chunk, Decoded, Event, Failure, Hello, Hosted, Inbound, Item,
-    Landed, Outcome, Payload, Phase, Posted, Record, Refusal, Related, Relations, Reply, Request, Served, Start, Store,
-    Stored, Trace, Unserved, Watched, Work, Workspace,
+    Landed, Model, Outcome, Payload, Phase, Posted, Record, Refusal, Related, Relations, Reply, Request, Served, Start,
+    Store, Stored, Trace, Unserved, Watched, Work, Workspace,
 };
-pub use config::Config;
+pub use config::{Account, Config};
 pub use domain::{Domain, fire, max_out, resume, step};
 pub use facts::Fact;
 pub use limits::{Limits, accepts, worst_case};

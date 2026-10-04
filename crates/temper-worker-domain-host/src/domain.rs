@@ -16,7 +16,8 @@ use crate::limits::{self, Limits};
 #[must_use]
 pub const fn max_out(limits: &Limits) -> u32 {
     let cancelling = limits.run_calls.saturating_mul(2);
-    let most = if limits.held > cancelling { limits.held } else { cancelling };
+    let starting = limits.held.saturating_add(limits.accounts);
+    let most = if starting > cancelling { starting } else { cancelling };
     most.saturating_add(2)
 }
 
@@ -142,7 +143,8 @@ impl Domain {
 pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     match event {
         Event::Assign { reply_to, assignment } => hosted::assign(domain, env, reply_to, assignment, out),
-        Event::Inbound { run, attempt, event } => hosted::inbound(domain, env, run, attempt, event, out),
+        Event::Inbound { run, attempt, name, event } => hosted::inbound(domain, env, run, attempt, name, event, out),
+        Event::Grant { run, attempt, grant } => hosted::grant(domain, run, attempt, grant, out),
         Event::Cancel { run, attempt } => hosted::cancel(domain, env, run, attempt, out),
         Event::Relayed { run, attempt, call, answer } => hosted::relayed(domain, run, attempt, call, answer, out),
         Event::RelayCancelled { call } => hosted::relay_cancelled(domain, call, out),
@@ -154,7 +156,7 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
         Event::Started { owner, agent } => hosted::started(domain, env, owner, agent, out),
         Event::Called { owner, call, ask } => hosted::called(domain, env, owner, call, ask, out),
         Event::Withdrawn { owner, call } => hosted::withdrawn(domain, owner, call, out),
-        Event::Bounced { owner, bounce } => hosted::bounced(domain, owner, bounce, out),
+        Event::Bounced { owner, name, bounce } => hosted::bounced(domain, owner, name, bounce, out),
         Event::Yielded { owner } => hosted::yielded(domain, owner, out),
         Event::Finished { owner, finish } => hosted::finished(domain, env, owner, finish, out),
         Event::Faulted { owner, fault } => hosted::faulted(domain, env, owner, fault, out),

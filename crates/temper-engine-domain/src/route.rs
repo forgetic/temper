@@ -65,6 +65,34 @@ pub(crate) const fn views_env(env: &Env<Limits>) -> Env<views::Limits> {
 /// top level, it is for.
 pub(crate) fn event(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     match event {
+        Event::Refreshed { account, generation, valid } => {
+            crate::credentials::step(domain, env, crate::accounts::Event::Refreshed { account, generation, valid });
+        }
+        Event::RefreshFailed { account, generation, failure } => {
+            crate::credentials::step(domain, env, crate::accounts::Event::Failed { account, generation, failure });
+        }
+        Event::Rejected { channel, item, attempt, account, generation } => fleet_step(
+            domain,
+            env,
+            fleet::Event::Rejected {
+                channel,
+                run: translate::run_of(item),
+                attempt: skein_lib::Token::new(attempt),
+                account,
+                generation,
+            },
+        ),
+        Event::Exhausted { channel, item, attempt, account, retry_after } => fleet_step(
+            domain,
+            env,
+            fleet::Event::Exhausted {
+                channel,
+                run: translate::run_of(item),
+                attempt: skein_lib::Token::new(attempt),
+                account,
+                retry_after,
+            },
+        ),
         Event::Answered { call, result, decoded } => {
             domain.decoded = decoded;
             forge_step(domain, env, forge::Event::Answered { call, result });
@@ -81,8 +109,12 @@ pub(crate) fn event(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &
         Event::Relay { channel, item, attempt, call, body } => {
             runs::relay(domain, env, channel, item, attempt, call, body);
         }
-        Event::Bounced { item, attempt, bounce } => runs::bounced(domain, env, item, attempt, bounce),
-        Event::Told { item, attempt, kind, content } => runs::told(domain, env, item, attempt, kind, content),
+        Event::Bounced { channel, item, attempt, name, bounce } => {
+            runs::bounced(domain, env, channel, item, attempt, name, bounce);
+        }
+        Event::Told { channel, item, attempt, kind, content } => {
+            runs::told(domain, env, channel, item, attempt, kind, content);
+        }
         Event::Ask { reply_to, person, ask } => people::ask(domain, env, reply_to, person, ask, out),
         Event::Unwatch { watcher } => views_step(domain, env, views::Event::Unwatch { watcher }),
         Event::Delivered { watcher, done } => views_step(domain, env, views::Event::Delivered { watcher, done }),
@@ -96,7 +128,9 @@ pub(crate) fn hand_off(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<R
     // Every request routed, and once the cold start is done, its end.
     let bound = limits::routed(&env.limits).saturating_add(1);
     for _ in 0..bound {
-        if let Some(request) = domain.views_out.pop() {
+        if let Some(request) = domain.account_out.pop() {
+            crate::credentials::route(domain, env, request, out);
+        } else if let Some(request) = domain.views_out.pop() {
             from_views(domain, env, request, out);
         } else if let Some(request) = domain.notes_out.pop() {
             from_notes(domain, env, request);
@@ -115,7 +149,8 @@ pub(crate) fn hand_off(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<R
         }
     }
     assert!(
-        domain.views_out.is_empty()
+        domain.account_out.is_empty()
+            && domain.views_out.is_empty()
             && domain.notes_out.is_empty()
             && domain.brief_out.is_empty()
             && domain.fleet_out.is_empty()
@@ -264,6 +299,22 @@ fn from_forge(domain: &mut Domain, env: &Env<Limits>, request: forge::Request, o
 /// to the hub, translated.
 fn from_fleet(domain: &mut Domain, env: &Env<Limits>, request: fleet::Request, out: &mut Queue<Request>) {
     match request {
+        fleet::Request::Grant { channel, run, attempt, grant } => out.push(Request::Grant {
+            channel,
+            item: translate::item(run),
+            attempt: attempt.raw(),
+            grant: crate::accounts::Grant { account: grant.account, generation: grant.generation, valid: grant.valid },
+        }),
+        fleet::Request::Rejected { run, attempt, account, generation } => {
+            if crate::credentials::uses(domain, translate::item(run), attempt.raw(), account) {
+                crate::credentials::step(domain, env, crate::accounts::Event::Rejected { account, generation });
+            }
+        }
+        fleet::Request::Exhausted { run, attempt, account, retry_after } => {
+            if crate::credentials::uses(domain, translate::item(run), attempt.raw(), account) {
+                crate::credentials::step(domain, env, crate::accounts::Event::Exhausted { account, retry_after });
+            }
+        }
         fleet::Request::Assign { channel, run, attempt } => runs::assign(domain, channel, run, attempt, out),
         fleet::Request::Inbound { channel, run, attempt, event } => {
             runs::deliver(domain, channel, run, attempt, event, out);
@@ -302,7 +353,7 @@ fn from_fleet(domain: &mut Domain, env: &Env<Limits>, request: fleet::Request, o
             runs::ended(domain, env, to, run, attempt, work::Answer::Refused);
         }
         fleet::Request::Relay { reply_to, run, attempt, body } => runs::call(domain, env, reply_to, run, attempt, body),
-        fleet::Request::Bounced { run, attempt, bounce: _ } => runs::bounce(domain, run, attempt),
+        fleet::Request::Bounced { run, attempt, name, bounce: _ } => runs::bounce(domain, run, attempt, name),
         fleet::Request::Undelivered { run, attempt, event, undelivered } => match undelivered {
             fleet::Undelivered::Unplaced | fleet::Undelivered::Adrift => {
                 let item = translate::item(run);

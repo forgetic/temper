@@ -30,6 +30,15 @@ const RETRY: Retry = Retry { retries: 2, base: Duration::from_secs(1), max: Dura
 const BUDGET: Budget = Budget { tokens: 1_000, turns: 20, time: Duration::from_secs(600) };
 
 const LIMITS: Limits = Limits {
+    accounts: crate::accounts::Limits {
+        accounts: 2,
+        refresh_margin: Duration::from_secs(10),
+        backoff_base: Duration::from_secs(1),
+        backoff_max: Duration::from_secs(8),
+        rejected_interval: Duration::from_secs(3),
+        spent_attention: Duration::from_secs(30),
+        facts: 16,
+    },
     work: work::Limits {
         items: 12,
         retries: Retries { transient: RETRY, permanent: RETRY, run: RETRY, agent: RETRY, lost: RETRY, invalid: RETRY },
@@ -171,6 +180,9 @@ fn config() -> Config {
         batch: plan::Batch { count: 1, age: None },
     };
     Config {
+        accounts: Box::new([crate::Account { account: 0, generation: 1, valid: Some(Duration::from_nanos(u64::MAX)) }]),
+        endpoints: Box::new([0]),
+        identities: Box::new([1, 1]),
         plan: plan::Config { repositories: Box::new([repo.clone(), repo]), templates: Box::new([]) },
         home: 0,
         forge: forge::Config {
@@ -202,7 +214,7 @@ fn config() -> Config {
             },
         },
         session: plan::SessionSpec { charter, resume: plan::Resume::Default, wake },
-        models: copy_of(b"model"),
+        models: Box::new([crate::Model { endpoint: 0, model: copy_of(b"model"), max_tokens: 1024 }]),
         policy: Policy {
             text: Capture::Content,
             progress: Capture::Shape,
@@ -942,7 +954,9 @@ impl World {
                 };
                 self.pending.push(Event::Stored { owner, stored });
             }
-            seen @ (Request::Assign { .. }
+            seen @ (Request::Account { .. }
+            | Request::Grant { .. }
+            | Request::Assign { .. }
             | Request::Inbound { .. }
             | Request::Cancel { .. }
             | Request::Relayed { .. }
@@ -2386,9 +2400,17 @@ fn a_change_whose_branch_was_deleted_is_made_again_from_its_base() {
 #[test]
 fn every_owned_configuration_collection_is_bounded() {
     let mut configured = config();
-    configured.models = copies(b'm', usize::try_from(LIMITS.models_bytes).unwrap());
+    configured.models = Box::new([crate::Model {
+        endpoint: 0,
+        model: copies(b'm', usize::try_from(LIMITS.models_bytes).unwrap() - size_of::<crate::Model>()),
+        max_tokens: 1,
+    }]);
     assert!(accepts(&configured, &LIMITS));
-    configured.models = copies(b'm', usize::try_from(LIMITS.models_bytes).unwrap() + 1);
+    configured.models = Box::new([crate::Model {
+        endpoint: 0,
+        model: copies(b'm', usize::try_from(LIMITS.models_bytes).unwrap() + 1 - size_of::<crate::Model>()),
+        max_tokens: 1,
+    }]);
     assert!(!accepts(&configured, &LIMITS));
 
     let mut configured = config();
@@ -2440,10 +2462,175 @@ fn every_forge_configuration_cap_is_checked_before_construction() {
 }
 
 #[test]
+fn static_git_identity_names_are_distinct_from_refreshing_llm_accounts() {
+    let mut configured = config();
+    configured.identities[0] = configured.accounts[0].account;
+    assert!(!accepts(&configured, &LIMITS), "a static git identity cannot name an OAuth account");
+}
+
+#[test]
+fn exhausted_credential_generations_are_refused_at_startup() {
+    for valid in [None, Some(Duration::from_secs(100))] {
+        let mut configured = config();
+        configured.accounts[0].generation = u64::MAX;
+        configured.accounts[0].valid = valid;
+        assert!(!accepts(&configured, &LIMITS));
+        configured.accounts[0].generation = u64::MAX - 1;
+        assert!(accepts(&configured, &LIMITS));
+    }
+}
+
+#[test]
+fn delayed_account_registration_preserves_the_original_expiry() {
+    let mut configured = config();
+    configured.accounts[0].valid = Some(Duration::from_secs(10));
+    let mut domain = Domain::new(configured, &LIMITS, 1, env(5).now);
+    crate::credentials::resume(&mut domain, &env(8));
+    assert_eq!(domain.accounts.grant(0, env(8).now).unwrap().valid, Duration::from_secs(7));
+    assert!(domain.accounts.grant(0, env(15).now).is_none());
+
+    let mut configured = config();
+    configured.accounts[0].valid = Some(Duration::from_secs(10));
+    let mut domain = Domain::new(configured, &LIMITS, 1, env(5).now);
+    crate::credentials::resume(&mut domain, &env(16));
+    assert!(domain.accounts.grant(0, env(16).now).is_none());
+    assert_eq!(domain.account_out.pop(), Some(crate::accounts::Request::Refresh { account: 0, generation: 2 }));
+}
+
+#[test]
+fn a_deployment_larger_than_the_v1_repository_name_field_is_refused_at_startup() {
+    let mut configured = config();
+    configured.plan.repositories = copies(plan::Repo { bases: Box::new([copy_of(b"main")]) }, 257);
+    configured.rules.repositories = 257;
+    configured.identities = copies(1, 257);
+    let limits = Limits {
+        forge: forge::Limits { repositories: 257, ..LIMITS.forge },
+        rules: rules::Limits { repositories: 257, ..LIMITS.rules },
+        ..LIMITS
+    };
+    assert!(!accepts(&configured, &limits), "every repository must fit its eight-bit channel name");
+}
+
+#[test]
 fn configured_model_bytes_are_counted_in_the_root_and_each_assignment() {
     let bound = worst_case(&LIMITS).unwrap();
     let extra = Limits { models_bytes: LIMITS.models_bytes + 1, ..LIMITS };
-    assert_eq!(worst_case(&extra).unwrap() - bound, 1 + u64::from(crate::limits::entries(&LIMITS).unwrap()));
+    assert_eq!(worst_case(&extra).unwrap() - bound, 5 + u64::from(crate::limits::entries(&LIMITS).unwrap()));
+}
+
+fn distinct_accounts() -> Config {
+    let mut configured = config();
+    configured.accounts = Box::new([
+        crate::Account { account: 10, generation: 1, valid: Some(Duration::from_nanos(u64::MAX)) },
+        crate::Account { account: 20, generation: 1, valid: Some(Duration::from_nanos(u64::MAX)) },
+    ]);
+    configured.endpoints = Box::new([10, 20]);
+    configured.identities = Box::new([11, 21]);
+    configured
+}
+
+#[test]
+fn credential_updates_reach_only_the_attempts_that_use_the_account() {
+    let mut world = World::configured(distinct_accounts);
+    world.settle();
+    world.deliver(Event::Hello {
+        channel: Token::new(1),
+        hello: Hello { slots: 2, workstreams: Box::new([]), hosting: Box::new([]) },
+    });
+    for repository in 0..2 {
+        world.deliver(Event::Ask {
+            reply_to: ReplyTo::new(Token::new(9 + u64::from(repository))),
+            person: ALICE,
+            ask: Ask::Open { repository, key: copy_of(b"key"), title: copy_of(b"hello"), message: copy_of(b"hello") },
+        });
+    }
+    let first = Item { repository: 0, number: 1 };
+    let second = Item { repository: 1, number: 2 };
+    let first_id = crate::items::find(&world.domain, first).unwrap();
+    let second_id = crate::items::find(&world.domain, second).unwrap();
+    // Distinct retained charters exercise the fanout independently of the
+    // current deployment-wide model selection policy.
+    world.domain.items.get_mut(second_id).unwrap().assignment.as_mut().unwrap().charter.models[0].endpoint = 1;
+    crate::credentials::redial(&mut world.domain, first_id);
+    crate::credentials::redial(&mut world.domain, second_id);
+    assert!(world.domain.grant_pending.contains(&(first_id, 10)));
+    assert!(world.domain.grant_pending.contains(&(first_id, 11)));
+    assert!(!world.domain.grant_pending.contains(&(first_id, 20)));
+    assert!(!world.domain.grant_pending.contains(&(first_id, 21)));
+    assert!(world.domain.grant_pending.contains(&(second_id, 20)));
+    assert!(world.domain.grant_pending.contains(&(second_id, 21)));
+    assert!(!world.domain.grant_pending.contains(&(second_id, 10)));
+    assert!(!world.domain.grant_pending.contains(&(second_id, 11)));
+    // A queued grant is checked again if the retained charter changes.
+    world.domain.grant_pending.insert((first_id, 20)).unwrap();
+    world.settle();
+    let mut unexpected = false;
+    for request in &world.seen {
+        if let Request::Grant { item, grant, .. } = request {
+            unexpected |= (*item == first && grant.account == 20) || (*item == second && grant.account == 10);
+        }
+    }
+    assert!(!unexpected, "redial and queued grants stay within each charter");
+    world.seen = List::with_capacity(1024);
+    world.secs = 5;
+    for (item, account) in [(first, 10), (second, 20)] {
+        world.deliver(Event::Rejected { channel: Token::new(1), item, attempt: 1, account, generation: 1 });
+        world.deliver(Event::Refreshed { account, generation: 2, valid: Duration::from_secs(100) });
+    }
+    let mut pushed = List::with_capacity(2);
+    for request in &world.seen {
+        if let Request::Grant { item, grant, .. } = request {
+            pushed.push((*item, grant.account, grant.generation)).unwrap();
+        }
+    }
+    assert_eq!(pushed.as_slice(), &[(first, 10, 2), (second, 20, 2)]);
+}
+
+#[test]
+fn a_refresh_during_cooldown_is_pushed_to_its_users_when_availability_returns() {
+    let mut world = World::configured(distinct_accounts);
+    world.settle();
+    world.deliver(Event::Hello {
+        channel: Token::new(1),
+        hello: Hello { slots: 2, workstreams: Box::new([]), hosting: Box::new([]) },
+    });
+    for repository in 0..2 {
+        world.deliver(Event::Ask {
+            reply_to: ReplyTo::new(Token::new(9 + u64::from(repository))),
+            person: ALICE,
+            ask: Ask::Open { repository, key: copy_of(b"key"), title: copy_of(b"hello"), message: copy_of(b"hello") },
+        });
+    }
+    let first = Item { repository: 0, number: 1 };
+    let second = Item { repository: 1, number: 2 };
+    let second_id = crate::items::find(&world.domain, second).unwrap();
+    world.domain.items.get_mut(second_id).unwrap().assignment.as_mut().unwrap().charter.models[0].endpoint = 1;
+    world.seen = List::with_capacity(1024);
+    world.secs = 5;
+    world.deliver(Event::Exhausted {
+        channel: Token::new(1),
+        item: first,
+        attempt: 1,
+        account: 10,
+        retry_after: Duration::from_secs(10),
+    });
+    world.deliver(Event::Rejected { channel: Token::new(1), item: first, attempt: 1, account: 10, generation: 1 });
+    world.deliver(Event::Refreshed { account: 10, generation: 2, valid: Duration::from_secs(100) });
+    for request in &world.seen {
+        if let Request::Grant { grant, .. } = request {
+            assert_ne!(grant.account, 10);
+        }
+    }
+    world.seen = List::with_capacity(1024);
+    world.secs = 15;
+    world.settle();
+    let mut pushed = List::with_capacity(2);
+    for request in &world.seen {
+        if let Request::Grant { item, grant, .. } = request {
+            pushed.push((*item, grant.account, grant.generation)).unwrap();
+        }
+    }
+    assert_eq!(pushed.as_slice(), &[(first, 10, 2)]);
 }
 
 #[test]

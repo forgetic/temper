@@ -130,6 +130,7 @@ pub(crate) struct Relay {
 pub(crate) struct Bounced {
     pub(crate) run: Token,
     pub(crate) attempt: Token,
+    pub(crate) name: Token,
     pub(crate) bounce: host::Bounce,
 }
 
@@ -332,9 +333,9 @@ impl Link {
     /// A bounce for the engine: now if the channel is open, kept until it is
     /// otherwise.
     pub(crate) fn bounce(&mut self, bounced: Bounced, out: &mut Queue<Request>) {
-        let Bounced { run, attempt, bounce } = bounced;
+        let Bounced { run, attempt, name, bounce } = bounced;
         if self.is_up() {
-            return out.push(Request::Bounced { run, attempt, bounce });
+            return out.push(Request::Bounced { run, attempt, name, bounce });
         }
         self.bounces.try_push(bounced).expect("room for every event that may bounce");
     }
@@ -382,10 +383,10 @@ impl Link {
             }
         }
         for _ in 0..self.bounces.capacity() {
-            let Some(Bounced { run, attempt, bounce }) = self.bounces.pop() else {
+            let Some(Bounced { run, attempt, name, bounce }) = self.bounces.pop() else {
                 break;
             };
-            out.push(Request::Bounced { run, attempt, bounce });
+            out.push(Request::Bounced { run, attempt, name, bounce });
         }
     }
 

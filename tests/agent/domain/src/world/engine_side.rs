@@ -107,6 +107,7 @@ impl World {
     pub(super) fn engine_request(&mut self, request: Request) {
         self.log(&format!("engine -> {}", describe_request(&request)));
         match request {
+            Request::Account { .. } => {}
             Request::Forge { call, repository, op, payload } => {
                 self.stats.forge_calls += 1;
                 self.owned.open(call, ());
@@ -128,7 +129,8 @@ impl World {
                     self.assign(assignment);
                 }
             }
-            request @ (Request::Inbound { channel, .. }
+            request @ (Request::Grant { channel, .. }
+            | Request::Inbound { channel, .. }
             | Request::Cancel { channel, .. }
             | Request::Relayed { channel, .. }
             | Request::Acknowledge { channel, .. }) => {
@@ -378,6 +380,10 @@ pub(super) fn describe_event(event: &Event) -> String {
         Event::Told { item, attempt, kind, .. } => format!("told {item:?}#{attempt} {kind:?}"),
         Event::Hint { .. }
         | Event::Hello { .. }
+        | Event::Refreshed { .. }
+        | Event::RefreshFailed { .. }
+        | Event::Rejected { .. }
+        | Event::Exhausted { .. }
         | Event::Lost { .. }
         | Event::Answer { .. }
         | Event::Relay { .. }
@@ -396,7 +402,9 @@ fn describe_request(request: &Request) -> String {
         }
         Request::Forge { call, repository, op, .. } => format!("forge {} on {repository}: {op:?}", call.raw()),
         Request::Store { owner, .. } => format!("store {}", owner.raw()),
-        Request::Inbound { .. }
+        Request::Account { .. }
+        | Request::Grant { .. }
+        | Request::Inbound { .. }
         | Request::Cancel { .. }
         | Request::Relayed { .. }
         | Request::Acknowledge { .. }

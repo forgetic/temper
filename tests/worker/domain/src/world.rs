@@ -257,6 +257,7 @@ impl Settings {
 /// bytes.
 pub const LIMITS: Limits = Limits {
     host: host::Limits {
+        accounts: 4,
         slots: 3,
         repositories: 2,
         name_bytes: 32,
@@ -279,6 +280,9 @@ pub const LIMITS: Limits = Limits {
         facts: 256,
     },
     agent: agent::Limits {
+        accounts: 4,
+        repositories: 8,
+        name_bytes: 256,
         agents: 3,
         charter_bytes: 8_192,
         snapshot_bytes: 64,

@@ -584,6 +584,7 @@ pub(crate) fn taken(domain: &mut Domain, env: &Env<Limits>, id: Id<Entry>, writt
 
 /// Forgets an entry, at the reclaim point.
 pub(crate) fn drop_entry(domain: &mut Domain, id: Id<Entry>) {
+    crate::credentials::forget(domain, id);
     let Some(entry) = domain.items.get_mut(id) else { return };
     if entry.taking == Taking::Gone {
         return;
@@ -831,7 +832,7 @@ pub(crate) fn inbox(
         return;
     }
     let seq = entry.next;
-    entry.next = entry.next.saturating_add(1);
+    entry.next = entry.next.checked_add(1).expect("an inbox event name is never reused");
     entry.blocked = false;
     let noted = Noted { inbound, news, source, at: env.now, delivered: false };
     if entry.inbox.insert(seq, noted).is_err() {

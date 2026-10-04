@@ -54,7 +54,7 @@ use temper_engine_domain_world::{codec, deployment};
 use temper_worker_domain::{self as worker, Told, host};
 
 /// Who the worker is to the forge, for every repository it checks out.
-pub const IDENTITY: &[u8] = b"worker";
+pub const IDENTITY: u32 = 1;
 
 /// The bytes a frame adds to a charter.
 pub const CHARTER_FRAME: usize = 8;
@@ -75,7 +75,7 @@ pub fn directory(repository: u32) -> &'static [u8] {
 /// workspace's order, which an answer's landings name by place.
 #[must_use]
 pub fn assignment(assignment: Assignment) -> (host::Assignment, Vec<u32>) {
-    let Assignment { item, attempt, workspace, save, charter, snapshot } = assignment;
+    let Assignment { item, attempt, workspace, save, charter, snapshot, grants } = assignment;
     let name = self::attempt(item, attempt);
     let places = workspace.repositories.iter().map(|checkout| checkout.repository).collect();
     let repositories = workspace.repositories.into_vec().into_iter().map(repository).collect();
@@ -86,6 +86,11 @@ pub fn assignment(assignment: Assignment) -> (host::Assignment, Vec<u32>) {
         save,
         charter: framed_charter(name, &codec::charter(&charter)),
         snapshot,
+        grants: grants
+            .into_vec()
+            .into_iter()
+            .map(|grant| host::Grant { account: grant.account, generation: grant.generation, valid: grant.valid })
+            .collect(),
     };
     (assignment, places)
 }
@@ -103,11 +108,12 @@ fn repository(checkout: engine::Checkout) -> host::Repository {
         None => host::Access::ReadOnly,
     };
     host::Repository {
+        tag: repository,
         name: directory(repository).into(),
         remote: deployment::name(repository).into(),
         start,
         access,
-        identity: IDENTITY.into(),
+        identity: IDENTITY,
     }
 }
 
@@ -130,9 +136,12 @@ pub fn unframed(charter: &[u8]) -> (Token, &[u8]) {
 pub fn down(request: &engine::Request) -> Option<worker::Event> {
     let event = match *request {
         engine::Request::Assign { .. } => unreachable!("the world translates an assignment with its places"),
-        engine::Request::Inbound { channel: _, item, attempt, event } => {
-            worker::Event::Inbound { run: run(item), attempt: self::attempt(item, attempt), event: inbound(event) }
-        }
+        engine::Request::Inbound { channel: _, item, attempt, name, event } => worker::Event::Inbound {
+            name,
+            run: run(item),
+            attempt: self::attempt(item, attempt),
+            event: inbound(event),
+        },
         engine::Request::Cancel { channel: _, item, attempt } => {
             worker::Event::Cancel { run: run(item), attempt: self::attempt(item, attempt) }
         }
@@ -140,7 +149,13 @@ pub fn down(request: &engine::Request) -> Option<worker::Event> {
         engine::Request::Acknowledge { channel: _, item, attempt } => {
             worker::Event::Acknowledged { run: run(item), attempt: self::attempt(item, attempt) }
         }
-        engine::Request::Forge { .. }
+        engine::Request::Grant { channel: _, item, attempt, grant } => worker::Event::Grant {
+            run: run(item),
+            attempt: self::attempt(item, attempt),
+            grant: host::Grant { account: grant.account, generation: grant.generation, valid: grant.valid },
+        },
+        engine::Request::Account { .. }
+        | engine::Request::Forge { .. }
         | engine::Request::Refuse { .. }
         | engine::Request::Reply { .. }
         | engine::Request::Deliver { .. }
@@ -186,12 +201,9 @@ fn phase(phase: worker::Phase) -> engine::fleet::Phase {
 /// The engine's answer for the worker's, its landings named by the
 /// deployment's index for each repository of the workspace, `places`.
 #[must_use]
-pub fn answer(answer: host::Answer, places: &[u32]) -> engine::Answer {
+pub fn answer(answer: host::Answer, _places: &[u32]) -> engine::Answer {
     let work = |work: host::Work| {
-        let landed = work.landed.iter().map(|landed| engine::Landed {
-            repository: places[usize::try_from(landed.repository).expect("a small place")],
-            commit: landed.commit,
-        });
+        let landed = work.landed.iter().map(|landed| engine::Landed { repository: landed.tag, commit: landed.commit });
         engine::Work { landed: landed.collect() }
     };
     match answer {
@@ -212,13 +224,19 @@ pub fn answer(answer: host::Answer, places: &[u32]) -> engine::Answer {
 #[must_use]
 pub fn failure(failure: host::Failure) -> engine::Failure {
     match failure {
-        host::Failure::Unprepared(host::Preparation::Transient) | host::Failure::Cancelled(_) => {
-            engine::Failure::Transient
-        }
+        host::Failure::Unprepared(host::Preparation::Transient)
+        | host::Failure::Cancelled(_)
+        | host::Failure::Run(host::RunFailure::Exhausted) => engine::Failure::Transient,
         host::Failure::Unprepared(host::Preparation::Missing { .. } | host::Preparation::Refused { .. }) => {
             engine::Failure::Permanent
         }
-        host::Failure::Run(_) => engine::Failure::Run,
+        host::Failure::Run(
+            host::RunFailure::Model
+            | host::RunFailure::Budget
+            | host::RunFailure::Policy
+            | host::RunFailure::Cancelled
+            | host::RunFailure::Stale,
+        ) => engine::Failure::Run,
         host::Failure::Agent(_) => engine::Failure::Agent,
     }
 }
@@ -236,7 +254,7 @@ pub fn bounce(bounce: host::Bounce) -> engine::fleet::Bounce {
 /// What the engine hears of a fact a run told: its kind, by what it is
 /// about, and the fact as it came.
 #[must_use]
-pub fn told(told: Told) -> engine::Event {
+pub fn told(channel: Token, told: Told) -> engine::Event {
     let Told { run: _, attempt, fact } = told;
     let (item, attempt) = attempt_of(attempt);
     let kind = if fact.starts_with(b"session.completion") {
@@ -248,7 +266,7 @@ pub fn told(told: Told) -> engine::Event {
     } else {
         Kind::Progress
     };
-    engine::Event::Told { item, attempt, kind, content: fact }
+    engine::Event::Told { channel, item, attempt, kind, content: fact }
 }
 
 /// What kind of answer `answer` is, for the world's counts: a refusal or a
@@ -276,6 +294,7 @@ pub fn failure_kind(failure: host::Failure) -> &'static str {
         host::Failure::Run(host::RunFailure::Policy) => "run policy",
         host::Failure::Run(host::RunFailure::Cancelled) => "run cancelled",
         host::Failure::Run(host::RunFailure::Stale) => "run stale",
+        host::Failure::Run(host::RunFailure::Exhausted) => "run exhausted",
         host::Failure::Agent(host::AgentFailure::Unstarted) => "agent unstarted",
         host::Failure::Agent(host::AgentFailure::Exited) => "agent exited",
         host::Failure::Agent(host::AgentFailure::Rules) => "agent rules",

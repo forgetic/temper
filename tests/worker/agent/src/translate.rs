@@ -14,12 +14,13 @@ use crate::script::{Answer, Heard, Said, Why};
 #[must_use]
 pub fn down(message: Down) -> Heard {
     match message {
-        Down::Start { charter, snapshot } => {
+        Down::Start { repositories: _, grants: _, charter, snapshot } => {
             Heard::Start { charter: charter.into_vec(), snapshot: snapshot.map(<[u8]>::into_vec) }
         }
-        Down::Event { event } => Heard::Event { event: event.into_vec() },
+        Down::Event { name, event } => Heard::Event { name: name.raw(), event: event.into_vec() },
         Down::Answer { call, reply } => Heard::Answer { name: call.raw(), answer: answer(reply) },
         Down::Cancel => Heard::Cancel,
+        Down::Grant { .. } => Heard::Grant,
     }
 }
 

@@ -55,7 +55,7 @@ pub struct Assigned {
 #[derive(Debug)]
 pub enum Down {
     Assign(Assigned),
-    Inbound { item: Item, attempt: u64, event: Inbound },
+    Inbound { item: Item, attempt: u64, name: Token, event: Inbound },
     Cancel { item: Item, attempt: u64 },
     Relayed { item: Item, attempt: u64, call: Token, served: Served },
     Acknowledge { item: Item, attempt: u64 },
@@ -76,7 +76,7 @@ pub enum Up {
     Hello { slots: u32, workstreams: Vec<Box<[u8]>>, hosting: Vec<Hosted> },
     Answer { item: Item, attempt: u64, said: Said },
     Relay { item: Item, attempt: u64, call: Token, body: Call },
-    Bounced { item: Item, attempt: u64, bounce: Bounce },
+    Bounced { item: Item, attempt: u64, name: Token, bounce: Bounce },
     Told { item: Item, attempt: u64, kind: Kind, content: Vec<u8> },
 }
 
@@ -266,7 +266,7 @@ impl Worker {
     pub fn down(&mut self, down: Down, now: Time, mirror: &Mirror, out: &mut Vec<Effect>) {
         match down {
             Down::Assign(assigned) => self.assign(assigned, now, mirror, out),
-            Down::Inbound { item, attempt, event: _ } => {
+            Down::Inbound { item, attempt, name, event: _ } => {
                 self.tally.inbound += 1;
                 if let Some(run) = self.runs.get_mut(&(item, attempt)) {
                     if run.wait == Wait::Inbound {
@@ -276,7 +276,7 @@ impl Worker {
                     }
                 } else {
                     self.tally.bounced += 1;
-                    out.push(Effect::Up(Up::Bounced { item, attempt, bounce: Bounce::Ending }));
+                    out.push(Effect::Up(Up::Bounced { item, attempt, name, bounce: Bounce::Ending }));
                 }
             }
             Down::Cancel { item, attempt } => {

@@ -126,15 +126,33 @@ pub enum Toward {
 #[must_use]
 pub fn down(down: Down, link: &Link) -> Option<Event> {
     match down {
-        Down::Start { charter, snapshot } => {
+        Down::Start { charter, snapshot, repositories, grants } => {
             assert!(snapshot.is_none(), "the agent never parks, so it is never resumed");
+            assert_eq!(repositories.len(), link.checkout.repositories.len());
+            for (sent, placed) in repositories.iter().zip(link.checkout.repositories.iter()) {
+                assert_eq!(sent.name, placed.name);
+                assert_eq!(sent.writable, placed.writable);
+            }
             let charter = self::charter(&charter, link.checkout.clone());
-            Some(Event::Start { reply_to: ReplyTo::new(link.worker), worker: link.worker, charter })
+            Some(Event::Start {
+                grants: grants.into_vec().into_iter().map(grant).collect(),
+                reply_to: ReplyTo::new(link.worker),
+                worker: link.worker,
+                charter,
+            })
         }
-        Down::Event { event: _ } => None,
+        Down::Event { name: _, event: _ } => None,
+        Down::Grant { grant: named } => Some(Event::Grant { grant: grant(named) }),
         Down::Answer { call, reply } => Some(answer(call, &reply)),
         // A cancel that crossed a refusal finds no run.
         Down::Cancel => link.run.map(|run| Event::Cancel { run }),
+    }
+}
+
+fn grant(named: temper_worker_domain_agent::channel::Grant) -> temper_agent_domain::Grant {
+    temper_agent_domain::Grant {
+        name: temper_agent_domain::GrantName { account: named.account, generation: named.generation },
+        valid: named.valid,
     }
 }
 
@@ -173,6 +191,10 @@ pub fn up(request: Request, now: Time) -> Toward {
             Toward::Worker(Up::Call { call: owner, ask: Ask::Push { message: message(&change) } })
         }
         Request::CancelHost { owner } => Toward::Worker(Up::Withdraw { call: owner }),
+        Request::Rejected { grant } => {
+            Toward::Worker(Up::Rejected { account: grant.account, generation: grant.generation })
+        }
+        Request::Exhausted { account, retry_after } => Toward::Worker(Up::Exhausted { account, retry_after }),
         below @ (Request::Complete { .. }
         | Request::Cancel { .. }
         | Request::Io { .. }
@@ -198,7 +220,14 @@ pub fn finish(answer: run::Answer) -> Finish {
 
 fn failure(failure: run::Failure) -> RunFailure {
     match failure {
-        run::Failure::Model(_) => RunFailure::Model,
+        run::Failure::Model(run::Fault::Exhausted) => RunFailure::Exhausted,
+        run::Failure::Model(
+            run::Fault::Provider
+            | run::Fault::ContextFull
+            | run::Fault::Refused
+            | run::Fault::Truncated
+            | run::Fault::Malformed,
+        ) => RunFailure::Model,
         run::Failure::Budget(_) => RunFailure::Budget,
         run::Failure::Policy(_) => RunFailure::Policy,
         run::Failure::Cancelled => RunFailure::Cancelled,
@@ -299,9 +328,13 @@ pub fn charter(bytes: &[u8], checkout: Checkout) -> run::Charter {
         plan::Finish::Turn { .. } => panic!("no session reaches an agent: people hand in agent steps and changes"),
     };
     let budget = split(budget);
-    let mut names = models.split(|byte| *byte == b' ').filter(|name| !name.is_empty());
-    let llm =
-        |model: &[u8]| charter::Llm { endpoint: charter::Endpoint(0), model: model.into(), max_tokens: MAX_TOKENS };
+    let mut names = models.into_iter();
+    let llm = |model: engine::Model| charter::Llm {
+        account: 0,
+        endpoint: charter::Endpoint(model.endpoint),
+        model: model.model,
+        max_tokens: model.max_tokens,
+    };
     let main = llm(names.next().expect("the deployment names a model"));
     run::Charter {
         brief: self::brief(why, &instructions, &brief),
@@ -322,16 +355,7 @@ pub const NOTE: &[u8] = b"note";
 /// is left for cache writes.
 #[must_use]
 pub fn split(budget: plan::Budget) -> Budget {
-    let tokens = budget.tokens;
-    let (input, output, cache_read) = (tokens / 2, tokens / 4, tokens / 8);
-    Budget {
-        turns: budget.turns,
-        input,
-        output,
-        cache_read,
-        cache_write: tokens - input - output - cache_read,
-        time: budget.time,
-    }
+    Budget::from_tokens(budget.turns, budget.tokens, budget.time)
 }
 
 /// The verdicts a run may finish with: a report on an agent step's work,

@@ -44,7 +44,8 @@
 use alloc::boxed::Box;
 use core::mem;
 
-use skein_lib::{Env, Id, Token};
+use skein_lib::bytes::copy_of;
+use skein_lib::{Env, Id, List, Token};
 use temper_worker_domain_agent as agent;
 use temper_worker_domain_checkout as checkout;
 use temper_worker_domain_host as host;
@@ -60,6 +61,8 @@ pub(crate) struct Workspace {
     run: Token,
     /// How many repositories it holds.
     repositories: u32,
+    roots: Box<[agent::channel::Repository]>,
+    identities: Box<[u32]>,
     state: State,
 }
 
@@ -96,8 +99,26 @@ impl Then {
 /// The host asks for `workspace` to be prepared for its run `owner`.
 pub(crate) fn prepare(domain: &mut Domain, env: &Env<Limits>, owner: Token, workspace: host::Workspace) {
     let repositories = u32::try_from(workspace.repositories.len()).expect("the host checked the repositories");
+    let mut roots = List::with_capacity(repositories);
+    let mut identities = List::with_capacity(repositories);
+    for repository in &workspace.repositories {
+        let writable = match repository.access {
+            host::Access::ReadOnly => false,
+            host::Access::Writable { .. } => true,
+        };
+        identities.push(repository.identity).expect("room for every repository identity");
+        roots
+            .push(agent::channel::Repository { name: copy_of(&repository.name), writable })
+            .expect("room for every repository");
+    }
     let preparing = State::Preparing { hold: None, abandoned: false };
-    let record = Workspace { run: owner, repositories, state: preparing };
+    let record = Workspace {
+        run: owner,
+        repositories,
+        roots: roots.into_boxed(),
+        identities: identities.into_boxed(),
+        state: preparing,
+    };
     let id = domain.workspaces.insert(record).expect("a workspace for every slot");
     let fresh = domain.preparing.insert(owner, id).expect("a prepare for every slot");
     assert!(fresh.is_none(), "a run's workspace is prepared once");
@@ -132,6 +153,7 @@ pub(crate) fn start(
     workspace: Token,
     charter: Box<[u8]>,
     snapshot: Option<Box<[u8]>>,
+    grants: Box<[host::Grant]>,
 ) {
     let record = domain.workspaces.get(Id::from_token(workspace)).expect("a workspace lives until it is released");
     let directory = match record.state {
@@ -140,7 +162,25 @@ pub(crate) fn start(
             unreachable!("an agent starts in a prepared workspace")
         }
     };
-    let spawn = agent::Spawn { workspace: directory, charter, snapshot };
+    let mut repositories = List::with_capacity(record.repositories);
+    for root in &record.roots {
+        repositories
+            .push(agent::channel::Repository { name: copy_of(&root.name), writable: root.writable })
+            .expect("room for every repository");
+    }
+    let mut names = List::with_capacity(u32::try_from(grants.len()).expect("validated grants"));
+    for grant in grants {
+        if !record.identities.contains(&grant.account) {
+            names.push(route::channel_grant(grant)).expect("room for every LLM grant");
+        }
+    }
+    let spawn = agent::Spawn {
+        workspace: directory,
+        charter,
+        snapshot,
+        repositories: repositories.into_boxed(),
+        grants: names.into_boxed(),
+    };
     route::agent_step(domain, env, agent::Event::Spawn { client: owner, spawn });
 }
 

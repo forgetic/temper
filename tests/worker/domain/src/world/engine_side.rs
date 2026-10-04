@@ -53,7 +53,8 @@ impl World {
                 | Fact::Loaded
                 | Fact::Mangled { .. }
                 | Fact::Untracked { .. }
-                | Fact::Ruled { .. } => {}
+                | Fact::Ruled { .. }
+                | Fact::Accounts { .. } => {}
             }
         }
         self.engine.reclaim();
@@ -63,6 +64,21 @@ impl World {
     fn request(&mut self, request: Request) {
         self.log(format!("engine -> {}", describe_request(&request)));
         match request {
+            Request::Grant { channel, item, attempt, grant } => {
+                let (run, attempt) = protocol::names(item, attempt);
+                self.send_down(
+                    channel,
+                    Event::Grant {
+                        run,
+                        attempt,
+                        grant: temper_worker_domain::host::Grant {
+                            account: grant.account,
+                            generation: grant.generation,
+                            valid: grant.valid,
+                        },
+                    },
+                );
+            }
             Request::Forge { call, repository, op, payload } => {
                 self.owned.open(call, ());
                 let (asked, op) = translate::op(op, payload.as_ref(), self.settings.engine.forge.page);
@@ -101,13 +117,13 @@ impl World {
                 }
                 self.send_down(channel, Event::Assign { assignment });
             }
-            Request::Inbound { channel, item, attempt, event } => {
+            Request::Inbound { channel, item, attempt, name, event } => {
                 let names = protocol::names(item, attempt);
                 let place = self.places.entry(names).or_default();
                 let framed = protocol::framed_event(*place, names, &event);
                 *place += 1;
                 self.end("inbound");
-                self.send_down(channel, Event::Inbound { run: names.0, attempt: names.1, event: framed });
+                self.send_down(channel, Event::Inbound { name, run: names.0, attempt: names.1, event: framed });
             }
             Request::Cancel { channel, item, attempt } => {
                 let (run, attempt) = protocol::names(item, attempt);
@@ -137,7 +153,7 @@ impl World {
                 let event = engine::Event::Delivered { watcher, done: true };
                 self.send(at, Delivery::Engine { life: self.engine_life, event });
             }
-            Request::Ended { .. } => {}
+            Request::Account { .. } | Request::Ended { .. } => {}
             Request::Store { owner, op } => {
                 self.stores.open(owner, ());
                 let (stored, after) = self.store.apply(op);
@@ -550,7 +566,11 @@ fn describe(event: &engine::Event) -> String {
         | engine::Event::Ask { .. }
         | engine::Event::Unwatch { .. }
         | engine::Event::Delivered { .. }
-        | engine::Event::Stored { .. } => format!("{event:?}"),
+        | engine::Event::Stored { .. }
+        | engine::Event::Refreshed { .. }
+        | engine::Event::RefreshFailed { .. }
+        | engine::Event::Rejected { .. }
+        | engine::Event::Exhausted { .. } => format!("{event:?}"),
     }
 }
 
@@ -568,6 +588,8 @@ fn describe_request(request: &Request) -> String {
         | Request::Reply { .. }
         | Request::Deliver { .. }
         | Request::Ended { .. }
-        | Request::Store { .. } => format!("{request:?}"),
+        | Request::Store { .. }
+        | Request::Account { .. }
+        | Request::Grant { .. } => format!("{request:?}"),
     }
 }

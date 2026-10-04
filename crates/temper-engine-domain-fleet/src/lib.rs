@@ -56,7 +56,7 @@ mod limits;
 #[cfg(test)]
 mod tests;
 
-pub use boundary::{Answer, Bounce, Event, Hello, Hosted, Phase, Refusal, Request, Undelivered, Withdrawal};
+pub use boundary::{Answer, Bounce, Event, Grant, Hello, Hosted, Phase, Refusal, Request, Undelivered, Withdrawal};
 pub use domain::{Domain, fire, max_out, resume, step};
 pub use facts::Fact;
 pub use limits::{Limits, worst_case};

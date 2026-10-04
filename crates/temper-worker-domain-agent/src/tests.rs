@@ -11,6 +11,9 @@ use crate::{
 };
 
 const LIMITS: Limits = Limits {
+    accounts: 4,
+    repositories: 8,
+    name_bytes: 256,
     agents: 2,
     charter_bytes: 16,
     snapshot_bytes: 8,
@@ -99,7 +102,13 @@ impl Harness {
     }
 
     fn spawn(&mut self, client: u64, charter: &[u8], snapshot: Option<Box<[u8]>>) -> Box<[Request]> {
-        let spawn = Spawn { workspace: token(client, 100), charter: bytes(charter), snapshot };
+        let spawn = Spawn {
+            repositories: Box::new([]),
+            grants: Box::new([]),
+            workspace: token(client, 100),
+            charter: bytes(charter),
+            snapshot,
+        };
         self.step(Event::Spawn { client: Token::new(client), spawn })
     }
 
@@ -121,7 +130,12 @@ impl Harness {
         let process = token(client, 200);
         let emitted = self.step(Event::Spawned { owner, process });
         let a = Names { client: Token::new(client), agent: owner, process };
-        let start = Down::Start { charter: bytes(b"charter"), snapshot: Some(bytes(b"snap")) };
+        let start = Down::Start {
+            repositories: Box::new([]),
+            grants: Box::new([]),
+            charter: bytes(b"charter"),
+            snapshot: Some(bytes(b"snap")),
+        };
         assert_eq!(
             &*emitted,
             [
@@ -150,7 +164,7 @@ impl Harness {
     }
 
     fn deliver(&mut self, a: Names, event: &[u8]) -> Box<[Request]> {
-        self.step(Event::Deliver { agent: a.agent, event: bytes(event) })
+        self.step(Event::Deliver { name: event_name(event), agent: a.agent, event: bytes(event) })
     }
 
     fn answer(&mut self, a: Names, call: u64, reply: Reply) -> Box<[Request]> {
@@ -428,18 +442,18 @@ fn a_hangup_before_the_finish_is_an_exit_without_answering() {
 
 #[test]
 fn inbound_events_go_down_in_order_or_are_bounced() {
-    let mut h = Harness::new(LIMITS);
+    let mut h = Harness::new(Limits { events: 3, ..LIMITS });
     let a = h.live(1);
     let emitted = h.deliver(a, b"one");
-    assert_eq!(&*emitted, [send(a, Down::Event { event: bytes(b"one") })]);
+    assert_eq!(&*emitted, [send(a, Down::Event { name: Token::new(1), event: bytes(b"one") })]);
     assert!(h.deliver(a, b"two").is_empty(), "it waits");
     assert!(h.deliver(a, b"three").is_empty(), "it waits");
     let emitted = h.deliver(a, b"four");
-    assert_eq!(&*emitted, [Request::Bounced { client: a.client, bounce: Bounce::Full }]);
+    assert_eq!(&*emitted, [Request::Bounced { name: Token::new(4), client: a.client, bounce: Bounce::Full }]);
     let emitted = h.deliver(a, &[b'x'; 9]);
-    assert_eq!(&*emitted, [Request::Bounced { client: a.client, bounce: Bounce::TooLarge }]);
-    assert_eq!(&*h.sent(a), [send(a, Down::Event { event: bytes(b"two") })]);
-    assert_eq!(&*h.sent(a), [send(a, Down::Event { event: bytes(b"three") })]);
+    assert_eq!(&*emitted, [Request::Bounced { name: Token::new(2), client: a.client, bounce: Bounce::TooLarge }]);
+    assert_eq!(&*h.sent(a), [send(a, Down::Event { name: Token::new(2), event: bytes(b"two") })]);
+    assert_eq!(&*h.sent(a), [send(a, Down::Event { name: Token::new(3), event: bytes(b"three") })]);
     assert!(h.sent(a).is_empty());
 }
 
@@ -456,14 +470,14 @@ fn an_answer_too_large_goes_down_as_such() {
 fn a_stop_cancels_the_run_behind_what_waits_and_its_finish_is_still_heard() {
     let mut h = Harness::new(LIMITS);
     let a = h.live(1);
-    assert_eq!(&*h.deliver(a, b"one"), [send(a, Down::Event { event: bytes(b"one") })]);
+    assert_eq!(&*h.deliver(a, b"one"), [send(a, Down::Event { name: Token::new(1), event: bytes(b"one") })]);
     assert!(h.stop(a).is_empty(), "the cancel waits behind the event");
     assert!(h.stop(a).is_empty(), "a second stop is the first");
     assert_eq!(&*h.sent(a), [send(a, Down::Cancel)]);
     assert!(h.sent(a).is_empty());
     assert_eq!(h.domain.next_deadline(), Some(secs(5)), "the grace runs, the watchdog no longer");
     let emitted = h.deliver(a, b"two");
-    assert_eq!(&*emitted, [Request::Bounced { client: a.client, bounce: Bounce::Ending }]);
+    assert_eq!(&*emitted, [Request::Bounced { name: Token::new(2), client: a.client, bounce: Bounce::Ending }]);
     h.exiting(a);
     assert!(h.stop(a).is_empty(), "a stop after the finish is harmless");
     h.goes(a);
@@ -529,7 +543,7 @@ fn the_clock_pauses_while_the_run_waits_having_read_every_event() {
     h.say(a, Up::Fact { fact: bytes(b"yielded") });
     assert_eq!(h.domain.next_deadline(), Some(secs(100)), "facts do not end the wait");
     h.at(80);
-    assert_eq!(&*h.deliver(a, b"hello"), [send(a, Down::Event { event: bytes(b"hello") })]);
+    assert_eq!(&*h.deliver(a, b"hello"), [send(a, Down::Event { name: Token::new(1), event: bytes(b"hello") })]);
     assert_eq!(h.domain.next_deadline(), Some(secs(90)), "an event ends it");
     h.sent(a);
     // A wait that crossed the event on its way is no wait.
@@ -716,7 +730,10 @@ fn a_finish_read_after_the_exit_is_heard() {
     let call = Up::Call { call: Token::new(1), ask: Ask::Relay { body: bytes(b"r") } };
     assert_eq!(&*h.say(a, call), [read(a)], "a call is dropped: nothing would hear its answer");
     assert_eq!(&*h.say(a, Up::Waiting { heard: 0 }), [read(a)]);
-    assert_eq!(&*h.deliver(a, b"x"), [Request::Bounced { client: a.client, bounce: Bounce::Ending }]);
+    assert_eq!(
+        &*h.deliver(a, b"x"),
+        [Request::Bounced { name: Token::new(2), client: a.client, bounce: Bounce::Ending }]
+    );
     assert_eq!(&*h.finish(a), [finished(a), read(a)]);
     assert!(h.step(Event::Hangup { owner: a.agent }).is_empty());
     assert_eq!(&*h.step(Event::Reaped { owner: a.agent, detail: bytes(b"") }), [gone(a, b"")]);
@@ -835,7 +852,10 @@ fn a_cancelled_run_past_the_grace_is_terminated_then_killed() {
     assert_eq!(&*h.stop(a), [], "a stop changes nothing");
     assert!(h.answer(a, 1, Reply::Busy).is_empty(), "an answer is dropped");
     assert_eq!(&*h.say(a, Up::Waiting { heard: 0 }), [read(a)], "what it says is dropped");
-    assert_eq!(&*h.deliver(a, b"x"), [Request::Bounced { client: a.client, bounce: Bounce::Ending }]);
+    assert_eq!(
+        &*h.deliver(a, b"x"),
+        [Request::Bounced { name: Token::new(2), client: a.client, bounce: Bounce::Ending }]
+    );
     assert!(h.step(Event::Malformed { owner: a.agent }).is_empty());
     assert!(h.step(Event::Exited { owner: a.agent }).is_empty());
     assert!(h.step(Event::Reaped { owner: a.agent, detail: bytes(b"") }).is_empty(), "signals in flight");
@@ -860,7 +880,10 @@ fn a_cancelled_run_that_hangs_up_or_exits_is_waited_for() {
     let a = h.live(1);
     h.stop(a);
     assert!(h.step(Event::Hangup { owner: a.agent }).is_empty(), "no fault after a stop");
-    assert_eq!(&*h.deliver(a, b"x"), [Request::Bounced { client: a.client, bounce: Bounce::Ending }]);
+    assert_eq!(
+        &*h.deliver(a, b"x"),
+        [Request::Bounced { name: Token::new(2), client: a.client, bounce: Bounce::Ending }]
+    );
     assert_eq!(&*h.fire_at(5), [signal(a, Signal::Terminate)]);
 
     let b = h.live(2);
@@ -885,7 +908,10 @@ fn anything_after_the_finish_breaks_the_rules() {
     let mut h = Harness::new(LIMITS);
     let a = h.live(1);
     h.exiting(a);
-    assert_eq!(&*h.deliver(a, b"x"), [Request::Bounced { client: a.client, bounce: Bounce::Ending }]);
+    assert_eq!(
+        &*h.deliver(a, b"x"),
+        [Request::Bounced { name: Token::new(2), client: a.client, bounce: Bounce::Ending }]
+    );
     let emitted = h.say(a, Up::Fact { fact: bytes(b"more") });
     assert_eq!(&*emitted, [signal(a, Signal::Terminate), read(a)], "terminated, the fault untold");
     let b = h.live(2);
@@ -977,4 +1003,70 @@ fn push_diagnostics_keep_the_allowed_tail_and_count_omitted_bytes() {
             [send(a, Down::Answer { call: Token::new(1), reply: Reply::Pushed(Push::Failed { failure: expected }) })]
         );
     }
+}
+
+fn event_name(event: &[u8]) -> Token {
+    let name = if event == b"two" || event.first() == Some(&b'x') {
+        2
+    } else if event == b"three" || event == b"y" {
+        3
+    } else if event == b"four" {
+        4
+    } else {
+        1
+    };
+    Token::new(name)
+}
+
+#[test]
+fn waiting_names_are_opaque_and_bounces_echo_the_record() {
+    let mut h = Harness::new(LIMITS);
+    let a = h.live(1);
+    let name = Token::new(9001);
+    let message = Event::Deliver { agent: a.agent, name, event: bytes(b"one") };
+    assert_eq!(&*h.step(message), [send(a, Down::Event { name, event: bytes(b"one") })]);
+    h.sent(a);
+    assert_eq!(&*h.say(a, Up::Waiting { heard: name.raw() }), [Request::Waiting { client: a.client }, read(a)]);
+    assert_eq!(h.domain.next_deadline(), Some(secs(100)));
+    let missing = Token::new(4);
+    let broken = h.say(a, Up::Waiting { heard: missing.raw() });
+    assert_eq!(&*broken, [faulted(a, Fault::Rules), signal(a, Signal::Terminate), read(a)]);
+    assert_eq!(
+        &*h.step(Event::Deliver { agent: a.agent, name: missing, event: bytes(b"one") }),
+        [Request::Bounced { client: a.client, name: missing, bounce: Bounce::Ending }]
+    );
+}
+
+#[test]
+fn grant_refreshes_coalesce_without_displacing_inbound_or_answers() {
+    let mut h = Harness::new(LIMITS);
+    let initial = crate::channel::Grant { account: 7, generation: 1, valid: Duration::from_secs(60) };
+    let spawn = Spawn {
+        workspace: Token::new(100),
+        charter: bytes(b"charter"),
+        snapshot: None,
+        repositories: Box::new([]),
+        grants: Box::new([initial]),
+    };
+    let emitted = h.step(Event::Spawn { client: Token::new(1), spawn });
+    let [Request::Spawn { owner, .. }] = &*emitted else {
+        panic!("spawn");
+    };
+    let a = Names { client: Token::new(1), agent: *owner, process: Token::new(200) };
+    h.step(Event::Spawned { owner: a.agent, process: a.process });
+    let newer = crate::channel::Grant { generation: 2, ..initial };
+    let newest = crate::channel::Grant { generation: 3, ..initial };
+    assert!(h.step(Event::Grant { agent: a.agent, grant: newer }).is_empty());
+    assert!(h.step(Event::Grant { agent: a.agent, grant: newest }).is_empty());
+    assert_eq!(&*h.sent(a), [send(a, Down::Grant { grant: newest })]);
+    assert!(h.sent(a).is_empty());
+    assert_eq!(
+        &*h.say(a, Up::Rejected { account: 7, generation: 3 }),
+        [Request::Rejected { client: a.client, account: 7, generation: 3 }, read(a)]
+    );
+    let retry_after = Duration::from_secs(5);
+    assert_eq!(
+        &*h.say(a, Up::Exhausted { account: 7, retry_after }),
+        [Request::Exhausted { client: a.client, account: 7, retry_after }, read(a)]
+    );
 }

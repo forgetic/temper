@@ -73,9 +73,13 @@ pub(crate) fn event(domain: &mut Domain, env: &Env<Limits>, event: Event) {
             domain.link.heard();
             return domain.link.acknowledged(run, attempt);
         }
-        Event::Inbound { run, attempt, event } => {
+        Event::Inbound { run, attempt, name, event } => {
             domain.link.heard();
-            return host_step(domain, env, host::Event::Inbound { run, attempt, event });
+            return host_step(domain, env, host::Event::Inbound { run, attempt, name, event });
+        }
+        Event::Grant { run, attempt, grant } => {
+            domain.link.heard();
+            return host_step(domain, env, host::Event::Grant { run, attempt, grant });
         }
         Event::Cancel { run, attempt } => {
             domain.link.heard();
@@ -162,16 +166,16 @@ fn from_host(domain: &mut Domain, env: &Env<Limits>, request: host::Request, out
             }
             return out.push(Request::CancelRelay { call });
         }
-        host::Request::Bounced { run, attempt, bounce } => {
-            return domain.link.bounce(Bounced { run, attempt, bounce }, out);
+        host::Request::Bounced { run, attempt, name, bounce } => {
+            return domain.link.bounce(Bounced { run, attempt, name, bounce }, out);
         }
         host::Request::Hosting { runs } => {
             return domain.link.hello(&runs, &domain.host, &domain.checkout, &env.limits, out);
         }
         host::Request::Prepare { owner, workspace } => return workspace::prepare(domain, env, owner, workspace),
         host::Request::Abort { owner } => return workspace::abort(domain, env, owner),
-        host::Request::Start { owner, workspace, charter, snapshot } => {
-            return workspace::start(domain, env, owner, workspace, charter, snapshot);
+        host::Request::Start { owner, workspace, charter, snapshot, grants } => {
+            return workspace::start(domain, env, owner, workspace, charter, snapshot, grants);
         }
         host::Request::Push { owner, workspace, message } => {
             return workspace::write(domain, env, owner, workspace, Write::Push { message });
@@ -180,10 +184,11 @@ fn from_host(domain: &mut Domain, env: &Env<Limits>, request: host::Request, out
             return workspace::write(domain, env, owner, workspace, Write::Save { branch });
         }
         host::Request::Release { workspace } => return workspace::release(domain, env, workspace),
-        host::Request::Deliver { agent, event } => agent::Event::Deliver { agent, event },
+        host::Request::Deliver { agent, name, event } => agent::Event::Deliver { agent, name, event },
         host::Request::Reply { agent, call, reply } => {
             agent::Event::Answer { agent, call, reply: translate::reply(reply) }
         }
+        host::Request::Grant { agent, grant } => agent::Event::Grant { agent, grant: channel_grant(grant) },
         host::Request::Stop { agent } => agent::Event::Stop { agent },
     };
     agent_step(domain, env, event);
@@ -216,6 +221,18 @@ fn from_agent(domain: &mut Domain, env: &Env<Limits>, request: agent::Request, o
         }
         agent::Request::Wait { owner, process } => return out.push(Request::Wait { owner, process }),
         agent::Request::Reap { owner, process } => return out.push(Request::Reap { owner, process }),
+        agent::Request::Rejected { client, account, generation } => {
+            if let Some(hosting) = domain.host.hosting(client) {
+                out.push(Request::Rejected { run: hosting.run, attempt: hosting.attempt, account, generation });
+            }
+            return;
+        }
+        agent::Request::Exhausted { client, account, retry_after } => {
+            if let Some(hosting) = domain.host.hosting(client) {
+                out.push(Request::Exhausted { run: hosting.run, attempt: hosting.attempt, account, retry_after });
+            }
+            return;
+        }
         agent::Request::Told { client, fact } => return domain::tell(domain, client, fact),
         agent::Request::Started { client, agent } => host::Event::Started { owner: client, agent },
         agent::Request::Called { client, call, ask } => {
@@ -229,12 +246,16 @@ fn from_agent(domain: &mut Domain, env: &Env<Limits>, request: agent::Request, o
         agent::Request::Faulted { client, fault } => {
             host::Event::Faulted { owner: client, fault: translate::fault(fault) }
         }
-        agent::Request::Bounced { client, bounce } => {
-            host::Event::Bounced { owner: client, bounce: translate::bounce(bounce) }
+        agent::Request::Bounced { client, name, bounce } => {
+            host::Event::Bounced { owner: client, name, bounce: translate::bounce(bounce) }
         }
         // However it went (refused at the entrance, which the limits rule
         // out, unspawned, or stopped), the agent has gone.
         agent::Request::Gone { client, end: _, detail } => host::Event::Gone { owner: client, detail },
     };
     host_step(domain, env, event);
+}
+
+pub(crate) const fn channel_grant(grant: host::Grant) -> agent::channel::Grant {
+    agent::channel::Grant { account: grant.account, generation: grant.generation, valid: grant.valid }
 }

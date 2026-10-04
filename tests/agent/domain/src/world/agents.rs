@@ -66,7 +66,8 @@ impl Process {
                 self.run.as_mut().expect("a cancel is for a run started").cancelled = true;
                 *cancels += 1;
             }
-            Event::Pushed { .. }
+            Event::Grant { .. }
+            | Event::Pushed { .. }
             | Event::HostCancelled { .. }
             | Event::Completed { .. }
             | Event::Failed { .. }
@@ -216,6 +217,8 @@ impl World {
             }
             Request::CancelHost { .. } => self.stats.host_cancels += 1,
             Request::Complete { .. }
+            | Request::Rejected { .. }
+            | Request::Exhausted { .. }
             | Request::Cancel { .. }
             | Request::Io { .. }
             | Request::CancelIo { .. }
@@ -242,7 +245,7 @@ impl World {
     /// What the agent of `process` asks of the provider and of io.
     fn below(&mut self, id: u64, request: Request) {
         match request {
-            Request::Complete { owner, prompt, timeout } => {
+            Request::Complete { owner, prompt, timeout, grant: _ } => {
                 let call = self.wire.name();
                 let deadline = self.schedule(self.now.saturating_add(timeout), Delivery::Deadline { call });
                 self.calls_out.open(call, Call { owner: (id, owner), deadline });
@@ -253,6 +256,7 @@ impl World {
                 self.send(Delivery::Query { call, query });
                 self.stats.calls += 1;
             }
+            Request::Rejected { .. } | Request::Exhausted { .. } => {}
             Request::Cancel { owner } => {
                 // A call that has already ended has its terminal event on the
                 // way: the cancel lost the race and changes nothing. One still
@@ -744,7 +748,8 @@ impl World {
                         | run::Returned::Refused { .. } => self.stats.served += 1,
                     }
                 }
-                agent::llm::Block::Text { .. }
+                agent::llm::Block::Opaque { .. }
+                | agent::llm::Block::Text { .. }
                 | agent::llm::Block::ToolCall { .. }
                 | agent::llm::Block::ToolResult { .. } => {}
             }
@@ -804,7 +809,8 @@ fn used(state: &mut super::Run, live: u32, usage: session::llm::Usage) {
 fn is_start(event: &Event) -> bool {
     match event {
         Event::Start { .. } => true,
-        Event::Cancel { .. }
+        Event::Grant { .. }
+        | Event::Cancel { .. }
         | Event::Pushed { .. }
         | Event::HostCancelled { .. }
         | Event::Completed { .. }
@@ -827,6 +833,8 @@ fn admitted(request: &Request) -> Option<Token> {
         | Request::Push { .. }
         | Request::CancelHost { .. }
         | Request::Complete { .. }
+        | Request::Rejected { .. }
+        | Request::Exhausted { .. }
         | Request::Cancel { .. }
         | Request::Io { .. }
         | Request::CancelIo { .. }
@@ -907,6 +915,7 @@ fn text(content: &[u8], max: u32) -> run::Read {
 fn describe_event(event: &Event) -> String {
     match event {
         Event::Start { worker, charter, .. } => format!("start {} {:?}", worker.raw(), charter.grants.tools),
+        Event::Grant { grant } => format!("grant {:?}", grant.name),
         Event::Cancel { run } => format!("cancel {}", run.raw()),
         Event::Pushed { owner, push } => format!("pushed {} {push:?}", owner.raw()),
         Event::HostCancelled { owner } => format!("host cancelled {}", owner.raw()),
@@ -936,6 +945,8 @@ fn describe_request(request: &Request) -> String {
         Request::Complete { owner, prompt, .. } => {
             format!("complete {} with {} messages, {} served", owner.raw(), prompt.messages.len(), prompt.served.len())
         }
+        Request::Rejected { grant } => format!("rejected {grant:?}"),
+        Request::Exhausted { account, retry_after } => format!("exhausted {account} {retry_after:?}"),
         Request::Cancel { owner } => format!("cancel {}", owner.raw()),
         Request::Io { owner, op, .. } => format!("io {} {}", owner.raw(), op_kind(op)),
         Request::CancelIo { owner } => format!("cancel io {}", owner.raw()),

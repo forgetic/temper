@@ -31,6 +31,10 @@ pub enum Role {
 /// A piece of a message. Text is UTF-8, checked by the protocol layer.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Block {
+    /// Provider-owned reasoning, preserved in position and replayed verbatim.
+    Opaque {
+        bytes: Box<[u8]>,
+    },
     Text {
         text: Box<[u8]>,
     },
@@ -210,4 +214,6 @@ pub enum Failure {
     Invalid,
     /// The provider refused our credentials (HTTP 401, 403).
     Unauthorized,
+    /// The account has spent its allowance; the engine waits for its reset.
+    Exhausted { retry_after: Duration },
 }

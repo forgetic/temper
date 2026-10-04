@@ -17,6 +17,9 @@ use crate::boundary::Item;
 /// Something that happened in a child domain, or at the top level.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Fact {
+    Accounts {
+        fact: crate::accounts::Fact,
+    },
     Work {
         fact: work::Fact,
     },

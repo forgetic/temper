@@ -65,6 +65,9 @@ pub struct Limits {
 pub fn worst_case(limits: &Limits) -> Option<u64> {
     let Limits { host: host_limits, checkout: checkout_limits, agent: agent_limits, .. } = limits;
     let fits = host_limits.repositories <= checkout_limits.repositories
+        && host_limits.repositories <= agent_limits.repositories
+        && host_limits.name_bytes <= agent_limits.name_bytes
+        && host_limits.accounts <= agent_limits.accounts
         && host_limits.name_bytes <= checkout_limits.name_bytes
         && host_limits.slots <= checkout_limits.workspaces
         && host_limits.slots <= agent_limits.agents
@@ -85,8 +88,18 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_add(checkout::worst_case(checkout_limits)?)?
         .checked_add(agent::worst_case(agent_limits)?)?;
     let slots = host_limits.slots;
-    let workspaces =
-        Slab::<Workspace>::worst_case(slots)?.checked_add(Map::<Token, Id<Workspace>>::worst_case(slots)?)?;
+    let workspaces = Slab::<Workspace>::worst_case(slots)?
+        .checked_add(Map::<Token, Id<Workspace>>::worst_case(slots)?)?
+        .checked_add(
+            u64::from(slots).checked_mul(
+                u64::from(host_limits.repositories).checked_mul(
+                    u64::try_from(size_of::<agent::channel::Repository>())
+                        .ok()?
+                        .checked_add(4)?
+                        .checked_add(u64::from(host_limits.name_bytes))?,
+                )?,
+            )?,
+        )?;
     let alarms = Deadlines::<Alarm>::worst_case(ALARMS)?;
     // An answer holds the outcome, the snapshot or the detail of a failure,
     // and the run's work: the repositories it landed in, and its save.

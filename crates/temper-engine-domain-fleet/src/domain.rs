@@ -153,15 +153,38 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
         Event::Inbound { run, attempt, event } => call::inbound(domain, run, attempt, event, out),
         Event::Relayed { to, answer } => call::relayed(domain, to, answer, out),
         Event::Acknowledge { run, attempt } => attempt::acknowledge(domain, run, attempt, out),
+        Event::Grant { run, attempt, grant } => call::grant(domain, run, attempt, grant, out),
+        Event::Rejected { channel, run, attempt, account, generation } => {
+            call::credential_notice(
+                domain,
+                channel,
+                run,
+                attempt,
+                Request::Rejected { run, attempt, account, generation },
+                out,
+            );
+        }
+        Event::Exhausted { channel, run, attempt, account, retry_after } => call::credential_notice(
+            domain,
+            channel,
+            run,
+            attempt,
+            Request::Exhausted { run, attempt, account, retry_after },
+            out,
+        ),
         Event::Loaded => attempt::loaded(domain, env),
         Event::Hello { channel, hello } => channel::hello(domain, env, channel, hello, out),
         Event::Lost { channel } => channel::lost(domain, env, channel),
         Event::Answer { channel, run, attempt, answer, payload } => {
             attempt::answer(domain, channel, run, attempt, answer, payload, out);
         }
-        Event::Relay { run, attempt, call, body } => call::relay(domain, run, attempt, call, body, out),
-        Event::Bounced { run, attempt, bounce } => call::bounced(domain, run, attempt, bounce, out),
-        Event::Told { run, attempt, fact } => call::told(domain, run, attempt, fact, out),
+        Event::Relay { channel, run, attempt, call, body } => {
+            call::relay(domain, channel, run, attempt, call, body, out);
+        }
+        Event::Bounced { channel, run, attempt, name, bounce } => {
+            call::bounced(domain, channel, run, attempt, name, bounce, out);
+        }
+        Event::Told { channel, run, attempt, fact } => call::told(domain, channel, run, attempt, fact, out),
     }
 }
 

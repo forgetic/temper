@@ -17,6 +17,11 @@ use temper_engine_domain_views::Policy;
 /// A deployment's configuration, handed to [`crate::Domain::new`].
 #[derive(Debug)]
 pub struct Config {
+    /// Startup metadata; values are owned by the protocol credential table.
+    pub accounts: Box<[Account]>,
+    /// Endpoint index to LLM account, repository index to static git account.
+    pub endpoints: Box<[u32]>,
+    pub identities: Box<[u32]>,
     /// The deployment's repositories, by their place in its list: what
     /// changes may land into in each, and the templates (the plan's).
     pub plan: plan::Config,
@@ -29,7 +34,7 @@ pub struct Config {
     /// What a session opened from the web, or handed in, carries.
     pub session: plan::SessionSpec,
     /// The models a run's charter names, as the agent takes them.
-    pub models: Box<[u8]>,
+    pub models: Box<[crate::Model]>,
     /// What a run's trace keeps of what it reports.
     pub policy: Policy,
     /// The branch an item's change is pushed to is this, then the item's
@@ -55,4 +60,12 @@ impl Config {
             gates: Box::new([]),
         }
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Account {
+    pub account: u32,
+    pub generation: u64,
+    /// Remaining validity at the `now` handed to [`crate::Domain::new`].
+    pub valid: Option<skein_lib::Duration>,
 }

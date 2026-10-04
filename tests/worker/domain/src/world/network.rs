@@ -176,7 +176,11 @@ impl World {
                     | engine::Event::Ask { .. }
                     | engine::Event::Unwatch { .. }
                     | engine::Event::Delivered { .. }
-                    | engine::Event::Stored { .. } => &[],
+                    | engine::Event::Stored { .. }
+                    | engine::Event::Refreshed { .. }
+                    | engine::Event::RefreshFailed { .. }
+                    | engine::Event::Rejected { .. }
+                    | engine::Event::Exhausted { .. } => &[],
                 };
                 let at = self.frame(Lane::Up);
                 let copy = self.moment(moments).map(|moment| (moment, copy(&event)));
@@ -311,7 +315,11 @@ impl World {
             | engine::Event::Ask { .. }
             | engine::Event::Unwatch { .. }
             | engine::Event::Delivered { .. }
-            | engine::Event::Stored { .. } => unreachable!("only the worker's words go up the channel"),
+            | engine::Event::Stored { .. }
+            | engine::Event::Refreshed { .. }
+            | engine::Event::RefreshFailed { .. }
+            | engine::Event::Rejected { .. }
+            | engine::Event::Exhausted { .. } => unreachable!("only the worker's words go up the channel"),
         }
     }
 
@@ -366,7 +374,11 @@ impl World {
                     | engine::Event::Ask { .. }
                     | engine::Event::Unwatch { .. }
                     | engine::Event::Delivered { .. }
-                    | engine::Event::Stored { .. } => unreachable!("only the worker's words go up the channel"),
+                    | engine::Event::Stored { .. }
+                    | engine::Event::Refreshed { .. }
+                    | engine::Event::RefreshFailed { .. }
+                    | engine::Event::Rejected { .. }
+                    | engine::Event::Exhausted { .. } => unreachable!("only the worker's words go up the channel"),
                 };
                 self.hosting.assert_holding(self.settings.seed);
                 self.stories.assert_holding(self.settings.seed);
@@ -427,7 +439,9 @@ impl World {
                     Event::Relayed { run, attempt, .. } => {
                         &[Moment::Now, Moment::Behind, Moment::Answered((*run, *attempt))]
                     }
-                    Event::Inbound { run, attempt, .. } => &[Moment::Answered((*run, *attempt))],
+                    Event::Inbound { run, attempt, .. } | Event::Grant { run, attempt, .. } => {
+                        &[Moment::Answered((*run, *attempt))]
+                    }
                     Event::RelayCancelled { .. }
                     | Event::Connected
                     | Event::Lost
@@ -452,6 +466,7 @@ impl World {
                     | Event::Cancel { .. }
                     | Event::Relayed { .. }
                     | Event::Inbound { .. }
+                    | Event::Grant { .. }
                     | Event::RelayCancelled { .. }
                     | Event::Connected
                     | Event::Lost
@@ -514,7 +529,7 @@ impl World {
         let (kind, names) = match event {
             Event::Cancel { run, attempt } => ("cancel", (*run, *attempt)),
             Event::Relayed { run, attempt, .. } => ("relayed", (*run, *attempt)),
-            Event::Inbound { run, attempt, .. } => ("inbound", (*run, *attempt)),
+            Event::Inbound { run, attempt, .. } | Event::Grant { run, attempt, .. } => ("inbound", (*run, *attempt)),
             Event::Acknowledged { .. } | Event::Assign { .. } => return,
             Event::RelayCancelled { .. }
             | Event::Connected
@@ -553,9 +568,13 @@ fn copy(event: &engine::Event) -> engine::Event {
         engine::Event::Answer { channel, item, attempt, answer } => {
             engine::Event::Answer { channel: *channel, item: *item, attempt: *attempt, answer: answer.clone() }
         }
-        engine::Event::Told { item, attempt, kind, content } => {
-            engine::Event::Told { item: *item, attempt: *attempt, kind: *kind, content: content.clone() }
-        }
+        engine::Event::Told { channel, item, attempt, kind, content } => engine::Event::Told {
+            channel: *channel,
+            item: *item,
+            attempt: *attempt,
+            kind: *kind,
+            content: content.clone(),
+        },
         engine::Event::Hello { .. }
         | engine::Event::Relay { .. }
         | engine::Event::Bounced { .. }
@@ -565,7 +584,11 @@ fn copy(event: &engine::Event) -> engine::Event {
         | engine::Event::Ask { .. }
         | engine::Event::Unwatch { .. }
         | engine::Event::Delivered { .. }
-        | engine::Event::Stored { .. } => unreachable!("only what is taken again is sent again"),
+        | engine::Event::Stored { .. }
+        | engine::Event::Refreshed { .. }
+        | engine::Event::RefreshFailed { .. }
+        | engine::Event::Rejected { .. }
+        | engine::Event::Exhausted { .. } => unreachable!("only what is taken again is sent again"),
     }
 }
 
@@ -573,12 +596,15 @@ fn copy(event: &engine::Event) -> engine::Event {
 fn copy_down(event: &Event) -> Event {
     match event {
         Event::Acknowledged { run, attempt } => Event::Acknowledged { run: *run, attempt: *attempt },
+        Event::Grant { run, attempt, grant } => Event::Grant { run: *run, attempt: *attempt, grant: *grant },
         Event::Cancel { run, attempt } => Event::Cancel { run: *run, attempt: *attempt },
         Event::Relayed { run, attempt, call, answer } => {
             Event::Relayed { run: *run, attempt: *attempt, call: *call, answer: answer.clone() }
         }
         Event::Assign { assignment } => Event::Assign { assignment: copy_assignment(assignment) },
-        Event::Inbound { run, attempt, event } => Event::Inbound { run: *run, attempt: *attempt, event: event.clone() },
+        Event::Inbound { name, run, attempt, event } => {
+            Event::Inbound { name: *name, run: *run, attempt: *attempt, event: event.clone() }
+        }
         Event::RelayCancelled { .. }
         | Event::Connected
         | Event::Lost
@@ -600,6 +626,7 @@ fn copy_down(event: &Event) -> Event {
 /// A copy of an assignment, as the engine's protocol layer sends it again.
 fn copy_assignment(assignment: &host::Assignment) -> host::Assignment {
     let repositories = assignment.workspace.repositories.iter().map(|repository| host::Repository {
+        tag: repository.tag,
         name: repository.name.clone(),
         remote: repository.remote.clone(),
         start: match &repository.start {
@@ -612,7 +639,7 @@ fn copy_assignment(assignment: &host::Assignment) -> host::Assignment {
             host::Access::Writable { push } => host::Access::Writable { push: push.clone() },
             host::Access::ReadOnly => host::Access::ReadOnly,
         },
-        identity: repository.identity.clone(),
+        identity: repository.identity,
     });
     host::Assignment {
         run: assignment.run,
@@ -621,5 +648,6 @@ fn copy_assignment(assignment: &host::Assignment) -> host::Assignment {
         save: assignment.save.clone(),
         charter: assignment.charter.clone(),
         snapshot: assignment.snapshot.clone(),
+        grants: assignment.grants.clone(),
     }
 }

@@ -65,6 +65,8 @@ const CEILING: session::Budget = session::Budget {
 /// carries, with a few conversations, sub-agents nested two deep beneath
 /// main.
 pub const LIMITS: Limits = Limits {
+    accounts: 4,
+    skew: Duration::ZERO,
     run: run::Limits {
         runs: 1,
         conversations: 6,
@@ -127,6 +129,8 @@ pub const LIMITS: Limits = Limits {
 /// An agent process's limits in random worlds: room for fewer conversations,
 /// sessions and calls than its run may ask for, so that some are refused.
 pub const TIGHT: Limits = Limits {
+    accounts: LIMITS.accounts,
+    skew: LIMITS.skew,
     run: run::Limits {
         conversations: 4,
         calls: 6,
@@ -154,6 +158,7 @@ pub const TIGHT: Limits = Limits {
 /// agent's run takes, and a watchdog no run of the scripts trips.
 pub const WORKER: worker::Limits = worker::Limits {
     host: host::Limits {
+        accounts: 4,
         slots: 3,
         repositories: 2,
         name_bytes: 32,
@@ -176,6 +181,9 @@ pub const WORKER: worker::Limits = worker::Limits {
         facts: 256,
     },
     agent: worker::agent::Limits {
+        repositories: 2,
+        name_bytes: 32,
+        accounts: 4,
         agents: 3,
         charter_bytes: 2048,
         snapshot_bytes: 64,
@@ -212,6 +220,7 @@ pub const CALM: Budget = Budget { tokens: 1 << 20, turns: 64, time: Duration::fr
 /// The engine's limits: the engine world's, with room for what an agent's run
 /// may ask, and few rebases of a change.
 pub const ENGINE: engine::Limits = engine::Limits {
+    models_bytes: 128,
     plan: engine::plan::Limits { budget: MOST, rebases: 2, ..deployment::LIMITS.plan },
     ..deployment::LIMITS
 };
@@ -221,7 +230,13 @@ pub const ENGINE: engine::Limits = engine::Limits {
 #[must_use]
 pub fn config() -> engine::Config {
     let mut config = deployment::config();
-    config.models = b"fake-1 fake-2 fake-3".as_slice().into();
+    config.models = [b"fake-1", b"fake-2", b"fake-3"]
+        .map(|name| engine::Model {
+            endpoint: 0,
+            model: name.as_slice().into(),
+            max_tokens: crate::channel::MAX_TOKENS,
+        })
+        .into();
     config.rules.run_spend = MOST.tokens;
     config
 }
@@ -1302,8 +1317,10 @@ impl World {
             self.stats.worker_facts += 1;
         }
         while let Some(told) = self.worker.pop_told() {
-            let event = crate::protocol::told(told);
-            self.send_up(event);
+            if let Some(channel) = self.channel {
+                let event = crate::protocol::told(channel, told);
+                self.send_up(event);
+            }
         }
         let live: Vec<u64> =
             self.processes.iter().filter(|(_, process)| process.agent.is_some()).map(|(id, _)| *id).collect();

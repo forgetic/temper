@@ -12,32 +12,20 @@
 use skein_lib::Token;
 use temper_engine_domain::Item;
 
-/// The channel's name for the item's run.
+/// The checked production name, asserted for the world's admitted items.
 #[must_use]
 pub fn run(item: Item) -> Token {
-    assert!(item.number < 1 << 24, "an item's number fits its place in a name");
-    Token::new(u64::from(item.repository) << 32 | item.number)
+    temper_engine_protocol::names::run(item).expect("the world's item fits v1")
 }
-
-/// The item whose run the channel names `run`.
 #[must_use]
 pub fn item(run: Token) -> Item {
-    let raw = run.raw();
-    Item { repository: u32::try_from(raw >> 32).expect("a repository's index"), number: raw & 0xFFFF_FFFF }
+    temper_engine_protocol::names::item(run).expect("the world's run name fits v1")
 }
-
-/// The channel's name for the item's attempt `attempt`.
 #[must_use]
-pub fn attempt(item: Item, attempt: u64) -> Token {
-    assert!(item.repository < 1 << 8 && item.number < 1 << 24, "an item fits its place in a name");
-    assert!(attempt < 1 << 32, "an attempt's count fits its place in a name");
-    Token::new(u64::from(item.repository) << 56 | item.number << 32 | attempt)
+pub fn attempt(item: Item, count: u64) -> Token {
+    temper_engine_protocol::names::attempt(item, count).expect("the world's attempt fits v1")
 }
-
-/// The item and the attempt's count an attempt's name stands for.
 #[must_use]
 pub fn attempt_of(attempt: Token) -> (Item, u64) {
-    let raw = attempt.raw();
-    let repository = u32::try_from(raw >> 56).expect("a byte");
-    (Item { repository, number: (raw >> 32) & 0xFF_FFFF }, raw & 0xFFFF_FFFF)
+    temper_engine_protocol::names::attempt_of(attempt)
 }

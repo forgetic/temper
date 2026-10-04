@@ -2,7 +2,8 @@ use skein_lib::{Id, Map, Queue, Set, Slab, Token};
 use temper_agent_domain_run::{self as run, Ask};
 use temper_agent_domain_session as session;
 
-use crate::domain::{Flight, Handoff};
+use crate::GrantName;
+use crate::domain::{Credential, Flight, Handoff};
 use crate::facts::Fact;
 use crate::peer::{self, Peer};
 
@@ -11,6 +12,8 @@ use crate::peer::{self, Peer};
 /// its tools'.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Limits {
+    pub accounts: u32,
+    pub skew: skein_lib::Duration,
     pub run: run::Limits,
     pub session: session::Limits,
 }
@@ -37,7 +40,7 @@ pub struct Limits {
 /// requests own is counted where they end up.
 #[must_use]
 pub fn worst_case(limits: &Limits) -> Option<u64> {
-    let Limits { run: run_limits, session: session_limits } = limits;
+    let Limits { run: run_limits, session: session_limits, accounts: _, skew: _ } = limits;
     let budget = run_limits.budget;
     let ceiling = session_limits.budget;
     let fits = budget.turns <= ceiling.turns
@@ -61,11 +64,16 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_add(uncharged(limits)?)?;
     let held = Slab::<Peer>::worst_case(peers)?.checked_add(u64::from(peers).checked_mul(tickets)?)?;
     let found = Map::<Token, Id<Peer>>::worst_case(peers)?.checked_mul(2)?;
-    let flights = Map::<Token, Flight>::worst_case(flights(limits)?)?;
+    let flights = Map::<Token, Flight>::worst_case(flights(limits)?)?
+        .checked_add(Map::<u32, Credential>::worst_case(limits.accounts)?)?
+        .checked_add(Map::<Token, GrantName>::worst_case(run_limits.conversations)?)?
+        .checked_add(Queue::<crate::Request>::worst_case(1)?)?;
     let ready = Set::<Handoff>::worst_case(handoffs(limits)?)?.checked_mul(2)?;
     let run_out = Queue::<run::Request>::worst_case(run_out(limits))?;
     let session_out = Queue::<session::Request>::worst_case(session_out(limits))?;
     let facts = Queue::<Fact>::worst_case(facts(limits)?)?;
+    let content = Queue::<crate::Content>::worst_case(limits.session.facts)?
+        .checked_add(u64::from(limits.session.facts).checked_add(1)?.checked_mul(limits.session.session_bytes)?)?;
     children
         .checked_add(held)?
         .checked_add(found)?
@@ -73,7 +81,8 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_add(ready)?
         .checked_add(run_out)?
         .checked_add(session_out)?
-        .checked_add(facts)
+        .checked_add(facts)?
+        .checked_add(content)
 }
 
 /// What a peer holds of the run's answers that its session has not charged

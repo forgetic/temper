@@ -113,10 +113,21 @@ impl World {
             worker::Request::Relay { .. } | worker::Request::CancelRelay { .. } => {
                 unreachable!("the agent's run relays no calls")
             }
-            worker::Request::Bounced { run: _, attempt, bounce } => {
+            worker::Request::Bounced { run: _, attempt, name, bounce } => {
                 let (item, attempt) = protocol::attempt_of(attempt);
                 let bounce = protocol::bounce(bounce);
-                self.send_up(engine::Event::Bounced { item, attempt, bounce });
+                let channel = self.channel.expect("a bounce goes on an open channel");
+                self.send_up(engine::Event::Bounced { channel, name, item, attempt, bounce });
+            }
+            worker::Request::Rejected { run: _, attempt, account, generation } => {
+                let (item, attempt) = protocol::attempt_of(attempt);
+                let channel = self.channel.expect("a credential notice goes on an open channel");
+                self.send_up(engine::Event::Rejected { channel, item, attempt, account, generation });
+            }
+            worker::Request::Exhausted { run: _, attempt, account, retry_after } => {
+                let (item, attempt) = protocol::attempt_of(attempt);
+                let channel = self.channel.expect("a credential notice goes on an open channel");
+                self.send_up(engine::Event::Exhausted { channel, item, attempt, account, retry_after });
             }
             worker::Request::Spawn { owner, workspace, deadline } => self.spawn(owner, workspace, deadline),
             worker::Request::Send { owner, process, message } => {
@@ -220,20 +231,20 @@ impl World {
             return;
         }
         let message = match message {
-            Down::Start { charter, snapshot } => {
+            Down::Start { charter, snapshot, repositories, grants } => {
                 assert!(process.link.is_none(), "the start comes down first, once");
                 assert!(snapshot.is_none(), "the engine never parks a run of the agent's, so it never resumes one");
                 // The frame is the world's, which the protocol layer takes off.
                 let (attempt, charter) = protocol::unframed(&charter);
                 let charter: Box<[u8]> = charter.into();
                 self.start(id, attempt, &charter);
-                Down::Start { charter, snapshot }
+                Down::Start { charter, snapshot, repositories, grants }
             }
             Down::Answer { call, reply } => {
                 self.push_answered(id, call, &reply);
                 Down::Answer { call, reply }
             }
-            message @ (Down::Event { .. } | Down::Cancel) => message,
+            message @ (Down::Event { .. } | Down::Cancel | Down::Grant { .. }) => message,
         };
         self.processes.get_mut(&id).expect("looked up above").heard.push_back(message);
         self.worker_stage.push(worker::Event::Sent { owner });
@@ -564,7 +575,8 @@ impl World {
         let landed: Vec<(usize, u64)> = landed
             .iter()
             .map(|landed| {
-                let index = usize::try_from(landed.repository).expect("a small place");
+                let index =
+                    places.iter().position(|tag| *tag == landed.tag).expect("a landing echoes a repository tag");
                 (index, io::fake(Commit::new(landed.commit)))
             })
             .collect();
@@ -589,6 +601,8 @@ fn is_finish(message: &Up) -> bool {
         | Up::Fact { .. }
         | Up::Long { .. }
         | Up::LongDone
+        | Up::Rejected { .. }
+        | Up::Exhausted { .. }
         | Up::Waiting { .. } => false,
     }
 }
@@ -599,6 +613,7 @@ pub(super) fn describe_event(event: &worker::Event) -> String {
         worker::Event::Connected => "connected".to_owned(),
         worker::Event::Lost => "lost".to_owned(),
         worker::Event::Assign { assignment } => format!("assign {}", assignment.attempt.raw()),
+        worker::Event::Grant { attempt, grant, .. } => format!("grant {} for {}", grant.account, attempt.raw()),
         worker::Event::Inbound { attempt, .. } => format!("inbound for {}", attempt.raw()),
         worker::Event::Cancel { attempt, .. } => format!("cancel {}", attempt.raw()),
         worker::Event::Relayed { attempt, call, .. } => format!("relayed {} for {}", call.raw(), attempt.raw()),
@@ -628,6 +643,8 @@ fn describe_request(request: &worker::Request) -> String {
         }
         worker::Request::Relay { attempt, call, .. } => format!("relay {} for {}", call.raw(), attempt.raw()),
         worker::Request::CancelRelay { call } => format!("cancel relay {}", call.raw()),
+        worker::Request::Rejected { account, generation, .. } => format!("rejected {account} generation {generation}"),
+        worker::Request::Exhausted { account, .. } => format!("exhausted {account}"),
         worker::Request::Bounced { attempt, bounce, .. } => format!("bounced {bounce:?} for {}", attempt.raw()),
         worker::Request::Spawn { owner, workspace, .. } => format!("spawn {} in {}", owner.raw(), workspace.raw()),
         worker::Request::Send { owner, message, .. } => format!("send {} {}", owner.raw(), describe_down(message)),
@@ -643,8 +660,9 @@ fn describe_request(request: &worker::Request) -> String {
 fn describe_down(message: &Down) -> String {
     match message {
         Down::Start { charter, .. } => format!("start, {} bytes", charter.len()),
-        Down::Event { event } => format!("event, {} bytes", event.len()),
+        Down::Event { name: _, event } => format!("event, {} bytes", event.len()),
         Down::Answer { call, reply } => format!("answer {} {reply:?}", call.raw()),
+        Down::Grant { grant } => format!("grant {} generation {}", grant.account, grant.generation),
         Down::Cancel => "cancel".to_owned(),
     }
 }
@@ -656,6 +674,8 @@ fn describe_up(message: &Up) -> String {
         Up::Fact { fact } => format!("fact {}", String::from_utf8_lossy(fact)),
         Up::Long { span } => format!("long {span:?}"),
         Up::LongDone => "long done".to_owned(),
+        Up::Rejected { account, generation } => format!("rejected {account} generation {generation}"),
+        Up::Exhausted { account, .. } => format!("exhausted {account}"),
         Up::Waiting { heard } => format!("waiting, {heard} heard"),
         Up::Finish { finish } => match finish {
             worker::agent::channel::Finish::Ended { outcome } => format!("ended, {} bytes", outcome.len()),

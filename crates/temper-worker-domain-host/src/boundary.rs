@@ -41,7 +41,7 @@ use alloc::boxed::Box;
 
 use crate::push::PushFailure;
 
-use skein_lib::{ReplyTo, Token};
+use skein_lib::{Duration, ReplyTo, Token};
 
 /// parent -> host
 #[derive(PartialEq, Eq, Debug)]
@@ -49,22 +49,47 @@ pub enum Event {
     /// From the engine, a call: host the run of `assignment`, and answer once
     /// it has ended. A fresh call for an already hosted attempt is refused
     /// as busy; its parent deduplicates wire retransmissions before calling.
-    Assign { reply_to: ReplyTo, assignment: Assignment },
+    Assign {
+        reply_to: ReplyTo,
+        assignment: Assignment,
+    },
     /// From the engine: an inbound event for the run `run`'s attempt
     /// `attempt`, which goes down to the run as it arrives.
-    Inbound { run: Token, attempt: Token, event: Box<[u8]> },
+    Inbound {
+        run: Token,
+        attempt: Token,
+        name: Token,
+        event: Box<[u8]>,
+    },
     /// From the engine: cancel the run `run`'s attempt `attempt`.
-    Cancel { run: Token, attempt: Token },
+    Cancel {
+        run: Token,
+        attempt: Token,
+    },
+    Grant {
+        run: Token,
+        attempt: Token,
+        grant: Grant,
+    },
     /// From the engine: the answer to the relayed call `call` of the run
     /// `run`'s attempt `attempt`.
-    Relayed { run: Token, attempt: Token, call: Token, answer: Box<[u8]> },
+    Relayed {
+        run: Token,
+        attempt: Token,
+        call: Token,
+        answer: Box<[u8]>,
+    },
     /// Terminal for a cancelled relay: its local delivery and wait have ended.
-    RelayCancelled { call: Token },
+    RelayCancelled {
+        call: Token,
+    },
     /// From the top level: cancel every run hosted now, for `reason` (lost
     /// contact with the engine past its grace, or shutdown). The runs are
     /// cancelled one at a time, from the ready list. A worker shutting down
     /// admits no more runs: assignments after it are refused as busy.
-    CancelAll { reason: Reason },
+    CancelAll {
+        reason: Reason,
+    },
     /// From the top level: say what the host hosts, for the engine to keep or
     /// cancel on reconnecting.
     Report,
@@ -72,40 +97,80 @@ pub enum Event {
     /// acknowledged by the engine. Each keeps its run's slot until it is, so
     /// that the engine, which frees a slot once it has the answer, never finds
     /// a worker with more runs than slots.
-    Unacknowledged { answers: u32 },
+    Unacknowledged {
+        answers: u32,
+    },
     /// Terminal for `Prepare`: the workspace is ready, and `workspace` names it
     /// from now on.
-    Prepared { owner: Token, workspace: Token },
+    Prepared {
+        owner: Token,
+        workspace: Token,
+    },
     /// Terminal for `Prepare`: the workspace could not be prepared, and
     /// nothing of it is held.
-    Unprepared { owner: Token, failure: Preparation, detail: Box<[u8]> },
+    Unprepared {
+        owner: Token,
+        failure: Preparation,
+        detail: Box<[u8]>,
+    },
     /// The agent started, and `agent` names it from now on.
-    Started { owner: Token, agent: Token },
+    Started {
+        owner: Token,
+        agent: Token,
+    },
     /// A host call of the run, which the host answers with one `Reply`.
     /// `call` is the agent's name for it.
-    Called { owner: Token, call: Token, ask: Ask },
+    Called {
+        owner: Token,
+        call: Token,
+        ask: Ask,
+    },
     /// The run withdrew its host call `call`, its own deadline for it having
     /// passed. A relayed call is answered at once as withdrawn; a push goes
     /// on, and is answered with how it went. A call answered already is not
     /// in flight, and nothing happens.
-    Withdrawn { owner: Token, call: Token },
+    Withdrawn {
+        owner: Token,
+        call: Token,
+    },
     /// The agent could not take an inbound event for the run, for `bounce`.
-    Bounced { owner: Token, bounce: Bounce },
+    Bounced {
+        owner: Token,
+        name: Token,
+        bounce: Bounce,
+    },
     /// The run yielded: it waits for its next inbound event.
-    Yielded { owner: Token },
+    Yielded {
+        owner: Token,
+    },
     /// The run said how it finishes. Its agent exits next. Said as it winds
     /// down after a stop, it is still the run's answer.
-    Finished { owner: Token, finish: Finish },
+    Finished {
+        owner: Token,
+        finish: Finish,
+    },
     /// The agent child domain is stopping the agent for `fault`.
-    Faulted { owner: Token, fault: AgentFailure },
+    Faulted {
+        owner: Token,
+        fault: AgentFailure,
+    },
     /// Terminal for `Start`: the agent and everything it started are gone.
     /// `detail` is for operators, such as the tail of its error output.
-    Gone { owner: Token, detail: Box<[u8]> },
+    Gone {
+        owner: Token,
+        detail: Box<[u8]>,
+    },
     /// Terminal for `Push`: what became of each repository of the workspace,
     /// in the assignment's order.
-    Pushed { owner: Token, push: Box<[Landing]> },
+    Pushed {
+        owner: Token,
+        push: Box<[Landing]>,
+    },
     /// Terminal for `Save`: what became of each repository, as for a push.
-    Saved { owner: Token, save: Box<[Landing]> },
+    Saved {
+        owner: Token,
+        save: Box<[Landing]>,
+    },
 }
 
 /// host -> parent
@@ -113,48 +178,102 @@ pub enum Event {
 #[expect(clippy::large_enum_variant, reason = "bounded diagnostics stay inline and are included in worst_case")]
 pub enum Request {
     /// To the engine, the answer to an `Assign`: exactly one per assignment.
-    Answer { to: ReplyTo, run: Token, attempt: Token, answer: Answer },
+    Answer {
+        to: ReplyTo,
+        run: Token,
+        attempt: Token,
+        answer: Answer,
+    },
     /// To the engine: a host call of the run `run`'s attempt `attempt`, which
     /// the host names `call`, relayed as it is.
-    Relay { run: Token, attempt: Token, call: Token, body: Box<[u8]> },
+    Relay {
+        run: Token,
+        attempt: Token,
+        call: Token,
+        body: Box<[u8]>,
+    },
     /// Cancel the local delivery and wait of a relay. Exactly one terminal
     /// follows: `RelayCancelled`, or `Relayed` if its answer won. Remote
     /// effects are not rolled back.
-    CancelRelay { call: Token },
+    CancelRelay {
+        call: Token,
+    },
     /// To the engine: an inbound event for the run `run`'s attempt `attempt`
     /// was not passed on, for `bounce`.
-    Bounced { run: Token, attempt: Token, bounce: Bounce },
+    Bounced {
+        run: Token,
+        attempt: Token,
+        name: Token,
+        bounce: Bounce,
+    },
     /// To the top level, the answer to `Report`: every run hosted, in the
     /// order of the engine's names for them.
-    Hosting { runs: Box<[Hosting]> },
+    Hosting {
+        runs: Box<[Hosting]>,
+    },
     /// Prepare `workspace` for the hosted run `owner`.
-    Prepare { owner: Token, workspace: Workspace },
+    Prepare {
+        owner: Token,
+        workspace: Workspace,
+    },
     /// Abandon the prepare in flight for `owner`, whose run is cancelled. Its
     /// terminal still comes: `Unprepared`, or `Prepared` if the prepare won
     /// the race, and then the workspace is released.
-    Abort { owner: Token },
+    Abort {
+        owner: Token,
+    },
     /// Start an agent on `charter`, resumed from `snapshot` if there is one,
     /// in the prepared workspace `workspace`, which says where the
     /// repositories sit.
-    Start { owner: Token, workspace: Token, charter: Box<[u8]>, snapshot: Option<Box<[u8]>> },
+    Start {
+        owner: Token,
+        workspace: Token,
+        charter: Box<[u8]>,
+        snapshot: Option<Box<[u8]>>,
+        grants: Box<[Grant]>,
+    },
     /// An inbound event for the run of the agent `agent`.
-    Deliver { agent: Token, event: Box<[u8]> },
+    Deliver {
+        agent: Token,
+        name: Token,
+        event: Box<[u8]>,
+    },
     /// The one answer to the host call `call` of the agent `agent`.
-    Reply { agent: Token, call: Token, reply: Reply },
+    Reply {
+        agent: Token,
+        call: Token,
+        reply: Reply,
+    },
     /// Stop the agent `agent`: cancel its run, then kill what is left of it
     /// past the grace. Its start's `Gone` comes once it has all gone. Sent
     /// whenever its run leaves live, also once the run has said how it
     /// finishes or the agent was faulted, when it changes nothing: the agent
     /// child domain winds the agent down then anyway.
-    Stop { agent: Token },
+    Stop {
+        agent: Token,
+    },
+    Grant {
+        agent: Token,
+        grant: Grant,
+    },
     /// Commit what the writable repositories of `workspace` hold, with
     /// `message`, and push it: the run's call `owner`.
-    Push { owner: Token, workspace: Token, message: Box<[u8]> },
+    Push {
+        owner: Token,
+        workspace: Token,
+        message: Box<[u8]>,
+    },
     /// Commit what the writable repositories of `workspace` hold, and push it
     /// to the saved-work branch `branch`.
-    Save { owner: Token, workspace: Token, branch: Box<[u8]> },
+    Save {
+        owner: Token,
+        workspace: Token,
+        branch: Box<[u8]>,
+    },
     /// The run is done with `workspace`: it goes back to the cache.
-    Release { workspace: Token },
+    Release {
+        workspace: Token,
+    },
 }
 
 /// What the engine gives the worker for one run (worker-domain.md, 4.1).
@@ -170,6 +289,7 @@ pub struct Assignment {
     pub charter: Box<[u8]>,
     /// The state of a parked run to resume from, passed through.
     pub snapshot: Option<Box<[u8]>>,
+    pub grants: Box<[Grant]>,
 }
 
 /// The checkout a run works in. The host checks its bounds and passes it on.
@@ -183,6 +303,8 @@ pub struct Workspace {
 /// A repository of a workspace. Names are compared byte for byte.
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub struct Repository {
+    /// Deployment repository name, echoed in landed work.
+    pub tag: u32,
     /// The directory it sits in, side by side with the workspace's others
     /// (worker-domain.md, section 5), and what the agent calls it: one path
     /// component, unique within the workspace.
@@ -193,9 +315,9 @@ pub struct Repository {
     pub start: Start,
     pub access: Access,
     /// Who the worker is to the forge for this repository, to read it and to
-    /// push to it, and who commits to it: a name the protocol layer maps to
+    /// push to it, and who commits to it: an account the protocol layer maps to
     /// credentials and an author.
-    pub identity: Box<[u8]>,
+    pub identity: u32,
 }
 
 /// Where a repository's checkout starts.
@@ -357,7 +479,7 @@ pub enum Answer {
 }
 
 /// What a run left on the forge: the repositories its pushes landed in, by
-/// their place in the assignment, ascending, each with the last commit landed
+/// their deployment tags, ascending, each with the last commit landed
 /// there (the head a pull request is to show); and its save, if one was made,
 /// each repository's outcome in the assignment's order.
 #[derive(PartialEq, Eq, Hash, Debug)]
@@ -366,11 +488,11 @@ pub struct Work {
     pub saved: Option<Box<[Landing]>>,
 }
 
-/// A repository a run's pushes landed in: its place in the assignment, and
+/// A repository a run's pushes landed in: its deployment tag, and
 /// the last commit landed there.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Landed {
-    pub repository: u32,
+    pub tag: u32,
     pub commit: [u8; 32],
 }
 
@@ -393,7 +515,7 @@ pub enum Invalid {
     Repositories,
     /// The workspace lists one repository name twice.
     Duplicate,
-    /// A workstream key, repository name, remote, branch or identity is empty
+    /// A workstream key, repository name, remote, branch is empty
     /// or longer than a name may be; or a repository name is not one
     /// safe path component: `.`, `..`, `.git` in any case, or holding `/` or
     /// NUL.
@@ -402,6 +524,7 @@ pub enum Invalid {
     Charter,
     /// The snapshot holds more bytes than a run may.
     Snapshot,
+    Grants,
 }
 
 /// Why a hosted run failed (worker-domain.md, 4.3): what the engine acts on.
@@ -456,6 +579,8 @@ pub enum RunFailure {
     Cancelled,
     /// The branch a change is pushed to moved since the run started.
     Stale,
+    /// Provider quota was exhausted; a later attempt may succeed.
+    Exhausted,
 }
 
 /// How an agent failed.
@@ -482,4 +607,12 @@ pub enum Reason {
     Contact,
     /// The worker is shutting down.
     Shutdown,
+}
+
+/// Names of credential grants; their values belong to the protocol layer.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Grant {
+    pub account: u32,
+    pub generation: u64,
+    pub valid: Duration,
 }

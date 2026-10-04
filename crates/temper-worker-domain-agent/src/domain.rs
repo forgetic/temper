@@ -79,8 +79,9 @@ impl Domain {
 pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     match event {
         Event::Spawn { client, spawn } => agent::spawn(domain, env, client, spawn, out),
-        Event::Deliver { agent, event } => agent::deliver(domain, env, agent, event, out),
+        Event::Deliver { agent, name, event } => agent::deliver(domain, env, agent, name, event, out),
         Event::Answer { agent, call, reply } => agent::answer(domain, env, agent, call, reply, out),
+        Event::Grant { agent, grant } => agent::grant(domain, env, agent, grant, out),
         Event::Stop { agent } => agent::stop(domain, env, agent, out),
         Event::Spawned { owner, process } => agent::spawned(domain, env, owner, process, out),
         Event::Unspawned { owner, detail } => agent::unspawned(domain, env, owner, detail, out),

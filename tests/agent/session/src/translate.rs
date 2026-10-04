@@ -99,6 +99,7 @@ fn translate_message(message: agent::Message, tickets: &Tickets) -> provider::Me
 fn part(block: agent::Block, tickets: &Tickets) -> provider::Part {
     match block {
         agent::Block::Text { text } => provider::Part::Text { text },
+        agent::Block::Opaque { bytes } => provider::Part::Opaque { bytes },
         // The call goes back as the LLM wrote it.
         agent::Block::ToolCall { id, name, input, call: _ } => provider::Part::ToolCall { id, name, arguments: input },
         agent::Block::ToolResult { id, result: agent::Returned::Delegated { answer } } => {
@@ -142,6 +143,7 @@ fn completion(
 fn block(part: provider::Part, tickets: &mut Tickets, opener: u64, served: &[agent::Descriptor]) -> agent::Block {
     match part {
         provider::Part::Text { text } => agent::Block::Text { text },
+        provider::Part::Opaque { bytes } => agent::Block::Opaque { bytes },
         provider::Part::ToolCall { id, name, arguments } => {
             let call = match delegated(&name, served, tickets) {
                 Some((tool, effect)) => {
@@ -171,6 +173,7 @@ fn failure(error: provider::Error) -> agent::Failure {
         provider::Error::Unavailable => agent::Failure::Unavailable,
         provider::Error::ContextTooLong => agent::Failure::ContextTooLong,
         provider::Error::Unauthorized => agent::Failure::Unauthorized,
+        provider::Error::Exhausted { retry_after } => agent::Failure::Exhausted { retry_after },
         provider::Error::InvalidRequest => agent::Failure::Invalid,
     }
 }
