@@ -298,6 +298,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-engine-domain-authority"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+]
+
+[[package]]
 name = "temper-engine-domain-brief"
 version = "0.0.0"
 dependencies = [

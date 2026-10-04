@@ -112,8 +112,12 @@ Authority
   segment that begins with it, and every name beneath. `ai/temper`
   `branch` `temper` `7` and an open empty segment covers every branch
   under `temper/7/`; an open `r42-` covers `temper/7/r42-1` and
-  `temper/7/r42-2`; an exact `c42` covers `temper/7/c42` alone, not
-  `temper/7/c420`. One pattern is at most another when every name the
+  `temper/7/r42-2`; an exact `c42` covers `temper/7/c42` and its
+  descendants, not `temper/7/c420`. Both terminal forms require one more
+  segment after the exact base and include descendants; a pattern with
+  no terminal covers only the exact base name. Empty segments are literal
+  bytes too, and an open empty terminal matches any additional segment.
+  One pattern is at most another when every name the
   first covers, the second covers too, which is decided segment by
   segment.
 - **temper's own branches are named after their tree** (forge.md,
@@ -129,7 +133,9 @@ Authority
   implies another: for the forge, a grant to land into a branch does not
   imply pushing to it, and pushing does not imply landing. A kind's
   order is a table the connector gives, and the authority child domain
-  holds as data.
+  holds as data. Equality is implicit and the connector's table includes
+  every transitive implication. Authority validates that preorder within
+  the configured maximum number of pairs before admitting the table.
 
 ## 5. Order and fitting
 
