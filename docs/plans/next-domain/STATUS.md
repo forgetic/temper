@@ -38,9 +38,22 @@ runner remains live. Comparison paging is unsupported, protection reads
 are denied to write permission, and supported REST job-log reads are
 unavailable; the design records bounded/unknown handling and status links.
 
-Steps 01 through 08 remain unimplemented. Read-only preparation is
-complete for authority value/order (01a), people sign-ins/requests (03a)
-and fleet turns/graces (05a); these are the next code increments.
+| Increment | State | Evidence |
+|---|---|---|
+| 01a authority values and order | merged, `2d38f2b` | all four workflow checks passed; focused 1,778/1,778 in 7.918 s, fuzzy 26/26 in 22.367 s, one ignored finding; authority serial total 0.087 s |
+| 05a fleet turns and graces | merged, `c6513cb` | all four workflow checks passed; focused 1,794/1,794 in 7.478 s, fuzzy 27/27 in 22.515 s, one ignored finding; fleet focused serial total 0.144 s and fuzzy 0.508 s |
+
+01a checks pattern inclusion against independently enumerated names and
+authority ordering laws. 05a adds bounded turn admission, commitment
+acknowledgements, prefix restoration with adoption, fencing and busy
+retry; its separate turn world checks reconnects, restart, ownership,
+replay, facts and declared stop bounds. Existing fleet scenarios remain.
+The legacy root supplies the first version's defaults and exhaustive
+ignore arms for additions.
+
+Steps 01 and 05 are partially implemented. Authority funding arithmetic
+(01b), people sign-in and initial requests (03a), and channel version two
+(05b) are in isolated worktrees. Steps 02, 04 and 06 through 08 remain.
 
 After groundwork, the plan's finer dependencies still apply: tasks needs
 authority's value and number shapes; the root's walking skeleton needs
