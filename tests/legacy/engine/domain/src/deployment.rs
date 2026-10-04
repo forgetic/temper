@@ -121,6 +121,7 @@ pub const LIMITS: Limits = Limits {
         workstream_bytes: 16,
         attempts: 32,
         calls: 8,
+        turns: 0,
         grace: Duration::from_secs(30),
         facts: 64,
     },

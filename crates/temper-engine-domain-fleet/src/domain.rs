@@ -8,13 +8,16 @@ use crate::call::{self, Call};
 use crate::channel::{self, Channel};
 use crate::facts::{Fact, Facts};
 use crate::limits::{self, Limits};
+use crate::turn::{self, Pending};
 
 /// The most requests a step, an alarm or a resume emits under `limits`: a
 /// request for each run a hello lists, up to twice the slots (a cancel, an
 /// acknowledgement, or the parent told an attempt is found or listed); or an
 /// adoption's three (the replaced claim's cancel and its withdrawal, and the
 /// adopted attempt's placing or answer). The parent reserves this much room
-/// in `out` before calling it.
+/// in `out` before calling it. A turn emits at most two (busy or
+/// acknowledgement, and drop); adoption and cleanup release one held turn
+/// per resume, within the same bound.
 #[must_use]
 pub const fn max_out(limits: &Limits) -> u32 {
     let listed = limits.slots.saturating_mul(2);
@@ -40,6 +43,8 @@ pub struct Domain {
     pub(crate) alarms: Deadlines<Id<Attempt>>,
     /// Relayed calls the parent has yet to answer.
     pub(crate) calls: Slab<Call>,
+    pub(crate) turns: Map<(Id<Attempt>, u32), Pending>,
+    pub(crate) turning: bool,
     /// Something changed that may let a waiting attempt be placed: the ready
     /// list.
     pub(crate) placing: bool,
@@ -65,6 +70,8 @@ impl Domain {
             serial: 0,
             alarms: Deadlines::with_capacity(tracked),
             calls: Slab::with_capacity(limits.calls),
+            turns: Map::with_capacity(limits.turns),
+            turning: false,
             placing: false,
             claims: 0,
             loaded: false,
@@ -97,6 +104,12 @@ impl Domain {
         self.calls.len()
     }
 
+    /// Turns held for adoption or awaiting the parent's commitment.
+    #[must_use]
+    pub fn turns(&self) -> u32 {
+        self.turns.len()
+    }
+
     /// When the earliest alarm falls due.
     #[must_use]
     pub fn next_deadline(&self) -> Option<Time> {
@@ -113,12 +126,12 @@ impl Domain {
         }
     }
 
-    /// Whether placement may find a slot for a waiting attempt. While it may,
+    /// Whether placement or a held turn may make progress. While it may,
     /// the loop resumes the root domain, which calls [`resume`], at the
     /// start of the domain's stage, before its input events.
     #[must_use]
     pub fn is_ready(&self) -> bool {
-        self.placing
+        self.placing || self.turning
     }
 
     /// The oldest fact not yet drained. The parent drains them at its own
@@ -148,7 +161,7 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
         Event::Start { reply_to, run, attempt, workstream } => {
             attempt::start(domain, env, reply_to, run, attempt, workstream, out);
         }
-        Event::Adopt { reply_to, run, attempt } => attempt::adopt(domain, env, reply_to, run, attempt, out),
+        Event::Adopt { reply_to, run, attempt, kept } => attempt::adopt(domain, env, reply_to, run, attempt, kept, out),
         Event::Cancel { run, attempt } => attempt::cancel(domain, run, attempt, out),
         Event::Inbound { run, attempt, event } => call::inbound(domain, run, attempt, event, out),
         Event::Relayed { to, answer } => call::relayed(domain, to, answer, out),
@@ -178,6 +191,11 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
         Event::Answer { channel, run, attempt, answer, payload } => {
             attempt::answer(domain, channel, run, attempt, answer, payload, out);
         }
+        Event::Turn { channel, run, attempt, turn, body } => {
+            turn::received(domain, channel, run, attempt, turn, body, out);
+        }
+        Event::TurnKept { run, attempt, turn } => turn::kept(domain, run, attempt, turn, out),
+        Event::TurnBusy { run, attempt, turn } => turn::busy(domain, run, attempt, turn, out),
         Event::Relay { channel, run, attempt, call, body } => {
             call::relay(domain, channel, run, attempt, call, body, out);
         }
@@ -198,10 +216,12 @@ pub fn fire(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
     }
 }
 
-/// Places a waiting attempt, if one can be, emitting at most [`max_out`]
-/// requests; with none, placement waits until something changes.
+/// Releases one held turn or places a waiting attempt, emitting at most
+/// [`max_out`] requests; with none, waits until something changes.
 pub fn resume(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
-    if domain.placing {
+    if domain.turning {
+        turn::resume(domain, out);
+    } else if domain.placing {
         attempt::resume(domain, env, out);
     }
 }

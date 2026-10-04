@@ -38,7 +38,9 @@ README.md.
 | Adds | Shape | The legacy root |
 |---|---|---|
 | turns, kept by the worker until acknowledged, fenced like answers | `Event::Turn { channel, run, attempt, turn, body }`; `Event::TurnKept { run, attempt, turn }`; `Request::Turned { .. }`, `Request::AcknowledgeTurn { channel, run, attempt, turn }` | an ignore arm for `Turned`: a worker could send one |
-| the worker's declared graces at its hello, refused when longer than the engine's (`engine.md`, section 8) | `Hello { graces: Option<Duration>, .. }`; `None` checks nothing | builds `graces: None` |
+| the worker's declared graces at its hello, refused unless strictly shorter than the engine's (`engine.md`, section 8) | `Hello { graces: Option<Duration>, .. }`; `None` checks nothing | builds `graces: None` |
+| committed turn prefix restored with adoption | `Adopt { kept: u32, .. }`, zero before the first turn | builds `kept: 0` |
+| bounded turn admission and commitment pressure | `Limits::turns`; `Event::TurnBusy { run, attempt, turn }`; `Request::TurnBusy { channel, run, attempt, turn }` | turn limit zero; ignore request arms |
 
 ```rust
 // fleet, boundary.rs: added
@@ -47,12 +49,33 @@ pub enum Event {
     /// From a worker: the `turn`th turn of the run's attempt, which it keeps
     /// until acknowledged (domain/worker.md, section 8). Passed up once from
     /// the live attempt; a copy of one the parent has kept is acknowledged
-    /// again; one from a fenced attempt is dropped.
+    /// again; one from a fenced attempt is acknowledged and dropped.
     Turn { channel: Token, run: Token, attempt: Token, turn: u32, body: Token },
     /// The parent committed the turn: acknowledge it.
     TurnKept { run: Token, attempt: Token, turn: u32 },
 }
 ```
+
+`graces` is the worker's declared **total stop bound**, not the separate
+component deadlines: its contact grace plus the longer of cancel's grace
+and a push's deadline, then a save's commit and push (engine.md, section
+8). A declaration equal to the engine's grace is refused as well: the
+engine's grace must be strictly longer. The component deadlines remain
+the worker's to configure and sum.
+
+Turns start at one. `Adopt::kept` restores the durable contiguous prefix
+atomically with the claim, before a stray's held turns are released.
+Commitments reach the fleet in order; a turn already in that prefix is
+acknowledged again. A duplicate pending commitment is dropped without
+acknowledgement. Stray turns wait, bounded by `Limits::turns`, for the
+parent to adopt them. A full admission sends `TurnBusy` and drops that
+copy's body; the worker keeps its original and retries after a backoff.
+The parent can also answer an admitted `Turned` with `TurnBusy` when its
+commitment cannot proceed, releasing the admission for that retry.
+Every body token is handed to the parent once, by `Turned` or `Drop`;
+a handed admission retains only its names. Adoption and cleanup release
+one held body per resume, so acknowledgement or busy plus drop needs
+only two output slots and the fleet's existing `max_out` bound suffices.
 
 ### 2.2 The worker
 

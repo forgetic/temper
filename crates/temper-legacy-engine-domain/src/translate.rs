@@ -89,7 +89,7 @@ pub(crate) fn hello(hello: Hello) -> fleet::Hello {
             break;
         }
     }
-    fleet::Hello { slots, workstreams, hosting: hosted.into_boxed() }
+    fleet::Hello { graces: None, slots, workstreams, hosting: hosted.into_boxed() }
 }
 
 /// What the fleet acts on of a run's answer.

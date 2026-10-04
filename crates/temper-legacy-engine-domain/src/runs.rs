@@ -503,7 +503,7 @@ pub(crate) fn adopt(domain: &mut Domain, env: &Env<Limits>, item: Item, attempt:
     entry.resumed = Some(items::Resumed { attempt, since: entry.since });
     let run = translate::run_of(item);
     let reply_to = ReplyTo::new(run);
-    route::fleet_step(domain, env, fleet::Event::Adopt { reply_to, run, attempt: Token::new(attempt) });
+    route::fleet_step(domain, env, fleet::Event::Adopt { reply_to, run, attempt: Token::new(attempt), kept: 0 });
 }
 
 /// A worker's hello: a run it lists as ending or answered takes no inbox

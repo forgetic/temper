@@ -98,6 +98,7 @@ const LIMITS: Limits = Limits {
         workstream_bytes: 16,
         attempts: 16,
         calls: 4,
+        turns: 0,
         grace: Duration::from_secs(10),
         facts: 64,
     },

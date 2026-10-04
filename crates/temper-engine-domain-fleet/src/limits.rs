@@ -6,6 +6,7 @@ use crate::attempt::{Attempt, Run};
 use crate::call::Call;
 use crate::channel::Channel;
 use crate::facts::Fact;
+use crate::turn::Pending;
 
 /// The fleet's limits (programming-model.md, section 7), handed by its parent
 /// to every step read-only.
@@ -32,6 +33,9 @@ pub struct Limits {
     /// Relayed calls the parent serves at once. A call beyond them is
     /// dropped, and its run withdraws it past its own deadline.
     pub calls: u32,
+    /// Turns awaiting adoption or the parent's commitment, across all
+    /// attempts. Bodies are the parent's tokens, never bytes held here.
+    pub turns: u32,
     /// How long the runs of a worker whose channel was lost are kept for it
     /// to come back, and how long an attempt a worker lists, and the parent
     /// has not claimed, waits to be adopted once the parent has loaded its
@@ -76,6 +80,13 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     // first, so a step holds no more than these.
     let waiting = u64::from(limits.attempts).checked_mul(u64::from(limits.workstream_bytes))?;
     let calls = Slab::<Call>::worst_case(limits.calls)?;
+    let turns = Map::<(Id<Attempt>, u32), Pending>::worst_case(limits.turns)?;
     let facts = Queue::<Fact>::worst_case(limits.facts)?;
-    channels.checked_add(workers)?.checked_add(attempts)?.checked_add(waiting)?.checked_add(calls)?.checked_add(facts)
+    channels
+        .checked_add(workers)?
+        .checked_add(attempts)?
+        .checked_add(waiting)?
+        .checked_add(calls)?
+        .checked_add(turns)?
+        .checked_add(facts)
 }

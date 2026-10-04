@@ -355,6 +355,8 @@ fn from_fleet(domain: &mut Domain, env: &Env<Limits>, request: fleet::Request, o
             let item = translate::item(run);
             out.push(Request::Acknowledge { channel, item, attempt: attempt.raw() });
         }
+        fleet::Request::Turned { body, .. } => runs::dropped(domain, env, body),
+        fleet::Request::AcknowledgeTurn { .. } | fleet::Request::TurnBusy { .. } => {}
         fleet::Request::Refuse { channel } => out.push(Request::Refuse { channel }),
         fleet::Request::Placed { run, attempt } => runs::placed(domain, env, run, attempt),
         fleet::Request::Listed { run, attempt } => {

@@ -44,7 +44,7 @@
 //! assignment (its charter, workspace and snapshot) is named by its run and
 //! attempt, and the parent attaches it to the [`Request::Assign`] that
 //! names them. An inbound event, a relayed call and its answer, a run's
-//! answer and its facts are each named by a token the parent issues, and
+//! answer, turns and facts are each named by a token the parent issues, and
 //! echoed exactly once: in the request that passes it on, or in a
 //! [`Request::Drop`] that tells the parent to forget it. Tokens of different
 //! families may be equal.
@@ -81,6 +81,8 @@ pub enum Event {
         reply_to: ReplyTo,
         run: Token,
         attempt: Token,
+        /// The committed prefix restored with the claim; zero before its first turn.
+        kept: u32,
     },
     /// From the parent: cancel the attempt `attempt` of the run `run`. Its
     /// call is still ended by its answer, unless it was never placed.
@@ -150,6 +152,30 @@ pub enum Event {
         attempt: Token,
         answer: Answer,
         payload: Token,
+    },
+    /// From the current worker: an opaque turn numbered from one. Its body
+    /// is echoed exactly once by `Turned` or `Drop`; a duplicate before
+    /// commitment is dropped unacknowledged. Strays' turns wait for adoption.
+    Turn {
+        channel: Token,
+        run: Token,
+        attempt: Token,
+        turn: u32,
+        body: Token,
+    },
+    /// The parent committed the prefix through `turn`. Commitments arrive in
+    /// order; the worker may forget this turn. Adoption restores the prefix.
+    TurnKept {
+        run: Token,
+        attempt: Token,
+        turn: u32,
+    },
+    /// The parent could not commit an admitted turn. Release its admission
+    /// and tell its current worker to retry it after a backoff.
+    TurnBusy {
+        run: Token,
+        attempt: Token,
+        turn: u32,
     },
     /// From a worker, a host call of the attempt `attempt` of the run `run`,
     /// which the worker names `call`, relayed as it is.
@@ -235,6 +261,30 @@ pub enum Request {
         channel: Token,
         run: Token,
         attempt: Token,
+    },
+    /// To the parent: this turn's body, once per admission, for commitment.
+    /// The parent owns the body after this request and answers with `TurnKept`
+    /// or `TurnBusy`. An engine restart may hand an uncommitted turn on again.
+    Turned {
+        run: Token,
+        attempt: Token,
+        turn: u32,
+        body: Token,
+    },
+    /// To the current worker: this turn is committed or fenced off.
+    AcknowledgeTurn {
+        channel: Token,
+        run: Token,
+        attempt: Token,
+        turn: u32,
+    },
+    /// To the current worker: no admission or commitment room; keep this turn
+    /// and retry after a backoff. A received body also gets `Drop`.
+    TurnBusy {
+        channel: Token,
+        run: Token,
+        attempt: Token,
+        turn: u32,
     },
     /// About a worker: the fleet has no room for it, or its hello is beyond
     /// the limits. Close its channel; it dials again later.
@@ -328,6 +378,10 @@ pub enum Request {
 /// What a worker says first on every channel (engine-domain.md, section 8).
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub struct Hello {
+    /// Declared stop bound: contact grace, then max(cancel grace, push
+    /// deadline), then save commit and push. It must be strictly below the engine's grace;
+    /// `None` preserves the first payload version's unchecked behavior.
+    pub graces: Option<Duration>,
     /// How many runs it hosts at once: none once it is shutting down.
     pub slots: u32,
     /// The workstreams it holds checkouts for.

@@ -25,6 +25,7 @@ pub const LIMITS: Limits = Limits {
     workstream_bytes: 8,
     attempts: 16,
     calls: 8,
+    turns: 0,
     grace: Duration::from_secs(20),
     facts: 64,
 };
@@ -869,7 +870,7 @@ impl World {
                     .into_iter()
                     .map(|(run, attempt, phase)| Hosted { run: Token::new(run), attempt: Token::new(attempt), phase })
                     .collect();
-                Event::Hello { channel: token, hello: Hello { slots, workstreams, hosting } }
+                Event::Hello { channel: token, hello: Hello { slots, workstreams, hosting, graces: None } }
             }
             Up::Answer { run, attempt, said } => {
                 let payload = self.payload(Payload::Answer(said));
@@ -921,6 +922,9 @@ impl World {
 
     fn request(&mut self, request: Request) {
         match request {
+            Request::Turned { .. } | Request::AcknowledgeTurn { .. } | Request::TurnBusy { .. } => {
+                unreachable!("the first-version world sends no turns")
+            }
             Request::Grant { .. } | Request::Rejected { .. } | Request::Exhausted { .. } => {}
             Request::Assign { channel, run, attempt } => {
                 self.stats.assigned += 1;
@@ -1229,7 +1233,7 @@ impl World {
                 self.adopting.push(attempt);
                 self.calls.open(attempt, ());
                 let token = Token::new(attempt);
-                self.stage.push(Event::Adopt { reply_to: ReplyTo::new(token), run, attempt: token });
+                self.stage.push(Event::Adopt { reply_to: ReplyTo::new(token), run, attempt: token, kept: 0 });
                 if cancelled {
                     self.observe(Seen::Cancelled { run: run.raw(), attempt });
                     self.stage.push(Event::Cancel { run, attempt: token });
@@ -1260,6 +1264,9 @@ fn describe(event: &Event) -> String {
         Event::Grant { .. }
         | Event::Rejected { .. }
         | Event::Exhausted { .. }
+        | Event::Turn { .. }
+        | Event::TurnKept { .. }
+        | Event::TurnBusy { .. }
         | Event::Adopt { .. }
         | Event::Cancel { .. }
         | Event::Inbound { .. }

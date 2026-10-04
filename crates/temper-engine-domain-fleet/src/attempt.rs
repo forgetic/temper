@@ -118,6 +118,8 @@ pub(crate) struct Attempt {
     /// Whether a worker's listing made it, in the room kept for listings, or
     /// the parent's start or adoption, in the room for claims.
     pub(crate) listed: bool,
+    /// The contiguous committed turn prefix, restored atomically on adoption.
+    pub(crate) kept: u32,
     pub(crate) state: State,
 }
 
@@ -274,6 +276,7 @@ pub(crate) fn adopt(
     to: ReplyTo,
     run: Token,
     attempt: Token,
+    kept: u32,
     out: &mut Queue<Request>,
 ) {
     let names = Names { run, attempt };
@@ -285,6 +288,8 @@ pub(crate) fn adopt(
         replace(domain, run, out);
         let until = env.now.saturating_add(env.limits.grace);
         insert(domain, run, attempt, false, State::Adopted { to, until });
+        let id = *domain.names.get(&(run, attempt)).expect("inserted above");
+        domain.attempts.get_mut(id).expect("inserted above").kept = kept;
         return;
     };
     let entry = domain.attempts.get(id).expect("a named attempt is tracked");
@@ -309,6 +314,7 @@ pub(crate) fn adopt(
     }
     replace(domain, run, out);
     let entry = domain.attempts.get_mut(id).expect("looked up above");
+    entry.kept = kept;
     let before = implied(&entry.state);
     let state = mem::replace(&mut entry.state, State::Closed);
     entry.state = match state {
@@ -935,7 +941,7 @@ fn found(
 
 /// Tracks a new attempt in `state`. The entrance checked there is room.
 fn insert(domain: &mut Domain, run: Token, attempt: Token, listed: bool, state: State) {
-    let Ok(id) = domain.attempts.insert(Attempt { run, token: attempt, listed, state }) else {
+    let Ok(id) = domain.attempts.insert(Attempt { run, token: attempt, listed, kept: 0, state }) else {
         unreachable!("the entrance checks there is room for an attempt");
     };
     let named = domain.names.insert((run, attempt), id);
@@ -952,6 +958,7 @@ fn insert(domain: &mut Domain, run: Token, attempt: Token, listed: bool, state: 
 /// may host, its place in the queue, its alarm; and retires it once it has
 /// closed.
 fn follow(domain: &mut Domain, id: Id<Attempt>, before: Implied) {
+    domain.turning = !domain.turns.is_empty();
     let entry = domain.attempts.get(id).expect("an attempt lives until it is reclaimed");
     let after = implied(&entry.state);
     let run = entry.run;

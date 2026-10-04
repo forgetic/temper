@@ -93,10 +93,10 @@ agent    LLM work: one run per agent process, reporting to the worker
   keeps or cancels each run. Past the grace, the worker cancels them
   itself, saving their work first, and keeps their turns and answers for
   the next channel. The engine keeps a lost worker's runs for a grace
-  of its own, longer than the worker's grace, its cancel's grace and its
-  push's deadline together, which the worker says at its hello
-  (engine.md, section 8), so no next attempt starts while this one may
-  still push.
+  of its own, strictly longer than the total stop bound it declares at
+  its hello: its contact grace, then the longer of cancel's grace and a
+  push's deadline, then a save's commit and push (engine.md, section 8).
+  So no next attempt starts while this one may still push.
 - **Shutting down** cancels every run and admits no more. The worker is
   done once the engine has every turn and answer. It gives up what it
   keeps, counted, only once no run is left and the engine is still out of

@@ -385,7 +385,8 @@ When an agent task is due (tasks.md, 5.2), the root:
   fails its run as transient, saying so, and the next run is prepared
   fresh, its brief carrying the tail.
 - **Turns are numbered within their attempt,** from one. The task keeps
-  the last turn committed for its live attempt, so a copy the engine has
+  the last turn committed for its live attempt, restored atomically with
+  the fleet's adoption of the claim, so a copy the engine has
   already committed is acknowledged again and dropped, after a restart
   too.
 
@@ -483,8 +484,9 @@ instead of an item's:
   longest a worker may take to stop a run it lost contact for: its
   grace, then the longer of its cancel's grace and a push's deadline,
   then a save's commit and push (worker.md, 4.2). The worker says that
-  sum at its hello; a worker whose sum is longer is refused. So the engine places no next attempt while a worker may still
-  host the last, and one run at most writes a write hold at a time
+  sum at its hello; a worker whose sum is equal to or longer than the
+  engine's grace is refused. So the engine places no next attempt while a
+  worker may still host the last, and one run at most writes a write hold at a time
   (connectors.md, 3.3). A lost attempt's push is found by its change
   afterwards (forge.md, 8.2).
 - **Every start and adoption ends once:** answered, lost, withdrawn (the

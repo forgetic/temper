@@ -4,7 +4,8 @@
 //! its hello lists: the fleet needs no other name for it.
 //!
 //! A hello is the worker's entrance. It is turned away, its channel to be
-//! closed, only if the fleet has no room for another worker. Its slots are
+//! closed, if the fleet has no room for another worker or its declared stop
+//! bound is not strictly below the engine's grace. Its slots are
 //! used up to the limit, and the workstreams it lists up to the limit, each
 //! within the bytes of a key. Each run it lists, up to the slots a worker
 //! may have, is kept, cancelled again, acknowledged or found (see the
@@ -106,12 +107,16 @@ pub(crate) fn hello(domain: &mut Domain, env: &Env<Limits>, channel: Token, hell
         domain.facts.push(Fact::Dropped);
         return;
     }
-    if domain.channels.is_full() {
+    let too_long = match hello.graces {
+        Some(graces) => graces >= limits.grace,
+        None => false,
+    };
+    if domain.channels.is_full() || too_long {
         domain.facts.push(Fact::TurnedAway);
         out.push(Request::Refuse { channel });
         return;
     }
-    let Hello { slots, workstreams, hosting } = hello;
+    let Hello { slots, workstreams, hosting, graces: _ } = hello;
     let mut worker = Channel {
         token: channel,
         slots: slots.min(limits.slots),

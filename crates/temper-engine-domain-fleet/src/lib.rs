@@ -12,6 +12,10 @@
 //! the worker, which keeps it and its slot until then, only once the parent
 //! has made it durable. A worker that refuses an attempt as busy gets
 //! nothing more until it frees a slot, and the attempt is placed again. It
+//! likewise passes numbered turns to the parent once per admission and
+//! acknowledges them after commitment. A restored claim carries its committed
+//! prefix; pending stray turns wait for adoption in bounded room. Turn
+//! pressure is answered busy for the worker to retry after a backoff. It
 //! keeps a lost worker's runs for a grace, and once the grace passes
 //! presumes them lost; a worker that comes back says what it hosts, and the
 //! fleet keeps what is still claimed and cancels the rest. After an engine
@@ -55,6 +59,7 @@ mod facts;
 mod limits;
 #[cfg(test)]
 mod tests;
+mod turn;
 
 pub use boundary::{Answer, Bounce, Event, Grant, Hello, Hosted, Phase, Refusal, Request, Undelivered, Withdrawal};
 pub use domain::{Domain, fire, max_out, resume, step};

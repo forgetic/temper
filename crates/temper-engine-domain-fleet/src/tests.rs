@@ -16,6 +16,7 @@ const LIMITS: Limits = Limits {
     workstream_bytes: 8,
     attempts: 6,
     calls: 2,
+    turns: 0,
     grace: Duration::from_secs(10),
     facts: 64,
 };
@@ -118,7 +119,7 @@ impl Harness {
         for key in workstreams {
             keys.push(Box::from(*key)).unwrap();
         }
-        let hello = Hello { slots, workstreams: keys.into_boxed(), hosting: Box::from(hosting) };
+        let hello = Hello { graces: None, slots, workstreams: keys.into_boxed(), hosting: Box::from(hosting) };
         self.step(Event::Hello { channel, hello })
     }
 
@@ -127,7 +128,7 @@ impl Harness {
     }
 
     fn adopt(&mut self, run: Token, attempt: Token) -> Box<[Request]> {
-        self.step(Event::Adopt { reply_to: to(attempt), run, attempt })
+        self.step(Event::Adopt { reply_to: to(attempt), run, attempt, kept: 0 })
     }
 
     /// Starts `run`'s `attempt` and has it placed, on the worker the fleet
@@ -946,4 +947,138 @@ fn the_worst_case_is_bounded_or_refused() {
     assert_eq!(max_out(&LIMITS), 4);
     assert_eq!(max_out(&Limits { slots: 1, ..LIMITS }), 3);
     assert_eq!(max_out(&Limits { slots: 8, ..LIMITS }), 16);
+}
+
+fn turns() -> Harness {
+    let mut h = Harness::new(Limits { turns: 2, ..LIMITS });
+    h.hello(C1, 2, &[], &[]);
+    h.place(R1, A1, b"one");
+    h
+}
+
+fn turn(h: &mut Harness, channel: Token, nth: u32, raw: u64) -> Box<[Request]> {
+    h.step(Event::Turn { channel, run: R1, attempt: A1, turn: nth, body: payload(raw) })
+}
+
+fn kept(h: &mut Harness, nth: u32) -> Box<[Request]> {
+    h.step(Event::TurnKept { run: R1, attempt: A1, turn: nth })
+}
+
+fn turn_ack(channel: Token, nth: u32) -> Request {
+    Request::AcknowledgeTurn { channel, run: R1, attempt: A1, turn: nth }
+}
+
+#[test]
+fn a_turn_is_handed_once_and_acknowledged_only_after_commitment() {
+    let mut h = turns();
+    assert_eq!(&*turn(&mut h, C1, 1, 1), &[Request::Turned { run: R1, attempt: A1, turn: 1, body: payload(1) }]);
+    assert_eq!(&*turn(&mut h, C1, 1, 2), &[drop(2)]);
+    assert_eq!(&*kept(&mut h, 1), &[turn_ack(C1, 1)]);
+    assert_eq!(&*turn(&mut h, C1, 1, 3), &[turn_ack(C1, 1), drop(3)]);
+}
+
+#[test]
+fn turn_inputs_require_the_current_hosting_channel() {
+    let mut h = turns();
+    h.hello(C2, 2, &[], &[]);
+    assert_eq!(&*turn(&mut h, C2, 1, 1), &[drop(1)]);
+    h.step(Event::Lost { channel: C1 });
+    assert_eq!(&*turn(&mut h, C1, 1, 2), &[drop(2)]);
+    assert_eq!(&*turn(&mut h, C2, 1, 3), &[drop(3)]);
+    h.hello(C3, 2, &[], &[hosted(R1, A1, Phase::Active)]);
+    assert_eq!(&*turn(&mut h, C2, 1, 4), &[drop(4)]);
+    assert_eq!(&*turn(&mut h, C3, 1, 5), &[Request::Turned { run: R1, attempt: A1, turn: 1, body: payload(5) }]);
+}
+
+#[test]
+fn turns_committed_out_of_contact_are_acknowledged_on_replay() {
+    let mut h = turns();
+    turn(&mut h, C1, 1, 1);
+    h.step(Event::Lost { channel: C1 });
+    assert!(kept(&mut h, 1).is_empty());
+    h.hello(C2, 2, &[], &[hosted(R1, A1, Phase::Active)]);
+    assert_eq!(&*turn(&mut h, C2, 1, 2), &[turn_ack(C2, 1), drop(2)]);
+}
+
+#[test]
+fn turns_from_fenced_attempts_are_acknowledged_without_freeing_the_host() {
+    let mut h = turns();
+    h.step(Event::Cancel { run: R1, attempt: A1 });
+    assert_eq!(&*turn(&mut h, C1, 1, 1), &[turn_ack(C1, 1), drop(1)]);
+    assert_eq!(h.domain.attempts(), 1, "turns do not end the attempt");
+    h.answer(C1, R1, A1, Answer::Ended, 2);
+    h.acknowledge(R1, A1);
+    assert_eq!(&*turn(&mut h, C1, 1, 3), &[turn_ack(C1, 1), drop(3)]);
+}
+
+#[test]
+fn capacity_and_parent_busy_both_release_turns_for_retry() {
+    let mut h = turns();
+    turn(&mut h, C1, 1, 1);
+    turn(&mut h, C1, 2, 2);
+    assert_eq!(&*turn(&mut h, C1, 3, 3), &[Request::TurnBusy { channel: C1, run: R1, attempt: A1, turn: 3 }, drop(3)]);
+    assert_eq!(
+        &*h.step(Event::TurnBusy { run: R1, attempt: A1, turn: 1 }),
+        &[Request::TurnBusy { channel: C1, run: R1, attempt: A1, turn: 1 }]
+    );
+    assert_eq!(&*turn(&mut h, C1, 1, 4), &[Request::Turned { run: R1, attempt: A1, turn: 1, body: payload(4) }]);
+    kept(&mut h, 1);
+    assert!(h.step(Event::TurnBusy { run: R1, attempt: A1, turn: 1 }).is_empty());
+    assert_eq!(&*turn(&mut h, C1, 1, 5), &[turn_ack(C1, 1), drop(5)]);
+}
+
+#[test]
+fn adoption_restores_the_prefix_before_releasing_stray_turns() {
+    let mut h = Harness::new(Limits { turns: 2, ..LIMITS });
+    h.hello(C1, 2, &[], &[hosted(R1, A1, Phase::Active)]);
+    assert!(turn(&mut h, C1, 1, 1).is_empty());
+    assert!(turn(&mut h, C1, 2, 2).is_empty());
+    assert_eq!(&*turn(&mut h, C1, 2, 3), &[drop(3)]);
+    h.step(Event::Adopt { reply_to: to(A1), run: R1, attempt: A1, kept: 1 });
+    assert_eq!(
+        &*h.settle(),
+        &[turn_ack(C1, 1), drop(1), Request::Turned { run: R1, attempt: A1, turn: 2, body: payload(2) }]
+    );
+    assert_eq!(&*kept(&mut h, 2), &[turn_ack(C1, 2)]);
+}
+
+#[test]
+fn a_restart_restores_committed_turns_before_the_worker_replays() {
+    let mut h = Harness::new(Limits { turns: 2, ..LIMITS });
+    h.step(Event::Adopt { reply_to: to(A1), run: R1, attempt: A1, kept: 7 });
+    h.hello(C1, 2, &[], &[hosted(R1, A1, Phase::Active)]);
+    assert_eq!(&*turn(&mut h, C1, 7, 1), &[turn_ack(C1, 7), drop(1)]);
+    assert_eq!(&*turn(&mut h, C1, 8, 2), &[Request::Turned { run: R1, attempt: A1, turn: 8, body: payload(2) }]);
+}
+
+#[test]
+fn stray_turn_bodies_are_released_when_the_claim_is_fenced_or_lost() {
+    let mut h = Harness::new(Limits { turns: 2, ..LIMITS });
+    h.hello(C1, 2, &[], &[hosted(R1, A1, Phase::Active)]);
+    turn(&mut h, C1, 1, 1);
+    h.loaded();
+    h.at(10);
+    assert_eq!(&*h.settle(), &[turn_ack(C1, 1), drop(1)]);
+    assert!(h.domain.turns.is_empty());
+}
+
+#[test]
+fn declared_stop_bounds_must_be_strictly_below_the_engine_grace() {
+    for (graces, accepted) in [
+        (None, true),
+        (Some(Duration::from_secs(9)), true),
+        (Some(Duration::from_secs(10)), false),
+        (Some(Duration::from_secs(11)), false),
+    ] {
+        let mut h = Harness::new(LIMITS);
+        let hello = Hello { graces, slots: 2, workstreams: Box::default(), hosting: Box::default() };
+        let out = h.step(Event::Hello { channel: C1, hello });
+        if accepted {
+            assert!(out.is_empty());
+            assert_eq!(h.domain.workers(), 1);
+        } else {
+            assert_eq!(&*out, &[Request::Refuse { channel: C1 }]);
+            assert_eq!(h.domain.workers(), 0);
+        }
+    }
 }

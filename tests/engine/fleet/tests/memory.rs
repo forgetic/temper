@@ -19,6 +19,7 @@ const LIMITS: Limits = Limits {
     workstream_bytes: 32,
     attempts: 12,
     calls: 4,
+    turns: 0,
     grace: Duration::from_secs(10),
     facts: 16,
 };
@@ -97,7 +98,10 @@ impl Measured {
         let limits = self.env.limits;
         let workstreams =
             (0..limits.workstreams).map(|nth| key(&limits, channel.raw() * 100 + u64::from(nth))).collect();
-        self.step(Event::Hello { channel, hello: Hello { slots: limits.slots, workstreams, hosting: hosting.into() } })
+        self.step(Event::Hello {
+            channel,
+            hello: Hello { graces: None, slots: limits.slots, workstreams, hosting: hosting.into() },
+        })
     }
 
     /// Starts an attempt of a run of its own, with a key of the most bytes.
@@ -215,9 +219,9 @@ fn every_entry_point_stays_within_the_worst_case() {
         Event::Answer { channel: channel(0), run: r2, attempt: a2, answer: Answer::Ended, payload: Token::new(1) };
     fleet.step(answer);
     fleet.step(Event::Loaded);
-    fleet.step(Event::Adopt { reply_to: ReplyTo::new(a2), run: r2, attempt: a2 });
+    fleet.step(Event::Adopt { reply_to: ReplyTo::new(a2), run: r2, attempt: a2, kept: 0 });
     fleet.step(Event::Acknowledge { run: r2, attempt: a2 });
-    fleet.step(Event::Adopt { reply_to: ReplyTo::new(a1), run: r1, attempt: a1 });
+    fleet.step(Event::Adopt { reply_to: ReplyTo::new(a1), run: r1, attempt: a1, kept: 0 });
     let (r3, a3) = fleet.start();
     let placed = placed(&fleet.settle());
     assert_eq!(placed.len(), 1);
@@ -267,4 +271,34 @@ fn every_entry_point_stays_within_the_worst_case() {
     fleet.at(30);
     fleet.settle();
     assert_eq!((fleet.domain.attempts(), fleet.domain.calls()), (0, 0));
+}
+
+#[test]
+fn held_and_handed_turn_admissions_stay_within_the_worst_case() {
+    let limits = Limits { turns: 8, ..LIMITS };
+    let mut fleet = Measured::new(limits);
+    let (run, attempt) = (fleet.name(), fleet.name());
+    fleet.hello(channel(0), vec![Hosted { run, attempt, phase: Phase::Active }]);
+    for turn in 1..=limits.turns {
+        let out =
+            fleet.step(Event::Turn { channel: channel(0), run, attempt, turn, body: Token::new(u64::from(turn)) });
+        assert!(out.is_empty(), "a stray holds its turn for adoption");
+    }
+    let refused = fleet.step(Event::Turn { channel: channel(0), run, attempt, turn: 9, body: Token::new(9) });
+    assert!(matches!(refused[..], [Request::TurnBusy { .. }, Request::Drop { .. }]));
+    fleet.step(Event::Adopt { reply_to: ReplyTo::new(attempt), run, attempt, kept: 3 });
+    let released = fleet.settle();
+    assert_eq!(released.iter().filter(|request| matches!(request, Request::Turned { .. })).count(), 5);
+    for turn in 4..=limits.turns {
+        fleet.step(Event::TurnKept { run, attempt, turn });
+    }
+    // Parent pressure frees the remaining admission for retry as well.
+    fleet.step(Event::Turn { channel: channel(0), run, attempt, turn: 9, body: Token::new(90) });
+    fleet.step(Event::TurnBusy { run, attempt, turn: 9 });
+    fleet.step(Event::Turn { channel: channel(0), run, attempt, turn: 9, body: Token::new(91) });
+    fleet.step(Event::TurnKept { run, attempt, turn: 9 });
+    fleet.step(Event::Answer { channel: channel(0), run, attempt, answer: Answer::Ended, payload: Token::new(99) });
+    fleet.step(Event::Acknowledge { run, attempt });
+    fleet.settle();
+    assert_eq!(fleet.domain.attempts(), 0);
 }
