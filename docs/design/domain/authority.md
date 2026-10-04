@@ -204,43 +204,81 @@ deployment's rules       the most any project may have; requirements on effects
 
 ## 7. Budgets and spend
 
-- **Four numbers per funder:** its budget (what it was given), what it
-  has spent itself, what the ended tasks it funded spent, and what it has
-  reserved for the live tasks it funds. What it has left is its budget
+- **Four numbers per current allotment:** its budget (what it was given),
+  what it has spent itself, what the closed allotments it funded spent,
+  and what it has reserved for the live allotments it funds. Normally an
+  allotment closes as its task ends; moving may close and replace an
+  allotment while its task stays live. What it has left is its budget
   less the other three, and never below zero. A task is a funder; so is
   each person's pool and each project's spend, per period, whose numbers
   the tasks child domain keeps too, in the store (engine.md, 5.4).
 - **Every reservation records its funder:** the task above, a person's
   pool, or a project's period. A batch reserves each delegate's budget
   from its creator in the commit that makes it; an accepted proposal
-  reserves from its accepter.
+  reserves from its accepter. A funding link names the actual task,
+  person's pool and period, or project's period, independently of the
+  requester tree. Each task has one current allotment and one recorded
+  funder. The tasks child durably numbers allotment generations and closes
+  each exactly once; an aggregate snapshot cannot recognize a duplicate
+  closure, including a zero-budget one.
 - **When a task ends,** in the commit that ends it, its reservation is
   released: its unspent budget goes back to its funder, and what it and
-  the tasks it funded spent is added to its funder's "spent by ended
-  tasks". Each funder passes its own on when it ends, so spend climbs
+  the allotments it funded spent is added to its funder's "spent by closed
+  allotments". Each funder passes its own on when it ends, so spend climbs
   the chain one end at a time, to the pool or period at the top, and is
   never counted twice nor lost, nor more than what funded it but by the
-  overrun below.
+  overrun below. Every allotment it funds must have closed before its own
+  closes. Closed allotments' historical spend remains in immutable history
+  and on the old funding chain, even when current task counters reset.
 - **A task moved** to a new requester (tasks.md, section 6) is funded
-  anew: its old funder is given back what the task has left and keeps
-  what it spent; the new funder reserves what the task has left from its
-  own.
+  anew. In one commit the root virtually closes its live funding subtree
+  from the leaves upward, retaining each live task's unspent amount. It
+  closes the old root allotment against its actual old funder, which keeps
+  all that allotment's spend and receives what remains. The new funder
+  reserves the unspent amount of the whole funding subtree. Each live
+  task's replacement allotment starts with zero spend and reserves its
+  directly funded tasks' retained amounts. Every promised amount must fit
+  at every level or the whole move is refused: an overrun is never fixed
+  by trimming a live task's budget. A top-up requires a separate authorized
+  amendment or proposal. A move to the same actual funder preserves the
+  original counters and reservations and skips this normalization.
+- **Funding across the requester tree.** An accepted proposal may have a
+  task's ancestor fund a delegate directly. Before moving a requester
+  subtree, the root checks every task's actual incoming funder link;
+  allocations still funded by an old task that must end need separate
+  transfers in the same commit, or the move is refused. They need not be
+  folded into the moved root's budget. Stable external pool or period
+  allocations retain their original funders. Funding cycles are refused,
+  and a funding node cannot close while it still funds live allocations.
+  New reservations use actual available funds; returning budget to a task
+  does not return it to that task's own funder until its allotment closes
+  or is explicitly narrowed.
+- **One funding source.** A budget widening from the same actual funder
+  updates the allotment and its reservation together. From another funder
+  it must re-fund the whole remaining allotment, with the increase, under
+  these rules and the authority checks, or be refused. It cannot mix a
+  second source into counters that record only one funder.
 - **Overruns** are charged all the same: what a run spends past what its
   task had left is counted, and its task, left with nothing, is held for
   its budget (tasks.md, 5.5); its funder's numbers carry the excess.
 - **Periods.** A project's spend and a person's allotment are per period.
   A reservation counts in the period that funded it, and what it returns
   goes back to that period, so a reset frees nothing reserved. A
-  recurring task's budget is carved again each period (tasks.md,
-  section 9).
+  period's identity and counters stay live until its reservations close;
+  an explicit transfer to a different period is new funding, even for the
+  same person or project. A recurring task's budget is carved again each
+  period (tasks.md, section 9).
 - **Spend is priced as it is spent.** A charter carries the prices of
   its models, in the deployment's unit. A run prices each completion it
   makes, its sub-agents' included, and reports what it spent with each
   turn it commits (engine.md, 7.2), and the whole with its answer; the
   engine charges each turn as it commits, and the difference between the
-  answer's whole and the turns committed when it commits the answer. What
-  a worker loses with turns never committed, and no answer, is bounded
-  by the turns a worker may keep unacknowledged.
+  answer's whole and the turns committed when it commits the answer. This
+  difference uses cumulative committed spend of that run, kept in history,
+  including turns charged to a closed allotment; resetting current task
+  counters during a move never charges those turns again. What a worker
+  loses with turns never committed, and no answer, is bounded by the turns
+  a worker may keep unacknowledged.
 - **A run's budget** is what its task has left, capped per run by the
   deployment, in the deployment's unit. The agent enforces it (agent.md,
   4.2), stopping the next completion of each session once the run has

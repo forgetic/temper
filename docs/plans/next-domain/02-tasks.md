@@ -65,8 +65,9 @@ pub(crate) struct Task {
     spec: Spec,               // words and typed parameters, bounded; the root's to read
     contract: Contract,
     authority: Authority,     // tasks' own type for it: carried, never judged
-    numbers: Numbers,         // against its authority, as authority's answers say
-    funder: Funder,
+    numbers: Numbers,         // its current allotment, as authority's answers say
+    funder: Funder,           // actual funding link, including the original period
+    allotment: u64,           // durable generation, closed exactly once
     tracked: Option<Priority>,
     dependencies: Set<u64>,   // live siblings it starts after
     delegates: Set<u64>,
@@ -214,10 +215,28 @@ pub enum Request {
 | a proposal | pending; decided | made, routed, decided |
 | an entry of a task's history | by task, by sequence | made, amended, held, released, cancelled, moved |
 | a funder's numbers | persons' pools, projects' periods | carved, settled, reset |
+| an allotment closure | by task and generation | ended or replaced in a move |
+| a run's cumulative committed spend | by task and attempt | each charged turn and answer |
 | a stub of an ended task | by number | ended while a live task names it |
 
 A task that ends is erased from the live range and saved to the ended
 one, in the commit that ends it, with its result.
+
+Moves preserve every live allotment's unspent amount by normalizing each
+actual funding component bottom-up, validating replacement reservations,
+and committing their closures, reopened generations and history together
+(authority.md, section 7). The hub checks external incoming funding links
+across the moved requester subtree: a delegate may have been funded by an
+accepted proposal's holder rather than its requester. Allocations funded
+by old tasks that must end are separately transferred, or the move is
+refused; original pool and period identities otherwise remain. The same
+actual funder keeps its counters unchanged. A budget widening cannot mix
+sources under one `Funder`: a different source must re-fund the whole
+remaining allotment and increase, subject to authority, or be refused.
+An in-flight run's answer charges only its cumulative whole less that
+run's previously committed expense, even across allotment replacement.
+History and generation records prevent a replay from closing an old
+allotment or charging an old turn twice.
 
 ## 3. The world
 

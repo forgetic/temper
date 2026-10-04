@@ -34,7 +34,7 @@ crates/temper-engine-domain-authority/src/
 ├── lib.rs          its doc (what it decides, what it never keeps), re-exports
 ├── value.rs        Authority, Tools, Grant, Pattern, Name, Delegation, Budget, Scopes
 ├── order.rs        at_most, fits, covers (a pattern, a grant, a holder)
-├── numbers.rs      Numbers, Funder; carve, return_unspent, charge, move_funding
+├── numbers.rs      Numbers, Funder, Funding; left, carve, settle, charge, move_funding
 ├── rules.rs        Rules (the deployment's), Policy (a project's), Role, Requirement, LandingRule, Implies
 ├── check.rs        check_batch, check_effect, check_run, check_request, check_call, needs, covers
 ├── domain.rs       Domain (rules and policies in force), step: policies added, changed, dropped
@@ -125,8 +125,8 @@ Kinds are ordered by the connector's `Implies` table (for the forge,
 ### 2.3 Numbers
 
 ```rust
-/// What is kept against one funder (authority.md, section 7). What is left
-/// is the budget less the other three, never below zero.
+/// What is kept against one current allotment (authority.md, section 7).
+/// What is left is the budget less the other three, never below zero.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Numbers {
     pub budget: u64,
@@ -140,14 +140,48 @@ pub fn carve(funder: Numbers, budgets: &[u64]) -> Option<Numbers>;
 
 /// As a funded task ends: its funder's numbers once what it left is
 /// returned and what it and its own funded tasks spent is counted below.
-pub fn settle(funder: Numbers, ended: Numbers) -> Numbers;
+pub fn settle(funder: Numbers, ended: Numbers) -> Option<Numbers>;
 
 /// A turn's or an answer's spend charged to the task that ran it; past what
 /// it had left, the excess is counted all the same, and the answer says so.
-pub fn charge(task: Numbers, spent: u64) -> Charged;
+pub fn charge(task: Numbers, spent: u64) -> Option<Charged>;
+
+/// A snapshot names its actual task, pool plus original period, or project
+/// period. The caller gathers every snapshot from one committed state.
+pub struct Funding {
+    pub by: Funder,
+    pub numbers: Numbers,
+}
+
+/// After caller-side bottom-up normalization, close the old allotment,
+/// reserve the whole unspent amount from the new funder, and reopen its
+/// direct child reservations. Any refusal leaves the input values intact.
+pub fn move_funding(
+    old: Funding,
+    new: Funding,
+    task: Numbers,
+    replacement_budgets: &[u64],
+) -> Option<Moved>;
 ```
 
 Checked arithmetic throughout; an overflow is a refusal, never a wrap.
+`settle` also refuses an allotment with live reservations or an old funder
+without its full recorded reservation. `charge` counts overruns and
+reports their amount; a representable overrun is not a refusal.
+
+`move_funding` takes the virtually settled, zero-reserved root for a
+different actual funder. The caller preserves every live allotment's
+unspent amount, validates replacements bottom-up, checks actual incoming
+funder links across the requester subtree, and commits all closures,
+replacements and history together (authority.md, section 7). The function
+validates the direct replacement reservations; it cannot detect an omitted
+child from amounts alone. A move to the same actual funder takes the
+original numbers and an empty replacement slice and returns them unchanged;
+different snapshots for the same funder are refused. Period identities are
+never changed by a reset. Durable allotment generations and cumulative
+committed expense per run are the tasks child's, not fields of `Numbers`.
+Widening and its authority checks belong to 01c; this increment transfers
+existing unspent allotments without mixing funding sources.
 
 ### 2.4 Rules, policies and checks
 

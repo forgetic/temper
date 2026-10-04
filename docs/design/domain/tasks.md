@@ -98,9 +98,11 @@ it is live:
   default wake policy and waiting time, whether a run resumes its
   transcript or starts fresh (engine.md, 7.1).
 - **Its authority** (authority.md, section 3), and the numbers kept
-  against it: spent by itself, spent by the ended tasks it funded,
-  reserved for the live tasks it funds, and who funded its own budget
-  (authority.md, 7).
+  against it: spent by itself, spent by the closed allotments it funded,
+  reserved for the live allotments it funds, and who funded its own current
+  allotment (authority.md, 7). The allotment has a durable generation;
+  historical spend and each run's cumulative committed expense survive
+  closing and replacing an allotment during a move.
 - **Its wake policy** (7.3) and **its subscriptions** (7.4).
 - **Whether it is tracked,** and its priority if so: a goal
   (core.md, 5.2).
@@ -322,7 +324,16 @@ which may amend, cancel or re-address it.
   live task they may amend, so that it outlives the task that asked for
   it, as a goal outlives the chat it came from. Its reservation moves to
   their funding (authority.md, section 7); the task that asked for it
-  keeps a reference to it.
+  keeps a reference to it. The move and every funding replacement commit
+  together: live tasks stay live, with every promised unspent budget
+  preserved, or the move is refused. The hub follows actual funder links
+  across the whole moved requester subtree, including delegates an
+  accepted proposal funded directly from the old chat. Such allocations
+  are separately re-funded if their old task funder must end; stable
+  external pool or period funding keeps its original identity. Closed
+  allotments are recorded exactly once by generation, and replacements
+  reopen current counters without erasing history or a live run's
+  cumulative charged expense (authority.md, section 7).
 
 ## 7. Messages
 
