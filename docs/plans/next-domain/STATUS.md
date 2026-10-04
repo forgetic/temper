@@ -8,7 +8,7 @@ their completion criteria. Branches are local. Nothing has been pushed.
 
 | Increment | State | Evidence |
 |---|---|---|
-| 00a Forgejo facts | probing complete; changes not yet merged | isolated Forgejo 15 probe; conformance branch `next-domain/00a` still in preparation |
+| 00a Forgejo facts | merged, `fa97784` | isolated Forgejo 15 probe and retained observations; all four workflow checks passed, focused 1,772/1,772 in 7.440 s, fuzzy 26/26 in 22.148 s, one ignored finding |
 | 00b dead drafts | merged, `9acb981` | all four workflow checks passed; 1,772 focused tests, 26 fuzzy tests and one ignored finding, unchanged from baseline |
 | 00c legacy rename | merged, `d8385dc` | all four workflow checks passed; focused 1,772/1,772 in 7.495 s, fuzzy 26/26 in 22.159 s, one ignored finding |
 | 00d design destination | merged, `be9164e` | Markdown only; design now under `docs/design/domain/` |
@@ -30,9 +30,17 @@ world's serial total is recorded in README.md, 5.5. Test budgets remain
 
 ## Remaining steps
 
-00a must be merged and its facts reviewed before new domain code begins.
-Steps 01 through 08 remain unimplemented. The authority value/order
-increment (01a) has been prepared read-only; it has no code yet.
+Step 00 is complete. All seven Forgejo prerequisites have observations
+or the specified conservative fallback in `domain/forge.md`, 20.1. The
+retained fixture contains 53 actual HTTP exchanges and two signed
+webhooks; both HMACs were independently verified. No scratch server or
+runner remains live. Comparison paging is unsupported, protection reads
+are denied to write permission, and supported REST job-log reads are
+unavailable; the design records bounded/unknown handling and status links.
+
+Steps 01 through 08 remain unimplemented. Read-only preparation is
+complete for authority value/order (01a), people sign-ins/requests (03a)
+and fleet turns/graces (05a); these are the next code increments.
 
 After groundwork, the plan's finer dependencies still apply: tasks needs
 authority's value and number shapes; the root's walking skeleton needs

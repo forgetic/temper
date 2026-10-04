@@ -395,7 +395,7 @@ that hears the store. Step 06 builds this; the children only follow 5.2.
 
 ### 5.4 Worlds
 
-A child domain's world follows `tests/engine/work`, today's template:
+A child domain's world follows `tests/legacy/engine/work`, the frozen template:
 
 ```
 tests/engine/tasks/
