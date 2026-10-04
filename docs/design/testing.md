@@ -291,6 +291,27 @@ web they make the engine's own calls, which no protocol carries yet. The
 whole worker's world reuses them; the agent's top-level world scripts its
 own, as its agents cannot take a session's turns yet.
 
+#### 4.4.1 The people child domain's parent and store
+
+The new `tests/engine/people` world plays the root, authority and tasks
+for increment 03a. Sign-ins, authoritative roles and keyed chat requests
+reach the real people child. The root scripts authority's outcome, makes
+a task and commits it alongside people's answer record. It holds every
+reply behind its commit, including a duplicate whose record exists only
+in the domain's state ahead of the store.
+
+Cold restarts keep only durable people records and task creations.
+Scenarios cut before durability, after durability before reply delivery,
+and while routing temporarily waits. Client calls lost with the process
+are abandoned and retried with a fresh reply destination and the same key.
+The referee observes client replies and durable task creations, checking
+reply order, roles and one creation per key; negative tests check each
+safety rule and a missing reply's deadline. Focused tests cover signing
+in, expiry, roles, initial-owner bootstrap, duplicate waiters and refused
+admission, replay, inert facts and counted peak memory. The fuzzy matrix
+settles every world and reaches each named ending within the people's
+world allotment (`docs/plans/next-domain/README.md`, 5.5).
+
 ### 4.5 Temper's own components
 
 A fake worker served until the worker's domain was built, and a fake
@@ -454,7 +475,7 @@ As of 2026-10-03.
 | Tier | Built |
 |---|---|
 | step tests | every domain crate and the fakes |
-| domain worlds | the agent's tools, session and run; the worker's checkout, agent and host; the engine's work, plan, forge, fleet, brief, notes and views (the rules by step tests alone); the engine's own |
+| domain worlds | the agent's tools, session and run; the worker's checkout, agent and host; the legacy engine's work, plan and forge, the new people child, fleet, brief, notes and views (the rules by step tests alone); the engine's own |
 | system worlds | the agent's top-level world: the engine, the worker and agents; the whole worker's: the engine, the worker and scripted agents |
 | machine worlds | none: temper has no machine of its own |
 | protocol worlds | none: no protocol layer exists |
@@ -548,7 +569,9 @@ By fake:
 - **Machine:** a step crate; programs as step machines with command-line
   faces; the shell subset; the io face, and its place behind the
   simulator; the real loop's sandbox.
-- **People:** a domain, then the client side of the web's protocol.
+- **People:** inboxes, person tasks and adoption after the new child's
+  signing-in, roles and keyed requests; then the client side of the web's
+  protocol.
 
 ## 10. Open questions
 

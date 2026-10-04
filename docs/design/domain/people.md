@@ -71,6 +71,30 @@ authority and to the tasks.
   everyone else gets a role by a project's owner, or by adoption's seed
   (section 4).
 
+### 3.1 Person numbers and the initial owners
+
+The root owns deployment numbers (`engine.md`, section 4). For a sign-in
+it supplies a fresh candidate person number alongside the forge identity;
+people uses it only for a new `(forge, user id)`. An identity already known
+keeps its durable number. Unused candidates leave gaps, and numbers are
+never reused. The protocol's sign-in numbers likewise name one sign-in
+only. Login and display name may change; neither identifies a person.
+
+Configuration names the initial owners by `(project, forge, user id)`.
+The project's roles are initialized before signing in. When an identity's
+first person record is made, people grants those configured roles and
+saves them with the person and sign-in in the same decision. It reserves
+room for every matching project first: a full project refuses the sign-in
+without making any record. Later sign-ins never regrant a role an owner
+changed. Configuration bounds the matches, and `max_out` includes every
+possible bootstrap role record.
+
+Sign-in expiry is saved as a wall time. Admission computes its monotonic
+deadline once; restoring computes it again from the saved wall time and
+the startup environment. Requests reject expiry by either the saved wall
+time or the current sign-in's monotonic deadline, so a backwards wall
+clock movement cannot extend a sign-in within one process.
+
 ## 4. Roles
 
 Each project has its roles, and its policy says what each may do
@@ -124,6 +148,35 @@ committed, and answered once durable (engine.md, 5.2):
   limit, a task since ended.
 - **Two people deciding one thing:** the first commit decides; the second
   is told it was decided, by whom, and how.
+#### 5.1.1 Keyed admission and answers
+
+Keys are scoped by person, across that person's sign-ins. A valid sign-in
+asking again with the same key and the same typed request gets its saved
+answer; current roles do not remake a decision already made. Reusing a
+key for a different request is refused as a key conflict. An in-flight
+copy joins a bounded group of reply destinations, with one route to the
+root; a full group answers busy.
+
+Admission reserves room for the eventual answered-key record before it
+routes. Completed records plus reservations cannot exceed the limit, so
+an outcome never fails halfway through for lack of key space. A request
+refused by its role saves that outcome too. Admission busy, invalid sign-in,
+oversized input and key-conflict answers make no record and change no
+state. Busy admission may be retried.
+
+The root routes and closes the decision in one step (`engine.md`, section
+4), saving the task changes and the keyed outcome in one commit. People
+emits the answer immediately; its parent holds it until that commit is
+durable (`engine.md`, 5.6). A root temporarily waiting for a load keeps
+the flight volatile and makes no external mutation until it can save the
+outcome with the decision. A crash before durability loses both task and
+key; one after durability loses neither, even if the reply had not left.
+
+Increment 03a retains completed keys up to a configured capacity; timed
+retention and paging follow in 03c. Its `Ask` contains `StartChat` only.
+Other requests in 5.1 gain their full typed vocabulary and behavior in
+the increments that implement them.
+
 ### 5.2 The project itself
 
 A project, its repositories and roles, and its policy are records in the
@@ -245,6 +298,29 @@ Its referee: every request is answered once, after its commit; no
 request is acted on beyond the person's role; what waits for a role
 leaves every inbox once one person acts on it; a person's words reach
 their task, or the task ends.
+
+### 12.1 What is built in increment 03a
+
+`tests/engine/people` runs identities, sign-ins and expiry, authoritative
+project-role updates, initial-owner bootstrap and keyed `StartChat`. Its
+scripted root checks the routed role and authority, makes a task, commits
+the task and people's saved answer together, and withholds replies until
+durability. Scenarios restart independently before durability and after
+durability before a reply, as well as during a transient root wait.
+
+The referee observes client replies and durable task creations: one reply
+per call, no reply before its commit, no observer routed and no key making
+two durable tasks. The world checks bounded duplicate waiters, key
+conflicts, capacity refusals, cold restoration, facts changing nothing,
+replay and memory. Its fuzzy matrix reaches every configured ending.
+Inboxes, person tasks, adoption and timed key retention remain later
+increments.
+
+Admission pressure reported by the root (`Busy` or `NotReady`) completes
+the pending call and every duplicate waiter without saving a completed
+answer. It releases the reserved answer slot, so the same key can retry
+when tasks or another child has room. A decided result or permanent
+refusal remains keyed and durable.
 
 ## 13. From today
 

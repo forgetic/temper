@@ -326,6 +326,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-engine-domain-people"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+]
+
+[[package]]
 name = "temper-engine-domain-views"
 version = "0.0.0"
 dependencies = [
@@ -347,6 +354,15 @@ version = "0.0.0"
 dependencies = [
  "skein-lib",
  "temper-engine-domain-notes",
+ "temper-world",
+]
+
+[[package]]
+name = "temper-engine-people-world"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+ "temper-engine-domain-people",
  "temper-world",
 ]
 
