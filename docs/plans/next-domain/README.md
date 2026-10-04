@@ -427,13 +427,68 @@ tests/engine/tasks/
 
 ### 5.5 Budgets
 
-Step 00 measures every world's share with the `measure` profile and
-records it in this section. Until then, each new world aims at:
+Measured on 2026-10-04 at `95e9bfd`, before the mechanical legacy rename,
+with no other build running. The enforced profiles passed: **1,772 focused
+tests in 5.758 seconds** (15-second cap), and **26 fuzzy tests in 18.223
+seconds**, with one ignored finding (60-second cap). The serial `measure`
+runs took 19.348 seconds focused and 41.076 seconds fuzzy. These are test
+execution times; compilation is outside the budgets.
 
-- **focused:** its tests together under 0.5 seconds, measured alone
-  (`--profile measure -j 1`), a story on one to three seeds;
-- **fuzzy:** its sweep under 4 seconds alone.
+The following totals sum nextest's per-test durations from the serial
+runs (`--profile measure -j 1`, adding `--ignore-default-filter -E
+'binary(/^fuzzy_/)'` for fuzzy). Durations are rounded to milliseconds,
+so short tests and process overhead account for the difference from wall
+time. Names here are the measured pre-migration names; the four legacy
+worlds receive their renamed packages in 00c without changing their tests.
 
+| World package | Focused seconds | Fuzzy seconds |
+|---|---:|---:|
+| `temper-agent-domain-world` | 1.576 | 15.548 |
+| `temper-agent-protocol-world` | 0.174 | 0.027 |
+| `temper-agent-run-world` | 0.501 | 0.289 |
+| `temper-agent-session-world` | 2.017 | 0.625 |
+| `temper-agent-tools-world` | 0.633 | 2.717 |
+| `temper-channel-world` | 0.068 | 0.107 |
+| `temper-engine-accounts-world` | 0.037 | 0.013 |
+| `temper-engine-brief-world` | 0.190 | 0.722 |
+| `temper-engine-domain-world` | 1.417 | 6.475 |
+| `temper-engine-fleet-world` | 0.259 | 0.526 |
+| `temper-engine-forge-world` | 1.286 | 2.625 |
+| `temper-engine-notes-world` | 0.110 | 0.189 |
+| `temper-engine-plan-world` | 0.152 | 1.458 |
+| `temper-engine-protocol-world` | 0.150 | 0.109 |
+| `temper-engine-views-world` | 0.317 | 0.255 |
+| `temper-engine-work-world` | 0.274 | 0.455 |
+| `temper-fake-forge-protocol-world` | 0.014 | 0.000 |
+| `temper-fake-forge-tests` | 0.004 | 0.000 |
+| `temper-fake-llm-tests` | 0.012 | 0.000 |
+| `temper-forge-forgejo-world` | 0.084 | 0.000 |
+| `temper-worker-agent-world` | 0.116 | 0.446 |
+| `temper-worker-checkout-world` | 0.457 | 0.763 |
+| `temper-worker-domain-world` | 3.979 | 7.106 |
+| `temper-worker-host-world` | 0.074 | 0.617 |
+| `temper-worker-protocol-world` | 0.125 | 0.000 |
+| `temper-world` | 0.059 | 0.000 |
+
+Other crates' unit tests total 5.123 seconds focused and 0.000
+seconds fuzzy in the serial runs.
+
+The initial allotments below preserve room for shared runtime extensions
+and process overhead. They apply to the sum of a new world's tests when
+measured alone with the serial profile; stories use one to three seeds.
+Authority has step tests only.
+
+| New tests | Focused seconds | Fuzzy seconds |
+|---|---:|---:|
+| authority step tests | 0.2 | — |
+| tasks world | 0.5 | 4 |
+| people world | 0.5 | 4 |
+| forge connector world | 0.5 | 4 |
+| new root world | 0.5 | 4 |
+
+These allotments add at most 2.2 focused and 16 fuzzy seconds of serial
+work to the overlap. They are targets, not proof that concurrent suites
+fit: every code increment still runs both enforced profiles in full.
 When a step's gate finds a budget broken, the step makes its own tests
 cheaper first, then trims the legacy worlds' fuzzy seed counts (3.4),
 and says so in its commit. The budgets in `.config/nextest.toml` are not
