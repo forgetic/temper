@@ -249,6 +249,51 @@ relies on, and all it relies on:
 What it is, where it lives and how it is built are not the domain's
 concern.
 
+### 5.6 How a child's records reach a commit
+
+Each child that keeps durable state defines its own `Stored` records and
+ordered `Key`s in its boundary vocabulary. Neither a sibling nor the
+store chooses their shapes. The root translates their keys and carries
+their records in its store vocabulary; the store's protocol layer encodes
+each shape with a version (5.5). The convention is shared by the children
+and their worlds (`docs/plans/next-domain/README.md`, 5.2 and 5.3):
+
+- **`Save { record: Stored }`** keeps the record under its own key, and
+  **`Erase { key: Key }`** removes that key. These requests are part of
+  the decision the parent is making. They have no terminal event and do
+  not ask the child to wait: its state changes as it decides (5.1), so
+  the next decision sees it.
+- **`Restore { record: Stored }`** supplies one record at restart, and
+  **`Restored`** says every record in the child's live ranges has been
+  supplied. The child then decides from that restored state. Its records
+  must carry everything needed to recover its decisions and pending work.
+- **`Load { owner: Token, range: Range }`** asks for one bounded page of
+  the child's own key range. Its one terminal event is
+  **`Loaded { owner: Token, rows: Box<[Stored]>, more: bool }`**. The token
+  is echoed, and `more` says another page remains: the parent supplies
+  each page in response to a separate load, rather than sending further
+  terminals for the first request. The child requests the next range when
+  needed, within its limits. This is distinct from restart's `Restore`
+  stream.
+
+A child never waits for a commit and never holds an output back for one.
+Assignments, answers and effects leave the child as it decides. Before
+its entry point returns, the root gathers every child's `Save` and
+`Erase` into the decision's one numbered `Commit`. It tags each outward
+request following from that decision with that commit, or with the last
+commit made if the decision made none. Requests wait until that number
+is durable and are released in their original order through the root's
+ready list, within `MAX_OUT`; the step hearing the store does not release
+an unbounded group at once. The outputs that decide nothing remain as
+5.2 specifies. A failed commit releases none of its waiting requests, nor
+any later ones (5.1).
+
+A child's world plays its parent and the store: it retains saved records,
+applies erases, commits at the end of each step, and restarts by feeding
+the durable records as `Restore` followed by `Restored`. It serves paged
+loads in the child's own vocabulary. Restart is therefore tested before
+the root is built, including decisions whose effects have yet to settle.
+
 ## 6. Restart
 
 A restart is a cold start that rebuilds everything a decision reads from
