@@ -202,7 +202,9 @@ fn event_up(
             }
         }
         http::Event::Upload(Up::Room) => exchange.action = Action::Send,
-        http::Event::Upload(Up::Failed(_)) => { exchange.upload = Box::new([]); }
+        http::Event::Upload(Up::Failed(_)) => {
+            exchange.upload = Box::new([]);
+        }
         http::Event::Upload(Up::Bytes(_) | Up::End) | http::Event::Body(Up::Room | Up::Failed(_)) => {
             terminal(exchange, env, Event::Failed(document::Failure::TimedOut), above, below);
         }
@@ -295,7 +297,9 @@ pub fn close(exchange: &mut Exchange, env: &Env<Limits>, below: &mut Queue<Down>
     exchange.upload = Box::new([]);
     exchange.body.clear();
     clear_events(exchange);
-    if !terminal { down(exchange, env, http::Request::Close, below); }
+    if !terminal {
+        down(exchange, env, http::Request::Close, below);
+    }
 }
 fn clear_events(exchange: &mut Exchange) {
     for _event in 0..exchange.events.capacity() {

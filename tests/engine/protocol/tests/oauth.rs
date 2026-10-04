@@ -18,8 +18,11 @@ fn failed(world: &World, expected: accounts::Failure) {
         world
             .notices
             .iter()
-            .any(|event| matches!(event, engine::Event::RefreshFailed {failure, ..} if *failure == expected))
-        , "expected {expected:?}; notices={:?}; records={}; ready={}", world.notices, world.records.len(), world.owner.is_ready()
+            .any(|event| matches!(event, engine::Event::RefreshFailed {failure, ..} if *failure == expected)),
+        "expected {expected:?}; notices={:?}; records={}; ready={}",
+        world.notices,
+        world.records.len(),
+        world.owner.is_ready()
     );
 }
 
