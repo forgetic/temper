@@ -75,9 +75,17 @@ the domains need of them:
   deployment's index for it. `generation` counts the access tokens an LLM
   account has bought since it was granted; a static secret stays at
   generation zero. Names cross the domain boundary as plain integers.
+- **A name never means two values, across restarts too.** A worker or an
+  agent may still hold a grant from the engine's last life when the next
+  one speaks. So an account's generation is kept with its rotated tokens
+  (section 6), and a restart resumes from it: the engine grants the kept
+  token again under its kept generation, and its next refresh buys the
+  one after. An account given anew at startup, after a revocation,
+  starts above the generation kept for it.
 - **A value is the token, and what goes beside it:** a bearer token and,
   for ChatGPT, the account id read once from the token's claims by the
-  engine. Every value is under `Limits::token_bytes`.
+  engine. On the channels they are two byte fields (channel.md, section
+  9). Every value is under `Limits::token_bytes`.
 - **Each protocol layer has a table, indexed by account,** holding at most
   the two newest generations of each.
   - **The engine's** also holds each LLM account's refresh token, which
@@ -101,9 +109,12 @@ the domains need of them:
 section 3). It is a capability, like the fleet, and keeps no secret.
 
 - **An account's state:**
+  - *Starting:* given only a refresh token, so it refreshes at once and
+    is unusable until that succeeds;
   - *Fresh:* its generation, and its deadline: when the token expires,
     on the engine's clock;
-  - *Refreshing:* a refresh in flight;
+  - *Refreshing:* a refresh in flight, which names the generation it
+    buys (the current one plus one), echoed when it ends;
   - *Retrying:* the last refresh failed transiently; the next one is due
     after a backoff;
   - *Revoked:* the provider refused the refresh token; only a person can
@@ -114,6 +125,7 @@ section 3). It is a capability, like the fleet, and keeps no secret.
 
   | State | On | Goes to |
   |---|---|---|
+  | Starting | the engine starts | Refreshing: asks for a refresh |
   | Fresh | its deadline less the margin | Refreshing: asks for a refresh |
   | Fresh | a `Rejected` naming the current generation, past the minimum interval since the last refresh | Refreshing |
   | Fresh | a `Rejected` naming an older generation | Fresh, unchanged |
@@ -126,10 +138,11 @@ section 3). It is a capability, like the fleet, and keeps no secret.
   | Revoked | a new grant from a person, after a restart | Fresh |
 
 - **Usable or not, for the work hub.** An account is usable while it is
-  fresh, or retrying with time left on its token, and not spent. A run
-  whose charter needs an unusable account is not started: the hub treats
-  it as waiting, as it would for a slot, and starts it once the account
-  is usable again. A live run is not cancelled for its account: it fails
+  fresh, or refreshing or retrying with time left on its token, and not
+  spent. A run whose charter needs an unusable account is not started:
+  the hub treats it as waiting, as it would for a slot. The accounts
+  domain tells its parent when an account becomes usable again, and the
+  hub then starts what waited for it. A live run is not cancelled for its account: it fails
   on its own if its calls do, and the hub's retry policy takes over.
 - **People are told** when an account becomes revoked, or spent beyond a
   threshold. The account's state is a fact that views carry to watchers
@@ -156,7 +169,8 @@ section 3). It is a capability, like the fleet, and keeps no secret.
   and a small decoder in `temper-oauth`, whose server side the fake LLM
   provider uses.
 - **Kept before it is used.** The protocol layer makes the rotated
-  refresh token durable, with the new access token. Only once that has
+  refresh token durable, with the new access token and its generation
+  (section 4). Only once that has
   completed does it tell the domain `Refreshed`.
   - A crash before then loses the new tokens. The old refresh token is
     still the one kept, and the provider either still takes it, or

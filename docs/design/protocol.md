@@ -379,7 +379,11 @@ In order, each boundary designed in depth first:
    running the system worlds' scenarios through bytes. It needs nothing
    new from skein while workers share the engine's host, the link in
    plaintext on loopback; workers on other hosts wait for skein's TLS
-   server side.
+   server side. Its protocol worlds join the stacks with in-memory
+   streams first, and gain io's sockets and pipes as skein builds them.
+   The agent's half of the channel (agent-domain.md, section 10) is a
+   domain feature designed apart: until it is built, the wire carries
+   its messages and the agent's translation hears what its domain does.
 2. **LLM providers and credentials:** accounts in the engine's domain and
    grants on the channels (below); both providers; the fake LLM
    provider's protocol layer; and from skein, its first pull: the TLS
@@ -400,7 +404,12 @@ What skein owes it, beyond the machines its documents plan:
   pieces (a head kept, the whole digested, the rest skipped);
 - **HTTP:** a server that answers before the domain hears, and a client
   that says whether any byte of a request was written;
-- **server-sent events** large enough for ChatGPT's echoes of a request.
+- **server-sent events** large enough for ChatGPT's echoes of a request;
+- **streams in both directions at once** (channel.md, 10.1): room asked
+  for while a read is outstanding. lib.md's contract answers one demand
+  at a time, with bytes or with room, so a side waiting for its peer's
+  next frame cannot ask for room to send. Until skein offers it, temper's
+  channel holds a grant of room of its own (channel.md, 10.1).
 
 ## 11. Open questions
 

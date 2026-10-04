@@ -322,7 +322,7 @@ Kinds `0x01xx`. In the tables:
 | `0x0183` | `Cancel` | run; attempt | `Request::Cancel` | `Event::Cancel` | notice |
 | `0x0184` | `Relayed` | run; attempt; call `u64`; answer: a served call (7.4) | `Request::Relayed` | `Event::Relayed` | answers `Relay` |
 | `0x0185` | `Acknowledge` | run; attempt | `Request::Acknowledge` | `Event::Acknowledged` | notice |
-| `0x0186` | `Grant` | run; attempt; account `u32`; generation `u64`; valid: duration; value bytes | owed | owed | notice |
+| `0x0186` | `Grant` | run; attempt; account `u32`; generation `u64`; valid: duration; token bytes; account id bytes (section 9) | owed | owed | notice |
 
 `Request::Refuse` is not a message of its own. It is the frozen
 `Refuse { busy }`, after which the channel closes; the engine's domain
@@ -380,9 +380,15 @@ neither: a call is named by the run.
 |---|---|---|---|---|---|
 | `0x0281` | `Start` | charter (7.1); snapshot: option (7.6); repositories: list of { name bytes, writable `bool` }; endpoints: list of endpoint descriptors (llm.md), each with its account; grants: list of grants with their values | `Start` | `Event::Start` | call; first, once |
 | `0x0282` | `Event` | event `u64`; body: an inbound event (7.3) | `Event` | owed: inbound events | notice |
-| `0x0283` | `Answer` | call `u64`; reply: `Relayed` { answer (7.4) }, `Pushed` { push `u8` }, `Unavailable`, `Busy`, `Withdrawn` or `TooLarge` | `Answer` | `Event::Pushed`, `Event::HostCancelled`; relayed: owed | answers `Call` |
+| `0x0283` | `Answer` | call `u64`; reply: `Relayed` { answer (7.4) }, `Pushed` { push: the push's result (below) }, `Unavailable`, `Busy`, `Withdrawn` or `TooLarge` | `Answer` | `Event::Pushed`, `Event::HostCancelled`; relayed: owed | answers `Call` |
 | `0x0284` | `Cancel` | nothing | `Cancel` | `Event::Cancel`, once admitted | notice |
-| `0x0285` | `Grant` | account `u32`; generation `u64`; valid: duration; value bytes | owed | owed | notice |
+| `0x0285` | `Grant` | account `u32`; generation `u64`; valid: duration; token bytes; account id bytes (section 9) | owed | owed | notice |
+
+- **A push's result** is the worker's domain's, field for field: landed,
+  nothing to push, stale, or failed with its typed reason, the failed
+  repository's index, and the tail of git's diagnostic (at most 512
+  bytes) with the count of bytes dropped before it (agent-domain.md,
+  4.4).
 
 - **The worker's protocol layer completes the start.**
   - **The repositories** are where the run's checkout sits: each a
@@ -492,8 +498,10 @@ The engine's `Call` and `Served`:
   the comment posted, or why it was not served.
 
 The schema of a read's answer is the part of the forge's answers that a
-run reads. It is settled with the agent's half of relaying
-(agent-domain.md, section 10).
+run reads. For now it mirrors the engine's `Served` as it stands, field
+for field; it changes with the agent's half of relaying
+(agent-domain.md, section 10), which v1, not frozen until temper first
+ships (4.5), allows at no cost.
 
 When the engine's protocol layer cannot decode a call, it answers the
 call itself, at once, as `Unserved { Invalid }`, without the domain. It
@@ -557,6 +565,10 @@ channels carry them.
     assignment that needs it.
   - **What the engine sends later** goes as `Grant` messages: after each
     refresh, and after every hello for the attempts it keeps.
+- **A value is two byte fields:** the bearer token, and the provider's
+  account id, empty unless the provider is ChatGPT (`credentials.md`,
+  section 4). Each is at most `Sizes::token_bytes`. Apart, the id never
+  has to be cut out of the token.
 - **Each protocol layer keeps values in its table:**
   - **On decode,** it moves each value into its table, by account, and
     the domain gets the name `(account, generation)` and how long the
@@ -630,6 +642,36 @@ channels carry them.
     asked; an answer arriving after that is dropped.
   - The worker's domain sends `Relay` only while the link is open. It
     holds relays itself while the link is down (`Limits::stalled`).
+
+### 10.1 Both directions at once
+
+Both channels are full duplex: what one side sends does not follow from
+what it reads. A side waiting for its peer's next frame must still be
+able to send. skein's stream contract (lib.md, section 7) answers one
+demand at a time, with `Bytes` or with `Room`, and a demand cannot be
+restated while it is outstanding. So a side whose read is outstanding
+cannot ask for room.
+
+- **What skein owes:** room asked for while a read is outstanding, each
+  answered once (protocol.md, section 10). The frame machine then asks
+  for room whenever it has a frame to send, whatever its read.
+- **Until then, the machine holds a grant of room.**
+  - With every demand it states, it asks for all the room it lacks, up to
+    the output cap.
+  - It keeps what `Room` gives as its grant, and sends within it.
+  - A frame that does not fit waits in the machine. What waits there and
+    what is queued below stay within the cap together, so the bounds of
+    this section hold.
+  - Each answer to a read lets the machine ask again. On the link the
+    peer's pings bound the wait to `Limits::ping`.
+  - On an agent's channel, each message from the agent lets the worker
+    ask again. Between two of them the worker sends little: the agent
+    child domain sends one message at a time, an inbound event wakes the
+    agent, and a waiting agent hears only grants, one per refresh, which
+    its run's wall time bounds. A grant of a whole cap outlasts that.
+- **The machine never asks for room it does not need.** A demand with
+  room that is free at once would be answered at once, and asked again,
+  forever.
 
 ## 11. Connections
 
@@ -898,6 +940,8 @@ As testing.md applies skein's strategy.
   output cap holds a slot's worth of them. If snapshots grow to many
   megabytes, a message could be split across frames, or compressed (the
   header's reserved field leaves room). Neither is needed yet.
+- **Both directions at once.** The grant of room in 10.1 retires once
+  skein's streams take room asked for while a read is outstanding.
 - **A worker's name in the engine's domain.** The fleet knows workers
   only by their channels. Views and operators may want the name: it
   would cross as a field of the hello, which the domain then carries.
