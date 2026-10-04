@@ -524,8 +524,8 @@ the step that does it:
 
 | Owed by | Change | Step |
 |---|---|---|
-| `protocol.md` | the store as a boundary: commits, loads, sized records, secret records | 06 (domain face), 08 (protocol) |
-| | the web first | 06 (domain face), 08 (protocol) |
+| `protocol.md` | the store as a boundary: commits, loads, sized records, secret records | 06 (domain face), 08 (protocol plan) |
+| | the web first | 06 (domain face), 08 (protocol plan) |
 | | runs named by task | 06, 07 |
 | | forge comments shrink to keys; transcripts for snapshots | 04, 05, 08 |
 | `channel.md` | turns up, kept until acknowledged; spend; graces at the hello | 05 |
@@ -537,12 +537,18 @@ the step that does it:
 | | names by task; no repository packing | 05 (wire), 07 (engine translation) |
 | | snapshots go; a versioned turn payload | 05 (beside), 08 (gone) |
 | | caps and sizes; its section 14 rewritten | 05 |
-| `credentials.md` | the refresh token in the store's secret records; the web's OAuth client; credentials per adopted repository | 08 |
+| `credentials.md` | the refresh token in the store's secret records; the web's OAuth client; credentials per adopted repository | 08 (follow-on plan) |
 | `llm.md` | schemas for every engine tool, connectors' reads and `wait`; `finish` with the result contract; turns encoded with their names; completions priced | 05 |
 | `docs/design/forge.md` | records, outcome blocks, the wiki, nonces, the person in a marker go | 00 (drafts), 08 (the rest) |
-| | the new calls | 04 (fake), 08 (Forgejo's protocol) |
-| | repositories adopted at runtime, on several forges | 04 (domain), 08 (protocol) |
+| | the new calls | 04 (fake), 08 (Forgejo protocol plan) |
+| | repositories adopted at runtime, on several forges | 04 (domain), 08 (protocol plan) |
 | `docs/design/testing.md` | the engine's world and its fake store; new worlds; the fake forge and checkout grown; restarts at cuts; the referee of `core.md`, section 10 | 02 to 06; rewritten at 07 |
 | `docs/design/performance.md` | turns' bytes; transcripts; the working set of tasks | 05, 06; rewritten at 07 |
 | `docs/development/protocol-implementation.md` | the paused forge increment's drafts deleted; settled decisions | 00 |
 | citations | about two hundred, repointed | as each crate moves; the rest at 08 |
+
+Step 08 writes the separate plans for work below the domain, as
+08-after.md, section 3, specifies. The protocol-plan entries above name
+those plans and the design revisions they require, not implementation of
+the lower layers during this migration. Its notes and contractions are
+implemented before those plans are written.
