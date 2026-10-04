@@ -5,6 +5,30 @@ The design authority is `docs/design/protocol.md`, with the detailed
 `channel.md`, `credentials.md`, `llm.md` and `forge.md` taking precedence
 over their overview where the overview has not caught up.
 
+## Next-domain migration: 00b
+
+The migration in `docs/plans/next-domain/README.md` supersedes the paused
+forge increment below. Its domain authority is the next design in
+`docs/design/next/domain/`, moved to `docs/design/domain/` by step 00d.
+The paused handoff remains a record of the earlier work and checks;
+it is not the migration's remaining-work list.
+
+Step 00b deletes only the unexported, unchecked `forge_blocks.rs`,
+`forge_cursor.rs` and `tests/engine/protocol/tests/forge_cursor.rs.draft`.
+Records, outcomes and notes move into the store: their forge text blocks,
+record comment times and explicit cursors over those records have no
+successor. Wiki hints and their coalescing have no successor either,
+because notes leave the wiki. Labels on keyed creations become display,
+so reconciling them is no longer a condition of finding a creation.
+
+Forgejo's exported documents and signed webhooks, the fake forge's
+protocol, and calls for pull requests, reviews, statuses, branches,
+issues and keyed creations stay. The existing wiki, label and hint
+capabilities stay while the legacy engine uses them; step 08 contracts
+them after the cutover. The new connector's bounded call plans and
+protocol work follow its vocabulary and the plans written in step 08,
+without reviving the deleted record drafts.
+
 ## Paused handoff: 2026-10-04, 12:58 UTC
 
 The user requested a graceful pause after disconnecting the network. All
@@ -38,12 +62,12 @@ Keep these later drafts out of that checkpoint until tested:
   from a checkpoint that excludes the file.
 - The fake forge's `acceptor.rs` is unexported. Socket acceptance,
   outbound signed hooks and the engine webhook receiver are next.
-- Engine `forge_cursor.rs` and `forge_blocks.rs` are unexported and
-  unchecked. `tests/engine/protocol/tests/forge_cursor.rs.draft` is
-  deliberately excluded from automatic test discovery.
-- Item comment times, explicit cursor bounds, keyed-creation label
-  reconciliation, typed record blocks and bounded Forge call plans are
-  still to implement and validate.
+- ~~Item comment times, explicit cursors over records, keyed-creation
+  label reconciliation beyond display, and typed record blocks are still
+  to implement and validate.~~ Step 00b drops this work for the reasons
+  above; the unexported drafts and excluded cursor test are deleted.
+- Bounded Forge call plans remain mechanism below the new connector;
+  their follow-on plan is written in step 08.
 
 The lockfile pins cached skein `78a07ec`; the local skein checkout remains
 read only. Use offline Cargo on resume. TLS integration still waits for
@@ -70,10 +94,12 @@ messages still belong to the channel schema.
    and durable rotation; Anthropic and ChatGPT dialects, both sides;
    agent's HTTP/SSE/JSON stack and provider-neutral tool translation; fake
    provider protocol and protocol world.
-3. **Forge:** domain prerequisites for costs, comment times and hints;
-   Forgejo documents and webhooks, both sides; production engine block
-   codecs, bounded call plans and caches; fake forge protocol; cost worlds
-   and real Forgejo conformance tooling.
+3. **Forge:** retain costs and hints for the legacy engine, Forgejo
+   documents and webhooks, the fake forge protocol, cost worlds and real
+   Forgejo conformance tooling. ~~Production engine record-block codecs,
+   item comment times and explicit cursors over records~~ are superseded
+   by the store. New call plans and caches follow the connector design
+   and its step 08 follow-on plan.
 
 ## Current ownership
 
@@ -205,10 +231,13 @@ OAuth rotation and forge implementation are the next increment.
   save that wins that race installs the durable generation before the
   cancellation terminal. Token validity is anchored to response completion
   and does not grow while waiting for persistence.
-- The OAuth owner exposes an atomic keeper effect. The future file owner
-  must replace the versioned record and sync both the file and directory
-  before reporting `Kept`; pure and socket worlds do not establish actual
-  filesystem durability.
+- The OAuth owner exposes an atomic keeper effect. The next design
+  settles its destination: refresh tokens live in the store's secret
+  records, written by the engine's protocol layer alone, never the domain
+  (`domain/engine.md`, sections 5.4 and 12). The existing file-record
+  path stays during the overlap; step 08 writes the credentials/store
+  follow-on plans. Their real io owner must establish durability before
+  reporting success; pure and socket worlds do not establish it.
 - Component-local operation tokens need a bounded whole-engine io router.
   It must allocate global names, route them to tagged local owners and
   retain every binding through actual io `Closed`, including terminal
@@ -226,13 +255,16 @@ OAuth rotation and forge implementation are the next increment.
   Concurrent multi-step calls can overshoot before their costs arrive;
   this terminal accounting does not enforce a hard per-request rate cap.
   Startup HTTP costs must be reported exactly once as well.
-- Wiki hints refresh only currently held notes scopes for their
-  repository, with deployment notes restricted to the home repository.
-  A bounded set coalesces hints and dispatches one scope per turn. The
-  configured engine's own echoes are dropped before hint routing.
+- ~~Wiki hints refresh held notes scopes, coalesced by a bounded set.~~
+  No new wiki-refresh work is owed: notes move to the store in step 08
+  (`domain/engine.md`, section 10). The already built legacy behavior
+  stays until then, including its scope filtering and own-echo filtering.
 - Real Forgejo v15 omits unknown labels on successful create/add writes.
-  The protocol must inspect returned labels; keyed creation recovery
-  needs a repeat-safe label reconciliation phase before returning Created.
+  ~~Keyed creation recovery needs a repeat-safe label reconciliation
+  phase before returning Created.~~ The next connector uses labels only
+  for display; finding a keyed creation does not depend on them
+  (`domain/forge.md`, sections 12 and 19). The legacy capabilities stay
+  until step 08.
   The retained live fixtures and tagged-source examples identify their
   separate provenance.
 - Every worker-origin attempt input is checked against its current hosting
@@ -258,12 +290,14 @@ OAuth rotation and forge implementation are the next increment.
   a subset and needs reconciliation. Descriptors retain their endpoint
   indexes; the agent validates model references at entrance. Only LLM
   grant values travel to the agent; static git values stay in the worker.
-- Inbound events and bounces carry an opaque event name. Acknowledgement
-  by name is not a count, so sequence gaps are allowed. The detailed link
-  schema lacks a worker-to-engine acknowledgement despite section 14
-  asking for one; the separately designed long-lived agent half remains
-  deferred while clarification is pending. Named bounces alone do not
-  solve recovery of a delivered event lost across reconnection.
+- The next design settles message acknowledgement: messages are named
+  per attempt, and a run reports the last one read in each turn or when
+  waiting. The engine commits the turn and the inbox messages it took,
+  then acknowledges the turn (`domain/engine.md`, section 7.2;
+  `domain/worker.md`, sections 4.2 and 8). Step 05 adds the second payload
+  version and its translations; step 07 switches the engine to it. The
+  first version's lack of a worker-to-engine message acknowledgement
+  remains an overlap limitation, rather than a pending design decision.
 - Removing the worker world's private payload prefixes exposed a restart
   finding: one hosted attempt can receive the same inbound name with
   different bodies after the engine restarts. The host forwards both;
@@ -271,11 +305,17 @@ OAuth rotation and forge implementation are the next increment.
   leave later ledger entries unacknowledged. The world retains the replay
   in its findings. The current adapters do not claim that the deferred
   long-lived acknowledgement and restart namespace policy is complete.
-- The agent Finish schema lacks refusal and spend fields, while section
-  14 asks for both and the domain documents call out their loss. The
-  implementation retains the specified schema pending design direction;
-  translation must explicitly expose this limitation instead of claiming
-  those values survive the wire.
+- The first-version agent Finish schema lacks refusal and spend fields.
+  The next design settles spend: turns and answers carry it in the
+  deployment's unit (`domain/worker.md`, sections 4.2 and 11;
+  `domain/agent.md`, sections 4.1 and 11). Step 05 adds its translation
+  beside the first version; step 07 switches the engine. The first
+  version's missing fields remain an explicit overlap limitation.
+- Opaque snapshots have no successor. Step 05 adds transcripts beside
+  them: versioned session turns with names resolved and provider blocks
+  retained verbatim (`domain/engine.md`, section 7.2;
+  `domain/agent.md`, section 5). Step 08 deletes the snapshot fields and
+  translations once the cutover has left one engine using transcripts.
 - `LongDone` uses owed output capacity. The future process/check owner
   must drive it from the actual check terminal; the domain's
   `CheckFinished` fact is best effort and can be dropped before it reaches
