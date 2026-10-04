@@ -7,6 +7,7 @@ members = [
     "crates/temper-agent-domain-run",
     "crates/temper-agent-domain-session",
     "crates/temper-agent-domain-tools",
+    "crates/temper-agent-protocol",
     "crates/temper-channel",
     "crates/temper-engine-domain",
     "crates/temper-engine-domain-accounts",
@@ -26,12 +27,14 @@ members = [
     "crates/temper-worker-domain-agent",
     "crates/temper-worker-domain-checkout",
     "crates/temper-worker-domain-host",
+    "crates/temper-worker-protocol",
     "testing/temper-fake-forge-domain",
     "testing/temper-fake-llm-domain",
     "tests/agent/domain",
     "tests/agent/run",
     "tests/agent/session",
     "tests/agent/tools",
+    "tests/agent/protocol",
     "tests/channel",
     "tests/fake-checkout",
     "tests/engine/accounts",
@@ -50,6 +53,7 @@ members = [
     "tests/worker/checkout",
     "tests/worker/host",
     "tests/worker/domain",
+    "tests/worker/protocol",
     "tests/world",
 ]
 
@@ -64,6 +68,12 @@ skein-lib = { git = "https://git.ekanayaka.io/ai/skein.git" }
 skein-io = { git = "https://git.ekanayaka.io/ai/skein.git" }
 skein-http = { git = "https://git.ekanayaka.io/ai/skein.git" }
 skein-json = { git = "https://git.ekanayaka.io/ai/skein.git" }
+skein-sim = { git = "https://git.ekanayaka.io/ai/skein.git" }
+subtle = { version = "=2.6.1", default-features = false, features = ["core_hint_black_box"] }
+temper-agent-protocol = { path = "crates/temper-agent-protocol" }
+temper-agent-protocol-world = { path = "tests/agent/protocol" }
+temper-worker-protocol = { path = "crates/temper-worker-protocol" }
+temper-worker-protocol-world = { path = "tests/worker/protocol" }
 temper-channel = { path = "crates/temper-channel" }
 temper-llm-anthropic = { path = "crates/temper-llm-anthropic" }
 temper-llm-openai = { path = "crates/temper-llm-openai" }

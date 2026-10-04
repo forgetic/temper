@@ -79,8 +79,7 @@ pub enum Heard {
         charter: Vec<u8>,
         snapshot: Option<Vec<u8>>,
     },
-    /// An inbound event; its first eight bytes are its place in the order
-    /// the client sent them.
+    /// An inbound event with its opaque delivery name; bytes are payload only.
     Event {
         name: u64,
         event: Vec<u8>,
@@ -328,7 +327,6 @@ pub struct Agent {
     /// Inbound events heard and not yet taken, and read in all.
     events: u32,
     heard: u64,
-    last_event: Option<u64>,
     obeys_cancel: bool,
     mute: bool,
     obeys_terminate: bool,
@@ -364,7 +362,6 @@ impl Agent {
             awaiting: BTreeMap::new(),
             events: 0,
             heard: 0,
-            last_event: None,
             obeys_cancel,
             mute,
             obeys_terminate,
@@ -420,11 +417,8 @@ impl Agent {
                 self.next(&mut acts);
             }
             Heard::Event { name, event } => {
+                drop(event);
                 assert!(self.phase != Phase::Unstarted, "events come after the start");
-                let place: [u8; 8] = event.get(..8).expect("an event begins with its place").try_into().expect("eight");
-                let place = u64::from_be_bytes(place);
-                assert!(self.last_event < Some(place), "inbound events come once each, in the order sent");
-                self.last_event = Some(place);
                 self.heard = name;
                 if self.phase == Phase::Waiting {
                     self.write(now, Said::Fact { text: b"woken".to_vec() }, &mut acts);

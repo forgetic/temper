@@ -281,3 +281,27 @@ fn worker_reads_stdout_through_eof_after_incoming_finish() {
     world.end();
     assert_eq!(world.machine.phase(), Phase::Closed);
 }
+
+#[test]
+fn readiness_reports_absent_demand_and_blocks_without_output_credit() {
+    let mut world = World::new(Endpoint::WorkerAgent, 17);
+    assert!(world.machine.is_ready(), "initial work states the first demand");
+    world.request(Request::Send(Message::Open {
+        open: temper_channel::wire::Open {
+            channel: temper_channel::wire::Channel::Agent,
+            lowest: 1,
+            highest: 1,
+            name: Box::new([]),
+            secret: Box::new([]),
+        },
+    }));
+    let pending = world.machine.pending_bytes();
+    assert!(pending > 0);
+    assert_eq!(world.machine.queued_bytes(), pending);
+    assert!(!world.machine.is_ready(), "a pending frame does not spin while Room is outstanding");
+    world.hold_room();
+    world.deliver_room();
+    assert_eq!(world.machine.pending_bytes(), 0);
+    assert_eq!(world.machine.queued_bytes(), pending, "sent bytes remain owed until a later full room grant");
+    assert!(!world.machine.is_ready(), "input and output grants are now awaited below");
+}

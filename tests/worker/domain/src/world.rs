@@ -454,6 +454,11 @@ const SCRIPT: script::Script = script::Script {
 
 /// What the world counted, by name, that the sweep must reach on the
 /// engine's side.
+/// Known v1 recovery gap: seed12 cold restart reuses a named inbound for the
+/// same attempt with a different body. Neither a namespace nor Waiting crosses
+/// worker-to-engine v1; the agent ledger finding preserves its consequence.
+pub const FINDINGS: [u64; 1] = [12];
+
 pub const ENDINGS: [&str; 14] = [
     "acknowledged",
     "assigned",
@@ -557,6 +562,8 @@ pub struct Stats {
     pub told_lost: u64,
     /// The engine restarted.
     pub restarts: u32,
+    /// Deferred namespace finding: one attempt received a reused name with different bytes.
+    pub reused_inbound_names: u32,
     /// The worker was told to shut down, and was done; and how often a new
     /// one started after.
     pub shutdown: bool,
@@ -639,6 +646,8 @@ enum Lane {
 #[derive(Debug)]
 struct Attempt {
     at: Time,
+    /// Referee input, separate from the unchanged production charter bytes.
+    charter: Box<[u8]>,
     repositories: Vec<Repository>,
     snapshot: Option<Box<[u8]>>,
     agent: Option<Token>,
@@ -807,6 +816,7 @@ pub struct World {
     /// index.
     places: Places,
     assigned: BTreeMap<Names, Vec<u32>>,
+    inbound_names: BTreeMap<(Names, Token), Vec<Box<[u8]>>>,
 
     // The engine and its neighbours: the engines started so far, a new one
     // after each restart.
@@ -905,6 +915,7 @@ impl World {
             abandoned: 0,
             places: Places::new(),
             assigned: BTreeMap::new(),
+            inbound_names: BTreeMap::new(),
             engine_life: 0,
             engine,
             desk: Stage::new(settings.engine, desk_out, desk_out + SPARE),
@@ -1360,7 +1371,7 @@ impl World {
 fn sizes(limits: &Limits) -> Sizes {
     Sizes {
         call: limits.agent.call_bytes,
-        fact: limits.agent.fact_bytes,
+        fact: limits.agent.fact_bytes.saturating_sub(5),
         outcome: 8,
         snapshot: limits.agent.snapshot_bytes,
         long: limits.agent.long_span,

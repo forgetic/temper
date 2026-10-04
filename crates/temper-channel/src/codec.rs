@@ -49,13 +49,18 @@ pub fn decode(bytes: &[u8], sizes: &Sizes) -> Option<Message> {
     body(head.kind, rest, sizes)
 }
 #[must_use]
-pub fn encode(message: &Message, sizes: &Sizes) -> Option<Box<[u8]>> {
+pub fn frame_len(message: &Message, sizes: &Sizes) -> Option<u32> {
     let mut measure = Encoder::measure();
     wire::put_message(&mut measure, message, sizes)?;
     let length = measure.length();
     if length > sizes::largest(message.kind(), sizes)? {
         return None;
     }
+    length.checked_add(8)
+}
+#[must_use]
+pub fn encode(message: &Message, sizes: &Sizes) -> Option<Box<[u8]>> {
+    let length = frame_len(message, sizes)?.checked_sub(8)?;
     let mut out = Encoder::writing(length.checked_add(8)?);
     out.u16(message.kind())?;
     out.u16(0)?;

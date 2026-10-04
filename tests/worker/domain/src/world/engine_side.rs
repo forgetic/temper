@@ -65,19 +65,8 @@ impl World {
         self.log(format!("engine -> {}", describe_request(&request)));
         match request {
             Request::Grant { channel, item, attempt, grant } => {
-                let (run, attempt) = protocol::names(item, attempt);
-                self.send_down(
-                    channel,
-                    Event::Grant {
-                        run,
-                        attempt,
-                        grant: temper_worker_domain::host::Grant {
-                            account: grant.account,
-                            generation: grant.generation,
-                            valid: grant.valid,
-                        },
-                    },
-                );
+                let projected = protocol::down(Request::Grant { channel, item, attempt, grant }, &[grant]);
+                self.send_down(channel, projected);
             }
             Request::Forge { call, repository, op, payload } => {
                 self.owned.open(call, ());
@@ -119,32 +108,41 @@ impl World {
             }
             Request::Inbound { channel, item, attempt, name, event } => {
                 let names = protocol::names(item, attempt);
-                let place = self.places.entry(names).or_default();
-                let framed = protocol::framed_event(*place, names, &event);
-                *place += 1;
+                *self.places.entry(names).or_default() += 1;
+                let projected = protocol::down(Request::Inbound { channel, item, attempt, name, event }, &[]);
+                let Event::Inbound { event: body, .. } = &projected else {
+                    panic!("Inbound projection");
+                };
+                // A restarted engine may reuse its token namespace; retained
+                // referee history checks unchanged bytes without inventing a
+                // cross-restart naming rule absent from v1.
+                let history = self.inbound_names.entry((names, name)).or_default();
+                if history.iter().any(|previous| previous != body) {
+                    self.stats.reused_inbound_names += 1;
+                }
+                history.push(body.clone());
                 self.end("inbound");
-                self.send_down(channel, Event::Inbound { name, run: names.0, attempt: names.1, event: framed });
+                self.send_down(channel, projected);
             }
             Request::Cancel { channel, item, attempt } => {
-                let (run, attempt) = protocol::names(item, attempt);
+                let names = protocol::names(item, attempt);
                 self.end("cancelled");
-                self.engine_cancels.insert((run, attempt));
-                self.send_down(channel, Event::Cancel { run, attempt });
+                self.engine_cancels.insert(names);
+                self.send_down(channel, protocol::down(Request::Cancel { channel, item, attempt }, &[]));
             }
             Request::Relayed { channel, item, attempt, call, served } => {
                 let names = protocol::names(item, attempt);
                 self.end("relayed");
                 self.hosting.observe(self.now, Seen::Relayed { names, call }, &mut Vec::new());
                 self.hosting.assert_holding(self.settings.seed);
-                let answer = protocol::served(&served);
-                self.send_down(channel, Event::Relayed { run: names.0, attempt: names.1, call, answer });
+                self.send_down(channel, protocol::down(Request::Relayed { channel, item, attempt, call, served }, &[]));
             }
             Request::Acknowledge { channel, item, attempt } => {
                 let names = protocol::names(item, attempt);
                 self.end("acknowledged");
                 self.hosting.observe(self.now, Seen::Acknowledged { names }, &mut Vec::new());
                 self.hosting.assert_holding(self.settings.seed);
-                self.send_down(channel, Event::Acknowledged { run: names.0, attempt: names.1 });
+                self.send_down(channel, protocol::down(Request::Acknowledge { channel, item, attempt }, &[]));
             }
             Request::Refuse { channel } => self.refuse(channel),
             Request::Reply { to, reply } => self.replied(to.into_token().raw(), reply),

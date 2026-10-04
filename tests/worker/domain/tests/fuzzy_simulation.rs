@@ -56,3 +56,12 @@ const UNREACHED: [&str; 2] = ["run cancelled", "refused invalid"];
 ///   nothing landed. The engine reads the change's branch on the forge
 ///   before it makes the change again, and starts from it.
 const PINNED: [u64; 2] = [34, 101];
+
+/// Unresolved FINDINGS[0], workflow.md3: replay the intended invariant, rather
+/// than treating a namespace collision as correct long-lived recovery.
+#[test]
+#[ignore = "v1 lacks a cross-restart inbound namespace and worker-to-engine Waiting transport"]
+fn finding_12_restarted_sender_never_reuses_an_attempts_event_name_for_different_bytes() {
+    let stats = run(&Settings::rough(temper_worker_domain_world::FINDINGS[0])).stats();
+    assert_eq!(stats.reused_inbound_names, 0, "one attempt/event name identifies one body across engine restart");
+}

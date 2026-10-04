@@ -36,11 +36,11 @@ The coordinator owns workspace registration, the lockfile, this record,
 review, integration and the full merge gate. Implementation agents own
 disjoint areas until explicitly reassigned:
 
-| Agent | First assignment |
+| Agent | Current assignment |
 |---|---|
-| `channel` | `crates/temper-channel`, `tests/channel`; then worker domain/world prerequisites and `temper-worker-protocol` |
-| `llm_dialects` | `crates/temper-llm-anthropic`, `crates/temper-llm-openai`, dialect tests; then OAuth and agent/provider protocol integration |
-| `domain_prerequisites` | engine and agent domain crates and worlds, new accounts child and world, engine account routing |
+| `channel` | `temper-worker-protocol` and its worlds; worker system-world translation; retains channel and worker domain ownership |
+| `llm_dialects` | `temper-agent-protocol`, fake provider documents and agent protocol worlds; agent system-world translation and canonical script fixtures; retains dialect/OAuth codecs |
+| `domain_prerequisites` | engine connection and credential/OAuth execution in `temper-engine-protocol`; retains engine/agent domain ownership |
 
 All work shares the feature branch. Agents do not independently commit or
 merge, or change global manifests. The coordinator reviews completed
@@ -54,6 +54,23 @@ Cargo's existing bare git cache from that local checkout. Use Cargo's
 `--offline` option while Forgejo is unavailable. No checkout override or
 change to skein is required. Import later main commits from the same
 checkout when the user reports them ready.
+
+Local main subsequently advanced to
+`4586ba9f729f63d9381e40cbb8e845d62f1fe04a`, with an HTTP server,
+SSE writer and TLS client. The channel checkpoint still uses `d873f985`.
+The HTTP-server merge `78a07ec` is a main ancestor whose stream contract
+is unchanged; it can unlock the server work while the following TLS
+contract change is reconciled.
+
+That TLS merge restricts each `Room` grant to one `Send`. The current
+channel's documented whole-cap fallback reuses byte credit across several
+frame sends while a read is outstanding (`channel.md`, 10.1). Directly
+stacking it on the new TLS client violates the grant contract. Spending
+the grant after one frame, or batching that frame with other queued ones,
+still strands later asynchronous output behind an outstanding read. An
+independent read/room demand implemented through io and TLS resolves this;
+the existing read withdrawal cannot, because it gives up further reading.
+Channel TLS integration awaits that upstream contract or design direction.
 
 | Facility | At the initial skein main | Consequence |
 |---|---|---|
@@ -95,8 +112,23 @@ production payload and name translation replaces its system world's
 copies, with opaque snapshots preserved, malformed outcomes retaining
 landed work, and invalid relays answered without losing the link. OAuth
 documents and saved records include starting from a refresh token alone.
-Connection adapters are next. These partial checks do not constitute the
-integrated merge gate.
+The work branch now adds the authenticated engine listener, worker link
+and agent stream bridge, and the agent channel owner. Socket replacements
+wait for actual closure; credential values remain in bounded protocol
+tables; fact traffic leaves owed output capacity. Agent tool grammar,
+result rendering, provider documents and current-run charter/outcome
+translation replace the corresponding system-world copies. Scoped byte,
+lifecycle, memory and replay checks pass; the integrated gate remains to
+run before this checkpoint moves main.
+
+## Verified milestone
+
+`a77df99` is on local main after all four integrated checks passed:
+formatting, workspace strict Clippy, the focused suite (1,662 tests in
+10.546 seconds), and the fuzzy suite (23 tests in 31.688 seconds). The
+15-second and 60-second budgets remain unchanged. The complete protocol
+goal is still active; this commit supplies schemas, document codecs,
+domain prerequisites and pure engine translation.
 
 ## Integration decisions to hold in review
 
@@ -119,6 +151,14 @@ integrated merge gate.
   channel in the fleet, including relays, facts, bounces and credential
   notices. Retired and foreign channels cannot act on a live attempt.
   A relay accepted before a disconnect still outlives that connection.
+- A worker reconnect is accepted only after its previous socket's actual
+  `Closed` event and the old channel's `Lost` notice. One pending
+  replacement per worker remains under its original handshake deadline;
+  a newer authenticated reconnect supersedes it without freeing any io
+  binding early.
+- Socket startup checks actual io read and room caps and enough Send
+  records for the full byte grant. Category-based pending-message counts
+  alone do not bound tiny ping records already handed below the machine.
 - Initial token validity is anchored to engine construction time, not
   delayed account registration. Counter exhaustion refuses startup or
   revokes an account when no further generation can be issued, without reuse
@@ -136,11 +176,28 @@ integrated merge gate.
   asking for one; the separately designed long-lived agent half remains
   deferred while clarification is pending. Named bounces alone do not
   solve recovery of a delivered event lost across reconnection.
+- Removing the worker world's private payload prefixes exposed a restart
+  finding: one hosted attempt can receive the same inbound name with
+  different bodies after the engine restarts. The host forwards both;
+  the agent child's acknowledgement of an already acknowledged name can
+  leave later ledger entries unacknowledged. The world retains the replay
+  in its findings. The current adapters do not claim that the deferred
+  long-lived acknowledgement and restart namespace policy is complete.
 - The agent Finish schema lacks refusal and spend fields, while section
   14 asks for both and the domain documents call out their loss. The
   implementation retains the specified schema pending design direction;
   translation must explicitly expose this limitation instead of claiming
   those values survive the wire.
+- `LongDone` uses owed output capacity. The future process/check owner
+  must drive it from the actual check terminal; the domain's
+  `CheckFinished` fact is best effort and can be dropped before it reaches
+  protocol translation. A fact-only projection cannot establish that
+  watchdog integration is complete.
+- The worker domain can reject an assignment because its grant names are
+  invalid, but the v1 `Invalid` wire enumeration has no Grants case. The
+  adapter reports a typed unsupported conversion while a wire extension
+  is awaiting design direction; it does not label this as a charter or
+  repository error.
 
 ## Completion gate
 

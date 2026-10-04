@@ -47,7 +47,7 @@ impl World {
         }
         while let Some(told) = self.worker.pop_told() {
             self.stats.told += 1;
-            self.send_up(move |channel| protocol::told(channel, &told));
+            self.send_up(move |channel| protocol::told(channel, told));
         }
         // What the steps asked for, submitted at the end of the iteration.
         while let Some(request) = self.stage.out.pop() {
@@ -130,6 +130,7 @@ impl World {
                 });
                 let record = Attempt {
                     at: self.now,
+                    charter: assignment.charter.clone(),
                     repositories: repositories.collect(),
                     snapshot: assignment.snapshot.clone(),
                     agent: None,
@@ -187,15 +188,11 @@ impl World {
             Request::Dial => self.dial(),
             Request::Hello { hello } => {
                 self.hello(&hello);
-                let hello = protocol::hello(&hello);
-                self.send_up(move |channel| engine::Event::Hello { channel, hello });
+                self.send_up(move |channel| protocol::up(Request::Hello { hello }, channel));
             }
             Request::Answer { run, attempt, answer } => {
                 self.answered((run, attempt), &answer);
-                let repositories = self.assigned.get(&(run, attempt)).cloned().unwrap_or_default();
-                let answer = protocol::answer(&answer, &repositories);
-                let (item, attempt) = protocol::attempt_of(attempt);
-                self.send_up(move |channel| engine::Event::Answer { channel, item, attempt, answer });
+                self.send_up(move |channel| protocol::up(Request::Answer { run, attempt, answer }, channel));
             }
             Request::Relay { run, attempt, call, body } => {
                 assert!(self.up, "a relay goes on a channel open");
@@ -204,17 +201,16 @@ impl World {
                     self.relay_waits.insert(call, ((run, attempt), false)).is_none(),
                     "relay wait names are unique"
                 );
-                let Some(body) = protocol::call_of(&body) else {
+                if protocol::call_of(&body).is_none() {
                     // Nothing the engine reads: the protocol layer answers it
                     // itself.
                     self.end("undecoded");
-                    let answer = protocol::UNDECODED.into();
+                    let answer = protocol::undecoded();
                     let at = self.now.saturating_add(self.settings.network.hop.draw(&mut self.rng));
                     self.send(at, Delivery::Worker(self.lives, Event::Relayed { run, attempt, call, answer }));
                     return;
-                };
-                let (item, attempt) = protocol::attempt_of(attempt);
-                self.send_up(move |channel| engine::Event::Relay { channel, item, attempt, call, body });
+                }
+                self.send_up(move |channel| protocol::up(Request::Relay { run, attempt, call, body }, channel));
             }
             Request::CancelRelay { call } => {
                 // A response already handed to the inbox wins its race with
@@ -230,17 +226,17 @@ impl World {
             Request::Bounced { name, run, attempt, bounce } => {
                 assert!(self.up, "a bounce goes on a channel open");
                 self.stats.bounces += 1;
-                let ((item, attempt), bounce) = (protocol::attempt_of(attempt), protocol::bounce(bounce));
-                assert_eq!(protocol::item(run), item, "a bounce names an attempt of its run");
-                self.send_up(move |channel| engine::Event::Bounced { channel, name, item, attempt, bounce });
+                self.send_up(move |channel| protocol::up(Request::Bounced { run, attempt, name, bounce }, channel));
             }
-            Request::Rejected { run: _, attempt, account, generation } => {
-                let (item, attempt) = protocol::attempt_of(attempt);
-                self.send_up(move |channel| engine::Event::Rejected { channel, item, attempt, account, generation });
+            Request::Rejected { run, attempt, account, generation } => {
+                self.send_up(move |channel| {
+                    protocol::up(Request::Rejected { run, attempt, account, generation }, channel)
+                });
             }
-            Request::Exhausted { run: _, attempt, account, retry_after } => {
-                let (item, attempt) = protocol::attempt_of(attempt);
-                self.send_up(move |channel| engine::Event::Exhausted { channel, item, attempt, account, retry_after });
+            Request::Exhausted { run, attempt, account, retry_after } => {
+                self.send_up(move |channel| {
+                    protocol::up(Request::Exhausted { run, attempt, account, retry_after }, channel)
+                });
             }
             Request::Spawn { owner, workspace, deadline } => {
                 self.spawn(owner, workspace);
@@ -413,10 +409,15 @@ impl World {
             Down::Start { repositories: _, grants: _, charter, snapshot } => {
                 self.start(owner, charter, snapshot.as_deref());
             }
-            Down::Event { name: _, event } => {
+            Down::Event { name, event } => {
                 let agent = self.agents.get(&owner).expect("an event goes to an agent spawned");
-                let names = protocol::event_names(event);
-                assert_eq!(agent.attempt, Some(names), "an inbound event reaches its attempt's agent");
+                let names = agent.attempt.expect("an inbound follows its Start");
+                let expected =
+                    self.inbound_names.get(&(names, *name)).expect("the referee knows this attempt's named inbound");
+                assert!(
+                    expected.iter().any(|body| body.as_ref() == event.as_ref()),
+                    "the named inbound reaches its attempt unchanged"
+                );
                 self.stats.events += 1;
                 // A person's message reaches a run where its agent hears it.
                 let (item, comment) = (protocol::item(names.0), protocol::event_comment(event));
@@ -458,7 +459,20 @@ impl World {
     /// What its words will say is drawn from its charter, as the forge shows
     /// its item now.
     fn start(&mut self, owner: Token, charter: &[u8], snapshot: Option<&[u8]>) {
-        let (names, charter) = protocol::charter_of(charter);
+        let expected: Vec<Names> = self
+            .attempts
+            .iter()
+            .filter_map(|(names, record)| {
+                (record.charter.as_ref() == charter
+                    && !record.refused
+                    && record.answer.is_none()
+                    && record.agent.is_none())
+                .then_some(*names)
+            })
+            .collect();
+        assert_eq!(expected.len(), 1, "the referee identifies one assigned charter without changing its bytes");
+        let names = expected[0];
+        let charter = protocol::charter_of(charter);
         let base = if self.settings.release { RELEASE } else { MAIN };
         let content = Content::new(protocol::item(names.0), &charter, snapshot, &self.mirror, base);
         self.tree.plot(owner, content.plot.clone());
@@ -569,16 +583,23 @@ impl World {
         };
         let message = match message {
             Up::Call { call, ask: Ask::Relay { .. } } if !garbled.calls => {
-                Up::Call { call, ask: Ask::Relay { body: protocol::call(&content.call()).into_boxed_slice() } }
+                Up::Call { call, ask: Ask::Relay { body: protocol::call(content.call()).into_boxed_slice() } }
             }
             Up::Finish { finish: Finish::Ended { .. } } if !garbled.outcome => {
                 let outcome = codec::outcome(&content.outcome(&self.mirror)).into_boxed_slice();
                 Up::Finish { finish: Finish::Ended { outcome } }
             }
+            Up::Fact { fact } => Up::Fact {
+                fact: temper_engine_protocol::payload::encode_fact(
+                    engine::views::Kind::Progress,
+                    fact,
+                    &protocol::SIZES,
+                )
+                .expect("bounded fixture fact"),
+            },
             Up::Call { ask: Ask::Relay { .. } | Ask::Push { .. }, .. }
             | Up::Finish { finish: Finish::Ended { .. } | Finish::Parked { .. } | Finish::Failed { .. } }
             | Up::Withdraw { .. }
-            | Up::Fact { .. }
             | Up::Long { .. }
             | Up::LongDone
             | Up::Waiting { .. }

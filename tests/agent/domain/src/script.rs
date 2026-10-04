@@ -89,11 +89,11 @@ fn says(said: &str) -> Turn {
 }
 
 fn read(path: &str) -> Line {
-    call("read_file", &format!(r#"{{"path":"{path}"}}"#))
+    call("read", &format!(r#"{{"path":"{path}"}}"#))
 }
 
 fn edit(old: &str, new: &str) -> Line {
-    call("edit_file", &format!(r#"{{"path":"src/lib.rs","old":"{old}","new":"{new}"}}"#))
+    call("edit", &format!(r#"{{"path":"src/lib.rs","old":"{old}","new":"{new}"}}"#))
 }
 
 fn change(body: &str) -> Line {
@@ -102,16 +102,17 @@ fn change(body: &str) -> Line {
 }
 
 fn sub_agent(brief: &str, tools: &str, more: &str) -> Line {
-    call("sub_agent", &format!(r#"{{"brief":"{brief}","tools":"{tools}"{more}}}"#))
+    let tools = tools.split(',').map(|name| format!("\"{name}\"")).collect::<Vec<_>>().join(",");
+    call("subagent", &format!(r#"{{"brief":"{brief}","tools":[{tools}]{more}}}"#))
 }
 
 fn coding() -> Vec<Turn> {
     vec![
-        calls(vec![text("Let me look."), read("src/lib.rs"), call("list_dir", r#"{"path":"."}"#)]),
+        calls(vec![text("Let me look."), read("src/lib.rs"), call("list", r#"{"path":"."}"#)]),
         calls(vec![edit("42", "41")]),
         // A tool that is not offered, beside the command: answered with its
         // problem, while the command runs.
-        calls(vec![call("run_shell", r#"{"command":"cargo test"}"#), call("delete_repository", "{}")]),
+        calls(vec![call("shell", r#"{"command":"cargo test"}"#), call("delete_repository", "{}")]),
         calls(vec![change("The answer is 41 now.")]),
         // The checks failed: they want 43.
         calls(vec![edit("41", "43")]),
@@ -129,14 +130,14 @@ fn review() -> Vec<Turn> {
         calls(vec![call("finish", r#"{"verdict":"request-changes","body":"Fix it."}"#)]),
         calls(vec![call(
             "finish",
-            r#"{"verdict":"request-changes","body":"Fix it.","1.kind":"blocking","1.path":"src/lib.rs","1.body":"43"}"#,
+            r#"{"verdict":"request-changes","body":"Fix it.","children":[{"kind":"blocking","fields":{"path":"src/lib.rs","body":"43"}}]}"#,
         )]),
     ]
 }
 
 fn reporting() -> Vec<Turn> {
     vec![
-        calls(vec![read("README.md"), call("list_dir", r#"{"path":"."}"#)]),
+        calls(vec![read("README.md"), call("list", r#"{"path":"."}"#)]),
         calls(vec![call("finish", r#"{"verdict":"report","body":"The answer is 42, and the checks want 43."}"#)]),
     ]
 }
@@ -147,7 +148,7 @@ fn delegating() -> Vec<Turn> {
             sub_agent("@explore Find where the answer is.", "inspect", ""),
             sub_agent("@explore Find what the checks want.", "inspect", r#","llm":"fake-2""#),
         ]),
-        calls(vec![sub_agent("@fix Make the answer 43.", "inspect,modify,shell", r#","agents":"yes""#)]),
+        calls(vec![sub_agent("@fix Make the answer 43.", "inspect,modify,shell", r#","agents":true"#)]),
         calls(vec![change("A sub-agent made the answer 43.")]),
     ]
 }

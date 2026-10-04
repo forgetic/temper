@@ -932,6 +932,9 @@ struct Call {
     owner: Owner,
     /// The deadline's delivery, withdrawn when the call ends first.
     deadline: Key,
+    /// The frozen offer, so an answer cannot call a tool this prompt omitted.
+    grants: temper_agent_domain::tools::Grants,
+    served: Box<[temper_agent_domain::llm::Served]>,
 }
 
 /// An operation of the tools in flight, as io keeps it.

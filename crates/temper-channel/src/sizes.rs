@@ -122,6 +122,13 @@ pub use bounds::largest;
 pub fn frame(kind: u16, sizes: &Sizes) -> Option<u32> {
     largest(kind, sizes)?.checked_add(8)
 }
+/// The most frame Send records held below one whole-cap byte grant. Frames
+/// are at least eight bytes; records already moved below may accumulate
+/// independently of the machine's own pending-message categories.
+#[must_use]
+pub fn stream_slots(endpoint: Endpoint, sizes: &Sizes) -> Option<u32> {
+    output_cap(endpoint, sizes)?.checked_div(8)
+}
 
 /// Output bytes include headers and the opening/refusal reserve.
 #[must_use]

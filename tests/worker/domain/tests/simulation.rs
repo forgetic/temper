@@ -426,7 +426,7 @@ fn a_session_a_person_stops_is_released_and_woken_by_a_message() {
 fn an_assignment_beyond_the_workers_limits_is_refused_invalid() {
     let settings = Settings::only(3, &[Story::Hello]);
     let limits = settings.worker;
-    let small = Limits { host: temper_worker_domain::host::Limits { charter_bytes: 256, ..limits.host }, ..limits };
+    let small = Limits { host: temper_worker_domain::host::Limits { charter_bytes: 128, ..limits.host }, ..limits };
     let mut world = World::new(Settings {
         worker: small,
         upgrade: Some(limits),
@@ -482,4 +482,16 @@ fn a_session_released_after_its_runs_failed_runs_again() {
     let stats = world.stats();
     assert!(ending(&stats, "released") > 0, "the caretaker released it: {stats:?}");
     assert!(ending(&stats, "assigned") > 3, "and it ran again: {:?}", stats.endings);
+}
+
+/// FINDING 12: a cold engine restart reuses a name for the same attempt with
+/// different bytes. The wire/worker preserve both; the acknowledgment ledger
+/// ambiguity is retained by the agent-domain focused finding. V1 supplies no
+/// cross-restart namespace or worker-to-engine Waiting record to repair it.
+#[test]
+fn finding_12_replays_same_attempt_name_reuse_across_engine_restart() {
+    let mut world = World::new(Settings::rough(12));
+    world.run(ITERATIONS);
+    assert!(world.stats().restarts > 0);
+    assert!(world.stats().reused_inbound_names > 0);
 }

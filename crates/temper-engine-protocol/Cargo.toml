@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 skein-lib.workspace = true
 skein-io.workspace = true
+subtle.workspace = true
 temper-channel.workspace = true
 temper-engine-domain.workspace = true
 

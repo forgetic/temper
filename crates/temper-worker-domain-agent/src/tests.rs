@@ -1070,3 +1070,31 @@ fn grant_refreshes_coalesce_without_displacing_inbound_or_answers() {
         [Request::Exhausted { client: a.client, account: 7, retry_after }, read(a)]
     );
 }
+
+/// Deferred v1 namespace finding: a restarted sender may reuse an already
+/// acknowledged opaque name. Both bodies are delivered, but that second
+/// acknowledgement cannot advance the ledger. The protocol adapter does not
+/// invent a namespace or long-lived recovery policy to conceal this.
+#[test]
+fn finding_reused_acknowledged_name_leaves_the_second_delivery_unacknowledged() {
+    let mut h = Harness::new(Limits { events: 1, ..LIMITS });
+    let a = h.live(1);
+    let name = Token::new(9001);
+    for body in [b"one".as_slice(), b"two".as_slice()] {
+        assert_eq!(
+            &*h.step(Event::Deliver { agent: a.agent, name, event: bytes(body) }),
+            [send(a, Down::Event { name, event: bytes(body) })]
+        );
+        h.sent(a);
+        h.say(a, Up::Waiting { heard: name.raw() });
+    }
+    assert_eq!(
+        h.domain.next_deadline(),
+        Some(secs(10)),
+        "the second delivery still occupies the ledger and keeps the watchdog running"
+    );
+    assert_eq!(
+        &*h.step(Event::Deliver { agent: a.agent, name: Token::new(9999), event: bytes(b"three") }),
+        [Request::Bounced { client: a.client, name: Token::new(9999), bounce: Bounce::Full }]
+    );
+}

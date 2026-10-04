@@ -92,3 +92,4 @@ pub fn outcome() -> engine::Outcome {
     };
     engine::Outcome::Plan { plan: plan::Plan { steps, envelope, budget: 1000 }, text: Box::new([]) }
 }
+pub mod link;

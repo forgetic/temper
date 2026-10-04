@@ -109,4 +109,4 @@ pub mod translate;
 mod world;
 
 pub use temper_world::Span;
-pub use world::{ENDINGS, ENGINE_LIMITS, Git, LIMITS, Network, RELEASE, Settings, Stats, World};
+pub use world::{ENDINGS, ENGINE_LIMITS, FINDINGS, Git, LIMITS, Network, RELEASE, Settings, Stats, World};

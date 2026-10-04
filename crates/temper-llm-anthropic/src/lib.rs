@@ -9,7 +9,7 @@ mod request;
 mod response;
 pub use common::{DecodeError, Failure, Limits, ProviderError, RateLimit, Stop, Usage, classify, worst_case};
 pub use json::{Collector, Json};
-pub use request::{Block, Message, Request, Role, Tool, decode_request, encode_request};
+pub use request::{Block, Message, Request, Role, Tool, decode_request, encode_request, measure_request};
 pub use response::{
     Delta, Event, MAX_OUT, Output, Part, StreamDecoder, decode_error, decode_event, encode_error, encode_event,
 };

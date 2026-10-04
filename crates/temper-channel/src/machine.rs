@@ -183,6 +183,30 @@ impl Machine {
     pub const fn pending_bytes(&self) -> u32 {
         self.pending_bytes
     }
+    /// Ready work advances one frame or states a currently absent demand.
+    /// Blocked output with a demand outstanding is not ready work.
+    #[must_use]
+    pub fn is_ready(&self) -> bool {
+        if self.phase == Phase::Closed || self.phase == Phase::Closing {
+            return false;
+        }
+        let held = match &self.input {
+            Input::Held(_) => true,
+            Input::Header | Input::Body { .. } | Input::Stopped => false,
+        };
+        let fits = match self.output.iter().next() {
+            Some(frame) => u32::try_from(frame.len()).expect("frame length is u32") <= self.grant,
+            None => false,
+        };
+        held || fits
+            || (self.phase == Phase::Finished && self.output.is_empty())
+            || (!self.outstanding && (self.reading && !self.read_ended || self.grant < self.cap))
+    }
+    /// Conservative output still held here or owed a lower room grant.
+    #[must_use]
+    pub fn queued_bytes(&self) -> u32 {
+        self.pending_bytes.checked_add(self.sent_bytes).expect("output remains within its cap")
+    }
 }
 
 fn emit(out: &mut Queue<Event>, event: Event) {

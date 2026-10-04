@@ -25,7 +25,7 @@ pub struct Repository {
 }
 
 /// Values beside the domain's grant names. Refresh tokens never occur here.
-#[derive(Debug)]
+#[expect(missing_debug_implementations, reason = "credential values must never occur in traces")]
 pub struct Value {
     pub account: u32,
     pub generation: u64,
@@ -174,7 +174,7 @@ pub fn down(
         | Request::Store { .. } => return Ok(None),
     };
     // This total validation runs before a connection retains any output.
-    temper_channel::codec::encode(&pair.1, sizes).ok_or(Error::Payload)?;
+    temper_channel::codec::frame_len(&pair.1, sizes).ok_or(Error::Payload)?;
     Ok(Some(pair))
 }
 
@@ -250,7 +250,7 @@ pub fn up(channel: Token, message: wire::Message, repositories: u32, sizes: &Siz
     if repositories > 256 {
         return Err(Error::Repository);
     }
-    temper_channel::codec::encode(&message, sizes).ok_or(Error::Payload)?;
+    temper_channel::codec::frame_len(&message, sizes).ok_or(Error::Payload)?;
     let event = match message {
         wire::Message::Hello { slots, workstreams, hosting } => {
             let mut hosted = List::with_capacity(u32::try_from(hosting.len()).ok().ok_or(Error::Payload)?);

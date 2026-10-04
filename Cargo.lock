@@ -3,6 +3,14 @@
 version = 4
 
 [[package]]
+name = "skein-http"
+version = "0.0.0"
+source = "git+https://git.ekanayaka.io/ai/skein.git#d873f985afb1b8224942dba4bd280222bc7cd419"
+dependencies = [
+ "skein-lib",
+]
+
+[[package]]
 name = "skein-io"
 version = "0.0.0"
 source = "git+https://git.ekanayaka.io/ai/skein.git#d873f985afb1b8224942dba4bd280222bc7cd419"
@@ -22,6 +30,21 @@ dependencies = [
 name = "skein-lib"
 version = "0.0.0"
 source = "git+https://git.ekanayaka.io/ai/skein.git#d873f985afb1b8224942dba4bd280222bc7cd419"
+
+[[package]]
+name = "skein-sim"
+version = "0.0.0"
+source = "git+https://git.ekanayaka.io/ai/skein.git#d873f985afb1b8224942dba4bd280222bc7cd419"
+dependencies = [
+ "skein-io",
+ "skein-lib",
+]
+
+[[package]]
+name = "subtle"
+version = "2.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "temper-agent-domain"
@@ -61,16 +84,53 @@ version = "0.0.0"
 dependencies = [
  "skein-lib",
  "temper-agent-domain",
+ "temper-agent-protocol",
  "temper-agent-tools-world",
+ "temper-channel",
  "temper-engine-domain",
  "temper-engine-domain-world",
  "temper-engine-forge-world",
+ "temper-engine-protocol",
  "temper-fake-checkout",
  "temper-fake-forge-domain",
  "temper-fake-llm-domain",
+ "temper-llm-openai",
  "temper-worker-checkout-world",
  "temper-worker-domain",
  "temper-worker-domain-agent",
+ "temper-world",
+]
+
+[[package]]
+name = "temper-agent-protocol"
+version = "0.0.0"
+dependencies = [
+ "skein-http",
+ "skein-io",
+ "skein-json",
+ "skein-lib",
+ "temper-agent-domain",
+ "temper-agent-domain-run",
+ "temper-agent-domain-session",
+ "temper-agent-domain-tools",
+ "temper-channel",
+ "temper-llm-anthropic",
+ "temper-llm-openai",
+]
+
+[[package]]
+name = "temper-agent-protocol-world"
+version = "0.0.0"
+dependencies = [
+ "skein-http",
+ "skein-io",
+ "skein-lib",
+ "temper-agent-domain",
+ "temper-agent-protocol",
+ "temper-channel",
+ "temper-fake-llm-domain",
+ "temper-llm-anthropic",
+ "temper-llm-openai",
  "temper-world",
 ]
 
@@ -275,6 +335,7 @@ version = "0.0.0"
 dependencies = [
  "skein-io",
  "skein-lib",
+ "subtle",
  "temper-channel",
  "temper-engine-domain",
 ]
@@ -283,6 +344,7 @@ dependencies = [
 name = "temper-engine-protocol-world"
 version = "0.0.0"
 dependencies = [
+ "skein-io",
  "skein-lib",
  "temper-channel",
  "temper-engine-domain",
@@ -424,14 +486,17 @@ name = "temper-worker-domain-world"
 version = "0.0.0"
 dependencies = [
  "skein-lib",
+ "temper-channel",
  "temper-engine-domain",
  "temper-engine-domain-world",
  "temper-engine-forge-world",
+ "temper-engine-protocol",
  "temper-fake-checkout",
  "temper-fake-forge-domain",
  "temper-worker-agent-world",
  "temper-worker-checkout-world",
  "temper-worker-domain",
+ "temper-worker-protocol",
  "temper-world",
 ]
 
@@ -441,6 +506,32 @@ version = "0.0.0"
 dependencies = [
  "skein-lib",
  "temper-worker-domain-host",
+ "temper-world",
+]
+
+[[package]]
+name = "temper-worker-protocol"
+version = "0.0.0"
+dependencies = [
+ "skein-io",
+ "skein-lib",
+ "temper-channel",
+ "temper-worker-domain",
+]
+
+[[package]]
+name = "temper-worker-protocol-world"
+version = "0.0.0"
+dependencies = [
+ "skein-io",
+ "skein-lib",
+ "skein-sim",
+ "temper-channel",
+ "temper-engine-domain",
+ "temper-engine-protocol",
+ "temper-engine-protocol-world",
+ "temper-worker-domain",
+ "temper-worker-protocol",
  "temper-world",
 ]
 

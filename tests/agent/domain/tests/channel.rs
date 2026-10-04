@@ -67,7 +67,7 @@ fn engine_charter(finish: Finish) -> Charter {
 /// The run's charter for [`engine_charter`] of a change, in [`checkout`].
 fn run_charter() -> run::Charter {
     let llm = |model: &[u8]| Llm { account: 0, endpoint: Endpoint(0), model: bytes(model), max_tokens: MAX_TOKENS };
-    let brief = b"@coding Keep it small.\n\nWhy: Produce\n\n## Item\nFix the parser.\n\n## Ci\n[unread: Failed]\n";
+    let brief = b"@coding Keep it small.\n\nWhy: produce\n\n## Item\nFix the parser.\n\n## CI\n[unread: failed]\n";
     run::Charter {
         brief: bytes(brief),
         checkout: checkout(),
@@ -118,7 +118,7 @@ fn what_a_run_may_finish_with_is_the_engines_outcome_spec() {
 }
 
 #[test]
-#[should_panic(expected = "no session reaches an agent")]
+#[should_panic(expected = "the domain-tier charter is representable by the current agent")]
 fn a_sessions_turn_is_asserted_against() {
     let encoded = codec::charter(&engine_charter(Finish::Turn { supervising: false }));
     let _ = channel::charter(&encoded, checkout());
@@ -268,7 +268,7 @@ fn every_answer_finishes_the_run_as_it_should() {
 }
 
 #[test]
-#[should_panic(expected = "a run declares only the verdicts its charter allows")]
+#[should_panic(expected = "the declared outcome fits the domain-tier deployment")]
 fn a_verdict_no_charter_allows_is_asserted_against() {
     let declared = Declared::Verdict(Verdict { name: bytes(b"maybe"), body: bytes(b""), children: Box::new([]) });
     let _ = channel::outcome(&declared);
@@ -463,7 +463,7 @@ fn a_push_failure_reaches_the_llm_as_its_reason_and_actual_diagnostic_output() {
     assert!(*is_error);
     assert_eq!(
         output.as_ref(),
-        b"push failed: Refused (repository 2); 37 diagnostic bytes omitted\nremote: hook declined: missing changelog"
+        b"push failed in repository 2: refused\n[37 diagnostic bytes omitted]\nremote: hook declined: missing changelog"
     );
 }
 

@@ -40,14 +40,19 @@ pub struct Request {
 }
 
 pub fn encode_request(request: &Request, limits: &Limits) -> Result<Box<[u8]>, DecodeError> {
+    let len = measure_request(request, limits)?;
+    let bounded = skein_json::writer::Limits { depth: limits.depth, length: limits.request_bytes };
+    let mut write = Encoder::write(len, &bounded);
+    write_request(&mut write, request);
+    Ok(write.finish())
+}
+/// Validates and measures without allocating the request's body.
+pub fn measure_request(request: &Request, limits: &Limits) -> Result<u32, DecodeError> {
     validate(request, limits)?;
     let bounded = skein_json::writer::Limits { depth: limits.depth, length: limits.request_bytes };
     let mut measure = Encoder::measure(&bounded);
     write_request(&mut measure, request);
-    let len = crate::common::measured(measure)?;
-    let mut write = Encoder::write(len, &bounded);
-    write_request(&mut write, request);
-    Ok(write.finish())
+    crate::common::measured(measure)
 }
 fn validate(request: &Request, limits: &Limits) -> Result<(), DecodeError> {
     if request.max_tokens == 0

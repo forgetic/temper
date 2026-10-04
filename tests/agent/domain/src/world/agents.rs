@@ -248,7 +248,10 @@ impl World {
             Request::Complete { owner, prompt, timeout, grant: _ } => {
                 let call = self.wire.name();
                 let deadline = self.schedule(self.now.saturating_add(timeout), Delivery::Deadline { call });
-                self.calls_out.open(call, Call { owner: (id, owner), deadline });
+                self.calls_out.open(
+                    call,
+                    Call { owner: (id, owner), deadline, grants: prompt.tools, served: prompt.served.clone() },
+                );
                 assert!(self.calling.insert((id, owner), call).is_none(), "a session has one call in flight");
                 offers(&prompt);
                 self.count_results(id, owner, &prompt);
@@ -554,7 +557,7 @@ impl World {
         // The fake refuses a transcript a real provider would: a call without
         // its result, a result without its call.
         assert!(result != Err(provider::api::Error::InvalidRequest), "the agent sends well-formed queries");
-        let Some(Call { owner, .. }) = self.end_call(call) else {
+        let Some(Call { owner, grants, served, .. }) = self.end_call(call) else {
             self.stats.late_answers += 1;
             return;
         };
@@ -563,7 +566,7 @@ impl World {
         let event = match result {
             Ok(answer) => {
                 self.stats.completed += 1;
-                Event::Completed { owner, completion: translate::completion(answer) }
+                Event::Completed { owner, completion: translate::completion(answer, grants, served) }
             }
             Err(error) => {
                 self.stats.failed += 1;

@@ -82,18 +82,15 @@
 //! outlets) and their answers (agent-domain.md, section 10).
 
 use skein_lib::{ReplyTo, Time, Token};
-use temper_agent_domain::run::charter::{self, Checkout};
+use temper_agent_domain::run::charter::Checkout;
 use temper_agent_domain::run::facts as run_facts;
-use temper_agent_domain::run::outcome::VerdictRule;
-use temper_agent_domain::run::outcome::{Change, ChangeSpec, Child, Children, Declared, Field, OutcomeSpec, Verdict};
+use temper_agent_domain::run::outcome::{Change, Declared};
 use temper_agent_domain::run::{self, Budget};
 use temper_agent_domain::session;
 use temper_agent_domain::tools;
 use temper_agent_domain::{Event, Fact, Request};
-use temper_engine_domain::brief::{Body, Section};
-use temper_engine_domain::plan::{self, Why};
-use temper_engine_domain::{self as engine, Outcome};
-use temper_engine_domain_world::codec;
+use temper_engine_domain::Outcome;
+use temper_engine_domain::plan;
 use temper_worker_domain_agent::channel::{Ask, Down, Finish, Push, Reply, RunFailure, Up};
 
 /// What the agent's protocol layer holds for an agent process's channel.
@@ -238,13 +235,8 @@ fn failure(failure: run::Failure) -> RunFailure {
 /// A push's commit message: the change's title, then its body after a blank
 /// line, if it has one.
 fn message(change: &Change) -> Box<[u8]> {
-    let Change { title, body } = change;
-    let mut message = title.to_vec();
-    if !body.is_empty() {
-        message.extend_from_slice(b"\n\n");
-        message.extend_from_slice(body);
-    }
-    message.into()
+    temper_agent_protocol::payload::message(change, temper_channel::Sizes::STARTING.detail)
+        .expect("the domain-tier push message fits")
 }
 
 /// What goes up for `fact`.
@@ -316,120 +308,55 @@ pub const MAX_TOKENS: u32 = 1024;
 /// do not decode: the engine's side encoded them.
 #[must_use]
 pub fn charter(bytes: &[u8], checkout: Checkout) -> run::Charter {
-    let charter = codec::charter_of(bytes).expect("a charter decodes as the engine's side encoded it");
-    let engine::Charter { why, brief, instructions, grants, finish, budget, models, policy: _ } = charter;
-    let tools = charter::Tools { inspect: true, modify: grants.modify, shell: grants.shell };
-    let outlets: Box<[charter::Outlet]> =
-        if grants.note { Box::new([charter::Outlet { name: NOTE.into() }]) } else { Box::new([]) };
-    let outcome = match finish {
-        plan::Finish::Report { grows: _ } => OutcomeSpec { change: None, verdicts: Box::new([rule(REPORT, 0, 0)]) },
-        plan::Finish::Change { checks } => OutcomeSpec { change: Some(ChangeSpec { checks }), verdicts: Box::new([]) },
-        plan::Finish::Verdict => OutcomeSpec { change: None, verdicts: verdicts() },
-        plan::Finish::Turn { .. } => panic!("no session reaches an agent: people hand in agent steps and changes"),
-    };
-    let budget = split(budget);
-    let mut names = models.into_iter();
-    let llm = |model: engine::Model| charter::Llm {
-        account: 0,
-        endpoint: charter::Endpoint(model.endpoint),
-        model: model.model,
-        max_tokens: model.max_tokens,
-    };
-    let main = llm(names.next().expect("the deployment names a model"));
-    run::Charter {
-        brief: self::brief(why, &instructions, &brief),
-        checkout,
-        grants: charter::Grants { tools, forge: grants.forge, agents: grants.subagents, outlets },
-        outcome,
-        budget,
-        llm: main,
-        models: names.map(llm).collect(),
+    // Domain-tier deployment wiring supplies account zero's dummy descriptors;
+    // production resolves real indexed descriptors at its channel entrance.
+    let wire = temper_channel::payload::decode_charter(bytes, &temper_channel::Sizes::STARTING)
+        .expect("a charter decodes as the engine's side encoded it");
+    let mut endpoints = Vec::new();
+    for model in wire.models {
+        if !endpoints.iter().any(|other: &temper_channel::wire::EndpointDescriptor| other.endpoint == model.endpoint) {
+            endpoints.push(temper_channel::wire::EndpointDescriptor {
+                endpoint: model.endpoint,
+                provider: temper_channel::wire::Provider::OpenAi,
+                host: b"localhost".as_slice().into(),
+                address: temper_channel::wire::Address::V4 { bytes: [127, 0, 0, 1] },
+                port: 8000,
+                path: b"/responses".as_slice().into(),
+                account: 0,
+                effort: Box::new([]),
+                thinking: None,
+            });
+        }
     }
+    temper_agent_protocol::payload::charter(
+        bytes,
+        checkout,
+        &endpoints,
+        &temper_channel::Sizes::STARTING,
+        &crate::translate::limits(),
+    )
+    .expect("the domain-tier charter is representable by the current agent")
 }
 
-/// The outlet of the engine's `note` grant.
+/// The outlet of the engine's note grant.
 pub const NOTE: &[u8] = b"note";
-
-/// The agent's budget for the engine's: its tokens split across the kinds,
-/// half for input, a quarter for output, an eighth for cache reads and what
-/// is left for cache writes.
 #[must_use]
 pub fn split(budget: plan::Budget) -> Budget {
     Budget::from_tokens(budget.turns, budget.tokens, budget.time)
 }
+pub const REPORT: &[u8] = temper_agent_protocol::payload::REPORT;
+pub const APPROVE: &[u8] = temper_agent_protocol::payload::APPROVE;
+pub const REQUEST: &[u8] = temper_agent_protocol::payload::REQUEST;
 
-/// The verdicts a run may finish with: a report on an agent step's work,
-/// and on a change it reviews, approving it or asking for changes.
-pub const REPORT: &[u8] = b"report";
-pub const APPROVE: &[u8] = b"approve";
-pub const REQUEST: &[u8] = b"request-changes";
-
-fn rule(name: &[u8], min: u32, max: u32) -> VerdictRule {
-    VerdictRule { name: name.into(), children: Children { min, max }, kinds: Box::new([]), fields: Box::new([]) }
-}
-
-/// A review's verdicts: approving, with nothing more, or asking for changes,
-/// one to eight of them, each blocking or a nit, with where and what.
-fn verdicts() -> Box<[VerdictRule]> {
-    let request = VerdictRule {
-        kinds: Box::new([b"blocking".as_slice().into(), b"nit".as_slice().into()]),
-        fields: Box::new([b"path".as_slice().into(), b"body".as_slice().into()]),
-        ..rule(REQUEST, 1, 8)
-    };
-    Box::new([rule(APPROVE, 0, 0), request])
-}
-
-/// The brief the LLM reads: the plan's guidance first, then why the run is
-/// due, then each section under a heading of its kind, or why it could not
-/// be read.
-fn brief(why: Why, instructions: &[u8], sections: &[Section]) -> Box<[u8]> {
-    let mut text = instructions.to_vec();
-    text.extend_from_slice(format!("\n\nWhy: {why:?}\n").as_bytes());
-    for section in sections {
-        text.extend_from_slice(format!("\n## {:?}\n", section.kind).as_bytes());
-        match &section.body {
-            Body::Text(body) => text.extend_from_slice(body),
-            Body::Missing(unread) => text.extend_from_slice(format!("[unread: {unread:?}]").as_bytes()),
-        }
-        text.push(b'\n');
-    }
-    text.into()
-}
-
-/// `declared`, as the engine's codec encodes the outcome it is
-/// ([`codec::outcome`]).
 #[must_use]
 pub fn outcome(declared: &Declared) -> Box<[u8]> {
-    codec::outcome(&engine_outcome(declared)).into()
+    temper_agent_protocol::payload::outcome(declared, &temper_channel::Sizes::STARTING)
+        .expect("the declared outcome fits the domain-tier deployment")
 }
-
-/// The engine's outcome for what a run declared: a change, by its message;
-/// a verdict on a change, its children written out after its text; a report.
 #[must_use]
 pub fn engine_outcome(declared: &Declared) -> Outcome {
-    match declared {
-        Declared::Change(change) => Outcome::Change { message: message(change) },
-        Declared::Verdict(Verdict { name, body, children }) => {
-            let mut text = body.to_vec();
-            for Child { kind, fields } in children {
-                text.extend_from_slice(b"\n- ");
-                text.extend_from_slice(kind);
-                for Field { name, value } in fields {
-                    text.extend_from_slice(b" ");
-                    text.extend_from_slice(name);
-                    text.extend_from_slice(b": ");
-                    text.extend_from_slice(value);
-                }
-            }
-            let text = text.into_boxed_slice();
-            match &**name {
-                REPORT => Outcome::Report { text },
-                APPROVE => Outcome::Verdict { verdict: plan::Verdict::Approve, text },
-                REQUEST => Outcome::Verdict { verdict: plan::Verdict::Changes, text },
-                other => panic!("a run declares only the verdicts its charter allows, not {other:?}"),
-            }
-        }
-    }
+    temper_engine_protocol::payload::decode_outcome(&outcome(declared), &temper_channel::Sizes::STARTING)
+        .expect("production outcome encoding decodes")
 }
 
 /// The run retains the worker's reason, repository and diagnostic tail.
