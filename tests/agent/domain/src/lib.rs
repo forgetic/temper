@@ -13,7 +13,7 @@
 //!   its repositories the deployment's, each holding the [`fixture`]'s code,
 //!   protecting its default branch, CI cued by a file the runs leave green
 //!   ([`forge`]); the engine reaches it through its protocol layer as the
-//!   engine's world plays it (`temper_engine_domain_world::translate`, its
+//!   engine's world plays it (`temper_legacy_engine_domain_world::translate`, its
 //!   payloads written and read by the engine's codecs), each call with a
 //!   deadline, with the forge's faults as the settings say (late and failing
 //!   calls, rate limits, lost and late webhooks, a skewed clock); io's git
@@ -91,7 +91,7 @@
 //! scripted to fail; every assignment is answered within the wall time the
 //! worker's watchdog gives a run, and a margin; and every issue handed in
 //! ends, closed or held, within a bound. The engine's
-//! (`temper_engine_domain_world::referee`): nothing lands on a protected
+//! (`temper_legacy_engine_domain_world::referee`): nothing lands on a protected
 //! branch without green CI on its exact head and a person's approval of it,
 //! writes only to the deployment's repositories, keyed creations and outcomes
 //! made once, attempts that only grow and one live run per item. Its stories

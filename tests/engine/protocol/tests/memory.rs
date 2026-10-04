@@ -26,7 +26,7 @@ fn maximal_outcome_conversion_counts_nested_plan_arrays_and_owned_text() {
     meter.start();
     let mut original = outcome();
     let fixed = payload::encode_outcome(&original, &SIZES).expect("the fixture fits").len();
-    let temper_engine_domain::Outcome::Plan { text, .. } = &mut original else { panic!("a plan fixture") };
+    let temper_legacy_engine_domain::Outcome::Plan { text, .. } = &mut original else { panic!("a plan fixture") };
     *text = vec![b'x'; SIZES.outcome as usize - fixed].into();
     let bytes = payload::encode_outcome(&original, &SIZES).expect("exactly full encoded outcome");
     assert_eq!(bytes.len(), SIZES.outcome as usize);
@@ -40,9 +40,9 @@ fn maximal_outcome_conversion_counts_nested_plan_arrays_and_owned_text() {
 fn occupied_connections_and_maximal_link_conversions_fit_the_owner_bound() {
     use skein_lib::Token;
     use temper_channel::wire;
-    use temper_engine_domain as engine;
     use temper_engine_protocol::{connection::Transport, names, worst_case};
     use temper_engine_protocol_world::link::{LIMITS, SIZES, World};
+    use temper_legacy_engine_domain as engine;
     let meter = Meter::new();
     meter.start();
     let mut world = World::new(Transport::Loopback);

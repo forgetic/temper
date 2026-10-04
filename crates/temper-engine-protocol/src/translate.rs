@@ -4,7 +4,7 @@ use alloc::boxed::Box;
 use skein_lib::bytes::copy_of;
 use skein_lib::{List, Time, Token};
 use temper_channel::{Sizes, wire};
-use temper_engine_domain::{self as engine, Event, Request};
+use temper_legacy_engine_domain::{self as engine, Event, Request};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Error {

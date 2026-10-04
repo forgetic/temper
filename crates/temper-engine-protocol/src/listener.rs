@@ -5,7 +5,7 @@ use skein_io::{self as io, kernel::Addr};
 use skein_lib::{Deadlines, Env, Id, Map, Queue, Set, Slab, Time, Token, stream};
 use subtle::ConstantTimeEq;
 use temper_channel::{Sizes, machine, wire};
-use temper_engine_domain::{self as engine, Request};
+use temper_legacy_engine_domain::{self as engine, Request};
 
 use crate::{
     Limits,

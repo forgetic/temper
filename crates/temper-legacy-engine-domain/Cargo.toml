@@ -1,0 +1,22 @@
+[package]
+name = "temper-legacy-engine-domain"
+description = "Legacy: The domain layer of the temper engine: the engine loop's entry point, sans-io"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+skein-lib.workspace = true
+temper-engine-domain-accounts.workspace = true
+temper-engine-domain-brief.workspace = true
+temper-engine-domain-fleet.workspace = true
+temper-legacy-engine-domain-forge.workspace = true
+temper-engine-domain-notes.workspace = true
+temper-legacy-engine-domain-plan.workspace = true
+temper-legacy-engine-domain-rules.workspace = true
+temper-engine-domain-views.workspace = true
+temper-legacy-engine-domain-work.workspace = true
+
+[lints]
+workspace = true

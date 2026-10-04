@@ -89,8 +89,8 @@ use temper_agent_domain::run::{self, Budget};
 use temper_agent_domain::session;
 use temper_agent_domain::tools;
 use temper_agent_domain::{Event, Fact, Request};
-use temper_engine_domain::Outcome;
-use temper_engine_domain::plan;
+use temper_legacy_engine_domain::Outcome;
+use temper_legacy_engine_domain::plan;
 use temper_worker_domain_agent::channel::{Ask, Down, Finish, Push, Reply, RunFailure, Up};
 
 /// What the agent's protocol layer holds for an agent process's channel.

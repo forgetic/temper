@@ -3,7 +3,7 @@
 //! why; and passes one that keeps them.
 
 use skein_lib::{Duration, Time, Token};
-use temper_engine_domain::work::{Class, Failures, Lifecycle, Phase};
+use temper_legacy_engine_domain::work::{Class, Failures, Lifecycle, Phase};
 use temper_worker_domain_world::protocol::Names;
 use temper_worker_domain_world::referee::{Hosting, Seen, Stimulus};
 use temper_world::{Referee, Verdict};

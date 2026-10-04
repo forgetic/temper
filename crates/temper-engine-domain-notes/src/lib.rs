@@ -13,7 +13,7 @@
 //!
 //! Sans-io: [`step`] and [`resume`] turn events into requests and change
 //! nothing but the [`Domain`] they are given. Every effect is a [`Request`]
-//! that its parent, the engine's root domain (`temper-engine-domain`),
+//! that its parent, the engine's root domain (`temper-legacy-engine-domain`),
 //! routes on: the wiki operations go to the forge child domain, the answers to
 //! the brief or the run that asked. Their outcomes come back later through
 //! the parent as an [`Event`]. The notes own no timers: the forge child domain

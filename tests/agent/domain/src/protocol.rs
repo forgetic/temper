@@ -1,6 +1,6 @@
 //! The channel between the engine and the worker (worker-domain.md, sections
 //! 2 and 4; engine-domain.md, section 8), as the protocol layers on both
-//! sides would carry it: the engine's boundary ([`temper_engine_domain`]) on
+//! sides would carry it: the engine's boundary ([`temper_legacy_engine_domain`]) on
 //! one side, the worker's ([`temper_worker_domain`]) on the other, each in its
 //! own terms.
 //!
@@ -22,7 +22,7 @@
 //! ```
 //!
 //! Names are packed into the channel's tokens as the engine's world packs
-//! them for every system world ([`temper_engine_domain_world::names`]), so
+//! them for every system world ([`temper_legacy_engine_domain_world::names`]), so
 //! that every attempt of every item has a name of its own. A repository of a
 //! workspace is the deployment's, by its forge name: the worker puts it in a
 //! directory named for its last component, and reaches it as the one
@@ -48,9 +48,9 @@
 //! - A fact goes up as its kind: progress, a call, a tool or a check, usage.
 
 use skein_lib::Token;
-use temper_engine_domain::views::Kind;
-use temper_engine_domain::{self as engine, Assignment};
-use temper_engine_domain_world::{codec, deployment};
+use temper_legacy_engine_domain::views::Kind;
+use temper_legacy_engine_domain::{self as engine, Assignment};
+use temper_legacy_engine_domain_world::{codec, deployment};
 use temper_worker_domain::{self as worker, Told, host};
 
 /// Who the worker is to the forge, for every repository it checks out.
@@ -59,7 +59,7 @@ pub const IDENTITY: u32 = 1;
 /// The bytes a frame adds to a charter.
 pub const CHARTER_FRAME: usize = 8;
 
-pub use temper_engine_domain_world::names::{attempt, attempt_of, run};
+pub use temper_legacy_engine_domain_world::names::{attempt, attempt_of, run};
 
 /// The directory a repository of the deployment sits in: the last component
 /// of its forge name.

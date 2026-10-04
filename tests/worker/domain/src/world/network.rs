@@ -21,7 +21,7 @@
 //! for the rest.
 
 use skein_lib::{Duration, Time, Token};
-use temper_engine_domain as engine;
+use temper_legacy_engine_domain as engine;
 use temper_worker_domain::{Event, host};
 use temper_world::Span;
 
@@ -357,7 +357,10 @@ impl World {
                         self.hosting.observe(self.now, Seen::Answered { names, refused }, &mut Vec::new());
                         self.stories.observe(
                             self.now,
-                            temper_engine_domain_world::referee::Seen::Answered { item: *item, attempt: *attempt },
+                            temper_legacy_engine_domain_world::referee::Seen::Answered {
+                                item: *item,
+                                attempt: *attempt,
+                            },
                             &mut Vec::new(),
                         );
                         hello

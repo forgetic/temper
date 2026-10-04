@@ -10,9 +10,9 @@
 
 use std::time::Duration;
 
-use temper_engine_domain_world::deployment::{CUE, GREEN};
 use temper_fake_checkout::git::Tree;
 use temper_fake_checkout::{self as fake, Checkout, Program};
+use temper_legacy_engine_domain_world::deployment::{CUE, GREEN};
 
 /// Where the checks are, beneath a repository's root.
 pub const CHECKS: &[u8] = b".temper/pre-pr";

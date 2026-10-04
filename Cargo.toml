@@ -9,16 +9,16 @@ members = [
     "crates/temper-agent-domain-tools",
     "crates/temper-agent-protocol",
     "crates/temper-channel",
-    "crates/temper-engine-domain",
+    "crates/temper-legacy-engine-domain",
     "crates/temper-engine-domain-accounts",
     "crates/temper-engine-domain-brief",
     "crates/temper-engine-domain-fleet",
-    "crates/temper-engine-domain-forge",
+    "crates/temper-legacy-engine-domain-forge",
     "crates/temper-engine-domain-notes",
-    "crates/temper-engine-domain-plan",
-    "crates/temper-engine-domain-rules",
+    "crates/temper-legacy-engine-domain-plan",
+    "crates/temper-legacy-engine-domain-rules",
     "crates/temper-engine-domain-views",
-    "crates/temper-engine-domain-work",
+    "crates/temper-legacy-engine-domain-work",
     "crates/temper-engine-protocol",
     "crates/temper-forge-forgejo",
     "crates/temper-llm-anthropic",
@@ -43,13 +43,13 @@ members = [
     "tests/engine/accounts",
     "tests/engine/brief",
     "tests/engine/fleet",
-    "tests/engine/forge",
-    "tests/engine/domain",
+    "tests/legacy/engine/forge",
+    "tests/legacy/engine/domain",
     "tests/engine/notes",
-    "tests/engine/plan",
+    "tests/legacy/engine/plan",
     "tests/engine/protocol",
     "tests/engine/views",
-    "tests/engine/work",
+    "tests/legacy/engine/work",
     "tests/fake-forge",
     "tests/fake-forge/protocol",
     "tests/forge/forgejo",
@@ -97,15 +97,15 @@ temper-agent-domain = { path = "crates/temper-agent-domain" }
 temper-agent-domain-run = { path = "crates/temper-agent-domain-run" }
 temper-agent-domain-session = { path = "crates/temper-agent-domain-session" }
 temper-agent-domain-tools = { path = "crates/temper-agent-domain-tools" }
-temper-engine-domain = { path = "crates/temper-engine-domain" }
+temper-legacy-engine-domain = { path = "crates/temper-legacy-engine-domain" }
 temper-engine-domain-brief = { path = "crates/temper-engine-domain-brief" }
 temper-engine-domain-fleet = { path = "crates/temper-engine-domain-fleet" }
-temper-engine-domain-forge = { path = "crates/temper-engine-domain-forge" }
+temper-legacy-engine-domain-forge = { path = "crates/temper-legacy-engine-domain-forge" }
 temper-engine-domain-notes = { path = "crates/temper-engine-domain-notes" }
-temper-engine-domain-plan = { path = "crates/temper-engine-domain-plan" }
-temper-engine-domain-rules = { path = "crates/temper-engine-domain-rules" }
+temper-legacy-engine-domain-plan = { path = "crates/temper-legacy-engine-domain-plan" }
+temper-legacy-engine-domain-rules = { path = "crates/temper-legacy-engine-domain-rules" }
 temper-engine-domain-views = { path = "crates/temper-engine-domain-views" }
-temper-engine-domain-work = { path = "crates/temper-engine-domain-work" }
+temper-legacy-engine-domain-work = { path = "crates/temper-legacy-engine-domain-work" }
 temper-worker-domain = { path = "crates/temper-worker-domain" }
 temper-worker-domain-agent = { path = "crates/temper-worker-domain-agent" }
 temper-worker-domain-checkout = { path = "crates/temper-worker-domain-checkout" }
@@ -116,8 +116,8 @@ temper-fake-forge-protocol-world = { path = "tests/fake-forge/protocol" }
 temper-fake-llm-domain = { path = "testing/temper-fake-llm-domain" }
 temper-fake-llm-protocol = { path = "testing/temper-fake-llm-protocol" }
 temper-fake-checkout = { path = "tests/fake-checkout" }
-temper-engine-forge-world = { path = "tests/engine/forge" }
-temper-engine-domain-world = { path = "tests/engine/domain" }
+temper-legacy-engine-forge-world = { path = "tests/legacy/engine/forge" }
+temper-legacy-engine-domain-world = { path = "tests/legacy/engine/domain" }
 temper-agent-tools-world = { path = "tests/agent/tools" }
 temper-worker-agent-world = { path = "tests/worker/agent" }
 temper-worker-checkout-world = { path = "tests/worker/checkout" }
@@ -128,9 +128,9 @@ temper-agent-session-world = { path = "tests/agent/session" }
 temper-engine-brief-world = { path = "tests/engine/brief" }
 temper-engine-fleet-world = { path = "tests/engine/fleet" }
 temper-engine-notes-world = { path = "tests/engine/notes" }
-temper-engine-plan-world = { path = "tests/engine/plan" }
+temper-legacy-engine-plan-world = { path = "tests/legacy/engine/plan" }
 temper-engine-views-world = { path = "tests/engine/views" }
-temper-engine-work-world = { path = "tests/engine/work" }
+temper-legacy-engine-work-world = { path = "tests/legacy/engine/work" }
 temper-worker-host-world = { path = "tests/worker/host" }
 temper-world = { path = "tests/world" }
 

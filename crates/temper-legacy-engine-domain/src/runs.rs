@@ -1,0 +1,1030 @@
+//! Runs (engine-domain.md, sections 4.2, 8 and 9): starting the run the hub
+//! claimed, the fleet's placements and answers, the inbox events relayed to
+//! a live run, its calls served, and its reports to the views.
+//!
+//! - **Starting:** the rules check the run (its budget against what was
+//!   spent, its grants); the brief renders the sections the plan selected;
+//!   the store gives the snapshot to resume if the plan says so and there
+//!   is one; the charter and the workspace are composed, and the fleet is
+//!   asked to place the attempt. Until the cold start is done, a run
+//!   prepared waits: nothing new starts before every claim is adopted. A run
+//!   the rules refuse, or whose brief cannot be rendered, is answered at
+//!   once, as failed; one stopped while it is prepared, as refused.
+//! - **Answers:** the fleet hands each answer on once; the inbox position
+//!   moves with what the run took, then the hub hears it, and the fleet's
+//!   acknowledgement goes once the hub has it durably or calls it stale.
+//! - **Calls:** a forge read (if the run's grants allow), a `recall`, a
+//!   `note` (if the rules allow), a comment and an escalation, each
+//!   answered once, through the fleet.
+
+use alloc::boxed::Box;
+use core::mem;
+
+use skein_lib::bytes::copy_of;
+use skein_lib::{Env, Id, List, Queue, ReplyTo, Token};
+use temper_engine_domain_brief as brief;
+use temper_engine_domain_fleet as fleet;
+use temper_engine_domain_views as views;
+use temper_legacy_engine_domain_forge::{self as forge, api};
+use temper_legacy_engine_domain_plan as plan;
+use temper_legacy_engine_domain_rules as rules;
+use temper_legacy_engine_domain_work as work;
+
+use crate::boundary::{
+    Answer, Assignment, Call, Charter, Checkout, Inbound, Item, Posted, Request, Served, Start, Unserved, Workspace,
+};
+use crate::domain::{self, Domain};
+use crate::facts::Fact;
+use crate::items::{self, Entry, Job, Live, Seen, Starting};
+use crate::jobs::{get, get_mut};
+use crate::limits::Limits;
+use crate::route;
+use crate::translate;
+use crate::waits::{Carried, Relayed, Wait};
+
+/// The hub starts the item's attempt `attempt`, on the run it was told is
+/// due, its claim written.
+pub(crate) fn start(domain: &mut Domain, env: &Env<Limits>, item: Item, attempt: u64, run: Token) {
+    let Some(id) = items::find(domain, item) else { unreachable!("the hub starts only items the top level holds") };
+    assert!(run == id.token(), "a run is the one decided for its item");
+    let entry = get_mut(domain, id);
+    let Some(due) = entry.due.take() else { unreachable!("the hub starts the run it was told is due") };
+    let start = entry.next.saturating_sub(1);
+    entry.live = Some(Live { attempt, start, started: false, bounced: false, comments: None });
+    entry.grants = Some(due.grants);
+    entry.resumed = None;
+    // The rules were asked as the run was decided; what was spent since may
+    // change their answer: then nothing runs, and the hub claims again,
+    // which asks them again.
+    match rule(domain, env, id, &due) {
+        rules::Decision::Allow => {}
+        rules::Decision::Wait | rules::Decision::Accept { .. } | rules::Decision::Refuse => {
+            return end(domain, env, id, attempt, work::Answer::Refused);
+        }
+    }
+    let sections = sections(domain, env, id, &due);
+    let Ok(rendering) = domain.waits.insert(Wait::Job { entry: id }) else {
+        unreachable!("the waits have room for every item's job")
+    };
+    let fetching = if due.resume && get(domain, id).relations.snapshot {
+        let Ok(fetching) = domain.waits.insert(Wait::Job { entry: id }) else {
+            unreachable!("the waits have room for every item's job")
+        };
+        domain.requests.push(Request::Store { owner: fetching.token(), op: crate::boundary::Store::Get { item } });
+        Some(fetching)
+    } else {
+        None
+    };
+    // The item's branch is read on the forge first when a change is made
+    // again after an earlier attempt, with no branch recorded: it starts
+    // from that attempt's push, if one landed whose answer never came (its
+    // worker lost holding it). So it is when a run is to start from the
+    // branch recorded after a run failed for good (a start the forge did not
+    // have, as one another party deleted): it starts from its base then.
+    let produces = match due.why {
+        plan::Why::Produce => true,
+        plan::Why::Work | plan::Why::Repair(_) | plan::Why::Review { .. } | plan::Why::Turn => false,
+    };
+    let entry = get(domain, id);
+    let unknown = produces && entry.relations.branch.is_none();
+    let doubtful = entry.relations.branch.is_some() && !entry.gone && entry.lifecycle.failures.permanent > 0;
+    let branching = if attempt > 1 && (unknown || doubtful) {
+        let Ok(branching) = domain.waits.insert(Wait::Job { entry: id }) else {
+            unreachable!("the waits have room for every item's job")
+        };
+        Some(branching)
+    } else {
+        None
+    };
+    let starting =
+        Starting { attempt, run: due, brief: None, rendering: Some(rendering), fetching, branching, snapshot: None };
+    get_mut(domain, id).job = Job::Starting(Box::new(starting));
+    if let Some(branching) = branching {
+        let branch = translate::branch(&domain.config.branches, item);
+        let read = forge::Read::Branch { repository: item.repository, branch };
+        route::forge_step(domain, env, forge::Event::Read { owner: branching.token(), read });
+    }
+    let reply_to = ReplyTo::new(rendering.token());
+    route::brief_step(domain, env, brief::Event::Render { reply_to, sections });
+}
+
+/// The forge answered the read of the item's branch, before a run starts:
+/// a push found there, where none is recorded, is the item's branch, and the
+/// run starts from it; a branch recorded and not found is gone, and the run
+/// starts from its base.
+pub(crate) fn branched(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    id: Id<Entry>,
+    wait: Id<Wait>,
+    result: Result<api::Answer, forge::Failure>,
+) {
+    let Some(entry) = domain.items.get_mut(id) else { return };
+    let Some(starting) = items::starting_mut(&mut entry.job) else { return };
+    if starting.branching != Some(wait) {
+        return;
+    }
+    starting.branching = None;
+    let pushed = match result {
+        Ok(api::Answer::Commit(commit)) => Some(commit),
+        Err(forge::Failure::Forge(api::Error::Missing)) => {
+            entry.gone = entry.relations.branch.is_some();
+            None
+        }
+        Ok(_) | Err(_) => None,
+    };
+    if let Some(commit) = pushed
+        && entry.relations.branch.is_none()
+    {
+        entry.relations.branch = Some(commit);
+        items::aside(domain, env, id);
+    }
+    ready(domain, env, id);
+}
+
+/// The rules on a run: its budget against what was spent, by the item's
+/// goal and by the deployment, and what it may read and push.
+pub(crate) fn rule(domain: &Domain, env: &Env<Limits>, id: Id<Entry>, run: &plan::Run) -> rules::Decision {
+    let entry = get(domain, id);
+    let goal = match entry.relations.goal {
+        Some(goal) => match items::find(domain, goal) {
+            Some(goal) => rules::Goal::Spent(get(domain, goal).relations.spent),
+            None => rules::Goal::Spent(0),
+        },
+        None => rules::Goal::Outside,
+    };
+    let branch = translate::branch(&domain.config.branches, entry.item);
+    let checked = rules::Run {
+        budget: run.budget.tokens,
+        goal,
+        deployment_spent: domain.spent,
+        grants: translate::grants(run.grants, entry.item.repository, &branch),
+    };
+    let gates = match entry.step.as_ref() {
+        Some(record) => translate::gates(&record.step.gates),
+        None => List::with_capacity(0),
+    };
+    let mut findings = Queue::with_capacity(rules::max_out(&env.limits.rules));
+    rules::check_run(
+        &domain.config.rules,
+        &env.limits.rules,
+        &checked,
+        items::accepted(entry, None),
+        gates.as_slice(),
+        &mut findings,
+    )
+}
+
+/// The sections a run's brief carries, in the brief's terms: the item is
+/// required; a repair's failing CI and a rebase's pull request too, since a
+/// run without them would spend itself on nothing.
+fn sections(domain: &Domain, env: &Env<Limits>, id: Id<Entry>, run: &plan::Run) -> Box<[brief::Wanted]> {
+    let entry = get(domain, id);
+    let item = translate::brief_item(entry.item);
+    let chosen = run.sections;
+    let head = head_of(domain, entry.item);
+    let repair = match run.why {
+        plan::Why::Repair(repair) => Some(repair),
+        plan::Why::Work | plan::Why::Produce | plan::Why::Review { .. } | plan::Why::Turn => None,
+    };
+    let mut wanted = List::with_capacity(env.limits.brief.sections);
+    want(&mut wanted, brief::Source::Item(item), true);
+    // People's messages waiting are what the run is for, and what its
+    // answer takes: without them, it does not run.
+    if chosen.comments {
+        let messages = waiting_messages(entry);
+        want(&mut wanted, brief::Source::Comments { item, since: entry.since }, messages);
+    }
+    if chosen.dependencies && !entry.relations.dependencies.is_empty() {
+        let mut items = List::with_capacity(env.limits.brief.items);
+        for dependency in &entry.relations.dependencies {
+            if items.push(translate::brief_item(dependency.item)).is_err() {
+                break;
+            }
+        }
+        want(&mut wanted, brief::Source::Dependencies(items.into_boxed()), false);
+    }
+    if let Some(head) = head {
+        if chosen.ci {
+            let required = repair == Some(plan::Repair::CiFailed);
+            want(&mut wanted, brief::Source::Ci { item, head }, required);
+        }
+        if chosen.reviews {
+            let required = repair == Some(plan::Repair::ChangesRequested);
+            want(&mut wanted, brief::Source::Reviews { item, head }, required);
+        }
+        if chosen.pull {
+            let required = matches_rebase(repair);
+            want(&mut wanted, brief::Source::Pull { item, head }, required);
+        }
+    }
+    if chosen.attempts {
+        want(&mut wanted, brief::Source::Attempts(item), false);
+    }
+    if chosen.plan {
+        let goal = match entry.relations.goal {
+            Some(goal) => Some(goal),
+            None => match entry.step.as_ref() {
+                Some(record) if record.goal.is_some() => Some(entry.item),
+                Some(_) | None => None,
+            },
+        };
+        if let Some(goal) = goal {
+            want(&mut wanted, brief::Source::Plan { goal: translate::brief_item(goal) }, false);
+        }
+    }
+    if chosen.notes {
+        let goal = goal_item(entry.relations.goal);
+        want(&mut wanted, brief::Source::Notes { repository: entry.item.repository, goal }, false);
+    }
+    if chosen.template
+        && let Some(template) = run.template
+    {
+        want(&mut wanted, brief::Source::Template(template), false);
+    }
+    wanted.into_boxed()
+}
+
+/// Whether people's messages wait in the item's inbox.
+fn waiting_messages(entry: &Entry) -> bool {
+    for (_, noted) in &entry.inbox {
+        if noted.source == plan::Source::Message {
+            return true;
+        }
+    }
+    false
+}
+
+/// The head of the item's pull request, as the working set holds it.
+fn head_of(domain: &Domain, item: Item) -> Option<brief::Commit> {
+    let level = domain.forge.pull(translate::forge_item(item))?;
+    Some(brief::Commit(level.commit))
+}
+
+fn goal_item(goal: Option<Item>) -> Option<brief::Item> {
+    let goal = goal?;
+    Some(translate::brief_item(goal))
+}
+
+fn want(wanted: &mut List<brief::Wanted>, source: brief::Source, required: bool) {
+    // A brief has room for every section the plan may select.
+    wanted.push(brief::Wanted { source, required }).expect("room for each of them");
+}
+
+const fn matches_rebase(repair: Option<plan::Repair>) -> bool {
+    match repair {
+        Some(repair) => match repair {
+            plan::Repair::BaseMoved | plan::Repair::Conflicts => true,
+            plan::Repair::CiFailed | plan::Repair::ChangesRequested => false,
+        },
+        None => false,
+    }
+}
+
+/// The brief answered: its sections, or `None` if it failed or was refused.
+pub(crate) fn rendered(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    reply_to: ReplyTo,
+    sections: Result<Box<[brief::Section]>, work::Answer>,
+) {
+    let token = reply_to.into_token();
+    let answered = crate::serve::take(domain, token);
+    let Some(id) = answered.job() else { return };
+    let Some(entry) = domain.items.get_mut(id) else { return };
+    let Some(starting) = items::starting_mut(&mut entry.job) else { return };
+    if starting.rendering != Some(Id::from_token(token)) {
+        return;
+    }
+    starting.rendering = None;
+    let attempt = starting.attempt;
+    match sections {
+        Ok(sections) => {
+            starting.brief = Some(sections);
+            ready(domain, env, id);
+        }
+        Err(answer) => {
+            entry.job = Job::Idle;
+            end(domain, env, id, attempt, answer);
+        }
+    }
+}
+
+/// The store answered the get of the snapshot to resume.
+pub(crate) fn fetched(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    id: Id<Entry>,
+    wait: Id<Wait>,
+    snapshot: Option<Box<[u8]>>,
+) {
+    let Some(entry) = domain.items.get_mut(id) else { return };
+    let Some(starting) = items::starting_mut(&mut entry.job) else { return };
+    if starting.fetching != Some(wait) {
+        return;
+    }
+    starting.fetching = None;
+    starting.snapshot = snapshot;
+    ready(domain, env, id);
+}
+
+/// A run prepared, once its brief and its snapshot are in: its assignment
+/// is composed, and the fleet places it, unless the cold start is not done.
+fn ready(domain: &mut Domain, env: &Env<Limits>, id: Id<Entry>) {
+    let entry = get_mut(domain, id);
+    let Some(starting) = items::starting_mut(&mut entry.job) else { return };
+    if starting.rendering.is_some() || starting.fetching.is_some() || starting.branching.is_some() {
+        return;
+    }
+    let starting = match mem::replace(&mut entry.job, Job::Idle) {
+        Job::Starting(starting) => starting,
+        Job::Idle | Job::Asking { .. } | Job::Writing { .. } | Job::Recording { .. } | Job::Applying(_) => {
+            unreachable!("an item starting is ready")
+        }
+    };
+    let Starting { attempt, run, brief, snapshot, .. } = *starting;
+    let brief = match brief {
+        Some(brief) => brief,
+        None => Box::new([]),
+    };
+    let assignment = assignment(domain, id, attempt, &run, brief, snapshot);
+    get_mut(domain, id).assignment = Some(Box::new(assignment));
+    if domain.loaded.is_some() {
+        place(domain, env, id);
+    } else if !get(domain, id).waiting {
+        get_mut(domain, id).waiting = true;
+        if domain.held.try_push(id).is_err() {
+            unreachable!("the held runs have room for every item");
+        }
+    }
+}
+
+/// The assignment of the item's attempt (worker-domain.md, 4.1).
+fn assignment(
+    domain: &Domain,
+    id: Id<Entry>,
+    attempt: u64,
+    run: &plan::Run,
+    brief: Box<[brief::Section]>,
+    snapshot: Option<Box<[u8]>>,
+) -> Assignment {
+    let entry = get(domain, id);
+    let item = entry.item;
+    let branch = translate::branch(&domain.config.branches, item);
+    // A change made again, its branch gone, starts over from its base.
+    let start = match entry.relations.branch {
+        Some(_) if !entry.gone => Start::Branch { branch: copy_of(&branch) },
+        Some(_) | None => Start::Base { branch: base(domain, entry) },
+    };
+    let push = if run.grants.modify { Some(copy_of(&branch)) } else { None };
+    let save = if run.grants.modify { Some(translate::branch(&domain.config.saved, item)) } else { None };
+    let checkout = Checkout { repository: item.repository, start, push };
+    let charter = Charter {
+        why: run.why,
+        brief,
+        instructions: copy_of(&run.instructions),
+        grants: run.grants,
+        finish: run.finish,
+        budget: run.budget,
+        models: domain.config.models.clone(),
+        policy: domain.config.policy,
+    };
+    Assignment {
+        grants: Box::new([]),
+        item,
+        attempt,
+        workspace: Workspace { key: translate::workstream(item), repositories: Box::new([checkout]) },
+        save,
+        charter,
+        snapshot,
+    }
+}
+
+/// Where a run's checkout starts that has no branch of its own yet: its
+/// change's base, or its repository's first base.
+fn base(domain: &Domain, entry: &Entry) -> Box<[u8]> {
+    if let Some(record) = entry.step.as_ref() {
+        match &record.step.work {
+            plan::Work::Change(change) => return copy_of(&change.base),
+            plan::Work::Agent(_) | plan::Work::Wait(_) | plan::Work::Session(_) => {}
+        }
+    }
+    let repo = domain.config.plan.repo(plan::Repository(entry.item.repository));
+    match repo {
+        Some(repo) => match repo.bases.first() {
+            Some(base) => copy_of(base),
+            None => copy_of(b"main"),
+        },
+        None => copy_of(b"main"),
+    }
+}
+
+/// Asks the fleet to place the item's attempt, and the views to follow it.
+pub(crate) fn place(domain: &mut Domain, env: &Env<Limits>, id: Id<Entry>) {
+    if !crate::credentials::can_start(domain, id, env.now) {
+        domain.account_waiting.insert(id).expect("one waiting run per item");
+        return;
+    }
+    domain.account_waiting.remove(&id);
+    let grants = crate::credentials::grants(domain, id, env.now);
+    if let Some(assignment) = get_mut(domain, id).assignment.as_mut() {
+        assignment.grants = grants;
+    }
+    let entry = get_mut(domain, id);
+    let item = entry.item;
+    let Some(live) = entry.live.as_mut() else { return };
+    live.started = true;
+    let attempt = live.attempt;
+    let run = translate::run_of(item);
+    let reply_to = ReplyTo::new(run);
+    let workstream = translate::workstream(item);
+    let started = views::Event::Started { run, attempt: Token::new(attempt), item: run, policy: domain.config.policy };
+    route::views_step(domain, env, started);
+    route::fleet_step(domain, env, fleet::Event::Start { reply_to, run, attempt: Token::new(attempt), workstream });
+}
+
+/// The forge child domain's cold read is done: every item it found is
+/// announced, and taken into the hub, or did not fit.
+pub(crate) fn read(domain: &mut Domain) {
+    domain.read = true;
+}
+
+/// Whether the cold start is done, and not yet told: the cold read is, and
+/// every item it announced is in the hub, which asked the fleet to adopt
+/// each claim it read, and the fleet has heard it.
+pub(crate) fn is_loaded(domain: &Domain) -> bool {
+    if domain.loaded.is_some() || !domain.read || !domain.work_out.is_empty() {
+        return false;
+    }
+    for (_, id) in &domain.names {
+        if let Some(entry) = domain.items.get(*id)
+            && entry.taking == items::Taking::Asked
+        {
+            return false;
+        }
+    }
+    true
+}
+
+/// The cold start is done: every claim the records hold is adopted. The
+/// fleet starts the strays' graces, the runs prepared meanwhile start, and
+/// the applications resumed meanwhile go on, from the ready list.
+pub(crate) fn loaded(domain: &mut Domain, env: &Env<Limits>) {
+    domain.loaded = Some(env.now);
+    domain::keep(domain, Fact::Loaded);
+    route::fleet_step(domain, env, fleet::Event::Loaded);
+    for _ in 0..domain.held.len() {
+        let Some(id) = domain.held.pop() else { break };
+        let Some(entry) = domain.items.get_mut(id) else { continue };
+        entry.waiting = false;
+        if entry.assignment.is_some() && entry.live.is_some() {
+            place(domain, env, id);
+        } else if items::applying(&entry.job).is_some() && domain.stalled.try_push(id).is_err() {
+            unreachable!("the ready list has room for every item");
+        }
+    }
+}
+
+/// The hub adopts the item's attempt `attempt`, which its record claims.
+pub(crate) fn adopt(domain: &mut Domain, env: &Env<Limits>, item: Item, attempt: u64) {
+    let Some(id) = items::find(domain, item) else { unreachable!("the hub adopts only items the top level holds") };
+    let entry = get_mut(domain, id);
+    let start = entry.next.saturating_sub(1);
+    // What it took before the restart is what its claim's record says: of
+    // what this life's inbox holds, it takes nothing, and the next run has
+    // it all again.
+    entry.live = Some(Live { attempt, start, started: true, bounced: true, comments: None });
+    // Its grants are what its claim gave it, which the record's step says;
+    // what an earlier life made for it comes after its claim's position.
+    entry.grants = match entry.step.as_ref() {
+        Some(record) => translate::grants_of(record),
+        None => None,
+    };
+    entry.resumed = Some(items::Resumed { attempt, since: entry.since });
+    let run = translate::run_of(item);
+    let reply_to = ReplyTo::new(run);
+    route::fleet_step(domain, env, fleet::Event::Adopt { reply_to, run, attempt: Token::new(attempt) });
+}
+
+/// A worker's hello: a run it lists as ending or answered takes no inbox
+/// event passed to it from now on, whatever crosses its answer.
+pub(crate) fn hello(domain: &mut Domain, hello: &crate::boundary::Hello) {
+    for hosted in &hello.hosting {
+        let ending = match hosted.phase {
+            fleet::Phase::Ending | fleet::Phase::Answered => true,
+            fleet::Phase::Preparing | fleet::Phase::Starting | fleet::Phase::Active | fleet::Phase::Waiting => false,
+        };
+        let Some(id) = items::find(domain, hosted.item) else { continue };
+        if !ending
+            && let Some(live) = get(domain, id).live
+            && live.attempt == hosted.attempt
+        {
+            crate::credentials::redial(domain, id);
+        }
+        if let Some(live) = get_mut(domain, id).live.as_mut()
+            && live.attempt == hosted.attempt
+            && ending
+        {
+            live.bounced = true;
+        }
+    }
+}
+
+/// The hub cancels the item's attempt `attempt`: the fleet cancels it, or, if
+/// it is still being prepared, it ends at once, refused.
+pub(crate) fn cancel(domain: &mut Domain, env: &Env<Limits>, item: Item, attempt: u64) {
+    let Some(id) = items::find(domain, item) else { return };
+    let entry = get_mut(domain, id);
+    let started = match entry.live {
+        Some(live) => live.attempt != attempt || live.started,
+        None => true,
+    };
+    if started {
+        let run = translate::run_of(item);
+        return route::fleet_step(domain, env, fleet::Event::Cancel { run, attempt: Token::new(attempt) });
+    }
+    entry.job = Job::Idle;
+    entry.assignment = None;
+    entry.grants = None;
+    crate::credentials::forget(domain, id);
+    end(domain, env, id, attempt, work::Answer::Refused);
+}
+
+/// Ends the item's attempt the fleet does not have: the hub hears it as
+/// answered, with nothing to acknowledge.
+fn end(domain: &mut Domain, env: &Env<Limits>, id: Id<Entry>, attempt: u64, answer: work::Answer) {
+    let entry = get_mut(domain, id);
+    entry.live = None;
+    entry.assignment = None;
+    entry.grants = None;
+    let item = entry.item;
+    route::work_step(domain, env, work::Event::Answered { item, attempt, answer });
+}
+
+/// The fleet assigns the item's attempt to a worker.
+pub(crate) fn assign(domain: &mut Domain, channel: Token, run: Token, attempt: Token, out: &mut Queue<Request>) {
+    let item = translate::item(run);
+    let Some(id) = items::find(domain, item) else { return };
+    let Some(assignment) = get(domain, id).assignment.as_ref() else { return };
+    if assignment.attempt != attempt.raw() {
+        return;
+    }
+    out.push(Request::Assign { channel, assignment: Assignment::clone(assignment) });
+}
+
+/// The fleet places the item's attempt on a worker.
+pub(crate) fn placed(domain: &mut Domain, env: &Env<Limits>, run: Token, attempt: Token) {
+    let item = translate::item(run);
+    let phase =
+        views::Event::Phase { item: run, repository: item.repository, phase: crate::boundary::Phase::Running.code() };
+    route::views_step(domain, env, phase);
+    route::work_step(domain, env, work::Event::Placed { item, attempt: attempt.raw() });
+}
+
+/// The hub relays the inbox event `event` to the item's attempt.
+pub(crate) fn inbound(domain: &mut Domain, env: &Env<Limits>, item: Item, attempt: u64, event: Token) {
+    let run = translate::run_of(item);
+    route::fleet_step(domain, env, fleet::Event::Inbound { run, attempt: Token::new(attempt), event });
+}
+
+/// The fleet passes the inbox event `event` to the worker hosting the
+/// item's attempt.
+pub(crate) fn deliver(
+    domain: &mut Domain,
+    channel: Token,
+    run: Token,
+    attempt: Token,
+    event: Token,
+    out: &mut Queue<Request>,
+) {
+    let item = translate::item(run);
+    let Some(id) = items::find(domain, item) else { return };
+    let Some(noted) = get_mut(domain, id).inbox.get_mut(&event.raw()) else { return };
+    noted.delivered = true;
+    let inbound = noted.inbound;
+    out.push(Request::Inbound { channel, item, attempt: attempt.raw(), name: event, event: inbound });
+}
+
+/// News of the item, from the forge child domain: kept in its inbox, and told
+/// the hub.
+pub(crate) fn news(domain: &mut Domain, env: &Env<Limits>, item: forge::Item, seq: u64, news: forge::News) {
+    let Some(id) = items::find(domain, translate::item_of(item)) else { return };
+    let (source, pushed) = match news {
+        forge::News::Comment { .. } => (plan::Source::Message, None),
+        forge::News::Reviews { .. } => (plan::Source::Own, None),
+        forge::News::Pull { commit, .. } => (plan::Source::Own, Some(commit)),
+    };
+    if let Some(commit) = pushed {
+        let base = match domain.forge.pull(item) {
+            Some(level) => level.base,
+            None => None,
+        };
+        let entry = get_mut(domain, id);
+        let moved = match entry.seen {
+            Some(seen) => seen.head != commit,
+            None => true,
+        };
+        if moved {
+            entry.seen = Some(Seen { head: commit, at: env.now, base });
+        }
+    }
+    items::inbox(domain, env, id, Inbound::News(news), Some(seq), source);
+}
+
+/// The hub keeps the snapshot its attempt parked with: to the store.
+pub(crate) fn keep(domain: &mut Domain, item: Item, snapshot: Token) {
+    let Some(carried) = domain.carried.get_mut(Id::from_token(snapshot)) else { return };
+    let Some(answer) = carried.answer_mut() else { return };
+    let kept = match answer {
+        Answer::Parked { snapshot, .. } => snapshot.take(),
+        Answer::Busy | Answer::Invalid | Answer::Ended { .. } | Answer::Failed { .. } => None,
+    };
+    let Some(bytes) = kept else { return };
+    let Some(id) = items::find(domain, item) else { return };
+    get_mut(domain, id).relations.snapshot = true;
+    let Ok(wait) = domain.waits.insert(Wait::Aside { entry: Some(id) }) else {
+        unreachable!("the waits have room for every item's job")
+    };
+    let op = crate::boundary::Store::Put { item, snapshot: bytes };
+    domain.requests.push(Request::Store { owner: wait.token(), op });
+}
+
+/// The hub has the item's attempt's answer durably, or does not want it:
+/// the fleet acknowledges it, if it handed it, and its payload goes.
+pub(crate) fn acknowledge(domain: &mut Domain, env: &Env<Limits>, item: Item, attempt: u64) {
+    let Some(payload) = domain.handed.remove(&(item, attempt)) else { return };
+    forget(domain, payload);
+    let run = translate::run_of(item);
+    route::fleet_step(domain, env, fleet::Event::Acknowledge { run, attempt: Token::new(attempt) });
+    if let Some(id) = items::find(domain, item)
+        && get(domain, id).resave
+    {
+        items::aside(domain, env, id);
+    }
+}
+
+/// The hub is done with the item: the forge child domain lets it go.
+pub(crate) fn left(domain: &mut Domain, env: &Env<Limits>, item: Item) {
+    items::finished(domain, env, item);
+    let Some(id) = items::find(domain, item) else { return };
+    let closed = get(domain, id).closed;
+    items::drop_entry(domain, id);
+    if !closed {
+        route::forge_step(domain, env, forge::Event::Untrack { item: translate::forge_item(item) });
+    }
+}
+
+/// A worker's answer for the item's attempt, which the fleet takes on.
+pub(crate) fn answer(domain: &mut Domain, env: &Env<Limits>, channel: Token, item: Item, attempt: u64, answer: Answer) {
+    let Some(run) = translate::run(item) else { return };
+    let acted = translate::answer(&answer);
+    let carried = Carried::Answer { item, attempt, answer: Box::new(answer) };
+    let Ok(payload) = domain.carried.insert(carried) else {
+        // No room: its channel is closed rather than the answer dropped,
+        // and the worker sends it again after its next hello.
+        domain.requests.push(Request::Refuse { channel });
+        return;
+    };
+    let event =
+        fleet::Event::Answer { channel, run, attempt: Token::new(attempt), answer: acted, payload: payload.token() };
+    route::fleet_step(domain, env, event);
+}
+
+/// The fleet hands on the answer of the item's attempt: what the run took
+/// leaves the inbox, then the hub hears it.
+pub(crate) fn answered(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    to: ReplyTo,
+    run: Token,
+    attempt: Token,
+    payload: Token,
+) {
+    assert!(to.into_token() == run, "an attempt's answer ends its run's call");
+    let item = translate::item(run);
+    let attempt = attempt.raw();
+    let answer = match domain.carried.get(Id::from_token(payload)) {
+        Some(Carried::Answer { answer, .. }) => answer,
+        Some(Carried::Call { .. } | Carried::Served { .. } | Carried::Report { .. } | Carried::Done) | None => {
+            unreachable!("an answer handed on is the one carried")
+        }
+    };
+    let (answer, work) = match answer.as_ref() {
+        Answer::Ended { work, .. } => (work::Answer::Ended { outcome: payload }, Some(work)),
+        Answer::Parked { snapshot, work } => {
+            let snapshot = if snapshot.is_some() { Some(payload) } else { None };
+            (work::Answer::Parked { snapshot }, Some(work))
+        }
+        Answer::Failed { failure, work } => (work::Answer::Failed(translate::class(*failure)), Some(work)),
+        Answer::Invalid => (work::Answer::Failed(work::Class::Permanent), None),
+        Answer::Busy => unreachable!("the fleet places a busy attempt again"),
+    };
+    let landed = match work {
+        Some(work) => {
+            let mut head = None;
+            for landed in &work.landed {
+                if landed.repository == item.repository {
+                    head = Some(landed.commit);
+                }
+            }
+            head
+        }
+        None => None,
+    };
+    if domain.handed.insert((item, attempt), payload).is_err() {
+        unreachable!("the answers handed on have room for every attempt");
+    }
+    route::views_step(domain, env, views::Event::Finished { run });
+    if let Some(id) = items::find(domain, item) {
+        let live = get(domain, id).live;
+        if let Some(live) = live
+            && live.attempt == attempt
+        {
+            {
+                let took = match answer {
+                    work::Answer::Ended { .. } | work::Answer::Parked { .. } => true,
+                    work::Answer::Failed(_) | work::Answer::Lost | work::Answer::Refused => false,
+                };
+                if took {
+                    items::took(domain, env, id);
+                }
+                let entry = get_mut(domain, id);
+                if let Some(head) = landed {
+                    entry.relations.branch = Some(head);
+                    entry.gone = false;
+                }
+                // A turn that parked is over, as one whose outcome is applied
+                // is: the next waits for its wake, not retried at once.
+                let parked = match answer {
+                    work::Answer::Parked { .. } => true,
+                    work::Answer::Ended { .. }
+                    | work::Answer::Failed(_)
+                    | work::Answer::Lost
+                    | work::Answer::Refused => false,
+                };
+                if parked && let Some(record) = entry.step.as_mut() {
+                    record.progress.running = None;
+                }
+                entry.live = None;
+                entry.assignment = None;
+                entry.grants = None;
+            }
+        }
+    }
+    route::work_step(domain, env, work::Event::Answered { item, attempt, answer });
+}
+
+/// The fleet ends the item's attempt with no worker's answer: lost,
+/// withdrawn or refused.
+pub(crate) fn ended(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    to: ReplyTo,
+    run: Token,
+    attempt: Token,
+    answer: work::Answer,
+) {
+    assert!(to.into_token() == run, "an attempt's ending ends its run's call");
+    let item = translate::item(run);
+    let attempt = attempt.raw();
+    route::views_step(domain, env, views::Event::Finished { run });
+    if let Some(id) = items::find(domain, item) {
+        let entry = get_mut(domain, id);
+        if let Some(live) = entry.live
+            && live.attempt == attempt
+        {
+            entry.live = None;
+            entry.assignment = None;
+            entry.grants = None;
+        }
+    }
+    route::work_step(domain, env, work::Event::Answered { item, attempt, answer });
+}
+
+/// The attempt the answer `outcome` carries is of.
+pub(crate) fn attempt_of(domain: &Domain, outcome: Token) -> u64 {
+    match domain.carried.get(Id::from_token(outcome)) {
+        Some(Carried::Answer { attempt, .. }) => *attempt,
+        Some(Carried::Call { .. } | Carried::Served { .. } | Carried::Report { .. } | Carried::Done) | None => 0,
+    }
+}
+
+/// The outcome the answer `outcome` carries, as it is posted.
+pub(crate) fn posted(domain: &Domain, outcome: Token) -> Option<Box<Posted>> {
+    let (item, attempt, answer) = domain.carried.get(Id::from_token(outcome))?.answer()?;
+    let (outcome, work) = match answer {
+        Answer::Ended { outcome, work } => (outcome, work),
+        Answer::Busy | Answer::Invalid | Answer::Parked { .. } | Answer::Failed { .. } => return None,
+    };
+    let mut head = None;
+    for landed in &work.landed {
+        if landed.repository == item.repository {
+            head = Some(landed.commit);
+        }
+    }
+    Some(Box::new(Posted { attempt, outcome: outcome.clone(), head }))
+}
+
+/// Forgets what the top level carried for the fleet as `payload`.
+pub(crate) fn forget(domain: &mut Domain, payload: Token) {
+    take_carried(domain, Id::from_token(payload));
+}
+
+/// The fleet drops what the top level carried as `payload`. A run's call it
+/// could not pass up is answered at once, unserved, on the channel it came
+/// on (never silently): busy if its attempt may yet be the live claim (the
+/// cold start is not done, or the fleet had no room for it), failed if it is
+/// fenced off. A run's answer that comes too late (its attempt presumed lost
+/// and fenced off, or kept as a stray past the grace) still says where it
+/// pushed: the item's branch is there on the forge, and its next run starts
+/// from it, unless the item records a branch already.
+pub(crate) fn dropped(domain: &mut Domain, env: &Env<Limits>, payload: Token) {
+    let Some(taken) = take_carried(domain, Id::from_token(payload)) else { return };
+    match taken {
+        Carried::Call { channel, item, attempt, call, body } => {
+            let relayed = Relayed { channel, item, attempt, call, body };
+            let live = match items::find(domain, item) {
+                Some(id) => match get(domain, id).live {
+                    Some(live) => live.attempt == attempt,
+                    None => false,
+                },
+                None => false,
+            };
+            let why = if live || domain.loaded.is_none() { Unserved::Busy } else { Unserved::Failed };
+            unrouted(domain, &relayed, why);
+        }
+        Carried::Answer { item, attempt: _, answer } => late(domain, env, item, &answer),
+        Carried::Served { .. } | Carried::Report { .. } | Carried::Done => {}
+    }
+}
+
+/// A run's answer the fleet drops: the push it made, if the item records
+/// none. One it records is a later answer's, or what was read on the forge,
+/// either newer than this push: only the record says so after a restart.
+fn late(domain: &mut Domain, env: &Env<Limits>, item: Item, answer: &Answer) {
+    let work = match answer {
+        Answer::Ended { work, .. } | Answer::Parked { work, .. } | Answer::Failed { work, .. } => work,
+        Answer::Busy | Answer::Invalid => return,
+    };
+    let mut head = None;
+    for landed in &work.landed {
+        if landed.repository == item.repository {
+            head = Some(landed.commit);
+        }
+    }
+    let Some(head) = head else { return };
+    let Some(id) = items::find(domain, item) else { return };
+    let entry = get_mut(domain, id);
+    if entry.relations.branch.is_some() {
+        return;
+    }
+    entry.relations.branch = Some(head);
+    items::aside(domain, env, id);
+}
+
+/// Answers a run's call at once, on the channel it came on.
+fn unrouted(domain: &mut Domain, relayed: &Relayed, why: Unserved) {
+    let Relayed { channel, item, attempt, call, .. } = *relayed;
+    domain.requests.push(Request::Relayed { channel, item, attempt, call, served: Served::Unserved(why) });
+}
+
+/// A worker relays a call of the item's run: carried to the fleet, which
+/// passes it up if the attempt is live.
+pub(crate) fn relay(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    channel: Token,
+    item: Item,
+    attempt: u64,
+    call: Token,
+    body: Call,
+) {
+    let Some(run) = translate::run(item) else {
+        let relayed = Relayed { channel, item, attempt, call, body: Box::new(body) };
+        return unrouted(domain, &relayed, Unserved::Invalid);
+    };
+    let payload = match domain.carried.insert(Carried::Call { channel, item, attempt, call, body: Box::new(body) }) {
+        Ok(payload) => payload,
+        Err(carried) => {
+            if let Some(relayed) = carried.call() {
+                unrouted(domain, &relayed, Unserved::Busy);
+            }
+            return;
+        }
+    };
+    let event = fleet::Event::Relay { channel, run, attempt: Token::new(attempt), call, body: payload.token() };
+    route::fleet_step(domain, env, event);
+}
+
+/// The fleet passes a run's call up: served, and answered once.
+pub(crate) fn call(domain: &mut Domain, env: &Env<Limits>, to: ReplyTo, run: Token, attempt: Token, body: Token) {
+    let item = translate::item(run);
+    let attempt = attempt.raw();
+    let id = Id::from_token(body);
+    let Some(taken) = take_carried(domain, id) else { unreachable!("a call passed up is the one carried") };
+    let Some(relayed) = taken.call() else { unreachable!("a call passed up is the one carried") };
+    let Ok(wait) = domain.waits.insert(Wait::Relay { to }) else {
+        unreachable!("the waits have room for every run's call")
+    };
+    crate::serve::serve(domain, env, wait, item, attempt, relayed.call, *relayed.body);
+}
+
+/// Takes what is carried as `id`, which goes at the reclaim point.
+fn take_carried(domain: &mut Domain, id: Id<Carried>) -> Option<Carried> {
+    let carried = domain.carried.get_mut(id)?;
+    let taken = mem::replace(carried, Carried::Done);
+    match taken {
+        Carried::Done => None,
+        Carried::Answer { .. } | Carried::Call { .. } | Carried::Served { .. } | Carried::Report { .. } => {
+            domain.carried.retire(id);
+            Some(taken)
+        }
+    }
+}
+
+/// The fleet passes the answer to a run's call down to its worker.
+pub(crate) fn relayed(
+    domain: &mut Domain,
+    channel: Token,
+    run: Token,
+    attempt: Token,
+    call: Token,
+    answer: Token,
+    out: &mut Queue<Request>,
+) {
+    let id = Id::from_token(answer);
+    let Some(taken) = take_carried(domain, id) else { return };
+    let Some(served) = taken.served() else { return };
+    let item = translate::item(run);
+    out.push(Request::Relayed { channel, item, attempt: attempt.raw(), call, served: *served });
+}
+
+/// The answer to a run's call goes to the fleet, carried.
+pub(crate) fn serve_answer(domain: &mut Domain, env: &Env<Limits>, to: ReplyTo, served: Served) {
+    let Ok(payload) = domain.carried.insert(Carried::Served { served: Box::new(served) }) else {
+        unreachable!("the carried answers have room for every run's call")
+    };
+    route::fleet_step(domain, env, fleet::Event::Relayed { to, answer: payload.token() });
+}
+
+/// A worker bounced an inbound event.
+pub(crate) fn bounced(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    channel: Token,
+    item: Item,
+    attempt: u64,
+    name: Token,
+    bounce: fleet::Bounce,
+) {
+    let Some(run) = translate::run(item) else { return };
+    route::fleet_step(domain, env, fleet::Event::Bounced { channel, run, attempt: Token::new(attempt), name, bounce });
+}
+
+/// The fleet passes a bounce up: what the attempt took is then only what its
+/// brief had.
+pub(crate) fn bounce(domain: &mut Domain, run: Token, attempt: Token, name: Token) {
+    let Some(id) = items::find(domain, translate::item(run)) else { return };
+    let entry = get_mut(domain, id);
+    if let Some(live) = entry.live.as_mut()
+        && live.attempt == attempt.raw()
+        && let Some(noted) = entry.inbox.get_mut(&name.raw())
+    {
+        noted.delivered = false;
+    }
+}
+
+/// A worker passes a run's report: carried to the fleet, which drops it
+/// unless its attempt is live.
+pub(crate) fn told(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    channel: Token,
+    item: Item,
+    attempt: u64,
+    kind: views::Kind,
+    content: Box<[u8]>,
+) {
+    let Some(run) = translate::run(item) else { return };
+    let Ok(payload) = domain.carried.insert(Carried::Report { kind, content }) else { return };
+    route::fleet_step(
+        domain,
+        env,
+        fleet::Event::Told { channel, run, attempt: Token::new(attempt), fact: payload.token() },
+    );
+}
+
+/// The fleet passes a run's report up: to the views.
+pub(crate) fn report(domain: &mut Domain, env: &Env<Limits>, run: Token, fact: Token) {
+    let id = Id::from_token(fact);
+    let Some(taken) = take_carried(domain, id) else { return };
+    let Some((kind, content)) = taken.report() else { return };
+    route::views_step(domain, env, views::Event::Reported { run, kind, content });
+}
+
+/// A run's call that cannot be served: answered at once.
+pub(crate) fn unserved(domain: &mut Domain, env: &Env<Limits>, wait: Id<Wait>, why: Unserved) {
+    let taken = crate::serve::take(domain, wait.token());
+    let Some(to) = taken.relay() else { return };
+    serve_answer(domain, env, to, Served::Unserved(why));
+}

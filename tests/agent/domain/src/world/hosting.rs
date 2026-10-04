@@ -11,8 +11,8 @@ use skein_lib::{Time, Token};
 use temper_agent_domain::run::charter::{Checkout, Repository as Placed};
 use temper_agent_domain::run::{self, Spend};
 use temper_agent_domain::{self as agent};
-use temper_engine_domain as engine;
-use temper_engine_domain_world::referee as engine_referee;
+use temper_legacy_engine_domain as engine;
+use temper_legacy_engine_domain_world::referee as engine_referee;
 use temper_worker_checkout_world::translate as io;
 use temper_worker_domain::agent::channel::{Down, Reply, Up};
 use temper_worker_domain::checkout::git::{Commit, Done, Op, Place, Want};
@@ -515,8 +515,11 @@ impl World {
         let reachable = !(op.is_remote() && self.rng.chance(self.settings.git_errors));
         self.stats.unreachable += u32::from(!reachable);
         let mut disk = std::mem::take(&mut self.disk);
-        let done =
-            io::perform(&mut self.direct(temper_engine_domain_world::deployment::WORKER, reachable), &mut disk, op);
+        let done = io::perform(
+            &mut self.direct(temper_legacy_engine_domain_world::deployment::WORKER, reachable),
+            &mut disk,
+            op,
+        );
         self.disk = disk;
         self.route_stray();
         self.observe_forge();

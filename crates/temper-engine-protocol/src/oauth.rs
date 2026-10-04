@@ -15,7 +15,7 @@ use crate::{
 use alloc::boxed::Box;
 use skein_io as io;
 use skein_lib::{Deadlines, Duration, Env, Id, Map, Queue, Set, Slab, Time, Token, Wall, bytes, stream};
-use temper_engine_domain::{self as engine, accounts};
+use temper_legacy_engine_domain::{self as engine, accounts};
 
 /// One HTTP entrypoint, a socket abort and a keeper request.
 pub const MAX_OUT: u32 = 8;

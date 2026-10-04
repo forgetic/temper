@@ -2,7 +2,7 @@
 //! and a sweep of random worlds.
 
 use skein_lib::Duration;
-use temper_engine_domain_world::people::Story;
+use temper_legacy_engine_domain_world::people::Story;
 use temper_worker_agent_world::script::{self, Fates};
 use temper_worker_domain::Limits;
 use temper_worker_domain_world::{Git, Network, Settings, Span, Stats, World};
@@ -37,7 +37,7 @@ fn total(worlds: &[Stats], field: impl Fn(&Stats) -> u32) -> u32 {
 /// Whether the item of the story `tale` is closed.
 fn closed(world: &World, tale: usize) -> bool {
     let item = world.item(tale).expect("the story's item is known");
-    let name = temper_engine_domain_world::deployment::name(item.repository);
+    let name = temper_legacy_engine_domain_world::deployment::name(item.repository);
     !world.mirror().issue(name, item.number).expect("on the forge").open
 }
 
@@ -452,7 +452,7 @@ fn facts_change_nothing_when_none_are_kept() {
     let kept = run(&settings);
     let dropped = run(&Settings {
         worker: none,
-        engine: temper_engine_domain::Limits { facts: 0, ..settings.engine },
+        engine: temper_legacy_engine_domain::Limits { facts: 0, ..settings.engine },
         ..settings.clone()
     });
     assert_eq!(kept.trace(), dropped.trace(), "nothing depends on whether a fact is kept");
@@ -477,7 +477,7 @@ fn a_seed_replays_to_the_same_run() {
 #[test]
 fn a_session_released_after_its_runs_failed_runs_again() {
     let settings = fated(Settings::only(2, &[Story::Hello]), Fates { ended: 1, failed: 2, ..NONE });
-    let mut world = World::new(Settings { engine: temper_engine_domain_world::deployment::LIMITS, ..settings });
+    let mut world = World::new(Settings { engine: temper_legacy_engine_domain_world::deployment::LIMITS, ..settings });
     world.run(ITERATIONS);
     let stats = world.stats();
     assert!(ending(&stats, "released") > 0, "the caretaker released it: {stats:?}");
@@ -495,7 +495,7 @@ fn finding_12_replays_same_attempt_name_reuse_across_engine_restart() {
     // newly read event receives a name the old engine gave different bytes.
     let calm = Settings::only(12, &[Story::Plan]);
     let mut world = World::new(Settings {
-        engine: temper_engine_domain_world::deployment::LIMITS,
+        engine: temper_legacy_engine_domain_world::deployment::LIMITS,
         restarts: 1,
         restart_at: Span::millis(180_000, 180_000),
         script: script::Script { steps: 20, ..calm.script },

@@ -7,9 +7,9 @@
 
 use std::collections::BTreeSet;
 
-use temper_engine_domain_world::deployment::{ENGINE, REPOSITORIES, REVIEWER};
-use temper_engine_domain_world::mirror::Mirror;
 use temper_fake_forge_domain::api::{Kind, Op, Verdict, Write};
+use temper_legacy_engine_domain_world::deployment::{ENGINE, REPOSITORIES, REVIEWER};
+use temper_legacy_engine_domain_world::mirror::Mirror;
 
 /// A review the reviewer makes: of the pull request `number` of the
 /// deployment's repository `repository`, at `head`.

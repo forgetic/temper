@@ -12,11 +12,11 @@ use temper_agent_domain::session::llm::{self as session_llm, Stop, Usage};
 use temper_agent_domain::{Event, Fact, Request, llm, session, tools};
 use temper_agent_domain_world::LIMITS;
 use temper_agent_domain_world::channel::{self, Link, MAX_TOKENS, Toward};
-use temper_engine_domain::brief::{Body, Kind, Section, Unread};
-use temper_engine_domain::plan::{self, Finish, Grants, Why};
-use temper_engine_domain::views::{Capture, Policy as Capturing};
-use temper_engine_domain::{Charter, Outcome};
-use temper_engine_domain_world::codec;
+use temper_legacy_engine_domain::brief::{Body, Kind, Section, Unread};
+use temper_legacy_engine_domain::plan::{self, Finish, Grants, Why};
+use temper_legacy_engine_domain::views::{Capture, Policy as Capturing};
+use temper_legacy_engine_domain::{Charter, Outcome};
+use temper_legacy_engine_domain_world::codec;
 use temper_worker_domain_agent::channel::{Ask, Down, Finish as Finished, Push, Reply, RunFailure, Up};
 
 const WORKER: Token = Token::new(7);
@@ -52,7 +52,11 @@ fn engine_charter(finish: Finish) -> Charter {
         budget: plan::Budget { tokens: 11, turns: 7, time: Duration::from_secs(23) },
         models: [b"main".as_slice(), b"small".as_slice(), b"large".as_slice()]
             .into_iter()
-            .map(|model| temper_engine_domain::Model { endpoint: 0, model: bytes(model), max_tokens: MAX_TOKENS })
+            .map(|model| temper_legacy_engine_domain::Model {
+                endpoint: 0,
+                model: bytes(model),
+                max_tokens: MAX_TOKENS,
+            })
             .collect(),
         policy: Capturing {
             text: Capture::Content,

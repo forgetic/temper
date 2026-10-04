@@ -13,7 +13,7 @@ skein-http.workspace = true
 skein-json.workspace = true
 subtle.workspace = true
 temper-channel.workspace = true
-temper-engine-domain.workspace = true
+temper-legacy-engine-domain.workspace = true
 temper-oauth.workspace = true
 
 [lints]

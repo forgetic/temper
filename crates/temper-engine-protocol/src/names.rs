@@ -1,6 +1,6 @@
 //! Checked, reversible names shared with workers and agents.
 use skein_lib::Token;
-use temper_engine_domain::Item;
+use temper_legacy_engine_domain::Item;
 
 /// The v1 system-world layout: an eight-bit repository and a 24-bit item.
 #[must_use]

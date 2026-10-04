@@ -1,6 +1,6 @@
 //! A system world for the whole worker (worker-domain.md, section 9;
 //! testing.md, 2.1): the worker's root domain (`temper_worker_domain`) run
-//! against the engine's (`temper_engine_domain`), each with everything around
+//! against the engine's (`temper_legacy_engine_domain`), each with everything around
 //! it, with no protocol and no io. One loop drives both, deterministically
 //! from a seed.
 //!
@@ -27,7 +27,7 @@
 //!   protocol layer as the engine's world plays it (each call with a deadline,
 //!   webhooks as hints), by people, and by the worker's git, whose pushes it
 //!   observes as any change;
-//! - **people** (the engine world's [`temper_engine_domain_world::people`]),
+//! - **people** (the engine world's [`temper_legacy_engine_domain_world::people`]),
 //!   who hand issues in, open sessions and message them, review what CI
 //!   passed, correct notes, release what is held and close what they gave
 //!   up on; and a person who now and then stops a run, once an item, and
@@ -85,7 +85,7 @@
 //! and identity; a branch the worker moves moved only by a fast-forward;
 //! what landed exactly the tree the agent left when it asked to push, and
 //! saved work exactly the tree it left. Two referees hold the rest, from
-//! outside: the engine world's ([`temper_engine_domain_world::referee`]),
+//! outside: the engine world's ([`temper_legacy_engine_domain_world::referee`]),
 //! over what the forge did and what the engine assigned (nothing lands on a
 //! protected branch without green CI and a person's approval, keyed
 //! creations made once, attempts that only grow, one live run per item,

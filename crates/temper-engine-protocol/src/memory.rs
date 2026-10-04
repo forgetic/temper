@@ -2,7 +2,7 @@
 //! does not follow directly from a byte cap (empty names still own boxes).
 use alloc::boxed::Box;
 use temper_channel::{Sizes, payload as wire, wire as frame};
-use temper_engine_domain::{self as engine, brief, forge, notes, plan};
+use temper_legacy_engine_domain::{self as engine, brief, forge, notes, plan};
 
 fn array(count: u32, fixed: usize) -> Option<u64> {
     u64::from(count).checked_mul(u64::try_from(fixed).ok()?)

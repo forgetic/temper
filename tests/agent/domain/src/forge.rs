@@ -15,17 +15,17 @@
 //! time came and webhooks, is kept for the world to route.
 
 use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
-use temper_engine_domain::forge::Position;
-use temper_engine_domain_world::codec;
-use temper_engine_domain_world::deployment::{
-    CI, ENGINE, MAIN, PEOPLE, REPOSITORIES, REVIEWER, STRANGER, TRACKING, WORKER,
-};
-use temper_engine_forge_world::translate::recorded;
 use temper_fake_checkout::git::{self, Created, Fault, Pushed, Remote, Tree, Want};
 use temper_fake_forge_domain::api::{
     Answer, Checks, Cue, Error, File, Git, Op, Permission, Protection, Read, Setup, What, Write,
 };
 use temper_fake_forge_domain::{self as forge, Config, Domain, Event, MAX_OUT, Request};
+use temper_legacy_engine_domain::forge::Position;
+use temper_legacy_engine_domain_world::codec;
+use temper_legacy_engine_domain_world::deployment::{
+    CI, ENGINE, MAIN, PEOPLE, REPOSITORIES, REVIEWER, STRANGER, TRACKING, WORKER,
+};
+use temper_legacy_engine_forge_world::translate::recorded;
 
 use crate::desk::{self, Hand};
 use crate::fixture;
@@ -52,7 +52,7 @@ pub fn setup(domain: &mut Domain, config: &Config, passes: Option<u32>) {
             name: name.into(),
             default: MAIN.into(),
             tree: tree.collect(),
-            labels: temper_engine_domain_world::deployment::LABELS.iter().map(|label| (*label).into()).collect(),
+            labels: temper_legacy_engine_domain_world::deployment::LABELS.iter().map(|label| (*label).into()).collect(),
             checks: Checks {
                 contexts: Box::new([b"ci".as_slice().into()]),
                 latency_min: Duration::from_secs(1),
@@ -63,8 +63,8 @@ pub fn setup(domain: &mut Domain, config: &Config, passes: Option<u32>) {
                 cue: match passes {
                     Some(_) => None,
                     None => Some(Cue {
-                        path: temper_engine_domain_world::deployment::CUE.into(),
-                        green: temper_engine_domain_world::deployment::GREEN.into(),
+                        path: temper_legacy_engine_domain_world::deployment::CUE.into(),
+                        green: temper_legacy_engine_domain_world::deployment::GREEN.into(),
                     }),
                 },
             },
@@ -163,7 +163,7 @@ impl Direct<'_> {
     /// engine's record goes on it as an earlier life of the engine wrote it,
     /// then the tracking label. Returns the issue's number.
     pub fn hand_in(&mut self, hand: &Hand, person: u64) -> u64 {
-        let repository = temper_engine_domain_world::deployment::name(hand.repository);
+        let repository = temper_legacy_engine_domain_world::deployment::name(hand.repository);
         self.user = person;
         let title = desk::title(hand).into_boxed_slice();
         let body = desk::guidance(hand.job).into_boxed_slice();

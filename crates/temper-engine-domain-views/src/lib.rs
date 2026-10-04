@@ -28,7 +28,7 @@
 //!
 //! Sans-io: [`step`] and [`fire`] turn events into requests and change
 //! nothing but the [`Domain`] they are given. Every effect is a [`Request`]
-//! that its parent, the engine's root domain (`temper-engine-domain`),
+//! that its parent, the engine's root domain (`temper-legacy-engine-domain`),
 //! routes on: a watcher's deliveries to the person's stream, the store's
 //! operations to the store. Their outcomes come back later through the parent
 //! as an [`Event`]. The batch's flush and the store's sweep are the views'

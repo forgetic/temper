@@ -1,6 +1,6 @@
 //! What a scripted agent's run is about: its story, drawn from its charter
 //! and the forge as observed, as the engine world's runs draw theirs
-//! ([`temper_engine_domain_world::script`]). The agent world's script decides
+//! ([`temper_legacy_engine_domain_world::script`]). The agent world's script decides
 //! when the agent speaks and how its run ends (it works, calls, pushes,
 //! waits, parks, fails or misbehaves), taking the beats its story calls for
 //! among its own steps and ending as its story does when its fate is to end
@@ -10,11 +10,11 @@
 
 use std::collections::VecDeque;
 
-use temper_engine_domain::forge::Read;
-use temper_engine_domain::plan::{self, Finish};
-use temper_engine_domain::{Call, Charter, Item, Outcome};
-use temper_engine_domain_world::mirror::Mirror;
-use temper_engine_domain_world::script::{self, Act, End};
+use temper_legacy_engine_domain::forge::Read;
+use temper_legacy_engine_domain::plan::{self, Finish};
+use temper_legacy_engine_domain::{Call, Charter, Item, Outcome};
+use temper_legacy_engine_domain_world::mirror::Mirror;
+use temper_legacy_engine_domain_world::script::{self, Act, End};
 use temper_worker_agent_world::script::{Beat, Ending, Plot};
 
 /// A run's content.
@@ -80,7 +80,7 @@ impl Story {
     /// item.
     pub(super) fn call(&mut self) -> Call {
         let Item { repository, number } = self.item;
-        let item = temper_engine_domain::forge::Item { repository, number };
+        let item = temper_legacy_engine_domain::forge::Item { repository, number };
         self.calls.pop_front().unwrap_or(Call::Read(Read::Item { item, after: 0 }))
     }
 

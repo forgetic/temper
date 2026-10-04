@@ -3,7 +3,7 @@
 use crate::{connection::Transport, translate::Value};
 use alloc::boxed::Box;
 use skein_lib::{Duration, List, Time, Wall, bytes::copy_of};
-use temper_engine_domain::Account;
+use temper_legacy_engine_domain::Account;
 use temper_oauth::{self as document, AccountKind, RefreshRequest, RefreshState, SavedToken, TokenResponse};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

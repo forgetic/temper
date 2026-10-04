@@ -9,10 +9,10 @@ use temper_agent_domain::run::outcome::Declared;
 use temper_agent_domain::run::{Answer, Exhausted, Failure, Push};
 use temper_agent_domain_world::desk::{CODING, Hand, Reviewer, Work};
 use temper_agent_domain_world::{CALM, Job, Run, Settings, Span, World};
-use temper_engine_domain::Outcome;
-use temper_engine_domain::plan::{Budget, Verdict};
-use temper_engine_domain::work::{Hold, Phase};
-use temper_engine_domain_world::deployment;
+use temper_legacy_engine_domain::Outcome;
+use temper_legacy_engine_domain::plan::{Budget, Verdict};
+use temper_legacy_engine_domain::work::{Hold, Phase};
+use temper_legacy_engine_domain_world::deployment;
 use temper_world::assert_replays;
 
 const ITERATIONS: u32 = 400_000;

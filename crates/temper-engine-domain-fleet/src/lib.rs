@@ -26,7 +26,7 @@
 //! Sans-io: [`step`], [`fire`] and [`resume`] turn events into requests and
 //! change nothing but the [`Domain`] they are given. Every effect is a
 //! [`Request`] that its parent, the engine's root domain
-//! (`temper-engine-domain`), routes on: to a worker's channel through the
+//! (`temper-legacy-engine-domain`), routes on: to a worker's channel through the
 //! protocol layer, or to the parent's own state. Their outcomes come back
 //! later through the parent as an [`Event`]. The fleet owns its timers: the
 //! grace of a lost channel, and that of an adoption.

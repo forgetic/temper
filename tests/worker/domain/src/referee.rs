@@ -35,7 +35,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use skein_lib::{Duration, Token};
-use temper_engine_domain::work::{Failures, Lifecycle};
+use temper_legacy_engine_domain::work::{Failures, Lifecycle};
 use temper_world::{Expectations, Judge};
 
 use crate::protocol::Names;

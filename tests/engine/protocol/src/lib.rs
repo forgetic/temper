@@ -1,7 +1,7 @@
 //! Focused production engine channel translations and conversion memory.
 use skein_lib::Duration;
 use temper_channel::Sizes;
-use temper_engine_domain::{self as engine, brief, plan, views};
+use temper_legacy_engine_domain::{self as engine, brief, plan, views};
 
 pub const SIZES: Sizes = Sizes {
     charter: 4096,

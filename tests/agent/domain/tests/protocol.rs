@@ -4,11 +4,11 @@
 
 use skein_lib::{Duration, Token};
 use temper_agent_domain_world::protocol::{self, IDENTITY};
-use temper_engine_domain::brief::{Body, Kind, Section};
-use temper_engine_domain::plan::{self, Finish, Grants, Why};
-use temper_engine_domain::views::{Capture, Policy};
-use temper_engine_domain::{self as engine, Assignment, Charter, Checkout, Item, Outcome, Start, Workspace};
-use temper_engine_domain_world::codec;
+use temper_legacy_engine_domain::brief::{Body, Kind, Section};
+use temper_legacy_engine_domain::plan::{self, Finish, Grants, Why};
+use temper_legacy_engine_domain::views::{Capture, Policy};
+use temper_legacy_engine_domain::{self as engine, Assignment, Charter, Checkout, Item, Outcome, Start, Workspace};
+use temper_legacy_engine_domain_world::codec;
 use temper_worker_domain::{self as worker, host};
 
 fn bytes(text: &[u8]) -> Box<[u8]> {
@@ -25,7 +25,7 @@ fn charter() -> Charter {
         grants: Grants { modify: true, shell: true, forge: false, subagents: false, note: false },
         finish: Finish::Change { checks: true },
         budget: plan::Budget { tokens: 100, turns: 3, time: Duration::from_secs(60) },
-        models: Box::new([temper_engine_domain::Model {
+        models: Box::new([temper_legacy_engine_domain::Model {
             endpoint: 0,
             model: bytes(b"fake-1"),
             max_tokens: temper_agent_domain_world::channel::MAX_TOKENS,

@@ -2,7 +2,7 @@
 use alloc::boxed::Box;
 use skein_lib::{List, Time};
 use temper_channel::{Sizes, payload as wire};
-use temper_engine_domain::{self as engine, brief, forge, notes, plan, views};
+use temper_legacy_engine_domain::{self as engine, brief, forge, notes, plan, views};
 
 pub(crate) fn charter_to(value: engine::Charter) -> Option<wire::Charter> {
     let mut brief = List::with_capacity(u32::try_from(value.brief.len()).ok()?);

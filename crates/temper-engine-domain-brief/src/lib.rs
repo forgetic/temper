@@ -48,7 +48,7 @@
 //!
 //! Sans-io: [`step`] and [`fire`] turn events into requests and change
 //! nothing but the [`Domain`] they are given. Every effect is a [`Request`]
-//! that its parent, the engine's root domain (`temper-engine-domain`),
+//! that its parent, the engine's root domain (`temper-legacy-engine-domain`),
 //! routes on: a read to the forge child domain, the notes child domain or its
 //! configuration, as the [`Source`] says, and the answer to whoever asked.
 //! Their outcomes come back later through the parent as an [`Event`]. Each

@@ -1,13 +1,13 @@
 use skein_io as io;
 use skein_lib::stream;
 use temper_channel::wire;
-use temper_engine_domain as engine;
 use temper_engine_protocol::{
     connection::{Phase, Transport},
     listener::{self, Event, Notice, Security},
     names,
 };
 use temper_engine_protocol_world::link::{LIMITS, SIZES, World};
+use temper_legacy_engine_domain as engine;
 
 #[test]
 fn names_and_secrets_are_authenticated_before_any_domain_hello() {
