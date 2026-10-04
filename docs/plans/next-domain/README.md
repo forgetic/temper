@@ -2,7 +2,7 @@
 
 Provisional, 2026-10-04. A plan for taking temper's code from the domain
 as built (`docs/design/engine-domain.md`, `worker-domain.md`,
-`agent-domain.md`) to the next design (`docs/design/next/domain/`), in
+`agent-domain.md`) to the domain design (`docs/design/domain/`), in
 steps that each land on main with every check of
 `docs/development/workflow.md` passing. This document is the overview:
 what I think of the migration and why it is shaped as it is, the
@@ -11,8 +11,8 @@ document of its own beside this one.
 
 **Citations.** A bare file name names a document of the next design
 (`tasks.md`, `forge.md`), as the design's own README does: in
-`docs/design/next/domain/` until step 00 moves it to
-`docs/design/domain/`; today's
+`docs/design/domain/` (moved from `docs/design/next/domain/` in step 00);
+today's
 documents are named by path (`docs/design/forge.md`, the forge's protocol
 layer) or as "the current `engine-domain.md`"; skein's foundation
 documents by their file names (`programming-model.md`,

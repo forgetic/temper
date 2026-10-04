@@ -1,4 +1,4 @@
-# temper's domain, next
+# temper's domain
 
 Provisional, 2026-10-04. The next design of temper's domain layer: temper
 as a generic engine on five primitives, which owns its state in its own
@@ -6,8 +6,10 @@ store and drives the forge as a connector. It replaces the domain
 documents in `docs/design/` (`engine-domain.md`, `worker-domain.md`,
 `agent-domain.md`) and the draft it grew from (`docs/design/drafts/core.md`,
 removed with this set), and changes what the protocol layer's documents
-say in the places section 5 lists. Until it is adopted, the documents in
-`docs/design/` describe what is built. The migration plan from today's
+say in the places section 5 lists. The legacy engine is described by
+`docs/design/engine-domain.md` until the cutover
+(`docs/plans/next-domain/07-cutover.md`). New code is written against this
+directory and cites it as `domain/<file>.md`. The migration plan from today's
 code to this design is built from sections 5 and 6 and each document's
 "From today" section.
 

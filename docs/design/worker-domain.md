@@ -1,5 +1,8 @@
 # The worker's domain layer
 
+This describes the worker as built. The migration extends it towards
+`domain/worker.md` (`docs/plans/next-domain/05-runtime.md`).
+
 Provisional, 2026-10-02. What the temper worker does, as a domain layer:
 its parts, what each is responsible for, and how they fit together. The
 mechanics are those of skein's `docs/foundation/programming-model.md`,

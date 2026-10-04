@@ -1,5 +1,9 @@
 # The engine's domain layer
 
+This describes the legacy engine, frozen during the migration. It is
+removed at the cutover (`docs/plans/next-domain/07-cutover.md`); new engine
+code follows `domain/engine.md`.
+
 Provisional, 2026-10-02. What the temper engine does, as a domain layer:
 its parts, what each is responsible for, and how they fit together. The
 mechanics are those of skein's `docs/foundation/programming-model.md`;
