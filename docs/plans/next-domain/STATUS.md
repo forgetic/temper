@@ -19,6 +19,7 @@ Detailed implementation and review evidence belongs in commit messages.
 | 02a tasks batches and lifecycle | merged | 376cbd4 | Gate passed; 2,115 focused / 5.532 s; 30 fuzzy / 20.070 s. |
 | 02b task inboxes, references and wakes | merged | 1cfd373 | Gate passed; 2,145 focused / 5.042 s; 31 fuzzy / 18.227 s. |
 | 02c task amendments and moves | merged | ec38fcc | Gate passed; 2,207 focused / 5.086 s; 34 fuzzy / 18.911 s. |
+| 02e finite funding seam | seam merged; depth parked | c987a083, 061030e | Gate passed; 2,237 focused / 5.649 s; 36 fuzzy / 20.113 s; tasks serial 65 / 0.356 s, 2 / 3.111 s. |
 | 03a people sign-in and chat requests | merged | 959795f | Gate passed; 1,822 focused / 7.251 s; 28 fuzzy / 22.695 s. |
 | 04a1 fake forge git foundations | merged | 0d09efc, 0eb1ff0 | Gate passed; 1,833 focused / 9.325 s; 28 fuzzy / 27.457 s. |
 | 04a2 fake forge API additions | merged | 6f8a73e | Gate passed; 1,843 focused / 6.235 s; 28 fuzzy / 23.993 s. |
@@ -43,7 +44,7 @@ Detailed implementation and review evidence belongs in commit messages.
 
 **02 — tasks**
 
-- Bring forward only 02e's finite funding and atomic charge seam for 06a.
+- Finite funding and atomic charged admission are merged; 02e depth stays parked.
 - After the walking story, audit every event/request against actual root routes.
 - Keep 02d–e depth parked until that audit passes, then resume in plan order.
 
