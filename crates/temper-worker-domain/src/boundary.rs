@@ -59,6 +59,28 @@ use temper_worker_domain_host as host;
     reason = "fixed diagnostic tails keep boundary records bounded without allocation"
 )]
 pub enum Event {
+    ConnectedV2,
+    /// Stable wire call name and the exact local delivery it answers.
+    RelayedV2 {
+        run: Token,
+        attempt: Token,
+        call: Token,
+        delivery: Token,
+        answer: Box<[u8]>,
+    },
+    AssignV2 {
+        assignment: host::AssignmentV2,
+    },
+    AcknowledgeTurn {
+        run: Token,
+        attempt: Token,
+        turn: u32,
+    },
+    TurnBusy {
+        run: Token,
+        attempt: Token,
+        turn: u32,
+    },
     /// The channel to the engine opened: the worker says hello next.
     Connected,
     /// Terminal for `Dial`: the channel to the engine closed, or never opened.
@@ -166,6 +188,28 @@ pub enum Event {
     reason = "fixed diagnostic tails keep boundary records bounded without allocation"
 )]
 pub enum Request {
+    HelloV2 {
+        hello: Hello,
+        graces: skein_lib::Duration,
+        push_deadline: skein_lib::Duration,
+    },
+    Turn {
+        run: Token,
+        attempt: Token,
+        turn: host::Turn,
+    },
+    AnswerV2 {
+        run: Token,
+        attempt: Token,
+        answer: host::AnswerV2,
+    },
+    RelayV2 {
+        run: Token,
+        attempt: Token,
+        call: Token,
+        delivery: Token,
+        body: Box<[u8]>,
+    },
     /// Open the channel to the engine. Ended by one `Lost`, after a
     /// `Connected` if it opened.
     Dial,

@@ -164,6 +164,10 @@ pub const WORKER: worker::Limits = worker::Limits {
         name_bytes: 32,
         charter_bytes: 2048,
         snapshot_bytes: 64,
+        transcript_bytes: 0,
+        turn_bytes: 0,
+        conflicts: 0,
+        path_bytes: 0,
         outcome_bytes: 8192,
         detail_bytes: 64,
         held: 2,
@@ -189,6 +193,10 @@ pub const WORKER: worker::Limits = worker::Limits {
         agents: 3,
         charter_bytes: 2048,
         snapshot_bytes: 64,
+        transcript_bytes: 0,
+        turn_bytes: 0,
+        conflicts: 0,
+        path_bytes: 0,
         event_bytes: 64,
         events: 2,
         calls: 2,
@@ -210,6 +218,9 @@ pub const WORKER: worker::Limits = worker::Limits {
     redial_max: Duration::from_secs(8),
     told: 256,
     stalled: 8,
+    turns: 0,
+    turn_queue_bytes: 0,
+    turn_backoff: Duration::from_secs(1),
 };
 
 /// The most a step's run may ask for, in the engine's terms: past the

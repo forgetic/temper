@@ -121,7 +121,7 @@ pub(super) fn invalid_to(value: host::Invalid) -> Result<wire::Invalid, Error> {
         host::Invalid::Name => wire::Invalid::Name,
         host::Invalid::Charter => wire::Invalid::Charter,
         host::Invalid::Snapshot => wire::Invalid::Snapshot,
-        host::Invalid::Grants => return Err(Error::Unsupported),
+        host::Invalid::Grants | host::Invalid::Transcript | host::Invalid::Version => return Err(Error::Unsupported),
     })
 }
 pub(super) fn push_failure_to(value: &channel::PushFailure) -> wire::PushFailure {
@@ -134,6 +134,7 @@ pub(super) fn push_failure_to(value: &channel::PushFailure) -> wire::PushFailure
 }
 pub(super) fn landing_to(value: &host::Landing) -> wire::Landing {
     match value {
+        host::Landing::Conflicted { .. } => unreachable!("version one cannot prepare a merge"),
         host::Landing::Explained { failure } => wire::Landing::Explained { failure: host_push_failure_to(failure) },
         host::Landing::Landed { commit } => wire::Landing::Landed { commit: *commit },
         host::Landing::Moved => wire::Landing::Moved,
@@ -195,6 +196,7 @@ pub(super) fn reply_to(value: channel::Reply) -> wire::Reply {
         channel::Reply::Relayed { answer } => wire::Reply::Relayed { answer },
         channel::Reply::Pushed(push) => wire::Reply::Pushed {
             push: match push {
+                channel::Push::Conflicted { .. } => unreachable!("version one cannot prepare a merge"),
                 channel::Push::Done => wire::Push::Done,
                 channel::Push::Moved => wire::Push::Moved,
                 channel::Push::Failed { failure } => wire::Push::Failed { failure: push_failure_to(&failure) },

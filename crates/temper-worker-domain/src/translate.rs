@@ -29,13 +29,21 @@ pub(crate) fn spec(workspace: host::Workspace) -> checkout::Spec {
     checkout::Spec { key, repositories: specs.into_boxed() }
 }
 
+#[expect(clippy::manual_map, reason = "explicit option match follows the step subset, without function pointers")]
 fn repository(repository: host::Repository) -> checkout::Repository {
     let host::Repository { tag: _, name, remote, start, access, identity } = repository;
-    let push = match access {
-        host::Access::ReadOnly => None,
-        host::Access::Writable { push } => Some(push),
+    let (push, expected) = match access {
+        host::Access::ReadOnly => (None, None),
+        host::Access::Writable { push } => (Some(push), None),
+        host::Access::WritableV2 { push, expected } => {
+            let expected = match expected {
+                Some(raw) => Some(git::Commit::new(raw)),
+                None => None,
+            };
+            (Some(push), expected)
+        }
     };
-    checkout::Repository { name, remote, start: self::start(start), identity, push, expected: None }
+    checkout::Repository { name, remote, start: self::start(start), identity, push, expected }
 }
 
 fn start(start: host::Start) -> checkout::Start {
@@ -44,6 +52,7 @@ fn start(start: host::Start) -> checkout::Start {
         host::Start::Branch { branch } => checkout::Start::Branch { branch },
         host::Start::Commit { commit } => checkout::Start::Commit { commit: git::Commit::new(commit) },
         host::Start::Saved { branch } => checkout::Start::Saved { branch },
+        host::Start::Merge { branch, base } => checkout::Start::Merge { branch, base: git::Commit::new(base) },
     }
 }
 
@@ -97,7 +106,7 @@ pub(crate) fn landings(outcome: checkout::Outcome, repositories: u32) -> Box<[ho
     match outcome {
         checkout::Outcome::Pushed { landings: pushed } => {
             for landed in pushed {
-                landings.push(landing(&landed)).expect("one landing for each repository");
+                landings.push(landing(landed)).expect("one landing for each repository");
             }
         }
         checkout::Outcome::Refused { refusal: _ } => {
@@ -109,13 +118,13 @@ pub(crate) fn landings(outcome: checkout::Outcome, repositories: u32) -> Box<[ho
     landings.into_boxed()
 }
 
-fn landing(landing: &checkout::Landing) -> host::Landing {
+fn landing(landing: checkout::Landing) -> host::Landing {
     match landing {
-        checkout::Landing::Conflicted { .. } => unreachable!("legacy host cannot prepare a merge"),
+        checkout::Landing::Conflicted { files } => host::Landing::Conflicted { files },
         checkout::Landing::Explained { fault, diagnostic } => host::Landing::Explained {
             failure: host::PushFailure {
                 repository: None,
-                reason: push_reason(*fault),
+                reason: push_reason(fault),
                 diagnostic: host::PushDiagnostic::new(diagnostic.output(), diagnostic.cut()),
             },
         },
@@ -129,6 +138,7 @@ fn landing(landing: &checkout::Landing) -> host::Landing {
 
 pub(crate) fn ask(ask: channel::Ask) -> host::Ask {
     match ask {
+        channel::Ask::PushV2 { title, body } => host::Ask::PushV2 { title, body },
         channel::Ask::Push { message } => host::Ask::Push { message },
         channel::Ask::Relay { body } => host::Ask::Relay { body },
     }
@@ -137,18 +147,19 @@ pub(crate) fn ask(ask: channel::Ask) -> host::Ask {
 pub(crate) fn reply(reply: host::Reply) -> channel::Reply {
     match reply {
         host::Reply::Relayed { answer } => channel::Reply::Relayed { answer },
-        host::Reply::Pushed(push) => channel::Reply::Pushed(self::push(&push)),
+        host::Reply::Pushed(push) => channel::Reply::Pushed(self::push(push)),
         host::Reply::Unavailable => channel::Reply::Unavailable,
         host::Reply::Withdrawn => channel::Reply::Withdrawn,
         host::Reply::Busy => channel::Reply::Busy,
     }
 }
 
-fn push(push: &host::Push) -> channel::Push {
+fn push(push: host::Push) -> channel::Push {
     match push {
+        host::Push::Conflicted { repository, files } => channel::Push::Conflicted { repository, files },
         host::Push::Done => channel::Push::Done,
         host::Push::Moved => channel::Push::Moved,
-        host::Push::Failed { failure } => channel::Push::Failed { failure: channel_failure(failure) },
+        host::Push::Failed { failure } => channel::Push::Failed { failure: channel_failure(&failure) },
         host::Push::Nothing => channel::Push::Nothing,
     }
 }
@@ -233,5 +244,13 @@ fn channel_failure(failure: &host::PushFailure) -> agent::PushFailure {
         repository: *repository,
         reason,
         diagnostic: agent::PushDiagnostic::new(diagnostic.output(), diagnostic.cut()),
+    }
+}
+
+pub(crate) fn finish_v2(finish: channel::FinishV2) -> host::FinishV2 {
+    match finish {
+        channel::FinishV2::Ended { outcome } => host::FinishV2::Ended { outcome },
+        channel::FinishV2::Parked => host::FinishV2::Parked,
+        channel::FinishV2::Failed { failure } => host::FinishV2::Failed { failure: run_failure(failure) },
     }
 }

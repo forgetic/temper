@@ -19,6 +19,10 @@ const LIMITS: Limits = Limits {
     name_bytes: 32,
     charter_bytes: 1024,
     snapshot_bytes: 512,
+    transcript_bytes: 0,
+    turn_bytes: 0,
+    conflicts: 0,
+    path_bytes: 0,
     outcome_bytes: 768,
     detail_bytes: 128,
     held: 2,
@@ -40,6 +44,8 @@ enum Asked {
     Relay { call: Token },
     Save { owner: Token },
     Answer { answer: Answer },
+    AnswerV2 { answer: temper_worker_domain_host::AnswerV2 },
+    Turn,
     Bounced { bounce: Bounce },
     Hosting { runs: usize },
     Other,
@@ -84,9 +90,13 @@ impl Measured {
         let mut cancelled = Vec::new();
         while let Some(request) = self.out.pop() {
             asked.push(match request {
+                Request::Turn { .. } => Asked::Turn,
+                Request::PushV2 { owner, .. } | Request::Push { owner, .. } => Asked::Push { owner },
+                Request::RelayV2 { delivery, .. } => Asked::Relay { call: delivery },
+                Request::AnswerV2 { answer, .. } => Asked::AnswerV2 { answer },
+                Request::StartV2 { .. } | Request::Start { .. } => Asked::Start,
+
                 Request::Prepare { owner, .. } => Asked::Prepare { owner },
-                Request::Start { .. } => Asked::Start,
-                Request::Push { owner, .. } => Asked::Push { owner },
                 Request::Relay { call, .. } => Asked::Relay { call },
                 Request::Save { owner, .. } => Asked::Save { owner },
                 Request::Answer { answer, .. } => Asked::Answer { answer },
@@ -343,4 +353,61 @@ fn a_host_with_every_slot_full_stays_within_its_worst_case() {
 fn every_entry_point_stays_within_the_worst_case() {
     paths(LIMITS);
     paths(Limits { slots: 8, repositories: 4, ..LIMITS });
+}
+
+#[test]
+fn v2_full_transcripts_and_owned_conflict_feedback_fit_the_hosts_bound() {
+    use temper_worker_domain_host::{AssignmentV2, EndingV2, FinishV2, Turn};
+    let limits = Limits { transcript_bytes: 2048, turn_bytes: 128, conflicts: 3, path_bytes: 64, ..LIMITS };
+    let mut owners = Vec::with_capacity(usize::try_from(limits.slots).expect("bounded"));
+    let mut host = Measured::new(limits);
+    for run in 0..u64::from(limits.slots) {
+        let mut assignment = assignment(run, &limits);
+        assignment.snapshot = None;
+        let next = AssignmentV2 { assignment, transcript: Some(bytes(limits.transcript_bytes)) };
+        let [Asked::Prepare { owner }] =
+            host.step(Event::AssignV2 { reply_to: ReplyTo::new(Token::new(run)), assignment: next })[..]
+        else {
+            panic!("v2 prepare")
+        };
+        owners.push(owner);
+    }
+    assert!(host.meter.held() >= u64::from(limits.slots) * (limits.charter_bytes + limits.transcript_bytes));
+    for owner in owners {
+        assert_eq!(host.step(Event::Prepared { owner, workspace: owner }), [Asked::Start]);
+        assert!(host.step(Event::Started { owner, agent: owner }).is_empty());
+        let [Asked::Push { owner: push }] = host.step(Event::Called {
+            owner,
+            call: Token::new(51),
+            ask: Ask::PushV2 { title: bytes(9), body: bytes(23) },
+        })[..] else {
+            panic!("v2 push")
+        };
+        let pushed = (0..limits.repositories)
+            .map(|_| Landing::Conflicted {
+                files: (0..limits.conflicts).map(|_| bytes(u64::from(limits.path_bytes))).collect(),
+            })
+            .collect();
+        assert_eq!(host.step(Event::Pushed { owner: push, push: pushed }), [Asked::Other]);
+        assert_eq!(
+            host.step(Event::Turn {
+                owner,
+                turn: Turn { turn: 1, spent: 23, read: None, body: bytes(limits.turn_bytes) }
+            }),
+            [Asked::Turn]
+        );
+        host.step(Event::FinishedV2 { owner, turns: 1, spent: 29, finish: FinishV2::Parked });
+        let [Asked::Save { owner: saving }] =
+            host.step(Event::Gone { owner, detail: bytes(u64::from(limits.detail_bytes)) })[..]
+        else {
+            panic!("save ordinary unfinished work")
+        };
+        let saved = vec![Landing::Unchanged; usize::try_from(limits.repositories).expect("bounded")].into_boxed_slice();
+        let asked = host.step(Event::Saved { owner: saving, save: saved });
+        let [Asked::Other, Asked::AnswerV2 { answer }] = &*asked else { panic!("snapshot-free answer: {asked:?}") };
+        assert_eq!((answer.turns, answer.spent), (1, 29));
+        let EndingV2::Parked { work } = &answer.ending else { panic!("parked") };
+        assert!(work.saved.is_some());
+    }
+    assert_eq!(host.domain.hosted(), 0);
 }

@@ -63,6 +63,15 @@ use crate::channel::{Ask, Down, Finish, Grant, Reply, Repository, Up};
 #[derive(PartialEq, Eq, Debug)]
 #[expect(clippy::large_enum_variant, reason = "bounded diagnostics stay inline and are included in worst_case")]
 pub enum Event {
+    SpawnV2 {
+        client: Token,
+        spawn: SpawnV2,
+    },
+    /// After each turn, the parent grants another maximum-sized turn or pauses.
+    TurnCredit {
+        agent: Token,
+        read: bool,
+    },
     /// From the client: spawn an agent process for `spawn`, and start its run.
     /// Ended by exactly one `Gone`.
     Spawn {
@@ -150,6 +159,16 @@ pub enum Event {
 #[derive(PartialEq, Eq, Debug)]
 #[expect(clippy::large_enum_variant, reason = "bounded diagnostics stay inline and are included in worst_case")]
 pub enum Request {
+    Turn {
+        client: Token,
+        turn: crate::channel::Turn,
+    },
+    FinishedV2 {
+        client: Token,
+        turns: u32,
+        spent: u64,
+        finish: crate::channel::FinishV2,
+    },
     /// To the client: the agent for `client` was spawned and its run started,
     /// and `agent` names it from now on.
     Started {
@@ -310,6 +329,7 @@ pub enum Invalid {
     Charter,
     /// The snapshot holds more bytes than a run may be given.
     Snapshot,
+    Transcript,
     Repositories,
     Grants,
 }
@@ -321,4 +341,13 @@ pub enum Signal {
     Terminate,
     /// Ends every member.
     Kill,
+}
+
+#[derive(PartialEq, Eq, Hash, Debug)]
+pub struct SpawnV2 {
+    pub workspace: Token,
+    pub charter: Box<[u8]>,
+    pub transcript: Option<Box<[u8]>>,
+    pub repositories: Box<[crate::channel::RepositoryV2]>,
+    pub grants: Box<[Grant]>,
 }

@@ -220,6 +220,9 @@ impl Tree {
     /// Takes one of the domain's io requests.
     pub fn take(&mut self, now: Time, request: Request) -> Vec<Out> {
         match request {
+            temper_worker_domain_agent::Request::Turn { .. }
+            | temper_worker_domain_agent::Request::FinishedV2 { .. } => unreachable!("this script runs version one"),
+
             Request::Spawn { owner, workspace: _, deadline } => self.spawn(now, owner, deadline),
             Request::Send { owner, process, message } => {
                 self.tally.sends += 1;

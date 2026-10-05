@@ -47,6 +47,10 @@ impl Settings {
                 agents: 4,
                 charter_bytes: 256,
                 snapshot_bytes: 128,
+                transcript_bytes: 0,
+                turn_bytes: 0,
+                conflicts: 0,
+                path_bytes: 0,
                 event_bytes: 32,
                 events: 2,
                 calls: 2,
@@ -505,6 +509,9 @@ impl World {
     fn take(&mut self, event: &Event) -> Taken {
         let limits = self.settings.agent;
         match event {
+            temper_worker_domain_agent::Event::SpawnV2 { .. }
+            | temper_worker_domain_agent::Event::TurnCredit { .. } => unreachable!("this script runs version one"),
+
             Event::Spawn { client, spawn } => {
                 let full = self.domain.agents() >= limits.agents;
                 let snapshot = spawn.snapshot.as_ref().map_or(0, |snapshot| len(snapshot));
@@ -599,6 +606,9 @@ impl World {
             return Verdict::Fine;
         }
         match message {
+            temper_worker_domain_agent::channel::Up::Turn { .. }
+            | temper_worker_domain_agent::channel::Up::FinishV2 { .. } => unreachable!("this script runs version one"),
+
             Up::Call { call, .. } if mirror.flight.contains(call) => Verdict::Breach("reused name"),
             Up::Withdraw { call } if mirror.withdrawn.contains(call) => Verdict::Breach("withdrawn twice"),
             Up::Waiting { heard } if *heard != 0 && !mirror.sent.contains(heard) => Verdict::Breach("heard too much"),
@@ -868,6 +878,9 @@ impl World {
 
     fn route(&mut self, request: Request) {
         match request {
+            temper_worker_domain_agent::Request::Turn { .. }
+            | temper_worker_domain_agent::Request::FinishedV2 { .. } => unreachable!("this script runs version one"),
+
             Request::Started { .. }
             | Request::Called { .. }
             | Request::Withdrawn { .. }
@@ -899,6 +912,11 @@ impl World {
             match out {
                 tree::Out::Domain { after, event } => {
                     let lane = match event {
+                        temper_worker_domain_agent::Event::SpawnV2 { .. }
+                        | temper_worker_domain_agent::Event::TurnCredit { .. } => {
+                            unreachable!("this script runs version one")
+                        }
+
                         Event::Received { .. } | Event::Malformed { .. } | Event::Hangup { .. } => Some(Lane::Reads),
                         Event::Exited { .. } | Event::Reaped { .. } => Some(Lane::Exits),
                         Event::Spawned { .. }
@@ -1048,6 +1066,10 @@ impl Mirror {
 
 fn made(request: &Request) -> Made {
     match request {
+        temper_worker_domain_agent::Request::Turn { .. } | temper_worker_domain_agent::Request::FinishedV2 { .. } => {
+            unreachable!("this script runs version one")
+        }
+
         Request::Started { client, agent } => Made::Started { client: *client, agent: *agent },
         Request::Called { client, call, ask: _ } => Made::Called { client: *client, call: *call },
         Request::Withdrawn { client, call } => Made::Withdrawn { client: *client, call: *call },
@@ -1068,6 +1090,10 @@ fn made(request: &Request) -> Made {
         Request::Spawn { owner, workspace: _, deadline: _ } => Made::Spawn { owner: *owner },
         Request::Send { owner, process: _, message } => {
             let (answer, busy, too_large) = match message {
+                temper_worker_domain_agent::channel::Down::StartV2 { .. } => {
+                    unreachable!("this script runs version one")
+                }
+
                 Down::Answer { call, reply } => match reply {
                     Reply::Busy => (Some(*call), true, false),
                     Reply::TooLarge => (Some(*call), false, true),
@@ -1078,6 +1104,10 @@ fn made(request: &Request) -> Made {
                 Down::Start { .. } | Down::Event { .. } | Down::Cancel | Down::Grant { .. } => (None, false, false),
             };
             let (event, cancel) = match message {
+                temper_worker_domain_agent::channel::Down::StartV2 { .. } => {
+                    unreachable!("this script runs version one")
+                }
+
                 Down::Event { .. } => (true, false),
                 Down::Cancel => (false, true),
                 Down::Start { .. } | Down::Answer { .. } | Down::Grant { .. } => (false, false),
@@ -1089,6 +1119,10 @@ fn made(request: &Request) -> Made {
                 too_large,
                 event,
                 name: match message {
+                    temper_worker_domain_agent::channel::Down::StartV2 { .. } => {
+                        unreachable!("this script runs version one")
+                    }
+
                     Down::Event { name, .. } => Some(name.raw()),
                     Down::Start { .. } | Down::Answer { .. } | Down::Cancel | Down::Grant { .. } => None,
                 },
@@ -1104,8 +1138,13 @@ fn made(request: &Request) -> Made {
 
 fn oversized(message: &Up, limits: &Limits) -> bool {
     match message {
+        temper_worker_domain_agent::channel::Up::Turn { .. }
+        | temper_worker_domain_agent::channel::Up::FinishV2 { .. } => unreachable!("this script runs version one"),
+
         Up::Call { call: _, ask } => {
             let body = match ask {
+                temper_worker_domain_agent::channel::Ask::PushV2 { .. } => unreachable!("this script runs version one"),
+
                 Ask::Push { message } => message,
                 Ask::Relay { body } => body,
             };

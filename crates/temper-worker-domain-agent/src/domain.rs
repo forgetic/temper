@@ -78,6 +78,8 @@ impl Domain {
 /// Handles one event, emitting at most [`MAX_OUT`] requests.
 pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     match event {
+        Event::SpawnV2 { client, spawn } => agent::spawn_v2(domain, env, client, spawn, out),
+        Event::TurnCredit { agent, read } => agent::turn_credit(domain, env, agent, read, out),
         Event::Spawn { client, spawn } => agent::spawn(domain, env, client, spawn, out),
         Event::Deliver { agent, name, event } => agent::deliver(domain, env, agent, name, event, out),
         Event::Answer { agent, call, reply } => agent::answer(domain, env, agent, call, reply, out),

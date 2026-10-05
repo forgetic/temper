@@ -433,6 +433,14 @@ impl World {
         match self.channel {
             Channel::Open { epoch, hello: true } if token(epoch) == channel => {
                 let moments: &[Moment] = match &event {
+                    temper_worker_domain::Event::AcknowledgeTurn { .. }
+                    | temper_worker_domain::Event::TurnBusy { .. }
+                    | temper_worker_domain::Event::ConnectedV2
+                    | temper_worker_domain::Event::RelayedV2 { .. }
+                    | temper_worker_domain::Event::AssignV2 { .. } => {
+                        unreachable!("this system world runs version one")
+                    }
+
                     Event::Acknowledged { .. } => &[Moment::Now, Moment::Behind],
                     Event::Assign { .. } => &[Moment::Now],
                     Event::Cancel { run, attempt } => {
@@ -464,6 +472,14 @@ impl World {
                 // The engine acknowledges an answer again on the same channel
                 // only for a copy of it: what a copy causes is timed apart.
                 let again = match &event {
+                    temper_worker_domain::Event::AcknowledgeTurn { .. }
+                    | temper_worker_domain::Event::TurnBusy { .. }
+                    | temper_worker_domain::Event::ConnectedV2
+                    | temper_worker_domain::Event::RelayedV2 { .. }
+                    | temper_worker_domain::Event::AssignV2 { .. } => {
+                        unreachable!("this system world runs version one")
+                    }
+
                     Event::Acknowledged { run, attempt } => !self.acknowledged.insert((epoch, (*run, *attempt))),
                     Event::Assign { .. }
                     | Event::Cancel { .. }
@@ -530,6 +546,12 @@ impl World {
     /// answered, or was given again: one it takes again, harmlessly.
     fn late(&mut self, event: &Event) {
         let (kind, names) = match event {
+            temper_worker_domain::Event::AcknowledgeTurn { .. }
+            | temper_worker_domain::Event::TurnBusy { .. }
+            | temper_worker_domain::Event::ConnectedV2
+            | temper_worker_domain::Event::RelayedV2 { .. }
+            | temper_worker_domain::Event::AssignV2 { .. } => unreachable!("this system world runs version one"),
+
             Event::Cancel { run, attempt } => ("cancel", (*run, *attempt)),
             Event::Relayed { run, attempt, .. } => ("relayed", (*run, *attempt)),
             Event::Inbound { run, attempt, .. } | Event::Grant { run, attempt, .. } => ("inbound", (*run, *attempt)),
@@ -598,6 +620,12 @@ fn copy(event: &engine::Event) -> engine::Event {
 /// A copy of a frame the worker takes again harmlessly.
 fn copy_down(event: &Event) -> Event {
     match event {
+        temper_worker_domain::Event::AcknowledgeTurn { .. }
+        | temper_worker_domain::Event::TurnBusy { .. }
+        | temper_worker_domain::Event::ConnectedV2
+        | temper_worker_domain::Event::RelayedV2 { .. }
+        | temper_worker_domain::Event::AssignV2 { .. } => unreachable!("this system world runs version one"),
+
         Event::Acknowledged { run, attempt } => Event::Acknowledged { run: *run, attempt: *attempt },
         Event::Grant { run, attempt, grant } => Event::Grant { run: *run, attempt: *attempt, grant: *grant },
         Event::Cancel { run, attempt } => Event::Cancel { run: *run, attempt: *attempt },
@@ -633,12 +661,20 @@ fn copy_assignment(assignment: &host::Assignment) -> host::Assignment {
         name: repository.name.clone(),
         remote: repository.remote.clone(),
         start: match &repository.start {
+            temper_worker_domain::host::Start::Merge { .. } => {
+                unreachable!("this system world runs version one")
+            }
+
             host::Start::Base { branch } => host::Start::Base { branch: branch.clone() },
             host::Start::Branch { branch } => host::Start::Branch { branch: branch.clone() },
             host::Start::Commit { commit } => host::Start::Commit { commit: *commit },
             host::Start::Saved { branch } => host::Start::Saved { branch: branch.clone() },
         },
         access: match &repository.access {
+            temper_worker_domain::host::Access::WritableV2 { .. } => {
+                unreachable!("this system world runs version one")
+            }
+
             host::Access::Writable { push } => host::Access::Writable { push: push.clone() },
             host::Access::ReadOnly => host::Access::ReadOnly,
         },

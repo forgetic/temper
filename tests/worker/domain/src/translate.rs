@@ -71,6 +71,10 @@ pub const ANSWER_KINDS: [&str; 20] = [
 #[must_use]
 pub fn from_agent_io(event: agent::Event) -> Event {
     match event {
+        temper_worker_domain::agent::Event::SpawnV2 { .. } | temper_worker_domain::agent::Event::TurnCredit { .. } => {
+            unreachable!("this system world runs version one")
+        }
+
         agent::Event::Spawned { owner, process } => Event::Spawned { owner, process },
         agent::Event::Unspawned { owner, detail } => Event::Unspawned { owner, detail },
         agent::Event::Sent { owner } => Event::Sent { owner },
@@ -95,6 +99,10 @@ pub fn from_agent_io(event: agent::Event) -> Event {
 #[must_use]
 pub fn down_bytes(message: &Down) -> Vec<&[u8]> {
     match message {
+        temper_worker_domain::agent::channel::Down::StartV2 { .. } => {
+            unreachable!("this system world runs version one")
+        }
+
         Down::Start { repositories: _, grants: _, charter, snapshot } => {
             [Some(&**charter), snapshot.as_deref()].into_iter().flatten().collect()
         }

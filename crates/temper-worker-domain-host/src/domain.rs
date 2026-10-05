@@ -97,6 +97,21 @@ impl Domain {
         hosted::is_relayed_for(self, run, attempt, call)
     }
 
+    /// Both the stable agent name and the current local delivery must match.
+    #[must_use]
+    pub fn is_relayed_named_for(&self, run: Token, attempt: Token, delivery: Token, call: Token) -> bool {
+        if !self.is_relayed_for(run, attempt, delivery) {
+            return false;
+        }
+        let Some(entry) = self.calls.get(Id::from_token(delivery)) else {
+            return false;
+        };
+        match entry.state {
+            call::State::Relayed { call: name, .. } | call::State::Settling { call: name } => name == call,
+            call::State::Pushing { .. } | call::State::Closed => false,
+        }
+    }
+
     /// Whether the relayed call `call`, as the host names it, still waits for
     /// the engine's answer: neither answered, withdrawn, nor answered as
     /// unavailable as its run left live.
@@ -142,6 +157,11 @@ impl Domain {
 /// Handles one event, emitting at most [`max_out`] requests.
 pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     match event {
+        Event::AssignV2 { reply_to, assignment } => hosted::assign_v2(domain, env, reply_to, assignment, out),
+        Event::Turn { owner, turn } => hosted::turned(domain, env, owner, turn, out),
+        Event::FinishedV2 { owner, turns, spent, finish } => {
+            hosted::finished_v2(domain, env, owner, turns, spent, finish, out);
+        }
         Event::Assign { reply_to, assignment } => hosted::assign(domain, env, reply_to, assignment, out),
         Event::Inbound { run, attempt, name, event } => hosted::inbound(domain, env, run, attempt, name, event, out),
         Event::Grant { run, attempt, grant } => hosted::grant(domain, run, attempt, grant, out),

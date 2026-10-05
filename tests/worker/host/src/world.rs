@@ -62,6 +62,10 @@ impl Settings {
                 name_bytes: 64,
                 charter_bytes: 4096,
                 snapshot_bytes: 1024,
+                transcript_bytes: 0,
+                turn_bytes: 0,
+                conflicts: 0,
+                path_bytes: 0,
                 outcome_bytes: 512,
                 detail_bytes: 64,
                 held: 2,
@@ -562,12 +566,18 @@ impl World {
             return Taken::Stale;
         }
         match event {
+            temper_worker_domain_host::Event::AssignV2 { .. }
+            | temper_worker_domain_host::Event::Turn { .. }
+            | temper_worker_domain_host::Event::FinishedV2 { .. } => unreachable!("this script runs version one"),
+
             Event::Assign { reply_to: _, assignment } => {
                 Taken::Assign { run: assignment.run, attempt: assignment.attempt }
             }
             Event::Started { owner, agent } => Taken::Started { owner: *owner, agent: *agent },
             Event::Called { owner, call, ask } => {
                 let push = match ask {
+                    temper_worker_domain_host::Ask::PushV2 { .. } => unreachable!("this script runs version one"),
+
                     host::Ask::Push { .. } => true,
                     host::Ask::Relay { .. } => false,
                 };
@@ -681,6 +691,12 @@ impl World {
     /// `run`'s attempt `attempt`: a refusal, or a prepare that admits it.
     fn assigned(&mut self, run: Token, attempt: Token, request: &Request) {
         match request {
+            temper_worker_domain_host::Request::Turn { .. }
+            | temper_worker_domain_host::Request::PushV2 { .. }
+            | temper_worker_domain_host::Request::RelayV2 { .. }
+            | temper_worker_domain_host::Request::AnswerV2 { .. }
+            | temper_worker_domain_host::Request::StartV2 { .. } => unreachable!("this script runs version one"),
+
             Request::Answer { to: _, run: answered, attempt: of, answer } => {
                 assert_eq!((*answered, *of), (run, attempt), "an assignment is answered as itself");
                 match answer {
@@ -722,6 +738,12 @@ impl World {
     fn route(&mut self, request: Request) {
         self.trace.log(self.now, format!("host -> {request:?}"));
         match request {
+            temper_worker_domain_host::Request::Turn { .. }
+            | temper_worker_domain_host::Request::PushV2 { .. }
+            | temper_worker_domain_host::Request::RelayV2 { .. }
+            | temper_worker_domain_host::Request::AnswerV2 { .. }
+            | temper_worker_domain_host::Request::StartV2 { .. } => unreachable!("this script runs version one"),
+
             Request::Answer { to, run, attempt, answer } => {
                 if let Some(owner) = self.admitted.remove(&(run, attempt)) {
                     assert!(self.parent.settled(owner), "a run answers once all of it has settled and is released");

@@ -95,6 +95,14 @@ impl World {
     /// Notes what the worker takes as `event`, before it takes it.
     fn take(&mut self, event: &Event) {
         match event {
+            temper_worker_domain::Event::AcknowledgeTurn { .. } | temper_worker_domain::Event::TurnBusy { .. } => {
+                unreachable!("this system world runs version one")
+            }
+
+            temper_worker_domain::Event::ConnectedV2
+            | temper_worker_domain::Event::RelayedV2 { .. }
+            | temper_worker_domain::Event::AssignV2 { .. } => unreachable!("this system world runs version one"),
+
             Event::Connected => {
                 if let Some(since) = self.down_since.take()
                     && !self.open.is_empty()
@@ -119,10 +127,18 @@ impl World {
                 }
                 let repositories = assignment.workspace.repositories.iter().map(|repository| {
                     let saved = match &repository.start {
+                        temper_worker_domain::host::Start::Merge { .. } => {
+                            unreachable!("this system world runs version one")
+                        }
+
                         host::Start::Saved { branch } => Some(branch.to_vec()),
                         host::Start::Base { .. } | host::Start::Branch { .. } | host::Start::Commit { .. } => None,
                     };
                     let push = match &repository.access {
+                        temper_worker_domain::host::Access::WritableV2 { .. } => {
+                            unreachable!("this system world runs version one")
+                        }
+
                         host::Access::Writable { push } => Some(push.to_vec()),
                         host::Access::ReadOnly => None,
                     };
@@ -185,6 +201,11 @@ impl World {
     /// One of the worker's requests, to the world that carries it out.
     fn route(&mut self, request: Request) {
         match request {
+            temper_worker_domain::Request::RelayV2 { .. }
+            | temper_worker_domain::Request::HelloV2 { .. }
+            | temper_worker_domain::Request::Turn { .. }
+            | temper_worker_domain::Request::AnswerV2 { .. } => unreachable!("this system world runs version one"),
+
             Request::Dial => self.dial(),
             Request::Hello { hello } => {
                 self.hello(&hello);
@@ -406,6 +427,10 @@ impl World {
     /// What the worker sends down to its agent `owner`.
     fn down(&mut self, owner: Token, message: &Down) {
         match message {
+            temper_worker_domain::agent::channel::Down::StartV2 { .. } => {
+                unreachable!("this system world runs version one")
+            }
+
             Down::Start { repositories: _, grants: _, charter, snapshot } => {
                 self.start(owner, charter, snapshot.as_deref());
             }
@@ -530,6 +555,11 @@ impl World {
             match out {
                 tree::Out::Domain { after, event } => {
                     let lane = match &event {
+                        temper_worker_domain::agent::Event::SpawnV2 { .. }
+                        | temper_worker_domain::agent::Event::TurnCredit { .. } => {
+                            unreachable!("this system world runs version one")
+                        }
+
                         agent::Event::Received { .. }
                         | agent::Event::Malformed { .. }
                         | agent::Event::Hangup { .. } => Some(Lane::Reads),
@@ -582,6 +612,16 @@ impl World {
             return agent::Event::Received { owner, message };
         };
         let message = match message {
+            temper_worker_domain::agent::channel::Up::Call {
+                ask: temper_worker_domain::agent::channel::Ask::PushV2 { .. },
+                ..
+            } => unreachable!("this system world runs version one"),
+
+            temper_worker_domain::agent::channel::Up::Turn { .. }
+            | temper_worker_domain::agent::channel::Up::FinishV2 { .. } => {
+                unreachable!("this system world runs version one")
+            }
+
             Up::Call { call, ask: Ask::Relay { .. } } if !garbled.calls => {
                 Up::Call { call, ask: Ask::Relay { body: protocol::call(content.call()).into_boxed_slice() } }
             }
@@ -752,6 +792,10 @@ impl World {
 
 fn push_kind(push: &agent::channel::Push) -> &'static str {
     match push {
+        temper_worker_domain::agent::channel::Push::Conflicted { .. } => {
+            unreachable!("this system world runs version one")
+        }
+
         agent::channel::Push::Done => "done",
         agent::channel::Push::Moved => "moved",
         agent::channel::Push::Failed { .. } => "failed",

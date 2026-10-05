@@ -69,6 +69,8 @@ use crate::translate;
 #[derive(Debug)]
 pub(crate) struct Link {
     state: State,
+    v2: bool,
+    turns: crate::turns::Turns,
     alarms: Deadlines<Alarm>,
     rng: Rng,
     /// Dials that failed, and channels lost unproved, since a channel last
@@ -122,6 +124,7 @@ pub(crate) struct Relay {
     pub(crate) run: Token,
     pub(crate) attempt: Token,
     pub(crate) call: Token,
+    pub(crate) stable: Option<Token>,
     pub(crate) body: Box<[u8]>,
 }
 
@@ -139,6 +142,7 @@ pub(crate) struct Bounced {
 pub(crate) enum Fired {
     /// It dialled.
     Dialled,
+    Turn,
     /// Every run is to be cancelled for contact.
     Grace,
 }
@@ -151,6 +155,8 @@ impl Link {
         let bounces = limits::bounces(limits).expect("worst_case accepted the limits");
         Link {
             state: State::Down,
+            v2: false,
+            turns: crate::turns::Turns::new(limits),
             alarms,
             rng: Rng::new(seed),
             failed: 0,
@@ -171,12 +177,18 @@ impl Link {
     }
 
     pub(crate) fn next_deadline(&self) -> Option<Time> {
-        self.alarms.next()
+        match self.alarms.next() {
+            Some(at) => match self.turns.next_deadline() {
+                Some(next) => Some(at.min(next)),
+                None => Some(at),
+            },
+            None => self.turns.next_deadline(),
+        }
     }
 
     /// Answers the engine has yet to acknowledge.
     pub(crate) fn held(&self) -> u32 {
-        self.answers.len()
+        self.answers.len().saturating_add(self.turns.held())
     }
 
     /// Relays and bounces waiting for a channel.
@@ -185,7 +197,7 @@ impl Link {
     }
 
     pub(crate) const fn abandoned(&self) -> u64 {
-        self.abandoned
+        self.abandoned.saturating_add(self.turns.abandoned())
     }
 
     pub(crate) const fn is_shut(&self) -> bool {
@@ -194,11 +206,25 @@ impl Link {
 
     /// Whether the link keeps the answer of the run `run`'s attempt `attempt`.
     pub(crate) fn holds(&self, run: Token, attempt: Token) -> bool {
-        self.answers.contains_key(&Named { run, attempt })
+        self.answers.contains_key(&Named { run, attempt }) || self.turns.holds(run, attempt)
     }
 
     /// Fires the link's alarm due at `env.now`, if there is one.
     pub(crate) fn fire(&mut self, env: &Env<Limits>, out: &mut Queue<Request>) -> Option<Fired> {
+        let turn_due = match self.turns.next_deadline() {
+            Some(at) => {
+                at <= env.now
+                    && match self.alarms.next() {
+                        Some(own) => at <= own,
+                        None => true,
+                    }
+            }
+            None => false,
+        };
+        if turn_due {
+            self.turns.fire(env.now, self.v2 && self.is_up(), out);
+            return Some(Fired::Turn);
+        }
         let alarm = self.alarms.expire(env.now)?;
         match alarm {
             Alarm::Dial => {
@@ -214,10 +240,25 @@ impl Link {
         }
     }
 
+    /// A reply-bearing assignment cannot enter this link's runtime mode.
+    pub(crate) fn refuse_version(&self, run: Token, attempt: Token, out: &mut Queue<Request>) {
+        assert!(self.is_up(), "an assignment arrives on an open channel");
+        if self.v2 {
+            let ending = host::EndingV2::Refused(host::Refusal::Invalid(host::Invalid::Version));
+            out.push(Request::AnswerV2 { run, attempt, answer: host::AnswerV2 { turns: 0, spent: 0, ending } });
+        } else {
+            // Charter is the v1 unsupported-lifecycle refusal; its frozen
+            // schema has no version-specific invalid code.
+            let answer = host::Answer::Refused(host::Refusal::Invalid(host::Invalid::Charter));
+            out.push(Request::Answer { run, attempt, answer });
+        }
+    }
+
     /// The channel opened: the hello is next, made once the host reports.
     pub(crate) fn connected(&mut self) {
         assert!(self.state == State::Dialling, "a channel opens once, for a dial in flight");
         self.state = State::Up { proved: false };
+        self.v2 = false;
         self.past = false;
         self.alarms.cancel(Alarm::Grace);
     }
@@ -287,12 +328,13 @@ impl Link {
     /// the link does not keep was acknowledged already, or was a refusal.
     pub(crate) fn acknowledged(&mut self, run: Token, attempt: Token) {
         self.answers.remove(&Named { run, attempt });
+        self.turns.answer_acknowledged(run, attempt);
     }
 
     /// A relay for the engine: now if the channel is open, kept until it is
     /// otherwise.
     pub(crate) fn relay(&mut self, relay: Relay, host: &host::Domain, out: &mut Queue<Request>) {
-        if self.is_up() {
+        if self.is_up() && (relay.stable.is_none() || self.v2) {
             return out.push(request(relay));
         }
         // Room is made by dropping the relays their calls no longer wait for:
@@ -351,7 +393,8 @@ impl Link {
         out: &mut Queue<Request>,
     ) {
         let count = u32::try_from(runs.len()).expect("the host reports no more runs than its slots");
-        let mut hosting = List::with_capacity(count.saturating_add(self.answers.len()));
+        let mut hosting =
+            List::with_capacity(count.saturating_add(self.answers.len()).saturating_add(self.turns.held()));
         for run in runs {
             let hosted = Hosted { run: run.run, attempt: run.attempt, phase: translate::phase(run.phase) };
             hosting.push(hosted).expect("room for every run reported");
@@ -360,6 +403,7 @@ impl Link {
             let hosted = Hosted { run: named.run, attempt: named.attempt, phase: Phase::Answered };
             hosting.push(hosted).expect("room for every answer kept");
         }
+        self.turns.hosting(&mut hosting);
         let mut workstreams = List::with_capacity(checkout.workspaces());
         for nth in 0..checkout.workspaces() {
             let Some(key) = checkout.workstream(nth) else {
@@ -370,16 +414,30 @@ impl Link {
         // A worker shutting down takes no more work.
         let slots = if self.shut { 0 } else { limits.host.slots };
         let hello = Hello { slots, workstreams: workstreams.into_boxed(), hosting: hosting.into_boxed() };
-        out.push(Request::Hello { hello });
+        if self.v2 {
+            out.push(Request::HelloV2 {
+                hello,
+                graces: limits::declared_graces(limits).expect("startup checked the stop bound"),
+                push_deadline: limits::push_deadline(limits).expect("startup checked push bound"),
+            });
+            self.turns.hello(out);
+        } else {
+            out.push(Request::Hello { hello });
+        }
         for (named, answer) in &self.answers {
             out.push(Request::Answer { run: named.run, attempt: named.attempt, answer: copy(answer) });
         }
-        for _ in 0..self.relays.capacity() {
+        let queued = self.relays.len();
+        for _ in 0..queued {
             let Some(relay) = self.relays.pop() else {
                 break;
             };
             if host.is_relayed(relay.call) {
-                out.push(request(relay));
+                if relay.stable.is_none() || self.v2 {
+                    out.push(request(relay));
+                } else {
+                    self.relays.push(relay);
+                }
             }
         }
         for _ in 0..self.bounces.capacity() {
@@ -397,6 +455,7 @@ impl Link {
         if !(self.shut && self.past) {
             return;
         }
+        self.turns.give_up();
         for _ in 0..self.answers.capacity() {
             let Some((named, _)) = self.answers.first() else {
                 break;
@@ -405,6 +464,44 @@ impl Link {
             self.answers.remove(&named);
             self.abandoned = self.abandoned.saturating_add(1);
         }
+    }
+
+    pub(crate) fn connected_v2(&mut self) {
+        self.connected();
+        self.v2 = true;
+    }
+    pub(crate) fn is_v2(&self) -> bool {
+        self.v2
+    }
+    pub(crate) fn retained_turns(&self) -> u32 {
+        self.turns.pending()
+    }
+    pub(crate) fn answer_v2(&mut self, run: Token, attempt: Token, answer: host::AnswerV2, out: &mut Queue<Request>) {
+        self.turns.answer(run, attempt, answer, self.v2 && self.is_up(), out);
+    }
+    pub(crate) fn turn(
+        &mut self,
+        agent: Token,
+        run: Token,
+        attempt: Token,
+        turn: host::Turn,
+        limits: &Limits,
+        out: &mut Queue<Request>,
+    ) -> bool {
+        self.turns.retain(agent, run, attempt, turn, limits, self.v2 && self.is_up(), out)
+    }
+    pub(crate) fn turn_acknowledged(
+        &mut self,
+        run: Token,
+        attempt: Token,
+        turn: u32,
+        limits: &Limits,
+    ) -> Option<Token> {
+        let agent = self.turns.acknowledge(run, attempt, turn)?;
+        if self.turns.credit(run, attempt, limits) { Some(agent) } else { None }
+    }
+    pub(crate) fn turn_busy(&mut self, run: Token, attempt: Token, turn: u32, env: &Env<Limits>) {
+        self.turns.busy(run, attempt, turn, env);
     }
 
     /// How long to wait before the next dial: the backoff for the dials failed
@@ -420,8 +517,11 @@ impl Link {
 pub(crate) const ALARMS: u32 = 2;
 
 fn request(relay: Relay) -> Request {
-    let Relay { run, attempt, call, body } = relay;
-    Request::Relay { run, attempt, call, body }
+    let Relay { run, attempt, call, stable, body } = relay;
+    match stable {
+        Some(name) => Request::RelayV2 { run, attempt, call: name, delivery: call, body },
+        None => Request::Relay { run, attempt, call, body },
+    }
 }
 
 /// A copy of `answer`, to send while the link keeps it.

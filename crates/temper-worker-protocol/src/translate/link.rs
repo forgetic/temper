@@ -113,6 +113,10 @@ pub fn up(message: wire::Message, sizes: &Sizes) -> Result<Incoming, Error> {
 }
 pub fn down(request: worker::Request, sizes: &Sizes) -> Result<Option<wire::Message>, Error> {
     let message = match request {
+        worker::Request::HelloV2 { .. }
+        | worker::Request::Turn { .. }
+        | worker::Request::AnswerV2 { .. }
+        | worker::Request::RelayV2 { .. } => return Err(Error::Unsupported),
         worker::Request::Hello { hello } => {
             if u32::try_from(hello.hosting.len()).ok().ok_or(Error::Limits)? > sizes.slots
                 || u32::try_from(hello.workstreams.len()).ok().ok_or(Error::Limits)? > sizes.workstreams

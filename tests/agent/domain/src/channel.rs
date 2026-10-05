@@ -123,6 +123,8 @@ pub enum Toward {
 #[must_use]
 pub fn down(down: Down, link: &Link) -> Option<Event> {
     match down {
+        temper_worker_domain_agent::channel::Down::StartV2 { .. } => unreachable!("this system world runs version one"),
+
         Down::Start { charter, snapshot, repositories, grants } => {
             assert!(snapshot.is_none(), "the agent never parks, so it is never resumed");
             assert_eq!(repositories.len(), link.checkout.repositories.len());
@@ -157,7 +159,7 @@ fn grant(named: temper_worker_domain_agent::channel::Grant) -> temper_agent_doma
 #[must_use]
 pub fn answer(call: Token, reply: &Reply) -> Event {
     match reply {
-        Reply::Pushed(pushed) => Event::Pushed { owner: call, push: push(*pushed) },
+        Reply::Pushed(pushed) => Event::Pushed { owner: call, push: push(pushed) },
         Reply::Unavailable => unpushed(call, run::PushReason::Unavailable),
         Reply::Busy => unpushed(call, run::PushReason::Busy),
         Reply::TooLarge => unpushed(call, run::PushReason::TooLarge),
@@ -168,11 +170,15 @@ pub fn answer(call: Token, reply: &Reply) -> Event {
 
 /// The run's push for the worker's.
 #[must_use]
-pub fn push(push: Push) -> run::Push {
+pub fn push(push: &Push) -> run::Push {
     match push {
+        temper_worker_domain_agent::channel::Push::Conflicted { .. } => {
+            unreachable!("this system world runs version one")
+        }
+
         Push::Done => run::Push::Done,
         Push::Moved => run::Push::Moved,
-        Push::Failed { failure } => run::Push::Failed { failure: push_failure(&failure) },
+        Push::Failed { failure } => run::Push::Failed { failure: push_failure(failure) },
         Push::Nothing => run::Push::Nothing,
     }
 }

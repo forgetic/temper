@@ -197,7 +197,7 @@ impl Client {
                         },
                         Push::Nothing,
                     ];
-                    Reply::Pushed(outcomes[usize::try_from(self.rng.below(4)).expect("fits")])
+                    Reply::Pushed(outcomes[usize::try_from(self.rng.below(4)).expect("fits")].clone())
                 } else if self.rng.chance(self.script.oversized) {
                     self.tally.oversized += 1;
                     Reply::Relayed {
@@ -249,9 +249,13 @@ impl Client {
     }
 
     /// Takes a record of the domain's for the client.
+    #[expect(clippy::too_many_lines, reason = "the frozen version-one boundary dispatch remains exhaustive")]
     pub fn take(&mut self, request: Request) -> Vec<Out> {
         let mut outs = Vec::new();
         match request {
+            temper_worker_domain_agent::Request::Turn { .. }
+            | temper_worker_domain_agent::Request::FinishedV2 { .. } => unreachable!("this script runs version one"),
+
             Request::Started { client, agent } => {
                 let spawned = self.live(client);
                 assert!(spawned.agent.is_none(), "an agent is named once");
@@ -273,6 +277,10 @@ impl Client {
             }
             Request::Called { client, call, ask } => {
                 let push = match ask {
+                    temper_worker_domain_agent::channel::Ask::PushV2 { .. } => {
+                        unreachable!("this script runs version one")
+                    }
+
                     Ask::Push { .. } => true,
                     Ask::Relay { .. } => false,
                 };
@@ -326,6 +334,10 @@ impl Client {
                 // A spawn beyond the limits is refused as invalid, or as busy
                 // when there is no room to look at it.
                 match end {
+                    temper_worker_domain_agent::End::Invalid(temper_worker_domain_agent::Invalid::Transcript) => {
+                        unreachable!("this script runs version one")
+                    }
+
                     End::Stopped => {
                         assert!(spawned.agent.is_some(), "an agent that ran was named");
                         assert!(!spawned.invalid, "a spawn beyond the limits never runs");

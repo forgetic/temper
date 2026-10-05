@@ -33,6 +33,7 @@ pub fn down(
         }
     }
     let message = match value {
+        channel::Down::StartV2 { .. } => return Err(Error::Unsupported),
         channel::Down::Start { charter, snapshot, repositories, grants } => {
             let snapshot_bytes = match &snapshot {
                 Some(bytes) => bytes.len(),

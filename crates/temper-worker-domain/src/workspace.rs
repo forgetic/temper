@@ -63,6 +63,7 @@ pub(crate) struct Workspace {
     repositories: u32,
     roots: Box<[agent::channel::Repository]>,
     identities: Box<[u32]>,
+    conflicts: Box<[checkout::Conflicts]>,
     state: State,
 }
 
@@ -104,7 +105,7 @@ pub(crate) fn prepare(domain: &mut Domain, env: &Env<Limits>, owner: Token, work
     for repository in &workspace.repositories {
         let writable = match repository.access {
             host::Access::ReadOnly => false,
-            host::Access::Writable { .. } => true,
+            host::Access::Writable { .. } | host::Access::WritableV2 { .. } => true,
         };
         identities.push(repository.identity).expect("room for every repository identity");
         roots
@@ -117,6 +118,7 @@ pub(crate) fn prepare(domain: &mut Domain, env: &Env<Limits>, owner: Token, work
         repositories,
         roots: roots.into_boxed(),
         identities: identities.into_boxed(),
+        conflicts: Box::new([]),
         state: preparing,
     };
     let id = domain.workspaces.insert(record).expect("a workspace for every slot");
@@ -204,6 +206,7 @@ pub(crate) fn write(domain: &mut Domain, env: &Env<Limits>, owner: Token, worksp
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub(crate) enum Write {
     Push { message: Box<[u8]> },
+    PushV2 { title: Box<[u8]>, body: Box<[u8]> },
     Save { branch: Box<[u8]> },
 }
 
@@ -245,7 +248,22 @@ pub(crate) fn prepared(domain: &mut Domain, env: &Env<Limits>, client: Token, pr
     let mut then = Then::NOTHING;
     let state = mem::replace(&mut record.state, State::Closed);
     record.state = match state {
-        State::Preparing { hold, abandoned } => ended(owner, client, hold, abandoned, prepared, &mut then),
+        State::Preparing { hold, abandoned } => match prepared {
+            checkout::Prepared::Ready { workspace, conflicts } => {
+                record.conflicts = conflicts;
+                ended(
+                    owner,
+                    client,
+                    hold,
+                    abandoned,
+                    checkout::Prepared::Ready { workspace, conflicts: Box::new([]) },
+                    &mut then,
+                )
+            }
+            checkout::Prepared::Refused { .. } | checkout::Prepared::Failed { .. } | checkout::Prepared::Aborted => {
+                ended(owner, client, hold, abandoned, prepared, &mut then)
+            }
+        },
         State::Ready { .. } | State::Releasing | State::Closed => unreachable!("a prepare ends once"),
     };
     domain.preparing.remove(&owner);
@@ -316,6 +334,7 @@ fn abandon(hold: Token, then: &mut Then) -> State {
 /// Ready, push or save: asked of the checkout, for the host's `owner`.
 fn asked(hold: Token, directory: Token, owner: Token, write: Write, then: &mut Then) -> State {
     then.checkout = Some(match write {
+        Write::PushV2 { title, body } => checkout::Event::Push { hold, message: checkout::Message { title, body } },
         Write::Push { message } => checkout::Event::Push { hold, message: translate::message(message) },
         Write::Save { branch } => checkout::Event::Save { hold, branch, message: translate::saved() },
     });
@@ -359,7 +378,7 @@ fn ended(
 ) -> State {
     match prepared {
         checkout::Prepared::Ready { workspace: directory, conflicts } => {
-            assert!(conflicts.is_empty(), "legacy host cannot prepare a merge");
+            assert!(conflicts.is_empty(), "conflicts moved to the workspace record before the transition");
             assert!(!abandoned, "a released hold's prepare ends aborted");
             then.host = Some(host::Event::Prepared { owner, workspace: client });
             State::Ready { hold: hold.expect("a prepare that ran was held"), directory, asked: None }
@@ -385,4 +404,48 @@ fn ended(
 
 fn unprepared(owner: Token, failure: host::Preparation) -> host::Event {
     host::Event::Unprepared { owner, failure, detail: Box::new([]) }
+}
+
+pub(crate) fn start_v2(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    owner: Token,
+    workspace: Token,
+    charter: Box<[u8]>,
+    transcript: Option<Box<[u8]>>,
+    grants: Box<[host::Grant]>,
+) {
+    let record = domain.workspaces.get_mut(Id::from_token(workspace)).expect("a workspace lives until released");
+    let directory = match record.state {
+        State::Ready { directory, .. } => directory,
+        State::Preparing { .. } | State::Releasing | State::Closed => unreachable!("only a prepared workspace starts"),
+    };
+    let mut repositories = List::with_capacity(record.repositories);
+    for root in &record.roots {
+        repositories
+            .push(agent::channel::RepositoryV2 {
+                name: copy_of(&root.name),
+                writable: root.writable,
+                conflicts: Box::new([]),
+            })
+            .expect("one descriptor per repository");
+    }
+    let mut names = List::with_capacity(u32::try_from(grants.len()).expect("validated grants"));
+    for grant in grants {
+        if !record.identities.contains(&grant.account) {
+            names.push(route::channel_grant(grant)).expect("room for every LLM grant");
+        }
+    }
+    for conflicts in mem::replace(&mut record.conflicts, Box::new([])) {
+        let root = repositories.get_mut(conflicts.repository).expect("the checkout returns a known repository");
+        root.conflicts = conflicts.files;
+    }
+    let spawn = agent::SpawnV2 {
+        workspace: directory,
+        charter,
+        transcript,
+        repositories: repositories.into_boxed(),
+        grants: names.into_boxed(),
+    };
+    route::agent_step(domain, env, agent::Event::SpawnV2 { client: owner, spawn });
 }

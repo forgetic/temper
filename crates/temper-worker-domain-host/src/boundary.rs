@@ -46,6 +46,23 @@ use skein_lib::{Duration, ReplyTo, Token};
 /// parent -> host
 #[derive(PartialEq, Eq, Debug)]
 pub enum Event {
+    /// A version-two run: transcript and committed call tail stay opaque.
+    AssignV2 {
+        reply_to: ReplyTo,
+        assignment: AssignmentV2,
+    },
+    /// One completed conversation turn, from its started agent.
+    Turn {
+        owner: Token,
+        turn: Turn,
+    },
+    /// Version-two last word, with cumulative accounting.
+    FinishedV2 {
+        owner: Token,
+        turns: u32,
+        spent: u64,
+        finish: FinishV2,
+    },
     /// From the engine, a call: host the run of `assignment`, and answer once
     /// it has ended. A fresh call for an already hosted attempt is refused
     /// as busy; its parent deduplicates wire retransmissions before calling.
@@ -177,6 +194,40 @@ pub enum Event {
 #[derive(PartialEq, Eq, Debug)]
 #[expect(clippy::large_enum_variant, reason = "bounded diagnostics stay inline and are included in worst_case")]
 pub enum Request {
+    /// Stable agent name on the engine wire; delivery identifies this local wait.
+    RelayV2 {
+        run: Token,
+        attempt: Token,
+        call: Token,
+        delivery: Token,
+        body: Box<[u8]>,
+    },
+    AnswerV2 {
+        to: ReplyTo,
+        run: Token,
+        attempt: Token,
+        answer: AnswerV2,
+    },
+    StartV2 {
+        owner: Token,
+        workspace: Token,
+        charter: Box<[u8]>,
+        transcript: Option<Box<[u8]>>,
+        grants: Box<[Grant]>,
+    },
+    /// Parent retains the turn and grants more agent read credit when room permits.
+    Turn {
+        agent: Token,
+        run: Token,
+        attempt: Token,
+        turn: Turn,
+    },
+    PushV2 {
+        owner: Token,
+        workspace: Token,
+        title: Box<[u8]>,
+        body: Box<[u8]>,
+    },
     /// To the engine, the answer to an `Assign`: exactly one per assignment.
     Answer {
         to: ReplyTo,
@@ -292,6 +343,44 @@ pub struct Assignment {
     pub grants: Box<[Grant]>,
 }
 
+/// An explicit second-version assignment. A snapshot is invalid here.
+#[derive(PartialEq, Eq, Hash, Debug)]
+pub struct AssignmentV2 {
+    pub assignment: Assignment,
+    pub transcript: Option<Box<[u8]>>,
+}
+
+/// A turn's cumulative spend and last read message name are opaque accounting.
+#[derive(PartialEq, Eq, Hash, Debug)]
+pub struct Turn {
+    pub turn: u32,
+    pub spent: u64,
+    pub read: Option<Token>,
+    pub body: Box<[u8]>,
+}
+
+#[derive(PartialEq, Eq, Hash, Debug)]
+pub enum FinishV2 {
+    Ended { outcome: Box<[u8]> },
+    Parked,
+    Failed { failure: RunFailure },
+}
+
+#[derive(PartialEq, Eq, Hash, Debug)]
+pub struct AnswerV2 {
+    pub turns: u32,
+    pub spent: u64,
+    pub ending: EndingV2,
+}
+
+#[derive(PartialEq, Eq, Hash, Debug)]
+pub enum EndingV2 {
+    Refused(Refusal),
+    Ended { outcome: Box<[u8]>, work: Work },
+    Parked { work: Work },
+    Failed { failure: Failure, detail: Box<[u8]>, work: Work },
+}
+
 /// The checkout a run works in. The host checks its bounds and passes it on.
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub struct Workspace {
@@ -323,6 +412,10 @@ pub struct Repository {
 /// Where a repository's checkout starts.
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub enum Start {
+    Merge {
+        branch: Box<[u8]>,
+        base: [u8; 32],
+    },
     /// A base branch, made from the default branch if it does not exist yet.
     Base {
         branch: Box<[u8]>,
@@ -345,6 +438,11 @@ pub enum Start {
 /// Whether a repository may be written.
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub enum Access {
+    /// Version-two writable branch, fenced to the expected previous head.
+    WritableV2 {
+        push: Box<[u8]>,
+        expected: Option<[u8; 32]>,
+    },
     ReadOnly,
     /// A change is pushed to `push`.
     Writable {
@@ -355,11 +453,19 @@ pub enum Access {
 /// A host call of a run.
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub enum Ask {
+    PushV2 {
+        title: Box<[u8]>,
+        body: Box<[u8]>,
+    },
     /// Commit what the checkout holds, with `message`, and push it. The host
     /// serves it.
-    Push { message: Box<[u8]> },
+    Push {
+        message: Box<[u8]>,
+    },
     /// A forge read or an outlet, relayed to the engine as it is.
-    Relay { body: Box<[u8]> },
+    Relay {
+        body: Box<[u8]>,
+    },
 }
 
 /// The answer to a host call.
@@ -385,9 +491,13 @@ pub enum Reply {
 
 /// How a push went, as the run is told: done only if every repository with a
 /// change landed it. A push the forge refused failed, as the run sees it.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 #[expect(clippy::large_enum_variant, reason = "bounded diagnostics stay inline and are included in worst_case")]
 pub enum Push {
+    Conflicted {
+        repository: u32,
+        files: Box<[Box<[u8]>]>,
+    },
     Done,
     /// A branch moved since the run started: no change of the run can land
     /// there.
@@ -401,14 +511,21 @@ pub enum Push {
 }
 
 /// What became of one repository in a push or a save.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 #[expect(clippy::large_enum_variant, reason = "bounded diagnostics stay inline and are included in worst_case")]
 pub enum Landing {
+    Conflicted {
+        files: Box<[Box<[u8]>]>,
+    },
     /// A failed invocation, with its typed reason and bounded diagnostics.
-    Explained { failure: PushFailure },
+    Explained {
+        failure: PushFailure,
+    },
     /// Its change is on the branch, as `commit`, by its object id (as
     /// [`Start::Commit`]'s).
-    Landed { commit: [u8; 32] },
+    Landed {
+        commit: [u8; 32],
+    },
     /// The branch moved since the run started: nothing was pushed.
     Moved,
     /// The push failed, and did not land: a retry may succeed.
@@ -524,6 +641,8 @@ pub enum Invalid {
     Charter,
     /// The snapshot holds more bytes than a run may.
     Snapshot,
+    Transcript,
+    Version,
     Grants,
 }
 

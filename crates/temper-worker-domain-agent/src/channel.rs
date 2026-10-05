@@ -37,6 +37,14 @@ use skein_lib::{Duration, Token};
 /// agent -> worker
 #[derive(PartialEq, Eq, Debug)]
 pub enum Up {
+    Turn {
+        turn: Turn,
+    },
+    FinishV2 {
+        turns: u32,
+        spent: u64,
+        finish: FinishV2,
+    },
     /// A host call, which the run names `call`: answered by exactly one
     /// [`Down::Answer`].
     Call {
@@ -86,6 +94,12 @@ pub enum Up {
 #[derive(PartialEq, Eq, Debug)]
 #[expect(clippy::large_enum_variant, reason = "bounded diagnostics stay inline and are included in worst_case")]
 pub enum Down {
+    StartV2 {
+        charter: Box<[u8]>,
+        transcript: Option<Box<[u8]>>,
+        repositories: Box<[RepositoryV2]>,
+        grants: Box<[Grant]>,
+    },
     /// The first message: what the run starts with, passed through. Where the
     /// repositories sit is the protocol layer's to add, from the spawn.
     Start {
@@ -114,11 +128,19 @@ pub enum Down {
 /// What a host call asks.
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub enum Ask {
+    PushV2 {
+        title: Box<[u8]>,
+        body: Box<[u8]>,
+    },
     /// Commit what the checkout holds, with `message`, and push it. The
     /// worker serves it.
-    Push { message: Box<[u8]> },
+    Push {
+        message: Box<[u8]>,
+    },
     /// A forge read or an outlet, relayed to the engine as it is.
-    Relay { body: Box<[u8]> },
+    Relay {
+        body: Box<[u8]>,
+    },
 }
 
 /// The answer to a host call.
@@ -141,16 +163,22 @@ pub enum Reply {
 }
 
 /// How a push went, as the run is told.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 #[expect(clippy::large_enum_variant, reason = "bounded diagnostics stay inline and are included in worst_case")]
 pub enum Push {
+    Conflicted {
+        repository: u32,
+        files: Box<[Box<[u8]>]>,
+    },
     /// Every repository with a change landed it.
     Done,
     /// A branch moved since the run started: no change of the run can land
     /// there.
     Moved,
     /// A push failed, and none moved.
-    Failed { failure: PushFailure },
+    Failed {
+        failure: PushFailure,
+    },
     /// No repository had a change.
     Nothing,
 }
@@ -196,4 +224,26 @@ pub struct Grant {
     pub account: u32,
     pub generation: u64,
     pub valid: Duration,
+}
+
+#[derive(PartialEq, Eq, Hash, Debug)]
+pub struct RepositoryV2 {
+    pub name: Box<[u8]>,
+    pub writable: bool,
+    pub conflicts: Box<[Box<[u8]>]>,
+}
+
+#[derive(PartialEq, Eq, Hash, Debug)]
+pub struct Turn {
+    pub turn: u32,
+    pub spent: u64,
+    pub read: Option<Token>,
+    pub body: Box<[u8]>,
+}
+
+#[derive(PartialEq, Eq, Hash, Debug)]
+pub enum FinishV2 {
+    Ended { outcome: Box<[u8]> },
+    Parked,
+    Failed { failure: RunFailure },
 }

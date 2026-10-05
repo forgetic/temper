@@ -92,9 +92,10 @@ only two output slots and the fleet's existing `max_out` bound suffices.
 
 `temper-worker-domain-host` and `temper-worker-domain`:
 
-- `Assignment` gains `transcript: Option<Box<[u8]>>`, beside `snapshot`,
-  carrying the transcript and the calls committed after its last turn,
-  opaque, to the agent's start;
+- `AssignmentV2 { assignment: Assignment, transcript: Option<Box<[u8]>> }`
+  carries the transcript and calls committed after its last turn, opaque,
+  to `StartV2`; its nested assignment must have no snapshot. The separate
+  v2 records retain the frozen v1 `Assignment`, `Start`, finish and answer;
 - turns: from the agent child up the link, kept until acknowledged and
   sent again after every hello, on the same footing as answers; a run with
   too many unacknowledged turns waits (`worker.md`, section 8);
@@ -300,7 +301,21 @@ passing with the same counts.
    Replay, facts independence, cancellation races and counted maximum
    conflict sets cover the state machine; legacy worlds retain their cases.
 4. **05d the host and the worker's root:** transcripts, turns, spend,
-   merges in progress, mid-run pushes, graces.
+   merges in progress, mid-run pushes, graces. It also extends the worker's
+   agent child wrapper, without implementing the agent execution domains.
+   Explicit `ConnectedV2`, `AssignV2`, `HelloV2`, `AnswerV2`, `StartV2` and
+   `FinishV2` records choose the new lifecycle; v1 records and scripts retain
+   their behavior. Turns carry cumulative spend and an optional last-read
+   message name, are fenced by run/attempt/turn, and remain owned by the
+   root until exact commitment ACK. Busy retries use bounded deadlines;
+   count and byte credits pause the reader and watchdog. An answer ACK
+   cannot release its slot while any turn remains. Relays carry the stable
+   agent call name separately from the local delivery token. Conflicted
+   paths move from checkout preparation into the agent start and from a
+   refused merge commit into its push reply. V2 parking has no snapshot,
+   saves ordinary unfinished work, and releases the process/workspace;
+   a merge run skips the unfinished save. Protocol v2 mapping follows in
+   05g; v1 translators explicitly reject the new records.
 5. **05e the session:** turns told, opening from a transcript, pricing.
 6. **05f the run and the tools:** messages, waiting and parking, the
    engine's tools, contracts, merges in progress, the budget in the unit.

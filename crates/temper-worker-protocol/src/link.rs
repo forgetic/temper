@@ -203,6 +203,13 @@ fn events(link: &mut Link, env: &Env<Limits>, out: &mut Queue<worker::Event>) {
                         }
                         if let Some(event) = incoming.event {
                             let deliver = match &event {
+                                worker::Event::ConnectedV2
+                                | worker::Event::RelayedV2 { .. }
+                                | worker::Event::AssignV2 { .. }
+                                | worker::Event::AcknowledgeTurn { .. }
+                                | worker::Event::TurnBusy { .. } => {
+                                    unreachable!("version one decoding cannot produce a version two event")
+                                }
                                 worker::Event::Relayed { run, attempt, call, .. } => {
                                     link.relays.answer(*call, *run, *attempt)
                                 }
@@ -279,6 +286,10 @@ pub fn down(
     lower: &mut Queue<skein_io::Request>,
 ) -> Result<(), Error> {
     match request {
+        worker::Request::HelloV2 { .. }
+        | worker::Request::Turn { .. }
+        | worker::Request::AnswerV2 { .. }
+        | worker::Request::RelayV2 { .. } => return Err(Error::Translation(translate::Error::Unsupported)),
         worker::Request::Dial => {
             if link.state != State::Idle {
                 return Err(Error::State);

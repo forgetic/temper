@@ -21,6 +21,10 @@ const LIMITS: Limits = Limits {
         name_bytes: 16,
         charter_bytes: 64,
         snapshot_bytes: 32,
+        transcript_bytes: 0,
+        turn_bytes: 0,
+        conflicts: 0,
+        path_bytes: 0,
         outcome_bytes: 32,
         detail_bytes: 8,
         held: 2,
@@ -46,6 +50,10 @@ const LIMITS: Limits = Limits {
         agents: 2,
         charter_bytes: 64,
         snapshot_bytes: 32,
+        transcript_bytes: 0,
+        turn_bytes: 0,
+        conflicts: 0,
+        path_bytes: 0,
         event_bytes: 16,
         events: 4,
         calls: 2,
@@ -67,6 +75,9 @@ const LIMITS: Limits = Limits {
     redial_max: Duration::from_secs(8),
     told: 2,
     stalled: 4,
+    turns: 0,
+    turn_queue_bytes: 0,
+    turn_backoff: Duration::from_secs(1),
 };
 
 /// What io's commits commit, when there is a change.
@@ -232,7 +243,11 @@ fn sort(requests: Box<[Request]>, changed: bool, pending: &mut Queue<(Token, git
     for request in requests {
         match request {
             Request::Io { owner, op, deadline: _ } => pending.push((owner, done(&op, changed))),
-            other @ (Request::Dial
+            other @ (Request::HelloV2 { .. }
+            | Request::Turn { .. }
+            | Request::AnswerV2 { .. }
+            | Request::RelayV2 { .. }
+            | Request::Dial
             | Request::Hello { .. }
             | Request::Answer { .. }
             | Request::Relay { .. }
@@ -921,7 +936,11 @@ fn out_of_reach_until(h: &mut Harness, secs: u64) {
             let emitted = match request {
                 Request::Dial => h.step(Event::Lost),
                 Request::Signal { owner, .. } => h.step(Event::Signalled { owner }),
-                other @ (Request::Hello { .. }
+                other @ (Request::HelloV2 { .. }
+                | Request::Turn { .. }
+                | Request::AnswerV2 { .. }
+                | Request::RelayV2 { .. }
+                | Request::Hello { .. }
                 | Request::Answer { .. }
                 | Request::Relay { .. }
                 | Request::Bounced { .. }
@@ -1101,4 +1120,226 @@ fn initial_git_grant_names_stay_on_the_worker() {
             Request::Read { owner, process: Token::new(200) }
         ]
     );
+}
+
+fn next_limits() -> Limits {
+    let mut limits = LIMITS;
+    limits.host.transcript_bytes = 64;
+    limits.host.turn_bytes = 16;
+    limits.agent.transcript_bytes = 64;
+    limits.agent.turn_bytes = 16;
+    limits.turns = 2;
+    limits.turn_queue_bytes = 32;
+    limits
+}
+
+fn next_live(h: &mut Harness, run: u64) -> Names {
+    assert_eq!(&*h.fire(), [Request::Dial]);
+    let hello = h.step(Event::ConnectedV2);
+    let [Request::HelloV2 { hello, graces, push_deadline }] = &*hello else { panic!("v2 hello first") };
+    assert_eq!(hello.slots, h.env.limits.host.slots);
+    assert_eq!(*push_deadline, Duration::from_secs(260));
+    assert_eq!(*graces, Duration::from_secs(550));
+    let assignment =
+        host::AssignmentV2 { assignment: assignment(run), transcript: Some(bytes(b"turns; committed-call-tail")) };
+    let emitted = h.step(Event::AssignV2 { assignment });
+    let emitted = h.git(emitted, true);
+    let [Request::Spawn { owner, .. }] = &*emitted else { panic!("v2 spawn: {emitted:?}") };
+    let r = Names {
+        run: Token::new(run),
+        attempt: attempt(run),
+        agent: *owner,
+        process: Token::new(run.saturating_add(500)),
+    };
+    let emitted = h.step(Event::Spawned { owner: r.agent, process: r.process });
+    let expected = Down::StartV2 {
+        charter: bytes(b"charter"),
+        transcript: Some(bytes(b"turns; committed-call-tail")),
+        repositories: Box::new([channel::RepositoryV2 {
+            name: bytes(b"app"),
+            writable: true,
+            conflicts: Box::new([]),
+        }]),
+        grants: Box::new([]),
+    };
+    assert_eq!(
+        &*emitted,
+        [
+            Request::Wait { owner: r.agent, process: r.process },
+            Request::Reap { owner: r.agent, process: r.process },
+            send(r, expected),
+            read(r)
+        ]
+    );
+    assert!(h.step(Event::Sent { owner: r.agent }).is_empty());
+    r
+}
+
+fn next_turn(h: &mut Harness, r: Names, turn: u32, spent: u64) -> Box<[Request]> {
+    h.say(r, Up::Turn { turn: channel::Turn { turn, spent, read: None, body: bytes(b"opaque-turn") } })
+}
+
+#[test]
+fn v2_turn_capacity_busy_retry_and_exact_commit_ack_resume_the_reader() {
+    let mut limits = next_limits();
+    limits.turns = 1;
+    limits.turn_queue_bytes = 16;
+    let mut h = Harness::new(&limits);
+    let r = next_live(&mut h, 31);
+    let emitted = next_turn(&mut h, r, 1, 17);
+    let [Request::Turn { run, attempt, turn }] = &*emitted else { panic!("full window pauses read: {emitted:?}") };
+    assert_eq!((*run, *attempt, turn.turn, turn.spent, &*turn.body), (r.run, r.attempt, 1, 17, &b"opaque-turn"[..]));
+    assert_eq!(h.domain.retained_turns(), 1);
+    assert!(h.step(Event::AcknowledgeTurn { run: r.run, attempt: Token::new(900), turn: 1 }).is_empty());
+    assert!(h.step(Event::AcknowledgeTurn { run: r.run, attempt: r.attempt, turn: 2 }).is_empty());
+    assert!(h.step(Event::TurnBusy { run: r.run, attempt: r.attempt, turn: 1 }).is_empty());
+    h.at(1);
+    assert_eq!(&*h.fire(), &*emitted, "busy retries the original body and identity");
+    assert_eq!(h.domain.retained_turns(), 1, "busy is not commitment");
+    assert_eq!(&*h.step(Event::AcknowledgeTurn { run: r.run, attempt: r.attempt, turn: 1 }), [read(r)]);
+    assert_eq!(h.domain.retained_turns(), 0);
+    assert!(
+        h.step(Event::AcknowledgeTurn { run: r.run, attempt: r.attempt, turn: 1 }).is_empty(),
+        "duplicate ACK is harmless"
+    );
+    assert_eq!(next_turn(&mut h, r, 2, 19).len(), 1);
+}
+
+#[test]
+fn v2_rehello_replays_turns_before_answers_and_crossed_acks_keep_the_slot() {
+    let mut h = Harness::new(&next_limits());
+    let r = next_live(&mut h, 32);
+    let emitted = next_turn(&mut h, r, 1, 13);
+    assert_eq!(emitted.len(), 2, "another read fits");
+    let emitted = h.say(r, Up::FinishV2 { turns: 1, spent: 21, finish: channel::FinishV2::Parked });
+    assert_eq!(&*emitted, [read(r)]);
+    let emitted = h.goes(r);
+    let emitted = h.git(emitted, false);
+    let [Request::AnswerV2 { run, attempt, answer }] = &*emitted else { panic!("v2 answer: {emitted:?}") };
+    assert_eq!((*run, *attempt, answer.turns, answer.spent), (r.run, r.attempt, 1, 21));
+    assert_eq!(answer.ending, host::EndingV2::Parked { work: work(&[], Some(Box::new([host::Landing::Unchanged]))) });
+    h.domain.reclaim();
+    assert_eq!(h.domain.workspaces(), 0);
+    assert_eq!(h.domain.agent().agents(), 0);
+    assert_eq!(h.domain.held(), 1);
+    assert!(h.step(Event::Lost).is_empty());
+    h.at(1);
+    assert_eq!(&*h.fire(), [Request::Dial]);
+    let replay = h.step(Event::ConnectedV2);
+    let [Request::HelloV2 { hello, .. }, Request::Turn { turn, .. }, Request::AnswerV2 { answer: replayed, .. }] =
+        &*replay
+    else {
+        panic!("hello/turn/answer order: {replay:?}")
+    };
+    assert_eq!(&*hello.hosting, [Hosted { run: r.run, attempt: r.attempt, phase: Phase::Answered }]);
+    assert_eq!((turn.turn, &*turn.body), (1, &b"opaque-turn"[..]));
+    assert_eq!(replayed, answer);
+    assert!(h.step(Event::Acknowledged { run: r.run, attempt: r.attempt }).is_empty());
+    assert_eq!(h.domain.held(), 1, "answer ACK alone cannot free retained turns");
+    assert!(
+        h.step(Event::AssignV2 { assignment: host::AssignmentV2 { assignment: assignment(32), transcript: None } })
+            .is_empty(),
+        "retry does not restart an answered attempt"
+    );
+    assert!(
+        h.step(Event::AcknowledgeTurn { run: r.run, attempt: r.attempt, turn: 1 }).is_empty(),
+        "the agent already went"
+    );
+    assert_eq!(h.domain.held(), 0);
+}
+
+#[test]
+fn v2_deadlines_and_cross_child_limits_are_checked_before_startup() {
+    let limits = next_limits();
+    assert_eq!(crate::push_deadline(&limits), Some(Duration::from_secs(260)));
+    assert_eq!(crate::declared_graces(&limits), Some(Duration::from_secs(550)));
+    let mut bad = limits;
+    bad.checkout.remote_timeout = Duration::from_nanos(u64::MAX);
+    assert!(worst_case(&bad).is_none(), "deadline arithmetic cannot wrap");
+    let mut bad = limits;
+    bad.turn_queue_bytes = 15;
+    assert!(worst_case(&bad).is_none(), "a credit needs space for a maximum turn");
+    let mut bad = limits;
+    bad.checkout.conflicts = 1;
+    assert!(worst_case(&bad).is_none(), "checkout's returned paths must fit the host and agent");
+}
+
+#[test]
+fn v2_relay_answers_match_the_stable_name_and_the_local_delivery() {
+    let mut h = Harness::new(&next_limits());
+    let r = next_live(&mut h, 33);
+    let emitted = h.say(r, Up::Call { call: Token::new(51), ask: channel::Ask::Relay { body: bytes(b"opaque-call") } });
+    let [reading, Request::RelayV2 { run, attempt, call, delivery, body }] = &*emitted else {
+        panic!("relay: {emitted:?}")
+    };
+    assert_eq!(reading, &read(r));
+    assert_eq!((*run, *attempt, *call, body.as_ref()), (r.run, r.attempt, Token::new(51), &b"opaque-call"[..]));
+    let delivery = *delivery;
+    for event in [
+        Event::RelayedV2 {
+            run: r.run,
+            attempt: Token::new(99),
+            call: Token::new(51),
+            delivery,
+            answer: bytes(b"stale"),
+        },
+        Event::RelayedV2 {
+            run: r.run,
+            attempt: r.attempt,
+            call: Token::new(52),
+            delivery,
+            answer: bytes(b"wrong-name"),
+        },
+        Event::RelayedV2 {
+            run: r.run,
+            attempt: r.attempt,
+            call: Token::new(51),
+            delivery: Token::new(999),
+            answer: bytes(b"wrong-delivery"),
+        },
+    ] {
+        assert!(h.step(event).is_empty());
+    }
+    let emitted = h.step(Event::RelayedV2 {
+        run: r.run,
+        attempt: r.attempt,
+        call: Token::new(51),
+        delivery,
+        answer: bytes(b"kept"),
+    });
+    assert_eq!(
+        &*emitted,
+        [send(r, Down::Answer { call: Token::new(51), reply: channel::Reply::Relayed { answer: bytes(b"kept") } })]
+    );
+}
+
+#[test]
+fn direct_v2_assignment_gets_a_supported_refusal_when_the_runtime_mode_is_disabled() {
+    let mut h = Harness::new(&LIMITS);
+    assert_eq!(&*h.fire(), [Request::Dial]);
+    h.step(Event::ConnectedV2);
+    let next = host::AssignmentV2 { assignment: assignment(1), transcript: None };
+    let emitted = h.step(Event::AssignV2 { assignment: next });
+    let answer = host::AnswerV2 {
+        turns: 0,
+        spent: 0,
+        ending: host::EndingV2::Refused(host::Refusal::Invalid(host::Invalid::Version)),
+    };
+    assert_eq!(&*emitted, [Request::AnswerV2 { run: Token::new(1), attempt: attempt(1), answer }]);
+    assert_eq!(h.domain.held(), 0);
+    assert_eq!(h.domain.host().hosted(), 0);
+    let mut h = Harness::new(&next_limits());
+    h.connect();
+    let next = host::AssignmentV2 { assignment: assignment(2), transcript: None };
+    let emitted = h.step(Event::AssignV2 { assignment: next });
+    assert_eq!(
+        &*emitted,
+        [Request::Answer {
+            run: Token::new(2),
+            attempt: attempt(2),
+            answer: host::Answer::Refused(host::Refusal::Invalid(host::Invalid::Charter))
+        }]
+    );
+    assert_eq!(h.domain.held(), 0);
+    assert_eq!(h.domain.host().hosted(), 0);
 }

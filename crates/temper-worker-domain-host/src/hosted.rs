@@ -145,7 +145,15 @@ pub(crate) struct Hosted {
     /// Its push in flight, if it has one: a write, so one at a time, and
     /// waited for through the stop.
     push: Option<Id<Call>>,
+    merging: bool,
+    runtime: Runtime,
     state: State,
+}
+
+#[derive(Debug)]
+enum Runtime {
+    Legacy,
+    V2 { transcript: Option<Box<[u8]>>, turns: u32, spent: u64 },
 }
 
 #[derive(Debug)]
@@ -205,24 +213,64 @@ pub(crate) fn assign(
     assignment: Assignment,
     out: &mut Queue<Request>,
 ) {
+    assign_runtime(domain, env, reply_to, assignment, Runtime::Legacy, out);
+}
+
+pub(crate) fn assign_v2(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    reply_to: ReplyTo,
+    next: crate::AssignmentV2,
+    out: &mut Queue<Request>,
+) {
+    let crate::AssignmentV2 { assignment, transcript } = next;
+    let invalid = if assignment.snapshot.is_some() {
+        Some(crate::Invalid::Version)
+    } else if match &transcript {
+        Some(bytes) => len(bytes) > env.limits.transcript_bytes,
+        None => false,
+    } {
+        Some(crate::Invalid::Transcript)
+    } else {
+        None
+    };
+    if let Some(invalid) = invalid {
+        refuse_v2(reply_to, &assignment, Refusal::Invalid(invalid), out);
+        return;
+    }
+    assign_runtime(domain, env, reply_to, assignment, Runtime::V2 { transcript, turns: 0, spent: 0 }, out);
+}
+
+fn assign_runtime(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    reply_to: ReplyTo,
+    assignment: Assignment,
+    runtime: Runtime,
+    out: &mut Queue<Request>,
+) {
     // A fresh child call always consumes its own ReplyTo. Wire retries are
     // deduplicated by the parent before it creates such a call.
     if fenced(&domain.names, &domain.hosted, assignment.run, assignment.attempt).is_some() {
-        refuse(reply_to, &assignment, Refusal::Busy, out);
+        refused(reply_to, &assignment, Refusal::Busy, &runtime, out);
         return;
     }
     let Domain { hosted, names, facts, shut, unacknowledged, .. } = domain;
     // An assignment that can never fit is invalid, room or not: busy invites a
     // retry.
-    if let Err(invalid) = assignment::check(&assignment, &env.limits) {
-        refuse(reply_to, &assignment, Refusal::Invalid(invalid), out);
+    let next = match runtime {
+        Runtime::Legacy => false,
+        Runtime::V2 { .. } => true,
+    };
+    if let Err(invalid) = assignment::check(&assignment, &env.limits, next) {
+        refused(reply_to, &assignment, Refusal::Invalid(invalid), &runtime, out);
         return;
     }
     // A slot whose run has answered is not free until the engine has the
     // answer.
     let taken = hosted.len().saturating_add(*unacknowledged);
     if *shut || taken >= env.limits.slots || names.contains_key(&assignment.run) {
-        refuse(reply_to, &assignment, Refusal::Busy, out);
+        refused(reply_to, &assignment, Refusal::Busy, &runtime, out);
         return;
     }
     let Assignment { run, attempt, workspace, save, charter, snapshot, grants } = assignment;
@@ -230,6 +278,16 @@ pub(crate) fn assign(
     let mut tags = List::with_capacity(repositories);
     for repository in &workspace.repositories {
         tags.push(repository.tag).expect("room for every repository tag");
+    }
+    let mut merging = false;
+    for repository in &workspace.repositories {
+        match repository.start {
+            crate::Start::Merge { .. } => merging = true,
+            crate::Start::Base { .. }
+            | crate::Start::Branch { .. }
+            | crate::Start::Commit { .. }
+            | crate::Start::Saved { .. } => {}
+        }
     }
     let held = Queue::with_capacity(env.limits.held);
     let entry = Hosted {
@@ -243,6 +301,8 @@ pub(crate) fn assign(
         landed: Map::with_capacity(repositories),
         relays: Set::with_capacity(env.limits.run_calls),
         push: None,
+        merging,
+        runtime,
         state: State::Preparing { reply_to, charter, snapshot, held },
     };
     let id = hosted.insert(entry).expect("checked for room above");
@@ -415,7 +475,18 @@ pub(crate) fn prepared(domain: &mut Domain, owner: Token, workspace: Token, out:
             for grant in &entry.grants {
                 grants.push(*grant).expect("room for every grant");
             }
-            out.push(Request::Start { owner, workspace, charter, snapshot, grants: grants.into_boxed() });
+            match &mut entry.runtime {
+                Runtime::Legacy => {
+                    out.push(Request::Start { owner, workspace, charter, snapshot, grants: grants.into_boxed() });
+                }
+                Runtime::V2 { transcript, .. } => out.push(Request::StartV2 {
+                    owner,
+                    workspace,
+                    charter,
+                    transcript: transcript.take(),
+                    grants: grants.into_boxed(),
+                }),
+            }
             entry.refreshed = false;
             State::Starting { reply_to, workspace, held }
         }
@@ -717,14 +788,19 @@ pub(crate) fn pushed(domain: &mut Domain, owner: Token, push: Box<[Landing]>, ou
                     )
                     .expect("room for every repository");
             }
-            Landing::Moved | Landing::Failed | Landing::Refused | Landing::Explained { .. } | Landing::Unchanged => {}
+            Landing::Conflicted { .. }
+            | Landing::Moved
+            | Landing::Failed
+            | Landing::Refused
+            | Landing::Explained { .. }
+            | Landing::Unchanged => {}
         }
     }
     // Live or stopping, the run is told how it went; an agent that has gone
     // drops it.
     match state {
         call::State::Pushing { agent, call } => {
-            out.push(Request::Reply { agent, call, reply: Reply::Pushed(told(&push)) });
+            out.push(Request::Reply { agent, call, reply: Reply::Pushed(told(push)) });
         }
         call::State::Relayed { .. } | call::State::Settling { .. } | call::State::Closed => {
             unreachable!("a push ends once, and only a push's call")
@@ -879,7 +955,11 @@ fn settle(
         Ending::Ended { .. } => !entry.landed.is_empty(),
         Ending::Parked { .. } | Ending::Failed { .. } | Ending::Stopped { .. } => false,
     };
-    let save = if landed { None } else { entry.save.take() };
+    let merging = match entry.runtime {
+        Runtime::Legacy => false,
+        Runtime::V2 { .. } => entry.merging,
+    };
+    let save = if landed || merging { None } else { entry.save.take() };
     match save {
         Some(branch) => {
             out.push(Request::Save { owner: id.token(), workspace, branch });
@@ -933,7 +1013,12 @@ fn answer(
             Answer::Failed { failure, detail, work }
         }
     };
-    out.push(Request::Answer { to: reply_to, run, attempt, answer });
+    match entry.runtime {
+        Runtime::Legacy => out.push(Request::Answer { to: reply_to, run, attempt, answer }),
+        Runtime::V2 { turns, spent, .. } => {
+            out.push(Request::AnswerV2 { to: reply_to, run, attempt, answer: next_answer(turns, spent, answer) });
+        }
+    }
     State::Closed
 }
 
@@ -964,9 +1049,29 @@ fn serve(
     limits: &Limits,
     out: &mut Queue<Request>,
 ) {
+    if !ask_mode(&entry.runtime, &ask) {
+        out.push(Request::Reply { agent, call, reply: Reply::Unavailable });
+        return;
+    }
+    match entry.runtime {
+        Runtime::Legacy => {}
+        Runtime::V2 { .. } => {
+            for pending in &entry.relays {
+                let pending = calls.get(*pending).expect("the run owns every relay");
+                let name = match pending.state {
+                    call::State::Relayed { call, .. } | call::State::Settling { call } => call,
+                    call::State::Pushing { .. } | call::State::Closed => unreachable!("the run keeps relay waits only"),
+                };
+                if name == call {
+                    out.push(Request::Reply { agent, call, reply: Reply::Busy });
+                    return;
+                }
+            }
+        }
+    }
     let in_flight = entry.relays.len().saturating_add(u32::from(entry.push.is_some()));
     let push = match &ask {
-        Ask::Push { .. } => true,
+        Ask::Push { .. } | Ask::PushV2 { .. } => true,
         Ask::Relay { .. } => false,
     };
     // A push is a write: one at a time.
@@ -986,10 +1091,25 @@ fn serve(
             entry.push = Some(call_id);
             out.push(Request::Push { owner: call_id.token(), workspace, message });
         }
+        Ask::PushV2 { title, body } => {
+            entry.push = Some(call_id);
+            out.push(Request::PushV2 { owner: call_id.token(), workspace, title, body });
+        }
         Ask::Relay { body } => {
             let added = entry.relays.insert(call_id).expect("checked the run's calls for room above");
             assert!(added, "a call is new to its run");
-            out.push(Request::Relay { run: entry.run, attempt: entry.attempt, call: call_id.token(), body });
+            match entry.runtime {
+                Runtime::Legacy => {
+                    out.push(Request::Relay { run: entry.run, attempt: entry.attempt, call: call_id.token(), body });
+                }
+                Runtime::V2 { .. } => out.push(Request::RelayV2 {
+                    run: entry.run,
+                    attempt: entry.attempt,
+                    call,
+                    delivery: call_id.token(),
+                    body,
+                }),
+            }
         }
     }
 }
@@ -1043,6 +1163,19 @@ fn leave(relays: &Set<Id<Call>>, calls: &mut Slab<Call>, out: &mut Queue<Request
     }
 }
 
+fn ask_mode(runtime: &Runtime, ask: &Ask) -> bool {
+    match runtime {
+        Runtime::Legacy => match ask {
+            Ask::PushV2 { .. } => false,
+            Ask::Push { .. } | Ask::Relay { .. } => true,
+        },
+        Runtime::V2 { .. } => match ask {
+            Ask::Push { .. } => false,
+            Ask::PushV2 { .. } | Ask::Relay { .. } => true,
+        },
+    }
+}
+
 /// How the run ends, as it says it finishes; a cancel it reports is
 /// `cancelled`. Saying more than the limits allow breaks the rules.
 fn said(finish: Finish, cancelled: Failure, limits: &Limits) -> Ending {
@@ -1071,10 +1204,14 @@ fn explained(ending: Ending, detail: Box<[u8]>) -> Ending {
 /// What the run is told of a push: done only if every repository with a
 /// change landed it; moved if any branch moved; failed if the forge refused
 /// one, or one failed.
-fn told(push: &[Landing]) -> Push {
-    let (mut landed, mut moved, mut failed) = (false, false, None);
-    for (index, landing) in push.iter().enumerate() {
-        let failure = match landing {
+fn told(push: Box<[Landing]>) -> Push {
+    let mut landed = false;
+    let mut moved = false;
+    let mut first = None;
+    let mut index = 0_u32;
+    for landing in push {
+        let failed = match landing {
+            Landing::Conflicted { files } => Some(Push::Conflicted { repository: index, files }),
             Landing::Landed { .. } => {
                 landed = true;
                 None
@@ -1083,22 +1220,35 @@ fn told(push: &[Landing]) -> Push {
                 moved = true;
                 None
             }
-            Landing::Failed => Some(crate::PushFailure::new(crate::PushReason::Unknown)),
-            Landing::Refused => Some(crate::PushFailure::new(crate::PushReason::Refused)),
-            Landing::Explained { failure } => Some(*failure),
+            Landing::Failed => Some(Push::Failed {
+                failure: crate::PushFailure {
+                    repository: Some(index),
+                    reason: crate::PushReason::Unknown,
+                    diagnostic: crate::PushDiagnostic::empty(),
+                },
+            }),
+            Landing::Refused => Some(Push::Failed {
+                failure: crate::PushFailure {
+                    repository: Some(index),
+                    reason: crate::PushReason::Refused,
+                    diagnostic: crate::PushDiagnostic::empty(),
+                },
+            }),
+            Landing::Explained { mut failure } => {
+                failure.repository = Some(index);
+                Some(Push::Failed { failure })
+            }
             Landing::Unchanged => None,
         };
-        if failed.is_none()
-            && let Some(mut failure) = failure
-        {
-            failure.repository = Some(u32::try_from(index).expect("repository counts fit in a u32"));
-            failed = Some(failure);
+        if first.is_none() {
+            first = failed;
         }
+        index = index.checked_add(1).expect("bounded repository count");
     }
     if moved {
         Push::Moved
-    } else if let Some(failure) = failed {
-        Push::Failed { failure }
+    } else if let Some(failed) = first {
+        failed
     } else if landed {
         Push::Done
     } else {
@@ -1155,4 +1305,108 @@ pub(crate) fn grant(domain: &mut Domain, run: Token, attempt: Token, grant: Gran
         | State::Saving { .. }
         | State::Closed => {}
     }
+}
+
+fn next_answer(turns: u32, spent: u64, answer: Answer) -> crate::AnswerV2 {
+    let ending = match answer {
+        Answer::Refused(refusal) => crate::EndingV2::Refused(refusal),
+        Answer::Ended { outcome, work } => crate::EndingV2::Ended { outcome, work },
+        Answer::Parked { snapshot: _, work } => crate::EndingV2::Parked { work },
+        Answer::Failed { failure, detail, work } => crate::EndingV2::Failed { failure, detail, work },
+    };
+    crate::AnswerV2 { turns, spent, ending }
+}
+
+fn refuse_v2(reply_to: ReplyTo, assignment: &Assignment, refusal: Refusal, out: &mut Queue<Request>) {
+    out.push(Request::AnswerV2 {
+        to: reply_to,
+        run: assignment.run,
+        attempt: assignment.attempt,
+        answer: next_answer(0, 0, Answer::Refused(refusal)),
+    });
+}
+
+fn refused(reply_to: ReplyTo, assignment: &Assignment, refusal: Refusal, runtime: &Runtime, out: &mut Queue<Request>) {
+    match runtime {
+        Runtime::Legacy => refuse(reply_to, assignment, refusal, out),
+        Runtime::V2 { .. } => refuse_v2(reply_to, assignment, refusal, out),
+    }
+}
+
+pub(crate) fn turned(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    owner: Token,
+    turn: crate::Turn,
+    out: &mut Queue<Request>,
+) {
+    let id = Id::<Hosted>::from_token(owner);
+    let Some(entry) = domain.hosted.get_mut(id) else {
+        return;
+    };
+    let agent = match entry.state {
+        State::Active { agent, .. } | State::Waiting { agent, .. } | State::Stopping { agent, gone: false, .. } => {
+            agent
+        }
+        State::Preparing { .. }
+        | State::Cancelling { .. }
+        | State::Starting { .. }
+        | State::Unwanted { .. }
+        | State::Stopping { gone: true, .. }
+        | State::Saving { .. }
+        | State::Closed => return,
+    };
+    let valid = match &mut entry.runtime {
+        Runtime::Legacy => false,
+        Runtime::V2 { turns, spent, .. } => {
+            if turns.checked_add(1) != Some(turn.turn) || turn.spent < *spent || len(&turn.body) > env.limits.turn_bytes
+            {
+                false
+            } else {
+                *turns = turn.turn;
+                *spent = turn.spent;
+                true
+            }
+        }
+    };
+    if valid {
+        out.push(Request::Turn { agent, run: entry.run, attempt: entry.attempt, turn });
+    } else {
+        faulted(domain, env, owner, AgentFailure::Rules, out);
+    }
+}
+
+pub(crate) fn finished_v2(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    owner: Token,
+    turns: u32,
+    spent: u64,
+    finish: crate::FinishV2,
+    out: &mut Queue<Request>,
+) {
+    let Some(entry) = domain.hosted.get_mut(Id::<Hosted>::from_token(owner)) else {
+        return;
+    };
+    let valid = match &mut entry.runtime {
+        Runtime::Legacy => false,
+        Runtime::V2 { turns: taken, spent: total, .. } => {
+            if turns != *taken || spent < *total {
+                false
+            } else {
+                *total = spent;
+                true
+            }
+        }
+    };
+    if !valid {
+        faulted(domain, env, owner, AgentFailure::Rules, out);
+        return;
+    }
+    let finish = match finish {
+        crate::FinishV2::Ended { outcome } => Finish::Ended { outcome },
+        crate::FinishV2::Parked => Finish::Parked { snapshot: None },
+        crate::FinishV2::Failed { failure } => Finish::Failed { failure },
+    };
+    finished(domain, env, owner, finish, out);
 }

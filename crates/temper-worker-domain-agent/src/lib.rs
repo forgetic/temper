@@ -45,7 +45,7 @@ mod push;
 #[cfg(test)]
 mod tests;
 
-pub use boundary::{Bounce, End, Event, Fault, Invalid, Request, Signal, Spawn};
+pub use boundary::{Bounce, End, Event, Fault, Invalid, Request, Signal, Spawn, SpawnV2};
 pub use domain::{Domain, MAX_OUT, fire, step};
 pub use facts::Fact;
 pub use limits::{Limits, worst_case};

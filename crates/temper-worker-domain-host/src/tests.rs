@@ -22,6 +22,10 @@ const LIMITS: Limits = Limits {
     name_bytes: 16,
     charter_bytes: 64,
     snapshot_bytes: 32,
+    transcript_bytes: 0,
+    turn_bytes: 0,
+    conflicts: 0,
+    path_bytes: 0,
     outcome_bytes: 32,
     detail_bytes: 8,
     held: 2,
@@ -612,11 +616,11 @@ fn a_run_that_says_more_than_the_limits_allow_has_broken_the_rules() {
         let hosted = h.live(1);
         assert_eq!(&*h.finish(hosted, finish), [stop(hosted)]);
         saving(&mut h, hosted);
-        let saved = Event::Saved { owner: hosted.owner, save: Box::new([Landing::Unchanged; 2]) };
+        let saved = Event::Saved { owner: hosted.owner, save: Box::new([Landing::Unchanged, Landing::Unchanged]) };
         let rules = failed(
             Failure::Agent(AgentFailure::Rules),
             b"",
-            Work { landed: Box::new([]), saved: Some(Box::new([Landing::Unchanged; 2])) },
+            Work { landed: Box::new([]), saved: Some(Box::new([Landing::Unchanged, Landing::Unchanged])) },
         );
         assert_eq!(&*h.step(saved), [release(hosted), answer(hosted, rules)]);
     }
@@ -1060,7 +1064,11 @@ fn every_slot_comes_back_once_every_run_has_answered() {
     saving(&mut h, first);
     saving(&mut h, second);
     for hosted in [first, second] {
-        assert_eq!(h.step(Event::Saved { owner: hosted.owner, save: Box::new([Landing::Unchanged; 2]) }).len(), 2);
+        assert_eq!(
+            h.step(Event::Saved { owner: hosted.owner, save: Box::new([Landing::Unchanged, Landing::Unchanged]) })
+                .len(),
+            2
+        );
     }
     h.domain.reclaim();
     assert_eq!((h.domain.hosted(), h.domain.calls()), (0, 0));
@@ -1304,4 +1312,176 @@ fn push_feedback_keeps_the_first_failed_repository_and_its_diagnostics() {
             [reply(hosted, 7, Reply::Pushed(expected))]
         );
     }
+}
+
+fn live_v2(h: &mut Harness, merging: bool) -> Names {
+    let mut assignment = assignment(1);
+    if merging {
+        assignment.workspace.repositories.get_mut(0).expect("repository").start =
+            Start::Merge { branch: bytes(b"topic"), base: [5; 32] };
+    }
+    let a = Names {
+        run: assignment.run,
+        attempt: assignment.attempt,
+        owner: Token::new(0),
+        workspace: Token::new(201),
+        agent: Token::new(202),
+    };
+    let next = crate::AssignmentV2 { assignment, transcript: Some(bytes(b"turns+calltail")) };
+    let emitted = h.step(Event::AssignV2 { reply_to: ReplyTo::new(a.run), assignment: next });
+    let [Request::Prepare { owner, .. }] = &*emitted else { panic!("prepare: {emitted:?}") };
+    let a = Names { owner: *owner, ..a };
+    let emitted = h.step(Event::Prepared { owner: a.owner, workspace: a.workspace });
+    let [Request::StartV2 { transcript, .. }] = &*emitted else { panic!("v2 start: {emitted:?}") };
+    assert_eq!(transcript.as_deref(), Some(&b"turns+calltail"[..]));
+    assert!(h.step(Event::Started { owner: a.owner, agent: a.agent }).is_empty());
+    a
+}
+
+#[test]
+fn v2_turns_and_park_use_accounting_without_a_snapshot() {
+    let mut h = Harness::new(Limits { transcript_bytes: 32, turn_bytes: 16, ..LIMITS });
+    let a = live_v2(&mut h, false);
+    let turn = crate::Turn { turn: 1, spent: 17, read: Some(Token::new(19)), body: bytes(b"opaque") };
+    assert_eq!(
+        &*h.step(Event::Turn { owner: a.owner, turn }),
+        [Request::Turn {
+            agent: a.agent,
+            run: a.run,
+            attempt: a.attempt,
+            turn: crate::Turn { turn: 1, spent: 17, read: Some(Token::new(19)), body: bytes(b"opaque") }
+        }]
+    );
+    assert_eq!(
+        &*h.step(Event::FinishedV2 { owner: a.owner, turns: 1, spent: 23, finish: crate::FinishV2::Parked }),
+        [Request::Stop { agent: a.agent }]
+    );
+    let emitted = h.step(Event::Gone { owner: a.owner, detail: bytes(b"exit") });
+    let [Request::Save { owner, workspace, branch }] = &*emitted else { panic!("save: {emitted:?}") };
+    assert_eq!((*owner, *workspace, branch.as_ref()), (a.owner, a.workspace, &b"saved"[..]));
+    let emitted = h.step(Event::Saved { owner: a.owner, save: Box::new([Landing::Unchanged, Landing::Unchanged]) });
+    let [Request::Release { .. }, Request::AnswerV2 { answer, .. }] = &*emitted else { panic!("answer: {emitted:?}") };
+    assert_eq!((answer.turns, answer.spent), (1, 23));
+    let crate::EndingV2::Parked { .. } = &answer.ending else {
+        panic!("parked ending");
+    };
+}
+
+#[test]
+fn v2_merge_park_does_not_save_an_unfinished_merge() {
+    let mut h = Harness::new(Limits { transcript_bytes: 32, turn_bytes: 16, conflicts: 2, path_bytes: 32, ..LIMITS });
+    let a = live_v2(&mut h, true);
+    h.step(Event::FinishedV2 { owner: a.owner, turns: 0, spent: 3, finish: crate::FinishV2::Parked });
+    let emitted = h.step(Event::Gone { owner: a.owner, detail: bytes(b"exit") });
+    let [Request::Release { .. }, Request::AnswerV2 { answer, .. }] = &*emitted else {
+        panic!("release/answer: {emitted:?}")
+    };
+    let crate::EndingV2::Parked { work } = &answer.ending else {
+        panic!("parked ending");
+    };
+    assert!(work.saved.is_none());
+}
+
+#[test]
+fn v2_push_keeps_title_and_body_and_relays_keep_the_agent_call_name() {
+    let mut h = Harness::new(Limits { transcript_bytes: 32, turn_bytes: 16, ..LIMITS });
+    let a = live_v2(&mut h, false);
+    let emitted = h.call(a, 37, Ask::PushV2 { title: bytes(b"title"), body: bytes(b"longer body") });
+    let [Request::PushV2 { title, body, .. }] = &*emitted else { panic!("push: {emitted:?}") };
+    assert_eq!((title.as_ref(), body.as_ref()), (&b"title"[..], &b"longer body"[..]));
+    let emitted = h.call(a, 51, Ask::Relay { body: bytes(b"call") });
+    let [Request::RelayV2 { call, delivery, .. }] = &*emitted else { panic!("relay: {emitted:?}") };
+    assert_eq!(*call, Token::new(51));
+    let old = *delivery;
+    let emitted = h.step(Event::Withdrawn { owner: a.owner, call: Token::new(51) });
+    assert_eq!(
+        &*emitted,
+        [
+            Request::Reply { agent: a.agent, call: Token::new(51), reply: Reply::Withdrawn },
+            Request::CancelRelay { call: old }
+        ]
+    );
+    assert_eq!(
+        &*h.call(a, 51, Ask::Relay { body: bytes(b"retry") }),
+        [Request::Reply { agent: a.agent, call: Token::new(51), reply: Reply::Busy }]
+    );
+    h.step(Event::RelayCancelled { call: old });
+    h.domain.reclaim();
+    let emitted = h.call(a, 51, Ask::Relay { body: bytes(b"retry") });
+    let [Request::RelayV2 { call, delivery, .. }] = &*emitted else { panic!("retry: {emitted:?}") };
+    assert_eq!(*call, Token::new(51));
+    assert_ne!(*delivery, old);
+}
+
+#[test]
+fn v2_invalid_transcripts_turn_order_and_finish_accounting_are_refused() {
+    let mut h = Harness::new(Limits { transcript_bytes: 4, turn_bytes: 16, ..LIMITS });
+    let assignment = assignment(1);
+    let run = assignment.run;
+    let emitted = h.step(Event::AssignV2 {
+        reply_to: ReplyTo::new(run),
+        assignment: crate::AssignmentV2 { assignment, transcript: Some(bytes(b"too long")) },
+    });
+    let [
+        Request::AnswerV2 {
+            answer: crate::AnswerV2 { ending: crate::EndingV2::Refused(Refusal::Invalid(Invalid::Transcript)), .. },
+            ..
+        },
+    ] = &*emitted
+    else {
+        panic!("invalid transcript: {emitted:?}");
+    };
+    let mut h = Harness::new(Limits { transcript_bytes: 32, turn_bytes: 16, ..LIMITS });
+    let a = live_v2(&mut h, false);
+    let emitted = h
+        .step(Event::Turn { owner: a.owner, turn: crate::Turn { turn: 2, spent: 1, read: None, body: bytes(b"gap") } });
+    assert_eq!(&*emitted, [Request::Stop { agent: a.agent }]);
+}
+
+#[test]
+fn v1_assignments_cannot_enter_the_merge_or_expected_head_lifecycle() {
+    let mut h = Harness::new(Limits { conflicts: 1, path_bytes: 32, ..LIMITS });
+    let mut merge = assignment(11);
+    merge.workspace.repositories.get_mut(0).expect("repository").start =
+        Start::Merge { branch: bytes(b"topic"), base: [2; 32] };
+    let mut expected = assignment(12);
+    expected.workspace.repositories.get_mut(0).expect("repository").access =
+        Access::WritableV2 { push: bytes(b"topic"), expected: Some([3; 32]) };
+    for assignment in [merge, expected] {
+        let run = assignment.run;
+        let emitted = h.step(Event::Assign { reply_to: ReplyTo::new(run), assignment });
+        let [Request::Answer { answer: Answer::Refused(Refusal::Invalid(Invalid::Version)), .. }] = &*emitted else {
+            panic!("v1 mode guard: {emitted:?}")
+        };
+    }
+}
+
+#[test]
+fn v2_finish_cannot_claim_an_unseen_turn_or_erase_spend() {
+    for (turns, spent) in [(2, 10), (1, 9)] {
+        let mut h = Harness::new(Limits { transcript_bytes: 32, turn_bytes: 16, ..LIMITS });
+        let a = live_v2(&mut h, false);
+        h.step(Event::Turn {
+            owner: a.owner,
+            turn: crate::Turn { turn: 1, spent: 10, read: None, body: bytes(b"kept") },
+        });
+        let emitted = h.step(Event::FinishedV2 { owner: a.owner, turns, spent, finish: crate::FinishV2::Parked });
+        assert_eq!(&*emitted, [Request::Stop { agent: a.agent }]);
+    }
+}
+
+#[test]
+fn a_direct_push_call_cannot_cross_the_hosted_runtime_mode() {
+    let mut legacy = Harness::new(LIMITS);
+    let a = legacy.live(1);
+    assert_eq!(
+        &*legacy.call(a, 51, Ask::PushV2 { title: bytes(b"title"), body: bytes(b"body") }),
+        [Request::Reply { agent: a.agent, call: Token::new(51), reply: Reply::Unavailable }]
+    );
+    let mut next = Harness::new(Limits { transcript_bytes: 32, turn_bytes: 16, ..LIMITS });
+    let a = live_v2(&mut next, false);
+    assert_eq!(
+        &*next.call(a, 51, Ask::Push { message: bytes(b"legacy") }),
+        [Request::Reply { agent: a.agent, call: Token::new(51), reply: Reply::Unavailable }]
+    );
 }

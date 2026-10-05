@@ -48,9 +48,9 @@ mod push;
 mod tests;
 
 pub use boundary::{
-    Access, AgentFailure, Answer, Ask, Assignment, Bounce, Event, Failure, Finish, Grant, Hosting, Invalid, Landed,
-    Landing, Missing, Phase, Preparation, Push, Reason, Refusal, Reply, Repository, Request, RunFailure, Start, Work,
-    Workspace,
+    Access, AgentFailure, Answer, AnswerV2, Ask, Assignment, AssignmentV2, Bounce, EndingV2, Event, Failure, Finish,
+    FinishV2, Grant, Hosting, Invalid, Landed, Landing, Missing, Phase, Preparation, Push, Reason, Refusal, Reply,
+    Repository, Request, RunFailure, Start, Turn, Work, Workspace,
 };
 pub use domain::{Domain, max_out, resume, step};
 pub use facts::Fact;

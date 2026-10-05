@@ -129,6 +129,9 @@ impl Measured {
         let measured = self.meter.end();
         while let Some(request) = self.out.pop() {
             match request {
+                Request::HelloV2 { .. } | Request::Turn { .. } | Request::AnswerV2 { .. } | Request::RelayV2 { .. } => {
+                    unreachable!("this memory script runs version one")
+                }
                 Request::Dial => self.asked.push(Asked::Dial),
                 Request::Hello { hello } => {
                     let answered = hello.hosting.iter().filter(|hosted| hosted.phase == Phase::Answered).count();

@@ -37,7 +37,11 @@ use crate::workspace::Workspace;
 #[must_use]
 pub const fn max_out(limits: &Limits) -> u32 {
     let bounces = limits.host.slots.saturating_mul(limits.host.held.saturating_add(limits.agent.events));
-    limits::routed(limits).saturating_add(limits.host.slots).saturating_add(limits.stalled).saturating_add(bounces)
+    limits::routed(limits)
+        .saturating_add(limits.host.slots)
+        .saturating_add(limits.stalled)
+        .saturating_add(bounces)
+        .saturating_add(limits.host.slots.saturating_mul(limits.turns))
 }
 
 /// The worker domain's state: its child domains', the engine link, what it
@@ -129,14 +133,20 @@ impl Domain {
         self.link.held()
     }
 
+    /// Turns retained until commitment acknowledgement.
+    #[must_use]
+    pub fn retained_turns(&self) -> u32 {
+        self.link.retained_turns()
+    }
+
     /// Relays and bounces waiting for a channel to the engine.
     #[must_use]
     pub fn stalled(&self) -> u32 {
         self.link.stalled()
     }
 
-    /// Answers given up by a worker shutting down with the engine out of
-    /// reach past the grace, since the domain was made.
+    /// Turns and answers given up by a worker shutting down with the engine
+    /// out of reach past the grace, since the domain was made.
     #[must_use]
     pub const fn abandoned(&self) -> u64 {
         self.link.abandoned()
@@ -240,7 +250,7 @@ pub(crate) fn tell(domain: &mut Domain, client: Token, fact: Box<[u8]>) {
 
 /// Handles one event, emitting at most [`max_out`] requests.
 pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
-    route::event(domain, env, event);
+    route::event(domain, env, event, out);
     settle(domain, env, out);
 }
 
@@ -257,7 +267,7 @@ pub fn fire(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
     let agent_due = domain.agent.is_due(env.now);
     if link_due && (!agent_due || domain.link.next_deadline() <= domain.agent.next_deadline()) {
         match domain.link.fire(env, out) {
-            Some(Fired::Dialled) | None => {}
+            Some(Fired::Dialled | Fired::Turn) | None => {}
             Some(Fired::Grace) => {
                 keep(domain, Fact::Grace);
                 let cancel = host::Event::CancelAll { reason: host::Reason::Contact };

@@ -55,6 +55,10 @@ impl World {
             name: repository.name.to_vec(),
             remote: repository.remote.to_vec(),
             push: match &repository.access {
+                temper_worker_domain::host::Access::WritableV2 { .. } => {
+                    unreachable!("this system world runs version one")
+                }
+
                 host::Access::Writable { push } => Some(push.to_vec()),
                 host::Access::ReadOnly => None,
             },
@@ -92,6 +96,11 @@ impl World {
     pub(super) fn worker_request(&mut self, request: worker::Request) {
         self.log(&format!("worker -> {}", describe_request(&request)));
         match request {
+            temper_worker_domain::Request::HelloV2 { .. }
+            | temper_worker_domain::Request::Turn { .. }
+            | temper_worker_domain::Request::AnswerV2 { .. }
+            | temper_worker_domain::Request::RelayV2 { .. } => unreachable!("this system world runs version one"),
+
             worker::Request::Dial => {
                 assert!(self.channel.is_none(), "the worker dials only while it has no channel");
                 // The channel opens: the engine's protocol layer names it.
@@ -231,6 +240,10 @@ impl World {
             return;
         }
         let message = match message {
+            temper_worker_domain_agent::channel::Down::StartV2 { .. } => {
+                unreachable!("this system world runs version one")
+            }
+
             Down::Start { charter, snapshot, repositories, grants } => {
                 assert!(process.link.is_none(), "the start comes down first, once");
                 assert!(snapshot.is_none(), "the engine never parks a run of the agent's, so it never resumes one");
@@ -322,7 +335,7 @@ impl World {
     fn push_answered(&mut self, id: u64, call: Token, reply: &Reply) {
         self.pushes.end((id, call));
         let push = match reply {
-            Reply::Pushed(push) => channel::push(*push),
+            Reply::Pushed(push) => channel::push(push),
             Reply::Unavailable => run::Push::Failed { failure: run::PushFailure::new(run::PushReason::Unavailable) },
             Reply::Busy => run::Push::Failed { failure: run::PushFailure::new(run::PushReason::Busy) },
             Reply::TooLarge => run::Push::Failed { failure: run::PushFailure::new(run::PushReason::TooLarge) },
@@ -603,6 +616,11 @@ impl World {
 /// Whether `message` says how the run finishes.
 fn is_finish(message: &Up) -> bool {
     match message {
+        temper_worker_domain_agent::channel::Up::Turn { .. }
+        | temper_worker_domain_agent::channel::Up::FinishV2 { .. } => {
+            unreachable!("this system world runs version one")
+        }
+
         Up::Finish { .. } => true,
         Up::Call { .. }
         | Up::Withdraw { .. }
@@ -618,6 +636,12 @@ fn is_finish(message: &Up) -> bool {
 /// The worker's `event`, for the trace.
 pub(super) fn describe_event(event: &worker::Event) -> String {
     match event {
+        temper_worker_domain::Event::ConnectedV2
+        | temper_worker_domain::Event::RelayedV2 { .. }
+        | temper_worker_domain::Event::AssignV2 { .. }
+        | temper_worker_domain::Event::AcknowledgeTurn { .. }
+        | temper_worker_domain::Event::TurnBusy { .. } => unreachable!("this system world runs version one"),
+
         worker::Event::Connected => "connected".to_owned(),
         worker::Event::Lost => "lost".to_owned(),
         worker::Event::Assign { assignment } => format!("assign {}", assignment.attempt.raw()),
@@ -644,6 +668,11 @@ pub(super) fn describe_event(event: &worker::Event) -> String {
 
 fn describe_request(request: &worker::Request) -> String {
     match request {
+        temper_worker_domain::Request::HelloV2 { .. }
+        | temper_worker_domain::Request::Turn { .. }
+        | temper_worker_domain::Request::AnswerV2 { .. }
+        | temper_worker_domain::Request::RelayV2 { .. } => unreachable!("this system world runs version one"),
+
         worker::Request::Dial => "dial".to_owned(),
         worker::Request::Hello { hello } => format!("hello hosting {}", hello.hosting.len()),
         worker::Request::Answer { attempt, answer, .. } => {
@@ -667,6 +696,8 @@ fn describe_request(request: &worker::Request) -> String {
 
 fn describe_down(message: &Down) -> String {
     match message {
+        temper_worker_domain_agent::channel::Down::StartV2 { .. } => unreachable!("this system world runs version one"),
+
         Down::Start { charter, .. } => format!("start, {} bytes", charter.len()),
         Down::Event { name: _, event } => format!("event, {} bytes", event.len()),
         Down::Answer { call, reply } => format!("answer {} {reply:?}", call.raw()),
@@ -677,6 +708,11 @@ fn describe_down(message: &Down) -> String {
 
 fn describe_up(message: &Up) -> String {
     match message {
+        temper_worker_domain_agent::channel::Up::Turn { .. }
+        | temper_worker_domain_agent::channel::Up::FinishV2 { .. } => {
+            unreachable!("this system world runs version one")
+        }
+
         Up::Call { call, .. } => format!("call {}", call.raw()),
         Up::Withdraw { call } => format!("withdraw {}", call.raw()),
         Up::Fact { fact } => format!("fact {}", String::from_utf8_lossy(fact)),

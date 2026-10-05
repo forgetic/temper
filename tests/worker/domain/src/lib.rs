@@ -103,6 +103,7 @@
 //! or its deliveries past their bounds, or does not settle in the
 //! iterations it is given, fails with its seed.
 
+pub mod next;
 pub mod protocol;
 pub mod referee;
 pub mod translate;

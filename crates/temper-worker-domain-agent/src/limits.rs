@@ -1,3 +1,5 @@
+use alloc::boxed::Box;
+
 use skein_lib::{Deadlines, Duration, Queue, Set, Slab, Token};
 
 use crate::agent::{Agent, Alarm};
@@ -20,6 +22,11 @@ pub struct Limits {
     pub charter_bytes: u64,
     /// The most bytes of a snapshot: a spawn's, or a parked run's.
     pub snapshot_bytes: u64,
+    pub transcript_bytes: u64,
+    pub turn_bytes: u64,
+    /// Conflict paths per repository and bytes in one relative path.
+    pub conflicts: u32,
+    pub path_bytes: u32,
     /// The most bytes of an inbound event. A larger one is bounced.
     pub event_bytes: u64,
     /// Inbound events queued or awaiting the run's named acknowledgement.
@@ -80,10 +87,22 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         u64::try_from(size_of::<crate::channel::Repository>()).ok()?.checked_add(u64::from(limits.name_bytes))?,
     )?;
     let grants = u64::from(limits.accounts).checked_mul(u64::try_from(size_of::<crate::channel::Grant>()).ok()?)?;
-    let spawning =
-        limits.charter_bytes.checked_add(limits.snapshot_bytes)?.checked_add(descriptors)?.checked_add(grants)?;
+    let spawning = limits
+        .charter_bytes
+        .checked_add(limits.snapshot_bytes.max(limits.transcript_bytes))?
+        .checked_add(descriptors)?
+        .checked_add(grants)?
+        .checked_add(u64::from(limits.repositories).checked_mul(
+            u64::try_from(size_of::<crate::channel::RepositoryV2>()).ok()?.checked_add(
+                u64::from(limits.conflicts).checked_mul(
+                    u64::try_from(size_of::<Box<[u8]>>()).ok()?.checked_add(u64::from(limits.path_bytes))?,
+                )?,
+            )?,
+        )?)?;
     let events = u64::from(limits.events).checked_mul(limits.event_bytes)?;
-    let answers = u64::from(limits.calls).checked_mul(limits.answer_bytes)?;
+    let path_bytes = u64::from(limits.conflicts)
+        .checked_mul(u64::try_from(size_of::<Box<[u8]>>()).ok()?.checked_add(u64::from(limits.path_bytes))?)?;
+    let answers = u64::from(limits.calls).checked_mul(limits.answer_bytes.max(path_bytes))?;
     let names = Set::<Token>::worst_case(limits.calls)?.checked_mul(3)?;
     let busy = Queue::<Token>::worst_case(BUSY)?;
     let outbox = Queue::<Down>::worst_case(outbox(limits)?)?;

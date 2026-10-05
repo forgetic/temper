@@ -494,6 +494,25 @@ world's, not either suite's. The suites are told apart by binary name.
 Each fuzzy file is a binary of its own, so a memory test's counting
 allocator never runs under a sweep.
 
+### 6.2 Worker runtime v2 extension
+
+`tests/worker/domain/src/next.rs` drives the real worker root and its three
+children against scripted engine and process records and deterministic git
+terminals. The existing v1 system-world scripts and random draws are
+unchanged. Its independent boundary referee checks complete turn replay,
+exact names and cumulative spend, read credit, identical answers, separate
+push title/body, merge paths and expected heads, and release at iteration
+reclaim points. Focused stories cover busy backoff, reconnects, crossed
+acknowledgements, ordinary saved work and snapshot-free merge parking.
+Replay compares digests of the full boundary records and facts; dropping
+facts leaves every boundary record unchanged. Referee tests inject a
+changed duplicate body and an unseen turn prefix and require rejection.
+Counted memory in the root and both changed child worlds exercises
+saturated turn windows, transcripts and conflict paths; a small
+deterministic sweep varies body lengths and one-to-three count and
+byte windows. This runtime extension uses the existing worlds' shared
+suite headroom (next-domain/README.md, 5.5); legacy focused coverage stays.
+
 ## 7. Layout
 
 ```

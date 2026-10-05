@@ -22,6 +22,10 @@ const LIMITS: Limits = Limits {
     agents: 2,
     charter_bytes: 1024,
     snapshot_bytes: 512,
+    transcript_bytes: 0,
+    turn_bytes: 0,
+    conflicts: 0,
+    path_bytes: 0,
     event_bytes: 256,
     events: 2,
     calls: 2,
@@ -54,6 +58,7 @@ enum Asked {
     Signal(Signal),
     Gone(End),
     Finished,
+    Turn,
     Faulted(Fault),
     Bounced(Bounce),
     Other,
@@ -102,6 +107,9 @@ impl Measured {
         let mut asked = Vec::new();
         while let Some(request) = self.out.pop() {
             asked.push(match request {
+                Request::Turn { .. } => Asked::Turn,
+                Request::FinishedV2 { .. } | Request::Finished { .. } => Asked::Finished,
+
                 Request::Started { agent, .. } => Asked::Started { agent },
                 Request::Called { .. } | Request::Withdrawn { .. } => Asked::Called,
                 Request::Spawn { owner, .. } => Asked::Spawn { owner },
@@ -109,7 +117,6 @@ impl Measured {
                 Request::Read { .. } => Asked::Read,
                 Request::Signal { signal, .. } => Asked::Signal(signal),
                 Request::Gone { end, .. } => Asked::Gone(end),
-                Request::Finished { .. } => Asked::Finished,
                 Request::Faulted { fault, .. } => Asked::Faulted(fault),
                 Request::Bounced { bounce, .. } => Asked::Bounced(bounce),
                 Request::Rejected { .. }
@@ -334,4 +341,81 @@ fn an_agent_child_domain_with_every_slot_full_stays_within_its_worst_case() {
 fn every_entry_point_stays_within_the_worst_case() {
     paths(LIMITS);
     paths(Limits { agents: 8, calls: 1, events: 1, ..LIMITS });
+}
+
+#[test]
+fn v2_full_transcripts_start_paths_and_queued_conflict_replies_fit_the_child_bound() {
+    use temper_worker_domain_agent::{SpawnV2, channel};
+    let limits = Limits { transcript_bytes: 2048, turn_bytes: 128, conflicts: 4, path_bytes: 512, ..LIMITS };
+    let mut owners = Vec::with_capacity(usize::try_from(limits.agents).expect("bounded"));
+    let mut agent = Measured::new(limits);
+    for client in 0..u64::from(limits.agents) {
+        let spawn = SpawnV2 {
+            workspace: Token::new(client),
+            charter: bytes(limits.charter_bytes),
+            transcript: Some(bytes(limits.transcript_bytes)),
+            repositories: (0..limits.repositories)
+                .map(|index| channel::RepositoryV2 {
+                    name: vec![
+                        b'a' + u8::try_from(index).expect("few repositories");
+                        usize::try_from(limits.name_bytes).expect("bounded")
+                    ]
+                    .into_boxed_slice(),
+                    writable: true,
+                    conflicts: (0..limits.conflicts).map(|_| bytes(u64::from(limits.path_bytes))).collect(),
+                })
+                .collect(),
+            grants: (0..limits.accounts)
+                .map(|account| channel::Grant { account, generation: 1, valid: Duration::from_secs(100) })
+                .collect(),
+        };
+        let [Asked::Spawn { owner }] = agent.step(Event::SpawnV2 { client: Token::new(client), spawn })[..] else {
+            panic!("v2 spawn")
+        };
+        owners.push(owner);
+    }
+    let held = u64::from(limits.agents)
+        * (limits.charter_bytes
+            + limits.transcript_bytes
+            + u64::from(limits.repositories) * u64::from(limits.conflicts) * u64::from(limits.path_bytes));
+    assert!(agent.meter.held() >= held, "all starts retain maximum payloads");
+    for owner in owners {
+        agent.start(owner);
+        for call in 0..u64::from(limits.calls) {
+            assert_eq!(
+                agent.say(
+                    owner,
+                    Up::Call {
+                        call: Token::new(call),
+                        ask: Ask::PushV2 { title: bytes(19), body: bytes(limits.call_bytes - 19) }
+                    }
+                ),
+                [Asked::Called, Asked::Read]
+            );
+        }
+        for call in 0..u64::from(limits.calls) {
+            let reply = Reply::Pushed(channel::Push::Conflicted {
+                repository: 0,
+                files: (0..limits.conflicts).map(|_| bytes(u64::from(limits.path_bytes))).collect(),
+            });
+            assert!(agent.step(Event::Answer { agent: owner, call: Token::new(call), reply }).is_empty());
+        }
+        assert_eq!(
+            agent.say(
+                owner,
+                Up::Turn { turn: channel::Turn { turn: 1, spent: 17, read: None, body: bytes(limits.turn_bytes) } }
+            ),
+            [Asked::Turn]
+        );
+        assert_eq!(agent.step(Event::TurnCredit { agent: owner, read: true }), [Asked::Read]);
+        assert_eq!(
+            agent.say(owner, Up::FinishV2 { turns: 1, spent: 29, finish: channel::FinishV2::Parked }),
+            [Asked::Finished, Asked::Read]
+        );
+        assert!(agent.step(Event::Sent { owner }).is_empty());
+        assert!(agent.step(Event::Exited { owner }).is_empty());
+        assert!(agent.step(Event::Reaped { owner, detail: bytes(u64::from(limits.detail_bytes)) }).is_empty());
+        assert_eq!(agent.step(Event::Hangup { owner }), [Asked::Gone(End::Stopped)]);
+    }
+    assert_eq!(agent.domain.agents(), 0);
 }

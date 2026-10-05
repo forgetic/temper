@@ -158,11 +158,16 @@ pub(crate) enum Alarm {
 }
 
 #[derive(Debug)]
-struct First {
-    charter: Box<[u8]>,
-    snapshot: Option<Box<[u8]>>,
-    repositories: Box<[crate::channel::Repository]>,
-    grants: Box<[Grant]>,
+enum First {
+    Legacy {
+        charter: Box<[u8]>,
+        snapshot: Option<Box<[u8]>>,
+        repositories: Box<[crate::channel::Repository]>,
+        grants: Box<[Grant]>,
+    },
+    V2 {
+        spawn: crate::SpawnV2,
+    },
 }
 
 #[derive(Debug)]
@@ -199,6 +204,10 @@ struct Process {
     /// io's name for the process.
     name: Token,
     reading: Reading,
+    version: Version,
+    credit: bool,
+    turns: u32,
+    spent: u64,
     /// A send is in flight.
     sending: bool,
     /// Signals in flight.
@@ -206,6 +215,12 @@ struct Process {
     exited: bool,
     /// Once its tree is empty, the detail of its end.
     reaped: Option<Box<[u8]>>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Version {
+    Legacy,
+    V2,
 }
 
 /// The channel up, as it is read.
@@ -294,7 +309,8 @@ pub(crate) fn spawn(domain: &mut Domain, env: &Env<Limits>, client: Token, spawn
         out.push(Request::Gone { client, end, detail: Box::new([]) });
         return;
     }
-    let agent = Agent { client, state: State::Spawning { start: First { charter, snapshot, repositories, grants } } };
+    let agent =
+        Agent { client, state: State::Spawning { start: First::Legacy { charter, snapshot, repositories, grants } } };
     let id = domain.agents.insert(agent).expect("checked for room above");
     let deadline = env.now.saturating_add(limits.spawn_timeout);
     out.push(Request::Spawn { owner: id.token(), workspace, deadline });
@@ -471,25 +487,26 @@ pub(crate) fn received(domain: &mut Domain, env: &Env<Limits>, owner: Token, mes
     let process = process_of(&mut entry.state);
     assert!(process.reading == Reading::Asked, "a read ends once");
     process.reading = Reading::Idle;
+    let wrong = !account(process, &message);
     let limits = &env.limits;
     let state = mem::replace(&mut entry.state, State::Closed);
     entry.state = match state {
         State::Live { process, channel, watch } => {
-            if broken(&message, Some(&channel), limits) {
+            if wrong || broken(&message, Some(&channel), limits) {
                 fail(names, process, Fault::Rules, true, env, facts, out)
             } else {
                 heard(names.client, process, channel, watch, message, env, facts, out)
             }
         }
         State::Cancelled { process, channel, until, owed } => {
-            if broken(&message, Some(&channel), limits) {
+            if wrong || broken(&message, Some(&channel), limits) {
                 fail(names, process, Fault::Rules, owed.is_some(), env, facts, out)
             } else {
                 wound(names.client, process, channel, until, owed, message, facts, out)
             }
         }
         State::Draining { process, until, owed } => {
-            if broken(&message, None, limits) {
+            if wrong || broken(&message, None, limits) {
                 fail(names, process, Fault::Rules, owed.is_some(), env, facts, out)
             } else {
                 drained(names.client, process, until, owed, message, facts, out)
@@ -503,11 +520,11 @@ pub(crate) fn received(domain: &mut Domain, env: &Env<Limits>, owner: Token, mes
         // What a tree being stopped writes is read to the end, and dropped,
         // but for a finish the client may still hear.
         State::Terminating { process, until, told } => {
-            let told = late(names.client, told, message, limits, facts, out);
+            let told = if wrong { told } else { late(names.client, told, message, limits, facts, out) };
             State::Terminating { process, until, told }
         }
         State::Killing { process, told } => {
-            let told = late(names.client, told, message, limits, facts, out);
+            let told = if wrong { told } else { late(names.client, told, message, limits, facts, out) };
             State::Killing { process, told }
         }
         State::Spawning { .. } | State::Closed => unreachable!("only a spawned agent reads"),
@@ -732,12 +749,16 @@ fn flow(owner: Token, state: &mut State, out: &mut Queue<Request>) {
     let (process, reads) = match state {
         State::Live { process, channel, .. } | State::Cancelled { process, channel, .. } => {
             send_next(owner, process, channel, out);
-            (process, channel.busy.len() < BUSY)
+            let reads = channel.busy.len() < BUSY && process.credit;
+            (process, reads)
         }
-        State::Draining { process, .. }
-        | State::Exiting { process, .. }
-        | State::Terminating { process, .. }
-        | State::Killing { process, .. } => (process, true),
+        State::Draining { process, .. } => {
+            let reads = process.credit;
+            (process, reads)
+        }
+        State::Exiting { process, .. } | State::Terminating { process, .. } | State::Killing { process, .. } => {
+            (process, true)
+        }
         State::Spawning { .. } | State::Closed => return,
     };
     if reads && process.reading == Reading::Idle {
@@ -777,7 +798,9 @@ fn leaving(channel: &mut Channel, message: &Down) {
             assert!(flying, "a call is in flight until its answer goes down");
         }
         Down::Cancel | Down::Grant { .. } => {}
-        Down::Start { .. } => unreachable!("the start message goes down first, never from the outbox"),
+        Down::Start { .. } | Down::StartV2 { .. } => {
+            unreachable!("the start message goes down first, never from the outbox")
+        }
     }
 }
 
@@ -828,8 +851,8 @@ fn gone(process: &Process) -> bool {
 /// stopping, until it is killed.
 fn timers(state: &State, limits: &Limits) -> (Option<Time>, Option<Time>, Option<Time>) {
     match state {
-        State::Live { process: _, channel, watch } => {
-            let runs = channel.asked.is_empty() && !watch.waiting;
+        State::Live { process, channel, watch } => {
+            let runs = channel.asked.is_empty() && !watch.waiting && process.credit;
             let due = watch.seen.max(watch.held).saturating_add(limits.no_progress);
             (runs.then_some(due), Some(watch.wall), None)
         }
@@ -867,15 +890,42 @@ fn start(
     out.push(Request::Wait { owner, process });
     out.push(Request::Reap { owner, process });
     let mut accounts = Set::with_capacity(limits.accounts);
-    for grant in &first.grants {
+    let grant_names = match &first {
+        First::V2 { spawn } => &spawn.grants,
+        First::Legacy { grants, .. } => grants,
+    };
+    for grant in grant_names {
         accounts.insert(grant.account).expect("validated grant accounts");
     }
-    let First { charter, snapshot, repositories, grants } = first;
-    out.push(Request::Send { owner, process, message: Down::Start { charter, snapshot, repositories, grants } });
+    let (version, message) = match first {
+        First::V2 { spawn } => (
+            Version::V2,
+            Down::StartV2 {
+                charter: spawn.charter,
+                transcript: spawn.transcript,
+                repositories: spawn.repositories,
+                grants: spawn.grants,
+            },
+        ),
+        First::Legacy { charter, snapshot, repositories, grants } => {
+            (Version::Legacy, Down::Start { charter, snapshot, repositories, grants })
+        }
+    };
+    out.push(Request::Send { owner, process, message });
     facts.push(Fact::Started { client: names.client });
     let outbox = limits::outbox(limits).expect("worst_case accepted the limits");
-    let process =
-        Process { name: process, reading: Reading::Idle, sending: true, signals: 0, exited: false, reaped: None };
+    let process = Process {
+        name: process,
+        reading: Reading::Idle,
+        version,
+        credit: true,
+        turns: 0,
+        spent: 0,
+        sending: true,
+        signals: 0,
+        exited: false,
+        reaped: None,
+    };
     let channel = Channel {
         outbox: Queue::with_capacity(outbox),
         events: 0,
@@ -945,7 +995,7 @@ fn drain(process: Process, env: &Env<Limits>) -> State {
 #[expect(clippy::too_many_arguments, reason = "a cell handler takes the fields it touches")]
 fn heard(
     client: Token,
-    process: Process,
+    mut process: Process,
     mut channel: Channel,
     mut watch: Watch,
     message: Up,
@@ -956,6 +1006,26 @@ fn heard(
     let now = env.now;
     watch.seen = now;
     match message {
+        Up::Turn { turn } => {
+            if let Some(read) = turn.read {
+                acknowledge(&mut channel, read);
+            }
+            process.credit = false;
+            out.push(Request::Turn { client, turn });
+        }
+        Up::FinishV2 { turns, spent, finish } => {
+            return finished_v2(
+                client,
+                process,
+                turns,
+                spent,
+                finish,
+                now.saturating_add(env.limits.grace),
+                None,
+                facts,
+                out,
+            );
+        }
         Up::Call { call, ask } => {
             watch.waiting = false;
             called(client, &mut channel, call, ask, out);
@@ -988,7 +1058,7 @@ fn heard(
 #[expect(clippy::too_many_arguments, reason = "a cell handler takes the fields it touches")]
 fn wound(
     client: Token,
-    process: Process,
+    mut process: Process,
     mut channel: Channel,
     until: Time,
     owed: Option<Fault>,
@@ -997,6 +1067,16 @@ fn wound(
     out: &mut Queue<Request>,
 ) -> State {
     match message {
+        Up::Turn { turn } => {
+            if let Some(read) = turn.read {
+                acknowledge(&mut channel, read);
+            }
+            process.credit = false;
+            out.push(Request::Turn { client, turn });
+        }
+        Up::FinishV2 { turns, spent, finish } => {
+            return finished_v2(client, process, turns, spent, finish, until, owed, facts, out);
+        }
         Up::Call { call, ask } => called(client, &mut channel, call, ask, out),
         Up::Withdraw { call } => withdrew(client, &mut channel, call, out),
         Up::Fact { fact } => out.push(Request::Told { client, fact }),
@@ -1012,7 +1092,7 @@ fn wound(
 /// it went. Nothing would hear an answer to a call, nor of its withdrawal.
 fn drained(
     client: Token,
-    process: Process,
+    mut process: Process,
     until: Time,
     owed: Option<Fault>,
     message: Up,
@@ -1020,6 +1100,13 @@ fn drained(
     out: &mut Queue<Request>,
 ) -> State {
     match message {
+        Up::Turn { turn } => {
+            process.credit = false;
+            out.push(Request::Turn { client, turn });
+        }
+        Up::FinishV2 { turns, spent, finish } => {
+            return finished_v2(client, process, turns, spent, finish, until, owed, facts, out);
+        }
         Up::Call { .. } | Up::Withdraw { .. } | Up::Long { .. } | Up::LongDone | Up::Waiting { .. } => {}
         Up::Fact { fact } => out.push(Request::Told { client, fact }),
         Up::Rejected { account, generation } => out.push(Request::Rejected { client, account, generation }),
@@ -1037,12 +1124,18 @@ fn late(client: Token, told: bool, message: Up, limits: &Limits, facts: &mut Fac
         return told;
     }
     match message {
+        Up::FinishV2 { turns, spent, finish } => {
+            facts.push(Fact::Finished { client });
+            out.push(Request::FinishedV2 { client, turns, spent, finish });
+            true
+        }
         Up::Finish { finish } => {
             facts.push(Fact::Finished { client });
             out.push(Request::Finished { client, finish });
             true
         }
-        Up::Call { .. }
+        Up::Turn { .. }
+        | Up::Call { .. }
         | Up::Withdraw { .. }
         | Up::Fact { .. }
         | Up::Long { .. }
@@ -1164,16 +1257,34 @@ fn signal(owner: Token, process: &mut Process, signal: Signal, out: &mut Queue<R
 /// an event name that was never sent down.
 fn broken(message: &Up, channel: Option<&Channel>, limits: &Limits) -> bool {
     match message {
+        Up::Turn { turn } => {
+            let unknown = match turn.read {
+                Some(read) => match channel {
+                    Some(channel) => !known(channel, read),
+                    None => false,
+                },
+                None => false,
+            };
+            unknown || !within(&turn.body, limits.turn_bytes)
+        }
+        Up::FinishV2 { finish, .. } => match finish {
+            crate::channel::FinishV2::Ended { outcome } => !within(outcome, limits.outcome_bytes),
+            crate::channel::FinishV2::Parked | crate::channel::FinishV2::Failed { .. } => false,
+        },
         Up::Call { call, ask } => {
             let reused = match channel {
                 Some(channel) => in_flight(channel, *call),
                 None => false,
             };
-            let body = match ask {
-                Ask::Push { message } => message,
-                Ask::Relay { body } => body,
+            let too_large = match ask {
+                Ask::Push { message } => !within(message, limits.call_bytes),
+                Ask::Relay { body } => !within(body, limits.call_bytes),
+                Ask::PushV2 { title, body } => match len(title).checked_add(len(body)) {
+                    Some(bytes) => bytes > limits.call_bytes,
+                    None => true,
+                },
             };
-            reused || !within(body, limits.call_bytes)
+            reused || too_large
         }
         Up::Withdraw { call } => match channel {
             Some(channel) => channel.withdrawn.contains(call),
@@ -1218,6 +1329,13 @@ fn bounded(reply: Reply, limits: &Limits) -> Reply {
                 Reply::Relayed { answer }
             } else {
                 Reply::TooLarge
+            }
+        }
+        Reply::Pushed(crate::channel::Push::Conflicted { repository, files }) => {
+            if repository >= limits.repositories || !paths(&files, limits) {
+                Reply::TooLarge
+            } else {
+                Reply::Pushed(crate::channel::Push::Conflicted { repository, files })
             }
         }
         Reply::Pushed(crate::channel::Push::Failed { mut failure }) => {
@@ -1345,7 +1463,8 @@ pub(crate) fn grant(domain: &mut Domain, env: &Env<Limits>, agent: Token, grant:
             | Down::Event { .. }
             | Down::Answer { .. }
             | Down::Cancel
-            | Down::Grant { .. }) => old,
+            | Down::Grant { .. }
+            | Down::StartV2 { .. }) => old,
         };
         channel.outbox.push(next);
     }
@@ -1353,4 +1472,162 @@ pub(crate) fn grant(domain: &mut Domain, env: &Env<Limits>, agent: Token, grant:
         channel.outbox.push(Down::Grant { grant });
     }
     follow(domain, env, id, out);
+}
+
+pub(crate) fn spawn_v2(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    client: Token,
+    spawn: crate::SpawnV2,
+    out: &mut Queue<Request>,
+) {
+    let limits = &env.limits;
+    let refusal = if domain.agents.is_full() {
+        Some(End::Busy)
+    } else if !within(&spawn.charter, limits.charter_bytes) {
+        Some(End::Invalid(Invalid::Charter))
+    } else if !within_optional(spawn.transcript.as_deref(), limits.transcript_bytes) {
+        Some(End::Invalid(Invalid::Transcript))
+    } else if !repositories_v2(&spawn.repositories, limits) {
+        Some(End::Invalid(Invalid::Repositories))
+    } else if !grant_names(&spawn.grants, limits.accounts) {
+        Some(End::Invalid(Invalid::Grants))
+    } else {
+        None
+    };
+    if let Some(end) = refusal {
+        domain.facts.push(Fact::Gone { client, end });
+        out.push(Request::Gone { client, end, detail: Box::new([]) });
+        return;
+    }
+    let workspace = spawn.workspace;
+    let first = First::V2 { spawn };
+    let id = domain
+        .agents
+        .insert(Agent { client, state: State::Spawning { start: first } })
+        .expect("checked for room above");
+    out.push(Request::Spawn { owner: id.token(), workspace, deadline: env.now.saturating_add(limits.spawn_timeout) });
+}
+
+fn repositories_v2(repositories: &[crate::channel::RepositoryV2], limits: &Limits) -> bool {
+    if len_count(repositories.len()) > u64::from(limits.repositories) {
+        return false;
+    }
+    for (index, repository) in repositories.iter().enumerate() {
+        if repository.name.is_empty()
+            || !within(&repository.name, u64::from(limits.name_bytes))
+            || len_count(repository.conflicts.len()) > u64::from(limits.conflicts)
+        {
+            return false;
+        }
+        for other in repositories.iter().skip(index.saturating_add(1)) {
+            if repository.name == other.name {
+                return false;
+            }
+        }
+        for file in &repository.conflicts {
+            if file.is_empty() || !within(file, u64::from(limits.path_bytes)) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn len_count(value: usize) -> u64 {
+    u64::try_from(value).expect("a length fits in u64")
+}
+fn len(bytes: &[u8]) -> u64 {
+    len_count(bytes.len())
+}
+
+/// Validate mode and cumulative accounting before a turn leaves the child.
+fn account(process: &mut Process, message: &Up) -> bool {
+    match message {
+        Up::Turn { turn } => {
+            if process.version != Version::V2
+                || process.turns.checked_add(1) != Some(turn.turn)
+                || turn.spent < process.spent
+            {
+                false
+            } else {
+                process.turns = turn.turn;
+                process.spent = turn.spent;
+                true
+            }
+        }
+        Up::FinishV2 { turns, spent, .. } => {
+            process.version == Version::V2 && *turns == process.turns && *spent >= process.spent
+        }
+        Up::Finish { .. } => process.version != Version::V2,
+        Up::Call { ask, .. } => match ask {
+            Ask::PushV2 { .. } => process.version == Version::V2,
+            Ask::Push { .. } => process.version != Version::V2,
+            Ask::Relay { .. } => true,
+        },
+        Up::Withdraw { .. }
+        | Up::Fact { .. }
+        | Up::Long { .. }
+        | Up::LongDone
+        | Up::Waiting { .. }
+        | Up::Rejected { .. }
+        | Up::Exhausted { .. } => true,
+    }
+}
+
+pub(crate) fn turn_credit(domain: &mut Domain, env: &Env<Limits>, agent: Token, read: bool, out: &mut Queue<Request>) {
+    let Some(id) = addressed(&domain.agents, agent) else {
+        return;
+    };
+    let entry = domain.agents.get_mut(id).expect("an addressed agent lives");
+    match &mut entry.state {
+        State::Live { process, watch, .. } => {
+            process.credit = read;
+            if read {
+                watch.seen = env.now;
+            }
+        }
+        State::Cancelled { process, .. } | State::Draining { process, .. } => process.credit = read,
+        State::Spawning { .. }
+        | State::Exiting { .. }
+        | State::Terminating { .. }
+        | State::Killing { .. }
+        | State::Closed => return,
+    }
+    follow(domain, env, id, out);
+}
+
+#[expect(clippy::too_many_arguments, reason = "a terminal takes explicit cumulative accounting")]
+fn finished_v2(
+    client: Token,
+    process: Process,
+    turns: u32,
+    spent: u64,
+    finish: crate::channel::FinishV2,
+    until: Time,
+    owed: Option<Fault>,
+    facts: &mut Facts,
+    out: &mut Queue<Request>,
+) -> State {
+    let cancelled = finish == crate::channel::FinishV2::Failed { failure: RunFailure::Cancelled };
+    match owed {
+        Some(Fault::WallTime) if cancelled => tell_fault(client, Fault::WallTime, true, facts, out),
+        Some(Fault::WallTime | Fault::Exited | Fault::Rules | Fault::NoProgress) | None => {
+            facts.push(Fact::Finished { client });
+            out.push(Request::FinishedV2 { client, turns, spent, finish });
+        }
+    }
+    State::Exiting { process, until, told: true }
+}
+
+fn paths(files: &[Box<[u8]>], limits: &Limits) -> bool {
+    if len_count(files.len()) > u64::from(limits.conflicts) {
+        return false;
+    }
+    for file in files {
+        if file.is_empty() || !within(file, u64::from(limits.path_bytes)) {
+            return false;
+        }
+    }
+    true
 }

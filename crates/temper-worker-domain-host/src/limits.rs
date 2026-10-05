@@ -1,3 +1,5 @@
+use alloc::boxed::Box;
+
 use skein_lib::{Id, Map, Queue, Set, Slab, Token};
 
 use crate::boundary::{Landing, Reason};
@@ -23,6 +25,12 @@ pub struct Limits {
     pub charter_bytes: u64,
     /// The most bytes of a snapshot: an assignment's, or a parked run's.
     pub snapshot_bytes: u64,
+    /// Opaque transcript, including the committed call tail.
+    pub transcript_bytes: u64,
+    /// One completed turn body.
+    pub turn_bytes: u64,
+    pub conflicts: u32,
+    pub path_bytes: u32,
     /// The most bytes of a run's declared outcome. A run that says more has
     /// broken the rules.
     pub outcome_bytes: u64,
@@ -77,7 +85,8 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     // finishes, the outcome, the snapshot or the detail of the failure.
     let held = Queue::<NamedEvent>::worst_case(limits.held)?
         .checked_add(u64::from(limits.held).checked_mul(limits.event_bytes)?)?;
-    let starting = limits.charter_bytes.checked_add(limits.snapshot_bytes)?.checked_add(held)?;
+    let starting =
+        limits.charter_bytes.checked_add(limits.snapshot_bytes.max(limits.transcript_bytes))?.checked_add(held)?;
     let ending = limits.outcome_bytes.max(limits.snapshot_bytes).max(u64::from(limits.detail_bytes));
     // Throughout, the saved-work branch, the repositories its pushes landed
     // in with the last commit landed in each, and its relayed calls in flight
@@ -95,7 +104,9 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     // One terminal arrives per step. Push feedback consumes this array
     // instead of handing it on; its fixed diagnostic payload is included.
     let landing = u64::try_from(size_of::<Landing>()).ok()?;
-    let pushed = u64::from(limits.repositories).checked_mul(landing)?;
+    let paths = u64::from(limits.conflicts)
+        .checked_mul(u64::try_from(size_of::<Box<[u8]>>()).ok()?.checked_add(u64::from(limits.path_bytes))?)?;
+    let pushed = u64::from(limits.repositories).checked_mul(landing.checked_add(paths)?)?;
     hosted
         .checked_add(names)?
         .checked_add(ready)?

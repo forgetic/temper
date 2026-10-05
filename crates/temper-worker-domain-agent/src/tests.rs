@@ -17,6 +17,10 @@ const LIMITS: Limits = Limits {
     agents: 2,
     charter_bytes: 16,
     snapshot_bytes: 8,
+    transcript_bytes: 0,
+    turn_bytes: 0,
+    conflicts: 0,
+    path_bytes: 0,
     event_bytes: 8,
     events: 2,
     calls: 2,
@@ -1097,4 +1101,127 @@ fn finding_reused_acknowledged_name_leaves_the_second_delivery_unacknowledged() 
         &*h.step(Event::Deliver { agent: a.agent, name: Token::new(9999), event: bytes(b"three") }),
         [Request::Bounced { client: a.client, name: Token::new(9999), bounce: Bounce::Full }]
     );
+}
+
+fn live_v2(h: &mut Harness) -> Names {
+    let client = Token::new(101);
+    let emitted = h.step(Event::SpawnV2 {
+        client,
+        spawn: crate::SpawnV2 {
+            workspace: Token::new(201),
+            charter: bytes(b"v2 charter"),
+            transcript: Some(bytes(b"turns+tail")),
+            repositories: Box::new([crate::channel::RepositoryV2 {
+                name: bytes(b"repo"),
+                writable: true,
+                conflicts: Box::new([bytes(b"src/file")]),
+            }]),
+            grants: Box::new([]),
+        },
+    });
+    let [Request::Spawn { owner, .. }] = &*emitted else { panic!("spawn: {emitted:?}") };
+    let a = Names { client, agent: *owner, process: Token::new(301) };
+    let emitted = h.step(Event::Spawned { owner: a.agent, process: a.process });
+    let [
+        Request::Started { .. },
+        Request::Wait { .. },
+        Request::Reap { .. },
+        Request::Send { message: Down::StartV2 { transcript, repositories, .. }, .. },
+        Request::Read { .. },
+    ] = &*emitted
+    else {
+        panic!("start: {emitted:?}")
+    };
+    assert_eq!(transcript.as_deref(), Some(&b"turns+tail"[..]));
+    assert_eq!(repositories[0].conflicts[0].as_ref(), b"src/file");
+    assert!(h.step(Event::Sent { owner: a.agent }).is_empty());
+    a
+}
+
+fn next_limits() -> Limits {
+    Limits { transcript_bytes: 32, turn_bytes: 16, conflicts: 2, path_bytes: 16, ..LIMITS }
+}
+
+#[test]
+fn v2_turn_pauses_reads_and_watchdog_until_parent_credit() {
+    let mut h = Harness::new(next_limits());
+    let a = live_v2(&mut h);
+    let turn = crate::channel::Turn { turn: 1, spent: 17, read: None, body: bytes(b"turn") };
+    let emitted = h.say(a, Up::Turn { turn });
+    let [Request::Turn { client, .. }] = &*emitted else { panic!("one turn without another read: {emitted:?}") };
+    assert_eq!(*client, a.client);
+    assert_eq!(
+        h.domain.next_deadline(),
+        Some(Time::ZERO.saturating_add(LIMITS.wall_time)),
+        "turn pressure pauses the watchdog"
+    );
+    h.at(20);
+    assert!(h.step(Event::TurnCredit { agent: a.agent, read: false }).is_empty());
+    assert_eq!(&*h.step(Event::TurnCredit { agent: a.agent, read: true }), [read(a)]);
+    assert_eq!(
+        h.domain.next_deadline(),
+        Some(h.env.now.saturating_add(LIMITS.no_progress)),
+        "credit restarts the progress clock"
+    );
+}
+
+#[test]
+fn v2_finish_parks_without_snapshot_and_reports_spend() {
+    let mut h = Harness::new(next_limits());
+    let a = live_v2(&mut h);
+    let emitted = h.say(a, Up::FinishV2 { turns: 0, spent: 23, finish: crate::channel::FinishV2::Parked });
+    let [Request::FinishedV2 { client, turns, spent, finish: crate::channel::FinishV2::Parked }, Request::Read { .. }] =
+        &*emitted
+    else {
+        panic!("park: {emitted:?}")
+    };
+    assert_eq!((*client, *turns, *spent), (a.client, 0, 23));
+}
+
+#[test]
+fn v2_turn_read_watermark_releases_delivered_message_credit() {
+    let mut h = Harness::new(next_limits());
+    let a = live_v2(&mut h);
+    h.step(Event::Deliver { agent: a.agent, name: Token::new(71), event: bytes(b"message") });
+    h.step(Event::Sent { owner: a.agent });
+    h.say(
+        a,
+        Up::Turn { turn: crate::channel::Turn { turn: 1, spent: 1, read: Some(Token::new(71)), body: bytes(b"turn") } },
+    );
+    h.step(Event::TurnCredit { agent: a.agent, read: true });
+    let emitted = h.say(a, Up::Waiting { heard: 71 });
+    assert_eq!(&*emitted, [Request::Waiting { client: a.client }, read(a)]);
+    assert_eq!(h.domain.next_deadline(), Some(Time::ZERO.saturating_add(LIMITS.wall_time)));
+}
+
+#[test]
+fn legacy_spawn_refuses_new_turn_and_v2_spawn_refuses_legacy_finish() {
+    let mut h = Harness::new(LIMITS);
+    let a = h.live(1);
+    let emitted =
+        h.say(a, Up::Turn { turn: crate::channel::Turn { turn: 1, spent: 1, read: None, body: bytes(b"turn") } });
+    assert!(rules(&emitted));
+    let mut h = Harness::new(next_limits());
+    let a = live_v2(&mut h);
+    let emitted = h.say(a, Up::Finish { finish: Finish::Parked { snapshot: None } });
+    assert!(rules(&emitted));
+}
+
+#[test]
+fn v2_push_bounds_both_title_and_body_before_forwarding() {
+    let mut h = Harness::new(next_limits());
+    let a = live_v2(&mut h);
+    let emitted =
+        h.say(a, Up::Call { call: Token::new(37), ask: Ask::PushV2 { title: bytes(b"title"), body: bytes(b"body") } });
+    assert!(rules(&emitted), "nine bytes exceed the eight-byte call cap");
+}
+
+fn rules(records: &[Request]) -> bool {
+    for record in records {
+        let Request::Faulted { fault: Fault::Rules, .. } = record else {
+            continue;
+        };
+        return true;
+    }
+    false
 }

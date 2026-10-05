@@ -192,6 +192,12 @@ impl Engine {
     /// Takes the host's request `request`, which is for the engine.
     pub fn take(&mut self, request: Request) -> Vec<Act> {
         match request {
+            temper_worker_domain_host::Request::Turn { .. }
+            | temper_worker_domain_host::Request::PushV2 { .. }
+            | temper_worker_domain_host::Request::RelayV2 { .. }
+            | temper_worker_domain_host::Request::AnswerV2 { .. }
+            | temper_worker_domain_host::Request::StartV2 { .. } => unreachable!("this script runs version one"),
+
             Request::Answer { to, run, attempt, answer } => {
                 assert_eq!(to, ReplyTo::new(run), "an answer goes to its assignment");
                 self.answered(run, attempt, &answer);

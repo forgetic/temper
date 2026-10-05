@@ -14,6 +14,8 @@ use crate::script::{Answer, Heard, Said, Why};
 #[must_use]
 pub fn down(message: Down) -> Heard {
     match message {
+        temper_worker_domain_agent::channel::Down::StartV2 { .. } => unreachable!("this script runs version one"),
+
         Down::Start { repositories: _, grants: _, charter, snapshot } => {
             Heard::Start { charter: charter.into_vec(), snapshot: snapshot.map(<[u8]>::into_vec) }
         }

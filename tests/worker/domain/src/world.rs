@@ -263,6 +263,10 @@ pub const LIMITS: Limits = Limits {
         name_bytes: 32,
         charter_bytes: 8_192,
         snapshot_bytes: 64,
+        transcript_bytes: 0,
+        turn_bytes: 0,
+        conflicts: 0,
+        path_bytes: 0,
         outcome_bytes: 4_096,
         detail_bytes: 32,
         held: 2,
@@ -288,6 +292,10 @@ pub const LIMITS: Limits = Limits {
         agents: 3,
         charter_bytes: 8_192,
         snapshot_bytes: 64,
+        transcript_bytes: 0,
+        turn_bytes: 0,
+        conflicts: 0,
+        path_bytes: 0,
         event_bytes: 96,
         events: 2,
         calls: 2,
@@ -309,6 +317,9 @@ pub const LIMITS: Limits = Limits {
     redial_max: Duration::from_secs(8),
     told: 16,
     stalled: 8,
+    turns: 0,
+    turn_queue_bytes: 0,
+    turn_backoff: Duration::from_secs(1),
 };
 
 /// A failed run's retries: more than the engine's world allows, as its

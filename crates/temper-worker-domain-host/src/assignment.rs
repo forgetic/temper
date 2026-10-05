@@ -8,7 +8,7 @@ use crate::boundary::{Access, Assignment, Invalid, Repository, Start};
 use crate::limits::Limits;
 
 /// Whether `assignment` fits `limits`, and what about it does not.
-pub(crate) fn check(assignment: &Assignment, limits: &Limits) -> Result<(), Invalid> {
+pub(crate) fn check(assignment: &Assignment, limits: &Limits, next: bool) -> Result<(), Invalid> {
     if len(&assignment.charter) > limits.charter_bytes {
         return Err(Invalid::Charter);
     }
@@ -37,7 +37,7 @@ pub(crate) fn check(assignment: &Assignment, limits: &Limits) -> Result<(), Inva
         return Err(Invalid::Repositories);
     }
     for repository in &workspace.repositories {
-        self::repository(repository, limits)?;
+        self::repository(repository, limits, next)?;
     }
     // Bounded: the repositories are within the limits, checked above.
     for (index, repository) in workspace.repositories.iter().enumerate() {
@@ -50,17 +50,31 @@ pub(crate) fn check(assignment: &Assignment, limits: &Limits) -> Result<(), Inva
     Ok(())
 }
 
-fn repository(repository: &Repository, limits: &Limits) -> Result<(), Invalid> {
+fn repository(repository: &Repository, limits: &Limits, next: bool) -> Result<(), Invalid> {
     name(&repository.name, limits)?;
     component(&repository.name)?;
     name(&repository.remote, limits)?;
     match &repository.start {
-        Start::Base { branch } | Start::Branch { branch } | Start::Saved { branch } => name(branch, limits)?,
+        Start::Base { branch } | Start::Branch { branch } | Start::Saved { branch } => {
+            name(branch, limits)?;
+        }
         Start::Commit { .. } => {}
+        Start::Merge { branch, .. } => {
+            if !next || limits.conflicts == 0 {
+                return Err(Invalid::Version);
+            }
+            name(branch, limits)?;
+        }
     }
     match &repository.access {
         Access::ReadOnly => Ok(()),
         Access::Writable { push } => name(push, limits),
+        Access::WritableV2 { push, .. } => {
+            if !next {
+                return Err(Invalid::Version);
+            }
+            name(push, limits)
+        }
     }
 }
 

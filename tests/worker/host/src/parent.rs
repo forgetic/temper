@@ -263,6 +263,12 @@ impl Parent {
     /// Takes the host's request `request`, which is for the parent.
     pub fn take(&mut self, request: Request) -> Vec<Out> {
         match request {
+            temper_worker_domain_host::Request::Turn { .. }
+            | temper_worker_domain_host::Request::PushV2 { .. }
+            | temper_worker_domain_host::Request::RelayV2 { .. }
+            | temper_worker_domain_host::Request::AnswerV2 { .. }
+            | temper_worker_domain_host::Request::StartV2 { .. } => unreachable!("this script runs version one"),
+
             Request::Prepare { owner, workspace } => self.prepare(owner, &workspace),
             // A notice: the prepare still ends as it was going to, which the
             // world checks the host takes.
@@ -330,6 +336,8 @@ impl Parent {
         let mut writable = Vec::new();
         for repository in &workspace.repositories {
             writable.push(match repository.access {
+                temper_worker_domain_host::Access::WritableV2 { .. } => unreachable!("this script runs version one"),
+
                 Access::ReadOnly => false,
                 Access::Writable { .. } => true,
             });
@@ -466,6 +474,8 @@ impl Parent {
 
     fn call(&mut self, agent: Token, ask: Ask) -> Out {
         match ask {
+            temper_worker_domain_host::Ask::PushV2 { .. } => unreachable!("this script runs version one"),
+
             Ask::Relay { .. } => self.tally.relays += 1,
             Ask::Push { .. } => self.tally.pushes += 1,
         }

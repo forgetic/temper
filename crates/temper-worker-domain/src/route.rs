@@ -35,8 +35,46 @@ pub(crate) const fn agent_env(env: &Env<Limits>) -> Env<agent::Limits> {
 
 /// Hands one of the protocol's events to the child domain, or the link, it is
 /// for.
-pub(crate) fn event(domain: &mut Domain, env: &Env<Limits>, event: Event) {
+#[expect(clippy::too_many_lines, reason = "one exhaustive boundary routing table")]
+pub(crate) fn event(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     let event = match event {
+        Event::RelayedV2 { run, attempt, call, delivery, answer } => {
+            domain.link.heard();
+            if domain.host.is_relayed_named_for(run, attempt, delivery, call) {
+                host_step(domain, env, host::Event::Relayed { run, attempt, call: delivery, answer });
+            }
+            return;
+        }
+        Event::ConnectedV2 => {
+            domain.link.connected_v2();
+            domain::keep(domain, Fact::Connected);
+            return host_step(domain, env, host::Event::Report);
+        }
+        Event::AssignV2 { assignment } => {
+            domain.link.heard();
+            let run = assignment.assignment.run;
+            let attempt = assignment.assignment.attempt;
+            if domain.link.holds(run, attempt) || domain.host.is_hosting(run, attempt) {
+                return;
+            }
+            if !domain.link.is_v2() || env.limits.turns == 0 {
+                return domain.link.refuse_version(run, attempt, out);
+            }
+            let answers = domain.link.held();
+            host_step(domain, env, host::Event::Unacknowledged { answers });
+            return host_step(domain, env, host::Event::AssignV2 { reply_to: ReplyTo::new(run), assignment });
+        }
+        Event::AcknowledgeTurn { run, attempt, turn } => {
+            domain.link.heard();
+            if let Some(agent) = domain.link.turn_acknowledged(run, attempt, turn, &env.limits) {
+                agent_step(domain, env, agent::Event::TurnCredit { agent, read: true });
+            }
+            return;
+        }
+        Event::TurnBusy { run, attempt, turn } => {
+            domain.link.heard();
+            return domain.link.turn_busy(run, attempt, turn, env);
+        }
         Event::Connected => {
             domain.link.connected();
             domain::keep(domain, Fact::Connected);
@@ -153,12 +191,33 @@ pub(crate) fn agent_step(domain: &mut Domain, env: &Env<Limits>, event: agent::E
 /// One of the host's requests: to the engine, or to a capability.
 fn from_host(domain: &mut Domain, env: &Env<Limits>, request: host::Request, out: &mut Queue<Request>) {
     let event = match request {
+        host::Request::AnswerV2 { to, run, attempt, answer } => {
+            assert!(to.into_token() == run, "an answer is its assignment's");
+            return domain.link.answer_v2(run, attempt, answer, out);
+        }
+        host::Request::RelayV2 { run, attempt, call, delivery, body } => {
+            return domain.link.relay(
+                Relay { run, attempt, call: delivery, stable: Some(call), body },
+                &domain.host,
+                out,
+            );
+        }
+        host::Request::Turn { agent, run, attempt, turn } => {
+            let read = domain.link.turn(agent, run, attempt, turn, &env.limits, out);
+            return agent_step(domain, env, agent::Event::TurnCredit { agent, read });
+        }
+        host::Request::StartV2 { owner, workspace, charter, transcript, grants } => {
+            return workspace::start_v2(domain, env, owner, workspace, charter, transcript, grants);
+        }
+        host::Request::PushV2 { owner, workspace, title, body } => {
+            return workspace::write(domain, env, owner, workspace, Write::PushV2 { title, body });
+        }
         host::Request::Answer { to, run, attempt, answer } => {
             assert!(to.into_token() == run, "an answer is its assignment's");
             return domain.link.answer(run, attempt, answer, out);
         }
         host::Request::Relay { run, attempt, call, body } => {
-            return domain.link.relay(Relay { run, attempt, call, body }, &domain.host, out);
+            return domain.link.relay(Relay { run, attempt, call, stable: None, body }, &domain.host, out);
         }
         host::Request::CancelRelay { call } => {
             if domain.link.cancel_relay(call) {
@@ -211,6 +270,13 @@ fn from_checkout(domain: &mut Domain, env: &Env<Limits>, request: checkout::Requ
 /// of a run for the engine.
 fn from_agent(domain: &mut Domain, env: &Env<Limits>, request: agent::Request, out: &mut Queue<Request>) {
     let event = match request {
+        agent::Request::Turn { client, turn } => host::Event::Turn {
+            owner: client,
+            turn: host::Turn { turn: turn.turn, spent: turn.spent, read: turn.read, body: turn.body },
+        },
+        agent::Request::FinishedV2 { client, turns, spent, finish } => {
+            host::Event::FinishedV2 { owner: client, turns, spent, finish: translate::finish_v2(finish) }
+        }
         agent::Request::Spawn { owner, workspace, deadline } => {
             return out.push(Request::Spawn { owner, workspace, deadline });
         }

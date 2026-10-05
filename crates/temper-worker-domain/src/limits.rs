@@ -1,3 +1,4 @@
+use alloc::boxed::Box;
 use core::mem::size_of;
 
 use skein_lib::{Deadlines, Duration, Id, Map, Queue, Slab, Token};
@@ -34,6 +35,10 @@ pub struct Limits {
     /// as may wait for the engine at once (the host's slots times the calls a
     /// run may have in flight), so that none is dropped.
     pub stalled: u32,
+    /// Retained turns per attempt, and their total body bytes per attempt.
+    pub turns: u32,
+    pub turn_queue_bytes: u64,
+    pub turn_backoff: Duration,
 }
 
 /// The most memory the domain holds under `limits`, in bytes (6.3), or `None`
@@ -59,12 +64,26 @@ pub struct Limits {
 /// each slot at most, and the relays and bounces it keeps while the engine
 /// is out of reach, the run's facts for the engine, the queues
 /// that hold what each child domain emits in a step until it is routed, and the
-/// facts. What the queued requests own is counted where they end up, and what
-/// the hello holds goes out in the step that makes it.
+/// facts. Version-two retained turns add a bounded map, its body byte budget
+/// and one retry deadline per entry; retained answers still hold slots.
+/// Owned preparation conflicts belong to the workspace until moved into the
+/// agent start. What the queued requests own is counted where they end up,
+/// and what the hello holds goes out in the step that makes it.
 #[must_use]
 pub fn worst_case(limits: &Limits) -> Option<u64> {
     let Limits { host: host_limits, checkout: checkout_limits, agent: agent_limits, .. } = limits;
-    let fits = host_limits.repositories <= checkout_limits.repositories
+    let next_fits = checkout_limits.conflicts <= host_limits.conflicts
+        && checkout_limits.path_bytes <= host_limits.path_bytes
+        && host_limits.conflicts <= agent_limits.conflicts
+        && host_limits.path_bytes <= agent_limits.path_bytes
+        && host_limits.transcript_bytes <= agent_limits.transcript_bytes
+        && host_limits.turn_bytes <= agent_limits.turn_bytes
+        && (limits.turns == 0
+            || (host_limits.turn_bytes > 0
+                && host_limits.turn_bytes <= limits.turn_queue_bytes
+                && limits.turn_backoff > Duration::ZERO));
+    let fits = next_fits
+        && host_limits.repositories <= checkout_limits.repositories
         && host_limits.repositories <= agent_limits.repositories
         && host_limits.name_bytes <= agent_limits.name_bytes
         && host_limits.accounts <= agent_limits.accounts
@@ -84,22 +103,21 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     if !fits {
         return None;
     }
+    declared_graces(limits)?;
     let children = host::worst_case(host_limits)?
         .checked_add(checkout::worst_case(checkout_limits)?)?
         .checked_add(agent::worst_case(agent_limits)?)?;
     let slots = host_limits.slots;
-    let workspaces = Slab::<Workspace>::worst_case(slots)?
-        .checked_add(Map::<Token, Id<Workspace>>::worst_case(slots)?)?
-        .checked_add(
-            u64::from(slots).checked_mul(
-                u64::from(host_limits.repositories).checked_mul(
-                    u64::try_from(size_of::<agent::channel::Repository>())
-                        .ok()?
-                        .checked_add(4)?
-                        .checked_add(u64::from(host_limits.name_bytes))?,
-                )?,
-            )?,
-        )?;
+    let workspaces = workspace_memory(limits)?;
+    let capacity = host_limits.slots.checked_mul(limits.turns)?;
+    routed(limits)
+        .checked_add(host_limits.slots)?
+        .checked_add(limits.stalled)?
+        .checked_add(bounces(limits)?)?
+        .checked_add(capacity)?;
+    let retained = Map::<crate::turns::TurnName, crate::turns::Pending>::worst_case(capacity)?
+        .checked_add(u64::from(host_limits.slots).checked_mul(limits.turn_queue_bytes)?)?
+        .checked_add(Deadlines::<crate::turns::TurnName>::worst_case(capacity)?)?;
     let alarms = Deadlines::<Alarm>::worst_case(ALARMS)?;
     // An answer holds the outcome, the snapshot or the detail of a failure,
     // and the run's work: the repositories it landed in, and its save.
@@ -107,8 +125,14 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .outcome_bytes
         .max(host_limits.snapshot_bytes)
         .max(u64::from(host_limits.detail_bytes))
-        .checked_add(u64::from(host_limits.repositories).checked_mul(work()?)?)?;
+        .checked_add(u64::from(host_limits.repositories).checked_mul(work()?.checked_add(
+            u64::from(host_limits.conflicts).checked_mul(
+                u64::try_from(size_of::<Box<[u8]>>()).ok()?.checked_add(u64::from(host_limits.path_bytes))?,
+            )?,
+        )?)?)?;
     let answers = Map::<Named, host::Answer>::worst_case(slots)?.checked_add(u64::from(slots).checked_mul(answer)?)?;
+    let next_answers = Map::<crate::turns::Name, crate::turns::Answer>::worst_case(slots)?
+        .checked_add(u64::from(slots).checked_mul(answer)?)?;
     let relays = Queue::<Relay>::worst_case(limits.stalled)?
         .checked_add(u64::from(limits.stalled).checked_mul(agent_limits.call_bytes)?)?;
     let bounces = Queue::<Bounced>::worst_case(bounces(limits)?)?;
@@ -122,6 +146,8 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_add(workspaces)?
         .checked_add(alarms)?
         .checked_add(answers)?
+        .checked_add(next_answers)?
+        .checked_add(retained)?
         .checked_add(relays)?
         .checked_add(bounces)?
         .checked_add(told)?
@@ -129,6 +155,33 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_add(checkout_out)?
         .checked_add(agent_out)?
         .checked_add(facts)
+}
+
+fn workspace_memory(limits: &Limits) -> Option<u64> {
+    let host_limits = &limits.host;
+    let checkout_limits = &limits.checkout;
+    let slots = host_limits.slots;
+    let workspaces = Slab::<Workspace>::worst_case(slots)?
+        .checked_add(Map::<Token, Id<Workspace>>::worst_case(slots)?)?
+        .checked_add(
+            u64::from(slots).checked_mul(
+                u64::from(host_limits.repositories).checked_mul(
+                    u64::try_from(size_of::<agent::channel::Repository>())
+                        .ok()?
+                        .checked_add(4)?
+                        .checked_add(u64::from(host_limits.name_bytes))?
+                        .checked_add(u64::try_from(size_of::<checkout::Conflicts>()).ok()?)?
+                        .checked_add(
+                            u64::from(checkout_limits.conflicts).checked_mul(
+                                u64::try_from(size_of::<Box<[u8]>>())
+                                    .ok()?
+                                    .checked_add(u64::from(checkout_limits.path_bytes))?,
+                            )?,
+                        )?,
+                )?,
+            )?,
+        )?;
+    Some(workspaces)
 }
 
 /// What an answer's work holds for each repository: its place among those
@@ -208,4 +261,23 @@ pub(crate) const fn agent_out(limits: &Limits) -> u32 {
 /// once.
 pub(crate) const fn routed(limits: &Limits) -> u32 {
     host_out(limits).saturating_add(checkout_out(limits)).saturating_add(agent_out(limits))
+}
+
+/// Complete serial workspace commit, push, and ambiguous-push verification.
+#[must_use]
+pub fn push_deadline(limits: &Limits) -> Option<Duration> {
+    let each = limits
+        .checkout
+        .local_timeout
+        .as_nanos()
+        .checked_add(limits.checkout.remote_timeout.as_nanos().checked_mul(2)?)?;
+    Some(Duration::from_nanos(each.checked_mul(u64::from(limits.checkout.repositories))?))
+}
+
+/// Contact, cancel/terminate or in-flight push, then saved commit/push/verify.
+#[must_use]
+pub fn declared_graces(limits: &Limits) -> Option<Duration> {
+    let push = push_deadline(limits)?.as_nanos();
+    let cancel = limits.agent.grace.as_nanos().checked_add(limits.agent.kill_after.as_nanos())?;
+    Some(Duration::from_nanos(limits.grace.as_nanos().checked_add(cancel.max(push))?.checked_add(push)?))
 }
