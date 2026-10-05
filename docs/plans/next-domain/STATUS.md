@@ -41,6 +41,9 @@ unavailable; the design records bounded/unknown handling and status links.
 | Increment | State | Evidence |
 |---|---|---|
 | 01a authority values and order | merged, `2d38f2b` | all four workflow checks passed; focused 1,778/1,778 in 7.918 s, fuzzy 26/26 in 22.367 s, one ignored finding; authority serial total 0.087 s |
+| 01b funding arithmetic | merged, `c80d438` | all four workflow checks passed; focused 1,829/1,829 in 5.256 s, fuzzy 28/28 in 22.473 s, one ignored finding; authority serial total 0.115 s |
+| 03a people sign-in and chat requests | merged, `959795f` | all four workflow checks passed; focused 1,822/1,822 in 7.251 s, fuzzy 28/28 in 22.695 s, one ignored finding; targeted people serial total 0.098 s before the added root-pressure regression |
+| 04a1 fake forge git foundations | merged, `0d09efc` | all four workflow checks passed; focused 1,833/1,833 in 6.661 s, fuzzy 28/28 in 22.321 s, one ignored finding; 68 targeted tests passed in 0.054 s |
 | 05a fleet turns and graces | merged, `c6513cb` | all four workflow checks passed; focused 1,794/1,794 in 7.478 s, fuzzy 27/27 in 22.515 s, one ignored finding; fleet focused serial total 0.144 s and fuzzy 0.508 s |
 
 01a checks pattern inclusion against independently enumerated names and
@@ -51,9 +54,19 @@ replay, facts and declared stop bounds. Existing fleet scenarios remain.
 The legacy root supplies the first version's defaults and exhaustive
 ignore arms for additions.
 
-Steps 01 and 05 are partially implemented. Authority funding arithmetic
-(01b), people sign-in and initial requests (03a), and channel version two
-(05b) are in isolated worktrees. Steps 02, 04 and 06 through 08 remain.
+01b keeps exact accounting through overruns and funding transfers, with
+independent expense-ledger tests and durable-generation obligations for
+the caller. 03a includes atomic owner bootstrap and keyed requests with
+commit cuts; retryable root pressure frees its key without saving a final
+answer. 04a1 exercises two-parent ancestry and object transfer, unchanged
+merge trees, conditional pushes, converging histories at the store limit,
+and measured memory. Existing fake-forge callers supply first-version
+defaults.
+
+Steps 01, 03, 04 and 05 are partially implemented. Rules and checks (01c),
+tasks/batches/lifecycle (02a), and channel version two (05b) are in isolated
+worktrees. The remaining fake-forge API additions (04a2) follow its git
+foundations; 04a is not yet complete. Steps 06 through 08 remain.
 
 After groundwork, the plan's finer dependencies still apply: tasks needs
 authority's value and number shapes; the root's walking skeleton needs
