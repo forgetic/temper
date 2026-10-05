@@ -101,6 +101,16 @@ impl Decision {
     }
 }
 impl Journal {
+    /// An empty store needs the deployment identity committed even before its
+    /// first task. The id is a root input, drawn once by the shell at startup.
+    #[must_use]
+    pub fn bootstrap(id: [u8; 16], l: &Limits) -> Journal {
+        let deployment =
+            Deployment { id, tasks: 0, people: 0, sign_ins: 0, messages: 0, runs: 0, calls: 0, commits: 0 };
+        let mut journal = Journal::new(deployment, l);
+        journal.dirty = true;
+        journal
+    }
     /// A loaded header names the last fully applied commit. It is durable;
     /// outstanding answers from a previous process need not be reconstructed.
     #[must_use]

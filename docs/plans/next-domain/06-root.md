@@ -338,8 +338,14 @@ step 07.
    deliveries carry the last commit even when their decision wrote nothing,
    cumulative store answers only make deliveries ready, and the ready pass
    releases one at a time. Pressure is checked before routing a child; a
-   failed commit stops all subsequent releases. The initial journal tests
-   cover these cells; child record wrappers, loads and the complete walking
+   failed commit stops all subsequent releases. A first start commits its
+   deployment identity; a restored header is already durable. The initial
+   root world has an atomic ordered fake store, an independent commit and
+   delivery referee with negative cases, deterministic lag/replay scenarios,
+   a lost completion recovery cut and maximum held-result memory checks.
+   Its small randomized sweep varies writing/read decisions, fresh number
+   gaps, storage latency and ready draining. These journal tests cover the
+   barrier cells; child record wrappers, loads and the complete walking
    story are still required before 06a is complete.
    Integration exposed a prerequisite missing from the original sketch:
    02a/b carry number snapshots but do not keep the external funding ledger.

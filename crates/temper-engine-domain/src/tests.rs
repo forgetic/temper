@@ -48,6 +48,24 @@ fn acknowledged(out: &mut Queue<Output>) -> u32 {
     turn
 }
 #[test]
+fn a_first_start_commits_its_deployment_before_releasing_a_delivery() {
+    let mut j = Journal::bootstrap([37; 16], &LIMITS);
+    let mut out = Queue::with_capacity(1);
+    let mut d = Decision::new(&LIMITS);
+    d.deliver(&LIMITS, ack(1)).unwrap();
+    accept(&mut j, &LIMITS, d, &mut out).unwrap();
+    let (number, writes) = commit(&mut out);
+    assert_eq!(number, 1);
+    assert_eq!(
+        writes.as_ref(),
+        &[Write::Save(Record::Deployment(Deployment { id: [37; 16], commits: 1, ..DEPLOYMENT }))]
+    );
+    assert!(!j.ready());
+    committed(&mut j, number);
+    resume(&mut j, &mut out);
+    assert_eq!(acknowledged(&mut out), 1);
+}
+#[test]
 fn a_store_answer_makes_outputs_ready_without_draining_them() {
     let mut j = Journal::new(DEPLOYMENT, &LIMITS);
     let mut out = Queue::with_capacity(1);

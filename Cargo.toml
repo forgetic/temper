@@ -46,6 +46,7 @@ members = [
     "tests/fake-checkout",
     "tests/engine/accounts",
     "tests/engine/brief",
+    "tests/engine/domain",
     "tests/engine/fleet",
     "tests/legacy/engine/forge",
     "tests/legacy/engine/domain",
@@ -96,6 +97,7 @@ temper-forge-forgejo = { path = "crates/temper-forge-forgejo" }
 temper-forge-forgejo-world = { path = "tests/forge/forgejo" }
 temper-engine-domain-accounts = { path = "crates/temper-engine-domain-accounts" }
 temper-engine-domain = { path = "crates/temper-engine-domain" }
+temper-engine-domain-world = { path = "tests/engine/domain" }
 temper-engine-domain-authority = { path = "crates/temper-engine-domain-authority" }
 temper-engine-domain-people = { path = "crates/temper-engine-domain-people" }
 temper-engine-domain-tasks = { path = "crates/temper-engine-domain-tasks" }

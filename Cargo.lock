@@ -355,6 +355,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-engine-domain-world"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+ "temper-engine-domain",
+ "temper-world",
+]
+
+[[package]]
 name = "temper-engine-fleet-world"
 version = "0.0.0"
 dependencies = [
