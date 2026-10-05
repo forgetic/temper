@@ -54,6 +54,7 @@ unavailable; the design records bounded/unknown handling and status links.
 | 05b versioned channel and typed payloads | merged, `d3cc9c3` | parent review corrected relay byte bounds and added distinct-value fixtures; all four workflow checks passed; focused 2,091/2,091 in 7.184 s, fuzzy 29/29 in 17.783 s, one ignored finding; channel world serial 0.115 s focused and 0.272 s fuzzy before final scalar fixtures |
 | 05c1 fake checkout git foundation | merged, `41eda2b` | all four workflow checks passed; focused 2,123/2,123 in 5.274 s, fuzzy 30/30 in 21.425 s, one ignored finding; physical-git scenarios verify conflict markers, two parents, graph transfer and conditional pushes |
 | 05c2 checkout merge state and ownership | merged, `8e94482` | independent review found no blockers; all four workflow checks passed; focused 2,132/2,132 in 5.396 s, fuzzy 31/31 in 21.190 s, one ignored finding; checkout world serial 0.545 s focused and 0.815 s fuzzy |
+| 05d worker turns and transcript lifecycle | merged, `e2a6a71` | independent review found no confirmed blockers; all four workflow checks passed; focused 2,172/2,172 in 6.761 s, fuzzy 32/32 in 25.290 s, one ignored finding; new worker root turn scenarios and memory checks take 0.048 s focused and 0.039 s fuzzy within shared runtime headroom |
 
 
 01a checks pattern inclusion against independently enumerated names and
@@ -113,8 +114,13 @@ forge client (04b) and worker turns (05d) have been developed independently.
 fences, reserved result/answer credits, bounded references and subscriptions,
 and durable wake eligibility. Root callbacks must complete before the one
 decision commits; pressure retries preserve the call key and use a fresh
-message candidate after intervening delivery. The forge client and worker
-are still in isolated worktrees. Session turns, transcripts and pricing
+message candidate after intervening delivery. The worker is merged: bounded
+retained turns, exact acknowledgement fences, Busy retries, turn-before-answer
+replay, cumulative spend, stable call names, owned conflict paths and checked
+stop graces. V2 watchdog, cancellation and kill races still need broader
+coverage in later runtime verification; the existing randomized host/agent
+worlds exercise v1. Protocol translation remains 05g. The forge client is
+still in an isolated worktree. Session turns, transcripts and pricing
 (05e) are being extended, and the root skeleton (06a) is being prepared.
 The client API foundation's required world verification must pass before
 any client code reaches main. Steps 07 and 08 remain.
