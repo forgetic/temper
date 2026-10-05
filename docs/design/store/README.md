@@ -22,29 +22,32 @@ kv.md and skein's plan. What is still open is in section 14.
   keeps is a key and a value in the map: projects, people, live and ended
   tasks, funding, proofs, archives, notes, the outbox and the connectors'
   state. A session's transcript, which is large, appended to and read
-  rarely, is a file beside the store (section 8): one of skein-kv's
-  payload logs (kv.md, section 6).
+  rarely, is a file of its own beside the store, and the file is the only
+  record of it (section 8).
 - **A thin protocol layer between them.** `temper-engine-protocol-store`
   translates the root's store vocabulary, which already exists
   (`Commit`, `Load` and their terminals), into skein-kv's. It encodes
-  keys so that bytes sort as the domain's keys do, encodes records with a
-  version per shape, and turns transcript writes into appends to files.
-  It holds no state the domain relies on.
-- **One decision, one commit, one sync.** Each root commit is exactly one
-  skein-kv commit with the same number. Its transcript appends are
-  synced before its frame, so a commit, and the bytes it records, is
-  durable whole or not at all. Group commit folds bursts into one sync. A
-  failed commit stops the engine, as the domain already says.
+  keys so that bytes sort as the domain's keys do, and encodes records
+  with a version per shape. It also writes and reads transcript files
+  through skein-io. It holds no state the domain relies on.
+- **One decision, one commit.** Each root commit is exactly one skein-kv
+  commit with the same number. A turn's bytes are synced to its file
+  before the commit that accepts the turn, so a turn is durable with its
+  commit or not at all. Group commit folds bursts into one sync. A failed
+  commit stops the engine, as the domain already says.
 - **Secrets in a second store.** Refresh tokens, sign-in digests and the
   credentials of adopted systems are in a second skein-kv store, in a
   directory only the engine's user can read. The protocol layer alone
   writes it, and the domain names its records by number (section 9).
-- **The domain does not change shape.** Children keep their `Stored`
-  records and ordered `Key`s (`domain/engine.md`, 5.6). The fake store in
-  the worlds stays, and a shared conformance suite holds it to the real
-  store. Two domain changes come with this design. A transcript belongs to
-  a session, not to an attempt. Transcript writes and reads join the
-  root's store vocabulary (section 3).
+- **The real store in every world.** The worlds run the real protocol
+  layer over skein-kv's in-memory mode, so they have no fake of the map.
+  Only transcript files have a stand-in, since domain worlds do no io
+  (section 12).
+- **The domain keeps its shape.** Children keep their `Stored` records
+  and ordered `Key`s (`domain/engine.md`, 5.6). Two domain changes come
+  with this design. A transcript belongs to a session, not to an attempt.
+  Transcript writes and reads join the root's store vocabulary
+  (section 3).
 - **Sized for years with retention.** By kv.md's estimate (section
   10.1), the map stays within 1–2 GB for a busy deployment when ended
   tasks shrink to summaries past a horizon. Transcripts grow by tens of
@@ -55,23 +58,22 @@ kv.md and skein's plan. What is still open is in section 14.
 ```
 temper-engine-domain               the root: Commit, Load, Read; Committed, Loaded, Read; numbers its commits
         │ the root's store vocabulary (crates/temper-engine-domain/src/store.rs)
-temper-engine-protocol-store       keys and records to bytes; ranges to intervals; turns to appends; secrets
-        │ skein-kv's vocabulary (skein's plan, 3.2 and section 6)
-skein-kv  ×2                       the store, and the secrets' store: map, log, snapshots, payload logs
+temper-engine-protocol-store       keys and records to bytes; ranges to intervals; transcript files; secrets
+        │ skein-kv's vocabulary (skein's plan, 3.2)       │ io's file requests
+skein-kv  ×2                       the store, and the secrets' store: map, log, snapshots
         │ io's file requests (skein's plan, 2.1)
 skein-io                           files: the ring, or the simulator's disk
 ```
 
-- **The engine's shell** runs both stores on its loop, as it runs any
-  machine. It routes the root's store requests to the protocol layer
-  and the protocol layer's io to skein-io. Opening the stores comes before
-  the root's `Start`.
+- **The engine's shell** runs both stores and the protocol layer on its
+  loop, as it runs any machine, and routes their io to skein-io. Opening
+  the stores comes before the root's `Start`.
 - **On disk,** in the engine's data directory, which nothing else writes:
 
 ```
 <data>/
 ├── store/          skein-kv: snapshot, log-<first number> segments
-├── transcripts/    the store's payload logs: one per session, sharded by task number
+├── transcripts/    one file per session, sharded by task number
 └── secrets/        a second skein-kv store: the directory 0o700, its files 0o600
 ```
 
@@ -94,8 +96,8 @@ loaded by key range: it is a sequence of turns read from either end.
 
 | Root to store | Store to root |
 |---|---|
-| in a commit, `Append { session, turn }`: one committed turn, written at the end of its session's transcript | (the commit's terminal) |
-| in a commit, `Drop { session }`: the transcript goes once the commit is durable | (the commit's terminal) |
+| in a commit, `Append { session, turn }`: one accepted turn, at the end of its session's transcript | (the commit's terminal) |
+| in a commit, `Drop { session }`: the transcript removed, past its horizon (section 11.2) | (the commit's terminal) |
 | `Read { owner, session, from, toward, most, bytes }`: turns from the start, the end or a cursor, forwards or backwards | `Read { owner, turns, next }`; `Unread { owner }` |
 
 - **A session** is one conversation with an LLM, as smith means it
@@ -103,16 +105,15 @@ loaded by key range: it is a sequence of turns read from either end.
   to its task's current session, and a run that starts fresh opens the
   next one. The root keeps the current ordinal in the task's run proof,
   which each claim carries forward, and an ended task's record says how
-  many it had.
-  Today's turns are keyed by attempt (`Key::Turn { task, attempt, turn }`).
-  That key cannot give a resumed run its whole conversation, which spans
-  attempts, so it goes.
+  many it had. Today's turns are keyed by attempt
+  (`Key::Turn { task, attempt, turn }`). That key cannot give a resumed
+  run its whole conversation, which spans attempts, so it goes.
 - **A turn** carries what `TurnRecord` carries today: its attempt, its
   number within the attempt, its cumulative spend, the last message it
   read, the wall time it was accepted, and its bytes (smith's turn,
   opaque).
 - **The cursor** is opaque to the domain: a position the store gives
-  and takes back. A read stops at the committed end and never crosses it.
+  and takes back. A read never goes past what is committed.
 - **Reads see what is durable.** A `Load` or a `Read` sees every commit
   answered before it was sent, and nothing that is not durable, as
   skein-kv serves reads (kv.md, section 2).
@@ -129,9 +130,8 @@ bounded pages; versions per shape; no other writer.
   (its own and its children's, wrapped) is encoded so that byte order
   equals the order Rust derives for it: a variant's index, then its
   fields in order, numbers big-endian at fixed width, bytes escaped and
-  terminated (skein's plan, 3.3). The fake store's `BTreeMap<Key, Record>`
-  and the real store therefore page identically, and a property test holds
-  the encoding to the derived order on generated keys.
+  terminated (skein's plan, 3.3). A property test holds the encoding to
+  the derived order on generated keys.
 - **A tag per owner, then per family.** The root's key enum already
   nests its children's (`Key::Tasks(tasks::Key)`, `Key::People(..)`).
   The encoding follows that nesting, so a child's keys form one interval,
@@ -143,7 +143,7 @@ bounded pages; versions per shape; no other writer.
 ### 4.2 Ranges to intervals
 
 The domain's `Range` is a predicate over keys (`Range::contains`), and
-the fake store filters by it. The real store must read intervals, so:
+today's fake store filters by it. The real store must read intervals, so:
 
 - **each `Range` maps to a short, fixed, ordered list of intervals,**
   in the protocol layer, and a page that exhausts one with room left goes
@@ -168,6 +168,7 @@ built. Their keys are the children's to declare, under these rules.
 | Owner | Family | Key | Loaded |
 |---|---|---|---|
 | protocol | the store's format | none: one row | at open, by the protocol layer |
+| protocol | live sessions' committed lengths | task | at open, by the protocol layer |
 | root | the deployment's header | none: one row | at start |
 | root | run proofs, with each live task's current session | task | at start |
 | root | terminal archive | task, attempt | on demand |
@@ -182,7 +183,6 @@ built. Their keys are the children's to declare, under these rules.
 | notes | *later:* entries, and an index row per entry | scope, name | per scope in use; entries on demand |
 | forge | *later:* outbox entries, owned objects by key, repositories' state, procedures' states, projections' digests | the connector's | live ones at start; the rest on demand |
 | accounts | *later:* accounts' state, no token | account | at start |
-| views | *later:* traces | wall day, sequence | on demand; swept |
 
 - **Live and history apart.** Within each child, families read at start
   come first and history after them, so a restart reads what is live
@@ -192,8 +192,13 @@ built. Their keys are the children's to declare, under these rules.
   goals newest first or a person's closed chats, is a family of small
   rows the child saves and erases in the same decision as the records
   they point at. Keys reversed in time (`rev_u64`) give newest first. Each
-  index is the domain's own, so it is tested in the child's world against
-  the fake store.
+  index is the domain's own, so it is tested in the child's world.
+- **No traces.** What runs report (the views child's traces of text,
+  progress, calls, tools and usage) is not stored. With every turn
+  committed, its transcript already holds the text, the calls, their
+  results and the usage. Live views still stream what runs report
+  (`domain/engine.md`, section 11), and the engine's own diagnostics go
+  to the process's logs, outside the store (section 11.2).
 
 ## 5. Records
 
@@ -233,9 +238,15 @@ built. Their keys are the children's to declare, under these rules.
   decision saves (`store.rs`, `Deployment`). A store that disagrees
   refuses the start.
 - **A commit's writes become skein-kv ops** in order: a `Save` a `Put`
-  of its encoded key and record, an `Erase` an `Erase`, an `Append` an
-  append to its session's transcript, a `Drop` a payload log dropped.
-  There is one frame and one number for all of them.
+  of its encoded key and record, and an `Erase` an `Erase`. An `Append`
+  becomes a write to its session's file, made before the commit is
+  submitted (section 8.2), and a put of that session's new committed
+  length. A `Drop` becomes the file's removal, made before the commit is
+  submitted (section 8.5).
+- **In order, whatever waits.** A commit with appends or drops goes to
+  skein-kv once its files are synced, and commits after it queue behind
+  it, so numbers reach skein-kv in order. The wait is one file sync, and
+  only for commits behind a turn or a drop.
 - **Group commit.** While a sync is in flight, commits queue, and the
   next write carries them all (kv.md, section 4). The root's bound on
   commits in flight is checked at start against skein-kv's queue
@@ -245,7 +256,8 @@ built. Their keys are the children's to declare, under these rules.
   it.
 - **A failure stops the engine.** skein-kv answers `Failed` for every
   commit in flight when a write or a sync fails or stalls (kv.md,
-  section 4). The protocol layer answers `Uncommitted` for each, the root
+  section 4), and a failed transcript write or sync fails its commit the
+  same way. The protocol layer answers `Uncommitted` for each, the root
   stops (`domain/engine.md`, 5.1), and the shell ends the process. The
   next process recovers the store as it opens it. The engine never
   carries on over a store that has recovered beneath it.
@@ -274,42 +286,37 @@ built. Their keys are the children's to declare, under these rules.
 
 ### 8.1 A file per session
 
-- **One payload log per session,** named by `(task, ordinal)`, in
+- **One file per session,** named by `(task, ordinal)`, in
   `transcripts/`, sharded by task number so no directory holds more than
-  a few thousand files. Nothing of a transcript is in the map but its
-  committed extent, which skein-kv keeps (kv.md, section 6).
-- **A turn per frame.** Each append is one turn: the protocol layer's
-  encoding of the turn's attempt, number, spend, read fence and wall time,
-  then smith's bytes. skein-kv frames it with a checksum and its length at
-  both ends, so the file can be walked from either end.
+  a few thousand files. The name is derived, so nothing lists or indexes
+  the files: a task's sessions are its ordinals, from one to the count
+  its run proof or ended record keeps.
+- **A turn per frame:** the turn's attempt, number, spend, read fence
+  and wall time, then smith's bytes, with a checksum, and the frame's
+  length at both ends so that the file can be walked from either end.
+- **No row per transcript.** The map keeps one fact for each *live*
+  session: how much of its file is committed. That is one row per live
+  task, erased as the task ends, so it is bounded by live work and never
+  grows with history. A closed session needs nothing in the map (8.4).
 
-### 8.2 Written inside its commit
+### 8.2 Written before its commit
 
 The root commits a turn with its spend, its proof and the messages it
 read, in one decision, and acknowledges the worker once that commit is
-durable (`domain/engine.md`, 7.2). The turn's bytes join that commit:
+durable (`domain/engine.md`, 7.2). For a commit that appends:
 
-1. skein-kv writes the commit's appends at each session's end. The end
-   includes appends queued ahead of it that are not yet durable, since a
-   session's next turn may be decided before its last one commits.
-2. It syncs each file it appended to.
-3. It writes the commit's frame, which records each session's new
-   extent, and syncs the log.
-4. It answers the commit.
+1. the protocol layer writes each turn at its session's end. The end
+   includes appends queued ahead that are not yet durable, since a
+   session's next turn may be decided before its last one commits;
+2. it syncs each file it wrote, and, for a session's first turn, the
+   directory that holds the new file;
+3. it submits the commit to skein-kv, with each session's new committed
+   length among its ops;
+4. skein-kv answers once the commit is durable, and the root hears it.
 
-Data first, then the commit (kv.md, section 6): a crash before step 3
-leaves bytes past the extent, which no reader sees and the next append
-writes over. A commit is durable with its transcript bytes or not at
-all. In a group commit, steps 1 and 2 run for every queued commit
-before one log write and one sync.
-
-This is what temper asks of skein-kv's payload logs, beyond its plan's
-sketch, which appends outside a commit and commits an `Extend` after
-it (skein's plan, section 6). There, a turn's commit would wait for its
-append's answer while later commits wait behind it, and a session's
-next turn could not be written before the last one committed. Inside the
-commit, skein-kv keeps both orders: commits by number, and each
-session's appends by commit.
+A crash after step 2 and before the commit is durable leaves a turn in
+the file past its committed length. The worker was not acknowledged, so
+it sends the turn again, and the next append writes over the old bytes.
 
 ### 8.3 Read back
 
@@ -320,18 +327,37 @@ session's appends by commit.
 - **A tail:** a fresh run's brief carries the end of its task's last
   session, read backwards from the end within the section's budget. The
   web reads the same way, newest first, a page at a time.
+- **Never past what is committed:** a live session is read up to its
+  committed length, and a closed one to its end.
 - **A turn that fails its checksum** fails the read (`Unread`). The root
   then treats the transcript as one the agent cannot use: the run fails
   as transient and the next starts fresh (`domain/engine.md`, 7.2).
-- **Open files are bounded:** skein-kv keeps a bounded set of payload
-  logs open, the live sessions' first, and opens others to read them.
+- **Open files are bounded:** the protocol layer keeps a bounded set
+  open, the live sessions' first, and opens others to read them.
 
-### 8.4 Dropped
+### 8.4 After a crash, and closing
 
-A `Drop` in a commit removes the session's extent, and skein-kv deletes
-the file once that commit is durable. At recovery, a file with no extent
-is deleted (kv.md, section 6). Retention (section 11) is what drops
-sessions.
+- **At open,** before the root starts, the protocol layer reads the
+  live sessions' committed lengths and cuts each session's file to its
+  length, syncing it. Only a crash leaves bytes past a committed length,
+  since a failed commit stops the engine. After the cut, every file holds
+  exactly its committed turns.
+- **A session closes** when its task's next run starts fresh, or when
+  the task ends. That happens in a running engine, after the cut, so a
+  closed session's file is exactly its turns and needs no record. The
+  protocol layer replaces a task's length row when an append names the
+  task's next session, and erases it in the commit that erases the task's
+  run proof, which is the commit that ends the task.
+
+### 8.5 Dropped
+
+A `Drop` in a commit names a closed session past its horizon. The
+protocol layer removes its file and syncs the directory before it submits
+the commit. A crash before the commit leaves a task whose session is gone
+while its records still count it. A read of it finds no file and answers
+as for a dropped transcript, and retention's next pass, which still finds
+the task, commits the drop again. Removing a missing file is not a
+failure. Retention is the only writer of drops (section 11.2).
 
 ## 9. Secrets
 
@@ -362,11 +388,13 @@ sessions.
 ## 10. Opening and restart
 
 1. **The shell opens both stores.** skein-kv recovers each: the
-   snapshot, then the log's longest valid prefix, then payload logs with
-   no extent deleted (kv.md, section 3). Each answers `Opened { last }`.
-2. **The protocol layer reads the format row,** refusing a newer
-   format or another deployment's store. An empty store gets its format
-   row in the root's first commit, with the header.
+   snapshot, then the log's longest valid prefix (kv.md, section 3).
+   Each answers `Opened { last }`.
+2. **The protocol layer reads its own rows:** the format row, refusing
+   a newer format or another deployment's store, and the live sessions'
+   committed lengths, cutting each session's file to its length (8.4).
+   An empty store gets its format row in the root's first commit, with the
+   header.
 3. **The root starts** (`domain/engine.md`, section 6): it pages the
    header, checks `last` against it (section 6), then pages the live
    families. Its paging is unchanged, and so is everything after it.
@@ -374,7 +402,8 @@ sessions.
    machines (accounts, the web) once its store is open.
 
 A restart reads a snapshot of a few hundred megabytes in about a second
-(kv.md, 10.1), and the live families are a small part of it.
+(kv.md, 10.1), and the live families are a small part of it. The cut
+reads and writes only live sessions' files.
 
 ## 11. Growth and retention
 
@@ -401,13 +430,11 @@ engine. It is not the store's, so it is tested in the worlds:
 - **Transcripts go past a longer horizon** (180 days by default), by
   `Drop`, in the same pass. A chat that is still live keeps its
   sessions, whatever their age.
-- **Traces stay in the map, cheaply.** Traces are expendable and swept
-  after their retention (`temper-engine-domain-views`). They keep each
-  report's shape and cut content to a small bound per report, and they
-  have a quota of the map's budget. Past the quota, the oldest day goes
-  first. Content captured in full is already in the transcript.
 - **Answered keys** expire after the people child's retention, in the
   same way.
+- **Diagnostics are not the store's.** The engine's own trace records
+  (programming-model.md, section 3: diagnostics are data) go to the
+  process's logs through its shell, with whatever retention those keep.
 
 ### 11.3 Keeping the map from filling
 
@@ -424,24 +451,33 @@ engine. It is not the store's, so it is tested in the worlds:
 
 ## 12. Testing
 
-Following `testing-strategy.md` and `docs/design/testing.md`:
+Following `testing-strategy.md` (section 4: a fake of the service's own
+component retires once the real one exists) and `docs/design/testing.md`:
 
-- **The fake store stays** in the engine's worlds, a `BTreeMap` that
-  commits whole, slowly or failing, and is cut at drawn moments. It gains
-  transcripts by session, appends inside commits, reads from either end,
-  drops and fill reports.
-- **One conformance suite** runs scripted commits, loads and reads
-  against the fake store and against the real one (protocol layer,
-  skein-kv, the simulator's disk). It compares rows, pages, cursors' keys
-  and turns, so the fake cannot drift from what temper will run on.
+- **The real store in the domain worlds.** The engine's worlds run the
+  protocol layer over skein-kv's in-memory mode (skein's plan, 5.1:
+  commits apply at once, no files), in place of today's fake store. The
+  worlds stay free of io, and every story runs the real key encoding,
+  codecs and paging.
+- **Faults come from the world, not the store.** The world holds
+  commits between the root and the store, in order. It delays them to
+  make the store slow, and answers one `Uncommitted` to fail it. A cut
+  keeps what reached skein-kv and loses what the world still held, so a
+  restart over the same store starts from exactly the commits kept,
+  whether or not their answers went out.
+- **Transcript files have a stand-in** in the domain worlds: an
+  in-memory file system serving the protocol layer's file requests, with
+  the same cut rule. The real files are tested in the store's world.
 - **The store's world,** `tests/engine/store`, runs the protocol layer
-  over skein-kv on the simulator's crashing disk (skein's plan, 2.2): a
-  scripted root commits, loads, appends turns and reads them back, and is
-  crashed at every file operation and sync. Its referee holds the domain's
-  promises: after recovery, the last acknowledged commit, or that and one
-  whole uncertain one, never part of one; no transcript byte past its
-  commit, and none missing before it; numbers that match the header;
-  pages equal to the fake's.
+  over skein-kv and transcript files on the simulator's crashing disk
+  (skein's plan, 2.2). A scripted root commits, loads, appends turns and
+  reads them back, and is crashed at every file operation and sync. Its
+  referee holds the domain's promises:
+  - after recovery, the last acknowledged commit, or that and one whole
+    uncertain one, never part of one;
+  - no turn readable past its commit, and none missing before it;
+  - numbers that match the header;
+  - pages equal to a model map's.
 - **Step tests** in the protocol crate: the key encoding against the
   derived order; ranges against `Range::contains`; every codec both ways,
   with golden bytes per version; refusals at open (format, deployment,
@@ -455,21 +491,25 @@ Following `testing-strategy.md` and `docs/design/testing.md`:
 ## 13. What the other documents now owe
 
 - **`domain/engine.md`:** 5.4, transcripts by session and kept as
-  files, secrets in their own store; 5.5, transcripts read from either
-  end; 7.2, sessions and resuming the current one; 14, the store's
-  layer named here.
+  files, secrets in their own store, traces no longer kept; 5.5,
+  transcripts read from either end; 7.2, sessions and resuming the current
+  one; 11, traces gone, views live only; 14, the store's layer named here,
+  and the fake store retired; 15, the world's store.
 - **`domain/README.md`, section 5:** the store's protocol is this
   directory, and `credentials.md`'s refresh token moves to the secrets'
   store.
 - **`docs/design/protocol.md`:** the store as a boundary of the engine's
   protocol layer, with this document as its design.
-- **`docs/design/testing.md`:** the store's world, the conformance suite,
-  and the fake store's additions.
-- **`docs/plans/next-domain/08-after.md`, section 3:** the store's plan
-  is `plan.md` here.
-- **skein's `kv.md`, section 6, and its plan, section 6:** appends inside
-  commits, frames readable from either end, many logs sharded, open logs
-  bounded, and the fill reported with each answer (sections 8 and 11.3).
+- **`docs/design/testing.md`:** the real store in the engine's worlds,
+  the transcripts' stand-in, and the store's world.
+- **`docs/plans/next-domain/08-after.md`:** section 2, the views child
+  loses its traces and their sweep; section 3, the store's plan is
+  `plan.md` here.
+- **skein's plan:** skein-kv's in-memory mode (5.1) is used by temper's
+  worlds, so it stays when the files arrive; skein-io's file entity gains
+  opening an existing file to write (its 2.3, needed now for transcripts)
+  and cutting a file to a length; the fill with each `Committed`. temper
+  does not need skein-kv's payload logs (its section 6).
 
 ## 14. Open questions
 
@@ -477,14 +517,19 @@ Following `testing-strategy.md` and `docs/design/testing.md`:
   decoder. A startup pass that rewrites every row of an old version is
   the likely way, run when the format row says one is due.
 - **Backups:** copying the directory while the engine is stopped works.
-  An online backup could copy the snapshot, then the segments from its
-  start, then the transcripts to their extents, which recovery's rule
-  makes consistent, if snapshots do not delete segments while it runs.
+  An online backup would copy the snapshot, then the segments from its
+  start, then the transcripts. That would rest on recovery's rule, if
+  snapshots did not delete segments while it ran and live sessions were
+  cut at restore.
 - **Sweeping orphan secrets:** a pass that lists the secrets' store and
   asks the domain which numbers it still names, or secrets that carry
   their own expiry only.
 - **Retention's horizons,** the summary's shape, and whether people may
   pin a task or a transcript past them.
+- **Run timings:** if what traces kept beyond the transcript (when a
+  tool or an LLM call started and how long it took) is wanted after the
+  run, it goes into the turn's frame or a file beside the transcripts,
+  never into the map.
 - **Search** over tasks, notes and transcripts (`docs/design/web/ux`):
   the store offers ordered keys only. Notes' descriptions are searched in
   memory per scope (`domain/engine.md`, section 10). Wider search would
