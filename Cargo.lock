@@ -109,17 +109,17 @@ dependencies = [
 [[package]]
 name = "skein-fake-checkout"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/skein.git#8b83175b6d75bfb96a6dc27baae5eb76d25f82bd"
+source = "git+https://git.ekanayaka.io/ai/skein.git#2c725c21474621d3631bc51562c1d82e73b8f903"
 
 [[package]]
 name = "skein-heap"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/skein.git#8b83175b6d75bfb96a6dc27baae5eb76d25f82bd"
+source = "git+https://git.ekanayaka.io/ai/skein.git#2c725c21474621d3631bc51562c1d82e73b8f903"
 
 [[package]]
 name = "skein-http"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/skein.git#8b83175b6d75bfb96a6dc27baae5eb76d25f82bd"
+source = "git+https://git.ekanayaka.io/ai/skein.git#2c725c21474621d3631bc51562c1d82e73b8f903"
 dependencies = [
  "skein-lib",
 ]
@@ -127,7 +127,7 @@ dependencies = [
 [[package]]
 name = "skein-io"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/skein.git#8b83175b6d75bfb96a6dc27baae5eb76d25f82bd"
+source = "git+https://git.ekanayaka.io/ai/skein.git#2c725c21474621d3631bc51562c1d82e73b8f903"
 dependencies = [
  "skein-lib",
 ]
@@ -135,7 +135,7 @@ dependencies = [
 [[package]]
 name = "skein-json"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/skein.git#8b83175b6d75bfb96a6dc27baae5eb76d25f82bd"
+source = "git+https://git.ekanayaka.io/ai/skein.git#2c725c21474621d3631bc51562c1d82e73b8f903"
 dependencies = [
  "skein-lib",
 ]
@@ -143,12 +143,12 @@ dependencies = [
 [[package]]
 name = "skein-lib"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/skein.git#8b83175b6d75bfb96a6dc27baae5eb76d25f82bd"
+source = "git+https://git.ekanayaka.io/ai/skein.git#2c725c21474621d3631bc51562c1d82e73b8f903"
 
 [[package]]
 name = "skein-shell"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/skein.git#8b83175b6d75bfb96a6dc27baae5eb76d25f82bd"
+source = "git+https://git.ekanayaka.io/ai/skein.git#2c725c21474621d3631bc51562c1d82e73b8f903"
 dependencies = [
  "io-uring",
  "libc",
@@ -159,7 +159,7 @@ dependencies = [
 [[package]]
 name = "skein-sim"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/skein.git#8b83175b6d75bfb96a6dc27baae5eb76d25f82bd"
+source = "git+https://git.ekanayaka.io/ai/skein.git#2c725c21474621d3631bc51562c1d82e73b8f903"
 dependencies = [
  "skein-io",
  "skein-lib",
@@ -168,7 +168,7 @@ dependencies = [
 [[package]]
 name = "skein-world"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/skein.git#8b83175b6d75bfb96a6dc27baae5eb76d25f82bd"
+source = "git+https://git.ekanayaka.io/ai/skein.git#2c725c21474621d3631bc51562c1d82e73b8f903"
 dependencies = [
  "skein-heap",
  "skein-io",
