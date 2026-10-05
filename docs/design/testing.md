@@ -312,6 +312,33 @@ admission, replay, inert facts and counted peak memory. The fuzzy matrix
 settles every world and reaches each named ending within the people's
 world allotment (`docs/plans/next-domain/README.md`, 5.5).
 
+#### 4.4.2 The tasks child domain's parent and executors
+
+`tests/engine/tasks` drives the real tasks child with always-allow
+authority and scripted agent executors in increment 02a. The parent
+commits task records and requester result mail together, and withholds
+replies, assignments, stops and closing requests until durability.
+Preparation, claimed attempts and actual running work are distinct;
+`Close`/`Settled` represents effects and resource release at the root.
+
+The independent referee observes durable task creation, assignments,
+terminals, closing/settlement and requester results. It checks whole
+batches from actual durable creations, cycles through dependency and
+delegation waits, dependency order, one run per task, increasing attempts,
+once-only durable replies/results, limits and every cancelled descendant
+ending before its requester. A table independently violates every initial
+rule. Focused stories cover failures in every class, assignment/preparation
+refusals, holds and release, a three-level cancellation and retained input
+stubs. Restart cuts independently bracket durability of make, claim,
+terminal, cancel and settlement decisions. Counting-allocator tests fill
+payloads, graph edges, stubs, alarms, held closing results and retired
+slots, and cold-restore the records against the child's worst-case bound.
+Replay agrees with facts consumed or left full. The seeded fuzzy lifecycle
+sweep adds failures, held/released tasks, failed dependency results,
+refusals, restarts and complete subtree cancellation within the tasks
+world allotment (`docs/plans/next-domain/README.md`, 5.5). Later increments
+extend this same world with inboxes, references, procedures and funding.
+
 ### 4.5 Temper's own components
 
 A fake worker served until the worker's domain was built, and a fake
@@ -475,7 +502,7 @@ As of 2026-10-03.
 | Tier | Built |
 |---|---|
 | step tests | every domain crate and the fakes |
-| domain worlds | the agent's tools, session and run; the worker's checkout, agent and host; the legacy engine's work, plan and forge, the new people child, fleet, brief, notes and views (the rules by step tests alone); the engine's own |
+| domain worlds | the agent's tools, session and run; the worker's checkout, agent and host; the legacy engine's work, plan and forge, the new people and tasks children, fleet, brief, notes and views (the rules by step tests alone); the engine's own |
 | system worlds | the agent's top-level world: the engine, the worker and agents; the whole worker's: the engine, the worker and scripted agents |
 | machine worlds | none: temper has no machine of its own |
 | protocol worlds | none: no protocol layer exists |

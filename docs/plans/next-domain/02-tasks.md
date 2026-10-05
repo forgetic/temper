@@ -125,7 +125,9 @@ pub(crate) enum Active {
 
 ### 2.2 Its vocabulary
 
-A sketch; the names are the implementer's to settle against `tasks.md`.
+A sketch of the complete target; later increments add their variants
+when they implement the behavior. Section 2.4 describes the narrower
+implemented 02a contract.
 
 ```rust
 /// parent -> tasks
@@ -138,7 +140,7 @@ pub enum Event {
     /// to `read` and spent `spent`; a run ended (finished, parked, failed by
     /// class); a procedure stepped; a person answered.
     Turned { task: u64, attempt: u64, turn: u32, read: Option<u64>, spent: u64 },
-    Activation { task: u64, attempt: u64, end: End },
+    Activation { reply_to: ReplyTo, task: u64, attempt: u64, end: End },
     /// A message admitted at its sender's entrance (tasks.md, 7.2), or a
     /// connector's news, classified for this task (7.3).
     Message { to: u64, from: Party, message: Message },
@@ -238,6 +240,62 @@ run's previously committed expense, even across allotment replacement.
 History and generation records prevent a replay from closing an old
 allotment or charging an old turn twice.
 
+### 2.4 The implemented 02a contract
+
+02a implements agent executors, batches and their dependencies, per-class
+failure/backoff, holds, cancellation and ordered closing. It carries its
+own authority, numbers and funder values; authority and funding decisions
+are the root's. Procedure/person executors, turns, inboxes, references,
+proposals and funder arithmetic arrive in their later increments.
+
+`Activate` asks the root for work. Reply-bearing `Prepare` and `Claim`
+advance due → preparing → claimed; `Started` records placement. The root
+issues fresh task and attempt numbers and commits a claim before assigning
+the run. A task's attempt must strictly grow; external stale or invalid
+claims are refused with typed state/attempt reasons. `Activation` answers
+with `Acknowledged { accepted: New | Already }` or a typed refusal. A
+finish with live delegates is a call before the run exits: a refusal
+leaves its attempt live so the executor can correct the finish. Invalid
+results instead consume an invalid-result try. No attempt/try is spent on
+preparation failure; assignment refusal consumes the claim's number and
+pauses without spending a try. Only agent execution is supported, while
+carried authority delegation kinds include charters, procedures and roles.
+
+Dependency admission initially accepts members of this batch and the
+creator's existing live direct delegates. Introduced references are 02b.
+The introduced-sibling refusal story in section 3 conflicts with the
+broader reference rule in `tasks.md`, section 4; 02b must settle that story
+explicitly when introduction lands. Ended tasks are inputs, not new
+dependencies. The root may load a trustworthy ended summary through
+bounded, reply-bearing `RememberStub`, in the same decision as `Make`.
+`ForgetStub` refuses while a live dependency or input names the stub;
+02b extends that guard to references. Loaded failure/cancellation summaries
+are valid inputs too. Remembered summaries occupy the configured stub
+limit until the root forgets them, and every live task reserves a future
+stub slot before batch mutation. Lifetime subtree-made counts preserve
+per-tree limits when completed delegates leave the live set.
+
+Held records preserve waiting, active or closing state and any closing
+result. Closing refuses new batches even while held, so a new delegate
+cannot invalidate settlement. A held live run is stopped, and release refuses while its terminal
+is outstanding. Incoming terminal/settlement updates the saved prior state
+without lifting the hold; release resets tries, restores that state and
+reassesses dependencies. Cancellation lifts holds throughout its subtree,
+waits for own runs, then delegates, then the root's `Close`/`Settled` gate.
+A cancelled task retains an optional completed result describing what it
+had done. Effect/resource settlement belongs to that root gate in 02a.
+
+`Live`, `Ended` and `Stub` records use their own typed keys, with immediate
+`Save`/`Erase` in the same decision as each reply or outward request
+(`engine.md`, 5.6). `Ended` asks the root to commit exactly one requester
+result message with the ended record; it is durable mail, never a volatile
+notification reconstructed from history. The root keeps its run/call
+acknowledgements after task/stub eviction. Startup-only `Restore` and
+`Restored` accept rows in any order, validate links and the dependency DAG,
+reproject stored wall backoffs once, and request adoption of committed
+claims before new work. Due/preparing work is rebuilt; closing gates are
+reissued idempotently. General paging remains 02f.
+
 ## 3. The world
 
 `tests/engine/tasks`, package `temper-engine-tasks-world`, shaped as
@@ -291,7 +349,8 @@ stalled, withdrawn) reached across the seeds.
    `Close` and `Settled`); `Stored` for tasks; the world with authority
    always allowing, agent executors only, no messages but results. Stories:
    batches, dependency order, failures and holds, a cancel down three
-   levels.
+   levels. Focused restart cuts and saturated-memory checks already cover
+   these records and gates; 02f broadens the complete hub's coverage.
 2. **02b inboxes and wakes.** `inbox.rs`, `wake.rs`, `refs.rs`: admission,
    taking by a turn, relaying to a live run, policies and batching,
    subscriptions to tasks and timers, references and introductions.

@@ -194,7 +194,10 @@ waiting ──► active ──► closing ──► done, failed or cancelled
   (section 3); the store keeps it all.
 - **Held:** stopped for a decision, from waiting, active or closing. It
   says why (5.5). A release returns it where it was, the reason it was
-  held judged afresh.
+  held judged afresh. A live run stopped by the hold must first return its
+  terminal answer; release cannot overlap it with another run. A terminal
+  or a settlement received while held updates the preserved prior state,
+  including a closing result, without lifting the hold.
 
 ### 5.2 Agent tasks
 
@@ -221,7 +224,9 @@ idle until its next wake. A task has one run at most at a time.
 Whether a waiting run holds its worker's slot or parks is engine.md,
 7.4. A claim that no worker reports after a restart, its attempt having
 committed no turn and no call, counts as not started: no try is spent
-on it.
+on it. The root issues every attempt number. Each task accepts only a
+strictly greater number for a new claim, and refuses invalid or stale
+external claims without changing its current run.
 
 ### 5.3 Procedure tasks
 
@@ -288,9 +293,17 @@ which may amend, cancel or re-address it.
   delegates of its task are live is refused, naming them, unless its
   finish asks for them to be cancelled, so a task that depends on
   another waits for that task's whole subtree. Its result goes to its
-  requester once it has closed (5.1).
+  requester once it has closed (5.1). The finish is a reply-bearing call
+  before the run exits: refusal leaves that attempt live so the executor
+  can correct the finish. An accepted activation terminal is acknowledged
+  after the decision is durable; replaying its accepted answer changes
+  neither the task nor its tries.
 - **Delivered once,** as a message to the requester, committed with the
-  task's end. A person requester sees it in the web.
+  task's end. The root commits this requester message in the same decision
+  as the ended record (`engine.md`, 5.6); restoration of the historical
+  record does not send another message. A person requester sees it in the
+  web. A cancellation can retain a completed result alongside its reason,
+  recording what was done before everything settled.
 - **Kept.** A result is read by every task that depends on its task, or
   names it among its inputs, in the brief of its next run (engine.md,
   section 9), and by its requester as a message.

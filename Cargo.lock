@@ -333,6 +333,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-engine-domain-tasks"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+]
+
+[[package]]
 name = "temper-engine-domain-views"
 version = "0.0.0"
 dependencies = [
@@ -393,6 +400,15 @@ dependencies = [
  "temper-fake-llm-protocol",
  "temper-legacy-engine-domain",
  "temper-oauth",
+ "temper-world",
+]
+
+[[package]]
+name = "temper-engine-tasks-world"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+ "temper-engine-domain-tasks",
  "temper-world",
 ]
 
