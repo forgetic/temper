@@ -51,6 +51,7 @@ unavailable; the design records bounded/unknown handling and status links.
 | 04a2 fake forge API additions | merged, `6f8a73e` | all four workflow checks passed on the final reviewed tip; focused 1,843/1,843 in 6.235 s, fuzzy 28/28 in 23.993 s, one ignored finding; 78 targeted tests in 0.073 s |
 | 05a fleet turns and graces | merged, `c6513cb` | all four workflow checks passed; focused 1,794/1,794 in 7.478 s, fuzzy 27/27 in 22.515 s, one ignored finding; fleet focused serial total 0.144 s and fuzzy 0.508 s |
 | 05b versioned channel and typed payloads | merged, `d3cc9c3` | parent review corrected relay byte bounds and added distinct-value fixtures; all four workflow checks passed; focused 2,091/2,091 in 7.184 s, fuzzy 29/29 in 17.783 s, one ignored finding; channel world serial 0.115 s focused and 0.272 s fuzzy before final scalar fixtures |
+| 05c1 fake checkout git foundation | merged, `41eda2b` | all four workflow checks passed; focused 2,123/2,123 in 5.274 s, fuzzy 30/30 in 21.425 s, one ignored finding; physical-git scenarios verify conflict markers, two parents, graph transfer and conditional pushes |
 
 
 01a checks pattern inclusion against independently enumerated names and

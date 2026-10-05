@@ -294,7 +294,11 @@ passing with the same counts.
    existing callers keep ordinary one-parent/fast-forward defaults.
    05c2 prepares `Start::Merge`, forwards bounded repository/path
    conflicts, retains the second parent until committed, and carries
-   expected heads through successful and ambiguous pushes.
+   expected heads through successful and ambiguous pushes. Its referee
+   predicts whole trees, parent pairs and refs, including marker refusal,
+   saved work and a stale head that would otherwise allow a fast-forward.
+   Replay, facts independence, cancellation races and counted maximum
+   conflict sets cover the state machine; legacy worlds retain their cases.
 4. **05d the host and the worker's root:** transcripts, turns, spend,
    merges in progress, mid-run pushes, graces.
 5. **05e the session:** turns told, opening from a transcript, pricing.

@@ -257,6 +257,14 @@ its files, while the forge keeps the repositories, and the transport
 carries git's calls between them (where a repository's branches are, a
 fetch, a push, a branch created for a base).
 
+The checkout's merge world independently predicts complete trees, both
+parents and remote refs for clean and conflicted merges, unchanged merge
+trees, saved work, stale expected heads and pushes that land but time out.
+Each scenario settles all its typed promises, replays from its seed, and
+has the same requests and effects with facts disabled. Its counted-memory
+test includes construction and maximum conflict-path sets in retired
+preparations alongside live pushes before reclaim.
+
 **The shell subset.** An LLM can type any command, and no fake can run a
 real build. The machine's sh interprets a small subset of POSIX sh: a few
 commands (`test`, `grep -q`, `cat`, `echo`, `exit`) joined by `&&`, `||`

@@ -260,3 +260,91 @@ fn a_domain_with_every_workspace_held_at_its_limits_stays_within_its_worst_case(
     fill(Limits { workspaces: 64, repositories: 8, name_bytes: 256, message_bytes: 65_536, ..LIMITS });
     fill(Limits { workspaces: 1000, repositories: 1, name_bytes: 16, message_bytes: 16, ..LIMITS });
 }
+
+fn full_paths(limits: &Limits) -> Box<[Box<[u8]>]> {
+    (0..limits.conflicts).map(|index| name(limits.path_bytes, index)).collect()
+}
+
+impl Fill {
+    /// Retain all but the final repository's maximum conflict set, with
+    /// that last merge in flight. IO's trusted terminals are supplied here;
+    /// the separate merge world checks their trees and remote effects.
+    fn pending_merge(&mut self, n: u32) -> Token {
+        let limits = self.env.limits;
+        let mut spec = full_spec(&limits, n);
+        for repo in &mut spec.repositories {
+            repo.start = Start::Merge { branch: bytes(limits.name_bytes), base: commit(5) };
+            repo.expected = Some(commit(1));
+        }
+        let [Asked::Held { hold }, Asked::Io { op: Kind::Make }] =
+            self.step(Event::Prepare { client: Token::new(u64::from(n)), spec })[..]
+        else {
+            panic!("admitted")
+        };
+        for _ in 0..limits.repositories {
+            assert_eq!(self.done(hold, Done::Succeeded)[..], [Asked::Io { op: Kind::Clone }]);
+        }
+        assert_eq!(self.done(hold, Done::Succeeded)[..], [Asked::Io { op: Kind::Fetch }]);
+        for place in 0..limits.repositories {
+            assert_eq!(self.done(hold, Done::Fetched { commit: commit(1) })[..], [Asked::Io { op: Kind::Fetch }]);
+            assert_eq!(self.done(hold, Done::Fetched { commit: commit(5) })[..], [Asked::Io { op: Kind::CheckOut }]);
+            assert_eq!(self.done(hold, Done::Succeeded)[..], [Asked::Io { op: Kind::Merge }]);
+            if place + 1 < limits.repositories {
+                assert_eq!(
+                    self.done(hold, Done::Conflicted { files: full_paths(&limits) })[..],
+                    [Asked::Io { op: Kind::Fetch }]
+                );
+            }
+        }
+        hold
+    }
+}
+
+#[test]
+fn retired_preparations_and_live_pushes_own_maximum_conflict_sets_within_the_bound() {
+    let limits = Limits { workspaces: 8, repositories: 4, conflicts: 8, path_bytes: 128, ..LIMITS };
+    // World bookkeeping predates the meter; only the domain and its admitted
+    // ownership transfers are charged against the domain's worst case.
+    let mut active = Vec::with_capacity(limits.workspaces as usize);
+    let mut fill = Fill::new(limits);
+    for n in 0..limits.workspaces {
+        let hold = fill.pending_merge(n);
+        assert_eq!(fill.step(Event::Release { hold })[..], [Asked::Cancel]);
+        assert_eq!(
+            fill.done(hold, Done::Failed { fault: Fault::Cancelled })[..],
+            [Asked::Prepared { prepared: Preparation::Aborted }, Asked::Released]
+        );
+    }
+    for n in limits.workspaces..limits.workspaces * 2 {
+        active.push(fill.pending_merge(n));
+    }
+    let payload = u64::from(limits.workspaces)
+        * u64::from(limits.repositories - 1)
+        * u64::from(limits.conflicts)
+        * u64::from(limits.path_bytes);
+    assert!(fill.meter.held() >= 2 * payload, "released and live preparations both retain full path bytes");
+    assert_eq!(fill.domain.holds(), limits.workspaces * 2);
+    for hold in &active {
+        let next = fill.done(*hold, Done::Conflicted { files: full_paths(&limits) });
+        let [Asked::Prepared { prepared: Preparation::Ready { conflicts, .. } }] = next[..] else { panic!("prepared") };
+        assert_eq!(conflicts, u64::from(limits.repositories) * u64::from(limits.conflicts));
+        assert_eq!(
+            fill.step(Event::Push { hold: *hold, message: message(&limits) })[..],
+            [Asked::Io { op: Kind::Commit }]
+        );
+        for _ in 0..limits.repositories - 1 {
+            assert_eq!(
+                fill.done(*hold, Done::Conflicted { files: full_paths(&limits) })[..],
+                [Asked::Io { op: Kind::Commit }]
+            );
+        }
+    }
+    assert!(fill.meter.held() >= 2 * payload, "retired preparation paths and live landing paths coexist");
+    let before = fill.meter.held();
+    fill.domain.reclaim();
+    assert!(before - fill.meter.held() >= payload, "reclaim releases retired path ownership");
+    assert_eq!(fill.domain.holds(), limits.workspaces);
+    for hold in active {
+        assert_eq!(fill.done(hold, Done::Conflicted { files: full_paths(&limits) })[..], [Asked::Pushed]);
+    }
+}

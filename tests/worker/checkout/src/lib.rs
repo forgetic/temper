@@ -31,6 +31,7 @@
 
 pub mod client;
 pub mod forge;
+pub mod merges;
 mod noisy;
 pub mod translate;
 mod world;

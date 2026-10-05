@@ -301,7 +301,11 @@ protocol layer runs as contained processes and whose output it parses.
   with two parents, the branch's head and the base commit, even when the
   tree is unchanged from either; a file the merge left in conflict that
   still holds a conflict marker is refused at push, and the run is told
-  which.
+  which. The checkout returns conflict sets by repository index, owning
+  each full relative path once. Its limits bound the number and bytes of
+  paths per repository; malformed or oversized git terminals fail without
+  retaining those paths. Facts keep only the path counts. A cancelled
+  merge releases the workspace only after its invocation has settled.
 - **Push commits what the run checked.** When a run asks to push, at
   `finish` with a change or proposing one mid-run, it has run the
   repository's checks with nothing else writing to the checkout
@@ -310,7 +314,10 @@ protocol layer runs as contained processes and whose output it parses.
   never forced: if the branch moved incompatibly with the run's commit,
   the push fails and the run is told. This checks freshness against
   divergent changes; it does not detect every branch movement
-  (section 13).
+  (section 13). When the assignment supplies an expected head, the remote
+  must also still be at that exact head. Successful or verified pushes
+  advance that condition for the next push; a refusal leaves it intact.
+  Saving to the separate saved-work branch does not advance it.
 - **Each repository lands on its own.** Pushing several is not atomic:
   the run is told done only if every repository with a change landed it,
   moved if a branch cannot take the commit as a fast-forward, and nothing

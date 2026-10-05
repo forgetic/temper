@@ -1073,3 +1073,49 @@ fn oversized_or_duplicate_terminal_paths_are_dropped_without_retention() {
         let Landing::Explained { fault: Fault::Broken, .. } = &landings[0] else { panic!("broken terminal") };
     }
 }
+
+#[test]
+fn releasing_an_inflight_merge_waits_for_its_terminal_and_never_exposes_a_ready_workspace() {
+    for done in [Done::Merged, Done::Conflicted { files: Box::new([bytes(b"src/a")]) }, failed(Fault::Cancelled)] {
+        let mut h = Harness::new(MERGES);
+        let (hold, _) = h.prepare(1, merge_spec());
+        h.next(hold, Done::Succeeded);
+        h.next(hold, Done::Succeeded);
+        h.next(hold, Done::Fetched { commit: commit(1) });
+        h.next(hold, Done::Fetched { commit: commit(7) });
+        let Op::Merge { .. } = h.next(hold, Done::Succeeded) else { panic!("merge in flight") };
+        assert_eq!(h.one(Event::Release { hold }), Request::Cancel { owner: hold });
+        h.none(Event::Release { hold });
+        assert_eq!(h.domain.holds(), 1, "the process can still touch its workspace");
+        let requests = h.step(Event::Done { owner: hold, done });
+        assert_eq!(
+            requests.as_slice(),
+            &[
+                Request::Prepared { client: Token::new(1), prepared: Prepared::Aborted },
+                Request::Released { client: Token::new(1) }
+            ]
+        );
+        assert_eq!(h.domain.holds(), 0);
+        h.none(Event::Release { hold });
+    }
+}
+
+#[test]
+fn a_moved_head_refusal_preserves_the_original_condition_on_retry() {
+    let mut h = Harness::new(MERGES);
+    let hold = h.ready(1, merge_spec());
+    h.one(Event::Push { hold, message: message() });
+    let Op::Push { expected, .. } = h.next(hold, Done::Committed { commit: commit(9) }) else {
+        panic!("conditional push")
+    };
+    assert_eq!(expected, Some(commit(1)));
+    assert_eq!(landings(h.one(Event::Done { owner: hold, done: Done::Rejected })).as_ref(), &[Landing::Moved]);
+    let Op::Commit { parent, merging, .. } = io(h.one(Event::Push { hold, message: message() }), hold) else {
+        panic!("retry retains the local merge commit")
+    };
+    assert_eq!((parent, merging), (commit(9), None));
+    let Op::Push { expected, commit: head, .. } = h.next(hold, Done::Unchanged) else {
+        panic!("retry of unlanded commit")
+    };
+    assert_eq!((head, expected), (commit(9), Some(commit(1))));
+}
