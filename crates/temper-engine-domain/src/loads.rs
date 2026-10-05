@@ -5,37 +5,89 @@ use alloc::boxed::Box;
 use core::mem::size_of;
 use skein_lib::{Id, List, Queue, Slab, Token};
 
+/// Startup bounds for paged store reads (domain/engine.md, section 5.3).
+/// The root supplies them; the protocol enforces the same decoded-page bound.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Limits {
+    /// Maximum issued loads, including abandoned IO awaiting its terminal.
     pub loads: u32,
+    /// Maximum rows requested and accepted in one incoming page.
     pub rows: u32,
-    /// Fixed record slots and their owned transcript bytes, together.
+    /// Soft kept-prefix bound, counting record slots and their owned bytes.
     pub bytes: u32,
     /// Hard decoded store-answer bound, enforced by the store protocol too.
     /// The kept prefix can have a smaller budget than its incoming page.
     pub reply_bytes: u32,
+    /// Soft per-turn transcript bound; the first oversized row cuts the prefix.
     pub transcript_bytes: u32,
 }
+
+/// Explicit omission from a validated page (domain/engine.md, section 5.3).
+/// A load waiter receives this with the kept prefix; it must handle zero progress.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Cut {
+    /// Number of omitted rows, bounded by the issued page's row limit.
     pub rows: u32,
+    /// Omitted record slots and owned bytes, bounded by the decoded-page limit.
     pub bytes: u64,
 }
+
+/// Terminal load failure delivered to its root waiter (domain/engine.md, 5.3).
+/// A malformed page is rejected whole before allocating any kept prefix.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Failure {
+    /// The store ended its issued load without rows.
     Store,
+    /// The page exceeded the issued row count or its count was unrepresentable.
     Rows,
+    /// A row belongs outside the issued key range.
     Range,
+    /// Keys are repeated, unordered or at/before the exclusive starting key.
     Order,
+    /// Continuation does not identify the last returned row in its range.
     Cursor,
+    /// Decoded slots and owned bytes overflow or exceed the hard page bound.
     Bytes,
 }
+
+/// Store IO and root-waiter handoffs (domain/engine.md, section 5.3).
+/// Every issued load ends once; abandonment retains IO ownership until then.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Request {
-    Load { owner: Token, range: Range, after: Option<Key>, most: u32, bytes: u32 },
-    Loaded { waiter: Token, rows: Box<[Record]>, next: Option<Key>, cut: Option<Cut> },
-    Unloaded { waiter: Token, failure: Failure },
+    /// Root to store; ends through `loaded` or `unloaded` with this owner.
+    /// The caller waits for prerequisite commits before dispatching it.
+    Load {
+        /// Generational IO identity, fenced after its terminal and reclaim.
+        owner: Token,
+        /// Closed key range that every returned row must belong to.
+        range: Range,
+        /// Exclusive starting key in the range, or its beginning.
+        after: Option<Key>,
+        /// Positive row demand, no larger than `Limits::rows`.
+        most: u32,
+        /// Hard decoded-page bytes, equal to `Limits::reply_bytes`.
+        bytes: u32,
+    },
+    /// One successful terminal to the root waiter, unless abandoned.
+    Loaded {
+        /// Root-owned identity passed unchanged from the admitted request.
+        waiter: Token,
+        /// Owned, validated whole-row prefix within the soft byte limits.
+        rows: Box<[Record]>,
+        /// Exclusive continuation; a cut may leave it at the original key.
+        next: Option<Key>,
+        /// Explicit omissions, including a zero-row kept prefix if necessary.
+        cut: Option<Cut>,
+    },
+    /// One failed terminal to the root waiter, unless abandoned.
+    Unloaded {
+        /// Root-owned identity passed unchanged from the admitted request.
+        waiter: Token,
+        /// Store failure or whole-page validation refusal.
+        failure: Failure,
+    },
 }
+
 #[derive(Debug)]
 struct Entry {
     waiter: Token,
@@ -44,28 +96,37 @@ struct Entry {
     most: u32,
     phase: Phase,
 }
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Phase {
     Waiting,
     Abandoned,
     Closed,
 }
+
+/// Bounded in-flight page ownership (domain/engine.md, section 5.3).
+/// It keeps waiter/range fences, never store rows or journal durability state.
 #[derive(Debug)]
 pub struct Loads {
     limits: Limits,
     entries: Slab<Entry>,
 }
+
 impl Loads {
+    /// Allocate fixed load slots from validated startup limits (domain/engine.md, 5.3).
+    /// Invalid limits fail at startup; per-request saturation is a refusal.
     #[must_use]
-    pub fn new(l: &Limits) -> Loads {
-        assert!(worst_case(l).is_some(), "valid root load limits");
-        Loads { limits: *l, entries: Slab::with_capacity(l.loads) }
+    pub fn new(limits: &Limits) -> Loads {
+        assert!(worst_case(limits).is_some(), "valid root load limits");
+        Loads { limits: *limits, entries: Slab::with_capacity(limits.loads) }
     }
 }
-/// Refuses before issuing anything. Admission is independent of journal
-/// pressure: store terminals must remain accepted while commits are full.
+
+/// Admit one root request or refuse before issuing IO (domain/engine.md, 5.3).
+/// Reserves one output; the issued owner ends through `loaded` or `unloaded`.
+/// Journal pressure is independent: store terminals are always accepted.
 pub fn begin(
-    d: &mut Loads,
+    domain: &mut Loads,
     waiter: Token,
     range: Range,
     after: Option<Key>,
@@ -73,7 +134,7 @@ pub fn begin(
     out: &mut Queue<Request>,
 ) -> Option<Token> {
     assert!(out.room() >= 1, "one root load output reserved");
-    if most == 0 || most > d.limits.rows || !valid_range(range) {
+    if most == 0 || most > domain.limits.rows || !valid_range(range) {
         return None;
     }
     if let Some(key) = after
@@ -82,53 +143,62 @@ pub fn begin(
         return None;
     }
     let entry = Entry { waiter, range, after, most, phase: Phase::Waiting };
-    let id = d.entries.insert(entry).ok()?;
+    let id = domain.entries.insert(entry).ok()?;
     let owner = id.token();
-    out.push(Request::Load { owner, range, after, most, bytes: d.limits.reply_bytes });
+    out.push(Request::Load { owner, range, after, most, bytes: domain.limits.reply_bytes });
     Some(owner)
 }
-/// An abandoned issued IO still occupies its slot until its actual terminal.
-/// It cannot be reclaimed as if the store had already answered.
-pub fn abandon(d: &mut Loads, owner: Token) {
-    if let Some(entry) = d.entries.get_mut(Id::from_token(owner)) {
+
+/// Abandon delivery to a waiter (domain/engine.md, section 5.3).
+/// Its issued IO still occupies a slot until the store's actual terminal;
+/// this call neither emits a terminal nor releases that ownership.
+pub fn abandon(domain: &mut Loads, owner: Token) {
+    if let Some(entry) = domain.entries.get_mut(Id::from_token(owner)) {
         match entry.phase {
             Phase::Waiting => entry.phase = Phase::Abandoned,
             Phase::Abandoned | Phase::Closed => {}
         }
     }
 }
-pub fn unloaded(d: &mut Loads, owner: Token, out: &mut Queue<Request>) {
+
+/// Accept the store's failed terminal (domain/engine.md, section 5.3).
+/// Reserve one output. Notify a live waiter once; discard abandoned/late answers.
+pub fn unloaded(domain: &mut Loads, owner: Token, out: &mut Queue<Request>) {
     assert!(out.room() >= 1, "one root load terminal reserved");
     let id = Id::from_token(owner);
-    if let Some(entry) = d.entries.get_mut(id) {
+    if let Some(entry) = domain.entries.get_mut(id) {
         match entry.phase {
             Phase::Waiting => out.push(Request::Unloaded { waiter: entry.waiter, failure: Failure::Store }),
             Phase::Abandoned => {}
             Phase::Closed => return,
         }
         entry.phase = Phase::Closed;
-        d.entries.retire(id);
+        domain.entries.retire(id);
     }
 }
-pub fn loaded(d: &mut Loads, owner: Token, rows: Box<[Record]>, next: Option<Key>, out: &mut Queue<Request>) {
+
+/// Accept the store's owned page terminal (domain/engine.md, section 5.3).
+/// Reserve one output. Validate the whole page before moving its bounded prefix;
+/// malformed input ends as failure and duplicate or abandoned input is dropped.
+pub fn loaded(domain: &mut Loads, owner: Token, rows: Box<[Record]>, next: Option<Key>, out: &mut Queue<Request>) {
     assert!(out.room() >= 1, "one root load terminal reserved");
     let id = Id::from_token(owner);
-    let Some(entry) = d.entries.get_mut(id) else {
+    let Some(entry) = domain.entries.get_mut(id) else {
         return;
     };
     match entry.phase {
         Phase::Abandoned => {
             entry.phase = Phase::Closed;
-            d.entries.retire(id);
+            domain.entries.retire(id);
             return;
         }
         Phase::Closed => return,
         Phase::Waiting => {}
     }
-    let checked = check(entry, &d.limits, &rows, next);
+    let checked = check(entry, &domain.limits, &rows, next);
     let waiter = entry.waiter;
     entry.phase = Phase::Closed;
-    d.entries.retire(id);
+    domain.entries.retire(id);
     match checked {
         Err(failure) => out.push(Request::Unloaded { waiter, failure }),
         Ok(page) => {
@@ -148,16 +218,21 @@ pub fn loaded(d: &mut Loads, owner: Token, rows: Box<[Record]>, next: Option<Key
         }
     }
 }
-pub fn reclaim(d: &mut Loads) {
-    d.entries.reclaim();
+
+/// Reclaim retired terminal slots at the iteration boundary (domain/engine.md, 5.3).
+/// Abandoned loads still awaiting their store terminal cannot be reclaimed.
+pub fn reclaim(domain: &mut Loads) {
+    domain.entries.reclaim();
 }
+
 #[derive(Debug)]
 struct Page {
     keep: u32,
     next: Option<Key>,
     cut: Option<Cut>,
 }
-fn check(entry: &Entry, l: &Limits, rows: &[Record], next: Option<Key>) -> Result<Page, Failure> {
+
+fn check(entry: &Entry, limits: &Limits, rows: &[Record], next: Option<Key>) -> Result<Page, Failure> {
     let Ok(count) = u32::try_from(rows.len()) else {
         return Err(Failure::Rows);
     };
@@ -193,7 +268,7 @@ fn check(entry: &Entry, l: &Limits, rows: &[Record], next: Option<Key>) -> Resul
             .checked_add(owned)
             .ok_or(Failure::Bytes)?;
         let total = bytes.checked_add(size).ok_or(Failure::Bytes)?;
-        if cutting || owned > u64::from(l.transcript_bytes) || total > u64::from(l.bytes) {
+        if cutting || owned > u64::from(limits.transcript_bytes) || total > u64::from(limits.bytes) {
             cutting = true;
             removed_bytes = removed_bytes.checked_add(size).ok_or(Failure::Bytes)?;
         } else {
@@ -211,7 +286,7 @@ fn check(entry: &Entry, l: &Limits, rows: &[Record], next: Option<Key>) -> Resul
             Range::Turns { .. } => {}
         }
     }
-    if bytes.checked_add(removed_bytes).ok_or(Failure::Bytes)? > u64::from(l.reply_bytes) {
+    if bytes.checked_add(removed_bytes).ok_or(Failure::Bytes)? > u64::from(limits.reply_bytes) {
         return Err(Failure::Bytes);
     }
     let cut = if cutting {
@@ -221,22 +296,26 @@ fn check(entry: &Entry, l: &Limits, rows: &[Record], next: Option<Key>) -> Resul
     };
     Ok(Page { keep, next: if cutting { last_kept } else { next }, cut })
 }
+
 fn valid_range(range: Range) -> bool {
     match range {
         Range::Deployment => true,
         Range::Turns { task, attempt } => task != 0 && attempt != 0,
     }
 }
+
+/// Startup heap bound, including decoded IO and temporary prefix slots
+/// (domain/engine.md, section 5.3). Invalid limits or arithmetic return `None`.
 #[must_use]
-pub fn worst_case(l: &Limits) -> Option<u64> {
-    if l.loads == 0
-        || l.rows == 0
-        || l.reply_bytes < l.bytes
-        || u64::from(l.bytes) < u64::try_from(size_of::<Record>()).ok()?
+pub fn worst_case(limits: &Limits) -> Option<u64> {
+    if limits.loads == 0
+        || limits.rows == 0
+        || limits.reply_bytes < limits.bytes
+        || u64::from(limits.bytes) < u64::try_from(size_of::<Record>()).ok()?
     {
         return None;
     }
-    Slab::<Entry>::worst_case(l.loads)?
-        .checked_add(List::<Record>::worst_case(l.rows)?)?
-        .checked_add(u64::from(l.reply_bytes))
+    Slab::<Entry>::worst_case(limits.loads)?
+        .checked_add(List::<Record>::worst_case(limits.rows)?)?
+        .checked_add(u64::from(limits.reply_bytes))
 }

@@ -28,13 +28,24 @@ pub enum Key {
     Deployment,
     Turn { task: u64, attempt: u64, turn: u32 },
 }
-/// Root-owned ranges. Children's ranges join with their record wrappers.
+/// Root-owned page ranges (domain/engine.md, section 5.3).
+/// The root asks the store for strictly ordered rows from one range; child
+/// ranges join here with their record wrappers when routing is implemented.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Range {
+    /// The singleton durable deployment header; it has no continuation.
     Deployment,
-    Turns { task: u64, attempt: u64 },
+    /// Committed transcript turns for one nonzero task and attempt.
+    Turns {
+        /// Durable task number allocated by the root's deployment header.
+        task: u64,
+        /// Nonzero activation number; turns from other attempts cannot match.
+        attempt: u64,
+    },
 }
 impl Range {
+    /// Check membership before accepting a store row (domain/engine.md, 5.3).
+    /// Turn zero is invalid; continuation ordering is checked by the load owner.
     #[must_use]
     pub const fn contains(self, key: Key) -> bool {
         match self {
