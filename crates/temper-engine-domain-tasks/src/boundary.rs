@@ -126,6 +126,13 @@ pub struct TaskRecord {
     pub number: u64,
     pub project: u32,
     pub requester: Party,
+    /// Current durable allotment generation; replacement never resets `run_spent`.
+    pub allotment: u64,
+    pub historical_spend: u64,
+    pub run_spent: u64,
+    pub revision: u64,
+    pub tracked: Option<u32>,
+    pub narrowing: bool,
     pub root: u64,
     pub depth: u32,
     pub executor: Executor,
@@ -171,6 +178,9 @@ pub enum Key {
     Offer(MessageKey),
     Question(u64),
     Subscription(u64),
+    History { task: u64, revision: u64 },
+    Closure { task: u64, generation: u64 },
+    Funding(Funder),
 }
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Stored {
@@ -183,6 +193,9 @@ pub enum Stored {
     Offer(Offer),
     Question(Question),
     Subscription(Subscription),
+    History(crate::History),
+    Closure(crate::Closure),
+    Funding { funder: Funder, numbers: Numbers },
 }
 impl Stored {
     #[must_use]
@@ -197,6 +210,9 @@ impl Stored {
             Stored::Offer(offer) => Key::Offer(offer.envelope.key()),
             Stored::Question(question) => Key::Question(question.number),
             Stored::Subscription(subscription) => Key::Subscription(subscription.number),
+            Stored::History(history) => Key::History { task: history.task, revision: history.revision },
+            Stored::Closure(closure) => Key::Closure { task: closure.task, generation: closure.generation },
+            Stored::Funding { funder, .. } => Key::Funding(*funder),
         }
     }
 }
@@ -234,6 +250,10 @@ pub enum Refusal {
     Read,
     Turn,
     KeyConflict,
+    Standing,
+    Funding,
+    Tracked,
+    Revision,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Problem {
@@ -252,6 +272,32 @@ pub enum Event {
         reply_to: ReplyTo,
         creator: Party,
         batch: Box<[New]>,
+    },
+    /// The root authenticated standing and checked authority on these exact snapshots.
+    Control {
+        reply_to: ReplyTo,
+        task: u64,
+        authorization: crate::Authorization,
+        action: crate::Control,
+    },
+    Amend {
+        reply_to: ReplyTo,
+        task: u64,
+        authorization: crate::Authorization,
+        amendment: crate::Amendment,
+    },
+    Move {
+        reply_to: ReplyTo,
+        task: u64,
+        authorization: crate::Authorization,
+        movement: crate::Movement,
+    },
+    /// Root reports cumulative priced spend before the matching turn/terminal, in the same decision.
+    Charge {
+        reply_to: ReplyTo,
+        task: u64,
+        attempt: u64,
+        cumulative: u64,
     },
     Prepare {
         reply_to: ReplyTo,

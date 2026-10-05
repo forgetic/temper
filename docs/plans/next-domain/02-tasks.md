@@ -427,3 +427,57 @@ stalled, withdrawn) reached across the seeds.
 - the fuzzy sweep reaches every ending, within its allotment;
 - the crate depends on `skein-lib` alone; nothing of the legacy crates
   changed.
+
+### 5.1 The 02c accounting seam
+
+02c adds checked `Control`, `Amend`, `Move` and cumulative `Charge` events.
+`Authorization` is authenticated evidence from the root: tasks checks actual
+tree standing, while project-role and escalation standing and authority
+comparisons remain authority's checks, translated by the root. An amendment
+carries all affected descendant authority snapshots; the root guarantees that
+this list includes every delegation ceiling changed by the amendment and
+marks the live runs whose grants cannot honour the new authority. Dependencies
+can only be removed while waiting. Each affected executor receives a durable,
+merged amendment message in a separate reserved control slot, preserving the
+ordinary inbox's existing capacity. Immutable prior offers stay readable.
+
+Moves validate the complete future requester wait graph, project, depth,
+lifetime tree bounds, references, terminal result credit and tracked goals.
+A tracked subtree cannot become a task's delegate. The old requester keeps
+its explicit reference; the moved root also retains its old requester as an
+explicit reference. Actual funding links are checked separately. Each incoming
+allocation from an old task funder is considered explicitly; old ancestors
+which cease to be ancestors cannot remain its funders. Stable external pool
+and period identities are retained for other allocations.
+
+Every actual funding component replaced by a move is normalized from its
+leaves. `Transfer` names exact old/new funding links. `Balance` names finite,
+authentic before/after funding snapshots, already authority checked by the
+root. Tasks verifies task-funder snapshots and exact arithmetic, including
+separate incoming allocations funded directly by an old ancestor. It refuses
+missing transfers, cycles, missing reservation evidence, overruns that cannot
+preserve promised unspent, and insufficient new funds before changing any row.
+A same-actual-funder transfer preserves its counters. All changed generations,
+`Stored::Closure`, replacement counters, `Stored::Funding` external snapshots
+and immutable `Stored::History` rows commit together. A task cannot close while
+it funds live allocations, even outside its requester subtree.
+
+`TaskRecord::run_spent` is attempt-local cumulative committed spend, reset only
+by a fresh claim. `Charge` adds only the whole minus that prior cumulative
+amount, preserves it through replacement, refuses a decreasing whole, and
+holds a charged overrun. It is a primitive for the atomic admission in 02e:
+**the root must not charge a turn or terminal before that call is accepted.**
+02e must add combined charged turn/terminal events so a refused read, turn,
+finish or attempt cannot precharge the ledger.
+
+02c reserves and settles actual live task funders concretely. External funding
+at ordinary `Make` still has an explicit root precondition: authority checked
+and reserved the actual named pool/period before `Make`, in its same decision.
+External balances for moves/amendments are emitted as `Stored::Funding`, but
+02c does not hold a complete person-pool/project-period ledger, initial pool
+carving, period resets or the pool's funding link to its original project
+period. Its unique closure row gives the root the original identity, generation,
+budget and spend to settle externally. Those finite ledgers and atomic charge
+admissions must land in **02e before the root's charged walking story**, rather
+than being invented as independent funding state in the root. The original
+02a/02b prerequisite suffices for its routing skeleton, not its accounting story.

@@ -90,7 +90,13 @@ fn valid_phase(task: &TaskRecord, l: &Limits) -> bool {
     }
 }
 fn valid_record(d: &Domain, l: &Limits, task: &TaskRecord) -> bool {
-    if task.depth > l.depth
+    if match task.historical_spend.checked_add(task.numbers.spent) {
+        Some(total) => task.run_spent > total,
+        None => true,
+    } || crate::funders::total(task.numbers).is_none()
+        || task.allotment == 0
+        || (task.narrowing && crate::run::run_attempt(&task.phase).is_none())
+        || task.depth > l.depth
         || task.made == 0
         || task.made > l.tree_tasks
         || task.delegates.len() > usize::try_from(l.delegates).expect("u32 fits usize")
@@ -179,7 +185,9 @@ pub(crate) fn restore(d: &mut Domain, env: &Env<Limits>, stored: Stored, out: &m
         // Historical ended rows are read through RememberStub at runtime;
         // they cannot accidentally return an ended task to the live arena.
         Stored::Ended(task) => failed(d, Some(task.number), Refusal::Restore, out),
-        Stored::ArchivedMessage(_) => failed(d, None, Refusal::Restore, out),
+        Stored::History(_) | Stored::Closure(_) | Stored::Funding { .. } | Stored::ArchivedMessage(_) => {
+            failed(d, None, Refusal::Restore, out);
+        }
         Stored::Message(_) | Stored::Offer(_) | Stored::Receipt(_) | Stored::Question(_) | Stored::Subscription(_) => {
             if !crate::inbox::restore(d, env, stored) {
                 failed(d, None, Refusal::Restore, out);
@@ -302,7 +310,10 @@ pub(crate) fn restored(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Reques
             return failed(d, Some(*number), Refusal::Restore, out);
         }
     }
-    if !crate::batch::acyclic(d, &env.limits, Party::Person(0), &[]) || !crate::inbox::links(d, env) {
+    if !crate::batch::acyclic(d, &env.limits, Party::Person(0), &[])
+        || !crate::inbox::links(d, env)
+        || !crate::funders::links(d, env.limits.tasks)
+    {
         return failed(d, None, Refusal::Restore, out);
     }
     d.startup = Startup::Ready;

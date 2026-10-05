@@ -188,7 +188,11 @@ pub(crate) fn progress(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Reques
                     }
                 }
                 Phase::Closing(closing) => match closing.stage {
-                    Stage::Delegates if task.delegates.is_empty() && task.results_due.is_empty() => {
+                    Stage::Delegates
+                        if task.delegates.is_empty()
+                            && task.results_due.is_empty()
+                            && !crate::funders::funded_live(d, number) =>
+                    {
                         let ending = closing.ending.clone();
                         let task = task_mut(d, number).expect("closing task live");
                         task.record.phase = Phase::Closing(Closing { stage: Stage::Effects, ending: ending.clone() });
@@ -232,6 +236,7 @@ fn end_task(d: &mut Domain, env: &Env<Limits>, number: u64, out: &mut Queue<Requ
         last_answer: task.last_answer,
     };
     let mut ended = task.clone();
+    crate::funders::end(d, env, number, out);
     ended.phase = Phase::Ended(ending.clone());
     crate::inbox::archive(d, number, out);
     crate::refs::end(d, number, out);
@@ -280,7 +285,8 @@ pub(crate) fn needed(d: &Domain, number: u64) -> bool {
             crate::Message::Result { task, .. } | crate::Message::Notice { target: task, .. } if task == number => {
                 return true;
             }
-            crate::Message::Words { .. }
+            crate::Message::Amendment { .. }
+            | crate::Message::Words { .. }
             | crate::Message::Question { .. }
             | crate::Message::Answer { .. }
             | crate::Message::Result { .. }

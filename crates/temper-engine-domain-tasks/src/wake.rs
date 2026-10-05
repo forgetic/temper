@@ -18,6 +18,7 @@ pub(crate) fn valid(policy: &crate::WakePolicy) -> bool {
 fn rule(d: &Domain, envelope: &Envelope) -> Rule {
     let task = record(d, envelope.task).expect("inbox recipient live");
     match &envelope.message {
+        Message::Amendment { .. } => Rule::Immediate,
         Message::Words { .. } => match envelope.from {
             Party::Person(_) => Rule::Immediate,
             Party::Task(_) | Party::Deployment { .. } => task.policy.words,
@@ -66,6 +67,7 @@ fn rule(d: &Domain, envelope: &Envelope) -> Rule {
 }
 fn kind(message: &Message) -> u8 {
     match message {
+        Message::Amendment { .. } => 7,
         Message::Words { .. } => 0,
         Message::Question { .. } => 1,
         Message::Answer { .. } => 2,
@@ -108,7 +110,11 @@ fn batched(
         Message::Words { .. } => 0,
         Message::News { .. } => 1,
         Message::Notice { .. } => 2,
-        Message::Question { .. } | Message::Answer { .. } | Message::Result { .. } | Message::Timer { .. } => {
+        Message::Amendment { .. }
+        | Message::Question { .. }
+        | Message::Answer { .. }
+        | Message::Result { .. }
+        | Message::Timer { .. } => {
             unreachable!("only these three kinds may batch")
         }
     };
@@ -146,7 +152,7 @@ pub(crate) fn progress(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Reques
         };
         let old_alarms =
             d.tasks.get(*d.names.get(&number).expect("snapshot live")).expect("name indexes live").wake_alarms;
-        let mut eligible = List::with_capacity(env.limits.inbox_messages);
+        let mut eligible = List::with_capacity(env.limits.inbox_messages.saturating_add(1));
         let mut alarms: [Option<Alarm>; 3] = [None; 3];
         for (key, envelope) in &d.messages {
             if key.task != number {

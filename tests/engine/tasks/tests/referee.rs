@@ -323,3 +323,109 @@ fn rejected_reads(
         assert!(judge.committed(&bad, &LIMITS, &[read]).is_err(), "read invariant {broken}");
     }
 }
+#[test]
+fn changed_tree_referee_refuses_a_wait_cycle_stale_requester_and_added_dependencies() {
+    rejects(vec![made(1), made(2), Seen::Moved { task: 1, from: Party::Person(99), to: Party::Person(3) }]);
+    rejects(vec![made(1), Seen::Amended { task: 1, dependencies: vec![99] }]);
+    rejects(vec![
+        made(1),
+        made(2),
+        Seen::Moved { task: 1, from: Party::Person(1), to: Party::Task(2) },
+        Seen::Moved { task: 2, from: Party::Person(1), to: Party::Task(1) },
+    ]);
+}
+#[test]
+fn accounting_referee_detects_lost_promises_generations_expense_and_actual_link_reservations() {
+    use temper_engine_domain_tasks::{Closure, Funder, Key, Numbers, Stored};
+    use temper_engine_tasks_world::accounting_referee::Accounting;
+    use temper_engine_tasks_world::{LIMITS, World, task};
+    let mut w = World::new(5, LIMITS);
+    w.make(Party::Person(1), vec![task(1, &[])]);
+    let before = w.records.clone();
+    for fault in 0..8 {
+        let mut rows = before.clone();
+        let old = w.record(1);
+        let mut replacement = old.clone();
+        replacement.allotment = 2;
+        replacement.numbers = Numbers { budget: 100, spent: 0, spent_below: 0, reserved: 0 };
+        rows.insert(
+            Key::Closure { task: 1, generation: 1 },
+            Stored::Closure(Closure { task: 1, generation: 1, funder: old.funder, budget: 100, spent: 0 }),
+        );
+        match fault {
+            0 => replacement.numbers.budget = 99,
+            1 => replacement.allotment = 3,
+            2 => replacement.run_spent = 1,
+            3 => {
+                rows.remove(&Key::Closure { task: 1, generation: 1 });
+            }
+            4 => replacement.numbers.reserved = 1,
+            5 => replacement.historical_spend = 1,
+            6 => {
+                replacement.allotment = 1;
+                replacement.funder = Funder::Task(99);
+            }
+            7 => {
+                rows.insert(
+                    Key::Closure { task: 1, generation: 1 },
+                    Stored::Closure(Closure { task: 1, generation: 1, funder: old.funder, budget: 100, spent: 1 }),
+                );
+            }
+            _ => unreachable!(),
+        }
+        rows.insert(Key::Live(1), Stored::Live(Box::new(replacement)));
+        let mut referee = Accounting::default();
+        referee.reset(&before);
+        assert!(referee.committed(&rows).is_err(), "fault {fault}");
+    }
+    let mut rows = before.clone();
+    rows.insert(
+        Key::Closure { task: 1, generation: 1 },
+        Stored::Closure(Closure { task: 1, generation: 1, funder: w.record(1).funder, budget: 100, spent: 0 }),
+    );
+    let mut referee = Accounting::default();
+    referee.reset(&rows);
+    rows.remove(&Key::Closure { task: 1, generation: 1 });
+    assert_eq!(referee.committed(&rows), Err("immutable accounting/history row changed"));
+}
+#[test]
+fn inbox_referee_rejects_duplicate_oversized_unready_and_future_amendment_controls() {
+    use temper_engine_domain_tasks::{Envelope, Key, Message, MessageKey, Stored};
+    use temper_engine_tasks_world::{LIMITS, World, inbox_referee::Inbox, task};
+    let mut w = World::new(14, LIMITS);
+    w.make(Party::Person(1), vec![task(1, &[])]);
+    for fault in 0..4 {
+        let mut rows = w.records.clone();
+        if let Some(Stored::Live(task)) = rows.get_mut(&Key::Live(1)) {
+            task.revision = 1;
+            task.last_message = 2;
+        }
+        let mut envelope = Envelope {
+            task: 1,
+            number: 1,
+            from: Party::Person(9),
+            message: Message::Amendment { revision: 1, reason: Box::new([]) },
+            at: skein_lib::Wall::EPOCH,
+            hits: 1,
+            eligible: true,
+        };
+        match fault {
+            0 => {
+                let mut second = envelope.clone();
+                second.number = 2;
+                rows.insert(Key::Message(MessageKey { task: 1, number: 2 }), Stored::Message(second));
+            }
+            1 => {
+                envelope.message = Message::Amendment {
+                    revision: 1,
+                    reason: vec![1; LIMITS.message_bytes as usize + 1].into_boxed_slice(),
+                }
+            }
+            2 => envelope.eligible = false,
+            3 => envelope.message = Message::Amendment { revision: 2, reason: Box::new([]) },
+            _ => unreachable!(),
+        }
+        rows.insert(Key::Message(envelope.key()), Stored::Message(envelope));
+        assert!(Inbox::default().committed(&rows, &LIMITS, &[]).is_err(), "control fault {fault}");
+    }
+}

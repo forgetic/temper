@@ -89,6 +89,7 @@ pub struct World {
     pub relays: BTreeMap<(u64, u64, u64), tasks::Envelope>,
     pub topics: BTreeMap<u64, tasks::Subscription>,
     message: u64,
+    pub accounting_referee: crate::accounting_referee::Accounting,
     pub inbox_referee: crate::inbox_referee::Inbox,
     reads: Vec<crate::inbox_referee::Read>,
     pub consume_facts: bool,
@@ -117,6 +118,7 @@ impl World {
             relays: BTreeMap::new(),
             topics: BTreeMap::new(),
             message: 0,
+            accounting_referee: crate::accounting_referee::Accounting::default(),
             inbox_referee: crate::inbox_referee::Inbox::default(),
             reads: Vec::new(),
             consume_facts: true,
@@ -143,6 +145,9 @@ impl World {
                 | Stored::Live(_)
                 | Stored::Ended(_)
                 | Stored::Stub(_)
+                | Stored::History(_)
+                | Stored::Closure(_)
+                | Stored::Funding { .. }
                 | Stored::ArchivedMessage(_)
                 | Stored::Receipt(_)
                 | Stored::Offer(_)
@@ -189,6 +194,9 @@ impl World {
                             Stored::Live(_)
                             | Stored::Stub(_)
                             | Stored::Message(_)
+                            | Stored::History(_)
+                            | Stored::Closure(_)
+                            | Stored::Funding { .. }
                             | Stored::ArchivedMessage(_)
                             | Stored::Receipt(_)
                             | Stored::Offer(_)
@@ -273,7 +281,11 @@ impl World {
             Event::Turn { task, attempt, turn, read, .. } => {
                 Some(crate::inbox_referee::Read { task: *task, attempt: *attempt, turn: *turn, through: *read })
             }
-            Event::Make { .. }
+            Event::Control { .. }
+            | Event::Amend { .. }
+            | Event::Move { .. }
+            | Event::Charge { .. }
+            | Event::Make { .. }
             | Event::Prepare { .. }
             | Event::Claim { .. }
             | Event::Send { .. }
@@ -327,12 +339,16 @@ impl World {
     pub fn durable(&mut self) {
         self.callbacks();
         self.commit += 1;
+        let mut histories = Vec::new();
         let mut terminals = Vec::new();
         let mut ended = Vec::new();
         for request in &self.pending {
             match request {
                 Request::Save { record } => {
                     self.records.insert(record.key(), record.clone());
+                    if let Stored::History(history) = record {
+                        histories.push(history.clone());
+                    }
                 }
                 Request::Erase { key } => {
                     self.records.remove(key);
@@ -364,6 +380,7 @@ impl World {
             }
         }
         if self.domain.ready() {
+            self.accounting_referee.committed(&self.records).expect("independent funding conservation");
             self.inbox_referee
                 .committed(&self.records, &self.env.limits, &self.reads)
                 .expect("independent inbox invariants");
@@ -384,6 +401,9 @@ impl World {
                 | Stored::Ended(_)
                 | Stored::Stub(_)
                 | Stored::Message(_)
+                | Stored::History(_)
+                | Stored::Closure(_)
+                | Stored::Funding { .. }
                 | Stored::ArchivedMessage(_)
                 | Stored::Receipt(_)
                 | Stored::Offer(_)
@@ -393,6 +413,17 @@ impl World {
             .collect::<Vec<_>>();
         for seen in made {
             self.observe(seen);
+        }
+        for history in histories {
+            match history.change {
+                tasks::Change::Moved { from, to } => self.observe(Seen::Moved { task: history.task, from, to }),
+                tasks::Change::Amended => self.observe(Seen::Amended {
+                    task: history.task,
+                    dependencies: self.record(history.task).dependencies.to_vec(),
+                }),
+                tasks::Change::Cancelled => self.observe(Seen::Cancelled { task: history.task }),
+                tasks::Change::Released => {}
+            }
         }
         for (task, attempt) in terminals {
             self.runs.remove(&task);
@@ -466,6 +497,9 @@ impl World {
                 Stored::Ended(_)
                 | Stored::Stub(_)
                 | Stored::Message(_)
+                | Stored::History(_)
+                | Stored::Closure(_)
+                | Stored::Funding { .. }
                 | Stored::ArchivedMessage(_)
                 | Stored::Receipt(_)
                 | Stored::Offer(_)
@@ -493,6 +527,9 @@ impl World {
             Stored::Ended(_)
             | Stored::Stub(_)
             | Stored::Message(_)
+            | Stored::History(_)
+            | Stored::Closure(_)
+            | Stored::Funding { .. }
             | Stored::ArchivedMessage(_)
             | Stored::Receipt(_)
             | Stored::Offer(_)
@@ -516,6 +553,9 @@ impl World {
                 | Key::Ended(_)
                 | Key::Stub(_)
                 | Key::Message(_)
+                | Key::History { .. }
+                | Key::Closure { .. }
+                | Key::Funding(_)
                 | Key::ArchivedMessage(_)
                 | Key::Receipt(_)
                 | Key::Offer(_)
@@ -556,6 +596,9 @@ impl World {
                 Stored::Live(record) | Stored::Ended(record) => record.attempt,
                 Stored::Stub(stub) => stub.attempt,
                 Stored::Message(_)
+                | Stored::History(_)
+                | Stored::Closure(_)
+                | Stored::Funding { .. }
                 | Stored::ArchivedMessage(_)
                 | Stored::Receipt(_)
                 | Stored::Offer(_)
@@ -593,6 +636,7 @@ impl World {
         self.pending.clear();
         self.reads.clear();
         self.inbox_referee.reset(&self.records);
+        self.accounting_referee.reset(&self.records);
         self.domain = Domain::new(&self.env.limits, self.seed, Box::new([1]));
         self.activations.clear();
         self.stops.clear();
@@ -600,7 +644,16 @@ impl World {
         let rows = self
             .records
             .values()
-            .filter(|record| !matches!(record, Stored::Ended(_) | Stored::ArchivedMessage(_)))
+            .filter(|record| {
+                !matches!(
+                    record,
+                    Stored::Ended(_)
+                        | Stored::History(_)
+                        | Stored::Closure(_)
+                        | Stored::Funding { .. }
+                        | Stored::ArchivedMessage(_)
+                )
+            })
             .cloned()
             .collect::<Vec<_>>();
         for record in rows {

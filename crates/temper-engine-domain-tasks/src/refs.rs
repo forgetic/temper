@@ -269,7 +269,8 @@ fn merge(
                 old_key = Some(*key);
                 break;
             }
-            Message::Words { .. }
+            Message::Amendment { .. }
+            | Message::Words { .. }
             | Message::Question { .. }
             | Message::Answer { .. }
             | Message::Result { .. }

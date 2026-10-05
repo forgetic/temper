@@ -345,7 +345,8 @@ fn reference_admission_post_end_subscriptions_and_hint_growth_keep_their_bounds(
             .iter()
             .map(|message| match &message.message {
                 Message::Words { words } | Message::News { words, .. } => words.len(),
-                Message::Question { .. }
+                Message::Amendment { .. }
+                | Message::Question { .. }
                 | Message::Answer { .. }
                 | Message::Result { .. }
                 | Message::Notice { .. }

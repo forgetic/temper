@@ -118,6 +118,18 @@ pub fn step(d: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Req
         Event::Restore { record } => crate::stored::restore(d, env, record, out),
         Event::Restored => crate::stored::restored(d, env, out),
         Event::Make { reply_to, creator, batch } => make(d, env, reply_to, creator, batch, out),
+        Event::Control { reply_to, task, authorization, action } => {
+            crate::amend::control(d, env, reply_to, task, authorization, action, out);
+        }
+        Event::Amend { reply_to, task, authorization, amendment } => {
+            crate::amend::amend(d, env, reply_to, task, authorization, amendment, out);
+        }
+        Event::Move { reply_to, task, authorization, movement } => {
+            crate::moving::move_task(d, env, reply_to, task, authorization, movement, out);
+        }
+        Event::Charge { reply_to, task, attempt, cumulative } => {
+            crate::funders::charge(d, env, reply_to, task, attempt, cumulative, out);
+        }
         Event::Prepare { reply_to, task } => crate::run::prepare(d, env, reply_to, task, out),
         Event::Claim { reply_to, task, attempt, readable } => {
             crate::run::claim(d, env, reply_to, task, attempt, &readable, out);
@@ -272,6 +284,7 @@ fn make(d: &mut Domain, env: &Env<Limits>, to: ReplyTo, creator: Party, batch: B
     if let Err(problem) = crate::batch::check(d, &env.limits, creator, &batch) {
         return out.push(Request::Refused { reply_to: to, problem });
     }
+    crate::funders::reserve(d, env, &batch, out);
     let parent = match creator {
         Party::Task(number) => Some(number),
         Party::Person(_) | Party::Deployment { .. } => None,
@@ -316,6 +329,12 @@ fn make(d: &mut Domain, env: &Env<Limits>, to: ReplyTo, creator: Party, batch: B
                 number,
                 project: new.project,
                 requester: creator,
+                allotment: 1,
+                historical_spend: 0,
+                run_spent: 0,
+                revision: 0,
+                tracked: None,
+                narrowing: false,
                 root: root.unwrap_or(number),
                 depth,
                 executor: new.executor,

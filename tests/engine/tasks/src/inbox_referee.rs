@@ -23,7 +23,8 @@ fn size(ending: &Ending) -> usize {
 }
 fn bytes(message: &Message) -> usize {
     match message {
-        Message::Words { words }
+        Message::Amendment { reason: words, .. }
+        | Message::Words { words }
         | Message::Question { words }
         | Message::Answer { words, .. }
         | Message::News { words, .. } => words.len(),
@@ -48,11 +49,18 @@ fn occupying(rows: &BTreeMap<Key, Stored>, number: u64) -> Option<usize> {
             Message::News { subscription, .. }
             | Message::Notice { subscription, .. }
             | Message::Timer { subscription, .. } => (subscription == number).then_some(bytes(&envelope.message)),
-            Message::Words { .. } | Message::Question { .. } | Message::Answer { .. } | Message::Result { .. } => None,
+            Message::Amendment { .. }
+            | Message::Words { .. }
+            | Message::Question { .. }
+            | Message::Answer { .. }
+            | Message::Result { .. } => None,
         },
         Stored::Live(_)
         | Stored::Ended(_)
         | Stored::Stub(_)
+        | Stored::History(_)
+        | Stored::Closure(_)
+        | Stored::Funding { .. }
         | Stored::ArchivedMessage(_)
         | Stored::Receipt(_)
         | Stored::Offer(_)
@@ -75,6 +83,7 @@ fn references(task: &tasks::TaskRecord, l: &Limits) -> Result<(), &'static str> 
 impl Inbox {
     /// # Errors
     /// Names the independently observed invariant broken by a durable decision.
+    #[expect(clippy::too_many_lines, reason = "exhaustive independent checks of durable inbox rows")]
     pub fn committed(&mut self, rows: &BTreeMap<Key, Stored>, l: &Limits, reads: &[Read]) -> Result<(), &'static str> {
         let live = rows
             .values()
@@ -83,6 +92,9 @@ impl Inbox {
                 Stored::Ended(_)
                 | Stored::Stub(_)
                 | Stored::Message(_)
+                | Stored::History(_)
+                | Stored::Closure(_)
+                | Stored::Funding { .. }
                 | Stored::ArchivedMessage(_)
                 | Stored::Receipt(_)
                 | Stored::Offer(_)
@@ -90,6 +102,7 @@ impl Inbox {
                 | Stored::Subscription(_) => None,
             })
             .collect::<BTreeMap<_, _>>();
+        let mut controls = BTreeSet::new();
         let mut counts = BTreeMap::<u64, (usize, usize)>::new();
         let mut receipts = 0;
         let mut questions = 0;
@@ -108,9 +121,20 @@ impl Inbox {
                     if matches!(envelope.message, Message::News { class: tasks::NewsClass::Dropped, .. }) {
                         return Err("dropped news persisted");
                     }
-                    let entry = counts.entry(envelope.task).or_default();
-                    entry.0 += 1;
-                    entry.1 += bytes(&envelope.message);
+                    if let Message::Amendment { revision, reason } = &envelope.message
+                        && (!controls.insert(envelope.task)
+                            || *revision == 0
+                            || *revision > task.revision
+                            || !envelope.eligible
+                            || reason.len() > l.message_bytes as usize)
+                    {
+                        return Err("invalid amendment control slot");
+                    }
+                    if !matches!(envelope.message, Message::Amendment { .. }) {
+                        let entry = counts.entry(envelope.task).or_default();
+                        entry.0 += 1;
+                        entry.1 += bytes(&envelope.message);
+                    }
                 }
                 Stored::Offer(offer) => {
                     offers += 1;
@@ -157,7 +181,12 @@ impl Inbox {
                     entry.0 += task.results_due.len();
                     entry.1 += task.results_due.len() * l.result_bytes as usize * 2;
                 }
-                Stored::Ended(_) | Stored::Stub(_) | Stored::ArchivedMessage(_) => {}
+                Stored::Ended(_)
+                | Stored::Stub(_)
+                | Stored::History(_)
+                | Stored::Closure(_)
+                | Stored::Funding { .. }
+                | Stored::ArchivedMessage(_) => {}
             }
         }
         if offers > l.offers as usize
@@ -182,6 +211,9 @@ impl Inbox {
                     Stored::Ended(_)
                     | Stored::Stub(_)
                     | Stored::Message(_)
+                    | Stored::History(_)
+                    | Stored::Closure(_)
+                    | Stored::Funding { .. }
                     | Stored::ArchivedMessage(_)
                     | Stored::Receipt(_)
                     | Stored::Offer(_)

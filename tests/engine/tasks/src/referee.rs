@@ -7,6 +7,8 @@ use temper_world::{Expectations, Judge};
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Seen {
     Batch { members: Vec<u64>, accepted: bool, made: Vec<u64> },
+    Moved { task: u64, from: Party, to: Party },
+    Amended { task: u64, dependencies: Vec<u64> },
     Made { task: u64, parent: Party, dependencies: Vec<u64>, depth: u32 },
     Durable { commit: u64 },
     Replied { call: u64, after: u64 },
@@ -126,6 +128,7 @@ impl Expectations for Tasks {
     type Seen = Seen;
     type Name = Name;
     type Stimulus = Stimulus;
+    #[expect(clippy::too_many_lines, reason = "exhaustive referee observation cells")]
     fn observe(&mut self, seen: Seen, judge: &mut Judge<Name, Stimulus>) {
         match seen {
             Seen::Batch { mut members, accepted, mut made } => {
@@ -185,6 +188,22 @@ impl Expectations for Tasks {
                 }
                 self.runs.remove(&task);
             }
+            Seen::Moved { task, from, to } => {
+                if self.parents.get(&task) != Some(&from) {
+                    judge.fail("move source is stale");
+                }
+                self.parents.insert(task, to);
+                if self.cycle() {
+                    judge.fail("move introduces wait cycle");
+                }
+            }
+            Seen::Amended { task, dependencies } => {
+                let old = self.dependencies.get(&task).expect("amendment names known task");
+                if dependencies.iter().any(|dependency| !old.contains(dependency)) {
+                    judge.fail("amendment added dependency");
+                }
+                self.dependencies.insert(task, dependencies);
+            }
             Seen::Closing { task } => {
                 if self.runs.contains_key(&task) {
                     judge.fail("effects closed before own run ended");
@@ -207,8 +226,9 @@ impl Expectations for Tasks {
             Seen::Ended { task, status, after } => self.end(task, status, after, judge),
             Seen::Cancelled { task } => {
                 for task in self.descendants(task) {
-                    self.cancelled.insert(task);
-                    judge.expect(Name::End(task), Duration::from_secs(10));
+                    if self.cancelled.insert(task) {
+                        judge.expect(Name::End(task), Duration::from_secs(10));
+                    }
                 }
             }
             Seen::Limit { live, cap } => {

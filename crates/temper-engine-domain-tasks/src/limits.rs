@@ -62,6 +62,7 @@ pub fn worst_case(l: &Limits) -> Option<u64> {
         .checked_add(u64::from(l.authority_bytes))?
         .checked_add(u64::from(l.executor_kinds).checked_mul(u64::try_from(size_of::<AuthorityExecutor>()).ok()?)?)?;
     Slab::<Task>::worst_case(l.tasks)?
+        .checked_add(crate::moving::worst_case(l.tasks)?)?
         .checked_add(Map::<u64, Id<Task>>::worst_case(l.tasks)?)?
         .checked_add(Map::<u64, Stub>::worst_case(l.stubs)?)?
         .checked_add(Deadlines::<u64>::worst_case(l.tasks)?)?

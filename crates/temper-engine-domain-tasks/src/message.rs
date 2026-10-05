@@ -60,6 +60,7 @@ pub enum Notice {
 }
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Message {
+    Amendment { revision: u64, reason: Box<[u8]> },
     Words { words: Box<[u8]> },
     Question { words: Box<[u8]> },
     Answer { question: u64, words: Box<[u8]> },

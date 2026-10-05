@@ -7,7 +7,7 @@ use crate::{
 };
 use skein_lib::{Env, List, Queue, ReplyTo};
 pub(crate) fn capacity(l: &Limits) -> Option<u32> {
-    l.tasks.checked_mul(l.inbox_messages)
+    l.tasks.checked_mul(l.inbox_messages.checked_add(1)?)
 }
 pub(crate) fn ending_bytes(ending: &Ending) -> usize {
     match ending {
@@ -21,7 +21,8 @@ pub(crate) fn ending_bytes(ending: &Ending) -> usize {
 }
 pub(crate) fn bytes(message: &Message) -> usize {
     match message {
-        Message::Words { words }
+        Message::Amendment { reason: words, .. }
+        | Message::Words { words }
         | Message::Question { words }
         | Message::Answer { words, .. }
         | Message::News { words, .. } => words.len(),
@@ -42,7 +43,7 @@ pub(crate) fn room(d: &Domain, l: &Limits, task: u64, extra: u32, extra_bytes: u
     let mut count = extra;
     let mut total = extra_bytes;
     for (_, envelope) in &d.messages {
-        if envelope.task == task {
+        if envelope.task == task && !is_amendment(&envelope.message) {
             count = count.saturating_add(1);
             total = total.saturating_add(bytes(&envelope.message));
         }
@@ -70,7 +71,8 @@ pub(crate) fn room(d: &Domain, l: &Limits, task: u64, extra: u32, extra_bytes: u
                     {
                         occupied = Some(bytes(&envelope.message));
                     }
-                    Message::Words { .. }
+                    Message::Amendment { .. }
+                    | Message::Words { .. }
                     | Message::Question { .. }
                     | Message::Answer { .. }
                     | Message::Result { .. }
@@ -442,6 +444,11 @@ fn valid_envelope(l: &Limits, envelope: &Envelope) -> bool {
             crate::Notice::Ended(ending) => valid_ending(l, ending),
         },
         Message::Timer { .. } => true,
+        Message::Amendment { revision, reason } => {
+            envelope.eligible
+                && *revision != 0
+                && reason.len() <= usize::try_from(l.message_bytes).expect("u32 fits usize")
+        }
     }
 }
 pub(crate) fn restore(d: &mut Domain, env: &Env<Limits>, stored: Stored) -> bool {
@@ -496,7 +503,13 @@ pub(crate) fn restore(d: &mut Domain, env: &Env<Limits>, stored: Stored) -> bool
             }
             d.subscriptions.insert(sub.number, sub).is_ok()
         }
-        Stored::ArchivedMessage(_) | Stored::Live(_) | Stored::Ended(_) | Stored::Stub(_) => false,
+        Stored::History(_)
+        | Stored::Closure(_)
+        | Stored::Funding { .. }
+        | Stored::ArchivedMessage(_)
+        | Stored::Live(_)
+        | Stored::Ended(_)
+        | Stored::Stub(_) => false,
     }
 }
 pub(crate) fn links(d: &Domain, env: &Env<Limits>) -> bool {
@@ -508,6 +521,15 @@ pub(crate) fn links(d: &Domain, env: &Env<Limits>) -> bool {
             return false;
         }
         let task = record(d, *number).expect("indexed live");
+        let mut amendments = 0_u32;
+        for (_, envelope) in &d.messages {
+            if envelope.task == *number && is_amendment(&envelope.message) {
+                amendments = amendments.saturating_add(1);
+            }
+        }
+        if amendments > 1 {
+            return false;
+        }
         for delegate in &task.delegates {
             if !crate::batch::contains(&task.results_due, *delegate) {
                 return false;
@@ -523,6 +545,17 @@ pub(crate) fn links(d: &Domain, env: &Env<Limits>) -> bool {
         let Some(task) = record(d, envelope.task) else {
             return false;
         };
+        match envelope.message {
+            Message::Amendment { revision, .. } if revision > task.revision => return false,
+            Message::Amendment { .. }
+            | Message::Words { .. }
+            | Message::Question { .. }
+            | Message::Answer { .. }
+            | Message::News { .. }
+            | Message::Result { .. }
+            | Message::Notice { .. }
+            | Message::Timer { .. } => {}
+        }
         if envelope.number > task.last_message {
             return false;
         }
@@ -554,4 +587,17 @@ pub(crate) fn links(d: &Domain, env: &Env<Limits>) -> bool {
         }
     }
     true
+}
+
+pub(crate) fn is_amendment(message: &Message) -> bool {
+    match message {
+        Message::Amendment { .. } => true,
+        Message::Words { .. }
+        | Message::Question { .. }
+        | Message::Answer { .. }
+        | Message::Result { .. }
+        | Message::News { .. }
+        | Message::Notice { .. }
+        | Message::Timer { .. } => false,
+    }
 }

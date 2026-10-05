@@ -82,8 +82,9 @@ pub struct Budget {
     pub deadline: Option<Wall>,
 }
 
-/// Carried accounting snapshots; root-authority arithmetic and settlement are
-/// added in02e. These shapes mirror01b without sharing its domain types.
+/// Current allotment accounting. Tasks checks concrete reservations, charges
+/// and move normalization; authority checks remain external. 02e adds the
+/// complete finite pool/period ledger. The vocabulary is independent of 01b.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Numbers {
     pub budget: u64,

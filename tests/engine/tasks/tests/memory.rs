@@ -14,6 +14,7 @@ struct Measured {
     meter: Meter,
     bound: u64,
     serial: u64,
+    refused: bool,
 }
 impl Measured {
     fn new(l: Limits) -> Measured {
@@ -27,6 +28,7 @@ impl Measured {
             meter,
             bound: tasks::worst_case(&l).expect("admitted bounds"),
             serial: 0,
+            refused: false,
         }
     }
     fn to(&mut self) -> ReplyTo {
@@ -37,7 +39,9 @@ impl Measured {
         self.meter.start();
         tasks::step(&mut self.d, &self.env, event, &mut self.out);
         let measured = self.meter.end();
+        self.refused = false;
         while let Some(request) = self.out.pop() {
+            self.refused |= matches!(request, Request::Refused { .. });
             drop(request);
         }
         self.meter.check(measured, self.bound, self.env.limits);
@@ -322,4 +326,62 @@ fn rejected_words_questions_and_answers_are_not_copied_before_the_byte_check() {
         m.meter.check(measured, m.bound.checked_add(input_bytes).expect("small peak bound"), kind);
         assert!(m.meter.held() <= m.bound, "no rejected payload retained");
     }
+}
+#[test]
+fn dedicated_amendment_slots_and_bottom_up_move_scratch_fit_counted_memory() {
+    let l = Limits { tasks: 8, project_tasks: 8, stubs: 16, tree_tasks: 8, depth: 2, delegates: 7, batch: 7, ..LIMITS };
+    let mut m = Measured::new(l);
+    m.event(Event::Restored);
+    let mut root = task(1, &[]);
+    root.numbers.budget = 10_000;
+    root.authority.budget.spend = 10_000;
+    let reply_to = m.to();
+    m.event(Event::Make { reply_to, creator: Party::Person(1), batch: Box::new([root]) });
+    let mut children = Vec::new();
+    for number in 2..=8 {
+        let mut child = task(number, &[]);
+        child.spec.words = vec![1; l.spec_bytes as usize].into_boxed_slice();
+        child.funder = tasks::Funder::Task(1);
+        children.push(child);
+    }
+    let reply_to = m.to();
+    m.event(Event::Make { reply_to, creator: Party::Task(1), batch: children.into_boxed_slice() });
+    assert!(!m.refused, "full funding tree admitted");
+    for task in 1..=8 {
+        let reply_to = m.to();
+        m.event(Event::Amend {
+            reply_to,
+            task,
+            authorization: tasks::Authorization::Person { person: 9, project: 1 },
+            amendment: tasks::Amendment {
+                message: task,
+                spec: None,
+                policy: None,
+                dependencies: None,
+                tracked: None,
+                authorities: Box::new([]),
+                balances: Box::new([]),
+                reason: vec![1; l.message_bytes as usize].into_boxed_slice(),
+            },
+        });
+    }
+    let source = tasks::Funder::Period { project: 1, period: 0 };
+    let destination = tasks::Funder::Pool { project: 1, person: 9, period: 7 };
+    let before = tasks::Numbers { budget: 100_000, spent: 0, spent_below: 0, reserved: 10_000 };
+    let reply_to = m.to();
+    m.event(Event::Move {
+        reply_to,
+        task: 1,
+        authorization: tasks::Authorization::Person { person: 9, project: 1 },
+        movement: tasks::Movement {
+            to: Party::Person(9),
+            transfers: Box::new([tasks::Transfer { task: 1, before: source, after: destination }]),
+            balances: Box::new([
+                tasks::Balance { funder: source, before, after: tasks::Numbers { reserved: 0, ..before } },
+                tasks::Balance { funder: destination, before: tasks::Numbers { reserved: 0, ..before }, after: before },
+            ]),
+            reason: Box::new([1]),
+        },
+    });
+    assert!(!m.refused, "worst-case normalization admitted");
 }

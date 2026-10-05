@@ -41,6 +41,7 @@ pub(crate) fn claim(
         return refused(to, Some(number), Refusal::State, out);
     }
     task.record.attempt = attempt;
+    task.record.run_spent = 0;
     task.record.turn = 0;
     task.record.last_read = None;
     task.record.phase = Phase::Active(Active::Claimed { attempt });
@@ -169,6 +170,7 @@ pub(crate) fn activation(
         | Phase::Held { was: Was::Waiting | Was::Active(_), .. }
         | Phase::Ended(_) => None,
     };
+    let end = if old.narrowing && closing.is_none() { End::Parked } else { end };
     let end = match end {
         End::Finished { result, cancel_delegates } => {
             if valid_result(&old.contract, &result, &env.limits) {
@@ -215,6 +217,7 @@ pub(crate) fn activation(
         }
     };
     let task = task_mut(d, number).expect("terminal names live task");
+    task.record.narrowing = false;
     task.record.last_answer = Some(attempt);
     task.record.phase = match held {
         Some(why) => Phase::Held { was: was(next), why },

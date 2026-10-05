@@ -6,15 +6,18 @@
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
 extern crate alloc;
+mod amend;
 mod batch;
 mod boundary;
 mod closing;
 mod domain;
 mod facts;
 mod failures;
+mod funders;
 mod inbox;
 mod limits;
 mod message;
+mod moving;
 mod refs;
 mod run;
 mod stored;
@@ -22,11 +25,14 @@ mod stored;
 mod tests;
 mod value;
 mod wake;
+pub use amend::{Amendment, AuthorityChange, Authorization, Change, Control, History};
 pub use boundary::*;
 pub use domain::{Domain, fire, max_out, step};
 pub use facts::Fact;
 pub use failures::{Class, Retries, Retry, Tries};
+pub use funders::{Balance, Closure};
 pub use limits::{Limits, worst_case};
+pub use moving::{Movement, Transfer};
 pub use value::{
     Authority, AuthorityExecutor, Budget, Delegation, Funder, Grant, Last, Numbers, Pattern, Scopes, Tools,
 };

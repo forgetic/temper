@@ -73,6 +73,10 @@ fn batch_is_atomic_and_cycles_and_limits_refuse_at_entrance() {
             | Refusal::Subscription
             | Refusal::Read
             | Refusal::Turn
+            | Refusal::Standing
+            | Refusal::Funding
+            | Refusal::Tracked
+            | Refusal::Revision
             | Refusal::KeyConflict => unreachable!(),
         }
         refused(&w.make(Party::Person(1), vec![task(1, &[]), new]), why);
