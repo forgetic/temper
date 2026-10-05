@@ -7,6 +7,7 @@ and it says nothing of visual design: no layouts, styles or markup, only
 the places the web has, what each shows and the actions each offers. It
 assumes one person for now (section 3). What the web needs that the
 domain does not yet give is section 10; what is still open, section 11.
+How the web is built is `../architecture.md`.
 
 ## 1. In one page
 
