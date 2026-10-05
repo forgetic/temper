@@ -145,7 +145,8 @@ pub(crate) fn ancestors(domain: &Domain, commit: u64) -> Set<u64> {
     let mut todo = Queue::with_capacity(domain.commits.len());
     found.insert(commit).expect("a commit of the store");
     todo.push(commit);
-    while let Some(current) = todo.pop() {
+    for _ in 0..domain.commits.len() {
+        let Some(current) = todo.pop() else { return found };
         let object = domain.commits.get(&current).expect("parents are commits of the store");
         for parent in [object.parent, object.merge_parent] {
             if let Some(parent) = parent
@@ -155,6 +156,7 @@ pub(crate) fn ancestors(domain: &Domain, commit: u64) -> Set<u64> {
             }
         }
     }
+    assert!(todo.is_empty(), "each stored object is queued at most once");
     found
 }
 
