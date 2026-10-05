@@ -6,7 +6,8 @@
 //!
 //! [`engine::step`] admits authenticated sign-ins and keyed chats, worker
 //! hellos/losses, numbered turns, priced answers, historical result reads and
-//! store/account terminals. [`engine::resume`] releases one durable delivery
+//! store/account terminals. Actual held chats also route authenticated escalation
+//! reads and keyed Release/Reject/Pass acceptance decisions (domain/engine.md, 7.7). [`engine::resume`] releases one durable delivery
 //! or routes pending work; [`engine::fire`] drives child timers through the
 //! same decision barrier. A writing decision is one ordered atomic commit;
 //! claims, accepted turns, answers and people's replies leave only after the
@@ -17,7 +18,9 @@
 //! current claim's latest turn metadata and typed terminal; authentic funding
 //! numbers stay in tasks. Startup pages and validates current proof rows before
 //! tasks restoration consequences and fleet adoption. [`TerminalRecord`] and
-//! transcript archives stay outside the bounded live proof map (domain/engine.md, 7.5). The shell reserves entry-point output
+//! transcript archives stay outside the bounded live proof map. Immutable escalation
+//! decision history uses named single-row reads through the finite shared query
+//! slots, never a restored live history map (domain/engine.md, 7.5 and 7.7). The shell reserves entry-point output
 //! room and calls [`engine::Domain::reclaim`] after each iteration. The store
 //! protocol encodes typed [`Record`]s and supplies bounded pages; the root
 //! never knows file descriptors, wire formats, secret credential bytes,
@@ -49,5 +52,6 @@ pub use decision::{
     worst_case,
 };
 pub use store::{
-    Deployment, Family, Key, Range, Record, RunProof, TerminalRecord, TurnProof, TurnRecord, Write, record_bytes,
+    Deployment, EscalationDecisionRecord, Family, Key, Range, Record, RunProof, TerminalRecord, TurnProof, TurnRecord,
+    Write, record_bytes,
 };

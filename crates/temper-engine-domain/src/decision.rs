@@ -45,6 +45,23 @@ pub struct Limits {
 /// resumed by the root and never passed to the protocol as child events.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Delivery {
+    /// Root-to-authenticated named reader: one current durable held-chat view,
+    /// derived from tasks without a persistent people inbox (domain/engine.md, 7.7).
+    EscalationReply {
+        /// One web-issued reply right (domain/engine.md, 7.7).
+        to: skein_lib::ReplyTo,
+        /// Authenticated person permitted to see this held chat (domain/engine.md, 7.7).
+        person: u64,
+        /// Bounded semantic view; rejection owns at most result_bytes
+        /// (domain/engine.md, 7.7).
+        context: Box<temper_engine_domain_tasks::EscalationContext>,
+    },
+    /// Root internal historical read, released after preceding commit; consumed
+    /// once by root and never exposed to the shell (domain/engine.md, 7.7).
+    ReadEscalationDecision {
+        /// Reserved root read slot, retired after IO terminal (domain/engine.md, 7.7).
+        waiter: skein_lib::Token,
+    },
     /// Journal caller to web: one people terminal without an attached session;
     /// the walking root uses `WebReply` instead (domain/people.md, 11).
     Reply {
@@ -252,6 +269,22 @@ impl Decision {
             Write::Erase(
                 Key::Turn { .. } | Key::RunProof { .. } | Key::Terminal { .. } | Key::Tasks(_) | Key::People(_),
             ) => true,
+            Write::Erase(Key::EscalationDecision { .. }) => false,
+            Write::Save(Record::EscalationDecision(row)) => {
+                row.task != 0
+                    && row.revision != 0
+                    && row.by != 0
+                    && row.requester != 0
+                    && match &row.decision {
+                        temper_engine_domain_people::EscalationDecision::Release
+                        | temper_engine_domain_people::EscalationDecision::Pass => true,
+                        temper_engine_domain_people::EscalationDecision::Reject { reason } => {
+                            reason.len()
+                                <= usize::try_from(limits.result_bytes.min(limits.transcript_bytes))
+                                    .expect("u32 fits usize")
+                        }
+                    }
+            }
             Write::Save(Record::Tasks(_) | Record::People(_) | Record::RunProof(_) | Record::Terminal(_)) => {
                 match crate::store::owned_bytes(&write) {
                     Some(bytes) => bytes <= u64::from(limits.transcript_bytes),
@@ -282,6 +315,30 @@ impl Decision {
             Delivery::Result { words, .. } | Delivery::ResultReply { words, .. } => {
                 words.len() <= usize::try_from(limits.result_bytes).expect("u32 fits usize")
             }
+            Delivery::EscalationReply { context, .. } => {
+                context.task != 0
+                    && context.requester != 0
+                    && match &context.escalation {
+                        temper_engine_domain_tasks::Escalation::Rejected { revision, by, reason } => {
+                            *revision != 0
+                                && *by != 0
+                                && reason.len() <= usize::try_from(limits.result_bytes).expect("u32 fits usize")
+                        }
+                        temper_engine_domain_tasks::Escalation::Waiting { revision, holder } => {
+                            *revision != 0
+                                && match holder {
+                                    temper_engine_domain_tasks::EscalationHolder::Person(person) => {
+                                        *person != 0 && *person == context.requester
+                                    }
+                                    temper_engine_domain_tasks::EscalationHolder::Role { project, .. } => {
+                                        *project == context.project
+                                    }
+                                }
+                        }
+                        temper_engine_domain_tasks::Escalation::Unheld { .. }
+                        | temper_engine_domain_tasks::Escalation::Routing { .. } => false,
+                    }
+            }
             Delivery::Fleet(event) => fleet_delivery_within(event, limits),
             Delivery::Assigned { assignment, .. } => assignment_within(assignment, limits),
             Delivery::Reply { .. }
@@ -290,6 +347,7 @@ impl Decision {
             | Delivery::Cancel { .. }
             | Delivery::WebReply { .. }
             | Delivery::Refuse { .. }
+            | Delivery::ReadEscalationDecision { .. }
             | Delivery::ReadResult { .. }
             | Delivery::TurnBusy { .. }
             | Delivery::Load { .. } => true,
@@ -512,13 +570,14 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_add(List::<Write>::worst_case(limits.writes)?.checked_mul(2)?)?
         .checked_add(Queue::<Delivery>::worst_case(limits.deliveries)?)?
         .checked_add(u64::from(limits.writes).checked_mul(2)?.checked_mul(u64::from(limits.transcript_bytes))?)?
-        .checked_add(u64::from(limits.held).checked_add(u64::from(limits.deliveries))?.checked_mul(
-            u64::from(limits.result_bytes).max(u64::from(limits.transcript_bytes)).checked_add(List::<
-                temper_engine_domain_brief::Section,
-            >::worst_case(
-                limits.deliveries
-            )?)?,
-        )?)
+        .checked_add(
+            u64::from(limits.held).checked_add(u64::from(limits.deliveries))?.checked_mul(
+                u64::from(limits.result_bytes).max(u64::from(limits.transcript_bytes)).checked_add(
+                    List::<temper_engine_domain_brief::Section>::worst_case(limits.deliveries)?
+                        .max(u64::try_from(size_of::<temper_engine_domain_tasks::EscalationContext>()).ok()?),
+                )?,
+            )?,
+        )
 }
 
 fn fleet_delivery_within(event: &temper_engine_domain_fleet::Event, limits: &Limits) -> bool {

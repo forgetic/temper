@@ -35,6 +35,12 @@ pub struct Rules {
 /// current entry. (domain/authority.md, sections 6 and 8.4).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Policy {
+    /// Optional final escalation recipient role, distinct from acceptance
+    /// permissions. When present it must name a configured role allowed to
+    /// accept escalations; the current root requires it. Disabled
+    /// authority-only policies route no escalation fallback (domain/authority.md,
+    /// section 9; domain/tasks.md, section 15).
+    pub escalation_role: Option<u32>,
     /// Project authority ceiling, no greater than the deployment ceiling. (domain/authority.md,
     /// sections 6 and 8.4).
     pub ceiling: Authority,

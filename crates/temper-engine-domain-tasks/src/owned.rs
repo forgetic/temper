@@ -99,6 +99,12 @@ fn task_bytes(task: &TaskRecord) -> Option<u64> {
         .checked_add(authority_bytes(&task.authority)?)?
         .checked_add(contract_bytes(&task.contract)?)?
         .checked_add(phase_bytes(&task.phase)?)?
+        .checked_add(match &task.escalation {
+            crate::Escalation::Rejected { reason, .. } => bytes(reason.len())?,
+            crate::Escalation::Unheld { .. }
+            | crate::Escalation::Routing { .. }
+            | crate::Escalation::Waiting { .. } => 0,
+        })?
         .checked_add(bytes(size_of_val(&*task.dependencies))?)?
         .checked_add(bytes(size_of_val(&*task.delegates))?)?
         .checked_add(bytes(size_of_val(&*task.waiting_on))?)

@@ -209,6 +209,18 @@ fn invalid(domain: &Domain, policy: &Policy) -> Option<PolicyRefusal> {
             }
         }
     }
+    if let Some(number) = policy.escalation_role {
+        let mut valid = false;
+        for role in &policy.roles {
+            if role.number == number {
+                valid = role.requests.allows(crate::RequestKind::Accept)
+                    && role.decides.allows(crate::ProposalKind::Escalation);
+            }
+        }
+        if !valid {
+            return Some(PolicyRefusal::InvalidRole);
+        }
+    }
     for rule in &policy.landing {
         for approval in &rule.approvals {
             let mut exists = false;

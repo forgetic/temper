@@ -80,6 +80,22 @@ pub struct Holding {
 /// increment. (domain/people.md, sections 5.1 and 12.1).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Ask {
+    /// Decide one held chat's exact semantic revision. Root verifies current
+    /// waiting recipient and authority; admission authenticates the session and
+    /// reserves keyed-answer room (domain/people.md, section 5.1.2).
+    DecideEscalation {
+        /// Actual policy project, checked against the held task by root
+        /// (domain/people.md, section 5.1.2).
+        project: u32,
+        /// Positive held chat identity (domain/people.md, section 5.1.2).
+        task: u64,
+        /// Positive task-local waiting revision, never a transport key
+        /// (domain/people.md, section 5.1.2).
+        revision: u64,
+        /// One bounded semantic choice; root authorizes before mutation
+        /// (domain/people.md, section 5.1.2).
+        decision: EscalationDecision,
+    },
     /// Request a chat task; admitted member-or-higher asks route once per key to the root.
     /// (domain/people.md, sections 5.1 and 12.1).
     StartChat {
@@ -90,11 +106,48 @@ pub enum Ask {
     },
 }
 
+/// Authenticated person's held-chat choice. Rejection words are bounded by
+/// people words; root also checks child/journal bounds (domain/people.md, 5.1.2).
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum EscalationDecision {
+    /// Rejudge a retry-exhausted held chat; no widening route is implied
+    /// (domain/people.md, 5.1.2).
+    Release,
+    /// Decide once while preserving the hold (domain/people.md, 5.1.2).
+    Reject {
+        /// Bounded reason saved with the ask and held task (domain/people.md, 5.1.2).
+        reason: Box<[u8]>,
+    },
+    /// Move from requester to final policy role; no further pass from that role
+    /// (domain/people.md, 5.1.2).
+    Pass,
+}
+
+/// Semantic kind of a committed decision, returned to a caller or historical
+/// loser of a race; carries no second task state (domain/people.md, 5.1.2).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum EscalationChoice {
+    /// Retry hold released (domain/people.md, 5.1.2).
+    Released,
+    /// Task remains held with rejection reason (domain/people.md, 5.1.2).
+    Rejected,
+    /// Waiting moved to policy role (domain/people.md, 5.1.2).
+    Passed,
+}
+
 /// Admission or root-decision reason; `Busy`/`NotReady` decisions release the flight without saving a
 /// completed key, while other decided refusals are retained. (domain/people.md, sections 5.1.1 and
 /// 12.1).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Refusal {
+    /// Final policy role cannot pass further; no state mutation
+    /// (domain/people.md, 5.1.2).
+    NoFurther,
+    /// Held cause needs an actual amendment route, currently absent
+    /// (domain/people.md, 5.1.2).
+    NeedsAmend,
+    /// Caller is not the current waiting recipient (domain/people.md, 5.1.2).
+    Standing,
     /// Restoration is unfinished/failed, or the root reports transient admission unavailability.
     /// (domain/people.md, sections 5.1.1 and 12.1).
     NotReady,
@@ -128,6 +181,19 @@ pub enum Refusal {
 /// 12.1).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Outcome {
+    /// Root's committed current or historical decision for one task revision;
+    /// first commit decides a race (domain/people.md, 5.1.2).
+    EscalationDecided {
+        /// Named held chat (domain/people.md, 5.1.2).
+        task: u64,
+        /// Decided task-local revision (domain/people.md, 5.1.2).
+        revision: u64,
+        /// Authenticated winning person, including historical races
+        /// (domain/people.md, 5.1.2).
+        by: u64,
+        /// Committed semantic choice (domain/people.md, 5.1.2).
+        choice: EscalationChoice,
+    },
     /// Root created the chat task; save the keyed answer with the task in one decision.
     /// (domain/people.md, sections 5.1.1 and 12.1).
     Started {
@@ -354,8 +420,8 @@ pub enum Request {
         person: u64,
         /** Project selected by the typed request. (domain/people.md, sections 5.1.1 and 12.1). */
         project: u32,
-        /** Current membership checked by people for this admission; root still checks authority. (domain/people.md, sections 5.1.1 and 12.1). */
-        role: Role,
+        /** Current membership at admission: Some is required for chat; an escalation decision may carry None so root can check named-person standing. Root still checks authority (domain/people.md, sections 5.1.1–5.1.2 and 12.1). */
+        role: Option<Role>,
         /** Original bounded request, owned by the root for routing and atomic decision. (domain/people.md, sections 5.1.1 and 12.1). */
         ask: Ask,
     },

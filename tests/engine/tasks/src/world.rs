@@ -245,11 +245,26 @@ impl World {
             | Event::Hold { .. }
             | Event::Settled { .. }
             | Event::Restore { .. }
-            | Event::Restored => None,
+            | Event::Restored
+            | Event::InspectEscalation { .. }
+            | Event::RoutedEscalation { .. }
+            | Event::DecideEscalation { .. } => None,
         };
         self.trace.log(self.env.now, format_args!("{event:?}"));
         tasks::step(&mut self.domain, &self.env, event, &mut self.out);
         while let Some(request) = self.out.pop() {
+            if let Request::EscalationNeeded { context } = &request {
+                tasks::step(
+                    &mut self.domain,
+                    &self.env,
+                    Event::RoutedEscalation {
+                        task: context.task,
+                        revision: context.escalation.revision(),
+                        holder: tasks::EscalationHolder::Person(context.requester),
+                    },
+                    &mut self.out,
+                );
+            }
             self.pending.push(request);
         }
         if self.consume_facts {
@@ -295,7 +310,10 @@ impl World {
                 | Request::Stop { .. }
                 | Request::Adopt { .. }
                 | Request::Close { .. }
-                | Request::RestoreRefused { .. } => {}
+                | Request::RestoreRefused { .. }
+                | Request::EscalationNeeded { .. }
+                | Request::EscalationInspected { .. }
+                | Request::EscalationDecided { .. } => {}
             }
         }
         if self.pending.iter().any(|request| {
@@ -342,7 +360,10 @@ impl World {
     pub fn deliver(&mut self) {
         for request in std::mem::take(&mut self.pending) {
             match request {
-                Request::Save { .. } | Request::Erase { .. } | Request::Ended { .. } => {}
+                Request::Save { .. }
+                | Request::Erase { .. }
+                | Request::Ended { .. }
+                | Request::EscalationNeeded { .. } => {}
                 Request::Made { reply_to, tasks } => self.reply(reply_to, Reply::Made(tasks.into_vec())),
                 Request::Refused { reply_to, problem } => self.reply(reply_to, Reply::Refused(problem)),
                 Request::Done { reply_to } => self.reply(reply_to, Reply::Done),
@@ -365,6 +386,9 @@ impl World {
                     self.observe(Seen::Closing { task });
                 }
                 Request::RestoreRefused { problem } => panic!("world store corrupted: {problem:?}"),
+                Request::EscalationInspected { .. } | Request::EscalationDecided { .. } => {
+                    panic!("this child world sends no escalation decisions")
+                }
             }
         }
         self.observe(Seen::Limit { live: self.live(), cap: self.env.limits.tasks });

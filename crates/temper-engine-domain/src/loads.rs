@@ -332,7 +332,9 @@ fn check(entry: &Entry, limits: &Limits, rows: &[Record], next: Option<Key>) -> 
             return Err(Failure::Cursor);
         }
         match entry.range {
-            Range::Deployment | Range::TaskResult { .. } => return Err(Failure::Cursor),
+            Range::Deployment | Range::TaskResult { .. } | Range::EscalationDecision { .. } => {
+                return Err(Failure::Cursor);
+            }
             Range::Turns { .. } | Range::Tasks | Range::People | Range::RunProofs => {}
         }
     }
@@ -351,6 +353,7 @@ fn valid_range(range: Range) -> bool {
     match range {
         Range::Deployment | Range::Tasks | Range::People | Range::RunProofs => true,
         Range::TaskResult { task } => task != 0,
+        Range::EscalationDecision { task, revision } => task != 0 && revision != 0,
         Range::Turns { task, attempt } => task != 0 && attempt != 0,
     }
 }

@@ -21,6 +21,7 @@ fn ended(world: &World) -> &tasks::TaskRecord {
             | Record::Turn(_)
             | Record::People(_)
             | Record::RunProof(_)
+            | Record::EscalationDecision(_)
             | Record::Terminal(_)
             | Record::Tasks(tasks::Stored::Live(_) | tasks::Stored::Closure(_) | tasks::Stored::Ledger(_)) => None,
         })

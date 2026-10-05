@@ -123,6 +123,15 @@ pub fn max_out(limits: &Limits) -> u32 {
 /// effects before external replies. (domain/tasks.md, sections 2, 4–5, 10 and 14).
 pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     match event {
+        Event::InspectEscalation { reply_to, task } => {
+            out.push(Request::EscalationInspected { reply_to, context: crate::escalation::context(domain, task) });
+        }
+        Event::RoutedEscalation { task, revision, holder } => {
+            crate::escalation::routed(domain, env, task, revision, holder, out);
+        }
+        Event::DecideEscalation { reply_to, task, revision, by, decision } => {
+            crate::escalation::decide(domain, env, reply_to, task, revision, by, decision, out);
+        }
         Event::OpenPeriod { reply_to, project, period, budget } => {
             crate::funders::open(domain, reply_to, project, period, budget, out);
         }
@@ -237,6 +246,7 @@ pub(crate) fn activate(domain: &Domain, number: u64, out: &mut Queue<Request>) {
 
 pub(crate) fn publish(domain: &mut Domain, env: &Env<Limits>, number: u64, out: &mut Queue<Request>) {
     let task = task_mut(domain, number).expect("published task is live");
+    let escalation = crate::escalation::begin(&mut task.record);
     let until = match task.record.phase {
         Phase::Active(Active::BackingOff { until }) => Some(until),
         Phase::Waiting
@@ -261,6 +271,11 @@ pub(crate) fn publish(domain: &mut Domain, env: &Env<Limits>, number: u64, out: 
     };
     task.alarm = alarm;
     out.push(Request::Save { record: Stored::Live(Box::new(task.record.clone())) });
+    if escalation {
+        out.push(Request::EscalationNeeded {
+            context: crate::escalation::context(domain, number).expect("new held person context"),
+        });
+    }
     match alarm {
         Some(alarm) => {
             let armed = domain.alarms.arm(number, alarm.due);
@@ -326,6 +341,7 @@ fn make(
         let number = new.number;
         let task = Task {
             record: TaskRecord {
+                escalation: crate::Escalation::Unheld { revision: 0 },
                 number,
                 project: new.project,
                 requester: creator,

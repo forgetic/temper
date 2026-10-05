@@ -367,3 +367,74 @@ fn restore_refuses_task_funding_outside_its_requester_ancestry() {
     step(&mut domain, &source.env, Event::Restored, &mut out);
     assert!(std::iter::from_fn(|| out.pop()).any(|request| matches!(request, Request::RestoreRefused { .. })));
 }
+
+#[test]
+fn unresolved_or_inconsistent_escalation_rows_refuse_before_retention() {
+    use skein_lib::Queue;
+    use temper_engine_domain_tasks::{Domain, Escalation, EscalationHolder, Hold, Request, Was, step};
+    let mut source = World::new(36, LIMITS);
+    source.make(Party::Person(1), vec![task(1, &[])]);
+    for corrupt in 0..6 {
+        let mut task = source.record(1).clone();
+        task.phase = Phase::Held { was: Was::Active(Active::Due), why: Hold::Deadline };
+        task.escalation = match corrupt {
+            0 => Escalation::Routing { revision: 1 },
+            1 => Escalation::Unheld { revision: 0 },
+            2 => Escalation::Waiting { revision: 0, holder: EscalationHolder::Person(1) },
+            3 => Escalation::Waiting { revision: 1, holder: EscalationHolder::Person(2) },
+            4 => Escalation::Waiting { revision: 1, holder: EscalationHolder::Role { project: 2, role: 0 } },
+            5 => Escalation::Rejected {
+                revision: 1,
+                by: 1,
+                reason: vec![b'x'; usize::try_from(LIMITS.result_bytes).unwrap() + 1].into_boxed_slice(),
+            },
+            _ => unreachable!(),
+        };
+        let mut domain = Domain::new(&LIMITS, 36, Box::new([1]));
+        let mut out = Queue::with_capacity(temper_engine_domain_tasks::max_out(&LIMITS));
+        step(&mut domain, &source.env, Event::Restore { record: Stored::Live(Box::new(task)) }, &mut out);
+        assert!(matches!(out.pop(), Some(Request::RestoreRefused { .. })));
+        assert!(out.pop().is_none());
+    }
+}
+
+#[test]
+fn waiting_restore_requests_recheck_once_and_identical_recipient_changes_nothing() {
+    use skein_lib::Queue;
+    use temper_engine_domain_tasks::{Domain, Escalation, EscalationHolder, Hold, Request, Was, step};
+    let mut source = World::new(37, LIMITS);
+    source.make(Party::Person(1), vec![task(1, &[])]);
+    for rejected in [false, true] {
+        let mut domain = Domain::new(&LIMITS, 37, Box::new([1]));
+        let mut out = Queue::with_capacity(temper_engine_domain_tasks::max_out(&LIMITS));
+        for record in source.records.values() {
+            let mut record = record.clone();
+            if let Stored::Live(task) = &mut record {
+                task.phase = Phase::Held { was: Was::Active(Active::Due), why: Hold::Deadline };
+                task.escalation = if rejected {
+                    Escalation::Rejected { revision: 4, by: 1, reason: b"no".as_slice().into() }
+                } else {
+                    Escalation::Waiting { revision: 4, holder: EscalationHolder::Person(1) }
+                };
+            }
+            step(&mut domain, &source.env, Event::Restore { record }, &mut out);
+        }
+        assert!(out.is_empty());
+        step(&mut domain, &source.env, Event::Restored, &mut out);
+        let requests = std::iter::from_fn(|| out.pop()).collect::<Vec<_>>();
+        assert_eq!(
+            requests.iter().filter(|row| matches!(row, Request::EscalationNeeded { .. })).count(),
+            usize::from(!rejected)
+        );
+        assert!(!requests.iter().any(|row| matches!(row, Request::Save { .. } | Request::Activate { .. })));
+        let before = format!("{domain:?}");
+        step(
+            &mut domain,
+            &source.env,
+            Event::RoutedEscalation { task: 1, revision: 4, holder: EscalationHolder::Person(1) },
+            &mut out,
+        );
+        assert!(out.is_empty(), "same selected recipient emits no save");
+        assert_eq!(format!("{domain:?}"), before);
+    }
+}

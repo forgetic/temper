@@ -38,7 +38,7 @@ pub struct Limits {
     /// Maximum combined login and display-name bytes per person. (domain/people.md, sections 2–5
     /// and 12.1).
     pub identity_bytes: u32,
-    /// Maximum opening-word bytes per `StartChat`, including pending and completed copies.
+    /// Maximum opening-word or escalation rejection-reason bytes per keyed ask, including pending and completed copies.
     /// (domain/people.md, sections 2–5 and 12.1).
     pub words: u32,
     /// Nonzero configured lifetime projected once from admission's wall/monotonic environment.

@@ -67,11 +67,12 @@ impl Store {
     pub fn page(&self, range: Range, after: Option<Key>, most: u32) -> (Box<[Record]>, Option<Key>) {
         let selected: Vec<Record> = self.rows.iter().filter(|(key, _)| {
             let within = match range {
+                Range::EscalationDecision { task, revision } => matches!(key, Key::EscalationDecision { task: found, revision: current } if *found == task && *current == revision),
                 Range::Deployment => **key == Key::Deployment,
                 Range::Tasks => match key {
                     Key::Tasks(temper_engine_domain_tasks::Key::Live(_) | temper_engine_domain_tasks::Key::Ledger(_)) => true,
                     Key::Tasks(temper_engine_domain_tasks::Key::Ended(_) | temper_engine_domain_tasks::Key::Closure { .. })
-                        | Key::Deployment | Key::Turn { .. } | Key::RunProof { .. } | Key::Terminal { .. } | Key::People(_) => false,
+                        | Key::EscalationDecision { .. } | Key::Deployment | Key::Turn { .. } | Key::RunProof { .. } | Key::Terminal { .. } | Key::People(_) => false,
                 },
                 Range::RunProofs => matches!(key, Key::RunProof { task } if *task != 0),
                 Range::People => matches!(key, Key::People(_)),

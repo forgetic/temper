@@ -4,7 +4,7 @@
 //! `Save`/`Erase` join the parent's decision; the parent holds replies until
 //! durable (domain/engine.md, 5.6). Inboxes and adoption follow later.
 //!
-//! The current boundary supports typed `StartChat` only; inboxes, adoption,
+//! The current boundary supports typed `StartChat` and authenticated escalation decisions; inboxes, adoption,
 //! person tasks and timed key retention remain later increments
 //! (domain/people.md, sections 5.1.1 and 12.1). This child never sees forge
 //! credentials, protocol bytes, task internals or authority policy state.
@@ -26,7 +26,8 @@
 //! `fire` expires at most one due sign-in per call. The caller reserves free
 //! request room from `max_out`, accounts output bytes separately, and reclaims
 //! retired flights at the iteration boundary. `worst_case` includes retained
-//! state and bounded scratch. `Domain::has_project` is a pure bounded startup
+//! state and bounded scratch. `Domain::role` supplies current membership for root
+//! escalation coverage/standing without authentication or copying. `Domain::has_project` is a pure bounded startup
 //! lookup; `Domain::person` is a pure sign-in lookup after restoration, checking
 //! both its projected monotonic deadline and saved wall expiry for root result
 //! routing, even before timer firing (domain/engine.md, sections 5.7 and 7.5).
@@ -42,8 +43,8 @@ mod limits;
 #[cfg(test)]
 mod tests;
 pub use boundary::{
-    Ask, Event, Holding, Identity, IdentityKey, InitialOwner, Key, Outcome, Refusal, Reply, Request, RequestKey, Role,
-    Stored,
+    Ask, EscalationChoice, EscalationDecision, Event, Holding, Identity, IdentityKey, InitialOwner, Key, Outcome,
+    Refusal, Reply, Request, RequestKey, Role, Stored,
 };
 pub use domain::{Domain, fire, max_out, step};
 pub use facts::Fact;

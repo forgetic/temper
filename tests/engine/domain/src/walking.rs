@@ -73,14 +73,15 @@ pub fn limits() -> engine::Limits {
         grace: Duration::from_secs(5),
         facts: 2,
     };
-    let writes = tasks::max_out(&tasks) * 8 + people::max_out(&people) * 4 + fleet::max_out(&fleet) * 4;
+    let writes =
+        tasks::max_out(&tasks) * 8 + people::max_out(&people) * 4 + people.pending * 2 + fleet::max_out(&fleet) * 4;
     engine::Limits {
         authority: authority_limits(),
         journal: JournalLimits {
             commits: 3,
             held: 64,
             writes,
-            deliveries: 16,
+            deliveries: 18,
             transcript_bytes: 8192,
             result_bytes: 128,
         },
@@ -171,6 +172,7 @@ pub fn config(seed: u64) -> engine::Config {
     };
     let mut domain = authority::Domain::new(rules, authority_limits()).expect("valid authority configuration");
     let policy = authority::Policy {
+        escalation_role: Some(0),
         ceiling,
         period_spend: 1000,
         roles: Box::new([authority::Role {
@@ -613,10 +615,17 @@ impl World {
                     .result(&self.store.rows, person, task, &words)
                     .expect("committed result reaches person once");
             }
-            Delivery::Reply { .. } | Delivery::WebReply { .. } | Delivery::Refuse { .. } | Delivery::Cancel { .. } => {
+            Delivery::Reply { .. }
+            | Delivery::EscalationReply { .. }
+            | Delivery::WebReply { .. }
+            | Delivery::Refuse { .. }
+            | Delivery::Cancel { .. } => {
                 panic!("unexpected walking delivery {delivery:?}")
             }
-            Delivery::Fleet(_) | Delivery::ReadResult { .. } | Delivery::Load { .. } => {
+            Delivery::Fleet(_)
+            | Delivery::ReadEscalationDecision { .. }
+            | Delivery::ReadResult { .. }
+            | Delivery::Load { .. } => {
                 panic!("internal handoff leaked to world")
             }
         }

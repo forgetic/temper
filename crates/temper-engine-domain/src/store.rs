@@ -66,6 +66,14 @@ pub enum Family {
 /// handles (domain/engine.md, 5.3–5.6).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Key {
+    /// Root's immutable decided held-chat revision; read only by named race
+    /// replay, never restored into live state (domain/engine.md, 7.7).
+    EscalationDecision {
+        /// Positive root-issued task (domain/engine.md, 7.7).
+        task: u64,
+        /// Positive semantic revision, unique within task (domain/engine.md, 7.7).
+        revision: u64,
+    },
     /// Singleton deployment header key (domain/engine.md, 5.4).
     Deployment,
     /// Root-accepted transcript turn under one task and attempt (domain/engine.md, 7.2).
@@ -108,6 +116,14 @@ pub enum Key {
 /// request on their own and promise no cross-page snapshot (domain/engine.md, 5.3).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Range {
+    /// Exactly one root-owned decision archive for a stale authenticated
+    /// decision; no unbounded history restore (domain/engine.md, 7.7).
+    EscalationDecision {
+        /// Positive named task (domain/engine.md, 7.7).
+        task: u64,
+        /// Positive decided semantic revision (domain/engine.md, 7.7).
+        revision: u64,
+    },
     /// Singleton header read by the root at startup; at most one row and no
     /// continuation (domain/engine.md, 5.3–5.4).
     Deployment,
@@ -147,11 +163,25 @@ impl Range {
     #[must_use]
     pub const fn contains(self, key: Key) -> bool {
         match self {
+            Range::EscalationDecision { task, revision } => match key {
+                Key::EscalationDecision { task: found, revision: current } => {
+                    task != 0 && revision != 0 && task == found && revision == current
+                }
+                Key::Deployment
+                | Key::Turn { .. }
+                | Key::RunProof { .. }
+                | Key::Terminal { .. }
+                | Key::Tasks(_)
+                | Key::People(_) => false,
+            },
             Range::Deployment => match key {
                 Key::Deployment => true,
-                Key::Turn { .. } | Key::RunProof { .. } | Key::Terminal { .. } | Key::Tasks(_) | Key::People(_) => {
-                    false
-                }
+                Key::EscalationDecision { .. }
+                | Key::Turn { .. }
+                | Key::RunProof { .. }
+                | Key::Terminal { .. }
+                | Key::Tasks(_)
+                | Key::People(_) => false,
             },
             Range::Tasks => match key {
                 Key::Tasks(child) => match child {
@@ -160,23 +190,35 @@ impl Range {
                         false
                     }
                 },
-                Key::Deployment | Key::Turn { .. } | Key::RunProof { .. } | Key::Terminal { .. } | Key::People(_) => {
-                    false
-                }
+                Key::EscalationDecision { .. }
+                | Key::Deployment
+                | Key::Turn { .. }
+                | Key::RunProof { .. }
+                | Key::Terminal { .. }
+                | Key::People(_) => false,
             },
             Range::People => match key {
                 Key::People(_) => true,
-                Key::Deployment | Key::Turn { .. } | Key::RunProof { .. } | Key::Terminal { .. } | Key::Tasks(_) => {
-                    false
-                }
+                Key::EscalationDecision { .. }
+                | Key::Deployment
+                | Key::Turn { .. }
+                | Key::RunProof { .. }
+                | Key::Terminal { .. }
+                | Key::Tasks(_) => false,
             },
             Range::RunProofs => match key {
                 Key::RunProof { task } => task != 0,
-                Key::Deployment | Key::Turn { .. } | Key::Terminal { .. } | Key::Tasks(_) | Key::People(_) => false,
+                Key::EscalationDecision { .. }
+                | Key::Deployment
+                | Key::Turn { .. }
+                | Key::Terminal { .. }
+                | Key::Tasks(_)
+                | Key::People(_) => false,
             },
             Range::TaskResult { task } => match key {
                 Key::Tasks(temper_engine_domain_tasks::Key::Ended(number)) => task == number,
-                Key::Tasks(_)
+                Key::EscalationDecision { .. }
+                | Key::Tasks(_)
                 | Key::Deployment
                 | Key::Turn { .. }
                 | Key::RunProof { .. }
@@ -185,7 +227,12 @@ impl Range {
             },
             Range::Turns { task, attempt } => match key {
                 Key::Turn { task: found, attempt: run, turn } => found == task && run == attempt && turn != 0,
-                Key::Deployment | Key::RunProof { .. } | Key::Terminal { .. } | Key::Tasks(_) | Key::People(_) => false,
+                Key::EscalationDecision { .. }
+                | Key::Deployment
+                | Key::RunProof { .. }
+                | Key::Terminal { .. }
+                | Key::Tasks(_)
+                | Key::People(_) => false,
             },
         }
     }
@@ -266,11 +313,40 @@ pub struct RunProof {
     pub terminal: Option<TerminalRecord>,
 }
 
+/// Root-owned immutable first accepted decision for one held-chat revision.
+/// Saved atomically with semantic task change and keyed people outcome; bounded
+/// reason is never restored into a live archive map (domain/engine.md, 7.7).
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct EscalationDecisionRecord {
+    /// Actual child's project, used to authenticate historical reads rather
+    /// than trust the caller's project (domain/engine.md, 7.7).
+    pub project: u32,
+    /// Actual person requester from the accepted bounded semantic context;
+    /// current requester/policy-role standing controls replay privacy
+    /// (domain/engine.md, 7.7).
+    pub requester: u64,
+    /// Positive task identity (domain/engine.md, 7.7).
+    pub task: u64,
+    /// Positive checked semantic revision (domain/engine.md, 7.7).
+    pub revision: u64,
+    /// Positive authenticated winning person (domain/engine.md, 7.7).
+    pub by: u64,
+    /// Exact accepted bounded choice; rejection reason fits journal result_bytes/transcript_bytes
+    /// and both child bounds before mutation (domain/engine.md, 7.7).
+    pub decision: temper_engine_domain_people::EscalationDecision,
+}
+
 /// Owned typed row sent root to store in a commit or returned store to root in
 /// a bounded page. The transaction/page, not each row, has the store terminal
 /// (domain/engine.md, 5.1, 5.3 and 5.6).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Record {
+    /// Root's immutable semantic decision evidence; not task-owned transport
+    /// state (domain/engine.md, 7.7).
+    EscalationDecision(
+        /// Exact bounded accepted choice (domain/engine.md, 7.7).
+        EscalationDecisionRecord,
+    ),
     /// Fixed deployment counters, saved only by the journal (domain/engine.md, 5.4).
     Deployment(/** Root-owned fixed-size header (domain/engine.md, 5.4). */ Deployment),
     /// Accepted transcript turn owned by the root (domain/engine.md, 7.2).
@@ -308,6 +384,7 @@ impl Record {
     #[must_use]
     pub const fn key(&self) -> Key {
         match self {
+            Record::EscalationDecision(row) => Key::EscalationDecision { task: row.task, revision: row.revision },
             Record::Deployment(_) => Key::Deployment,
             Record::Turn(row) => Key::Turn { task: row.task, attempt: row.attempt, turn: row.turn },
             Record::RunProof(row) => Key::RunProof { task: row.task },
@@ -350,6 +427,7 @@ impl Write {
 #[must_use]
 pub fn record_bytes(record: &Record) -> Option<u64> {
     match record {
+        Record::EscalationDecision(row) => decision_bytes(&row.decision),
         Record::Deployment(_) => Some(0),
         Record::Turn(turn) => u64::try_from(turn.transcript.len()).ok(),
         Record::RunProof(row) => match &row.terminal {
@@ -367,6 +445,7 @@ pub fn record_bytes(record: &Record) -> Option<u64> {
                 .checked_mul(u64::try_from(size_of::<temper_engine_domain_people::Holding>()).ok()?),
             temper_engine_domain_people::Stored::Answer { ask, .. } => match ask {
                 temper_engine_domain_people::Ask::StartChat { words, .. } => u64::try_from(words.len()).ok(),
+                temper_engine_domain_people::Ask::DecideEscalation { decision, .. } => decision_bytes(decision),
             },
             temper_engine_domain_people::Stored::SignIn { .. } => Some(0),
         },
@@ -394,5 +473,13 @@ fn terminal_bytes(row: &TerminalRecord) -> Option<u64> {
         temper_engine_domain_tasks::End::Parked
         | temper_engine_domain_tasks::End::Failed(_)
         | temper_engine_domain_tasks::End::Refused => Some(0),
+    }
+}
+
+fn decision_bytes(decision: &temper_engine_domain_people::EscalationDecision) -> Option<u64> {
+    match decision {
+        temper_engine_domain_people::EscalationDecision::Release
+        | temper_engine_domain_people::EscalationDecision::Pass => Some(0),
+        temper_engine_domain_people::EscalationDecision::Reject { reason } => u64::try_from(reason.len()).ok(),
     }
 }

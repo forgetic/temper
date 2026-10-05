@@ -662,6 +662,80 @@ complete-state replay, facts-neutrality, counted-memory and small randomized
 latency tests exercise this cut. Other worker-loss, session-expiry, competing
 request and deployment migration cuts remain separate recovery work.
 
+### 7.7 Held person-chat escalation and decisions (02d1)
+
+The actual root route now completes the first held-chat decision increment.
+Tasks owns a current semantic escalation on its live row (tasks.md, 15); root
+owns authentication, policy resolution, transport slots and immutable decision
+history. People owns authenticated keyed requests/answers, with no escalation
+inbox or task-state copy. Authority supplies needs/covers and the real escalation acceptance
+request check. No future task-tree route justifies this surface.
+
+A newly held person chat emits EscalationNeeded. Root uses current people role
+membership and authority coverage for Escalate(release=None), with authentic
+pool numbers from tasks, to choose its requester. Otherwise it chooses the
+project's explicit escalation_role. Root policies require a selector among
+people's role identities Owner0, Maintainer1, Member2, Observer3; authority
+validates that the selected role can Accept and decide Escalation.
+The resulting RoutedEscalation callback joins the same decision: transient
+Routing is replaced by durable Waiting before any output escapes.
+
+ReadEscalation authenticates a session against both clocks and inspects the
+current held context. Only its requester or a current member of the selected
+policy role may see it. It is a direct bounded read with one terminal reply,
+not a persistent subscription. Keyed Ask::DecideEscalation authenticates the
+person before routing even when they lack membership, because a named person
+holder may still reject/pass. Root checks exact Waiting revision and holder
+standing; Release accepts this escalation and checks current coverage plus
+Accept(Escalate(release=None)). A future direct release request will use its
+separate Release permission.
+Only a retry-exhaustion hold is released in this slice; other holds return
+NeedsAmend. Reject retains bounded reason and remains held. Pass advances the
+revision to the final role, whose further Pass refuses NoFurther.
+
+Before any decision mutates tasks, root reserves a shared result/escalation
+query slot and validates every owned rejection copy. The accepted semantic
+Live write, root EscalationDecision archive and people answered-key record
+are one coalesced commit. Release's ensuing preparation/claim writes join the
+same decision as applicable. All replies and worker handoffs wait for durability.
+The original task/pool/period accounting remains tasks-owned and is never
+reset, replaced by a decision maker pool or charged again on replay.
+
+An exact keyed retry uses people's saved answer. A new key naming an already
+decided revision loads exactly one root EscalationDecision(task,revision) row,
+then tells an eligible requester/policy-role reader the committed winner's
+person and choice. It performs no task mutation, authority widening or charge.
+Current history-read membership is checked again at completion. Missing or
+malformed evidence refuses; Unloaded/load pressure returns transient Busy so
+the same key can retry. IO terminals under journal pressure are retained in
+bounded work until they can close the people's flight. Every such terminal
+retires the root query slot; iteration reclaim frees it. Archive rows never
+load at startup or collect in a live map; the store retains them immutably.
+
+Startup pages people, tasks and current proofs before Tasks Restored. Each
+restored Waiting context then rechecks current membership/coverage and the
+configured fallback before Fleet Loaded. Same holder changes nothing;
+changed holder advances its checked revision, stopping startup if exhausted.
+A final-role holder never moves down to a requester. Rejected remains rejected.
+Live role administration/loss rerouting is deferred to the following real
+03b/02d SetRoles integration, which has no root entrance in this increment.
+
+Route room includes two retained callbacks per pending people flight; the
+delivery reserve includes one history reply per flight alongside ordinary task
+outputs. This permits simultaneous issued IO terminals to wait under pressure
+without filling the fixed work queue or overrunning one decision.
+
+Memory prices one semantic rejection reason per live task, boxed contexts and
+simultaneous context copies, shared finite query slots and their owned offered
+reason, one buffered named-history row per slot, and all journal/archive/people
+copies. Rejection entrance is bounded by people.words, task result_bytes and
+the root journal's result/transcript row bounds before mutation. Named reads
+use real page and decoded-owned-byte admission; no unbounded archive restore
+is hidden in the finite query map. The independent world uses real children,
+two authenticated owners, priced retry failure3 and fresh success2, paged
+store, held/decision durability cuts, first-winner races, stale history queries,
+facts neutrality and complete-state replay. These cover 02d1, not full02d.
+
 ## 8. The fleet
 
 The fleet child domain knows the workers and the runs they host. It

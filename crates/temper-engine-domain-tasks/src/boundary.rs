@@ -403,6 +403,9 @@ pub struct New {
 /// does not maintain a mutable copy of this ledger. (domain/tasks.md, sections 3, 5 and 14).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct TaskRecord {
+    /// One bounded semantic held-chat decision and checked revision. Root owns
+    /// authentication, routing and historical receipts (domain/tasks.md, 15).
+    pub escalation: crate::Escalation,
     /// Stable never-reused deployment task identity. (domain/tasks.md, sections 3, 5 and 14).
     pub number: u64,
     /// Project whose policy applies to this task. (domain/tasks.md, sections 3, 5 and 14).
@@ -649,6 +652,38 @@ pub enum Accepted {
 /// 4–5 and 14). (domain/engine.md, section 7.5).
 #[derive(PartialEq, Eq, Debug)]
 pub enum Event {
+    /// Root queries one bounded held view for actual named reads/decisions;
+    /// returns one EscalationInspected, including absent (domain/tasks.md, 15).
+    InspectEscalation {
+        /// Root-owned synchronous correlation, echoed once (domain/tasks.md, 15).
+        reply_to: ReplyTo,
+        /// Named task; this query mutates nothing (domain/tasks.md, 15).
+        task: u64,
+    },
+    /// Root resolves the just-created routing obligation before commitment;
+    /// stale notification changes nothing (domain/tasks.md, 15).
+    RoutedEscalation {
+        /// Held person chat (domain/tasks.md, 15).
+        task: u64,
+        /// Exact positive semantic revision (domain/tasks.md, 15).
+        revision: u64,
+        /// Root-verified eligible requester or final policy role (domain/tasks.md, 15).
+        holder: crate::EscalationHolder,
+    },
+    /// Root has authenticated the current recipient and checked authority;
+    /// one EscalationDecided terminal follows (domain/tasks.md, 15).
+    DecideEscalation {
+        /// Root-owned correlation owed one semantic terminal (domain/tasks.md, 15).
+        reply_to: ReplyTo,
+        /// Exact held task (domain/tasks.md, 15).
+        task: u64,
+        /// Waiting revision, never a root transport receipt (domain/tasks.md, 15).
+        revision: u64,
+        /// Positive authenticated deciding person (domain/tasks.md, 15).
+        by: u64,
+        /// Bounded authorized release/reject/pass choice (domain/tasks.md, 15).
+        decision: crate::EscalationDecision,
+    },
     /// `Open` one finite monotonic project period after root authorization; emits ledger `Save`
     /// plus `Done`, or one `Refused` with no mutation. (domain/tasks.md, sections 4–5 and 14).
     /// (domain/engine.md, section 7.5).
@@ -831,6 +866,34 @@ pub enum Event {
 /// sections 5 and 14). (domain/engine.md, section 7.5).
 #[derive(PartialEq, Eq, Debug)]
 pub enum Request {
+    /// Tasks asks root to resolve its new held person chat in this atomic
+    /// decision; no outward notice precedes commitment (domain/tasks.md, 15).
+    EscalationNeeded {
+        /// Temporary bounded held context; root drops it after routing
+        /// (domain/tasks.md, 15).
+        context: Box<crate::EscalationContext>,
+    },
+    /// Terminal for one InspectEscalation; query owns no durable task copy
+    /// (domain/tasks.md, 15).
+    EscalationInspected {
+        /// Echoed root correlation, consumed once (domain/tasks.md, 15).
+        reply_to: ReplyTo,
+        /// Owned bounded view, or absent/non-person/non-held task
+        /// (domain/tasks.md, 15).
+        context: Option<Box<crate::EscalationContext>>,
+    },
+    /// One semantic decision terminal; root commits accepted child writes,
+    /// its typed history and people's keyed answer together (domain/tasks.md, 15).
+    EscalationDecided {
+        /// Echoed root correlation, consumed once (domain/tasks.md, 15).
+        reply_to: ReplyTo,
+        /// Decision task (domain/tasks.md, 15).
+        task: u64,
+        /// Exact requested semantic revision (domain/tasks.md, 15).
+        revision: u64,
+        /// Accepted semantic transition or unchanged refusal (domain/tasks.md, 15).
+        outcome: crate::EscalationOutcome,
+    },
     /// One successful `Make` terminal reporting the complete batch. (domain/tasks.md, sections 5
     /// and 14). (domain/engine.md, section 7.5).
     Made {

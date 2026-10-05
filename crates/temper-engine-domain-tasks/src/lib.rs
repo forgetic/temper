@@ -36,6 +36,10 @@
 //! without cloning; `Domain::funding` borrows authentic finite accounting without
 //! creating a mutable root shadow (domain/tasks.md, sections 10 and 14).
 //! Current chat construction supplies a report contract and empty parameters.
+//! A held person chat owns one bounded semantic escalation revision/recipient
+//! or rejected reason. Root authenticates its actual read/decision route, resolves
+//! eligibility and owns immutable transport history; this child accepts/rejects/
+//! passes only the authorized exact revision (domain/tasks.md, 15).
 //! Agent execution is the current executor route; nonempty historical inputs,
 //! inbox/wake/proposal, general amend/cancel/release/move and source-retirement
 //! entrypoints are absent from this contracted API (domain/tasks.md, section 14).
@@ -47,6 +51,7 @@ mod batch;
 mod boundary;
 mod closing;
 mod domain;
+mod escalation;
 mod facts;
 mod failures;
 mod funders;
@@ -62,6 +67,7 @@ pub use boundary::{
     Problem, Refusal, Request, RunContext, Spec, Stage, Status, Stored, TaskRecord, TaskResult, Verdict, Was,
 };
 pub use domain::{Domain, fire, max_out, step};
+pub use escalation::{Escalation, EscalationContext, EscalationDecision, EscalationHolder, EscalationOutcome};
 pub use facts::Fact;
 pub use failures::{Class, Retries, Retry, Tries};
 pub use funders::{Closure, FundingRecord};

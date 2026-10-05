@@ -101,6 +101,7 @@ fn policy() -> Policy {
     let mut second = first.clone();
     second.number = 8;
     Policy {
+        escalation_role: None,
         ceiling: authority(),
         period_spend: 500,
         roles: Box::new([first, second]),

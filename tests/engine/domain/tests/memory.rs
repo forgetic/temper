@@ -221,3 +221,28 @@ fn real_root_state_and_complete_walking_handoffs_fit_the_declared_counted_bound(
         meter.check(measured, bound, limits);
     }
 }
+
+#[test]
+fn held_reasons_history_queries_and_real_escalation_handoffs_fit_counted_root_memory() {
+    use temper_engine_domain_world::{escalation, escalation_referee::Story, walking};
+    let mut limits = walking::limits();
+    limits.people.initial_owners = 2;
+    limits.people.requests = 8;
+    limits.tasks.retries.run.retries = 0;
+    let bound = root::engine::worst_case(&limits).expect("all escalation retained and transient ownership priced");
+    for story in [Story::PassRelease, Story::RaceReject] {
+        let meter = Meter::new();
+        meter.start();
+        let mut world = escalation::World::new(escalation::Settings {
+            cut: escalation::Cut::Decision,
+            commit_delay: 1,
+            page_delay: 1,
+            ..escalation::Settings::calm(9201, story)
+        });
+        world.run();
+        let measured = meter.end();
+        // Includes the fake's durable history and independent observations as
+        // well as actual root query/context/journal and restored child copies.
+        meter.check(measured, bound, limits);
+    }
+}

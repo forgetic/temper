@@ -283,6 +283,7 @@ fn borrowed_stored_bytes_matches_allocator_for_every_retained_row() {
         was: tasks::Was::Closing(tasks::Closing { stage: tasks::Stage::Delegates, ending: ending.clone() }),
         why: Hold::Budget,
     };
+    record.escalation = tasks::Escalation::Rejected { revision: 1, by: 1, reason: Box::new([6, 7, 8, 9]) };
     let mut rows = world.records.values().cloned().collect::<Vec<_>>();
     rows.push(Stored::Live(Box::new(record.clone())));
     record.phase = tasks::Phase::Ended(ending);

@@ -21,6 +21,8 @@
 //! connectors and the broader people/run routes remain later increments (5.7).
 //! Child facts are disposable observations; [`Domain::quiescent`] reports
 //! internal idleness, while an external referee establishes final story results.
+mod escalation;
+
 use crate::{
     Decision, Delivery, Family, Journal, JournalLimits, Key, Output, Range, Record, RunProof, TerminalRecord,
     TurnProof, TurnRecord, Write, loads,
@@ -139,6 +141,16 @@ pub struct Turn {
 /// be dropped by fleet. Store and refresh variants are terminals, not new calls.
 #[derive(Debug)]
 pub enum Event {
+    /// Authenticated named held-chat read; one bounded view or refusal terminal,
+    /// without persistent inbox/history restore (domain/engine.md, 7.7).
+    ReadEscalation {
+        /// One web-issued reply right (domain/engine.md, 7.7).
+        reply_to: ReplyTo,
+        /// Root-issued session, checked against both clocks (domain/engine.md, 7.7).
+        sign_in: u64,
+        /// Positive chat task known from Started (domain/engine.md, 7.7).
+        task: u64,
+    },
     /// Shell to root: begin cold paged restoration and account setup. Repeated
     /// starts are inert; readiness follows all restored/adopted claims, or a
     /// terminal startup/storage failure emits `Stop` (domain/engine.md, 5.7 and 6).
@@ -356,6 +368,8 @@ enum Work {
     Fleet(fleet::Event),
     Brief(brief::Event),
     Activate(Box<tasks::RunContext>),
+    EscalationLoaded { waiter: Token, rows: Box<[Record]> },
+    EscalationFailed { waiter: Token },
 }
 
 #[derive(Debug)]
@@ -369,6 +383,12 @@ struct ResultRead {
     to: ReplyTo,
     person: u64,
     task: u64,
+}
+
+#[derive(Debug)]
+enum Read {
+    Result(ResultRead),
+    Escalation(escalation::Query),
 }
 
 #[derive(Debug)]
@@ -406,7 +426,7 @@ pub struct Domain {
     loads: loads::Loads,
     assignments: Map<u64, Assignment>,
     payloads: Slab<Option<Payload>>,
-    result_reads: Slab<Option<ResultRead>>,
+    result_reads: Slab<Option<Read>>,
     made: Map<Token, u64>,
     claiming: Map<u64, u64>,
     contexts: Map<u64, Box<tasks::RunContext>>,
@@ -434,6 +454,13 @@ impl Domain {
         let mut projects = List::with_capacity(limits.people.projects);
         for owner in &config.owners {
             assert!(config.authority.policy(owner.project).is_some(), "bootstrap owner names configured policy");
+            assert!(
+                match config.authority.policy(owner.project).expect("known policy").escalation_role {
+                    Some(role) => role <= 3,
+                    None => false,
+                },
+                "current root requires final escalation role"
+            );
             let mut found = false;
             for project in &projects {
                 if *project == owner.project {
@@ -791,6 +818,10 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
                 payload: id.token(),
             }));
         }
+        Event::ReadEscalation { reply_to, sign_in, task } => {
+            escalation::read(domain, env, reply_to, sign_in, task, out);
+            return;
+        }
         Event::ReadResult { reply_to, sign_in, task } => {
             if task == 0 {
                 out.push(Request::Deliver(Delivery::WebReply {
@@ -816,10 +847,13 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
                 }));
                 return;
             }
-            let id = match domain.result_reads.insert(Some(ResultRead { to: reply_to, person, task })) {
+            let id = match domain.result_reads.insert(Some(Read::Result(ResultRead { to: reply_to, person, task }))) {
                 Ok(id) => id,
                 Err(read) => {
-                    let read = read.expect("unadmitted result read retains reply");
+                    let read = match read.expect("unadmitted result read retains reply") {
+                        Read::Result(read) => read,
+                        Read::Escalation(_) => unreachable!("inserted result read"),
+                    };
                     out.push(Request::Deliver(Delivery::WebReply {
                         to: read.to,
                         sign_in: None,
@@ -904,6 +938,17 @@ pub fn resume(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) 
                 request_load(domain, waiter, range, after, out);
                 return;
             }
+            Output::Deliver(Delivery::ReadEscalationDecision { waiter }) => {
+                let Some(Some(read)) = domain.result_reads.get(Id::from_token(waiter)) else { return };
+                let (task, revision) = match read {
+                    Read::Escalation(escalation::Query::Decide { task, revision, .. }) => (*task, *revision),
+                    Read::Result(_) | Read::Escalation(escalation::Query::Read { .. }) => {
+                        unreachable!("decision archive waiter")
+                    }
+                };
+                request_load(domain, waiter, Range::EscalationDecision { task, revision }, None, out);
+                return;
+            }
             Output::Deliver(Delivery::ReadResult { waiter }) => {
                 let Some(read) = domain.result_reads.get(Id::from_token(waiter)) else {
                     return;
@@ -911,7 +956,11 @@ pub fn resume(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) 
                 let Some(read) = read else {
                     return;
                 };
-                request_load(domain, waiter, Range::TaskResult { task: read.task }, None, out);
+                let task = match read {
+                    Read::Result(read) => read.task,
+                    Read::Escalation(_) => unreachable!("result waiter"),
+                };
+                request_load(domain, waiter, Range::TaskResult { task }, None, out);
                 return;
             }
             Output::Deliver(delivery) => {
@@ -1015,6 +1064,8 @@ fn route_into(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision) {
                 brief_outputs(domain, env, decision, &mut out);
             }
             Work::Activate(task) => activate(domain, env, task),
+            Work::EscalationLoaded { waiter, rows } => escalation::loaded(domain, env, waiter, rows),
+            Work::EscalationFailed { waiter } => escalation::failed(domain, waiter),
         }
     }
     assert!(domain.work.is_empty(), "finite synchronous root handoffs finish within the configured route bound");
@@ -1028,9 +1079,15 @@ fn people_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decisio
             people::Request::Reply { to, reply } => {
                 emit(decision, &env.limits, Delivery::WebReply { to, sign_in: domain.signing_in, reply });
             }
-            people::Request::Route { request, person, project, role, ask } => {
-                make_chat(domain, env, request, person, project, role, ask);
-            }
+            people::Request::Route { request, person, project, role, ask } => match ask {
+                people::Ask::StartChat { .. } => {
+                    let Some(role) = role else { unreachable!("chat membership admitted") };
+                    make_chat(domain, env, request, person, project, role, ask);
+                }
+                people::Ask::DecideEscalation { task, revision, decision, .. } => {
+                    escalation::begin(domain, request, person, role, project, task, revision, decision)
+                }
+            },
             people::Request::RolesRefused { .. } | people::Request::RestoreRefused { .. } => {
                 domain.startup = Startup::Failed;
             }
@@ -1085,7 +1142,12 @@ fn make_chat(
     let Some(role_policy) = domain.config.authority.role(project, role_number) else {
         unreachable!("checked role policy")
     };
-    if domain.config.period_budget > policy.period_spend || domain.config.person_budget > role_policy.period_spend {
+    if match policy.escalation_role {
+        Some(role) => role > 3,
+        None => true,
+    } || domain.config.period_budget > policy.period_spend
+        || domain.config.person_budget > role_policy.period_spend
+    {
         domain.work.push(Work::People(people::Event::Decided {
             request,
             outcome: people::Outcome::Refused(people::Refusal::Authority),
@@ -1120,6 +1182,7 @@ fn make_chat(
     assert!(domain.made.insert(request, number) == Ok(None), "people route has unique pending key");
     let words = match ask {
         people::Ask::StartChat { words, .. } => words,
+        people::Ask::DecideEscalation { .. } => unreachable!("decision routed separately"),
     };
     domain.work.push(Work::Tasks(tasks::Event::Make {
         reply_to: ReplyTo::new(request),
@@ -1235,6 +1298,13 @@ fn activate(domain: &mut Domain, env: &Env<Limits>, task: Box<tasks::RunContext>
 fn tasks_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, out: &mut Queue<tasks::Request>) {
     for _ in 0..out.len() {
         match out.pop().expect("tasks output count") {
+            tasks::Request::EscalationNeeded { context } => escalation::needed(domain, context),
+            tasks::Request::EscalationInspected { reply_to, context } => {
+                escalation::inspected(domain, env, decision, reply_to.into_token(), context)
+            }
+            tasks::Request::EscalationDecided { reply_to, task, revision, outcome } => {
+                escalation::completed(domain, env, decision, reply_to.into_token(), task, revision, outcome)
+            }
             tasks::Request::Save { record } => save(decision, &env.limits, Write::Save(Record::Tasks(record))),
             tasks::Request::Erase { key } => save(decision, &env.limits, Write::Erase(Key::Tasks(key))),
             tasks::Request::Made { reply_to, tasks } => {
@@ -1573,13 +1643,25 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
 fn request_load(domain: &mut Domain, waiter: Token, range: Range, after: Option<Key>, out: &mut Queue<Request>) {
     let mut load_out = Queue::with_capacity(1);
     let most = match range {
-        Range::Deployment | Range::TaskResult { .. } => 1,
+        Range::Deployment | Range::TaskResult { .. } | Range::EscalationDecision { .. } => 1,
         Range::Tasks | Range::People | Range::RunProofs | Range::Turns { .. } => domain.limits.loads.rows,
     };
-    assert!(
-        loads::begin(&mut domain.loads, waiter, range, after, most, &mut load_out).is_some(),
-        "startup/read load room reserved"
-    );
+    if loads::begin(&mut domain.loads, waiter, range, after, most, &mut load_out).is_none() {
+        match range {
+            Range::EscalationDecision { .. } => {
+                domain.work.push(Work::EscalationFailed { waiter });
+                return;
+            }
+            Range::Deployment
+            | Range::Tasks
+            | Range::People
+            | Range::RunProofs
+            | Range::Turns { .. }
+            | Range::TaskResult { .. } => {
+                unreachable!("startup/result load room reserved")
+            }
+        }
+    }
     match load_out.pop().expect("load issued") {
         loads::Request::Load { owner, range, after, most, bytes } => {
             out.push(Request::Load { owner, range, after, most, bytes });
@@ -1598,27 +1680,55 @@ fn load_outputs(
         match load_out.pop().expect("load terminal count") {
             loads::Request::Loaded { waiter, rows, next, cut } => {
                 if cut.is_some() {
-                    domain.startup = Startup::Failed;
-                    out.push(Request::Stop);
+                    let archive = match domain.result_reads.get(Id::from_token(waiter)) {
+                        Some(Some(Read::Escalation(_))) => true,
+                        Some(Some(Read::Result(_))) | Some(None) | None => false,
+                    };
+                    if archive {
+                        domain.work.push(Work::EscalationFailed { waiter });
+                    } else {
+                        domain.startup = Startup::Failed;
+                        out.push(Request::Stop);
+                    }
                     return;
                 }
                 if waiter == Token::new(u64::MAX) {
                     startup_page(domain, env, rows, next, out);
                 } else {
-                    result_page(domain, waiter, rows, out);
+                    let archive = match domain.result_reads.get(Id::from_token(waiter)) {
+                        Some(Some(Read::Escalation(_))) => true,
+                        Some(Some(Read::Result(_))) | Some(None) | None => false,
+                    };
+                    if archive {
+                        domain.work.push(Work::EscalationLoaded { waiter, rows });
+                    } else {
+                        result_page(domain, waiter, rows, out);
+                    }
                 }
             }
             loads::Request::Unloaded { waiter, .. } => {
                 if waiter == Token::new(u64::MAX) {
                     domain.startup = Startup::Failed;
                     out.push(Request::Stop);
-                } else if let Some(read) = take_read(domain, waiter) {
-                    domain.result_reads.retire(Id::from_token(waiter));
-                    out.push(Request::Deliver(Delivery::WebReply {
-                        to: read.to,
-                        sign_in: None,
-                        reply: people::Reply::Refused(people::Refusal::Unknown),
-                    }));
+                } else {
+                    let archive = match domain.result_reads.get(Id::from_token(waiter)) {
+                        Some(Some(Read::Escalation(_))) => true,
+                        Some(Some(Read::Result(_))) | Some(None) | None => false,
+                    };
+                    if archive {
+                        domain.work.push(Work::EscalationFailed { waiter });
+                    } else if let Some(read) = take_read(domain, waiter) {
+                        let read = match read {
+                            Read::Result(read) => read,
+                            Read::Escalation(_) => unreachable!("result terminal"),
+                        };
+                        domain.result_reads.retire(Id::from_token(waiter));
+                        out.push(Request::Deliver(Delivery::WebReply {
+                            to: read.to,
+                            sign_in: None,
+                            reply: people::Reply::Refused(people::Refusal::Unknown),
+                        }));
+                    }
                 }
             }
             loads::Request::Load { .. } => unreachable!("terminal methods never issue IO"),
@@ -1672,7 +1782,9 @@ fn startup_page(
         Range::People => Some(Range::Tasks),
         Range::Tasks => Some(Range::RunProofs),
         Range::RunProofs => None,
-        Range::Turns { .. } | Range::TaskResult { .. } => unreachable!("startup range"),
+        Range::EscalationDecision { .. } | Range::Turns { .. } | Range::TaskResult { .. } => {
+            unreachable!("startup range")
+        }
     };
     if range == Range::Tasks {
         for project in &domain.projects {
@@ -1724,8 +1836,10 @@ fn startup_page(
 
 fn result_page(domain: &mut Domain, waiter: Token, rows: Box<[Record]>, out: &mut Queue<Request>) {
     let id = Id::from_token(waiter);
-    let Some(read) = take_read(domain, waiter) else {
-        return;
+    let Some(read) = take_read(domain, waiter) else { return };
+    let read = match read {
+        Read::Result(read) => read,
+        Read::Escalation(_) => unreachable!("named result page"),
     };
     domain.result_reads.retire(id);
     let mut record = None;
@@ -1737,7 +1851,8 @@ fn result_page(domain: &mut Domain, waiter: Token, rows: Box<[Record]>, out: &mu
             | Record::People(_)
             | Record::Turn(_)
             | Record::RunProof(_)
-            | Record::Terminal(_) => {
+            | Record::Terminal(_)
+            | Record::EscalationDecision(_) => {
                 unreachable!("result range only contains ended row")
             }
         }
@@ -1922,6 +2037,9 @@ fn route_bound(limits: &Limits) -> Option<u32> {
     tasks::max_out(&limits.tasks)
         .checked_mul(8)?
         .checked_add(people::max_out(&limits.people).checked_mul(4)?)?
+        // Every in-flight historical decision may complete under journal pressure:
+        // one retained IO terminal and one people Decided callback per flight.
+        .checked_add(limits.people.pending.checked_mul(2)?)?
         .checked_add(fleet::max_out(&limits.fleet).checked_mul(4)?)
 }
 
@@ -1945,7 +2063,8 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     let load_bytes = loads::worst_case(&limits.loads)?;
     let routes = route_bound(limits)?;
     if limits.journal.writes < routes
-        || limits.journal.deliveries < limits.tasks.tasks.checked_mul(4)?.checked_add(8)?
+        || limits.journal.deliveries
+            < limits.tasks.tasks.checked_mul(4)?.checked_add(8)?.checked_add(limits.people.pending)?
         || limits.loads.loads < 2
         || limits.journal.held < limits.journal.deliveries.checked_mul(3)?
         || limits.journal.deliveries
@@ -1954,6 +2073,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         || limits.journal.result_bytes < limits.brief.brief_bytes
         || limits.journal.deliveries < limits.brief.sections
         || limits.journal.result_bytes < limits.tasks.result_bytes
+        || limits.journal.result_bytes < limits.people.words
         || limits.fleet.workstream_bytes < 8
         || u64::from(limits.journal.transcript_bytes) < row_bound(limits)?
     {
@@ -1986,12 +2106,18 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
             u64::from(limits.journal.transcript_bytes).max(u64::from(limits.tasks.result_bytes).checked_mul(2)?),
         )?,
     )?;
-    bytes = bytes.checked_add(Slab::<Option<ResultRead>>::worst_case(limits.loads.loads)?)?.checked_add(Map::<
-        Token,
-        u64,
-    >::worst_case(
-        limits.people.pending,
-    )?)?;
+    bytes = bytes
+        .checked_add(Slab::<Option<Read>>::worst_case(limits.loads.loads)?)?
+        // Each reserved semantic/history query can retain one independent
+        // rejection offer while child/people own their copies.
+        .checked_add(u64::from(limits.loads.loads).checked_mul(u64::from(limits.people.words))?)?
+        // At most one historical terminal per reserved read slot can wait in
+        // work under journal pressure; include decoded row slot and owned bytes.
+        .checked_add(
+            u64::from(limits.loads.loads)
+                .checked_mul(u64::try_from(size_of::<Record>()).ok()?.checked_add(u64::from(limits.people.words))?)?,
+        )?
+        .checked_add(Map::<Token, u64>::worst_case(limits.people.pending)?)?;
     bytes = bytes
         .checked_add(Map::<u64, u64>::worst_case(limits.tasks.tasks)?)?
         .checked_add(Map::<u64, RunProof>::worst_case(limits.tasks.tasks)?)?
@@ -1999,6 +2125,15 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_add(Map::<u64, Box<tasks::RunContext>>::worst_case(limits.tasks.tasks)?)?
         .checked_add(u64::from(limits.tasks.tasks).checked_mul(u64::from(limits.tasks.result_bytes).checked_mul(2)?)?)?
         .checked_add(u64::from(limits.tasks.result_bytes).checked_mul(6)?)?
+        // One routing/view context per live task plus an incoming clone; the
+        // rejected reason is additional to the context's boxed inline slot.
+        .checked_add(
+            u64::from(limits.tasks.tasks).checked_add(1)?.checked_mul(
+                u64::try_from(size_of::<tasks::EscalationContext>())
+                    .ok()?
+                    .checked_add(u64::from(limits.tasks.result_bytes))?,
+            )?,
+        )?
         .checked_add(u64::from(limits.tasks.tasks).checked_mul(row_bound(limits)?.checked_mul(2)?)?)?;
     bytes = bytes.checked_add(Map::<u64, Assignment>::worst_case(limits.tasks.tasks)?)?.checked_add(
         u64::from(limits.tasks.tasks).checked_add(u64::from(limits.journal.held))?.checked_mul(
@@ -2018,7 +2153,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_add(Queue::<accounts::Request>::worst_case(accounts::MAX_OUT)?)
 }
 
-fn take_read(domain: &mut Domain, waiter: Token) -> Option<ResultRead> {
+fn take_read(domain: &mut Domain, waiter: Token) -> Option<Read> {
     let entry = domain.result_reads.get_mut(Id::from_token(waiter))?;
     entry.take()
 }
@@ -2152,7 +2287,12 @@ fn header_loaded(startup: Startup) -> bool {
     match startup {
         Startup::Cold | Startup::Loading(Range::Deployment) | Startup::Failed => false,
         Startup::Loading(
-            Range::Tasks | Range::People | Range::RunProofs | Range::Turns { .. } | Range::TaskResult { .. },
+            Range::Tasks
+            | Range::People
+            | Range::RunProofs
+            | Range::EscalationDecision { .. }
+            | Range::Turns { .. }
+            | Range::TaskResult { .. },
         )
         | Startup::Adopting
         | Startup::Running => true,
@@ -2178,7 +2318,7 @@ fn row_bound(limits: &Limits) -> Option<u64> {
     let mut bytes = u64::try_from(size_of::<tasks::TaskRecord>()).ok()?;
     for retained in [
         u64::from(tasks.spec_bytes),
-        u64::from(tasks.result_bytes).checked_mul(2)?,
+        u64::from(tasks.result_bytes).checked_mul(3)?,
         u64::from(tasks.parameters).checked_mul(u64::try_from(size_of::<tasks::Parameter>()).ok()?)?,
         u64::from(tasks.inputs)
             .checked_add(u64::from(tasks.dependencies).checked_mul(2)?)?
@@ -2225,6 +2365,7 @@ fn discard_after_stop(domain: &mut Domain, event: Event) {
         | Event::Lost { .. }
         | Event::Turn { .. }
         | Event::Answer { .. }
+        | Event::ReadEscalation { .. }
         | Event::ReadResult { .. }
         | Event::Refreshed { .. }
         | Event::RefreshFailed { .. } => {}
@@ -2327,6 +2468,7 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
             }
             tasks::Stored::Live(ref task) => {
                 if !supported_task(task, domain.config.charter)
+                    || !escalation::supported(domain, task)
                     || task.number > domain.journal.deployment().tasks
                     || task.attempt > domain.journal.deployment().runs
                     || !supported_person(task.requester, domain.journal.deployment().people)
@@ -2367,6 +2509,8 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
                 domain.startup = Startup::Failed;
             }
         }
-        Record::Turn(_) | Record::Terminal(_) => unreachable!("startup excludes archive families"),
+        Record::Turn(_) | Record::Terminal(_) | Record::EscalationDecision(_) => {
+            unreachable!("startup excludes archive families")
+        }
     }
 }

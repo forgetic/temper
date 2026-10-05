@@ -398,6 +398,17 @@ project and deployment ceilings too; missing message standing refuses.
 What may be proposed, what it needs, and what an acceptance does; where
 proposals wait and how they move is tasks.md, section 8.
 
+The current 02d1 person-chat escalation route uses Escalate(release=None)
+needs and covers for requester eligibility, then the real Accept(Escalate(release=None)) request
+check for acceptance. A project policy may name one bounded escalation_role;
+policy admission requires that named role exists and permits Accept
+and deciding Escalation. Policies without that selector remain valid for
+other authority-only uses; the current root chat route requires it. Root owns
+current membership/standing and selects that role as the final fallback, with
+no sponsor substitution or mutable financial shadow. The route releases only
+retry-exhaustion; widening budget/deadline/grants awaits actual amendment work
+(domain/tasks.md, 15; domain/engine.md, 7.7).
+
 - **What may be proposed:** a batch beyond its creator's authority; an
   effect beyond its grants; a widening of the proposer's own authority
   (more budget, more depth, another grant, a later deadline); an

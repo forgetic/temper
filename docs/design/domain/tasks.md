@@ -7,7 +7,7 @@ first of the primitives of core.md (section 3) in depth, and the hub of
 the engine's domain (engine.md, section 3). Authority, which every
 action here is checked against, is authority.md; what an agent's run
 is, engine.md, section 7; a connector's procedures, connectors.md,
-section 6. What is still open is listed in section 13. Section 14 is the current
+section 6. What is still open is listed in section 13. Sections 14–15 are the current
 implemented boundary; the broader routes described below join only when
 a real root caller and consumer are integrated.
 
@@ -663,10 +663,11 @@ This inventory records actual constructors and consumers in
 routes. The pre-audit source remains on
 `preserve/pre-tasks-boundary-audit-429647c` and the original implementation
 branches. Deleting dormant surface does not assert those deeper designs are
-complete. The first-turn durable/lost-completion restart is covered; broader
-terminal-before-ACK/result restart recovery remains later root work.
+complete. The first-turn durable/lost-completion restart and bounded final Report cut
+are covered (engine.md, 7.6). Section 15 adds the actual 02d1 held-chat route;
+broader task-tree escalation and deployment recovery remain later work.
 
-### 14.1 Events: thirteen actual root constructors
+### 14.1 Events: sixteen actual root constructors
 
 | Event | Decision | Concrete caller |
 | --- | --- | --- |
@@ -682,7 +683,10 @@ terminal-before-ACK/result restart recovery remains later root work.
 | Hold | Keep | `activate`, for authority deadline, budget or other static findings |
 | Settled | Keep | `tasks_outputs` Close, after this slice's synchronous closing effects |
 | Restore | Keep | `startup_page`, actual paged Live/Ledger records |
-| Restored | Keep | `startup_page`, after all current root proof pages validate |
+| Restored | Keep | `startup_page`, after all current root proof pages validate; Waiting escalation holders are rechecked before Fleet Loaded |
+| InspectEscalation | Add actual 02d1 route | `engine::escalation::read` and `begin`, after direct-read/session or keyed-decision admission |
+| RoutedEscalation | Add actual 02d1 callback | `engine::escalation::needed`, after current membership/coverage and policy fallback selection |
+| DecideEscalation | Add actual 02d1 route | `engine::escalation::inspected`, after exact revision/standing checks and real release authority |
 
 Uncalled events are removed: ForgetAdmission, Control, Amend, Move, Charge,
 Send, Peek, DeliverResult, DeliverNotice, DeliverTimer, News, ForgetReceipt,
@@ -691,7 +695,7 @@ RememberStub and ForgetStub. ChargedTurn merges into Turn; ChargedActivation
 merges into Activation. Standalone Cancel is uncalled; legitimate
 `Finished { cancel_delegates: true }` still closes a delegate tree.
 
-### 14.2 Requests: thirteen actual root consumers
+### 14.2 Requests: sixteen actual root consumers
 
 | Request | Decision | Concrete consumer |
 | --- | --- | --- |
@@ -708,6 +712,9 @@ merges into Activation. Standalone Cancel is uncalled; legitimate
 | Save | Keep | `tasks_outputs`, wraps authentic child row into current root Decision |
 | Erase | Keep | `tasks_outputs`, wraps child erase into that same Decision |
 | RestoreRefused | Keep | `tasks_outputs`, stops startup before continuation or Fleet Loaded |
+| EscalationNeeded | Add actual 02d1 consumer | `engine::escalation::needed`, resolves a newly held chat or rechecks a restored Waiting holder |
+| EscalationInspected | Add actual 02d1 consumer | `engine::escalation::inspected`, authenticated read or keyed decision using one reserved root query slot |
+| EscalationDecided | Add actual 02d1 consumer | `engine::escalation::completed`, saves root archive and people keyed outcome with the semantic state |
 
 Sent, Inbox, Relay, Observe, Notify, Timer and Topic have no reachable producer
 under actual root events and are removed with their dormant mechanics.
@@ -722,7 +729,7 @@ under actual root events and are removed with their dormant mechanics.
 | Closure | Keep historical | Child Save records actual ended allotment generation/financial posting; never live restore |
 | Admission | Move to root RunProof/Terminal | Actual current claim, next turn and worker terminal; root pages current proofs before Fleet Loaded |
 | Stub, Message, ArchivedMessage, Receipt, Offer, Question, Subscription, History | Remove | No actual root constructor; dormant restore pass-through was not a live route |
-| `funding(Funder)` | Keep narrow authentic query | `chat` reads whether its actual finite source already exists; root owns no mutable copy |
+| `funding(Funder)` | Keep narrow authentic query | `make_chat` reads whether its actual finite source already exists; escalation coverage reads the actual decision maker pool; root owns no mutable copy |
 | `live_task`, `task_stub` | Remove | Authority/brief use Activate's bounded RunContext, adoption uses kept, refusal uses owned payload task/attempt correlation |
 | `ready`, `next_deadline`, `is_due`, `facts_lost` | Private/remove | No actual root caller; restoration terminal and root-owned timers drive the boundary |
 | `fire`, `reclaim`, `pop_fact`, `max_out`, `worst_case`, `stored_bytes` | Keep | Root timer pass, iteration reclamation, neutral observation drain, bounded route/byte admission |
@@ -742,3 +749,47 @@ remain inert after its actual Settled callback. Financial restore verifies
 current reservations, actual requester-ancestor task funding, original
 external source links and representability of eventual postings before
 Ready. Historical Ended/Closure rows never enter the live arena.
+
+
+## 15. Current held-chat escalation boundary (02d1)
+
+This first vertical increment handles person-requested Report chats made by
+root. When such a live task becomes Held, publish advances its checked
+per-task revision and emits EscalationNeeded. Routing is transient: root
+resolves it synchronously and the coalesced commit contains Waiting with one
+recipient. There is no child receipt table, historical archive or people
+inbox. Tasks stores only the current semantic state on its existing live row.
+
+The root chooses the requester if current membership and authority coverage
+permit Escalation with no widening; otherwise it chooses the project's
+explicit policy escalation role. Waiting identifies that person or that final
+project role. InspectEscalation supplies a bounded temporary context; root
+owns authentication, privacy, standing and current policy checks.
+
+A decision names the exact Waiting revision. Release is implemented only for
+retry-exhaustion Held(Failures) from Due: it resets tries/refusals, retains
+accepted expense and the original funder, and emits ordinary Activate.
+Deadline, budget, dependency and closing holds require a real amendment route
+and return NeedsAmend. Reject records bounded reason/by/revision and stays
+Held without automatic reopening. Pass from the requester advances revision
+and persists the final policy role. Passing from that role refuses NoFurther.
+Checked revision exhaustion refuses before a decision changes state. An
+ended/cancelled lifecycle retires current escalation state; root keeps history.
+
+On restore, unresolved Routing, zero revisions, inconsistent recipient/project
+and oversized rejection reason refuse before retaining the row. Waiting emits
+one actual root recheck after the full task/proof pages pass. Identical holder
+keeps the same revision and emits no Save. A changed holder advances revision;
+a final role never moves down to a requester. If that advance is exhausted,
+root stops startup before Ready. Rejected restores without recheck/reopening.
+
+One task owns at most one escalation reason, bounded by result_bytes. The
+retained bound includes that reason alongside a held closing reason and
+partial result. Temporary boxed contexts, root query copies, history-load
+rows and journal writes are accounted separately by root. Facts remain
+optional observations, never routing inputs.
+
+Ancestor/delegate proposal routing, generic release/amend/cancel entrances,
+live project-role administration and holder-loss rerouting are not implemented
+by 02d1. The latter requires a following actual SetRoles entrance and consumer
+in the 03b/02d integration; no dormant recheck notification is introduced here.

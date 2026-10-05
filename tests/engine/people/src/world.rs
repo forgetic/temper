@@ -299,7 +299,7 @@ impl World {
                     let key = self.context.expect("a routed call carries the client's key");
                     assert_eq!(person, key.person);
                     self.stats.routes += 1;
-                    self.observe(Seen::Routed { role });
+                    self.observe(Seen::Routed { role: role.expect("chat requires project membership") });
                     if self.defer_route {
                         self.deferred.push((request, key));
                     } else {

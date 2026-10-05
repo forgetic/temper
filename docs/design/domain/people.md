@@ -173,9 +173,35 @@ outcome with the decision. A crash before durability loses both task and
 key; one after durability loses neither, even if the reply had not left.
 
 Increment 03a retains completed keys up to a configured capacity; timed
-retention and paging follow in 03c. Its `Ask` contains `StartChat` only.
+retention and paging follow in 03c. Its original `Ask` contains `StartChat`; 02d1 also adds the actual held-chat
+`DecideEscalation` route below.
 Other requests in 5.1 gain their full typed vocabulary and behavior in
 the increments that implement them.
+
+#### 5.1.2 Current held-chat decisions (02d1)
+
+DecideEscalation names project, task, exact semantic revision and Release,
+Reject(reason) or Pass. It uses the same authenticated person-scoped key and
+bounded answer reservation as StartChat. Reason is at most words; root imposes
+its own task/journal limits before mutation. People routes the authenticated
+identity and optional current role: absent membership alone does not prevent a
+named requester from rejecting/passing. Root verifies standing, read privacy
+and release authority; this child knows no task state or policy selectors.
+
+An accepted outcome names task/revision, winning person and choice. Root saves
+semantic task state, immutable decision history and the people's answered key
+in one commit. A stale new key gets the archived winner through a bounded named
+root load, not a second decision. Busy/NotReady from temporary query capacity or
+failed history IO closes the flight without saving an answer, so the same key
+may retry. Standing, NoFurther, NeedsAmend and permanent bounds refusal are
+normal saved outcomes. Direct ReadEscalation is a root-owned authenticated
+current view, not an inbox or new persistent people record.
+
+Current roles are queried through the narrow borrowed role(person,project)
+projection by actual root holder selection and decision/read checks. It does
+not authenticate and allocates nothing. Root authenticates its caller first;
+person(sign_in,now,wall) checks both expiry clocks. Live role administration and
+membership-loss rerouting await a real root SetRoles route in the next integration.
 
 ### 5.2 The project itself
 

@@ -401,3 +401,43 @@ fn expiry_projection_uses_the_environment_when_restore_finishes() {
     test.env.wall = Wall::from_nanos(Duration::from_secs(55).as_nanos());
     assert_eq!(reply(&test.request(10, 1, ask(1))), Reply::Refused(Refusal::SignIn));
 }
+
+#[test]
+fn authenticated_escalation_decisions_route_without_membership_and_io_pressure_is_retryable() {
+    let mut test = Test::new(LIMITS);
+    test.signin(1, 10, identity(0, 1));
+    let ask = Ask::DecideEscalation { project: 1, task: 9, revision: 2, decision: EscalationDecision::Pass };
+    let routed = test.request(10, 2, ask.clone());
+    assert!(
+        routed
+            .iter()
+            .any(|row| matches!(row, Request::Route { person: 1, role: None, ask: routed, .. } if *routed == ask))
+    );
+    let request = route(&routed);
+    assert_eq!(
+        reply(&test.send(Event::Decided { request, outcome: Outcome::Refused(Refusal::Busy) })),
+        Reply::Outcome(Outcome::Refused(Refusal::Busy))
+    );
+    let retried = test.request(10, 2, ask.clone());
+    let request = route(&retried);
+    let outcome = Outcome::EscalationDecided { task: 9, revision: 2, by: 7, choice: EscalationChoice::Passed };
+    test.send(Event::Decided { request, outcome });
+    assert_eq!(reply(&test.request(10, 2, ask)), Reply::Outcome(outcome));
+    assert_eq!(
+        reply(&test.request(
+            10,
+            2,
+            Ask::DecideEscalation { project: 1, task: 9, revision: 2, decision: EscalationDecision::Release }
+        )),
+        Reply::Refused(Refusal::KeyConflict)
+    );
+    test.env.now = Time::from_nanos(Duration::from_secs(61).as_nanos());
+    assert_eq!(
+        reply(&test.request(
+            10,
+            3,
+            Ask::DecideEscalation { project: 1, task: 9, revision: 2, decision: EscalationDecision::Pass }
+        )),
+        Reply::Refused(Refusal::SignIn)
+    );
+}

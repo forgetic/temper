@@ -131,6 +131,15 @@ impl Domain {
         self.lost
     }
 
+    /// Pure bounded membership lookup used by root escalation routing and
+    /// authenticated named reads; caller separately authenticates identities.
+    /// Available during restore, allocating/emitting/mutating nothing
+    /// (domain/people.md, sections 4 and 5.1.2).
+    #[must_use]
+    pub fn role(&self, person: u64, project: u32) -> Option<Role> {
+        role(self, person, project)
+    }
+
     /// Pure lookup of whether the bounded role table contains `project`, including an empty
     /// holdings set. Available during restoration so the root preserves restored roles and seeds
     /// only missing bootstrap projects; it implies neither readiness nor person membership.
@@ -387,13 +396,23 @@ fn end_signin(domain: &mut Domain, number: u64, out: &mut Queue<Request>) {
 
 fn project(ask: &Ask) -> u32 {
     match ask {
-        Ask::StartChat { project, .. } => *project,
+        Ask::StartChat { project, .. } | Ask::DecideEscalation { project, .. } => *project,
     }
 }
 
 fn valid_ask(limits: &Limits, ask: &Ask) -> bool {
     match ask {
         Ask::StartChat { words, .. } => words.len() <= usize::try_from(limits.words).expect("u32 fits usize"),
+        Ask::DecideEscalation { task, revision, decision, .. } => {
+            *task != 0
+                && *revision != 0
+                && match decision {
+                    crate::EscalationDecision::Release | crate::EscalationDecision::Pass => true,
+                    crate::EscalationDecision::Reject { reason } => {
+                        reason.len() <= usize::try_from(limits.words).expect("u32 fits usize")
+                    }
+                }
+        }
     }
 }
 
@@ -451,9 +470,12 @@ fn admit_ask(
     }
     let project = project(&ask);
     let role = role(domain, key.person, project);
-    let refusal = match role {
-        Some(Role::Owner | Role::Maintainer | Role::Member) => None,
-        Some(Role::Observer) | None => Some(Refusal::Role),
+    let refusal = match &ask {
+        Ask::StartChat { .. } => match role {
+            Some(Role::Owner | Role::Maintainer | Role::Member) => None,
+            Some(Role::Observer) | None => Some(Refusal::Role),
+        },
+        Ask::DecideEscalation { .. } => None,
     };
     if let Some(refusal) = refusal {
         let outcome = Outcome::Refused(refusal);
@@ -469,13 +491,7 @@ fn admit_ask(
     let id = domain.pending.insert(flight).expect("pending request admitted");
     let indexed = domain.flights.insert(key, id);
     assert!(indexed == Ok(None), "one key per flight within pending capacity");
-    out.push(Request::Route {
-        request: id.token(),
-        person: key.person,
-        project,
-        role: role.expect("role checked"),
-        ask,
-    });
+    out.push(Request::Route { request: id.token(), person: key.person, project, role, ask });
     fact(domain, Fact::Routed { person: key.person });
 }
 
@@ -506,8 +522,12 @@ fn decided(domain: &mut Domain, env: &Env<Limits>, id: Id<Pending>, outcome: Out
         // pressure reported by tasks or another child through the root.
         Outcome::Refused(Refusal::Busy | Refusal::NotReady) => {}
         Outcome::Started { .. }
+        | Outcome::EscalationDecided { .. }
         | Outcome::Refused(
-            Refusal::SignIn
+            Refusal::NoFurther
+            | Refusal::NeedsAmend
+            | Refusal::Standing
+            | Refusal::SignIn
             | Refusal::Role
             | Refusal::Authority
             | Refusal::Unknown

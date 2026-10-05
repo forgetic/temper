@@ -19,6 +19,7 @@ struct Driver {
     serial: u64,
     accounts: Vec<accounts::Request>,
     stopped: bool,
+    fail_archive_once: bool,
 }
 
 impl Driver {
@@ -37,6 +38,7 @@ impl Driver {
             serial: 100,
             accounts: Vec::new(),
             stopped: false,
+            fail_archive_once: false,
         }
     }
 
@@ -54,7 +56,13 @@ impl Driver {
                     let (rows, next) = self.store.page(range, after, most);
                     assert!(rows.len() <= usize::try_from(most).expect("small count"));
                     assert!(bytes >= self.env.limits.loads.bytes);
-                    self.events.push_back(engine::Event::Loaded { owner, rows, next });
+                    if self.fail_archive_once && matches!(range, temper_engine_domain::Range::EscalationDecision { .. })
+                    {
+                        self.fail_archive_once = false;
+                        self.events.push_back(engine::Event::Unloaded { owner });
+                    } else {
+                        self.events.push_back(engine::Event::Loaded { owner, rows, next });
+                    }
                 }
                 engine::Request::Deliver(delivery) => self.delivered.push(delivery),
                 engine::Request::Account(request) => self.accounts.push(request),
@@ -115,6 +123,8 @@ impl Driver {
                 | Delivery::Fleet(_)
                 | Delivery::Assigned { .. }
                 | Delivery::Refuse { .. }
+                | Delivery::EscalationReply { .. }
+                | Delivery::ReadEscalationDecision { .. }
                 | Delivery::ReadResult { .. }
                 | Delivery::TurnBusy { .. }
                 | Delivery::Load { .. }
@@ -187,6 +197,8 @@ fn durable_start_turn_and_answer_callbacks_survive_full_journal_pressure() {
             | Delivery::Fleet(_)
             | Delivery::WebReply { .. }
             | Delivery::Refuse { .. }
+            | Delivery::EscalationReply { .. }
+            | Delivery::ReadEscalationDecision { .. }
             | Delivery::ReadResult { .. }
             | Delivery::TurnBusy { .. }
             | Delivery::Load { .. }
@@ -238,6 +250,7 @@ fn restart_recovers_named_ended_result_without_replaying_a_raw_notice() {
             | Record::Turn(_)
             | Record::People(_)
             | Record::RunProof(_)
+            | Record::EscalationDecision(_)
             | Record::Terminal(_) => None,
         })
         .expect("ended task");
@@ -297,6 +310,8 @@ fn assigned(driver: &Driver) -> engine::Assignment {
             | Delivery::Fleet(_)
             | Delivery::WebReply { .. }
             | Delivery::Refuse { .. }
+            | Delivery::EscalationReply { .. }
+            | Delivery::ReadEscalationDecision { .. }
             | Delivery::ReadResult { .. }
             | Delivery::TurnBusy { .. }
             | Delivery::Load { .. }
@@ -491,6 +506,7 @@ fn invalid_nonfinal_task_restore_page_stops_before_issuing_its_continuation() {
             | Record::Turn(_)
             | Record::People(_)
             | Record::RunProof(_)
+            | Record::EscalationDecision(_)
             | Record::Terminal(_) => None,
         })
         .expect("ended fixture");
@@ -571,6 +587,7 @@ fn authenticated_result_query_refuses_monotonic_expiry_after_backward_wall_jump_
             | Record::Turn(_)
             | Record::People(_)
             | Record::RunProof(_)
+            | Record::EscalationDecision(_)
             | Record::Terminal(_) => None,
         })
         .expect("ended chat");
@@ -754,4 +771,226 @@ fn bounded_invalid_typed_terminal_preserves_original_root_evidence_and_charges_o
     });
     driver.settle();
     assert_eq!(driver.store.rows, rows, "fenced duplicate never reaches child priced admission");
+}
+
+fn escalation_archive_driver() -> (Driver, temper_engine_domain::EscalationDecisionRecord) {
+    use temper_engine_domain_world::{escalation, escalation_referee::Story};
+    let mut world = escalation::World::new(escalation::Settings::calm(9200, Story::Release));
+    world.run();
+    let archive = world
+        .store
+        .rows
+        .values()
+        .find_map(|row| if let Record::EscalationDecision(archive) = row { Some(archive.clone()) } else { None })
+        .expect("actual completed escalation archive");
+    let mut configured = limits();
+    configured.people.requests = 8;
+    configured.people.initial_owners = 2;
+    configured.tasks.retries.run.retries = 0;
+    let mut driver = Driver::configured(world.store, config(9200), &configured);
+    driver.settle();
+    driver.sign_in();
+    driver.settle();
+    (driver, archive)
+}
+
+#[test]
+fn failed_named_escalation_history_read_closes_once_and_same_key_retries() {
+    let (mut driver, archive) = escalation_archive_driver();
+    let rows = driver.store.rows.clone();
+    let session = driver.session();
+    driver.delivered.clear();
+    driver.fail_archive_once = true;
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(900)),
+        sign_in: session,
+        key: [9; 16],
+        ask: people::Ask::DecideEscalation {
+            project: archive.project,
+            task: archive.task,
+            revision: archive.revision,
+            decision: people::EscalationDecision::Release,
+        },
+    });
+    driver.settle();
+    assert!(!driver.stopped);
+    assert!(driver.root.quiescent());
+    assert_eq!(driver.store.rows, rows, "failed IO saves no keyed answer or task/financial change");
+    assert_eq!(driver.delivered.len(), 1);
+    assert!(matches!(
+        &driver.delivered[0],
+        Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::Refused(people::Refusal::Busy)), .. }
+    ));
+    driver.delivered.clear();
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(901)),
+        sign_in: session,
+        key: [9; 16],
+        ask: people::Ask::DecideEscalation {
+            project: archive.project,
+            task: archive.task,
+            revision: archive.revision,
+            decision: people::EscalationDecision::Release,
+        },
+    });
+    driver.settle();
+    assert_eq!(driver.delivered.len(), 1);
+    assert!(
+        matches!(&driver.delivered[0], Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::EscalationDecided { by, .. }), .. } if *by == archive.by)
+    );
+    assert!(driver.root.quiescent(), "shared read and people's pending slots retired");
+}
+
+fn held_waiting_store() -> Store {
+    use temper_engine_domain_world::{escalation, escalation_referee::Story};
+    let mut world = escalation::World::new(escalation::Settings::calm(9202, Story::Reject));
+    for _ in 0..300 {
+        world.iterate();
+        if world.store.rows.values().any(|row| matches!(row, Record::Tasks(tasks::Stored::Live(task)) if matches!(task.escalation, tasks::Escalation::Waiting { .. }))) {
+            return Store { applied: world.store.applied, rows: world.store.rows.clone(), pending: VecDeque::new() };
+        }
+    }
+    panic!("actual failure never committed Waiting");
+}
+
+fn held_driver(store: Store) -> Driver {
+    let mut configured = limits();
+    configured.people.initial_owners = 2;
+    configured.people.requests = 8;
+    configured.tasks.retries.run.retries = 0;
+    Driver::configured(store, config(9202), &configured)
+}
+
+#[test]
+fn restored_waiting_rechecks_snapshot_membership_and_same_holder_changes_nothing() {
+    let store = held_waiting_store();
+    let rows = store.rows.clone();
+    let mut same = held_driver(store);
+    same.settle();
+    assert!(!same.stopped);
+    assert!(same.root.quiescent());
+    assert_eq!(same.store.rows, rows, "same holder preserves revision without another commit");
+    let mut store = held_waiting_store();
+    let requester = store
+        .rows
+        .values()
+        .find_map(|row| {
+            if let Record::Tasks(tasks::Stored::Live(task)) = row {
+                if let tasks::Party::Person(person) = task.requester {
+                    return Some(person);
+                }
+            }
+            None
+        })
+        .expect("person chat");
+    for row in store.rows.values_mut() {
+        if let Record::People(people::Stored::Roles { holdings, .. }) = row {
+            *holdings = holdings
+                .iter()
+                .copied()
+                .filter(|holding| holding.person != requester)
+                .collect::<Vec<_>>()
+                .into_boxed_slice();
+        }
+    }
+    let mut changed = held_driver(store);
+    changed.settle();
+    assert!(!changed.stopped);
+    assert!(changed.store.rows.values().any(|row| matches!(row, Record::Tasks(tasks::Stored::Live(task)) if task.escalation == tasks::Escalation::Waiting { revision: 2, holder: tasks::EscalationHolder::Role { project: 1, role: 0 } })));
+    assert!(
+        !changed
+            .delivered
+            .iter()
+            .any(|delivery| matches!(delivery, Delivery::Assigned { .. } | Delivery::Result { .. }))
+    );
+}
+
+#[test]
+fn exhausted_revision_with_changed_restored_holder_stops_without_committing() {
+    let mut store = held_waiting_store();
+    for row in store.rows.values_mut() {
+        if let Record::Tasks(tasks::Stored::Live(task)) = row {
+            task.escalation =
+                tasks::Escalation::Waiting { revision: u64::MAX, holder: tasks::EscalationHolder::Person(1) };
+        }
+        if let Record::People(people::Stored::Roles { holdings, .. }) = row {
+            *holdings =
+                holdings.iter().copied().filter(|holding| holding.person != 1).collect::<Vec<_>>().into_boxed_slice();
+        }
+    }
+    let rows = store.rows.clone();
+    let mut driver = held_driver(store);
+    for _ in 0..150 {
+        driver.advance(true);
+        if driver.stopped {
+            break;
+        }
+    }
+    assert!(driver.stopped);
+    assert_eq!(driver.store.rows, rows);
+    assert!(driver.store.pending.is_empty());
+    assert!(driver.delivered.is_empty(), "invalid recheck releases no child consequence");
+}
+
+#[test]
+fn rejected_restore_stays_rejected_and_current_read_checks_privacy_and_both_expiry_clocks() {
+    use temper_engine_domain_world::{escalation, escalation_referee::Story};
+    let mut world = escalation::World::new(escalation::Settings::calm(9203, Story::Reject));
+    world.run();
+    let task = world
+        .store
+        .rows
+        .values()
+        .find_map(|row| if let Record::Tasks(tasks::Stored::Live(task)) = row { Some(task.number) } else { None })
+        .expect("rejected held task");
+    let before = world.store.rows.clone();
+    let mut driver = held_driver(world.store);
+    driver.settle();
+    assert_eq!(driver.store.rows, before, "rejection never reopens or reroutes at startup");
+    driver.sign_in();
+    driver.settle();
+    let owner_session = driver.session();
+    driver.delivered.clear();
+    driver.send(engine::Event::ReadEscalation {
+        reply_to: ReplyTo::new(Token::new(910)),
+        sign_in: owner_session,
+        task,
+    });
+    driver.settle();
+    assert!(
+        matches!(&driver.delivered[..], [Delivery::EscalationReply { context, .. }] if matches!(context.escalation, tasks::Escalation::Rejected { .. }))
+    );
+    driver.delivered.clear();
+    driver.send(engine::Event::SignedIn {
+        reply_to: ReplyTo::new(Token::new(911)),
+        identity: people::Identity {
+            key: people::IdentityKey { forge: 1, user: 9 },
+            login: b"outsider".as_slice().into(),
+            name: b"Outsider".as_slice().into(),
+        },
+    });
+    driver.settle();
+    let outsider = driver.session();
+    driver.delivered.clear();
+    driver.send(engine::Event::ReadEscalation { reply_to: ReplyTo::new(Token::new(912)), sign_in: outsider, task });
+    driver.settle();
+    assert!(matches!(
+        &driver.delivered[..],
+        [Delivery::WebReply { reply: people::Reply::Refused(people::Refusal::Standing), .. }]
+    ));
+    driver.delivered.clear();
+    driver.env.now = Time::from_nanos(Duration::from_secs(61).as_nanos());
+    driver.env.wall = Wall::EPOCH;
+    driver.send(engine::Event::ReadEscalation {
+        reply_to: ReplyTo::new(Token::new(913)),
+        sign_in: owner_session,
+        task,
+    });
+    assert!(
+        matches!(
+            &driver.delivered[..],
+            [Delivery::WebReply { reply: people::Reply::Refused(people::Refusal::SignIn), .. }]
+        ),
+        "monotonic expiry refuses even with backward wall before fire"
+    );
 }

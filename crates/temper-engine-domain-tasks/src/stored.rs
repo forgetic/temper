@@ -59,6 +59,44 @@ fn valid_phase(task: &TaskRecord, limits: &Limits) -> bool {
     }
 }
 
+fn valid_escalation(task: &TaskRecord, limits: &Limits) -> bool {
+    let held = match task.phase {
+        Phase::Held { .. } => true,
+        Phase::Waiting | Phase::Active(_) | Phase::Closing(_) | Phase::Ended(_) => false,
+    };
+    match &task.escalation {
+        crate::Escalation::Unheld { revision } => {
+            *revision != u64::MAX
+                && match task.requester {
+                    Party::Person(_) => !held,
+                    Party::Task(_) | Party::Deployment { .. } => *revision == 0,
+                }
+        }
+        crate::Escalation::Routing { .. } => false,
+        crate::Escalation::Waiting { revision, holder } => {
+            *revision != 0
+                && held
+                && match task.requester {
+                    Party::Person(requester) => match holder {
+                        crate::EscalationHolder::Person(person) => *person != 0 && *person == requester,
+                        crate::EscalationHolder::Role { project, .. } => *project == task.project,
+                    },
+                    Party::Task(_) | Party::Deployment { .. } => false,
+                }
+        }
+        crate::Escalation::Rejected { revision, by, reason } => {
+            *revision != 0
+                && *by != 0
+                && held
+                && match task.requester {
+                    Party::Person(_) => true,
+                    Party::Task(_) | Party::Deployment { .. } => false,
+                }
+                && reason.len() <= usize::try_from(limits.result_bytes).expect("u32 fits usize")
+        }
+    }
+}
+
 fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
     if match task.historical_spend.checked_add(task.numbers.spent) {
         Some(total) => task.run_spent > total,
@@ -78,6 +116,7 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
         || !crate::batch::valid_contract(limits, &task.contract)
         || !crate::batch::valid_authority(limits, &task.authority)
         || !valid_phase(task, limits)
+        || !valid_escalation(task, limits)
     {
         return false;
     }
@@ -264,6 +303,14 @@ pub(crate) fn restored(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<R
     let numbers = snapshot(domain, env.limits.tasks);
     for number in numbers.into_boxed() {
         let phase = record(domain, number).expect("restored name exists").phase.clone();
+        match record(domain, number).expect("restored name exists").escalation {
+            crate::Escalation::Waiting { .. } => out.push(Request::EscalationNeeded {
+                context: crate::escalation::context(domain, number).expect("valid held person context"),
+            }),
+            crate::Escalation::Unheld { .. }
+            | crate::Escalation::Routing { .. }
+            | crate::Escalation::Rejected { .. } => {}
+        }
         match phase {
             Phase::Active(Active::Due | Active::Preparing) => {
                 task_mut(domain, number).expect("restored name exists").record.phase = Phase::Active(Active::Due);

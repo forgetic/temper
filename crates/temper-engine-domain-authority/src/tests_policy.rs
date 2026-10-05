@@ -87,6 +87,7 @@ fn role(ceiling: Authority) -> Role {
 
 fn policy(ceiling: Authority) -> Policy {
     Policy {
+        escalation_role: None,
         roles: Box::new([role(ceiling.clone())]),
         ceiling,
         period_spend: 500,
@@ -822,4 +823,41 @@ fn check_full_policy_memory() {
     };
     assert_eq!(worst_case(&enormous), None, "overflowing memory is never wrapped");
     assert_eq!(max_out(&enormous), None, "overflowing queue bounds are never wrapped");
+}
+
+#[test]
+fn escalation_fallback_requires_accept_and_decide_but_not_direct_release() {
+    let mut domain = domain();
+    for missing in 0..3 {
+        let mut selected = policy(authority());
+        selected.escalation_role = Some(7);
+        match missing {
+            0 => selected.escalation_role = Some(8),
+            1 => selected.roles[0].requests = Requests(Requests::ALL.0 & !4),
+            2 => selected.roles[0].decides = Proposals(0),
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            apply(&mut domain, Event::Policy { project: 1, policy: selected }),
+            PolicyFact::Refused { project: 1, reason: PolicyRefusal::InvalidRole }
+        );
+        assert_eq!(domain.policy(1).unwrap().escalation_role, None);
+    }
+    let mut selected = policy(authority());
+    selected.escalation_role = Some(7);
+    selected.roles[0].requests = Requests(4);
+    assert_eq!(apply(&mut domain, Event::Policy { project: 1, policy: selected }), PolicyFact::Changed { project: 1 });
+    assert_eq!(domain.policy(1).unwrap().escalation_role, Some(7));
+    let checked = check_request(
+        &domain,
+        &PersonAsk {
+            project: 1,
+            role: 7,
+            pool: numbers(0),
+            tasks_left: 0,
+            request: PersonRequest::Accept(Action::Escalate { release: None }),
+        },
+        &mut Queue::with_capacity(max_out(domain.limits()).unwrap()),
+    );
+    assert_eq!(checked.answer, Answer::Allow, "Accept+Escalation needs no direct Release permission");
 }
