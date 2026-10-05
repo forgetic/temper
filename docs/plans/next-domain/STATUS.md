@@ -46,6 +46,7 @@ unavailable; the design records bounded/unknown handling and status links.
 | 01d landing requirements | merged, `e9aea6d` | independent review corrected missing-facts refusal precedence; all four workflow checks passed; focused 2,118/2,118 in 4.506 s, fuzzy 30/30 in 16.345 s, one ignored finding; authority serial total 0.164 s |
 | 02a tasks batches and lifecycle | merged, `376cbd4` | independent review corrected held-closing creation and exhaustive matches; recovery regression passed; all four workflow checks passed; focused 2,115/2,115 in 5.532 s, fuzzy 30/30 in 20.070 s, one ignored finding; tasks serial focused 0.117 s, fuzzy 0.781 s |
 | 02b task inboxes, references and wakes | merged, `1cfd373` | independent review corrected oversized copying before admission, with a negative counted-memory regression; all four workflow checks passed; focused 2,145/2,145 in 5.042 s, fuzzy 31/31 in 18.227 s, one ignored finding; tasks world serial 0.220 s focused and 2.519 s fuzzy |
+| 02c task amendments and moves | merged, `ec38fcc` | independent review corrected restored narrowing stops and saturated control offers; all four workflow checks passed; focused 2,207/2,207 in 5.086 s, fuzzy 34/34 in 18.911 s, one ignored finding; idle tasks world serial 0.282 s focused and 2.876 s fuzzy |
 | 03a people sign-in and chat requests | merged, `959795f` | all four workflow checks passed; focused 1,822/1,822 in 7.251 s, fuzzy 28/28 in 22.695 s, one ignored finding; targeted people serial total 0.098 s before the added root-pressure regression |
 | 04a1 fake forge git foundations | merged, `0d09efc` | all four workflow checks passed; focused 1,833/1,833 in 6.661 s, fuzzy 28/28 in 22.321 s, one ignored finding; 68 targeted tests passed in 0.054 s |
 | 04a1 bounded traversal correction | merged, `0eb1ff0` | all four workflow checks passed; focused 1,833/1,833 in 9.325 s, fuzzy 28/28 in 27.457 s, one ignored finding; traversal uses a configured bounded `for` |
@@ -126,11 +127,16 @@ answered/withdrawn child spend are merged. Restored waking results are sized
 before allocation; owned-IO terminal races, complete-state replay and fuzzy
 outcome coverage are verified. Whole-run aggregation and native tools (05f)
 are being implemented. The root skeleton (06a) has a brief seam and ordered
-journal/store world in its worktree; partial-list memory transfer is being
-corrected after independent review. Its complete charged story needs 02e's
+journal/store world in its worktree; partial-list memory transfer has been
+corrected after independent review and awaits its final gate. Its complete
+charged story needs 02e's
 finite funding ledger and atomic turn/answer admission, which is brought
-forward after 02c. Task amendment/move review found restart cancellation and
-control-offer pressure issues that are being repaired before merging.
+forward after 02c. Task amendments and moves are merged: persisted narrowing
+reissues stops after restart, and two reserved immutable control offers per
+task let amendments reach live runs under ordinary-offer saturation. A third
+unread amendment refuses before mutation. Finite external funding ledgers and
+combined accepted turn/answer charging remain 02e; the root must not precharge
+a turn or terminal which the tasks hub may refuse.
 The client API foundation's required world verification must pass before
 any client code reaches main. Steps 07 and 08 remain.
 
