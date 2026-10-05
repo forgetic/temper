@@ -33,6 +33,8 @@ pub struct WalkingReferee {
     acknowledged_turns: BTreeSet<u32>,
     assignments: u32,
     answer_acknowledgements: u32,
+    terminal_commits: u32,
+    replayed_answer_acknowledgements: u32,
     results: u32,
 }
 
@@ -110,6 +112,20 @@ impl WalkingReferee {
                 if !retired || !terminal {
                     return Err("ended task and root terminal proof retirement are not one transaction");
                 }
+                let closed = writes.iter().any(|write| {
+                    matches!(write,
+                    Write::Save(Record::Tasks(tasks::Stored::Closure(closure)))
+                        if closure.task == record.number && closure.generation == record.allotment
+                            && closure.funder == record.funder && closure.budget == record.numbers.budget
+                            && closure.spent == FINAL_SPEND)
+                });
+                if !closed {
+                    return Err("terminal and exact financial closure are not one transaction");
+                }
+                if self.terminal_commits != 0 {
+                    return Err("terminal committed twice");
+                }
+                self.terminal_commits += 1;
             }
         }
         Ok(())
@@ -328,6 +344,103 @@ impl WalkingReferee {
         Ok(())
     }
 
+    /// The fake store checks the one applied terminal transaction before losing
+    /// its completion. No worker ACK or person result has escaped the old root;
+    /// the ended row, exact typed evidence and posted funding are durable, and
+    /// the live proof is erased (domain/engine.md, section 7.6).
+    ///
+    /// # Errors
+    /// Names a premature/late cut, missing terminal evidence or changed expense.
+    pub fn terminal_cut(&self, rows: &BTreeMap<Key, Record>) -> Result<(), &'static str> {
+        if self.terminal_commits != 1 || self.answer_acknowledgements != 0 || self.results != 0 {
+            return Err("cut is not after one terminal commit before ACK/result release");
+        }
+        self.terminal_evidence(rows)?;
+        let mut probe = self.clone();
+        probe.answer_ack(
+            rows,
+            self.task.ok_or("terminal without task")?,
+            self.attempt.ok_or("terminal without attempt")?,
+        )?;
+        probe.result(
+            rows,
+            self.person.ok_or("terminal without person")?,
+            self.task.ok_or("terminal without task")?,
+            REPORT,
+        )
+    }
+
+    fn terminal_evidence(&self, rows: &BTreeMap<Key, Record>) -> Result<(), &'static str> {
+        let task = self.task.ok_or("terminal without task")?;
+        let attempt = self.attempt.ok_or("terminal without attempt")?;
+        let Some(Record::Terminal(terminal)) = rows.get(&Key::Terminal { task, attempt }) else {
+            return Err("durable terminal evidence missing");
+        };
+        if terminal.task != task
+            || terminal.attempt != attempt
+            || terminal.cumulative != FINAL_SPEND
+            || terminal.end
+                != (tasks::End::Finished {
+                    result: tasks::TaskResult::Report { words: REPORT.into() },
+                    cancel_delegates: false,
+                })
+        {
+            return Err("durable terminal evidence differs from worker offer");
+        }
+        let record = task_record(rows, task).ok_or("terminal without ended task")?;
+        let Some(Record::Tasks(tasks::Stored::Closure(closure))) =
+            rows.get(&Key::Tasks(tasks::Key::Closure { task, generation: record.allotment }))
+        else {
+            return Err("durable financial closure missing");
+        };
+        if *closure
+            != (tasks::Closure {
+                task,
+                generation: record.allotment,
+                funder: record.funder,
+                budget: record.numbers.budget,
+                spent: FINAL_SPEND,
+            })
+        {
+            return Err("durable financial closure differs from actual allotment");
+        }
+        if rows.contains_key(&Key::RunProof { task }) || rows.contains_key(&Key::Tasks(tasks::Key::Live(task))) {
+            return Err("ended task retained a live task or proof");
+        }
+        Ok(())
+    }
+
+    /// The worker resends once after its recovered ACK. This separate transport
+    /// ACK is permitted only for the same ended fence and unchanged terminal;
+    /// it adds no task commit, charge or person result (domain/engine.md, 7.6).
+    ///
+    /// # Errors
+    /// Names an unsolicited/repeated replay ACK or changed durable evidence.
+    pub fn replayed_answer_ack(
+        &mut self,
+        rows: &BTreeMap<Key, Record>,
+        task: u64,
+        attempt: u64,
+    ) -> Result<(), &'static str> {
+        if self.answer_acknowledgements != 1 || self.replayed_answer_acknowledgements != 0 {
+            return Err("replay ACK is not the one explicit post-ACK resend");
+        }
+        self.terminal_evidence(rows)?;
+        let mut probe = self.clone();
+        probe.answer_acknowledgements = 0;
+        probe.answer_ack(rows, task, attempt)?;
+        self.replayed_answer_acknowledgements += 1;
+        Ok(())
+    }
+
+    /// The outside worker has consumed the ACK for its one explicit post-ACK
+    /// terminal resend; this does not count a second logical result or terminal
+    /// (domain/engine.md, section 7.6).
+    #[must_use]
+    pub fn terminal_replay_done(&self) -> bool {
+        self.replayed_answer_acknowledgements == 1
+    }
+
     /// The story is complete only after all independently expected effects.
     #[must_use]
     pub fn done(&self) -> bool {
@@ -336,6 +449,7 @@ impl WalkingReferee {
             && self.assignments == 1
             && self.saved_turns.len() == TURNS.len()
             && self.acknowledged_turns.len() == TURNS.len()
+            && self.terminal_commits == 1
             && self.answer_acknowledgements == 1
             && self.results == 1
     }

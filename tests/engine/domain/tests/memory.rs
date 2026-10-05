@@ -209,13 +209,15 @@ fn real_root_state_and_complete_walking_handoffs_fit_the_declared_counted_bound(
     use temper_engine_domain_world::walking::{Settings, World, limits};
     let limits = limits();
     let bound = root::engine::worst_case(&limits).expect("all child and root bounds checked");
-    let meter = Meter::new();
-    meter.start();
-    let mut world = World::new(Settings::calm(73));
-    world.run();
-    let measured = meter.end();
-    // The meter also sees the independent fake's durable map and script
-    // observations. Their tiny footprint only makes this stricter: root
-    // scratch queues and every real restored child are exercised together.
-    meter.check(measured, bound, limits);
+    for settings in [Settings::calm(73), Settings::terminal(74)] {
+        let meter = Meter::new();
+        meter.start();
+        let mut world = World::new(settings);
+        world.run();
+        let measured = meter.end();
+        // The meter also sees the independent fake's durable map and script
+        // observations. Their tiny footprint only makes this stricter: root
+        // scratch queues and every real restored child are exercised together.
+        meter.check(measured, bound, limits);
+    }
 }

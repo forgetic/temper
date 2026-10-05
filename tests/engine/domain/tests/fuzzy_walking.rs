@@ -10,6 +10,7 @@ fn fuzzy_walking_commit_cuts_latency_replay_and_observation_pressure() {
         let settings = Settings {
             seed,
             restart: random.below(2) == 0,
+            terminal_restart: false,
             commit_delay: u32::try_from(random.below(3)).expect("tiny latency"),
             page_delay: u32::try_from(random.below(3)).expect("tiny latency"),
             facts: random.below(2) == 0,
@@ -20,4 +21,20 @@ fn fuzzy_walking_commit_cuts_latency_replay_and_observation_pressure() {
         covered.insert((settings.restart, settings.commit_delay != 0, settings.page_delay != 0));
     }
     assert_eq!(covered.len(), 8, "both commit cuts across delayed/immediate store and page terminals");
+}
+
+#[test]
+fn fuzzy_terminal_commit_cut_preserves_complete_replay_and_funding() {
+    for seed in 0..16 {
+        let mut random = Rng::new(seed + 8100);
+        let settings = Settings {
+            commit_delay: u32::try_from(random.below(3)).expect("tiny latency"),
+            page_delay: u32::try_from(random.below(3)).expect("tiny latency"),
+            facts: random.below(2) == 0,
+            ..Settings::terminal(seed)
+        };
+        let world = run_replayed(settings);
+        assert!(world.referee.done() && world.referee.terminal_replay_done(), "seed {seed}");
+        assert_eq!(world.restarts, 1, "seed {seed}");
+    }
 }

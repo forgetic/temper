@@ -5,7 +5,7 @@
 use crate::commits::Store;
 use crate::walking_referee::{FINAL_SPEND, QUESTION, REPORT, TURNS, WalkingReferee};
 use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use temper_engine_domain::{Delivery, JournalLimits, Record, engine, loads};
 use temper_engine_domain_accounts as accounts;
 use temper_engine_domain_authority as authority;
@@ -216,6 +216,11 @@ pub struct Settings {
     pub page_delay: u32,
     /// Lose the first turn's commit completion and restart while the worker retains it.
     pub restart: bool,
+    /// World script cuts after the final ended/financial transaction is applied
+    /// before its completion or ACK/result release; mutually exclusive with
+    /// `restart`. Retained worker answer and authenticated named result read
+    /// recover through the real root routes (domain/engine.md, section 7.6).
+    pub terminal_restart: bool,
     /// Drain observational child facts or leave their tiny queues saturated.
     pub facts: bool,
 }
@@ -224,7 +229,16 @@ impl Settings {
     /// The required commit-cut restart story with tiny one-row pages.
     #[must_use]
     pub const fn calm(seed: u64) -> Settings {
-        Settings { seed, commit_delay: 0, page_delay: 0, restart: true, facts: true }
+        Settings { seed, commit_delay: 0, page_delay: 0, restart: true, terminal_restart: false, facts: true }
+    }
+
+    /// Script one final-commit process cut and one extra worker terminal resend.
+    /// The person requests the named ended result with their restored session;
+    /// the fake checks exactly one result and unchanged durable rows after cut
+    /// (domain/engine.md, section 7.6; domain/people.md, section 6).
+    #[must_use]
+    pub const fn terminal(seed: u64) -> Settings {
+        Settings { seed, commit_delay: 0, page_delay: 0, restart: false, terminal_restart: true, facts: true }
     }
 }
 
@@ -253,12 +267,18 @@ pub struct World {
     session: Option<u64>,
     assignment: Option<engine::Assignment>,
     pending_turn: Option<u32>,
+    pending_answer: bool,
+    terminal_recovery_sent: bool,
+    recovery_clock_offset: u64,
+    terminal_replay_sent: bool,
+    terminal_snapshot: Option<BTreeMap<temper_engine_domain::Key, Record>>,
 }
 
 impl World {
     /// Construct the real children and schedule startup plus an empty worker hello.
     #[must_use]
     pub fn new(settings: Settings) -> World {
+        assert!(!(settings.restart && settings.terminal_restart), "one chosen process cut per story");
         let limits = limits();
         let mut world = World {
             domain: engine::Domain::new(config(settings.seed), &limits),
@@ -276,6 +296,11 @@ impl World {
             session: None,
             assignment: None,
             pending_turn: None,
+            pending_answer: false,
+            terminal_recovery_sent: false,
+            recovery_clock_offset: 0,
+            terminal_replay_sent: false,
+            terminal_snapshot: None,
             settings,
         };
         world.queue(engine::Event::Start, 0);
@@ -294,7 +319,7 @@ impl World {
                 Box::new([fleet::Hosted {
                     run: Token::new(assignment.task),
                     attempt: Token::new(assignment.attempt),
-                    phase: fleet::Phase::Active,
+                    phase: if self.pending_answer { fleet::Phase::Answered } else { fleet::Phase::Active },
                 }])
             },
         );
@@ -325,12 +350,19 @@ impl World {
         self.queue(event, 0);
     }
 
-    fn restart(&mut self) {
+    fn restart(&mut self, terminal: bool) {
         assert!(self.store.pending.is_empty(), "cut has no later submitted commit");
         self.domain = engine::Domain::new(config(self.settings.seed), &self.environment.limits);
         self.events.clear();
         self.restarts += 1;
-        self.trace.push("restart after durable turn, before completion".into());
+        self.trace.push(
+            if terminal {
+                "restart after durable terminal/result, before completion"
+            } else {
+                "restart after durable turn, before completion"
+            }
+            .into(),
+        );
         self.queue(engine::Event::Start, 0);
         self.hello();
     }
@@ -338,8 +370,8 @@ impl World {
     /// Drive one up/ready/timer/reclaim iteration and independent fake effects.
     pub fn iterate(&mut self) {
         self.iteration += 1;
-        self.environment.now = Time::from_nanos(u64::from(self.iteration) * 1_000_000);
-        self.environment.wall = Wall::from_nanos(u64::from(self.iteration) * 1_000_000);
+        self.environment.now = Time::from_nanos(u64::from(self.iteration) * 1_000_000 + self.recovery_clock_offset);
+        self.environment.wall = Wall::from_nanos(u64::from(self.iteration) * 1_000_000 + self.recovery_clock_offset);
         engine::resume(&mut self.domain, &self.environment, &mut self.out);
         self.observe();
         if self.events.front().is_some_and(|(due, _)| *due <= self.iteration) {
@@ -361,15 +393,25 @@ impl World {
                 let first_turn = self.store.pending.front().expect("pending commit").1.iter().any(
                     |write| matches!(write, temper_engine_domain::Write::Save(Record::Turn(turn)) if turn.turn == 1),
                 );
+                let terminal = self.store.pending.front().expect("pending commit").1.iter().any(|write| {
+                    matches!(write, temper_engine_domain::Write::Save(Record::Tasks(tasks::Stored::Ended(_))))
+                });
                 let number = self.store.apply();
                 self.trace.push(format!("applied {number}"));
                 self.commit_wait = self.settings.commit_delay;
                 if self.settings.restart && self.restarts == 0 && first_turn {
-                    self.restart();
+                    self.restart(false);
+                } else if self.settings.terminal_restart && self.restarts == 0 && terminal {
+                    self.referee.terminal_cut(&self.store.rows).expect("durable terminal before any ACK/result");
+                    self.terminal_snapshot = Some(self.store.rows.clone());
+                    self.restart(true);
                 } else {
                     self.queue(engine::Event::Committed { number }, 0);
                 }
             }
+        }
+        if let Some(snapshot) = &self.terminal_snapshot {
+            assert_eq!(&self.store.rows, snapshot, "terminal recovery changes no durable row or commit counter");
         }
         if self.domain.ready() && !self.person_sent {
             self.person_sent = true;
@@ -392,6 +434,46 @@ impl World {
         {
             self.turn(1);
         }
+        if self.settings.terminal_restart && self.restarts == 1 && self.domain.ready() && !self.terminal_recovery_sent {
+            self.terminal_recovery_sent = true;
+            let assignment = self.assignment.as_ref().expect("worker retains terminal claim");
+            self.queue(
+                engine::Event::ReadResult {
+                    reply_to: ReplyTo::new(Token::new(103)),
+                    sign_in: self.session.expect("person retains authenticated session"),
+                    task: assignment.task,
+                },
+                0,
+            );
+            self.answer();
+        }
+        if self.terminal_recovery_sent
+            && self.recovery_clock_offset == 0
+            && !self.events.iter().any(|(_, event)| matches!(event, engine::Event::Answer { .. }))
+        {
+            // The retained answer has reached the loaded fleet. Advance the
+            // external clock past its five-second grace, staying within the
+            // person's sixty-second session and account validity.
+            self.recovery_clock_offset = 6_000_000_000;
+        }
+    }
+
+    fn answer(&mut self) {
+        let assignment = self.assignment.as_ref().expect("worker retains terminal claim");
+        self.pending_answer = true;
+        self.queue(
+            engine::Event::Answer {
+                channel: Token::new(7),
+                task: assignment.task,
+                attempt: assignment.attempt,
+                cumulative: FINAL_SPEND,
+                end: tasks::End::Finished {
+                    result: tasks::TaskResult::Report { words: REPORT.into() },
+                    cancel_delegates: false,
+                },
+            },
+            0,
+        );
     }
 
     fn observe(&mut self) {
@@ -400,6 +482,7 @@ impl World {
             self.trace.push(format!("output {request:?}"));
             match request {
                 engine::Request::Commit { number, writes } => {
+                    assert!(self.terminal_snapshot.is_none(), "terminal recovery must not submit another commit");
                     self.referee.commit(&writes).expect("independent transaction referee");
                     if self.store.pending.is_empty() {
                         self.commit_wait = self.settings.commit_delay;
@@ -477,31 +560,41 @@ impl World {
                 if turn == 1 {
                     self.turn(2);
                 } else {
-                    self.queue(
-                        engine::Event::Answer {
-                            channel,
-                            task,
-                            attempt,
-                            cumulative: FINAL_SPEND,
-                            end: tasks::End::Finished {
-                                result: tasks::TaskResult::Report { words: REPORT.into() },
-                                cancel_delegates: false,
-                            },
-                        },
-                        0,
-                    );
+                    self.answer();
                 }
             }
             Delivery::Acknowledge { channel, task, attempt } => {
                 assert_eq!(channel, Token::new(7));
-                self.referee.answer_ack(&self.store.rows, task, attempt).expect("priced terminal durable before ACK");
+                self.pending_answer = false;
+                if self.settings.terminal_restart && self.terminal_replay_sent {
+                    self.referee
+                        .replayed_answer_ack(&self.store.rows, task, attempt)
+                        .expect("fenced duplicate answer receives ACK without another terminal");
+                } else {
+                    self.referee
+                        .answer_ack(&self.store.rows, task, attempt)
+                        .expect("priced terminal durable before ACK");
+                    if self.settings.terminal_restart {
+                        self.terminal_replay_sent = true;
+                        self.answer();
+                    }
+                }
             }
             Delivery::TurnBusy { turn, .. } => self.turn(turn),
             Delivery::Result { person, task, words } => self
                 .referee
                 .result(&self.store.rows, person, task, &words)
                 .expect("committed result reaches person once"),
-            Delivery::ResultReply { .. } => panic!("unsolicited historical result reply"),
+            Delivery::ResultReply { to, person, task, words } => {
+                assert!(
+                    self.settings.terminal_restart && self.terminal_recovery_sent,
+                    "named result must be requested after restart"
+                );
+                assert_eq!(to.into_token(), Token::new(103), "one actual named result request terminal");
+                self.referee
+                    .result(&self.store.rows, person, task, &words)
+                    .expect("committed result reaches person once");
+            }
             Delivery::Reply { .. } | Delivery::WebReply { .. } | Delivery::Refuse { .. } | Delivery::Cancel { .. } => {
                 panic!("unexpected walking delivery {delivery:?}")
             }
@@ -524,6 +617,8 @@ impl World {
 
     fn settled(&self) -> bool {
         self.referee.done()
+            && (!self.settings.terminal_restart || self.referee.terminal_replay_done())
+            && !self.pending_answer
             && self.events.is_empty()
             && self.store.pending.is_empty()
             && self.out.is_empty()

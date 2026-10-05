@@ -618,8 +618,49 @@ or terminal archives never load into the bounded live map. Worst-case memory
 prices proof slots/owned terminal bytes, transient startup correlation,
 activation contexts, incoming payloads and simultaneous child/decision
 copies. This preserves the independently tested first-turn durable/lost-store-
-completion restart. Terminal-commit-before-ACK/result restart remains later
-coverage; its durable typed archive is preserved without claiming that cut.
+completion restart. Section 7.6 covers the bounded final Report transaction
+cut; broader restart and deployment recovery remain later coverage.
+
+
+### 7.6 Final Report transaction recovery cut
+
+The walking world also cuts the process after the fake store applies the
+final Report transaction and before the old root receives its completion or
+releases the worker ACK or person result. The transaction contains the ended
+task, its closure and actual funding posting, the typed Terminal archive, and
+the live RunProof erase. The independent referee requires that single atomic
+terminal transaction, exact cumulative expense 12, both preceding charged
+turns, and no outward terminal before the cut. This is the bounded recovery
+prerequisite for the current person Report route, not full deployment recovery.
+
+The restarted root reads real child and root families through one-row pages.
+An ended task is historical: it is not restored as live, adopted into fleet,
+assigned again or charged again. The worker retains its exact answer until
+ACK and lists that attempt as Answered in Hello. Fleet holds this unadopted
+attempt as a stray; a retained answer becomes kept. After Loaded, its grace
+expires and fleet drops the kept payload and ACKs it without a task Activation.
+The world advances the external clock past this grace while keeping the
+person's session and account valid. A further exact resend after that ACK
+follows the known-worker/unknown-attempt fencing route: drop and ACK, with no
+new semantic terminal or price. These two raw ACKs correspond to two actual
+worker sends; the referee separately counts the explicit post-ACK resend.
+
+Startup does not replay an unsolicited person inbox or result notice. The
+person retains the task name and authenticated session, then issues one
+ReadResult after readiness. Root authenticates the session against both clocks
+and loads the named ended task through the real TaskResult range. One
+ResultReply returns its committed Report at that request's reply address
+(domain/people.md, section 6). The old result never escaped before the cut;
+no duplicate result is hidden by a consumer deduplication rule.
+
+The fake store freezes its complete durable map at the cut and rejects every
+later commit submission or row change. A same-script uninterrupted run has
+exactly the same final rows and applied commit count. Independent negatives
+reject missing/altered terminal evidence, retained live proof, doubled funding,
+a second terminal transaction, a late cut or an unscripted replay ACK. Focused,
+complete-state replay, facts-neutrality, counted-memory and small randomized
+latency tests exercise this cut. Other worker-loss, session-expiry, competing
+request and deployment migration cuts remain separate recovery work.
 
 ## 8. The fleet
 

@@ -32,8 +32,9 @@
 //! [`engine::Domain::drain_facts`]; dropping them changes no decision.
 //! [`engine::Domain::quiescent`] is an idle fence, not a final story result;
 //! assigned workers and future task/account timers may remain (5.7). The
-//! required first-turn durable/lost-completion restart is covered; the broader
-//! terminal-before-ACK/result restart cut remains later coverage (7.5).
+//! first-turn and final Report durable/lost-completion restart cuts are covered
+//! by the walking world; broader deployment recovery remains later work
+//! (domain/engine.md, 7.5–7.6).
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
 extern crate alloc;

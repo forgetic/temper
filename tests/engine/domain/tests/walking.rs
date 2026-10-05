@@ -318,7 +318,145 @@ fn walking_referee_rejects_missing_or_split_current_claim_turn_and_terminal_proo
             Write::Save(ended),
             Write::Save(posted),
             Write::Save(terminal),
+            Write::Save(
+                world.store.rows[&Key::Tasks(tasks::Key::Closure { task: task.number, generation: task.allotment })]
+                    .clone(),
+            ),
             Write::Erase(Key::RunProof { task: task.number }),
         ])
         .expect("terminal evidence and retirement share final transaction");
+}
+
+#[test]
+fn final_transaction_survives_lost_completion_ack_and_result_without_another_write() {
+    let mut recovered = World::new(Settings::terminal(81));
+    recovered.run();
+    assert!(recovered.referee.done() && recovered.referee.terminal_replay_done());
+    assert_eq!(recovered.restarts, 1);
+    assert!(recovered.pages > 8, "real child rows restore through one-row pages");
+    assert!(recovered.store.pending.is_empty());
+    let mut uninterrupted = World::new(Settings { restart: false, ..Settings::calm(81) });
+    uninterrupted.run();
+    assert_eq!(
+        recovered.store.rows, uninterrupted.store.rows,
+        "same task, transcript, terminal, closure and financial history"
+    );
+    assert_eq!(
+        recovered.store.applied, uninterrupted.store.applied,
+        "no recovery commit, duplicate expense or fresh assignment"
+    );
+}
+
+#[test]
+fn terminal_restart_replays_complete_state_with_delayed_store_and_page_terminals() {
+    let settings = Settings { commit_delay: 2, page_delay: 2, ..Settings::terminal(82) };
+    let first = run_replayed(settings);
+    let mut replay = World::new(settings);
+    replay.run();
+    assert!(first.referee.terminal_replay_done());
+    assert_eq!(first.trace, replay.trace);
+    assert_eq!(first.store.rows, replay.store.rows);
+}
+
+#[test]
+fn terminal_restart_is_unchanged_when_observation_queues_saturate() {
+    let mut observed = World::new(Settings::terminal(83));
+    observed.run();
+    let mut saturated = World::new(Settings { facts: false, ..Settings::terminal(83) });
+    saturated.run();
+    assert_eq!(observed.trace, saturated.trace);
+    assert_eq!(observed.store.rows, saturated.store.rows);
+    assert!(saturated.referee.done() && saturated.referee.terminal_replay_done());
+}
+
+fn terminal_cut() -> World {
+    let mut world = World::new(Settings::terminal(84));
+    for _ in 0..600 {
+        if world.restarts == 1 {
+            world.referee.terminal_cut(&world.store.rows).expect("the selected cut precedes every outward terminal");
+            return world;
+        }
+        world.iterate();
+    }
+    panic!("script never reached its durable terminal cut");
+}
+
+#[test]
+fn independent_terminal_cut_referee_rejects_missing_or_altered_evidence() {
+    let world = terminal_cut();
+    let task = ended(&world);
+    let key = Key::Terminal { task: task.number, attempt: task.attempt };
+    let mut rows = world.store.rows.clone();
+    rows.remove(&key);
+    assert_eq!(world.referee.terminal_cut(&rows), Err("durable terminal evidence missing"));
+    rows = world.store.rows.clone();
+    let Some(Record::Terminal(terminal)) = rows.get_mut(&key) else { panic!("terminal evidence") };
+    terminal.cumulative += 1;
+    assert_eq!(world.referee.terminal_cut(&rows), Err("durable terminal evidence differs from worker offer"));
+    rows = world.store.rows.clone();
+    rows.remove(&Key::Tasks(tasks::Key::Closure { task: task.number, generation: task.allotment }));
+    assert_eq!(world.referee.terminal_cut(&rows), Err("durable financial closure missing"));
+    rows = world.store.rows.clone();
+    rows.insert(
+        Key::RunProof { task: task.number },
+        Record::RunProof(temper_engine_domain::RunProof {
+            task: task.number,
+            attempt: task.attempt,
+            turn: None,
+            terminal: None,
+        }),
+    );
+    assert_eq!(world.referee.terminal_cut(&rows), Err("ended task retained a live task or proof"));
+    rows = world.store.rows.clone();
+    let Some(Record::Tasks(tasks::Stored::Ledger(pool))) = rows.get_mut(&Key::Tasks(tasks::Key::Ledger(task.funder)))
+    else {
+        panic!("person pool")
+    };
+    pool.numbers.spent_below *= 2;
+    assert_eq!(world.referee.terminal_cut(&rows), Err("final charge was lost, duplicated or posted to another source"));
+}
+
+#[test]
+fn independent_referee_rejects_recommitted_terminal_and_unscripted_ack() {
+    let world = terminal_cut();
+    let task = ended(&world);
+    let writes = [
+        Write::Save(world.store.rows[&Key::Tasks(tasks::Key::Ended(task.number))].clone()),
+        Write::Save(world.store.rows[&Key::Tasks(tasks::Key::Ledger(task.funder))].clone()),
+        Write::Save(world.store.rows[&Key::Terminal { task: task.number, attempt: task.attempt }].clone()),
+        Write::Save(
+            world.store.rows[&Key::Tasks(tasks::Key::Closure { task: task.number, generation: task.allotment })]
+                .clone(),
+        ),
+        Write::Erase(Key::RunProof { task: task.number }),
+    ];
+    let mut referee = WalkingReferee::default();
+    let without_closure: Vec<_> = writes
+        .iter()
+        .filter(|write| !matches!(write, Write::Save(Record::Tasks(tasks::Stored::Closure(_)))))
+        .cloned()
+        .collect();
+    assert_eq!(
+        WalkingReferee::default().commit(&without_closure),
+        Err("terminal and exact financial closure are not one transaction")
+    );
+    referee.commit(&writes).expect("one actual final transaction");
+    assert_eq!(referee.commit(&writes), Err("terminal committed twice"));
+    let mut referee = world.referee.clone();
+    assert_eq!(
+        referee.replayed_answer_ack(&world.store.rows, task.number, task.attempt),
+        Err("replay ACK is not the one explicit post-ACK resend")
+    );
+    referee.answer_ack(&world.store.rows, task.number, task.attempt).expect("one recovered answer ACK");
+    assert_eq!(
+        referee.terminal_cut(&world.store.rows),
+        Err("cut is not after one terminal commit before ACK/result release")
+    );
+    referee
+        .replayed_answer_ack(&world.store.rows, task.number, task.attempt)
+        .expect("the explicit worker resend is ACKed");
+    assert_eq!(
+        referee.replayed_answer_ack(&world.store.rows, task.number, task.attempt),
+        Err("replay ACK is not the one explicit post-ACK resend")
+    );
 }
