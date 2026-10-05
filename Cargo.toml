@@ -9,6 +9,7 @@ members = [
     "crates/temper-agent-domain-tools",
     "crates/temper-agent-protocol",
     "crates/temper-channel",
+    "crates/temper-engine-domain",
     "crates/temper-legacy-engine-domain",
     "crates/temper-engine-domain-accounts",
     "crates/temper-engine-domain-authority",
@@ -94,6 +95,7 @@ temper-oauth = { path = "crates/temper-oauth" }
 temper-forge-forgejo = { path = "crates/temper-forge-forgejo" }
 temper-forge-forgejo-world = { path = "tests/forge/forgejo" }
 temper-engine-domain-accounts = { path = "crates/temper-engine-domain-accounts" }
+temper-engine-domain = { path = "crates/temper-engine-domain" }
 temper-engine-domain-authority = { path = "crates/temper-engine-domain-authority" }
 temper-engine-domain-people = { path = "crates/temper-engine-domain-people" }
 temper-engine-domain-tasks = { path = "crates/temper-engine-domain-tasks" }

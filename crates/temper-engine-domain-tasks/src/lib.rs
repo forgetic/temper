@@ -27,7 +27,7 @@ mod value;
 mod wake;
 pub use amend::{Amendment, AuthorityChange, Authorization, Change, Control, History};
 pub use boundary::*;
-pub use domain::{Domain, fire, max_out, step};
+pub use domain::{Domain, fire, live_task, max_out, step, task_stub};
 pub use facts::Fact;
 pub use failures::{Class, Retries, Retry, Tries};
 pub use funders::{Balance, Closure};

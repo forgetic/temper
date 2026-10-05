@@ -209,6 +209,17 @@ pub fn fire(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
 pub(crate) fn record(d: &Domain, number: u64) -> Option<&TaskRecord> {
     Some(&d.tasks.get(*d.names.get(&number)?).expect("name indexes live task").record)
 }
+/// Borrow the live task for a parent's read or cross-domain decision. The
+/// parent cannot change it except by a tasks event.
+#[must_use]
+pub fn live_task(d: &Domain, number: u64) -> Option<&TaskRecord> {
+    record(d, number)
+}
+/// A bounded summary; complete ended records remain in the parent's store.
+#[must_use]
+pub fn task_stub(d: &Domain, number: u64) -> Option<&Stub> {
+    d.stubs.get(&number)
+}
 pub(crate) fn task_mut(d: &mut Domain, number: u64) -> Option<&mut Task> {
     let id = *d.names.get(&number)?;
     Some(d.tasks.get_mut(id).expect("name indexes live task"))

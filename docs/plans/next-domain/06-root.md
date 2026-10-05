@@ -332,6 +332,14 @@ step 07.
    ancestors first. The existing brief world's seeds retain their source
    distribution; dedicated task worlds add replay, facts and randomized
    bounds/terminal-race coverage. This seam alone is not the walking skeleton.
+   The root's journal is the next seam: a deployment header owns fresh
+   numbers, every writing decision saves that header in its one commit,
+   deliveries carry the last commit even when their decision wrote nothing,
+   cumulative store answers only make deliveries ready, and the ready pass
+   releases one at a time. Pressure is checked before routing a child; a
+   failed commit stops all subsequent releases. The initial journal tests
+   cover these cells; child record wrappers, loads and the complete walking
+   story are still required before 06a is complete.
 2. **06b runs.** Parking and resuming from a transcript, or fresh past the
    resume limit with the tail in the brief; messages relayed only once
    committed; cancels; failures by class, backoff, holds; saved work;
