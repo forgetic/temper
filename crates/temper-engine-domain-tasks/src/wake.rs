@@ -140,6 +140,7 @@ pub(crate) fn progress(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Reques
     let numbers = snapshot(d, env.limits.tasks);
     for number in numbers.into_boxed() {
         let phase = record(d, number).expect("snapshot live").phase.clone();
+        let control_attempt = crate::run::run_attempt(&phase);
         let running = match phase {
             Phase::Active(Active::Running { attempt }) => Some(attempt),
             Phase::Waiting
@@ -196,10 +197,14 @@ pub(crate) fn progress(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Reques
             publish(d, env, number, out);
             activate(d, number, out);
         }
-        if let Some(attempt) = running {
+        if running.is_some() || control_attempt.is_some() {
             for message in eligible.into_boxed() {
                 let key = crate::MessageKey { task: number, number: message };
-                if d.offers.contains_key(&key) || (d.offers.len() == d.offers.capacity()) {
+                let control = crate::inbox::is_amendment(&d.messages.get(&key).expect("eligible row live").message);
+                let Some(attempt) = (if control { control_attempt } else { running }) else {
+                    continue;
+                };
+                if d.offers.contains_key(&key) || !crate::inbox::offer_room(d, number, control, 1) {
                     continue;
                 }
                 crate::inbox::offer(d, number, attempt, &[message], out);

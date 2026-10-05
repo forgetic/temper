@@ -92,12 +92,14 @@ fn amendments_remove_waits_and_reach_live_runs_with_immutable_merged_offers() {
         matches!(amend(&mut w, 2, person(), change), Reply::Refused(problem) if problem.why == Refusal::Dependencies)
     );
     assert_eq!(before, w.records);
-    let mut change = blank(w.number());
+    let initial = w.number();
+    let mut change = blank(initial);
     change.dependencies = Some(Box::new([]));
     change.spec = Some(Spec { words: Box::new([8]), parameters: Box::new([]), inputs: Box::new([]) });
     assert_eq!(amend(&mut w, 2, person(), change), Reply::Done);
     assert!(w.activations.contains(&2));
     w.claim(2, 1);
+    w.turn(2, 1, Some(initial));
     let first = w.number();
     let mut change = blank(first);
     change.policy = Some(tasks::WakePolicy { words: tasks::Rule::Never, ..tasks::WakePolicy::DEFAULT });
@@ -108,7 +110,7 @@ fn amendments_remove_waits_and_reach_live_runs_with_immutable_merged_offers() {
     assert_eq!(w.messages(2)[0].number, second);
     assert!(w.relays.contains_key(&(2, 1, first)));
     w.restart();
-    w.turn(2, 1, Some(first));
+    w.turn(2, 2, Some(first));
     assert_eq!(w.messages(2)[0].number, second, "reading immutable prior offer keeps replacement");
     w.cancel(1, b"end");
     w.cancel(2, b"end");
@@ -400,4 +402,167 @@ fn zero_allotment_replacement_has_its_own_once_only_closure_generation() {
     w.complete_cancel();
     assert!(w.records.contains_key(&Key::Closure { task: 2, generation: 1 }));
     assert!(w.records.contains_key(&Key::Closure { task: 2, generation: 2 }));
+}
+#[test]
+fn durable_narrowing_reissues_stops_after_the_undelivered_stop_is_lost() {
+    for started in [false, true] {
+        let mut w = World::new(15, LIMITS);
+        let mut new = task(1, &[]);
+        new.authority.tools = tasks::Tools(3);
+        w.make(Party::Person(1), vec![new]);
+        if started {
+            w.claim(1, 1);
+        } else {
+            assert!(w.activations.remove(&1));
+            let reply_to = w.to();
+            w.send(Event::Prepare { reply_to, task: 1 });
+            let reply_to = w.to();
+            w.send(Event::Claim { reply_to, task: 1, attempt: 1, readable: Box::new([]) });
+            w.runs.insert(1, 1);
+            w.observe(temper_engine_tasks_world::referee::Seen::Assigned {
+                task: 1,
+                attempt: 1,
+                after: 0,
+                adopted: false,
+            });
+        }
+        let before = w.record(1).authority.clone();
+        let mut after = before.clone();
+        after.tools = tasks::Tools(0);
+        let mut amendment = blank(w.number());
+        amendment.authorities = Box::new([AuthorityChange {
+            task: 1,
+            before,
+            after,
+            budget: 100,
+            stop_run: true,
+            message: amendment.message,
+        }]);
+        let reply_to = w.to();
+        w.stage(Event::Amend { reply_to, task: 1, authorization: person(), amendment });
+        w.durable();
+        assert!(
+            w.records.contains_key(&Key::Offer(tasks::MessageKey { task: 1, number: 1 })),
+            "control has a durable offer even before Started"
+        );
+        assert!(w.stops.is_empty(), "Stop has not escaped the durable decision yet");
+        // restart clears the pending outward Stop and all volatile prior Stop
+        // observations; only TaskRecord::narrowing can recover cancellation.
+        w.restart();
+        assert_eq!(w.stops, [(1, 1)].into_iter().collect());
+        w.terminal(1, End::Parked);
+        assert!(!w.record(1).narrowing);
+        w.cancel(1, b"end");
+        w.complete_cancel();
+    }
+}
+#[test]
+fn amendment_offers_have_separate_capacity_and_repeated_unread_controls_refuse_atomically() {
+    let mut w = World::new(16, tasks::Limits { offers: 1, ..LIMITS });
+    w.make(Party::Person(1), vec![task(1, &[])]);
+    w.claim(1, 1);
+    let ordinary = w.number();
+    w.mail_number(ordinary, 1, Party::Person(9), tasks::UserMessage::Words { words: Box::new([1]) });
+    assert!(w.relays.contains_key(&(1, 1, ordinary)));
+    let first = w.number();
+    assert_eq!(amend(&mut w, 1, person(), blank(first)), Reply::Done);
+    let second = w.number();
+    assert_eq!(amend(&mut w, 1, person(), blank(second)), Reply::Done);
+    assert!(
+        w.relays.contains_key(&(1, 1, first)) && w.relays.contains_key(&(1, 1, second)),
+        "ordinary pressure cannot defer either admitted control"
+    );
+    let before = w.records.clone();
+    let third = w.number();
+    assert!(
+        matches!(amend(&mut w, 1, person(), blank(third)), Reply::Refused(problem) if problem.why == Refusal::Busy)
+    );
+    assert_eq!(w.records, before);
+    w.restart();
+    assert_eq!(w.records.keys().filter(|key| matches!(key, Key::Offer(_))).count(), 3);
+    w.turn(1, 1, Some(first));
+    assert_eq!(w.messages(1)[0].number, second, "read of old immutable control keeps its replacement");
+    assert_eq!(amend(&mut w, 1, person(), blank(third)), Reply::Done);
+    assert!(w.relays.contains_key(&(1, 1, third)));
+    w.cancel(1, b"end");
+    w.complete_cancel();
+}
+
+#[test]
+fn independent_accounting_referee_rejects_missing_actual_task_and_external_postings() {
+    use temper_engine_tasks_world::accounting_referee::Accounting;
+    let mut w = funding_world(17, false);
+    let before = w.records.clone();
+    let plan = funded_move(&w);
+    assert_eq!(movement(&mut w, plan.clone()), Reply::Done);
+    let mut bad = w.records.clone();
+    if let Some(Stored::Live(task)) = bad.get_mut(&Key::Live(1)) {
+        task.numbers.spent_below = 0;
+    }
+    let mut judge = Accounting::default();
+    judge.reset(&before);
+    judge.begin(&plan.balances);
+    judge.emitted(plan.balances[1].funder);
+    assert_eq!(judge.committed(&bad), Err("closed spend not posted to actual task funder"));
+    // A missing child posting inside a closing generation also changes the
+    // closure total, independently of the unchanged actual funder's ledger.
+    let mut bad = w.records.clone();
+    if let Some(Stored::Closure(closure)) = bad.get_mut(&Key::Closure { task: 3, generation: 1 }) {
+        closure.spent = 10;
+    }
+    let mut judge = Accounting::default();
+    judge.reset(&before);
+    judge.begin(&plan.balances);
+    judge.emitted(plan.balances[1].funder);
+    assert_eq!(judge.committed(&bad), Err("closure lost actual descendant spend"));
+    let source = Funder::Pool { project: 1, person: 9, period: 7 };
+    let destination = Funder::Pool { project: 1, person: 9, period: 8 };
+    let mut w = World::new(18, LIMITS);
+    w.make(Party::Person(1), vec![task(1, &[])]);
+    w.make(Party::Task(1), vec![funded(2, 100, source)]);
+    w.claim(2, 1);
+    charge(&mut w, 2, 20);
+    let before = w.records.clone();
+    let plan = Movement {
+        to: Party::Person(9),
+        transfers: Box::new([Transfer { task: 2, before: source, after: destination }]),
+        balances: Box::new([
+            Balance {
+                funder: source,
+                before: Numbers { budget: 500, spent: 0, spent_below: 0, reserved: 100 },
+                after: Numbers { budget: 500, spent: 0, spent_below: 20, reserved: 0 },
+            },
+            Balance {
+                funder: destination,
+                before: Numbers { budget: 500, spent: 0, spent_below: 0, reserved: 0 },
+                after: Numbers { budget: 500, spent: 0, spent_below: 0, reserved: 80 },
+            },
+        ]),
+        reason: Box::new([]),
+    };
+    assert_eq!(movement(&mut w, plan.clone()), Reply::Done);
+    for fault in 0..3 {
+        let mut bad = w.records.clone();
+        let funder = if fault == 2 { destination } else { source };
+        if let Some(Stored::Funding { numbers, .. }) = bad.get_mut(&Key::Funding(funder)) {
+            match fault {
+                0 => numbers.spent_below = 0,
+                1 => numbers.reserved = 1,
+                2 => numbers.reserved = 79,
+                _ => unreachable!(),
+            }
+        }
+        let mut judge = Accounting::default();
+        judge.reset(&before);
+        judge.begin(&plan.balances);
+        judge.emitted(source);
+        judge.emitted(destination);
+        assert!(judge.committed(&bad).is_err(), "actual external funder fault {fault}");
+    }
+    let mut judge = Accounting::default();
+    judge.reset(&before);
+    judge.begin(&plan.balances);
+    judge.emitted(source);
+    judge.emitted(destination);
+    assert!(judge.committed(&w.records).is_ok(), "independent external arithmetic accepts intact rows");
 }

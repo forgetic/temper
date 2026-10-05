@@ -439,7 +439,12 @@ this list includes every delegation ceiling changed by the amendment and
 marks the live runs whose grants cannot honour the new authority. Dependencies
 can only be removed while waiting. Each affected executor receives a durable,
 merged amendment message in a separate reserved control slot, preserving the
-ordinary inbox's existing capacity. Immutable prior offers stay readable.
+ordinary inbox's existing capacity. Offers reserve two separate immutable
+control slots per task as well; ordinary offer saturation cannot delay an
+admitted amendment. A third unread live amendment refuses `Busy` before any
+mutation until a read or terminal frees a control slot. Immutable prior offers
+stay readable. Durable narrowing reissues `Stop` after restart, including a
+cut after its commit but before the first `Stop` delivery.
 
 Moves validate the complete future requester wait graph, project, depth,
 lifetime tree bounds, references, terminal result credit and tracked goals.

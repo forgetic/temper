@@ -108,6 +108,7 @@ impl Inbox {
         let mut questions = 0;
         let mut subscriptions = 0;
         let mut offers = 0;
+        let mut control_offers = BTreeMap::<u64, usize>::new();
         for (key, row) in rows {
             if *key != row.key() {
                 return Err("stored row key mismatch");
@@ -137,7 +138,11 @@ impl Inbox {
                     }
                 }
                 Stored::Offer(offer) => {
-                    offers += 1;
+                    if matches!(offer.envelope.message, Message::Amendment { .. }) {
+                        *control_offers.entry(offer.envelope.task).or_default() += 1;
+                    } else {
+                        offers += 1;
+                    }
                     let task = live.get(&offer.envelope.task).ok_or("offer recipient ended")?;
                     if task.attempt != offer.attempt || offer.attempt == 0 || offer.envelope.number > task.last_message
                     {
@@ -189,7 +194,8 @@ impl Inbox {
                 | Stored::ArchivedMessage(_) => {}
             }
         }
-        if offers > l.offers as usize
+        if control_offers.values().any(|count| *count > 2)
+            || offers > l.offers as usize
             || questions > l.questions as usize
             || subscriptions > l.subscriptions as usize
             || receipts + questions > l.receipts as usize

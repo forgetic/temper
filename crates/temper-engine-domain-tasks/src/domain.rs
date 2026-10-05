@@ -58,7 +58,7 @@ impl Domain {
             wakes: Deadlines::with_capacity(l.tasks),
             timers: Deadlines::with_capacity(l.subscriptions),
             messages: Map::with_capacity(crate::inbox::capacity(l).expect("valid message capacity")),
-            offers: Map::with_capacity(l.offers),
+            offers: Map::with_capacity(crate::inbox::offer_capacity(l).expect("valid control offer capacity")),
             receipts: Map::with_capacity(l.receipts),
             questions: Map::with_capacity(l.questions),
             subscriptions: Map::with_capacity(l.subscriptions),
@@ -100,7 +100,7 @@ pub(crate) fn output_bound(l: &Limits) -> Option<u32> {
         .checked_add(l.stubs.checked_mul(2)?)?
         .checked_add(l.batch.checked_mul(2)?)?
         .checked_add(crate::inbox::capacity(l)?.checked_mul(4)?)?
-        .checked_add(l.offers.checked_mul(3)?)?
+        .checked_add(crate::inbox::offer_capacity(l)?.checked_mul(3)?)?
         .checked_add(l.subscriptions.checked_mul(4)?)?
         .checked_add(l.questions.checked_mul(2)?)?
         .checked_add(8)

@@ -228,20 +228,46 @@ pub(crate) fn claimable(d: &Domain, task: u64, readable: &[u64]) -> bool {
     if readable.len() > usize::try_from(d.messages.capacity()).expect("u32 fits usize") {
         return false;
     }
-    let mut needed = 0_u32;
+    let mut ordinary = 0_u32;
+    let mut controls = 0_u32;
     for (at, number) in readable.iter().enumerate() {
-        if !d.messages.contains_key(&MessageKey { task, number: *number }) {
+        let Some(envelope) = d.messages.get(&MessageKey { task, number: *number }) else {
             return false;
-        }
+        };
         for earlier in readable.iter().take(at) {
             if earlier == number {
                 return false;
             }
         }
-        needed = needed.saturating_add(1);
+        if is_amendment(&envelope.message) {
+            controls = controls.saturating_add(1);
+        } else {
+            ordinary = ordinary.saturating_add(1);
+        }
     }
-    d.offers.capacity().saturating_sub(d.offers.len()) >= needed
+    offer_room(d, task, false, ordinary) && offer_room(d, task, true, controls)
 }
+/// Two immutable control offers per task: its current amendment and one prior
+/// merged payload. A third amendment refuses at its entrance until a read or
+/// terminal frees room, while ordinary offer pressure cannot delay a control.
+pub(crate) fn offer_capacity(l: &Limits) -> Option<u32> {
+    l.offers.checked_add(l.tasks.checked_mul(2)?)
+}
+pub(crate) fn offer_room(d: &Domain, task: u64, control: bool, extra: u32) -> bool {
+    let mut used = 0_u32;
+    for (_, offer) in &d.offers {
+        if control {
+            if offer.envelope.task == task && is_amendment(&offer.envelope.message) {
+                used = used.saturating_add(1);
+            }
+        } else if !is_amendment(&offer.envelope.message) {
+            used = used.saturating_add(1);
+        }
+    }
+    let cap = if control { 2 } else { d.offers.capacity().saturating_sub(d.tasks.capacity().saturating_mul(2)) };
+    used.saturating_add(extra) <= cap
+}
+
 pub(crate) fn offer(d: &mut Domain, task: u64, attempt: u64, numbers: &[u64], out: &mut Queue<Request>) {
     for number in numbers {
         let key = MessageKey { task, number: *number };
@@ -516,7 +542,13 @@ pub(crate) fn links(d: &Domain, env: &Env<Limits>) -> bool {
     if d.receipts.len().saturating_add(d.questions.len()) > env.limits.receipts {
         return false;
     }
+    if !offer_room(d, 0, false, 0) {
+        return false;
+    }
     for (number, _) in &d.names {
+        if !offer_room(d, *number, true, 0) {
+            return false;
+        }
         if !room(d, &env.limits, *number, 0, 0) {
             return false;
         }

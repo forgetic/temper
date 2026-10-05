@@ -328,6 +328,9 @@ pub(crate) fn restored(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Reques
             }
             Phase::Active(Active::Claimed { attempt } | Active::Running { attempt }) => {
                 out.push(Request::Adopt { task: number, attempt });
+                if record(d, number).expect("restored task live").narrowing {
+                    out.push(Request::Stop { task: number, attempt });
+                }
             }
             Phase::Active(Active::BackingOff { .. }) => publish(d, env, number, out),
             Phase::Closing(closing) => match closing.stage {

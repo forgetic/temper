@@ -276,6 +276,38 @@ impl World {
         }
     }
     pub fn stage(&mut self, event: Event) {
+        match &event {
+            Event::Move { movement, .. } => self.accounting_referee.begin(&movement.balances),
+            Event::Amend { amendment, .. } => self.accounting_referee.begin(&amendment.balances),
+            Event::Control { .. }
+            | Event::Charge { .. }
+            | Event::Turn { .. }
+            | Event::Make { .. }
+            | Event::Prepare { .. }
+            | Event::Claim { .. }
+            | Event::Send { .. }
+            | Event::Peek { .. }
+            | Event::DeliverResult { .. }
+            | Event::DeliverNotice { .. }
+            | Event::DeliverTimer { .. }
+            | Event::News { .. }
+            | Event::ForgetReceipt { .. }
+            | Event::Introduce { .. }
+            | Event::ForgetReference { .. }
+            | Event::Subscribe { .. }
+            | Event::Unsubscribe { .. }
+            | Event::Started { .. }
+            | Event::Activation { .. }
+            | Event::PreparationFailed { .. }
+            | Event::Hold { .. }
+            | Event::Release { .. }
+            | Event::Cancel { .. }
+            | Event::Settled { .. }
+            | Event::RememberStub { .. }
+            | Event::ForgetStub { .. }
+            | Event::Restore { .. }
+            | Event::Restored => self.accounting_referee.begin(&[]),
+        }
         assert!(self.pending.is_empty(), "one parent decision at a time");
         let read = match &event {
             Event::Turn { task, attempt, turn, read, .. } => {
@@ -346,6 +378,9 @@ impl World {
             match request {
                 Request::Save { record } => {
                     self.records.insert(record.key(), record.clone());
+                    if let Stored::Funding { funder, .. } = record {
+                        self.accounting_referee.emitted(*funder);
+                    }
                     if let Stored::History(history) = record {
                         histories.push(history.clone());
                     }

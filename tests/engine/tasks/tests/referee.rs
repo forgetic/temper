@@ -429,3 +429,30 @@ fn inbox_referee_rejects_duplicate_oversized_unready_and_future_amendment_contro
         assert!(Inbox::default().committed(&rows, &LIMITS, &[]).is_err(), "control fault {fault}");
     }
 }
+
+#[test]
+fn independent_inbox_referee_rejects_a_third_immutable_control_offer() {
+    use temper_engine_domain_tasks::{Envelope, Key, Message, Offer, Stored};
+    use temper_engine_tasks_world::{LIMITS, World, inbox_referee::Inbox, task};
+    let mut w = World::new(21, LIMITS);
+    w.make(Party::Person(1), vec![task(1, &[])]);
+    w.claim(1, 1);
+    let mut rows = w.records.clone();
+    if let Some(Stored::Live(task)) = rows.get_mut(&Key::Live(1)) {
+        task.last_message = 3;
+        task.revision = 3;
+    }
+    for number in 1..=3 {
+        let envelope = Envelope {
+            task: 1,
+            number,
+            from: Party::Person(9),
+            message: Message::Amendment { revision: number, reason: Box::new([]) },
+            at: skein_lib::Wall::EPOCH,
+            hits: 1,
+            eligible: true,
+        };
+        rows.insert(Key::Offer(envelope.key()), Stored::Offer(Offer { attempt: 1, envelope }));
+    }
+    assert!(Inbox::default().committed(&rows, &LIMITS, &[]).is_err());
+}

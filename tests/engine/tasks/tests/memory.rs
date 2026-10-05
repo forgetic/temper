@@ -385,3 +385,80 @@ fn dedicated_amendment_slots_and_bottom_up_move_scratch_fit_counted_memory() {
     });
     assert!(!m.refused, "worst-case normalization admitted");
 }
+
+#[test]
+fn saturated_ordinary_and_two_immutable_control_offers_fit_counted_memory_and_restore() {
+    let l = Limits { tasks: 1, stubs: 2, offers: 1, tree_tasks: 1, ..LIMITS };
+    let mut w = temper_engine_tasks_world::World::new(19, l);
+    w.make(Party::Person(1), vec![task(1, &[])]);
+    w.claim(1, 1);
+    w.mail(
+        1,
+        Party::Person(9),
+        tasks::UserMessage::Words { words: vec![1; l.message_bytes as usize].into_boxed_slice() },
+    );
+    let mut m = Measured::new(l);
+    for record in w.records.values() {
+        m.event(Event::Restore { record: record.clone() });
+    }
+    m.event(Event::Restored);
+    for message in 2..=4 {
+        let reply_to = m.to();
+        m.event(Event::Amend {
+            reply_to,
+            task: 1,
+            authorization: tasks::Authorization::Person { person: 9, project: 1 },
+            amendment: tasks::Amendment {
+                message,
+                spec: None,
+                policy: None,
+                dependencies: None,
+                tracked: None,
+                authorities: Box::new([]),
+                balances: Box::new([]),
+                reason: vec![1; l.message_bytes as usize].into_boxed_slice(),
+            },
+        });
+        assert_eq!(m.refused, message == 4, "third immutable control refuses before copying");
+    }
+    let reply_to = m.to();
+    m.event(Event::Turn { reply_to, task: 1, attempt: 1, turn: 1, read: Some(2) });
+    assert!(!m.refused);
+}
+
+#[test]
+fn restored_full_control_offer_partition_fits_counted_memory() {
+    let l = Limits { tasks: 1, stubs: 2, offers: 1, tree_tasks: 1, ..LIMITS };
+    let mut w = temper_engine_tasks_world::World::new(20, l);
+    w.make(Party::Person(1), vec![task(1, &[])]);
+    w.claim(1, 1);
+    w.mail(
+        1,
+        Party::Person(9),
+        tasks::UserMessage::Words { words: vec![1; l.message_bytes as usize].into_boxed_slice() },
+    );
+    for message in 2..=3 {
+        let reply_to = w.to();
+        w.send(Event::Amend {
+            reply_to,
+            task: 1,
+            authorization: tasks::Authorization::Person { person: 9, project: 1 },
+            amendment: tasks::Amendment {
+                message,
+                spec: None,
+                policy: None,
+                dependencies: None,
+                tracked: None,
+                authorities: Box::new([]),
+                balances: Box::new([]),
+                reason: vec![1; l.message_bytes as usize].into_boxed_slice(),
+            },
+        });
+    }
+    let mut m = Measured::new(l);
+    for record in w.records.values().filter(|row| !matches!(row, Stored::History(_))) {
+        m.event(Event::Restore { record: record.clone() });
+    }
+    m.event(Event::Restored);
+    assert!(!m.refused);
+}

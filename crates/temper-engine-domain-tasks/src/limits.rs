@@ -31,12 +31,14 @@ pub struct Limits {
     pub questions: u32,
     pub subscriptions: u32,
     pub receipts: u32,
+    /// Ordinary immutable offers; two additional control offers are reserved per task.
     pub offers: u32,
 }
 #[must_use]
 pub fn worst_case(l: &Limits) -> Option<u64> {
     crate::domain::output_bound(l)?;
     let messages = crate::inbox::capacity(l)?;
+    let offers = crate::inbox::offer_capacity(l)?;
     if l.tasks == 0 || l.batch == 0 || l.tree_tasks == 0 || l.stubs < l.tasks {
         return None;
     }
@@ -70,17 +72,17 @@ pub fn worst_case(l: &Limits) -> Option<u64> {
         .checked_add(Deadlines::<u64>::worst_case(l.tasks)?)?
         .checked_add(Deadlines::<u64>::worst_case(l.subscriptions)?)?
         .checked_add(Map::<crate::MessageKey, crate::Envelope>::worst_case(messages)?)?
-        .checked_add(Map::<crate::MessageKey, crate::Offer>::worst_case(l.offers)?)?
+        .checked_add(Map::<crate::MessageKey, crate::Offer>::worst_case(offers)?)?
         .checked_add(Map::<u64, crate::Receipt>::worst_case(l.receipts)?)?
         .checked_add(Map::<u64, crate::Question>::worst_case(l.questions)?)?
         .checked_add(Map::<u64, crate::Subscription>::worst_case(l.subscriptions)?)?
         .checked_add(
             u64::from(messages)
-                .checked_add(u64::from(l.offers))?
+                .checked_add(u64::from(offers))?
                 .checked_add(u64::from(l.receipts))?
                 .checked_mul(u64::from(l.message_bytes).max(u64::from(l.result_bytes).checked_mul(2)?))?,
         )?
-        .checked_add(List::<crate::MessageKey>::worst_case(messages.max(l.offers))?.checked_mul(2)?)?
+        .checked_add(List::<crate::MessageKey>::worst_case(messages.max(offers))?.checked_mul(2)?)?
         .checked_add(List::<crate::Envelope>::worst_case(messages)?)?
         .checked_add(List::<crate::Subscription>::worst_case(l.subscriptions)?)?
         .checked_add(List::<u64>::worst_case(l.references)?)?

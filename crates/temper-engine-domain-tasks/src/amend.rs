@@ -301,6 +301,9 @@ fn check(d: &Domain, l: &Limits, number: u64, amendment: &Amendment) -> Result<(
     if amendment.reason.len() > usize::try_from(l.message_bytes).expect("u32 fits usize") {
         return Err(Refusal::Reason);
     }
+    if crate::run::run_attempt(&task.phase).is_some() && !crate::inbox::offer_room(d, number, true, 1) {
+        return Err(Refusal::Busy);
+    }
     if amendment.message == 0 || amendment.message <= task.last_message {
         return Err(Refusal::Message);
     }
@@ -357,6 +360,9 @@ fn check(d: &Domain, l: &Limits, number: u64, amendment: &Amendment) -> Result<(
         }
         if !mutable(&other.phase) || other.authority != change.before {
             return Err(Refusal::State);
+        }
+        if crate::run::run_attempt(&other.phase).is_some() && !crate::inbox::offer_room(d, change.task, true, 1) {
+            return Err(Refusal::Busy);
         }
         if other.revision == u64::MAX {
             return Err(Refusal::Revision);
