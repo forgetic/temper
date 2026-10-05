@@ -60,6 +60,9 @@ place and their integration, as [README.md](README.md) states.
 | 05s2a shared revision (Smith) | merged locally; adapter open | smith 38c0590 | Gate passed; 459 focused / 3.060 s; 10 fuzzy / 2.973 s; all nine canonical Skein packages use 8b83175. |
 | 05s2a shared revision (Temper) | merged | e94e0508 | Gate passed; 2,292 focused / 6.043 s; 40 fuzzy / 24.343 s; all nine canonical Skein packages use 8b83175. |
 | 05s2a replay receiving admission | merged locally; Smith adapter open | skein 4bcfe62 | Gate passed; 1,048 focused / 2.757 s; 64 fuzzy / 16.270 s; generated replay obeys the full raw cap. |
+| 05s2a native tool identities | merged locally; Smith adapter open | skein 2c725c2 | Gate passed; 1,052 focused / 2.785 s; 64 fuzzy / 16.281 s; exact continuation and counted maximum IDs. |
+| 05s2a identity revision (Smith) | merged locally; adapter open | smith 03d1b40 | Gate passed; 459 focused / 1.739 s; 10 fuzzy / 2.962 s; all nine canonical Skein packages use 2c725c2. |
+| 05s2a identity revision (Temper) | merged | 9e86d6d4 | Gate passed; 2,292 focused / 10.339 s; 40 fuzzy / 26.092 s; all nine canonical Skein packages use 2c725c2. |
 | 02d1 actual escalation routes | merged; broader escalation open | 754ca84 | Gate passed; 2,277 focused / 5.850 s; 39 fuzzy / 24.314 s; root serial 68 / 0.393 s, 5 / 1.293 s. |
 | 03c role administration and live rerouting | merged; narrow dependency | 6dfa4d2 | Gate passed; 2,292 focused / 10.993 s; 40 fuzzy / 26.798 s; root serial 78 / 0.490 s, 6 / 1.435 s. |
 
@@ -118,6 +121,6 @@ place and their integration, as [README.md](README.md) states.
 
 ## Resume point
 
-- Active: Smith's real `skein-llm` adapter and messages/wait/parking/resume. The shared Client/peer/replay changes, generic host tools and V2 host supervision are merged; consumer adoption and copied-crate removal remain open. Smith has priority.
+- Active: Smith's real `skein-llm` adapter and messages/wait/parking/resume. The shared Client/peer/replay changes, generic host tools and V2 host supervision are merged; both consumers select the shared revision; the actual adapter gate and copied-crate removal remain open. Smith has priority.
 - Parked drafts: `next-domain/02e-depth-draft` (`a60bf1c`), `next-domain/04b2` (`0eff9dc`), `next-domain/05f` (`c33941c`). These have not passed the merge gate.
 - Shared skein revision is local and cached; fresh-machine fetches need its authorized publication. Forgejo v16.0.5 job-log client repairs remain open.
