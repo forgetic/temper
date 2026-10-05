@@ -29,7 +29,7 @@ Detailed implementation and review evidence belongs in commit messages.
 | 05c2 checkout merge state and ownership | merged | 8e94482 | Gate passed; 2,132 focused / 5.396 s; 31 fuzzy / 21.190 s. |
 | 05d worker turns and transcript lifecycle | merged | e2a6a71 | Gate passed; 2,172 focused / 6.761 s; 32 fuzzy / 25.290 s. |
 | 05e session transcripts and pricing | merged | 8b91ed3 | Gate passed; 2,187 focused / 5.116 s; 33 fuzzy / 17.917 s. |
-| 06a walking skeleton | foundation merged; story open | e74678e | Gate passed; 2,228 focused / 5.652 s; 36 fuzzy / 20.108 s. |
+| 06a walking skeleton | story merged; audit open | 429647c | Gate passed; 2,270 focused / 10.521 s; 38 fuzzy / 29.586 s; root serial 40 / 0.168 s, 3 / 0.740 s. |
 
 ## What remains open
 
@@ -67,9 +67,9 @@ Detailed implementation and review evidence belongs in commit messages.
 
 **06 — root**
 
-- Finish real routing, child record wrappers and paged restoration for the full charged story.
-- Commit and acknowledge two turns and the answer; deliver the result once across a commit-cut restart.
 - Complete the tasks route audit, documentation backfill and five style checks before resuming child depth.
+- Continue 06b–f: run, tool, people and forge routes; broader restarts and worst-case worlds.
+- Recovery after terminal commit but before ACK/result release remains owed.
 
 **07 — cutover**
 
