@@ -1,4 +1,4 @@
-use skein_lib::{Queue, Rng, Wall};
+use skein_lib::{Queue, Rng, Token, Wall};
 use std::collections::{BTreeMap, VecDeque};
 use temper_engine_domain::{
     self as root, Decision, Delivery, Deployment, Family, Journal, JournalLimits, Key, Output, Record, TurnRecord,
@@ -126,7 +126,7 @@ impl Referee {
                 if store.applied < after {
                     return Err("before durability");
                 }
-                if (channel, task, attempt, turn) != (7, 1, 1, expected) {
+                if (channel, task, attempt, turn) != (Token::new(7), 1, 1, expected) {
                     return Err("delivery order or fence");
                 }
                 self.deliveries.pop_front();
@@ -190,7 +190,7 @@ impl World {
                 .expect("bounded transcript");
         }
         decision
-            .deliver(&LIMITS, Delivery::AcknowledgeTurn { channel: 7, task: 1, attempt: 1, turn })
+            .deliver(&LIMITS, Delivery::AcknowledgeTurn { channel: Token::new(7), task: 1, attempt: 1, turn })
             .expect("delivery room");
         root::accept(&mut self.journal, &LIMITS, decision, &mut self.out).expect("reserved whole decision");
         self.observe();

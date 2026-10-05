@@ -1,4 +1,4 @@
-use skein_lib::Queue;
+use skein_lib::{Queue, Token};
 use temper_engine_domain::{self as root, Decision, Delivery, Family, Journal, Output, Record, Write};
 use temper_engine_domain_world::commits::{HEADER, LIMITS, Referee, Store, World, random};
 
@@ -28,14 +28,14 @@ fn a_lost_completion_recovers_the_whole_header_and_transcript_without_reapplying
     let mut out = Queue::with_capacity(1);
     let mut replay = Decision::new(&LIMITS);
     replay
-        .deliver(&LIMITS, Delivery::AcknowledgeTurn { channel: 7, task: 1, attempt: 1, turn: 1 })
+        .deliver(&LIMITS, Delivery::AcknowledgeTurn { channel: Token::new(7), task: 1, attempt: 1, turn: 1 })
         .expect("bounded replay acknowledgement");
     root::accept(&mut recovered, &LIMITS, replay, &mut out).expect("recovered decision room");
     assert!(out.is_empty());
     root::resume(&mut recovered, &mut out);
     assert_eq!(
         out.pop(),
-        Some(Output::Deliver(Delivery::AcknowledgeTurn { channel: 7, task: 1, attempt: 1, turn: 1 }))
+        Some(Output::Deliver(Delivery::AcknowledgeTurn { channel: Token::new(7), task: 1, attempt: 1, turn: 1 }))
     );
     assert_eq!(world.store.rows, rows);
     assert_eq!(root::fresh(&mut recovered, Family::Task), Some(2));
@@ -51,7 +51,7 @@ fn random_store_lag_replays_the_identical_trace() {
 }
 #[test]
 fn the_referee_rejects_early_duplicate_or_reordered_acknowledgements() {
-    let ack = |turn| Output::Deliver(Delivery::AcknowledgeTurn { channel: 7, task: 1, attempt: 1, turn });
+    let ack = |turn| Output::Deliver(Delivery::AcknowledgeTurn { channel: Token::new(7), task: 1, attempt: 1, turn });
     let mut judge = Referee::new();
     let mut store = Store::new();
     judge.decision(1, b"first", true, false);
@@ -61,7 +61,7 @@ fn the_referee_rejects_early_duplicate_or_reordered_acknowledgements() {
     assert_eq!(judge.observe(&mut store, ack(1)), Ok(()));
     assert_eq!(judge.observe(&mut store, ack(1)), Err("duplicate delivery"));
     assert_eq!(
-        judge.observe(&mut store, Output::Deliver(Delivery::Cancel { channel: 7, task: 1, attempt: 1 })),
+        judge.observe(&mut store, Output::Deliver(Delivery::Cancel { channel: Token::new(7), task: 1, attempt: 1 })),
         Err("delivery shape")
     );
 }

@@ -3,7 +3,7 @@ use crate::decision::{
 };
 use crate::{Deployment, Family, Key, Record, TurnRecord, Write};
 use alloc::boxed::Box;
-use skein_lib::{List, Queue, Wall};
+use skein_lib::{List, Queue, Token, Wall};
 
 const LIMITS: Limits = Limits { commits: 2, held: 8, writes: 4, deliveries: 4, transcript_bytes: 64, result_bytes: 32 };
 const DEPLOYMENT: Deployment =
@@ -27,7 +27,7 @@ fn turn(number: u32, len: u32) -> Write {
     }))
 }
 fn ack(number: u32) -> Delivery {
-    Delivery::AcknowledgeTurn { channel: 7, task: 1, attempt: 1, turn: number }
+    Delivery::AcknowledgeTurn { channel: Token::new(7), task: 1, attempt: 1, turn: number }
 }
 fn decision(number: u32) -> Decision {
     let mut d = Decision::new(&LIMITS);

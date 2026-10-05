@@ -1,7 +1,7 @@
 //! One decision, one ordered commit, bounded release (domain/engine.md, 5).
 use crate::{Deployment, Family, Key, Record, Write};
 use alloc::boxed::Box;
-use skein_lib::{List, Queue, ReplyTo};
+use skein_lib::{List, Queue, ReplyTo, Token};
 use temper_engine_domain_people as people;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -17,9 +17,9 @@ pub struct Limits {
 #[derive(PartialEq, Eq, Debug)]
 pub enum Delivery {
     Reply { to: ReplyTo, reply: people::Reply },
-    AcknowledgeTurn { channel: u64, task: u64, attempt: u64, turn: u32 },
-    Acknowledge { channel: u64, task: u64, attempt: u64 },
-    Cancel { channel: u64, task: u64, attempt: u64 },
+    AcknowledgeTurn { channel: Token, task: u64, attempt: u64, turn: u32 },
+    Acknowledge { channel: Token, task: u64, attempt: u64 },
+    Cancel { channel: Token, task: u64, attempt: u64 },
     Result { person: u64, task: u64, words: Box<[u8]> },
 }
 #[derive(PartialEq, Eq, Debug)]
