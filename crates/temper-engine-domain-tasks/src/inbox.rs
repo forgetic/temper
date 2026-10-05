@@ -153,6 +153,14 @@ pub(crate) fn send(
     } {
         return refused(to, Some(task), Refusal::Reference, out);
     }
+    let size = match &receipt.message {
+        UserMessage::Words { words } | UserMessage::Question { words } | UserMessage::Answer { words, .. } => {
+            words.len()
+        }
+    };
+    if size > usize::try_from(env.limits.message_bytes).expect("u32 fits usize") {
+        return refused(to, Some(task), Refusal::Message, out);
+    }
     let (payload, question, answered) = match &receipt.message {
         UserMessage::Words { words } => (Message::Words { words: words.clone() }, None, None),
         UserMessage::Question { words } => {
@@ -177,10 +185,6 @@ pub(crate) fn send(
             (Message::Answer { question: *question, words: words.clone() }, None, Some(*question))
         }
     };
-    let size = bytes(&payload);
-    if size > usize::try_from(env.limits.message_bytes).expect("u32 fits usize") {
-        return refused(to, Some(task), Refusal::Message, out);
-    }
     if answered.is_none() && !room(d, &env.limits, task, 1, size) {
         return refused(to, Some(task), Refusal::Inbox, out);
     }

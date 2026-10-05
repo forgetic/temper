@@ -282,3 +282,44 @@ fn saturated_inboxes_offers_receipts_questions_subscriptions_and_restore_fit() {
     let reply_to = m.to();
     m.event(Event::Release { reply_to, task: 1 });
 }
+
+#[test]
+fn rejected_words_questions_and_answers_are_not_copied_before_the_byte_check() {
+    use temper_engine_domain_tasks::{Problem, Refusal, UserMessage};
+    for kind in 0..3 {
+        let l = Limits { tasks: 2, stubs: 4, ..LIMITS };
+        let mut m = Measured::new(l);
+        m.event(Event::Restored);
+        let reply_to = m.to();
+        m.event(Event::Make { reply_to, creator: Party::Person(1), batch: Box::new([task(1, &[]), task(2, &[])]) });
+        let reply_to = m.to();
+        m.event(Event::Introduce { reply_to, by: Party::Person(1), left: 1, right: 2 });
+        let reply_to = m.to();
+        m.event(Event::Send {
+            reply_to,
+            number: 1,
+            task: 2,
+            from: Party::Task(1),
+            message: UserMessage::Question { words: Box::new([1]) },
+        });
+        let input_bytes = m.bound.checked_add(65_536).expect("small test bound");
+        let words = vec![1; usize::try_from(input_bytes).expect("small input")].into_boxed_slice();
+        let (target, from, message) = match kind {
+            0 => (2, Party::Task(1), UserMessage::Words { words }),
+            1 => (2, Party::Task(1), UserMessage::Question { words }),
+            2 => (1, Party::Task(2), UserMessage::Answer { question: 1, words }),
+            _ => unreachable!("three input shapes"),
+        };
+        let reply_to = m.to();
+        // The caller owns this already allocated input before admission.
+        // Allow it once at the measured peak, but no unbounded domain copy.
+        m.meter.start();
+        tasks::step(&mut m.d, &m.env, Event::Send { reply_to, number: 2, task: target, from, message }, &mut m.out);
+        let measured = m.meter.end();
+        let Some(Request::Refused { problem, .. }) = m.out.pop() else { panic!("oversized message refused") };
+        assert_eq!(problem, Problem { task: Some(target), why: Refusal::Message });
+        assert!(m.out.is_empty());
+        m.meter.check(measured, m.bound.checked_add(input_bytes).expect("small peak bound"), kind);
+        assert!(m.meter.held() <= m.bound, "no rejected payload retained");
+    }
+}
