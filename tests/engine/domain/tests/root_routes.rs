@@ -1133,7 +1133,14 @@ fn restored_loss_spends_a_try_only_after_a_real_durable_turn() {
             })
             .collect();
         let mut restored = Driver::new(original.store);
-        restored.settle();
+        for _ in 0..200 {
+            restored.advance(true);
+            if restored.root.ready() && restored.events.is_empty() && restored.store.pending.is_empty() {
+                break;
+            }
+        }
+        assert!(restored.root.ready() && restored.events.is_empty() && restored.store.pending.is_empty());
+        // A restored claim waits for fleet grace; it cannot be quiescent yet.
         restored.env.now = Time::from_nanos(6_000_000_000);
         restored.env.wall = Wall::from_nanos(6_000_000_000);
         engine::fire(&mut restored.root, &restored.env, &mut restored.out);
