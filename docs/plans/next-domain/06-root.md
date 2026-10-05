@@ -317,7 +317,8 @@ step 07.
 
 ## 9. Increments
 
-1. **06a the walking skeleton.** The root with `tasks` (02a, 02b),
+1. **06a the walking skeleton.** The root with `tasks` (02a, 02b, and
+   the finite funding/atomic charge seam of 02e),
    `authority` (01a to 01c), `people` (03a), the fleet (05a), the brief and
    accounts; the fake store, one scripted worker, one person. One story:
    a person signs in and starts a chat; the task is made, due, its brief
@@ -340,6 +341,14 @@ step 07.
    failed commit stops all subsequent releases. The initial journal tests
    cover these cells; child record wrappers, loads and the complete walking
    story are still required before 06a is complete.
+   Integration exposed a prerequisite missing from the original sketch:
+   02a/b carry number snapshots but do not keep the external funding ledger.
+   The charged story must use 02e's finite person pool/project period,
+   atomic carving and charged turn/answer admission. A separate precharge
+   followed by a refusing turn would commit an expense for an unaccepted
+   event. Begin brief, journal and load work beside 02c; bring the funding
+   seam forward before running the complete story. The root never keeps a
+   second copy of the child's funding ledger.
 2. **06b runs.** Parking and resuming from a transcript, or fresh past the
    resume limit with the tail in the brief; messages relayed only once
    committed; cancels; failures by class, backoff, holds; saved work;

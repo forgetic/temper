@@ -373,6 +373,13 @@ When an agent task is due (tasks.md, 5.2), the root:
   spend and with the messages up to that one taken, then acknowledges
   it. A worker keeps each turn until it is acknowledged, and a run with
   too many unacknowledged turns waits (worker.md, section 8).
+  Admission is whole: the task hub validates the attempt, turn and offered
+  read-through before changing its cumulative spend or funding ledger.
+  A refused turn changes neither; a duplicate accepted turn changes neither
+  again. Authority supplies arithmetic over snapshots; the hub owns and
+  saves the actual finite funding links and numbers. The root gathers those
+  saves with the opaque transcript into the same commit. It never precharges
+  an event in a separate hub operation or maintains a duplicate pool ledger.
 - **The engine never looks inside.** A turn is bytes of the agent's own
   conversation vocabulary, bounded, which the web's protocol layer
   renders. The domain reads only its size, its spend and what it took.
