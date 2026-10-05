@@ -828,7 +828,7 @@ fn check_full_policy_memory() {
 #[test]
 fn escalation_fallback_requires_accept_and_decide_but_not_direct_release() {
     let mut domain = domain();
-    for missing in 0..3 {
+    for missing in 0_u32..3 {
         let mut selected = policy(authority());
         selected.escalation_role = Some(7);
         match missing {

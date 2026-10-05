@@ -331,7 +331,7 @@ pub struct EscalationDecisionRecord {
     pub revision: u64,
     /// Positive authenticated winning person (domain/engine.md, 7.7).
     pub by: u64,
-    /// Exact accepted bounded choice; rejection reason fits journal result_bytes/transcript_bytes
+    /// Exact accepted bounded choice; rejection reason fits journal `result_bytes`/`transcript_bytes`
     /// and both child bounds before mutation (domain/engine.md, 7.7).
     pub decision: temper_engine_domain_people::EscalationDecision,
 }

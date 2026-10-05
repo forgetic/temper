@@ -96,7 +96,7 @@ pub struct Verdict {
     /// Distinct permitted choice code within its contract. (domain/tasks.md, sections 3, 5.6 and
     /// 14).
     pub code: u32,
-    /// Maximum word bytes for this choice, no greater than `Limits::result_bytes`.
+    /// Maximum word bytes for this choice, no greater than `Limits::`result_bytes``.
     /// (domain/tasks.md, sections 3, 5.6 and 14).
     pub words: u32,
 }
@@ -653,7 +653,7 @@ pub enum Accepted {
 #[derive(PartialEq, Eq, Debug)]
 pub enum Event {
     /// Root queries one bounded held view for actual named reads/decisions;
-    /// returns one EscalationInspected, including absent (domain/tasks.md, 15).
+    /// returns one `EscalationInspected`, including absent (domain/tasks.md, 15).
     InspectEscalation {
         /// Root-owned synchronous correlation, echoed once (domain/tasks.md, 15).
         reply_to: ReplyTo,
@@ -671,7 +671,7 @@ pub enum Event {
         holder: crate::EscalationHolder,
     },
     /// Root has authenticated the current recipient and checked authority;
-    /// one EscalationDecided terminal follows (domain/tasks.md, 15).
+    /// one `EscalationDecided` terminal follows (domain/tasks.md, 15).
     DecideEscalation {
         /// Root-owned correlation owed one semantic terminal (domain/tasks.md, 15).
         reply_to: ReplyTo,
@@ -873,7 +873,7 @@ pub enum Request {
         /// (domain/tasks.md, 15).
         context: Box<crate::EscalationContext>,
     },
-    /// Terminal for one InspectEscalation; query owns no durable task copy
+    /// Terminal for one `InspectEscalation`; query owns no durable task copy
     /// (domain/tasks.md, 15).
     EscalationInspected {
         /// Echoed root correlation, consumed once (domain/tasks.md, 15).

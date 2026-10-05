@@ -408,11 +408,14 @@ fn authenticated_escalation_decisions_route_without_membership_and_io_pressure_i
     test.signin(1, 10, identity(0, 1));
     let ask = Ask::DecideEscalation { project: 1, task: 9, revision: 2, decision: EscalationDecision::Pass };
     let routed = test.request(10, 2, ask.clone());
-    assert!(
-        routed
-            .iter()
-            .any(|row| matches!(row, Request::Route { person: 1, role: None, ask: routed, .. } if *routed == ask))
-    );
+    assert!(routed.iter().any(|row| match row {
+        Request::Route { person, role, ask: routed, .. } => *person == 1 && role.is_none() && *routed == ask,
+        Request::Reply { .. }
+        | Request::Save { .. }
+        | Request::Erase { .. }
+        | Request::RolesRefused { .. }
+        | Request::RestoreRefused { .. } => false,
+    }));
     let request = route(&routed);
     assert_eq!(
         reply(&test.send(Event::Decided { request, outcome: Outcome::Refused(Refusal::Busy) })),

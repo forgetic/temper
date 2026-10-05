@@ -59,7 +59,7 @@ pub enum Escalation {
         revision: u64,
         /// Authenticated person reported by root (domain/tasks.md, 15).
         by: u64,
-        /// Rejection words, at most task result_bytes (domain/tasks.md, 15).
+        /// Rejection words, at most task `result_bytes` (domain/tasks.md, 15).
         reason: Box<[u8]>,
     },
 }
@@ -87,7 +87,7 @@ pub enum EscalationDecision {
     Release,
     /// Decide once while leaving the task held (domain/tasks.md, 15).
     Reject {
-        /// At most result_bytes, checked before mutation (domain/tasks.md, 15).
+        /// At most `result_bytes`, checked before mutation (domain/tasks.md, 15).
         reason: Box<[u8]>,
     },
     /// Persist the root-verified final policy role and advance revision; a role
@@ -137,7 +137,7 @@ pub struct EscalationContext {
     /// Preserved semantic hold reason (domain/tasks.md, 15).
     pub why: Hold,
     /// Exactly one bounded current revision/status; rejection owns at most
-    /// result_bytes (domain/tasks.md, 15).
+    /// `result_bytes` (domain/tasks.md, 15).
     pub escalation: Escalation,
 }
 
