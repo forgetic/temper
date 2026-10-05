@@ -1,8 +1,10 @@
 # Migration status
 
-Local branches only; nothing has been pushed. Counts below are the full
-workspace gate at the listed tip; fuzzy runs retain one ignored finding.
+Paused at the user’s request after merging the ready work into this checkout’s
+main. Local branches only; nothing has been pushed. Counts below are the full
+workspace gate at the listed source tip; fuzzy runs retain one ignored finding.
 Detailed implementation and review evidence belongs in commit messages.
+The focused fixture gate skips its two explicit regeneration tests.
 
 | Increment | State | Commit | Evidence |
 |---|---|---|---|
@@ -31,6 +33,10 @@ Detailed implementation and review evidence belongs in commit messages.
 | 05e session transcripts and pricing | merged | 8b91ed3 | Gate passed; 2,187 focused / 5.116 s; 33 fuzzy / 17.917 s. |
 | 06a walking skeleton | story merged | 429647c | Gate passed; 2,270 focused / 10.521 s; 38 fuzzy / 29.586 s; root serial 40 / 0.168 s, 3 / 0.740 s. |
 | 06a tasks boundary audit | merged | c6d07ef | Gate passed; 2,249 focused / 5.861 s; 37 fuzzy / 17.878 s; root serial 46 / 0.190 s, tasks 37 / 0.167 s. |
+| Boundary style | merged | 5ca23b7 | Gate passed; 2,249 focused / 8.630 s; 37 fuzzy / 27.153 s. |
+| Field-doc formatting companion | merged with backfill | a718c70 | Final backfill gate; 2,249 focused / 11.273 s; 37 fuzzy / 29.489 s. |
+| Four-crate documentation backfill | merged | 6f0698a | Gate passed; 2,249 focused / 11.273 s; 37 fuzzy / 29.489 s; 33 files comment-only. |
+| Channel golden regeneration | merged | e0aa8f3 | Gate passed; 2,251 focused / 11.393 s; 37 fuzzy / 29.164 s; 218 binaries regenerate unchanged. |
 
 ## What remains open
 
@@ -39,20 +45,17 @@ Detailed implementation and review evidence belongs in commit messages.
 - Target Forgejo v16.0.5; read job logs through its API.
 - Preserve v15 observations; capture v16 log exchanges in protocol work.
 
-**01 — authority**
-
-- Backfill boundary and module documentation; implementation is complete.
+**01 — authority: complete**
 
 **02 — tasks**
 
 - Finish retired-source and recurring funding depth in 02e.
 - Restore inbox, amendment and move surface only with actual root routes.
-- Keep 02d–e parked through documentation/style gates, then resume in plan order.
+- Keep 02d–e parked until the user resumes; then follow the plan’s order.
 
 **03 — people**
 
-- Backfill boundary and module documentation.
-- Resume pages, derived inboxes and remaining increments after 06a.
+- Resume pages, derived inboxes and remaining increments in plan order.
 
 **04 — forge connector**
 
@@ -63,12 +66,10 @@ Detailed implementation and review evidence belongs in commit messages.
 **05 — runtime**
 
 - Keep 05f–g parked; preserve native run/tool work on its branch.
-- Verify documented code regeneration and drift tests for all goldens before 05g.
 - Carry remaining v2 watchdog, cancellation and kill coverage into runtime verification.
 
 **06 — root**
 
-- Complete documentation backfill and five style checks before resuming child depth.
 - Continue 06b–f: run, tool, people and forge routes; broader restarts and worst-case worlds.
 - Recovery after terminal commit but before ACK/result release remains owed.
 
@@ -82,3 +83,9 @@ Detailed implementation and review evidence belongs in commit messages.
 - Implement notes and contractions after cutover.
 - Write separate store, web, credentials, forge protocol and iteration/shell plans.
 - Implementing those lower layers remains outside this migration.
+
+## Resume point
+
+- Resume in plan order after an explicit user instruction; keep gate, independent review and legacy rules.
+- Parked drafts: `next-domain/02e-depth-draft` (`a60bf1c`), `next-domain/04b2` (`0eff9dc`), `next-domain/05f` (`c33941c`). These have not passed the merge gate.
+- Forgejo v16.0.5 job logs are API-readable; update the parked client accordingly. Terminal-commit-before-ACK/result restart coverage remains open.
