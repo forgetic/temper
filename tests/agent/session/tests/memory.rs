@@ -489,3 +489,104 @@ fn restoring_a_maximum_recorded_history_stays_within_the_counted_bound() {
     meter.check(measured, bound, limits);
     assert!(meter.held() >= limits.session_bytes);
 }
+
+#[test]
+fn an_oversized_waking_result_tail_is_refused_before_cloning_provider_ids() {
+    use temper_agent_domain_session::{
+        llm::{Message, Role},
+        record,
+    };
+    let tools = temper_agent_domain_tools::Limits {
+        kits: 1,
+        calls: 1,
+        path_bytes: 16,
+        known_files: 0,
+        file_bytes: 16,
+        read_bytes: 16,
+        list_entries: 1,
+        match_lines: 1,
+        env_bytes: 0,
+        shell_head: 0,
+        shell_tail: 0,
+        search_hits: 1,
+        search_bytes: 16,
+        facts: 0,
+        ..LIMITS.tools
+    };
+    let calls = 128_u32;
+    let id_bytes = 8192_u64;
+    let block = size(size_of::<Block>());
+    let spec_charge = 2 + size(size_of::<Descriptor>()) + block + 1;
+    let original = block + 1 + u64::from(calls) * (block + id_bytes + 2);
+    let limits = Limits { messages: 4, session_bytes: spec_charge + original, spend: u64::MAX, tools, ..LIMITS };
+    let bound = worst_case(&limits).expect("bounded restore limits");
+    let env = Env { now: Time::ZERO, wall: Wall::EPOCH, limits };
+    let mut out = Queue::with_capacity(max_out(&limits));
+    let meter = Meter::new();
+    let mut domain = Domain::new(&limits, 79);
+    let mut tail = Vec::new();
+    for call in 0..calls {
+        let mut id = bytes(id_bytes).into_vec();
+        id[..4].copy_from_slice(&call.to_le_bytes());
+        tail.push(Block::ToolCall { id: id.into(), name: bytes(1), input: bytes(1), call: Decoded::Historical });
+    }
+    let history = record::Transcript {
+        version: record::VERSION,
+        endpoint: Endpoint(7),
+        dialect: 2,
+        turns: Box::new([record::Turn {
+            version: record::VERSION,
+            endpoint: Endpoint(7),
+            dialect: 2,
+            sequence: 1,
+            usage: Usage::ZERO,
+            spent: 0,
+            messages: Box::new([
+                Message { role: Role::User, content: Box::new([Block::Text { text: bytes(1) }]) },
+                Message { role: Role::Assistant, content: tail.into() },
+            ]),
+        }]),
+        after: Box::default(),
+    };
+    let spec = Spec {
+        endpoint: Endpoint(7),
+        model: bytes(1),
+        system: bytes(1),
+        authority: authority(),
+        delegated: Box::new([Descriptor { ticket: Token::new(2), effect: Effect::Write }]),
+        prompt: bytes(1),
+        max_tokens: 1,
+        budget: limits.budget,
+    };
+    meter.start();
+    temper_agent_domain_session::step(
+        &mut domain,
+        &env,
+        Event::OpenV2 {
+            opener: Token::new(1),
+            spec: record::Opening {
+                spec,
+                dialect: 2,
+                prices: record::Prices { input: 1, cached: 1, output: 1, unit: 1 },
+                budget: 1,
+                transcript: Some(history),
+            },
+        },
+        &mut out,
+    );
+    let measured = meter.end();
+    assert_eq!(
+        out.pop(),
+        Some(Request::Ended {
+            opener: Token::new(1),
+            end: temper_agent_domain_session::End::TranscriptRefused { reason: record::Refusal::TooLarge },
+            turns: 0,
+            usage: Usage::ZERO
+        })
+    );
+    assert!(out.is_empty());
+    meter.check(measured, bound, limits);
+    domain.reclaim();
+    assert_eq!(domain.sessions(), 0);
+    assert_eq!(domain.kits(), 0);
+}

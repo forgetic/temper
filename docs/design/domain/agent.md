@@ -352,7 +352,9 @@ history are distinct `TranscriptRefused` reasons. The run treats every one
 as transient and starts its next attempt fresh (05f); the legacy run never
 opens these sessions. Committed concrete results after the last turn are
 restored before the waking prompt. An unanswered call in a yielded tail gets
-the same `NotRun` result as an ordinary continuation.
+the same `NotRun` result as an ordinary continuation. Admission counts those
+result blocks and copied provider ids before allocating waking content; the
+waking text moves into the transcript without a temporary clone.
 
 Prices are integer input, cached and output amounts per positive `unit`
 tokens (channel.md, 16). New input and cache writes use the input rate;

@@ -1235,10 +1235,12 @@ fn resumed(
     if let Some(spent) = spent(conversation, env.now) {
         return finish(End::Budget { spent });
     }
-    let content = unrun(conversation, text);
-    if conversation.transcript.room() == 0 || !charge(conversation, content_cost(&content), &env.limits) {
+    let last = conversation.transcript.last().expect("a yielded session has its assistant message");
+    let cost = unrun_cost(&last.content, &text);
+    if conversation.transcript.room() == 0 || !charge(conversation, cost, &env.limits) {
         return finish(End::TranscriptFull);
     }
+    let content = unrun(conversation, text);
     conversation.transcript.push(Message { role: Role::User, content }).expect("checked for room above");
     call(conversation, id, 0, env, out)
 }
@@ -1920,9 +1922,36 @@ fn restore(
 ) -> Result<u32, crate::record::Refusal> {
     use crate::record::Refusal;
     let (sequence, mut bytes) = validate_transcript(conversation, &transcript, dialect, limits)?;
-    let prompt = conversation.transcript.get(0).expect("admission held the initial prompt").clone();
+    let prompt = conversation.transcript.get(0).expect("admission held the initial prompt");
     let prompt_charge = content_cost(&prompt.content).ok_or(Refusal::TooLarge)?;
-    conversation.transcript.clear();
+    let last = match transcript.after.last() {
+        Some(last) => last,
+        None => transcript
+            .turns
+            .last()
+            .expect("validated nonempty history")
+            .messages
+            .last()
+            .expect("validated nonempty turn"),
+    };
+    let added = match last.role {
+        Role::Assistant => unrun_cost(&last.content, initial_text(prompt)).ok_or(Refusal::TooLarge)?,
+        Role::User => prompt_charge,
+    };
+    // An unanswered yielded tail needs concrete NotRun blocks and copied ids.
+    // Account all of them before moving history or allocating waking content.
+    bytes = bytes.checked_sub(prompt_charge).ok_or(Refusal::TooLarge)?;
+    bytes = bytes.checked_add(added).ok_or(Refusal::TooLarge)?;
+    if bytes > limits.session_bytes {
+        return Err(Refusal::TooLarge);
+    }
+    // Move the waking prompt: cloning its potentially large text before
+    // clearing the initial transcript would also exceed the bounded staging.
+    let initial = mem::replace(&mut conversation.transcript, List::with_capacity(limits.messages));
+    let mut initial = initial.into_boxed().into_iter();
+    let prompt = initial.next().expect("admission held the initial prompt");
+    assert!(initial.next().is_none(), "admission holds exactly one user message");
+    drop(initial);
     for turn in transcript.turns {
         for message in turn.messages {
             conversation.transcript.push(message).expect("history counted before allocation");
@@ -1931,32 +1960,47 @@ fn restore(
     for message in transcript.after {
         conversation.transcript.push(message).expect("history counted before allocation");
     }
-    // The first user message belongs to the original activation.
-    if conversation.transcript.get(0).expect("nonempty history").role != Role::User {
-        return Err(Refusal::Malformed);
-    }
     let last = conversation.transcript.last().expect("nonempty history");
     let content = match last.role {
         Role::Assistant => {
-            // The resumed prompt also resolves any calls in a yielded answer
-            // that were not run, exactly as Continue does within an activation.
-            let text = text_of(&prompt.content);
+            let mut blocks = prompt.content.into_iter();
+            let text = match blocks.next().expect("admission's initial text") {
+                Block::Text { text } => text,
+                Block::Opaque { .. } | Block::ToolCall { .. } | Block::ToolResult { .. } => {
+                    unreachable!("admission constructs one text block")
+                }
+            };
             unrun(conversation, text)
         }
         Role::User => prompt.content,
     };
-    let old = conversation.transcript.len();
-    // Count the concrete NotRun ids added above as well as the new text.
-    let added = content_cost(&content).ok_or(Refusal::TooLarge)?;
-    // `bytes` already includes the fresh prompt; replace its charge.
-    bytes = bytes.checked_sub(prompt_charge).ok_or(Refusal::TooLarge)?;
-    bytes = bytes.checked_add(added).ok_or(Refusal::TooLarge)?;
-    if bytes > limits.session_bytes || old >= limits.messages {
-        return Err(Refusal::TooLarge);
-    }
     conversation.transcript.push(Message { role: Role::User, content }).expect("one prompt reserved");
     conversation.bytes = bytes;
     Ok(sequence)
+}
+
+fn initial_text(prompt: &Message) -> &[u8] {
+    match prompt.content.first().expect("admission's initial text") {
+        Block::Text { text } => text,
+        Block::Opaque { .. } | Block::ToolCall { .. } | Block::ToolResult { .. } => {
+            unreachable!("admission constructs one text block")
+        }
+    }
+}
+
+/// The waking user message plus a `NotRun` result for every unanswered call.
+/// Counts the eventual concrete blocks and copied provider ids without owning
+/// any of them, so a refusal allocates no tail-sized scratch.
+fn unrun_cost(content: &[Block], text: &[u8]) -> Option<u64> {
+    let block = u64::try_from(size_of::<Block>()).ok()?;
+    let mut cost = block.checked_add(len(text)?)?;
+    for part in content {
+        match part {
+            Block::ToolCall { id, .. } => cost = cost.checked_add(block)?.checked_add(len(id)?)?,
+            Block::Opaque { .. } | Block::Text { .. } | Block::ToolResult { .. } => {}
+        }
+    }
+    Some(cost)
 }
 
 fn validate_recorded(message: &Message) -> Result<(), crate::record::Refusal> {

@@ -382,16 +382,20 @@ fn the_limits_fit_and_a_session_must_take_what_the_run_asks() {
 
 #[test]
 fn what_an_entry_point_may_emit_grows_with_the_tools_cancels_only_once() {
-    assert_eq!(max_out(&LIMITS), 145);
+    assert_eq!(max_out(&LIMITS), 287);
     // A kit's close cancels as many operations as the tools run, which go out
     // to io and lead nowhere else: what the run is sent does not grow with
     // them.
     let tools = tools::Limits { calls: 256, ..LIMITS.session.tools };
     let wide = Limits { session: session::Limits { parallel_tools: 8, tools, ..LIMITS.session }, ..LIMITS };
-    assert_eq!(max_out(&wide), 6007);
+    // Four session records plus eight delegated calls may reach the run;
+    // each can open/say at most MAX_OUT sessions. The kit's io cancels do not.
+    assert_eq!(limits::session_steps(&wide), 25);
+    assert_eq!(max_out(&wide), 7301);
     let wider =
         Limits { session: session::Limits { tools: tools::Limits { calls: 512, ..tools }, ..wide.session }, ..wide };
-    assert_eq!(max_out(&wider) - max_out(&wide), 21 * 256, "a kit's cancels for each session step");
+    assert_eq!(limits::run_out(&wider), limits::run_out(&wide), "io cancels never multiply run hand-offs");
+    assert_eq!(max_out(&wider) - max_out(&wide), 25 * 256, "one additional kit cancel per session step");
 }
 
 #[test]

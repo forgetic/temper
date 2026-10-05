@@ -220,8 +220,11 @@ fn committed_call_results_after_a_yield_are_restored_without_tickets() {
 
 #[test]
 fn replay_and_facts_capacity_change_no_decision() {
-    assert_eq!(scenario(19, 256).trace, scenario(19, 256).trace);
-    assert_eq!(scenario(19, 256).trace, scenario(19, 0).trace);
+    let first = scenario(19, 256);
+    let replayed = scenario(19, 256);
+    assert_eq!(first.trace, replayed.trace);
+    assert_eq!(first.snapshots, replayed.snapshots, "the complete frozen domain states replay too");
+    assert_eq!(first.trace, scenario(19, 0).trace);
 }
 
 #[test]
@@ -293,4 +296,87 @@ fn cumulative_child_spend_overflow_is_a_typed_failure() {
     assert_eq!(world.spend, [(16, false), (16, true)]);
     assert_eq!(world.end, Some(session::End::PriceOverflow));
     world.close();
+}
+
+#[test]
+fn owned_io_cancellation_keeps_actual_terminal_results_in_the_turn() {
+    use temper_agent_domain_tools::{Authority, Call, Done, Grants, Name, Op, Outcome, Part, Path, Repo, Version};
+    for wins in [false, true] {
+        let mut world = World::new(32, 256);
+        let mut spec = opening(None, 100);
+        let name = || Name::new(b"repo".as_slice().into()).expect("a repository mount");
+        spec.spec.authority = Authority {
+            cwd: Box::new([name()]),
+            repos: Box::new([Repo { mount: Box::new([name()]), root: Token::new(7), writable: false }]),
+            grants: Grants { inspect: true, modify: false, shell: false },
+            env: Box::default(),
+        };
+        world.open(spec);
+        world.complete(
+            Box::new([
+                llm::Block::Opaque { bytes: recorded::OPAQUE.into() },
+                llm::Block::ToolCall {
+                    id: b"owned-read".as_slice().into(),
+                    name: b"read_file".as_slice().into(),
+                    input: br#"{"path":"data"}"#.as_slice().into(),
+                    call: llm::Decoded::Owned {
+                        call: Call::Read {
+                            path: Path {
+                                absolute: false,
+                                parts: Box::new([Part::Name {
+                                    name: Name::new(b"data".as_slice().into()).expect("a file name"),
+                                }]),
+                            },
+                            skip: 0,
+                            lines: None,
+                        },
+                    },
+                },
+            ]),
+            llm::Stop::ToolUse,
+            recorded::USAGE,
+        );
+        let (owner, op) = &world.operations[0];
+        let owner = *owner;
+        let Op::Load { at, .. } = op else {
+            panic!("a read asks io to load the file");
+        };
+        assert_eq!((at.root, at.path.as_ref()), (Token::new(7), b"data".as_slice()));
+        world.step(session::Event::Close { session: world.session.expect("admitted session") });
+        assert_eq!(world.cancelled_operations, [owner]);
+        assert!(world.turns.is_empty(), "the turn waits for the owned io terminal");
+        let done = if wins {
+            Done::Loaded { content: b"file bytes\n".as_slice().into(), version: Version::new([1, 0, 0, 0]) }
+        } else {
+            Done::Cancelled
+        };
+        world.step(session::Event::Done { owner, done });
+        assert_eq!(world.end, Some(session::End::Closed));
+        assert_eq!(world.turns[0].spent, 16);
+        assert_eq!(world.turns[0].messages[1].content[0], llm::Block::Opaque { bytes: recorded::OPAQUE.into() });
+        let llm::Block::ToolResult { result: llm::Returned::Owned { outcome }, .. } =
+            &world.turns[0].messages[2].content[0]
+        else {
+            panic!("the actual owned result is recorded");
+        };
+        if wins {
+            assert_eq!(
+                *outcome,
+                Outcome::Read {
+                    content: b"file bytes\n".as_slice().into(),
+                    skipped: 0,
+                    lines: 1,
+                    total: 1,
+                    cut: false
+                }
+            );
+        } else {
+            assert_eq!(*outcome, Outcome::Cancelled);
+        }
+        let mut resumed = World::new(32, 0);
+        resumed.open(opening(Some(transcript(&world)), 100));
+        assert!(resumed.end.is_none(), "the settled owned terminal is resumable");
+        resumed.close();
+        world.close();
+    }
 }

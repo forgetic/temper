@@ -325,16 +325,21 @@ passing with the same counts.
    beside token caps; duplicate child terminals cannot charge twice. Its
    world preserves legacy scenarios and adds independent observations of
    replay, refusals, cancellation races, prices, facts and counted memory.
+   Restore pre-counts waking `NotRun` blocks and copied ids before allocation;
+   the maximum-tail negative allocator case reproduces the old overrun.
+   Owned read-IO cancellation checks both terminal winners, replay includes
+   complete frozen domain states, and the fuzzy sweep asserts outcome coverage.
    The run's aggregation and the byte codec remain 05f and 05g.
 
    Session-only serial measurement, on the idle development machine with
    `cargo nextest run -p temper-agent-domain-session -p
    temper-agent-session-world --profile measure -j 1`: baseline `ae897a2`
-   ran 82 retained focused tests in **2.221 s**; the 05e source candidate
-   `cf5ee62` ran those plus 13 focused tests in **2.254 s**, a **+0.033 s**
+   ran 82 retained focused tests in **2.228 s**; the repaired 05e source
+   candidate `0497442` ran those plus 15 focused tests in **2.247 s**, a **+0.019 s**
    delta. Selecting fuzzy binaries with `--ignore-default-filter -E
-   'binary(/^fuzzy_/)'`, the retained one test took **0.641 s** and the
-   candidate's two took **0.653 s**, a **+0.012 s** delta. The added sweep
+   'binary(/^fuzzy_/)'`, the retained one test took **0.643 s** and the
+   candidate's two took **0.643 s**, a **+0.000 s** delta at the reported
+   precision. The added sweep
    covers 64 priced child-terminal/closing races. No retained scenario or
    sweep was trimmed. These are scoped serial costs; the full workspace
    gate still enforces the shared 15/60-second limits.

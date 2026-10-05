@@ -43,6 +43,11 @@ pub struct World {
     pub session: Option<Token>,
     pub completing: Option<Token>,
     pub delegated: Vec<Token>,
+    pub operations: Vec<(Token, temper_agent_domain_tools::Op)>,
+    pub cancelled_operations: Vec<Token>,
+    /// Complete deterministic state snapshots at loop boundaries, separate
+    /// from the referee's external observations.
+    pub snapshots: Vec<String>,
     pub prompts: Vec<llm::Prompt>,
     pub turns: Vec<record::Turn>,
     pub spend: Vec<(u64, bool)>,
@@ -65,6 +70,9 @@ impl World {
             session: None,
             completing: None,
             delegated: vec![],
+            operations: vec![],
+            cancelled_operations: vec![],
+            snapshots: vec![],
             prompts: vec![],
             turns: vec![],
             spend: vec![],
@@ -87,11 +95,18 @@ impl World {
                     self.delegated.iter().position(|pending| pending == owner).expect("one terminal per delegate");
                 self.delegated.remove(position);
             }
+            session::Event::Done { owner, .. } => {
+                let position = self
+                    .operations
+                    .iter()
+                    .position(|(pending, _)| pending == owner)
+                    .expect("one terminal per owned operation");
+                self.operations.remove(position);
+            }
             session::Event::Open { .. }
             | session::Event::OpenV2 { .. }
             | session::Event::Continue { .. }
             | session::Event::Close { .. }
-            | session::Event::Done { .. }
             | session::Event::Answered { .. } => {}
         }
         self.domain.reclaim();
@@ -128,12 +143,18 @@ impl World {
                 | session::Request::Used { .. }
                 | session::Request::Cancel { .. }
                 | session::Request::Withdraw { .. } => {}
-                session::Request::Io { .. } | session::Request::CancelIo { .. } => {
-                    panic!("the scenario has no owned operations")
+                session::Request::Io { owner, op, .. } => {
+                    assert!(!self.operations.iter().any(|(pending, _)| pending == &owner));
+                    self.operations.push((owner, op));
+                }
+                session::Request::CancelIo { owner } => {
+                    assert!(self.operations.iter().any(|(pending, _)| pending == &owner));
+                    self.cancelled_operations.push(owner);
                 }
             }
         }
         while self.domain.pop_fact().is_some() {}
+        self.snapshots.push(format!("{:?}", self.domain));
     }
 
     pub fn open(&mut self, opening: record::Opening) {
@@ -155,7 +176,7 @@ impl World {
         assert_eq!(self.domain.sessions(), 0);
         assert_eq!(self.domain.runs(), 0);
         assert_eq!(self.domain.kits(), 0);
-        assert!(self.completing.is_none() && self.delegated.is_empty());
+        assert!(self.completing.is_none() && self.delegated.is_empty() && self.operations.is_empty());
     }
 }
 

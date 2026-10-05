@@ -689,11 +689,18 @@ Focused cases cover fresh v2 admission, transcript identity/structure/size
 and unresolved-ticket refusals before effects, concrete committed results
 after a turn, unanswered yielded calls, per-completion rounding, overflow,
 child spend exactly once before and after reclaim, and cancellation races.
-The same observations replay and remain identical with facts disabled.
+Owned-tool cases close with read IO outstanding and check both cancellation
+and completion winning, preserving the actual terminal result in the turn.
+The same observations and complete frozen domain states replay; observations
+remain identical with facts disabled.
 The counting allocator also fills a v2 delegated transcript and restores
 concrete history exactly to their byte cap, counting the turn and provider
 copies at emission against the session's declared worst case. The bound
 includes the record envelopes while incoming messages move into the session's
 bounded transcript list. A separate fuzzy test varies token counts,
 child spend, concrete result sizes and the closing/terminal races over 64
-seeds. It adds no runtime-system scenario and changes no legacy case.
+seeds, asserting that every terminal race and both unit-cap outcomes occur.
+A counted negative restore fills the last assistant message with 128 unique
+historical calls and large provider ids, then leaves no room for waking
+`NotRun` results. It requires refusal before allocating that tail's copied
+ids. It adds no runtime-system scenario and changes no legacy case.
