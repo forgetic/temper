@@ -272,7 +272,7 @@ fn deep_child_rows_and_arbitrary_internal_payloads_are_refused_before_retention(
             holdings: Box::new([people::Holding { person: 1, role: people::Role::Owner }]),
         },
         outcome: people::Outcome::RolesSet { project: 1 },
-        at: skein_lib::Wall::EPOCH,
+        at: Wall::EPOCH,
     });
     assert_eq!(
         crate::record_bytes(&roster_answer),

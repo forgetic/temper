@@ -246,6 +246,8 @@ impl World {
             | Event::Settled { .. }
             | Event::Restore { .. }
             | Event::Restored
+            | Event::InspectEscalations { .. }
+            | Event::RecheckEscalations { .. }
             | Event::InspectEscalation { .. }
             | Event::RoutedEscalation { .. }
             | Event::DecideEscalation { .. } => None,

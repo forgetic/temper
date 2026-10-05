@@ -1115,12 +1115,7 @@ fn make_chat(
     role: people::Role,
     ask: people::Ask,
 ) {
-    let role_number = match role {
-        people::Role::Owner => 0,
-        people::Role::Maintainer => 1,
-        people::Role::Member => 2,
-        people::Role::Observer => 3,
-    };
+    let role_number = escalation::role_number(role);
     let pool = tasks::Funder::Pool { project, person, period: domain.config.period };
     let pool_numbers = match domain.tasks.funding(pool) {
         Some(record) => record.numbers,
@@ -2111,15 +2106,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         return None;
     }
     let mut bytes = crate::worst_case(&limits.journal)?;
-    // Role administration owns one incoming/routed candidate and application
-    // scratch copies independently of people's pending/completed asks. Semantic
-    // inspection/recheck arrays contain Waiting contexts only (no reason bytes).
-    let roster_bytes =
-        u64::from(limits.people.holdings).checked_mul(u64::try_from(size_of::<people::Holding>()).ok()?)?;
-    bytes = bytes
-        .checked_add(roster_bytes.checked_mul(4)?)?
-        .checked_add(List::<tasks::EscalationContext>::worst_case(limits.tasks.tasks)?.checked_mul(2)?)?
-        .checked_add(u64::try_from(size_of::<tasks::EscalationContext>()).ok()?)?;
+    bytes = bytes.checked_add(role_scratch_bytes(limits)?)?;
     let cold = limits.fleet.workers;
     let hello = u64::from(limits.fleet.slots)
         .checked_mul(u64::try_from(size_of::<fleet::Hosted>()).ok()?)?
@@ -2193,6 +2180,18 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_add(Queue::<Output>::worst_case(1)?)?
         .checked_add(Queue::<loads::Request>::worst_case(1)?)?
         .checked_add(Queue::<accounts::Request>::worst_case(accounts::MAX_OUT)?)
+}
+
+fn role_scratch_bytes(limits: &Limits) -> Option<u64> {
+    // Role administration owns one incoming/routed candidate and application
+    // scratch copies independently of people's pending/completed asks. Semantic
+    // inspection/recheck arrays contain Waiting contexts only (no reason bytes).
+    let roster_bytes =
+        u64::from(limits.people.holdings).checked_mul(u64::try_from(size_of::<people::Holding>()).ok()?)?;
+    roster_bytes
+        .checked_mul(4)?
+        .checked_add(List::<tasks::EscalationContext>::worst_case(limits.tasks.tasks)?.checked_mul(2)?)?
+        .checked_add(u64::try_from(size_of::<tasks::EscalationContext>()).ok()?)
 }
 
 fn take_read(domain: &mut Domain, waiter: Token) -> Option<Read> {

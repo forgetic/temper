@@ -93,11 +93,11 @@ impl Referee {
             .iter()
             .filter_map(|write| match write {
                 Write::Save(Record::People(people::Stored::Roles { project, holdings })) => Some((*project, holdings)),
-                Write::Save(Record::People(
-                    people::Stored::Person { .. } | people::Stored::SignIn { .. } | people::Stored::Answer { .. },
-                ))
-                | Write::Save(
-                    Record::Tasks(_)
+                Write::Save(
+                    Record::People(
+                        people::Stored::Person { .. } | people::Stored::SignIn { .. } | people::Stored::Answer { .. },
+                    )
+                    | Record::Tasks(_)
                     | Record::Deployment(_)
                     | Record::Turn(_)
                     | Record::RunProof(_)
@@ -117,11 +117,11 @@ impl Referee {
                         None
                     }
                 }
-                Write::Save(Record::People(
-                    people::Stored::Person { .. } | people::Stored::SignIn { .. } | people::Stored::Roles { .. },
-                ))
-                | Write::Save(
-                    Record::Tasks(_)
+                Write::Save(
+                    Record::People(
+                        people::Stored::Person { .. } | people::Stored::SignIn { .. } | people::Stored::Roles { .. },
+                    )
+                    | Record::Tasks(_)
                     | Record::Deployment(_)
                     | Record::Turn(_)
                     | Record::RunProof(_)
@@ -158,14 +158,14 @@ impl Referee {
                     Write::Save(Record::Tasks(tasks::Stored::Live(record))) if record.number == *number => {
                         Some(record.as_ref())
                     }
-                    Write::Save(Record::Tasks(
-                        tasks::Stored::Live(_)
-                        | tasks::Stored::Ended(_)
-                        | tasks::Stored::Ledger(_)
-                        | tasks::Stored::Closure(_),
-                    ))
-                    | Write::Save(
-                        Record::People(_)
+                    Write::Save(
+                        Record::Tasks(
+                            tasks::Stored::Live(_)
+                            | tasks::Stored::Ended(_)
+                            | tasks::Stored::Ledger(_)
+                            | tasks::Stored::Closure(_),
+                        )
+                        | Record::People(_)
                         | Record::Deployment(_)
                         | Record::Turn(_)
                         | Record::RunProof(_)

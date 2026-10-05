@@ -5,7 +5,7 @@
     reason = "step tests are ordinary Rust (testing-strategy.md, section 4)"
 )]
 use crate::*;
-use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
+use skein_lib::{Duration, Env, List, Queue, ReplyTo, Time, Token, Wall};
 
 const LIMITS: Limits = Limits {
     people: 4,
@@ -63,6 +63,32 @@ impl Test {
         requests
     }
 
+    fn send_bounded(&mut self, event: Event) -> List<Request> {
+        let capacity = max_out(&self.env.limits);
+        let mut out = Queue::with_capacity(capacity);
+        step(&mut self.d, &self.env, event, &mut out);
+        let mut requests = List::with_capacity(capacity);
+        for _ in 0..capacity {
+            let Some(request) = out.pop() else {
+                break;
+            };
+            requests.push(request).expect("one bounded output snapshot");
+        }
+        assert!(out.is_empty());
+        self.d.reclaim();
+        requests
+    }
+
+    fn signin_bounded(&mut self, person: u64, sign_in: u64, identity: Identity) -> List<Request> {
+        let reply_to = self.to();
+        self.send_bounded(Event::SignedIn { reply_to, person, sign_in, identity })
+    }
+
+    fn request_bounded(&mut self, sign_in: u64, key: u8, ask: Ask) -> List<Request> {
+        let reply_to = self.to();
+        self.send_bounded(Event::Ask { reply_to, sign_in, key: [key; 16], ask })
+    }
+
     fn signin(&mut self, person: u64, sign_in: u64, identity: Identity) -> Vec<Request> {
         let reply_to = self.to();
         self.send(Event::SignedIn { reply_to, person, sign_in, identity })
@@ -105,6 +131,23 @@ fn route(rows: &[Request]) -> Token {
             | Request::RestoreRefused { .. } => None,
         })
         .expect("route emitted")
+}
+
+fn saved_answer(rows: &[Request]) -> Stored {
+    rows.iter()
+        .find_map(|row| match row {
+            Request::Save { record } => match record {
+                Stored::Answer { .. } => Some(record.clone()),
+                Stored::Person { .. } | Stored::SignIn { .. } | Stored::Roles { .. } => None,
+            },
+            Request::Reply { .. }
+            | Request::Erase { .. }
+            | Request::Route { .. }
+            | Request::RolesApplied { .. }
+            | Request::RolesRefused { .. }
+            | Request::RestoreRefused { .. } => None,
+        })
+        .expect("keyed answer saved")
 }
 
 #[test]
@@ -232,6 +275,185 @@ fn restore_order_is_independent_and_bad_or_oversized_records_refuse_start() {
         test.send(Event::Restore { record: Stored::Person { number: 1, identity: identity(0, 1) } }),
         [Request::RestoreRefused { key: Key::Person(1), refusal: Refusal::Limit }]
     );
+}
+
+#[test]
+fn actual_role_success_restores_before_identities_and_replays_after_roster_changes() {
+    let mut live = Test::new(LIMITS);
+    live.signin_bounded(1, 10, identity(0, 1));
+    live.signin_bounded(2, 20, identity(0, 2));
+    live.send_bounded(Event::Roles { project: 1, holdings: Box::new([Holding { person: 1, role: Role::Owner }]) });
+    let ask = Ask::SetRoles { project: 1, holdings: Box::new([Holding { person: 2, role: Role::Member }]) };
+    let request = route(live.request_bounded(10, 7, ask.clone()).as_slice());
+    let reply_token = live.to().into_token();
+    assert_eq!(
+        live.send_bounded(Event::ApplyRoles { reply_to: ReplyTo::new(reply_token), request }).as_slice(),
+        [
+            Request::Save {
+                record: Stored::Roles { project: 1, holdings: Box::new([Holding { person: 2, role: Role::Member }]) }
+            },
+            Request::RolesApplied { reply_to: ReplyTo::new(reply_token), request, result: Ok(()) },
+        ]
+    );
+    let outcome = Outcome::RolesSet { project: 1 };
+    let completed = live.send_bounded(Event::Decided { request, outcome });
+    assert_eq!(reply(completed.as_slice()), Reply::Outcome(outcome));
+    let mut cold = Test::new(LIMITS);
+    cold.d = Domain::new(&LIMITS, Box::new([]));
+    assert!(cold.send_bounded(Event::Restore { record: saved_answer(completed.as_slice()) }).is_empty());
+    // The historical roster differs from today's; the original owner is now an observer.
+    assert!(
+        cold.send_bounded(Event::Restore {
+            record: Stored::Roles { project: 1, holdings: Box::new([Holding { person: 1, role: Role::Observer }]) }
+        })
+        .is_empty()
+    );
+    for person in [2, 1] {
+        assert!(
+            cold.send_bounded(Event::Restore {
+                record: Stored::Person { number: person, identity: identity(0, person) }
+            })
+            .is_empty()
+        );
+    }
+    assert!(cold.send_bounded(Event::Restored).is_empty());
+    assert!(cold.d.ready());
+    cold.signin_bounded(3, 30, identity(0, 1));
+    let replayed = cold.request_bounded(30, 7, ask.clone());
+    assert_eq!(replayed.len(), 1, "replay emits no route or role write");
+    assert_eq!(reply(replayed.as_slice()), Reply::Outcome(outcome));
+    assert_eq!(cold.d.role(1, 1), Some(Role::Observer));
+    assert_eq!(cold.d.role(2, 1), None);
+    assert_eq!(reply(cold.request_bounded(30, 8, ask).as_slice()), Reply::Outcome(Outcome::Refused(Refusal::Role)));
+}
+
+#[test]
+fn restored_role_success_requires_matching_ask_kind_and_project() {
+    let key = RequestKey { person: 1, key: [7; 16] };
+    for (ask, outcome) in [
+        (Ask::SetRoles { project: 1, holdings: Box::new([]) }, Outcome::RolesSet { project: 2 }),
+        (ask(1), Outcome::RolesSet { project: 1 }),
+        (
+            Ask::DecideEscalation { project: 1, task: 9, revision: 2, decision: EscalationDecision::Pass },
+            Outcome::RolesSet { project: 1 },
+        ),
+        (Ask::SetRoles { project: 1, holdings: Box::new([]) }, Outcome::Started { task: 9 }),
+        (
+            Ask::SetRoles { project: 1, holdings: Box::new([]) },
+            Outcome::EscalationDecided { task: 9, revision: 2, by: 1, choice: EscalationChoice::Passed },
+        ),
+    ] {
+        let mut test = Test::new(LIMITS);
+        test.d = Domain::new(&LIMITS, Box::new([]));
+        assert_eq!(
+            test.send_bounded(Event::Restore { record: Stored::Answer { key, ask, outcome, at: Wall::EPOCH } })
+                .as_slice(),
+            [Request::RestoreRefused { key: Key::Answer(key), refusal: Refusal::Limit }]
+        );
+        assert!(test.send_bounded(Event::Restored).is_empty());
+        assert!(!test.d.ready());
+    }
+}
+
+#[test]
+fn restored_successful_role_rosters_require_positive_unique_people() {
+    let key = RequestKey { person: 1, key: [7; 16] };
+    for holdings in [
+        Box::from([Holding { person: 0, role: Role::Member }]),
+        Box::from([Holding { person: 2, role: Role::Owner }, Holding { person: 2, role: Role::Member }]),
+    ] {
+        let mut test = Test::new(LIMITS);
+        test.d = Domain::new(&LIMITS, Box::new([]));
+        assert_eq!(
+            test.send_bounded(Event::Restore {
+                record: Stored::Answer {
+                    key,
+                    ask: Ask::SetRoles { project: 1, holdings },
+                    outcome: Outcome::RolesSet { project: 1 },
+                    at: Wall::EPOCH,
+                }
+            })
+            .as_slice(),
+            [Request::RestoreRefused { key: Key::Answer(key), refusal: Refusal::Limit }]
+        );
+        assert!(test.send_bounded(Event::Restored).is_empty());
+        assert!(!test.d.ready());
+    }
+}
+
+#[test]
+fn restored_role_success_checks_historical_people_and_project_after_all_rows_arrive() {
+    let key = RequestKey { person: 1, key: [7; 16] };
+    for (project, person) in [(1, 99), (2, 1)] {
+        let mut test = Test::new(LIMITS);
+        test.d = Domain::new(&LIMITS, Box::new([]));
+        assert!(
+            test.send_bounded(Event::Restore {
+                record: Stored::Answer {
+                    key,
+                    ask: Ask::SetRoles { project, holdings: Box::new([Holding { person, role: Role::Member }]) },
+                    outcome: Outcome::RolesSet { project },
+                    at: Wall::EPOCH,
+                }
+            })
+            .is_empty()
+        );
+        test.send_bounded(Event::Restore { record: Stored::Person { number: 1, identity: identity(0, 1) } });
+        test.send_bounded(Event::Restore { record: Stored::Roles { project: 1, holdings: Box::new([]) } });
+        assert_eq!(
+            test.send_bounded(Event::Restored).as_slice(),
+            [Request::RestoreRefused { key: Key::Answer(key), refusal: Refusal::Unknown }]
+        );
+        assert!(!test.d.ready());
+    }
+}
+
+#[test]
+fn actual_refused_role_requests_restore_invalid_rosters_and_unknown_targets_for_replay() {
+    for (role, project, holdings, refusal) in [
+        (
+            Role::Observer,
+            1,
+            Box::from([Holding { person: 0, role: Role::Owner }, Holding { person: 0, role: Role::Member }]),
+            Refusal::Role,
+        ),
+        (Role::Owner, 2, Box::from([Holding { person: 99, role: Role::Member }]), Refusal::Unknown),
+        (Role::Owner, 1, Box::from([Holding { person: 0, role: Role::Member }]), Refusal::Limit),
+        (
+            Role::Owner,
+            1,
+            Box::from([Holding { person: 1, role: Role::Owner }, Holding { person: 1, role: Role::Member }]),
+            Refusal::Limit,
+        ),
+        (Role::Owner, 1, Box::from([Holding { person: 99, role: Role::Member }]), Refusal::Unknown),
+    ] {
+        let mut live = Test::new(LIMITS);
+        live.signin_bounded(1, 10, identity(0, 1));
+        live.send_bounded(Event::Roles { project: 1, holdings: Box::new([Holding { person: 1, role }]) });
+        let ask = Ask::SetRoles { project, holdings };
+        let mut rows = live.request_bounded(10, 7, ask.clone());
+        if role == Role::Owner && project == 1 {
+            let request = route(rows.as_slice());
+            let reply_token = live.to().into_token();
+            assert_eq!(
+                live.send_bounded(Event::ApplyRoles { reply_to: ReplyTo::new(reply_token), request }).as_slice(),
+                [Request::RolesApplied { reply_to: ReplyTo::new(reply_token), request, result: Err(refusal) }]
+            );
+            rows = live.send_bounded(Event::Decided { request, outcome: Outcome::Refused(refusal) });
+        }
+        assert_eq!(reply(rows.as_slice()), Reply::Outcome(Outcome::Refused(refusal)));
+        let mut cold = Test::new(LIMITS);
+        cold.d = Domain::new(&LIMITS, Box::new([]));
+        assert!(cold.send_bounded(Event::Restore { record: saved_answer(rows.as_slice()) }).is_empty());
+        cold.send_bounded(Event::Restore { record: Stored::Person { number: 1, identity: identity(0, 1) } });
+        // Even a refused unknown project needs no present membership row.
+        assert!(cold.send_bounded(Event::Restored).is_empty());
+        assert!(cold.d.ready());
+        cold.signin_bounded(2, 20, identity(0, 1));
+        let replayed = cold.request_bounded(20, 7, ask);
+        assert_eq!(replayed.len(), 1);
+        assert_eq!(reply(replayed.as_slice()), Reply::Outcome(Outcome::Refused(refusal)));
+    }
 }
 
 #[test]

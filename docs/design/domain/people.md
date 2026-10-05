@@ -238,6 +238,23 @@ an eligible current owner still needs Policy permission. Saved role asks own a
 bounded roster, priced independently of the current project membership row.
 Busy/NotReady remain transient, without a completed key, as in 5.1.1.
 
+On cold restore, a successful role answer must pair SetRoles with RolesSet for
+the same project. Its bounded historical roster must contain only positive,
+unique people; incompatible success variants or an invalid roster refuse
+restoration with Limit at that answer's key. After all rows arrive, Restored
+checks that the successful answer's project and every roster person exist,
+refusing Unknown at that answer's key if any reference is missing. Arrival
+order is immaterial. The original requester still needs its person record,
+but today's membership and roster need not match the historical decision:
+replay returns its outcome without applying the old roles again.
+
+Saved Refused(Role/Unknown/Limit) answers may retain zero, duplicate or unknown
+roster people, or an unknown project: those requests explain the refusal.
+Their payload bounds and requesting person reference still apply. Focused
+people step tests cover actual ApplyRoles/Decided success and refusal records,
+restoration before identities, changed membership and malformed successful
+answers (`testing-strategy.md`, sections 2.1 and 3).
+
 This implements only the role-administration dependency for live held-chat
 rerouting. Policy edits, pool administration, timed key retention, inboxes and
 broader owner requests remain later parts of 03c; no such event is exposed here.

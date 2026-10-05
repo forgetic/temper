@@ -119,10 +119,6 @@ fn preflight(
 
 /// Consume one actual people route, preflight bounded Waiting contexts and
 /// commit membership/rerouting/keyed completion together (domain/engine.md, 7.8).
-#[expect(
-    clippy::too_many_arguments,
-    reason = "one synchronous keyed operation carries its authenticated face and owned bounded candidate"
-)]
 pub(super) fn begin(
     domain: &mut Domain,
     env: &Env<Limits>,

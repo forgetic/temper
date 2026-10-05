@@ -9,7 +9,7 @@ use crate::{
     RequestKey, Role, Stored,
 };
 use alloc::boxed::Box;
-use skein_lib::{Deadlines, Env, Id, List, Map, Queue, ReplyTo, Slab, Time, Wall};
+use skein_lib::{Deadlines, Env, Id, List, Map, Queue, ReplyTo, Slab, Time, Token, Wall};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct SignIn {
@@ -195,7 +195,10 @@ pub fn max_out(limits: &Limits) -> u32 {
 /// Apply one root-issued `event` with iteration clocks and immutable configured bounds in `env`;
 /// caller reserves at least `max_out(&env.limits)` free `out` slots. Emits typed
 /// routing/persistence/replies, never IO; root completes each `Route` once and withholds replies
-/// until required atomic writes are durable. (domain/people.md, sections 2–5 and 12.1).
+/// until required atomic writes are durable. Restore admission validates role-success shape;
+/// `Restored` checks its project/person references without rechecking current membership or
+/// requiring the historical roster to equal the current one. Refused role asks retain their
+/// invalid targets for keyed replay. (domain/people.md, sections 2–5, 5.1.3 and 12.1).
 pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     match event {
         Event::ApplyRoles { reply_to, request } => {
@@ -464,6 +467,36 @@ fn valid_ask(limits: &Limits, ask: &Ask) -> bool {
     }
 }
 
+fn valid_answer_shape(ask: &Ask, outcome: Outcome) -> bool {
+    match outcome {
+        Outcome::RolesSet { project: answered } => match ask {
+            Ask::SetRoles { project, holdings } => {
+                if *project != answered {
+                    return false;
+                }
+                for (at, holding) in holdings.iter().enumerate() {
+                    if holding.person == 0 {
+                        return false;
+                    }
+                    for earlier in holdings.get(..at).expect("enumerated holding position is in bounds") {
+                        if earlier.person == holding.person {
+                            return false;
+                        }
+                    }
+                }
+                true
+            }
+            Ask::StartChat { .. } | Ask::DecideEscalation { .. } => false,
+        },
+        Outcome::Started { .. } | Outcome::EscalationDecided { .. } => match ask {
+            Ask::SetRoles { .. } => false,
+            Ask::StartChat { .. } | Ask::DecideEscalation { .. } => true,
+        },
+        // Invalid rosters and unknown targets can be legitimate saved refusals.
+        Outcome::Refused(_) => true,
+    }
+}
+
 fn role(domain: &Domain, person: u64, project: u32) -> Option<Role> {
     for holding in &**domain.roles.get(&project)? {
         if holding.person == person {
@@ -619,8 +652,9 @@ fn restore(domain: &mut Domain, env: &Env<Limits>, record: Stored, out: &mut Que
         Stored::Roles { project, holdings } => {
             valid_roles(domain, &env.limits, *project, holdings).is_ok() && !domain.roles.contains_key(project)
         }
-        Stored::Answer { key, ask, .. } => {
+        Stored::Answer { key, ask, outcome, .. } => {
             valid_ask(&env.limits, ask)
+                && valid_answer_shape(ask, *outcome)
                 && !domain.answers.contains_key(key)
                 && domain.answers.len() < env.limits.requests
         }
@@ -673,9 +707,27 @@ fn restored(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
             }
         }
     }
-    for (key, _) in &domain.answers {
+    for (key, answer) in &domain.answers {
         if !domain.people.contains_key(&key.person) {
             return restore_failed(domain, Key::Answer(*key), Refusal::Unknown, out);
+        }
+        match answer.outcome {
+            Outcome::RolesSet { .. } => match &answer.ask {
+                Ask::SetRoles { project, holdings } => {
+                    if !domain.roles.contains_key(project) {
+                        return restore_failed(domain, Key::Answer(*key), Refusal::Unknown, out);
+                    }
+                    for holding in holdings {
+                        if !domain.people.contains_key(&holding.person) {
+                            return restore_failed(domain, Key::Answer(*key), Refusal::Unknown, out);
+                        }
+                    }
+                }
+                Ask::StartChat { .. } | Ask::DecideEscalation { .. } => {
+                    unreachable!("restored role success has a matching roster ask");
+                }
+            },
+            Outcome::Started { .. } | Outcome::EscalationDecided { .. } | Outcome::Refused(_) => {}
         }
     }
     domain.phase = Phase::Ready;

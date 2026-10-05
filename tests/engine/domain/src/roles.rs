@@ -464,10 +464,13 @@ impl World {
                     self.queue(engine::Event::Loaded { owner, rows, next }, self.settings.page_delay);
                 }
                 engine::Request::Deliver(Delivery::WebReply { to, reply, .. }) => {
-                    self.referee
-                        .replied(&self.store.rows, to.into_token(), reply)
-                        .expect("exact durable role terminal");
-                    self.inputs.remove(&to.into_token()).expect("one pending outside reply right");
+                    let token = to.into_token();
+                    assert_eq!(
+                        self.referee.replied(&self.store.rows, token, reply),
+                        Ok(()),
+                        "exact durable role terminal: {token:?} {reply:?}"
+                    );
+                    self.inputs.remove(&token).expect("one pending outside reply right");
                 }
                 engine::Request::Deliver(delivery) => panic!("unexpected role-world delivery {delivery:?}"),
                 engine::Request::Account(accounts::Request::Refresh { account, generation }) => {

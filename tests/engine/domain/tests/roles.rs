@@ -117,7 +117,7 @@ fn both_current_owner_race_orders_authorize_only_the_first_committed_roster() {
 }
 
 #[test]
-fn invalid_duplicate_unknown_and_oversized_holdings_have_exact_inert_refusals() {
+fn role_admission_checks_current_authority_payload_bounds_and_revision_room() {
     let mut world = World::new(Settings::calm(9303, Base::Requester));
     let before = world.task_record().clone();
     let original = world.store.rows.get(&Key::People(people::Key::Roles(1))).cloned();
@@ -137,6 +137,7 @@ fn invalid_duplicate_unknown_and_oversized_holdings_have_exact_inert_refusals() 
         (78, Box::new([known, known, known]), people::Reply::Refused(people::Refusal::Limit)),
     ] {
         world.ask(1, key, people::Ask::SetRoles { project: 1, holdings }, reply, false);
+        world.run();
     }
     world.ask(
         1,
@@ -149,9 +150,10 @@ fn invalid_duplicate_unknown_and_oversized_holdings_have_exact_inert_refusals() 
     assert_eq!(*world.task_record(), before);
     assert_eq!(world.store.rows.get(&Key::People(people::Key::Roles(1))), original.as_ref());
     assert_eq!(world.referee.replacements, 0);
+    current_owner_policy_and_session_expiry_are_separate_real_checks();
+    exhausted_waiting_revision_and_insufficient_startup_room_refuse_before_mutation();
 }
 
-#[test]
 fn current_owner_policy_and_session_expiry_are_separate_real_checks() {
     let mut no_policy = World::new(Settings { policy: false, ..Settings::calm(9304, Base::Requester) });
     no_policy.ask(1, 80, roster(&no_policy, 1), refused(people::Refusal::Authority), false);
@@ -173,7 +175,6 @@ fn current_owner_policy_and_session_expiry_are_separate_real_checks() {
     assert_eq!(member.referee.replacements, 1, "ordinary membership does not grant administration");
 }
 
-#[test]
 fn exhausted_waiting_revision_and_insufficient_startup_room_refuse_before_mutation() {
     let mut exhausted = World::new(Settings { exhausted: true, ..Settings::calm(9305, Base::Requester) });
     let before = exhausted.task_record().clone();

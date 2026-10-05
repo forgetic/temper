@@ -1311,6 +1311,7 @@ fn multiple_waiting_recipients_preflight_together_and_full_journal_refuses_witho
 
     let mut overflow_store = Store::new();
     overflow_store.rows = before;
+    overflow_store.applied = overflow_store.header().commits;
     let Some(Record::Tasks(tasks::Stored::Live(last))) =
         overflow_store.rows.get_mut(&temper_engine_domain::Key::Tasks(tasks::Key::Live(assignment.task)))
     else {
@@ -1318,6 +1319,8 @@ fn multiple_waiting_recipients_preflight_together_and_full_journal_refuses_witho
     };
     last.escalation =
         tasks::Escalation::Waiting { revision: u64::MAX, holder: tasks::EscalationHolder::Person(people[0]) };
+    let mut expected_header = overflow_store.header();
+    expected_header.commits = expected_header.commits.checked_add(1).expect("one saved refusal commit");
     let unchanged = overflow_store.rows.clone();
     let mut overflow = Driver::configured(overflow_store, administration_config(9310), &configured);
     overflow.settle();
@@ -1339,7 +1342,23 @@ fn multiple_waiting_recipients_preflight_together_and_full_journal_refuses_witho
             ..
         })
     ));
-    for (key, row) in unchanged {
+    assert_eq!(overflow.store.header(), expected_header, "only the saved refusal advances the commit count");
+    assert_eq!(overflow.store.rows.len(), unchanged.len() + 1, "one new keyed refusal record");
+    let refused_key = people::RequestKey { person: people[1], key: [122; 16] };
+    assert_eq!(
+        overflow.store.rows.get(&temper_engine_domain::Key::People(people::Key::Answer(refused_key))),
+        Some(&Record::People(people::Stored::Answer {
+            key: refused_key,
+            ask: people::Ask::SetRoles {
+                project: 1,
+                holdings: Box::new([people::Holding { person: people[1], role: people::Role::Owner }]),
+            },
+            outcome: people::Outcome::Refused(people::Refusal::Limit),
+            at: overflow.env.wall,
+        })),
+        "the only added row is the exact durable keyed refusal"
+    );
+    for (key, row) in unchanged.into_iter().filter(|(key, _)| *key != temper_engine_domain::Key::Deployment) {
         assert_eq!(
             overflow.store.rows.get(&key),
             Some(&row),
