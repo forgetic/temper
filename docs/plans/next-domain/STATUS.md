@@ -54,6 +54,9 @@ place and their integration, as [README.md](README.md) states.
 | 05s4 smith generic delivery | merged locally | smith 2a621a5 | Gate passed; 394 focused / 1.613 s; 9 fuzzy / 2.530 s; serial 394 / 4.429 s, 9 / 6.229 s. |
 | 05s4 smith declared host tools | merged locally | smith ab15cae | Gate passed; 411 focused / 1.786 s; 9 fuzzy / 3.111 s; serial 411 / 4.764 s, 9 / 15.212 s. |
 | 05s6 smith V2 host supervision | merged locally | smith eb46ecc | Gate passed; 459 focused / 1.606 s; 10 fuzzy / 2.593 s; serial 459 / 5.001 s, 10 / 6.569 s. |
+| 05s2a provider-neutral design | merged locally | smith 51fdd24 | Markdown only; actual Skein Client and shared peer ownership; Smith application policy and caller credentials. |
+| 05s2a shared LLM core | merged locally; consumer adoption open | skein b2eeae9 | Gate passed; 1,045 focused / 2.777 s; 64 fuzzy / 27.913 s; 28 capture resources preserved. |
+| 05s2a prepared Client world | merged locally; consumer adoption open | skein 8b83175 | Gate passed; 1,046 focused / 2.878 s; 64 fuzzy / 17.244 s; caller's one actual Client drives the shared peer. |
 | 02d1 actual escalation routes | merged; broader escalation open | 754ca84 | Gate passed; 2,277 focused / 5.850 s; 39 fuzzy / 24.314 s; root serial 68 / 0.393 s, 5 / 1.293 s. |
 | 03c role administration and live rerouting | merged; narrow dependency | 6dfa4d2 | Gate passed; 2,292 focused / 10.993 s; 40 fuzzy / 26.798 s; root serial 78 / 0.490 s, 6 / 1.435 s. |
 
@@ -91,7 +94,7 @@ place and their integration, as [README.md](README.md) states.
 **05s — smith**
 
 - Provision smith's forge remotes; preserve the frozen legacy agent until cutover.
-- Replace copied provider/OAuth ownership with the shared Skein LLM client; continue messages/wait/parking/resume and remaining run increments (05s2a, 05s4).
+- Adopt the merged Skein LLM client and remove Smith's copied provider/OAuth crates; complete messages/wait/parking/resume and remaining run increments (05s2a, 05s4).
 - Build channel/protocol, Temper's runtime half and local-host worlds (05s5, 05s7–8); shared kit belongs in Skein.
 
 **06 — root**
@@ -112,6 +115,6 @@ place and their integration, as [README.md](README.md) states.
 
 ## Resume point
 
-- Active: replace Smith's provider clients with `skein-llm` (shared changes first) and build messages/wait/parking/resume; generic host tools and V2 host supervision are merged. Smith has priority.
+- Active: Smith's real `skein-llm` adapter and messages/wait/parking/resume. The shared Client/peer/replay changes, generic host tools and V2 host supervision are merged; consumer adoption and copied-crate removal remain open. Smith has priority.
 - Parked drafts: `next-domain/02e-depth-draft` (`a60bf1c`), `next-domain/04b2` (`0eff9dc`), `next-domain/05f` (`c33941c`). These have not passed the merge gate.
 - Shared skein revision is local and cached; fresh-machine fetches need its authorized publication. Forgejo v16.0.5 job-log client repairs remain open.
