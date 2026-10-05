@@ -22,8 +22,8 @@ pub struct Numbers {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Funder {
     Task(u64),
-    Pool { project: u32, person: u64, period: u64 },
-    Period { project: u32, period: u64 },
+    Pool { project: u32, person: u64, period: u64 ,},
+    Period { project: u32, period: u64 ,},
 }
 
 /// A funder and the snapshot the root gathered for this decision.
@@ -45,8 +45,8 @@ pub struct Charged {
 /// the old funder; it is not charged again to the new one.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Moved {
-    Same { funding: Funding, task: Numbers },
-    Changed { old: Funding, new: Funding, task: Numbers },
+    Same { funding: Funding, task: Numbers ,},
+    Changed { old: Funding, new: Funding, task: Numbers ,},
 }
 
 /// What is available, never below zero. Sequential subtraction also handles

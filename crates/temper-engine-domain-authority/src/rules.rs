@@ -92,7 +92,7 @@ pub enum RequestKind {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct Requests(pub u16);
+pub struct Requests(pub u16,);
 
 impl Requests {
     pub const ALL: Requests = Requests(511);
@@ -124,7 +124,7 @@ pub enum ProposalKind {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct Proposals(pub u8);
+pub struct Proposals(pub u8,);
 
 impl Proposals {
     pub const ALL: Proposals = Proposals(31);

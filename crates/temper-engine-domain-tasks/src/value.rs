@@ -19,11 +19,11 @@ pub struct Authority {
 /// Up to 64 tool families, one bit each. Configuration assigns the bits,
 /// including each connector's read family; the root translates them.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct Tools(pub u64);
+pub struct Tools(pub u64,);
 
 /// Note scopes relative to the task: goal, repository, project, deployment.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct Scopes(pub u8);
+pub struct Scopes(pub u8,);
 
 impl Scopes {
     pub const GOAL: Scopes = Scopes(1);
@@ -55,17 +55,17 @@ pub enum Last {
     /// Only the name the base segments spell, with no descendants.
     None,
     /// One additional segment exactly equal to this, and all descendants.
-    Exact(Box<[u8]>),
+    Exact(Box<[u8]>,),
     /// One additional segment beginning with this, and all descendants.
-    Open(Box<[u8]>),
+    Open(Box<[u8]>,),
 }
 
 /// Executors local to authority, numbered by configuration or project policy.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum AuthorityExecutor {
-    Charter(u32),
-    Procedure(u32),
-    Role(u32),
+    Charter(u32,),
+    Procedure(u32,),
+    Role(u32,),
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -98,7 +98,7 @@ pub struct Numbers {
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Funder {
-    Task(u64),
-    Pool { project: u32, person: u64, period: u64 },
-    Period { project: u32, period: u64 },
+    Task(u64,),
+    Pool { project: u32, person: u64, period: u64 ,},
+    Period { project: u32, period: u64 ,},
 }

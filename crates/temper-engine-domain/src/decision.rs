@@ -109,7 +109,7 @@ pub enum Delivery {
 
 #[derive(PartialEq, Eq, Debug)]
 pub enum Output {
-    Commit { number: u64, writes: Box<[Write]> },
+    Commit { number: u64, writes: Box<[Write]> ,},
     Deliver(Delivery),
     Stop,
 }

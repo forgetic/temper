@@ -39,7 +39,7 @@ pub struct Holding {
 /// variants for goals, tasks, inboxes, notes and watches will be added there.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Ask {
-    StartChat { project: u32, words: Box<[u8]> },
+    StartChat { project: u32, words: Box<[u8]> ,},
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -57,16 +57,16 @@ pub enum Refusal {
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Outcome {
-    Started { task: u64 },
-    Refused(Refusal),
+    Started { task: u64 ,},
+    Refused(Refusal,),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Reply {
-    SignedIn { person: u64, expires: Wall },
+    SignedIn { person: u64, expires: Wall ,},
     SignedOut,
-    Outcome(Outcome),
-    Refused(Refusal),
+    Outcome(Outcome,),
+    Refused(Refusal,),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -78,17 +78,17 @@ pub struct RequestKey {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Key {
     Person(u64),
-    SignIn(u64),
+    SignIn(u64,),
     Roles(u32),
     Answer(RequestKey),
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Stored {
-    Person { number: u64, identity: Identity },
-    SignIn { number: u64, person: u64, expires: Wall },
-    Roles { project: u32, holdings: Box<[Holding]> },
-    Answer { key: RequestKey, ask: Ask, outcome: Outcome, at: Wall },
+    Person { number: u64, identity: Identity ,},
+    SignIn { number: u64, person: u64, expires: Wall ,},
+    Roles { project: u32, holdings: Box<[Holding]> ,},
+    Answer { key: RequestKey, ask: Ask, outcome: Outcome, at: Wall ,},
 }
 
 impl Stored {
@@ -139,10 +139,10 @@ pub enum Event {
 
 #[derive(PartialEq, Eq, Debug)]
 pub enum Request {
-    Route { request: Token, person: u64, project: u32, role: Role, ask: Ask },
-    Reply { to: ReplyTo, reply: Reply },
-    Save { record: Stored },
-    Erase { key: Key },
-    RolesRefused { project: u32, refusal: Refusal },
-    RestoreRefused { key: Key, refusal: Refusal },
+    Route { request: Token, person: u64, project: u32, role: Role, ask: Ask ,},
+    Reply { to: ReplyTo, reply: Reply ,},
+    Save { record: Stored ,},
+    Erase { key: Key ,},
+    RolesRefused { project: u32, refusal: Refusal ,},
+    RestoreRefused { key: Key, refusal: Refusal ,},
 }

@@ -4,21 +4,21 @@ use skein_lib::{ReplyTo, Wall};
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Party {
-    Task(u64),
-    Person(u64),
-    Deployment { project: u32 },
+    Task(u64,),
+    Person(u64,),
+    Deployment { project: u32 ,},
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Executor {
-    Agent { charter: u32 },
+    Agent { charter: u32 ,},
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Parameter {
-    Number { name: u32, value: u64 },
-    Bytes { name: u32, value: Box<[u8]> },
-    Resource { name: u32, connector: u16, resource: u64 },
+    Number { name: u32, value: u64 ,},
+    Bytes { name: u32, value: Box<[u8]> ,},
+    Resource { name: u32, connector: u16, resource: u64 ,},
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -36,24 +36,24 @@ pub struct Verdict {
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Contract {
-    Report { words: u32 },
-    Verdict { choices: Box<[Verdict]> },
-    Change { connector: u16, kind: u16, words: u32 },
+    Report { words: u32 ,},
+    Verdict { choices: Box<[Verdict]> ,},
+    Change { connector: u16, kind: u16, words: u32 ,},
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum TaskResult {
-    Report { words: Box<[u8]> },
-    Verdict { code: u32, words: Box<[u8]> },
-    Change { connector: u16, kind: u16, resource: u64, words: Box<[u8]> },
-    Failure { reason: Box<[u8]> },
+    Report { words: Box<[u8]> ,},
+    Verdict { code: u32, words: Box<[u8]> ,},
+    Change { connector: u16, kind: u16, resource: u64, words: Box<[u8]> ,},
+    Failure { reason: Box<[u8]> ,},
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Ending {
-    Done(TaskResult),
-    Failed { reason: Box<[u8]> },
-    Cancelled { reason: Box<[u8]>, result: Option<TaskResult> },
+    Done(TaskResult,),
+    Failed { reason: Box<[u8]> ,},
+    Cancelled { reason: Box<[u8]>, result: Option<TaskResult> ,},
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -65,16 +65,16 @@ pub enum Status {
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum End {
-    Finished { result: TaskResult, cancel_delegates: bool },
+    Finished { result: TaskResult, cancel_delegates: bool ,},
     Parked,
-    Failed(Class),
+    Failed(Class,),
     Refused,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Hold {
     Failures(Class),
-    Dependency(u64),
+    Dependency(u64,),
     Stopped,
     Drift,
     Effects,
@@ -87,14 +87,14 @@ pub enum Active {
     Idle,
     Due,
     Preparing,
-    Claimed { attempt: u64 },
-    Running { attempt: u64 },
-    BackingOff { until: Wall },
+    Claimed { attempt: u64 ,},
+    Running { attempt: u64 ,},
+    BackingOff { until: Wall ,},
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Stage {
-    Run { attempt: u64 },
+    Run { attempt: u64 ,},
     Delegates,
     Effects,
     Settled,
@@ -109,7 +109,7 @@ pub struct Closing {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Was {
     Waiting,
-    Active(Active),
+    Active(Active,),
     Closing(Closing),
 }
 
@@ -118,8 +118,8 @@ pub enum Phase {
     Waiting,
     Active(Active),
     Closing(Closing),
-    Held { was: Was, why: Hold },
-    Ended(Ending),
+    Held { was: Was, why: Hold ,},
+    Ended(Ending,),
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -172,17 +172,17 @@ pub struct TaskRecord {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Key {
     Live(u64),
-    Ended(u64),
+    Ended(u64,),
     Ledger(Funder),
-    Closure { task: u64, generation: u64 },
+    Closure { task: u64, generation: u64 ,},
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Stored {
-    Live(Box<TaskRecord>),
-    Ended(Box<TaskRecord>),
-    Ledger(crate::FundingRecord),
-    Closure(crate::Closure),
+    Live(Box<TaskRecord>,),
+    Ended(Box<TaskRecord>,),
+    Ledger(crate::FundingRecord,),
+    Closure(crate::Closure,),
 }
 
 impl Stored {

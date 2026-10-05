@@ -190,7 +190,7 @@ pub struct RunProof {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Record {
     Deployment(Deployment),
-    Turn(TurnRecord),
+    Turn(TurnRecord,),
     /// Current bounded replay evidence; proof and all financial writes share one commit (domain/engine.md, 7.2).
     RunProof(
         /// Root-owned proof, bounded by tasks.tasks, one latest turn and journal bytes (domain/engine.md, 6 and 7.2).

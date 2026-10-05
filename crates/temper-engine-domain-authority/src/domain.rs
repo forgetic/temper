@@ -14,8 +14,8 @@ pub struct Domain {
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Event {
-    Policy { project: u32, policy: Policy },
-    Dropped { project: u32 },
+    Policy { project: u32, policy: Policy ,},
+    Dropped { project: u32 ,},
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -28,10 +28,10 @@ pub enum PolicyRefusal {
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum PolicyFact {
-    Added { project: u32 },
-    Changed { project: u32 },
-    Dropped { project: u32, existed: bool },
-    Refused { project: u32, reason: PolicyRefusal },
+    Added { project: u32 ,},
+    Changed { project: u32 ,},
+    Dropped { project: u32, existed: bool ,},
+    Refused { project: u32, reason: PolicyRefusal ,},
 }
 
 pub const POLICY_MAX_OUT: u32 = 1;

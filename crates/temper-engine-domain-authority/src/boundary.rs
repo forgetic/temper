@@ -28,10 +28,10 @@ pub enum Finding {
     Oversized,
     UnknownProject,
     UnknownRole,
-    Authority { source: Source, lacks: crate::Lacks },
-    Executor { source: Source },
-    Tasks { source: Source },
-    Spend { source: Source },
+    Authority { source: Source, lacks: crate::Lacks ,},
+    Executor { source: Source ,},
+    Tasks { source: Source ,},
+    Spend { source: Source ,},
     Arithmetic,
     RunBudget,
     RunCap,
@@ -39,21 +39,21 @@ pub enum Finding {
     Account,
     Writer,
     Tool,
-    Grant { source: Source },
+    Grant { source: Source ,},
     Reference,
-    Scope { source: Source },
-    Required { connector: u16, fact: u16 },
-    Failed { connector: u16, fact: u16 },
+    Scope { source: Source ,},
+    Required { connector: u16, fact: u16 ,},
+    Failed { connector: u16, fact: u16 ,},
     Unpermitted,
     Undecidable,
     PeriodSpend,
     LandingMissing,
     LandingPin,
-    Ci { status: Status },
-    Behind { status: Status },
-    Gate { number: u32, status: Status },
-    Approval { role: u32, have: u32, want: u32 },
-    ReviewFailed { role: u32 },
+    Ci { status: Status ,},
+    Behind { status: Status ,},
+    Gate { number: u32, status: Status ,},
+    Approval { role: u32, have: u32, want: u32 ,},
+    ReviewFailed { role: u32 ,},
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -183,13 +183,13 @@ pub struct RunAsk {
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum PersonRequest {
-    Create(Box<[Delegate]>),
+    Create(Box<[Delegate]>,),
     /// The complete future authority/allotment to fund, not an unchecked delta.
-    Allot(Authority),
-    Accept(Action),
+    Allot(Authority,),
+    Accept(Action,),
     /// What the amendment must newly give; a narrowing gives empty authority.
-    Amend(Authority),
-    Move(Authority),
+    Amend(Authority,),
+    Move(Authority,),
     Cancel,
     Release,
     Watch,
@@ -208,9 +208,9 @@ pub struct PersonAsk {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Call {
     Tool,
-    Read(Effect),
-    Message { referenced: bool },
-    Note(Scopes),
+    Read(Effect,),
+    Message { referenced: bool ,},
+    Note(Scopes,),
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -224,10 +224,10 @@ pub struct CallAsk {
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Action {
-    Batch(Box<[Delegate]>),
+    Batch(Box<[Delegate]>,),
     Effect(Effect),
     Widen(Authority),
-    Amend(Authority),
+    Amend(Authority,),
     /// Topology grants standing; release may additionally need authority.
     Escalate {
         release: Option<Authority>,
