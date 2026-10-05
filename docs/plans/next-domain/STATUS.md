@@ -2,7 +2,7 @@
 
 Resumed at the user’s request on 2026-10-05 with the joint temper/smith
 goal. Local branches only; nothing has been pushed. Counts below are the full
-workspace gate at the listed source tip; fuzzy runs retain one ignored finding.
+workspace gate at the listed source tip; temper's fuzzy runs retain one ignored finding.
 Detailed implementation and review evidence belongs in commit messages.
 The focused fixture gate skips its two explicit regeneration tests.
 
@@ -42,11 +42,10 @@ place and their integration, as [README.md](README.md) states.
 | Field-doc formatting companion | merged with backfill | a718c70 | Final backfill gate; 2,249 focused / 11.273 s; 37 fuzzy / 29.489 s. |
 | Four-crate documentation backfill | merged | 6f0698a | Gate passed; 2,249 focused / 11.273 s; 37 fuzzy / 29.489 s; 33 files comment-only. |
 | Channel golden regeneration | merged | e0aa8f3 | Gate passed; 2,251 focused / 11.393 s; 37 fuzzy / 29.164 s; 218 binaries regenerate unchanged. |
-
 | Shared domain-world kit (skein) | merged locally | skein 3cbd792 | Gate passed; 983 focused / 4.210 s; 62 fuzzy / 23.355 s. |
 | Shared domain-world kit (temper) | merged | c51bb5c | Gate passed; 2,251 focused / 10.826 s; 37 fuzzy / 28.978 s. |
 | 05s1 smith workspace | merged locally | smith e60ab48 | Gate passed; 2 focused / 0.004 s; 1 fuzzy / 0.006 s. |
-| 06a terminal commit restart | merged | 2e83cc2 | Gate passed; 2,256 focused / 11.832 s; 38 fuzzy / 29.735 s; root serial 51 / 0.287 s, 4 / 0.927 s. |
+| 06a Report terminal commit restart | merged | 2e83cc2 | Gate passed; 2,256 focused / 11.832 s; 38 fuzzy / 29.735 s; root serial 51 / 0.287 s, 4 / 0.927 s. |
 
 ## What remains open
 
