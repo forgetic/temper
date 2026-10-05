@@ -19,6 +19,7 @@ mod inbox;
 mod limits;
 mod message;
 mod moving;
+mod owned;
 mod refs;
 mod run;
 mod stored;
@@ -35,6 +36,7 @@ pub use failures::{Class, Retries, Retry, Tries};
 pub use funders::{Balance, Closure, FundingRecord};
 pub use limits::{Limits, worst_case};
 pub use moving::{Movement, Transfer};
+pub use owned::stored_bytes;
 pub use value::{
     Authority, AuthorityExecutor, Budget, Delegation, Funder, Grant, Last, Numbers, Pattern, Scopes, Tools,
 };

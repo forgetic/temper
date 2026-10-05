@@ -525,3 +525,95 @@ fn saturated_charged_receipts_and_oversized_terminal_fit_before_copying() {
         });
     }
 }
+
+#[test]
+fn borrowed_stored_bytes_matches_independent_allocator_for_deep_and_malformed_rows() {
+    let mut world = temper_engine_tasks_world::World::new(80, LIMITS);
+    world.make(Party::Person(1), vec![task(1, &[])]);
+    let mut record = world.record(1).clone();
+    let new = filled(&LIMITS, 1);
+    record.spec = new.spec;
+    record.spec.parameters = Box::new([
+        Parameter::Bytes { name: 1, value: vec![1; 4096].into_boxed_slice() },
+        Parameter::Number { name: 2, value: 5 },
+        Parameter::Resource { name: 3, connector: 1, resource: 2 },
+    ]);
+    record.authority = new.authority;
+    record.authority.grants[0].pattern.segments = Box::new([Box::new([1_u8, 2]) as Box<[u8]>, Box::new([3])]);
+    record.authority.grants[1].pattern.last = Last::Open(Box::new([4, 5]));
+    record.contract = new.contract;
+    record.dependencies = Box::new([1, 2, 3]);
+    record.delegates = Box::new([4, 5]);
+    record.references = Box::new([6]);
+    record.results_due = Box::new([7, 8]);
+    let ending = tasks::Ending::Cancelled {
+        reason: Box::new([1, 2]),
+        result: Some(Result::Report { words: Box::new([3, 4, 5]) }),
+    };
+    record.phase = tasks::Phase::Held {
+        was: tasks::Was::Closing(tasks::Closing { stage: tasks::Stage::Delegates, ending: ending.clone() }),
+        why: Hold::Budget,
+    };
+    let mut rows = world.records.values().cloned().collect::<Vec<_>>();
+    rows.push(Stored::Live(Box::new(record.clone())));
+    record.phase = tasks::Phase::Ended(ending.clone());
+    rows.push(Stored::Ended(Box::new(record)));
+    for message in [
+        tasks::Message::Words { words: Box::new([1]) },
+        tasks::Message::Question { words: Box::new([1, 2]) },
+        tasks::Message::Answer { question: 1, words: Box::new([1, 2, 3]) },
+        tasks::Message::Amendment { revision: 1, reason: Box::new([1, 2]) },
+        tasks::Message::News { subscription: 1, class: tasks::NewsClass::Kept, words: Box::new([1, 2]) },
+        tasks::Message::Result { task: 1, ending: ending.clone() },
+        tasks::Message::Notice { subscription: 1, target: 1, notice: tasks::Notice::Ended(ending) },
+        tasks::Message::Notice { subscription: 1, target: 1, notice: tasks::Notice::Held(Hold::Budget) },
+        tasks::Message::Timer { subscription: 1, at: Wall::EPOCH },
+    ] {
+        let envelope = tasks::Envelope {
+            number: 1,
+            task: 1,
+            from: Party::Person(1),
+            message,
+            at: Wall::EPOCH,
+            hits: 1,
+            eligible: true,
+        };
+        rows.push(Stored::Message(envelope.clone()));
+        rows.push(Stored::ArchivedMessage(envelope.clone()));
+        rows.push(Stored::Offer(tasks::Offer { attempt: 1, envelope }));
+    }
+    rows.push(Stored::History(tasks::History {
+        task: 1,
+        revision: 1,
+        by: Party::Person(1),
+        reason: Box::new([1, 2]),
+        change: tasks::Change::Amended,
+    }));
+    for message in [
+        tasks::UserMessage::Words { words: Box::new([1]) },
+        tasks::UserMessage::Question { words: Box::new([1, 2]) },
+        tasks::UserMessage::Answer { question: 1, words: Box::new([1, 2, 3]) },
+    ] {
+        rows.push(Stored::Receipt(tasks::Receipt { number: 1, task: 1, from: Party::Person(1), message }));
+    }
+    for result in [
+        Result::Report { words: Box::new([1]) },
+        Result::Verdict { code: 1, words: Box::new([1, 2]) },
+        Result::Change { connector: 1, kind: 1, resource: 1, words: Box::new([1, 2, 3]) },
+        Result::Failure { reason: vec![1; 4096].into_boxed_slice() },
+    ] {
+        rows.push(Stored::Admission(tasks::Admission::Activation {
+            task: 1,
+            attempt: 1,
+            end: End::Finished { result, cancel_delegates: false },
+            cumulative: 1,
+        }));
+    }
+    for row in rows {
+        let meter = Meter::new();
+        let cloned = row.clone();
+        let actual = meter.held();
+        assert_eq!(tasks::stored_bytes(&cloned), Some(actual));
+        assert_eq!(meter.held(), actual, "borrowed measurement allocates nothing");
+    }
+}

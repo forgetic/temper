@@ -188,9 +188,15 @@ pub enum Key {
     },
     Funding(Funder),
     /// Live finite funding key (domain/tasks.md, 2).
-    Ledger(Funder),
+    Ledger(
+        /// Actual retained finite source identity (domain/tasks.md, 2).
+        Funder,
+    ),
     /// Exact charged admission replay key (domain/tasks.md, 5).
-    Admission(crate::AdmissionKey),
+    Admission(
+        /// Exact charged admission identity (domain/tasks.md, 5).
+        crate::AdmissionKey,
+    ),
 }
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Stored {
@@ -210,9 +216,15 @@ pub enum Stored {
         numbers: Numbers,
     },
     /// Tasks-owned finite source, loaded at restart (domain/tasks.md, 2).
-    Ledger(crate::FundingRecord),
+    Ledger(
+        /// Tasks-owned finite source record (domain/tasks.md, 2).
+        crate::FundingRecord,
+    ),
     /// Bounded exact replay evidence, loaded at restart (domain/tasks.md, 5).
-    Admission(crate::Admission),
+    Admission(
+        /// Bounded exact replay evidence retained by tasks (domain/tasks.md, 5).
+        crate::Admission,
+    ),
 }
 impl Stored {
     #[must_use]
@@ -290,19 +302,28 @@ pub enum Event {
     /// A new identity creates a finite period; old periods and reservations remain.
     /// Replies Done or Refused; bounded by `Limits::funders` (domain/tasks.md, 2).
     OpenPeriod {
+        /// Root-issued reply destination; exactly one terminal reply (domain/tasks.md, 5).
         reply_to: ReplyTo,
+        /// Authenticated project identity checked by root in this decision (domain/tasks.md, 2).
         project: u32,
+        /// Fresh period identity for opening; the actual original period for carving (domain/tasks.md, 2).
         period: u64,
+        /// Finite authority-approved allotment in the deployment spending unit (domain/tasks.md, 2).
         budget: u64,
     },
     /// Root sends after authenticating this person's current project role and
     /// authority for this exact carve. Replies Done or Refused, reserving its
     /// original period atomically; bounded by `Limits::funders` (domain/tasks.md, 2).
     CarvePool {
+        /// Root-issued reply destination; exactly one terminal reply (domain/tasks.md, 5).
         reply_to: ReplyTo,
+        /// Authenticated project identity checked by root in this decision (domain/tasks.md, 2).
         project: u32,
+        /// Person whose current project role root authenticated (domain/tasks.md, 2).
         person: u64,
+        /// Fresh period identity for opening; the actual original period for carving (domain/tasks.md, 2).
         period: u64,
+        /// Finite authority-approved allotment in the deployment spending unit (domain/tasks.md, 2).
         budget: u64,
     },
     /// Root sends cumulative priced spend with the exact admitted turn/read.
@@ -311,11 +332,17 @@ pub enum Event {
     /// mutation (`Limits::admissions`; domain/tasks.md, 5). Overruns are charged
     /// and held, provided the complete actual funding chain can represent them.
     ChargedTurn {
+        /// Root-issued reply destination; exactly one terminal reply (domain/tasks.md, 5).
         reply_to: ReplyTo,
+        /// Nonzero root-issued task identity (domain/tasks.md, 5).
         task: u64,
+        /// Nonzero claimed attempt fence; stale attempts cannot charge (domain/tasks.md, 5).
         attempt: u64,
+        /// Nonzero next turn, or an exact retained replay (domain/tasks.md, 5).
         turn: u32,
+        /// Immutable offered message fence acknowledged by this turn (domain/tasks.md, 5).
         read: Option<u64>,
+        /// Whole priced attempt spend; only its new delta is posted (domain/tasks.md, 5).
         cumulative: u64,
     },
     /// Root sends a priced terminal. Replies Acknowledged or Refused atomically.
@@ -323,17 +350,24 @@ pub enum Event {
     /// result bytes above `Limits::result_bytes` refuse before retaining a receipt.
     /// Exact replay is once-only (`Limits::admissions`; domain/tasks.md, 5).
     ChargedActivation {
+        /// Root-issued reply destination; exactly one terminal reply (domain/tasks.md, 5).
         reply_to: ReplyTo,
+        /// Nonzero root-issued task identity (domain/tasks.md, 5).
         task: u64,
+        /// Nonzero claimed attempt fence; stale attempts cannot charge (domain/tasks.md, 5).
         attempt: u64,
+        /// Original bounded terminal; normal lifecycle normalization follows admission (domain/tasks.md, 5).
         end: End,
+        /// Whole priced attempt spend; only its new delta is posted (domain/tasks.md, 5).
         cumulative: u64,
     },
     /// Root retention has ended; forgetting removes only replay evidence.
     /// Replies Done, or Refused before restart completes (domain/tasks.md, 5).
     /// Root must retain receipts while a worker can replay their admissions.
     ForgetAdmission {
+        /// Root-issued reply destination; exactly one terminal reply (domain/tasks.md, 5).
         reply_to: ReplyTo,
+        /// Retained admission identity whose root retention has ended (domain/tasks.md, 5).
         key: crate::AdmissionKey,
     },
     /// Numbers are fresh root-issued candidates; authority already allowed.

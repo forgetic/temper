@@ -334,28 +334,31 @@ pub(crate) fn links(d: &Domain, bound: u32) -> bool {
 pub struct FundingRecord {
     /// Durable actual source identity (domain/tasks.md, 2).
     pub funder: Funder,
-    /// A pool's original project period; periods have no parent.
+    /// A pool's original project period; periods have no parent (domain/tasks.md, 2).
     pub parent: Option<Funder>,
-    /// Finite authentic counters owned and updated by tasks.
+    /// Finite authentic counters owned and updated by tasks (domain/tasks.md, 2).
     pub numbers: Numbers,
-    /// Reserved for later bounded source retirement; currently always false.
+    /// Reserved for later bounded source retirement; currently always false
+    /// (domain/tasks.md, 2).
     pub closed: bool,
 }
-fn save_funding(d: &Domain, funder: Funder, out: &mut Queue<Request>) {
-    let ledger = *d.funding.get(&funder).expect("funding admitted");
+
+fn save_funding(domain: &Domain, funder: Funder, out: &mut Queue<Request>) {
+    let ledger = *domain.funding.get(&funder).expect("funding admitted");
     out.push(Request::Save { record: Stored::Ledger(ledger) });
     out.push(Request::Save { record: Stored::Funding { funder, numbers: ledger.numbers } });
 }
-pub(crate) fn open(d: &mut Domain, to: ReplyTo, project: u32, period: u64, budget: u64, out: &mut Queue<Request>) {
-    if !d.ready() {
+
+pub(crate) fn open(domain: &mut Domain, to: ReplyTo, project: u32, period: u64, budget: u64, out: &mut Queue<Request>) {
+    if !domain.ready() {
         return refused(to, None, Refusal::NotReady, out);
     }
     let funder = Funder::Period { project, period };
-    if d.funding.contains_key(&funder) {
+    if domain.funding.contains_key(&funder) {
         return refused(to, None, Refusal::Duplicate, out);
     }
     // Monotonic identities prevent reintroducing a reset's old period.
-    for (other, _) in &d.funding {
+    for (other, _) in &domain.funding {
         match *other {
             Funder::Period { project: p, period: old } => {
                 if p == project && old >= period {
@@ -365,7 +368,7 @@ pub(crate) fn open(d: &mut Domain, to: ReplyTo, project: u32, period: u64, budge
             Funder::Task(_) | Funder::Pool { .. } => {}
         }
     }
-    if d.funding.len() == d.funding.capacity() {
+    if domain.funding.len() == domain.funding.capacity() {
         return refused(to, None, Refusal::Busy, out);
     }
     let record = FundingRecord {
@@ -374,12 +377,13 @@ pub(crate) fn open(d: &mut Domain, to: ReplyTo, project: u32, period: u64, budge
         numbers: Numbers { budget, spent: 0, spent_below: 0, reserved: 0 },
         closed: false,
     };
-    assert!(d.funding.insert(funder, record) == Ok(None), "period admitted");
-    save_funding(d, funder, out);
+    assert!(domain.funding.insert(funder, record) == Ok(None), "period admitted");
+    save_funding(domain, funder, out);
     out.push(Request::Done { reply_to: to });
 }
+
 pub(crate) fn carve(
-    d: &mut Domain,
+    domain: &mut Domain,
     to: ReplyTo,
     project: u32,
     person: u64,
@@ -387,15 +391,15 @@ pub(crate) fn carve(
     budget: u64,
     out: &mut Queue<Request>,
 ) {
-    if !d.ready() {
+    if !domain.ready() {
         return refused(to, None, Refusal::NotReady, out);
     }
     let funder = Funder::Pool { project, person, period };
     let parent = Funder::Period { project, period };
-    if d.funding.contains_key(&funder) {
+    if domain.funding.contains_key(&funder) {
         return refused(to, None, Refusal::Duplicate, out);
     }
-    let Some(old) = d.funding.get(&parent) else {
+    let Some(old) = domain.funding.get(&parent) else {
         return refused(to, None, Refusal::Funding, out);
     };
     let mut after = old.numbers;
@@ -406,7 +410,7 @@ pub(crate) fn carve(
     if old.closed || available(after).is_none() {
         return refused(to, None, Refusal::Funding, out);
     }
-    if d.funding.len() == d.funding.capacity() {
+    if domain.funding.len() == domain.funding.capacity() {
         return refused(to, None, Refusal::Busy, out);
     }
     let record = FundingRecord {
@@ -415,15 +419,16 @@ pub(crate) fn carve(
         numbers: Numbers { budget, spent: 0, spent_below: 0, reserved: 0 },
         closed: false,
     };
-    assert!(d.funding.insert(funder, record) == Ok(None), "pool admitted");
-    d.funding.get_mut(&parent).expect("period admitted").numbers = after;
-    save_funding(d, parent, out);
-    save_funding(d, funder, out);
+    assert!(domain.funding.insert(funder, record) == Ok(None), "pool admitted");
+    domain.funding.get_mut(&parent).expect("period admitted").numbers = after;
+    save_funding(domain, parent, out);
+    save_funding(domain, funder, out);
     out.push(Request::Done { reply_to: to });
 }
-pub(crate) fn restore_funding(d: &mut Domain, ledger: FundingRecord) -> bool {
-    if d.funding.contains_key(&ledger.funder)
-        || d.funding.len() == d.funding.capacity()
+
+pub(crate) fn restore_funding(domain: &mut Domain, ledger: FundingRecord) -> bool {
+    if domain.funding.contains_key(&ledger.funder)
+        || domain.funding.len() == domain.funding.capacity()
         || total(ledger.numbers).is_none()
     {
         return false;
@@ -439,29 +444,30 @@ pub(crate) fn restore_funding(d: &mut Domain, ledger: FundingRecord) -> bool {
     if !valid {
         return false;
     }
-    assert!(d.funding.insert(ledger.funder, ledger) == Ok(None), "restored ledger admitted");
+    assert!(domain.funding.insert(ledger.funder, ledger) == Ok(None), "restored ledger admitted");
     true
 }
 
 // The final period will eventually receive every still-open aggregate under
 // it. Counting each live node's own/closed spend once bounds every intermediate
 // task and pool posting as well. No accepted overrun can overflow settlement.
-fn original_period(d: &Domain, number: u64) -> Option<Funder> {
-    let mut funder = record(d, number)?.funder;
-    for _ in 0..d.names.len().checked_add(2)? {
+fn original_period(domain: &Domain, number: u64) -> Option<Funder> {
+    let mut funder = record(domain, number)?.funder;
+    for _ in 0..domain.names.len().checked_add(2)? {
         match funder {
-            Funder::Task(number) => funder = record(d, number)?.funder,
-            Funder::Pool { .. } => funder = d.funding.get(&funder)?.parent?,
+            Funder::Task(number) => funder = record(domain, number)?.funder,
+            Funder::Pool { .. } => funder = domain.funding.get(&funder)?.parent?,
             Funder::Period { .. } => return Some(funder),
         }
     }
     None
 }
-pub(crate) fn representable(d: &Domain, number: u64, delta: u64) -> bool {
-    let Some(period) = original_period(d, number) else {
+
+pub(crate) fn representable(domain: &Domain, number: u64, delta: u64) -> bool {
+    let Some(period) = original_period(domain, number) else {
         return false;
     };
-    let Some(ledger) = d.funding.get(&period) else {
+    let Some(ledger) = domain.funding.get(&period) else {
         return false;
     };
     let Some(base) = total(ledger.numbers) else {
@@ -470,7 +476,7 @@ pub(crate) fn representable(d: &Domain, number: u64, delta: u64) -> bool {
     let Some(mut eventual) = base.checked_add(delta) else {
         return false;
     };
-    for (_, pool) in &d.funding {
+    for (_, pool) in &domain.funding {
         if pool.parent == Some(period) && !pool.closed {
             let Some(spent) = total(pool.numbers) else {
                 return false;
@@ -481,9 +487,9 @@ pub(crate) fn representable(d: &Domain, number: u64, delta: u64) -> bool {
             eventual = sum;
         }
     }
-    for (number, _) in &d.names {
-        if original_period(d, *number) == Some(period) {
-            let Some(spent) = total(record(d, *number).expect("live name").numbers) else {
+    for (number, _) in &domain.names {
+        if original_period(domain, *number) == Some(period) {
+            let Some(spent) = total(record(domain, *number).expect("live name").numbers) else {
                 return false;
             };
             let Some(sum) = eventual.checked_add(spent) else {
