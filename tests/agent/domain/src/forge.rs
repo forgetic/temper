@@ -297,7 +297,7 @@ fn fault(error: Error) -> Fault {
         Error::Unreachable => Fault::Unreachable,
         Error::Refused => Fault::Refused,
         Error::Missing(
-            What::Item | What::Pull | What::Comment | What::Label | What::File | What::Page | What::Review,
+            What::Item | What::Pull | What::Comment | What::Label | What::File | What::Page | What::Review | What::Job,
         )
         | Error::Unavailable
         | Error::Timeout

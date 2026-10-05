@@ -1079,6 +1079,12 @@ fn made(result: Result<forge_api::Answer, forge_api::Error>) -> (Option<u64>, bo
         | Answer::Revision(_)
         | Answer::Done
         | Answer::Cloned { .. }
+        | Answer::PullFiles { .. }
+        | Answer::Comparison { .. }
+        | Answer::Checks(_)
+        | Answer::Protection(_)
+        | Answer::Settings(_)
+        | Answer::Collaborators(_)
         | Answer::Branch(_) => (None, false),
     }
 }

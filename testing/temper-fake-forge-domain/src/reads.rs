@@ -55,6 +55,23 @@ pub(crate) fn read(domain: &Domain, config: &Config, id: Id<Repository>, read: &
         Read::Dependencies { number } => Ok(Answer::Dependencies(numbers(&repository.item(*number)?.dependencies))),
         Read::Labels => Ok(Answer::Labels(names(&repository.labels))),
         Read::Pull { number } => pulls::view(domain, limits, repository, *number),
+        Read::PullFiles { number, page, limit } => {
+            crate::next::pull_files(domain, limits, repository, *number, *page, *limit)
+        }
+        Read::Compare { base, head, page: _, limit: _ } => {
+            crate::next::compare(domain, limits, repository, *base, *head)
+        }
+        Read::Checks { commit } => crate::next::checks(repository, limits, *commit),
+        Read::Job { commit: _, context: _ } => Err(Error::Missing(What::Job)),
+        Read::Protection { branch } => {
+            let protection = match &repository.protection {
+                Some(protection) if protection.branch == *branch => Some(protection.clone()),
+                Some(_) | None => None,
+            };
+            Ok(Answer::Protection(protection))
+        }
+        Read::Settings => Ok(crate::next::settings(repository)),
+        Read::Collaborators => Ok(crate::next::collaborators(repository)),
         Read::PullFor { head, base } => match repository.newest_pull(head, base) {
             Some(number) => pulls::view(domain, limits, repository, number),
             None => Err(Error::Missing(What::Pull)),

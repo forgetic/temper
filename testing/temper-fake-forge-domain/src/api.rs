@@ -59,37 +59,95 @@ pub enum Read {
     },
     /// The item `number` and a page of its comments with ids above `after`.
     /// Answered by [`Answer::Item`].
-    Item { number: u64, after: u64 },
+    Item {
+        number: u64,
+        after: u64,
+    },
     /// The comment `id`. Answered by [`Answer::Comment`].
-    Comment { id: u64 },
+    Comment {
+        id: u64,
+    },
     /// The items the item `number` depends on, which block it. Answered by
     /// [`Answer::Dependencies`].
-    Dependencies { number: u64 },
+    Dependencies {
+        number: u64,
+    },
     /// The labels defined. Answered by [`Answer::Labels`].
     Labels,
     /// The pull request `number`, its reviews and the statuses on its head.
     /// Answered by [`Answer::Pull`].
-    Pull { number: u64 },
+    Pull {
+        number: u64,
+    },
+    /// Files and whole before/after contents at the pull's exact head,
+    /// paged from one. The diff starts at its merge base, as Forgejo does.
+    PullFiles {
+        number: u64,
+        page: u32,
+        limit: u32,
+    },
+    /// Compare exact commits. Forgejo 15 ignores these page arguments;
+    /// this fake returns the whole bounded comparison or `TooLarge`.
+    Compare {
+        base: u64,
+        head: u64,
+        page: u32,
+        limit: u32,
+    },
+    /// Detailed commit statuses: failed CI's description and job link.
+    Checks {
+        commit: u64,
+    },
+    /// A job's output. The probed Forgejo has no supported REST log route:
+    /// this returns `Missing(Job)`, so a repair uses its status and link.
+    Job {
+        commit: u64,
+        context: Box<[u8]>,
+    },
+    /// Requires admin permission, including when no protection exists.
+    Protection {
+        branch: Box<[u8]>,
+    },
+    Settings,
+    Collaborators,
     /// The newest pull request, open or not, that merges `head` into
     /// `base`. Answered by [`Answer::Pull`].
-    PullFor { head: Box<[u8]>, base: Box<[u8]> },
+    PullFor {
+        head: Box<[u8]>,
+        base: Box<[u8]>,
+    },
     /// The latest status of each context on `commit`, which the repository
     /// has. Answered by [`Answer::Statuses`].
-    Statuses { commit: u64 },
+    Statuses {
+        commit: u64,
+    },
     /// The permission of `user`. Answered by [`Answer::Permission`].
-    Permission { user: u64 },
+    Permission {
+        user: u64,
+    },
     /// Where `branch` is. Answered by [`Answer::Commit`].
-    Branch { branch: Box<[u8]> },
+    Branch {
+        branch: Box<[u8]>,
+    },
     /// The files of `commit`, which the repository has. Answered by
     /// [`Answer::Tree`].
-    Tree { commit: u64 },
+    Tree {
+        commit: u64,
+    },
     /// One file of `commit`. Answered by [`Answer::File`].
-    File { commit: u64, path: Box<[u8]> },
+    File {
+        commit: u64,
+        path: Box<[u8]>,
+    },
     /// A page of the wiki's page names, in their order, from after `after`.
     /// Answered by [`Answer::Pages`].
-    Pages { after: Option<Box<[u8]>> },
+    Pages {
+        after: Option<Box<[u8]>>,
+    },
     /// The wiki page `name`. Answered by [`Answer::Page`].
-    Page { name: Box<[u8]> },
+    Page {
+        name: Box<[u8]>,
+    },
 }
 
 /// The writes, each answered by [`Answer::Done`] unless it says otherwise.
@@ -197,6 +255,17 @@ pub enum Write {
         number: u64,
         head: u64,
     },
+    /// Merge the current base into the pull's branch, keeping both parents
+    /// and starting CI at the new head. A conflict leaves it unchanged.
+    Update {
+        number: u64,
+    },
+    /// Create a repository branch at an existing full commit id through
+    /// the API, with the same permissions and protection as git creation.
+    CreateBranch {
+        branch: Box<[u8]>,
+        commit: u64,
+    },
     /// Closes or reopens the item `number`: its author's, or anyone's with
     /// write permission.
     Close {
@@ -277,6 +346,21 @@ pub enum Answer {
         more: bool,
     },
     Pull(Pull),
+    PullFiles {
+        head: u64,
+        files: Box<[ChangedFile]>,
+        more: bool,
+    },
+    Comparison {
+        base: u64,
+        head: u64,
+        files: Box<[ChangedFile]>,
+        commits: Box<[u64]>,
+    },
+    Checks(Box<[CheckSummary]>),
+    Protection(Option<Protection>),
+    Settings(Settings),
+    Collaborators(Box<[Collaborator]>),
     /// In their contexts' order.
     Statuses(Box<[Status]>),
     Permission(Permission),
@@ -376,6 +460,7 @@ pub enum What {
     File,
     Page,
     Review,
+    Job,
 }
 
 /// Whether an item is an issue or a pull request.
@@ -483,6 +568,36 @@ pub enum Check {
 pub struct File {
     pub path: Box<[u8]>,
     pub content: Box<[u8]>,
+}
+
+/// The complete change of a file, including additions and deletions. The
+/// protocol layer may render these trees as a diff for an ordinary client.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct ChangedFile {
+    pub path: Box<[u8]>,
+    pub before: Option<Box<[u8]>>,
+    pub after: Option<Box<[u8]>>,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct CheckSummary {
+    pub status: Status,
+    pub description: Box<[u8]>,
+    pub link: Box<[u8]>,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct Settings {
+    pub default: Box<[u8]>,
+    pub merge: bool,
+    pub rebase: bool,
+    pub squash: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Collaborator {
+    pub user: u64,
+    pub permission: Permission,
 }
 
 /// A wiki page. Its revision grows with every write to the repository's wiki.

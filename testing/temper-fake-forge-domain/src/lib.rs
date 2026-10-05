@@ -55,6 +55,7 @@ mod git;
 mod hooks;
 mod issues;
 mod limits;
+mod next;
 mod observe;
 mod pulls;
 mod reads;
@@ -70,4 +71,4 @@ pub use domain::{Config, Domain, MAX_OUT, Metadata, Room, Skew, Tally, fire, ste
 pub use git::{Object, Tree};
 pub use limits::{Limits, worst_case};
 pub use observe::{Branches, Observation, Operation};
-pub use scenario::{advance, commit, grant, merge_commit, repository, set_reachable, set_refusing};
+pub use scenario::{advance, commit, grant, merge_commit, repository, set_reachable, set_refusing, settings};

@@ -286,7 +286,7 @@ fn push(
 }
 
 /// Creates `branch` at `commit`, only where none is.
-fn create(
+pub(crate) fn create(
     domain: &mut Domain,
     env: &Env<Config>,
     id: Id<Repository>,

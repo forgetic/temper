@@ -53,6 +53,17 @@ pub fn grant(domain: &mut Domain, repository: &[u8], user: u64, permission: Perm
     repository.permissions.insert(user, permission).expect("a repository's users are within the limits");
 }
 
+/// Set repository metadata in a world's initial setup. Its default must
+/// name an existing branch; these booleans model provider merge settings.
+pub fn settings(domain: &mut Domain, repository: &[u8], settings: crate::api::Settings) {
+    let id = domain.id(repository);
+    let repository = domain.repositories.get_mut(id).expect("a repository of the forge");
+    assert!(repository.branches.contains_key(&*settings.default), "the default branch exists");
+    repository.default = settings.default;
+    repository.styles =
+        crate::store::Styles { merge: settings.merge, rebase: settings.rebase, squash: settings.squash };
+}
+
 /// Makes `repository` reachable by git, or not.
 pub fn set_reachable(domain: &mut Domain, repository: &[u8], reachable: bool) {
     let id = domain.id(repository);

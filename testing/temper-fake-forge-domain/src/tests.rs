@@ -1,5 +1,7 @@
 //! Feed the forge calls, inspect its answers, webhooks and observations.
 
+mod next;
+
 use alloc::boxed::Box;
 
 use skein_lib::bytes::copy_of;

@@ -234,7 +234,7 @@ or an optional field, with its own tests in the crate and in
 | a pull request's files and diff at its head; a comparison's files and commits | `Read::PullFiles`, `Read::Compare` |
 | updating a pull request from its base, by merge, refused on a conflict | `Write::Update`, answering `Error::Conflict` |
 | merges with two parents, in the git it keeps | the update's commit; `Git::Push` of a merge |
-| CI's output for a failed job | `Read::Job` |
+| a failed job's status description and link; unsupported REST logs refused | `Read::Checks`; `Read::Job` answers missing, following step 00's fallback |
 | branch protection, repository settings (merge styles, default branch), collaborators with their permissions | `Read::Protection`, `Read::Settings`, `Read::Collaborators` |
 | creating a branch at a commit through the API | `Write::CreateBranch` |
 | a push refused unless its branch is at the head it expects | `Git::Push { expected: Option<u64> }`, `None` as today |
@@ -243,6 +243,19 @@ or an optional field, with its own tests in the crate and in
 Its facts follow step 00's answers about Forgejo, not guesses: where
 Forgejo answers a conflicting update in a particular way, the fake does
 the same.
+
+The bounded fake represents a diff by each changed path's complete before
+and after contents; the client can derive the patch without losing a
+deleted path. Pull files page at the observed head. Comparisons return
+all files and commits within the configured limits regardless of page,
+as Forgejo 15 did in the probe; excessive data is `TooLarge`, so overlap
+remains unknown and wakes conservatively. Protection requires admin even
+when the requested protection is absent. Update creates a commit with
+both parents and starts CI at its new head. Failed CI has a status
+description and job link; no supported REST job-log route is invented.
+These additions are the typed fake API. Their protocol routes and rendering
+belong to the lower-layer follow-up plan in step 08; the connector world
+uses its own translation of the typed calls (section 5).
 
 ## 5. The world
 

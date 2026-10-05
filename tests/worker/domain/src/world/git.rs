@@ -461,7 +461,7 @@ fn fault(error: Error) -> fake::Fault {
         Error::Unreachable => fake::Fault::Unreachable,
         Error::Refused => fake::Fault::Refused,
         Error::Missing(
-            What::Item | What::Pull | What::Comment | What::Label | What::File | What::Page | What::Review,
+            What::Item | What::Pull | What::Comment | What::Label | What::File | What::Page | What::Review | What::Job,
         )
         | Error::Unavailable
         | Error::Timeout

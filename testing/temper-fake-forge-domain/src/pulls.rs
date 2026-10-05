@@ -434,7 +434,7 @@ fn allowed(repository: &Repository, item: &Item, pull: &Pull) -> bool {
 
 /// The tree of `head` merged onto `onto`, three-way from the newest commit
 /// they share, or why not: a conflict, or a tree past the limits.
-fn merged(domain: &Domain, limits: &Limits, head: u64, onto: u64) -> Result<Tree, Error> {
+pub(crate) fn merged(domain: &Domain, limits: &Limits, head: u64, onto: u64) -> Result<Tree, Error> {
     let empty = Map::with_capacity(0);
     let ancestor = match git::merge_base(domain, head, onto) {
         Some(commit) => &domain.commits.get(&commit).expect("a commit of the store").tree,

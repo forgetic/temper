@@ -146,6 +146,12 @@ impl Thread {
                         | api::Answer::Done
                         | api::Answer::Cloned { .. }
                         | api::Answer::Pushed(_)
+                        | api::Answer::PullFiles { .. }
+                        | api::Answer::Comparison { .. }
+                        | api::Answer::Checks(_)
+                        | api::Answer::Protection(_)
+                        | api::Answer::Settings(_)
+                        | api::Answer::Collaborators(_)
                         | api::Answer::Branch(_) => Err(api::Error::Refused),
                     }
                 } else {

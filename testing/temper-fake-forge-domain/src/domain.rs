@@ -433,9 +433,42 @@ fn call(
         out.push(Request::Reply { to: reply_to, result: Err(Error::Unavailable) });
         return;
     }
+    // A delayed API branch creation must not retain an unbounded name.
+    // Oversized input takes the ordinary refusal path instead.
+    let can_land = match &op {
+        Op::Write(write) => match write {
+            Write::CreateBranch { branch, .. } => {
+                crate::store::fits(branch, env.limits.limits.name_bytes).is_ok()
+                    && crate::store::fits(repository, env.limits.limits.name_bytes).is_ok()
+            }
+            Write::Update { .. } => crate::store::fits(repository, env.limits.limits.name_bytes).is_ok(),
+            Write::CreateIssue { .. }
+            | Write::Comment { .. }
+            | Write::EditItem { .. }
+            | Write::SetDependencies { .. }
+            | Write::EditComment { .. }
+            | Write::DeleteComment { .. }
+            | Write::SetLabels { .. }
+            | Write::AddLabels { .. }
+            | Write::RemoveLabels { .. }
+            | Write::DefineLabel { .. }
+            | Write::OpenPull { .. }
+            | Write::SetReviewers { .. }
+            | Write::Review { .. }
+            | Write::Submit { .. }
+            | Write::Merge { .. }
+            | Write::Close { .. }
+            | Write::Reopen { .. }
+            | Write::DeleteBranch { .. }
+            | Write::Status { .. }
+            | Write::PutPage { .. }
+            | Write::DeletePage { .. } => true,
+        },
+        Op::Read(_) | Op::Git(_) => true,
+    };
     let (result, landing) = match faults::admit(domain, env, user) {
         Err(error) => (Err(error), None),
-        Ok(()) if observe::subject(&op).is_some() && faults::lands_late(domain, env) => {
+        Ok(()) if can_land && observe::subject(&op).is_some() && faults::lands_late(domain, env) => {
             (Err(Error::Timeout), Some(Landing { user, repository: copy_of(repository), op }))
         }
         Ok(()) => {
@@ -473,6 +506,29 @@ fn execute(domain: &mut Domain, env: &Env<Config>, user: u64, repository: &[u8],
         Op::Read(read) => {
             let repository = domain.repositories.get(id).expect("a named repository");
             repository.require(user, Permission::Read)?;
+            match &read {
+                Read::Protection { .. } => repository.require(user, Permission::Admin)?,
+                Read::Items { .. }
+                | Read::Item { .. }
+                | Read::Comment { .. }
+                | Read::Dependencies { .. }
+                | Read::Pull { .. }
+                | Read::PullFiles { .. }
+                | Read::Compare { .. }
+                | Read::Checks { .. }
+                | Read::Job { .. }
+                | Read::PullFor { .. }
+                | Read::Statuses { .. }
+                | Read::Permission { .. }
+                | Read::Branch { .. }
+                | Read::Tree { .. }
+                | Read::File { .. }
+                | Read::Pages { .. }
+                | Read::Page { .. }
+                | Read::Labels
+                | Read::Settings
+                | Read::Collaborators => {}
+            }
             reads::read(domain, &env.limits, id, &read)
         }
         Op::Write(write) => match write {
@@ -495,6 +551,8 @@ fn execute(domain: &mut Domain, env: &Env<Config>, user: u64, repository: &[u8],
             Write::Review { number, verdict, body } => pulls::review(domain, env, id, user, number, verdict, body),
             Write::Submit { number, review, verdict } => pulls::submit(domain, env, id, user, number, review, verdict),
             Write::Merge { number, head } => pulls::merge(domain, env, id, user, number, head),
+            Write::Update { number } => crate::next::update(domain, env, id, user, number),
+            Write::CreateBranch { branch, commit } => git::create(domain, env, id, user, &branch, commit),
             Write::DeleteBranch { branch } => git::delete(domain, env, id, user, &branch),
             Write::Status { commit, context, state } => ci::status(domain, env, id, user, commit, context, state),
             Write::PutPage { name, content } => wiki::put(domain, env, id, user, name, content),

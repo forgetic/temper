@@ -354,6 +354,12 @@ fn answer_labels(answer: api::Answer) -> Result<Box<[Box<[u8]>]>, api::Error> {
         | api::Answer::Done
         | api::Answer::Cloned { .. }
         | api::Answer::Pushed(_)
+        | api::Answer::PullFiles { .. }
+        | api::Answer::Comparison { .. }
+        | api::Answer::Checks(_)
+        | api::Answer::Protection(_)
+        | api::Answer::Settings(_)
+        | api::Answer::Collaborators(_)
         | api::Answer::Branch(_) => Err(api::Error::Refused),
     }
 }
@@ -381,6 +387,12 @@ fn answer_pull(answer: api::Answer) -> Result<api::Pull, api::Error> {
         | api::Answer::Done
         | api::Answer::Cloned { .. }
         | api::Answer::Pushed(_)
+        | api::Answer::PullFiles { .. }
+        | api::Answer::Comparison { .. }
+        | api::Answer::Checks(_)
+        | api::Answer::Protection(_)
+        | api::Answer::Settings(_)
+        | api::Answer::Collaborators(_)
         | api::Answer::Branch(_) => Err(api::Error::Refused),
     }
 }
@@ -408,6 +420,12 @@ fn answer_dependencies(answer: api::Answer) -> Result<Box<[u64]>, api::Error> {
         | api::Answer::Done
         | api::Answer::Cloned { .. }
         | api::Answer::Pushed(_)
+        | api::Answer::PullFiles { .. }
+        | api::Answer::Comparison { .. }
+        | api::Answer::Checks(_)
+        | api::Answer::Protection(_)
+        | api::Answer::Settings(_)
+        | api::Answer::Collaborators(_)
         | api::Answer::Branch(_) => Err(api::Error::Refused),
     }
 }
@@ -843,6 +861,12 @@ pub fn project(
         | api::Answer::File(_)
         | api::Answer::Cloned { .. }
         | api::Answer::Pushed(_)
+        | api::Answer::PullFiles { .. }
+        | api::Answer::Comparison { .. }
+        | api::Answer::Checks(_)
+        | api::Answer::Protection(_)
+        | api::Answer::Settings(_)
+        | api::Answer::Collaborators(_)
         | api::Answer::Branch(_) => Err(api::Error::Refused),
     }
 }
@@ -877,6 +901,12 @@ fn stored_item(
         | api::Answer::Done
         | api::Answer::Cloned { .. }
         | api::Answer::Pushed(_)
+        | api::Answer::PullFiles { .. }
+        | api::Answer::Comparison { .. }
+        | api::Answer::Checks(_)
+        | api::Answer::Protection(_)
+        | api::Answer::Settings(_)
+        | api::Answer::Collaborators(_)
         | api::Answer::Branch(_) => Err(api::Error::Refused),
     }
 }
@@ -911,6 +941,12 @@ fn stored_comment(
         | api::Answer::Done
         | api::Answer::Cloned { .. }
         | api::Answer::Pushed(_)
+        | api::Answer::PullFiles { .. }
+        | api::Answer::Comparison { .. }
+        | api::Answer::Checks(_)
+        | api::Answer::Protection(_)
+        | api::Answer::Settings(_)
+        | api::Answer::Collaborators(_)
         | api::Answer::Branch(_) => Err(api::Error::Refused),
     }
 }
@@ -1003,6 +1039,12 @@ fn page_answer(answer: api::Answer) -> Result<Document, api::Error> {
         | api::Answer::Done
         | api::Answer::Cloned { .. }
         | api::Answer::Pushed(_)
+        | api::Answer::PullFiles { .. }
+        | api::Answer::Comparison { .. }
+        | api::Answer::Checks(_)
+        | api::Answer::Protection(_)
+        | api::Answer::Settings(_)
+        | api::Answer::Collaborators(_)
         | api::Answer::Branch(_) => Err(api::Error::Refused),
     }
 }
@@ -1051,6 +1093,12 @@ fn done(
                 | api::Answer::Done
                 | api::Answer::Cloned { .. }
                 | api::Answer::Pushed(_)
+                | api::Answer::PullFiles { .. }
+                | api::Answer::Comparison { .. }
+                | api::Answer::Checks(_)
+                | api::Answer::Protection(_)
+                | api::Answer::Settings(_)
+                | api::Answer::Collaborators(_)
                 | api::Answer::Branch(_) => Err(api::Error::Refused),
             }
         }

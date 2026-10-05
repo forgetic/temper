@@ -171,17 +171,52 @@ fn full_merge_history_and_both_parent_traversals_stay_bounded() {
         )
         .expect("a pull was opened");
     forge.ok(AUTHOR, &repository, Op::Read(Read::Pull { number }));
+    forge.ok(AUTHOR, &repository, Op::Read(Read::PullFiles { number, page: 1, limit: 0 }));
+    forge.ok(AUTHOR, &repository, Op::Read(Read::Checks { commit: right }));
+    forge.ok(AUTHOR, &repository, Op::Read(Read::Settings));
+    forge.ok(AUTHOR, &repository, Op::Read(Read::Collaborators));
+    temper_fake_forge_domain::grant(&mut forge.domain, &repository, ADMIN, Permission::Admin);
+    forge.ok(ADMIN, &repository, Op::Read(Read::Protection { branch: name(b'w', 0) }));
+    // Each held comparison owns the full changed trees and every new commit
+    // in the converging history, rather than relying on a single-parent walk.
+    for _ in 0..LIMITS.calls {
+        forge.send(AUTHOR, &repository, Op::Read(Read::Compare { base: first, head: right, page: 1, limit: 1 }));
+    }
+    assert_eq!(forge.domain.calls(), LIMITS.calls);
+}
+
+#[test]
+fn many_check_contexts_and_small_trees_keep_the_temporary_status_array_bounded() {
+    let limits = Limits { repositories: 1, files: 1, contexts: 64, statuses: 1, commits: 2, ..LIMITS };
+    let config = Config { limits, ..CONFIG };
+    let mut forge = Measured::with(config);
+    let repository = name(b'r', 0);
+    let mut configured = setup(0);
+    configured.tree = Box::new([File { path: name(b'p', 0), content: text(limits.content_bytes, b'g') }]);
+    configured.checks.contexts = names(b'c', limits.contexts);
+    configured.protection = None;
+    let first = temper_fake_forge_domain::repository(&mut forge.domain, &config, configured);
+    temper_fake_forge_domain::grant(&mut forge.domain, &repository, AUTHOR, Permission::Write);
+    forge.ok(AUTHOR, &repository, Op::Git(Git::Push { branch: name(b'w', 0), commit: first, expected: None }));
+    for _ in 0..limits.calls {
+        forge.send(AUTHOR, &repository, Op::Read(Read::Checks { commit: first }));
+    }
+    assert_eq!(forge.domain.calls(), limits.calls);
 }
 
 impl Measured {
     fn new() -> Measured {
-        let bound = worst_case(&LIMITS).expect("the test limits fit");
+        Self::with(CONFIG)
+    }
+
+    fn with(config: Config) -> Measured {
+        let bound = worst_case(&config.limits).expect("the test limits fit");
         let meter = Meter::new();
-        let domain = Domain::new(&CONFIG, 7);
+        let domain = Domain::new(&config, 7);
         let out = Queue::with_capacity(MAX_OUT);
         Measured {
             domain,
-            env: Env { now: Time::ZERO, wall: Wall::EPOCH, limits: CONFIG },
+            env: Env { now: Time::ZERO, wall: Wall::EPOCH, limits: config },
             out,
             meter,
             bound,
@@ -261,6 +296,12 @@ fn outcome(result: Result<Answer, Error>) -> Result<Option<u64>, Error> {
         | Answer::Done
         | Answer::Cloned { .. }
         | Answer::Pushed(_)
+        | Answer::PullFiles { .. }
+        | Answer::Comparison { .. }
+        | Answer::Checks(_)
+        | Answer::Protection(_)
+        | Answer::Settings(_)
+        | Answer::Collaborators(_)
         | Answer::Branch(_) => Ok(None),
     }
 }
@@ -354,6 +395,10 @@ fn a_forge_filled_to_its_limits_stays_within_its_worst_case() {
     assert!(tally.hooks_dropped > 0, "the webhooks in flight are as many as may be");
     // Calls held, each with as large an answer as there is.
     let repository = name(b'r', 0);
+    forge.ok(ADMIN, &repository, Op::Read(Read::Checks { commit: firsts[0] }));
+    forge.ok(ADMIN, &repository, Op::Read(Read::Protection { branch: name(b'z', 0) }));
+    forge.ok(ADMIN, &repository, Op::Read(Read::Settings));
+    forge.ok(ADMIN, &repository, Op::Read(Read::Collaborators));
     let big = [
         Op::Read(Read::Tree { commit: firsts[0] }),
         Op::Read(Read::Items {

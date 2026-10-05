@@ -20,6 +20,7 @@ use crate::limits::{self, Limits};
 pub(crate) struct Repository {
     pub(crate) name: Box<[u8]>,
     pub(crate) default: Box<[u8]>,
+    pub(crate) styles: Styles,
     /// The users with a permission on it.
     pub(crate) permissions: Map<u64, Permission>,
     /// The labels defined.
@@ -113,6 +114,13 @@ pub(crate) struct Page {
     pub(crate) revision: u64,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Styles {
+    pub(crate) merge: bool,
+    pub(crate) rebase: bool,
+    pub(crate) squash: bool,
+}
+
 impl Repository {
     /// An empty repository named `name`, its default branch at `first`.
     pub(crate) fn new(
@@ -127,6 +135,7 @@ impl Repository {
         let mut repository = Repository {
             name,
             default,
+            styles: Styles { merge: true, rebase: true, squash: true },
             permissions: Map::with_capacity(limits.users),
             labels: Set::with_capacity(limits.labels),
             items: Map::with_capacity(limits.items),

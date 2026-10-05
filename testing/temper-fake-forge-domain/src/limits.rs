@@ -6,7 +6,10 @@ use core::mem::size_of;
 
 use skein_lib::{Deadlines, Id, List, Map, Queue, Set, Slab, Time};
 
-use crate::api::{Comment, File, Head, PageName, Permission, Review, Status as StatusView, Summary};
+use crate::api::{
+    ChangedFile, CheckSummary, Collaborator, Comment, File, Head, PageName, Permission, Review, Status as StatusView,
+    Summary,
+};
 use crate::domain::{Alarm, Call};
 use crate::faults::Window;
 use crate::git::Object;
@@ -109,6 +112,9 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_mul(2)?
         .checked_add(Queue::<u64>::worst_case(limits.commits)?)?
         .checked_add(tree(limits)?)?
+        .checked_add(changes(limits)?)?
+        .checked_add(List::<StatusView>::worst_case(limits.contexts)?)?
+        .checked_add(List::<u64>::worst_case(limits.commits)?)?
         .checked_add(List::<u64>::worst_case(limits.items)?)?
         .checked_add(call(limits)?)?
         .checked_add(item(limits)?)?
@@ -211,7 +217,35 @@ fn answer(limits: &Limits) -> Option<u64> {
     let pages = times(limits.page_size, named)?.checked_add(name)?;
     let page = name.checked_add(content)?;
     let cloned = name.checked_add(times(limits.branches, head)?)?;
-    Some(items.max(item).max(pull).max(tree).max(pages).max(page).max(cloned).max(dependencies).max(labels))
+    let comparison = changes(limits)?.checked_add(times(limits.commits, number)?)?;
+    let checks = times(
+        limits.contexts,
+        name.checked_mul(2)?.checked_add(body)?.checked_add(u64::try_from(size_of::<CheckSummary>()).ok()?)?,
+    )?;
+    let protection = name.checked_add(names(limits.contexts, limits)?)?;
+    let collaborators = times(limits.users, u64::try_from(size_of::<Collaborator>()).ok()?)?;
+    Some(
+        items
+            .max(item)
+            .max(pull)
+            .max(tree)
+            .max(pages)
+            .max(page)
+            .max(cloned)
+            .max(dependencies)
+            .max(labels)
+            .max(comparison)
+            .max(checks)
+            .max(protection)
+            .max(collaborators),
+    )
+}
+
+fn changes(limits: &Limits) -> Option<u64> {
+    let file = u64::from(limits.name_bytes)
+        .checked_add(u64::from(limits.content_bytes).checked_mul(2)?)?
+        .checked_add(u64::try_from(size_of::<ChangedFile>()).ok()?)?;
+    times(limits.files, file)
 }
 
 /// The most a call within the limits brings: the repository's name, and
