@@ -84,7 +84,7 @@ enum Order {
 
 fn order(kind: Kind) -> Order {
     match kind {
-        Kind::Item | Kind::Pull | Kind::Plan | Kind::Template => Order::First,
+        Kind::Task | Kind::Item | Kind::Pull | Kind::Plan | Kind::Template => Order::First,
         Kind::Comments | Kind::Attempts => Order::Last,
         Kind::Dependencies | Kind::Reviews => Order::Even(Keep::Start),
         Kind::Ci => Order::Even(Keep::End),

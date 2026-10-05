@@ -132,6 +132,7 @@ pub const LIMITS: Limits = Limits {
         parts: 4,
         read_bytes: 512,
         budgets: Budgets {
+            task: 128,
             item: 128,
             comments: 128,
             dependencies: 128,

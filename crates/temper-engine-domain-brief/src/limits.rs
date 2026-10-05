@@ -41,6 +41,7 @@ pub struct Limits {
 /// The most bytes of a section of each kind (engine-domain.md, section 9).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Budgets {
+    pub task: u32,
     pub item: u32,
     pub comments: u32,
     pub dependencies: u32,
@@ -56,6 +57,7 @@ pub struct Budgets {
 /// The budget of a section of `kind`.
 pub(crate) fn budget(budgets: &Budgets, kind: Kind) -> u32 {
     match kind {
+        Kind::Task => budgets.task,
         Kind::Item => budgets.item,
         Kind::Comments => budgets.comments,
         Kind::Dependencies => budgets.dependencies,
@@ -70,7 +72,8 @@ pub(crate) fn budget(budgets: &Budgets, kind: Kind) -> u32 {
 }
 
 /// The kinds, in the order a brief usually has them.
-pub(crate) const KINDS: [Kind; 10] = [
+pub(crate) const KINDS: [Kind; 11] = [
+    Kind::Task,
     Kind::Item,
     Kind::Comments,
     Kind::Dependencies,

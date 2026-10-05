@@ -160,7 +160,8 @@ fn bounded(source: Source, most: u32) -> (Source, u32) {
             }
             (Source::Dependencies(kept.into_boxed()), named.saturating_sub(most))
         }
-        source @ (Source::Item(_)
+        source @ (Source::Task { .. }
+        | Source::Item(_)
         | Source::Comments { .. }
         | Source::Ci { .. }
         | Source::Reviews { .. }

@@ -274,6 +274,7 @@ pub(crate) fn repair_from(value: wire::Repair) -> plan::Repair {
 
 pub(crate) fn section_kind_to(value: brief::Kind) -> wire::SectionKind {
     match value {
+        brief::Kind::Task => unreachable!("the legacy root never assigns a task brief on v1"),
         brief::Kind::Item => wire::SectionKind::Item,
         brief::Kind::Comments => wire::SectionKind::Comments,
         brief::Kind::Dependencies => wire::SectionKind::Dependencies,

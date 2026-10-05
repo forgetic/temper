@@ -27,3 +27,13 @@ fn random_worlds_settle_with_every_ending_reached() {
     assert!(missed.is_empty(), "every ending was reached: {missed:?} were not");
     assert!(sections > 5000 && cuts > 500, "the referee judged sections and cuts: {sections}, {cuts}");
 }
+
+#[test]
+fn task_sections_settle_across_random_bounds_and_terminal_races() {
+    let mut judged = 0;
+    for seed in 0..64 {
+        let world = run(Settings { task_sections: true, ..Settings::random(seed) });
+        judged += world.judged().0;
+    }
+    assert!(judged > 500, "the referee checked task sections across the sweep");
+}

@@ -109,6 +109,7 @@ const LIMITS: Limits = Limits {
         parts: 4,
         read_bytes: 256,
         budgets: Budgets {
+            task: 64,
             item: 64,
             comments: 64,
             dependencies: 64,

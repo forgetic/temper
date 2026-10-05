@@ -7,6 +7,10 @@
 //! output, review comments, its pull request against its base, its earlier
 //! attempts, the plan's status, the index of the notes in its scope, or the
 //! template it follows.
+//! The new root also asks for a task's spec, contract and requester lineage
+//! as [`Source::Task`], with its own budget (domain/engine.md, section 9).
+//! The task remains first; the farthest lineage is cut first. Legacy sources
+//! remain through the cutover, and are not inferred from a task number.
 //!
 //! For each brief its parent asks for, the brief asks its parent to read
 //! every section's content (forge reads on demand, the notes' index, a

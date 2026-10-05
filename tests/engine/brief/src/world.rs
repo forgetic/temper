@@ -48,6 +48,7 @@ pub const LIMITS: Limits = Limits {
     parts: 6,
     read_bytes: 600,
     budgets: Budgets {
+        task: 160,
         item: 160,
         comments: 240,
         dependencies: 200,
@@ -90,6 +91,8 @@ pub struct Settings {
     /// Seeds the world.
     pub seed: u64,
     pub limits: Limits,
+    /// Generate task sections in a separate world, preserving legacy seeds.
+    pub task_sections: bool,
     /// The briefs the parent asks for, and the time between them; per mille
     /// those past the limits, the sections that are required, and the lists
     /// of dependencies longer than a source may name.
@@ -120,6 +123,7 @@ impl Settings {
         Settings {
             seed,
             limits: LIMITS,
+            task_sections: false,
             briefs: 30,
             brief_gap: Span::millis(200, 3000),
             oversized: 0,
@@ -149,8 +153,10 @@ impl Settings {
         let sections = 1 + chance(5);
         let tight = chance(1000) < 150;
         let mut budget = || if tight || chance(1000) < 100 { floor } else { floor + chance(300) };
+        let item = budget();
         let budgets = Budgets {
-            item: budget(),
+            task: item,
+            item,
             comments: budget(),
             dependencies: budget(),
             ci: budget(),
@@ -175,6 +181,7 @@ impl Settings {
         Settings {
             seed,
             limits,
+            task_sections: false,
             briefs: 20 + chance(40),
             brief_gap: Span::millis(1, 100 + u64::from(chance(5000))),
             oversized: chance(100),
@@ -461,7 +468,8 @@ impl World {
         let mut wanted = Vec::new();
         let mut sections = Vec::new();
         for _ in 0..count {
-            let kind = KINDS[self.pick(KINDS.len())];
+            let drawn = KINDS[self.pick(KINDS.len())];
+            let kind = if self.settings.task_sections { Kind::Task } else { drawn };
             let items = if self.rng.chance(self.settings.long) {
                 limits.items + 1 + self.below(3)
             } else {
@@ -485,6 +493,7 @@ impl World {
         head[..8].copy_from_slice(&self.rng.below(1000).to_be_bytes());
         let head = Commit(head);
         match kind {
+            Kind::Task => Source::Task { task: item.number },
             Kind::Item => Source::Item(item),
             Kind::Comments => Source::Comments { item, since: self.rng.below(50) },
             Kind::Dependencies => {

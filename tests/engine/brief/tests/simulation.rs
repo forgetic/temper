@@ -116,3 +116,18 @@ fn facts_change_nothing() {
         assert!(none.trace() == many.trace(), "seed {seed}: the same run whatever facts are kept");
     }
 }
+
+#[test]
+fn task_sections_are_judged_replay_and_ignore_facts_at_their_limits() {
+    for seed in [17, 81] {
+        let settings = Settings { task_sections: true, parts: 12, part_chars: 300, ..Settings::calm(seed) };
+        let first = run(settings);
+        let replay = run(settings);
+        let none = run(Settings { limits: Limits { facts: 0, ..settings.limits }, ..settings });
+        assert_eq!(first.trace(), replay.trace(), "seed {seed}");
+        assert_eq!(first.trace(), none.trace(), "facts do not change task sections, seed {seed}");
+        let stats = first.stats();
+        assert_eq!(count(&stats, "rendered"), stats.briefs);
+        assert!(count(&stats, "cut") > 0 && first.judged().0 > 0, "task content was independently judged");
+    }
+}

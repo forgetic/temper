@@ -20,6 +20,7 @@ use crate::{
 };
 
 const BUDGETS: Budgets = Budgets {
+    task: 64,
     item: 64,
     comments: 64,
     dependencies: 96,
@@ -147,7 +148,7 @@ fn reads(requests: &[Request], kinds: &[Kind]) -> Box<[Token]> {
 fn shape(kind: Kind) -> (Keep, Fit, u32) {
     let most = LIMITS.read_bytes.min(budget(&BUDGETS, kind));
     match kind {
-        Kind::Item | Kind::Pull | Kind::Plan | Kind::Template => (Keep::Start, Fit::Run, most),
+        Kind::Task | Kind::Item | Kind::Pull | Kind::Plan | Kind::Template => (Keep::Start, Fit::Run, most),
         Kind::Comments | Kind::Attempts => (Keep::End, Fit::Run, most),
         Kind::Dependencies | Kind::Reviews => (Keep::Start, Fit::Each, LIMITS.read_bytes),
         Kind::Ci => (Keep::End, Fit::Each, LIMITS.read_bytes),
@@ -176,6 +177,7 @@ fn text(section: &Section) -> &[u8] {
 /// A source of every kind.
 fn source(kind: Kind) -> Source {
     match kind {
+        Kind::Task => Source::Task { task: 17 },
         Kind::Item => Source::Item(ISSUE),
         Kind::Comments => Source::Comments { item: ISSUE, since: 3 },
         Kind::Dependencies => Source::Dependencies(Box::from([Item { repository: 0, number: 2 }])),
@@ -187,6 +189,35 @@ fn source(kind: Kind) -> Source {
         Kind::Notes => Source::Notes { repository: 1, goal: Some(Item { repository: 0, number: 1 }) },
         Kind::Template => Source::Template(0),
     }
+}
+
+#[test]
+fn a_task_uses_its_own_budget_and_cuts_the_farthest_lineage_first() {
+    let limits = Limits { budgets: Budgets { task: 96, ..BUDGETS }, ..LIMITS };
+    let mut h = Harness::new(limits);
+    let task = Source::Task { task: 17 };
+    let (reply, requests) = h.render(&[(task.clone(), true)]);
+    let Request::Read { source, bytes: read_bytes, keep, fit, owner, .. } = &requests[0] else { panic!("task read") };
+    assert_eq!(source, &task);
+    assert_eq!((*read_bytes, *keep, *fit), (96, Keep::Start, Fit::Run));
+    let got = Read::Got(Box::new([
+        Part { bytes: Box::from(&b"task spec\n"[..]), left: 0 },
+        Part { bytes: Box::from(&b"requester spec\n"[..]), left: 0 },
+        Part { bytes: bytes(68, b'a'), left: 30 },
+    ]));
+    let sections = rendered(h.step(Event::Read { owner: *owner, read: got }), reply);
+    assert_eq!(sections[0].kind, Kind::Task);
+    let mut expected = List::with_capacity(96);
+    for byte in b"task spec\nrequester spec\n" {
+        expected.push(*byte).unwrap();
+    }
+    for _ in 0_u32..55 {
+        expected.push(b'a').unwrap();
+    }
+    for byte in b"\n[43 bytes cut]\n" {
+        expected.push(*byte).unwrap();
+    }
+    assert_eq!(text(&sections[0]), expected.as_slice());
 }
 
 fn bytes(len: usize, byte: u8) -> Box<[u8]> {

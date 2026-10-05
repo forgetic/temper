@@ -262,6 +262,7 @@ pub(crate) fn expire(domain: &mut Domain, owner: Token, before: Time, out: &mut 
 /// The brief reads a section's source.
 pub(crate) fn brief_read(domain: &mut Domain, env: &Env<Limits>, owner: Token, source: brief::Source, bounds: Bounds) {
     let read = match &source {
+        brief::Source::Task { .. } => unreachable!("the legacy root never asks for a task brief"),
         brief::Source::Template(index) => {
             let guidance = match domain.config.plan.templates.get(usize::try_from(*index).unwrap_or(usize::MAX)) {
                 Some(template) => copy_of(&template.guidance),
@@ -304,6 +305,7 @@ pub(crate) fn brief_read(domain: &mut Domain, env: &Env<Limits>, owner: Token, s
             };
             let pull = forge::Item { repository: item.repository, number: pull };
             match &source {
+                brief::Source::Task { .. } => unreachable!("the legacy root never asks for a task brief"),
                 brief::Source::Reviews { .. } => forge::Read::Reviews { item: pull, page: 1 },
                 brief::Source::Item(_)
                 | brief::Source::Comments { .. }
@@ -354,6 +356,7 @@ fn brief_got(
     let engine = domain.config.forge.engine;
     let mut found: List<Box<[u8]>> = List::with_capacity(bounds.parts.max(1));
     let fits = match source {
+        brief::Source::Task { .. } => unreachable!("the legacy root never asks for a task brief"),
         brief::Source::Item(_) => {
             let api::Answer::Item { item, .. } = answer else { return failed(domain, env, owner) };
             found.push(translate::concat(&[&item.title, b"\n\n", &item.body])).is_ok()

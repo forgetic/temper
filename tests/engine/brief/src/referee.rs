@@ -508,7 +508,7 @@ impl Expectations for Briefs {
 #[must_use]
 pub fn shape(kind: Kind) -> (Keep, Fit) {
     match kind {
-        Kind::Item | Kind::Pull | Kind::Plan | Kind::Template => (Keep::Start, Fit::Run),
+        Kind::Task | Kind::Item | Kind::Pull | Kind::Plan | Kind::Template => (Keep::Start, Fit::Run),
         Kind::Comments | Kind::Attempts => (Keep::End, Fit::Run),
         Kind::Dependencies | Kind::Reviews => (Keep::Start, Fit::Each),
         Kind::Ci => (Keep::End, Fit::Each),
@@ -521,6 +521,7 @@ pub fn shape(kind: Kind) -> (Keep, Fit) {
 pub fn budget(limits: &Limits, kind: Kind) -> u32 {
     let budgets = &limits.budgets;
     match kind {
+        Kind::Task => budgets.task,
         Kind::Item => budgets.item,
         Kind::Comments => budgets.comments,
         Kind::Dependencies => budgets.dependencies,
@@ -539,7 +540,8 @@ pub fn budget(limits: &Limits, kind: Kind) -> u32 {
 fn bounded(source: &Source, items: u32) -> Source {
     match source {
         Source::Dependencies(named) => Source::Dependencies(named.iter().take(items as usize).copied().collect()),
-        Source::Item(_)
+        Source::Task { .. }
+        | Source::Item(_)
         | Source::Comments { .. }
         | Source::Ci { .. }
         | Source::Reviews { .. }
@@ -555,7 +557,8 @@ fn bounded(source: &Source, items: u32) -> Source {
 fn cut_items(source: &Source, items: u32) -> u32 {
     match source {
         Source::Dependencies(named) => u32::try_from(named.len()).expect("small").saturating_sub(items),
-        Source::Item(_)
+        Source::Task { .. }
+        | Source::Item(_)
         | Source::Comments { .. }
         | Source::Ci { .. }
         | Source::Reviews { .. }
@@ -816,7 +819,7 @@ fn follows(kind: Kind, parts: &[Part], kept: &[usize]) -> bool {
     let none: Vec<bool> = kept.iter().map(|kept| *kept == 0).collect();
     match kind {
         // The first bytes: whole parts, then one cut, then none.
-        Kind::Item | Kind::Pull | Kind::Plan | Kind::Template => {
+        Kind::Task | Kind::Item | Kind::Pull | Kind::Plan | Kind::Template => {
             let edge = whole.iter().position(|whole| !whole).unwrap_or(parts.len());
             none.iter().skip(edge + 1).all(|none| *none)
         }
@@ -849,7 +852,9 @@ fn follows(kind: Kind, parts: &[Part], kept: &[usize]) -> bool {
 /// one step more of its measure would add.
 fn slack(kind: Kind, parts: &[Part]) -> usize {
     match kind {
-        Kind::Item | Kind::Pull | Kind::Plan | Kind::Template | Kind::Comments | Kind::Attempts => CUT_LINE + 4,
+        Kind::Task | Kind::Item | Kind::Pull | Kind::Plan | Kind::Template | Kind::Comments | Kind::Attempts => {
+            CUT_LINE + 4
+        }
         Kind::Dependencies | Kind::Reviews | Kind::Ci => (CUT_LINE + 4) * (parts.len() + 1),
         Kind::Notes => parts.iter().map(|part| part.bytes.len()).max().unwrap_or(0) + CUT_LINE,
     }

@@ -327,6 +327,11 @@ step 07.
    after a commit is durable and before its answer reaches the engine,
    making nothing twice. This is where the design's gaps show first: each
    one found is settled in `domain/engine.md` in the same branch.
+   Its brief seam adds `Source::Task { task }`, `Kind::Task` and a separate
+   task budget; task text precedes requester lineage, losing farthest
+   ancestors first. The existing brief world's seeds retain their source
+   distribution; dedicated task worlds add replay, facts and randomized
+   bounds/terminal-race coverage. This seam alone is not the walking skeleton.
 2. **06b runs.** Parking and resuming from a transcript, or fresh past the
    resume limit with the tail in the brief; messages relayed only once
    committed; cancels; failures by class, backoff, holds; saved work;
