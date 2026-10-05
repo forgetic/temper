@@ -85,7 +85,8 @@ systems   what connectors drive: the forge first, with git, pull requests, CI an
 - **The engine decides; workers host; agents think.** Workers dial the
   engine, prepare workspaces and run agents (worker.md); agents do the
   LLM work and reach the engine only through tools their worker relays
-  (agent.md). What the engine is made of is engine.md.
+  (agent.md: smith, as temper uses it). What the engine is made of is
+  engine.md.
 - **The store is assumed.** It keeps durably what the engine gives it,
   commits several changes as one, applies commits in order, and answers
   bounded reads. What the engine asks of it is engine.md, section 5; what
@@ -346,7 +347,7 @@ these:
 
 An agent delegates in two ways, and chooses between them:
 
-- **sub-agents within its run** (agent.md, section 5): cheap,
+- **sub-agents within its run** (smith's `run.md`, 5.3): cheap,
   ephemeral, sharing its workspace and its budget, and ended with the
   call that asked for them;
 - **tasks:** durable and scheduled, with an executor, a workspace and an

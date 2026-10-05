@@ -6,7 +6,8 @@ anything leaves the engine, how it restarts, how it runs agents, and the
 capabilities it keeps from today (the fleet, briefs, notes, views,
 accounts). The model is core.md; tasks are tasks.md, authority
 authority.md, connectors connectors.md and the forge forge.md, people
-people.md. The worker it drives is worker.md, the agent agent.md. The
+people.md. The worker it drives is worker.md, the agent smith, as
+agent.md says temper uses it. The
 mechanics are those of skein's `docs/foundation/programming-model.md`.
 What is still open is listed in section 17.
 
@@ -161,7 +162,7 @@ them before it returns.
   bound, a decision that would need a commit is not taken, and what
   asked for it is told so: a person's request is answered busy; a run's
   tool call is answered busy, and the run asks it again after a backoff
-  (agent.md, 4.3); a turn or an answer is answered busy, and its worker
+  (smith's `run.md`, 5.2); a turn or an answer is answered busy, and its worker
   sends it again after a backoff (worker.md, section 8); a connector
   keeps its events and its outbox's outcomes until there is room. That
   is backpressure on every entrance at once.
@@ -455,7 +456,8 @@ When an agent task is due (tasks.md, 5.2), the root:
      the branch a change is pushed to; and a workstream key, the number
      of the task that holds the resources written, so that a change's
      producing, repairs and conflicts find its checkout cached;
-   - its charter, for the agent (agent.md, 4.1): the task's instructions,
+   - its charter, for the agent (agent.md, section 4), which the
+     engine's protocol layer encodes as smith's: the task's instructions,
      the brief, the tools its authority gives, the outcome its result
      contract asks for, its budget for the run and its models with their
      prices (authority.md, 7);
@@ -499,8 +501,10 @@ When an agent task is due (tasks.md, 5.2), the root:
 
 ### 7.3 The engine's tools
 
-A run reaches the engine through tools its worker relays as host calls
-(worker.md, 4.2). Each is checked against its task's authority
+A run reaches the engine through smith's host tools, declared in its
+charter, which its worker relays (worker.md, 4.2); their schemas,
+decoding and rendering are the engine's protocol layer's (agent.md,
+4.3). Each is checked against its task's authority
 (authority.md, section 8), decided, committed, and answered after the
 commit:
 
@@ -525,15 +529,17 @@ their answers commits, or the task ends; so calls an attempt made in a
 turn it lost are still there for the next attempt to be told of (7.1).
 A run whose call was withdrawn, lost with its channel, or answered busy
 asks it again with the same name while it lives, after a backoff
-(agent.md, 4.3), so the LLM is told the outcome rather than trying anew;
+(smith's `run.md`, 5.2), so the LLM is told the outcome rather than
+trying anew;
 an effect's key is derived from the call that asked for it
 (connectors.md, 4.4).
 
-Two tools a run has are not the engine's: `wait`, which the run and its
-worker serve, holding the slot until a message arrives (7.4), and
+Three tools a run has are not the engine's: `wait`, which the run and
+its worker serve, holding the slot until a message arrives (7.4);
 `finish`, which the run serves, checking its result against the
-contract (agent.md, 4.4), and whose result reaches the engine as the
-run's answer (tasks.md, 5.6).
+contract (smith's `run.md`, section 7), and whose result reaches the
+engine as the run's answer (tasks.md, 5.6); and `deliver`, which its
+worker serves as a push (agent.md, section 6).
 
 Beyond authority, a call is refused naming what it lacked; the run may
 `propose` the same action with a reason. Calls never become proposals on
@@ -889,7 +895,7 @@ and referee.
   one budget; cancelling a brief while it gathers; how a missing section
   shows in what the agent reads.
 - **Transcripts' limits:** the resume limit, whether runs compact a
-  transcript (agent.md, section 5) before it is reached, and how long
+  transcript (smith's `session.md`, section 8) before it is reached, and how long
   the store keeps them.
 - **Views:** a limit on watchers per subject; how a watch of a task's
   tree is bounded when the tree is large.

@@ -33,8 +33,10 @@ code to this design is built from sections 5 and 6 and each document's
    landing queues, updates and conflicts, branches, issues.
 7. **people.md:** people as parties: identity, roles, requests, inboxes,
    chats, person tasks.
-8. **worker.md** and **agent.md:** the worker and the agent, complete,
-   each changed little.
+8. **worker.md** and **agent.md:** the worker, complete, changed
+   little, and smith's host; and the agent, which is smith: what temper
+   takes from it and fills in. smith's own design is in its repository
+   (`docs/design/domain/`).
 
 ## 2. Conventions
 
@@ -45,6 +47,8 @@ code to this design is built from sections 5 and 6 and each document's
 - **skein's foundation documents** are named as their own file names:
   `programming-model.md`, `testing-strategy.md`, `notes.md`, cited by
   section, as today.
+- **smith's documents,** in smith's repository's `docs/design/domain/`,
+  are named with smith's name: smith's `run.md`, cited by section.
 - **Each document** says in one page what it is, then its structure, its
   parts, what it owes and is owed below the domain, its world, what
   changes from today, and what is open.
@@ -101,7 +105,10 @@ code to this design is built from sections 5 and 6 and each document's
 | workstream | the key a workspace is cached under: the holding task's number | an item's workstream |
 | owned, participating, context | what temper writes alone, writes among others, only reads (core.md, 7.1, 7.2; 5.1) | none |
 | drift | a change temper did not make to what it owns and relies on (connectors.md, section 10) | mangled records, a deleted branch |
-| session | an agent's conversation with an LLM, only (agent.md, section 5) | also an engine item that chats |
+| session | an agent's conversation with an LLM, only (smith's `session.md`) | also an engine item that chats |
+| smith | the agent kit, and the agent, temper runs (agent.md) | temper's own agent crates |
+| host tool | an engine tool or a connector's read, as smith offers it to the LLM (agent.md, 4.3) | a relayed call |
+| delivery | smith's request that its host make a change durable: for temper, a push (agent.md, section 6) | a push |
 | sign-in | a person signed in to the web (people.md, section 3) | none |
 
 ## 4. What goes
@@ -120,6 +127,14 @@ code to this design is built from sections 5 and 6 and each document's
 ## 5. What the other documents now owe
 
 What this design changes in each, for the migration plan:
+
+- **smith** (smith's `docs/design/domain/`): the agent's domain, its
+  protocol layer's agent half, its providers and its channel with the
+  worker leave temper for smith's repository (agent.md, section 11);
+  what this list says below of the agent's hop of `channel.md` and of
+  `llm.md` is smith's protocol design's to carry, and temper keeps the
+  engine's protocol layer's half: charters encoded, host tools declared,
+  decoded and answered, messages and the brief rendered.
 
 - **`docs/design/protocol.md`:**
   - the store becomes a boundary in its own right: commits numbered and
@@ -161,7 +176,10 @@ What this design changes in each, for the migration plan:
     whose schema is the session vocabulary's (`llm.md`);
   - its caps and sizes gain unacknowledged turns and transcripts; its
     section 14 is rewritten. The channel's first version may still
-    change freely, as it has not shipped (`channel.md`, 4.5).
+    change freely, as it has not shipped (`channel.md`, 4.5);
+  - the agent's hop leaves for `smith-channel`: the worker speaks it as
+    smith's host, carrying the charter as bytes, and `channel.md` keeps
+    the engine's hop with workers.
 - **`credentials.md`:** an LLM account's refresh token moves from
   temper-oauth's file record into the store's secret records, still
   written by the engine's protocol layer, never by the domain; the web's
@@ -169,8 +187,9 @@ What this design changes in each, for the migration plan:
   its own; git identities, webhook secrets and API tokens (one per
   forge) come with repositories as they are adopted, not from a fixed
   map at startup.
-- **`llm.md`:** schemas, decoding and rendering for every engine tool,
-  each connector's reads and `wait`; `finish` taking the result
+- **`llm.md`:** moves to smith's protocol design, but for what the
+  engine's protocol layer keeps of it: schemas, decoding and rendering
+  for every engine tool, each connector's reads and `wait`; `finish` taking the result
   contract; a session's turns encoded with a version and their names
   resolved, its providers' opaque blocks kept verbatim with the dialect
   and endpoint they came from, so a later session can open from them;
@@ -261,16 +280,39 @@ What this design changes in each, for the migration plan:
 
 | Section | Now |
 |---|---|
-| 1 to 3 | agent.md, 1 to 3 |
-| 4.1 Charter | agent.md, 4.1, with instructions, tools from authority, a result contract and a budget in the deployment's unit; today's mapping of the engine's charter in agent.md, 11 |
-| 4.2 What a run does | agent.md, 4.2, with turns |
-| 4.3 Inbound events and outlets | agent.md, 4.3: messages and the engine's tools |
-| 4.4 Finishing | agent.md, 4.4, with a merge in progress |
-| 4.5 Lifetime | agent.md, 4.5: waiting, parking, resuming |
-| 5 to 8 | agent.md, 5 to 8, sessions telling their turns |
-| — | agent.md, 9: the world |
-| 9. Open questions | agent.md, 10 |
-| 10. Not built yet | agent.md, 10 (context management, the commands' environment) and 11 (MCP, facts for the worker, one io vocabulary, the channel's half, the prerequisites done) |
+| 1 to 3 | smith's `README.md`, 1 and 4, and `run.md`, 2; temper's place in agent.md, 1 to 3 |
+| 4.1 Charter | smith's `run.md`, 3.1, with instructions, tools, a result contract and a budget in a unit; temper's charter in agent.md, section 4 |
+| 4.2 What a run does | smith's `run.md`, section 4, with turns |
+| 4.3 Inbound events and outlets | smith's `run.md`, 5.2 and section 6: host tools and messages; temper's in agent.md, 4.3 and section 5 |
+| 4.4 Finishing | smith's `run.md`, sections 7 and 8, with a merge in progress; the push in agent.md, section 6 |
+| 4.5 Lifetime | smith's `run.md`, section 6: waiting, parking, resuming |
+| 5 to 8 | smith's `session.md`, `tools.md`, `run.md`, section 11 (facts), and `host.md`, section 3 (the channel) |
+| — | smith's worlds, each document's; temper's in agent.md, section 9 |
+| 9. Open questions | smith's `run.md`, 15, `session.md`, 11, `tools.md`, 8; agent.md, 10 |
+| 10. Not built yet | smith's `session.md`, 8 (context management), `tools.md`, 8 (the commands' environment), `run.md`, 5.1 (MCP); agent.md, 11 |
+
+### 6.5 This directory's `agent.md`, before smith
+
+The agent's document of 2026-10-04, which code and plans cite as
+`domain/agent.md`:
+
+| Section | Now |
+|---|---|
+| 1. In one page | smith's `README.md`, 1; agent.md, 1 |
+| 2. The agent in the system | agent.md, 2 |
+| 3. Structure | smith's `README.md`, 4; agent.md, 3 |
+| 4.1 Charter | smith's `run.md`, 3.1 and 3.2; agent.md, section 4 |
+| 4.2 What a run does | smith's `run.md`, sections 4 and 10 |
+| 4.3 Messages and the engine's tools | smith's `run.md`, 5.2 and section 6; agent.md, 4.3, section 5 and section 8 |
+| 4.4 Finishing | smith's `run.md`, sections 7 and 8; agent.md, section 6 |
+| 4.5 Waiting, parking, resuming | smith's `run.md`, section 6; agent.md, 4.6 |
+| 5. Sessions | smith's `session.md` |
+| 6. Tools | smith's `tools.md` |
+| 7. Facts | smith's `run.md`, section 11 |
+| 8. Below the domain | smith's documents, each; agent.md, section 3 |
+| 9. The world | smith's documents, each; agent.md, section 9 |
+| 10. Open questions | smith's `run.md`, section 15; agent.md, section 10 |
+| 11. From today | smith's `run.md`, section 14; agent.md, section 11 |
 
 ### 6.4 `drafts/core.md`
 

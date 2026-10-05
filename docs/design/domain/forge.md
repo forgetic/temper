@@ -309,7 +309,7 @@ producing ─► opening ─► checking ─► gating ─► queued ─► firs
 
 1. **Producing:** a task for an agent, with the charter the change
    names, whose workspace starts from its landing branch (or its saved
-   work) and pushes the change's branch (agent.md, 4.4). Its result is
+   work) and pushes the change's branch (agent.md, section 6). Its result is
    the head it pushed. An attempt whose answer was lost may have pushed
    all the same: its writer slot is freed only once the branch has been
    read afresh (connectors.md, 3.3), and a head found there then is the

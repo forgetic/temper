@@ -285,7 +285,7 @@ which may amend, cancel or re-address it.
 ### 5.6 Results
 
 - **Checked twice.** An agent's run checks its result against the
-  contract before it finishes (agent.md, 4.4); the engine checks it
+  contract before it finishes (smith's `run.md`, section 7); the engine checks it
   again as it commits, against the contract and the state as it is
   now. A result that breaks its contract is a failed attempt, its reason
   given to the next run.

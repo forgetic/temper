@@ -77,7 +77,7 @@ Authority
   notes       the scopes it may write notes in
 ```
 
-- **Tools:** families, as an agent's charter names them (agent.md, 4.1):
+- **Tools:** families, as an agent's charter names them (agent.md, 4.3):
   inspecting the workspace, modifying it, the shell, sub-agents, each
   connector's reads, and the engine's tools, each its own family
   (delegate, message, amend and cancel, decide, propose, subscribe,
@@ -286,8 +286,8 @@ deployment's rules       the most any project may have; requirements on effects
   loses with turns never committed, and no answer, is bounded by the turns
   a worker may keep unacknowledged.
 - **A run's budget** is what its task has left, capped per run by the
-  deployment, in the deployment's unit. The agent enforces it (agent.md,
-  4.2), stopping the next completion of each session once the run has
+  deployment, in the deployment's unit. The agent enforces it (smith's
+  `run.md`, section 9), stopping the next completion of each session once the run has
   spent it, so a run spends past its budget by at most one completion of
   each session it has open.
 - **Time is a deadline.** A task past its deadline is held, and its

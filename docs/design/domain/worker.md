@@ -3,7 +3,8 @@
 Provisional, 2026-10-04. What the temper worker does, as a domain layer:
 its parts, what each is responsible for, and how they fit together. It
 hosts the runs of the engine's agent tasks (engine.md, section 7); the
-agent it starts is agent.md. The mechanics are those of skein's
+agent it starts is smith, as agent.md says, and the worker is its host
+(smith's `host.md`). The mechanics are those of skein's
 `docs/foundation/programming-model.md`. What is still open is listed in
 section 12, and what it defers in section 13.
 
@@ -19,13 +20,13 @@ section 12, and what it defers in section 13.
   branches, saved work). A worker can be killed at any moment and any
   worker can take any run; its checkouts are caches.
 - **It hosts runs, not jobs.** A run may finish once, or wait for
-  messages, take them and park (agent.md, 4.5). The worker's unit is a
+  messages, take them and park (smith's `run.md`, section 6). The worker's unit is a
   hosted run with that lifecycle: start, fresh or from a transcript;
   messages in; tool calls out; turns up; park or end.
 - **Policy is data.** The worker interprets no workflow vocabulary: no
   task, role, verdict or tool names. An assignment says which
   repositories to check out and how, what to save, and the charter to
-  hand the agent.
+  hand the agent, which is smith's and which it carries as bytes.
 - **Its one forge write is a git push:** a change its run accepted, or
   saved work. Push credentials stay in the worker's protocol layer; an
   agent never sees them. Everything else that touches the forge goes
@@ -109,13 +110,14 @@ agent    LLM work: one run per agent process, reporting to the worker
 temper-worker-domain                 the worker loop's entry point: the engine link, routing
 ├── temper-worker-domain-host        hosted runs: admit, prepare, start, relay, park or end
 ├── temper-worker-domain-checkout    workspaces: prepare, merge, commit, push, save; the cache
-└── temper-worker-domain-agent       agent processes: spawn, channel, watchdog, cancel then kill
+└── smith-host-domain                agent processes: spawn, channel, watchdog, cancel then kill
 ```
 
 The tree follows programming-model.md, 4.5: each child domain is a step
 machine with its own vocabulary, limits and world; a parent owns its
 children's state and routes between them; siblings share no domain
-types. `host` is the hub: it knows a hosted run's lifecycle and nothing
+types. The agent child is smith's host domain (smith's `host.md`,
+section 4), a child like the others. `host` is the hub: it knows a hosted run's lifecycle and nothing
 of git, processes or channels. The other two are capabilities, which the
 top level translates to and from through small total functions. A
 hand-off goes from a capability to the host, from the host to a
@@ -149,8 +151,10 @@ What the engine gives the worker for one run:
   - the identity for every git operation on it (a name the protocol layer
     maps to credentials and a commit author).
 - **Saving.** Whether to save unfinished work, and to which branch.
-- **Charter.** What the agent's run is given (agent.md, 4.1). The worker
-  adds where the repositories sit and passes the rest through.
+- **Charter.** smith's, as the engine wrote it (agent.md, section 4),
+  carried as bytes. The worker gives it to the agent with the workspace
+  it prepared: where the repositories sit, which may be written, and for
+  a merge in progress the files in conflict (smith's `run.md`, 3.2).
 - **Transcript,** optional: the turns of the task's earlier runs, for a
   run that resumes, and the calls committed after the last of them
   (engine.md, 7.2). The worker carries them opaque, within its
@@ -166,7 +170,7 @@ limits, and so is a workspace with no repository or with a name twice.
 ```
 admit ─► prepare ─► start ─► active ⇄ waiting
                                │  turns: kept until acknowledged
-                               │  tool calls: push, served here; the rest relayed to the engine
+                               │  tool calls: delivery, a push, served here; the rest relayed to the engine
                                ▼
                          park or end ─► stop ─► save ─► release ─► answer
 cancel, from any state ──────────────► stop ─► save ─► release ─► answer
@@ -188,8 +192,9 @@ cancel, from any state ──────────────► stop ─►
      acknowledged, and a run with as many unacknowledged turns as its
      limit allows is not read from until one is (section 8).
    - **Tool calls** come up, a bounded number per run and one push at a
-     time; one more is answered as busy. Pushes are served by the worker
-     (section 5); every other call goes to the engine and its answer
+     time; one more is answered as busy. Pushes, smith's deliveries, are
+     served by the worker (section 5; agent.md, section 6); every other
+     call goes to the engine and its answer
      comes back. A call the run withdraws, past its own deadline for it,
      is answered as withdrawn at once if relayed: the host cancels its
      delivery through the engine link and keeps the call until the link
@@ -229,7 +234,8 @@ A cancel from the engine, a lost channel or shutdown, or a fault of the
 agent (the watchdog's among them), takes the same tail: stop, save,
 release, answer. A cancelled run may still say how it finishes as it
 winds down, and what it says first, before its agent has gone, is its
-answer: a push that lands meanwhile is its result (agent.md, 4.4), and a
+answer: a push that lands meanwhile is its result (smith's `run.md`,
+8.2), and a
 cancel it reports is the worker's. A run past its wall time winds down
 the same way, but a cancel it reports is its wall time's failure; a run
 stopped for any other fault is answered with the fault. Only a run that
@@ -249,8 +255,8 @@ Typed, so the engine can act on them without reading prose:
   workstream holds its checkout), or permanent until something changes on
   the forge, naming the repository: the forge does not have it, a branch
   or a commit, or it refuses the identity.
-- **The run failed,** as it reports it (agent.md, 4.2: domain, budget,
-  policy, stale, a transcript it could not resume), or because an LLM
+- **The run failed,** as it reports it (smith's `run.md`, section 10: the
+  model, budget, policy, stale, a transcript it could not resume), or because an LLM
   account it needs is exhausted.
 - **The agent failed:** it could not be started, it exited without
   answering, it broke the channel's rules or said more than the limits
@@ -297,7 +303,7 @@ protocol layer runs as contained processes and whose output it parses.
   out the branch, and merges the base into it as git does, leaving the
   files in conflict with their markers and the merge's state in the
   repository. The agent edits the files and runs the checks; it has no git
-  writes (agent.md, section 6). Its push commits the tree as the merge,
+  writes (smith's `tools.md`, section 5). Its push commits the tree as the merge,
   with two parents, the branch's head and the base commit, even when the
   tree is unchanged from either; a file the merge left in conflict that
   still holds a conflict marker is refused at push, and the run is told
@@ -306,10 +312,9 @@ protocol layer runs as contained processes and whose output it parses.
   paths per repository; malformed or oversized git terminals fail without
   retaining those paths. Facts keep only the path counts. A cancelled
   merge releases the workspace only after its invocation has settled.
-- **Push commits what the run checked.** When a run asks to push, at
-  `finish` with a change or proposing one mid-run, it has run the
-  repository's checks with nothing else writing to the checkout
-  (agent.md, 4.4); the worker commits exactly that tree and pushes the
+- **Push commits what the run checked.** When a run asks to deliver, at
+  `finish` with a change or mid-run, it has run the repository's checks
+  with nothing else writing to the checkout (smith's `run.md`, 8.1); the worker commits exactly that tree and pushes the
   commit, with the run's title and body. A push is a fast-forward and
   never forced: if the branch moved incompatibly with the run's commit,
   the push fails and the run is told. This checks freshness against
@@ -338,8 +343,10 @@ protocol layer runs as contained processes and whose output it parses.
 
 ## 6. Agent processes
 
-The agent child domain runs each hosted run in an agent process of its
-own.
+The agent child domain is smith's host domain (smith's `host.md`,
+section 4): it runs each hosted run in an agent process of its own,
+smith's agent. What follows is what temper relies on of it, and the
+choices temper makes.
 
 - **One process per run.** Its process tree is the run's containment
   boundary: stopping a run means that tree is gone, which io proves. Its
@@ -349,7 +356,8 @@ own.
   such. It has gone only once its process has exited, its tree is empty
   and its channel has been read to the end, so what it said before it went
   is heard.
-- **One channel** over the process's pipes (agent.md, section 8). Down:
+- **One channel** over the process's pipes, smith's (smith's `host.md`,
+  sections 2 and 3). Down:
   the charter and transcript first, then messages, answers to tool calls,
   grants and at most one cancel, in order. Up: tool calls, named by the
   run and each answered once, also once the run has withdrawn it; the
@@ -372,7 +380,7 @@ own.
   to lunch nor a two-hour test suite looks like a hang. A separate bound
   covers the run's wall time.
 - **Cancel, then kill.** A cancel goes down the channel first, and the
-  run winds down on its own (agent.md, 4.2); past a grace period the
+  run winds down on its own (smith's `run.md`, section 10); past a grace period the
   process tree is terminated, then killed. Wall time ends the same polite
   way, as the run is alive and may still report; a broken rule, no
   progress, or a channel hung up while the run is live terminate the tree
@@ -381,7 +389,7 @@ own.
 
 ## 7. Facts
 
-What the run reports as it goes (agent.md, section 7) feeds the watchdog
+What the run reports as it goes (smith's `run.md`, section 11) feeds the watchdog
 and goes up to the engine, with the run's and the attempt's names, for
 liveness, operators and live views, such as a chat's streaming text.
 Forwarding is best effort: a bounded queue, with what does not fit
@@ -393,7 +401,7 @@ acknowledged (section 8).
 ## 8. Turns
 
 - **What a turn is:** the bytes of one turn of the run's conversation, in
-  the agent's own vocabulary (agent.md, section 5), numbered within its
+  the agent's own vocabulary (smith's `session.md`, section 3), numbered within its
   attempt, with what it spent and the last of the messages it read. The
   worker reads only its number, its size and that name.
 - **Kept until acknowledged,** like an answer: sent at once, sent again
@@ -480,7 +488,8 @@ design changes in them.
   domain emitted, so none goes before the hello.
 - **Agents:** spawning the agent within a deadline in a contained process
   tree (a delegated cgroup), with proof that the tree is empty after it
-  stops; a framed channel over its pipes, whose start message the
+  stops; smith's channel over its pipes (`smith-channel`, the host's
+  half), whose start message the
   protocol layer completes with where the repositories sit and, for a
   merge in progress, which files are in conflict; an environment without
   forge credentials.
@@ -507,7 +516,7 @@ its types (testing-strategy.md, section 4):
   and answers once its fake store has committed them;
 - **a network** whose channel drops at random, for less and for more than
   the grace;
-- **an agent** that follows a script: progress, tool calls, turns, waits,
+- **an agent** that follows a script, smith's scripted agent: progress, tool calls, turns, waits,
   parks and ends, but also hangs, crashes, broken rules and ignored
   cancels;
 - **git:** a remote of refs and commits, and local working trees, with
@@ -538,7 +547,7 @@ git operation runs while a run's agent may, but the push it asked for,
 and that nothing is live once it settles.
 
 The worker meets the real agent in the agent's top-level world: each
-process it spawns is an agent domain with a fake LLM provider, its tools
+process it spawns is smith's domain with smith's fake LLM provider, its tools
 working in the trees the worker prepared, and the engine commits the
 turns and the result the run reports. `docs/design/testing.md` places
 these worlds among temper's tiers and tracks their fakes; the working
@@ -549,6 +558,9 @@ branch the worker pushes is the head the engine reads.
 
 - **The worker stays** as it is built, its lifecycle, its checkout cache,
   its fenced attempts and acknowledged answers, its supervision.
+- **The agent becomes smith:** the agent child domain is smith's host
+  domain, the channel to the agent smith's, and the charter smith's,
+  carried as bytes (agent.md, section 11).
 - **Items become tasks** in its names: a run is named by its task, and its
   workstream key is the holding task's number.
 - **Snapshots go.** No agent produces one today, and the agent's protocol
