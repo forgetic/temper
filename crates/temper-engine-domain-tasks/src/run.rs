@@ -1,4 +1,4 @@
-use crate::domain::{Domain, activate, entrance, fact, publish, record, refused, task_mut};
+use crate::domain::{Domain, entrance, fact, publish, record, refused, task_mut};
 use crate::{
     Accepted, Active, Class, Closing, Contract, End, Ending, Fact, Hold, Limits, Phase, Refusal, Request, Result,
     Stage, Tries, Was,
@@ -23,16 +23,12 @@ pub(crate) fn claim(
     to: ReplyTo,
     number: u64,
     attempt: u64,
-    readable: &[u64],
     out: &mut Queue<Request>,
 ) {
     let to = match entrance(d, to, number) {
         Ok(to) => to,
         Err((to, why)) => return refused(to, Some(number), why, out),
     };
-    if !crate::inbox::claimable(d, number, readable) {
-        return refused(to, Some(number), Refusal::Read, out);
-    }
     let task = task_mut(d, number).expect("entrance names task");
     if attempt <= task.record.attempt {
         return refused(to, Some(number), Refusal::Attempt, out);
@@ -43,10 +39,8 @@ pub(crate) fn claim(
     task.record.attempt = attempt;
     task.record.run_spent = 0;
     task.record.turn = 0;
-    task.record.last_read = None;
     task.record.phase = Phase::Active(Active::Claimed { attempt });
     publish(d, env, number, out);
-    crate::inbox::offer(d, number, attempt, readable, out);
     fact(d, Fact::Claimed { task: number, attempt });
     out.push(Request::Done { reply_to: to });
 }
@@ -141,16 +135,6 @@ pub(crate) fn activation(
         return refused(to, Some(number), Refusal::NotReady, out);
     }
     let Some(old) = record(d, number) else {
-        if let Some(stub) = d.stubs.get(&number)
-            && stub.last_answer == Some(attempt)
-        {
-            return out.push(Request::Acknowledged {
-                reply_to: to,
-                task: number,
-                attempt,
-                accepted: Accepted::Already,
-            });
-        }
         return refused(to, Some(number), Refusal::Unknown, out);
     };
     if old.last_answer == Some(attempt) {
@@ -170,7 +154,6 @@ pub(crate) fn activation(
         | Phase::Held { was: Was::Waiting | Was::Active(_), .. }
         | Phase::Ended(_) => None,
     };
-    let end = if old.narrowing && closing.is_none() { End::Parked } else { end };
     let end = match end {
         End::Finished { result, cancel_delegates } => {
             if valid_result(&old.contract, &result, &env.limits) {
@@ -217,21 +200,12 @@ pub(crate) fn activation(
         }
     };
     let task = task_mut(d, number).expect("terminal names live task");
-    task.record.narrowing = false;
     task.record.last_answer = Some(attempt);
     task.record.phase = match held {
         Some(why) => Phase::Held { was: was(next), why },
         None => next,
     };
-    let held_notice = match task.record.phase {
-        Phase::Held { why, .. } => Some(why),
-        Phase::Waiting | Phase::Active(_) | Phase::Closing(_) | Phase::Ended(_) => None,
-    };
-    crate::inbox::clear_offers(d, number, out);
     publish(d, env, number, out);
-    if let Some(why) = held_notice {
-        crate::refs::notify(d, number, crate::Notice::Held(why), out);
-    }
     out.push(Request::Acknowledged { reply_to: to, task: number, attempt, accepted: Accepted::New });
 }
 pub(crate) fn was(phase: Phase) -> Was {
@@ -298,39 +272,5 @@ pub(crate) fn hold(d: &mut Domain, env: &Env<Limits>, number: u64, why: Hold, ou
     let old = core::mem::replace(&mut task.record.phase, Phase::Waiting);
     task.record.phase = Phase::Held { was: was(old), why };
     publish(d, env, number, out);
-    crate::refs::notify(d, number, crate::Notice::Held(why), out);
     fact(d, Fact::Held { task: number, why });
-}
-pub(crate) fn release(d: &mut Domain, env: &Env<Limits>, to: ReplyTo, number: u64, out: &mut Queue<Request>) {
-    let to = match entrance(d, to, number) {
-        Ok(to) => to,
-        Err((to, why)) => return refused(to, Some(number), why, out),
-    };
-    let old = record(d, number).expect("entrance names task");
-    if run_attempt(&old.phase).is_some() {
-        return refused(to, Some(number), Refusal::Busy, out);
-    }
-    let previous = match &old.phase {
-        Phase::Held { was, .. } => was,
-        Phase::Waiting | Phase::Active(_) | Phase::Closing(_) | Phase::Ended(_) => {
-            return refused(to, Some(number), Refusal::Unheld, out);
-        }
-    };
-    let next = match previous {
-        Was::Waiting => Phase::Waiting,
-        Was::Active(Active::Preparing | Active::BackingOff { .. }) => Phase::Active(Active::Due),
-        Was::Active(active) => Phase::Active(*active),
-        Was::Closing(closing) => Phase::Closing(closing.clone()),
-    };
-    let task = task_mut(d, number).expect("entrance names task");
-    task.record.phase = next;
-    task.record.tries = Tries::NONE;
-    task.record.refusals = 0;
-    let due = task.record.phase == Phase::Active(Active::Due);
-    publish(d, env, number, out);
-    if due {
-        activate(d, number, out);
-    }
-    fact(d, Fact::Released { task: number });
-    out.push(Request::Done { reply_to: to });
 }

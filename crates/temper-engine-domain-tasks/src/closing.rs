@@ -1,10 +1,9 @@
-use crate::domain::{Domain, activate, entrance, fact, publish, record, refused, snapshot, task_mut};
+use crate::domain::{Domain, activate, fact, publish, record, snapshot, task_mut};
 use crate::{
-    Active, Closing, Ending, Fact, Hold, Key, Limits, Party, Phase, Refusal, Request, Result, Stage, Status, Stored,
-    Stub, Was,
+    Active, Closing, Ending, Fact, Hold, Key, Limits, Party, Phase, Request, Result, Stage, Status, Stored, Was,
 };
 use alloc::boxed::Box;
-use skein_lib::{Env, List, Queue, ReplyTo};
+use skein_lib::{Env, List, Queue};
 pub(crate) fn status(ending: &Ending) -> Status {
     match ending {
         Ending::Done(_) => Status::Done,
@@ -30,24 +29,6 @@ fn below(d: &Domain, number: u64, ancestor: u64, bound: u32) -> bool {
         };
     }
     false
-}
-pub(crate) fn cancel(
-    d: &mut Domain,
-    env: &Env<Limits>,
-    to: ReplyTo,
-    number: u64,
-    reason: Box<[u8]>,
-    out: &mut Queue<Request>,
-) {
-    let to = match entrance(d, to, number) {
-        Ok(to) => to,
-        Err((to, why)) => return refused(to, Some(number), why, out),
-    };
-    if reason.len() > usize::try_from(env.limits.result_bytes).expect("u32 fits usize") {
-        return refused(to, Some(number), Refusal::Reason, out);
-    }
-    cancel_tree(d, env, number, &reason, out);
-    out.push(Request::Done { reply_to: to });
 }
 pub(crate) fn cancel_delegates(
     d: &mut Domain,
@@ -158,29 +139,14 @@ pub(crate) fn progress(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Reques
             match &task.phase {
                 Phase::Waiting => {
                     let mut ready = true;
-                    let mut failed = None;
-                    for dependency in &task.dependencies {
+                    for dependency in &task.waiting_on {
                         if d.names.contains_key(dependency) {
                             ready = false;
-                        } else if let Some(stub) = d.stubs.get(dependency) {
-                            match stub.status {
-                                Status::Done => {}
-                                Status::Failed | Status::Cancelled => {
-                                    failed = Some(*dependency);
-                                }
-                            }
                         } else {
-                            unreachable!("admitted dependency is live or retained stub");
+                            unreachable!("unfinished dependency must remain live");
                         }
                     }
-                    if let Some(dependency) = failed {
-                        task_mut(d, number).expect("waiting task live").record.phase =
-                            Phase::Held { was: Was::Waiting, why: Hold::Dependency(dependency) };
-                        publish(d, env, number, out);
-                        crate::refs::notify(d, number, crate::Notice::Held(Hold::Dependency(dependency)), out);
-                        fact(d, Fact::Held { task: number, why: Hold::Dependency(dependency) });
-                        changed = true;
-                    } else if ready {
+                    if ready {
                         task_mut(d, number).expect("waiting task live").record.phase = Phase::Active(Active::Due);
                         publish(d, env, number, out);
                         activate(d, number, out);
@@ -188,11 +154,7 @@ pub(crate) fn progress(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Reques
                     }
                 }
                 Phase::Closing(closing) => match closing.stage {
-                    Stage::Delegates
-                        if task.delegates.is_empty()
-                            && task.results_due.is_empty()
-                            && !crate::funders::funded_live(d, number) =>
-                    {
+                    Stage::Delegates if task.delegates.is_empty() && !crate::funders::funded_live(d, number) => {
                         let ending = closing.ending.clone();
                         let task = task_mut(d, number).expect("closing task live");
                         task.record.phase = Phase::Closing(Closing { stage: Stage::Effects, ending: ending.clone() });
@@ -228,29 +190,41 @@ fn end_task(d: &mut Domain, env: &Env<Limits>, number: u64, out: &mut Queue<Requ
     assert!(task.delegates.is_empty(), "all delegates ended before requester");
     let ending = ending.clone();
     let requester = task.requester;
-    let stub = Stub {
-        number,
-        project: task.project,
-        status: status(&ending),
-        attempt: task.attempt,
-        last_answer: task.last_answer,
-    };
+    let status = status(&ending);
     let mut ended = task.clone();
     crate::funders::end(d, env, number, out);
     ended.phase = Phase::Ended(ending.clone());
-    crate::inbox::archive(d, number, out);
-    crate::refs::end(d, number, out);
-    crate::refs::notify(d, number, crate::Notice::Ended(ending.clone()), out);
-    d.wakes.cancel(number);
     let id = d.names.remove(&number).expect("ending name exists");
     d.tasks.retire(id);
     d.alarms.cancel(number);
     out.push(Request::Erase { key: Key::Live(number) });
     out.push(Request::Save { record: Stored::Ended(Box::new(ended)) });
-    if needed(d, number) {
-        let saved = d.stubs.insert(number, stub);
-        assert!(saved == Ok(None), "ended stub room reserved at make");
-        out.push(Request::Save { record: Stored::Stub(stub) });
+    let dependents = snapshot(d, env.limits.tasks);
+    for dependent in dependents.into_boxed() {
+        let task = task_mut(d, dependent).expect("dependent snapshot is live");
+        if !crate::batch::contains(&task.record.waiting_on, number) {
+            continue;
+        }
+        let mut remaining = List::with_capacity(env.limits.dependencies);
+        for &waiting in &task.record.waiting_on {
+            if waiting != number {
+                remaining.push(waiting).expect("dependency subset bounded");
+            }
+        }
+        task.record.waiting_on = remaining.into_boxed();
+        match status {
+            Status::Done => {}
+            Status::Failed | Status::Cancelled => match &task.record.phase {
+                Phase::Closing(_) | Phase::Held { was: Was::Closing(_), .. } | Phase::Ended(_) => {}
+                Phase::Waiting | Phase::Active(_) | Phase::Held { was: Was::Waiting | Was::Active(_), .. } => {
+                    task.record.phase = Phase::Held {
+                        was: crate::run::was(core::mem::replace(&mut task.record.phase, Phase::Waiting)),
+                        why: Hold::Dependency(number),
+                    };
+                }
+            },
+        }
+        publish(d, env, dependent, out);
     }
     match requester {
         Party::Task(parent) => {
@@ -267,33 +241,5 @@ fn end_task(d: &mut Domain, env: &Env<Limits>, number: u64, out: &mut Queue<Requ
         Party::Person(_) | Party::Deployment { .. } => {}
     }
     out.push(Request::Ended { task: number, requester, ending });
-    fact(d, Fact::Ended { task: number, status: stub.status });
-}
-pub(crate) fn needed(d: &Domain, number: u64) -> bool {
-    for (_, id) in &d.names {
-        let task = &d.tasks.get(*id).expect("name indexes live task").record;
-        if crate::batch::contains(&task.dependencies, number)
-            || crate::batch::contains(&task.spec.inputs, number)
-            || crate::batch::contains(&task.references, number)
-            || crate::batch::contains(&task.results_due, number)
-        {
-            return true;
-        }
-    }
-    for (_, envelope) in &d.messages {
-        match envelope.message {
-            crate::Message::Result { task, .. } | crate::Message::Notice { target: task, .. } if task == number => {
-                return true;
-            }
-            crate::Message::Amendment { .. }
-            | crate::Message::Words { .. }
-            | crate::Message::Question { .. }
-            | crate::Message::Answer { .. }
-            | crate::Message::Result { .. }
-            | crate::Message::News { .. }
-            | crate::Message::Notice { .. }
-            | crate::Message::Timer { .. } => {}
-        }
-    }
-    false
+    fact(d, Fact::Ended { task: number, status });
 }

@@ -5,6 +5,5 @@ pub enum Fact {
     Claimed { task: u64, attempt: u64 },
     Failed { task: u64, class: Class },
     Held { task: u64, why: Hold },
-    Released { task: u64 },
     Ended { task: u64, status: Status },
 }

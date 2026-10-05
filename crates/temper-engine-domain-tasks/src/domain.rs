@@ -1,6 +1,4 @@
-use crate::{
-    Active, Event, Fact, Limits, New, Party, Phase, Problem, Refusal, Request, Stored, Stub, TaskRecord, Tries,
-};
+use crate::{Active, Event, Fact, Limits, New, Party, Phase, Problem, Refusal, Request, Stored, TaskRecord, Tries};
 use alloc::boxed::Box;
 use skein_lib::{Deadlines, Env, Id, List, Map, Queue, ReplyTo, Rng, Slab, Time, Wall};
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -12,7 +10,6 @@ pub(crate) struct Alarm {
 pub(crate) struct Task {
     pub record: TaskRecord,
     pub alarm: Option<Alarm>,
-    pub wake_alarms: [Option<Alarm>; 3],
 }
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Startup {
@@ -25,17 +22,8 @@ pub struct Domain {
     pub(crate) startup: Startup,
     pub(crate) tasks: Slab<Task>,
     pub(crate) names: Map<u64, Id<Task>>,
-    pub(crate) stubs: Map<u64, Stub>,
     pub(crate) alarms: Deadlines<u64>,
-    pub(crate) wakes: Deadlines<u64>,
-    pub(crate) timers: Deadlines<u64>,
-    pub(crate) messages: Map<crate::MessageKey, crate::Envelope>,
-    pub(crate) offers: Map<crate::MessageKey, crate::Offer>,
-    pub(crate) receipts: Map<u64, crate::Receipt>,
-    pub(crate) questions: Map<u64, crate::Question>,
-    pub(crate) subscriptions: Map<u64, crate::Subscription>,
     pub(crate) funding: Map<crate::Funder, crate::FundingRecord>,
-    pub(crate) admissions: Map<crate::AdmissionKey, crate::Admission>,
     pub(crate) charters: Box<[u32]>,
     pub(crate) rng: Rng,
     facts: Queue<Fact>,
@@ -55,17 +43,8 @@ impl Domain {
             startup: Startup::Restoring,
             tasks: Slab::with_capacity(l.tasks),
             names: Map::with_capacity(l.tasks),
-            stubs: Map::with_capacity(l.stubs),
             alarms: Deadlines::with_capacity(l.tasks),
-            wakes: Deadlines::with_capacity(l.tasks),
-            timers: Deadlines::with_capacity(l.subscriptions),
-            messages: Map::with_capacity(crate::inbox::capacity(l).expect("valid message capacity")),
-            offers: Map::with_capacity(crate::inbox::offer_capacity(l).expect("valid control offer capacity")),
-            receipts: Map::with_capacity(l.receipts),
-            questions: Map::with_capacity(l.questions),
-            subscriptions: Map::with_capacity(l.subscriptions),
             funding: Map::with_capacity(l.funders),
-            admissions: Map::with_capacity(l.admissions),
             charters,
             rng: Rng::new(seed),
             facts: Queue::with_capacity(l.facts),
@@ -79,19 +58,8 @@ impl Domain {
         self.funding.get(&funder)
     }
     #[must_use]
-    pub fn ready(&self) -> bool {
+    pub(crate) fn ready(&self) -> bool {
         self.startup == Startup::Ready
-    }
-    #[must_use]
-    pub fn next_deadline(&self) -> Option<Time> {
-        [self.alarms.next(), self.wakes.next(), self.timers.next()].into_iter().flatten().min()
-    }
-    #[must_use]
-    pub fn is_due(&self, now: Time) -> bool {
-        match self.next_deadline() {
-            Some(at) => at <= now,
-            None => false,
-        }
     }
     pub fn reclaim(&mut self) {
         self.tasks.reclaim();
@@ -99,20 +67,11 @@ impl Domain {
     pub fn pop_fact(&mut self) -> Option<Fact> {
         self.facts.pop()
     }
-    #[must_use]
-    pub const fn facts_lost(&self) -> u64 {
-        self.lost
-    }
 }
 pub(crate) fn output_bound(l: &Limits) -> Option<u32> {
     l.tasks
         .checked_mul(20)?
-        .checked_add(l.stubs.checked_mul(2)?)?
         .checked_add(l.batch.checked_mul(2)?)?
-        .checked_add(crate::inbox::capacity(l)?.checked_mul(4)?)?
-        .checked_add(crate::inbox::offer_capacity(l)?.checked_mul(3)?)?
-        .checked_add(l.subscriptions.checked_mul(4)?)?
-        .checked_add(l.questions.checked_mul(2)?)?
         .checked_add(l.funders.checked_mul(3)?)?
         .checked_add(8)
 }
@@ -130,75 +89,27 @@ pub fn step(d: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Req
         Event::CarvePool { reply_to, project, person, period, budget } => {
             crate::funders::carve(d, reply_to, project, person, period, budget, out);
         }
-        Event::ChargedTurn { reply_to, task, attempt, turn, read, cumulative } => {
+        Event::Make { reply_to, creator, batch } => make(d, env, reply_to, creator, batch, out),
+        Event::Prepare { reply_to, task } => crate::run::prepare(d, env, reply_to, task, out),
+        Event::Claim { reply_to, task, attempt } => crate::run::claim(d, env, reply_to, task, attempt, out),
+        Event::Turn { reply_to, task, attempt, turn, read, cumulative } => {
             crate::admission::turn(d, env, reply_to, task, attempt, turn, read, cumulative, out);
         }
-        Event::ChargedActivation { reply_to, task, attempt, end, cumulative } => {
-            crate::admission::activation(d, env, reply_to, task, attempt, end, cumulative, out);
-        }
-        Event::ForgetAdmission { reply_to, key } => crate::admission::forget(d, reply_to, key, out),
-        Event::RememberStub { reply_to, stub } => crate::stored::remember(d, env, reply_to, stub, out),
-        Event::ForgetStub { reply_to, task } => crate::stored::forget(d, reply_to, task, out),
-        Event::Restore { record } => crate::stored::restore(d, env, record, out),
-        Event::Restored => crate::stored::restored(d, env, out),
-        Event::Make { reply_to, creator, batch } => make(d, env, reply_to, creator, batch, out),
-        Event::Control { reply_to, task, authorization, action } => {
-            crate::amend::control(d, env, reply_to, task, authorization, action, out);
-        }
-        Event::Amend { reply_to, task, authorization, amendment } => {
-            crate::amend::amend(d, env, reply_to, task, authorization, amendment, out);
-        }
-        Event::Move { reply_to, task, authorization, movement } => {
-            crate::moving::move_task(d, env, reply_to, task, authorization, movement, out);
-        }
-        Event::Charge { reply_to, task, attempt, cumulative } => {
-            crate::funders::charge(d, env, reply_to, task, attempt, cumulative, out);
-        }
-        Event::Prepare { reply_to, task } => crate::run::prepare(d, env, reply_to, task, out),
-        Event::Claim { reply_to, task, attempt, readable } => {
-            crate::run::claim(d, env, reply_to, task, attempt, &readable, out);
-        }
-        Event::Send { reply_to, number, task, from, message } => {
-            crate::inbox::send(d, env, reply_to, number, task, from, message, out);
-        }
-        Event::Peek { reply_to, task, bytes } => crate::inbox::peek(d, reply_to, task, bytes, out),
-        Event::Turn { reply_to, task, attempt, turn, read } => {
-            crate::inbox::turn(d, env, reply_to, task, attempt, turn, read, out);
-        }
-        Event::DeliverResult { reply_to, number, task, delegate, ending } => {
-            crate::inbox::result(d, env, reply_to, number, task, delegate, ending, out);
-        }
-        Event::DeliverNotice { reply_to, number, subscription, notice } => {
-            crate::refs::notice(d, env, reply_to, number, subscription, notice, out);
-        }
-        Event::DeliverTimer { reply_to, number, subscription } => {
-            crate::refs::timer(d, env, reply_to, number, subscription, out);
-        }
-        Event::News { reply_to, number, subscription, class, words } => {
-            crate::refs::news(d, env, reply_to, number, subscription, class, words, out);
-        }
-        Event::ForgetReceipt { reply_to, number } => crate::inbox::forget_receipt(d, reply_to, number, out),
-        Event::Introduce { reply_to, by, left, right } => {
-            crate::refs::introduce(d, env, reply_to, by, left, right, out);
-        }
-        Event::ForgetReference { reply_to, task, target } => crate::refs::forget(d, env, reply_to, task, target, out),
-        Event::Subscribe { reply_to, subscription } => crate::refs::subscribe(d, env, reply_to, subscription, out),
-        Event::Unsubscribe { reply_to, task, subscription } => {
-            crate::refs::unsubscribe(d, reply_to, task, subscription, out);
-        }
         Event::Started { task, attempt } => crate::run::started(d, env, task, attempt, out),
-        Event::Activation { reply_to, task, attempt, end } => {
-            crate::run::activation(d, env, reply_to, task, attempt, end, out);
-        }
+        Event::Activation { reply_to, task, attempt, end, cause } => match cause {
+            crate::Cause::Priced { cumulative } => {
+                crate::admission::activation(d, env, reply_to, task, attempt, end, cumulative, out);
+            }
+            crate::Cause::Unpriced => crate::run::activation(d, env, reply_to, task, attempt, end, out),
+        },
         Event::PreparationFailed { task } => crate::run::preparation_failed(d, env, task, out),
         Event::Hold { task, why } => crate::run::hold(d, env, task, why, out),
-        Event::Release { reply_to, task } => crate::run::release(d, env, reply_to, task, out),
-        Event::Cancel { reply_to, task, reason } => crate::closing::cancel(d, env, reply_to, task, reason, out),
         Event::Settled { task } => crate::closing::settled(d, env, task, out),
+        Event::Restore { record } => crate::stored::restore(d, env, record, out),
+        Event::Restored => crate::stored::restored(d, env, out),
     }
     if d.ready() {
         crate::closing::progress(d, env, out);
-        crate::wake::progress(d, env, out);
     }
 }
 /// One backoff expiration per iteration; a wall-clock correction does not
@@ -225,24 +136,10 @@ pub fn fire(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
             | Phase::Ended(_) => {}
         }
     }
-    crate::refs::fire(d, env, out);
-    let _: Option<u64> = d.wakes.expire(env.now);
     crate::closing::progress(d, env, out);
-    crate::wake::progress(d, env, out);
 }
 pub(crate) fn record(d: &Domain, number: u64) -> Option<&TaskRecord> {
     Some(&d.tasks.get(*d.names.get(&number)?).expect("name indexes live task").record)
-}
-/// Borrow the live task for a parent's read or cross-domain decision. The
-/// parent cannot change it except by a tasks event.
-#[must_use]
-pub fn live_task(d: &Domain, number: u64) -> Option<&TaskRecord> {
-    record(d, number)
-}
-/// A bounded summary; complete ended records remain in the parent's store.
-#[must_use]
-pub fn task_stub(d: &Domain, number: u64) -> Option<&Stub> {
-    d.stubs.get(&number)
 }
 pub(crate) fn task_mut(d: &mut Domain, number: u64) -> Option<&mut Task> {
     let id = *d.names.get(&number)?;
@@ -274,7 +171,18 @@ pub(crate) fn entrance(d: &Domain, to: ReplyTo, number: u64) -> Result<ReplyTo, 
 }
 pub(crate) fn activate(d: &Domain, number: u64, out: &mut Queue<Request>) {
     let task = record(d, number).expect("activation names live task");
-    out.push(Request::Activate { task: number, executor: task.executor });
+    out.push(Request::Activate {
+        context: Box::new(crate::RunContext {
+            task: number,
+            project: task.project,
+            executor: task.executor,
+            spec: task.spec.clone(),
+            contract: task.contract.clone(),
+            requester: task.requester,
+            authority: task.authority.clone(),
+            numbers: task.numbers,
+        }),
+    });
 }
 pub(crate) fn publish(d: &mut Domain, env: &Env<Limits>, number: u64, out: &mut Queue<Request>) {
     let task = task_mut(d, number).expect("published task is live");
@@ -339,8 +247,6 @@ fn make(d: &mut Domain, env: &Env<Limits>, to: ReplyTo, creator: Party, batch: B
     if let Some(number) = parent {
         let old = task_mut(d, number).expect("creator admitted");
         old.record.delegates = append(env.limits.delegates, &old.record.delegates, &batch);
-        old.record.results_due = append(env.limits.delegates, &old.record.results_due, &batch);
-        old.record.references = append(env.limits.references, &old.record.references, &batch);
         // Count each made task in all ancestors, so ending a delegate does not
         // make lifetime tree capacity reappear.
         let mut ancestor = Some(number);
@@ -367,9 +273,6 @@ fn make(d: &mut Domain, env: &Env<Limits>, to: ReplyTo, creator: Party, batch: B
                 allotment: 1,
                 historical_spend: 0,
                 run_spent: 0,
-                revision: 0,
-                tracked: None,
-                narrowing: false,
                 root: root.unwrap_or(number),
                 depth,
                 executor: new.executor,
@@ -378,14 +281,10 @@ fn make(d: &mut Domain, env: &Env<Limits>, to: ReplyTo, creator: Party, batch: B
                 authority: new.authority,
                 numbers: new.numbers,
                 funder: new.funder,
+                waiting_on: new.dependencies.clone(),
                 dependencies: new.dependencies,
                 delegates: Box::new([]),
-                references: Box::new([]),
-                results_due: Box::new([]),
-                policy: new.policy,
-                last_message: 0,
                 turn: 0,
-                last_read: None,
                 made: 1,
                 attempt: 0,
                 last_answer: None,
@@ -394,7 +293,6 @@ fn make(d: &mut Domain, env: &Env<Limits>, to: ReplyTo, creator: Party, batch: B
                 phase: Phase::Waiting,
             },
             alarm: None,
-            wake_alarms: [None; 3],
         };
         let id = d.tasks.insert(task).expect("batch slab room admitted");
         let indexed = d.names.insert(number, id);

@@ -64,16 +64,11 @@ impl Store {
             let within = match range {
                 Range::Deployment => **key == Key::Deployment,
                 Range::Tasks => match key {
-                    Key::Tasks(temper_engine_domain_tasks::Key::Live(_) | temper_engine_domain_tasks::Key::Stub(_)
-                        | temper_engine_domain_tasks::Key::Message(_) | temper_engine_domain_tasks::Key::Receipt(_)
-                        | temper_engine_domain_tasks::Key::Offer(_) | temper_engine_domain_tasks::Key::Question(_)
-                        | temper_engine_domain_tasks::Key::Subscription(_) | temper_engine_domain_tasks::Key::Ledger(_)
-                        | temper_engine_domain_tasks::Key::Admission(_)) => true,
-                    Key::Tasks(temper_engine_domain_tasks::Key::Ended(_) | temper_engine_domain_tasks::Key::ArchivedMessage(_)
-                        | temper_engine_domain_tasks::Key::History { .. } | temper_engine_domain_tasks::Key::Closure { .. }
-                        | temper_engine_domain_tasks::Key::Funding(_))
-                        | Key::Deployment | Key::Turn { .. } | Key::People(_) => false,
+                    Key::Tasks(temper_engine_domain_tasks::Key::Live(_) | temper_engine_domain_tasks::Key::Ledger(_)) => true,
+                    Key::Tasks(temper_engine_domain_tasks::Key::Ended(_) | temper_engine_domain_tasks::Key::Closure { .. })
+                        | Key::Deployment | Key::Turn { .. } | Key::RunProof { .. } | Key::Terminal { .. } | Key::People(_) => false,
                 },
+                Range::RunProofs => matches!(key, Key::RunProof { task } if *task != 0),
                 Range::People => matches!(key, Key::People(_)),
                 Range::TaskResult { task } => matches!(key, Key::Tasks(temper_engine_domain_tasks::Key::Ended(number)) if *number == task),
                 Range::Turns { task, attempt } => matches!(key, Key::Turn { task: found, attempt: run, turn } if *found == task && *run == attempt && *turn != 0),

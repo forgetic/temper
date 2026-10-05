@@ -103,14 +103,15 @@ impl Domain {
 
     /// Root reads an authenticated unexpired session to derive a task result
     /// for its requester (domain/people.md, sections 3 and 6). This read changes
-    /// no session, role or inbox state; unknown/expired sign-ins are refused.
+    /// no session, role or inbox state; unknown sign-ins and sessions expired by
+    /// either supplied monotonic time or wall time are refused, even before fire.
     #[must_use]
-    pub fn person(&self, sign_in: u64, wall: Wall) -> Option<u64> {
+    pub fn person(&self, sign_in: u64, now: Time, wall: Wall) -> Option<u64> {
         if !self.ready() {
             return None;
         }
         let session = self.sign_ins.get(&sign_in)?;
-        if session.expires <= wall {
+        if session.expires <= wall || session.due <= now {
             return None;
         }
         Some(session.person)

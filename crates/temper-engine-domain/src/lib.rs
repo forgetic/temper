@@ -15,4 +15,6 @@ pub use decision::{
     Decision, Delivery, Journal, Limits as JournalLimits, Output, accept, committed, fresh, resume, takes, uncommitted,
     worst_case,
 };
-pub use store::{Deployment, Family, Key, Range, Record, TurnRecord, Write, record_bytes};
+pub use store::{
+    Deployment, Family, Key, Range, Record, RunProof, TerminalRecord, TurnProof, TurnRecord, Write, record_bytes,
+};

@@ -177,6 +177,17 @@ fn expiry_is_monotonic_even_when_wall_clock_moves_back() {
     assert_eq!(out.pop(), Some(Request::Erase { key: Key::SignIn(10) }));
 }
 #[test]
+fn result_query_checks_monotonic_expiry_before_fire_after_backward_wall_jump() {
+    let mut test = Test::new(LIMITS);
+    test.env.wall = Wall::from_nanos(Duration::from_secs(100).as_nanos());
+    test.member();
+    assert_eq!(test.d.person(10, test.env.now, test.env.wall), Some(1));
+    test.env.now = Time::from_nanos(Duration::from_secs(60).as_nanos());
+    test.env.wall = Wall::EPOCH;
+    assert_eq!(test.d.person(10, test.env.now, test.env.wall), None);
+    assert_eq!(reply(&test.request(10, 1, ask(1))), Reply::Refused(Refusal::SignIn));
+}
+#[test]
 fn restore_order_is_independent_and_bad_or_oversized_records_refuse_start() {
     let mut test = Test::new(LIMITS);
     test.d = Domain::new(&LIMITS, Box::new([]));

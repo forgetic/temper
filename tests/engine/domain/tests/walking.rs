@@ -20,21 +20,9 @@ fn ended(world: &World) -> &tasks::TaskRecord {
             Record::Deployment(_)
             | Record::Turn(_)
             | Record::People(_)
-            | Record::Tasks(
-                tasks::Stored::Live(_)
-                | tasks::Stored::Stub(_)
-                | tasks::Stored::Message(_)
-                | tasks::Stored::ArchivedMessage(_)
-                | tasks::Stored::Receipt(_)
-                | tasks::Stored::Offer(_)
-                | tasks::Stored::Question(_)
-                | tasks::Stored::Subscription(_)
-                | tasks::Stored::History(_)
-                | tasks::Stored::Closure(_)
-                | tasks::Stored::Funding { .. }
-                | tasks::Stored::Ledger(_)
-                | tasks::Stored::Admission(_),
-            ) => None,
+            | Record::RunProof(_)
+            | Record::Terminal(_)
+            | Record::Tasks(tasks::Stored::Live(_) | tasks::Stored::Closure(_) | tasks::Stored::Ledger(_)) => None,
         })
         .expect("story ended its one task")
 }
@@ -94,7 +82,13 @@ fn walking_referee_rejects_duplicate_transaction_keys_and_transcripts() {
     let charged = Record::Tasks(tasks::Stored::Live(Box::new(charged)));
     let writes = [Write::Save(charged.clone()), Write::Save(row.clone()), Write::Save(row.clone())];
     assert_eq!(WalkingReferee::default().commit(&writes), Err("same key written twice in one decision"));
-    let writes = [Write::Save(charged), Write::Save(row)];
+    let proof = Record::RunProof(temper_engine_domain::RunProof {
+        task: task.number,
+        attempt: task.attempt,
+        turn: Some(temper_engine_domain::TurnProof { turn: 1, cumulative: 3, read: None }),
+        terminal: None,
+    });
+    let writes = [Write::Save(charged), Write::Save(row), Write::Save(proof)];
     let mut referee = WalkingReferee::default();
     referee.commit(&writes).expect("first transcript");
     assert_eq!(referee.commit(&writes), Err("transcript committed twice"));
@@ -262,4 +256,69 @@ fn walking_referee_rejects_a_lost_or_duplicate_funding_posting_and_result() {
         world.referee.clone().result(&world.store.rows, person, task.number, REPORT),
         Err("person received result twice")
     );
+}
+
+#[test]
+fn walking_referee_rejects_missing_or_split_current_claim_turn_and_terminal_proofs() {
+    let world = settled();
+    let task = ended(&world);
+    let mut live = task.clone();
+    live.phase = tasks::Phase::Active(tasks::Active::Claimed { attempt: task.attempt });
+    live.turn = 0;
+    live.run_spent = 0;
+    let initial = Record::RunProof(temper_engine_domain::RunProof {
+        task: task.number,
+        attempt: task.attempt,
+        turn: None,
+        terminal: None,
+    });
+    let claim = Write::Save(Record::Tasks(tasks::Stored::Live(Box::new(live.clone()))));
+    assert_eq!(
+        WalkingReferee::default().commit(std::slice::from_ref(&claim)),
+        Err("claim and reserved root proof are not one transaction")
+    );
+    WalkingReferee::default().commit(&[claim, Write::Save(initial)]).expect("claim proof shares transaction");
+    live.phase = tasks::Phase::Active(tasks::Active::Running { attempt: task.attempt });
+    live.turn = 1;
+    live.run_spent = 3;
+    live.numbers.spent = 3;
+    let turn =
+        world.store.rows.get(&Key::Turn { task: task.number, attempt: task.attempt, turn: 1 }).expect("turn").clone();
+    let charged = Write::Save(Record::Tasks(tasks::Stored::Live(Box::new(live))));
+    assert_eq!(
+        WalkingReferee::default().commit(&[charged, Write::Save(turn)]),
+        Err("turn and root proof are not one transaction")
+    );
+    let ended = world.store.rows.get(&Key::Tasks(tasks::Key::Ended(task.number))).expect("ended").clone();
+    let posted = world.store.rows.get(&Key::Tasks(tasks::Key::Ledger(task.funder))).expect("pool").clone();
+    let terminal = world
+        .store
+        .rows
+        .get(&Key::Terminal { task: task.number, attempt: task.attempt })
+        .expect("typed terminal")
+        .clone();
+    assert_eq!(
+        WalkingReferee::default().commit(&[
+            Write::Save(ended.clone()),
+            Write::Save(posted.clone()),
+            Write::Save(terminal.clone())
+        ]),
+        Err("ended task and root terminal proof retirement are not one transaction")
+    );
+    assert_eq!(
+        WalkingReferee::default().commit(&[
+            Write::Save(ended.clone()),
+            Write::Save(posted.clone()),
+            Write::Erase(Key::RunProof { task: task.number })
+        ]),
+        Err("ended task and root terminal proof retirement are not one transaction")
+    );
+    WalkingReferee::default()
+        .commit(&[
+            Write::Save(ended),
+            Write::Save(posted),
+            Write::Save(terminal),
+            Write::Erase(Key::RunProof { task: task.number }),
+        ])
+        .expect("terminal evidence and retirement share final transaction");
 }

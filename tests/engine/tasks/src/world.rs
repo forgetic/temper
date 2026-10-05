@@ -1,18 +1,19 @@
+//! Durable parent and scripted executors at the retained tasks boundary
+//! (domain/tasks.md, 11; domain/engine.md, 7).
 use crate::referee::{Seen, Stimulus, Tasks};
 use skein_lib::{Duration, Env, Queue, ReplyTo, Rng, Time, Token, Wall};
 use std::collections::{BTreeMap, BTreeSet};
 use temper_engine_domain_tasks::{
-    self as tasks, Accepted, Authority, Budget, Contract, Delegation, Domain, End, Ending, Event, Executor, Fact,
-    Funder, Key, Limits, New, Numbers, Party, Problem, Request, Result, Retries, Retry, Scopes, Spec, Stored, Tools,
+    self as tasks, Accepted, Authority, Budget, Cause, Contract, Delegation, Domain, End, Ending, Event, Executor,
+    Fact, Funder, Key, Limits, New, Numbers, Party, Problem, Request, Result, Retries, Retry, RunContext, Scopes, Spec,
+    Stored, Tools,
 };
 use temper_world::{Referee, Trace};
 pub const RETRY: Retry = Retry { retries: 2, base: Duration::from_millis(10), max: Duration::from_secs(1) };
 pub const LIMITS: Limits = Limits {
     tasks: 16,
     funders: 32,
-    admissions: 128,
     project_tasks: 16,
-    stubs: 32,
     tree_tasks: 16,
     depth: 4,
     delegates: 8,
@@ -30,14 +31,6 @@ pub const LIMITS: Limits = Limits {
     executor_kinds: 3,
     retries: Retries { transient: RETRY, permanent: RETRY, run: RETRY, agent: RETRY, lost: RETRY, invalid: RETRY },
     facts: 16,
-    references: 8,
-    inbox_messages: 32,
-    inbox_bytes: 2048,
-    message_bytes: 64,
-    questions: 16,
-    subscriptions: 16,
-    receipts: 64,
-    offers: 64,
 };
 #[must_use]
 pub fn authority() -> Authority {
@@ -61,7 +54,6 @@ pub fn task(number: u64, dependencies: &[u64]) -> New {
         numbers: Numbers { budget: 100, spent: 0, spent_below: 0, reserved: 0 },
         funder: Funder::Period { project: 1, period: 0 },
         dependencies: dependencies.into(),
-        policy: tasks::WakePolicy::DEFAULT,
     }
 }
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -70,9 +62,43 @@ pub enum Reply {
     Done,
     Refused(Problem),
     Acknowledged(Accepted),
-    Sent(Accepted),
-    Inbox(Vec<tasks::Envelope>, bool),
     Turn(Accepted),
+}
+/// Complete frozen run evidence, including internal deterministic state and all
+/// parent/executor state; facts are diagnostic only (domain/tasks.md, 11).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Frozen {
+    /// Durable parent rows (domain/tasks.md, 5).
+    pub records: BTreeMap<Key, Stored>,
+    /// Committed call replies (domain/tasks.md, 5).
+    pub replies: BTreeMap<u64, Reply>,
+    /// Pending executor preparations (domain/engine.md, 7).
+    pub activations: BTreeSet<u64>,
+    /// Owned activation briefs (domain/engine.md, 9).
+    pub contexts: BTreeMap<u64, RunContext>,
+    /// Physical executor attempts (domain/engine.md, 7).
+    pub runs: BTreeMap<u64, u64>,
+    /// Requested stops awaiting terminal work (domain/tasks.md, 5.1).
+    pub stops: BTreeSet<(u64, u64)>,
+    /// Effects settlement gates (domain/tasks.md, 5.1).
+    pub closing: BTreeSet<u64>,
+    /// Committed requester outcomes (domain/tasks.md, 5.6).
+    pub results: BTreeMap<u64, Ending>,
+    deadlines: BTreeMap<u64, (Wall, Time)>,
+    restoring: bool,
+    facts: Vec<Fact>,
+    consume_facts: bool,
+    limits: Limits,
+    seed: u64,
+    priced: Option<(u64, u64)>,
+    domain: String,
+    referee: String,
+    accounting: String,
+    pending: String,
+    now: Time,
+    wall: Wall,
+    call: u64,
+    commit: u64,
 }
 #[derive(Debug)]
 pub struct World {
@@ -83,23 +109,23 @@ pub struct World {
     pub records: BTreeMap<Key, Stored>,
     pub replies: BTreeMap<u64, Reply>,
     pub activations: BTreeSet<u64>,
+    /// Owned activation brief supplied by the child (domain/engine.md, 9).
+    pub contexts: BTreeMap<u64, RunContext>,
     pub runs: BTreeMap<u64, u64>,
     pub stops: BTreeSet<(u64, u64)>,
     pub closing: BTreeSet<u64>,
     pub results: BTreeMap<u64, Ending>,
     pub facts: Vec<Fact>,
-    pub relays: BTreeMap<(u64, u64, u64), tasks::Envelope>,
-    pub topics: BTreeMap<u64, tasks::Subscription>,
-    message: u64,
     pub accounting_referee: crate::accounting_referee::Accounting,
-    pub inbox_referee: crate::inbox_referee::Inbox,
-    reads: Vec<crate::inbox_referee::Read>,
     pub consume_facts: bool,
     pub referee: Referee<Tasks>,
     pub trace: Trace,
     seed: u64,
     call: u64,
     commit: u64,
+    priced: Option<(u64, u64)>,
+    restoring: bool,
+    deadlines: BTreeMap<u64, (Wall, Time)>,
 }
 impl World {
     #[must_use]
@@ -112,27 +138,56 @@ impl World {
             records: BTreeMap::new(),
             replies: BTreeMap::new(),
             activations: BTreeSet::new(),
+            contexts: BTreeMap::new(),
             runs: BTreeMap::new(),
             stops: BTreeSet::new(),
             closing: BTreeSet::new(),
             results: BTreeMap::new(),
             facts: Vec::new(),
-            relays: BTreeMap::new(),
-            topics: BTreeMap::new(),
-            message: 0,
             accounting_referee: crate::accounting_referee::Accounting::default(),
-            inbox_referee: crate::inbox_referee::Inbox::default(),
-            reads: Vec::new(),
             consume_facts: true,
             referee: Referee::new(Tasks::default()),
             trace: Trace::default(),
             seed,
             call: 0,
             commit: 0,
+            priced: None,
+            restoring: true,
+            deadlines: BTreeMap::new(),
         };
         world.send(Event::Restored);
         world.open_period(0, 100_000);
         world
+    }
+    #[must_use]
+    /// Capture all retained domain, parent and executor state between steps
+    /// (domain/tasks.md, 11).
+    pub fn frozen(&self) -> Frozen {
+        Frozen {
+            records: self.records.clone(),
+            replies: self.replies.clone(),
+            activations: self.activations.clone(),
+            contexts: self.contexts.clone(),
+            runs: self.runs.clone(),
+            stops: self.stops.clone(),
+            closing: self.closing.clone(),
+            results: self.results.clone(),
+            deadlines: self.deadlines.clone(),
+            restoring: self.restoring,
+            facts: self.facts.clone(),
+            consume_facts: self.consume_facts,
+            limits: self.env.limits,
+            seed: self.seed,
+            priced: self.priced,
+            domain: format!("{:?}", self.domain),
+            referee: format!("{:?}", self.referee),
+            accounting: format!("{:?}", self.accounting_referee),
+            pending: format!("{:?} {:?}", self.pending, self.out),
+            now: self.env.now,
+            wall: self.env.wall,
+            call: self.call,
+            commit: self.commit,
+        }
     }
     pub fn open_period(&mut self, period: u64, budget: u64) {
         let reply_to = self.to();
@@ -141,139 +196,6 @@ impl World {
     pub fn carve_pool(&mut self, period: u64, budget: u64) {
         let reply_to = self.to();
         self.send(Event::CarvePool { reply_to, project: 1, person: 9, period, budget });
-    }
-    pub fn number(&mut self) -> u64 {
-        self.message += 1;
-        self.message
-    }
-    #[must_use]
-    pub fn messages(&self, task: u64) -> Vec<tasks::Envelope> {
-        self.records
-            .values()
-            .filter_map(|row| match row {
-                Stored::Message(envelope) if envelope.task == task => Some(envelope.clone()),
-                Stored::Message(_)
-                | Stored::Live(_)
-                | Stored::Ended(_)
-                | Stored::Stub(_)
-                | Stored::History(_)
-                | Stored::Closure(_)
-                | Stored::Funding { .. }
-                | Stored::Ledger(_)
-                | Stored::Admission(_)
-                | Stored::ArchivedMessage(_)
-                | Stored::Receipt(_)
-                | Stored::Offer(_)
-                | Stored::Question(_)
-                | Stored::Subscription(_) => None,
-            })
-            .collect()
-    }
-    pub fn mail(&mut self, task: u64, from: Party, message: tasks::UserMessage) -> Reply {
-        let number = self.number();
-        self.mail_number(number, task, from, message)
-    }
-    pub fn mail_number(&mut self, number: u64, task: u64, from: Party, message: tasks::UserMessage) -> Reply {
-        self.message = self.message.max(number);
-        let reply_to = self.to();
-        let call = self.call;
-        self.send(Event::Send { reply_to, number, task, from, message });
-        self.replies[&call].clone()
-    }
-    pub fn turn(&mut self, task: u64, turn: u32, read: Option<u64>) -> Reply {
-        let attempt = self.record(task).attempt;
-        let reply_to = self.to();
-        let call = self.call;
-        self.send(Event::Turn { reply_to, task, attempt, turn, read });
-        self.replies[&call].clone()
-    }
-    fn callbacks(&mut self) {
-        let mut at = 0;
-        while at < self.pending.len() {
-            let event = match &self.pending[at] {
-                Request::Ended { task, requester: Party::Task(parent), ending } => {
-                    Some((0, *parent, *task, Some(ending.clone()), None))
-                }
-                Request::Observe { subscription, target } => {
-                    let ending = match self.records.get(&Key::Ended(*target)) {
-                        Some(Stored::Ended(record)) => match &record.phase {
-                            tasks::Phase::Ended(ending) => ending.clone(),
-                            tasks::Phase::Waiting
-                            | tasks::Phase::Active(_)
-                            | tasks::Phase::Closing(_)
-                            | tasks::Phase::Held { .. } => panic!("historical row ended"),
-                        },
-                        Some(
-                            Stored::Live(_)
-                            | Stored::Stub(_)
-                            | Stored::Message(_)
-                            | Stored::History(_)
-                            | Stored::Closure(_)
-                            | Stored::Funding { .. }
-                            | Stored::Ledger(_)
-                            | Stored::Admission(_)
-                            | Stored::ArchivedMessage(_)
-                            | Stored::Receipt(_)
-                            | Stored::Offer(_)
-                            | Stored::Question(_)
-                            | Stored::Subscription(_),
-                        )
-                        | None => panic!("root loads the authoritative ended row"),
-                    };
-                    Some((1, *subscription, 0, None, Some(tasks::Notice::Ended(ending))))
-                }
-                Request::Notify { subscription, notice } => Some((1, *subscription, 0, None, Some(notice.clone()))),
-                Request::Timer { subscription } => Some((2, *subscription, 0, None, None)),
-                Request::Made { .. }
-                | Request::Refused { .. }
-                | Request::Done { .. }
-                | Request::Acknowledged { .. }
-                | Request::Sent { .. }
-                | Request::Inbox { .. }
-                | Request::TurnAcknowledged { .. }
-                | Request::Relay { .. }
-                | Request::Topic { .. }
-                | Request::Activate { .. }
-                | Request::Stop { .. }
-                | Request::Adopt { .. }
-                | Request::Close { .. }
-                | Request::Ended { requester: Party::Person(_) | Party::Deployment { .. }, .. }
-                | Request::Save { .. }
-                | Request::Erase { .. }
-                | Request::RestoreRefused { .. } => None,
-            };
-            at += 1;
-            if let Some((kind, target, delegate, ending, notice)) = event {
-                let number = self.number();
-                let reply_to = self.to();
-                let event = match kind {
-                    0 => Event::DeliverResult {
-                        reply_to,
-                        number,
-                        task: target,
-                        delegate,
-                        ending: ending.expect("result callback carries ending"),
-                    },
-                    1 => Event::DeliverNotice {
-                        reply_to,
-                        number,
-                        subscription: target,
-                        notice: notice.expect("notice callback carries notice"),
-                    },
-                    2 => Event::DeliverTimer { reply_to, number, subscription: target },
-                    _ => unreachable!(),
-                };
-                self.trace.log(self.env.now, format_args!("{event:?}"));
-                tasks::step(&mut self.domain, &self.env, event, &mut self.out);
-                while let Some(request) = self.out.pop() {
-                    assert!(
-                        !matches!(request, Request::Refused { .. }),
-                        "guaranteed callback must have reserved room: {request:?}"
-                    );
-                    self.pending.push(request);
-                }
-            }
-        }
     }
     pub fn to(&mut self) -> ReplyTo {
         self.call += 1;
@@ -291,79 +213,23 @@ impl World {
         }
     }
     pub fn stage(&mut self, event: Event) {
-        match &event {
-            Event::Move { movement, .. } => self.accounting_referee.begin(&movement.balances),
-            Event::Amend { amendment, .. } => self.accounting_referee.begin(&amendment.balances),
-            Event::OpenPeriod { .. }
-            | Event::CarvePool { .. }
-            | Event::ForgetAdmission { .. }
-            | Event::ChargedTurn { .. }
-            | Event::ChargedActivation { .. }
-            | Event::Control { .. }
-            | Event::Charge { .. }
-            | Event::Turn { .. }
-            | Event::Make { .. }
-            | Event::Prepare { .. }
-            | Event::Claim { .. }
-            | Event::Send { .. }
-            | Event::Peek { .. }
-            | Event::DeliverResult { .. }
-            | Event::DeliverNotice { .. }
-            | Event::DeliverTimer { .. }
-            | Event::News { .. }
-            | Event::ForgetReceipt { .. }
-            | Event::Introduce { .. }
-            | Event::ForgetReference { .. }
-            | Event::Subscribe { .. }
-            | Event::Unsubscribe { .. }
-            | Event::Started { .. }
-            | Event::Activation { .. }
-            | Event::PreparationFailed { .. }
-            | Event::Hold { .. }
-            | Event::Release { .. }
-            | Event::Cancel { .. }
-            | Event::Settled { .. }
-            | Event::RememberStub { .. }
-            | Event::ForgetStub { .. }
-            | Event::Restore { .. }
-            | Event::Restored => self.accounting_referee.begin(&[]),
-        }
         assert!(self.pending.is_empty(), "one parent decision at a time");
-        let read = match &event {
-            Event::Turn { task, attempt, turn, read, .. } | Event::ChargedTurn { task, attempt, turn, read, .. } => {
-                Some(crate::inbox_referee::Read { task: *task, attempt: *attempt, turn: *turn, through: *read })
-            }
+        if matches!(event, Event::Restored) {
+            self.restoring = false;
+        }
+        self.priced = match &event {
+            Event::Turn { task, cumulative, .. }
+            | Event::Activation { task, cause: Cause::Priced { cumulative }, .. } => Some((*task, *cumulative)),
             Event::OpenPeriod { .. }
             | Event::CarvePool { .. }
-            | Event::ForgetAdmission { .. }
-            | Event::ChargedActivation { .. }
-            | Event::Control { .. }
-            | Event::Amend { .. }
-            | Event::Move { .. }
-            | Event::Charge { .. }
             | Event::Make { .. }
             | Event::Prepare { .. }
             | Event::Claim { .. }
-            | Event::Send { .. }
-            | Event::Peek { .. }
-            | Event::DeliverResult { .. }
-            | Event::DeliverNotice { .. }
-            | Event::DeliverTimer { .. }
-            | Event::News { .. }
-            | Event::ForgetReceipt { .. }
-            | Event::Introduce { .. }
-            | Event::ForgetReference { .. }
-            | Event::Subscribe { .. }
-            | Event::Unsubscribe { .. }
             | Event::Started { .. }
-            | Event::Activation { .. }
+            | Event::Activation { cause: Cause::Unpriced, .. }
             | Event::PreparationFailed { .. }
             | Event::Hold { .. }
-            | Event::Release { .. }
-            | Event::Cancel { .. }
             | Event::Settled { .. }
-            | Event::RememberStub { .. }
-            | Event::ForgetStub { .. }
             | Event::Restore { .. }
             | Event::Restored => None,
         };
@@ -371,14 +237,6 @@ impl World {
         tasks::step(&mut self.domain, &self.env, event, &mut self.out);
         while let Some(request) = self.out.pop() {
             self.pending.push(request);
-        }
-        if let Some(read) = read
-            && self
-                .pending
-                .iter()
-                .any(|request| matches!(request, Request::TurnAcknowledged { accepted: Accepted::New, .. }))
-        {
-            self.reads.push(read);
         }
         if self.consume_facts {
             while let Some(fact) = self.domain.pop_fact() {
@@ -391,46 +249,32 @@ impl World {
         self.durable();
         self.deliver();
     }
-    /// Commit records and requester mail together, then allow delivery later.
+    /// Commit state and requester results together before executor delivery
+    /// (domain/tasks.md, 5; domain/engine.md, 7).
     pub fn durable(&mut self) {
-        self.callbacks();
         self.commit += 1;
-        let mut histories = Vec::new();
         let mut terminals = Vec::new();
         let mut ended = Vec::new();
         for request in &self.pending {
             match request {
                 Request::Save { record } => {
                     self.records.insert(record.key(), record.clone());
-                    if let Stored::Funding { funder, .. } = record {
-                        self.accounting_referee.emitted(*funder);
-                    }
-                    if let Stored::History(history) = record {
-                        histories.push(history.clone());
-                    }
                 }
                 Request::Erase { key } => {
                     self.records.remove(key);
                 }
                 Request::Ended { task, ending, .. } => {
-                    assert!(self.results.insert(*task, ending.clone()).is_none(), "requester mail is committed once");
+                    assert!(self.results.insert(*task, ending.clone()).is_none(), "requester result committed once");
                     ended.push((*task, status(ending)));
                 }
                 Request::Acknowledged { task, attempt, accepted: Accepted::New, .. } => {
                     terminals.push((*task, *attempt));
                 }
-                Request::Sent { .. }
-                | Request::Inbox { .. }
-                | Request::TurnAcknowledged { .. }
-                | Request::Relay { .. }
-                | Request::Observe { .. }
-                | Request::Notify { .. }
-                | Request::Timer { .. }
-                | Request::Topic { .. }
-                | Request::Made { .. }
+                Request::Made { .. }
                 | Request::Refused { .. }
                 | Request::Done { .. }
                 | Request::Acknowledged { accepted: Accepted::Already, .. }
+                | Request::TurnAcknowledged { .. }
                 | Request::Activate { .. }
                 | Request::Stop { .. }
                 | Request::Adopt { .. }
@@ -438,13 +282,21 @@ impl World {
                 | Request::RestoreRefused { .. } => {}
             }
         }
-        if self.domain.ready() {
-            self.accounting_referee.committed(&self.records).expect("independent funding conservation");
-            self.inbox_referee
-                .committed(&self.records, &self.env.limits, &self.reads)
-                .expect("independent inbox invariants");
+        if self.pending.iter().any(|request| {
+            matches!(
+                request,
+                Request::Acknowledged { accepted: Accepted::New, .. }
+                    | Request::TurnAcknowledged { accepted: Accepted::New, .. }
+            )
+        }) && let Some((task, cumulative)) = self.priced
+        {
+            self.accounting_referee.charged(task, cumulative);
         }
-        self.reads.clear();
+        self.priced = None;
+        self.project_deadlines();
+        if !self.restoring {
+            self.accounting_referee.committed(&self.records).expect("independent conservation");
+        }
         self.observe(Seen::Durable { commit: self.commit });
         let made = self
             .records
@@ -456,35 +308,11 @@ impl World {
                     dependencies: record.dependencies.to_vec(),
                     depth: record.depth,
                 }),
-                Stored::Live(_)
-                | Stored::Ended(_)
-                | Stored::Stub(_)
-                | Stored::Message(_)
-                | Stored::History(_)
-                | Stored::Closure(_)
-                | Stored::Funding { .. }
-                | Stored::Ledger(_)
-                | Stored::Admission(_)
-                | Stored::ArchivedMessage(_)
-                | Stored::Receipt(_)
-                | Stored::Offer(_)
-                | Stored::Question(_)
-                | Stored::Subscription(_) => None,
+                Stored::Live(_) | Stored::Ended(_) | Stored::Ledger(_) | Stored::Closure(_) => None,
             })
             .collect::<Vec<_>>();
         for seen in made {
             self.observe(seen);
-        }
-        for history in histories {
-            match history.change {
-                tasks::Change::Moved { from, to } => self.observe(Seen::Moved { task: history.task, from, to }),
-                tasks::Change::Amended => self.observe(Seen::Amended {
-                    task: history.task,
-                    dependencies: self.record(history.task).dependencies.to_vec(),
-                }),
-                tasks::Change::Cancelled => self.observe(Seen::Cancelled { task: history.task }),
-                tasks::Change::Released => {}
-            }
         }
         for (task, attempt) in terminals {
             self.runs.remove(&task);
@@ -495,50 +323,23 @@ impl World {
         }
     }
     pub fn deliver(&mut self) {
-        let requests = std::mem::take(&mut self.pending);
-        for request in requests {
+        for request in std::mem::take(&mut self.pending) {
             match request {
-                Request::Save { .. }
-                | Request::Erase { .. }
-                | Request::Ended { .. }
-                | Request::Observe { .. }
-                | Request::Notify { .. }
-                | Request::Timer { .. } => {}
-                Request::Sent { reply_to, accepted, .. } => self.reply(reply_to, Reply::Sent(accepted)),
-                Request::Inbox { reply_to, messages, more } => {
-                    self.reply(reply_to, Reply::Inbox(messages.into_vec(), more));
-                }
-                Request::TurnAcknowledged { reply_to, accepted, .. } => self.reply(reply_to, Reply::Turn(accepted)),
-                Request::Relay { task, attempt, envelope } => {
-                    assert_eq!(self.runs.get(&task), Some(&attempt), "relay reaches actual adopted/live executor");
-                    let key = (task, attempt, envelope.number);
-                    assert_eq!(
-                        self.records.get(&Key::Offer(envelope.key())),
-                        Some(&Stored::Offer(tasks::Offer { attempt, envelope: envelope.clone() })),
-                        "offered payload durable before relay"
-                    );
-                    if let Some(old) = self.relays.insert(key, envelope.clone()) {
-                        assert_eq!(old, envelope, "replayed relay has identical payload");
-                    }
-                }
-                Request::Topic { subscription, present } => {
-                    if present {
-                        self.topics.insert(subscription.number, subscription);
-                    } else {
-                        self.topics.remove(&subscription.number);
-                    }
-                }
+                Request::Save { .. } | Request::Erase { .. } | Request::Ended { .. } => {}
                 Request::Made { reply_to, tasks } => self.reply(reply_to, Reply::Made(tasks.into_vec())),
                 Request::Refused { reply_to, problem } => self.reply(reply_to, Reply::Refused(problem)),
                 Request::Done { reply_to } => self.reply(reply_to, Reply::Done),
                 Request::Acknowledged { reply_to, accepted, .. } => self.reply(reply_to, Reply::Acknowledged(accepted)),
-                Request::Activate { task, .. } => {
-                    self.activations.insert(task);
+                Request::TurnAcknowledged { reply_to, accepted, .. } => self.reply(reply_to, Reply::Turn(accepted)),
+                Request::Activate { context } => {
+                    self.activations.insert(context.task);
+                    self.contexts.insert(context.task, *context);
                 }
                 Request::Stop { task, attempt } => {
                     self.stops.insert((task, attempt));
                 }
-                Request::Adopt { task, attempt } => {
+                Request::Adopt { task, attempt, kept } => {
+                    assert_eq!(kept, self.record(task).turn, "adoption carries durable turn fence");
                     self.runs.insert(task, attempt);
                     self.observe(Seen::Assigned { task, attempt, after: self.commit, adopted: true });
                 }
@@ -553,25 +354,12 @@ impl World {
         let live = self
             .records
             .values()
-            .filter_map(|record| match record {
+            .filter_map(|row| match row {
                 Stored::Live(record) => Some(*record.clone()),
-                Stored::Ended(_)
-                | Stored::Stub(_)
-                | Stored::Message(_)
-                | Stored::History(_)
-                | Stored::Closure(_)
-                | Stored::Funding { .. }
-                | Stored::Ledger(_)
-                | Stored::Admission(_)
-                | Stored::ArchivedMessage(_)
-                | Stored::Receipt(_)
-                | Stored::Offer(_)
-                | Stored::Question(_)
-                | Stored::Subscription(_) => None,
+                Stored::Ended(_) | Stored::Ledger(_) | Stored::Closure(_) => None,
             })
             .collect();
-        let stubs = self.records.keys().filter(|key| matches!(key, Key::Stub(_))).count();
-        self.observe(Seen::Stored { live, stubs, limits: Box::new(self.env.limits) });
+        self.observe(Seen::Stored { live, limits: Box::new(self.env.limits) });
         self.domain.reclaim();
     }
     fn reply(&mut self, to: ReplyTo, reply: Reply) {
@@ -585,111 +373,80 @@ impl World {
     }
     #[must_use]
     pub fn record(&self, number: u64) -> &tasks::TaskRecord {
-        match self.records.get(&Key::Live(number)).expect("task live") {
+        match &self.records[&Key::Live(number)] {
             Stored::Live(record) => record,
-            Stored::Ended(_)
-            | Stored::Stub(_)
-            | Stored::Message(_)
-            | Stored::History(_)
-            | Stored::Closure(_)
-            | Stored::Funding { .. }
-            | Stored::Ledger(_)
-            | Stored::Admission(_)
-            | Stored::ArchivedMessage(_)
-            | Stored::Receipt(_)
-            | Stored::Offer(_)
-            | Stored::Question(_)
-            | Stored::Subscription(_) => unreachable!("key is live"),
+            Stored::Ended(_) | Stored::Ledger(_) | Stored::Closure(_) => unreachable!("live key"),
         }
     }
     pub fn make(&mut self, creator: Party, batch: Vec<New>) -> Reply {
         let before = self.records.keys().copied().collect::<BTreeSet<_>>();
-        let members = batch.iter().map(|task| task.number).collect::<Vec<_>>();
+        let members = batch.iter().map(|task| task.number).collect();
         let reply_to = self.to();
         let call = self.call;
         self.send(Event::Make { reply_to, creator, batch: batch.into_boxed_slice() });
-        let reply = self.replies.get(&call).expect("make replied").clone();
+        let reply = self.replies[&call].clone();
         let made = self
             .records
             .keys()
             .filter_map(|key| match key {
                 Key::Live(number) if !before.contains(key) => Some(*number),
-                Key::Live(_)
-                | Key::Ended(_)
-                | Key::Stub(_)
-                | Key::Message(_)
-                | Key::History { .. }
-                | Key::Closure { .. }
-                | Key::Funding(_)
-                | Key::Ledger(_)
-                | Key::Admission(_)
-                | Key::ArchivedMessage(_)
-                | Key::Receipt(_)
-                | Key::Offer(_)
-                | Key::Question(_)
-                | Key::Subscription(_) => None,
+                Key::Live(_) | Key::Ended(_) | Key::Ledger(_) | Key::Closure { .. } => None,
             })
             .collect();
         self.observe(Seen::Batch { members, accepted: matches!(reply, Reply::Made(_)), made });
         reply
     }
-    /// Root builds a brief, asks the executor to prepare, commits the fresh
-    /// claim, then starts actual work. Authority initially always allows.
     pub fn claim(&mut self, task: u64, attempt: u64) {
-        assert!(self.activations.remove(&task), "task activated before preparation");
+        assert!(self.activations.remove(&task), "activated before preparation");
+        let context = &self.contexts[&task];
+        let record = self.record(task);
+        assert_eq!(context.spec, record.spec);
+        assert_eq!(context.contract, record.contract);
+        assert_eq!(context.authority, record.authority);
         let reply_to = self.to();
         self.send(Event::Prepare { reply_to, task });
         let reply_to = self.to();
         let call = self.call;
-        let readable = self.messages(task).iter().map(|message| message.number).collect::<Vec<_>>().into_boxed_slice();
-        self.send(Event::Claim { reply_to, task, attempt, readable });
-        assert_eq!(self.replies.get(&call), Some(&Reply::Done), "fresh claim accepted");
-        assert!(self.runs.insert(task, attempt).is_none(), "one physical run per task");
+        self.send(Event::Claim { reply_to, task, attempt });
+        assert_eq!(self.replies[&call], Reply::Done);
+        assert!(self.runs.insert(task, attempt).is_none());
         self.observe(Seen::Assigned { task, attempt, after: self.commit, adopted: false });
         self.send(Event::Started { task, attempt });
     }
     pub fn terminal(&mut self, task: u64, end: End) -> Reply {
-        let attempt = *self.runs.get(&task).expect("physical run exists");
+        self.terminal_cause(task, end, Cause::Unpriced)
+    }
+    /// Submit a real priced or recovery terminal (domain/tasks.md, 5).
+    pub fn terminal_cause(&mut self, task: u64, end: End, cause: Cause) -> Reply {
+        let attempt = self.runs[&task];
         let reply_to = self.to();
         let call = self.call;
-        self.send(Event::Activation { reply_to, task, attempt, end });
-        self.replies.get(&call).expect("terminal replied").clone()
+        self.send(Event::Activation { reply_to, task, attempt, end, cause });
+        self.replies[&call].clone()
     }
     pub fn claim_fresh(&mut self, task: u64) {
         let attempt = self
             .records
             .values()
-            .map(|record| match record {
-                Stored::Live(record) | Stored::Ended(record) => record.attempt,
-                Stored::Stub(stub) => stub.attempt,
-                Stored::Message(_)
-                | Stored::History(_)
-                | Stored::Closure(_)
-                | Stored::Funding { .. }
-                | Stored::Ledger(_)
-                | Stored::Admission(_)
-                | Stored::ArchivedMessage(_)
-                | Stored::Receipt(_)
-                | Stored::Offer(_)
-                | Stored::Question(_)
-                | Stored::Subscription(_) => 0,
+            .filter_map(|row| match row {
+                Stored::Live(record) | Stored::Ended(record) => Some(record.attempt),
+                Stored::Ledger(_) | Stored::Closure(_) => None,
             })
             .max()
             .unwrap_or(0)
-            .checked_add(1)
-            .expect("test counters fit");
+            + 1;
         self.claim(task, attempt);
     }
     pub fn finish(&mut self, task: u64) {
         self.terminal(task, End::Finished { result: Result::Report { words: Box::new([1]) }, cancel_delegates: false });
     }
     pub fn settle(&mut self, task: u64) {
-        assert!(self.closing.remove(&task), "root closing gate open");
+        assert!(self.closing.remove(&task));
         self.observe(Seen::Settled { task });
         self.send(Event::Settled { task });
     }
     pub fn advance(&mut self) {
-        let at = self.domain.next_deadline().expect("backoff deadline pending");
+        let at = self.deadlines.values().map(|(_, at)| *at).min().expect("backoff pending");
         self.env.wall = Wall::from_nanos(
             self.env.wall.as_nanos().saturating_add(at.as_nanos().saturating_sub(self.env.now.as_nanos())),
         );
@@ -701,28 +458,38 @@ impl World {
         self.durable();
         self.deliver();
     }
+    fn project_deadlines(&mut self) {
+        let mut projected = BTreeMap::new();
+        for row in self.records.values() {
+            if let Stored::Live(task) = row
+                && let tasks::Phase::Active(tasks::Active::BackingOff { until }) = task.phase
+            {
+                let at = match self.deadlines.get(&task.number) {
+                    Some((old, at)) if *old == until => *at,
+                    Some(_) | None => self.env.now.saturating_add(Duration::from_nanos(
+                        until.as_nanos().saturating_sub(self.env.wall.as_nanos()),
+                    )),
+                };
+                projected.insert(task.number, (until, at));
+            }
+        }
+        self.deadlines = projected;
+    }
     pub fn restart(&mut self) {
         self.pending.clear();
-        self.reads.clear();
-        self.inbox_referee.reset(&self.records);
+        self.priced = None;
+        self.restoring = true;
+        self.deadlines.clear();
         self.accounting_referee.reset(&self.records);
         self.domain = Domain::new(&self.env.limits, self.seed, Box::new([1]));
         self.activations.clear();
+        self.contexts.clear();
         self.stops.clear();
         self.closing.clear();
         let rows = self
             .records
             .values()
-            .filter(|record| {
-                !matches!(
-                    record,
-                    Stored::Ended(_)
-                        | Stored::History(_)
-                        | Stored::Closure(_)
-                        | Stored::Funding { .. }
-                        | Stored::ArchivedMessage(_)
-                )
-            })
+            .filter(|row| matches!(row, Stored::Live(_) | Stored::Ledger(_)))
             .cloned()
             .collect::<Vec<_>>();
         for record in rows {
@@ -730,11 +497,8 @@ impl World {
         }
         self.send(Event::Restored);
     }
-    pub fn cancel(&mut self, task: u64, reason: &[u8]) {
-        self.observe(Seen::Cancelled { task });
-        let reply_to = self.to();
-        self.send(Event::Cancel { reply_to, task, reason: reason.into() });
-    }
+    /// Complete the stopped descendants after an accepted delegate-cancelling
+    /// terminal (domain/tasks.md, 5.6).
     pub fn complete_cancel(&mut self) {
         for (task, _) in self.stops.clone() {
             if self.runs.contains_key(&task) {
@@ -755,110 +519,77 @@ fn status(ending: &Ending) -> tasks::Status {
         Ending::Cancelled { .. } => tasks::Status::Cancelled,
     }
 }
-/// A dependency plan whose agent fault and restart choices are drawn from the
-/// seed, with a cancel of the complete tree at the end.
+/// Seeded dependency, priced work, retry, crash and delegate-close story
+/// (domain/tasks.md, 11). Replay includes complete frozen state.
 #[must_use]
-pub fn run_story(seed: u64) -> (Vec<String>, usize) {
+pub fn run_story(seed: u64) -> (Vec<String>, Frozen) {
     run_story_facts(seed, true)
 }
 #[must_use]
-pub fn run_story_facts(seed: u64, consume_facts: bool) -> (Vec<String>, usize) {
+pub fn run_story_facts(seed: u64, consume_facts: bool) -> (Vec<String>, Frozen) {
     let mut rng = Rng::new(seed);
-    let mut world = World::new(seed, LIMITS);
-    world.consume_facts = consume_facts;
+    let mut w = World::new(seed, LIMITS);
+    w.consume_facts = consume_facts;
     let arrival = Duration::from_millis(rng.between(1, 20));
-    world.env.now = world.env.now.saturating_add(arrival);
-    world.env.wall = Wall::from_nanos(arrival.as_nanos());
-    world.make(Party::Person(1), vec![task(1, &[])]);
-    world.claim(1, 1);
-    world.make(Party::Task(1), vec![task(2, &[]), task(3, &[2])]);
-    world.claim_fresh(2);
-    // Inbox decisions travel through the same durable root and real agents.
-    let question = world.number();
-    world.mail_number(question, 1, Party::Task(2), tasks::UserMessage::Question { words: Box::new([1]) });
-    world.mail(2, Party::Task(1), tasks::UserMessage::Answer { question, words: Box::new([2]) });
-    let reply_to = world.to();
-    world.send(Event::Subscribe {
-        reply_to,
-        subscription: tasks::Subscription {
-            number: 1,
-            task: 1,
-            kind: tasks::SubscriptionKind::Topic { connector: 1, topic: 1 },
-            pending: false,
-        },
-    });
-    for _ in 0..rng.between(1, 4) {
-        let number = world.number();
-        let reply_to = world.to();
-        let class = match rng.below(3) {
-            0 => tasks::NewsClass::Wakes,
-            1 => tasks::NewsClass::Kept,
-            2 => tasks::NewsClass::Dropped,
-            _ => unreachable!("three news classes"),
-        };
-        world.send(Event::News { reply_to, number, subscription: 1, class, words: Box::new([3]) });
-    }
-    world.mail(1, Party::Person(1), tasks::UserMessage::Words { words: Box::new([4]) });
-    let read = world.messages(1).last().expect("person words present").number;
-    let reply_to = world.to();
-    world.stage(Event::Turn { reply_to, task: 1, attempt: 1, turn: 1, read: Some(read) });
+    w.env.now = w.env.now.saturating_add(arrival);
+    w.env.wall = Wall::from_nanos(arrival.as_nanos());
+    w.make(Party::Person(1), vec![task(1, &[])]);
+    w.claim(1, 1);
+    w.make(Party::Task(1), vec![task(2, &[]), task(3, &[2])]);
+    w.claim_fresh(2);
+    let reply_to = w.to();
+    w.stage(Event::Turn { reply_to, task: 1, attempt: 1, turn: 1, read: None, cumulative: 5 });
     if rng.chance(500) {
-        world.durable();
+        w.durable();
     }
-    world.restart();
-    world.turn(1, 1, Some(read));
-    match rng.below(4) {
+    w.restart();
+    match rng.below(3) {
         0 => {
-            world.terminal(2, End::Refused);
-            world.advance();
-            world.claim_fresh(2);
+            w.terminal(2, End::Refused);
+            w.advance();
+            w.claim_fresh(2);
         }
         1 => {
-            let class = match rng.below(6) {
-                0 => tasks::Class::Transient,
-                1 => tasks::Class::Permanent,
-                2 => tasks::Class::Run,
-                3 => tasks::Class::Agent,
-                4 => tasks::Class::Lost,
-                5 => tasks::Class::Invalid,
-                _ => unreachable!("draw below six"),
-            };
-            for failure in 0..3 {
-                world.terminal(2, End::Failed(class));
-                if failure < 2 {
-                    world.advance();
-                    world.claim_fresh(2);
-                }
-            }
-            let reply_to = world.to();
-            world.send(Event::Release { reply_to, task: 2 });
-            world.claim_fresh(2);
+            w.terminal(2, End::Failed(tasks::Class::Lost));
+            w.advance();
+            w.claim_fresh(2);
         }
-        2 | 3 => {}
-        _ => unreachable!("draw below four"),
+        2 => {}
+        _ => unreachable!(),
     }
     if rng.chance(500) {
-        world.restart();
+        w.restart();
     }
     if rng.chance(200) {
-        world.terminal(2, End::Finished { result: Result::Failure { reason: Box::new([1]) }, cancel_delegates: false });
-        world.settle(2);
+        w.terminal(2, End::Finished { result: Result::Failure { reason: Box::new([1]) }, cancel_delegates: false });
+        w.settle(2);
+        assert!(matches!(w.record(3).phase, tasks::Phase::Held { .. }));
     } else {
-        world.finish(2);
-        world.settle(2);
-        world.claim_fresh(3);
-        world.finish(3);
-        world.settle(3);
+        w.terminal_cause(
+            2,
+            End::Finished { result: Result::Report { words: Box::new([1]) }, cancel_delegates: false },
+            Cause::Priced { cumulative: rng.between(1, 10) },
+        );
+        w.settle(2);
+        w.claim_fresh(3);
+        w.finish(3);
+        w.settle(3);
     }
-    world.make(Party::Task(1), vec![task(4, &[])]);
-    world.claim_fresh(4);
-    world.make(Party::Task(4), vec![task(5, &[])]);
-    world.claim_fresh(5);
+    w.make(Party::Task(1), vec![task(4, &[])]);
+    w.claim_fresh(4);
+    w.make(Party::Task(4), vec![task(5, &[])]);
+    w.claim_fresh(5);
     if rng.chance(500) {
-        world.restart();
+        w.restart();
     }
-    world.cancel(1, b"done");
-    world.complete_cancel();
-    assert_eq!(world.results.len(), 5, "all tasks have a durable result");
-    (world.trace.lines().to_vec(), world.results.len())
+    for task in [3, 4] {
+        if w.records.contains_key(&Key::Live(task)) {
+            w.observe(Seen::Cancelled { task });
+        }
+    }
+    w.terminal(1, End::Finished { result: Result::Report { words: Box::new([1]) }, cancel_delegates: true });
+    w.complete_cancel();
+    assert_eq!(w.results.len(), 5);
+    assert_eq!(w.live(), 0);
+    (w.trace.lines().to_vec(), w.frozen())
 }

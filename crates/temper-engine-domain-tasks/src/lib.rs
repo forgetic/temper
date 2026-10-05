@@ -7,7 +7,6 @@
 #![forbid(unsafe_code)]
 extern crate alloc;
 mod admission;
-mod amend;
 mod batch;
 mod boundary;
 mod closing;
@@ -15,33 +14,23 @@ mod domain;
 mod facts;
 mod failures;
 mod funders;
-mod inbox;
 mod limits;
-mod message;
-mod moving;
 mod owned;
-mod refs;
 mod run;
 mod stored;
 #[cfg(test)]
 mod tests;
 mod value;
-mod wake;
-pub use admission::{Admission, AdmissionKey};
-pub use amend::{Amendment, AuthorityChange, Authorization, Change, Control, History};
-pub use boundary::*;
-pub use domain::{Domain, fire, live_task, max_out, step, task_stub};
+pub use boundary::{
+    Accepted, Active, Cause, Closing, Contract, End, Ending, Event, Executor, Hold, Key, New, Parameter, Party, Phase,
+    Problem, Refusal, Request, Result, RunContext, Spec, Stage, Status, Stored, TaskRecord, Verdict, Was,
+};
+pub use domain::{Domain, fire, max_out, step};
 pub use facts::Fact;
 pub use failures::{Class, Retries, Retry, Tries};
-pub use funders::{Balance, Closure, FundingRecord};
+pub use funders::{Closure, FundingRecord};
 pub use limits::{Limits, worst_case};
-pub use moving::{Movement, Transfer};
 pub use owned::stored_bytes;
 pub use value::{
     Authority, AuthorityExecutor, Budget, Delegation, Funder, Grant, Last, Numbers, Pattern, Scopes, Tools,
-};
-
-pub use message::{
-    Envelope, Interest, Message, MessageKey, NewsClass, Notice, Offer, Question, Receipt, ResultsWake, Rule,
-    Subscription, SubscriptionKind, UserMessage, WakePolicy,
 };

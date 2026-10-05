@@ -7,8 +7,6 @@ use temper_world::{Expectations, Judge};
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Seen {
     Batch { members: Vec<u64>, accepted: bool, made: Vec<u64> },
-    Moved { task: u64, from: Party, to: Party },
-    Amended { task: u64, dependencies: Vec<u64> },
     Made { task: u64, parent: Party, dependencies: Vec<u64>, depth: u32 },
     Durable { commit: u64 },
     Replied { call: u64, after: u64 },
@@ -19,7 +17,7 @@ pub enum Seen {
     Ended { task: u64, status: Status, after: u64 },
     Cancelled { task: u64 },
     Limit { live: usize, cap: u32 },
-    Stored { live: Vec<TaskRecord>, stubs: usize, limits: Box<Limits> },
+    Stored { live: Vec<TaskRecord>, limits: Box<Limits> },
     Finished,
 }
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -128,7 +126,6 @@ impl Expectations for Tasks {
     type Seen = Seen;
     type Name = Name;
     type Stimulus = Stimulus;
-    #[expect(clippy::too_many_lines, reason = "exhaustive referee observation cells")]
     fn observe(&mut self, seen: Seen, judge: &mut Judge<Name, Stimulus>) {
         match seen {
             Seen::Batch { mut members, accepted, mut made } => {
@@ -188,22 +185,6 @@ impl Expectations for Tasks {
                 }
                 self.runs.remove(&task);
             }
-            Seen::Moved { task, from, to } => {
-                if self.parents.get(&task) != Some(&from) {
-                    judge.fail("move source is stale");
-                }
-                self.parents.insert(task, to);
-                if self.cycle() {
-                    judge.fail("move introduces wait cycle");
-                }
-            }
-            Seen::Amended { task, dependencies } => {
-                let old = self.dependencies.get(&task).expect("amendment names known task");
-                if dependencies.iter().any(|dependency| !old.contains(dependency)) {
-                    judge.fail("amendment added dependency");
-                }
-                self.dependencies.insert(task, dependencies);
-            }
             Seen::Closing { task } => {
                 if self.runs.contains_key(&task) {
                     judge.fail("effects closed before own run ended");
@@ -236,7 +217,7 @@ impl Expectations for Tasks {
                     judge.fail("live task limit exceeded");
                 }
             }
-            Seen::Stored { live, stubs, limits } => stored(&live, stubs, &limits, judge),
+            Seen::Stored { live, limits } => stored(&live, &limits, judge),
             Seen::Finished => {
                 if self.cancelled.iter().any(|task| !self.ended.contains_key(task)) {
                     judge.fail("cancelled task did not end");
@@ -324,9 +305,8 @@ fn within(task: &TaskRecord, l: &Limits) -> bool {
         }
 }
 
-fn stored(live: &[TaskRecord], stubs: usize, limits: &Limits, judge: &mut Judge<Name, Stimulus>) {
-    if stubs + live.len() > usize::try_from(limits.stubs).expect("u32 fits usize")
-        || !live.iter().all(|task| within(task, limits))
+fn stored(live: &[TaskRecord], limits: &Limits, judge: &mut Judge<Name, Stimulus>) {
+    if !live.iter().all(|task| within(task, limits))
         || live.iter().any(|task| {
             live.iter().filter(|other| other.project == task.project).count()
                 > usize::try_from(limits.project_tasks).expect("u32 fits usize")

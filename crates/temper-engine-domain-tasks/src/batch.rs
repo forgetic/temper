@@ -17,11 +17,6 @@ pub(crate) fn check(d: &Domain, l: &Limits, creator: Party, batch: &[New]) -> Re
     if d.names.len().saturating_add(size) > l.tasks || d.tasks.capacity().saturating_sub(d.tasks.len()) < size {
         return Err(problem(None, Refusal::Live));
     }
-    // Each live task reserves an eventual stub before work begins. Closing
-    // cannot discover a full stub table after it has already changed things.
-    if d.stubs.len().saturating_add(d.names.len()).saturating_add(size) > l.stubs {
-        return Err(problem(None, Refusal::Busy));
-    }
     let parent = match creator {
         Party::Task(number) => {
             let Some(parent) = record(d, number) else {
@@ -37,23 +32,6 @@ pub(crate) fn check(d: &Domain, l: &Limits, creator: Party, batch: &[New]) -> Re
             }
             if u32::try_from(parent.delegates.len()).unwrap_or(u32::MAX).saturating_add(size) > l.delegates {
                 return Err(problem(Some(number), Refusal::Delegates));
-            }
-            if u32::try_from(parent.results_due.len()).unwrap_or(u32::MAX).saturating_add(size) > l.delegates
-                || !crate::inbox::room(
-                    d,
-                    l,
-                    number,
-                    size,
-                    usize::try_from(l.result_bytes)
-                        .expect("u32 fits usize")
-                        .saturating_mul(2)
-                        .saturating_mul(batch.len()),
-                )
-            {
-                return Err(problem(Some(number), Refusal::Inbox));
-            }
-            if u32::try_from(parent.references.len()).unwrap_or(u32::MAX).saturating_add(size) > l.references {
-                return Err(problem(Some(number), Refusal::Busy));
             }
             if parent.depth.saturating_add(1) > l.depth {
                 return Err(problem(Some(number), Refusal::Depth));
@@ -87,7 +65,7 @@ fn check_members(
 ) -> Result<(), Problem> {
     for (at, new) in batch.iter().enumerate() {
         let number = Some(new.number);
-        if d.names.contains_key(&new.number) || d.stubs.contains_key(&new.number) {
+        if d.names.contains_key(&new.number) {
             return Err(problem(number, Refusal::Duplicate));
         }
         for earlier in batch.iter().take(at) {
@@ -131,9 +109,6 @@ fn check_members(
                 }
             }
         }
-        if !crate::wake::valid(&new.policy) {
-            return Err(problem(number, Refusal::Message));
-        }
         if !valid_spec(l, &new.spec) {
             return Err(problem(number, Refusal::Spec));
         }
@@ -143,10 +118,9 @@ fn check_members(
         if !valid_authority(l, &new.authority) {
             return Err(problem(number, Refusal::AuthorityShape));
         }
-        for input in &new.spec.inputs {
-            if !d.stubs.contains_key(input) {
-                return Err(problem(number, Refusal::Inputs));
-            }
+        // Historical result admission belongs to an actual root input route.
+        if !new.spec.inputs.is_empty() {
+            return Err(problem(number, Refusal::Inputs));
         }
         if new.dependencies.len() > usize::try_from(l.dependencies).expect("u32 fits usize") {
             return Err(problem(number, Refusal::Dependencies));
@@ -169,9 +143,6 @@ fn check_members(
                         known = true;
                     }
                 }
-            }
-            if !known && let Some(parent) = parent {
-                known = contains(&parent.references, *dependency) && d.names.contains_key(dependency);
             }
             if !known {
                 return Err(problem(number, Refusal::Dependencies));

@@ -341,8 +341,8 @@ The walking root settles the following choices before extending the routes:
   to route those callbacks. A blocked callback is routed before consuming
   another held callback or admitting new work. A channel loss changes only
   fleet topology/deadlines immediately; it emits no saves or effects.
-- **Run readiness retains its cause.** A credential-only wait keeps one task
-  number in bounded due room, reconsidered when the real account becomes
+- **Run readiness retains its cause.** A credential-only wait keeps one bounded
+  activation context in due room, reconsidered when the real account becomes
   usable. Deadline, budget and other static authority failures become task
   holds, so they cannot spin the ready pass or block unrelated placements.
   Fleet refusal or withdrawal clears the prepared assignment and routes an
@@ -357,13 +357,13 @@ The walking root settles the following choices before extending the routes:
   finite pool are admitted through tasks only after the real project/role
   policy allows their ceilings. `Make` reserves that pool atomically. A turn
   and terminal each use the hub's charged admission, not a charge followed by
-  a separate event. Exact admission records and the original finite ledger
-  are loaded at restart; the root keeps no copy of their balances.
+  a separate event. The original finite ledger stays in tasks; the root restores its own
+  bounded current-claim proof before fleet adoption and keeps no copy of balances.
 - **The task section is concrete.** For this chat it starts with the person's
   spec, then its report contract's byte bound, then its requester. A task
-  requester chain is followed nearest first within depth/part/read bounds;
-  omitted farthest entries add their exact byte omission to the last kept
-  part. The brief child owns rendering, required-section admission and cuts.
+  requester is the actual person for this route. Task/deployment requester
+  brief depth joins only with its actual root caller; this slice refuses it.
+  A cut accounts for omitted person bytes in the last kept part. The brief child owns rendering, required-section admission and cuts.
 - **A person's result comes from its ended task.** The committed ending may
   produce a live result notice; losing that notice loses no inbox record.
   Reconnecting web clients request that named task's result using a valid
@@ -473,10 +473,10 @@ When an agent task is due (tasks.md, 5.2), the root:
   spend and with the messages up to that one taken, then acknowledges
   it. A worker keeps each turn until it is acknowledged, and a run with
   too many unacknowledged turns waits (worker.md, section 8).
-  Admission is whole: the task hub validates the attempt, turn and offered
+  Admission is whole: the task hub validates the attempt, next turn and admitted
   read-through before changing its cumulative spend or funding ledger.
-  A refused turn changes neither; a duplicate accepted turn changes neither
-  again. Authority supplies arithmetic over snapshots; the hub owns and
+  A refused turn changes neither; fleet fences accepted duplicate turns
+  before child admission, so they change neither again. Authority supplies arithmetic over snapshots; the hub owns and
   saves the actual finite funding links and numbers. The root gathers those
   saves with the opaque transcript into the same commit. It never precharges
   an event in a separate hub operation or maintains a duplicate pool ledger.
@@ -563,6 +563,57 @@ their own, so a person is never asked by accident.
 - **Saved work.** A run that parks, fails or is cancelled with
   unfinished changes has them saved by its worker to its saved-work
   branch, and the next run of its task starts from it (worker.md, 4.2).
+
+### 7.5 Current tasks boundary and root-owned replay evidence
+
+The concrete per-variant audit is tasks.md, section 14. Root owns transport
+proofs, transcripts, worker terminal evidence and child correlation; tasks
+owns semantic lifecycle/dependency state and authentic task/pool/period
+financial numbers. Removing raw task peeks does not introduce a second
+ledger. Actual Activate supplies bounded temporary RunContext for authority
+and the person-chat brief; Adopt carries its actual committed kept turn;
+owned worker payloads carry task and attempt for refusal correlation.
+
+Before Claim mutates the child, root reserves one RunProof map slot, bounded
+by live task capacity. The accepted claim and initial proof share one commit.
+Each accepted next Turn commits its latest metadata proof, immutable TurnRecord
+and all child financial/task writes together. Fleet's kept-turn fence handles
+older or pending duplicate bodies before they can produce Turned; therefore
+one latest turn's metadata is enough. Transcript bytes remain only in their
+immutable archive, with no duplicate replay window or reduced worker bound.
+
+A priced Answer reserves its current proof and bounded typed terminal room
+before child mutation. On acceptance, root Terminal archive plus current
+proof and all child lifecycle/financial writes share one decision. Rejected
+answers normalize to an unpriced Invalid terminal without applying their
+expense. Topology refusal/loss is unpriced; its proof records the actual root-translated
+terminal at the latest accepted expense, with no invented worker answer. Ending erases RunProof in that same decision; coalescing means the
+final transaction contains the terminal archive and proof Erase. The held
+Fleet Acknowledge owns the completion handoff after this barrier, including
+fenced duplicate worker inputs. Root never charges an event separately.
+
+Startup pages Live/Ledger and then the RunProofs family. It validates every
+proof against transient metadata from its owned live-task page: current
+attempt, kept turn, run expense and last answered attempt. Latest turn expense
+cannot exceed run expense; a stored terminal must match current answered
+attempt and final run expense. Proof terminal presence must match the child's current answered attempt;
+unpriced topology records its actual root-translated terminal at unchanged
+accepted expense.
+The root also refuses restored task shapes with no actual root route: non-person
+requesters, a different charter, non-Report contracts or delegate/dependency/input
+work. Tasks Restored is deferred until all proof rows pass, so invalid proof
+cannot commit a restored closing consequence or release a result/cancel.
+Missing, unrelated, oversized, malformed or excess proof rows stop startup;
+none is silently dropped. Only after all proofs pass does root hand every
+restored claim to fleet, followed by Loaded and new assignments.
+
+A new claim replaces its proof, an ended task erases it, and historical turn
+or terminal archives never load into the bounded live map. Worst-case memory
+prices proof slots/owned terminal bytes, transient startup correlation,
+activation contexts, incoming payloads and simultaneous child/decision
+copies. This preserves the independently tested first-turn durable/lost-store-
+completion restart. Terminal-commit-before-ACK/result restart remains later
+coverage; its durable typed archive is preserved without claiming that cut.
 
 ## 8. The fleet
 

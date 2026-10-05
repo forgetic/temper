@@ -55,6 +55,17 @@ impl WalkingReferee {
             if !keys.insert(write.key()) {
                 return Err("same key written twice in one decision");
             }
+        }
+        for write in writes {
+            if let Write::Save(Record::Tasks(tasks::Stored::Live(record))) = write
+                && matches!(record.phase, tasks::Phase::Active(tasks::Active::Claimed { .. }))
+            {
+                let claimed = writes.iter().any(|write| matches!(write,
+                        Write::Save(Record::RunProof(proof)) if proof.task == record.number && proof.attempt == record.attempt && proof.turn.is_none() && proof.terminal.is_none()));
+                if !claimed {
+                    return Err("claim and reserved root proof are not one transaction");
+                }
+            }
             if let Write::Save(Record::Turn(turn)) = write {
                 let expected = TURNS.iter().find(|(number, _, _)| *number == turn.turn).ok_or("unexpected turn")?;
                 if turn.spent != expected.1 || turn.transcript.as_ref() != expected.2 || turn.read.is_some() {
@@ -66,8 +77,14 @@ impl WalkingReferee {
                         && record.attempt == turn.attempt && record.turn == turn.turn
                         && record.run_spent == expected.1 && record.numbers.spent == expected.1)
                 });
+                let proven = writes.iter().any(|write| matches!(write,
+                    Write::Save(Record::RunProof(proof)) if proof.task == turn.task && proof.attempt == turn.attempt
+                        && proof.turn == Some(temper_engine_domain::TurnProof { turn: turn.turn, cumulative: turn.spent, read: turn.read })));
                 if !charged {
                     return Err("transcript and accepted charge are not one transaction");
+                }
+                if !proven {
+                    return Err("turn and root proof are not one transaction");
                 }
                 if !self.saved_turns.insert((turn.task, turn.attempt, turn.turn)) {
                     return Err("transcript committed twice");
@@ -80,8 +97,15 @@ impl WalkingReferee {
                     if ledger.funder == record.funder && ledger.numbers.spent_below == FINAL_SPEND
                         && ledger.numbers.reserved == 0)
                 });
+                let retired = writes.contains(&Write::Erase(Key::RunProof { task: record.number }));
+                let terminal = writes.iter().any(|write| matches!(write,
+                    Write::Save(Record::Terminal(proof)) if proof.task == record.number && proof.attempt == record.attempt && proof.cumulative == FINAL_SPEND
+                        && proof.end == (tasks::End::Finished { result: tasks::Result::Report { words: REPORT.into() }, cancel_delegates: false })));
                 if record.numbers.spent != FINAL_SPEND || !posted {
                     return Err("terminal and funding posting are not one transaction");
+                }
+                if !retired || !terminal {
+                    return Err("ended task and root terminal proof retirement are not one transaction");
                 }
             }
         }

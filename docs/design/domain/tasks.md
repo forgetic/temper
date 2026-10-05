@@ -7,7 +7,9 @@ first of the primitives of core.md (section 3) in depth, and the hub of
 the engine's domain (engine.md, section 3). Authority, which every
 action here is checked against, is authority.md; what an agent's run
 is, engine.md, section 7; a connector's procedures, connectors.md,
-section 6. What is still open is listed in section 13.
+section 6. What is still open is listed in section 13. Section 14 is the current
+implemented boundary; the broader routes described below join only when
+a real root caller and consumer are integrated.
 
 ## 1. In one page
 
@@ -300,14 +302,12 @@ which may amend, cancel or re-address it.
   can correct the finish. An accepted activation terminal is acknowledged
   after the decision is durable; replaying its accepted answer changes
   neither the task nor its tries.
-- **Delivered once,** as a message to the requester, committed with the
-  task's end. The child's durable result credit remains until the root
-  delivers that actual message in the same decision; a closing requester
-  cannot advance past delegates with an undelivered result credit. The root
-  commits this requester message in the same decision
-  as the ended record (`engine.md`, 5.6); restoration of the historical
-  record does not send another message. A person requester sees it in the
-  web. A cancellation can retain a completed result alongside its reason,
+- **Delivered after commitment.** The child emits `Ended` with its ending
+  after closing; the root commits the ended row and financial posting before
+  releasing a live notice to a person. Reconnecting people read the named
+  ended task through the root, authenticated by people (people.md, 6). There
+  is no task-owned transport receipt or persistent result credit. A future
+  requester inbox route must integrate its own real root handoff. A cancellation can retain a completed result alongside its reason,
   recording what was done before everything settled.
 - **Kept.** A result is read by every task that depends on its task, or
   names it among its inputs, in the brief of its next run (engine.md,
@@ -391,26 +391,16 @@ are entries of its own (section 8), which always wake it.
   - *refused at the sender's entrance:* words and questions, past the
     bound: a person is told the inbox is full, an agent's tool call
     answers so.
-- **Named by the root.** Message, question and subscription numbers are
-  fresh root-issued values. Accepted user messages retain bounded receipts
-  containing the complete call: an exact replay acknowledges the old
-  outcome, a changed call using its number is refused, and pressure refusals
-  consume no receipt. The root retains the logical call key across pressure
-  retries (`Busy`, `Inbox`, `NotReady`) and assigns a fresh message candidate
-  when other deliveries have meanwhile committed. Only final outcomes are
-  cached. Increasing committed message IDs keep an old read-through from
-  taking a later delivery. An open question reserves both answer inbox
-  capacity
-  and an answer receipt before the question is accepted. The root retires a
-  receipt only after its own call history no longer needs it.
-- **Taken by committed turns.** Each attempt starts at turn zero. A turn
-  advances by one; already committed turns acknowledge without taking
-  anything again. The root gives a claim the message IDs in its actual
-  brief. Each live relay saves an immutable offered payload before delivery.
-  A read-through takes only IDs offered to that attempt, so an older message
-  kept by policy survives reading a newer live relay. An older deferred ID
-  may later be read by a new attempt. Offers are bounded; when their table
-  is full, new messages stay in the inbox until a turn frees offer room.
+- **Named by the root.** Message, question and subscription identities and
+  transport call/replay evidence belong to the root (engine.md, 5.4 and 7.5).
+  A future inbox route must show its real sender and terminal consumer before
+  adding that machinery. The current boundary has no inbox or offered-payload
+  table; `Turn` refuses a nonempty read fence.
+- **Taken by committed turns.** Tasks admits only the next turn of the
+  current attempt. Root/fleet handles accepted duplicate transport inputs
+  before they can reach child admission; the root owns its durable proof.
+  Future inbox read-through remains a semantic admission in the same priced
+  turn, when its actual root route is integrated.
 - **Merged with a fresh ID.** A replacement hint keeps the oldest arrival
   time and accumulated occurrence count, but receives a fresh root number.
   Reached batch thresholds are durable and survive holds, wall corrections
@@ -645,23 +635,110 @@ where a holder can decide it; nothing beyond a task's limits is held.
 
 ### Incremental accounting implementation
 
-The 02e slice used by the root's first walking story owns finite project
-period and person pool ledgers. A pool records its original project period
-as its actual parent; opening another period does not release its old
-reservations. Whole-batch reservation and closure posting happen within the
-hub's decision, including authentic before snapshots for funding replacements.
-The root supplies authenticated current authority inputs; the hub supplies
-and verifies the concrete accounting state.
+The retained slice owns finite project period and person pool ledgers. A
+pool records its original project period as its actual parent; opening a
+new period does not release old reservations. Whole-batch reservation and
+closure posting happen inside the child decision. Root authenticates the
+current role/authority and gathers all writes into one atomic commit.
 
-Charged turn and terminal inputs preflight their complete admission and the
-representability of all eventual actual-chain postings. Exact durable replay
-receipts are bounded independently; pressure, stale attempts, invalid reads
-and refused live-delegate finishes spend nothing. Bounded invalid results
-still consume the normal Invalid terminal; narrowed and cancelled terminals
-keep their ordinary lifecycle rules. An oversized terminal refuses before
-copying into replay evidence. Root routes use these combined inputs.
+`Turn` combines next-turn admission with the new cumulative expense delta.
+`Activation` explicitly distinguishes a priced worker terminal from an
+unpriced loss, fleet refusal or invalid-answer normalization. Priced inputs
+preflight both semantic admission and representability of eventual actual
+funding-chain postings before mutation. Refused inputs spend nothing.
+Tasks saves only authentic task/funding state and closure financial history;
+root-owned transport proof, transcript and terminal evidence join those
+writes in the same decision (engine.md, 7.5). There is no standalone Charge
+operation or second pool ledger.
 
-Period/pool retirement and the recurring procedure are not implemented by
-this early slice. Its finite retained source table refuses new identities
-when full; later 02e work must retire closed sources without forgetting
-monotonic period identity or recreating spent availability.
+Period/pool retirement, funding replacement/move and recurring procedures
+remain parked until their real root routes are integrated. The finite source
+table refuses fresh identities when full; unsupported closed sources and
+external ledgers with direct own spend are refused at restoration.
+
+## 14. Current concrete boundary after the tasks audit
+
+This inventory records actual constructors and consumers in
+`crates/temper-engine-domain/src/engine.rs`, rather than proposed future
+routes. The pre-audit source remains on
+`preserve/pre-tasks-boundary-audit-429647c` and the original implementation
+branches. Deleting dormant surface does not assert those deeper designs are
+complete. The first-turn durable/lost-completion restart is covered; broader
+terminal-before-ACK/result restart recovery remains later root work.
+
+### 14.1 Events: thirteen actual root constructors
+
+| Event | Decision | Concrete caller |
+| --- | --- | --- |
+| OpenPeriod | Keep | `chat`, after current project authority validates its ceiling |
+| CarvePool | Keep | `chat`, after current person role validates its ceiling |
+| Make | Keep | `chat`, for authenticated people `StartChat` |
+| Prepare | Keep | `activate`, after real authority/account readiness |
+| Claim | Keep | `brief_outputs` Rendered, after brief and grant; root reserves proof room first |
+| Turn | Merge charged admission; remove unpriced Turn | `fleet_outputs` Turned, correlated to the root's owned worker payload |
+| Started | Keep | `fleet_outputs` Placed |
+| Activation | Merge charged and unpriced causes | `fleet_outputs` Answered uses Priced; Lost/Withdrawn/Refused use Unpriced; `tasks_outputs` rejected answer normalizes Invalid unpriced |
+| PreparationFailed | Keep | `brief_outputs` Failed/Refused or exhausted run/grant/proof room; `tasks_outputs` rejected Claim |
+| Hold | Keep | `activate`, for authority deadline, budget or other static findings |
+| Settled | Keep | `tasks_outputs` Close, after this slice's synchronous closing effects |
+| Restore | Keep | `startup_page`, actual paged Live/Ledger records |
+| Restored | Keep | `startup_page`, after all current root proof pages validate |
+
+Uncalled events are removed: ForgetAdmission, Control, Amend, Move, Charge,
+Send, Peek, DeliverResult, DeliverNotice, DeliverTimer, News, ForgetReceipt,
+Introduce, ForgetReference, Subscribe, Unsubscribe, Release, Cancel,
+RememberStub and ForgetStub. ChargedTurn merges into Turn; ChargedActivation
+merges into Activation. Standalone Cancel is uncalled; legitimate
+`Finished { cancel_delegates: true }` still closes a delegate tree.
+
+### 14.2 Requests: thirteen actual root consumers
+
+| Request | Decision | Concrete consumer |
+| --- | --- | --- |
+| Made | Keep | `tasks_outputs`, correlates pending people request and supplies Decided Started |
+| Refused | Keep | `tasks_outputs`, completes Make refusal or Claim failure, or handles owned Turn/Answer refusal |
+| Done | Keep | `tasks_outputs`, correlation releases claimed Fleet Start after commit; funding/Prepare Done has no outward effect |
+| Acknowledged | Keep | `tasks_outputs`, saves root terminal evidence and holds Fleet Acknowledge |
+| TurnAcknowledged | Keep | `tasks_outputs`, saves transcript and latest root proof, then holds Fleet TurnKept |
+| Activate | Keep bounded context | `tasks_outputs` -> `activate`; authority and real task brief consume temporary RunContext |
+| Stop | Keep | `tasks_outputs`, holds Fleet Cancel |
+| Adopt | Keep kept-turn field | `tasks_outputs`, retains claim adoption before Fleet Loaded; no raw task peek |
+| Close | Keep | `tasks_outputs`, routes actual synchronous Settled |
+| Ended | Keep | `tasks_outputs`, erases current proof and holds person result notice |
+| Save | Keep | `tasks_outputs`, wraps authentic child row into current root Decision |
+| Erase | Keep | `tasks_outputs`, wraps child erase into that same Decision |
+| RestoreRefused | Keep | `tasks_outputs`, stops startup before continuation or Fleet Loaded |
+
+Sent, Inbox, Relay, Observe, Notify, Timer and Topic have no reachable producer
+under actual root events and are removed with their dormant mechanics.
+
+### 14.3 Stored, keys and queries
+
+| Surface | Decision | Actual root use |
+| --- | --- | --- |
+| Live | Keep | Child Save/Erase; Tasks startup page restores bounded current semantic lifecycle and dependencies |
+| Ended | Keep historical | Child Save; root's authenticated TaskResult singleton load derives person result; never live restore |
+| Ledger | Keep, merge duplicate Funding | Child Save; Tasks startup page restores actual period/pool numbers |
+| Closure | Keep historical | Child Save records actual ended allotment generation/financial posting; never live restore |
+| Admission | Move to root RunProof/Terminal | Actual current claim, next turn and worker terminal; root pages current proofs before Fleet Loaded |
+| Stub, Message, ArchivedMessage, Receipt, Offer, Question, Subscription, History | Remove | No actual root constructor; dormant restore pass-through was not a live route |
+| `funding(Funder)` | Keep narrow authentic query | `chat` reads whether its actual finite source already exists; root owns no mutable copy |
+| `live_task`, `task_stub` | Remove | Authority/brief use Activate's bounded RunContext, adoption uses kept, refusal uses owned payload task/attempt correlation |
+| `ready`, `next_deadline`, `is_due`, `facts_lost` | Private/remove | No actual root caller; restoration terminal and root-owned timers drive the boundary |
+| `fire`, `reclaim`, `pop_fact`, `max_out`, `worst_case`, `stored_bytes` | Keep | Root timer pass, iteration reclamation, neutral observation drain, bounded route/byte admission |
+
+Dependencies remain immutable history. `waiting_on` is their bounded
+unfinished subset; ending propagates removal directly to live dependents,
+without historical stub storage. Restore first checks length/unique/subset
+without cloning, then requires every still-live dependency in that subset
+once all pages arrived. Failed dependencies hold ordinary waiting work;
+already-closing cancellation continues closing. Current batch dependencies
+name same-batch tasks or the creator's live delegates; nonempty Spec.inputs
+are explicitly refused until an actual root input-result route joins.
+
+Live restore rejects unheld Closing Settled: the same child step always
+ends that transient phase before a root commit. Held closing state may
+remain inert after its actual Settled callback. Financial restore verifies
+current reservations, actual requester-ancestor task funding, original
+external source links and representability of eventual postings before
+Ready. Historical Ended/Closure rows never enter the live arena.

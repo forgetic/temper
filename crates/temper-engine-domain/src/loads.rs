@@ -283,7 +283,7 @@ fn check(entry: &Entry, limits: &Limits, rows: &[Record], next: Option<Key>) -> 
         }
         match entry.range {
             Range::Deployment | Range::TaskResult { .. } => return Err(Failure::Cursor),
-            Range::Turns { .. } | Range::Tasks | Range::People => {}
+            Range::Turns { .. } | Range::Tasks | Range::People | Range::RunProofs => {}
         }
     }
     if bytes.checked_add(removed_bytes).ok_or(Failure::Bytes)? > u64::from(limits.reply_bytes) {
@@ -299,7 +299,7 @@ fn check(entry: &Entry, limits: &Limits, rows: &[Record], next: Option<Key>) -> 
 
 fn valid_range(range: Range) -> bool {
     match range {
-        Range::Deployment | Range::Tasks | Range::People => true,
+        Range::Deployment | Range::Tasks | Range::People | Range::RunProofs => true,
         Range::TaskResult { task } => task != 0,
         Range::Turns { task, attempt } => task != 0 && attempt != 0,
     }

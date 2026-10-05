@@ -1,10 +1,7 @@
 //! Borrowed durable-row heap accounting for root journal/load admission
 //! (domain/tasks.md, 2; domain/engine.md, 5.6). This measures existing ownership
 //! and allocates nothing; shape/authority admission remains with the hub/root.
-use crate::{
-    Admission, Authority, Contract, End, Ending, Last, Message, Notice, Parameter, Phase, Result, Spec, Stored,
-    TaskRecord, UserMessage, Was,
-};
+use crate::{Authority, Contract, Ending, Last, Parameter, Phase, Result, Spec, Stored, TaskRecord, Was};
 use core::mem::{size_of, size_of_val};
 
 /// Root measures a borrowed durable task row before journal/load byte admission.
@@ -16,24 +13,7 @@ use core::mem::{size_of, size_of_val};
 pub fn stored_bytes(record: &Stored) -> Option<u64> {
     match record {
         Stored::Live(task) | Stored::Ended(task) => task_bytes(task),
-        Stored::Message(envelope) | Stored::ArchivedMessage(envelope) => message_bytes(&envelope.message),
-        Stored::Offer(offer) => message_bytes(&offer.envelope.message),
-        Stored::Receipt(receipt) => match &receipt.message {
-            UserMessage::Words { words } | UserMessage::Question { words } | UserMessage::Answer { words, .. } => {
-                bytes(words.len())
-            }
-        },
-        Stored::History(history) => bytes(history.reason.len()),
-        Stored::Admission(admission) => match admission {
-            Admission::Turn { .. } => Some(0),
-            Admission::Activation { end, .. } => end_bytes(end),
-        },
-        Stored::Stub(_)
-        | Stored::Question(_)
-        | Stored::Subscription(_)
-        | Stored::Closure(_)
-        | Stored::Funding { .. }
-        | Stored::Ledger(_) => Some(0),
+        Stored::Closure(_) | Stored::Ledger(_) => Some(0),
     }
 }
 fn bytes(length: usize) -> Option<u64> {
@@ -91,12 +71,6 @@ fn ending_bytes(ending: &Ending) -> Option<u64> {
         }
     }
 }
-fn end_bytes(end: &End) -> Option<u64> {
-    match end {
-        End::Finished { result, .. } => result_bytes(result),
-        End::Parked | End::Failed(_) | End::Refused => Some(0),
-    }
-}
 fn phase_bytes(phase: &Phase) -> Option<u64> {
     match phase {
         Phase::Closing(closing) => ending_bytes(&closing.ending),
@@ -116,21 +90,5 @@ fn task_bytes(task: &TaskRecord) -> Option<u64> {
         .checked_add(phase_bytes(&task.phase)?)?
         .checked_add(bytes(size_of_val(&*task.dependencies))?)?
         .checked_add(bytes(size_of_val(&*task.delegates))?)?
-        .checked_add(bytes(size_of_val(&*task.references))?)?
-        .checked_add(bytes(size_of_val(&*task.results_due))?)
-}
-fn message_bytes(message: &Message) -> Option<u64> {
-    match message {
-        Message::Amendment { reason, .. } => bytes(reason.len()),
-        Message::Words { words }
-        | Message::Question { words }
-        | Message::Answer { words, .. }
-        | Message::News { words, .. } => bytes(words.len()),
-        Message::Result { ending, .. } => ending_bytes(ending),
-        Message::Notice { notice, .. } => match notice {
-            Notice::Held(_) => Some(0),
-            Notice::Ended(ending) => ending_bytes(ending),
-        },
-        Message::Timer { .. } => Some(0),
-    }
+        .checked_add(bytes(size_of_val(&*task.waiting_on))?)
 }

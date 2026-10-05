@@ -201,258 +201,87 @@ fn stored_limits() {
             }
             _ => unreachable!(),
         }
-        rejects(vec![Seen::Stored { live: vec![record], stubs: 0, limits: Box::new(LIMITS) }]);
+        rejects(vec![Seen::Stored { live: vec![record], limits: Box::new(LIMITS) }]);
     }
-    rejects(vec![Seen::Stored { live: vec![], stubs: 33, limits: Box::new(LIMITS) }]);
     let record = w.record(1).clone();
     rejects(vec![Seen::Stored {
         live: vec![record.clone(), record],
-        stubs: 0,
         limits: Box::new(temper_engine_domain_tasks::Limits { project_tasks: 1, ..LIMITS }),
     }]);
 }
 #[test]
-fn inbox_referee_catches_each_new_initial_invariant_without_child_state() {
-    use temper_engine_domain_tasks::{self as tasks, Key, Message, Party, Stored, UserMessage};
-    use temper_engine_tasks_world::{LIMITS, World, inbox_referee::Inbox, task};
-    let mut w = World::new(81, LIMITS);
-    let mut root = task(1, &[]);
-    root.policy.words = tasks::Rule::Never;
-    w.make(Party::Person(1), vec![root]);
-    w.make(Party::Task(1), vec![task(2, &[])]);
+fn accounting_referee_rejects_expense_reservation_and_closure_corruption() {
+    use temper_engine_domain_tasks::{Cause, End, Funder, Key, Stored};
+    use temper_engine_tasks_world::{LIMITS, World, accounting_referee::Accounting, task};
+    let mut w = World::new(80, LIMITS);
+    w.make(Party::Person(1), vec![task(1, &[])]);
     w.claim(1, 1);
-    w.mail(1, Party::Task(2), UserMessage::Words { words: Box::new([1]) });
-    w.mail(1, Party::Person(1), UserMessage::Words { words: Box::new([2]) });
-    let rows = w.records.clone();
-    for broken in 0..11 {
-        let mut bad = rows.clone();
-        let mut limits = LIMITS;
-        match broken {
+    let before = w.records.clone();
+    w.terminal_cause(
+        1,
+        End::Finished {
+            result: temper_engine_domain_tasks::Result::Report { words: Box::new([1]) },
+            cancel_delegates: false,
+        },
+        Cause::Priced { cumulative: 7 },
+    );
+    for fault in 0..3 {
+        let mut bad = w.records.clone();
+        if let Some(Stored::Live(task)) = bad.get_mut(&Key::Live(1)) {
+            match fault {
+                0 => task.numbers.spent = 0,
+                1 => task.run_spent = 0,
+                2 => task.numbers.reserved = 1,
+                _ => unreachable!(),
+            }
+        }
+        let mut judge = Accounting::default();
+        judge.reset(&before);
+        judge.charged(1, 7);
+        assert!(judge.committed(&bad).is_err(), "expense fault {fault}");
+    }
+    let before = w.records.clone();
+    w.settle(1);
+    for fault in 0..6 {
+        let mut bad = w.records.clone();
+        match fault {
             0 => {
-                let row = bad.remove(&Key::Receipt(1)).expect("receipt");
-                bad.insert(Key::Receipt(999), row);
+                bad.remove(&Key::Closure { task: 1, generation: 1 });
             }
             1 => {
-                if let Some(Stored::Message(envelope)) =
-                    bad.get_mut(&Key::Message(tasks::MessageKey { task: 1, number: 1 }))
-                {
-                    envelope.hits = 0;
+                if let Some(Stored::Closure(row)) = bad.get_mut(&Key::Closure { task: 1, generation: 1 }) {
+                    row.spent = 6;
                 }
             }
             2 => {
-                if let Some(Stored::Message(envelope)) =
-                    bad.get_mut(&Key::Message(tasks::MessageKey { task: 1, number: 1 }))
-                {
-                    envelope.message =
-                        Message::News { subscription: 1, class: tasks::NewsClass::Dropped, words: Box::new([]) };
+                if let Some(Stored::Closure(row)) = bad.get_mut(&Key::Closure { task: 1, generation: 1 }) {
+                    row.funder = Funder::Task(99);
                 }
             }
             3 => {
-                if let Some(Stored::Offer(offer)) = bad.get_mut(&Key::Offer(tasks::MessageKey { task: 1, number: 2 })) {
-                    offer.attempt = 99;
+                if let Some(Stored::Ledger(row)) = bad.get_mut(&Key::Ledger(Funder::Period { project: 1, period: 0 })) {
+                    row.numbers.reserved = 100;
                 }
             }
             4 => {
-                let q = tasks::Question { number: 3, asker: 1, answerer: 999 };
-                bad.insert(Key::Question(3), Stored::Question(q));
+                if let Some(Stored::Ledger(row)) = bad.get_mut(&Key::Ledger(Funder::Period { project: 1, period: 0 })) {
+                    row.numbers.spent_below = 0;
+                }
             }
             5 => {
-                let sub = tasks::Subscription {
-                    number: 3,
-                    task: 1,
-                    kind: tasks::SubscriptionKind::Topic { connector: 1, topic: 1 },
-                    pending: true,
-                };
-                bad.insert(Key::Subscription(3), Stored::Subscription(sub));
-            }
-            6 => {
-                if let Some(Stored::Live(record)) = bad.get_mut(&Key::Live(1)) {
-                    record.references = Box::new([2, 2]);
+                if let Some(Stored::Ended(row)) = bad.get_mut(&Key::Ended(1)) {
+                    row.numbers.budget = 99;
                 }
             }
-            7 => {
-                if let Some(Stored::Live(record)) = bad.get_mut(&Key::Live(1)) {
-                    record.results_due = Box::new([999]);
-                }
-            }
-            8 => limits.inbox_messages = 1,
-            9 => limits.inbox_bytes = 1,
-            10 => limits.receipts = 0,
             _ => unreachable!(),
         }
-        assert!(Inbox::default().committed(&bad, &limits, &[]).is_err(), "independent invariant {broken}");
+        let mut judge = Accounting::default();
+        judge.reset(&before);
+        assert!(judge.committed(&bad).is_err(), "closure fault {fault}");
     }
-    rejected_reads(&rows);
-}
-fn rejected_reads(
-    rows: &std::collections::BTreeMap<temper_engine_domain_tasks::Key, temper_engine_domain_tasks::Stored>,
-) {
-    use temper_engine_domain_tasks::{self as tasks, Key, Stored};
-    use temper_engine_tasks_world::{
-        LIMITS,
-        inbox_referee::{Inbox, Read},
-    };
-    let read = Read { task: 1, attempt: 1, turn: 1, through: Some(2) };
-    let mut taken = rows.clone();
-    if let Some(Stored::Live(record)) = taken.get_mut(&Key::Live(1)) {
-        record.turn = 1;
-        record.last_read = Some(2);
-    }
-    taken.remove(&Key::Message(tasks::MessageKey { task: 1, number: 2 }));
-    taken.remove(&Key::Offer(tasks::MessageKey { task: 1, number: 2 }));
-    let mut judge = Inbox::default();
-    judge.reset(rows);
-    assert!(judge.committed(&taken, &LIMITS, &[read]).is_ok());
-    for broken in 0..4 {
-        let mut bad = taken.clone();
-        let mut read = read;
-        match broken {
-            0 => read.through = Some(999),
-            1 => read.turn = 3,
-            2 => {
-                bad.remove(&Key::Message(tasks::MessageKey { task: 1, number: 1 }));
-            }
-            3 => {
-                let key = Key::Message(tasks::MessageKey { task: 1, number: 2 });
-                bad.insert(key, rows[&key].clone());
-            }
-            _ => unreachable!(),
-        }
-        let mut judge = Inbox::default();
-        judge.reset(rows);
-        assert!(judge.committed(&bad, &LIMITS, &[read]).is_err(), "read invariant {broken}");
-    }
-}
-#[test]
-fn changed_tree_referee_refuses_a_wait_cycle_stale_requester_and_added_dependencies() {
-    rejects(vec![made(1), made(2), Seen::Moved { task: 1, from: Party::Person(99), to: Party::Person(3) }]);
-    rejects(vec![made(1), Seen::Amended { task: 1, dependencies: vec![99] }]);
-    rejects(vec![
-        made(1),
-        made(2),
-        Seen::Moved { task: 1, from: Party::Person(1), to: Party::Task(2) },
-        Seen::Moved { task: 2, from: Party::Person(1), to: Party::Task(1) },
-    ]);
-}
-#[test]
-fn accounting_referee_detects_lost_promises_generations_expense_and_actual_link_reservations() {
-    use temper_engine_domain_tasks::{Closure, Funder, Key, Numbers, Stored};
-    use temper_engine_tasks_world::accounting_referee::Accounting;
-    use temper_engine_tasks_world::{LIMITS, World, task};
-    let mut w = World::new(5, LIMITS);
-    w.make(Party::Person(1), vec![task(1, &[])]);
-    let before = w.records.clone();
-    for fault in 0..8 {
-        let mut rows = before.clone();
-        let old = w.record(1);
-        let mut replacement = old.clone();
-        replacement.allotment = 2;
-        replacement.numbers = Numbers { budget: 100, spent: 0, spent_below: 0, reserved: 0 };
-        rows.insert(
-            Key::Closure { task: 1, generation: 1 },
-            Stored::Closure(Closure { task: 1, generation: 1, funder: old.funder, budget: 100, spent: 0 }),
-        );
-        match fault {
-            0 => replacement.numbers.budget = 99,
-            1 => replacement.allotment = 3,
-            2 => replacement.run_spent = 1,
-            3 => {
-                rows.remove(&Key::Closure { task: 1, generation: 1 });
-            }
-            4 => replacement.numbers.reserved = 1,
-            5 => replacement.historical_spend = 1,
-            6 => {
-                replacement.allotment = 1;
-                replacement.funder = Funder::Task(99);
-            }
-            7 => {
-                rows.insert(
-                    Key::Closure { task: 1, generation: 1 },
-                    Stored::Closure(Closure { task: 1, generation: 1, funder: old.funder, budget: 100, spent: 1 }),
-                );
-            }
-            _ => unreachable!(),
-        }
-        rows.insert(Key::Live(1), Stored::Live(Box::new(replacement)));
-        let mut referee = Accounting::default();
-        referee.reset(&before);
-        assert!(referee.committed(&rows).is_err(), "fault {fault}");
-    }
-    let mut rows = before.clone();
-    rows.insert(
-        Key::Closure { task: 1, generation: 1 },
-        Stored::Closure(Closure { task: 1, generation: 1, funder: w.record(1).funder, budget: 100, spent: 0 }),
-    );
-    let mut referee = Accounting::default();
-    referee.reset(&rows);
-    rows.remove(&Key::Closure { task: 1, generation: 1 });
-    assert_eq!(referee.committed(&rows), Err("immutable accounting/history row changed"));
-}
-#[test]
-fn inbox_referee_rejects_duplicate_oversized_unready_and_future_amendment_controls() {
-    use temper_engine_domain_tasks::{Envelope, Key, Message, MessageKey, Stored};
-    use temper_engine_tasks_world::{LIMITS, World, inbox_referee::Inbox, task};
-    let mut w = World::new(14, LIMITS);
-    w.make(Party::Person(1), vec![task(1, &[])]);
-    for fault in 0..4 {
-        let mut rows = w.records.clone();
-        if let Some(Stored::Live(task)) = rows.get_mut(&Key::Live(1)) {
-            task.revision = 1;
-            task.last_message = 2;
-        }
-        let mut envelope = Envelope {
-            task: 1,
-            number: 1,
-            from: Party::Person(9),
-            message: Message::Amendment { revision: 1, reason: Box::new([]) },
-            at: skein_lib::Wall::EPOCH,
-            hits: 1,
-            eligible: true,
-        };
-        match fault {
-            0 => {
-                let mut second = envelope.clone();
-                second.number = 2;
-                rows.insert(Key::Message(MessageKey { task: 1, number: 2 }), Stored::Message(second));
-            }
-            1 => {
-                envelope.message = Message::Amendment {
-                    revision: 1,
-                    reason: vec![1; LIMITS.message_bytes as usize + 1].into_boxed_slice(),
-                }
-            }
-            2 => envelope.eligible = false,
-            3 => envelope.message = Message::Amendment { revision: 2, reason: Box::new([]) },
-            _ => unreachable!(),
-        }
-        rows.insert(Key::Message(envelope.key()), Stored::Message(envelope));
-        assert!(Inbox::default().committed(&rows, &LIMITS, &[]).is_err(), "control fault {fault}");
-    }
-}
-
-#[test]
-fn independent_inbox_referee_rejects_a_third_immutable_control_offer() {
-    use temper_engine_domain_tasks::{Envelope, Key, Message, Offer, Stored};
-    use temper_engine_tasks_world::{LIMITS, World, inbox_referee::Inbox, task};
-    let mut w = World::new(21, LIMITS);
-    w.make(Party::Person(1), vec![task(1, &[])]);
-    w.claim(1, 1);
-    let mut rows = w.records.clone();
-    if let Some(Stored::Live(task)) = rows.get_mut(&Key::Live(1)) {
-        task.last_message = 3;
-        task.revision = 3;
-    }
-    for number in 1..=3 {
-        let envelope = Envelope {
-            task: 1,
-            number,
-            from: Party::Person(9),
-            message: Message::Amendment { revision: number, reason: Box::new([]) },
-            at: skein_lib::Wall::EPOCH,
-            hits: 1,
-            eligible: true,
-        };
-        rows.insert(Key::Offer(envelope.key()), Stored::Offer(Offer { attempt: 1, envelope }));
-    }
-    assert!(Inbox::default().committed(&rows, &LIMITS, &[]).is_err());
+    let mut bad = w.records.clone();
+    bad.remove(&Key::Closure { task: 1, generation: 1 });
+    let mut judge = Accounting::default();
+    judge.reset(&w.records);
+    assert_eq!(judge.committed(&bad), Err("immutable accounting row changed"));
 }

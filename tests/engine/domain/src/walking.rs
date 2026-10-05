@@ -22,9 +22,7 @@ pub fn limits() -> engine::Limits {
     let tasks = tasks::Limits {
         tasks: 2,
         funders: 4,
-        admissions: 8,
         project_tasks: 2,
-        stubs: 4,
         tree_tasks: 2,
         depth: 1,
         delegates: 1,
@@ -49,14 +47,6 @@ pub fn limits() -> engine::Limits {
             invalid: retry,
         },
         facts: 2,
-        references: 1,
-        inbox_messages: 4,
-        inbox_bytes: 256,
-        message_bytes: 64,
-        questions: 1,
-        subscriptions: 1,
-        receipts: 4,
-        offers: 4,
     };
     let people = people::Limits {
         people: 2,

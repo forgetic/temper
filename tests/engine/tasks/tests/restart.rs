@@ -1,4 +1,4 @@
-use temper_engine_domain_tasks::{Active, End, Event, Hold, Key, Party, Phase, Refusal, Result, Status, Stored, Stub};
+use temper_engine_domain_tasks::{Active, End, Event, Key, Party, Phase, Refusal, Result, Stored};
 use temper_engine_tasks_world::{LIMITS, Reply, World, task};
 #[test]
 fn make_and_claim_have_independent_before_and_after_durable_cuts() {
@@ -18,7 +18,7 @@ fn make_and_claim_have_independent_before_and_after_durable_cuts() {
     let reply_to = w.to();
     w.send(Event::Prepare { reply_to, task: 2 });
     let reply_to = w.to();
-    w.stage(Event::Claim { reply_to, task: 2, attempt: 10, readable: Box::new([]) });
+    w.stage(Event::Claim { reply_to, task: 2, attempt: 10 });
     assert!(w.runs.is_empty());
     w.restart();
     assert_eq!(w.record(2).attempt, 0);
@@ -26,7 +26,7 @@ fn make_and_claim_have_independent_before_and_after_durable_cuts() {
     let reply_to = w.to();
     w.send(Event::Prepare { reply_to, task: 2 });
     let reply_to = w.to();
-    w.stage(Event::Claim { reply_to, task: 2, attempt: 11, readable: Box::new([]) });
+    w.stage(Event::Claim { reply_to, task: 2, attempt: 11 });
     w.durable();
     assert!(w.runs.is_empty());
     w.restart();
@@ -36,34 +36,12 @@ fn make_and_claim_have_independent_before_and_after_durable_cuts() {
     w.settle(2);
 }
 #[test]
-fn closing_and_held_state_survive_restart_without_early_result() {
-    let mut w = World::new(21, LIMITS);
-    w.make(Party::Person(1), vec![task(1, &[])]);
-    w.claim(1, 1);
-    w.send(Event::Hold { task: 1, why: Hold::Stopped });
-    w.restart();
-    assert!(w.stops.contains(&(1, 1)));
-    assert!(w.activations.is_empty());
-    w.terminal(1, End::Parked);
-    let reply_to = w.to();
-    w.send(Event::Release { reply_to, task: 1 });
-    w.cancel(1, b"stop");
-    assert!(w.results.is_empty());
-    w.restart();
-    assert!(w.closing.contains(&1));
-    assert!(w.results.is_empty());
-    w.settle(1);
-    w.restart();
-    assert_eq!(w.results.len(), 1);
-    w.referee.assert_passed(21);
-}
-#[test]
 fn stale_claims_and_replayed_terminal_are_typed_and_do_not_mutate() {
     let mut w = World::new(22, LIMITS);
     w.make(Party::Person(1), vec![task(1, &[])]);
     w.claim(1, 4);
     let reply_to = w.to();
-    w.send(Event::Claim { reply_to, task: 1, attempt: 4, readable: Box::new([]) });
+    w.send(Event::Claim { reply_to, task: 1, attempt: 4 });
     assert!(
         matches!(w.replies.last_key_value().expect("reply").1, Reply::Refused(problem) if problem.why == Refusal::Attempt)
     );
@@ -75,41 +53,13 @@ fn stale_claims_and_replayed_terminal_are_typed_and_do_not_mutate() {
         task: 1,
         attempt: 4,
         end: End::Failed(temper_engine_domain_tasks::Class::Lost),
+        cause: temper_engine_domain_tasks::Cause::Unpriced,
     });
     assert_eq!(w.record(1), &record);
     assert!(matches!(
         w.replies.last_key_value().expect("reply").1,
         Reply::Acknowledged(temper_engine_domain_tasks::Accepted::Already)
     ));
-}
-#[test]
-fn ended_inputs_can_reload_stubs_and_forget_only_after_last_reference() {
-    let mut w = World::new(23, LIMITS);
-    w.make(Party::Person(1), vec![task(1, &[])]);
-    w.claim(1, 1);
-    w.finish(1);
-    w.settle(1);
-    assert!(!w.records.contains_key(&Key::Stub(1)));
-    let reply_to = w.to();
-    w.send(Event::RememberStub {
-        reply_to,
-        stub: Stub { number: 1, project: 1, status: Status::Done, attempt: 1, last_answer: Some(1) },
-    });
-    let mut next = task(2, &[]);
-    next.spec.inputs = Box::new([1]);
-    w.make(Party::Person(1), vec![next]);
-    let reply_to = w.to();
-    w.send(Event::ForgetStub { reply_to, task: 1 });
-    assert!(
-        matches!(w.replies.last_key_value().expect("reply").1, Reply::Refused(problem) if problem.why == Refusal::Busy)
-    );
-    w.restart();
-    w.claim(2, 2);
-    w.finish(2);
-    w.settle(2);
-    let reply_to = w.to();
-    w.send(Event::ForgetStub { reply_to, task: 1 });
-    assert!(!w.records.contains_key(&Key::Stub(1)));
 }
 #[test]
 fn a_crash_before_finished_decision_resumes_current_attempt() {
@@ -122,6 +72,7 @@ fn a_crash_before_finished_decision_resumes_current_attempt() {
         task: 1,
         attempt: 1,
         end: End::Finished { result: Result::Report { words: Box::new([1]) }, cancel_delegates: false },
+        cause: temper_engine_domain_tasks::Cause::Unpriced,
     });
     assert!(w.results.is_empty());
     assert!(w.closing.is_empty());
@@ -147,6 +98,7 @@ fn restore_rejects_corrupt_links_cycles_and_contracts_without_panicking() {
                 1 => {
                     record.phase = Phase::Waiting;
                     record.dependencies = Box::new([3 - number]);
+                    record.waiting_on = Box::new([3 - number]);
                 }
                 2 => record.contract = temper_engine_domain_tasks::Contract::Report { words: 33 },
                 3 => {
@@ -163,7 +115,6 @@ fn restore_rejects_corrupt_links_cycles_and_contracts_without_panicking() {
             step(&mut domain, &env, Event::Restore { record: Stored::Live(Box::new(record)) }, &mut out);
         }
         step(&mut domain, &env, Event::Restored, &mut out);
-        assert!(!domain.ready());
         let mut rejected = false;
         while let Some(request) = out.pop() {
             if matches!(request, Request::RestoreRefused { .. }) {
@@ -184,6 +135,7 @@ fn terminal_and_settlement_each_have_a_durable_cut_before_delivery() {
         task: 1,
         attempt: 1,
         end: End::Finished { result: Result::Report { words: Box::new([1]) }, cancel_delegates: false },
+        cause: temper_engine_domain_tasks::Cause::Unpriced,
     });
     w.durable();
     assert!(w.closing.is_empty());
@@ -199,25 +151,6 @@ fn terminal_and_settlement_each_have_a_durable_cut_before_delivery() {
     w.restart();
     assert_eq!(w.results.len(), 1);
     assert!(w.closing.is_empty());
-}
-#[test]
-fn cancellation_cut_after_durability_stops_adopted_runs_then_closes_deepest() {
-    let mut w = World::new(27, LIMITS);
-    w.make(Party::Person(1), vec![task(1, &[])]);
-    w.claim(1, 1);
-    w.make(Party::Task(1), vec![task(2, &[])]);
-    w.claim(2, 2);
-    w.make(Party::Task(2), vec![task(3, &[])]);
-    w.claim(3, 3);
-    w.observe(temper_engine_tasks_world::referee::Seen::Cancelled { task: 1 });
-    let reply_to = w.to();
-    w.stage(Event::Cancel { reply_to, task: 1, reason: Box::new([1]) });
-    w.durable();
-    assert!(w.stops.is_empty());
-    w.restart();
-    assert_eq!(w.stops.len(), 3);
-    w.complete_cancel();
-    assert_eq!(w.results.len(), 3);
 }
 #[test]
 fn wall_correction_does_not_move_a_live_backoff_but_restore_reprojects_it() {
@@ -237,63 +170,187 @@ fn wall_correction_does_not_move_a_live_backoff_but_restore_reprojects_it() {
     assert!(w.activations.contains(&1));
 }
 #[test]
-fn restore_rejects_inbox_corruption_and_unfinished_root_callbacks() {
-    use skein_lib::Queue;
-    use temper_engine_domain_tasks::{Domain, Request, step};
-    let mut w = World::new(53, LIMITS);
+fn delegate_cancel_cut_after_durability_stops_adopted_runs_then_closes_deepest() {
+    let mut w = World::new(27, LIMITS);
     w.make(Party::Person(1), vec![task(1, &[])]);
     w.claim(1, 1);
-    w.mail(1, Party::Person(1), temper_engine_domain_tasks::UserMessage::Words { words: Box::new([1]) });
-    for broken in 0..6 {
-        let mut rows = w.records.values().cloned().collect::<Vec<_>>();
-        match broken {
-            0 => {
-                for row in &mut rows {
-                    if let Stored::Offer(offer) = row {
-                        offer.attempt = 99;
-                    }
-                }
-            }
-            1 => {
-                for row in &mut rows {
-                    if let Stored::Message(envelope) = row {
-                        envelope.number = 99;
-                    }
-                }
-            }
-            2 => rows.push(Stored::Subscription(temper_engine_domain_tasks::Subscription {
-                number: 1,
-                task: 1,
-                kind: temper_engine_domain_tasks::SubscriptionKind::Topic { connector: 1, topic: 1 },
-                pending: true,
-            })),
-            3 => {
-                rows.push(Stored::Question(temper_engine_domain_tasks::Question { number: 2, asker: 1, answerer: 99 }));
-            }
-            4 => {
-                for row in &mut rows {
-                    if let Stored::Message(envelope) = row {
-                        envelope.message =
-                            temper_engine_domain_tasks::Message::Words { words: vec![1; 65].into_boxed_slice() };
-                    }
-                }
-            }
-            5 => {
-                for row in &mut rows {
-                    if let Stored::Live(record) = row {
-                        record.last_read = Some(99);
-                    }
-                }
-            }
-            _ => unreachable!(),
+    w.make(Party::Task(1), vec![task(2, &[])]);
+    w.claim(2, 2);
+    w.make(Party::Task(2), vec![task(3, &[])]);
+    w.claim(3, 3);
+    w.observe(temper_engine_tasks_world::referee::Seen::Cancelled { task: 2 });
+    let reply_to = w.to();
+    w.stage(Event::Activation {
+        reply_to,
+        task: 1,
+        attempt: 1,
+        end: End::Finished { result: Result::Report { words: Box::new([1]) }, cancel_delegates: true },
+        cause: temper_engine_domain_tasks::Cause::Unpriced,
+    });
+    w.durable();
+    assert!(w.stops.is_empty());
+    w.restart();
+    assert_eq!(w.stops.len(), 2);
+    w.complete_cancel();
+    assert_eq!(w.results.len(), 3);
+}
+#[test]
+fn dependency_progress_survives_restore_without_loading_historical_ends() {
+    let mut w = World::new(29, LIMITS);
+    w.make(Party::Person(1), vec![task(1, &[]), task(2, &[]), task(3, &[1, 2])]);
+    w.claim(1, 1);
+    w.finish(1);
+    w.settle(1);
+    assert_eq!(w.record(3).waiting_on.as_ref(), [2]);
+    let before = w.records.clone();
+    w.restart();
+    assert_eq!(w.records, before);
+    assert!(!w.activations.contains(&3));
+    w.claim(2, 2);
+    w.finish(2);
+    w.settle(2);
+    assert!(w.record(3).waiting_on.is_empty());
+    w.restart();
+    w.claim(3, 3);
+    w.finish(3);
+    w.settle(3);
+    assert_eq!(w.results.len(), 3);
+}
+#[test]
+fn restore_refuses_unrepresentable_eventual_actual_funding_postings() {
+    use skein_lib::Queue;
+    use temper_engine_domain_tasks::{Cause, Domain, Funder, Request, step};
+    let mut source = World::new(30, LIMITS);
+    source.make(Party::Person(1), vec![task(1, &[])]);
+    source.claim(1, 1);
+    source.terminal_cause(
+        1,
+        End::Finished { result: Result::Report { words: Box::new([1]) }, cancel_delegates: false },
+        Cause::Priced { cumulative: 1 },
+    );
+    let mut rows = source.records.values().cloned().collect::<Vec<_>>();
+    for row in &mut rows {
+        if let Stored::Ledger(ledger) = row
+            && ledger.funder == (Funder::Period { project: 1, period: 0 })
+        {
+            ledger.numbers.spent_below = u64::MAX;
         }
-        let mut d = Domain::new(&LIMITS, 1, Box::new([1]));
+    }
+    let mut domain = Domain::new(&LIMITS, 30, Box::new([1]));
+    let mut out = Queue::with_capacity(temper_engine_domain_tasks::max_out(&LIMITS));
+    for record in rows {
+        step(&mut domain, &source.env, Event::Restore { record }, &mut out);
+    }
+    step(&mut domain, &source.env, Event::Restored, &mut out);
+    assert!(std::iter::from_fn(|| out.pop()).any(|request| matches!(request, Request::RestoreRefused { .. })));
+}
+#[test]
+fn malformed_unfinished_dependencies_refuse_at_restore_entrance() {
+    use skein_lib::Queue;
+    use temper_engine_domain_tasks::{Domain, Request, step};
+    let mut source = World::new(31, LIMITS);
+    source.make(Party::Person(1), vec![task(1, &[])]);
+    for waiting in [
+        Box::new([99_u64]) as Box<[u64]>,
+        (1..=u64::from(LIMITS.dependencies) + 1).collect::<Vec<_>>().into_boxed_slice(),
+    ] {
+        let mut record = source.record(1).clone();
+        record.waiting_on = waiting;
+        let mut domain = Domain::new(&LIMITS, 31, Box::new([1]));
+        let mut out = Queue::with_capacity(temper_engine_domain_tasks::max_out(&LIMITS));
+        step(&mut domain, &source.env, Event::Restore { record: Stored::Live(Box::new(record)) }, &mut out);
+        assert!(
+            matches!(out.pop(), Some(Request::RestoreRefused { .. })),
+            "oversize/non-subset refused before Restored"
+        );
+        assert!(out.pop().is_none());
+    }
+}
+#[test]
+fn restore_refuses_a_missing_unfinished_live_dependency_before_activation() {
+    use skein_lib::Queue;
+    use temper_engine_domain_tasks::{Domain, Request, step};
+    let mut source = World::new(32, LIMITS);
+    source.make(Party::Person(1), vec![task(1, &[]), task(2, &[1])]);
+    for phase in [Phase::Waiting, Phase::Active(Active::Due), Phase::Active(Active::Preparing)] {
+        let mut rows = source.records.values().cloned().collect::<Vec<_>>();
+        for row in &mut rows {
+            if let Stored::Live(task) = row
+                && task.number == 2
+            {
+                task.waiting_on = Box::new([]);
+                task.phase = phase.clone();
+            }
+        }
+        let mut domain = Domain::new(&LIMITS, 32, Box::new([1]));
         let mut out = Queue::with_capacity(temper_engine_domain_tasks::max_out(&LIMITS));
         for record in rows {
-            step(&mut d, &w.env, Event::Restore { record }, &mut out);
+            step(&mut domain, &source.env, Event::Restore { record }, &mut out);
         }
-        step(&mut d, &w.env, Event::Restored, &mut out);
-        assert!(!d.ready());
-        assert!(std::iter::from_fn(|| out.pop()).any(|request| matches!(request, Request::RestoreRefused { .. })));
+        step(&mut domain, &source.env, Event::Restored, &mut out);
+        let mut refused = false;
+        while let Some(request) = out.pop() {
+            assert!(!matches!(request, Request::Activate { .. } | Request::Adopt { .. }));
+            refused |= matches!(request, Request::RestoreRefused { .. });
+        }
+        assert!(refused, "corrupt unfinished subset refuses before activation");
     }
+}
+#[test]
+fn impossible_settled_live_and_unsupported_ledger_states_refuse_at_restore_entrance() {
+    use skein_lib::Queue;
+    use temper_engine_domain_tasks::{Domain, Request, Stage, step};
+    let mut source = World::new(33, LIMITS);
+    source.open_period(1, 300);
+    source.carve_pool(1, 200);
+    source.make(Party::Person(1), vec![task(1, &[])]);
+    source.claim(1, 1);
+    source.finish(1);
+    let mut task = source.record(1).clone();
+    if let Phase::Closing(closing) = &mut task.phase {
+        closing.stage = Stage::Settled;
+    } else {
+        panic!("closing fixture");
+    }
+    let mut invalid = vec![Stored::Live(Box::new(task))];
+    for row in source.records.values() {
+        if let Stored::Ledger(ledger) = row {
+            let mut closed = *ledger;
+            closed.closed = true;
+            invalid.push(Stored::Ledger(closed));
+            let mut spent = *ledger;
+            spent.numbers.spent = 1;
+            invalid.push(Stored::Ledger(spent));
+        }
+    }
+    for record in invalid {
+        let mut domain = Domain::new(&LIMITS, 33, Box::new([1]));
+        let mut out = Queue::with_capacity(temper_engine_domain_tasks::max_out(&LIMITS));
+        step(&mut domain, &source.env, Event::Restore { record }, &mut out);
+        assert!(matches!(out.pop(), Some(Request::RestoreRefused { .. })));
+        assert!(out.pop().is_none());
+    }
+}
+#[test]
+fn restore_refuses_task_funding_outside_its_requester_ancestry() {
+    use skein_lib::Queue;
+    use temper_engine_domain_tasks::{Domain, Funder, Request, step};
+    let mut source = World::new(34, LIMITS);
+    source.make(Party::Person(1), vec![task(1, &[]), task(2, &[])]);
+    let mut rows = source.records.values().cloned().collect::<Vec<_>>();
+    for row in &mut rows {
+        match row {
+            Stored::Live(task) if task.number == 1 => task.numbers.reserved = 100,
+            Stored::Live(task) if task.number == 2 => task.funder = Funder::Task(1),
+            Stored::Ledger(ledger) => ledger.numbers.reserved = 100,
+            Stored::Live(_) | Stored::Ended(_) | Stored::Closure(_) => {}
+        }
+    }
+    let mut domain = Domain::new(&LIMITS, 34, Box::new([1]));
+    let mut out = Queue::with_capacity(temper_engine_domain_tasks::max_out(&LIMITS));
+    for record in rows {
+        step(&mut domain, &source.env, Event::Restore { record }, &mut out);
+    }
+    step(&mut domain, &source.env, Event::Restored, &mut out);
+    assert!(std::iter::from_fn(|| out.pop()).any(|request| matches!(request, Request::RestoreRefused { .. })));
 }

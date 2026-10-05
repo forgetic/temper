@@ -159,11 +159,15 @@ impl Decision {
                     && row.turn != 0
                     && row.transcript.len() <= usize::try_from(l.transcript_bytes).expect("u32 fits usize")
             }
-            Write::Erase(Key::Turn { .. } | Key::Tasks(_) | Key::People(_)) => true,
-            Write::Save(Record::Tasks(_) | Record::People(_)) => match crate::store::owned_bytes(&write) {
-                Some(bytes) => bytes <= u64::from(l.transcript_bytes),
-                None => false,
-            },
+            Write::Erase(
+                Key::Turn { .. } | Key::RunProof { .. } | Key::Terminal { .. } | Key::Tasks(_) | Key::People(_),
+            ) => true,
+            Write::Save(Record::Tasks(_) | Record::People(_) | Record::RunProof(_) | Record::Terminal(_)) => {
+                match crate::store::owned_bytes(&write) {
+                    Some(bytes) => bytes <= u64::from(l.transcript_bytes),
+                    None => false,
+                }
+            }
         };
         if !within {
             return Err(write);

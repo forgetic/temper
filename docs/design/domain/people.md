@@ -77,7 +77,7 @@ The root owns deployment numbers (`engine.md`, section 4). For a sign-in
 it supplies a fresh candidate person number alongside the forge identity;
 people uses it only for a new `(forge, user id)`. An identity already known
 keeps its durable number. Unused candidates leave gaps, and numbers are
-never reused. The protocol's sign-in numbers likewise name one sign-in
+never reused. The root issues sign-in numbers; they likewise name one sign-in
 only. Login and display name may change; neither identifies a person.
 
 Configuration names the initial owners by `(project, forge, user id)`.

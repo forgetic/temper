@@ -230,7 +230,12 @@ fn restart_recovers_named_ended_result_without_replaying_a_raw_notice() {
         .values()
         .find_map(|row| match row {
             Record::Tasks(tasks::Stored::Ended(task)) => Some(task.number),
-            Record::Tasks(_) | Record::Deployment(_) | Record::Turn(_) | Record::People(_) => None,
+            Record::Tasks(_)
+            | Record::Deployment(_)
+            | Record::Turn(_)
+            | Record::People(_)
+            | Record::RunProof(_)
+            | Record::Terminal(_) => None,
         })
         .expect("ended task");
     let mut driver = Driver::new(world.store);
@@ -478,7 +483,12 @@ fn invalid_nonfinal_task_restore_page_stops_before_issuing_its_continuation() {
         .values()
         .find_map(|row| match row {
             Record::Tasks(tasks::Stored::Ended(record)) => Some(record.as_ref().clone()),
-            Record::Tasks(_) | Record::Deployment(_) | Record::Turn(_) | Record::People(_) => None,
+            Record::Tasks(_)
+            | Record::Deployment(_)
+            | Record::Turn(_)
+            | Record::People(_)
+            | Record::RunProof(_)
+            | Record::Terminal(_) => None,
         })
         .expect("ended fixture");
     record.spec.words = vec![b'x'; 65].into_boxed_slice();
@@ -529,4 +539,216 @@ fn maximum_cold_hello_batch_and_duplicate_losses_fit_one_startup_decision() {
     assert!(!driver.stopped);
     limits.fleet.workers = 16;
     assert!(engine::worst_case(&limits).is_none(), "cold callback outputs plus continuation must fit");
+}
+
+#[test]
+fn overflowing_child_limits_refuse_root_startup_without_panicking() {
+    let mut configured = limits();
+    configured.tasks.tasks = u32::MAX;
+    assert!(engine::worst_case(&configured).is_none());
+    configured = limits();
+    configured.fleet.workers = u32::MAX;
+    configured.fleet.slots = u32::MAX;
+    assert!(engine::worst_case(&configured).is_none());
+}
+
+#[test]
+fn authenticated_result_query_refuses_monotonic_expiry_after_backward_wall_jump_before_fire() {
+    let mut world = World::new(Settings { restart: false, ..Settings::calm(101) });
+    world.run();
+    let header = world.store.header();
+    let task = world
+        .store
+        .rows
+        .values()
+        .find_map(|row| match row {
+            Record::Tasks(tasks::Stored::Ended(task)) => Some(task.number),
+            Record::Tasks(_)
+            | Record::Deployment(_)
+            | Record::Turn(_)
+            | Record::People(_)
+            | Record::RunProof(_)
+            | Record::Terminal(_) => None,
+        })
+        .expect("ended chat");
+    let mut driver = Driver::new(world.store);
+    driver.settle();
+    driver.env.now = Time::from_nanos(driver.env.limits.people.sign_in_lifetime.as_nanos() * 2);
+    driver.env.wall = Wall::EPOCH;
+    driver.send(engine::Event::ReadResult { reply_to: ReplyTo::new(Token::new(901)), sign_in: header.sign_ins, task });
+    driver.settle();
+    assert!(matches!(
+        driver.delivered.as_slice(),
+        [Delivery::WebReply { reply: people::Reply::Refused(people::Refusal::SignIn), .. }]
+    ));
+    assert_eq!(driver.store.header(), header);
+}
+
+fn running_fixture() -> (Driver, engine::Assignment) {
+    let mut driver = Driver::new(Store::new());
+    hello(&mut driver);
+    driver.settle();
+    driver.sign_in();
+    driver.settle();
+    chat(&mut driver, 12);
+    driver.settle();
+    let assignment = assigned(&driver);
+    turn(&mut driver, &assignment, 1, 3);
+    driver.settle();
+    (driver, assignment)
+}
+
+#[test]
+fn invalid_current_proof_stops_before_any_restored_closing_effect_or_result() {
+    let (driver, assignment) = running_fixture();
+    for corruption in 0..5 {
+        let mut store = Store::new();
+        store.rows = driver.store.rows.clone();
+        let key = temper_engine_domain::Key::Tasks(tasks::Key::Live(assignment.task));
+        let Some(Record::Tasks(tasks::Stored::Live(task))) = store.rows.get_mut(&key) else {
+            panic!("live task");
+        };
+        task.last_answer = Some(assignment.attempt);
+        task.phase = tasks::Phase::Closing(tasks::Closing {
+            stage: tasks::Stage::Effects,
+            ending: tasks::Ending::Done(tasks::Result::Report { words: REPORT.into() }),
+        });
+        let proof_key = temper_engine_domain::Key::RunProof { task: assignment.task };
+        let Some(Record::RunProof(proof)) = store.rows.get_mut(&proof_key) else {
+            panic!("proof");
+        };
+        proof.terminal = Some(temper_engine_domain::TerminalRecord {
+            task: assignment.task,
+            attempt: assignment.attempt,
+            cumulative: 3,
+            end: tasks::End::Finished {
+                result: tasks::Result::Report { words: REPORT.into() },
+                cancel_delegates: false,
+            },
+        });
+        match corruption {
+            0 => {
+                store.rows.remove(&proof_key);
+            }
+            1 => {
+                let Some(Record::RunProof(proof)) = store.rows.get_mut(&proof_key) else {
+                    panic!("proof");
+                };
+                proof.turn.as_mut().expect("kept turn").cumulative = 999;
+            }
+            2 => {
+                let Some(Record::RunProof(proof)) = store.rows.get_mut(&proof_key) else {
+                    panic!("proof");
+                };
+                proof.terminal = Some(temper_engine_domain::TerminalRecord {
+                    task: assignment.task,
+                    attempt: assignment.attempt,
+                    cumulative: 999,
+                    end: tasks::End::Parked,
+                });
+            }
+            3 => {
+                let header = store.header();
+                let Some(Record::Tasks(tasks::Stored::Live(task))) = store.rows.get_mut(&key) else {
+                    panic!("task");
+                };
+                task.attempt = header.runs + 1;
+                task.last_answer = Some(task.attempt);
+                let Some(Record::RunProof(proof)) = store.rows.get_mut(&proof_key) else {
+                    panic!("proof");
+                };
+                proof.attempt = header.runs + 1;
+            }
+            4 => {
+                let Some(Record::RunProof(proof)) = store.rows.get_mut(&proof_key) else {
+                    panic!("proof");
+                };
+                proof.terminal = None;
+            }
+            _ => unreachable!(),
+        }
+        let header = store.header();
+        let before = store.rows.clone();
+        let mut restarted = Driver::new(store);
+        for _ in 0..100 {
+            restarted.advance(true);
+        }
+        assert!(restarted.stopped, "corruption {corruption}");
+        assert_eq!(restarted.store.rows, before, "no child restoration consequences committed");
+        assert_eq!(restarted.store.header(), header);
+        assert!(restarted.delivered.is_empty(), "no cancellation/result before root proof validation");
+    }
+}
+
+#[test]
+fn root_restore_refuses_task_shapes_without_an_actual_root_route() {
+    let (driver, assignment) = running_fixture();
+    for unsupported in 0..3 {
+        let mut store = Store::new();
+        store.rows = driver.store.rows.clone();
+        let Some(Record::Tasks(tasks::Stored::Live(task))) =
+            store.rows.get_mut(&temper_engine_domain::Key::Tasks(tasks::Key::Live(assignment.task)))
+        else {
+            panic!("task");
+        };
+        match unsupported {
+            0 => task.requester = tasks::Party::Deployment { project: 1 },
+            1 => task.executor = tasks::Executor::Agent { charter: 99 },
+            2 => task.contract = tasks::Contract::Verdict { choices: Box::new([tasks::Verdict { code: 1, words: 8 }]) },
+            _ => unreachable!(),
+        }
+        let before = store.rows.clone();
+        let mut restarted = Driver::new(store);
+        for _ in 0..100 {
+            restarted.advance(true);
+        }
+        assert!(restarted.stopped);
+        assert_eq!(restarted.store.rows, before);
+        assert!(restarted.delivered.is_empty());
+    }
+}
+
+#[test]
+fn bounded_invalid_typed_terminal_preserves_original_root_evidence_and_charges_once() {
+    let (mut driver, assignment) = running_fixture();
+    let end = tasks::End::Finished {
+        result: tasks::Result::Verdict { code: 99, words: b"invalid contract".as_slice().into() },
+        cancel_delegates: false,
+    };
+    driver.send(engine::Event::Answer {
+        channel: Token::new(7),
+        task: assignment.task,
+        attempt: assignment.attempt,
+        cumulative: 8,
+        end: end.clone(),
+    });
+    driver.settle();
+    let key = temper_engine_domain::Key::Terminal { task: assignment.task, attempt: assignment.attempt };
+    assert_eq!(
+        driver.store.rows.get(&key),
+        Some(&Record::Terminal(temper_engine_domain::TerminalRecord {
+            task: assignment.task,
+            attempt: assignment.attempt,
+            cumulative: 8,
+            end: end.clone()
+        }))
+    );
+    let Some(Record::Tasks(tasks::Stored::Live(task))) =
+        driver.store.rows.get(&temper_engine_domain::Key::Tasks(tasks::Key::Live(assignment.task)))
+    else {
+        panic!("retryable invalid task");
+    };
+    assert_eq!(task.run_spent, 8);
+    assert_eq!(task.numbers.spent, 8);
+    assert_eq!(task.tries.invalid, 1);
+    let rows = driver.store.rows.clone();
+    driver.send(engine::Event::Answer {
+        channel: Token::new(7),
+        task: assignment.task,
+        attempt: assignment.attempt,
+        cumulative: 8,
+        end,
+    });
+    driver.settle();
+    assert_eq!(driver.store.rows, rows, "fenced duplicate never reaches child priced admission");
 }
