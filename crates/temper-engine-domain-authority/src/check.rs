@@ -71,6 +71,10 @@ fn effect_within(effect: &Effect, limits: &Limits) -> bool {
 
 /// Batch reservations are all-or-nothing. Every direct child consumes one
 /// lifetime task slot in addition to the capacity allotted below that child.
+/// Root's pure bounded creation check, returning the strictest answer and proposed replacement
+/// funding numbers only on allowance. Reserve `max_out(domain.limits())` free finding slots; no
+/// ledger mutation, allocation or child request. Commit reservation with task admission once.
+/// (domain/authority.md, section 8.1).
 #[must_use]
 pub fn check_batch(domain: &Domain, ask: &BatchAsk, why: &mut Queue<Finding>) -> Checked {
     room(domain, why);
@@ -243,6 +247,10 @@ fn requirements(
     }
 }
 
+/// Root's pure effect check over one coherent snapshot of authentic pinned `facts` and optional
+/// landing facts. Returns the strictest answer and findings, refusing oversized inputs; reserve
+/// `max_out(domain.limits())` free slots. No connector call or retained state; carry the checked
+/// pin into execution. (domain/authority.md, sections 8.2 and 10).
 #[must_use]
 pub fn check_effect(domain: &Domain, ask: &EffectAsk, facts: &[Fact], why: &mut Queue<Finding>) -> Answer {
     room(domain, why);
@@ -273,6 +281,9 @@ pub fn check_effect(domain: &Domain, ask: &EffectAsk, facts: &[Fact], why: &mut 
     answer
 }
 
+/// Root's pure run-admission check over offered budget, clock/account reports and root-verified
+/// writer holds. Returns the strictest answer and findings; reserve `max_out(domain.limits())` free
+/// slots. No claim, run start, allocation or ledger mutation. (domain/authority.md, section 8.3).
 #[must_use]
 pub fn check_run(domain: &Domain, ask: &RunAsk, why: &mut Queue<Finding>) -> Answer {
     room(domain, why);
@@ -321,6 +332,9 @@ pub fn check_run(domain: &Domain, ask: &RunAsk, why: &mut Queue<Finding>) -> Ans
     answer
 }
 
+/// Root's pure tool-call check over one configured family bit, read grant, message standing or note
+/// scope. Returns the strictest answer and bounded findings; reserve `max_out(domain.limits())`
+/// free slots. Makes no external call or state change. (domain/authority.md, section 8.5).
 #[must_use]
 pub fn check_call(domain: &Domain, ask: &CallAsk, why: &mut Queue<Finding>) -> Answer {
     room(domain, why);
@@ -437,6 +451,10 @@ fn give(
 
 /// A person's request checks their role and funding. An accepted effect
 /// must additionally pass `check_effect` on pinned facts in the same commit.
+/// Root's pure person-role/funding check returning a strict answer and replacement numbers only
+/// when allowed. Reserve `max_out(domain.limits())` free finding slots; caller verifies person
+/// membership, checks accepted effect facts and commits the decision atomically.
+/// (domain/authority.md, section 8.4).
 #[must_use]
 pub fn check_request(domain: &Domain, ask: &PersonAsk, why: &mut Queue<Finding>) -> Checked {
     room(domain, why);
@@ -564,6 +582,9 @@ fn empty() -> Authority {
 
 /// Construct an owned least value, bounded by the caller-admitted action.
 /// Unlike the borrowed checks, constructing this result copies owned bytes.
+/// Pure constructor over a caller-admitted action; copies bounded grants/segments/executors into
+/// the least authority needed. Returns `None` on aggregate arithmetic overflow; caller counts this
+/// owned output separately and no lifecycle event is emitted. (domain/authority.md, section 9).
 #[must_use]
 pub fn needs(action: &Action) -> Option<Authority> {
     match action {
@@ -643,6 +664,10 @@ fn needed_within(authority: &Authority, limits: &Limits) -> bool {
 
 /// The caller supplies an eligible ancestor/role and its verified distance
 /// to the proposer. The action's needs already include its creation depth.
+/// Pure proposal-holder coverage query; root verifies standing and distance `below` and supplies
+/// current funding/task capacity. Returns false on missing policy/role, bounds, arithmetic or
+/// coverage failure; emits no findings or child event and allocates nothing. (domain/authority.md,
+/// section 9).
 #[must_use]
 pub fn covers(domain: &Domain, needed: &Authority, holder: &Holder, below: u32) -> bool {
     if !needed_within(needed, domain.limits()) {

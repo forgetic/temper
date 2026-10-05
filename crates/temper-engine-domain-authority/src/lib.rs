@@ -12,6 +12,19 @@
 //! into caller-reserved bounded queues. [`needs`] constructs an owned value;
 //! policy events update the bounded table and emit one lifecycle fact.
 
+//!
+//! Entry contracts: `check_*` borrow admitted snapshots, return one answer
+//! and write bounded findings; the root supplies authentic facts and commits
+//! allowed numbers with actions exactly once (domain/authority.md, sections
+//! 7–9). `at_most`, coverage and accounting functions are pure value queries,
+//! not child event protocols. Callers bound owned inputs before these queries;
+//! `needs` copies bounded data and its output is counted by the caller.
+//! `step` alone updates the policy table and emits one terminal `PolicyFact`
+//! per event, with free room `POLICY_MAX_OUT` (domain/authority.md, section 6).
+//! `max_out` bounds finding room and `worst_case` bounds retained policy heap;
+//! callers count question payloads and queues (domain/authority.md, section 11).
+//! This child never authenticates people, discovers task standing or funding
+//! links, executes effects, or recognizes duplicate settlement generations.
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
 

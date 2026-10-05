@@ -1,5 +1,16 @@
-//! Paged root loads, one terminal per issued token (domain/engine.md, 5.3).
-//! The caller dispatches a load only after the commits it reads are answered.
+//! The root's bounded paged-load ownership seam (domain/engine.md, 5.3).
+//! [`Loads`] keeps waiter identities, requested ranges/cursors and generational
+//! IO slots. It never keeps page rows, store encodings or journal durability;
+//! the caller dispatches each load only after its prerequisite commits answer.
+//!
+//! [`begin`] admits a page request or refuses before IO. The store echoes its
+//! owner through [`loaded`] or [`unloaded`], each emitting at most one terminal
+//! to the live root waiter. [`abandon`] suppresses waiter delivery without
+//! freeing issued IO; [`reclaim`] frees retired slots at iteration end. Every
+//! emitting entry point requires one reserved output slot. Whole-page row,
+//! range, ordering, cursor and deep-byte checks precede any kept prefix.
+//! Byte cuts carry exact omitted rows/bytes and a potentially nonprogressing
+//! continuation; the walking root stops rather than restoring a cut page.
 use crate::{Key, Range, Record};
 use alloc::boxed::Box;
 use core::mem::size_of;
@@ -10,15 +21,21 @@ use skein_lib::{Id, List, Queue, Slab, Token};
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Limits {
     /// Maximum issued loads, including abandoned IO awaiting its terminal.
+    /// (domain/engine.md, 5.3).
     pub loads: u32,
     /// Maximum rows requested and accepted in one incoming page.
+    /// (domain/engine.md, 5.3).
     pub rows: u32,
     /// Soft kept-prefix bound, counting record slots and their owned bytes.
+    /// (domain/engine.md, 5.3).
     pub bytes: u32,
     /// Hard decoded store-answer bound, enforced by the store protocol too.
     /// The kept prefix can have a smaller budget than its incoming page.
+    /// (domain/engine.md, 5.3).
     pub reply_bytes: u32,
-    /// Soft per-turn transcript bound; the first oversized row cuts the prefix.
+    /// Soft per-row deep-owned-byte bound, covering transcripts and wrapped
+    /// child rows; the first oversized row cuts the prefix.
+    /// (domain/engine.md, 5.3).
     pub transcript_bytes: u32,
 }
 
@@ -27,8 +44,10 @@ pub struct Limits {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Cut {
     /// Number of omitted rows, bounded by the issued page's row limit.
+    /// (domain/engine.md, 5.3).
     pub rows: u32,
     /// Omitted record slots and owned bytes, bounded by the decoded-page limit.
+    /// (domain/engine.md, 5.3).
     pub bytes: u64,
 }
 
@@ -36,17 +55,24 @@ pub struct Cut {
 /// A malformed page is rejected whole before allocating any kept prefix.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Failure {
-    /// The store ended its issued load without rows.
+    /// The store reported a failed issued load; an empty successful page is
+    /// instead a valid `Loaded` terminal.
+    /// (domain/engine.md, 5.3).
     Store,
     /// The page exceeded the issued row count or its count was unrepresentable.
+    /// (domain/engine.md, 5.3).
     Rows,
     /// A row belongs outside the issued key range.
+    /// (domain/engine.md, 5.3).
     Range,
     /// Keys are repeated, unordered or at/before the exclusive starting key.
+    /// (domain/engine.md, 5.3).
     Order,
     /// Continuation does not identify the last returned row in its range.
+    /// (domain/engine.md, 5.3).
     Cursor,
     /// Decoded slots and owned bytes overflow or exceed the hard page bound.
+    /// (domain/engine.md, 5.3).
     Bytes,
 }
 
@@ -56,34 +82,48 @@ pub enum Failure {
 pub enum Request {
     /// Root to store; ends through `loaded` or `unloaded` with this owner.
     /// The caller waits for prerequisite commits before dispatching it.
+    /// (domain/engine.md, 5.3).
     Load {
         /// Generational IO identity, fenced after its terminal and reclaim.
+        /// (domain/engine.md, 5.3).
         owner: Token,
         /// Closed key range that every returned row must belong to.
+        /// (domain/engine.md, 5.3).
         range: Range,
         /// Exclusive starting key in the range, or its beginning.
+        /// (domain/engine.md, 5.3).
         after: Option<Key>,
         /// Positive row demand, no larger than `Limits::rows`.
+        /// (domain/engine.md, 5.3).
         most: u32,
         /// Hard decoded-page bytes, equal to `Limits::reply_bytes`.
+        /// (domain/engine.md, 5.3).
         bytes: u32,
     },
     /// One successful terminal to the root waiter, unless abandoned.
+    /// (domain/engine.md, 5.3).
     Loaded {
         /// Root-owned identity passed unchanged from the admitted request.
+        /// (domain/engine.md, 5.3).
         waiter: Token,
         /// Owned, validated whole-row prefix within the soft byte limits.
+        /// (domain/engine.md, 5.3).
         rows: Box<[Record]>,
         /// Exclusive continuation; a cut may leave it at the original key.
+        /// (domain/engine.md, 5.3).
         next: Option<Key>,
         /// Explicit omissions, including a zero-row kept prefix if necessary.
+        /// (domain/engine.md, 5.3).
         cut: Option<Cut>,
     },
     /// One failed terminal to the root waiter, unless abandoned.
+    /// (domain/engine.md, 5.3).
     Unloaded {
         /// Root-owned identity passed unchanged from the admitted request.
+        /// (domain/engine.md, 5.3).
         waiter: Token,
         /// Store failure or whole-page validation refusal.
+        /// (domain/engine.md, 5.3).
         failure: Failure,
     },
 }
@@ -104,8 +144,9 @@ enum Phase {
     Closed,
 }
 
-/// Bounded in-flight page ownership (domain/engine.md, section 5.3).
+/// Root-owned bounded in-flight page slots (domain/engine.md, section 5.3).
 /// It keeps waiter/range fences, never store rows or journal durability state.
+/// Issued loads remain counted through abandonment, terminal and reclaim.
 #[derive(Debug)]
 pub struct Loads {
     limits: Limits,
@@ -121,7 +162,7 @@ impl Loads {
         Loads { limits: *limits, entries: Slab::with_capacity(limits.loads) }
     }
 
-    /// Shell completion fence: no issued page awaits its terminal or reclaim.
+    /// Pure shell idle query: no issued page awaits its terminal or reclaim.
     /// Abandoned IO remains counted until its actual answer (domain/engine.md, 5.3).
     #[must_use]
     pub fn quiescent(&self) -> bool {
@@ -132,6 +173,9 @@ impl Loads {
 /// Admit one root request or refuse before issuing IO (domain/engine.md, 5.3).
 /// Reserves one output; the issued owner ends through `loaded` or `unloaded`.
 /// Journal pressure is independent: store terminals are always accepted.
+/// The root supplies an opaque waiter and a positive row demand. Invalid
+/// demand/range/cursor or full unreclaimed slots return `None` without an
+/// output; success returns the issued owner and one store request.
 pub fn begin(
     domain: &mut Loads,
     waiter: Token,
@@ -158,7 +202,8 @@ pub fn begin(
 
 /// Abandon delivery to a waiter (domain/engine.md, section 5.3).
 /// Its issued IO still occupies a slot until the store's actual terminal;
-/// this call neither emits a terminal nor releases that ownership.
+/// this call neither emits a terminal nor releases that ownership. Unknown,
+/// stale and already abandoned/closed owners are inert.
 pub fn abandon(domain: &mut Loads, owner: Token) {
     if let Some(entry) = domain.entries.get_mut(Id::from_token(owner)) {
         match entry.phase {
@@ -169,7 +214,8 @@ pub fn abandon(domain: &mut Loads, owner: Token) {
 }
 
 /// Accept the store's failed terminal (domain/engine.md, section 5.3).
-/// Reserve one output. Notify a live waiter once; discard abandoned/late answers.
+/// Reserve one output. Notify a live waiter once with `Failure::Store`;
+/// discarded abandoned/late answers create no replacement request.
 pub fn unloaded(domain: &mut Loads, owner: Token, out: &mut Queue<Request>) {
     assert!(out.room() >= 1, "one root load terminal reserved");
     let id = Id::from_token(owner);
@@ -187,6 +233,9 @@ pub fn unloaded(domain: &mut Loads, owner: Token, out: &mut Queue<Request>) {
 /// Accept the store's owned page terminal (domain/engine.md, section 5.3).
 /// Reserve one output. Validate the whole page before moving its bounded prefix;
 /// malformed input ends as failure and duplicate or abandoned input is dropped.
+/// The store protocol must bound the decoded page by `reply_bytes` before
+/// transferring it; the seam rechecks that bound and issued row demand. A cut
+/// moves whole rows into exactly sized prefix room without cloning payloads.
 pub fn loaded(domain: &mut Loads, owner: Token, rows: Box<[Record]>, next: Option<Key>, out: &mut Queue<Request>) {
     assert!(out.room() >= 1, "one root load terminal reserved");
     let id = Id::from_token(owner);
@@ -307,7 +356,9 @@ fn valid_range(range: Range) -> bool {
 }
 
 /// Startup heap bound, including decoded IO and temporary prefix slots
-/// (domain/engine.md, section 5.3). Invalid limits or arithmetic return `None`.
+/// (domain/engine.md, section 5.3). Pure checked calculation, excluding allocator
+/// overhead; invalid limits or arithmetic return `None`, with no allocation,
+/// request or terminal.
 #[must_use]
 pub fn worst_case(limits: &Limits) -> Option<u64> {
     if limits.loads == 0

@@ -1,3 +1,7 @@
+//! Fenced agent-task preparation, claims, activation terminals and holds
+//! (domain/tasks.md, sections 5.2, 5.5, 5.6 and 14). Root supplies actual run
+//! events; tasks checks lifecycle/result shape and emits bounded state changes.
+//! Priced inputs use combined accounting admission; exact replay is root-owned.
 use crate::domain::{Domain, entrance, fact, publish, record, refused, task_mut};
 use crate::{
     Accepted, Active, Class, Closing, Contract, End, Ending, Fact, Hold, Limits, Phase, Refusal, Request, Stage,

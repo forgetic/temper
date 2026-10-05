@@ -1,36 +1,80 @@
-//! Root-owned store shapes and concrete child wrappers (domain/engine.md, 5.4).
-//! The root gathers these atomically; the store protocol encodes them.
+//! The root's typed durable store vocabulary (domain/engine.md, 5.3–5.6).
+//! It carries deployment counters, accepted transcript turns and owned child
+//! records/keys. The root gathers writes into atomic decisions; the store
+//! protocol encodes versions and supplies ordered, bounded pages.
+//!
+//! These values keep no IO state and know no store format, transport or secret
+//! bytes. [`Range::contains`], [`Record::key`], [`Write::key`] and [`record_bytes`]
+//! are pure value helpers: they neither issue IO nor create terminal events.
+//! Range membership and deep-byte accounting are only parts of admission;
+//! [`crate::loads`] also checks whole-page row bounds, order and continuation.
 use alloc::boxed::Box;
 use skein_lib::Wall;
 
+/// Root to store, then store to root at startup: one fixed-size deployment
+/// header with allocated high-water marks. Every writing decision saves it
+/// atomically with its other rows (domain/engine.md, 5.1 and 5.4).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Deployment {
+    /// Shell-supplied identity committed on the deployment's first start and
+    /// restored thereafter; exactly sixteen bytes (domain/engine.md, 5.4 and 5.7).
     pub id: [u8; 16],
+    /// Last task number allocated by the root; zero before its first allocation,
+    /// never reset or reused (domain/engine.md, 5.4; domain/tasks.md, 2).
     pub tasks: u64,
+    /// Last candidate person number allocated for sign-in; refused or existing
+    /// identities may leave gaps (domain/engine.md, 5.4; domain/people.md, 3).
     pub people: u64,
+    /// Last sign-in candidate allocated by the root; persisted gaps are allowed
+    /// and no secret session bytes are held here (domain/people.md, 3 and 11).
     pub sign_ins: u64,
+    /// Last root-allocated message number; retained for the broader inbox routes,
+    /// not allocated by the current chat story (domain/engine.md, 5.4 and 5.7).
     pub messages: u64,
+    /// Last activation number allocated for a claim; the candidate may leave a
+    /// gap if preparation fails (domain/engine.md, 5.4 and 7.1).
     pub runs: u64,
+    /// Last root-allocated call number; current 06a routes no tool calls
+    /// (domain/engine.md, 5.4, 5.7 and 7.3).
     pub calls: u64,
+    /// Last issued ordered commit. A restored header is already durable; a live
+    /// journal may await this number's store terminal (domain/engine.md, 5.1).
     pub commits: u64,
 }
 
+/// Root-selected counter for `fresh`; each is a separate checked `u64` high-water
+/// mark, not a channel token or child-owned handle (domain/engine.md, 5.4).
+/// Selecting a family is pure; allocating it dirties the journal header.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Family {
+    /// Task identities saved with the task row (domain/engine.md, 5.4).
     Task,
+    /// Person candidates supplied to people sign-in admission (domain/people.md, 3).
     Person,
+    /// Secret-free sign-in candidates supplied to people (domain/people.md, 3).
     SignIn,
+    /// Message identities reserved for later inbox routes (domain/engine.md, 5.7).
     Message,
+    /// Fresh attempt identities saved at claims (domain/engine.md, 7.1).
     Run,
+    /// Call identities reserved for later engine tool routes (domain/engine.md, 7.3).
     Call,
 }
 
+/// Ordered fixed-size address of a durable row. Root-issued and child-issued
+/// identities stay in their own variants; keys contain no payload bytes or IO
+/// handles (domain/engine.md, 5.3–5.6).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Key {
+    /// Singleton deployment header key (domain/engine.md, 5.4).
     Deployment,
+    /// Root-accepted transcript turn under one task and attempt (domain/engine.md, 7.2).
     Turn {
+        /// Positive durable task number, validated for turn writes (domain/engine.md, 7.2).
         task: u64,
+        /// Positive root-issued activation number (domain/engine.md, 7.2).
         attempt: u64,
+        /// Positive turn sequence number, represented by `u32` (domain/engine.md, 7.2).
         turn: u32,
     },
     /// Root-issued live claim replay key; at most one per live task, erased on end (domain/engine.md, 7.2).
@@ -45,7 +89,8 @@ pub enum Key {
         /// Positive root-issued claim number; immutable archive identity (domain/engine.md, 7.1).
         attempt: u64,
     },
-    /// Store key for the tasks child's record, including funding and receipts (domain/tasks.md, 2).
+    /// Child semantic task/financial record key; transport proofs have root
+    /// keys and no child receipt family exists (domain/tasks.md, 2 and 14; domain/engine.md, 7.5).
     Tasks(
         /// Tasks-issued key, preserved under the root wrapper without reinterpretation (domain/tasks.md, 2).
         temper_engine_domain_tasks::Key,
@@ -59,14 +104,20 @@ pub enum Key {
 
 /// Root-owned page ranges (domain/engine.md, section 5.3).
 /// The root asks the store for strictly ordered rows from one range; child
-/// ranges join here with their record wrappers when routing is implemented.
+/// records already have concrete task/people wrappers. These values issue no
+/// request on their own and promise no cross-page snapshot (domain/engine.md, 5.3).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Range {
-    /// The singleton durable deployment header; it has no continuation.
+    /// Singleton header read by the root at startup; at most one row and no
+    /// continuation (domain/engine.md, 5.3–5.4).
     Deployment,
-    /// Root startup reads live task rows and authentic funding counters (domain/engine.md, 6).
+    /// Root startup pages only child Live/Ledger state; historical Ended/Closure
+    /// rows stay outside this range. Actual root-supported task shapes validate
+    /// before child restoration (domain/engine.md, 6 and 7.5).
     Tasks,
-    /// Root pages only current claim proof rows; historical turns and terminals are excluded (domain/engine.md, 6).
+    /// Root pages current claims only, at most tasks `tasks` rows; every proof
+    /// must correlate with its loaded live row before tasks Restored or fleet
+    /// adoption. Historical transcripts/terminals are excluded (domain/engine.md, 6 and 7.5).
     RunProofs,
     /// Root startup reads every people child row before accepting people (domain/engine.md, 6).
     People,
@@ -75,18 +126,24 @@ pub enum Range {
         /// Positive root-issued ended task key; terminal page has at most one row (domain/people.md, 6).
         task: u64,
     },
-    /// Committed transcript turns for one nonzero task and attempt.
+    /// Historical committed transcript turns for one task/attempt; the root
+    /// load seam supports this range, though 06a does not resume transcripts
+    /// (domain/engine.md, 5.3, 5.7 and 7.2).
     Turns {
-        /// Durable task number allocated by the root's deployment header.
+        /// Positive durable task number; admitted ranges reject zero
+        /// (domain/engine.md, 5.3 and 7.2).
         task: u64,
-        /// Nonzero activation number; turns from other attempts cannot match.
+        /// Positive root-issued activation; other attempts cannot match
+        /// (domain/engine.md, 5.3 and 7.2).
         attempt: u64,
     },
 }
 
 impl Range {
-    /// Root checks store membership before retaining a row; range continuations
-    /// are separately ordered and bounded (domain/engine.md, 5.3).
+    /// Check membership before accepting a store row (domain/engine.md, 5.3).
+    /// Pure value predicate, with no allocation, effect or terminal. Turn zero
+    /// is invalid; continuation ordering is checked by the load owner. It does
+    /// not validate a child row's payload or its task links (domain/engine.md, 5.3).
     #[must_use]
     pub const fn contains(self, key: Key) -> bool {
         match self {
@@ -134,14 +191,30 @@ impl Range {
     }
 }
 
+/// Root to store: an accepted numbered transcript and cumulative priced spend,
+/// saved atomically with child task/funding and root latest-turn proof before
+/// its worker ACK
+/// (domain/engine.md, 5.1 and 7.2). Loads return the same owned shape.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct TurnRecord {
+    /// Positive durable task number owning this transcript (domain/engine.md, 7.2).
     pub task: u64,
+    /// Positive root-issued activation fence for the transcript (domain/engine.md, 7.2).
     pub attempt: u64,
+    /// Positive accepted turn number; sequence admission belongs to tasks
+    /// (domain/engine.md, 7.2; domain/tasks.md, 7).
     pub turn: u32,
+    /// Cumulative accepted spend for this attempt, not an additional charge;
+    /// represented by `u64` (domain/engine.md, 7.2).
     pub spent: u64,
+    /// No message fence is admitted in this current route; tasks refuses `Some`
+    /// before mutation until an actual inbox route joins (domain/engine.md, 7.2 and 7.5; domain/tasks.md, 14).
     pub read: Option<u64>,
+    /// Injected wall time when the root accepted the turn; it survives restart
+    /// without depending on the process clock (domain/engine.md, 5.4 and 7.2).
     pub at: Wall,
+    /// Owned transcript bytes, bounded by journal `transcript_bytes` before
+    /// writing and by load page budgets when read (domain/engine.md, 5.3 and 7.2).
     pub transcript: Box<[u8]>,
 }
 
@@ -174,7 +247,10 @@ pub struct TurnProof {
 
 /// Root's current claim evidence, store to root on paged startup. At most
 /// tasks.tasks rows are kept; each has one latest turn and one terminal.
-/// Claim replaces the row; ending erases it (domain/engine.md, 6 and 7.2).
+/// Claim reserves map room before child mutation and replaces this row. Ending
+/// erases it atomically; immutable transcript/terminal archives never enter the
+/// live map. Startup validates every row or stops, dropping none silently
+/// (domain/engine.md, 6, 7.2 and 7.5).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct RunProof {
     /// Positive task identity allocated by root; unique in the live proof table (domain/engine.md, 5.4).
@@ -183,14 +259,24 @@ pub struct RunProof {
     pub attempt: u64,
     /// Latest accepted turn, or none before the first turn; no historical body is retained (domain/engine.md, 7.2).
     pub turn: Option<TurnProof>,
-    /// Latest typed terminal for this claim, or none; cleared on replacement/end (domain/engine.md, 7.4).
+    /// Typed accepted worker offer or actual root-translated unpriced terminal;
+    /// present iff the child answered this current attempt. At most twice task
+    /// result bytes before normalization; cleared on replacement/end
+    /// (domain/engine.md, 7.4 and 7.5).
     pub terminal: Option<TerminalRecord>,
 }
 
+/// Owned typed row sent root to store in a commit or returned store to root in
+/// a bounded page. The transaction/page, not each row, has the store terminal
+/// (domain/engine.md, 5.1, 5.3 and 5.6).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Record {
-    Deployment(Deployment),
-    Turn(TurnRecord,),
+    /// Fixed deployment counters, saved only by the journal (domain/engine.md, 5.4).
+    Deployment(/** Root-owned fixed-size header (domain/engine.md, 5.4). */ Deployment),
+    /// Accepted transcript turn owned by the root (domain/engine.md, 7.2).
+    Turn(
+        /** Owned transcript and acceptance metadata, byte-bounded at admission (domain/engine.md, 7.2). */ TurnRecord,
+    ),
     /// Current bounded replay evidence; proof and all financial writes share one commit (domain/engine.md, 7.2).
     RunProof(
         /// Root-owned proof, bounded by tasks.tasks, one latest turn and journal bytes (domain/engine.md, 6 and 7.2).
@@ -198,10 +284,13 @@ pub enum Record {
     ),
     /// Immutable typed terminal archive; startup never retains the historical family (domain/engine.md, 7.4).
     Terminal(
-        /// Root-owned accepted worker terminal, within result admission bounds (domain/engine.md, 7.4).
+        /// Root-owned exact bounded worker offer or canonical root-translated
+        /// topology/Invalid terminal at accepted expense, within result admission
+        /// bounds (domain/engine.md, 7.4 and 7.5).
         TerminalRecord,
     ),
-    /// Child's durable task/funding/admission record; saved atomically by the root (domain/engine.md, 5.6).
+    /// Child's authentic task/funding/closure row; root transport proofs have
+    /// their own variants. All writes share the root decision (domain/engine.md, 5.6 and 7.5).
     Tasks(
         /// Owned child row, deep bytes checked before journal or load retention (domain/engine.md, 5.3 and 5.6).
         temper_engine_domain_tasks::Stored,
@@ -214,6 +303,8 @@ pub enum Record {
 }
 
 impl Record {
+    /// Pure fixed-size key projection; it emits no request and neither copies
+    /// payloads nor validates their bounds (domain/engine.md, 5.3 and 5.6).
     #[must_use]
     pub const fn key(&self) -> Key {
         match self {
@@ -227,13 +318,20 @@ impl Record {
     }
 }
 
+/// Root to store: one unique-key operation within an atomic commit. Child
+/// saves/erases acquire no separate terminal; the ordered commit answers once
+/// (domain/engine.md, 5.1 and 5.6).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Write {
-    Save(Record),
-    Erase(Key),
+    /// Replace the row at its own key (domain/engine.md, 5.1 and 5.6).
+    Save(/** Owned typed row, byte-bounded by journal admission (domain/engine.md, 5.6). */ Record),
+    /// Remove the named row, with no owned payload (domain/engine.md, 5.1 and 5.6).
+    Erase(/** Fixed-size row key; journal callers cannot erase the header (domain/engine.md, 5.4). */ Key),
 }
 
 impl Write {
+    /// Pure fixed-size key projection for replacement/erase coalescing; it
+    /// emits no effect or terminal (domain/engine.md, 5.1 and 5.6).
     #[must_use]
     pub const fn key(&self) -> Key {
         match self {
@@ -244,7 +342,11 @@ impl Write {
 }
 
 /// Deep owned allocation bytes retained by a store row (domain/engine.md, 5.3).
-/// The root validates the whole decoded page before restoring or cloning.
+/// Pure checked calculation: sums heap payloads and nested boxed-record/slice
+/// allocations, excluding the outer `Record` slot and allocator overhead. It
+/// returns `None` on arithmetic overflow and emits no request or terminal. The
+/// root validates the whole decoded page before restoring or cloning. Payload
+/// shape admission remains the child's responsibility (domain/engine.md, 5.3 and 5.6).
 #[must_use]
 pub fn record_bytes(record: &Record) -> Option<u64> {
     match record {
@@ -271,6 +373,9 @@ pub fn record_bytes(record: &Record) -> Option<u64> {
     }
 }
 
+/// Pure checked deep-byte projection for journal admission; erases own no
+/// payload and saves use `record_bytes`. No request or terminal is emitted
+/// (domain/engine.md, 5.1, 5.3 and 5.6).
 pub(crate) fn owned_bytes(write: &Write) -> Option<u64> {
     match write {
         Write::Save(record) => record_bytes(record),

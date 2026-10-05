@@ -1,15 +1,31 @@
-//! Concrete accounting carriers. Authority remains the root's pure policy;
-//! tasks validates exact arithmetic and closes durable generations once.
+//! Authentic finite periods/pools and actual task-allotment accounting
+//! (domain/tasks.md, sections 2 and 14; domain/authority.md, section 7).
+//! Root authorizes new allocations; tasks reserves, charges and closes their
+//! real financial links once, emitting rows for one root decision. No move
+//! or period/pool retirement route is implemented by this contracted boundary.
 use crate::domain::{Domain, publish, record, refused, task_mut};
 use crate::{Funder, Limits, Numbers, Refusal, Request, Stored};
 use skein_lib::{Env, Queue, ReplyTo};
 
+/// Tasks-to-root historical record of one closed task allotment; saved atomically with the actual
+/// funder posting and ended task, and never restored into the live arena. (domain/tasks.md,
+/// sections 2–3 and 14). (domain/authority.md, section 7).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Closure {
+    /// Task whose current allotment closed. (domain/tasks.md, sections 2–3 and 14).
+    /// (domain/authority.md, section 7).
     pub task: u64,
+    /// Durable allotment generation closed once with this task's settlement. (domain/tasks.md,
+    /// sections 2–3 and 14). (domain/authority.md, section 7).
     pub generation: u64,
+    /// Actual original financial source receiving the settlement. (domain/tasks.md, sections 2–3
+    /// and 14). (domain/authority.md, section 7).
     pub funder: Funder,
+    /// Full original reservation removed from that source. (domain/tasks.md, sections 2–3 and 14).
+    /// (domain/authority.md, section 7).
     pub budget: u64,
+    /// Checked total of direct and already-settled funded spend posted to that source once.
+    /// (domain/tasks.md, sections 2–3 and 14). (domain/authority.md, section 7).
     pub spent: u64,
 }
 
@@ -238,19 +254,24 @@ pub(crate) fn links(domain: &Domain, bound: u32) -> bool {
     true
 }
 
-/// Live external allotment. A pool's actual parent is immutable across resets
-/// and requester moves (domain/tasks.md, 2). Source retirement remains the
-/// later 02e depth increment; this slice refuses new sources at its live bound.
+/// Owned finite external period or person-pool accounting; tasks mutates the authentic counters and
+/// emits typed ledger saves for the root's atomic commit. (domain/tasks.md, sections 2–3 and 14).
+/// (domain/authority.md, section 7).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct FundingRecord {
-    /// Durable actual source identity (domain/tasks.md, 2).
+    /// Durable period/pool identity; task sources use live `TaskRecord` counters instead of a
+    /// separate ledger. (domain/tasks.md, sections 2–3 and 14). (domain/authority.md, section 7).
     pub funder: Funder,
-    /// A pool's original project period; periods have no parent (domain/tasks.md, 2).
+    /// Pool's original project period; a period has `None`, and no current event changes this link.
+    /// (domain/tasks.md, sections 2–3 and 14). (domain/authority.md, section 7).
     pub parent: Option<Funder>,
-    /// Finite authentic counters owned and updated by tasks (domain/tasks.md, 2).
+    /// Authentic finite accounting owned by tasks; external ledgers have zero direct spent and
+    /// receive settled expense in `spent_below`. Root borrows these values for policy checks.
+    /// (domain/tasks.md, sections 2–3 and 14). (domain/authority.md, section 7).
     pub numbers: Numbers,
-    /// Reserved for later bounded source retirement; currently always false
-    /// (domain/tasks.md, 2).
+    /// False for this contracted finite source boundary; no current event retires sources and
+    /// restoration refuses any closed period or pool. (domain/tasks.md, sections 2–3 and 14).
+    /// (domain/authority.md, section 7).
     pub closed: bool,
 }
 

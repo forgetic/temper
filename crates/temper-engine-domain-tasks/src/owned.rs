@@ -1,14 +1,15 @@
-//! Borrowed durable-row heap accounting for root journal/load admission
-//! (domain/tasks.md, 2; domain/engine.md, 5.6). This measures existing ownership
-//! and allocates nothing; shape/authority admission remains with the hub/root.
+//! Pure borrowed durable-row heap measurement for root journal/load admission
+//! (domain/tasks.md, sections 2 and 14; domain/engine.md, sections 5.3 and 5.6).
+//! Measures existing ownership without allocating or cloning; shape admission
+//! remains with tasks and authority decisions remain with root policy checks.
 use crate::{Authority, Contract, Ending, Last, Parameter, Phase, Spec, Stored, TaskRecord, TaskResult, Was};
 use core::mem::{size_of, size_of_val};
 
-/// Root measures a borrowed durable task row before journal/load byte admission.
-/// Counts every owned allocation, including the boxed task record, slice backing
-/// arrays and all nested bytes. Excludes the inline `Stored` slot, which the root
-/// counts separately. Returns `None` if the exact sum cannot fit `u64`; no clone,
-/// mutation or allocation occurs (domain/tasks.md, 2; domain/engine.md, 5.6).
+/// Pure borrowed measurement for root journal/load byte admission: counts existing boxed records,
+/// slice backing arrays and nested bytes, excluding the inline `Stored` slot. `Ledger`/`Closure`
+/// own no heap. Returns `None` on sum overflow; allocates/copies nothing and admits neither shape
+/// nor authority. Root separately counts inline slots and queues (domain/engine.md, sections 5.3
+/// and 5.6). (domain/tasks.md, sections 2, 10 and 14).
 #[must_use]
 pub fn stored_bytes(record: &Stored) -> Option<u64> {
     match record {

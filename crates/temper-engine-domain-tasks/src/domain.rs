@@ -1,3 +1,7 @@
+//! Live task and finite-source ownership, step dispatch and retry scheduling
+//! (domain/tasks.md, sections 2, 5, 10 and 14). Root supplies authorized events
+//! and iteration time, routes outputs and owns durability/transport proofs.
+//! Tasks never performs IO or keeps historical stubs, inboxes or root shadows.
 use crate::{Active, Event, Fact, Limits, New, Party, Phase, Problem, Refusal, Request, Stored, TaskRecord, Tries};
 use alloc::boxed::Box;
 use skein_lib::{Deadlines, Env, Id, List, Map, Queue, ReplyTo, Rng, Slab, Time, Wall};
@@ -21,6 +25,10 @@ pub(crate) enum Startup {
     Failed,
 }
 
+/// Bounded live task arena, immutable dependencies, retry timers, finite period/pool ledgers,
+/// configured charters and deterministic retry randomness. Keeps no inbox, historical stub,
+/// transport receipt, connector state or mutable root shadow ledger. (domain/tasks.md, sections 2,
+/// 4–5, 10 and 14).
 #[derive(Debug)]
 pub struct Domain {
     pub(crate) startup: Startup,
@@ -35,6 +43,10 @@ pub struct Domain {
 }
 
 impl Domain {
+    /// Create restoring state from validated `limits`, deterministic `seed` and unique configured
+    /// `charters` bounded by `limits.charters`. Panics on invalid/unrepresentable limits or malformed
+    /// charter configuration; no task becomes active until `Restore`/`Restored` completes.
+    /// (domain/tasks.md, sections 2, 4–5, 10 and 14).
     #[must_use]
     pub fn new(limits: &Limits, seed: u64, charters: Box<[u32]>) -> Domain {
         assert!(crate::worst_case(limits).is_some(), "task limits are valid");
@@ -57,8 +69,10 @@ impl Domain {
         }
     }
 
-    /// Root borrows owned finite accounting for its current authority check;
-    /// this query changes nothing and allocates nothing (domain/tasks.md, 2).
+    /// Pure borrowed lookup of authentic period/pool accounting for root policy checks; returns
+    /// `None` when absent. The table is bounded by `Limits::funders`; no readiness transition,
+    /// allocation or output occurs and the root must not persist a second mutable ledger.
+    /// (domain/tasks.md, sections 2, 4–5, 10 and 14).
     #[must_use]
     pub fn funding(&self, funder: crate::Funder) -> Option<&crate::FundingRecord> {
         self.funding.get(&funder)
@@ -69,10 +83,16 @@ impl Domain {
         self.startup == Startup::Ready
     }
 
+    /// Reclaim retired live task slots at the parent's iteration reclaim point after outputs have
+    /// been routed; emits no persistence or lifecycle output. (domain/tasks.md, sections 2, 4–5, 10
+    /// and 14).
     pub fn reclaim(&mut self) {
         self.tasks.reclaim();
     }
 
+    /// Remove one optional content-free observation from the bounded diagnostic queue; keeping or
+    /// dropping facts changes no decision, durability barrier or reply. (domain/tasks.md, sections
+    /// 2, 4–5, 10 and 14).
     pub fn pop_fact(&mut self) -> Option<Fact> {
         self.facts.pop()
     }
@@ -87,13 +107,20 @@ pub(crate) fn output_bound(limits: &Limits) -> Option<u32> {
         .checked_add(8)
 }
 
-/// Cascading dependency and closing decisions touch at most the bounded live
-/// set; each task advances through a constant number of phases in one step.
+/// Required free `Request` slots for one `step` or `fire` under validated `limits`: checked 20 times
+/// tasks plus 2 times batch plus 3 times funders plus 8. Cascades are bounded by the live set;
+/// panics if bound arithmetic is invalid. Caller counts output payload copies separately.
+/// (domain/tasks.md, sections 2, 4–5, 10 and 14).
 #[must_use]
 pub fn max_out(limits: &Limits) -> u32 {
     output_bound(limits).expect("task limits admit output bound")
 }
 
+/// Apply one root-issued typed event to `domain` using the iteration clocks and immutable limits in
+/// `env`, then advance bounded dependency/closing cascades when ready. Caller reserves `max_out`
+/// free slots. Reply-bearing inputs produce one terminal reply; notifications may emit no output.
+/// Root checks authority, fences exact transport replay and commits saves/erases with resulting
+/// effects before external replies. (domain/tasks.md, sections 2, 4–5, 10 and 14).
 pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     match event {
         Event::OpenPeriod { reply_to, project, period, budget } => {
@@ -126,8 +153,10 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
     }
 }
 
-/// One backoff expiration per iteration; a wall-clock correction does not
-/// change an already projected monotonic deadline.
+/// Expire at most one due retry deadline using `env.now` after successful restoration, then advance
+/// bounded closing/readiness cascades. Caller reserves `max_out` free `Request` slots and drives
+/// later iterations while due; wall correction does not reproject an already armed deadline.
+/// (domain/tasks.md, sections 2, 4–5, 10 and 14).
 pub fn fire(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
     if !domain.ready() {
         return;

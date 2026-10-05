@@ -1,25 +1,60 @@
+//! Root-configured capacities and checked heap accounting (domain/people.md,
+//! sections 2–5 and 12.1). `worst_case` validates limits before construction;
+//! bounds cover retained state and scratch. Root accounts output queues and
+//! payloads separately. These calculations know no IO, credentials or tasks.
+
 use crate::domain::{Answered, Pending, SignIn};
 use crate::{Fact, Holding, Identity, IdentityKey, InitialOwner, RequestKey};
 use alloc::boxed::Box;
 use skein_lib::{Deadlines, Duration, Id, List, Map, Queue, Slab};
 
+/// Immutable root-configured capacities and payload limits for people's retained state and one-step
+/// outputs; validate via `worst_case` before construction. (domain/people.md, sections 2–5 and
+/// 12.1).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Limits {
+    /// Maximum retained people and forge/user index entries. (domain/people.md, sections 2–5 and
+    /// 12.1).
     pub people: u32,
+    /// Maximum live secret-free sign-ins and expiry alarms. (domain/people.md, sections 2–5 and
+    /// 12.1).
     pub sign_ins: u32,
+    /// Maximum retained project role sets. (domain/people.md, sections 2–5 and 12.1).
     pub projects: u32,
+    /// Maximum unique-person holdings per project role set. (domain/people.md, sections 2–5 and
+    /// 12.1).
     pub holdings: u32,
+    /// Maximum retained configured first-owner entries; also bounds bootstrap output matches.
+    /// (domain/people.md, sections 2–5 and 12.1).
     pub initial_owners: u32,
+    /// Maximum completed keys plus slots reserved by pending flights; no timed eviction is
+    /// implemented here. (domain/people.md, sections 2–5 and 12.1).
     pub requests: u32,
+    /// Maximum simultaneous routed keyed flights. (domain/people.md, sections 2–5 and 12.1).
     pub pending: u32,
+    /// Positive maximum reply destinations per flight, including its first caller.
+    /// (domain/people.md, sections 2–5 and 12.1).
     pub waiters: u32,
+    /// Maximum combined login and display-name bytes per person. (domain/people.md, sections 2–5
+    /// and 12.1).
     pub identity_bytes: u32,
+    /// Maximum opening-word bytes per `StartChat`, including pending and completed copies.
+    /// (domain/people.md, sections 2–5 and 12.1).
     pub words: u32,
+    /// Nonzero configured lifetime projected once from admission's wall/monotonic environment.
+    /// (domain/people.md, sections 2–5 and 12.1).
     pub sign_in_lifetime: Duration,
+    /// Capacity of optional content-free observations; overflow increments a diagnostic lost
+    /// counter. (domain/people.md, sections 2–5 and 12.1).
     pub facts: u32,
 }
 
 /// Containers, retained bytes, pending copies and bounded bootstrap config.
+/// Checked heap bound under `limits` for retained containers/bytes, pending copies, bootstrap owners,
+/// restoration sign-in snapshot, role-update scratch and facts. Returns `None` for arithmetic
+/// overflow, zero waiters or zero sign-in lifetime; validates `max_out` additions. Caller separately
+/// counts incoming/outgoing payloads and Request queue storage. (domain/people.md, sections 2–5 and
+/// 12.1).
 #[must_use]
 pub fn worst_case(limits: &Limits) -> Option<u64> {
     limits.initial_owners.checked_add(3)?;

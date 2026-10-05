@@ -1,33 +1,80 @@
+//! Root-configured admission and memory bounds (domain/tasks.md, sections
+//! 10 and 14). Counts retained live state and bounded scratch; parents count
+//! their owned input/output copies separately. This module performs no admission
+//! mutation, authority decision or allocation during the bound calculation.
 use crate::domain::Task;
 use crate::{AuthorityExecutor, Class, Fact, Grant, Parameter, Retries, Verdict};
 use alloc::boxed::Box;
 use skein_lib::{Deadlines, Id, List, Map, Queue, Slab};
 
+/// Immutable root-configured limits for live task state, finite sources, owned semantic payloads
+/// and retry policies; validate through `worst_case` before construction. (domain/tasks.md,
+/// sections 10 and 14).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Limits {
+    /// Maximum retained live task slots, name-index entries and retry alarms. (domain/tasks.md,
+    /// sections 10 and 14).
     pub tasks: u32,
-    /// Live period/pool identities, refused before carving (domain/tasks.md, 2).
+    /// Maximum retained finite period/pool identities; source pressure is refused before mutation.
+    /// (domain/tasks.md, sections 10 and 14).
     pub funders: u32,
+    /// Maximum live tasks per project, including every member of an admitted batch.
+    /// (domain/tasks.md, sections 10 and 14).
     pub project_tasks: u32,
+    /// Maximum lifetime tasks made in a requester tree, including its root; completed delegates do
+    /// not return this capacity. (domain/tasks.md, sections 10 and 14).
     pub tree_tasks: u32,
+    /// Maximum structural depth below the requester-tree root, which has depth zero.
+    /// (domain/tasks.md, sections 10 and 14).
     pub depth: u32,
+    /// Maximum live direct delegates of one requester task. (domain/tasks.md, sections 10 and 14).
     pub delegates: u32,
+    /// Maximum directly created tasks in one atomic nonempty `Make` batch. (domain/tasks.md,
+    /// sections 10 and 14).
     pub batch: u32,
+    /// Maximum immutable dependency identities per task; also bounds its remaining live
+    /// `waiting_on` subset. (domain/tasks.md, sections 10 and 14).
     pub dependencies: u32,
+    /// Shape bound for typed input identities; current `Make` and live restore require
+    /// `Spec::inputs` to be empty because no historical-input route is implemented.
+    /// (domain/tasks.md, sections 10 and 14).
     pub inputs: u32,
+    /// Maximum combined specification words and byte-valued parameter bytes per task.
+    /// (domain/tasks.md, sections 10 and 14).
     pub spec_bytes: u32,
+    /// Maximum typed parameters per specification. (domain/tasks.md, sections 10 and 14).
     pub parameters: u32,
+    /// Maximum result/reason bytes; contracts cannot allow larger results and cancellation may
+    /// retain one bounded reason plus one bounded partial result. (domain/tasks.md, sections 10 and
+    /// 14).
     pub result_bytes: u32,
+    /// Maximum distinct-code choices in a nonempty verdict contract. (domain/tasks.md, sections 10
+    /// and 14).
     pub contract_choices: u32,
+    /// Maximum retained configured agent-charter numbers. (domain/tasks.md, sections 10 and 14).
     pub charters: u32,
+    /// Maximum resource grants per task authority carrier. (domain/tasks.md, sections 10 and 14).
     pub authority_grants: u32,
+    /// Maximum base segments per carried grant pattern. (domain/tasks.md, sections 10 and 14).
     pub authority_segments: u32,
+    /// Maximum total bytes across every grant's base and terminal segments in one authority
+    /// carrier. (domain/tasks.md, sections 10 and 14).
     pub authority_bytes: u32,
+    /// Maximum carried authority executor-permission entries; task execution itself is agent-only.
+    /// (domain/tasks.md, sections 10 and 14).
     pub executor_kinds: u32,
+    /// Validated per-class failure retry and pause policies. (domain/tasks.md, sections 10 and 14).
     pub retries: Retries,
+    /// Optional content-free observation capacity; overflow is diagnostic and changes no decision.
+    /// (domain/tasks.md, sections 10 and 14).
     pub facts: u32,
 }
 
+/// Pure checked heap bound for live containers and nested payloads, finite ledgers, charter
+/// configuration, optional facts and bounded graph/traversal scratch under `limits`. Returns `None` on
+/// overflow or invalid task/batch/tree/retry settings. Validates output-bound arithmetic; caller
+/// separately counts incoming data, `RunContext`/saved-row copies and `Request` queues.
+/// (domain/tasks.md, sections 10 and 14).
 #[must_use]
 pub fn worst_case(limits: &Limits) -> Option<u64> {
     crate::domain::output_bound(limits)?;

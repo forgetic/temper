@@ -1,45 +1,97 @@
-//! One decision, one ordered commit, bounded release (domain/engine.md, 5).
+//! The root's ordered commit seam (domain/engine.md, 5.1–5.2 and 5.7).
+//! [`Decision`] keeps a bounded unique-key write set and owned deliveries;
+//! [`Journal`] keeps deployment counters, cumulative durability and deliveries
+//! held behind their prerequisite commits. It never knows child policy, worker
+//! placement, store encoding or IO; the walking root routes internal deliveries.
+//!
+//! Call [`takes`] before child mutation, then [`accept`] once synchronous routes
+//! finish. The store answers issued commits through [`committed`] or
+//! [`uncommitted`]; [`resume`] releases at most one ready delivery. Refused
+//! admission returns ownership, successful admission may emit one commit, and
+//! failed storage emits one stop notice. No helper waits for its own effect.
 use crate::{Deployment, Family, Key, Record, Write};
 use alloc::boxed::Box;
 use skein_lib::{List, Queue, ReplyTo, Token};
 use temper_engine_domain_people as people;
 
+/// Startup capacities supplied by the root, immutable across journal calls
+/// (domain/engine.md, 5.1–5.2). Positive commit/write/delivery room and a held
+/// queue at least as large as one delivery batch are required.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Limits {
+    /// Maximum issued commits not yet cumulatively answered; saturation refuses
+    /// a new decision before children change (domain/engine.md, 5.1).
     pub commits: u32,
+    /// Delivery slots retained across decisions until durability permits release;
+    /// the walking root reserves additional callback batches (domain/engine.md, 5.2 and 5.7).
     pub held: u32,
-    /// Includes the automatically saved deployment header.
+    /// Maximum unique writes per commit, including its automatically saved
+    /// deployment header; a decision has one fewer slot (domain/engine.md, 5.1 and 5.4).
     pub writes: u32,
+    /// Maximum owned deliveries in one decision; admission requires this much
+    /// held room before routing (domain/engine.md, 5.2).
     pub deliveries: u32,
+    /// Maximum transcript bytes or deep owned bytes in a wrapped child row;
+    /// excess writes return ownership (domain/engine.md, 5.3, 5.6 and 7.2).
     pub transcript_bytes: u32,
+    /// Maximum owned result text or assignment section text admitted to a held
+    /// delivery (domain/engine.md, 5.2, 7.1 and 7.4).
     pub result_bytes: u32,
 }
 
+/// Owned root effects held after the decision they follow (domain/engine.md,
+/// 5.2 and 5.7). External notices have no acknowledgement of their own; web
+/// replies consume one reply destination. Internal fleet/load deliveries are
+/// resumed by the root and never passed to the protocol as child events.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Delivery {
+    /// Journal caller to web: one people terminal without an attached session;
+    /// the walking root uses `WebReply` instead (domain/people.md, 11).
     Reply {
+        /// Web-issued right to exactly this terminal; moved once (domain/people.md, 11).
         to: ReplyTo,
+        /// Typed, secret-free reply with no owned unbounded body (domain/people.md, 11).
         reply: people::Reply,
     },
+    /// Root to worker: accepted turn is durable; release its retained body.
+    /// This notice has no terminal event (domain/engine.md, 7.2).
     AcknowledgeTurn {
+        /// Worker protocol destination echoed through fleet (domain/worker.md, 2).
         channel: Token,
+        /// Durable task whose turn was accepted (domain/engine.md, 7.2).
         task: u64,
+        /// Root-issued activation fence for that turn (domain/engine.md, 7.2).
         attempt: u64,
+        /// Positive accepted turn number, represented by `u32` (domain/engine.md, 7.2).
         turn: u32,
     },
+    /// Root to worker: the attempt terminal is durable; release its answer.
+    /// This notice has no terminal event (domain/engine.md, 7.4).
     Acknowledge {
+        /// Worker protocol destination echoed through fleet (domain/worker.md, 2).
         channel: Token,
+        /// Durable task whose attempt answered (domain/engine.md, 7.4).
         task: u64,
+        /// Root-issued attempt whose answer may be forgotten (domain/engine.md, 7.4).
         attempt: u64,
     },
+    /// Root to worker: stop this attempt. Its answer or lost-channel grace
+    /// outcome returns through fleet; this notice allocates no additional
+    /// attempt (domain/engine.md, 7.4; domain/worker.md, 2).
     Cancel {
+        /// Worker protocol destination echoed through fleet (domain/worker.md, 2).
         channel: Token,
+        /// Task owning the attempt being cancelled (domain/engine.md, 7.4).
         task: u64,
+        /// Root-issued activation to cancel, not a later attempt (domain/engine.md, 7.4).
         attempt: u64,
     },
     /// Root to fleet after durability; the root resumes it internally (domain/engine.md, 5.2).
     Fleet(
-        /// Only bounded `Start`, `TurnKept`, `Acknowledge` and `Cancel` callbacks are admitted (domain/engine.md, 5.2).
+        /// Root-issued `Start`, `TurnKept`, `Acknowledge` or `Cancel` callback.
+        /// `Start` workstream bytes are at most journal `transcript_bytes`; other
+        /// payloads are fixed-size. Fleet start/cancel consequences route back
+        /// inside the root (domain/engine.md, 5.2 and 5.7).
         temper_engine_domain_fleet::Event,
     ),
     /// Root to worker: complete bounded assignment after its claim commit (domain/engine.md, 7.1).
@@ -49,18 +101,25 @@ pub enum Delivery {
         /// Complete claim/brief/grant; section slots and owned bytes validated at journal admission (domain/engine.md, 7.1 and 9).
         assignment: crate::engine::Assignment,
     },
-    /// Root to web: terminal reply, with newly allocated session when signing in (domain/people.md, 3).
+    /// Root to web: one terminal reply, optionally carrying its sign-in candidate;
+    /// only a successful people reply admits that session (domain/people.md, 3 and 11).
     WebReply {
         /// Web-issued right to this one terminal reply (domain/people.md, 11).
         to: ReplyTo,
-        /// New root-issued session on a sign-in reply; absent for other replies (domain/people.md, 3).
+        /// Root-issued sign-in candidate accompanying a sign-in decision, or none.
+        /// A refusal can leave it unused; clients require a successful `SignedIn`
+        /// reply before using it (domain/people.md, 3; domain/engine.md, 5.4).
         sign_in: Option<u64>,
-        /// Secret-free people terminal, held after the decision it names (domain/people.md, 5.1).
+        /// Fixed-size secret-free people terminal, held after the decision it
+        /// names; owns no display or credential bytes (domain/people.md, 5.1 and 11).
         reply: people::Reply,
     },
-    /// Root to worker: the hello exceeded bounded fleet room (domain/worker.md, 2).
+    /// Root to worker: refuse its hello because of startup, shape or fleet
+    /// admission; no attempt is assigned and no terminal is owed for this notice
+    /// (domain/engine.md, 5.7; domain/worker.md, 2).
     Refuse {
-        /// Worker protocol destination, bounded by fleet worker room (domain/worker.md, 2).
+        /// Fixed-size worker protocol destination echoed from its refused hello;
+        /// no worker slot is admitted (domain/engine.md, 5.7; domain/worker.md, 2).
         channel: Token,
     },
     /// Root resumes authenticated historical result IO only after prior commits (domain/engine.md, 5.3).
@@ -100,20 +159,42 @@ pub enum Delivery {
         /// Owned result text bounded by journal `result_bytes` (domain/people.md, 6).
         words: Box<[u8]>,
     },
+    /// Root to the task requester: live notice of its durable ending, with no
+    /// reply right or persistent people inbox; historical reads use `ResultReply`
+    /// (domain/engine.md, 5.7; domain/people.md, 6).
     Result {
+        /// Durable person requester, checked by the task route (domain/people.md, 6).
         person: u64,
+        /// Ended task whose record remains the source of this result (domain/people.md, 6).
         task: u64,
+        /// Owned result text, at most journal `result_bytes` (domain/engine.md, 5.2).
         words: Box<[u8]>,
     },
 }
 
+/// Journal to its root caller: at most one value per entry point; the caller
+/// translates it to store IO or an outward/internal delivery (domain/engine.md, 5).
 #[derive(PartialEq, Eq, Debug)]
 pub enum Output {
-    Commit { number: u64, writes: Box<[Write]> ,},
-    Deliver(Delivery),
+    /// Ordered atomic store transaction, ended by `committed` or `uncommitted`
+    /// using the issued number (domain/engine.md, 5.1).
+    Commit {
+        /// Positive monotonically allocated commit identity (domain/engine.md, 5.1).
+        number: u64,
+        /// Owned unique-key writes including the header, at most `Limits::writes`
+        /// (domain/engine.md, 5.1 and 5.4).
+        writes: Box<[Write]>,
+    },
+    /// One effect whose prerequisite commit is durable (domain/engine.md, 5.2).
+    Deliver(/** Owned bounded effect, consumed once by the root (domain/engine.md, 5.2). */ Delivery),
+    /// Storage failed; the caller stops the process without releasing later work.
+    /// This notice has no terminal event (domain/engine.md, 5.1).
     Stop,
 }
 
+/// One root route's bounded transient writes and deliveries; it owns their
+/// payloads until accepted or returned on refusal (domain/engine.md, 5.1–5.2).
+/// This value knows no durability and emits nothing on drop.
 #[derive(Debug)]
 pub struct Decision {
     limits: Limits,
@@ -127,6 +208,9 @@ struct Held {
     delivery: Delivery,
 }
 
+/// Root-owned deployment counters and ordered durability barrier
+/// (domain/engine.md, 5.1–5.4). It retains bounded delivery ownership, never
+/// store IO handles or a second copy of child state.
 #[derive(Debug)]
 pub struct Journal {
     limits: Limits,
@@ -138,6 +222,8 @@ pub struct Journal {
 }
 
 impl Decision {
+    /// Allocate one transient decision from validated startup limits; no effect
+    /// is issued until `accept` (domain/engine.md, 5.1–5.2).
     #[must_use]
     pub fn new(limits: &Limits) -> Decision {
         assert!(worst_case(limits).is_some(), "valid root journal limits");
@@ -150,6 +236,9 @@ impl Decision {
 
     /// A replacement at the same key keeps its original position. All child
     /// callbacks finish before submission, so only the final value is saved.
+    /// The root supplies the write; successful admission emits no event. Bounds
+    /// or capacity refusal returns it unchanged. Deployment writes are reserved
+    /// for `accept`, not callers (domain/engine.md, 5.1 and 5.6).
     pub fn write(&mut self, limits: &Limits, write: Write) -> Result<(), Write> {
         assert!(*limits == self.limits, "decision uses its configured limits");
         let within = match &write {
@@ -184,6 +273,9 @@ impl Decision {
         self.writes.push(write)
     }
 
+    /// Retain one root effect for the decision, without releasing or issuing it.
+    /// Bounds or capacity refusal returns ownership; successful admission ends
+    /// through journal release after durability (domain/engine.md, 5.2 and 5.7).
     pub fn deliver(&mut self, limits: &Limits, delivery: Delivery) -> Result<(), Delivery> {
         assert!(*limits == self.limits, "decision uses its configured limits");
         let within = match &delivery {
@@ -212,6 +304,8 @@ impl Decision {
 impl Journal {
     /// An empty store needs the deployment identity committed even before its
     /// first task. The id is a root input, drawn once by the shell at startup.
+    /// Validated limits size the fixed held queue; the next accepted decision
+    /// emits the dirty header's commit (domain/engine.md, 5.4 and 5.7).
     #[must_use]
     pub fn bootstrap(id: [u8; 16], limits: &Limits) -> Journal {
         let deployment =
@@ -223,6 +317,8 @@ impl Journal {
 
     /// A loaded header names the last fully applied commit. It is durable;
     /// outstanding answers from a previous process need not be reconstructed.
+    /// The root supplies the decoded store header and validated startup bounds;
+    /// construction emits no effect (domain/engine.md, 5.4 and 6).
     #[must_use]
     pub fn new(deployment: Deployment, limits: &Limits) -> Journal {
         assert!(worst_case(limits).is_some(), "valid root journal limits");
@@ -236,22 +332,28 @@ impl Journal {
         }
     }
 
+    /// Pure snapshot of allocated counters, which may run ahead of the durable
+    /// store until its issued commits answer (domain/engine.md, 5.1 and 5.4).
     #[must_use]
     pub const fn deployment(&self) -> Deployment {
         self.deployment
     }
 
+    /// Pure query for the last cumulatively answered commit; bounded by the
+    /// allocated commit counter (domain/engine.md, 5.1).
     #[must_use]
     pub const fn durable(&self) -> u64 {
         self.durable
     }
 
+    /// Pure query for the storage-failure fence; true prevents subsequent
+    /// admission and release (domain/engine.md, 5.1).
     #[must_use]
     pub const fn stopped(&self) -> bool {
         self.stopped
     }
 
-    /// Shell completion fence: no dirty header, held delivery or unanswered
+    /// Pure shell idle query: no dirty header, held delivery or unanswered
     /// issued commit remains. A stopped journal is not complete
     /// (domain/engine.md, 5.2 and 5.7).
     #[must_use]
@@ -259,10 +361,14 @@ impl Journal {
         !self.stopped && !self.dirty && self.held.is_empty() && self.durable == self.deployment.commits
     }
 
+    /// Pure root query for unused held-delivery slots; callback admission uses
+    /// this in addition to `takes` (domain/engine.md, 5.2 and 5.7).
     pub(crate) fn held_room(&self) -> u32 {
         self.held.room()
     }
 
+    /// Pure query: whether the front held effect can be released by `resume`.
+    /// It reports no child or IO readiness (domain/engine.md, 5.2).
     #[must_use]
     pub fn ready(&self) -> bool {
         if self.stopped {
@@ -277,6 +383,8 @@ impl Journal {
 
 /// Called before routing anything that may mutate a child. Reserving the
 /// whole decision avoids partially applying a child and discovering pressure.
+/// Pure query for one journal batch, with no mutation or emitted terminal; the
+/// walking root additionally reserves callback room (domain/engine.md, 5.1 and 5.7).
 #[must_use]
 pub fn takes(journal: &Journal, limits: &Limits) -> bool {
     assert!(*limits == journal.limits, "journal uses its configured limits");
@@ -289,6 +397,9 @@ pub fn takes(journal: &Journal, limits: &Limits) -> bool {
 
 /// Root numbers are never reused. Allocation is part of the admitted
 /// decision, even if its candidate is unused; the next commit saves the gap.
+/// The root chooses the counter family after admission. Returns its next positive
+/// `u64`, or `None` when stopped/exhausted, with no effect on refusal; emits no
+/// request itself (domain/engine.md, 5.4).
 pub fn fresh(journal: &mut Journal, family: Family) -> Option<u64> {
     if journal.stopped {
         return None;
@@ -309,6 +420,9 @@ pub fn fresh(journal: &mut Journal, family: Family) -> Option<u64> {
 
 /// Return ownership on refusal. The root must call `takes` before making
 /// the decision; this defensive check does not undo already-routed children.
+/// Reserve one output. A dirty header or nonempty write set produces one atomic
+/// commit, ended by the store; a read-only decision issues none. Every retained
+/// delivery follows the latest allocated commit (domain/engine.md, 5.1–5.2).
 pub fn accept(
     journal: &mut Journal,
     limits: &Limits,
@@ -350,6 +464,8 @@ pub fn accept(
 
 /// A cumulative store answer only makes outputs ready. The ready pass
 /// releases one per call; it never drains all of them inside the store step.
+/// The store echoes an issued `u64` commit number. Duplicate/older terminals are
+/// inert; a number beyond issued commits is a caller error (domain/engine.md, 5.1).
 pub fn committed(journal: &mut Journal, number: u64) {
     if journal.stopped || number <= journal.durable {
         return;
@@ -358,6 +474,9 @@ pub fn committed(journal: &mut Journal, number: u64) {
     journal.durable = number;
 }
 
+/// Root ready pass: reserve one output and release at most one durable held
+/// effect in FIFO order; stopped or unready journals emit nothing. A delivery
+/// is consumed by its root route, not answered to this seam (domain/engine.md, 5.2).
 pub fn resume(journal: &mut Journal, out: &mut Queue<Output>) {
     assert!(out.room() >= 1, "one root ready output reserved");
     if journal.ready() {
@@ -366,6 +485,9 @@ pub fn resume(journal: &mut Journal, out: &mut Queue<Output>) {
     }
 }
 
+/// Store to journal: an issued commit failed. Reserve one output; the first
+/// failure beyond durable progress emits `Stop` and retains all held effects.
+/// Older or repeated failure notices are inert (domain/engine.md, 5.1).
 pub fn uncommitted(journal: &mut Journal, number: u64, out: &mut Queue<Output>) {
     assert!(out.room() >= 1, "one root stop output reserved");
     if journal.stopped || number <= journal.durable {
@@ -377,6 +499,10 @@ pub fn uncommitted(journal: &mut Journal, number: u64, out: &mut Queue<Output>) 
     out.push(Output::Stop);
 }
 
+/// Pure startup heap calculation for journal containers and simultaneously
+/// owned decision/commit/held payloads, excluding allocator overhead. Invalid
+/// bounds or arithmetic overflow return `None`; no state or effect is created
+/// (domain/engine.md, 4 and 5.1–5.3).
 #[must_use]
 pub fn worst_case(limits: &Limits) -> Option<u64> {
     if limits.commits == 0 || limits.writes == 0 || limits.held < limits.deliveries || limits.deliveries == 0 {

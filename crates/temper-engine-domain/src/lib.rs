@@ -1,7 +1,39 @@
-//! The engine's new root, built beside the legacy root (domain/engine.md).
-//! [`engine`] owns the walking root's real tasks, authority, people, fleet,
-//! brief and accounts. Child writes and synchronous handoffs form one decision;
-//! assignments, turns, terminals and results pass through the durable barrier.
+//! The engine's root domain: the charged chat walking story beside the frozen
+//! legacy root (domain/engine.md, 3–7 and 5.7). [`engine::Domain`] keeps real
+//! tasks, authority, people, fleet, brief and account children, with bounded
+//! root-owned commits, loads, fresh-number counters and unfinished handoffs.
+//! The root translates between children; no sibling talks to another directly.
+//!
+//! [`engine::step`] admits authenticated sign-ins and keyed chats, worker
+//! hellos/losses, numbered turns, priced answers, historical result reads and
+//! store/account terminals. [`engine::resume`] releases one durable delivery
+//! or routes pending work; [`engine::fire`] drives child timers through the
+//! same decision barrier. A writing decision is one ordered atomic commit;
+//! claims, accepted turns, answers and people's replies leave only after the
+//! commit they follow is durable. Store failures stop further release.
+//!
+//! [`Decision`] and [`Journal`] expose the commit seam separately; [`loads`]
+//! owns fenced one-terminal page reads. Root-owned [`RunProof`] rows hold one
+//! current claim's latest turn metadata and typed terminal; authentic funding
+//! numbers stay in tasks. Startup pages and validates current proof rows before
+//! tasks restoration consequences and fleet adoption. [`TerminalRecord`] and
+//! transcript archives stay outside the bounded live proof map (domain/engine.md, 7.5). The shell reserves entry-point output
+//! room and calls [`engine::Domain::reclaim`] after each iteration. The store
+//! protocol encodes typed [`Record`]s and supplies bounded pages; the root
+//! never knows file descriptors, wire formats, secret credential bytes,
+//! repositories or kernel completion mechanics (domain/engine.md, 2 and 5.5).
+//!
+//! This root currently routes person Report chats and their required task brief
+//! only, with the configured charter and no delegate/dependency/input-result
+//! route. Unsupported restored shapes stop startup rather than reaching a
+//! dormant consumer (domain/engine.md, 7.5; domain/tasks.md, 14).
+//! Connector, tool, procedure, notes and view routes remain later increments
+//! (domain/engine.md, 5.7). Child facts are bounded observations drained by
+//! [`engine::Domain::drain_facts`]; dropping them changes no decision.
+//! [`engine::Domain::quiescent`] is an idle fence, not a final story result;
+//! assigned workers and future task/account timers may remain (5.7). The
+//! required first-turn durable/lost-completion restart is covered; the broader
+//! terminal-before-ACK/result restart cut remains later coverage (7.5).
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
 extern crate alloc;
