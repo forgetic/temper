@@ -56,6 +56,9 @@ pub(crate) fn charge(
     let Some(spent) = old.numbers.spent.checked_add(delta) else {
         return refused(to, Some(number), Refusal::Funding, out);
     };
+    if !representable(d, number, delta) {
+        return refused(to, Some(number), Refusal::Funding, out);
+    }
     let task = task_mut(d, number).expect("entrance names task");
     if spent.checked_add(task.record.numbers.spent_below).is_none() {
         return refused(to, Some(number), Refusal::Funding, out);
@@ -69,8 +72,8 @@ pub(crate) fn charge(
     }
     out.push(Request::Done { reply_to: to });
 }
-/// Validate all caller-supplied snapshots before any mutation. External pool
-/// and period authenticity is the root's contract; no unlimited synthetic pool.
+/// Validate owned authentic before snapshots before any mutation. Root checks
+/// current authority; tasks checks concrete finite balances and arithmetic.
 pub(crate) fn validate_balances(d: &Domain, project: u32, balances: &[Balance], bound: u32) -> bool {
     if balances.len() > usize::try_from(bound).expect("u32 fits usize") {
         return false;
@@ -94,7 +97,10 @@ pub(crate) fn validate_balances(d: &Domain, project: u32, balances: &[Balance], 
                 }
             }
             Funder::Pool { project: other, .. } | Funder::Period { project: other, .. } => {
-                if other != project {
+                let Some(ledger) = d.funding.get(&balance.funder) else {
+                    return false;
+                };
+                if other != project || ledger.closed || ledger.numbers != balance.before {
                     return false;
                 }
             }
@@ -113,7 +119,8 @@ pub(crate) fn apply_balances(d: &mut Domain, env: &Env<Limits>, balances: &[Bala
                 publish(d, env, number, out);
             }
             Funder::Pool { .. } | Funder::Period { .. } => {
-                out.push(Request::Save { record: Stored::Funding { funder: balance.funder, numbers: balance.after } });
+                d.funding.get_mut(&balance.funder).expect("authentic balance validated").numbers = balance.after;
+                save_funding(d, balance.funder, out);
             }
         }
     }
@@ -129,8 +136,7 @@ pub(crate) fn closure(number: u64, generation: u64, funder: Funder, numbers: Num
         }),
     });
 }
-/// Existing batches carry snapshots only. 02c operations require complete,
-/// coherent actual funding snapshots; 02e integrates ordinary carving.
+/// Actual task sources cannot end while any incoming allocation remains live.
 pub(crate) fn funded_live(d: &Domain, funder: u64) -> bool {
     for (number, _) in &d.names {
         if *number != funder && record(d, *number).expect("live name").funder == Funder::Task(funder) {
@@ -140,7 +146,7 @@ pub(crate) fn funded_live(d: &Domain, funder: u64) -> bool {
     false
 }
 
-pub(crate) fn can_reserve(d: &Domain, batch: &[crate::New]) -> bool {
+pub(crate) fn can_reserve(d: &Domain, creator: crate::Party, batch: &[crate::New]) -> bool {
     for new in batch {
         if new.numbers != (Numbers { budget: new.authority.budget.spend, spent: 0, spent_below: 0, reserved: 0 }) {
             return false;
@@ -150,7 +156,11 @@ pub(crate) fn can_reserve(d: &Domain, batch: &[crate::New]) -> bool {
                 let Some(funder) = record(d, number) else {
                     return false;
                 };
-                if funder.project != new.project || !crate::amend::mutable(&funder.phase) {
+                let ancestor = match creator {
+                    crate::Party::Task(requester) => crate::amend::below(d, requester, number, d.names.len()),
+                    crate::Party::Person(_) | crate::Party::Deployment { .. } => false,
+                };
+                if !ancestor || funder.project != new.project || !crate::amend::mutable(&funder.phase) {
                     return false;
                 }
                 let mut after = funder.numbers;
@@ -167,7 +177,22 @@ pub(crate) fn can_reserve(d: &Domain, batch: &[crate::New]) -> bool {
                 }
             }
             Funder::Pool { project, .. } | Funder::Period { project, .. } => {
-                if project != new.project {
+                let Some(ledger) = d.funding.get(&new.funder) else {
+                    return false;
+                };
+                if project != new.project || ledger.closed {
+                    return false;
+                }
+                let mut after = ledger.numbers;
+                for sibling in batch {
+                    if sibling.funder == new.funder {
+                        let Some(reserved) = after.reserved.checked_add(sibling.numbers.budget) else {
+                            return false;
+                        };
+                        after.reserved = reserved;
+                    }
+                }
+                if available(after).is_none() {
                     return false;
                 }
             }
@@ -184,9 +209,13 @@ pub(crate) fn reserve(d: &mut Domain, env: &Env<Limits>, batch: &[crate::New], o
                     task.record.numbers.reserved.checked_add(new.numbers.budget).expect("reservation admitted");
                 publish(d, env, number, out);
             }
-            // The root reserved authentic external funding before Make; its
-            // original pool/period stays named on the task and its closure.
-            Funder::Pool { .. } | Funder::Period { .. } => {}
+            // Ordinary external reservations are owned here, in the Make commit.
+            Funder::Pool { .. } | Funder::Period { .. } => {
+                let ledger = d.funding.get_mut(&new.funder).expect("finite source admitted");
+                ledger.numbers.reserved =
+                    ledger.numbers.reserved.checked_add(new.numbers.budget).expect("reservation admitted");
+                save_funding(d, new.funder, out);
+            }
         }
     }
 }
@@ -210,13 +239,49 @@ pub(crate) fn end(d: &mut Domain, env: &Env<Limits>, number: u64, out: &mut Queu
                 .expect("root ensures priced aggregates fit accounting unit");
             publish(d, env, parent_number, out);
         }
-        // The root applies this unique closure to the original external
-        // balance before committing the task end. No period reset loses it.
-        Funder::Pool { .. } | Funder::Period { .. } => {}
+        // Post once against the actual original source in the task-end commit.
+        Funder::Pool { .. } | Funder::Period { .. } => {
+            let ledger = d.funding.get_mut(&funder).expect("actual source preserved");
+            ledger.numbers.reserved = ledger.numbers.reserved.checked_sub(budget).expect("allotment reserved");
+            ledger.numbers.spent_below =
+                ledger.numbers.spent_below.checked_add(spent).expect("priced aggregate fits unit");
+            save_funding(d, funder, out);
+        }
     }
 }
 
 pub(crate) fn links(d: &Domain, bound: u32) -> bool {
+    for (funder, ledger) in &d.funding {
+        let mut reserved = 0_u64;
+        for (_, other) in &d.funding {
+            if other.parent == Some(*funder) && !other.closed {
+                let Some(sum) = reserved.checked_add(other.numbers.budget) else {
+                    return false;
+                };
+                reserved = sum;
+            }
+        }
+        for (number, _) in &d.names {
+            let task = record(d, *number).expect("live name");
+            if task.funder == *funder {
+                if ledger.closed {
+                    return false;
+                }
+                let Some(sum) = reserved.checked_add(task.numbers.budget) else {
+                    return false;
+                };
+                reserved = sum;
+            }
+        }
+        if reserved != ledger.numbers.reserved {
+            return false;
+        }
+        if let Some(parent) = ledger.parent
+            && !d.funding.contains_key(&parent)
+        {
+            return false;
+        }
+    }
     for (number, _) in &d.names {
         let task = record(d, *number).expect("live name");
         let mut reserved = 0_u64;
@@ -251,12 +316,180 @@ pub(crate) fn links(d: &Domain, bound: u32) -> bool {
                     Some(parent)
                 }
                 Funder::Pool { project, .. } | Funder::Period { project, .. } => {
-                    if project != task.project {
+                    if project != task.project || !d.funding.contains_key(&node.funder) {
                         return false;
                     }
                     None
                 }
             };
+        }
+    }
+    true
+}
+
+/// Live external allotment. A pool's actual parent is immutable across resets
+/// and requester moves (domain/tasks.md, 2). Source retirement remains the
+/// later 02e depth increment; this slice refuses new sources at its live bound.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct FundingRecord {
+    /// Durable actual source identity (domain/tasks.md, 2).
+    pub funder: Funder,
+    /// A pool's original project period; periods have no parent.
+    pub parent: Option<Funder>,
+    /// Finite authentic counters owned and updated by tasks.
+    pub numbers: Numbers,
+    /// Reserved for later bounded source retirement; currently always false.
+    pub closed: bool,
+}
+fn save_funding(d: &Domain, funder: Funder, out: &mut Queue<Request>) {
+    let ledger = *d.funding.get(&funder).expect("funding admitted");
+    out.push(Request::Save { record: Stored::Ledger(ledger) });
+    out.push(Request::Save { record: Stored::Funding { funder, numbers: ledger.numbers } });
+}
+pub(crate) fn open(d: &mut Domain, to: ReplyTo, project: u32, period: u64, budget: u64, out: &mut Queue<Request>) {
+    if !d.ready() {
+        return refused(to, None, Refusal::NotReady, out);
+    }
+    let funder = Funder::Period { project, period };
+    if d.funding.contains_key(&funder) {
+        return refused(to, None, Refusal::Duplicate, out);
+    }
+    // Monotonic identities prevent reintroducing a reset's old period.
+    for (other, _) in &d.funding {
+        match *other {
+            Funder::Period { project: p, period: old } => {
+                if p == project && old >= period {
+                    return refused(to, None, Refusal::Funding, out);
+                }
+            }
+            Funder::Task(_) | Funder::Pool { .. } => {}
+        }
+    }
+    if d.funding.len() == d.funding.capacity() {
+        return refused(to, None, Refusal::Busy, out);
+    }
+    let record = FundingRecord {
+        funder,
+        parent: None,
+        numbers: Numbers { budget, spent: 0, spent_below: 0, reserved: 0 },
+        closed: false,
+    };
+    assert!(d.funding.insert(funder, record) == Ok(None), "period admitted");
+    save_funding(d, funder, out);
+    out.push(Request::Done { reply_to: to });
+}
+pub(crate) fn carve(
+    d: &mut Domain,
+    to: ReplyTo,
+    project: u32,
+    person: u64,
+    period: u64,
+    budget: u64,
+    out: &mut Queue<Request>,
+) {
+    if !d.ready() {
+        return refused(to, None, Refusal::NotReady, out);
+    }
+    let funder = Funder::Pool { project, person, period };
+    let parent = Funder::Period { project, period };
+    if d.funding.contains_key(&funder) {
+        return refused(to, None, Refusal::Duplicate, out);
+    }
+    let Some(old) = d.funding.get(&parent) else {
+        return refused(to, None, Refusal::Funding, out);
+    };
+    let mut after = old.numbers;
+    let Some(reserved) = after.reserved.checked_add(budget) else {
+        return refused(to, None, Refusal::Funding, out);
+    };
+    after.reserved = reserved;
+    if old.closed || available(after).is_none() {
+        return refused(to, None, Refusal::Funding, out);
+    }
+    if d.funding.len() == d.funding.capacity() {
+        return refused(to, None, Refusal::Busy, out);
+    }
+    let record = FundingRecord {
+        funder,
+        parent: Some(parent),
+        numbers: Numbers { budget, spent: 0, spent_below: 0, reserved: 0 },
+        closed: false,
+    };
+    assert!(d.funding.insert(funder, record) == Ok(None), "pool admitted");
+    d.funding.get_mut(&parent).expect("period admitted").numbers = after;
+    save_funding(d, parent, out);
+    save_funding(d, funder, out);
+    out.push(Request::Done { reply_to: to });
+}
+pub(crate) fn restore_funding(d: &mut Domain, ledger: FundingRecord) -> bool {
+    if d.funding.contains_key(&ledger.funder)
+        || d.funding.len() == d.funding.capacity()
+        || total(ledger.numbers).is_none()
+    {
+        return false;
+    }
+    let valid = match ledger.funder {
+        Funder::Task(_) => false,
+        Funder::Period { .. } => ledger.parent.is_none() && !ledger.closed,
+        Funder::Pool { project, period, .. } => {
+            ledger.parent == Some(Funder::Period { project, period })
+                && (!ledger.closed || ledger.numbers.reserved == 0)
+        }
+    };
+    if !valid {
+        return false;
+    }
+    assert!(d.funding.insert(ledger.funder, ledger) == Ok(None), "restored ledger admitted");
+    true
+}
+
+// The final period will eventually receive every still-open aggregate under
+// it. Counting each live node's own/closed spend once bounds every intermediate
+// task and pool posting as well. No accepted overrun can overflow settlement.
+fn original_period(d: &Domain, number: u64) -> Option<Funder> {
+    let mut funder = record(d, number)?.funder;
+    for _ in 0..d.names.len().checked_add(2)? {
+        match funder {
+            Funder::Task(number) => funder = record(d, number)?.funder,
+            Funder::Pool { .. } => funder = d.funding.get(&funder)?.parent?,
+            Funder::Period { .. } => return Some(funder),
+        }
+    }
+    None
+}
+pub(crate) fn representable(d: &Domain, number: u64, delta: u64) -> bool {
+    let Some(period) = original_period(d, number) else {
+        return false;
+    };
+    let Some(ledger) = d.funding.get(&period) else {
+        return false;
+    };
+    let Some(base) = total(ledger.numbers) else {
+        return false;
+    };
+    let Some(mut eventual) = base.checked_add(delta) else {
+        return false;
+    };
+    for (_, pool) in &d.funding {
+        if pool.parent == Some(period) && !pool.closed {
+            let Some(spent) = total(pool.numbers) else {
+                return false;
+            };
+            let Some(sum) = eventual.checked_add(spent) else {
+                return false;
+            };
+            eventual = sum;
+        }
+    }
+    for (number, _) in &d.names {
+        if original_period(d, *number) == Some(period) {
+            let Some(spent) = total(record(d, *number).expect("live name").numbers) else {
+                return false;
+            };
+            let Some(sum) = eventual.checked_add(spent) else {
+                return false;
+            };
+            eventual = sum;
         }
     }
     true

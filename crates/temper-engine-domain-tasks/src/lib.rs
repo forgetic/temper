@@ -6,6 +6,7 @@
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
 extern crate alloc;
+mod admission;
 mod amend;
 mod batch;
 mod boundary;
@@ -25,12 +26,13 @@ mod stored;
 mod tests;
 mod value;
 mod wake;
+pub use admission::{Admission, AdmissionKey};
 pub use amend::{Amendment, AuthorityChange, Authorization, Change, Control, History};
 pub use boundary::*;
 pub use domain::{Domain, fire, live_task, max_out, step, task_stub};
 pub use facts::Fact;
 pub use failures::{Class, Retries, Retry, Tries};
-pub use funders::{Balance, Closure};
+pub use funders::{Balance, Closure, FundingRecord};
 pub use limits::{Limits, worst_case};
 pub use moving::{Movement, Transfer};
 pub use value::{

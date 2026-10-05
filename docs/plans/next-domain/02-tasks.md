@@ -486,3 +486,32 @@ budget and spend to settle externally. Those finite ledgers and atomic charge
 admissions must land in **02e before the root's charged walking story**, rather
 than being invented as independent funding state in the root. The original
 02a/02b prerequisite suffices for its routing skeleton, not its accounting story.
+
+### 5.2 The 02e walking-story slice
+
+The finite-ledger and charged-admission slice is brought forward for 06a.
+Tasks owns bounded `FundingRecord` rows for project periods and person
+pools. `OpenPeriod` accepts a fresh monotonic identity and a finite budget;
+`CarvePool` reserves that exact period, which remains the pool's immutable
+actual parent. The root authenticates current project/role authority in
+that same decision. `Make` reserves the actual source atomically, including
+whole-batch refusal, and unique closures post to the original source.
+External move/amendment balances must match tasks' owned before snapshot.
+
+`ChargedTurn` and `ChargedActivation` validate admission and representability
+of the entire actual funding chain before mutation. Durable bounded exact
+receipts make replay once-only across restart and task ending. A valid finish
+with live delegates refuses without charging; an invalid bounded result uses
+the normal Invalid failure, and narrowed/cancelled terminals retain normal
+lifecycle semantics. Oversized results refuse before copying. The root uses
+these combined events, never a separate precharge. It restores `Ledger` and
+`Admission` rows; `Funding` snapshots and historical rows are excluded from
+live restore. Receipt retention is explicit and pressure refuses before
+spending.
+
+This slice is **not full 02e**. Core recurring templates/timers, person and
+procedure executors, period/pool retirement that frees live capacity while
+preserving immutable store history, and the broad reset/recurring world
+stories remain parked until 06a is complete. Current period identities are
+monotonic among retained ledgers; at the finite source bound a new identity
+refuses `Busy`. The deeper draft is retained on `next-domain/02e-depth-draft`.

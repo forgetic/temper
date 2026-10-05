@@ -9,6 +9,8 @@ use temper_world::{Referee, Trace};
 pub const RETRY: Retry = Retry { retries: 2, base: Duration::from_millis(10), max: Duration::from_secs(1) };
 pub const LIMITS: Limits = Limits {
     tasks: 16,
+    funders: 32,
+    admissions: 128,
     project_tasks: 16,
     stubs: 32,
     tree_tasks: 16,
@@ -129,7 +131,16 @@ impl World {
             commit: 0,
         };
         world.send(Event::Restored);
+        world.open_period(0, 100_000);
         world
+    }
+    pub fn open_period(&mut self, period: u64, budget: u64) {
+        let reply_to = self.to();
+        self.send(Event::OpenPeriod { reply_to, project: 1, period, budget });
+    }
+    pub fn carve_pool(&mut self, period: u64, budget: u64) {
+        let reply_to = self.to();
+        self.send(Event::CarvePool { reply_to, project: 1, person: 9, period, budget });
     }
     pub fn number(&mut self) -> u64 {
         self.message += 1;
@@ -148,6 +159,8 @@ impl World {
                 | Stored::History(_)
                 | Stored::Closure(_)
                 | Stored::Funding { .. }
+                | Stored::Ledger(_)
+                | Stored::Admission(_)
                 | Stored::ArchivedMessage(_)
                 | Stored::Receipt(_)
                 | Stored::Offer(_)
@@ -197,6 +210,8 @@ impl World {
                             | Stored::History(_)
                             | Stored::Closure(_)
                             | Stored::Funding { .. }
+                            | Stored::Ledger(_)
+                            | Stored::Admission(_)
                             | Stored::ArchivedMessage(_)
                             | Stored::Receipt(_)
                             | Stored::Offer(_)
@@ -279,7 +294,12 @@ impl World {
         match &event {
             Event::Move { movement, .. } => self.accounting_referee.begin(&movement.balances),
             Event::Amend { amendment, .. } => self.accounting_referee.begin(&amendment.balances),
-            Event::Control { .. }
+            Event::OpenPeriod { .. }
+            | Event::CarvePool { .. }
+            | Event::ForgetAdmission { .. }
+            | Event::ChargedTurn { .. }
+            | Event::ChargedActivation { .. }
+            | Event::Control { .. }
             | Event::Charge { .. }
             | Event::Turn { .. }
             | Event::Make { .. }
@@ -310,10 +330,14 @@ impl World {
         }
         assert!(self.pending.is_empty(), "one parent decision at a time");
         let read = match &event {
-            Event::Turn { task, attempt, turn, read, .. } => {
+            Event::Turn { task, attempt, turn, read, .. } | Event::ChargedTurn { task, attempt, turn, read, .. } => {
                 Some(crate::inbox_referee::Read { task: *task, attempt: *attempt, turn: *turn, through: *read })
             }
-            Event::Control { .. }
+            Event::OpenPeriod { .. }
+            | Event::CarvePool { .. }
+            | Event::ForgetAdmission { .. }
+            | Event::ChargedActivation { .. }
+            | Event::Control { .. }
             | Event::Amend { .. }
             | Event::Move { .. }
             | Event::Charge { .. }
@@ -439,6 +463,8 @@ impl World {
                 | Stored::History(_)
                 | Stored::Closure(_)
                 | Stored::Funding { .. }
+                | Stored::Ledger(_)
+                | Stored::Admission(_)
                 | Stored::ArchivedMessage(_)
                 | Stored::Receipt(_)
                 | Stored::Offer(_)
@@ -535,6 +561,8 @@ impl World {
                 | Stored::History(_)
                 | Stored::Closure(_)
                 | Stored::Funding { .. }
+                | Stored::Ledger(_)
+                | Stored::Admission(_)
                 | Stored::ArchivedMessage(_)
                 | Stored::Receipt(_)
                 | Stored::Offer(_)
@@ -565,6 +593,8 @@ impl World {
             | Stored::History(_)
             | Stored::Closure(_)
             | Stored::Funding { .. }
+            | Stored::Ledger(_)
+            | Stored::Admission(_)
             | Stored::ArchivedMessage(_)
             | Stored::Receipt(_)
             | Stored::Offer(_)
@@ -591,6 +621,8 @@ impl World {
                 | Key::History { .. }
                 | Key::Closure { .. }
                 | Key::Funding(_)
+                | Key::Ledger(_)
+                | Key::Admission(_)
                 | Key::ArchivedMessage(_)
                 | Key::Receipt(_)
                 | Key::Offer(_)
@@ -634,6 +666,8 @@ impl World {
                 | Stored::History(_)
                 | Stored::Closure(_)
                 | Stored::Funding { .. }
+                | Stored::Ledger(_)
+                | Stored::Admission(_)
                 | Stored::ArchivedMessage(_)
                 | Stored::Receipt(_)
                 | Stored::Offer(_)

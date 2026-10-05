@@ -44,6 +44,8 @@ fn funded(number: u64, budget: u64, funder: Funder) -> tasks::New {
 fn funding_world(seed: u64, facts: bool) -> World {
     let mut w = World::new(seed, LIMITS);
     w.consume_facts = facts;
+    w.open_period(7, 10_000);
+    w.carve_pool(7, 1000);
     w.make(Party::Person(1), vec![funded(1, 1000, Funder::Period { project: 1, period: 0 })]);
     w.make(Party::Task(1), vec![funded(2, 300, Funder::Task(1))]);
     // An accepted proposal's holder funds a delegate directly, independently
@@ -230,6 +232,8 @@ fn incomplete_funding_underfunding_and_cycles_refuse_before_mutation() {
 fn same_actual_funder_keeps_generation_and_tracked_tasks_refuse_task_reparenting() {
     let pool = Funder::Pool { project: 1, person: 9, period: 7 };
     let mut w = World::new(8, LIMITS);
+    w.open_period(7, 10_000);
+    w.carve_pool(7, 500);
     w.make(Party::Person(1), vec![task(1, &[]), funded(5, 500, Funder::Period { project: 1, period: 0 })]);
     w.make(Party::Task(1), vec![funded(2, 100, pool)]);
     w.claim(2, 2);
@@ -308,6 +312,8 @@ fn budget_amendment_reserves_its_single_actual_source_and_rejects_missing_eviden
 #[test]
 fn move_keeps_old_requester_visibility_or_refuses_reference_pressure() {
     let mut w = World::new(10, tasks::Limits { references: 1, ..LIMITS });
+    w.open_period(7, 10_000);
+    w.carve_pool(7, 500);
     w.make(Party::Person(1), vec![task(1, &[]), task(5, &[])]);
     w.make(Party::Task(1), vec![funded(2, 100, Funder::Pool { project: 1, person: 9, period: 7 })]);
     let reply_to = w.to();
@@ -374,6 +380,8 @@ fn oversized_checked_cancel_and_amendment_during_closing_leave_history_unchanged
 #[test]
 fn zero_allotment_replacement_has_its_own_once_only_closure_generation() {
     let mut w = World::new(13, LIMITS);
+    w.open_period(7, 1000);
+    w.carve_pool(7, 0);
     w.make(Party::Person(1), vec![task(1, &[])]);
     w.make(Party::Task(1), vec![funded(2, 0, Funder::Task(1))]);
     let destination = Funder::Pool { project: 1, person: 9, period: 7 };
@@ -518,6 +526,10 @@ fn independent_accounting_referee_rejects_missing_actual_task_and_external_posti
     let source = Funder::Pool { project: 1, person: 9, period: 7 };
     let destination = Funder::Pool { project: 1, person: 9, period: 8 };
     let mut w = World::new(18, LIMITS);
+    for period in [7, 8] {
+        w.open_period(period, 10_000);
+        w.carve_pool(period, 500);
+    }
     w.make(Party::Person(1), vec![task(1, &[])]);
     w.make(Party::Task(1), vec![funded(2, 100, source)]);
     w.claim(2, 1);

@@ -185,6 +185,16 @@ pub(crate) fn restore(d: &mut Domain, env: &Env<Limits>, stored: Stored, out: &m
         // Historical ended rows are read through RememberStub at runtime;
         // they cannot accidentally return an ended task to the live arena.
         Stored::Ended(task) => failed(d, Some(task.number), Refusal::Restore, out),
+        Stored::Ledger(record) => {
+            if !crate::funders::restore_funding(d, record) {
+                failed(d, None, Refusal::Restore, out);
+            }
+        }
+        Stored::Admission(record) => {
+            if !crate::admission::restore(d, env, record) {
+                failed(d, None, Refusal::Restore, out);
+            }
+        }
         Stored::History(_) | Stored::Closure(_) | Stored::Funding { .. } | Stored::ArchivedMessage(_) => {
             failed(d, None, Refusal::Restore, out);
         }

@@ -17,7 +17,8 @@ struct Measured {
     refused: bool,
 }
 impl Measured {
-    fn new(l: Limits) -> Measured {
+    fn new(l: &Limits) -> Measured {
+        let l = *l;
         let out = Queue::with_capacity(tasks::max_out(&l));
         let meter = Meter::new();
         let d = Domain::new(&l, 1, Box::new([1]));
@@ -46,6 +47,15 @@ impl Measured {
         }
         self.meter.check(measured, self.bound, self.env.limits);
         self.d.reclaim();
+    }
+    fn bootstrap(&mut self) {
+        self.event(Event::Restored);
+        for period in [0, 7] {
+            let reply_to = self.to();
+            self.event(Event::OpenPeriod { reply_to, project: 1, period, budget: 100_000 });
+        }
+        let reply_to = self.to();
+        self.event(Event::CarvePool { reply_to, project: 1, person: 9, period: 7, budget: 100_000 });
     }
     fn fire(&mut self) {
         self.env.now = self.d.next_deadline().expect("due");
@@ -95,8 +105,8 @@ fn saturated_payloads_graph_backoff_held_closing_retirement_and_restore_fit() {
             ..LIMITS
         },
     ] {
-        let mut m = Measured::new(l);
-        m.event(Event::Restored);
+        let mut m = Measured::new(&l);
+        m.bootstrap();
         for number in 100..100 + u64::from(l.inputs) {
             let reply_to = m.to();
             m.event(Event::RememberStub {
@@ -106,7 +116,7 @@ fn saturated_payloads_graph_backoff_held_closing_retirement_and_restore_fit() {
         }
         let mut batch = Vec::new();
         for number in 1..=u64::from(l.tasks) {
-            batch.push(filled(l, number));
+            batch.push(filled(&l, number));
         }
         let reply_to = m.to();
         m.event(Event::Make { reply_to, creator: Party::Person(1), batch: batch.into_boxed_slice() });
@@ -153,12 +163,12 @@ fn full_delegate_tree_dependency_edges_and_cold_restored_claims_fit() {
     source.claim(1, 1);
     source.make(Party::Task(1), vec![task(2, &[]), task(3, &[2]), task(4, &[2, 3])]);
     source.claim(2, 2);
-    let mut m = Measured::new(l);
+    let mut m = Measured::new(&l);
     for row in source.records.values() {
         let record = row.clone();
         m.event(Event::Restore { record });
     }
-    m.event(Event::Restored);
+    m.bootstrap();
     let reply_to = m.to();
     m.event(Event::Cancel { reply_to, task: 1, reason: Box::new([1]) });
     for task in [2, 1] {
@@ -180,7 +190,8 @@ fn full_delegate_tree_dependency_edges_and_cold_restored_claims_fit() {
     );
 }
 
-fn filled(l: Limits, number: u64) -> temper_engine_domain_tasks::New {
+fn filled(l: &Limits, number: u64) -> temper_engine_domain_tasks::New {
+    let l = *l;
     let mut new = task(number, &[]);
     new.spec.words = vec![1; usize::try_from(l.spec_bytes).expect("small bound")].into_boxed_slice();
     new.spec.parameters =
@@ -273,7 +284,7 @@ fn saturated_inboxes_offers_receipts_questions_subscriptions_and_restore_fit() {
     w.mail(2, Party::Person(1), UserMessage::Words { words: vec![4; 64].into_boxed_slice() });
     let rows = w.records.values().cloned().collect::<Vec<_>>();
     // The world's parent/store allocations predate this child's meter.
-    let mut m = Measured::new(l);
+    let mut m = Measured::new(&l);
     for record in &rows {
         m.event(Event::Restore { record: record.clone() });
     }
@@ -292,8 +303,8 @@ fn rejected_words_questions_and_answers_are_not_copied_before_the_byte_check() {
     use temper_engine_domain_tasks::{Problem, Refusal, UserMessage};
     for kind in 0..3 {
         let l = Limits { tasks: 2, stubs: 4, ..LIMITS };
-        let mut m = Measured::new(l);
-        m.event(Event::Restored);
+        let mut m = Measured::new(&l);
+        m.bootstrap();
         let reply_to = m.to();
         m.event(Event::Make { reply_to, creator: Party::Person(1), batch: Box::new([task(1, &[]), task(2, &[])]) });
         let reply_to = m.to();
@@ -330,8 +341,8 @@ fn rejected_words_questions_and_answers_are_not_copied_before_the_byte_check() {
 #[test]
 fn dedicated_amendment_slots_and_bottom_up_move_scratch_fit_counted_memory() {
     let l = Limits { tasks: 8, project_tasks: 8, stubs: 16, tree_tasks: 8, depth: 2, delegates: 7, batch: 7, ..LIMITS };
-    let mut m = Measured::new(l);
-    m.event(Event::Restored);
+    let mut m = Measured::new(&l);
+    m.bootstrap();
     let mut root = task(1, &[]);
     root.numbers.budget = 10_000;
     root.authority.budget.spend = 10_000;
@@ -397,8 +408,8 @@ fn saturated_ordinary_and_two_immutable_control_offers_fit_counted_memory_and_re
         Party::Person(9),
         tasks::UserMessage::Words { words: vec![1; l.message_bytes as usize].into_boxed_slice() },
     );
-    let mut m = Measured::new(l);
-    for record in w.records.values() {
+    let mut m = Measured::new(&l);
+    for record in w.records.values().filter(|row| !matches!(row, Stored::Funding { .. })) {
         m.event(Event::Restore { record: record.clone() });
     }
     m.event(Event::Restored);
@@ -455,10 +466,62 @@ fn restored_full_control_offer_partition_fits_counted_memory() {
             },
         });
     }
-    let mut m = Measured::new(l);
-    for record in w.records.values().filter(|row| !matches!(row, Stored::History(_))) {
+    let mut m = Measured::new(&l);
+    for record in w.records.values().filter(|row| !matches!(row, Stored::History(_) | Stored::Funding { .. })) {
         m.event(Event::Restore { record: record.clone() });
     }
     m.event(Event::Restored);
     assert!(!m.refused);
+}
+
+#[test]
+fn saturated_charged_receipts_and_oversized_terminal_fit_before_copying() {
+    let l = Limits { admissions: 4, ..LIMITS };
+    let mut measured = Measured::new(&l);
+    measured.bootstrap();
+    let reply_to = measured.to();
+    measured.event(Event::Make { reply_to, creator: Party::Person(1), batch: Box::new([task(1, &[])]) });
+    measured.claim(1);
+    for turn in 1..=4 {
+        let reply_to = measured.to();
+        measured.event(Event::ChargedTurn {
+            reply_to,
+            task: 1,
+            attempt: 1,
+            turn,
+            read: None,
+            cumulative: u64::from(turn),
+        });
+        assert!(!measured.refused);
+    }
+    let reply_to = measured.to();
+    measured.event(Event::ChargedActivation {
+        reply_to,
+        task: 1,
+        attempt: 1,
+        end: End::Finished {
+            result: Result::Report { words: vec![1; 32_768].into_boxed_slice() },
+            cancel_delegates: false,
+        },
+        cumulative: 5,
+    });
+    assert!(measured.refused);
+    let reply_to = measured.to();
+    measured.event(Event::ChargedActivation { reply_to, task: 1, attempt: 1, end: End::Parked, cumulative: 5 });
+    assert!(measured.refused);
+    let l = Limits { admissions: 4, ..LIMITS };
+    let mut measured = Measured::new(&l);
+    for task in 1..=4 {
+        measured.event(Event::Restore {
+            record: Stored::Admission(tasks::Admission::Activation {
+                task,
+                attempt: 1,
+                end: End::Finished {
+                    result: Result::Report { words: vec![1; l.result_bytes as usize].into_boxed_slice() },
+                    cancel_delegates: false,
+                },
+                cumulative: task,
+            }),
+        });
+    }
 }

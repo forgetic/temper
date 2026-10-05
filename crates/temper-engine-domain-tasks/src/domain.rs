@@ -34,6 +34,8 @@ pub struct Domain {
     pub(crate) receipts: Map<u64, crate::Receipt>,
     pub(crate) questions: Map<u64, crate::Question>,
     pub(crate) subscriptions: Map<u64, crate::Subscription>,
+    pub(crate) funding: Map<crate::Funder, crate::FundingRecord>,
+    pub(crate) admissions: Map<crate::AdmissionKey, crate::Admission>,
     pub(crate) charters: Box<[u32]>,
     pub(crate) rng: Rng,
     facts: Queue<Fact>,
@@ -62,11 +64,19 @@ impl Domain {
             receipts: Map::with_capacity(l.receipts),
             questions: Map::with_capacity(l.questions),
             subscriptions: Map::with_capacity(l.subscriptions),
+            funding: Map::with_capacity(l.funders),
+            admissions: Map::with_capacity(l.admissions),
             charters,
             rng: Rng::new(seed),
             facts: Queue::with_capacity(l.facts),
             lost: 0,
         }
+    }
+    /// Root borrows owned finite accounting for its current authority check;
+    /// this query changes nothing and allocates nothing (domain/tasks.md, 2).
+    #[must_use]
+    pub fn funding(&self, funder: crate::Funder) -> Option<&crate::FundingRecord> {
+        self.funding.get(&funder)
     }
     #[must_use]
     pub fn ready(&self) -> bool {
@@ -103,6 +113,7 @@ pub(crate) fn output_bound(l: &Limits) -> Option<u32> {
         .checked_add(crate::inbox::offer_capacity(l)?.checked_mul(3)?)?
         .checked_add(l.subscriptions.checked_mul(4)?)?
         .checked_add(l.questions.checked_mul(2)?)?
+        .checked_add(l.funders.checked_mul(3)?)?
         .checked_add(8)
 }
 /// Cascading dependency and closing decisions touch at most the bounded live
@@ -113,6 +124,19 @@ pub fn max_out(l: &Limits) -> u32 {
 }
 pub fn step(d: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     match event {
+        Event::OpenPeriod { reply_to, project, period, budget } => {
+            crate::funders::open(d, reply_to, project, period, budget, out);
+        }
+        Event::CarvePool { reply_to, project, person, period, budget } => {
+            crate::funders::carve(d, reply_to, project, person, period, budget, out);
+        }
+        Event::ChargedTurn { reply_to, task, attempt, turn, read, cumulative } => {
+            crate::admission::turn(d, env, reply_to, task, attempt, turn, read, cumulative, out);
+        }
+        Event::ChargedActivation { reply_to, task, attempt, end, cumulative } => {
+            crate::admission::activation(d, env, reply_to, task, attempt, end, cumulative, out);
+        }
+        Event::ForgetAdmission { reply_to, key } => crate::admission::forget(d, reply_to, key, out),
         Event::RememberStub { reply_to, stub } => crate::stored::remember(d, env, reply_to, stub, out),
         Event::ForgetStub { reply_to, task } => crate::stored::forget(d, reply_to, task, out),
         Event::Restore { record } => crate::stored::restore(d, env, record, out),

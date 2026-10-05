@@ -6,6 +6,8 @@ use temper_engine_tasks_world::{LIMITS, World, task};
 fn tiny_actual_funding_trees_keep_unspent_and_cumulative_spend_over_moves() {
     for seed in 0..16 {
         let mut w = World::new(seed, LIMITS);
+        w.open_period(2, 1000);
+        w.carve_pool(2, 100);
         let mut root = task(1, &[]);
         root.numbers.budget = 1000;
         root.authority.budget.spend = 1000;

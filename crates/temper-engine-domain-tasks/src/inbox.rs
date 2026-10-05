@@ -532,6 +532,8 @@ pub(crate) fn restore(d: &mut Domain, env: &Env<Limits>, stored: Stored) -> bool
         Stored::History(_)
         | Stored::Closure(_)
         | Stored::Funding { .. }
+        | Stored::Ledger(_)
+        | Stored::Admission(_)
         | Stored::ArchivedMessage(_)
         | Stored::Live(_)
         | Stored::Ended(_)

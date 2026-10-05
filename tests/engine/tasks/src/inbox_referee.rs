@@ -61,6 +61,8 @@ fn occupying(rows: &BTreeMap<Key, Stored>, number: u64) -> Option<usize> {
         | Stored::History(_)
         | Stored::Closure(_)
         | Stored::Funding { .. }
+        | Stored::Ledger(_)
+        | Stored::Admission(_)
         | Stored::ArchivedMessage(_)
         | Stored::Receipt(_)
         | Stored::Offer(_)
@@ -95,6 +97,8 @@ impl Inbox {
                 | Stored::History(_)
                 | Stored::Closure(_)
                 | Stored::Funding { .. }
+                | Stored::Ledger(_)
+                | Stored::Admission(_)
                 | Stored::ArchivedMessage(_)
                 | Stored::Receipt(_)
                 | Stored::Offer(_)
@@ -191,6 +195,8 @@ impl Inbox {
                 | Stored::History(_)
                 | Stored::Closure(_)
                 | Stored::Funding { .. }
+                | Stored::Ledger(_)
+                | Stored::Admission(_)
                 | Stored::ArchivedMessage(_) => {}
             }
         }
@@ -220,6 +226,8 @@ impl Inbox {
                     | Stored::History(_)
                     | Stored::Closure(_)
                     | Stored::Funding { .. }
+                    | Stored::Ledger(_)
+                    | Stored::Admission(_)
                     | Stored::ArchivedMessage(_)
                     | Stored::Receipt(_)
                     | Stored::Offer(_)

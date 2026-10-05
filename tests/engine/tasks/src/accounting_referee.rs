@@ -52,7 +52,9 @@ impl Accounting {
                 | Stored::Subscription(_)
                 | Stored::History(_)
                 | Stored::Closure(_)
-                | Stored::Funding { .. } => None,
+                | Stored::Funding { .. }
+                | Stored::Ledger(_)
+                | Stored::Admission(_) => None,
             })
             .sum()
     }
@@ -68,41 +70,76 @@ impl Accounting {
                 }
             }
         }
-        for funder in &self.funding_emitted {
-            let before =
-                self.funding_before.get(funder).ok_or("external balance lacks authenticated prior snapshot")?;
-            let Some(Stored::Funding { numbers: after, .. }) = rows.get(&Key::Funding(*funder)) else {
+        for (key, row) in rows {
+            let Stored::Ledger(ledger) = row else {
+                continue;
+            };
+            let Some(Stored::Funding { numbers: snapshot, .. }) = rows.get(&Key::Funding(ledger.funder)) else {
                 return Err("external balance emission missing");
             };
-            let posted = self.posted(rows, *funder);
-            if after.budget != before.budget
-                || after.spent != before.spent
-                || after.spent_below != before.spent_below + posted
-            {
-                return Err("closed spend not posted to actual external funder");
+            if *snapshot != ledger.numbers {
+                return Err("external balance emission missing");
             }
-            // Net every changed incoming live reservation independently. This
-            // also covers amendments whose allotment generation stays the same.
-            let mut old_reserved = 0;
-            let mut new_reserved = 0;
-            for row in self.before.values() {
-                if let Stored::Live(task) = row
-                    && task.funder == *funder
-                {
-                    old_reserved += task.numbers.budget;
+            let mut reserved = 0;
+            for candidate in rows.values() {
+                match candidate {
+                    Stored::Live(task) if task.funder == ledger.funder => reserved += task.numbers.budget,
+                    Stored::Ledger(pool) if pool.parent == Some(ledger.funder) && !pool.closed => {
+                        reserved += pool.numbers.budget;
+                    }
+                    Stored::Live(_)
+                    | Stored::Ended(_)
+                    | Stored::Stub(_)
+                    | Stored::Message(_)
+                    | Stored::ArchivedMessage(_)
+                    | Stored::Receipt(_)
+                    | Stored::Offer(_)
+                    | Stored::Question(_)
+                    | Stored::Subscription(_)
+                    | Stored::History(_)
+                    | Stored::Closure(_)
+                    | Stored::Funding { .. }
+                    | Stored::Ledger(_)
+                    | Stored::Admission(_) => {}
                 }
             }
-            for row in rows.values() {
-                if let Stored::Live(task) = row
-                    && task.funder == *funder
-                {
-                    new_reserved += task.numbers.budget;
-                }
-            }
-            if before.reserved.checked_sub(old_reserved).and_then(|rest| rest.checked_add(new_reserved))
-                != Some(after.reserved)
-            {
+            if ledger.numbers.reserved != reserved {
                 return Err("external balance lost actual reservations");
+            }
+            if let Some(Stored::Ledger(before)) = self.before.get(key) {
+                if before.funder != ledger.funder
+                    || before.parent != ledger.parent
+                    || (before.closed && *before != *ledger)
+                {
+                    return Err("original pool identity or closed ledger changed");
+                }
+                let mut posted = self.posted(rows, ledger.funder);
+                for (pool_key, candidate) in rows {
+                    if let Stored::Ledger(pool) = candidate
+                        && pool.parent == Some(ledger.funder)
+                        && pool.closed
+                        && let Some(Stored::Ledger(old)) = self.before.get(pool_key)
+                        && !old.closed
+                    {
+                        posted += pool.numbers.spent + pool.numbers.spent_below;
+                    }
+                }
+                if ledger.numbers.budget != before.numbers.budget
+                    || ledger.numbers.spent != before.numbers.spent
+                    || ledger.numbers.spent_below != before.numbers.spent_below + posted
+                {
+                    return Err("closed spend not posted to actual external funder");
+                }
+                if ledger.numbers != before.numbers && !self.funding_emitted.contains(&ledger.funder) {
+                    return Err("external balance emission missing");
+                }
+            } else if ledger.numbers.spent != 0 || ledger.numbers.spent_below != 0 {
+                return Err("new ledger carries invented spend");
+            }
+        }
+        for key in self.before.keys() {
+            if matches!(key, Key::Ledger(_)) && !rows.contains_key(key) {
+                return Err("original funding ledger vanished");
             }
         }
         Ok(())
@@ -110,7 +147,9 @@ impl Accounting {
 
     fn immutable(&self, rows: &BTreeMap<Key, Stored>) -> Result<(), &'static str> {
         for (key, row) in &self.before {
-            if matches!(row, Stored::Closure(_) | Stored::History(_)) && rows.get(key) != Some(row) {
+            if matches!(row, Stored::Closure(_) | Stored::History(_) | Stored::Admission(_))
+                && rows.get(key) != Some(row)
+            {
                 return Err("immutable accounting/history row changed");
             }
         }
@@ -118,6 +157,7 @@ impl Accounting {
     }
     /// # Errors
     /// Reports conservation, generation, or actual funding-link violations.
+    #[expect(clippy::too_many_lines, reason = "independent bounded conservation checks remain together")]
     pub fn committed(&mut self, rows: &BTreeMap<Key, Stored>) -> Result<(), &'static str> {
         self.immutable(rows)?;
         for (key, row) in rows {
@@ -176,7 +216,9 @@ impl Accounting {
                         | Stored::Subscription(_)
                         | Stored::History(_)
                         | Stored::Closure(_)
-                        | Stored::Funding { .. } => None,
+                        | Stored::Funding { .. }
+                        | Stored::Ledger(_)
+                        | Stored::Admission(_) => None,
                     })
                     .sum();
                 if reserved != task.numbers.reserved {

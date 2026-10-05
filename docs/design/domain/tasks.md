@@ -642,3 +642,26 @@ where a holder can decide it; nothing beyond a task's limits is held.
   scarce: today's order is by when each became due.
 - **Long-lived tasks** that serve as an agent's identity across goals
   (core.md, section 11).
+
+### Incremental accounting implementation
+
+The 02e slice used by the root's first walking story owns finite project
+period and person pool ledgers. A pool records its original project period
+as its actual parent; opening another period does not release its old
+reservations. Whole-batch reservation and closure posting happen within the
+hub's decision, including authentic before snapshots for funding replacements.
+The root supplies authenticated current authority inputs; the hub supplies
+and verifies the concrete accounting state.
+
+Charged turn and terminal inputs preflight their complete admission and the
+representability of all eventual actual-chain postings. Exact durable replay
+receipts are bounded independently; pressure, stale attempts, invalid reads
+and refused live-delegate finishes spend nothing. Bounded invalid results
+still consume the normal Invalid terminal; narrowed and cancelled terminals
+keep their ordinary lifecycle rules. An oversized terminal refuses before
+copying into replay evidence. Root routes use these combined inputs.
+
+Period/pool retirement and the recurring procedure are not implemented by
+this early slice. Its finite retained source table refuses new identities
+when full; later 02e work must retire closed sources without forgetting
+monotonic period identity or recreating spent availability.

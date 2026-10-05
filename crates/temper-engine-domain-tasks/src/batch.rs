@@ -70,7 +70,7 @@ pub(crate) fn check(d: &Domain, l: &Limits, creator: Party, batch: &[New]) -> Re
         Party::Person(_) | Party::Deployment { .. } => None,
     };
     check_members(d, l, creator, batch, parent)?;
-    if !crate::funders::can_reserve(d, batch) {
+    if !crate::funders::can_reserve(d, creator, batch) {
         return Err(problem(None, Refusal::Funding));
     }
     if !acyclic(d, l, creator, batch) {

@@ -178,9 +178,19 @@ pub enum Key {
     Offer(MessageKey),
     Question(u64),
     Subscription(u64),
-    History { task: u64, revision: u64 },
-    Closure { task: u64, generation: u64 },
+    History {
+        task: u64,
+        revision: u64,
+    },
+    Closure {
+        task: u64,
+        generation: u64,
+    },
     Funding(Funder),
+    /// Live finite funding key (domain/tasks.md, 2).
+    Ledger(Funder),
+    /// Exact charged admission replay key (domain/tasks.md, 5).
+    Admission(crate::AdmissionKey),
 }
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Stored {
@@ -195,7 +205,14 @@ pub enum Stored {
     Subscription(Subscription),
     History(crate::History),
     Closure(crate::Closure),
-    Funding { funder: Funder, numbers: Numbers },
+    Funding {
+        funder: Funder,
+        numbers: Numbers,
+    },
+    /// Tasks-owned finite source, loaded at restart (domain/tasks.md, 2).
+    Ledger(crate::FundingRecord),
+    /// Bounded exact replay evidence, loaded at restart (domain/tasks.md, 5).
+    Admission(crate::Admission),
 }
 impl Stored {
     #[must_use]
@@ -213,6 +230,8 @@ impl Stored {
             Stored::History(history) => Key::History { task: history.task, revision: history.revision },
             Stored::Closure(closure) => Key::Closure { task: closure.task, generation: closure.generation },
             Stored::Funding { funder, .. } => Key::Funding(*funder),
+            Stored::Ledger(record) => Key::Ledger(record.funder),
+            Stored::Admission(record) => Key::Admission(record.key()),
         }
     }
 }
@@ -267,6 +286,56 @@ pub enum Accepted {
 }
 #[derive(PartialEq, Eq, Debug)]
 pub enum Event {
+    /// The root authenticates the project and current authority in this decision.
+    /// A new identity creates a finite period; old periods and reservations remain.
+    /// Replies Done or Refused; bounded by `Limits::funders` (domain/tasks.md, 2).
+    OpenPeriod {
+        reply_to: ReplyTo,
+        project: u32,
+        period: u64,
+        budget: u64,
+    },
+    /// Root sends after authenticating this person's current project role and
+    /// authority for this exact carve. Replies Done or Refused, reserving its
+    /// original period atomically; bounded by `Limits::funders` (domain/tasks.md, 2).
+    CarvePool {
+        reply_to: ReplyTo,
+        project: u32,
+        person: u64,
+        period: u64,
+        budget: u64,
+    },
+    /// Root sends cumulative priced spend with the exact admitted turn/read.
+    /// Replies `TurnAcknowledged` or Refused. Refusals change nothing; an exact
+    /// replay never charges again. Receipt room is checked before copying or
+    /// mutation (`Limits::admissions`; domain/tasks.md, 5). Overruns are charged
+    /// and held, provided the complete actual funding chain can represent them.
+    ChargedTurn {
+        reply_to: ReplyTo,
+        task: u64,
+        attempt: u64,
+        turn: u32,
+        read: Option<u64>,
+        cumulative: u64,
+    },
+    /// Root sends a priced terminal. Replies Acknowledged or Refused atomically.
+    /// Uses Activation's invalid-result, narrowing and cancellation semantics;
+    /// result bytes above `Limits::result_bytes` refuse before retaining a receipt.
+    /// Exact replay is once-only (`Limits::admissions`; domain/tasks.md, 5).
+    ChargedActivation {
+        reply_to: ReplyTo,
+        task: u64,
+        attempt: u64,
+        end: End,
+        cumulative: u64,
+    },
+    /// Root retention has ended; forgetting removes only replay evidence.
+    /// Replies Done, or Refused before restart completes (domain/tasks.md, 5).
+    /// Root must retain receipts while a worker can replay their admissions.
+    ForgetAdmission {
+        reply_to: ReplyTo,
+        key: crate::AdmissionKey,
+    },
     /// Numbers are fresh root-issued candidates; authority already allowed.
     Make {
         reply_to: ReplyTo,
@@ -292,7 +361,9 @@ pub enum Event {
         authorization: crate::Authorization,
         movement: crate::Movement,
     },
-    /// Root reports cumulative priced spend before the matching turn/terminal, in the same decision.
+    /// Legacy migration primitive for isolated accounting tests. Root production
+    /// routes must use ChargedTurn/ChargedActivation, never precharge an input
+    /// whose admission could refuse (domain/tasks.md, 5).
     Charge {
         reply_to: ReplyTo,
         task: u64,

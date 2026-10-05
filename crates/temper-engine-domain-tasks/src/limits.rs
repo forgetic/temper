@@ -5,6 +5,10 @@ use skein_lib::{Deadlines, Id, List, Map, Queue, Slab};
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Limits {
     pub tasks: u32,
+    /// Live period/pool identities, refused before carving (domain/tasks.md, 2).
+    pub funders: u32,
+    /// Exact charged replay receipts, refused before spending (domain/tasks.md, 5).
+    pub admissions: u32,
     pub project_tasks: u32,
     pub stubs: u32,
     pub tree_tasks: u32,
@@ -64,6 +68,9 @@ pub fn worst_case(l: &Limits) -> Option<u64> {
         .checked_add(u64::from(l.authority_bytes))?
         .checked_add(u64::from(l.executor_kinds).checked_mul(u64::try_from(size_of::<AuthorityExecutor>()).ok()?)?)?;
     Slab::<Task>::worst_case(l.tasks)?
+        .checked_add(Map::<crate::Funder, crate::FundingRecord>::worst_case(l.funders)?)?
+        .checked_add(Map::<crate::AdmissionKey, crate::Admission>::worst_case(l.admissions)?)?
+        .checked_add(u64::from(l.admissions).checked_mul(u64::from(l.result_bytes))?)?
         .checked_add(crate::moving::worst_case(l.tasks)?)?
         .checked_add(Map::<u64, Id<Task>>::worst_case(l.tasks)?)?
         .checked_add(Map::<u64, Stub>::worst_case(l.stubs)?)?
