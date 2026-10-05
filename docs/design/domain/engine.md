@@ -721,8 +721,8 @@ Live role administration/loss rerouting is deferred to the following real
 03b/02d SetRoles integration, which has no root entrance in this increment.
 
 Route room includes two retained callbacks per pending people flight; the
-delivery reserve includes one history reply per flight alongside ordinary task
-outputs. This permits simultaneous issued IO terminals to wait under pressure
+delivery reserve includes pending times waiters history replies alongside
+ordinary task outputs, with checked multiplication before construction. This permits simultaneous issued IO terminals to wait under pressure
 without filling the fixed work queue or overrunning one decision.
 
 Memory prices one semantic rejection reason per live task, boxed contexts and

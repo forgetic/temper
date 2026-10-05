@@ -96,7 +96,7 @@ pub struct Verdict {
     /// Distinct permitted choice code within its contract. (domain/tasks.md, sections 3, 5.6 and
     /// 14).
     pub code: u32,
-    /// Maximum word bytes for this choice, no greater than `Limits::`result_bytes``.
+    /// Maximum word bytes for this choice, no greater than `Limits::result_bytes`.
     /// (domain/tasks.md, sections 3, 5.6 and 14).
     pub words: u32,
 }

@@ -79,9 +79,9 @@ pub fn limits() -> engine::Limits {
         authority: authority_limits(),
         journal: JournalLimits {
             commits: 3,
-            held: 64,
+            held: 76,
             writes,
-            deliveries: 18,
+            deliveries: 20,
             transcript_bytes: 8192,
             result_bytes: 128,
         },

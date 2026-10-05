@@ -987,3 +987,91 @@ fn rejected_restore_stays_rejected_and_current_read_checks_privacy_and_both_expi
         "monotonic expiry refuses even with backward wall before fire"
     );
 }
+
+#[test]
+fn coalesced_history_waiters_survive_simultaneous_io_completion_under_full_journal() {
+    use temper_engine_domain_world::{escalation, escalation_referee::Story};
+    let mut world = escalation::World::new(escalation::Settings::calm(9204, Story::Release));
+    world.run();
+    let archive = world
+        .store
+        .rows
+        .values()
+        .find_map(|row| if let Record::EscalationDecision(archive) = row { Some(archive.clone()) } else { None })
+        .expect("actual immutable decision");
+    let mut configured = escalation::limits();
+    configured.people.waiters = 8;
+    configured.journal.writes = tasks::max_out(&configured.tasks) * 8
+        + people::max_out(&configured.people) * 4
+        + configured.people.pending * 2
+        + fleet::max_out(&configured.fleet) * 4;
+    configured.journal.deliveries =
+        configured.tasks.tasks * 4 + 8 + configured.people.pending * configured.people.waiters;
+    configured.journal.held = configured.journal.deliveries * 3 + 16;
+    let mut insufficient = configured;
+    insufficient.journal.deliveries -= 1;
+    assert_eq!(engine::worst_case(&insufficient), None, "startup prices every pending flight's duplicate waiters");
+    let session = world.store.header().sign_ins;
+    let mut driver = Driver::configured(world.store, config(9204), &configured);
+    driver.settle();
+    for key in 9_u8..11 {
+        for waiter in 0_u64..8 {
+            driver.send(engine::Event::Ask {
+                reply_to: ReplyTo::new(Token::new(950 + u64::from(key - 9) * 8 + waiter)),
+                sign_in: session,
+                key: [key; 16],
+                ask: people::Ask::DecideEscalation {
+                    project: archive.project,
+                    task: archive.task,
+                    revision: archive.revision,
+                    decision: people::EscalationDecision::Release,
+                },
+            });
+        }
+    }
+    for _ in 0..20 {
+        if driver.events.len() == 2 {
+            break;
+        }
+        engine::resume(&mut driver.root, &driver.env, &mut driver.out);
+        driver.collect();
+        driver.root.reclaim();
+    }
+    assert_eq!(driver.events.len(), 2, "one real named IO for each coalesced flight");
+    driver.sign_in();
+    driver.sign_in();
+    driver.sign_in();
+    assert_eq!(driver.store.pending.len(), 3, "all store commit slots full before IO completes");
+    driver.advance(false);
+    driver.advance(false);
+    assert!(driver.events.is_empty());
+    assert!(!driver.root.quiescent());
+    assert!(
+        !driver.delivered.iter().any(|delivery| matches!(
+            delivery,
+            Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::EscalationDecided { .. }), .. }
+        )),
+        "no waiter reply escapes pressure before its keyed outcome can commit"
+    );
+    driver.settle();
+    let replies: Vec<_> = driver
+        .delivered
+        .iter()
+        .filter_map(|delivery| match delivery {
+            Delivery::WebReply {
+                to,
+                reply: people::Reply::Outcome(people::Outcome::EscalationDecided { by, .. }),
+                ..
+            } => Some((to.into_token().raw(), *by)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(replies.len(), 16);
+    let mut rights = std::collections::BTreeSet::new();
+    for (to, by) in replies {
+        assert!((950..966).contains(&to));
+        assert!(rights.insert(to), "each admitted waiter ends once");
+        assert_eq!(by, archive.by);
+    }
+    assert!(driver.root.quiescent(), "all query/pending/store obligations retired");
+}

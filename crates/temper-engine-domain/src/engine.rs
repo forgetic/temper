@@ -2064,7 +2064,12 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     let routes = route_bound(limits)?;
     if limits.journal.writes < routes
         || limits.journal.deliveries
-            < limits.tasks.tasks.checked_mul(4)?.checked_add(8)?.checked_add(limits.people.pending)?
+            < limits
+                .tasks
+                .tasks
+                .checked_mul(4)?
+                .checked_add(8)?
+                .checked_add(limits.people.pending.checked_mul(limits.people.waiters)?)?
         || limits.loads.loads < 2
         || limits.journal.held < limits.journal.deliveries.checked_mul(3)?
         || limits.journal.deliveries
