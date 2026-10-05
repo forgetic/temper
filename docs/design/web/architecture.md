@@ -34,10 +34,8 @@ what this asks of temper and skein, section 9; what is open, section 10.
   reads the tree by role, name and text and presses what a person would.
   No browser, no WebAssembly and no fake DOM library are involved.
 - **A real browser at the top, driven from Rust.** A few scenarios run in
-  headless Chromium, driven over the DevTools protocol by `skein-browser`,
-  skein's browser testing kit: a step machine in the same loop as the
-  engine, with nothing beyond skein but the browser. It is the person's
-  other face.
+  headless Chromium, driven by `skein-browser`, skein's browser testing
+  kit, from the same loop as the engine. It is the person's other face.
 
 ## 2. The client
 
@@ -233,8 +231,8 @@ section 4):
   the view tree by role, accessible name and text, presses them and
   types into them. It never finds them by class, by position or through
   the client's state.
-- **The DOM face,** in the browser: the same queries over Chromium's
-  accessibility tree, the same actions as input events.
+- **The DOM face,** in the browser: the same queries and actions, made
+  through `skein-browser` over Chromium's accessibility tree.
 
 A scenario is written once, in a person's terms ("open the inbox; press
 Accept on T1's proposal; see it gone from the chat"), and runs at every
@@ -243,29 +241,25 @@ emits, never the client's state (testing-strategy.md, section 7).
 
 ### 7.3 The browser tier
 
-- **Chromium, headless, over a pipe.** Launched with
-  `--remote-debugging-pipe`, it speaks the DevTools protocol (CDP) as
-  JSON documents, each ending in a NUL byte, on the child's descriptors 3
-  and 4. There is no WebSocket, WebDriver or Node.
-- **The driver is skein's:** `skein-browser`, a testing kit for any
-  service with a web. It launches Chromium, frames CDP over the pipe, and
-  speaks the part of CDP a test needs: open a page, query the
-  accessibility tree by role and name, dispatch input, read console
-  messages and exceptions, and take a screenshot when a test fails. It is
-  a step machine over skein's io (the spawned child and its pipes) and
-  `skein-json`, in the real loop beside the service: one thread, no async
-  runtime, and no dependency beyond skein. Chromium is the one thing it
-  needs from outside. It goes into skein from the start rather than
-  once a second service needs it (testing-strategy.md, section 7), since
-  nothing in it is temper's.
-- **temper's part is the person's DOM face,** which turns the person's
-  queries and actions (7.2) into `skein-browser`'s.
-- **What only a browser shows:** the shell (patches keep focus, caret,
-  selection and scroll; events carry the right tokens; session storage
-  survives a reload; a panic reloads) and the bundle (it loads under its
-  content security policy, and signs in through the fake forge). Then a
-  few journeys of the first slice (ux README, section 9): sign in, start a
-  chat, decide a held chat's escalation.
+- **The driver is skein's.** `skein-browser` (skein's
+  `docs/design/browser.md`) runs headless Chromium as a child, drives it
+  over the DevTools protocol on a pipe from the loop beside the engine,
+  and reports the page's trouble. It goes into skein from the start,
+  rather than once a second service needs it (testing-strategy.md,
+  section 7), since nothing in it is temper's.
+- **temper's part** is the person's DOM face, which turns the person's
+  queries and actions (7.2) into the kit's requests, and a harness that
+  fails a test on any trouble its scenario did not expect.
+- **What only a browser shows:**
+  - the shell: a patch keeps focus (the node stays focused), the caret
+    (typing goes on where it was) and scroll (a node keeps its place on
+    screen); events carry the right tokens; session storage survives a
+    reload; a panic reloads;
+  - the bundle: it loads under its content security policy, and signs
+    in through the fake forge.
+
+  Then come a few journeys of the first slice (ux README, section 9):
+  sign in, start a chat, decide a held chat's escalation.
 - **A suite of its own.** It needs Chromium, does not replay, and pays
   for a browser's start, so it is neither focused nor fuzzy. The gate
   runs it, and also builds the bundle and runs clippy for wasm32.
@@ -307,10 +301,9 @@ the domain, its worlds and its scenarios would not change.
 - **`../testing.md`:** people act on the client (7.2); the browser as a
   tier (7.3); the layout gains the native shell and the person's two
   faces, under `testing/`.
-- **skein:** `skein-browser` (7.3), designed in skein's `docs/design`,
-  and for it a spawned child with two more pipes, at descriptors 3 and 4.
-  The native shell needs only what skein has: the HTTP client and the
-  server-sent events reader.
+- **skein:** `skein-browser` (7.3), and what it asks of io (skein's
+  `docs/design/browser.md`, section 10). The native shell needs only
+  what skein has: the HTTP client and the server-sent events reader.
 - **The toolchain:** the standard library for `wasm32-unknown-unknown`
   (the development machine's rustc is Debian's, without rustup, so
   `libstd-rust-dev-wasm32`) and the wasm-bindgen CLI. Chromium is
@@ -319,9 +312,10 @@ the domain, its worlds and its scenarios would not change.
 ## 10. Open questions
 
 - **The browser suite's budget:** proposed at 30 seconds, set when its
-  first tests are built.
+  first tests are built, with skein's (skein's `docs/design/browser.md`,
+  section 11).
 - **A markup macro,** if plain calls prove unreadable (section 4).
 - **Which Markdown:** the subset the view reads, kept to what agents
   write, and what it does with the rest (shown as text, never dropped).
-- **Other browsers:** Firefox and WebKit through WebDriver BiDi, if a bug
-  ever shows only there.
+- **Other browsers** are `skein-browser`'s question (skein's
+  `docs/design/browser.md`, section 11).
