@@ -386,7 +386,8 @@ fn unresolved_or_inconsistent_escalation_rows_refuse_before_retention() {
             5 => Escalation::Rejected {
                 revision: 1,
                 by: 1,
-                reason: vec![b'x'; usize::try_from(LIMITS.result_bytes).unwrap() + 1].into_boxed_slice(),
+                reason: vec![b'x'; usize::try_from(LIMITS.result_bytes).expect("configured bounded task result") + 1]
+                    .into_boxed_slice(),
             },
             _ => unreachable!(),
         };

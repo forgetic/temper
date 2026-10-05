@@ -191,7 +191,7 @@ pub(super) fn begin(
     let query = Query::Decide { request, requester: 0, person, role, project, task, revision, decision };
     match domain.result_reads.insert(Some(Read::Escalation(query))) {
         Ok(id) => {
-            domain.work.push(Work::Tasks(tasks::Event::InspectEscalation { reply_to: ReplyTo::new(id.token()), task }))
+            domain.work.push(Work::Tasks(tasks::Event::InspectEscalation { reply_to: ReplyTo::new(id.token()), task }));
         }
         Err(_) => decided(domain, request, people::Outcome::Refused(people::Refusal::Busy)),
     }
@@ -492,7 +492,7 @@ pub(super) fn failed(domain: &mut Domain, waiter: Token) {
     domain.result_reads.retire(Id::from_token(waiter));
     match read {
         Read::Escalation(Query::Decide { request, .. }) => {
-            decided(domain, request, people::Outcome::Refused(people::Refusal::Busy))
+            decided(domain, request, people::Outcome::Refused(people::Refusal::Busy));
         }
         Read::Result(_) | Read::Escalation(Query::Read { .. }) => unreachable!("only decision history loads here"),
     }

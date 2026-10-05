@@ -49,10 +49,10 @@ pub enum Delivery {
     /// derived from tasks without a persistent people inbox (domain/engine.md, 7.7).
     EscalationReply {
         /// One web-issued reply right (domain/engine.md, 7.7).
-        to: skein_lib::ReplyTo,
+        to: ReplyTo,
         /// Authenticated person permitted to see this held chat (domain/engine.md, 7.7).
         person: u64,
-        /// Bounded semantic view; rejection owns at most result_bytes
+        /// Bounded semantic view; rejection owns at most `result_bytes`
         /// (domain/engine.md, 7.7).
         context: Box<temper_engine_domain_tasks::EscalationContext>,
     },
@@ -60,7 +60,7 @@ pub enum Delivery {
     /// once by root and never exposed to the shell (domain/engine.md, 7.7).
     ReadEscalationDecision {
         /// Reserved root read slot, retired after IO terminal (domain/engine.md, 7.7).
-        waiter: skein_lib::Token,
+        waiter: Token,
     },
     /// Journal caller to web: one people terminal without an attached session;
     /// the walking root uses `WebReply` instead (domain/people.md, 11).
@@ -259,7 +259,9 @@ impl Decision {
     pub fn write(&mut self, limits: &Limits, write: Write) -> Result<(), Write> {
         assert!(*limits == self.limits, "decision uses its configured limits");
         let within = match &write {
-            Write::Save(Record::Deployment(_)) | Write::Erase(Key::Deployment) => false,
+            Write::Save(Record::Deployment(_)) | Write::Erase(Key::Deployment | Key::EscalationDecision { .. }) => {
+                false
+            }
             Write::Save(Record::Turn(row)) => {
                 row.task != 0
                     && row.attempt != 0
@@ -269,7 +271,6 @@ impl Decision {
             Write::Erase(
                 Key::Turn { .. } | Key::RunProof { .. } | Key::Terminal { .. } | Key::Tasks(_) | Key::People(_),
             ) => true,
-            Write::Erase(Key::EscalationDecision { .. }) => false,
             Write::Save(Record::EscalationDecision(row)) => {
                 row.task != 0
                     && row.revision != 0

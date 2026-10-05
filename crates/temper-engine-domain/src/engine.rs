@@ -1085,7 +1085,7 @@ fn people_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decisio
                     make_chat(domain, env, request, person, project, role, ask);
                 }
                 people::Ask::DecideEscalation { task, revision, decision, .. } => {
-                    escalation::begin(domain, request, person, role, project, task, revision, decision)
+                    escalation::begin(domain, request, person, role, project, task, revision, decision);
                 }
             },
             people::Request::RolesRefused { .. } | people::Request::RestoreRefused { .. } => {
@@ -1300,10 +1300,10 @@ fn tasks_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
         match out.pop().expect("tasks output count") {
             tasks::Request::EscalationNeeded { context } => escalation::needed(domain, context),
             tasks::Request::EscalationInspected { reply_to, context } => {
-                escalation::inspected(domain, env, decision, reply_to.into_token(), context)
+                escalation::inspected(domain, env, decision, reply_to.into_token(), context);
             }
             tasks::Request::EscalationDecided { reply_to, task, revision, outcome } => {
-                escalation::completed(domain, env, decision, reply_to.into_token(), task, revision, outcome)
+                escalation::completed(domain, env, decision, reply_to.into_token(), task, revision, outcome);
             }
             tasks::Request::Save { record } => save(decision, &env.limits, Write::Save(Record::Tasks(record))),
             tasks::Request::Erase { key } => save(decision, &env.limits, Write::Erase(Key::Tasks(key))),
@@ -1682,7 +1682,7 @@ fn load_outputs(
                 if cut.is_some() {
                     let archive = match domain.result_reads.get(Id::from_token(waiter)) {
                         Some(Some(Read::Escalation(_))) => true,
-                        Some(Some(Read::Result(_))) | Some(None) | None => false,
+                        Some(Some(Read::Result(_)) | None) | None => false,
                     };
                     if archive {
                         domain.work.push(Work::EscalationFailed { waiter });
@@ -1697,7 +1697,7 @@ fn load_outputs(
                 } else {
                     let archive = match domain.result_reads.get(Id::from_token(waiter)) {
                         Some(Some(Read::Escalation(_))) => true,
-                        Some(Some(Read::Result(_))) | Some(None) | None => false,
+                        Some(Some(Read::Result(_)) | None) | None => false,
                     };
                     if archive {
                         domain.work.push(Work::EscalationLoaded { waiter, rows });
@@ -1713,7 +1713,7 @@ fn load_outputs(
                 } else {
                     let archive = match domain.result_reads.get(Id::from_token(waiter)) {
                         Some(Some(Read::Escalation(_))) => true,
-                        Some(Some(Read::Result(_))) | Some(None) | None => false,
+                        Some(Some(Read::Result(_)) | None) | None => false,
                     };
                     if archive {
                         domain.work.push(Work::EscalationFailed { waiter });
