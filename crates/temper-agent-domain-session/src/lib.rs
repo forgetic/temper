@@ -35,6 +35,7 @@ mod domain;
 mod facts;
 mod limits;
 pub mod llm;
+pub mod record;
 mod session;
 #[cfg(test)]
 mod tests;

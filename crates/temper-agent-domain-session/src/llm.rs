@@ -67,6 +67,9 @@ pub enum Decoded {
     /// A call that is no call: the session answers it with its problem, and
     /// runs nothing.
     Invalid { problem: Problem },
+    /// A prior call, kept by provider name and input in its enclosing block.
+    /// It is replayed to the provider and never executed again.
+    Historical,
 }
 
 /// What came of a tool call, for the protocol layer to render as the text the
@@ -83,6 +86,10 @@ pub enum Returned {
     /// Nothing ran for the call: the LLM stopped for another reason than
     /// calling tools, its answer cut short or its turn ended.
     NotRun,
+    /// An opener's concrete rendered answer, without a local ticket.
+    Text { text: Box<[u8]>, error: bool },
+    /// A delegated call whose withdrawal won its terminal race.
+    Withdrawn,
 }
 
 /// A tool the opener serves, which the prompt offers the LLM: `ticket` names

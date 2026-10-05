@@ -91,6 +91,7 @@ pub const LIMITS: Limits = Limits {
     },
     session: session::Limits {
         sessions: 6,
+        spend: 0,
         messages: 64,
         session_bytes: 1 << 20,
         budget: CEILING,
@@ -142,6 +143,7 @@ pub const TIGHT: Limits = Limits {
     },
     session: session::Limits {
         sessions: 4,
+        spend: 0,
         messages: 32,
         session_bytes: 1 << 16,
         retries: 2,

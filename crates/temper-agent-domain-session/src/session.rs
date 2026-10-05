@@ -172,6 +172,23 @@ struct Conversation {
     /// Its kit in the tools it owns, as the tools name it. A session is
     /// inserted Closed, holding nothing, and given its kit as it opens.
     kit: Token,
+    recording: Recording,
+    closing_tools: Option<Tools>,
+}
+
+#[derive(Debug)]
+enum Recording {
+    V1,
+    V2 {
+        dialect: u32,
+        prices: crate::record::Prices,
+        budget: u64,
+        spent: u64,
+        overflow: bool,
+        sequence: u32,
+        told: u32,
+        pending: Option<Usage>,
+    },
 }
 
 #[derive(Debug)]
@@ -247,6 +264,7 @@ enum Slot {
 /// tools or the opener.
 #[derive(Debug)]
 pub(crate) struct Run {
+    ended: bool,
     session: Id<Session>,
     slot: u32,
     block: u32,
@@ -349,6 +367,18 @@ pub(crate) fn open(domain: &mut Domain, env: &Env<Limits>, opener: Token, spec: 
         refuse(&mut domain.facts, opener, End::Invalid, out);
         return;
     };
+    open_admitted(domain, env, opener, conversation, authority, out, mark);
+}
+
+fn open_admitted(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    opener: Token,
+    conversation: Conversation,
+    authority: tools::Authority,
+    out: &mut Queue<Request>,
+    mark: u32,
+) {
     // Closed until its kit opens and the first call is made, which a budget
     // just admitted pays for.
     let session = Session { conversation, state: State::Closed };
@@ -359,7 +389,7 @@ pub(crate) fn open(domain: &mut Domain, env: &Env<Limits>, opener: Token, spec: 
         Some(News::Opened { kit }) => {
             session.conversation.kit = kit;
             out.push(Request::Opened { opener, session: id.token() });
-            session.state = call(&session.conversation, id, 0, env, out);
+            session.state = call(&mut session.conversation, id, 0, env, out);
         }
         // Refused at the tools' entrance: the session never opened.
         Some(News::Refused { refusal }) => {
@@ -409,8 +439,17 @@ pub(crate) fn close(domain: &mut Domain, env: &Env<Limits>, session: Token, out:
     let state = mem::replace(&mut session.state, State::Closed);
     session.state = match state {
         State::Calling { attempt: _ } => cancel_call(id, End::Closed, out),
-        State::Backoff { .. } | State::Resting { .. } | State::Yielded => finish(End::Closed),
-        State::Tooling { tools } => cancel_tools(&domain.calls.runs, tools, End::Closed, out),
+        State::Resting { tools } => {
+            match session.conversation.recording {
+                Recording::V1 => {}
+                Recording::V2 { .. } => session.conversation.closing_tools = Some(tools),
+            }
+            finish(End::Closed)
+        }
+        State::Backoff { .. } | State::Yielded => finish(End::Closed),
+        State::Tooling { tools } => {
+            cancel_tools(&mut session.conversation, &domain.calls.runs, tools, End::Closed, out)
+        }
         // It is already ending, with the end it had first.
         State::Closing { end, waiting } => State::Closing { end, waiting },
         State::Closed => unreachable!("an addressed session has not ended"),
@@ -436,7 +475,7 @@ pub(crate) fn completed(
     session.state = match state {
         State::Calling { attempt: _ } => answered(conversation, id, &mut domain.calls, completion, env, out),
         State::Closing { end, waiting: waiting @ Waiting { call: true, .. } } => {
-            answered_late(conversation, end, waiting, completion.usage, out)
+            answered_late(conversation, end, waiting, completion, &env.limits, out)
         }
         State::Backoff { .. }
         | State::Tooling { .. }
@@ -542,7 +581,7 @@ fn owned_answered(
     outcome: Outcome,
     out: &mut Queue<Request>,
 ) -> Id<Session> {
-    let Run { session: id, slot, block, by } = ended_run(&mut domain.calls.runs, run);
+    let Run { session: id, slot, block, by, ended: _ } = ended_run(&mut domain.calls.runs, run);
     assert!(by == By::Tools, "the tools answer only the calls they were given");
     let session = domain.sessions.get_mut(id).expect("a session lives until its requests have ended");
     let state = mem::replace(&mut session.state, State::Closed);
@@ -552,7 +591,10 @@ fn owned_answered(
             let result = Returned::Owned { outcome };
             tool_ran(conversation, id, &mut domain.calls, tools, slot, block, result, env, out)
         }
-        State::Closing { end, waiting } => settled(end, waiting),
+        State::Closing { end, waiting } => {
+            let end = keep_closing(conversation, slot, block, Returned::Owned { outcome }, &env.limits).unwrap_or(end);
+            settled(end, waiting)
+        }
         State::Calling { .. } | State::Backoff { .. } | State::Resting { .. } | State::Yielded | State::Closed => {
             unreachable!("an answer ends a tool run in flight")
         }
@@ -586,7 +628,7 @@ pub(crate) fn delegate_answered(
     out: &mut Queue<Request>,
 ) {
     let mark = out.len();
-    let Run { session: id, slot, block, by } = ended_run(&mut domain.calls.runs, Id::from_token(owner));
+    let Run { session: id, slot, block, by, ended: _ } = ended_run(&mut domain.calls.runs, Id::from_token(owner));
     assert!(by == By::Opener, "the opener answers only the calls delegated to it");
     let session = domain.sessions.get_mut(id).expect("a session lives until its requests have ended");
     let Answer { ticket: _, bytes, error } = answer;
@@ -598,7 +640,11 @@ pub(crate) fn delegate_answered(
             let result = Returned::Delegated { answer };
             tool_ran(conversation, id, &mut domain.calls, tools, slot, block, result, env, out)
         }
-        State::Closing { end, waiting } => settled(end, waiting),
+        State::Closing { end, waiting } => {
+            let end =
+                keep_closing(conversation, slot, block, Returned::Delegated { answer }, &env.limits).unwrap_or(end);
+            settled(end, waiting)
+        }
         State::Calling { .. } | State::Backoff { .. } | State::Resting { .. } | State::Yielded | State::Closed => {
             unreachable!("an answer ends a delegated call in flight")
         }
@@ -608,13 +654,17 @@ pub(crate) fn delegate_answered(
 
 pub(crate) fn delegate_cancelled(domain: &mut Domain, env: &Env<Limits>, owner: Token, out: &mut Queue<Request>) {
     let mark = out.len();
-    let Run { session: id, slot: _, block: _, by } = ended_run(&mut domain.calls.runs, Id::from_token(owner));
+    let Run { session: id, slot, block, by, ended: _ } = ended_run(&mut domain.calls.runs, Id::from_token(owner));
     assert!(by == By::Opener, "the opener answers only the calls delegated to it");
     let session = domain.sessions.get_mut(id).expect("a session lives until its requests have ended");
     domain.facts.push(Fact::DelegateCancelled { opener: session.conversation.opener });
+    let conversation = &mut session.conversation;
     let state = mem::replace(&mut session.state, State::Closed);
     session.state = match state {
-        State::Closing { end, waiting } => settled(end, waiting),
+        State::Closing { end, waiting } => {
+            let end = keep_closing(conversation, slot, block, Returned::Withdrawn, &env.limits).unwrap_or(end);
+            settled(end, waiting)
+        }
         State::Calling { .. }
         | State::Backoff { .. }
         | State::Tooling { .. }
@@ -631,8 +681,17 @@ pub(crate) fn expire(domain: &mut Domain, env: &Env<Limits>, id: Id<Session>, ou
     let state = mem::replace(&mut session.state, State::Closed);
     session.state = match state {
         State::Calling { attempt: _ } => cancel_call(id, OUT_OF_TIME, out),
-        State::Backoff { .. } | State::Resting { .. } | State::Yielded => finish(OUT_OF_TIME),
-        State::Tooling { tools } => cancel_tools(&domain.calls.runs, tools, OUT_OF_TIME, out),
+        State::Resting { tools } => {
+            match session.conversation.recording {
+                Recording::V1 => {}
+                Recording::V2 { .. } => session.conversation.closing_tools = Some(tools),
+            }
+            finish(OUT_OF_TIME)
+        }
+        State::Backoff { .. } | State::Yielded => finish(OUT_OF_TIME),
+        State::Tooling { tools } => {
+            cancel_tools(&mut session.conversation, &domain.calls.runs, tools, OUT_OF_TIME, out)
+        }
         State::Closing { .. } | State::Closed => {
             unreachable!("the expiry alarm runs only in Calling, Backoff, Tooling, Resting and Yielded")
         }
@@ -645,7 +704,7 @@ pub(crate) fn retry(domain: &mut Domain, env: &Env<Limits>, id: Id<Session>, out
     let session = domain.sessions.get_mut(id).expect("an alarm is cancelled before its session closes");
     let state = mem::replace(&mut session.state, State::Closed);
     session.state = match state {
-        State::Backoff { attempt, until: _ } => call(&session.conversation, id, attempt, env, out),
+        State::Backoff { attempt, until: _ } => call(&mut session.conversation, id, attempt, env, out),
         State::Calling { .. }
         | State::Tooling { .. }
         | State::Resting { .. }
@@ -706,8 +765,10 @@ const fn kit_session(fact: tools::Fact) -> Token {
 /// The run `run` names, whose terminal event has come: retired, and copied
 /// out.
 fn ended_run(runs: &mut Slab<Run>, run: Id<Run>) -> Run {
-    let found = runs.get(run).expect("a run lives until its terminal event");
-    let ended = Run { session: found.session, slot: found.slot, block: found.block, by: found.by };
+    let found = runs.get_mut(run).expect("a run lives until its terminal event");
+    assert!(!found.ended, "one terminal per run");
+    found.ended = true;
+    let ended = Run { session: found.session, slot: found.slot, block: found.block, by: found.by, ended: true };
     runs.retire(run);
     ended
 }
@@ -776,6 +837,29 @@ fn addressed(sessions: &Slab<Session>, session: Token) -> Option<Id<Session>> {
 /// tells, and what the new state implies. `mark` is where the requests the
 /// transition made begin in `out`.
 fn conclude(domain: &mut Domain, env: &Env<Limits>, id: Id<Session>, out: &mut Queue<Request>, mark: u32) {
+    let session = domain.sessions.get_mut(id).expect("the transition's session lives");
+    match session.state {
+        State::Closing { waiting: Waiting { call: false, runs: 0, .. }, .. } | State::Yielded => {
+            finish_closing(&mut session.conversation);
+            if let Some(end) = tell_turn(&mut session.conversation, out) {
+                match &mut session.state {
+                    State::Closing { end: current, .. } => *current = end,
+                    State::Yielded => session.state = finish(end),
+                    State::Calling { .. }
+                    | State::Backoff { .. }
+                    | State::Tooling { .. }
+                    | State::Resting { .. }
+                    | State::Closed => unreachable!("matched states above"),
+                }
+            }
+        }
+        State::Closing { .. }
+        | State::Calling { .. }
+        | State::Backoff { .. }
+        | State::Tooling { .. }
+        | State::Resting { .. }
+        | State::Closed => {}
+    }
     settle(domain, env, id, out);
     let session = domain.sessions.get(id).expect("a session lives until it is retired");
     tell(&mut domain.facts, &domain.calls.runs, session, out, mark);
@@ -844,7 +928,12 @@ fn tell(facts: &mut Facts, runs: &Slab<Run>, session: &Session, out: &Queue<Requ
                 let run = runs.get(Id::from_token(*owner)).expect("a run lives while its call is asked for");
                 Fact::DelegateStarted { opener, block: run.block }
             }
-            Request::Cancel { .. } | Request::Withdraw { .. } | Request::Io { .. } | Request::CancelIo { .. } => {
+            Request::Turn { .. }
+            | Request::Priced { .. }
+            | Request::Cancel { .. }
+            | Request::Withdraw { .. }
+            | Request::Io { .. }
+            | Request::CancelIo { .. } => {
                 continue;
             }
         };
@@ -906,6 +995,21 @@ fn answered(
     out: &mut Queue<Request>,
 ) -> State {
     used(conversation, completion.usage, out);
+    for block in &completion.content {
+        match block {
+            Block::ToolCall { call: Decoded::Historical, .. } => {
+                clear_pending(conversation);
+                return finish(End::Invalid);
+            }
+            Block::ToolCall {
+                call: Decoded::Owned { .. } | Decoded::Delegated { .. } | Decoded::Invalid { .. },
+                ..
+            }
+            | Block::Opaque { .. }
+            | Block::Text { .. }
+            | Block::ToolResult { .. } => {}
+        }
+    }
     match completion.stop {
         Stop::ToolUse => use_tools(conversation, id, calls, completion.content, env, out),
         Stop::EndTurn => pause(conversation, Yield::Done, completion.content, &env.limits, out),
@@ -921,10 +1025,24 @@ fn answered_late(
     conversation: &mut Conversation,
     end: End,
     waiting: Waiting,
-    usage: Usage,
+    completion: Completion,
+    limits: &Limits,
     out: &mut Queue<Request>,
 ) -> State {
-    used(conversation, usage, out);
+    used(conversation, completion.usage, out);
+    match conversation.recording {
+        Recording::V1 => {}
+        Recording::V2 { .. } => {
+            if conversation.transcript.room() == 0 || !charge(conversation, content_cost(&completion.content), limits) {
+                clear_pending(conversation);
+                return State::Closing { end: End::TranscriptFull, waiting: Waiting { call: false, ..waiting } };
+            }
+            conversation
+                .transcript
+                .push(Message { role: Role::Assistant, content: completion.content })
+                .expect("checked room");
+        }
+    }
     State::Closing { end, waiting: Waiting { call: false, ..waiting } }
 }
 
@@ -944,6 +1062,7 @@ fn use_tools(
     }
     // The results go back in another message.
     if conversation.transcript.room() < 2 || !charge(conversation, held(&content, count), &env.limits) {
+        clear_pending(conversation);
         return finish(End::TranscriptFull);
     }
     conversation.transcript.push(Message { role: Role::Assistant, content }).expect("checked for room above");
@@ -972,6 +1091,10 @@ fn advance(
 ) -> State {
     // Time does not wait: no batch starts once it is up.
     if env.now >= conversation.expires {
+        match conversation.recording {
+            Recording::V1 => {}
+            Recording::V2 { .. } => conversation.closing_tools = Some(tools),
+        }
         return finish(OUT_OF_TIME);
     }
     let message = conversation.transcript.last().expect("the assistant message is last while tooling");
@@ -990,7 +1113,7 @@ fn advance(
                     break;
                 }
                 let call = call.clone();
-                let run = Run { session: id, slot: tools.slots.len(), block: index, by: By::Tools };
+                let run = Run { session: id, slot: tools.slots.len(), block: index, by: By::Tools, ended: false };
                 let run = calls.runs.insert(run).expect("the run slab has room for two batches a session");
                 let deadline = env.now.saturating_add(env.limits.tool_timeout).min(conversation.expires);
                 let (kit, reply_to) = (conversation.kit, ReplyTo::new(run.token()));
@@ -1020,7 +1143,7 @@ fn advance(
                     next = index;
                     break;
                 }
-                let run = Run { session: id, slot: tools.slots.len(), block: index, by: By::Opener };
+                let run = Run { session: id, slot: tools.slots.len(), block: index, by: By::Opener, ended: false };
                 let run = calls.runs.insert(run).expect("the run slab has room for two batches a session");
                 // The opener runs the race, and the session waits for it as
                 // long as it lives.
@@ -1037,7 +1160,10 @@ fn advance(
                 let result = Block::ToolResult { id: call.clone(), result: answer };
                 tools.slots.push(Slot::Done { result }).expect("a slot for every call");
             }
-            Block::Opaque { .. } | Block::Text { .. } | Block::ToolResult { .. } => {}
+            Block::ToolCall { call: Decoded::Historical, .. }
+            | Block::Opaque { .. }
+            | Block::Text { .. }
+            | Block::ToolResult { .. } => {}
         }
     }
     tools.next = next;
@@ -1084,10 +1210,14 @@ fn pause(
 ) -> State {
     // A session continues from its transcript, so the message must fit there.
     if conversation.transcript.room() == 0 || !charge(conversation, content_cost(&content), limits) {
+        clear_pending(conversation);
         return finish(End::TranscriptFull);
     }
     let text = text_of(&content);
     conversation.transcript.push(Message { role: Role::Assistant, content }).expect("checked for room above");
+    if let Some(end) = tell_turn(conversation, out) {
+        return finish(end);
+    }
     out.push(Request::Yielded { opener: conversation.opener, stop, text });
     State::Yielded
 }
@@ -1153,7 +1283,8 @@ fn tool_ran(
     let result = Block::ToolResult { id: call_id(conversation, block), result };
     *tools.slots.get_mut(slot).expect("a run fills its own slot") = Slot::Done { result };
     if !fits {
-        return abandon(&calls.runs, tools, End::TranscriptFull, out);
+        clear_pending(conversation);
+        return abandon(conversation, &calls.runs, tools, End::TranscriptFull, out);
     }
     if tools.running > 0 {
         return State::Tooling { tools };
@@ -1180,12 +1311,15 @@ fn call_failed(attempt: u32, failure: Failure, rng: &mut Rng, env: &Env<Limits>)
 /// completion and the transcript has room for its answer; ends the session
 /// otherwise, rather than pay for an answer it could not keep.
 fn call(
-    conversation: &Conversation,
+    conversation: &mut Conversation,
     id: Id<Session>,
     attempt: u32,
     env: &Env<Limits>,
     out: &mut Queue<Request>,
 ) -> State {
+    if let Some(end) = tell_turn(conversation, out) {
+        return finish(end);
+    }
     if let Some(spent) = spent(conversation, env.now) {
         return finish(End::Budget { spent });
     }
@@ -1203,7 +1337,13 @@ fn cancel_call(id: Id<Session>, end: End, out: &mut Queue<Request>) -> State {
 
 /// Withdraws the delegated runs in flight, to end with `end` once every run
 /// has settled. The tools' runs end as the kit's close cancels them.
-fn cancel_tools(runs: &Slab<Run>, tools: Tools, end: End, out: &mut Queue<Request>) -> State {
+fn cancel_tools(
+    conversation: &mut Conversation,
+    runs: &Slab<Run>,
+    tools: Tools,
+    end: End,
+    out: &mut Queue<Request>,
+) -> State {
     for slot in &tools.slots {
         match slot {
             Slot::Running { run } => match runs.get(*run).expect("a run in flight is in the slab").by {
@@ -1213,21 +1353,53 @@ fn cancel_tools(runs: &Slab<Run>, tools: Tools, end: End, out: &mut Queue<Reques
             Slot::Done { .. } => {}
         }
     }
-    State::Closing { end, waiting: Waiting { runs: tools.running, ..KIT } }
+    let running = tools.running;
+    match conversation.recording {
+        Recording::V1 => {}
+        Recording::V2 { .. } => {
+            if end == End::TranscriptFull {
+                clear_pending(conversation);
+            } else {
+                conversation.closing_tools = Some(tools);
+            }
+        }
+    }
+    State::Closing { end, waiting: Waiting { runs: running, ..KIT } }
 }
 
 /// Ends with `end` at once, or once the runs in flight have settled.
-fn abandon(runs: &Slab<Run>, tools: Tools, end: End, out: &mut Queue<Request>) -> State {
+fn abandon(
+    conversation: &mut Conversation,
+    runs: &Slab<Run>,
+    tools: Tools,
+    end: End,
+    out: &mut Queue<Request>,
+) -> State {
     if tools.running == 0 {
         return finish(end);
     }
-    cancel_tools(runs, tools, end, out)
+    cancel_tools(conversation, runs, tools, end, out)
 }
 
 /// Counts a completion that came back, and tells the opener.
 fn used(conversation: &mut Conversation, usage: Usage, out: &mut Queue<Request>) {
     conversation.turns = conversation.turns.saturating_add(1);
     conversation.usage = conversation.usage.saturating_add(usage);
+    match &mut conversation.recording {
+        Recording::V1 => {}
+        Recording::V2 { prices, spent, overflow, pending, .. } => {
+            *pending = Some(usage);
+            let total = match prices.price(usage) {
+                Some(price) => spent.checked_add(price),
+                None => None,
+            };
+            match total {
+                Some(total) => *spent = total,
+                None => *overflow = true,
+            }
+            out.push(Request::Priced { opener: conversation.opener, spent: *spent, overflow: *overflow });
+        }
+    }
     out.push(Request::Used { opener: conversation.opener, usage });
 }
 
@@ -1278,6 +1450,8 @@ fn admit(opener: Token, spec: Spec, limits: &Limits, now: Time) -> Option<(Conve
         // Named as the kit opens: until then, the session is Closed, which
         // holds nothing.
         kit: Token::new(0),
+        recording: Recording::V1,
+        closing_tools: None,
     };
     Some((conversation, spec.authority))
 }
@@ -1297,6 +1471,14 @@ fn affordable(budget: &Budget, most: &Budget) -> bool {
 /// up, its cache reads or writes taken past their budget by a completion (whose
 /// tokens are known only once it comes back), or its time run out.
 fn spent(conversation: &Conversation, now: Time) -> Option<Dimension> {
+    match conversation.recording {
+        Recording::V1 => {}
+        Recording::V2 { budget, spent, overflow, .. } => {
+            if overflow || spent >= budget {
+                return Some(Dimension::Unit);
+            }
+        }
+    }
     let Conversation { budget, turns, usage, expires, .. } = conversation;
     if *turns >= budget.turns {
         return Some(Dimension::Turns);
@@ -1380,7 +1562,9 @@ fn tally(content: &[Block]) -> (u32, u32) {
     let (mut calls, mut invalid): (u32, u32) = (0, 0);
     for block in content {
         match block {
-            Block::ToolCall { call: Decoded::Owned { .. } | Decoded::Delegated { .. }, .. } => {
+            Block::ToolCall {
+                call: Decoded::Owned { .. } | Decoded::Delegated { .. } | Decoded::Historical, ..
+            } => {
                 calls = calls.saturating_add(1);
             }
             Block::ToolCall { call: Decoded::Invalid { .. }, .. } => {
@@ -1451,7 +1635,12 @@ fn held(content: &[Block], calls: u32) -> Option<u64> {
             Block::ToolCall { id, name: _, input: _, call: Decoded::Invalid { problem } } => {
                 cost = cost.checked_add(len(id)?)?.checked_add(problem_cost(problem)?)?;
             }
-            Block::ToolCall { id, name: _, input: _, call: Decoded::Owned { .. } | Decoded::Delegated { .. } } => {
+            Block::ToolCall {
+                id,
+                name: _,
+                input: _,
+                call: Decoded::Owned { .. } | Decoded::Delegated { .. } | Decoded::Historical,
+            } => {
                 cost = cost.checked_add(len(id)?)?;
             }
             Block::Opaque { .. } | Block::Text { .. } | Block::ToolResult { .. } => {}
@@ -1483,7 +1672,7 @@ fn payload_cost(block: &Block) -> Option<u64> {
             // A delegated call is the opener's to hold.
             let decoded = match call {
                 Decoded::Owned { call } => call_cost(call)?,
-                Decoded::Delegated { ticket: _, effect: _ } => 0,
+                Decoded::Delegated { ticket: _, effect: _ } | Decoded::Historical => 0,
                 Decoded::Invalid { problem } => problem_cost(problem)?,
             };
             len(id)?.checked_add(len(name)?)?.checked_add(len(input)?)?.checked_add(decoded)
@@ -1499,7 +1688,8 @@ fn returned_cost(result: &Returned) -> Option<u64> {
         // The opener holds its answer, and the session counts it.
         Returned::Delegated { answer } => Some(answer.bytes),
         Returned::Invalid { problem } => problem_cost(problem),
-        Returned::NotRun => Some(0),
+        Returned::NotRun | Returned::Withdrawn => Some(0),
+        Returned::Text { text, .. } => len(text),
     }
 }
 
@@ -1592,4 +1782,473 @@ fn len(bytes: &[u8]) -> Option<u64> {
 /// nothing.
 fn count(items: usize) -> u32 {
     u32::try_from(items).unwrap_or(u32::MAX)
+}
+
+/// Admit concrete history before acquiring a tools kit or making a completion.
+pub(crate) fn open_v2(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    opener: Token,
+    opening: crate::record::Opening,
+    out: &mut Queue<Request>,
+) {
+    let mark = out.len();
+    if domain.sessions.is_full() {
+        refuse(&mut domain.facts, opener, End::Busy, out);
+        return;
+    }
+    let crate::record::Opening { spec, dialect, prices, budget, transcript } = opening;
+    if prices.unit == 0 || budget > env.limits.spend {
+        refuse(&mut domain.facts, opener, End::Invalid, out);
+        return;
+    }
+    let Some((mut conversation, authority)) = admit(opener, spec, &env.limits, env.now) else {
+        refuse(&mut domain.facts, opener, End::Invalid, out);
+        return;
+    };
+    let mut sequence = 0;
+    let mut told = 0;
+    match transcript {
+        None => {}
+        Some(transcript) => match restore(&mut conversation, transcript, dialect, &env.limits) {
+            Ok(previous) => {
+                sequence = previous;
+                told = conversation.transcript.len().saturating_sub(1);
+            }
+            Err(reason) => {
+                refuse(&mut domain.facts, opener, End::TranscriptRefused { reason }, out);
+                return;
+            }
+        },
+    }
+    conversation.recording =
+        Recording::V2 { dialect, prices, budget, spent: 0, overflow: false, sequence, told, pending: None };
+    open_admitted(domain, env, opener, conversation, authority, out, mark);
+}
+
+fn validate_transcript(
+    conversation: &Conversation,
+    transcript: &crate::record::Transcript,
+    dialect: u32,
+    limits: &Limits,
+) -> Result<(u32, u64), crate::record::Refusal> {
+    use crate::record::{Refusal, VERSION};
+    if transcript.version != VERSION {
+        return Err(Refusal::Version);
+    }
+    if transcript.endpoint != conversation.endpoint {
+        return Err(Refusal::Endpoint);
+    }
+    if transcript.dialect != dialect {
+        return Err(Refusal::Dialect);
+    }
+    // Check sizes before cloning or allocating history into the bounded list.
+    if transcript.turns.len() > usize::try_from(limits.messages).expect("u32 fits")
+        || transcript.after.len() > usize::try_from(limits.messages).expect("u32 fits")
+    {
+        return Err(Refusal::TooLarge);
+    }
+    let mut count = 1_u32;
+    let mut bytes = conversation.bytes;
+    let mut sequence = 0_u32;
+    let mut previous: Option<&Message> = None;
+    for turn in &transcript.turns {
+        if turn.version != VERSION {
+            return Err(Refusal::Version);
+        }
+        if turn.endpoint != transcript.endpoint {
+            return Err(Refusal::Endpoint);
+        }
+        if turn.dialect != dialect {
+            return Err(Refusal::Dialect);
+        }
+        sequence = sequence.checked_add(1).ok_or(Refusal::Malformed)?;
+        if turn.sequence != sequence || turn.messages.is_empty() {
+            return Err(Refusal::Malformed);
+        }
+        if turn.messages.len() > usize::try_from(limits.messages).expect("u32 fits") {
+            return Err(Refusal::TooLarge);
+        }
+        let mut assistants = 0_u32;
+        for message in &turn.messages {
+            count = count.checked_add(1).ok_or(Refusal::TooLarge)?;
+            if count >= limits.messages {
+                return Err(Refusal::TooLarge);
+            }
+            recorded_shape(message, limits)?;
+            validate_recorded(message)?;
+            validate_link(previous, message)?;
+            previous = Some(message);
+            if message.role == Role::Assistant {
+                assistants = assistants.saturating_add(1);
+            }
+            bytes =
+                bytes.checked_add(content_cost(&message.content).ok_or(Refusal::TooLarge)?).ok_or(Refusal::TooLarge)?;
+            if bytes > limits.session_bytes {
+                return Err(Refusal::TooLarge);
+            }
+        }
+        if assistants != 1 {
+            return Err(Refusal::Malformed);
+        }
+    }
+    for message in &transcript.after {
+        recorded_shape(message, limits)?;
+        validate_recorded(message)?;
+        validate_link(previous, message)?;
+        previous = Some(message);
+        if message.role != Role::User {
+            return Err(Refusal::Malformed);
+        }
+        count = count.checked_add(1).ok_or(Refusal::TooLarge)?;
+        bytes = bytes.checked_add(content_cost(&message.content).ok_or(Refusal::TooLarge)?).ok_or(Refusal::TooLarge)?;
+    }
+    if sequence == 0 {
+        return Err(Refusal::Malformed);
+    }
+    if count >= limits.messages || bytes > limits.session_bytes {
+        return Err(Refusal::TooLarge);
+    }
+    Ok((sequence, bytes))
+}
+
+fn restore(
+    conversation: &mut Conversation,
+    transcript: crate::record::Transcript,
+    dialect: u32,
+    limits: &Limits,
+) -> Result<u32, crate::record::Refusal> {
+    use crate::record::Refusal;
+    let (sequence, mut bytes) = validate_transcript(conversation, &transcript, dialect, limits)?;
+    let prompt = conversation.transcript.get(0).expect("admission held the initial prompt").clone();
+    let prompt_charge = content_cost(&prompt.content).ok_or(Refusal::TooLarge)?;
+    conversation.transcript.clear();
+    for turn in transcript.turns {
+        for message in turn.messages {
+            conversation.transcript.push(message).expect("history counted before allocation");
+        }
+    }
+    for message in transcript.after {
+        conversation.transcript.push(message).expect("history counted before allocation");
+    }
+    // The first user message belongs to the original activation.
+    if conversation.transcript.get(0).expect("nonempty history").role != Role::User {
+        return Err(Refusal::Malformed);
+    }
+    let last = conversation.transcript.last().expect("nonempty history");
+    let content = match last.role {
+        Role::Assistant => {
+            // The resumed prompt also resolves any calls in a yielded answer
+            // that were not run, exactly as Continue does within an activation.
+            let text = text_of(&prompt.content);
+            unrun(conversation, text)
+        }
+        Role::User => prompt.content,
+    };
+    let old = conversation.transcript.len();
+    // Count the concrete NotRun ids added above as well as the new text.
+    let added = content_cost(&content).ok_or(Refusal::TooLarge)?;
+    // `bytes` already includes the fresh prompt; replace its charge.
+    bytes = bytes.checked_sub(prompt_charge).ok_or(Refusal::TooLarge)?;
+    bytes = bytes.checked_add(added).ok_or(Refusal::TooLarge)?;
+    if bytes > limits.session_bytes || old >= limits.messages {
+        return Err(Refusal::TooLarge);
+    }
+    conversation.transcript.push(Message { role: Role::User, content }).expect("one prompt reserved");
+    conversation.bytes = bytes;
+    Ok(sequence)
+}
+
+fn validate_recorded(message: &Message) -> Result<(), crate::record::Refusal> {
+    use crate::record::Refusal;
+    for block in &message.content {
+        match block {
+            Block::Opaque { .. } | Block::Text { .. } => {}
+            Block::ToolCall { call, .. } => {
+                if message.role != Role::Assistant {
+                    return Err(Refusal::Malformed);
+                }
+                match call {
+                    Decoded::Historical => {}
+                    Decoded::Owned { .. } | Decoded::Delegated { .. } | Decoded::Invalid { .. } => {
+                        return Err(Refusal::Unresolved);
+                    }
+                }
+            }
+            Block::ToolResult { result, .. } => {
+                if message.role != Role::User {
+                    return Err(Refusal::Malformed);
+                }
+                match result {
+                    Returned::Delegated { .. } => return Err(Refusal::Unresolved),
+                    Returned::Owned { .. }
+                    | Returned::Invalid { .. }
+                    | Returned::NotRun
+                    | Returned::Text { .. }
+                    | Returned::Withdrawn => {}
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn tell_turn(conversation: &mut Conversation, out: &mut Queue<Request>) -> Option<End> {
+    let (dialect, sequence, told, usage, spent, overflow) = match &mut conversation.recording {
+        Recording::V1 => return None,
+        Recording::V2 { dialect, sequence, told, pending, spent, overflow, .. } => {
+            let usage = pending.take()?;
+            (*dialect, sequence, told, usage, *spent, *overflow)
+        }
+    };
+    if overflow {
+        return Some(End::PriceOverflow);
+    }
+    let Some(next) = sequence.checked_add(1) else {
+        return Some(End::TranscriptFull);
+    };
+    let mut messages = List::with_capacity(conversation.transcript.len().saturating_sub(*told));
+    for message in conversation.transcript.iter().skip(usize::try_from(*told).expect("u32 fits")) {
+        let mut blocks = List::with_capacity(count(message.content.len()));
+        for block in &message.content {
+            let block = match block {
+                Block::ToolCall { id, name, input, .. } => Block::ToolCall {
+                    id: id.clone(),
+                    name: name.clone(),
+                    input: input.clone(),
+                    call: Decoded::Historical,
+                },
+                Block::ToolResult { result: Returned::Delegated { .. }, .. } => {
+                    return Some(End::TranscriptRefused { reason: crate::record::Refusal::Unresolved });
+                }
+                Block::Text { .. } | Block::Opaque { .. } | Block::ToolResult { .. } => block.clone(),
+            };
+            blocks.push(block).expect("one copied block per original");
+        }
+        messages
+            .push(Message { role: message.role, content: blocks.into_boxed() })
+            .expect("one copied message per original");
+    }
+    *sequence = next;
+    *told = conversation.transcript.len();
+    let turn = crate::record::Turn {
+        version: crate::record::VERSION,
+        endpoint: conversation.endpoint,
+        dialect,
+        sequence: next,
+        usage,
+        spent,
+        messages: messages.into_boxed(),
+    };
+    out.push(Request::Turn { opener: conversation.opener, turn });
+    None
+}
+
+pub(crate) fn delegate_ended_v2(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    owner: Token,
+    result: Returned,
+    spent: u64,
+    out: &mut Queue<Request>,
+) {
+    // This value may be redelivered by a v2 parent. A retired or stale
+    // identity cannot charge a child twice, including before reclaim.
+    let Some(run) = domain.calls.runs.get(Id::from_token(owner)) else {
+        return;
+    };
+    if run.ended || run.by != By::Opener {
+        return;
+    }
+    let mark = out.len();
+    let Run { session: id, slot, block, by, ended: _ } = ended_run(&mut domain.calls.runs, Id::from_token(owner));
+    assert!(by == By::Opener, "the opener answers its delegated call once");
+    let session = domain.sessions.get_mut(id).expect("a call keeps its session alive");
+    let conversation = &mut session.conversation;
+    match &mut conversation.recording {
+        Recording::V1 => unreachable!("version one uses ticketed answers"),
+        Recording::V2 { spent: total, overflow, .. } => {
+            match total.checked_add(spent) {
+                Some(sum) => *total = sum,
+                None => *overflow = true,
+            }
+            out.push(Request::Priced { opener: conversation.opener, spent: *total, overflow: *overflow });
+        }
+    }
+    let fact = match &result {
+        Returned::Text { text, error } => {
+            Fact::DelegateAnswered { opener: conversation.opener, bytes: count(text.len()).into(), error: *error }
+        }
+        Returned::Withdrawn => Fact::DelegateCancelled { opener: conversation.opener },
+        Returned::Owned { .. } | Returned::Delegated { .. } | Returned::Invalid { .. } | Returned::NotRun => {
+            unreachable!("v2 terminals carry a concrete answer or withdrawal")
+        }
+    };
+    domain.facts.push(fact);
+    let state = mem::replace(&mut session.state, State::Closed);
+    session.state = match state {
+        State::Tooling { tools } => tool_ran(conversation, id, &mut domain.calls, tools, slot, block, result, env, out),
+        State::Closing { end, waiting } => {
+            let end = keep_closing(conversation, slot, block, result, &env.limits).unwrap_or(end);
+            settled(end, waiting)
+        }
+        State::Calling { .. } | State::Backoff { .. } | State::Resting { .. } | State::Yielded | State::Closed => {
+            unreachable!("an answer ends an in-flight delegated call")
+        }
+    };
+    conclude(domain, env, id, out, mark);
+}
+
+fn clear_pending(conversation: &mut Conversation) {
+    match &mut conversation.recording {
+        Recording::V1 => {}
+        Recording::V2 { pending, .. } => *pending = None,
+    }
+}
+
+fn keep_closing(
+    conversation: &mut Conversation,
+    slot: u32,
+    block: u32,
+    result: Returned,
+    limits: &Limits,
+) -> Option<End> {
+    conversation.closing_tools.as_ref()?;
+    if !charge(conversation, returned_cost(&result), limits) {
+        clear_pending(conversation);
+        conversation.closing_tools = None;
+        return Some(End::TranscriptFull);
+    }
+    let result = Block::ToolResult { id: call_id(conversation, block), result };
+    let tools = conversation.closing_tools.as_mut().expect("present above");
+    *tools.slots.get_mut(slot).expect("the terminal fills its call's slot") = Slot::Done { result };
+    None
+}
+
+fn finish_closing(conversation: &mut Conversation) {
+    let Some(tools) = conversation.closing_tools.take() else {
+        return;
+    };
+    let message = conversation.transcript.last().expect("tooling recorded its assistant message");
+    let (calls, _) = tally(&message.content);
+    let mut results = List::with_capacity(calls);
+    for slot in tools.slots.into_boxed() {
+        match slot {
+            Slot::Done { result } => results.push(result).expect("one slot per call"),
+            Slot::Running { .. } => unreachable!("all closing terminal responses have arrived"),
+        }
+    }
+    for block in message.content.iter().skip(usize::try_from(tools.next).expect("u32 fits")) {
+        match block {
+            Block::ToolCall { id, .. } => {
+                results
+                    .push(Block::ToolResult { id: id.clone(), result: Returned::NotRun })
+                    .expect("one result per call");
+            }
+            Block::Text { .. } | Block::Opaque { .. } | Block::ToolResult { .. } => {}
+        }
+    }
+    conversation
+        .transcript
+        .push(Message { role: Role::User, content: results.into_boxed() })
+        .expect("tool use reserved its result message");
+}
+
+/// Result ids must resolve to the preceding assistant's calls, in call order.
+/// A yielded assistant may be the tail; resuming supplies its `NotRun` results.
+fn validate_link(previous: Option<&Message>, message: &Message) -> Result<(), crate::record::Refusal> {
+    use crate::record::Refusal;
+    let Some(previous) = previous else {
+        if message.role != Role::User {
+            return Err(Refusal::Malformed);
+        }
+        for block in &message.content {
+            match block {
+                Block::Text { .. } | Block::Opaque { .. } => {}
+                Block::ToolCall { .. } | Block::ToolResult { .. } => return Err(Refusal::Malformed),
+            }
+        }
+        return Ok(());
+    };
+    match message.role {
+        Role::Assistant => {
+            if previous.role != Role::User {
+                return Err(Refusal::Malformed);
+            }
+            // Call ids must be unique within a provider completion.
+            for (index, block) in message.content.iter().enumerate() {
+                match block {
+                    Block::ToolCall { id, .. } => {
+                        for earlier in message.content.iter().take(index) {
+                            match earlier {
+                                Block::ToolCall { id: other, .. } => {
+                                    if id == other {
+                                        return Err(Refusal::Malformed);
+                                    }
+                                }
+                                Block::Text { .. } | Block::Opaque { .. } | Block::ToolResult { .. } => {}
+                            }
+                        }
+                    }
+                    Block::Text { .. } | Block::Opaque { .. } | Block::ToolResult { .. } => {}
+                }
+            }
+        }
+        Role::User => {
+            let mut calls = previous.content.iter();
+            let mut answered = 0_u32;
+            for block in &message.content {
+                match block {
+                    Block::ToolResult { id, .. } => {
+                        if previous.role != Role::Assistant {
+                            return Err(Refusal::Malformed);
+                        }
+                        let mut expected = None;
+                        for candidate in calls.by_ref() {
+                            match candidate {
+                                Block::ToolCall { id, .. } => {
+                                    expected = Some(id);
+                                    break;
+                                }
+                                Block::Text { .. } | Block::Opaque { .. } | Block::ToolResult { .. } => {}
+                            }
+                        }
+                        if expected != Some(id) {
+                            return Err(Refusal::Malformed);
+                        }
+                        answered = answered.saturating_add(1);
+                    }
+                    Block::Text { .. } | Block::Opaque { .. } => {}
+                    Block::ToolCall { .. } => return Err(Refusal::Malformed),
+                }
+            }
+            let mut expected = 0_u32;
+            if previous.role == Role::Assistant {
+                for block in &previous.content {
+                    match block {
+                        Block::ToolCall { .. } => expected = expected.saturating_add(1),
+                        Block::Text { .. } | Block::Opaque { .. } | Block::ToolResult { .. } => {}
+                    }
+                }
+            }
+            if answered != expected {
+                return Err(Refusal::Malformed);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn recorded_shape(message: &Message, limits: &Limits) -> Result<(), crate::record::Refusal> {
+    let fixed = match u64::try_from(size_of::<Block>()).ok() {
+        Some(block) => match u64::try_from(message.content.len()).ok() {
+            Some(count) => block.checked_mul(count),
+            None => None,
+        },
+        None => None,
+    };
+    match fixed {
+        Some(fixed) if fixed <= limits.session_bytes => Ok(()),
+        Some(_) | None => Err(crate::record::Refusal::TooLarge),
+    }
 }

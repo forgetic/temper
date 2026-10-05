@@ -316,7 +316,28 @@ passing with the same counts.
    saves ordinary unfinished work, and releases the process/workspace;
    a merge run skips the unfinished save. Protocol v2 mapping follows in
    05g; v1 translators explicitly reject the new records.
-5. **05e the session:** turns told, opening from a transcript, pricing.
+5. **05e the session:** explicit version-two admission and concrete,
+   versioned turn/transcript records beside version one. Settled turns keep
+   provider blocks verbatim and replace local delegated tickets with
+   provider call names/input and concrete answers. Restore checks identity,
+   structure and bounds before opening a kit, with typed transient refusals.
+   Checked per-completion prices and child-terminal spend share a unit cap
+   beside token caps; duplicate child terminals cannot charge twice. Its
+   world preserves legacy scenarios and adds independent observations of
+   replay, refusals, cancellation races, prices, facts and counted memory.
+   The run's aggregation and the byte codec remain 05f and 05g.
+
+   Session-only serial measurement, on the idle development machine with
+   `cargo nextest run -p temper-agent-domain-session -p
+   temper-agent-session-world --profile measure -j 1`: baseline `ae897a2`
+   ran 82 retained focused tests in **2.221 s**; the 05e source candidate
+   `cf5ee62` ran those plus 13 focused tests in **2.254 s**, a **+0.033 s**
+   delta. Selecting fuzzy binaries with `--ignore-default-filter -E
+   'binary(/^fuzzy_/)'`, the retained one test took **0.641 s** and the
+   candidate's two took **0.653 s**, a **+0.012 s** delta. The added sweep
+   covers 64 priced child-terminal/closing races. No retained scenario or
+   sweep was trimmed. These are scoped serial costs; the full workspace
+   gate still enforces the shared 15/60-second limits.
 6. **05f the run and the tools:** messages, waiting and parking, the
    engine's tools, contracts, merges in progress, the budget in the unit.
 7. **05g the agent's and the worker's protocol translations** of the

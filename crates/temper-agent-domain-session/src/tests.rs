@@ -53,6 +53,7 @@ const TOOLS: tools::Limits = tools::Limits {
 
 const LIMITS: Limits = Limits {
     sessions: 2,
+    spend: 0,
     messages: 8,
     session_bytes: 65_536,
     budget: BUDGET,
@@ -118,6 +119,7 @@ impl Harness {
         let mut one = None;
         while let Some(request) = self.out.pop() {
             match request {
+                Request::Turn { .. } | Request::Priced { .. } => unreachable!("v1 scenarios"),
                 Request::Used { opener: _, usage } => {
                     assert!(one.is_none(), "a completion's usage comes first");
                     self.turns = self.turns.saturating_add(1);
@@ -147,6 +149,7 @@ impl Harness {
         let mut runs = List::with_capacity(max_out(&self.env.limits));
         while let Some(request) = self.out.pop() {
             match request {
+                Request::Turn { .. } | Request::Priced { .. } => unreachable!("v1 scenarios"),
                 Request::Io { owner, .. }
                 | Request::CancelIo { owner }
                 | Request::Delegate { owner, .. }
@@ -843,7 +846,7 @@ fn the_llm_yields_whenever_it_stops_calling_tools() {
 
 #[test]
 fn opens_beyond_the_session_slots_are_refused_as_busy() {
-    let mut h = Harness::new(Limits { sessions: 1, ..LIMITS });
+    let mut h = Harness::new(Limits { sessions: 1, spend: 0, ..LIMITS });
     drop(h.open(1));
     let refused = h.step(Event::Open { opener: Token::new(2), spec: spec() });
     assert_eq!(refused, Some(Request::Ended { opener: Token::new(2), end: End::Busy, turns: 0, usage: Usage::ZERO }));
@@ -962,7 +965,7 @@ fn closing_a_session_that_is_already_closing_changes_nothing() {
 
 #[test]
 fn a_handle_to_a_session_that_has_ended_is_dropped() {
-    let mut h = Harness::new(Limits { sessions: 1, ..LIMITS });
+    let mut h = Harness::new(Limits { sessions: 1, spend: 0, ..LIMITS });
     let session = h.yielded();
     assert_eq!(h.step(Event::Close { session }), Some(ended(End::Closed, 1)));
     // Ended, and not yet reclaimed.
@@ -1275,7 +1278,7 @@ fn a_session_tells_what_happens_as_facts() {
 
 #[test]
 fn retries_cancels_and_refusals_are_told_too() {
-    let mut h = Harness::new(Limits { sessions: 1, ..LIMITS });
+    let mut h = Harness::new(Limits { sessions: 1, spend: 0, ..LIMITS });
     let opener = Token::new(1);
     let (owner, _) = h.open(1);
     assert_eq!(h.step(Event::Failed { owner, failure: Failure::Overloaded }), None);

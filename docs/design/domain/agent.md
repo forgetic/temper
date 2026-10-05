@@ -331,6 +331,46 @@ charters or results.
   opener like a sub-agent, comes after. A long-lived chat needs it before
   its transcript reaches the resume limit.
 
+The session extension (migration 05e) selects version two with `OpenV2`,
+whose concrete `Opening` carries a dialect, charter prices, a deployment-unit
+budget and optional typed history. Absence of history never selects version
+one. `Open` retains the first-version session unchanged. Versioned `Turn`
+and `Transcript` records are domain values; their byte encoding belongs to
+the protocol translation in 05g. Each settled turn contains its completion
+and surrounding user messages, provider blocks in position, provider call
+ids, names and original input bytes. A historical call contains no executable
+session ticket. Delegated results contain concrete rendered bytes, and a
+withdrawal has its own typed result. Closing waits for actual terminal
+responses before telling the turn, including answers that win cancellation.
+
+History is checked before a kit opens or a completion starts: version,
+endpoint and dialect; contiguous turn sequence; message and block bounds;
+roles and call/result ids; and absence of unresolved session tickets. It
+must fit the message and byte limits with the waking prompt and room for a
+completion. Version, endpoint, dialect, malformed, unresolved and oversized
+history are distinct `TranscriptRefused` reasons. The run treats every one
+as transient and starts its next attempt fresh (05f); the legacy run never
+opens these sessions. Committed concrete results after the last turn are
+restored before the waking prompt. An unanswered call in a yielded tail gets
+the same `NotRun` result as an ordinary continuation.
+
+Prices are integer input, cached and output amounts per positive `unit`
+tokens (channel.md, 16). New input and cache writes use the input rate;
+cache reads use the cached rate. The combined rational charge of **each
+completion** is rounded upwards once, using checked arithmetic; the result
+and cumulative deployment spend must fit `u64`. Overflow is a typed
+`PriceOverflow` ending with an overflow spend report, never a saturated
+charge. `Limits::spend` bounds admission, beside unchanged token caps. The
+completion crossing the unit budget still runs and settles its tools; the
+next completion stops. A concrete delegated terminal, answered or withdrawn, carries the
+sub-agent's cumulative spend once under its call identity; duplicate or
+stale delivery cannot charge it again. `Priced` and `Turn::spent` are
+cumulative within this activation, including these children; restoring
+history does not charge old activations again. A run must count each child
+through its terminal parent response once, rather than adding both child
+spend reports and the parent's inclusive total. Enforcing one aggregate
+budget across concurrently open sessions belongs to the run in 05f.
+
 A sub-agent is a delegated tool call that the run serves by opening
 another session: the same workspace, its own tools (often read-only, and
 never the engine's), a budget carved from the run's, and one of the LLMs

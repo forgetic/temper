@@ -256,6 +256,7 @@ fn path(text: &[u8]) -> Result<Path, agent::Problem> {
 #[must_use]
 pub fn render(result: &agent::Returned) -> (Box<[u8]>, bool) {
     match result {
+        agent::Returned::Text { text, error } => (text.clone(), *error),
         agent::Returned::Owned { outcome } => {
             let failed = !matches!(
                 outcome,
@@ -275,6 +276,7 @@ pub fn render(result: &agent::Returned) -> (Box<[u8]>, bool) {
         }
         agent::Returned::Invalid { problem } => (format!("malformed call: {problem:?}").into_bytes().into(), true),
         agent::Returned::Delegated { .. } => unreachable!("the opener's answers are rendered from their tickets"),
+        agent::Returned::Withdrawn => (b"withdrawn".as_slice().into(), true),
         agent::Returned::NotRun => (b"not run: the answer stopped first".as_slice().into(), true),
     }
 }

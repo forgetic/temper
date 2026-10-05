@@ -44,6 +44,7 @@ fn size(of: usize) -> u64 {
 
 const LIMITS: Limits = Limits {
     sessions: 1,
+    spend: 0,
     messages: 4,
     session_bytes: 1024,
     budget: Budget {
@@ -121,7 +122,9 @@ fn fill(limits: Limits, route: Route) {
                 | Request::Cancel { .. }
                 | Request::CancelIo { .. }
                 | Request::Delegate { .. }
-                | Request::Withdraw { .. } => Asked::Other,
+                | Request::Withdraw { .. }
+                | Request::Turn { .. }
+                | Request::Priced { .. } => Asked::Other,
             });
         }
         meter.check(measured, bound, limits);
@@ -209,9 +212,9 @@ fn fill(limits: Limits, route: Route) {
 fn a_domain_with_every_session_full_stays_within_its_worst_case() {
     for route in [Route::Tool, Route::Invalid, Route::Talk] {
         fill(LIMITS, route);
-        fill(Limits { sessions: 64, session_bytes: 65_536, ..LIMITS }, route);
-        fill(Limits { sessions: 1000, messages: 8, session_bytes: 600, ..LIMITS }, route);
-        fill(Limits { sessions: 64, parallel_tools: MAX_PARALLEL, ..LIMITS }, route);
+        fill(Limits { sessions: 64, spend: 0, session_bytes: 65_536, ..LIMITS }, route);
+        fill(Limits { sessions: 1000, spend: 0, messages: 8, session_bytes: 600, ..LIMITS }, route);
+        fill(Limits { sessions: 64, spend: 0, parallel_tools: MAX_PARALLEL, ..LIMITS }, route);
     }
 }
 
@@ -327,4 +330,162 @@ fn slabs_lists_and_queues_take_no_more_than_their_worst_case() {
         meter.check(meter.end(), bound, format_args!("a queue of {capacity}"));
         drop(queue);
     }
+}
+
+#[test]
+fn recorded_delegated_turns_hold_exactly_the_byte_cap_and_count_their_copies() {
+    use temper_agent_domain_session::record;
+    let limits = Limits { messages: 6, spend: u64::MAX, ..LIMITS };
+    let bound = worst_case(&limits).expect("the counted scenario fits");
+    let env = Env { now: Time::ZERO, wall: Wall::EPOCH, limits };
+    let mut out = Queue::with_capacity(max_out(&limits));
+    let meter = Meter::new();
+    let mut domain = Domain::new(&limits, 77);
+    let mut drive = |event| {
+        meter.start();
+        temper_agent_domain_session::step(&mut domain, &env, event, &mut out);
+        let measured = meter.end();
+        let mut completion = None;
+        let mut delegate = None;
+        while let Some(request) = out.pop() {
+            match request {
+                Request::Complete { owner, .. } => completion = Some(owner),
+                Request::Delegate { owner, .. } => delegate = Some(owner),
+                Request::Opened { .. }
+                | Request::Yielded { .. }
+                | Request::Used { .. }
+                | Request::Ended { .. }
+                | Request::Turn { .. }
+                | Request::Priced { .. }
+                | Request::Cancel { .. }
+                | Request::Io { .. }
+                | Request::CancelIo { .. }
+                | Request::Withdraw { .. } => {}
+            }
+        }
+        meter.check(measured, bound, limits);
+        (completion, delegate)
+    };
+    let spec = Spec {
+        endpoint: Endpoint(7),
+        model: bytes(1),
+        system: bytes(1),
+        authority: authority(),
+        delegated: Box::new([Descriptor { ticket: Token::new(2), effect: Effect::Write }]),
+        prompt: bytes(1),
+        max_tokens: 1,
+        budget: limits.budget,
+    };
+    let block = size(size_of::<Block>());
+    let spec_charge = 2 + size(size_of::<Descriptor>()) + block + 1;
+    let turn_charge = block + 1 + block + 3 + block + 1;
+    let output = limits.session_bytes - spec_charge - turn_charge;
+    let (owner, _) = drive(Event::OpenV2 {
+        opener: Token::new(1),
+        spec: record::Opening {
+            spec,
+            dialect: 2,
+            prices: record::Prices { input: 1, cached: 1, output: 1, unit: 1 },
+            budget: 1,
+            transcript: None,
+        },
+    });
+    let (_, delegate) = drive(Event::Completed {
+        owner: owner.expect("the counted scenario fits"),
+        completion: Completion {
+            content: Box::new([
+                Block::Opaque { bytes: bytes(1) },
+                Block::ToolCall {
+                    id: bytes(1),
+                    name: bytes(1),
+                    input: bytes(1),
+                    call: Decoded::Delegated { ticket: Token::new(99), effect: Effect::Write },
+                },
+            ]),
+            stop: Stop::ToolUse,
+            usage: Usage::ZERO,
+        },
+    });
+    let (owner, _) = drive(Event::AnsweredV2 {
+        owner: delegate.expect("the counted scenario fits"),
+        text: bytes(output),
+        error: false,
+        spent: 0,
+    });
+    drive(Event::Failed { owner: owner.expect("the counted scenario fits"), failure: Failure::Overloaded });
+    assert!(meter.held() >= limits.session_bytes);
+}
+
+#[test]
+fn restoring_a_maximum_recorded_history_stays_within_the_counted_bound() {
+    use temper_agent_domain_session::record;
+    let limits = Limits { messages: 6, spend: u64::MAX, ..LIMITS };
+    let bound = worst_case(&limits).expect("the limits fit");
+    let env = Env { now: Time::ZERO, wall: Wall::EPOCH, limits };
+    let mut out = Queue::with_capacity(max_out(&limits));
+    let meter = Meter::new();
+    let mut domain = Domain::new(&limits, 78);
+    let block = size(size_of::<Block>());
+    let charge = 2 + size(size_of::<Descriptor>()) + block + 1;
+    let opaque = limits.session_bytes - charge - 2 * block - 1;
+    let spec = Spec {
+        endpoint: Endpoint(7),
+        model: bytes(1),
+        system: bytes(1),
+        authority: authority(),
+        delegated: Box::new([Descriptor { ticket: Token::new(2), effect: Effect::Write }]),
+        prompt: bytes(1),
+        max_tokens: 1,
+        budget: limits.budget,
+    };
+    let history = record::Transcript {
+        version: record::VERSION,
+        endpoint: Endpoint(7),
+        dialect: 2,
+        turns: Box::new([record::Turn {
+            version: record::VERSION,
+            endpoint: Endpoint(7),
+            dialect: 2,
+            sequence: 1,
+            usage: Usage::ZERO,
+            spent: 0,
+            messages: Box::new([
+                temper_agent_domain_session::llm::Message {
+                    role: temper_agent_domain_session::llm::Role::User,
+                    content: Box::new([Block::Text { text: bytes(1) }]),
+                },
+                temper_agent_domain_session::llm::Message {
+                    role: temper_agent_domain_session::llm::Role::Assistant,
+                    content: Box::new([Block::Opaque { bytes: bytes(opaque) }]),
+                },
+            ]),
+        }]),
+        after: Box::default(),
+    };
+    meter.start();
+    temper_agent_domain_session::step(
+        &mut domain,
+        &env,
+        Event::OpenV2 {
+            opener: Token::new(1),
+            spec: record::Opening {
+                spec,
+                dialect: 2,
+                prices: record::Prices { input: 1, cached: 1, output: 1, unit: 1 },
+                budget: 1,
+                transcript: Some(history),
+            },
+        },
+        &mut out,
+    );
+    let measured = meter.end();
+    let mut completed = false;
+    while let Some(request) = out.pop() {
+        if let Request::Complete { .. } = request {
+            completed = true;
+        }
+    }
+    assert!(completed, "a history filled to the exact byte cap still leaves an answer slot");
+    meter.check(measured, bound, limits);
+    assert!(meter.held() >= limits.session_bytes);
 }

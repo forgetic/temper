@@ -68,6 +68,7 @@ fn random_worlds_settle_with_every_session_ended() {
                 End::Failed { failure: Failure::TimedOut } => "timed out".into(),
                 End::Failed { .. } => "failed".into(),
                 End::Budget { spent } => format!("{spent:?}"),
+                End::TranscriptRefused { .. } | End::PriceOverflow => unreachable!("v1 scenarios"),
                 End::TranscriptFull => "transcript full".into(),
             };
             ends.insert(kind);

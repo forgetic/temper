@@ -154,6 +154,9 @@ fn session_step(domain: &mut Domain, env: &Env<Limits>, event: session::Event) {
 /// One of the sessions' requests: out to the protocol layer, or to the run.
 fn from_session(domain: &mut Domain, env: &Env<Limits>, request: session::Request, out: &mut Queue<Request>) {
     let event = match request {
+        session::Request::Turn { .. } | session::Request::Priced { .. } => {
+            unreachable!("the legacy run opens only version-one sessions")
+        }
         session::Request::Complete { owner, prompt, timeout } => {
             let id = *domain.sessions.get(&owner).expect("a session asks for completions once it has opened");
             let peer = domain.peers.get_mut(id).expect("a peer lives as its session");

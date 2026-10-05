@@ -30,3 +30,4 @@ mod world;
 pub use noisy::{noisy, submit_noisily};
 pub use temper_world::Span;
 pub use world::{BUDGET, Count, Ended, Session, Settings, Stats, TOOLS, Told, World, spec};
+pub mod recorded;

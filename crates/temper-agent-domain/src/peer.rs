@@ -189,6 +189,9 @@ impl Peer {
                     }
                     sllm::Returned::Invalid { problem } => Returned::Invalid { problem },
                     sllm::Returned::NotRun => Returned::NotRun,
+                    sllm::Returned::Text { .. } | sllm::Returned::Withdrawn => {
+                        unreachable!("version-one sessions retain ticketed served answers")
+                    }
                 };
                 Block::ToolResult { id, result }
             }

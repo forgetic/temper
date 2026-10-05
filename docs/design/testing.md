@@ -674,3 +674,26 @@ By fake:
   so execution terminates, but programming-model.md, sections 3 and 10.3,
   forbids `while` in step code. Rewriting it as a bounded `for` is deferred;
   this records the discrepancy rather than granting a general exception.
+
+### Session extension (migration 05e)
+
+The session world's existing v1 scenarios and fuzzy sweep stay intact.
+`tests/agent/session/src/recorded.rs` is a scripted v2 parent/provider
+world: its referee observes requests, provider message bytes, concrete turns
+and cumulative spend. It computes expected charges independently from token
+counts, checks the original opaque bytes and provider ids/input, and feeds
+its durable turn values into a new session. The harness separately checks
+request terminals, output bounds and settled session/run/kit counts.
+
+Focused cases cover fresh v2 admission, transcript identity/structure/size
+and unresolved-ticket refusals before effects, concrete committed results
+after a turn, unanswered yielded calls, per-completion rounding, overflow,
+child spend exactly once before and after reclaim, and cancellation races.
+The same observations replay and remain identical with facts disabled.
+The counting allocator also fills a v2 delegated transcript and restores
+concrete history exactly to their byte cap, counting the turn and provider
+copies at emission against the session's declared worst case. The bound
+includes the record envelopes while incoming messages move into the session's
+bounded transcript list. A separate fuzzy test varies token counts,
+child spend, concrete result sizes and the closing/terminal races over 64
+seeds. It adds no runtime-system scenario and changes no legacy case.

@@ -4,6 +4,7 @@ use temper_agent_domain_tools as tools;
 use crate::boundary::Budget;
 use crate::facts::Fact;
 use crate::llm::Message;
+use crate::record::Turn;
 use crate::session::{Alarm, Ready, Run, Session};
 
 /// The most tool calls a session runs at once: what `Limits::parallel_tools`
@@ -16,6 +17,8 @@ pub const MAX_PARALLEL: u32 = 8;
 pub struct Limits {
     /// Sessions at once. An `Open` beyond them is refused as busy.
     pub sessions: u32,
+    /// Largest version-two deployment-unit budget admitted. V1 does not use it.
+    pub spend: u64,
     /// Messages a session's transcript holds, the spec's prompt included: at
     /// least two, the prompt and an answer.
     pub messages: u32,
@@ -84,6 +87,10 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     // Each session owns its transcript's list and up to its byte limit.
     let session = List::<Message>::worst_case(limits.messages)?.checked_add(limits.session_bytes)?;
     let held = u64::from(limits.sessions).checked_mul(session)?;
+    // One restore event at a time may still own its bounded record envelopes
+    // while its messages move into the already allocated transcript list.
+    let staging =
+        List::<Turn>::worst_case(limits.messages)?.checked_add(List::<Message>::worst_case(limits.messages)?)?;
     sessions
         .checked_add(runs)?
         .checked_add(alarms)?
@@ -91,7 +98,8 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_add(facts)?
         .checked_add(tools)?
         .checked_add(tools_out)?
-        .checked_add(held)
+        .checked_add(held)?
+        .checked_add(staging)
 }
 
 /// The run slab's capacity: two batches a session. A session starts at most

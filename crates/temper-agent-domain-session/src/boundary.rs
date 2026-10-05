@@ -29,6 +29,13 @@ pub enum Event {
     /// Open a session for `spec`, on behalf of `opener`. Answered by exactly one
     /// `Ended`, after an `Opened` if the session was admitted.
     Open { opener: Token, spec: Spec },
+    /// Explicit version-two admission, including a fresh session with no history.
+    OpenV2 { opener: Token, spec: crate::record::Opening },
+    /// A concrete delegated answer, including the spend of a sub-agent served
+    /// by this call. The opener charges each child once, at its terminal answer.
+    AnsweredV2 { owner: Token, text: Box<[u8]>, error: bool, spent: u64 },
+    /// A withdrawn child terminal still reports what it spent before stopping.
+    AnswerCancelledV2 { owner: Token, spent: u64 },
     /// A new user message for a yielded session, which calls the LLM again.
     /// Sent only while the session is yielded; a `session` that has ended
     /// meanwhile is dropped.
@@ -56,6 +63,10 @@ pub enum Request {
     /// The session for `opener` was admitted, and `session` names it from now
     /// on.
     Opened { opener: Token, session: Token },
+    /// A settled turn, copied at emission. Its values contain no session tickets.
+    Turn { opener: Token, turn: crate::record::Turn },
+    /// Version two's cumulative deployment-unit spend, including child calls.
+    Priced { opener: Token, spent: u64, overflow: bool },
     /// The LLM stopped calling tools, saying `text` (its message's text blocks,
     /// one after another). The session waits for `Continue` or `Close`, and
     /// its time budget keeps running.
@@ -142,6 +153,7 @@ pub enum Dimension {
     CacheRead,
     CacheWrite,
     Time,
+    Unit,
 }
 
 /// Why a session yielded: how the LLM stopped calling tools.
@@ -173,4 +185,9 @@ pub enum End {
     Budget { spent: Dimension },
     /// The conversation outgrew the session's message or byte limit.
     TranscriptFull,
+    /// A transcript cannot be resumed. The next attempt must start fresh;
+    /// this is a transient run failure (domain/engine.md, 7.2).
+    TranscriptRefused { reason: crate::record::Refusal },
+    /// A checked price or cumulative spend did not fit the deployment counter.
+    PriceOverflow,
 }

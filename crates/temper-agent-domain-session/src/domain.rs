@@ -9,7 +9,7 @@ use crate::limits::{self, Limits};
 use crate::session::{self, Alarm, Calls, Ready, Session};
 
 /// The most requests an entry point emits per call under `limits`, following
-/// the chain to the tools (4.5): the session's own two (a completion's `Used`
+/// the chain to the tools (4.5): the session's own four (a completion's `Used`, priced spend and told turn
 /// and what follows it, or an admitted `Open`'s `Opened` and first call);
 /// the one batch of runs a step may start, a request each, or the withdraws
 /// and cancels closing sends for a batch; and what one step of the tools
@@ -17,17 +17,17 @@ use crate::session::{self, Alarm, Calls, Ready, Session};
 /// The parent reserves this much room in `out` before calling it.
 #[must_use]
 pub const fn max_out(limits: &Limits) -> u32 {
-    2_u32.saturating_add(limits.parallel_tools).saturating_add(tools::max_out(&limits.tools))
+    4_u32.saturating_add(limits.parallel_tools).saturating_add(tools::max_out(&limits.tools))
 }
 
 /// The most of those requests that are for the opener (the session's records
 /// that name it, and its delegated calls and their withdraws): the session's
-/// own two, and a batch of delegated calls, a request each, or the withdraws
+/// own four, and a batch of delegated calls, a request each, or the withdraws
 /// closing sends for one (a step starts a batch or cancels one, never both).
 /// The tools' operations and their cancels never reach the opener.
 #[must_use]
 pub const fn max_to_opener(limits: &Limits) -> u32 {
-    2_u32.saturating_add(limits.parallel_tools)
+    4_u32.saturating_add(limits.parallel_tools)
 }
 
 /// The session child domain's state.
@@ -141,6 +141,13 @@ impl Domain {
 pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     match event {
         Event::Open { opener, spec } => session::open(domain, env, opener, spec, out),
+        Event::OpenV2 { opener, spec } => session::open_v2(domain, env, opener, spec, out),
+        Event::AnsweredV2 { owner, text, error, spent } => {
+            session::delegate_ended_v2(domain, env, owner, crate::llm::Returned::Text { text, error }, spent, out);
+        }
+        Event::AnswerCancelledV2 { owner, spent } => {
+            session::delegate_ended_v2(domain, env, owner, crate::llm::Returned::Withdrawn, spent, out);
+        }
         Event::Continue { session, content } => session::continued(domain, env, session, content, out),
         Event::Close { session } => session::close(domain, env, session, out),
         Event::Completed { owner, completion } => session::completed(domain, env, owner, completion, out),

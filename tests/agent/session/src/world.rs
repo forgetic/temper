@@ -115,6 +115,7 @@ impl Settings {
             seed,
             agent: agent::Limits {
                 sessions: 4,
+                spend: 0,
                 messages: 32,
                 session_bytes: 1 << 20,
                 budget: BUDGET,
@@ -643,7 +644,9 @@ impl World {
         let mut sent = 0;
         for request in self.agent_stage.out.iter().skip(usize::try_from(from).expect("small")) {
             match request {
-                agent::Request::Opened { .. }
+                agent::Request::Turn { .. }
+                | agent::Request::Priced { .. }
+                | agent::Request::Opened { .. }
                 | agent::Request::Yielded { .. }
                 | agent::Request::Used { .. }
                 | agent::Request::Ended { .. }
@@ -662,6 +665,7 @@ impl World {
     fn agent_request(&mut self, request: agent::Request) {
         self.log(&format!("agent -> {}", describe_agent_request(&request)));
         match request {
+            agent::Request::Turn { .. } | agent::Request::Priced { .. } => unreachable!("v1 scenarios"),
             agent::Request::Opened { opener, session } => self.opened(opener.raw(), session),
             agent::Request::Yielded { opener, stop, text } => self.yielded(opener.raw(), stop, text),
             agent::Request::Used { opener, usage } => self.used(opener.raw(), usage),
@@ -797,6 +801,7 @@ impl World {
         let session = self.sessions.get(&opener).expect("a session ends for an open that was sent");
         assert!(session.ended.is_none(), "a session ends once");
         match ended.end {
+            agent::End::TranscriptRefused { .. } | agent::End::PriceOverflow => unreachable!("v1 scenarios"),
             agent::End::Busy | agent::End::Invalid => {
                 assert!(session.session.is_none(), "a session refused at the entrance never opened");
             }
@@ -825,6 +830,7 @@ impl World {
     fn spent(&self, session: &Session, dimension: agent::Dimension) -> bool {
         let (budget, usage) = (&session.budget, &session.usage);
         match dimension {
+            agent::Dimension::Unit => unreachable!("v1 scenarios"),
             agent::Dimension::Turns => session.turns >= budget.turns,
             agent::Dimension::Input => usage.input_tokens >= budget.input,
             agent::Dimension::Output => usage.output_tokens >= budget.output,
@@ -1318,8 +1324,12 @@ impl World {
 /// The delegated call whose end `event` is, if it is one.
 fn ended_run(event: &agent::Event) -> Option<Token> {
     match event {
-        agent::Event::Answered { owner, .. } | agent::Event::AnswerCancelled { owner } => Some(*owner),
-        agent::Event::Open { .. }
+        agent::Event::Answered { owner, .. }
+        | agent::Event::AnsweredV2 { owner, .. }
+        | agent::Event::AnswerCancelledV2 { owner, .. }
+        | agent::Event::AnswerCancelled { owner } => Some(*owner),
+        agent::Event::OpenV2 { .. }
+        | agent::Event::Open { .. }
         | agent::Event::Continue { .. }
         | agent::Event::Close { .. }
         | agent::Event::Completed { .. }
@@ -1331,6 +1341,11 @@ fn ended_run(event: &agent::Event) -> Option<Token> {
 
 fn describe_agent_event(event: &agent::Event) -> String {
     match event {
+        agent::Event::AnswerCancelledV2 { owner, spent } => format!("cancelled v2 {} {spent}", owner.raw()),
+        agent::Event::OpenV2 { opener, spec } => format!("open v2 {} {spec:?}", opener.raw()),
+        agent::Event::AnsweredV2 { owner, text, error, spent } => {
+            format!("answered v2 {} {text:?} {error} {spent}", owner.raw())
+        }
         agent::Event::Open { opener, spec } => {
             format!("open {} {:?}", opener.raw(), String::from_utf8_lossy(&spec.prompt))
         }
@@ -1351,6 +1366,8 @@ fn describe_agent_event(event: &agent::Event) -> String {
 
 fn describe_agent_request(request: &agent::Request) -> String {
     match request {
+        agent::Request::Turn { opener, turn } => format!("turn {} {turn:?}", opener.raw()),
+        agent::Request::Priced { opener, spent, overflow } => format!("priced {} {spent} {overflow}", opener.raw()),
         agent::Request::Opened { opener, session } => format!("opened {} as {}", opener.raw(), session.raw()),
         agent::Request::Yielded { opener, stop, text } => {
             format!("yielded {} {stop:?} {:?}", opener.raw(), String::from_utf8_lossy(text))

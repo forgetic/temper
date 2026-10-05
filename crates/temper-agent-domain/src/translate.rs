@@ -128,8 +128,11 @@ pub(crate) const fn spend(turns: u32, usage: llm::Usage) -> Spend {
 /// How the session ended, as the run hears it: a failed call is its
 /// provider's fault, but for a conversation too long for the model, which is
 /// a full context, as is a transcript past the session's limits.
-pub(crate) const fn end(end: session::End) -> run::End {
+pub(crate) fn end(end: session::End) -> run::End {
     match end {
+        session::End::TranscriptRefused { .. } | session::End::PriceOverflow => {
+            unreachable!("the legacy run opens only version-one sessions")
+        }
         session::End::Busy => run::End::Busy,
         session::End::Invalid => run::End::Invalid,
         session::End::Closed => run::End::Closed,
@@ -148,8 +151,9 @@ pub(crate) const fn end(end: session::End) -> run::End {
     }
 }
 
-const fn exhausted(spent: Dimension) -> run::Exhausted {
+fn exhausted(spent: Dimension) -> run::Exhausted {
     match spent {
+        Dimension::Unit => unreachable!("the legacy run opens only version-one sessions"),
         Dimension::Turns => run::Exhausted::Turns,
         Dimension::Input => run::Exhausted::Input,
         Dimension::Output => run::Exhausted::Output,

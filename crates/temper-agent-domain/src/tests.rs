@@ -68,6 +68,7 @@ const LIMITS: Limits = Limits {
     },
     session: session::Limits {
         sessions: 4,
+        spend: 0,
         messages: 16,
         session_bytes: 65_536,
         budget: CEILING,
@@ -372,7 +373,7 @@ fn no_grant_fails_locally_and_exhaustion_reports_the_account() {
 #[test]
 fn the_limits_fit_and_a_session_must_take_what_the_run_asks() {
     assert!(worst_case(&LIMITS).is_some());
-    let fewer = Limits { session: session::Limits { sessions: 3, ..LIMITS.session }, ..LIMITS };
+    let fewer = Limits { session: session::Limits { sessions: 3, spend: 0, ..LIMITS.session }, ..LIMITS };
     assert_eq!(worst_case(&fewer), None, "a session for every conversation the run may have");
     let budget = session::Budget { turns: 50, ..CEILING };
     let smaller = Limits { session: session::Limits { budget, ..LIMITS.session }, ..LIMITS };
