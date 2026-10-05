@@ -232,8 +232,11 @@ The byte fields inside (`effect`, `read`, `amendment`) are themselves
 typed at their ends by the connector's or the tasks' schema in the same
 module, never left for the domain to parse (programming-model.md,
 section 4); they are bytes here only because the worker passes them
-through. Their exact fields follow `tasks.md`, `engine.md`, 7.3 and the
-connectors' reads, and are settled when 05b is written.
+through. Their concrete fields are settled by `channel.md`, section 16 and
+`temper-channel/src/payload/v2.rs`: amendments, actions, authority and
+forge reads/effects/results are closed typed values at the endpoints.
+The byte-shaped members in the sketch above describe worker pass-through,
+not a domain parser.
 
 ### 2.5 The protocol layers
 
@@ -276,7 +279,12 @@ passing with the same counts.
 1. **05a the fleet's turns and graces.** Needed first, by step 06's
    skeleton.
 2. **05b the channel:** the link's new kinds; `payload/v1.rs` moved,
-   `payload/v2.rs` written, with golden frames.
+   `payload/v2.rs` written, with golden frames. Settled layouts and the
+   typed inner schemas are in `channel.md`, section 16. This increment
+   adds configured 1–2 negotiation and bounded unknown-kind status/skip;
+   legacy callers retain explicit v1 imports and mechanical exhaustive
+   match arms. It does not implement runtime domain behavior or v2
+   protocol translations (05c–05g).
 3. **05c the checkout and the fake checkout:** merges, two parents,
    expected heads.
 4. **05d the host and the worker's root:** transcripts, turns, spend,

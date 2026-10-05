@@ -1,4 +1,5 @@
 //! Frozen opening and the two channel vocabularies.
+pub mod v2;
 use crate::{
     Sizes,
     primitives::{self as p, Encoder},
@@ -1182,6 +1183,40 @@ pub(crate) fn get_address(input: &mut Reader<'_>, _sizes: &Sizes) -> Option<Addr
 }
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Message {
+    Unsupported {
+        kind: u16,
+    },
+    HelloV2 {
+        hello: v2::Hello,
+    },
+    AnswerV2 {
+        answer: v2::Answer,
+    },
+    AssignV2 {
+        assign: v2::Assign,
+    },
+    AgentCallV2 {
+        call: v2::AgentCall,
+    },
+    FinishV2 {
+        finish: v2::Finished,
+    },
+    AgentStartV2 {
+        start: v2::AgentStart,
+    },
+    Turn {
+        turn: v2::Turn,
+    },
+    AcknowledgeTurn {
+        turn: v2::TurnName,
+    },
+    TurnBusy {
+        turn: v2::TurnName,
+    },
+    AgentTurn {
+        turn: v2::AgentTurn,
+    },
+
     Open {
         open: Open,
     },
@@ -1320,34 +1355,39 @@ impl Message {
     #[must_use]
     pub const fn kind(&self) -> u16 {
         match self {
+            Message::Unsupported { .. } => 17,
+            Message::Turn { .. } => 264,
+            Message::AcknowledgeTurn { .. } => 391,
+            Message::TurnBusy { .. } => 392,
+            Message::AgentTurn { .. } => 522,
             Message::Open { .. } => 1,
             Message::Accept { .. } => 2,
             Message::Refuse { .. } => 3,
             Message::Ping => 4,
             Message::Terms { .. } => 16,
-            Message::Hello { .. } => 257,
-            Message::Answer { .. } => 258,
+            Message::Hello { .. } | Message::HelloV2 { .. } => 257,
+            Message::Answer { .. } | Message::AnswerV2 { .. } => 258,
             Message::Relay { .. } => 259,
             Message::Bounced { .. } => 260,
             Message::Told { .. } => 261,
             Message::Rejected { .. } => 262,
             Message::Exhausted { .. } => 263,
-            Message::Assign { .. } => 385,
+            Message::Assign { .. } | Message::AssignV2 { .. } => 385,
             Message::Inbound { .. } => 386,
             Message::Cancel { .. } => 387,
             Message::Relayed { .. } => 388,
             Message::Acknowledge { .. } => 389,
             Message::Grant { .. } => 390,
-            Message::AgentCall { .. } => 513,
+            Message::AgentCall { .. } | Message::AgentCallV2 { .. } => 513,
             Message::Withdraw { .. } => 514,
             Message::Fact { .. } => 515,
             Message::Long { .. } => 516,
             Message::LongDone => 517,
             Message::Waiting { .. } => 518,
-            Message::Finish { .. } => 519,
+            Message::Finish { .. } | Message::FinishV2 { .. } => 519,
             Message::AgentRejected { .. } => 520,
             Message::AgentExhausted { .. } => 521,
-            Message::AgentStart { .. } => 641,
+            Message::AgentStart { .. } | Message::AgentStartV2 { .. } => 641,
             Message::AgentEvent { .. } => 642,
             Message::AgentAnswer { .. } => 643,
             Message::AgentCancel => 644,
@@ -1355,9 +1395,147 @@ impl Message {
         }
     }
 }
+impl Message {
+    /// A record tied to one version cannot be sent in another.
+    #[must_use]
+    pub const fn payload_version(&self) -> Option<u16> {
+        match self {
+            Message::Hello { .. }
+            | Message::Answer { .. }
+            | Message::Assign { .. }
+            | Message::AgentCall { .. }
+            | Message::Finish { .. }
+            | Message::AgentStart { .. } => Some(1),
+            Message::HelloV2 { .. }
+            | Message::AnswerV2 { .. }
+            | Message::AssignV2 { .. }
+            | Message::AgentCallV2 { .. }
+            | Message::FinishV2 { .. }
+            | Message::AgentStartV2 { .. }
+            | Message::Turn { .. }
+            | Message::AcknowledgeTurn { .. }
+            | Message::TurnBusy { .. }
+            | Message::AgentTurn { .. } => Some(2),
+            Message::Open { .. }
+            | Message::Accept { .. }
+            | Message::Refuse { .. }
+            | Message::Ping
+            | Message::Terms { .. }
+            | Message::Relay { .. }
+            | Message::Bounced { .. }
+            | Message::Told { .. }
+            | Message::Rejected { .. }
+            | Message::Exhausted { .. }
+            | Message::Inbound { .. }
+            | Message::Cancel { .. }
+            | Message::Relayed { .. }
+            | Message::Acknowledge { .. }
+            | Message::Grant { .. }
+            | Message::Withdraw { .. }
+            | Message::Fact { .. }
+            | Message::Long { .. }
+            | Message::LongDone
+            | Message::Waiting { .. }
+            | Message::AgentRejected { .. }
+            | Message::AgentExhausted { .. }
+            | Message::AgentEvent { .. }
+            | Message::AgentAnswer { .. }
+            | Message::AgentCancel
+            | Message::AgentGrant { .. }
+            | Message::Unsupported { .. } => None,
+        }
+    }
+}
+pub(crate) fn put_version(out: &mut Encoder, value: &Message, sizes: &Sizes, version: u16) -> Option<()> {
+    if let Some(required) = value.payload_version()
+        && required != version
+    {
+        return None;
+    }
+    match version {
+        1 => put_message(out, value, sizes),
+        2 => match value {
+            Message::HelloV2 { hello } => v2::put_hello(out, hello, sizes),
+            Message::AnswerV2 { answer } => v2::put_answer(out, answer, sizes),
+            Message::AssignV2 { assign } => v2::put_assign(out, assign, sizes),
+            Message::AgentCallV2 { call } => v2::put_agent_call(out, call, sizes),
+            Message::FinishV2 { finish } => v2::put_finished(out, finish, sizes),
+            Message::AgentStartV2 { start } => v2::put_agent_start(out, start, sizes),
+            Message::Turn { turn } => v2::put_turn(out, turn, sizes),
+            Message::AcknowledgeTurn { turn } | Message::TurnBusy { turn } => v2::put_turn_name(out, turn, sizes),
+            Message::AgentTurn { turn } => v2::put_agent_turn(out, turn, sizes),
+            Message::Open { .. }
+            | Message::Accept { .. }
+            | Message::Refuse { .. }
+            | Message::Ping
+            | Message::Terms { .. }
+            | Message::Relay { .. }
+            | Message::Bounced { .. }
+            | Message::Told { .. }
+            | Message::Rejected { .. }
+            | Message::Exhausted { .. }
+            | Message::Inbound { .. }
+            | Message::Cancel { .. }
+            | Message::Relayed { .. }
+            | Message::Acknowledge { .. }
+            | Message::Grant { .. }
+            | Message::Withdraw { .. }
+            | Message::Fact { .. }
+            | Message::Long { .. }
+            | Message::LongDone
+            | Message::Waiting { .. }
+            | Message::AgentRejected { .. }
+            | Message::AgentExhausted { .. }
+            | Message::AgentEvent { .. }
+            | Message::AgentAnswer { .. }
+            | Message::AgentCancel
+            | Message::AgentGrant { .. }
+            | Message::Unsupported { .. }
+            | Message::Hello { .. }
+            | Message::Answer { .. }
+            | Message::Assign { .. }
+            | Message::AgentCall { .. }
+            | Message::Finish { .. }
+            | Message::AgentStart { .. } => put_message(out, value, sizes),
+        },
+        _ => None,
+    }
+}
+pub(crate) fn get_version(kind: u16, input: &mut Reader<'_>, sizes: &Sizes, version: u16) -> Option<Message> {
+    match version {
+        1 => get_message(kind, input, sizes),
+        2 => match kind {
+            257 => Some(Message::HelloV2 { hello: v2::get_hello(input, sizes)? }),
+            258 => Some(Message::AnswerV2 { answer: v2::get_answer(input, sizes)? }),
+            385 => Some(Message::AssignV2 { assign: v2::get_assign(input, sizes)? }),
+            513 => Some(Message::AgentCallV2 { call: v2::get_agent_call(input, sizes)? }),
+            519 => Some(Message::FinishV2 { finish: v2::get_finished(input, sizes)? }),
+            641 => Some(Message::AgentStartV2 { start: v2::get_agent_start(input, sizes)? }),
+            264 => Some(Message::Turn { turn: v2::get_turn(input, sizes)? }),
+            391 => Some(Message::AcknowledgeTurn { turn: v2::get_turn_name(input, sizes)? }),
+            392 => Some(Message::TurnBusy { turn: v2::get_turn_name(input, sizes)? }),
+            522 => Some(Message::AgentTurn { turn: v2::get_agent_turn(input, sizes)? }),
+            _ => get_message(kind, input, sizes),
+        },
+        _ => None,
+    }
+}
 #[expect(clippy::too_many_lines, reason = "one exhaustive table mirrors every v1 wire kind")]
 pub(crate) fn put_message(out: &mut Encoder, value: &Message, sizes: &Sizes) -> Option<()> {
     match value {
+        Message::Unsupported { kind } => {
+            out.u16(*kind)?;
+        }
+        Message::HelloV2 { .. }
+        | Message::AnswerV2 { .. }
+        | Message::AssignV2 { .. }
+        | Message::AgentCallV2 { .. }
+        | Message::FinishV2 { .. }
+        | Message::AgentStartV2 { .. }
+        | Message::Turn { .. }
+        | Message::AcknowledgeTurn { .. }
+        | Message::TurnBusy { .. }
+        | Message::AgentTurn { .. } => return None,
         Message::Open { open } => {
             out.raw(b"tmpr")?;
             put_open(out, open, sizes)?;
@@ -1565,6 +1743,7 @@ pub(crate) fn put_message(out: &mut Encoder, value: &Message, sizes: &Sizes) -> 
 #[expect(clippy::too_many_lines, reason = "one exhaustive table mirrors every v1 wire kind")]
 pub(crate) fn get_message(kind: u16, input: &mut Reader<'_>, sizes: &Sizes) -> Option<Message> {
     Some(match kind {
+        17 => Message::Unsupported { kind: input.u16()? },
         1 => {
             if input.bytes(4)? != b"tmpr" {
                 return None;
@@ -1750,3 +1929,7 @@ impl RefusalReason {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "wire/tests_v2.rs"]
+mod tests_v2;

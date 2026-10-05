@@ -114,24 +114,32 @@ offset  size  field
   such as compression, only after both sides have agreed that version.
 - **Kinds are unique across both channels and both directions:**
   - `0x0001`–`0x000f`: the frozen opening (section 4);
-  - `0x0010`: `Terms`;
+  - `0x0010`: `Terms`; `0x0011`: the fixed `Unsupported` status;
   - `0x01xx`: the engine's link (`0x0101`… up from the worker,
     `0x0181`… down to it);
   - `0x02xx`: an agent's channel (`0x0201`… up from the agent, `0x0281`…
     down to it).
 
-  A kind that does not belong to this channel, in this direction, at this
-  point and in the version agreed is a framing error. Since the version
-  was agreed when the channel opened, an unknown kind cannot come from a
-  newer peer, so it is not skipped (programming-model.md, section 8).
+  A known kind in the wrong channel, direction or phase is a framing
+  error. After opening, an unknown kind with a body no larger than the
+  configured maximum frame body is skipped in chunks, without allocating
+  its body, and answered by `Unsupported { kind }` (`0x0011`, a two-byte
+  body). This follows programming-model.md, section 8, including when a
+  version 1 peer sees a kind introduced in version 2. Bad lengths still
+  close. A known newer kind's direction is checked before skipping it.
+  The small status is common to both versions, omitted from `Terms`, and
+  has a fixed bound; version 1's advertised terms therefore stay unchanged.
+  One completed skip waits for output room before its status is queued;
+  the next header waits behind it.
 
 ### 3.2 Reading
 
 The machine reads a frame in three steps:
 
 1. **The header:** a demand to fill 8 bytes. The kind must be one
-   expected next. The length must be at most that kind's largest body,
-   which is checked before anything is set aside.
+   expected next, or a bounded unknown kind to skip after opening. A known
+   kind's length must be at most its agreed version's largest body,
+   checked before anything is set aside.
 2. **The body:** a buffer of exactly `length` bytes, allocated once the
    header has passed. It is filled from demands of at most
    `Limits::chunk` bytes each, so the stream below needs an intake of only
@@ -945,3 +953,110 @@ As testing.md applies skein's strategy.
 - **A worker's name in the engine's domain.** The fleet knows workers
   only by their channels. Views and operators may want the name: it
   would cross as a field of the hello, which the domain then carries.
+
+
+## 16. Version 2 beside version 1
+
+The new design's channel shapes live in `temper-channel/src/wire/v2.rs`
+and `payload/v2.rs`; the shipped payload schemas live unchanged in
+`payload/v1.rs`. This section settles step 05b of
+`docs/plans/next-domain/05-runtime.md`. The runtime domains and their
+translations follow in 05c–05g. All legacy protocol callers explicitly
+use `payload::v1`, and `Machine::new`, codec and size entrypoints without
+`_version` keep version 1.
+
+`Machine::with_versions` configures a contiguous range within 1–2.
+Opening still has its frozen layout. The chosen version must fit both
+that range and the offered `Open` range; the agent chooses their highest
+common version. `Ready` tells the parent which was chosen. Direction,
+phase and the version's body bound are checked before decoding. A v2
+record cannot be sent through a v1 machine. The `*_version` codec and
+size functions take the agreed version explicitly; `worst_case_versions`
+counts a machine's output container before either version is chosen.
+
+Changed records retain their kind number, with their whole layout
+selected by the agreed version. Separate Rust variants (`HelloV2`,
+`AssignV2`, `AnswerV2`, `AgentStartV2`, `AgentCallV2`, `FinishV2`) prevent
+accidentally encoding one layout under another version.
+
+| Direction | Kind | Version 2 record |
+|---|---|---|
+| worker → engine | `0x0101` | hello: slots, workstreams, hosting, total stop graces and push deadline |
+| worker → engine | `0x0102` | answer: run, attempt, contiguous turn count, whole-attempt spend, answer |
+| worker → engine | `0x0108` | turn: run, attempt, turn number, per-turn spend, optional last message read, body |
+| engine → worker | `0x0181` | assignment: run, attempt, workspace, optional save branch, charter, optional transcript, grants |
+| engine → worker | `0x0187` | acknowledge turn: run, attempt, turn number |
+| engine → worker | `0x0188` | turn busy: the same names; worker keeps and retries the turn after backoff |
+| agent → worker | `0x0201` | call: call number, push with separate title and body, or opaque relay |
+| agent → worker | `0x0207` | finish: contiguous turn count, whole-attempt spend, ended outcome, parked, or failed |
+| agent → worker | `0x020a` | turn: turn number, per-turn spend, optional last message read, body |
+| worker → agent | `0x0281` | start: charter, optional transcript, repositories with conflicted files, endpoints, grants |
+
+Other kinds retain their layouts. The v2 workspace starts a branch, a
+commit, a saved branch, or a merge of `base` into `branch`; its writable
+access carries the branch to push and an optional expected head. V2
+parking carries work in the link answer and no snapshot. Snapshots and
+worker-created base branches remain only in v1. `graces` declares the
+total stop duration defined by domain/engine.md, section 8, and must be
+strictly below the engine's grace, including refusal at equality.
+
+Payloads use concrete, bounded records at both ends. The charter has
+instructions, named brief sections, tool-family bits, a report/verdict/
+change contract, spend/turn/time budget, priced endpoint models, and the
+waiting duration. Prices are integer input/cached/output amounts per
+`unit` tokens in the deployment's spend unit; zero units are refused. Models distinguish main
+and subagent kinds. Failure remains an allowed outcome of every contract.
+Verdict fields and follow-up task specs are typed, not a byte format a
+domain must interpret.
+
+New task specs carry words, resource read/write names, ended task inputs,
+an executor, contract, authority, existing-task or batch-index dependencies,
+references, wake policy, subscriptions, and tracked priority. Authority
+contains tool bits, connector/kind resource patterns, delegation executor
+kinds and count/depth, spend and an optional wall deadline, and note
+scopes. Own branches name the repository and change/saved/runs role;
+the root resolves these symbolic resources when it commits task numbers.
+Person executors carry a role, question and choices; procedure parameters
+are closed typed land/watch values. This wire vocabulary has no dependency
+on a domain crate; the root's translation supplies each domain's values.
+
+The named inbound envelope carries a whole result, question, answer,
+decision, typed amendment, words with their party, classified connector
+news, typed notice, timer, or waiting proposal with its typed action.
+Calls cover all engine tools and connector reads. `Action` is a separate
+closed vocabulary so proposals cannot recursively contain proposals;
+proposals say whether their accepter requests the delegated tasks.
+Amendments carry optional spec/wake/authority/instructions/procedure
+changes and dependency removals. Engine answers are typed delegated
+numbers, message numbers, done, proposals with their holder, decisions,
+effect outcomes, notes, read results, refusals or the authority lacked.
+Lost, withdrawn, busy, unavailable and too-large are explicit unserved
+answers.
+
+The connector vocabulary has a forge family: pull, files at a head,
+diff, CI at a head, issue and comments reads; typed pull-opening, merge,
+comment, issue edits/closure, pull closure and conditional branch push
+effects; and typed read results, effect results and news. Resource names
+and connector numbers remain values the root checks. Worker pass-through
+bytes are decoded into these types by the actual endpoints, never parsed
+by a domain.
+
+`Turn` preserves the session's versioned provider blocks as bytes, spend
+and read watermark. `Transcript` carries its turns and calls committed
+after the last turn, each with its call name, typed ask and typed answer.
+The session's own turn vocabulary is supplied in 05e. Byte and array
+bounds are checked before allocation and codecs reject trailing bytes;
+the static schema has no recursive type or recursive parser. `Sizes`
+adds turn bytes, transcript bytes, retained turn count and conflicted-file
+count. Per-schema heap bounds count every decoded array record and owned
+field with checked arithmetic. Exact payload bounds also cap nested array
+allocation by the enclosing byte limit and each array record's minimum
+encoded footprint. Machine output reserves count retained
+turns, acknowledgements and busy replies; skipping owns no body buffer.
+
+Independent binary fixtures cover every new frame, every payload record
+and every enum arm. The fragmented machine world exercises both versions,
+v1 refusal and resynchronization, send fencing, range checks, unsupported
+floods, replay and fuzzy tapes. Heap checks include maximum v2 transcript
+and conflicted-file arrays; the v1 tapes and their random choices stay
+unchanged.

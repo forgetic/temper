@@ -96,9 +96,11 @@ pub fn down(
             for named in grants {
                 values.push(grant(named, credentials, now)?).expect("source grant count");
             }
-            let charter =
-                temper_channel::payload::encode_charter(&payload::charter_to(charter).ok_or(Error::Payload)?, sizes)
-                    .ok_or(Error::Payload)?;
+            let charter = temper_channel::payload::v1::encode_charter(
+                &payload::charter_to(charter).ok_or(Error::Payload)?,
+                sizes,
+            )
+            .ok_or(Error::Payload)?;
             (
                 channel,
                 wire::Message::Assign {
@@ -301,7 +303,18 @@ pub fn up(channel: Token, message: wire::Message, repositories: u32, sizes: &Siz
             let (item, attempt) = named(run, attempt, repositories)?;
             Event::Exhausted { channel, item, attempt, account, retry_after }
         }
-        wire::Message::Open { .. }
+        wire::Message::Unsupported { .. }
+        | wire::Message::HelloV2 { .. }
+        | wire::Message::AnswerV2 { .. }
+        | wire::Message::AssignV2 { .. }
+        | wire::Message::AgentCallV2 { .. }
+        | wire::Message::FinishV2 { .. }
+        | wire::Message::AgentStartV2 { .. }
+        | wire::Message::Turn { .. }
+        | wire::Message::AcknowledgeTurn { .. }
+        | wire::Message::TurnBusy { .. }
+        | wire::Message::AgentTurn { .. }
+        | wire::Message::Open { .. }
         | wire::Message::Accept { .. }
         | wire::Message::Refuse { .. }
         | wire::Message::Terms { .. }

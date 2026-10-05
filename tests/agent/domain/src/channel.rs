@@ -310,7 +310,7 @@ pub const MAX_TOKENS: u32 = 1024;
 pub fn charter(bytes: &[u8], checkout: Checkout) -> run::Charter {
     // Domain-tier deployment wiring supplies account zero's dummy descriptors;
     // production resolves real indexed descriptors at its channel entrance.
-    let wire = temper_channel::payload::decode_charter(bytes, &temper_channel::Sizes::STARTING)
+    let wire = temper_channel::payload::v1::decode_charter(bytes, &temper_channel::Sizes::STARTING)
         .expect("a charter decodes as the engine's side encoded it");
     let mut endpoints = Vec::new();
     for model in wire.models {

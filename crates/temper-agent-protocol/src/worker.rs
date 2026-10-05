@@ -4,7 +4,7 @@ use crate::{Error, payload, render::Text};
 use alloc::boxed::Box;
 use skein_lib::{Token, bytes};
 use temper_agent_domain::{self as agent, run, session, tools};
-use temper_channel::{Sizes, payload as document, wire};
+use temper_channel::{Sizes, payload::v1 as document, wire};
 
 #[derive(Debug)]
 pub struct Projection {

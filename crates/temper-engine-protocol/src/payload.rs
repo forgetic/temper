@@ -1,7 +1,7 @@
 //! Typed v1 payload translation. The channel owns every byte schema.
 use alloc::boxed::Box;
 use skein_lib::{List, Time};
-use temper_channel::{Sizes, payload as wire};
+use temper_channel::{Sizes, payload::v1 as wire};
 use temper_legacy_engine_domain::{self as engine, brief, forge, notes, plan, views};
 
 pub(crate) fn charter_to(value: engine::Charter) -> Option<wire::Charter> {

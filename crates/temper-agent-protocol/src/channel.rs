@@ -310,7 +310,18 @@ fn entrance(
         wire::Message::AgentStart { charter, snapshot, repositories, endpoints, grants } => {
             (charter, snapshot, repositories, endpoints, grants)
         }
-        wire::Message::Open { .. }
+        wire::Message::Unsupported { .. }
+        | wire::Message::HelloV2 { .. }
+        | wire::Message::AnswerV2 { .. }
+        | wire::Message::AssignV2 { .. }
+        | wire::Message::AgentCallV2 { .. }
+        | wire::Message::FinishV2 { .. }
+        | wire::Message::AgentStartV2 { .. }
+        | wire::Message::Turn { .. }
+        | wire::Message::AcknowledgeTurn { .. }
+        | wire::Message::TurnBusy { .. }
+        | wire::Message::AgentTurn { .. }
+        | wire::Message::Open { .. }
         | wire::Message::Accept { .. }
         | wire::Message::Refuse { .. }
         | wire::Message::Ping
@@ -414,8 +425,18 @@ fn message(channel: &mut Channel, value: wire::Message, env: &Env<Limits>, out: 
         }
         // The current run has no inbound-event operation; retain no bytes and
         // do not invent a policy for the future long-lived agent domain.
-        wire::Message::AgentEvent { .. } => {}
-        wire::Message::Open { .. }
+        wire::Message::AgentEvent { .. } | wire::Message::Unsupported { .. } => {}
+        wire::Message::HelloV2 { .. }
+        | wire::Message::AnswerV2 { .. }
+        | wire::Message::AssignV2 { .. }
+        | wire::Message::AgentCallV2 { .. }
+        | wire::Message::FinishV2 { .. }
+        | wire::Message::AgentStartV2 { .. }
+        | wire::Message::Turn { .. }
+        | wire::Message::AcknowledgeTurn { .. }
+        | wire::Message::TurnBusy { .. }
+        | wire::Message::AgentTurn { .. }
+        | wire::Message::Open { .. }
         | wire::Message::Accept { .. }
         | wire::Message::Refuse { .. }
         | wire::Message::Ping
@@ -856,8 +877,8 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_add(u64::from(s.repositories).checked_mul(u64::from(s.name_bytes))?.checked_mul(2)?)?;
     let charter = List::<agent::run::charter::Llm>::worst_case(s.endpoints)?
         .checked_mul(2)?
-        .checked_add(List::<temper_channel::payload::Section>::worst_case(s.entries)?)?
-        .checked_add(List::<temper_channel::payload::Model>::worst_case(s.endpoints)?)?
+        .checked_add(List::<temper_channel::payload::v1::Section>::worst_case(s.entries)?)?
+        .checked_add(List::<temper_channel::payload::v1::Model>::worst_case(s.endpoints)?)?
         .checked_add(u64::from(s.endpoints).checked_mul(u64::from(s.name_bytes))?)?
         .checked_add(u64::from(p.request_bytes).checked_mul(2)?)?
         .checked_add(u64::from(s.charter))?

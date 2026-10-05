@@ -44,7 +44,7 @@ fn largest_ask(sizes: &Sizes) -> Option<u32> {
 fn largest_hosting(sizes: &Sizes) -> Option<u32> {
     0_u32.checked_add(8_u32)?.checked_add(8_u32)?.checked_add(largest_hosting_phase(sizes))
 }
-fn largest_failure(sizes: &Sizes) -> Option<u32> {
+pub(crate) fn largest_failure(sizes: &Sizes) -> Option<u32> {
     let mut length = 1_u32;
     let mut variant = 1_u32;
     variant = variant.checked_add(largest_preparation(sizes)?)?;
@@ -60,7 +60,7 @@ fn largest_failure(sizes: &Sizes) -> Option<u32> {
     length = length.max(variant);
     Some(length)
 }
-fn largest_endpoint_descriptor(sizes: &Sizes) -> Option<u32> {
+pub(crate) fn largest_endpoint_descriptor(sizes: &Sizes) -> Option<u32> {
     0_u32
         .checked_add(4_u32)?
         .checked_add(largest_provider(sizes))?
@@ -286,7 +286,7 @@ fn largest_landing(sizes: &Sizes) -> Option<u32> {
     length = length.max(variant);
     Some(length)
 }
-fn largest_assignment_refusal(sizes: &Sizes) -> Option<u32> {
+pub(crate) fn largest_assignment_refusal(sizes: &Sizes) -> Option<u32> {
     let mut length = 1_u32;
     let variant = 1_u32;
     length = length.max(variant);
@@ -295,7 +295,7 @@ fn largest_assignment_refusal(sizes: &Sizes) -> Option<u32> {
     length = length.max(variant);
     Some(length)
 }
-fn largest_work(sizes: &Sizes) -> Option<u32> {
+pub(crate) fn largest_work(sizes: &Sizes) -> Option<u32> {
     0_u32
         .checked_add(4_u32.checked_add(sizes.repositories.checked_mul(largest_landed(sizes)?)?)?)?
         .checked_add(1_u32.checked_add(4_u32.checked_add(sizes.repositories.checked_mul(largest_landing(sizes)?)?)?)?)
@@ -352,7 +352,7 @@ fn largest_run_failure(_sizes: &Sizes) -> u32 {
 pub fn largest(kind: u16, sizes: &Sizes) -> Option<u32> {
     match kind {
         1 => Some(256),
-        2 => Some(2),
+        2 | 17 => Some(2),
         3 => Some(512),
         4 => Some(0),
         16 => {

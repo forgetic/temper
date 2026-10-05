@@ -56,7 +56,7 @@ fn heap_repository(sizes: &Sizes) -> Option<u64> {
 fn heap_start(sizes: &Sizes) -> u64 {
     u64::from(sizes.name_bytes).max(u64::from(sizes.name_bytes)).max(u64::from(sizes.name_bytes))
 }
-fn heap_work(sizes: &Sizes) -> Option<u64> {
+pub(crate) fn heap_work(sizes: &Sizes) -> Option<u64> {
     u64::from(sizes.repositories)
         .checked_mul(u64::try_from(size_of::<Landed>()).ok()?.checked_add(0_u64)?)?
         .checked_add(
@@ -73,7 +73,7 @@ fn heap_workspace(sizes: &Sizes) -> Option<u64> {
 pub(crate) fn decoded_heap(kind: u16, sizes: &Sizes) -> Option<u64> {
     Some(match kind {
         1 => heap_open(sizes)?,
-        2 | 4 | 260 | 262 | 263 | 387 | 389 | 514 | 516 | 517 | 518 | 520 | 521 | 644 => 0_u64,
+        17 | 2 | 4 | 260 | 262 | 263 | 387 | 389 | 514 | 516 | 517 | 518 | 520 | 521 | 644 => 0_u64,
         3 => heap_refuse(sizes),
         16 => u64::from(sizes.terms).checked_mul(u64::try_from(size_of::<Term>()).ok()?.checked_add(0_u64)?)?,
         257 => u64::from(sizes.workstreams)

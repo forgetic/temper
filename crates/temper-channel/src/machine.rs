@@ -19,23 +19,38 @@ pub enum Endpoint {
 impl Endpoint {
     #[must_use]
     pub const fn receives(self, kind: u16) -> bool {
-        if kind == 3 || kind == 16 {
+        self.receives_version(kind, 1)
+    }
+    #[must_use]
+    pub const fn receives_version(self, kind: u16, version: u16) -> bool {
+        if version != 1 && version != 2 {
+            return false;
+        }
+        if kind == 3 || kind == 16 || kind == 17 {
             return true;
         }
         match self {
-            Endpoint::Engine => kind == 1 || kind == 4 || (kind >= 0x101 && kind <= 0x107),
-            Endpoint::WorkerLink => kind == 2 || kind == 4 || (kind >= 0x181 && kind <= 0x186),
-            Endpoint::WorkerAgent => kind == 2 || (kind >= 0x201 && kind <= 0x209),
+            Endpoint::Engine => {
+                kind == 1 || kind == 4 || (kind >= 0x101 && kind <= if version == 2 { 0x108 } else { 0x107 })
+            }
+            Endpoint::WorkerLink => {
+                kind == 2 || kind == 4 || (kind >= 0x181 && kind <= if version == 2 { 0x188 } else { 0x186 })
+            }
+            Endpoint::WorkerAgent => kind == 2 || (kind >= 0x201 && kind <= if version == 2 { 0x20a } else { 0x209 }),
             Endpoint::Agent => kind == 1 || (kind >= 0x281 && kind <= 0x285),
         }
     }
     #[must_use]
     pub const fn sends(self, kind: u16) -> bool {
+        self.sends_version(kind, 1)
+    }
+    #[must_use]
+    pub const fn sends_version(self, kind: u16, version: u16) -> bool {
         match self {
-            Endpoint::Engine => Endpoint::WorkerLink.receives(kind),
-            Endpoint::WorkerLink => Endpoint::Engine.receives(kind),
-            Endpoint::WorkerAgent => Endpoint::Agent.receives(kind),
-            Endpoint::Agent => Endpoint::WorkerAgent.receives(kind),
+            Endpoint::Engine => Endpoint::WorkerLink.receives_version(kind, version),
+            Endpoint::WorkerLink => Endpoint::Engine.receives_version(kind, version),
+            Endpoint::WorkerAgent => Endpoint::Agent.receives_version(kind, version),
+            Endpoint::Agent => Endpoint::WorkerAgent.receives_version(kind, version),
         }
     }
     const fn channel(self) -> Channel {
@@ -99,6 +114,8 @@ enum Input {
     Header,
     Body { kind: u16, length: u32, body: Writer },
     Held(Message),
+    Skip { kind: u16, remaining: u32 },
+    Skipped { kind: u16 },
     Stopped,
 }
 #[derive(Debug)]
@@ -107,6 +124,10 @@ pub struct Machine {
     endpoint: Endpoint,
     phase: Phase,
     version: u16,
+    lowest: u16,
+    highest: u16,
+    offered_lowest: u16,
+    offered_highest: u16,
     input: Input,
     reading: bool,
     read_ended: bool,
@@ -129,14 +150,33 @@ pub struct Machine {
 impl Machine {
     #[must_use]
     pub fn new(endpoint: Endpoint, limits: &Limits, sizes: &Sizes) -> Option<Machine> {
+        Self::with_versions(endpoint, limits, sizes, 1, 1)
+    }
+    /// Accept only this configured contiguous range; a legacy machine speaks v1.
+    #[must_use]
+    pub fn with_versions(
+        endpoint: Endpoint,
+        limits: &Limits,
+        sizes: &Sizes,
+        lowest: u16,
+        highest: u16,
+    ) -> Option<Machine> {
+        if lowest < 1 || highest > 2 || lowest > highest {
+            return None;
+        }
         if !limits.valid() || !sizes.valid() {
             return None;
         }
-        let cap = sizes::output_cap(endpoint, sizes)?;
+        let cap = sizes::output_cap_version(endpoint, sizes, lowest)?
+            .max(sizes::output_cap_version(endpoint, sizes, highest)?);
         Some(Machine {
             endpoint,
             phase: Phase::Opening,
             version: 0,
+            lowest,
+            highest,
+            offered_lowest: lowest,
+            offered_highest: highest,
             input: Input::Header,
             reading: true,
             read_ended: false,
@@ -148,7 +188,10 @@ impl Machine {
             grant: 0,
             pending_bytes: 0,
             sent_bytes: 0,
-            output: Queue::with_capacity(sizes::output_slots(endpoint, sizes)?),
+            output: Queue::with_capacity(
+                sizes::output_slots_version(endpoint, sizes, lowest)?
+                    .max(sizes::output_slots_version(endpoint, sizes, highest)?),
+            ),
             cap,
             sent_open: false,
             sent_terms: false,
@@ -192,7 +235,8 @@ impl Machine {
         }
         let held = match &self.input {
             Input::Held(_) => true,
-            Input::Header | Input::Body { .. } | Input::Stopped => false,
+            Input::Skipped { .. } => self.output.room() > 0 && self.cap.saturating_sub(self.queued_bytes()) >= 10,
+            Input::Header | Input::Body { .. } | Input::Skip { .. } | Input::Stopped => false,
         };
         let fits = match self.output.iter().next() {
             Some(frame) => u32::try_from(frame.len()).expect("frame length is u32") <= self.grant,
@@ -216,7 +260,7 @@ fn send(out: &mut Queue<stream::Down>, request: stream::Down) {
     out.push(request);
 }
 fn queue(machine: &mut Machine, message: &Message, sizes: &Sizes) -> Option<()> {
-    let frame = codec::encode(message, sizes)?;
+    let frame = codec::encode_version(message, sizes, machine.version.max(1))?;
     let length = u32::try_from(frame.len()).ok()?;
     // Opening reserve is usable before the initial whole-cap grant arrives.
     let used = machine.pending_bytes.checked_add(length)?;
@@ -272,7 +316,7 @@ fn stop(machine: &mut Machine, fault: Fault, up: &mut Queue<Event>, down: &mut Q
     emit(up, Event::Closed { fault });
 }
 fn allowed(machine: &Machine, kind: u16) -> bool {
-    if !machine.endpoint.receives(kind) {
+    if !machine.endpoint.receives_version(kind, machine.version.max(1)) {
         return false;
     }
     if kind == 3 {
@@ -300,15 +344,20 @@ fn opening_ok(open: &Open, endpoint: Endpoint) -> bool {
     }
 }
 fn terms(machine: &mut Machine, sizes: &Sizes) -> Option<()> {
-    let terms = sizes::terms(machine.endpoint, sizes)?;
+    let terms = sizes::terms_version(machine.endpoint, sizes, machine.version)?;
     queue(machine, &Message::Terms { terms }, sizes)?;
     machine.sent_terms = true;
     Some(())
 }
 fn accept(machine: &mut Machine, version: u16, sizes: &Sizes) -> Option<()> {
-    if version != 1 {
+    if version < machine.lowest
+        || version > machine.highest
+        || version < machine.offered_lowest
+        || version > machine.offered_highest
+    {
         return None;
     }
+    machine.version = version;
     queue(machine, &Message::Accept { version }, sizes)?;
     terms(machine, sizes)?;
     machine.version = version;
@@ -331,10 +380,12 @@ fn deliver(
                 stop(machine, Fault::Framing, up, down);
                 return;
             }
-            if open.lowest > 1 || open.highest < 1 {
+            if open.lowest > machine.highest || open.highest < machine.lowest {
                 stop(machine, Fault::Version, up, down);
                 return;
             }
+            machine.offered_lowest = open.lowest;
+            machine.offered_highest = open.highest;
             match machine.endpoint {
                 Endpoint::Engine => {
                     machine.phase = Phase::Authorizing;
@@ -342,7 +393,7 @@ fn deliver(
                     emit(up, Event::Message(Message::Open { open }));
                 }
                 Endpoint::Agent => {
-                    if accept(machine, 1, sizes).is_none() {
+                    if accept(machine, open.highest.min(machine.highest), sizes).is_none() {
                         stop(machine, Fault::OutputFull, up, down);
                     }
                 }
@@ -352,7 +403,11 @@ fn deliver(
             }
         }
         Message::Accept { version } => {
-            if version != 1 {
+            if version < machine.lowest
+                || version > machine.highest
+                || version < machine.offered_lowest
+                || version > machine.offered_highest
+            {
                 stop(machine, Fault::Version, up, down);
                 return;
             }
@@ -363,7 +418,7 @@ fn deliver(
             }
         }
         Message::Terms { terms } => {
-            if sizes::check_terms(machine.endpoint, &terms, sizes).is_none() {
+            if sizes::check_terms_version(machine.endpoint, &terms, sizes, machine.version).is_none() {
                 stop(machine, Fault::Limits, up, down);
                 return;
             }
@@ -385,31 +440,39 @@ fn deliver(
             stop(machine, Fault::Closed, up, down);
         }
         Message::Ping => {}
-        Message::Hello { slots, workstreams, hosting } => {
+        value @ (Message::Hello { .. } | Message::HelloV2 { .. }) => {
             if machine.phase != Phase::Hello {
                 stop(machine, Fault::Framing, up, down);
                 return;
             }
             machine.phase = Phase::Open;
             machine.reading = false;
-            emit(up, Event::Message(Message::Hello { slots, workstreams, hosting }));
+            emit(up, Event::Message(value));
         }
-        Message::AgentStart { charter, snapshot, repositories, endpoints, grants } => {
+        value @ (Message::AgentStart { .. } | Message::AgentStartV2 { .. }) => {
             if machine.phase != Phase::Starting {
                 stop(machine, Fault::Framing, up, down);
                 return;
             }
             machine.phase = Phase::Open;
             machine.reading = false;
-            emit(up, Event::Message(Message::AgentStart { charter, snapshot, repositories, endpoints, grants }));
+            emit(up, Event::Message(value));
         }
-        Message::Finish { finish } => {
+        value @ (Message::Finish { .. } | Message::FinishV2 { .. }) => {
             // The worker domain drains stdout and enforces the agent's last-word
             // rule after this delivery; keep subsequent Reads available.
             machine.reading = false;
-            emit(up, Event::Message(Message::Finish { finish }));
+            emit(up, Event::Message(value));
         }
-        value @ (Message::Answer { .. }
+        value @ (Message::Unsupported { .. }
+        | Message::AnswerV2 { .. }
+        | Message::AssignV2 { .. }
+        | Message::AgentCallV2 { .. }
+        | Message::Turn { .. }
+        | Message::AcknowledgeTurn { .. }
+        | Message::TurnBusy { .. }
+        | Message::AgentTurn { .. }
+        | Message::Answer { .. }
         | Message::Relay { .. }
         | Message::Bounced { .. }
         | Message::Told { .. }
@@ -449,7 +512,8 @@ fn read(machine: &Machine, limits: &Limits) -> stream::Read {
             let rest = length.checked_sub(done).expect("body never exceeds its header");
             stream::Read::Fill(rest.min(limits.chunk))
         }
-        Input::Held(_) | Input::Stopped => stream::Read::Nothing,
+        Input::Skip { remaining, .. } => stream::Read::Fill((*remaining).min(limits.chunk)),
+        Input::Held(_) | Input::Skipped { .. } | Input::Stopped => stream::Read::Nothing,
     }
 }
 /// Flush at most one frame and state at most one demand per invocation.
@@ -469,6 +533,15 @@ pub fn poll(
             deliver(machine, message, sizes, up, down);
             Input::Header
         }
+        Input::Skipped { kind } => {
+            if queue(machine, &Message::Unsupported { kind }, sizes).is_some() {
+                machine.received_frames = machine.received_frames.saturating_add(1);
+                Input::Header
+            } else {
+                Input::Skipped { kind }
+            }
+        }
+        Input::Skip { kind, remaining } => Input::Skip { kind, remaining },
         Input::Header => Input::Header,
         Input::Body { kind, length, body } => Input::Body { kind, length, body },
         Input::Stopped => Input::Stopped,
@@ -529,12 +602,34 @@ fn receive(machine: &mut Machine, sizes: &Sizes, bytes: &[u8]) -> Option<()> {
     let source = core::mem::replace(&mut machine.input, Input::Stopped);
     machine.input = match source {
         Input::Header => {
-            let header = codec::header(bytes, sizes)?;
+            let header = codec::framing(bytes)?;
+            let version = machine.version.max(1);
+            if let Some(largest) = sizes::largest_version(header.kind, sizes, version) {
+                if header.length > largest {
+                    return None;
+                }
+            } else {
+                if machine.phase != Phase::Open || header.length > sizes::largest_body(sizes, version)? {
+                    return None;
+                }
+                // A known newer kind still has a fixed channel and direction.
+                if sizes::largest_version(header.kind, sizes, 2).is_some()
+                    && !machine.endpoint.receives_version(header.kind, 2)
+                {
+                    return None;
+                }
+                machine.input = if header.length == 0 {
+                    Input::Skipped { kind: header.kind }
+                } else {
+                    Input::Skip { kind: header.kind, remaining: header.length }
+                };
+                return Some(());
+            }
             if !allowed(machine, header.kind) {
                 return None;
             }
             if header.length == 0 {
-                Input::Held(codec::body(header.kind, &[], sizes)?)
+                Input::Held(codec::body_version(header.kind, &[], sizes, machine.version.max(1))?)
             } else {
                 Input::Body {
                     kind: header.kind,
@@ -547,12 +642,16 @@ fn receive(machine: &mut Machine, sizes: &Sizes, bytes: &[u8]) -> Option<()> {
             body.put(bytes).ok()?;
             if body.room() == 0 {
                 let bytes = body.finish();
-                Input::Held(codec::body(kind, &bytes, sizes)?)
+                Input::Held(codec::body_version(kind, &bytes, sizes, machine.version.max(1))?)
             } else {
                 Input::Body { kind, length, body }
             }
         }
-        Input::Held(_) | Input::Stopped => return None,
+        Input::Skip { kind, remaining } => {
+            let remaining = remaining.checked_sub(exact)?;
+            if remaining == 0 { Input::Skipped { kind } } else { Input::Skip { kind, remaining } }
+        }
+        Input::Held(_) | Input::Skipped { .. } | Input::Stopped => return None,
     };
     Some(())
 }
@@ -689,8 +788,14 @@ pub fn down(
                 emit(out, Event::Unsent);
                 return;
             }
+            if let Some(required) = message.payload_version()
+                && required != machine.version
+            {
+                emit(out, Event::Unsent);
+                return;
+            }
             let kind = message.kind();
-            if !machine.endpoint.sends(kind) {
+            if !machine.endpoint.sends_version(kind, machine.version.max(1)) {
                 stop(machine, Fault::Framing, out, lower);
                 return;
             }
@@ -699,15 +804,21 @@ pub fn down(
                     if machine.phase != Phase::Opening
                         || machine.sent_open
                         || !opening_ok(open, machine.endpoint)
-                        || open.lowest > 1
-                        || open.highest < 1
+                        || open.lowest < machine.lowest
+                        || open.highest > machine.highest
+                        || open.lowest > open.highest
                     {
                         stop(machine, Fault::Framing, out, lower);
                         return;
                     }
+                    machine.offered_lowest = open.lowest;
+                    machine.offered_highest = open.highest;
                     machine.sent_open = true;
                 }
-                Message::Hello { .. } | Message::AgentStart { .. } => {
+                Message::Hello { .. }
+                | Message::AgentStart { .. }
+                | Message::HelloV2 { .. }
+                | Message::AgentStartV2 { .. } => {
                     if machine.phase != Phase::Open || machine.first_sent {
                         stop(machine, Fault::Framing, out, lower);
                         return;
@@ -724,13 +835,21 @@ pub fn down(
                         return;
                     }
                 }
-                Message::Finish { .. } => {
+                Message::Finish { .. } | Message::FinishV2 { .. } => {
                     if machine.phase != Phase::Open {
                         stop(machine, Fault::Framing, out, lower);
                         return;
                     }
                 }
-                Message::Answer { .. }
+                Message::Unsupported { .. }
+                | Message::AnswerV2 { .. }
+                | Message::AssignV2 { .. }
+                | Message::AgentCallV2 { .. }
+                | Message::Turn { .. }
+                | Message::AcknowledgeTurn { .. }
+                | Message::TurnBusy { .. }
+                | Message::AgentTurn { .. }
+                | Message::Answer { .. }
                 | Message::Relay { .. }
                 | Message::Bounced { .. }
                 | Message::Told { .. }

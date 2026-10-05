@@ -4,7 +4,7 @@ use crate::fixture;
 use skein_lib::{Duration, Env, Intake, Queue, Time, Token, Wall, stream};
 use temper_agent_domain::{self as agent, run::charter::Checkout};
 use temper_agent_protocol::channel::{self, Channel, Up};
-use temper_channel::{codec, machine::Endpoint, payload, sizes, wire};
+use temper_channel::{codec, machine::Endpoint, payload::v1 as payload, sizes, wire};
 
 #[must_use]
 pub fn limits() -> channel::Limits {

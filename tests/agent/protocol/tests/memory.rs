@@ -2,7 +2,7 @@ use skein_lib::{Duration, Env, Queue, Time, Token, Wall, stream};
 use temper_agent_domain::run::charter::{Checkout, Repository};
 use temper_agent_protocol::channel::{self, Channel, Up};
 use temper_agent_protocol_world::{fixture, pipe};
-use temper_channel::{codec, machine::Endpoint, payload, sizes, wire};
+use temper_channel::{codec, machine::Endpoint, payload::v1 as payload, sizes, wire};
 use temper_world::heap::{self, Meter};
 #[global_allocator]
 static HEAP: heap::Counting = heap::Counting;

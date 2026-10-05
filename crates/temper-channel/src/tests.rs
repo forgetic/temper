@@ -1,6 +1,6 @@
 #![expect(clippy::disallowed_methods, reason = "ordinary Rust tests mutate golden frames and term lists")]
 //! Independent golden bodies and round trips for every schema branch.
-use crate::{Sizes, codec, payload, primitives::Encoder, sizes, wire};
+use crate::{Sizes, codec, payload::v1 as payload, primitives::Encoder, sizes, wire};
 use alloc::boxed::Box;
 use skein_lib::Reader;
 #[test]

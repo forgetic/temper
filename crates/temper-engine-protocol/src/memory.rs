@@ -1,7 +1,7 @@
 //! Conversion scratch includes array storage on both typed sides, which
 //! does not follow directly from a byte cap (empty names still own boxes).
 use alloc::boxed::Box;
-use temper_channel::{Sizes, payload as wire, wire as frame};
+use temper_channel::{Sizes, payload::v1 as wire, wire as frame};
 use temper_legacy_engine_domain::{self as engine, brief, forge, notes, plan};
 
 fn array(count: u32, fixed: usize) -> Option<u64> {

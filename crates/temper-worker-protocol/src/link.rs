@@ -316,7 +316,18 @@ pub fn down(
                         return Err(Error::Relay);
                     }
                 }
-                wire::Message::Open { .. }
+                wire::Message::Unsupported { .. }
+                | wire::Message::HelloV2 { .. }
+                | wire::Message::AnswerV2 { .. }
+                | wire::Message::AssignV2 { .. }
+                | wire::Message::AgentCallV2 { .. }
+                | wire::Message::FinishV2 { .. }
+                | wire::Message::AgentStartV2 { .. }
+                | wire::Message::Turn { .. }
+                | wire::Message::AcknowledgeTurn { .. }
+                | wire::Message::TurnBusy { .. }
+                | wire::Message::AgentTurn { .. }
+                | wire::Message::Open { .. }
                 | wire::Message::Accept { .. }
                 | wire::Message::Refuse { .. }
                 | wire::Message::Ping

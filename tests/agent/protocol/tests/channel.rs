@@ -6,7 +6,7 @@ use temper_agent_protocol::{
     payload, worker,
 };
 use temper_agent_protocol_world::pipe::{self, World};
-use temper_channel::{payload as document, wire};
+use temper_channel::{payload::v1 as document, wire};
 
 fn admitted(world: &mut World) {
     world.down(agent::Request::Admitted { worker: Token::new(5), run: Token::new(9) });

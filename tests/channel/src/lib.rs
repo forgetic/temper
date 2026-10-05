@@ -23,6 +23,7 @@ pub struct World {
     pub machine: Machine,
     pub limits: Limits,
     pub sizes: Sizes,
+    pub wire_version: u16,
     pub seen: Vec<Seen>,
     pub demand: Option<(stream::Read, u32)>,
     peer: Vec<u8>,
@@ -69,6 +70,7 @@ impl World {
             machine: Machine::new(endpoint, &limits, &sizes).expect("small limits fit"),
             limits,
             sizes,
+            wire_version: 1,
             seen: Vec::new(),
             demand: None,
             peer: Vec::new(),
@@ -83,8 +85,16 @@ impl World {
             ended: false,
         }
     }
+    #[must_use]
+    pub fn with_versions(endpoint: Endpoint, seed: u64, lowest: u16, highest: u16) -> World {
+        let mut world = Self::new(endpoint, seed);
+        world.wire_version = highest;
+        world.machine = Machine::with_versions(endpoint, &world.limits, &world.sizes, lowest, highest)
+            .expect("configured range fits");
+        world
+    }
     pub fn append(&mut self, message: &Message) {
-        let bytes = codec::encode(message, &self.sizes).expect("scripted frame fits");
+        let bytes = codec::encode_version(message, &self.sizes, self.wire_version).expect("scripted frame fits");
         self.peer.extend_from_slice(&bytes);
     }
     pub fn raw(&mut self, bytes: &[u8]) {
@@ -129,7 +139,11 @@ impl World {
                     self.credit = self.credit.checked_sub(length).expect("Send consumes credit actually granted below");
                     self.queued =
                         self.queued.checked_add(u32::try_from(bytes.len()).expect("small frame")).expect("small count");
-                    assert!(self.queued <= sizes::output_cap(self.machine.endpoint(), &self.sizes).expect("cap fits"));
+                    assert!(
+                        self.queued
+                            <= sizes::output_cap_version(self.machine.endpoint(), &self.sizes, self.wire_version)
+                                .expect("cap fits")
+                    );
                     self.seen.push(Seen::Output(bytes.into_vec()));
                 }
                 stream::Down::Finish => self.seen.push(Seen::Finish),
@@ -247,6 +261,87 @@ pub fn replay(seed: u64) -> Vec<Seen> {
         }
     }
     assert_eq!(world.machine.received_frames(), 11);
+    world.request(Request::Close);
+    world.seen
+}
+
+/// A second-version link tape with named turns, mixed known/unknown frames,
+/// and a slow user. The existing v1 tape and its random draws stay unchanged.
+#[must_use]
+pub fn replay_v2(seed: u64) -> Vec<Seen> {
+    use temper_channel::wire::v2;
+    let mut world = World::with_versions(Endpoint::Engine, seed, 1, 2);
+    world.append(&Message::Open {
+        open: Open {
+            channel: Channel::Link,
+            lowest: 1,
+            highest: 2,
+            name: Box::from(*b"worker"),
+            secret: Box::from(*b"secret"),
+        },
+    });
+    world.append(&Message::Terms {
+        terms: sizes::terms_version(Endpoint::WorkerLink, &world.sizes, 2).expect("terms fit"),
+    });
+    world.append(&Message::HelloV2 {
+        hello: v2::Hello {
+            slots: 2,
+            workstreams: Box::from([]),
+            hosting: Box::from([]),
+            graces: skein_lib::Duration::from_secs(5),
+            push_deadline: skein_lib::Duration::from_secs(1),
+        },
+    });
+    for turn in 1..=8 {
+        world.append(&Message::Turn {
+            turn: v2::Turn {
+                run: 1,
+                attempt: 1,
+                turn,
+                spent: u64::from(turn),
+                read: Some(u64::from(turn)),
+                body: Box::from(*b"turn"),
+            },
+        });
+        world.raw(&[1, 9, 0, 0, 0, 0, 0, 3, 21, 22, 23]);
+    }
+    let mut authorized = false;
+    for _ in 0..8000 {
+        world.tick();
+        if world.machine.phase() == Phase::Authorizing && !authorized {
+            authorized = true;
+            world.request(Request::Accept { version: 2 });
+        }
+        if world.machine.phase() == Phase::Open && world.rng.chance(50) {
+            world.request(Request::Read);
+        }
+    }
+    assert_eq!(world.machine.phase(), Phase::Open);
+    assert_eq!(world.machine.received_frames(), 19);
+    let mut turns = 0;
+    let mut statuses = 0;
+    for event in &world.seen {
+        match event {
+            Seen::Frame(Message::Turn { turn }) => {
+                turns += 1;
+                assert_eq!(turn.turn, turns);
+            }
+            Seen::Output(bytes) => {
+                if codec::decode_version(bytes, &world.sizes, 2) == Some(Message::Unsupported { kind: 0x109 }) {
+                    statuses += 1;
+                }
+            }
+            Seen::Frame(_)
+            | Seen::Ready(_)
+            | Seen::Sent
+            | Seen::Unsent
+            | Seen::ReadEnded
+            | Seen::Closed(_)
+            | Seen::Finish => {}
+        }
+    }
+    assert_eq!(turns, 8);
+    assert_eq!(statuses, 8);
     world.request(Request::Close);
     world.seen
 }

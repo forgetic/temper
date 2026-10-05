@@ -4,7 +4,7 @@ use crate::{Error, Limits, grants, render::Text};
 use alloc::boxed::Box;
 use skein_lib::{List, bytes};
 use temper_agent_domain::run::{self, charter, outcome};
-use temper_channel::{Sizes, payload as wire, wire::EndpointDescriptor};
+use temper_channel::{Sizes, payload::v1 as wire, wire::EndpointDescriptor};
 
 pub const REPORT: &[u8] = b"report";
 pub const APPROVE: &[u8] = b"approve";
