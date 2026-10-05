@@ -1054,15 +1054,14 @@ fn coalesced_history_waiters_survive_simultaneous_io_completion_under_full_journ
         "no waiter reply escapes pressure before its keyed outcome can commit"
     );
     driver.settle();
-    let replies: Vec<_> = driver
-        .delivered
-        .iter()
+    let replies: Vec<_> = std::mem::take(&mut driver.delivered)
+        .into_iter()
         .filter_map(|delivery| match delivery {
             Delivery::WebReply {
                 to,
                 reply: people::Reply::Outcome(people::Outcome::EscalationDecided { by, .. }),
                 ..
-            } => Some((to.into_token().raw(), *by)),
+            } => Some((to.into_token().raw(), by)),
             _ => None,
         })
         .collect();
