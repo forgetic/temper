@@ -83,8 +83,8 @@ people in with the forge's), supervised processes.
 
 The engine decides an agent task's charter in its own terms (engine.md,
 7.1); its protocol layer encodes it as smith's (smith's `run.md`, 3.1),
-in one place, `temper-agent-protocol`, whose role this changes
-(section 11).
+in one place, `temper-engine-protocol` (section 11; the migration's
+07a). The agent process's translation belongs to smith's `smith-protocol`.
 
 ### 4.1 Instructions and brief
 

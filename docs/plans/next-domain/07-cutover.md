@@ -108,7 +108,9 @@ dependency on `temper-legacy-engine-domain` go; `tests/engine/protocol`'s
 legacy tests go with them, and `tests/worker/protocol`, whose socket
 worlds pair a worker with the engine's end of the link, moves to the new
 root's records. From here the engine speaks only the second
-payload version; workers and agents still speak both until step 08.
+payload version. Workers keep first-version engine-link compatibility
+until step 08; smith speaks only its own channel and the second conversation
+version. temper's frozen legacy agent goes in 07d.
 
 ### 07d the legacy engine deleted
 
@@ -140,7 +142,8 @@ Markdown, but for the citations in code, which run the gate.
 ## 4. Done when
 
 - `rg -i legacy crates tests testing` finds nothing, nor
-  `rg 'temper-(agent|llm|oauth|fake-llm)'`;
+  `rg 'temper-(agent|llm|oauth|fake-llm)' crates tests testing Cargo.toml Cargo.lock`;
+  historical migration documents retain their earlier names;
 - the system worlds pass on the new root with every story mapped;
 - the two suites are within their budgets with the legacy worlds gone,
   and README.md, 5.5 records their new shares;

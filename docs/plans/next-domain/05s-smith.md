@@ -154,6 +154,26 @@ scripted agent.
   half, built with the rest of the worker's protocol and io (08-after.md,
   section 3).
 
+### 05s8 the local host domain (smith)
+
+`smith-local-domain` and its world, new rather than copied (smith's
+`host.md`, sections 8–11). This completes the host domain logic the new
+goal includes alongside the extracted agent:
+
+- typed configuration, terminal messages and cancellation, optional
+  workspace, transcript persistence and delivery in place;
+- the world with smith's real agent, fake LLM, scripted person and fake
+  disk: a workspace-free chat waits, parks and resumes across invocations;
+  a change is checked and committed in place; terminal cancellation settles;
+- in-process composition through small total translations, preserving the
+  same call, turn, acknowledgement, budget and cancellation contracts
+  (smith's `host.md`, section 9).
+
+Files, terminal IO and contained process trees remain typed domain
+boundaries, exercised through fakes. A live terminal adapter is a separate
+lower-layer implementation; this increment completes the local host's
+domain logic and worlds. MCP remains explicitly later in smith's design.
+
 ## 5. Tests and budgets
 
 - **smith's worlds** start as copies of temper's (README.md, 5.5: the
@@ -195,16 +215,21 @@ authority or connectors in temper.
 05s1 ──► 05s2 ──┬──► 05s4 (several) ──┐
                 ├──► 05s6 ────────────┼──► 05s5 ──► 05s7
                 └──► 05s3 (temper)    │
+
+05s4 + 05s6 ──► 05s8 (local host)
 ```
 
 The step starts after README.md, section 8's gates (the walking story,
 the tasks audit, the documentation backfill and the style checks). 05f
 and 05g stay parked meanwhile and are ported, not merged. 07 needs 05s
-done.
+done, including 05s8. The local host follows 05s4 and 05s6 and may be
+built beside 05s5–7.
 
 ## 8. Done when
 
-- smith's gate passes, with every story of its documents' worlds;
+- smith's gate passes, with every story of its documents' worlds,
+  including the local host's (05s8); its agent, run, session, tools, host
+  and local host domains conform to their designs;
 - temper's agent is legacy and frozen, and the system worlds pass
   unchanged on the first version;
 - smith's documents and code agree, and temper's `agent.md`, section 11

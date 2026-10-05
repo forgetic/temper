@@ -6,6 +6,10 @@ workspace gate at the listed source tip; fuzzy runs retain one ignored finding.
 Detailed implementation and review evidence belongs in commit messages.
 The focused fixture gate skips its two explicit regeneration tests.
 
+The revised goal covers both temper's domain migration and the standalone
+smith domain in `~/src/rust/smith/`; completion requires both designs in
+place and their integration, as [README.md](README.md) states.
+
 | Increment | State | Commit | Evidence |
 |---|---|---|---|
 | 00a Forgejo facts | merged | fa97784 | Gate passed; 1,772 focused / 7.440 s; 26 fuzzy / 22.148 s. |
@@ -71,10 +75,9 @@ The focused fixture gate skips its two explicit regeneration tests.
 
 **05s — smith**
 
-- Make `ai/smith` on the forge, with its GitHub backup.
-- 05s1 smith's workspace; 05s2 the agent copied; 05s3 temper's moved aside.
-- 05s4 the run and tools, generic; 05s6 the host domain; 05s5 the channel, protocol and binary; 05s7 temper's half.
-- Shared kit to skein as 05s-smith.md, section 6 says.
+- Set up smith's workspace and forge remotes; copy the agent and freeze temper's legacy copy (05s1–3).
+- Build the generic run, tools and host, then channel/protocol and temper's half (05s4–7).
+- Build the local host domain and worlds (05s8); move shared kit to skein as section 6 requires.
 
 **06 — root**
 

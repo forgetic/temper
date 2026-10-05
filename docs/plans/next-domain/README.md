@@ -9,6 +9,20 @@ what I think of the migration and why it is shaped as it is, the
 conventions every step follows, and the steps in order. Each step has a
 document of its own beside this one.
 
+**Goal, revised 2026-10-05.** Migrate temper's domain layer to the new
+design, including the temper/smith split which extracts agent-specific
+domain code into `~/src/rust/smith/`. The goal is completed when both
+temper and smith domain logic is in place and follows the new design.
+
+Completion includes this plan's remaining increments, cutover and domain
+contractions, smith's domain contracts and world stories, and temper's
+integration with smith. Copying the existing agent into smith alone does
+not complete the goal. Both repositories follow skein's foundation
+documents, independent review and their own exact-tip gates. Features
+explicitly deferred by the designs remain deferred; the lower-layer
+follow-on plans retain their existing scope. Implementation remains
+paused until the user asks to resume.
+
 **Citations.** A bare file name names a document of the next design
 (`tasks.md`, `forge.md`), as the design's own README does: in
 `docs/design/domain/` (moved from `docs/design/next/domain/` in step 00);
