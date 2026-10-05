@@ -735,7 +735,27 @@ impl World {
             }
             self.iterate();
         }
-        panic!("escalation story did not settle: {:?}", self.trace);
+        panic!("escalation story did not settle: {}", self.unsettled());
+    }
+
+    fn unsettled(&self) -> String {
+        format!(
+            "settings {:?}; iteration {}; pending asks {:?}; pending read {:?}; worker {:?}; \
+             recovery {:?}; cut {:?}; referee {:?}; pending store {}; events {:?}; output {:?}; \
+             recent boundary trace {:?}",
+            self.settings,
+            self.iteration,
+            self.asks,
+            self.pending_read,
+            self.worker_answer,
+            self.recovery,
+            self.frozen_cut,
+            self.referee,
+            self.store.pending.len(),
+            self.events,
+            self.out,
+            self.trace.iter().rev().take(32).collect::<Vec<_>>(),
+        )
     }
 
     fn settled(&self) -> bool {
@@ -759,7 +779,7 @@ pub fn run_replayed(settings: Settings) -> World {
     let mut replay = World::new(settings);
     for _ in 0..600 {
         if first.settled() {
-            assert!(replay.settled(), "replay settled at same cut");
+            assert!(replay.settled(), "replay settled at same cut: {settings:?}; {}", replay.unsettled());
             first.referee.final_state(&first.store.rows).expect("replayed finite funding");
             return first;
         }
@@ -768,9 +788,9 @@ pub fn run_replayed(settings: Settings) -> World {
         assert_eq!(
             format!("{first:?}"),
             format!("{replay:?}"),
-            "complete frozen escalation state at iteration {}",
+            "complete frozen escalation state for {settings:?} at iteration {}",
             first.iteration
         );
     }
-    panic!("escalation replay did not settle");
+    panic!("escalation replay did not settle: {}", first.unsettled());
 }
