@@ -51,6 +51,7 @@ place and their integration, as [README.md](README.md) states.
 | 05s2 smith agent copy | merged locally | smith 8a959a5 | Gate passed; 351 focused / 1.435 s; 8 fuzzy / 2.674 s; serial 351 / 4.446 s, 8 / 6.278 s. |
 | 05s3 temper legacy agent rename | merged | 669bb52 | Gate passed; 2,256 focused / 10.283 s; 38 fuzzy / 28.851 s; behavior unchanged. |
 | 05s4 smith generic results | merged locally | smith 14cd733 | Gate passed; 368 focused / 1.509 s; 8 fuzzy / 2.820 s; serial 368 / 4.359 s, 8 / 6.150 s. |
+| 05s4 smith generic delivery | merged locally | smith 2a621a5 | Gate passed; 394 focused / 1.613 s; 9 fuzzy / 2.530 s; serial 394 / 4.429 s, 9 / 6.229 s. |
 | 02d1 actual escalation routes | merged; broader escalation open | 754ca84 | Gate passed; 2,277 focused / 5.850 s; 39 fuzzy / 24.314 s; root serial 68 / 0.393 s, 5 / 1.293 s. |
 | 03c role administration and live rerouting | merged; narrow dependency | 6dfa4d2 | Gate passed; 2,292 focused / 10.993 s; 40 fuzzy / 26.798 s; root serial 78 / 0.490 s, 6 / 1.435 s. |
 
@@ -88,7 +89,7 @@ place and their integration, as [README.md](README.md) states.
 **05s — smith**
 
 - Provision smith's forge remotes; preserve the frozen legacy agent until cutover.
-- Continue generic delivery, host tools and the remaining run increments; build the host, then channel/protocol and temper's half (05s4–7).
+- Continue host tools and the remaining run increments; extract the V2 host, then channel/protocol and temper's half (05s4–7).
 - Build the local host domain and worlds (05s8); move shared kit to skein as section 6 requires.
 
 **06 — root**
@@ -109,6 +110,6 @@ place and their integration, as [README.md](README.md) states.
 
 ## Resume point
 
-- Active: validate smith's generic delivery (05s4); the narrow 03c role-administration dependency is merged.
+- Active: extract smith's V2 process host (05s6) and continue generic host tools (05s4); generic delivery and the narrow 03c role-administration dependency are merged.
 - Parked drafts: `next-domain/02e-depth-draft` (`a60bf1c`), `next-domain/04b2` (`0eff9dc`), `next-domain/05f` (`c33941c`). These have not passed the merge gate.
 - Shared skein revision is local and cached; fresh-machine fetches need its authorized publication. Forgejo v16.0.5 job-log client repairs remain open.
