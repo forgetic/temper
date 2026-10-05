@@ -1,35 +1,37 @@
 use crate::domain::{Domain, entrance, fact, publish, record, refused, task_mut};
 use crate::{
-    Accepted, Active, Class, Closing, Contract, End, Ending, Fact, Hold, Limits, Phase, Refusal, Request, Result,
-    Stage, Tries, Was,
+    Accepted, Active, Class, Closing, Contract, End, Ending, Fact, Hold, Limits, Phase, Refusal, Request, Stage,
+    TaskResult, Tries, Was,
 };
 use skein_lib::{Env, Queue, ReplyTo};
-pub(crate) fn prepare(d: &mut Domain, env: &Env<Limits>, to: ReplyTo, number: u64, out: &mut Queue<Request>) {
-    let to = match entrance(d, to, number) {
+
+pub(crate) fn prepare(domain: &mut Domain, env: &Env<Limits>, to: ReplyTo, number: u64, out: &mut Queue<Request>) {
+    let to = match entrance(domain, to, number) {
         Ok(to) => to,
         Err((to, why)) => return refused(to, Some(number), why, out),
     };
-    let task = task_mut(d, number).expect("entrance names task");
+    let task = task_mut(domain, number).expect("entrance names task");
     if task.record.phase != Phase::Active(Active::Due) {
         return refused(to, Some(number), Refusal::State, out);
     }
     task.record.phase = Phase::Active(Active::Preparing);
-    publish(d, env, number, out);
+    publish(domain, env, number, out);
     out.push(Request::Done { reply_to: to });
 }
+
 pub(crate) fn claim(
-    d: &mut Domain,
+    domain: &mut Domain,
     env: &Env<Limits>,
     to: ReplyTo,
     number: u64,
     attempt: u64,
     out: &mut Queue<Request>,
 ) {
-    let to = match entrance(d, to, number) {
+    let to = match entrance(domain, to, number) {
         Ok(to) => to,
         Err((to, why)) => return refused(to, Some(number), why, out),
     };
-    let task = task_mut(d, number).expect("entrance names task");
+    let task = task_mut(domain, number).expect("entrance names task");
     if attempt <= task.record.attempt {
         return refused(to, Some(number), Refusal::Attempt, out);
     }
@@ -40,21 +42,23 @@ pub(crate) fn claim(
     task.record.run_spent = 0;
     task.record.turn = 0;
     task.record.phase = Phase::Active(Active::Claimed { attempt });
-    publish(d, env, number, out);
-    fact(d, Fact::Claimed { task: number, attempt });
+    publish(domain, env, number, out);
+    fact(domain, Fact::Claimed { task: number, attempt });
     out.push(Request::Done { reply_to: to });
 }
-pub(crate) fn started(d: &mut Domain, env: &Env<Limits>, number: u64, attempt: u64, out: &mut Queue<Request>) {
-    if !d.ready() {
+
+pub(crate) fn started(domain: &mut Domain, env: &Env<Limits>, number: u64, attempt: u64, out: &mut Queue<Request>) {
+    if !domain.ready() {
         return;
     }
-    if let Some(task) = task_mut(d, number)
+    if let Some(task) = task_mut(domain, number)
         && task.record.phase == Phase::Active(Active::Claimed { attempt })
     {
         task.record.phase = Phase::Active(Active::Running { attempt });
-        publish(d, env, number, out);
+        publish(domain, env, number, out);
     }
 }
+
 pub(crate) fn run_attempt(phase: &Phase) -> Option<u64> {
     match phase {
         Phase::Active(Active::Claimed { attempt } | Active::Running { attempt })
@@ -78,18 +82,19 @@ pub(crate) fn run_attempt(phase: &Phase) -> Option<u64> {
         | Phase::Ended(_) => None,
     }
 }
-pub(crate) fn valid_result(contract: &Contract, result: &Result, l: &Limits) -> bool {
+
+pub(crate) fn valid_result(contract: &Contract, result: &TaskResult, limits: &Limits) -> bool {
     match result {
-        Result::Failure { reason } => match contract {
+        TaskResult::Failure { reason } => match contract {
             Contract::Report { .. } | Contract::Verdict { .. } | Contract::Change { .. } => {
-                reason.len() <= usize::try_from(l.result_bytes).expect("u32 fits usize")
+                reason.len() <= usize::try_from(limits.result_bytes).expect("u32 fits usize")
             }
         },
-        Result::Report { words } => match contract {
+        TaskResult::Report { words } => match contract {
             Contract::Report { words: limit } => words.len() <= usize::try_from(*limit).expect("u32 fits usize"),
             Contract::Verdict { .. } | Contract::Change { .. } => false,
         },
-        Result::Verdict { code, words } => match contract {
+        TaskResult::Verdict { code, words } => match contract {
             Contract::Verdict { choices } => {
                 for choice in choices {
                     if choice.code == *code && words.len() <= usize::try_from(choice.words).expect("u32 fits usize") {
@@ -100,7 +105,7 @@ pub(crate) fn valid_result(contract: &Contract, result: &Result, l: &Limits) -> 
             }
             Contract::Report { .. } | Contract::Change { .. } => false,
         },
-        Result::Change { connector: actual_connector, kind: actual_kind, words, .. } => match contract {
+        TaskResult::Change { connector: actual_connector, kind: actual_kind, words, .. } => match contract {
             Contract::Change { connector, kind, words: limit } => {
                 connector == actual_connector
                     && kind == actual_kind
@@ -110,20 +115,25 @@ pub(crate) fn valid_result(contract: &Contract, result: &Result, l: &Limits) -> 
         },
     }
 }
-pub(crate) fn result_bytes(result: &Result) -> usize {
+
+pub(crate) fn result_bytes(result: &TaskResult) -> usize {
     match result {
-        Result::Report { words } | Result::Verdict { words, .. } | Result::Change { words, .. } => words.len(),
-        Result::Failure { reason } => reason.len(),
+        TaskResult::Report { words } | TaskResult::Verdict { words, .. } | TaskResult::Change { words, .. } => {
+            words.len()
+        }
+        TaskResult::Failure { reason } => reason.len(),
     }
 }
-fn ending(result: Result) -> Ending {
+
+fn ending(result: TaskResult) -> Ending {
     match result {
-        Result::Failure { reason } => Ending::Failed { reason },
-        Result::Report { .. } | Result::Verdict { .. } | Result::Change { .. } => Ending::Done(result),
+        TaskResult::Failure { reason } => Ending::Failed { reason },
+        TaskResult::Report { .. } | TaskResult::Verdict { .. } | TaskResult::Change { .. } => Ending::Done(result),
     }
 }
+
 pub(crate) fn activation(
-    d: &mut Domain,
+    domain: &mut Domain,
     env: &Env<Limits>,
     to: ReplyTo,
     number: u64,
@@ -131,10 +141,10 @@ pub(crate) fn activation(
     end: End,
     out: &mut Queue<Request>,
 ) {
-    if !d.ready() {
+    if !domain.ready() {
         return refused(to, Some(number), Refusal::NotReady, out);
     }
-    let Some(old) = record(d, number) else {
+    let Some(old) = record(domain, number) else {
         return refused(to, Some(number), Refusal::Unknown, out);
     };
     if old.last_answer == Some(attempt) {
@@ -185,29 +195,30 @@ pub(crate) fn activation(
         match end {
             End::Finished { result, cancel_delegates } => {
                 if cancel_delegates {
-                    crate::closing::cancel_delegates(d, env, number, b"", out);
+                    crate::closing::cancel_delegates(domain, env, number, b"", out);
                 }
                 Phase::Closing(Closing { stage: Stage::Delegates, ending: ending(result) })
             }
             End::Parked => {
-                let task = task_mut(d, number).expect("terminal names live task");
+                let task = task_mut(domain, number).expect("terminal names live task");
                 task.record.tries = Tries::NONE;
                 task.record.refusals = 0;
                 Phase::Active(Active::Idle)
             }
-            End::Failed(class) => failure(d, env, number, class),
-            End::Refused => pause(d, env, number),
+            End::Failed(class) => failure(domain, env, number, class),
+            End::Refused => pause(domain, env, number),
         }
     };
-    let task = task_mut(d, number).expect("terminal names live task");
+    let task = task_mut(domain, number).expect("terminal names live task");
     task.record.last_answer = Some(attempt);
     task.record.phase = match held {
         Some(why) => Phase::Held { was: was(next), why },
         None => next,
     };
-    publish(d, env, number, out);
+    publish(domain, env, number, out);
     out.push(Request::Acknowledged { reply_to: to, task: number, attempt, accepted: Accepted::New });
 }
+
 pub(crate) fn was(phase: Phase) -> Was {
     match phase {
         Phase::Waiting => Was::Waiting,
@@ -217,48 +228,53 @@ pub(crate) fn was(phase: Phase) -> Was {
         Phase::Ended(_) => unreachable!("ended task cannot be held"),
     }
 }
+
 fn wall_after(env: &Env<Limits>, duration: skein_lib::Duration) -> skein_lib::Wall {
     skein_lib::Wall::from_nanos(env.wall.as_nanos().saturating_add(duration.as_nanos()))
 }
-fn failure(d: &mut Domain, env: &Env<Limits>, number: u64, class: Class) -> Phase {
-    let task = task_mut(d, number).expect("failure names live task");
+
+fn failure(domain: &mut Domain, env: &Env<Limits>, number: u64, class: Class) -> Phase {
+    let task = task_mut(domain, number).expect("failure names live task");
     task.record.tries.add(class);
     task.record.refusals = 0;
     let times = task.record.tries.of(class);
     let retry = env.limits.retries.of(class);
-    fact(d, Fact::Failed { task: number, class });
+    fact(domain, Fact::Failed { task: number, class });
     if times > retry.retries {
-        fact(d, Fact::Held { task: number, why: Hold::Failures(class) });
+        fact(domain, Fact::Held { task: number, why: Hold::Failures(class) });
         Phase::Held { was: Was::Active(Active::Due), why: Hold::Failures(class) }
     } else {
-        let duration = crate::failures::backoff(times, retry, &mut d.rng);
+        let duration = crate::failures::backoff(times, retry, &mut domain.rng);
         Phase::Active(Active::BackingOff { until: wall_after(env, duration) })
     }
 }
-fn pause(d: &mut Domain, env: &Env<Limits>, number: u64) -> Phase {
-    let task = task_mut(d, number).expect("pause names live task");
+
+fn pause(domain: &mut Domain, env: &Env<Limits>, number: u64) -> Phase {
+    let task = task_mut(domain, number).expect("pause names live task");
     task.record.refusals = task.record.refusals.saturating_add(1);
     let times = task.record.refusals;
-    let duration = crate::failures::backoff(times, env.limits.retries.transient, &mut d.rng);
+    let duration = crate::failures::backoff(times, env.limits.retries.transient, &mut domain.rng);
     Phase::Active(Active::BackingOff { until: wall_after(env, duration) })
 }
-pub(crate) fn preparation_failed(d: &mut Domain, env: &Env<Limits>, number: u64, out: &mut Queue<Request>) {
-    if !d.ready() {
+
+pub(crate) fn preparation_failed(domain: &mut Domain, env: &Env<Limits>, number: u64, out: &mut Queue<Request>) {
+    if !domain.ready() {
         return;
     }
-    if let Some(task) = record(d, number)
+    if let Some(task) = record(domain, number)
         && task.phase == Phase::Active(Active::Preparing)
     {
-        let phase = pause(d, env, number);
-        task_mut(d, number).expect("prepared task exists").record.phase = phase;
-        publish(d, env, number, out);
+        let phase = pause(domain, env, number);
+        task_mut(domain, number).expect("prepared task exists").record.phase = phase;
+        publish(domain, env, number, out);
     }
 }
-pub(crate) fn hold(d: &mut Domain, env: &Env<Limits>, number: u64, why: Hold, out: &mut Queue<Request>) {
-    if !d.ready() {
+
+pub(crate) fn hold(domain: &mut Domain, env: &Env<Limits>, number: u64, why: Hold, out: &mut Queue<Request>) {
+    if !domain.ready() {
         return;
     }
-    let Some(task) = record(d, number) else {
+    let Some(task) = record(domain, number) else {
         return;
     };
     match task.phase {
@@ -268,9 +284,9 @@ pub(crate) fn hold(d: &mut Domain, env: &Env<Limits>, number: u64, why: Hold, ou
     if let Some(attempt) = run_attempt(&task.phase) {
         out.push(Request::Stop { task: number, attempt });
     }
-    let task = task_mut(d, number).expect("hold names live task");
+    let task = task_mut(domain, number).expect("hold names live task");
     let old = core::mem::replace(&mut task.record.phase, Phase::Waiting);
     task.record.phase = Phase::Held { was: was(old), why };
-    publish(d, env, number, out);
-    fact(d, Fact::Held { task: number, why });
+    publish(domain, env, number, out);
+    fact(domain, Fact::Held { task: number, why });
 }

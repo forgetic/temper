@@ -1,9 +1,10 @@
 use skein_lib::Duration;
 use std::collections::{BTreeMap, BTreeSet};
 use temper_engine_domain_tasks::{
-    Contract, Ending, Last, Limits, Parameter, Party, Phase, Result, Status, TaskRecord, Was,
+    Contract, Ending, Last, Limits, Parameter, Party, Phase, Status, TaskRecord, TaskResult, Was,
 };
 use temper_world::{Expectations, Judge};
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Seen {
     Batch { members: Vec<u64>, accepted: bool, made: Vec<u64> },
@@ -20,14 +21,17 @@ pub enum Seen {
     Stored { live: Vec<TaskRecord>, limits: Box<Limits> },
     Finished,
 }
+
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Name {
     End(u64),
 }
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Stimulus {
     Restart,
 }
+
 #[derive(Default, Debug)]
 pub struct Tasks {
     durable: u64,
@@ -41,11 +45,13 @@ pub struct Tasks {
     ended: BTreeMap<u64, Status>,
     cancelled: BTreeSet<u64>,
 }
+
 impl Tasks {
     #[must_use]
     pub fn has_task(&self, task: u64) -> bool {
         self.parents.contains_key(&task)
     }
+
     #[must_use]
     pub fn descendants(&self, ancestor: u64) -> Vec<u64> {
         self.parents
@@ -70,6 +76,7 @@ impl Tasks {
             .copied()
             .collect()
     }
+
     fn end(&mut self, task: u64, status: Status, after: u64, judge: &mut Judge<Name, Stimulus>) {
         if after > self.durable {
             judge.fail("result before durability");
@@ -93,6 +100,7 @@ impl Tasks {
         }
         judge.meet(&Name::End(task));
     }
+
     fn cycle(&self) -> bool {
         for start in self.parents.keys() {
             let mut pending = self.dependencies.get(start).cloned().unwrap_or_default();
@@ -122,10 +130,14 @@ impl Tasks {
         false
     }
 }
+
 impl Expectations for Tasks {
     type Seen = Seen;
+
     type Name = Name;
+
     type Stimulus = Stimulus;
+
     fn observe(&mut self, seen: Seen, judge: &mut Judge<Name, Stimulus>) {
         match seen {
             Seen::Batch { mut members, accepted, mut made } => {
@@ -227,12 +239,15 @@ impl Expectations for Tasks {
     }
 }
 
-fn bytes(result: &Result) -> usize {
+fn bytes(result: &TaskResult) -> usize {
     match result {
-        Result::Report { words } | Result::Verdict { words, .. } | Result::Change { words, .. } => words.len(),
-        Result::Failure { reason } => reason.len(),
+        TaskResult::Report { words } | TaskResult::Verdict { words, .. } | TaskResult::Change { words, .. } => {
+            words.len()
+        }
+        TaskResult::Failure { reason } => reason.len(),
     }
 }
+
 fn end_within(ending: &Ending, cap: usize) -> bool {
     match ending {
         Ending::Done(result) => bytes(result) <= cap,
@@ -242,7 +257,8 @@ fn end_within(ending: &Ending, cap: usize) -> bool {
         }
     }
 }
-fn within(task: &TaskRecord, l: &Limits) -> bool {
+
+fn within(task: &TaskRecord, limits: &Limits) -> bool {
     let spec_bytes = task.spec.words.len()
         + task
             .spec
@@ -266,33 +282,31 @@ fn within(task: &TaskRecord, l: &Limits) -> bool {
         })
         .sum::<usize>();
     let counts = [
-        (task.delegates.len(), l.delegates),
-        (task.dependencies.len(), l.dependencies),
-        (task.spec.inputs.len(), l.inputs),
-        (task.spec.parameters.len(), l.parameters),
-        (spec_bytes, l.spec_bytes),
-        (task.authority.grants.len(), l.authority_grants),
-        (task.authority.delegation.kinds.len(), l.executor_kinds),
-        (grant_bytes, l.authority_bytes),
+        (task.delegates.len(), limits.delegates),
+        (task.dependencies.len(), limits.dependencies),
+        (task.spec.inputs.len(), limits.inputs),
+        (task.spec.parameters.len(), limits.parameters),
+        (spec_bytes, limits.spec_bytes),
+        (task.authority.grants.len(), limits.authority_grants),
+        (task.authority.delegation.kinds.len(), limits.executor_kinds),
+        (grant_bytes, limits.authority_bytes),
     ];
-    if task.depth > l.depth
-        || task.made > l.tree_tasks
+    if task.depth > limits.depth
+        || task.made > limits.tree_tasks
         || counts.into_iter().any(|(count, limit)| count > usize::try_from(limit).expect("u32 fits usize"))
-        || task
-            .authority
-            .grants
-            .iter()
-            .any(|grant| grant.pattern.segments.len() > usize::try_from(l.authority_segments).expect("u32 fits usize"))
+        || task.authority.grants.iter().any(|grant| {
+            grant.pattern.segments.len() > usize::try_from(limits.authority_segments).expect("u32 fits usize")
+        })
     {
         return false;
     }
-    let result_cap = usize::try_from(l.result_bytes).expect("u32 fits usize");
+    let result_cap = usize::try_from(limits.result_bytes).expect("u32 fits usize");
     let contract = match &task.contract {
-        Contract::Report { words } | Contract::Change { words, .. } => *words <= l.result_bytes,
+        Contract::Report { words } | Contract::Change { words, .. } => *words <= limits.result_bytes,
         Contract::Verdict { choices } => {
             !choices.is_empty()
-                && choices.len() <= usize::try_from(l.contract_choices).expect("u32 fits usize")
-                && choices.iter().all(|choice| choice.words <= l.result_bytes)
+                && choices.len() <= usize::try_from(limits.contract_choices).expect("u32 fits usize")
+                && choices.iter().all(|choice| choice.words <= limits.result_bytes)
         }
     };
     contract

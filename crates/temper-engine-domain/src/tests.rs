@@ -6,8 +6,10 @@ use alloc::boxed::Box;
 use skein_lib::{List, Queue, Token, Wall};
 
 const LIMITS: Limits = Limits { commits: 2, held: 8, writes: 4, deliveries: 4, transcript_bytes: 64, result_bytes: 32 };
+
 const DEPLOYMENT: Deployment =
     Deployment { id: [19; 16], tasks: 0, people: 0, sign_ins: 0, messages: 0, runs: 0, calls: 0, commits: 0 };
+
 fn bytes(len: u32) -> Box<[u8]> {
     let mut bytes = List::with_capacity(len);
     for _ in 0..len {
@@ -15,6 +17,7 @@ fn bytes(len: u32) -> Box<[u8]> {
     }
     bytes.into_boxed()
 }
+
 fn turn(number: u32, len: u32) -> Write {
     Write::Save(Record::Turn(TurnRecord {
         task: 1,
@@ -26,27 +29,32 @@ fn turn(number: u32, len: u32) -> Write {
         transcript: bytes(len),
     }))
 }
+
 fn ack(number: u32) -> Delivery {
     Delivery::AcknowledgeTurn { channel: Token::new(7), task: 1, attempt: 1, turn: number }
 }
+
 fn decision(number: u32) -> Decision {
     let mut d = Decision::new(&LIMITS);
     d.write(&LIMITS, turn(number, 2)).unwrap();
     d.deliver(&LIMITS, ack(number)).unwrap();
     d
 }
+
 fn commit(out: &mut Queue<Output>) -> (u64, Box<[Write]>) {
     let Output::Commit { number, writes } = out.pop().unwrap() else {
         panic!("commit");
     };
     (number, writes)
 }
+
 fn acknowledged(out: &mut Queue<Output>) -> u32 {
     let Output::Deliver(Delivery::AcknowledgeTurn { turn, .. }) = out.pop().unwrap() else {
         panic!("ack");
     };
     turn
 }
+
 #[test]
 fn a_first_start_commits_its_deployment_before_releasing_a_delivery() {
     let mut j = Journal::bootstrap([37; 16], &LIMITS);
@@ -65,6 +73,7 @@ fn a_first_start_commits_its_deployment_before_releasing_a_delivery() {
     resume(&mut j, &mut out);
     assert_eq!(acknowledged(&mut out), 1);
 }
+
 #[test]
 fn a_store_answer_makes_outputs_ready_without_draining_them() {
     let mut j = Journal::new(DEPLOYMENT, &LIMITS);
@@ -84,6 +93,7 @@ fn a_store_answer_makes_outputs_ready_without_draining_them() {
     resume(&mut j, &mut out);
     assert!(out.is_empty());
 }
+
 #[test]
 fn a_decision_without_writes_still_waits_for_the_state_it_observed() {
     let mut j = Journal::new(DEPLOYMENT, &LIMITS);
@@ -103,6 +113,7 @@ fn a_decision_without_writes_still_waits_for_the_state_it_observed() {
     assert_eq!(acknowledged(&mut out), 2);
     assert_eq!(j.deployment().commits, 1);
 }
+
 #[test]
 fn cumulative_and_duplicate_store_answers_preserve_original_output_order() {
     let mut j = Journal::new(DEPLOYMENT, &LIMITS);
@@ -123,6 +134,7 @@ fn cumulative_and_duplicate_store_answers_preserve_original_output_order() {
     }
     assert!(takes(&j, &LIMITS));
 }
+
 #[test]
 fn a_failed_commit_releases_neither_its_outputs_nor_later_outputs() {
     let mut j = Journal::new(DEPLOYMENT, &LIMITS);
@@ -141,6 +153,7 @@ fn a_failed_commit_releases_neither_its_outputs_nor_later_outputs() {
     assert!(!takes(&j, &LIMITS));
     assert_eq!(fresh(&mut j, Family::Task), None);
 }
+
 #[test]
 fn held_output_pressure_is_seen_before_the_next_child_decision() {
     let mut j = Journal::new(DEPLOYMENT, &LIMITS);
@@ -167,6 +180,7 @@ fn held_output_pressure_is_seen_before_the_next_child_decision() {
     assert_eq!(writes.len(), 2);
     assert_eq!(writes[1], turn(1, 2));
 }
+
 #[test]
 fn fresh_numbers_and_unused_gaps_are_durable_in_the_decisions_header() {
     let mut j = Journal::new(DEPLOYMENT, &LIMITS);
@@ -186,6 +200,7 @@ fn fresh_numbers_and_unused_gaps_are_durable_in_the_decisions_header() {
     assert_eq!(restarted.durable(), 1);
     assert_eq!(fresh(&mut restarted, Family::Task), Some(3));
 }
+
 #[test]
 fn same_key_saves_and_erases_collapse_to_the_last_write_before_commit() {
     let mut j = Journal::new(DEPLOYMENT, &LIMITS);
@@ -201,6 +216,7 @@ fn same_key_saves_and_erases_collapse_to_the_last_write_before_commit() {
     assert_eq!(writes[1], turn(1, 4));
     assert_eq!(writes[2], turn(2, 3));
 }
+
 #[test]
 fn rejected_payloads_are_returned_without_replacing_admitted_ownership() {
     let mut d = Decision::new(&LIMITS);
@@ -223,6 +239,7 @@ fn rejected_payloads_are_returned_without_replacing_admitted_ownership() {
     resume(&mut j, &mut out);
     assert!(out.is_empty());
 }
+
 #[test]
 fn counter_and_commit_overflow_cannot_reuse_names() {
     let mut j = Journal::new(Deployment { tasks: u64::MAX, commits: u64::MAX, ..DEPLOYMENT }, &LIMITS);

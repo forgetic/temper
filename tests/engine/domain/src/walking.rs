@@ -431,7 +431,7 @@ impl World {
                         attempt,
                         cumulative: FINAL_SPEND,
                         end: tasks::End::Finished {
-                            result: tasks::Result::Report { words: REPORT.into() },
+                            result: tasks::TaskResult::Report { words: REPORT.into() },
                             cancel_delegates: false,
                         },
                     },
@@ -484,7 +484,7 @@ impl World {
                             attempt,
                             cumulative: FINAL_SPEND,
                             end: tasks::End::Finished {
-                                result: tasks::Result::Report { words: REPORT.into() },
+                                result: tasks::TaskResult::Report { words: REPORT.into() },
                                 cancel_delegates: false,
                             },
                         },

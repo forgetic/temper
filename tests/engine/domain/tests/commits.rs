@@ -16,6 +16,7 @@ fn a_cumulative_completion_releases_decisions_in_order_one_at_a_time() {
     assert!(world.referee.done());
     assert_eq!(world.referee.judged, 5);
 }
+
 #[test]
 fn a_lost_completion_recovers_the_whole_header_and_transcript_without_reapplying() {
     let mut world = World::new();
@@ -40,6 +41,7 @@ fn a_lost_completion_recovers_the_whole_header_and_transcript_without_reapplying
     assert_eq!(world.store.rows, rows);
     assert_eq!(root::fresh(&mut recovered, Family::Task), Some(2));
 }
+
 #[test]
 fn random_store_lag_replays_the_identical_trace() {
     for seed in [3_u64, 17, 29] {
@@ -49,6 +51,7 @@ fn random_store_lag_replays_the_identical_trace() {
         assert_eq!(first.store.rows, replay.store.rows);
     }
 }
+
 #[test]
 fn the_referee_rejects_early_duplicate_or_reordered_acknowledgements() {
     let ack = |turn| Output::Deliver(Delivery::AcknowledgeTurn { channel: Token::new(7), task: 1, attempt: 1, turn });
@@ -65,6 +68,7 @@ fn the_referee_rejects_early_duplicate_or_reordered_acknowledgements() {
         Err("delivery shape")
     );
 }
+
 #[test]
 fn a_failed_fake_store_transaction_changes_no_rows_and_stops_waiting_releases() {
     let mut world = World::new();
@@ -89,6 +93,7 @@ fn a_failed_fake_store_transaction_changes_no_rows_and_stops_waiting_releases() 
     assert_eq!(recovered.deployment().commits, 1);
     assert_eq!(recovered.deployment().tasks, 1);
 }
+
 #[test]
 fn the_referee_rejects_missing_records_wrong_numbers_and_unsolicited_commits() {
     for wrong_number in [false, true] {

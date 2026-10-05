@@ -120,6 +120,7 @@ impl Loads {
         assert!(worst_case(limits).is_some(), "valid root load limits");
         Loads { limits: *limits, entries: Slab::with_capacity(limits.loads) }
     }
+
     /// Shell completion fence: no issued page awaits its terminal or reclaim.
     /// Abandoned IO remains counted until its actual answer (domain/engine.md, 5.3).
     #[must_use]

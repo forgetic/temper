@@ -7,17 +7,20 @@ pub struct IdentityKey {
     pub forge: u32,
     pub user: u64,
 }
+
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Identity {
     pub key: IdentityKey,
     pub login: Box<[u8]>,
     pub name: Box<[u8]>,
 }
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct InitialOwner {
     pub project: u32,
     pub identity: IdentityKey,
 }
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Role {
     Owner,
@@ -25,6 +28,7 @@ pub enum Role {
     Member,
     Observer,
 }
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Holding {
     pub person: u64,
@@ -37,6 +41,7 @@ pub struct Holding {
 pub enum Ask {
     StartChat { project: u32, words: Box<[u8]> },
 }
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Refusal {
     NotReady,
@@ -49,11 +54,13 @@ pub enum Refusal {
     Limit,
     KeyConflict,
 }
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Outcome {
     Started { task: u64 },
     Refused(Refusal),
 }
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Reply {
     SignedIn { person: u64, expires: Wall },
@@ -61,11 +68,13 @@ pub enum Reply {
     Outcome(Outcome),
     Refused(Refusal),
 }
+
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct RequestKey {
     pub person: u64,
     pub key: [u8; 16],
 }
+
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Key {
     Person(u64),
@@ -73,6 +82,7 @@ pub enum Key {
     Roles(u32),
     Answer(RequestKey),
 }
+
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Stored {
     Person { number: u64, identity: Identity },
@@ -80,6 +90,7 @@ pub enum Stored {
     Roles { project: u32, holdings: Box<[Holding]> },
     Answer { key: RequestKey, ask: Ask, outcome: Outcome, at: Wall },
 }
+
 impl Stored {
     #[must_use]
     pub const fn key(&self) -> Key {
@@ -91,6 +102,7 @@ impl Stored {
         }
     }
 }
+
 #[derive(PartialEq, Eq, Debug)]
 pub enum Event {
     /// Root-issued fresh candidate: used only when this identity is new.
@@ -124,6 +136,7 @@ pub enum Event {
     },
     Restored,
 }
+
 #[derive(PartialEq, Eq, Debug)]
 pub enum Request {
     Route { request: Token, person: u64, project: u32, role: Role, ask: Ask },

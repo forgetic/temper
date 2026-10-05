@@ -2,6 +2,7 @@ use skein_lib::Time;
 use temper_engine_domain_people::{RequestKey, Role};
 use temper_engine_people_world::referee::{People, Seen};
 use temper_world::{Referee, Verdict};
+
 fn fails(observations: &[Seen]) {
     let mut referee = Referee::new(People::default());
     for seen in observations {
@@ -9,23 +10,28 @@ fn fails(observations: &[Seen]) {
     }
     assert!(matches!(referee.verdict(), Verdict::Failed(_)));
 }
+
 #[test]
 fn rejects_a_reply_before_its_commit() {
     fails(&[Seen::Called { call: 1 }, Seen::Replied { call: 1, after: 1 }]);
 }
+
 #[test]
 fn rejects_a_repeated_reply() {
     fails(&[Seen::Called { call: 1 }, Seen::Replied { call: 1, after: 0 }, Seen::Replied { call: 1, after: 0 }]);
 }
+
 #[test]
 fn rejects_an_observer_routed() {
     fails(&[Seen::Routed { role: Role::Observer }]);
 }
+
 #[test]
 fn rejects_a_key_made_twice() {
     let key = RequestKey { person: 1, key: [1; 16] };
     fails(&[Seen::Created { key }, Seen::Created { key }]);
 }
+
 #[test]
 fn a_missing_reply_fails_its_deadline() {
     let mut referee = Referee::new(People::default());

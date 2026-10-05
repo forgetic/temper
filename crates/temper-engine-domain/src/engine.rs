@@ -31,7 +31,7 @@ pub struct Limits {
     pub fleet: fleet::Limits,
     /// Required task section gathering and cuts (domain/engine.md, 9).
     pub brief: brief::Limits,
-    /// Secret-free credential policy (domain/engine.md, section 8; credentials.md, 5).
+    /// Secret-free credential policy (domain/engine.md, section 8; docs/design/credentials.md, 5).
     pub accounts: accounts::Limits,
 }
 
@@ -57,11 +57,11 @@ pub struct Config {
     pub person_budget: u64,
     /// Exact task authority checked for each authenticated chat (domain/authority.md, 8.4).
     pub chat_authority: authority::Authority,
-    /// Account required by the chat charter, configured through the accounts child (domain/engine.md, section 8; credentials.md, 5).
+    /// Account required by the chat charter, configured through the accounts child (domain/engine.md, section 8; docs/design/credentials.md, 5).
     pub account: u32,
-    /// Existing secret-free generation at startup (domain/engine.md, section 8; credentials.md, 5).
+    /// Existing secret-free generation at startup (domain/engine.md, section 8; docs/design/credentials.md, 5).
     pub account_generation: u64,
-    /// Startup credential lifetime; a refresh is required when absent (domain/engine.md, section 8; credentials.md, 5).
+    /// Startup credential lifetime; a refresh is required when absent (domain/engine.md, section 8; docs/design/credentials.md, 5).
     pub account_valid: Option<skein_lib::Duration>,
 }
 
@@ -77,7 +77,7 @@ pub struct Assignment {
     pub charter: u32,
     /// Required typed task section, gathered by the brief child (domain/engine.md, 9).
     pub sections: Box<[brief::Section]>,
-    /// Secret-free account grant; token bytes stay in the protocol (domain/engine.md, section 8; credentials.md, 5).
+    /// Secret-free account grant; token bytes stay in the protocol (domain/engine.md, section 8; docs/design/credentials.md, 5).
     pub grant: accounts::Grant,
 }
 
@@ -188,7 +188,7 @@ pub enum Event {
         /// Positive root-issued task number; the worker must name the current durable claim (domain/tasks.md, 2; domain/engine.md, 7).
         task: u64,
     },
-    /// Account protocol completes a refresh with secret-free lifetime (domain/engine.md, section 8; credentials.md, 5).
+    /// Account protocol completes a refresh with secret-free lifetime (domain/engine.md, section 8; docs/design/credentials.md, 5).
     Refreshed {
         /// Configured secret-free account number; bounded by accounts account room (domain/engine.md, 8).
         account: u32,
@@ -197,7 +197,7 @@ pub enum Event {
         /// Remaining credential lifetime, represented by a u64 duration; no token bytes cross the domain (domain/engine.md, 8).
         valid: skein_lib::Duration,
     },
-    /// Account protocol ends its refresh unsuccessfully (domain/engine.md, section 8; credentials.md, 5).
+    /// Account protocol ends its refresh unsuccessfully (domain/engine.md, section 8; docs/design/credentials.md, 5).
     RefreshFailed {
         /// Configured secret-free account number; bounded by accounts account room (domain/engine.md, 8).
         account: u32,
@@ -237,7 +237,7 @@ pub enum Request {
         /// Owned bounded effect, released once after the commit it follows (domain/engine.md, 5.2).
         Delivery,
     ),
-    /// Account protocol action, ended by the corresponding refresh event (domain/engine.md, section 8; credentials.md, 5).
+    /// Account protocol action, ended by the corresponding refresh event (domain/engine.md, section 8; docs/design/credentials.md, 5).
     Account(
         /// Typed secret-free protocol action; refresh terminal returns through this root (domain/engine.md, 8).
         accounts::Request,
@@ -389,12 +389,14 @@ impl Domain {
             limits: *limits,
         }
     }
+
     /// True once every restored claim was handed to fleet before `Loaded`;
     /// new work is admitted only then (domain/engine.md, 6).
     #[must_use]
     pub fn ready(&self) -> bool {
         self.startup == Startup::Running && !self.journal.stopped()
     }
+
     /// Shell idle fence: no immediate internal handoff or issued store operation
     /// remains unfinished. Call after the iteration's reclaim; sessions, idle
     /// workers, assigned workers awaiting external answers and future task/account
@@ -426,12 +428,14 @@ impl Domain {
             && self.fleet.next_deadline().is_none()
             && !self.accounts.waiting()
     }
+
     /// Expose the latest allocated deployment counters for the world/shell, never
     /// children or held bodies (domain/engine.md, 5.4).
     #[must_use]
     pub fn deployment(&self) -> crate::Deployment {
         self.journal.deployment()
     }
+
     /// Retired IO/body/child slots are reclaimed at iteration end, after
     /// every event and ready pass (domain/engine.md, 5; programming-model.md, 2).
     pub fn reclaim(&mut self) {
@@ -443,6 +447,7 @@ impl Domain {
         self.result_reads.reclaim();
         loads::reclaim(&mut self.loads);
     }
+
     /// Drain one observation from each child; keeping or losing these has
     /// no effect on decisions (domain/engine.md, 14).
     pub fn drain_facts(&mut self) {
@@ -1681,12 +1686,12 @@ fn account_fire(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>
     }
 }
 
-fn result_words(result: tasks::Result) -> Box<[u8]> {
+fn result_words(result: tasks::TaskResult) -> Box<[u8]> {
     match result {
-        tasks::Result::Report { words }
-        | tasks::Result::Verdict { words, .. }
-        | tasks::Result::Change { words, .. } => words,
-        tasks::Result::Failure { reason } => reason,
+        tasks::TaskResult::Report { words }
+        | tasks::TaskResult::Verdict { words, .. }
+        | tasks::TaskResult::Change { words, .. } => words,
+        tasks::TaskResult::Failure { reason } => reason,
     }
 }
 
@@ -1704,10 +1709,10 @@ fn ending_words(ending: tasks::Ending) -> Box<[u8]> {
 fn end_bytes(end: &tasks::End) -> u64 {
     match end {
         tasks::End::Finished { result, .. } => match result {
-            tasks::Result::Report { words }
-            | tasks::Result::Verdict { words, .. }
-            | tasks::Result::Change { words, .. } => u64::try_from(words.len()).expect("usize fits u64"),
-            tasks::Result::Failure { reason } => u64::try_from(reason.len()).expect("usize fits u64"),
+            tasks::TaskResult::Report { words }
+            | tasks::TaskResult::Verdict { words, .. }
+            | tasks::TaskResult::Change { words, .. } => u64::try_from(words.len()).expect("usize fits u64"),
+            tasks::TaskResult::Failure { reason } => u64::try_from(reason.len()).expect("usize fits u64"),
         },
         tasks::End::Parked | tasks::End::Failed(_) | tasks::End::Refused => 0,
     }
@@ -2113,12 +2118,14 @@ fn current_proof(domain: &Domain, task: u64, attempt: u64) -> bool {
         None => false,
     }
 }
+
 fn proof_turn(proof: &RunProof) -> u32 {
     match proof.turn {
         Some(turn) => turn.turn,
         None => 0,
     }
 }
+
 fn valid_proof(proof: &RunProof, expected: &RestoringProof, limits: &Limits) -> bool {
     if proof.task == 0 || proof.attempt == 0 {
         return false;
@@ -2176,6 +2183,7 @@ fn remember_unpriced_terminal(domain: &mut Domain, run: Token, attempt: Token, e
     };
     proof.terminal = Some(TerminalRecord { task: run.raw(), attempt: attempt.raw(), cumulative, end });
 }
+
 fn supported_person(requester: tasks::Party, highest: u64) -> bool {
     match requester {
         tasks::Party::Person(person) => person != 0 && person <= highest,

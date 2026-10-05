@@ -2,6 +2,7 @@ use skein_lib::Time;
 use temper_engine_domain_tasks::{Party, Status};
 use temper_engine_tasks_world::referee::{Seen, Tasks};
 use temper_world::{Referee, Verdict};
+
 fn rejects(seen: Vec<Seen>) {
     let mut referee = Referee::new(Tasks::default());
     let mut out = Vec::new();
@@ -10,27 +11,35 @@ fn rejects(seen: Vec<Seen>) {
     }
     assert!(matches!(referee.verdict(), Verdict::Failed(_)), "referee catches violated invariant");
 }
+
 fn made(task: u64) -> Seen {
     Seen::Made { task, parent: Party::Person(1), dependencies: vec![], depth: 0 }
 }
+
 fn assigned(task: u64, attempt: u64) -> Seen {
     Seen::Assigned { task, attempt, after: 0, adopted: false }
 }
+
 fn partial_batch() {
     rejects(vec![Seen::Batch { members: vec![1, 2], accepted: true, made: vec![1] }]);
 }
+
 fn refused_batch_created_task() {
     rejects(vec![Seen::Batch { members: vec![1], accepted: false, made: vec![1] }]);
 }
+
 fn reused_number() {
     rejects(vec![made(1), made(1)]);
 }
+
 fn dependency_on_self() {
     rejects(vec![Seen::Made { task: 1, parent: Party::Person(1), dependencies: vec![1], depth: 0 }]);
 }
+
 fn delegate_without_parent() {
     rejects(vec![Seen::Made { task: 2, parent: Party::Task(1), dependencies: vec![], depth: 1 }]);
 }
+
 fn assignment_before_dependency_done() {
     rejects(vec![
         made(1),
@@ -38,18 +47,23 @@ fn assignment_before_dependency_done() {
         assigned(2, 1),
     ]);
 }
+
 fn overlapping_runs() {
     rejects(vec![made(1), assigned(1, 1), assigned(1, 2)]);
 }
+
 fn nonmonotonic_attempt() {
     rejects(vec![made(1), assigned(1, 2), Seen::Terminal { task: 1, attempt: 2 }, assigned(1, 1)]);
 }
+
 fn terminal_of_wrong_attempt() {
     rejects(vec![made(1), assigned(1, 1), Seen::Terminal { task: 1, attempt: 2 }]);
 }
+
 fn closing_before_run_ended() {
     rejects(vec![made(1), assigned(1, 1), Seen::Closing { task: 1 }]);
 }
+
 fn closing_before_delegate_ended() {
     rejects(vec![
         made(1),
@@ -57,12 +71,15 @@ fn closing_before_delegate_ended() {
         Seen::Closing { task: 1 },
     ]);
 }
+
 fn settlement_before_close() {
     rejects(vec![Seen::Settled { task: 1 }]);
 }
+
 fn result_before_settlement() {
     rejects(vec![made(1), Seen::Ended { task: 1, status: Status::Done, after: 0 }]);
 }
+
 fn duplicate_result() {
     rejects(vec![
         made(1),
@@ -72,6 +89,7 @@ fn duplicate_result() {
         Seen::Ended { task: 1, status: Status::Done, after: 0 },
     ]);
 }
+
 fn parent_result_before_child() {
     rejects(vec![
         made(1),
@@ -81,6 +99,7 @@ fn parent_result_before_child() {
         Seen::Ended { task: 1, status: Status::Done, after: 0 },
     ]);
 }
+
 fn wrong_cancelled_ending() {
     rejects(vec![
         made(1),
@@ -90,21 +109,27 @@ fn wrong_cancelled_ending() {
         Seen::Ended { task: 1, status: Status::Done, after: 0 },
     ]);
 }
+
 fn cancelled_descendant_missing() {
     rejects(vec![made(1), Seen::Cancelled { task: 1 }, Seen::Finished]);
 }
+
 fn live_limit() {
     rejects(vec![Seen::Limit { live: 2, cap: 1 }]);
 }
+
 fn reply_before_durable() {
     rejects(vec![Seen::Replied { call: 1, after: 1 }]);
 }
+
 fn duplicate_reply() {
     rejects(vec![Seen::Replied { call: 1, after: 0 }, Seen::Replied { call: 1, after: 0 }]);
 }
+
 fn assignment_before_durable() {
     rejects(vec![made(1), Seen::Assigned { task: 1, attempt: 1, after: 1, adopted: false }]);
 }
+
 fn result_before_durable() {
     rejects(vec![
         made(1),
@@ -150,6 +175,7 @@ fn dependency_cycle() {
         Seen::Made { task: 2, parent: Party::Person(1), dependencies: vec![1], depth: 0 },
     ]);
 }
+
 fn cycle_through_delegate() {
     rejects(vec![made(1), Seen::Made { task: 2, parent: Party::Task(1), dependencies: vec![1], depth: 1 }]);
 }
@@ -209,6 +235,7 @@ fn stored_limits() {
         limits: Box::new(temper_engine_domain_tasks::Limits { project_tasks: 1, ..LIMITS }),
     }]);
 }
+
 #[test]
 fn accounting_referee_rejects_expense_reservation_and_closure_corruption() {
     use temper_engine_domain_tasks::{Cause, End, Funder, Key, Stored};
@@ -220,7 +247,7 @@ fn accounting_referee_rejects_expense_reservation_and_closure_corruption() {
     w.terminal_cause(
         1,
         End::Finished {
-            result: temper_engine_domain_tasks::Result::Report { words: Box::new([1]) },
+            result: temper_engine_domain_tasks::TaskResult::Report { words: Box::new([1]) },
             cancel_delegates: false,
         },
         Cause::Priced { cumulative: 7 },

@@ -5,11 +5,13 @@ use skein_lib::{Duration, Env, Queue, ReplyTo, Rng, Time, Token, Wall};
 use std::collections::{BTreeMap, BTreeSet};
 use temper_engine_domain_tasks::{
     self as tasks, Accepted, Authority, Budget, Cause, Contract, Delegation, Domain, End, Ending, Event, Executor,
-    Fact, Funder, Key, Limits, New, Numbers, Party, Problem, Request, Result, Retries, Retry, RunContext, Scopes, Spec,
-    Stored, Tools,
+    Fact, Funder, Key, Limits, New, Numbers, Party, Problem, Request, Retries, Retry, RunContext, Scopes, Spec, Stored,
+    TaskResult, Tools,
 };
 use temper_world::{Referee, Trace};
+
 pub const RETRY: Retry = Retry { retries: 2, base: Duration::from_millis(10), max: Duration::from_secs(1) };
+
 pub const LIMITS: Limits = Limits {
     tasks: 16,
     funders: 32,
@@ -32,6 +34,7 @@ pub const LIMITS: Limits = Limits {
     retries: Retries { transient: RETRY, permanent: RETRY, run: RETRY, agent: RETRY, lost: RETRY, invalid: RETRY },
     facts: 16,
 };
+
 #[must_use]
 pub fn authority() -> Authority {
     Authority {
@@ -42,6 +45,7 @@ pub fn authority() -> Authority {
         notes: Scopes(0),
     }
 }
+
 #[must_use]
 pub fn task(number: u64, dependencies: &[u64]) -> New {
     New {
@@ -56,6 +60,7 @@ pub fn task(number: u64, dependencies: &[u64]) -> New {
         dependencies: dependencies.into(),
     }
 }
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Reply {
     Made(Vec<u64>),
@@ -64,6 +69,7 @@ pub enum Reply {
     Acknowledged(Accepted),
     Turn(Accepted),
 }
+
 /// Complete frozen run evidence, including internal deterministic state and all
 /// parent/executor state; facts are diagnostic only (domain/tasks.md, 11).
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -100,6 +106,7 @@ pub struct Frozen {
     call: u64,
     commit: u64,
 }
+
 #[derive(Debug)]
 pub struct World {
     pub env: Env<Limits>,
@@ -127,6 +134,7 @@ pub struct World {
     restoring: bool,
     deadlines: BTreeMap<u64, (Wall, Time)>,
 }
+
 impl World {
     #[must_use]
     pub fn new(seed: u64, limits: Limits) -> World {
@@ -159,6 +167,7 @@ impl World {
         world.open_period(0, 100_000);
         world
     }
+
     #[must_use]
     /// Capture all retained domain, parent and executor state between steps
     /// (domain/tasks.md, 11).
@@ -189,18 +198,22 @@ impl World {
             commit: self.commit,
         }
     }
+
     pub fn open_period(&mut self, period: u64, budget: u64) {
         let reply_to = self.to();
         self.send(Event::OpenPeriod { reply_to, project: 1, period, budget });
     }
+
     pub fn carve_pool(&mut self, period: u64, budget: u64) {
         let reply_to = self.to();
         self.send(Event::CarvePool { reply_to, project: 1, person: 9, period, budget });
     }
+
     pub fn to(&mut self) -> ReplyTo {
         self.call += 1;
         ReplyTo::new(Token::new(self.call))
     }
+
     pub fn observe(&mut self, seen: Seen) {
         self.trace.log(self.env.now, format_args!("{seen:?}"));
         let mut stimuli = Vec::new();
@@ -212,6 +225,7 @@ impl World {
             }
         }
     }
+
     pub fn stage(&mut self, event: Event) {
         assert!(self.pending.is_empty(), "one parent decision at a time");
         if matches!(event, Event::Restored) {
@@ -244,11 +258,13 @@ impl World {
             }
         }
     }
+
     pub fn send(&mut self, event: Event) {
         self.stage(event);
         self.durable();
         self.deliver();
     }
+
     /// Commit state and requester results together before executor delivery
     /// (domain/tasks.md, 5; domain/engine.md, 7).
     pub fn durable(&mut self) {
@@ -322,6 +338,7 @@ impl World {
             self.observe(Seen::Ended { task, status, after: self.commit });
         }
     }
+
     pub fn deliver(&mut self) {
         for request in std::mem::take(&mut self.pending) {
             match request {
@@ -362,15 +379,18 @@ impl World {
         self.observe(Seen::Stored { live, limits: Box::new(self.env.limits) });
         self.domain.reclaim();
     }
+
     fn reply(&mut self, to: ReplyTo, reply: Reply) {
         let call = to.into_token().raw();
         assert!(self.replies.insert(call, reply).is_none(), "one reply per call");
         self.observe(Seen::Replied { call, after: self.commit });
     }
+
     #[must_use]
     pub fn live(&self) -> usize {
         self.records.keys().filter(|key| matches!(key, Key::Live(_))).count()
     }
+
     #[must_use]
     pub fn record(&self, number: u64) -> &tasks::TaskRecord {
         match &self.records[&Key::Live(number)] {
@@ -378,6 +398,7 @@ impl World {
             Stored::Ended(_) | Stored::Ledger(_) | Stored::Closure(_) => unreachable!("live key"),
         }
     }
+
     pub fn make(&mut self, creator: Party, batch: Vec<New>) -> Reply {
         let before = self.records.keys().copied().collect::<BTreeSet<_>>();
         let members = batch.iter().map(|task| task.number).collect();
@@ -396,6 +417,7 @@ impl World {
         self.observe(Seen::Batch { members, accepted: matches!(reply, Reply::Made(_)), made });
         reply
     }
+
     pub fn claim(&mut self, task: u64, attempt: u64) {
         assert!(self.activations.remove(&task), "activated before preparation");
         let context = &self.contexts[&task];
@@ -413,9 +435,11 @@ impl World {
         self.observe(Seen::Assigned { task, attempt, after: self.commit, adopted: false });
         self.send(Event::Started { task, attempt });
     }
+
     pub fn terminal(&mut self, task: u64, end: End) -> Reply {
         self.terminal_cause(task, end, Cause::Unpriced)
     }
+
     /// Submit a real priced or recovery terminal (domain/tasks.md, 5).
     pub fn terminal_cause(&mut self, task: u64, end: End, cause: Cause) -> Reply {
         let attempt = self.runs[&task];
@@ -424,6 +448,7 @@ impl World {
         self.send(Event::Activation { reply_to, task, attempt, end, cause });
         self.replies[&call].clone()
     }
+
     pub fn claim_fresh(&mut self, task: u64) {
         let attempt = self
             .records
@@ -437,14 +462,20 @@ impl World {
             + 1;
         self.claim(task, attempt);
     }
+
     pub fn finish(&mut self, task: u64) {
-        self.terminal(task, End::Finished { result: Result::Report { words: Box::new([1]) }, cancel_delegates: false });
+        self.terminal(
+            task,
+            End::Finished { result: TaskResult::Report { words: Box::new([1]) }, cancel_delegates: false },
+        );
     }
+
     pub fn settle(&mut self, task: u64) {
         assert!(self.closing.remove(&task));
         self.observe(Seen::Settled { task });
         self.send(Event::Settled { task });
     }
+
     pub fn advance(&mut self) {
         let at = self.deadlines.values().map(|(_, at)| *at).min().expect("backoff pending");
         self.env.wall = Wall::from_nanos(
@@ -458,6 +489,7 @@ impl World {
         self.durable();
         self.deliver();
     }
+
     fn project_deadlines(&mut self) {
         let mut projected = BTreeMap::new();
         for row in self.records.values() {
@@ -475,6 +507,7 @@ impl World {
         }
         self.deadlines = projected;
     }
+
     pub fn restart(&mut self) {
         self.pending.clear();
         self.priced = None;
@@ -497,6 +530,7 @@ impl World {
         }
         self.send(Event::Restored);
     }
+
     /// Complete the stopped descendants after an accepted delegate-cancelling
     /// terminal (domain/tasks.md, 5.6).
     pub fn complete_cancel(&mut self) {
@@ -512,6 +546,7 @@ impl World {
         self.referee.assert_passed(self.seed);
     }
 }
+
 fn status(ending: &Ending) -> tasks::Status {
     match ending {
         Ending::Done(_) => tasks::Status::Done,
@@ -519,12 +554,14 @@ fn status(ending: &Ending) -> tasks::Status {
         Ending::Cancelled { .. } => tasks::Status::Cancelled,
     }
 }
+
 /// Seeded dependency, priced work, retry, crash and delegate-close story
 /// (domain/tasks.md, 11). Replay includes complete frozen state.
 #[must_use]
 pub fn run_story(seed: u64) -> (Vec<String>, Frozen) {
     run_story_facts(seed, true)
 }
+
 #[must_use]
 pub fn run_story_facts(seed: u64, consume_facts: bool) -> (Vec<String>, Frozen) {
     let mut rng = Rng::new(seed);
@@ -561,13 +598,13 @@ pub fn run_story_facts(seed: u64, consume_facts: bool) -> (Vec<String>, Frozen) 
         w.restart();
     }
     if rng.chance(200) {
-        w.terminal(2, End::Finished { result: Result::Failure { reason: Box::new([1]) }, cancel_delegates: false });
+        w.terminal(2, End::Finished { result: TaskResult::Failure { reason: Box::new([1]) }, cancel_delegates: false });
         w.settle(2);
         assert!(matches!(w.record(3).phase, tasks::Phase::Held { .. }));
     } else {
         w.terminal_cause(
             2,
-            End::Finished { result: Result::Report { words: Box::new([1]) }, cancel_delegates: false },
+            End::Finished { result: TaskResult::Report { words: Box::new([1]) }, cancel_delegates: false },
             Cause::Priced { cumulative: rng.between(1, 10) },
         );
         w.settle(2);
@@ -587,7 +624,7 @@ pub fn run_story_facts(seed: u64, consume_facts: bool) -> (Vec<String>, Frozen) 
             w.observe(Seen::Cancelled { task });
         }
     }
-    w.terminal(1, End::Finished { result: Result::Report { words: Box::new([1]) }, cancel_delegates: true });
+    w.terminal(1, End::Finished { result: TaskResult::Report { words: Box::new([1]) }, cancel_delegates: true });
     w.complete_cancel();
     assert_eq!(w.results.len(), 5);
     assert_eq!(w.live(), 0);

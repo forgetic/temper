@@ -27,8 +27,11 @@ pub struct Scopes(pub u8);
 
 impl Scopes {
     pub const GOAL: Scopes = Scopes(1);
+
     pub const REPOSITORY: Scopes = Scopes(2);
+
     pub const PROJECT: Scopes = Scopes(4);
+
     pub const DEPLOYMENT: Scopes = Scopes(8);
 }
 
@@ -92,6 +95,7 @@ pub struct Numbers {
     pub spent_below: u64,
     pub reserved: u64,
 }
+
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Funder {
     Task(u64),

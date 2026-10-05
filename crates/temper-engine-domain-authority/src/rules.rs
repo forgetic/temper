@@ -66,7 +66,7 @@ pub struct Approval {
 }
 
 /// Requirements on one connector's exact landing kind and branch pattern
-/// (domain/authority.md, 10; forge.md, 8.3). These add to change gates.
+/// (domain/authority.md, 10; domain/forge.md, 8.3). These add to change gates.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct LandingRule {
     pub connector: u16,

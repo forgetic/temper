@@ -1,7 +1,7 @@
 //! Borrowed durable-row heap accounting for root journal/load admission
 //! (domain/tasks.md, 2; domain/engine.md, 5.6). This measures existing ownership
 //! and allocates nothing; shape/authority admission remains with the hub/root.
-use crate::{Authority, Contract, Ending, Last, Parameter, Phase, Result, Spec, Stored, TaskRecord, Was};
+use crate::{Authority, Contract, Ending, Last, Parameter, Phase, Spec, Stored, TaskRecord, TaskResult, Was};
 use core::mem::{size_of, size_of_val};
 
 /// Root measures a borrowed durable task row before journal/load byte admission.
@@ -16,9 +16,11 @@ pub fn stored_bytes(record: &Stored) -> Option<u64> {
         Stored::Closure(_) | Stored::Ledger(_) => Some(0),
     }
 }
+
 fn bytes(length: usize) -> Option<u64> {
     u64::try_from(length).ok()
 }
+
 fn spec_bytes(spec: &Spec) -> Option<u64> {
     let mut total = bytes(spec.words.len())?
         .checked_add(bytes(size_of_val(&*spec.parameters))?)?
@@ -31,6 +33,7 @@ fn spec_bytes(spec: &Spec) -> Option<u64> {
     }
     Some(total)
 }
+
 fn authority_bytes(authority: &Authority) -> Option<u64> {
     let mut total =
         bytes(size_of_val(&*authority.grants))?.checked_add(bytes(size_of_val(&*authority.delegation.kinds))?)?;
@@ -46,18 +49,23 @@ fn authority_bytes(authority: &Authority) -> Option<u64> {
     }
     Some(total)
 }
+
 fn contract_bytes(contract: &Contract) -> Option<u64> {
     match contract {
         Contract::Verdict { choices } => bytes(size_of_val(&**choices)),
         Contract::Report { .. } | Contract::Change { .. } => Some(0),
     }
 }
-fn result_bytes(result: &Result) -> Option<u64> {
+
+fn result_bytes(result: &TaskResult) -> Option<u64> {
     match result {
-        Result::Report { words } | Result::Verdict { words, .. } | Result::Change { words, .. } => bytes(words.len()),
-        Result::Failure { reason } => bytes(reason.len()),
+        TaskResult::Report { words } | TaskResult::Verdict { words, .. } | TaskResult::Change { words, .. } => {
+            bytes(words.len())
+        }
+        TaskResult::Failure { reason } => bytes(reason.len()),
     }
 }
+
 fn ending_bytes(ending: &Ending) -> Option<u64> {
     match ending {
         Ending::Done(result) => result_bytes(result),
@@ -71,6 +79,7 @@ fn ending_bytes(ending: &Ending) -> Option<u64> {
         }
     }
 }
+
 fn phase_bytes(phase: &Phase) -> Option<u64> {
     match phase {
         Phase::Closing(closing) => ending_bytes(&closing.ending),
@@ -82,6 +91,7 @@ fn phase_bytes(phase: &Phase) -> Option<u64> {
         Phase::Waiting | Phase::Active(_) => Some(0),
     }
 }
+
 fn task_bytes(task: &TaskRecord) -> Option<u64> {
     bytes(size_of::<TaskRecord>())?
         .checked_add(spec_bytes(&task.spec)?)?

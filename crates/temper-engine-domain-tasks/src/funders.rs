@@ -3,6 +3,7 @@
 use crate::domain::{Domain, publish, record, refused, task_mut};
 use crate::{Funder, Limits, Numbers, Refusal, Request, Stored};
 use skein_lib::{Env, Queue, ReplyTo};
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Closure {
     pub task: u64,
@@ -11,15 +12,19 @@ pub struct Closure {
     pub budget: u64,
     pub spent: u64,
 }
+
 pub(crate) fn total(numbers: Numbers) -> Option<u64> {
     numbers.spent.checked_add(numbers.spent_below)
 }
+
 pub(crate) fn remaining(numbers: Numbers) -> Option<u64> {
     numbers.budget.checked_sub(total(numbers)?)
 }
+
 pub(crate) fn available(numbers: Numbers) -> Option<u64> {
     remaining(numbers)?.checked_sub(numbers.reserved)
 }
+
 pub(crate) fn closure(number: u64, generation: u64, funder: Funder, numbers: Numbers, out: &mut Queue<Request>) {
     out.push(Request::Save {
         record: Stored::Closure(Closure {
@@ -31,28 +36,29 @@ pub(crate) fn closure(number: u64, generation: u64, funder: Funder, numbers: Num
         }),
     });
 }
+
 /// Actual task sources cannot end while any incoming allocation remains live.
-pub(crate) fn funded_live(d: &Domain, funder: u64) -> bool {
-    for (number, _) in &d.names {
-        if *number != funder && record(d, *number).expect("live name").funder == Funder::Task(funder) {
+pub(crate) fn funded_live(domain: &Domain, funder: u64) -> bool {
+    for (number, _) in &domain.names {
+        if *number != funder && record(domain, *number).expect("live name").funder == Funder::Task(funder) {
             return true;
         }
     }
     false
 }
 
-pub(crate) fn can_reserve(d: &Domain, creator: crate::Party, batch: &[crate::New]) -> bool {
+pub(crate) fn can_reserve(domain: &Domain, creator: crate::Party, batch: &[crate::New]) -> bool {
     for new in batch {
         if new.numbers != (Numbers { budget: new.authority.budget.spend, spent: 0, spent_below: 0, reserved: 0 }) {
             return false;
         }
         match new.funder {
             Funder::Task(number) => {
-                let Some(funder) = record(d, number) else {
+                let Some(funder) = record(domain, number) else {
                     return false;
                 };
                 let ancestor = match creator {
-                    crate::Party::Task(requester) => below(d, requester, number, d.names.len()),
+                    crate::Party::Task(requester) => below(domain, requester, number, domain.names.len()),
                     crate::Party::Person(_) | crate::Party::Deployment { .. } => false,
                 };
                 if !ancestor || funder.project != new.project || !mutable(&funder.phase) {
@@ -72,7 +78,7 @@ pub(crate) fn can_reserve(d: &Domain, creator: crate::Party, batch: &[crate::New
                 }
             }
             Funder::Pool { project, .. } | Funder::Period { project, .. } => {
-                let Some(ledger) = d.funding.get(&new.funder) else {
+                let Some(ledger) = domain.funding.get(&new.funder) else {
                     return false;
                 };
                 if project != new.project || ledger.closed {
@@ -95,27 +101,29 @@ pub(crate) fn can_reserve(d: &Domain, creator: crate::Party, batch: &[crate::New
     }
     true
 }
-pub(crate) fn reserve(d: &mut Domain, env: &Env<Limits>, batch: &[crate::New], out: &mut Queue<Request>) {
+
+pub(crate) fn reserve(domain: &mut Domain, env: &Env<Limits>, batch: &[crate::New], out: &mut Queue<Request>) {
     for new in batch {
         match new.funder {
             Funder::Task(number) => {
-                let task = task_mut(d, number).expect("actual funder admitted");
+                let task = task_mut(domain, number).expect("actual funder admitted");
                 task.record.numbers.reserved =
                     task.record.numbers.reserved.checked_add(new.numbers.budget).expect("reservation admitted");
-                publish(d, env, number, out);
+                publish(domain, env, number, out);
             }
             // Ordinary external reservations are owned here, in the Make commit.
             Funder::Pool { .. } | Funder::Period { .. } => {
-                let ledger = d.funding.get_mut(&new.funder).expect("finite source admitted");
+                let ledger = domain.funding.get_mut(&new.funder).expect("finite source admitted");
                 ledger.numbers.reserved =
                     ledger.numbers.reserved.checked_add(new.numbers.budget).expect("reservation admitted");
-                save_funding(d, new.funder, out);
+                save_funding(domain, new.funder, out);
             }
         }
     }
 }
-pub(crate) fn end(d: &mut Domain, env: &Env<Limits>, number: u64, out: &mut Queue<Request>) {
-    let task = record(d, number).expect("ending task live");
+
+pub(crate) fn end(domain: &mut Domain, env: &Env<Limits>, number: u64, out: &mut Queue<Request>) {
+    let task = record(domain, number).expect("ending task live");
     let funder = task.funder;
     let budget = task.numbers.budget;
     let spent = total(task.numbers).expect("total checked on charge and restore");
@@ -123,7 +131,8 @@ pub(crate) fn end(d: &mut Domain, env: &Env<Limits>, number: u64, out: &mut Queu
     match funder {
         Funder::Task(parent) => {
             let parent_number = parent;
-            let parent = task_mut(d, parent_number).expect("actual funder remains live until its allocations close");
+            let parent =
+                task_mut(domain, parent_number).expect("actual funder remains live until its allocations close");
             parent.record.numbers.reserved =
                 parent.record.numbers.reserved.checked_sub(budget).expect("allotment reserved on admission");
             parent.record.numbers.spent_below = parent
@@ -132,23 +141,23 @@ pub(crate) fn end(d: &mut Domain, env: &Env<Limits>, number: u64, out: &mut Queu
                 .spent_below
                 .checked_add(spent)
                 .expect("root ensures priced aggregates fit accounting unit");
-            publish(d, env, parent_number, out);
+            publish(domain, env, parent_number, out);
         }
         // Post once against the actual original source in the task-end commit.
         Funder::Pool { .. } | Funder::Period { .. } => {
-            let ledger = d.funding.get_mut(&funder).expect("actual source preserved");
+            let ledger = domain.funding.get_mut(&funder).expect("actual source preserved");
             ledger.numbers.reserved = ledger.numbers.reserved.checked_sub(budget).expect("allotment reserved");
             ledger.numbers.spent_below =
                 ledger.numbers.spent_below.checked_add(spent).expect("priced aggregate fits unit");
-            save_funding(d, funder, out);
+            save_funding(domain, funder, out);
         }
     }
 }
 
-pub(crate) fn links(d: &Domain, bound: u32) -> bool {
-    for (funder, ledger) in &d.funding {
+pub(crate) fn links(domain: &Domain, bound: u32) -> bool {
+    for (funder, ledger) in &domain.funding {
         let mut reserved = 0_u64;
-        for (_, other) in &d.funding {
+        for (_, other) in &domain.funding {
             if other.parent == Some(*funder) && !other.closed {
                 let Some(sum) = reserved.checked_add(other.numbers.budget) else {
                     return false;
@@ -156,8 +165,8 @@ pub(crate) fn links(d: &Domain, bound: u32) -> bool {
                 reserved = sum;
             }
         }
-        for (number, _) in &d.names {
-            let task = record(d, *number).expect("live name");
+        for (number, _) in &domain.names {
+            let task = record(domain, *number).expect("live name");
             if task.funder == *funder {
                 if ledger.closed {
                     return false;
@@ -172,16 +181,16 @@ pub(crate) fn links(d: &Domain, bound: u32) -> bool {
             return false;
         }
         if let Some(parent) = ledger.parent
-            && !d.funding.contains_key(&parent)
+            && !domain.funding.contains_key(&parent)
         {
             return false;
         }
     }
-    for (number, _) in &d.names {
-        let task = record(d, *number).expect("live name");
+    for (number, _) in &domain.names {
+        let task = record(domain, *number).expect("live name");
         let mut reserved = 0_u64;
-        for (child, _) in &d.names {
-            let child = record(d, *child).expect("live name");
+        for (child, _) in &domain.names {
+            let child = record(domain, *child).expect("live name");
             if child.funder == Funder::Task(*number) {
                 let Some(total) = reserved.checked_add(child.numbers.budget) else {
                     return false;
@@ -197,7 +206,7 @@ pub(crate) fn links(d: &Domain, bound: u32) -> bool {
             let Some(current) = at else {
                 break;
             };
-            let Some(node) = record(d, current) else {
+            let Some(node) = record(domain, current) else {
                 return false;
             };
             if node.project != task.project {
@@ -206,7 +215,7 @@ pub(crate) fn links(d: &Domain, bound: u32) -> bool {
             at = match node.funder {
                 Funder::Task(parent) => {
                     let ancestor = match node.requester {
-                        crate::Party::Task(requester) => below(d, requester, parent, bound),
+                        crate::Party::Task(requester) => below(domain, requester, parent, bound),
                         crate::Party::Person(_) | crate::Party::Deployment { .. } => false,
                     };
                     if !ancestor {
@@ -218,7 +227,7 @@ pub(crate) fn links(d: &Domain, bound: u32) -> bool {
                     Some(parent)
                 }
                 Funder::Pool { project, .. } | Funder::Period { project, .. } => {
-                    if project != task.project || !d.funding.contains_key(&node.funder) {
+                    if project != task.project || !domain.funding.contains_key(&node.funder) {
                         return false;
                     }
                     None
@@ -401,7 +410,7 @@ pub(crate) fn representable(domain: &Domain, number: u64, delta: u64) -> bool {
     true
 }
 
-fn below(d: &Domain, number: u64, ancestor: u64, bound: u32) -> bool {
+fn below(domain: &Domain, number: u64, ancestor: u64, bound: u32) -> bool {
     let mut at = Some(number);
     for _ in 0..bound {
         let Some(number) = at else {
@@ -410,7 +419,7 @@ fn below(d: &Domain, number: u64, ancestor: u64, bound: u32) -> bool {
         if number == ancestor {
             return true;
         }
-        at = match record(d, number) {
+        at = match record(domain, number) {
             Some(task) => match task.requester {
                 crate::Party::Task(parent) => Some(parent),
                 crate::Party::Person(_) | crate::Party::Deployment { .. } => None,
@@ -420,6 +429,7 @@ fn below(d: &Domain, number: u64, ancestor: u64, bound: u32) -> bool {
     }
     false
 }
+
 fn mutable(phase: &crate::Phase) -> bool {
     match phase {
         crate::Phase::Waiting

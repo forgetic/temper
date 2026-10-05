@@ -2,6 +2,7 @@ use skein_lib::{Queue, Token, Wall};
 use temper_engine_domain::{self as root, Decision, Delivery, Journal, Output, Record, TurnRecord, Write};
 use temper_engine_domain_world::commits::{HEADER, LIMITS};
 use temper_world::heap::{self, Meter};
+
 #[global_allocator]
 static HEAP: heap::Counting = heap::Counting;
 
@@ -93,6 +94,7 @@ fn partial_delivery_transfer_never_allocates_a_second_shrinking_container() {
     meter.check(measured, root::worst_case(&limits).expect("valid bounds"), limits);
     assert!(journal.ready());
 }
+
 #[test]
 fn partial_write_transfer_moves_values_without_shrinking_the_source() {
     let limits =

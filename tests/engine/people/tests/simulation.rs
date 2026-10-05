@@ -2,6 +2,7 @@ use skein_lib::Duration;
 use temper_engine_domain_people::{Holding, IdentityKey, InitialOwner, Outcome, Refusal, Reply, Role};
 use temper_engine_people_world::{Settings, World};
 use temper_world::assert_replays;
+
 fn member(world: &mut World) -> u64 {
     let call = world.signin(10, 1);
     assert!(world.reply(call).is_none());
@@ -13,6 +14,7 @@ fn member(world: &mut World) -> u64 {
     world.commit_all();
     person
 }
+
 #[test]
 fn the_people_stories_and_both_restart_cuts() {
     for seed in 0..3 {
@@ -20,6 +22,7 @@ fn the_people_stories_and_both_restart_cuts() {
         world.run();
     }
 }
+
 #[test]
 fn state_runs_ahead_while_duplicate_replies_wait_for_the_same_commit() {
     let mut world = World::new(Settings::calm(4));
@@ -34,6 +37,7 @@ fn state_runs_ahead_while_duplicate_replies_wait_for_the_same_commit() {
     assert_eq!(world.tasks(), 1);
     world.assert_settled();
 }
+
 #[test]
 fn a_commit_failed_or_lost_releases_no_reply_and_the_retry_makes_one_task() {
     let mut world = World::new(Settings::calm(5));
@@ -48,6 +52,7 @@ fn a_commit_failed_or_lost_releases_no_reply_and_the_retry_makes_one_task() {
     assert_eq!(world.tasks(), 1);
     world.assert_settled();
 }
+
 #[test]
 fn a_durable_decision_with_its_reply_lost_is_replayed_after_restart() {
     let mut world = World::new(Settings::calm(6));
@@ -67,6 +72,7 @@ fn a_durable_decision_with_its_reply_lost_is_replayed_after_restart() {
     assert_eq!(world.tasks(), 1);
     world.assert_settled();
 }
+
 #[test]
 fn transient_root_wait_keeps_one_route_and_each_waiter_receives_one_reply() {
     let mut world = World::new(Settings::calm(7));
@@ -85,6 +91,7 @@ fn transient_root_wait_keeps_one_route_and_each_waiter_receives_one_reply() {
     assert_eq!(world.tasks(), 1);
     world.assert_settled();
 }
+
 #[test]
 fn pending_authorisation_can_be_lost_and_retried_without_repeating_durable_work() {
     let mut world = World::new(Settings::calm(8));
@@ -100,6 +107,7 @@ fn pending_authorisation_can_be_lost_and_retried_without_repeating_durable_work(
     assert_eq!(world.tasks(), 1);
     world.assert_settled();
 }
+
 #[test]
 fn initial_owner_and_signins_restore_and_expire_at_their_original_wall_time() {
     let owners = Box::new([InitialOwner { project: 1, identity: IdentityKey { forge: 0, user: 1 } }]);
@@ -121,6 +129,7 @@ fn initial_owner_and_signins_restore_and_expire_at_their_original_wall_time() {
     assert_eq!(world.reply(call), Some(Reply::Refused(Refusal::SignIn)));
     world.assert_settled();
 }
+
 #[test]
 fn facts_change_nothing_and_a_seed_replays() {
     let run = |seed| {

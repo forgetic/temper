@@ -82,6 +82,7 @@ fn run(seed: u64) -> (String, &'static str) {
     assert!(out.is_empty(), "old page cannot complete replacement IO");
     (trace, ending)
 }
+
 #[test]
 fn bounded_pages_and_terminal_races_replay_with_every_outcome() {
     let mut endings = BTreeSet::new();

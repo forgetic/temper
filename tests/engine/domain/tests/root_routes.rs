@@ -210,7 +210,10 @@ fn durable_start_turn_and_answer_callbacks_survive_full_journal_pressure() {
         task: assignment.task,
         attempt: assignment.attempt,
         cumulative: FINAL_SPEND,
-        end: tasks::End::Finished { result: tasks::Result::Report { words: REPORT.into() }, cancel_delegates: false },
+        end: tasks::End::Finished {
+            result: tasks::TaskResult::Report { words: REPORT.into() },
+            cancel_delegates: false,
+        },
     });
     driver.pressure();
     assert!(!driver.delivered.iter().any(|delivery| matches!(delivery, Delivery::Acknowledge { .. })));
@@ -373,7 +376,7 @@ fn refused_terminal_clears_fleet_handoff_without_charging_rejected_spend() {
         attempt: assignment.attempt,
         cumulative: FINAL_SPEND,
         end: tasks::End::Finished {
-            result: tasks::Result::Report { words: vec![b'x'; 129].into_boxed_slice() },
+            result: tasks::TaskResult::Report { words: vec![b'x'; 129].into_boxed_slice() },
             cancel_delegates: false,
         },
     });
@@ -611,7 +614,7 @@ fn invalid_current_proof_stops_before_any_restored_closing_effect_or_result() {
         task.last_answer = Some(assignment.attempt);
         task.phase = tasks::Phase::Closing(tasks::Closing {
             stage: tasks::Stage::Effects,
-            ending: tasks::Ending::Done(tasks::Result::Report { words: REPORT.into() }),
+            ending: tasks::Ending::Done(tasks::TaskResult::Report { words: REPORT.into() }),
         });
         let proof_key = temper_engine_domain::Key::RunProof { task: assignment.task };
         let Some(Record::RunProof(proof)) = store.rows.get_mut(&proof_key) else {
@@ -622,7 +625,7 @@ fn invalid_current_proof_stops_before_any_restored_closing_effect_or_result() {
             attempt: assignment.attempt,
             cumulative: 3,
             end: tasks::End::Finished {
-                result: tasks::Result::Report { words: REPORT.into() },
+                result: tasks::TaskResult::Report { words: REPORT.into() },
                 cancel_delegates: false,
             },
         });
@@ -712,7 +715,7 @@ fn root_restore_refuses_task_shapes_without_an_actual_root_route() {
 fn bounded_invalid_typed_terminal_preserves_original_root_evidence_and_charges_once() {
     let (mut driver, assignment) = running_fixture();
     let end = tasks::End::Finished {
-        result: tasks::Result::Verdict { code: 99, words: b"invalid contract".as_slice().into() },
+        result: tasks::TaskResult::Verdict { code: 99, words: b"invalid contract".as_slice().into() },
         cancel_delegates: false,
     };
     driver.send(engine::Event::Answer {

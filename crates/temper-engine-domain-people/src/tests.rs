@@ -6,6 +6,7 @@
 )]
 use crate::*;
 use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
+
 const LIMITS: Limits = Limits {
     people: 4,
     sign_ins: 4,
@@ -20,17 +21,21 @@ const LIMITS: Limits = Limits {
     sign_in_lifetime: Duration::from_secs(60),
     facts: 8,
 };
+
 fn identity(forge: u32, user: u64) -> Identity {
     Identity { key: IdentityKey { forge, user }, login: Box::new([b'l']), name: Box::new([b'n']) }
 }
+
 fn ask(project: u32) -> Ask {
     Ask::StartChat { project, words: Box::new([1]) }
 }
+
 struct Test {
     d: Domain,
     env: Env<Limits>,
     serial: u64,
 }
+
 impl Test {
     fn new(limits: Limits) -> Test {
         let mut test = Test {
@@ -41,10 +46,12 @@ impl Test {
         assert!(test.send(Event::Restored).is_empty());
         test
     }
+
     fn to(&mut self) -> ReplyTo {
         self.serial += 1;
         ReplyTo::new(Token::new(self.serial))
     }
+
     fn send(&mut self, event: Event) -> Vec<Request> {
         let mut out = Queue::with_capacity(max_out(&self.env.limits));
         step(&mut self.d, &self.env, event, &mut out);
@@ -55,19 +62,23 @@ impl Test {
         self.d.reclaim();
         requests
     }
+
     fn signin(&mut self, person: u64, sign_in: u64, identity: Identity) -> Vec<Request> {
         let reply_to = self.to();
         self.send(Event::SignedIn { reply_to, person, sign_in, identity })
     }
+
     fn request(&mut self, sign_in: u64, key: u8, ask: Ask) -> Vec<Request> {
         let reply_to = self.to();
         self.send(Event::Ask { reply_to, sign_in, key: [key; 16], ask })
     }
+
     fn member(&mut self) {
         self.signin(1, 10, identity(0, 1));
         self.send(Event::Roles { project: 1, holdings: Box::new([Holding { person: 1, role: Role::Member }]) });
     }
 }
+
 fn reply(rows: &[Request]) -> Reply {
     rows.iter()
         .find_map(|r| match r {
@@ -80,6 +91,7 @@ fn reply(rows: &[Request]) -> Reply {
         })
         .expect("reply emitted")
 }
+
 fn route(rows: &[Request]) -> Token {
     rows.iter()
         .find_map(|r| match r {
@@ -92,6 +104,7 @@ fn route(rows: &[Request]) -> Token {
         })
         .expect("route emitted")
 }
+
 #[test]
 fn identities_are_forge_and_user_and_existing_people_keep_their_number() {
     let mut test = Test::new(LIMITS);
@@ -100,6 +113,7 @@ fn identities_are_forge_and_user_and_existing_people_keep_their_number() {
     assert_eq!(signed_person(reply(&test.signin(3, 12, identity(1, 1)))), Some(3));
     assert_eq!(reply(&test.signin(4, 10, identity(0, 4))), Reply::Refused(Refusal::SignIn));
 }
+
 #[test]
 fn all_roles_are_checked_and_refusals_are_saved() {
     for role in [Role::Owner, Role::Maintainer, Role::Member, Role::Observer] {
@@ -118,6 +132,7 @@ fn all_roles_are_checked_and_refusals_are_saved() {
     test.member();
     assert_eq!(reply(&test.request(10, 1, ask(2))), Reply::Outcome(Outcome::Refused(Refusal::Role)));
 }
+
 #[test]
 fn pending_duplicates_share_one_route_and_reserve_answer_room() {
     let mut test = Test::new(Limits { requests: 1, ..LIMITS });
@@ -132,6 +147,7 @@ fn pending_duplicates_share_one_route_and_reserve_answer_room() {
     assert_eq!(completed.iter().filter(|r| is_reply(r)).count(), 2);
     assert_eq!(reply(&test.request(10, 1, ask(1))), Reply::Outcome(Outcome::Started { task: 90 }));
 }
+
 #[test]
 fn answered_keys_follow_people_across_signins_and_role_changes() {
     let mut test = Test::new(LIMITS);
@@ -146,6 +162,7 @@ fn answered_keys_follow_people_across_signins_and_role_changes() {
     assert_eq!(reply(&test.request(11, 1, ask(1))), Reply::Outcome(Outcome::Started { task: 90 }));
     assert_eq!(reply(&test.request(11, 1, ask(2))), Reply::Refused(Refusal::KeyConflict));
 }
+
 #[test]
 fn every_admission_point_refuses_without_partial_state() {
     let mut test = Test::new(Limits { people: 1, sign_ins: 1, projects: 1, holdings: 1, words: 1, ..LIMITS });
@@ -165,6 +182,7 @@ fn every_admission_point_refuses_without_partial_state() {
     });
     assert_eq!(roles, [Request::RolesRefused { project: 1, refusal: Refusal::Limit }]);
 }
+
 #[test]
 fn expiry_is_monotonic_even_when_wall_clock_moves_back() {
     let mut test = Test::new(LIMITS);
@@ -176,6 +194,7 @@ fn expiry_is_monotonic_even_when_wall_clock_moves_back() {
     fire(&mut test.d, &test.env, &mut out);
     assert_eq!(out.pop(), Some(Request::Erase { key: Key::SignIn(10) }));
 }
+
 #[test]
 fn result_query_checks_monotonic_expiry_before_fire_after_backward_wall_jump() {
     let mut test = Test::new(LIMITS);
@@ -187,6 +206,7 @@ fn result_query_checks_monotonic_expiry_before_fire_after_backward_wall_jump() {
     assert_eq!(test.d.person(10, test.env.now, test.env.wall), None);
     assert_eq!(reply(&test.request(10, 1, ask(1))), Reply::Refused(Refusal::SignIn));
 }
+
 #[test]
 fn restore_order_is_independent_and_bad_or_oversized_records_refuse_start() {
     let mut test = Test::new(LIMITS);
@@ -211,6 +231,7 @@ fn restore_order_is_independent_and_bad_or_oversized_records_refuse_start() {
         [Request::RestoreRefused { key: Key::Person(1), refusal: Refusal::Limit }]
     );
 }
+
 #[test]
 fn initial_owners_bootstrap_all_projects_atomically_and_never_regrant() {
     let owners = Box::new([
@@ -241,6 +262,7 @@ fn signed_person(reply: Reply) -> Option<u64> {
         Reply::SignedOut | Reply::Outcome(_) | Reply::Refused(_) => None,
     }
 }
+
 fn is_reply(request: &Request) -> bool {
     match request {
         Request::Reply { .. } => true,
@@ -251,6 +273,7 @@ fn is_reply(request: &Request) -> bool {
         | Request::RestoreRefused { .. } => false,
     }
 }
+
 fn is_answer(request: &Request) -> bool {
     match request {
         Request::Save { record } => match record {
@@ -264,6 +287,7 @@ fn is_answer(request: &Request) -> bool {
         | Request::RestoreRefused { .. } => false,
     }
 }
+
 fn is_roles(request: &Request) -> bool {
     match request {
         Request::Save { record } => match record {
@@ -295,6 +319,7 @@ fn equal_keys_of_different_people_are_independent() {
     assert_eq!(reply(&test.request(10, 1, ask(1))), Reply::Outcome(Outcome::Started { task: 90 }));
     assert_eq!(reply(&test.request(20, 1, ask(1))), Reply::Outcome(Outcome::Started { task: 91 }));
 }
+
 #[test]
 fn pending_capacity_refuses_before_routing_and_the_key_can_retry() {
     let mut test = Test::new(Limits { pending: 1, ..LIMITS });
@@ -322,6 +347,7 @@ fn root_pressure_answers_every_waiter_and_releases_the_key_for_retry() {
         assert_eq!(reply(&test.request(10, 1, ask(1))), Reply::Outcome(Outcome::Started { task: 90 }));
     }
 }
+
 #[test]
 fn identity_limits_clock_overflow_and_duplicate_holdings_leave_no_records() {
     let mut test = Test::new(Limits { identity_bytes: 1, ..LIMITS });
@@ -340,6 +366,7 @@ fn identity_limits_clock_overflow_and_duplicate_holdings_leave_no_records() {
     assert_eq!(rows, [Request::RolesRefused { project: 1, refusal: Refusal::Limit }]);
     route(&test.request(10, 1, ask(1)));
 }
+
 #[test]
 fn calls_before_restore_and_after_failed_restore_are_answered_not_ready() {
     let mut test = Test::new(LIMITS);

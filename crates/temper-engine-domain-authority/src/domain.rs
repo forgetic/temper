@@ -57,14 +57,17 @@ impl Domain {
     pub const fn rules(&self) -> &Rules {
         &self.rules
     }
+
     #[must_use]
     pub const fn limits(&self) -> &Limits {
         &self.limits
     }
+
     #[must_use]
     pub fn policy(&self, project: u32) -> Option<&Policy> {
         self.policies.get(&project)
     }
+
     #[must_use]
     #[expect(clippy::manual_find, reason = "the foundation's step subset uses bounded loops without closures")]
     pub fn role(&self, project: u32, number: u32) -> Option<&Role> {

@@ -2,23 +2,27 @@
 //! rows and admitted priced inputs (domain/tasks.md, 2 and 5).
 use std::collections::BTreeMap;
 use temper_engine_domain_tasks::{Funder, Key, Stored, TaskRecord};
+
 #[derive(Default, Debug)]
 pub struct Accounting {
     before: BTreeMap<Key, Stored>,
     charged: Option<(u64, u64)>,
 }
+
 fn live(rows: &BTreeMap<Key, Stored>, task: u64) -> Option<&TaskRecord> {
     match rows.get(&Key::Live(task)) {
         Some(Stored::Live(row)) => Some(row),
         _ => None,
     }
 }
+
 fn current(rows: &BTreeMap<Key, Stored>, task: u64) -> Option<&TaskRecord> {
     live(rows, task).or_else(|| match rows.get(&Key::Ended(task)) {
         Some(Stored::Ended(row)) => Some(row),
         _ => None,
     })
 }
+
 impl Accounting {
     /// Accepted cumulative input supplied by the scripted parent, independently
     /// of production counters (domain/tasks.md, 5).
@@ -26,9 +30,11 @@ impl Accounting {
         let old = live(&self.before, task).expect("priced input names a live allocation");
         self.charged = Some((task, cumulative.checked_sub(old.run_spent).expect("admitted cumulative grows")));
     }
+
     fn delta(&self, task: u64) -> u64 {
         self.charged.filter(|(number, _)| *number == task).map_or(0, |(_, delta)| delta)
     }
+
     /// # Errors
     /// Rejects changed identities, missing postings, lost reservations or
     /// invented expense at the durable boundary (domain/tasks.md, 2).
@@ -154,6 +160,7 @@ impl Accounting {
         self.charged = None;
         Ok(())
     }
+
     pub fn reset(&mut self, rows: &BTreeMap<Key, Stored>) {
         self.before = rows.clone();
         self.charged = None;

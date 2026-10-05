@@ -11,8 +11,11 @@ use crate::{
 };
 
 const LETTERS: [&[u8]; 3] = [b"a", b"b", b"c"];
+
 const SEGMENTS: [&[u8]; 7] = [b"", b"a", b"b", b"c", b"aa", b"ba", b"ca"];
+
 const TERMINALS: [&[u8]; 4] = [b"", b"a", b"b", b"c"];
+
 const WORDS: usize = 44; // ceil(2,801 names / 64).
 
 fn segments(parts: &[&[u8]]) -> Box<[Box<[u8]>]> {

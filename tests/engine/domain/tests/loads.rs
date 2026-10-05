@@ -5,6 +5,7 @@ use temper_engine_domain::{self as root, Key, Range, Record, TurnRecord};
 use temper_engine_domain_world::commits::World;
 
 const LIMITS: Limits = Limits { loads: 2, rows: 4, bytes: 1024, reply_bytes: 1024, transcript_bytes: 128 };
+
 fn row(turn: u32, bytes: usize) -> Record {
     Record::Turn(TurnRecord {
         task: 1,
@@ -16,12 +17,14 @@ fn row(turn: u32, bytes: usize) -> Record {
         transcript: vec![b'x'; bytes].into_boxed_slice(),
     })
 }
+
 fn key(turn: u32) -> Key {
     Key::Turn { task: 1, attempt: 1, turn }
 }
-fn begin(d: &mut Loads, after: Option<Key>, most: u32, out: &mut Queue<Request>) -> Token {
-    let owner =
-        loads::begin(d, Token::new(51), Range::Turns { task: 1, attempt: 1 }, after, most, out).expect("load admitted");
+
+fn begin(loads: &mut Loads, after: Option<Key>, most: u32, out: &mut Queue<Request>) -> Token {
+    let owner = loads::begin(loads, Token::new(51), Range::Turns { task: 1, attempt: 1 }, after, most, out)
+        .expect("load admitted");
     assert_eq!(
         out.pop(),
         Some(Request::Load {

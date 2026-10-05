@@ -1,5 +1,5 @@
 //! Generated landing sweep against a set-based statement, exact pins and
-//! full landing-rule memory (domain/authority.md, 10–11; forge.md, 8.3).
+//! full landing-rule memory (domain/authority.md, 10–11; domain/forge.md, 8.3).
 
 use alloc::boxed::Box;
 use core::mem::{size_of, size_of_val};
@@ -14,8 +14,11 @@ use crate::{
 };
 
 const HEAD: Head = [1; 32];
+
 const OLD: Head = [2; 32];
+
 const FOREIGN: Head = [3; 32];
+
 const LIMITS: Limits = Limits {
     projects: 1,
     roles: 2,
@@ -40,9 +43,11 @@ const LIMITS: Limits = Limits {
 fn pattern() -> Pattern {
     Pattern { segments: Box::new([]), last: Last::Open(copy_of(b"")) }
 }
+
 fn branch() -> Pattern {
     Pattern { segments: Box::new([copy_of(b"repo"), copy_of(b"main")]), last: Last::None }
 }
+
 fn authority() -> Authority {
     Authority {
         tools: Tools(1),
@@ -52,6 +57,7 @@ fn authority() -> Authority {
         notes: Scopes(0),
     }
 }
+
 fn rule() -> LandingRule {
     LandingRule {
         connector: 1,
@@ -63,12 +69,15 @@ fn rule() -> LandingRule {
         approvals: Box::new([]),
     }
 }
+
 fn gate(blocking: bool, freshness: Freshness) -> Gate {
     Gate { number: 10, blocking, freshness }
 }
+
 fn approval(freshness: Freshness, people: u32) -> Approval {
     Approval { role: 7, people, freshness }
 }
+
 fn rules() -> Rules {
     Rules {
         ceiling: authority(),
@@ -80,6 +89,7 @@ fn rules() -> Rules {
         landing: Box::new([rule()]),
     }
 }
+
 fn policy() -> Policy {
     let mut landing = rule();
     landing.ci = false;
@@ -98,16 +108,19 @@ fn policy() -> Policy {
         landing: Box::new([landing]),
     }
 }
+
 fn install(domain: &mut Domain, policy: Policy) -> PolicyFact {
     let mut out = Queue::with_capacity(POLICY_MAX_OUT);
     step(domain, Event::Policy { project: 1, policy }, &mut out);
     out.pop().unwrap()
 }
+
 fn domain(policy: Policy) -> Domain {
     let mut domain = Domain::new(rules(), LIMITS).unwrap();
     assert_eq!(install(&mut domain, policy), PolicyFact::Added { project: 1 });
     domain
 }
+
 fn landing() -> Landing {
     Landing {
         head: HEAD,
@@ -120,6 +133,7 @@ fn landing() -> Landing {
         reviews: Box::new([Review { person: 1, role: 7, head: OLD, status: Status::Passed }]),
     }
 }
+
 fn ask() -> EffectAsk {
     EffectAsk {
         project: 1,
@@ -133,11 +147,13 @@ fn ask() -> EffectAsk {
         landing: Some(landing()),
     }
 }
+
 fn check(domain: &Domain, ask: &EffectAsk) -> (Answer, Queue<Finding>) {
     let mut out = Queue::with_capacity(max_out(domain.limits()).unwrap());
     let answer = check_effect(domain, ask, &[], &mut out);
     (answer, out)
 }
+
 fn status(rng: &mut Rng) -> Status {
     match rng.below(8) {
         0 => Status::Unknown,
@@ -146,6 +162,7 @@ fn status(rng: &mut Rng) -> Status {
         _ => Status::Passed,
     }
 }
+
 fn head(rng: &mut Rng) -> Head {
     match rng.below(5) {
         0 => FOREIGN,
@@ -153,6 +170,7 @@ fn head(rng: &mut Rng) -> Head {
         _ => HEAD,
     }
 }
+
 fn fresh(rng: &mut Rng) -> Freshness {
     if rng.chance(500) { Freshness::Clean } else { Freshness::Exact }
 }
@@ -172,6 +190,7 @@ fn accepted_heads(landing: &Landing, freshness: Freshness) -> Set<Head> {
     }
     set
 }
+
 fn fact_answer(status: Status) -> Answer {
     if status == Status::Failed {
         Answer::Refuse
@@ -181,6 +200,7 @@ fn fact_answer(status: Status) -> Answer {
         Answer::Wait
     }
 }
+
 fn gate_statement(gate: Gate, landing: &Landing) -> Answer {
     if !gate.blocking {
         return Answer::Allow;
@@ -207,6 +227,7 @@ fn gate_statement(gate: Gate, landing: &Landing) -> Answer {
         Answer::Allow
     }
 }
+
 fn approval_statement(approval: &Approval, landing: &Landing) -> Answer {
     let heads = accepted_heads(landing, approval.freshness);
     let mut people = Set::with_capacity(LIMITS.reviews);
@@ -233,6 +254,7 @@ fn approval_statement(approval: &Approval, landing: &Landing) -> Answer {
         Answer::Allow
     }
 }
+
 fn statement(policy: &Policy, ask: &EffectAsk) -> Answer {
     let mut answer = if policy.ceiling.grants.is_empty() {
         Answer::Refuse

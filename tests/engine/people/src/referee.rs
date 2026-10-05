@@ -3,6 +3,7 @@ use skein_lib::Duration;
 use std::collections::BTreeSet;
 use temper_engine_domain_people::{RequestKey, Role};
 use temper_world::{Expectations, Judge};
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Seen {
     Called { call: u64 },
@@ -12,24 +13,31 @@ pub enum Seen {
     Created { key: RequestKey },
     Replied { call: u64, after: u64 },
 }
+
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Name {
     Reply(u64),
 }
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Stimulus {
     Restart,
 }
+
 #[derive(Default, Debug)]
 pub struct People {
     durable: u64,
     replied: BTreeSet<u64>,
     created: BTreeSet<RequestKey>,
 }
+
 impl Expectations for People {
     type Seen = Seen;
+
     type Name = Name;
+
     type Stimulus = Stimulus;
+
     fn observe(&mut self, seen: Seen, judge: &mut Judge<Name, Stimulus>) {
         match seen {
             Seen::Called { call } => judge.expect(Name::Reply(call), Duration::from_secs(10)),

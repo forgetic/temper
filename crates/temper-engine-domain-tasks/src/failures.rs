@@ -1,6 +1,7 @@
 //! Six failure classes and equal-jitter exponential backoff, ported from
 //! legacy work's tracked.rs and boundary.rs (domain/tasks.md, 5.5).
 use skein_lib::{Duration, Rng};
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Class {
     Transient,
@@ -10,6 +11,7 @@ pub enum Class {
     Lost,
     Invalid,
 }
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Tries {
     pub transient: u32,
@@ -19,8 +21,10 @@ pub struct Tries {
     pub lost: u32,
     pub invalid: u32,
 }
+
 impl Tries {
     pub const NONE: Tries = Tries { transient: 0, permanent: 0, run: 0, agent: 0, lost: 0, invalid: 0 };
+
     #[must_use]
     pub const fn of(&self, class: Class) -> u32 {
         match class {
@@ -32,6 +36,7 @@ impl Tries {
             Class::Invalid => self.invalid,
         }
     }
+
     pub(crate) fn add(&mut self, class: Class) {
         match class {
             Class::Transient => self.transient = self.transient.saturating_add(1),
@@ -43,12 +48,14 @@ impl Tries {
         }
     }
 }
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Retry {
     pub retries: u32,
     pub base: Duration,
     pub max: Duration,
 }
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Retries {
     pub transient: Retry,
@@ -58,6 +65,7 @@ pub struct Retries {
     pub lost: Retry,
     pub invalid: Retry,
 }
+
 impl Retries {
     #[must_use]
     pub const fn of(&self, class: Class) -> Retry {
@@ -71,6 +79,7 @@ impl Retries {
         }
     }
 }
+
 pub(crate) fn backoff(times: u32, retry: Retry, rng: &mut Rng) -> Duration {
     let factor = 1_u64.checked_shl(times.saturating_sub(1)).unwrap_or(u64::MAX);
     let ceiling = retry.base.saturating_mul(factor).min(retry.max);

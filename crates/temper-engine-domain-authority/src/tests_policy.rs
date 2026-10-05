@@ -38,9 +38,11 @@ const LIMITS: Limits = Limits {
 fn numbers(budget: u64) -> Numbers {
     Numbers { budget, spent: 0, spent_below: 0, reserved: 0 }
 }
+
 fn pattern() -> Pattern {
     Pattern { segments: Box::new([]), last: Last::Open(copy_of(b"")) }
 }
+
 fn authority() -> Authority {
     Authority {
         tools: Tools(u64::MAX),
@@ -54,9 +56,11 @@ fn authority() -> Authority {
         notes: Scopes(15),
     }
 }
+
 fn requirement(fact: u16) -> Requirement {
     Requirement { connector: 1, kind: 1, pattern: pattern(), facts: Box::new([fact]) }
 }
+
 fn rules(ceiling: Authority) -> Rules {
     Rules {
         ceiling,
@@ -76,9 +80,11 @@ fn rules(ceiling: Authority) -> Rules {
         landing: Box::new([]),
     }
 }
+
 fn role(ceiling: Authority) -> Role {
     Role { number: 7, authority: ceiling, period_spend: 100, requests: Requests::ALL, decides: Proposals::ALL }
 }
+
 fn policy(ceiling: Authority) -> Policy {
     Policy {
         roles: Box::new([role(ceiling.clone())]),
@@ -88,11 +94,13 @@ fn policy(ceiling: Authority) -> Policy {
         landing: Box::new([]),
     }
 }
+
 fn apply(domain: &mut Domain, event: Event) -> PolicyFact {
     let mut out = Queue::with_capacity(POLICY_MAX_OUT);
     step(domain, event, &mut out);
     out.pop().unwrap()
 }
+
 fn domain_with(deployment: Authority, project: Authority) -> Domain {
     let mut domain = Domain::new(rules(deployment), LIMITS).unwrap();
     assert_eq!(
@@ -101,19 +109,24 @@ fn domain_with(deployment: Authority, project: Authority) -> Domain {
     );
     domain
 }
+
 fn domain() -> Domain {
     domain_with(authority(), authority())
 }
+
 fn findings(domain: &Domain) -> Queue<Finding> {
     Queue::with_capacity(max_out(domain.limits()).unwrap())
 }
+
 fn effect() -> Effect {
     Effect { connector: 1, kind: 1, name: Name { segments: Box::new([copy_of(b"repo")]) }, state: [1; 32] }
 }
+
 fn fact(kind: u16, status: Status) -> Fact {
     let effect = effect();
     Fact { connector: effect.connector, kind, name: effect.name, state: effect.state, status }
 }
+
 fn child(spend: u64) -> Delegate {
     let mut child = authority();
     child.budget.spend = spend;
@@ -121,6 +134,7 @@ fn child(spend: u64) -> Delegate {
     child.delegation.depth = 0;
     Delegate { executor: crate::Executor::Charter(1), authority: child }
 }
+
 fn saw(why: &Queue<Finding>, finding: Finding) -> bool {
     for actual in why {
         if *actual == finding {
@@ -622,9 +636,11 @@ fn fitting_laws_needs_and_holder_depth_use_separate_current_inputs() {
 fn add(a: u64, b: u64) -> u64 {
     a.checked_add(b).unwrap()
 }
+
 fn sized(size: usize) -> u64 {
     u64::try_from(size).unwrap()
 }
+
 fn pattern_heap(pattern: &Pattern) -> u64 {
     let mut bytes = sized(size_of_val(pattern.segments.as_ref()));
     for segment in &pattern.segments {
@@ -636,6 +652,7 @@ fn pattern_heap(pattern: &Pattern) -> u64 {
     }
     bytes
 }
+
 fn authority_heap(authority: &Authority) -> u64 {
     let mut bytes =
         add(sized(size_of_val(authority.grants.as_ref())), sized(size_of_val(authority.delegation.kinds.as_ref())));
@@ -644,6 +661,7 @@ fn authority_heap(authority: &Authority) -> u64 {
     }
     bytes
 }
+
 fn requirements_heap(requirements: &[Requirement]) -> u64 {
     let mut bytes = sized(size_of_val(requirements));
     for requirement in requirements {
@@ -651,18 +669,21 @@ fn requirements_heap(requirements: &[Requirement]) -> u64 {
     }
     bytes
 }
+
 fn full_pattern() -> Pattern {
     Pattern {
         segments: Box::new([copy_of(b"12345678"), copy_of(b"12345678"), copy_of(b"12345678"), copy_of(b"12345678")]),
         last: Last::Open(copy_of(b"12345678")),
     }
 }
+
 fn full_authority() -> Authority {
     let mut authority = authority();
     let grant = Grant { connector: 1, kind: 3, pattern: full_pattern() };
     authority.grants = Box::new([grant.clone(), grant.clone(), grant]);
     authority
 }
+
 fn full_requirements() -> Box<[Requirement]> {
     let requirement = Requirement { connector: 1, kind: 1, pattern: full_pattern(), facts: Box::new([7, 7, 7, 7]) };
     Box::new([requirement.clone(), requirement])

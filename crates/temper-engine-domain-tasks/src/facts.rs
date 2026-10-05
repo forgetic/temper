@@ -1,4 +1,5 @@
 use crate::{Class, Hold, Party, Status};
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Fact {
     Made { task: u64, requester: Party },

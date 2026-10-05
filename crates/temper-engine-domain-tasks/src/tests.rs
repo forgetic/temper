@@ -1,5 +1,6 @@
 use crate::{Retry, failures::backoff};
 use skein_lib::{Duration, Rng};
+
 #[test]
 fn exponential_equal_jitter_saturates_without_overflow_and_replays() {
     let retry = Retry { retries: 4, base: Duration::from_millis(10), max: Duration::from_secs(1) };

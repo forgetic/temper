@@ -21,6 +21,7 @@ pub const LIMITS: Limits = Limits {
     sign_in_lifetime: Duration::from_secs(60),
     facts: 16,
 };
+
 pub const ENDINGS: &[&str] = &[
     "started",
     "authority",
@@ -34,6 +35,7 @@ pub const ENDINGS: &[&str] = &[
     "busy",
     "waiter busy",
 ];
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Settings {
     pub seed: u64,
@@ -41,11 +43,13 @@ pub struct Settings {
     pub authority_refuses: bool,
     pub facts: bool,
 }
+
 impl Settings {
     #[must_use]
     pub const fn calm(seed: u64) -> Settings {
         Settings { seed, limits: LIMITS, authority_refuses: false, facts: true }
     }
+
     #[must_use]
     pub fn random(seed: u64) -> Settings {
         let mut rng = Rng::new(seed);
@@ -63,6 +67,7 @@ impl Settings {
         Settings { limits, authority_refuses, ..Settings::calm(seed) }
     }
 }
+
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct Stats {
     pub routes: u32,
@@ -71,23 +76,27 @@ pub struct Stats {
     pub restarts: u32,
     pub endings: BTreeSet<&'static str>,
 }
+
 #[derive(Debug)]
 struct Commit {
     number: u64,
     changes: Vec<Change>,
     tasks: Vec<(RequestKey, u64)>,
 }
+
 #[derive(Debug)]
 enum Change {
     Save(Stored),
     Erase(Key),
 }
+
 #[derive(Debug)]
 struct Held {
     commit: u64,
     call: u64,
     reply: Reply,
 }
+
 #[derive(Debug)]
 pub struct World {
     settings: Settings,
@@ -112,6 +121,7 @@ pub struct World {
     context: Option<RequestKey>,
     hold_replies: bool,
 }
+
 #[must_use]
 pub fn identity(user: u64) -> Identity {
     Identity {
@@ -120,11 +130,13 @@ pub fn identity(user: u64) -> Identity {
         name: b"name".to_vec().into_boxed_slice(),
     }
 }
+
 impl World {
     #[must_use]
     pub fn new(settings: Settings) -> World {
         Self::with_owners(settings, Box::new([]))
     }
+
     #[must_use]
     pub fn with_owners(settings: Settings, owners: Box<[InitialOwner]>) -> World {
         let domain = Domain::new(&settings.limits, owners.clone());
@@ -154,53 +166,65 @@ impl World {
         world.send(Event::Restored);
         world
     }
+
     #[must_use]
     pub fn stats(&self) -> &Stats {
         &self.stats
     }
+
     #[must_use]
     pub fn trace(&self) -> &[String] {
         self.trace.lines()
     }
+
     #[must_use]
     pub fn reply(&self, call: u64) -> Option<Reply> {
         self.replies.get(&call).copied()
     }
+
     #[must_use]
     pub fn tasks(&self) -> usize {
         self.durable_tasks.len()
     }
+
     #[must_use]
     pub fn records(&self) -> &BTreeMap<Key, Stored> {
         &self.records
     }
+
     pub fn ending(&mut self, name: &'static str) {
         self.stats.endings.insert(name);
     }
+
     fn name(&mut self) -> u64 {
         self.next += 1;
         self.next
     }
+
     fn call(&mut self) -> (u64, ReplyTo) {
         let number = self.name();
         assert!(self.calls.insert(number));
         self.observe(Seen::Called { call: number });
         (number, ReplyTo::new(Token::new(number)))
     }
+
     pub fn signin(&mut self, sign_in: u64, user: u64) -> u64 {
         let (call, reply_to) = self.call();
         let person = self.name();
         self.send(Event::SignedIn { reply_to, person, sign_in, identity: identity(user) });
         call
     }
+
     pub fn signout(&mut self, sign_in: u64) -> u64 {
         let (call, reply_to) = self.call();
         self.send(Event::SignOut { reply_to, sign_in });
         call
     }
+
     pub fn roles(&mut self, project: u32, holdings: Box<[Holding]>) {
         self.send(Event::Roles { project, holdings });
     }
+
     pub fn ask(&mut self, sign_in: u64, key: [u8; 16], words: &[u8]) -> u64 {
         let (call, reply_to) = self.call();
         let person = self
@@ -227,9 +251,11 @@ impl World {
         self.context = None;
         call
     }
+
     pub fn defer_routes(&mut self, defer: bool) {
         self.defer_route = defer;
     }
+
     pub fn decide_deferred(&mut self) {
         for (request, key) in std::mem::take(&mut self.deferred) {
             self.context = Some(key);
@@ -238,6 +264,7 @@ impl World {
             self.context = None;
         }
     }
+
     fn send_decision(&mut self, request: Token, key: RequestKey, task: u64) {
         let outcome = if self.settings.authority_refuses {
             Outcome::Refused(Refusal::Authority)
@@ -246,9 +273,11 @@ impl World {
         };
         self.send_inner(Event::Decided { request, outcome }, Some((key, task)));
     }
+
     fn send(&mut self, event: Event) {
         self.send_inner(event, None);
     }
+
     fn send_inner(&mut self, event: Event, task: Option<(RequestKey, u64)>) {
         let mut changes = Vec::new();
         let mut tasks = Vec::new();
@@ -303,6 +332,7 @@ impl World {
             while self.domain.pop_fact().is_some() {}
         }
     }
+
     pub fn commit_all(&mut self) {
         while let Some(commit) = self.commits.pop_front() {
             for change in commit.changes {
@@ -325,9 +355,11 @@ impl World {
             self.release();
         }
     }
+
     pub fn hold_replies(&mut self, hold: bool) {
         self.hold_replies = hold;
     }
+
     fn release(&mut self) {
         if self.hold_replies {
             return;
@@ -340,6 +372,7 @@ impl World {
             self.observe(Seen::Replied { call: held.call, after: held.commit });
         }
     }
+
     /// Cold restart drops volatile outputs and flights, retaining only durable
     /// people records and scripted tasks. Client calls lost with the process
     /// are abandoned, then retried with a fresh `ReplyTo` and the same key.
@@ -347,6 +380,7 @@ impl World {
         self.referee.inject(self.env.now, Stimulus::Restart);
         self.fire_referee();
     }
+
     fn restart_cold(&mut self) {
         for call in std::mem::take(&mut self.calls) {
             self.observe(Seen::Abandoned { call });
@@ -362,6 +396,7 @@ impl World {
         self.send(Event::Restored);
         self.stats.restarts += 1;
     }
+
     pub fn advance(&mut self, duration: Duration) {
         self.env.now = self.env.now.saturating_add(duration);
         self.env.wall = Wall::from_nanos(self.env.wall.as_nanos().saturating_add(duration.as_nanos()));
@@ -374,6 +409,7 @@ impl World {
         self.commit_all();
         self.fire_referee();
     }
+
     fn observe(&mut self, seen: Seen) {
         let mut stimuli = Vec::new();
         self.referee.observe(self.env.now, seen, &mut stimuli);
@@ -384,6 +420,7 @@ impl World {
         }
         self.referee.assert_holding(self.settings.seed);
     }
+
     fn fire_referee(&mut self) {
         let mut stimuli = Vec::new();
         self.referee.fire(self.env.now, &mut stimuli);
@@ -394,10 +431,12 @@ impl World {
         }
         self.referee.assert_holding(self.settings.seed);
     }
+
     pub fn assert_settled(&self) {
         assert!(self.calls.is_empty() && self.commits.is_empty() && self.held.is_empty() && self.deferred.is_empty());
         self.referee.assert_passed(self.settings.seed);
     }
+
     /// Compact scenario matrix: each seed draws authority and crash cuts while
     /// every configured outcome is named and checked across the sweep.
     pub fn run(&mut self) {

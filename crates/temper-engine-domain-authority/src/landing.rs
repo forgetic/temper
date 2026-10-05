@@ -1,5 +1,5 @@
 //! Landing requirements over owned pinned facts, borrowed without allocation
-//! (domain/authority.md, sections 8.2 and 10; forge.md, 8.3).
+//! (domain/authority.md, sections 8.2 and 10; domain/forge.md, 8.3).
 
 use skein_lib::Queue;
 

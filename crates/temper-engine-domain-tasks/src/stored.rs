@@ -3,8 +3,9 @@ use crate::{
     Active, Closing, Ending, Executor, Limits, Party, Phase, Problem, Refusal, Request, Stage, Stored, TaskRecord, Was,
 };
 use skein_lib::{Env, Queue};
-fn valid_ending(l: &Limits, ending: &Ending) -> bool {
-    let cap = usize::try_from(l.result_bytes).expect("u32 fits usize");
+
+fn valid_ending(limits: &Limits, ending: &Ending) -> bool {
+    let cap = usize::try_from(limits.result_bytes).expect("u32 fits usize");
     match ending {
         Ending::Done(result) => crate::run::result_bytes(result) <= cap,
         Ending::Failed { reason } => reason.len() <= cap,
@@ -19,11 +20,12 @@ fn valid_ending(l: &Limits, ending: &Ending) -> bool {
         }
     }
 }
-fn valid_stage(task: &TaskRecord, closing: &Closing, l: &Limits) -> bool {
-    valid_ending(l, &closing.ending)
+
+fn valid_stage(task: &TaskRecord, closing: &Closing, limits: &Limits) -> bool {
+    valid_ending(limits, &closing.ending)
         && match &closing.ending {
             Ending::Done(result) | Ending::Cancelled { result: Some(result), .. } => {
-                crate::run::valid_result(&task.contract, result, l)
+                crate::run::valid_result(&task.contract, result, limits)
             }
             Ending::Failed { .. } | Ending::Cancelled { result: None, .. } => true,
         }
@@ -33,14 +35,15 @@ fn valid_stage(task: &TaskRecord, closing: &Closing, l: &Limits) -> bool {
             Stage::Effects | Stage::Settled => task.delegates.is_empty(),
         }
 }
-fn valid_phase(task: &TaskRecord, l: &Limits) -> bool {
+
+fn valid_phase(task: &TaskRecord, limits: &Limits) -> bool {
     match &task.phase {
         Phase::Active(Active::Claimed { attempt } | Active::Running { attempt })
         | Phase::Held { was: Was::Active(Active::Claimed { attempt } | Active::Running { attempt }), .. } => {
             *attempt != 0 && *attempt == task.attempt && task.last_answer != Some(*attempt)
         }
-        Phase::Closing(closing) => closing.stage != Stage::Settled && valid_stage(task, closing, l),
-        Phase::Held { was: Was::Closing(closing), .. } => valid_stage(task, closing, l),
+        Phase::Closing(closing) => closing.stage != Stage::Settled && valid_stage(task, closing, limits),
+        Phase::Held { was: Was::Closing(closing), .. } => valid_stage(task, closing, limits),
         Phase::Waiting
         | Phase::Active(Active::Idle | Active::Due | Active::Preparing | Active::BackingOff { .. })
         | Phase::Held {
@@ -50,25 +53,26 @@ fn valid_phase(task: &TaskRecord, l: &Limits) -> bool {
         Phase::Ended(_) => false,
     }
 }
-fn valid_record(d: &Domain, l: &Limits, task: &TaskRecord) -> bool {
+
+fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
     if match task.historical_spend.checked_add(task.numbers.spent) {
         Some(total) => task.run_spent > total,
         None => true,
     } || crate::funders::total(task.numbers).is_none()
         || task.allotment == 0
-        || task.depth > l.depth
+        || task.depth > limits.depth
         || task.made == 0
-        || task.made > l.tree_tasks
-        || task.delegates.len() > usize::try_from(l.delegates).expect("u32 fits usize")
-        || task.waiting_on.len() > usize::try_from(l.dependencies).expect("u32 fits usize")
-        || task.dependencies.len() > usize::try_from(l.dependencies).expect("u32 fits usize")
+        || task.made > limits.tree_tasks
+        || task.delegates.len() > usize::try_from(limits.delegates).expect("u32 fits usize")
+        || task.waiting_on.len() > usize::try_from(limits.dependencies).expect("u32 fits usize")
+        || task.dependencies.len() > usize::try_from(limits.dependencies).expect("u32 fits usize")
     {
         return false;
     }
-    if !crate::batch::valid_spec(l, &task.spec)
-        || !crate::batch::valid_contract(l, &task.contract)
-        || !crate::batch::valid_authority(l, &task.authority)
-        || !valid_phase(task, l)
+    if !crate::batch::valid_spec(limits, &task.spec)
+        || !crate::batch::valid_contract(limits, &task.contract)
+        || !crate::batch::valid_authority(limits, &task.authority)
+        || !valid_phase(task, limits)
     {
         return false;
     }
@@ -96,7 +100,7 @@ fn valid_record(d: &Domain, l: &Limits, task: &TaskRecord) -> bool {
     }
     match task.executor {
         Executor::Agent { charter } => {
-            for configured in &d.charters {
+            for configured in &domain.charters {
                 if *configured == charter {
                     return true;
                 }
@@ -105,41 +109,45 @@ fn valid_record(d: &Domain, l: &Limits, task: &TaskRecord) -> bool {
         }
     }
 }
-pub(crate) fn restore(d: &mut Domain, env: &Env<Limits>, stored: Stored, out: &mut Queue<Request>) {
-    match d.startup {
-        Startup::Ready => return failed(d, None, Refusal::NotReady, out),
+
+pub(crate) fn restore(domain: &mut Domain, env: &Env<Limits>, stored: Stored, out: &mut Queue<Request>) {
+    match domain.startup {
+        Startup::Ready => return failed(domain, None, Refusal::NotReady, out),
         Startup::Failed => return,
         Startup::Restoring => {}
     }
     match stored {
         Stored::Live(task) => {
             let number = task.number;
-            if d.names.contains_key(&number) || d.tasks.is_full() || !valid_record(d, &env.limits, &task) {
-                return failed(d, Some(number), Refusal::Restore, out);
+            if domain.names.contains_key(&number) || domain.tasks.is_full() || !valid_record(domain, &env.limits, &task)
+            {
+                return failed(domain, Some(number), Refusal::Restore, out);
             }
-            let id = d.tasks.insert(Task { record: *task, alarm: None }).expect("restored task admitted");
-            let indexed = d.names.insert(number, id);
+            let id = domain.tasks.insert(Task { record: *task, alarm: None }).expect("restored task admitted");
+            let indexed = domain.names.insert(number, id);
             assert!(indexed == Ok(None), "restored name admitted");
         }
         // Historical ended rows stay outside the live arena;
         // they cannot accidentally return an ended task to the live arena.
-        Stored::Ended(task) => failed(d, Some(task.number), Refusal::Restore, out),
+        Stored::Ended(task) => failed(domain, Some(task.number), Refusal::Restore, out),
         Stored::Ledger(record) => {
-            if !crate::funders::restore_funding(d, record) {
-                failed(d, None, Refusal::Restore, out);
+            if !crate::funders::restore_funding(domain, record) {
+                failed(domain, None, Refusal::Restore, out);
             }
         }
-        Stored::Closure(_) => failed(d, None, Refusal::Restore, out),
+        Stored::Closure(_) => failed(domain, None, Refusal::Restore, out),
     }
 }
-fn failed(d: &mut Domain, task: Option<u64>, why: Refusal, out: &mut Queue<Request>) {
-    d.startup = Startup::Failed;
+
+fn failed(domain: &mut Domain, task: Option<u64>, why: Refusal, out: &mut Queue<Request>) {
+    domain.startup = Startup::Failed;
     out.push(Request::RestoreRefused { problem: Problem { task, why } });
 }
-fn links(d: &Domain, env: &Env<Limits>, task: &TaskRecord) -> bool {
+
+fn links(domain: &Domain, env: &Env<Limits>, task: &TaskRecord) -> bool {
     match task.requester {
         Party::Task(number) => {
-            let Some(parent) = record(d, number) else {
+            let Some(parent) = record(domain, number) else {
                 return false;
             };
             if task.project != parent.project
@@ -160,7 +168,7 @@ fn links(d: &Domain, env: &Env<Limits>, task: &TaskRecord) -> bool {
         Party::Deployment { project } if project != task.project => return false,
         Party::Deployment { .. } | Party::Task(_) | Party::Person(_) => {}
     }
-    let Some(root) = record(d, task.root) else {
+    let Some(root) = record(domain, task.root) else {
         return false;
     };
     if root.depth != 0 || root.made < task.made {
@@ -168,8 +176,8 @@ fn links(d: &Domain, env: &Env<Limits>, task: &TaskRecord) -> bool {
     }
     let mut project_count = 0_u32;
     let mut subtree = 0_u32;
-    for (_, id) in &d.names {
-        let other = &d.tasks.get(*id).expect("name indexes task").record;
+    for (_, id) in &domain.names {
+        let other = &domain.tasks.get(*id).expect("name indexes task").record;
         if other.project == task.project {
             project_count = project_count.saturating_add(1);
         }
@@ -182,7 +190,7 @@ fn links(d: &Domain, env: &Env<Limits>, task: &TaskRecord) -> bool {
     }
     let mut descendants_made = 1_u32;
     for delegate in &task.delegates {
-        let Some(child) = record(d, *delegate) else {
+        let Some(child) = record(domain, *delegate) else {
             return false;
         };
         let Some(total) = descendants_made.checked_add(child.made) else {
@@ -200,7 +208,7 @@ fn links(d: &Domain, env: &Env<Limits>, task: &TaskRecord) -> bool {
         if !crate::batch::contains(&task.dependencies, *dependency) {
             return false;
         }
-        let Some(other) = record(d, *dependency) else {
+        let Some(other) = record(domain, *dependency) else {
             return false;
         };
         if other.project != task.project {
@@ -208,7 +216,7 @@ fn links(d: &Domain, env: &Env<Limits>, task: &TaskRecord) -> bool {
         }
     }
     for dependency in &task.dependencies {
-        if let Some(other) = record(d, *dependency)
+        if let Some(other) = record(domain, *dependency)
             && (other.project != task.project || !crate::batch::contains(&task.waiting_on, *dependency))
         {
             return false;
@@ -229,45 +237,48 @@ fn links(d: &Domain, env: &Env<Limits>, task: &TaskRecord) -> bool {
     }
     true
 }
-pub(crate) fn restored(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
-    match d.startup {
+
+pub(crate) fn restored(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
+    match domain.startup {
         Startup::Ready | Startup::Failed => return,
         Startup::Restoring => {}
     }
-    for (number, _) in &d.names {
-        if !links(d, env, record(d, *number).expect("name indexes task"))
-            || !crate::funders::representable(d, *number, 0)
+    for (number, _) in &domain.names {
+        if !links(domain, env, record(domain, *number).expect("name indexes task"))
+            || !crate::funders::representable(domain, *number, 0)
         {
-            return failed(d, Some(*number), Refusal::Restore, out);
+            return failed(domain, Some(*number), Refusal::Restore, out);
         }
     }
-    if !crate::batch::acyclic(d, &env.limits, Party::Person(0), &[]) || !crate::funders::links(d, env.limits.tasks) {
-        return failed(d, None, Refusal::Restore, out);
+    if !crate::batch::acyclic(domain, &env.limits, Party::Person(0), &[])
+        || !crate::funders::links(domain, env.limits.tasks)
+    {
+        return failed(domain, None, Refusal::Restore, out);
     }
-    d.startup = Startup::Ready;
-    let numbers = snapshot(d, env.limits.tasks);
+    domain.startup = Startup::Ready;
+    let numbers = snapshot(domain, env.limits.tasks);
     for number in numbers.into_boxed() {
-        let phase = record(d, number).expect("restored name exists").phase.clone();
+        let phase = record(domain, number).expect("restored name exists").phase.clone();
         match phase {
             Phase::Active(Active::Due | Active::Preparing) => {
-                task_mut(d, number).expect("restored name exists").record.phase = Phase::Active(Active::Due);
-                publish(d, env, number, out);
-                activate(d, number, out);
+                task_mut(domain, number).expect("restored name exists").record.phase = Phase::Active(Active::Due);
+                publish(domain, env, number, out);
+                activate(domain, number, out);
             }
             Phase::Active(Active::Claimed { attempt } | Active::Running { attempt }) => {
                 out.push(Request::Adopt {
                     task: number,
                     attempt,
-                    kept: record(d, number).expect("restored live task").turn,
+                    kept: record(domain, number).expect("restored live task").turn,
                 });
             }
-            Phase::Active(Active::BackingOff { .. }) => publish(d, env, number, out),
+            Phase::Active(Active::BackingOff { .. }) => publish(domain, env, number, out),
             Phase::Closing(closing) => match closing.stage {
                 Stage::Run { attempt } => {
                     out.push(Request::Adopt {
                         task: number,
                         attempt,
-                        kept: record(d, number).expect("restored live task").turn,
+                        kept: record(domain, number).expect("restored live task").turn,
                     });
                     out.push(Request::Stop { task: number, attempt });
                 }
@@ -280,7 +291,7 @@ pub(crate) fn restored(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Reques
                     out.push(Request::Adopt {
                         task: number,
                         attempt,
-                        kept: record(d, number).expect("restored live task").turn,
+                        kept: record(domain, number).expect("restored live task").turn,
                     });
                     out.push(Request::Stop { task: number, attempt });
                 }

@@ -14,6 +14,7 @@ pub struct Deployment {
     pub calls: u64,
     pub commits: u64,
 }
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Family {
     Task,
@@ -23,6 +24,7 @@ pub enum Family {
     Run,
     Call,
 }
+
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Key {
     Deployment,
@@ -54,6 +56,7 @@ pub enum Key {
         temper_engine_domain_people::Key,
     ),
 }
+
 /// Root-owned page ranges (domain/engine.md, section 5.3).
 /// The root asks the store for strictly ordered rows from one range; child
 /// ranges join here with their record wrappers when routing is implemented.
@@ -80,6 +83,7 @@ pub enum Range {
         attempt: u64,
     },
 }
+
 impl Range {
     /// Root checks store membership before retaining a row; range continuations
     /// are separately ordered and bounded (domain/engine.md, 5.3).
@@ -129,6 +133,7 @@ impl Range {
         }
     }
 }
+
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct TurnRecord {
     pub task: u64,
@@ -139,6 +144,7 @@ pub struct TurnRecord {
     pub at: Wall,
     pub transcript: Box<[u8]>,
 }
+
 /// Root's accepted terminal identity (worker offer or actual root-translated
 /// unpriced terminal), saved atomically with task and
 /// financial writes before ACK; result bytes obey root admission (domain/engine.md, 7.4).
@@ -153,6 +159,7 @@ pub struct TerminalRecord {
     /// Exact bounded worker terminal, even when child lifecycle normalizes it; a refused answer archives root's unpriced Invalid normalization, and topology routes archive their actual Lost/Refused terminal (domain/engine.md, 7.4).
     pub end: temper_engine_domain_tasks::End,
 }
+
 /// Root's latest accepted turn metadata; the full transcript stays only in
 /// the immutable turn archive. Fleet fences earlier bodies (domain/engine.md, 7.2).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -164,6 +171,7 @@ pub struct TurnProof {
     /// Admitted message fence; currently none until an actual root inbox route (domain/engine.md, 7.2).
     pub read: Option<u64>,
 }
+
 /// Root's current claim evidence, store to root on paged startup. At most
 /// tasks.tasks rows are kept; each has one latest turn and one terminal.
 /// Claim replaces the row; ending erases it (domain/engine.md, 6 and 7.2).
@@ -178,6 +186,7 @@ pub struct RunProof {
     /// Latest typed terminal for this claim, or none; cleared on replacement/end (domain/engine.md, 7.4).
     pub terminal: Option<TerminalRecord>,
 }
+
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Record {
     Deployment(Deployment),
@@ -203,6 +212,7 @@ pub enum Record {
         temper_engine_domain_people::Stored,
     ),
 }
+
 impl Record {
     #[must_use]
     pub const fn key(&self) -> Key {
@@ -216,11 +226,13 @@ impl Record {
         }
     }
 }
+
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Write {
     Save(Record),
     Erase(Key),
 }
+
 impl Write {
     #[must_use]
     pub const fn key(&self) -> Key {
@@ -258,6 +270,7 @@ pub fn record_bytes(record: &Record) -> Option<u64> {
         },
     }
 }
+
 pub(crate) fn owned_bytes(write: &Write) -> Option<u64> {
     match write {
         Write::Save(record) => record_bytes(record),
@@ -268,10 +281,10 @@ pub(crate) fn owned_bytes(write: &Write) -> Option<u64> {
 fn terminal_bytes(row: &TerminalRecord) -> Option<u64> {
     match &row.end {
         temper_engine_domain_tasks::End::Finished { result, .. } => match result {
-            temper_engine_domain_tasks::Result::Report { words }
-            | temper_engine_domain_tasks::Result::Verdict { words, .. }
-            | temper_engine_domain_tasks::Result::Change { words, .. } => u64::try_from(words.len()).ok(),
-            temper_engine_domain_tasks::Result::Failure { reason } => u64::try_from(reason.len()).ok(),
+            temper_engine_domain_tasks::TaskResult::Report { words }
+            | temper_engine_domain_tasks::TaskResult::Verdict { words, .. }
+            | temper_engine_domain_tasks::TaskResult::Change { words, .. } => u64::try_from(words.len()).ok(),
+            temper_engine_domain_tasks::TaskResult::Failure { reason } => u64::try_from(reason.len()).ok(),
         },
         temper_engine_domain_tasks::End::Parked
         | temper_engine_domain_tasks::End::Failed(_)

@@ -4,8 +4,10 @@ use temper_engine_domain_people::{
 };
 use temper_engine_people_world::LIMITS;
 use temper_world::heap::{self, Meter};
+
 #[global_allocator]
 static HEAP: heap::Counting = heap::Counting;
+
 struct Measured {
     domain: Domain,
     env: Env<Limits>,
@@ -14,6 +16,7 @@ struct Measured {
     bound: u64,
     call: u64,
 }
+
 impl Measured {
     fn new(limits: Limits) -> Measured {
         let out = Queue::with_capacity(max_out(&limits));
@@ -28,15 +31,18 @@ impl Measured {
             call: 0,
         }
     }
+
     fn to(&mut self) -> ReplyTo {
         self.call += 1;
         ReplyTo::new(Token::new(self.call))
     }
+
     fn event(&mut self, event: Event) -> Option<Token> {
         self.meter.start();
         step(&mut self.domain, &self.env, event, &mut self.out);
         self.drain()
     }
+
     fn drain(&mut self) -> Option<Token> {
         let measured = self.meter.end();
         let mut routed = None;
@@ -49,6 +55,7 @@ impl Measured {
         self.domain.reclaim();
         routed
     }
+
     fn ask(&mut self, key: u8) -> Option<Token> {
         let reply_to = self.to();
         let words = vec![1; usize::try_from(self.env.limits.words).expect("test values are admitted and fit")]
@@ -56,6 +63,7 @@ impl Measured {
         self.event(Event::Ask { reply_to, sign_in: 1, key: [key; 16], ask: Ask::StartChat { project: 1, words } })
     }
 }
+
 #[test]
 fn full_people_roles_signins_pending_waiters_answers_and_expiry_fit() {
     for limits in [

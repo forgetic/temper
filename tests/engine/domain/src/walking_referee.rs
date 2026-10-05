@@ -10,10 +10,13 @@ use temper_engine_domain_tasks as tasks;
 
 /// The person's question, supplied independently of the root's brief route.
 pub const QUESTION: &[u8] = b"say hello";
+
 /// The worker's final report, supplied independently of task closing.
 pub const REPORT: &[u8] = b"hello";
+
 /// Cumulative prices and concrete transcripts selected by the worker script.
 pub const TURNS: &[(u32, u64, &[u8])] = &[(1, 3, b"first"), (2, 8, b"second")];
+
 /// Terminal price includes expense after the last transcript turn.
 pub const FINAL_SPEND: u64 = 12;
 
@@ -100,7 +103,7 @@ impl WalkingReferee {
                 let retired = writes.contains(&Write::Erase(Key::RunProof { task: record.number }));
                 let terminal = writes.iter().any(|write| matches!(write,
                     Write::Save(Record::Terminal(proof)) if proof.task == record.number && proof.attempt == record.attempt && proof.cumulative == FINAL_SPEND
-                        && proof.end == (tasks::End::Finished { result: tasks::Result::Report { words: REPORT.into() }, cancel_delegates: false })));
+                        && proof.end == (tasks::End::Finished { result: tasks::TaskResult::Report { words: REPORT.into() }, cancel_delegates: false })));
                 if record.numbers.spent != FINAL_SPEND || !posted {
                     return Err("terminal and funding posting are not one transaction");
                 }
@@ -287,7 +290,8 @@ impl WalkingReferee {
         let Some(Record::Tasks(tasks::Stored::Ended(record))) = rows.get(&Key::Tasks(tasks::Key::Ended(task))) else {
             return Err("result before durable ended record");
         };
-        let tasks::Phase::Ended(tasks::Ending::Done(tasks::Result::Report { words: report })) = &record.phase else {
+        let tasks::Phase::Ended(tasks::Ending::Done(tasks::TaskResult::Report { words: report })) = &record.phase
+        else {
             return Err("result is not the committed report");
         };
         if report.as_ref() != REPORT || record.numbers.spent != FINAL_SPEND {

@@ -1,5 +1,6 @@
-use temper_engine_domain_tasks::{Active, End, Event, Key, Party, Phase, Refusal, Result, Stored};
+use temper_engine_domain_tasks::{Active, End, Event, Key, Party, Phase, Refusal, Stored, TaskResult};
 use temper_engine_tasks_world::{LIMITS, Reply, World, task};
+
 #[test]
 fn make_and_claim_have_independent_before_and_after_durable_cuts() {
     let mut w = World::new(20, LIMITS);
@@ -35,6 +36,7 @@ fn make_and_claim_have_independent_before_and_after_durable_cuts() {
     w.finish(2);
     w.settle(2);
 }
+
 #[test]
 fn stale_claims_and_replayed_terminal_are_typed_and_do_not_mutate() {
     let mut w = World::new(22, LIMITS);
@@ -61,6 +63,7 @@ fn stale_claims_and_replayed_terminal_are_typed_and_do_not_mutate() {
         Reply::Acknowledged(temper_engine_domain_tasks::Accepted::Already)
     ));
 }
+
 #[test]
 fn a_crash_before_finished_decision_resumes_current_attempt() {
     let mut w = World::new(24, LIMITS);
@@ -71,7 +74,7 @@ fn a_crash_before_finished_decision_resumes_current_attempt() {
         reply_to,
         task: 1,
         attempt: 1,
-        end: End::Finished { result: Result::Report { words: Box::new([1]) }, cancel_delegates: false },
+        end: End::Finished { result: TaskResult::Report { words: Box::new([1]) }, cancel_delegates: false },
         cause: temper_engine_domain_tasks::Cause::Unpriced,
     });
     assert!(w.results.is_empty());
@@ -81,6 +84,7 @@ fn a_crash_before_finished_decision_resumes_current_attempt() {
     w.finish(1);
     w.settle(1);
 }
+
 #[test]
 fn restore_rejects_corrupt_links_cycles_and_contracts_without_panicking() {
     use skein_lib::{Env, Queue, Time, Wall};
@@ -124,6 +128,7 @@ fn restore_rejects_corrupt_links_cycles_and_contracts_without_panicking() {
         assert!(rejected);
     }
 }
+
 #[test]
 fn terminal_and_settlement_each_have_a_durable_cut_before_delivery() {
     let mut w = World::new(26, LIMITS);
@@ -134,7 +139,7 @@ fn terminal_and_settlement_each_have_a_durable_cut_before_delivery() {
         reply_to,
         task: 1,
         attempt: 1,
-        end: End::Finished { result: Result::Report { words: Box::new([1]) }, cancel_delegates: false },
+        end: End::Finished { result: TaskResult::Report { words: Box::new([1]) }, cancel_delegates: false },
         cause: temper_engine_domain_tasks::Cause::Unpriced,
     });
     w.durable();
@@ -152,6 +157,7 @@ fn terminal_and_settlement_each_have_a_durable_cut_before_delivery() {
     assert_eq!(w.results.len(), 1);
     assert!(w.closing.is_empty());
 }
+
 #[test]
 fn wall_correction_does_not_move_a_live_backoff_but_restore_reprojects_it() {
     use skein_lib::{Duration, Wall};
@@ -169,6 +175,7 @@ fn wall_correction_does_not_move_a_live_backoff_but_restore_reprojects_it() {
     w.advance();
     assert!(w.activations.contains(&1));
 }
+
 #[test]
 fn delegate_cancel_cut_after_durability_stops_adopted_runs_then_closes_deepest() {
     let mut w = World::new(27, LIMITS);
@@ -184,7 +191,7 @@ fn delegate_cancel_cut_after_durability_stops_adopted_runs_then_closes_deepest()
         reply_to,
         task: 1,
         attempt: 1,
-        end: End::Finished { result: Result::Report { words: Box::new([1]) }, cancel_delegates: true },
+        end: End::Finished { result: TaskResult::Report { words: Box::new([1]) }, cancel_delegates: true },
         cause: temper_engine_domain_tasks::Cause::Unpriced,
     });
     w.durable();
@@ -194,6 +201,7 @@ fn delegate_cancel_cut_after_durability_stops_adopted_runs_then_closes_deepest()
     w.complete_cancel();
     assert_eq!(w.results.len(), 3);
 }
+
 #[test]
 fn dependency_progress_survives_restore_without_loading_historical_ends() {
     let mut w = World::new(29, LIMITS);
@@ -216,6 +224,7 @@ fn dependency_progress_survives_restore_without_loading_historical_ends() {
     w.settle(3);
     assert_eq!(w.results.len(), 3);
 }
+
 #[test]
 fn restore_refuses_unrepresentable_eventual_actual_funding_postings() {
     use skein_lib::Queue;
@@ -225,7 +234,7 @@ fn restore_refuses_unrepresentable_eventual_actual_funding_postings() {
     source.claim(1, 1);
     source.terminal_cause(
         1,
-        End::Finished { result: Result::Report { words: Box::new([1]) }, cancel_delegates: false },
+        End::Finished { result: TaskResult::Report { words: Box::new([1]) }, cancel_delegates: false },
         Cause::Priced { cumulative: 1 },
     );
     let mut rows = source.records.values().cloned().collect::<Vec<_>>();
@@ -244,6 +253,7 @@ fn restore_refuses_unrepresentable_eventual_actual_funding_postings() {
     step(&mut domain, &source.env, Event::Restored, &mut out);
     assert!(std::iter::from_fn(|| out.pop()).any(|request| matches!(request, Request::RestoreRefused { .. })));
 }
+
 #[test]
 fn malformed_unfinished_dependencies_refuse_at_restore_entrance() {
     use skein_lib::Queue;
@@ -266,6 +276,7 @@ fn malformed_unfinished_dependencies_refuse_at_restore_entrance() {
         assert!(out.pop().is_none());
     }
 }
+
 #[test]
 fn restore_refuses_a_missing_unfinished_live_dependency_before_activation() {
     use skein_lib::Queue;
@@ -296,6 +307,7 @@ fn restore_refuses_a_missing_unfinished_live_dependency_before_activation() {
         assert!(refused, "corrupt unfinished subset refuses before activation");
     }
 }
+
 #[test]
 fn impossible_settled_live_and_unsupported_ledger_states_refuse_at_restore_entrance() {
     use skein_lib::Queue;
@@ -331,6 +343,7 @@ fn impossible_settled_live_and_unsupported_ledger_states_refuse_at_restore_entra
         assert!(out.pop().is_none());
     }
 }
+
 #[test]
 fn restore_refuses_task_funding_outside_its_requester_ancestry() {
     use skein_lib::Queue;

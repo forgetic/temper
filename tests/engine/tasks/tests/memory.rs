@@ -1,12 +1,14 @@
 use skein_lib::{Env, Queue, ReplyTo, Time, Token, Wall};
 use temper_engine_domain_tasks::{
     self as tasks, Active, AuthorityExecutor, Contract, Domain, End, Event, Grant, Hold, Last, Limits, Parameter,
-    Party, Pattern, Request, Result, Stored, Verdict,
+    Party, Pattern, Request, Stored, TaskResult, Verdict,
 };
 use temper_engine_tasks_world::{LIMITS, task};
 use temper_world::heap::{self, Meter};
+
 #[global_allocator]
 static HEAP: heap::Counting = heap::Counting;
+
 struct Measured {
     d: Domain,
     env: Env<Limits>,
@@ -16,26 +18,29 @@ struct Measured {
     serial: u64,
     refused: bool,
 }
+
 impl Measured {
-    fn new(l: &Limits) -> Measured {
-        let l = *l;
-        let out = Queue::with_capacity(tasks::max_out(&l));
+    fn new(limits: &Limits) -> Measured {
+        let limits = *limits;
+        let out = Queue::with_capacity(tasks::max_out(&limits));
         let meter = Meter::new();
-        let d = Domain::new(&l, 1, Box::new([1]));
+        let d = Domain::new(&limits, 1, Box::new([1]));
         Measured {
             d,
-            env: Env { now: Time::ZERO, wall: Wall::EPOCH, limits: l },
+            env: Env { now: Time::ZERO, wall: Wall::EPOCH, limits },
             out,
             meter,
-            bound: tasks::worst_case(&l).expect("admitted bounds"),
+            bound: tasks::worst_case(&limits).expect("admitted bounds"),
             serial: 0,
             refused: false,
         }
     }
+
     fn to(&mut self) -> ReplyTo {
         self.serial += 1;
         ReplyTo::new(Token::new(self.serial))
     }
+
     fn event(&mut self, event: Event) {
         self.meter.start();
         tasks::step(&mut self.d, &self.env, event, &mut self.out);
@@ -48,6 +53,7 @@ impl Measured {
         self.meter.check(measured, self.bound, self.env.limits);
         self.d.reclaim();
     }
+
     fn bootstrap(&mut self) {
         self.event(Event::Restored);
         for period in [0, 7] {
@@ -57,6 +63,7 @@ impl Measured {
         let reply_to = self.to();
         self.event(Event::CarvePool { reply_to, project: 1, person: 9, period: 7, budget: 100_000 });
     }
+
     fn fire(&mut self) {
         self.env.now = self.env.now.saturating_add(skein_lib::Duration::from_secs(1));
         self.env.wall = Wall::from_nanos(self.env.now.as_nanos());
@@ -69,6 +76,7 @@ impl Measured {
         self.meter.check(measured, self.bound, self.env.limits);
         self.d.reclaim();
     }
+
     fn claim(&mut self, number: u64) {
         let reply_to = self.to();
         self.event(Event::Prepare { reply_to, task: number });
@@ -77,6 +85,7 @@ impl Measured {
         self.event(Event::Started { task: number, attempt: number });
     }
 }
+
 #[test]
 fn saturated_payloads_graph_backoff_held_closing_retirement_and_restore_fit() {
     for l in [
@@ -133,7 +142,7 @@ fn saturated_payloads_graph_backoff_held_closing_retirement_and_restore_fit() {
                 task: number,
                 attempt: number + 10,
                 end: End::Finished {
-                    result: Result::Verdict { code: 0, words: vec![1; l.result_bytes as usize].into_boxed_slice() },
+                    result: TaskResult::Verdict { code: 0, words: vec![1; l.result_bytes as usize].into_boxed_slice() },
                     cancel_delegates: false,
                 },
                 cause: tasks::Cause::Priced { cumulative: 10 },
@@ -143,6 +152,7 @@ fn saturated_payloads_graph_backoff_held_closing_retirement_and_restore_fit() {
         }
     }
 }
+
 #[test]
 fn full_delegate_tree_dependency_edges_and_cold_restored_claims_fit() {
     let l = Limits { tasks: 4, tree_tasks: 4, delegates: 3, batch: 3, dependencies: 3, inputs: 0, ..LIMITS };
@@ -161,7 +171,7 @@ fn full_delegate_tree_dependency_edges_and_cold_restored_claims_fit() {
         reply_to,
         task: 1,
         attempt: 1,
-        end: End::Finished { result: Result::Report { words: Box::new([1]) }, cancel_delegates: true },
+        end: End::Finished { result: TaskResult::Report { words: Box::new([1]) }, cancel_delegates: true },
         cause: tasks::Cause::Unpriced,
     });
     let reply_to = m.to();
@@ -179,31 +189,32 @@ fn full_delegate_tree_dependency_edges_and_cold_restored_claims_fit() {
         matches!(w.records.get(&tasks::Key::Ended(10)),Some(Stored::Ended(record)) if record.phase!=tasks::Phase::Active(Active::Due))
     );
 }
-fn filled(l: &Limits, number: u64) -> temper_engine_domain_tasks::New {
-    let l = *l;
+
+fn filled(limits: &Limits, number: u64) -> temper_engine_domain_tasks::New {
+    let limits = *limits;
     let mut new = task(number, &[]);
-    new.spec.words = vec![1; usize::try_from(l.spec_bytes).expect("small bound")].into_boxed_slice();
+    new.spec.words = vec![1; usize::try_from(limits.spec_bytes).expect("small bound")].into_boxed_slice();
     new.spec.parameters =
-        vec![Parameter::Number { name: 1, value: 1 }; usize::try_from(l.parameters).expect("small bound")]
+        vec![Parameter::Number { name: 1, value: 1 }; usize::try_from(limits.parameters).expect("small bound")]
             .into_boxed_slice();
 
     new.contract = Contract::Verdict {
-        choices: (0..l.contract_choices)
-            .map(|code| Verdict { code, words: l.result_bytes })
+        choices: (0..limits.contract_choices)
+            .map(|code| Verdict { code, words: limits.result_bytes })
             .collect::<Vec<_>>()
             .into_boxed_slice(),
     };
-    new.authority.grants = (0..l.authority_grants)
+    new.authority.grants = (0..limits.authority_grants)
         .map(|kind| Grant {
             connector: 0,
             kind: u16::try_from(kind).expect("small bound"),
             pattern: Pattern {
-                segments: (0..l.authority_segments)
+                segments: (0..limits.authority_segments)
                     .map(|_| Box::new([]) as Box<[u8]>)
                     .collect::<Vec<_>>()
                     .into_boxed_slice(),
                 last: Last::Exact(if kind == 0 {
-                    vec![1; usize::try_from(l.authority_bytes).expect("small bound")].into_boxed_slice()
+                    vec![1; usize::try_from(limits.authority_bytes).expect("small bound")].into_boxed_slice()
                 } else {
                     Box::new([])
                 }),
@@ -212,9 +223,11 @@ fn filled(l: &Limits, number: u64) -> temper_engine_domain_tasks::New {
         .collect::<Vec<_>>()
         .into_boxed_slice();
     new.authority.delegation.kinds =
-        vec![AuthorityExecutor::Charter(1); usize::try_from(l.executor_kinds).expect("small bound")].into_boxed_slice();
+        vec![AuthorityExecutor::Charter(1); usize::try_from(limits.executor_kinds).expect("small bound")]
+            .into_boxed_slice();
     new
 }
+
 #[test]
 fn saturated_finite_sources_and_oversized_refusals_fit_without_input_copies() {
     let l = Limits { tasks: 1, funders: 3, ..LIMITS };
@@ -232,7 +245,7 @@ fn saturated_finite_sources_and_oversized_refusals_fit_without_input_copies() {
         task: 1,
         attempt: 1,
         end: End::Finished {
-            result: Result::Report { words: vec![1; 1024].into_boxed_slice() },
+            result: TaskResult::Report { words: vec![1; 1024].into_boxed_slice() },
             cancel_delegates: false,
         },
         cause: tasks::Cause::Priced { cumulative: 5 },
@@ -242,6 +255,7 @@ fn saturated_finite_sources_and_oversized_refusals_fit_without_input_copies() {
     m.event(Event::Turn { reply_to, task: 1, attempt: 1, turn: 1, read: Some(1), cumulative: 5 });
     assert!(m.refused);
 }
+
 #[test]
 fn borrowed_stored_bytes_matches_allocator_for_every_retained_row() {
     let mut world = temper_engine_tasks_world::World::new(80, LIMITS);
@@ -263,7 +277,7 @@ fn borrowed_stored_bytes_matches_allocator_for_every_retained_row() {
     record.delegates = Box::new([4, 5]);
     let ending = tasks::Ending::Cancelled {
         reason: Box::new([1, 2]),
-        result: Some(Result::Report { words: Box::new([3, 4, 5]) }),
+        result: Some(TaskResult::Report { words: Box::new([3, 4, 5]) }),
     };
     record.phase = tasks::Phase::Held {
         was: tasks::Was::Closing(tasks::Closing { stage: tasks::Stage::Delegates, ending: ending.clone() }),

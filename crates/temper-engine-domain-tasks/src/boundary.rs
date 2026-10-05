@@ -1,65 +1,76 @@
 use crate::{Authority, Class, Funder, Numbers, Tries};
 use alloc::boxed::Box;
 use skein_lib::{ReplyTo, Wall};
+
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Party {
     Task(u64),
     Person(u64),
     Deployment { project: u32 },
 }
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Executor {
     Agent { charter: u32 },
 }
+
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Parameter {
     Number { name: u32, value: u64 },
     Bytes { name: u32, value: Box<[u8]> },
     Resource { name: u32, connector: u16, resource: u64 },
 }
+
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Spec {
     pub words: Box<[u8]>,
     pub parameters: Box<[Parameter]>,
     pub inputs: Box<[u64]>,
 }
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Verdict {
     pub code: u32,
     pub words: u32,
 }
+
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Contract {
     Report { words: u32 },
     Verdict { choices: Box<[Verdict]> },
     Change { connector: u16, kind: u16, words: u32 },
 }
+
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub enum Result {
+pub enum TaskResult {
     Report { words: Box<[u8]> },
     Verdict { code: u32, words: Box<[u8]> },
     Change { connector: u16, kind: u16, resource: u64, words: Box<[u8]> },
     Failure { reason: Box<[u8]> },
 }
+
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Ending {
-    Done(Result),
+    Done(TaskResult),
     Failed { reason: Box<[u8]> },
-    Cancelled { reason: Box<[u8]>, result: Option<Result> },
+    Cancelled { reason: Box<[u8]>, result: Option<TaskResult> },
 }
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Status {
     Done,
     Failed,
     Cancelled,
 }
+
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum End {
-    Finished { result: Result, cancel_delegates: bool },
+    Finished { result: TaskResult, cancel_delegates: bool },
     Parked,
     Failed(Class),
     Refused,
 }
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Hold {
     Failures(Class),
@@ -70,6 +81,7 @@ pub enum Hold {
     Budget,
     Deadline,
 }
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Active {
     Idle,
@@ -79,6 +91,7 @@ pub enum Active {
     Running { attempt: u64 },
     BackingOff { until: Wall },
 }
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Stage {
     Run { attempt: u64 },
@@ -86,17 +99,20 @@ pub enum Stage {
     Effects,
     Settled,
 }
+
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Closing {
     pub stage: Stage,
     pub ending: Ending,
 }
+
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Was {
     Waiting,
     Active(Active),
     Closing(Closing),
 }
+
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Phase {
     Waiting,
@@ -105,6 +121,7 @@ pub enum Phase {
     Held { was: Was, why: Hold },
     Ended(Ending),
 }
+
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct New {
     pub number: u64,
@@ -117,6 +134,7 @@ pub struct New {
     pub funder: Funder,
     pub dependencies: Box<[u64]>,
 }
+
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct TaskRecord {
     pub number: u64,
@@ -150,6 +168,7 @@ pub struct TaskRecord {
     pub refusals: u32,
     pub phase: Phase,
 }
+
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Key {
     Live(u64),
@@ -157,6 +176,7 @@ pub enum Key {
     Ledger(Funder),
     Closure { task: u64, generation: u64 },
 }
+
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Stored {
     Live(Box<TaskRecord>),
@@ -164,6 +184,7 @@ pub enum Stored {
     Ledger(crate::FundingRecord),
     Closure(crate::Closure),
 }
+
 impl Stored {
     #[must_use]
     pub const fn key(&self) -> Key {
@@ -175,6 +196,7 @@ impl Stored {
         }
     }
 }
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Refusal {
     NotReady,
@@ -203,16 +225,19 @@ pub enum Refusal {
     Turn,
     Funding,
 }
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Problem {
     pub task: Option<u64>,
     pub why: Refusal,
 }
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Accepted {
     New,
     Already,
 }
+
 #[derive(PartialEq, Eq, Debug)]
 pub enum Event {
     OpenPeriod {
@@ -294,6 +319,7 @@ pub enum Event {
     },
     Restored,
 }
+
 #[derive(PartialEq, Eq, Debug)]
 pub enum Request {
     Made {
@@ -374,6 +400,7 @@ pub enum Cause {
     /// spends nothing, and still ends in one terminal reply (domain/tasks.md, 5).
     Unpriced,
 }
+
 /// Tasks to root: bounded semantic values for one actual requested activation.
 /// Root owns this temporary preparation context, never a second mutable task
 /// or funding ledger. It drops it on claim or failure (domain/engine.md, 7.1 and 9).

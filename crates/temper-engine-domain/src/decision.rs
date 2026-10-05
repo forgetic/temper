@@ -139,32 +139,33 @@ pub struct Journal {
 
 impl Decision {
     #[must_use]
-    pub fn new(l: &Limits) -> Decision {
-        assert!(worst_case(l).is_some(), "valid root journal limits");
+    pub fn new(limits: &Limits) -> Decision {
+        assert!(worst_case(limits).is_some(), "valid root journal limits");
         Decision {
-            limits: *l,
-            writes: List::with_capacity(l.writes.checked_sub(1).expect("header slot reserved")),
-            deliveries: Queue::with_capacity(l.deliveries),
+            limits: *limits,
+            writes: List::with_capacity(limits.writes.checked_sub(1).expect("header slot reserved")),
+            deliveries: Queue::with_capacity(limits.deliveries),
         }
     }
+
     /// A replacement at the same key keeps its original position. All child
     /// callbacks finish before submission, so only the final value is saved.
-    pub fn write(&mut self, l: &Limits, write: Write) -> Result<(), Write> {
-        assert!(*l == self.limits, "decision uses its configured limits");
+    pub fn write(&mut self, limits: &Limits, write: Write) -> Result<(), Write> {
+        assert!(*limits == self.limits, "decision uses its configured limits");
         let within = match &write {
             Write::Save(Record::Deployment(_)) | Write::Erase(Key::Deployment) => false,
             Write::Save(Record::Turn(row)) => {
                 row.task != 0
                     && row.attempt != 0
                     && row.turn != 0
-                    && row.transcript.len() <= usize::try_from(l.transcript_bytes).expect("u32 fits usize")
+                    && row.transcript.len() <= usize::try_from(limits.transcript_bytes).expect("u32 fits usize")
             }
             Write::Erase(
                 Key::Turn { .. } | Key::RunProof { .. } | Key::Terminal { .. } | Key::Tasks(_) | Key::People(_),
             ) => true,
             Write::Save(Record::Tasks(_) | Record::People(_) | Record::RunProof(_) | Record::Terminal(_)) => {
                 match crate::store::owned_bytes(&write) {
-                    Some(bytes) => bytes <= u64::from(l.transcript_bytes),
+                    Some(bytes) => bytes <= u64::from(limits.transcript_bytes),
                     None => false,
                 }
             }
@@ -182,14 +183,15 @@ impl Decision {
         }
         self.writes.push(write)
     }
-    pub fn deliver(&mut self, l: &Limits, delivery: Delivery) -> Result<(), Delivery> {
-        assert!(*l == self.limits, "decision uses its configured limits");
+
+    pub fn deliver(&mut self, limits: &Limits, delivery: Delivery) -> Result<(), Delivery> {
+        assert!(*limits == self.limits, "decision uses its configured limits");
         let within = match &delivery {
             Delivery::Result { words, .. } | Delivery::ResultReply { words, .. } => {
-                words.len() <= usize::try_from(l.result_bytes).expect("u32 fits usize")
+                words.len() <= usize::try_from(limits.result_bytes).expect("u32 fits usize")
             }
-            Delivery::Fleet(event) => fleet_delivery_within(event, l),
-            Delivery::Assigned { assignment, .. } => assignment_within(assignment, l),
+            Delivery::Fleet(event) => fleet_delivery_within(event, limits),
+            Delivery::Assigned { assignment, .. } => assignment_within(assignment, limits),
             Delivery::Reply { .. }
             | Delivery::AcknowledgeTurn { .. }
             | Delivery::Acknowledge { .. }
@@ -211,39 +213,44 @@ impl Journal {
     /// An empty store needs the deployment identity committed even before its
     /// first task. The id is a root input, drawn once by the shell at startup.
     #[must_use]
-    pub fn bootstrap(id: [u8; 16], l: &Limits) -> Journal {
+    pub fn bootstrap(id: [u8; 16], limits: &Limits) -> Journal {
         let deployment =
             Deployment { id, tasks: 0, people: 0, sign_ins: 0, messages: 0, runs: 0, calls: 0, commits: 0 };
-        let mut journal = Journal::new(deployment, l);
+        let mut journal = Journal::new(deployment, limits);
         journal.dirty = true;
         journal
     }
+
     /// A loaded header names the last fully applied commit. It is durable;
     /// outstanding answers from a previous process need not be reconstructed.
     #[must_use]
-    pub fn new(deployment: Deployment, l: &Limits) -> Journal {
-        assert!(worst_case(l).is_some(), "valid root journal limits");
+    pub fn new(deployment: Deployment, limits: &Limits) -> Journal {
+        assert!(worst_case(limits).is_some(), "valid root journal limits");
         Journal {
-            limits: *l,
+            limits: *limits,
             durable: deployment.commits,
             deployment,
             dirty: false,
             stopped: false,
-            held: Queue::with_capacity(l.held),
+            held: Queue::with_capacity(limits.held),
         }
     }
+
     #[must_use]
     pub const fn deployment(&self) -> Deployment {
         self.deployment
     }
+
     #[must_use]
     pub const fn durable(&self) -> u64 {
         self.durable
     }
+
     #[must_use]
     pub const fn stopped(&self) -> bool {
         self.stopped
     }
+
     /// Shell completion fence: no dirty header, held delivery or unanswered
     /// issued commit remains. A stopped journal is not complete
     /// (domain/engine.md, 5.2 and 5.7).
@@ -251,9 +258,11 @@ impl Journal {
     pub fn quiescent(&self) -> bool {
         !self.stopped && !self.dirty && self.held.is_empty() && self.durable == self.deployment.commits
     }
+
     pub(crate) fn held_room(&self) -> u32 {
         self.held.room()
     }
+
     #[must_use]
     pub fn ready(&self) -> bool {
         if self.stopped {
@@ -265,52 +274,61 @@ impl Journal {
         }
     }
 }
+
 /// Called before routing anything that may mutate a child. Reserving the
 /// whole decision avoids partially applying a child and discovering pressure.
 #[must_use]
-pub fn takes(j: &Journal, l: &Limits) -> bool {
-    assert!(*l == j.limits, "journal uses its configured limits");
-    !j.stopped
-        && j.deployment.commits != u64::MAX
-        && j.deployment.commits.checked_sub(j.durable).expect("durable never exceeds made") < u64::from(l.commits)
-        && j.held.room() >= l.deliveries
+pub fn takes(journal: &Journal, limits: &Limits) -> bool {
+    assert!(*limits == journal.limits, "journal uses its configured limits");
+    !journal.stopped
+        && journal.deployment.commits != u64::MAX
+        && journal.deployment.commits.checked_sub(journal.durable).expect("durable never exceeds made")
+            < u64::from(limits.commits)
+        && journal.held.room() >= limits.deliveries
 }
+
 /// Root numbers are never reused. Allocation is part of the admitted
 /// decision, even if its candidate is unused; the next commit saves the gap.
-pub fn fresh(j: &mut Journal, family: Family) -> Option<u64> {
-    if j.stopped {
+pub fn fresh(journal: &mut Journal, family: Family) -> Option<u64> {
+    if journal.stopped {
         return None;
     }
     let counter = match family {
-        Family::Task => &mut j.deployment.tasks,
-        Family::Person => &mut j.deployment.people,
-        Family::SignIn => &mut j.deployment.sign_ins,
-        Family::Message => &mut j.deployment.messages,
-        Family::Run => &mut j.deployment.runs,
-        Family::Call => &mut j.deployment.calls,
+        Family::Task => &mut journal.deployment.tasks,
+        Family::Person => &mut journal.deployment.people,
+        Family::SignIn => &mut journal.deployment.sign_ins,
+        Family::Message => &mut journal.deployment.messages,
+        Family::Run => &mut journal.deployment.runs,
+        Family::Call => &mut journal.deployment.calls,
     };
     let next = counter.checked_add(1)?;
     *counter = next;
-    j.dirty = true;
+    journal.dirty = true;
     Some(next)
 }
+
 /// Return ownership on refusal. The root must call `takes` before making
 /// the decision; this defensive check does not undo already-routed children.
-pub fn accept(j: &mut Journal, l: &Limits, mut decision: Decision, out: &mut Queue<Output>) -> Result<(), Decision> {
+pub fn accept(
+    journal: &mut Journal,
+    limits: &Limits,
+    mut decision: Decision,
+    out: &mut Queue<Output>,
+) -> Result<(), Decision> {
     assert!(out.room() >= 1, "one root journal output reserved");
-    if !takes(j, l)
-        || decision.limits != *l
-        || decision.writes.len() >= l.writes
-        || decision.deliveries.len() > l.deliveries
-        || decision.deliveries.len() > j.held.room()
+    if !takes(journal, limits)
+        || decision.limits != *limits
+        || decision.writes.len() >= limits.writes
+        || decision.deliveries.len() > limits.deliveries
+        || decision.deliveries.len() > journal.held.room()
     {
         return Err(decision);
     }
-    let writing = j.dirty || !decision.writes.is_empty();
+    let writing = journal.dirty || !decision.writes.is_empty();
     if writing {
-        j.deployment.commits = j.deployment.commits.checked_add(1).expect("admitted commit number");
+        journal.deployment.commits = journal.deployment.commits.checked_add(1).expect("admitted commit number");
         let mut writes = List::with_capacity(decision.writes.len().checked_add(1).expect("reserved header slot"));
-        writes.push(Write::Save(Record::Deployment(j.deployment))).expect("header slot reserved");
+        writes.push(Write::Save(Record::Deployment(journal.deployment))).expect("header slot reserved");
         for at in 0..decision.writes.len() {
             let source = decision.writes.get_mut(at).expect("admitted write index");
             let key = source.key();
@@ -319,59 +337,60 @@ pub fn accept(j: &mut Journal, l: &Limits, mut decision: Decision, out: &mut Que
             let write = core::mem::replace(source, Write::Erase(key));
             writes.push(write).expect("admitted decision writes");
         }
-        out.push(Output::Commit { number: j.deployment.commits, writes: writes.into_boxed() });
-        j.dirty = false;
+        out.push(Output::Commit { number: journal.deployment.commits, writes: writes.into_boxed() });
+        journal.dirty = false;
     }
     drop(decision.writes);
     for _ in 0..decision.deliveries.len() {
         let delivery = decision.deliveries.pop().expect("admitted delivery count");
-        j.held.push(Held { after: j.deployment.commits, delivery });
+        journal.held.push(Held { after: journal.deployment.commits, delivery });
     }
     Ok(())
 }
+
 /// A cumulative store answer only makes outputs ready. The ready pass
 /// releases one per call; it never drains all of them inside the store step.
-pub fn committed(j: &mut Journal, number: u64) {
-    if j.stopped || number <= j.durable {
+pub fn committed(journal: &mut Journal, number: u64) {
+    if journal.stopped || number <= journal.durable {
         return;
     }
-    assert!(number <= j.deployment.commits, "store answers only issued commits");
-    j.durable = number;
+    assert!(number <= journal.deployment.commits, "store answers only issued commits");
+    journal.durable = number;
 }
 
-pub fn resume(j: &mut Journal, out: &mut Queue<Output>) {
+pub fn resume(journal: &mut Journal, out: &mut Queue<Output>) {
     assert!(out.room() >= 1, "one root ready output reserved");
-    if j.ready() {
-        let held = j.held.pop().expect("ready front exists");
+    if journal.ready() {
+        let held = journal.held.pop().expect("ready front exists");
         out.push(Output::Deliver(held.delivery));
     }
 }
 
-pub fn uncommitted(j: &mut Journal, number: u64, out: &mut Queue<Output>) {
+pub fn uncommitted(journal: &mut Journal, number: u64, out: &mut Queue<Output>) {
     assert!(out.room() >= 1, "one root stop output reserved");
-    if j.stopped || number <= j.durable {
+    if journal.stopped || number <= journal.durable {
         return;
     }
-    assert!(number <= j.deployment.commits, "failure names an issued commit");
-    j.stopped = true;
+    assert!(number <= journal.deployment.commits, "failure names an issued commit");
+    journal.stopped = true;
     // Nothing is released, including outputs tagged with a later commit.
     out.push(Output::Stop);
 }
 
 #[must_use]
-pub fn worst_case(l: &Limits) -> Option<u64> {
-    if l.commits == 0 || l.writes == 0 || l.held < l.deliveries || l.deliveries == 0 {
+pub fn worst_case(limits: &Limits) -> Option<u64> {
+    if limits.commits == 0 || limits.writes == 0 || limits.held < limits.deliveries || limits.deliveries == 0 {
         return None;
     }
-    Queue::<Held>::worst_case(l.held)?
-        .checked_add(List::<Write>::worst_case(l.writes)?.checked_mul(2)?)?
-        .checked_add(Queue::<Delivery>::worst_case(l.deliveries)?)?
-        .checked_add(u64::from(l.writes).checked_mul(2)?.checked_mul(u64::from(l.transcript_bytes))?)?
-        .checked_add(u64::from(l.held).checked_add(u64::from(l.deliveries))?.checked_mul(
-            u64::from(l.result_bytes).max(u64::from(l.transcript_bytes)).checked_add(List::<
+    Queue::<Held>::worst_case(limits.held)?
+        .checked_add(List::<Write>::worst_case(limits.writes)?.checked_mul(2)?)?
+        .checked_add(Queue::<Delivery>::worst_case(limits.deliveries)?)?
+        .checked_add(u64::from(limits.writes).checked_mul(2)?.checked_mul(u64::from(limits.transcript_bytes))?)?
+        .checked_add(u64::from(limits.held).checked_add(u64::from(limits.deliveries))?.checked_mul(
+            u64::from(limits.result_bytes).max(u64::from(limits.transcript_bytes)).checked_add(List::<
                 temper_engine_domain_brief::Section,
             >::worst_case(
-                l.deliveries
+                limits.deliveries
             )?)?,
         )?)
 }

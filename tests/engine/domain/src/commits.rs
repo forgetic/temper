@@ -7,6 +7,7 @@ use temper_engine_domain::{
 
 pub const LIMITS: JournalLimits =
     JournalLimits { commits: 3, held: 12, writes: 4, deliveries: 4, transcript_bytes: 128, result_bytes: 128 };
+
 pub const HEADER: Deployment =
     Deployment { id: [31; 16], tasks: 0, people: 0, sign_ins: 0, messages: 0, runs: 0, calls: 0, commits: 0 };
 
@@ -18,6 +19,7 @@ pub struct Store {
     pub rows: BTreeMap<Key, Record>,
     pub pending: VecDeque<(u64, Box<[Write]>)>,
 }
+
 impl Store {
     #[must_use]
     pub fn new() -> Store {
@@ -27,6 +29,7 @@ impl Store {
             pending: VecDeque::new(),
         }
     }
+
     pub fn apply(&mut self) -> u64 {
         let (number, writes) = self.pending.pop_front().expect("queued transaction");
         assert_eq!(number, self.applied + 1, "fake store commits in order");
@@ -49,6 +52,7 @@ impl Store {
         self.applied = number;
         number
     }
+
     #[must_use]
     pub fn header(&self) -> Deployment {
         let Some(Record::Deployment(header)) = self.rows.get(&Key::Deployment) else {
@@ -56,6 +60,7 @@ impl Store {
         };
         *header
     }
+
     /// Key-range paging, derived directly from the fake store's durable map.
     /// Each page is a separate request and has a cursor only when rows remain.
     #[must_use]
@@ -82,6 +87,7 @@ impl Store {
         (rows, next)
     }
 }
+
 impl Default for Store {
     fn default() -> Self {
         Self::new()
@@ -97,11 +103,13 @@ pub struct Referee {
     deliveries: VecDeque<(u64, u32)>,
     pub judged: u32,
 }
+
 impl Referee {
     #[must_use]
     pub fn new() -> Referee {
         Referee { header: HEADER, writes: VecDeque::new(), deliveries: VecDeque::new(), judged: 0 }
     }
+
     pub fn decision(&mut self, turn: u32, payload: &[u8], writing: bool, fresh: bool) {
         if fresh {
             self.header.tasks += 1;
@@ -124,6 +132,7 @@ impl Referee {
         }
         self.deliveries.push_back((self.header.commits, turn));
     }
+
     /// Check one observation against submitted decisions and durable storage.
     ///
     /// # Errors
@@ -161,11 +170,13 @@ impl Referee {
         self.judged += 1;
         Ok(())
     }
+
     #[must_use]
     pub fn done(&self) -> bool {
         self.writes.is_empty() && self.deliveries.is_empty()
     }
 }
+
 impl Default for Referee {
     fn default() -> Self {
         Self::new()
@@ -180,6 +191,7 @@ pub struct World {
     out: Queue<Output>,
     pub trace: Vec<String>,
 }
+
 impl World {
     #[must_use]
     pub fn new() -> World {
@@ -191,6 +203,7 @@ impl World {
             trace: Vec::new(),
         }
     }
+
     pub fn decision(&mut self, turn: u32, payload: &[u8], writing: bool, fresh: bool) {
         assert!(root::takes(&self.journal, &LIMITS), "world reserves decision before mutation");
         self.referee.decision(turn, payload, writing, fresh);
@@ -220,6 +233,7 @@ impl World {
         root::accept(&mut self.journal, &LIMITS, decision, &mut self.out).expect("reserved whole decision");
         self.observe();
     }
+
     pub fn apply(&mut self, answer: bool) {
         let number = self.store.apply();
         self.trace.push(format!("applied {number}"));
@@ -227,10 +241,12 @@ impl World {
             root::committed(&mut self.journal, number);
         }
     }
+
     pub fn ready(&mut self) {
         root::resume(&mut self.journal, &mut self.out);
         self.observe();
     }
+
     fn observe(&mut self) {
         assert!(self.out.len() <= 1, "one output per ready pass");
         while let Some(output) = self.out.pop() {
@@ -238,6 +254,7 @@ impl World {
             self.referee.observe(&mut self.store, output).expect("independent referee");
         }
     }
+
     pub fn settle(&mut self) {
         while !self.store.pending.is_empty() {
             self.apply(true);
@@ -248,6 +265,7 @@ impl World {
         assert!(self.referee.done(), "all submitted obligations settled");
     }
 }
+
 impl Default for World {
     fn default() -> Self {
         Self::new()

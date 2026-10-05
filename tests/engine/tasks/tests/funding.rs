@@ -1,26 +1,31 @@
 use skein_lib::ReplyTo;
 use temper_engine_domain_tasks::{
-    self as tasks, Accepted, Cause, End, Event, Funder, Key, Numbers, Party, Refusal, Result, Stored,
+    self as tasks, Accepted, Cause, End, Event, Funder, Key, Numbers, Party, Refusal, Stored, TaskResult,
 };
 use temper_engine_tasks_world::{LIMITS, Reply, World, task};
+
 fn send(world: &mut World, build: impl FnOnce(ReplyTo) -> Event) -> Reply {
     let reply_to = world.to();
     let key = reply_to.into_token().raw();
     world.send(build(ReplyTo::new(skein_lib::Token::new(key))));
     world.replies[&key].clone()
 }
+
 fn turn(world: &mut World, task: u64, attempt: u64, turn: u32, read: Option<u64>, cumulative: u64) -> Reply {
     send(world, |reply_to| Event::Turn { reply_to, task, attempt, turn, read, cumulative })
 }
+
 fn end(world: &mut World, task: u64, attempt: u64, end: End, cumulative: u64) -> Reply {
     send(world, |reply_to| Event::Activation { reply_to, task, attempt, end, cause: Cause::Priced { cumulative } })
 }
+
 fn ledger(world: &World, funder: Funder) -> tasks::FundingRecord {
     match world.records[&Key::Ledger(funder)] {
         Stored::Ledger(record) => record,
         Stored::Live(_) | Stored::Ended(_) | Stored::Closure(_) => unreachable!(),
     }
 }
+
 #[test]
 fn finite_pool_carves_reserves_and_posts_to_its_original_period_atomically() {
     let mut w = World::new(71, LIMITS);
@@ -50,7 +55,7 @@ fn finite_pool_carves_reserves_and_posts_to_its_original_period_atomically() {
             &mut w,
             1,
             1,
-            End::Finished { result: Result::Report { words: Box::new([1]) }, cancel_delegates: false },
+            End::Finished { result: TaskResult::Report { words: Box::new([1]) }, cancel_delegates: false },
             30
         ),
         Reply::Acknowledged(Accepted::New)
@@ -60,6 +65,7 @@ fn finite_pool_carves_reserves_and_posts_to_its_original_period_atomically() {
     assert_eq!(ledger(&w, period).numbers.reserved, 200);
     assert_eq!(ledger(&w, Funder::Period { project: 1, period: 2 }).numbers.reserved, 0);
 }
+
 #[test]
 fn priced_admissions_refuse_before_spending_and_adoption_carries_kept_turns() {
     let mut w = World::new(72, LIMITS);
@@ -77,12 +83,13 @@ fn priced_admissions_refuse_before_spending_and_adoption_carries_kept_turns() {
     let before = w.records.clone();
     assert!(matches!(turn(&mut w, 1, 1, 1, None, 20), Reply::Refused(problem) if problem.why == Refusal::Turn));
     assert_eq!(w.records, before);
-    let finish = End::Finished { result: Result::Report { words: Box::new([2]) }, cancel_delegates: false };
+    let finish = End::Finished { result: TaskResult::Report { words: Box::new([2]) }, cancel_delegates: false };
     assert!(matches!(end(&mut w,1,1,finish.clone(),19),Reply::Refused(problem) if problem.why==Refusal::Turn));
     assert_eq!(w.records, before);
     assert_eq!(end(&mut w, 1, 1, finish, 30), Reply::Acknowledged(Accepted::New));
     w.settle(1);
 }
+
 #[test]
 fn priced_invalid_terminals_charge_but_live_delegate_refusals_do_not() {
     let mut w = World::new(73, LIMITS);
@@ -91,7 +98,7 @@ fn priced_invalid_terminals_charge_but_live_delegate_refusals_do_not() {
     w.claim(1, 1);
     let before = w.records.clone();
     assert!(
-        matches!(end(&mut w,1,1,End::Finished { result:Result::Report { words:Box::new([1]) },cancel_delegates:false },20),Reply::Refused(problem) if problem.why==Refusal::LiveDelegates)
+        matches!(end(&mut w,1,1,End::Finished { result:TaskResult::Report { words:Box::new([1]) },cancel_delegates:false },20),Reply::Refused(problem) if problem.why==Refusal::LiveDelegates)
     );
     assert_eq!(w.records, before);
     assert_eq!(
@@ -99,7 +106,7 @@ fn priced_invalid_terminals_charge_but_live_delegate_refusals_do_not() {
             &mut w,
             1,
             1,
-            End::Finished { result: Result::Verdict { code: 99, words: Box::new([1]) }, cancel_delegates: false },
+            End::Finished { result: TaskResult::Verdict { code: 99, words: Box::new([1]) }, cancel_delegates: false },
             20
         ),
         Reply::Acknowledged(Accepted::New)
@@ -108,10 +115,11 @@ fn priced_invalid_terminals_charge_but_live_delegate_refusals_do_not() {
     assert_eq!(w.record(1).tries.invalid, 1);
     w.advance();
     w.claim(1, 2);
-    w.terminal(1, End::Finished { result: Result::Report { words: Box::new([1]) }, cancel_delegates: true });
+    w.terminal(1, End::Finished { result: TaskResult::Report { words: Box::new([1]) }, cancel_delegates: true });
     w.complete_cancel();
     assert_eq!(ledger(&w, Funder::Period { project: 1, period: 0 }).numbers.spent_below, 20);
 }
+
 #[test]
 fn priced_overrun_holds_and_accounting_overflow_refuses_before_acceptance() {
     let mut w = World::new(75, LIMITS);
@@ -136,6 +144,7 @@ fn priced_overrun_holds_and_accounting_overflow_refuses_before_acceptance() {
     assert!(matches!(turn(&mut w,2,2,1,None,6),Reply::Refused(problem) if problem.why==Refusal::Funding));
     assert_eq!(w.records, before);
 }
+
 #[test]
 fn oversized_terminal_does_not_charge_or_copy_and_sources_refuse_at_capacity() {
     let mut w = World::new(77, LIMITS);
@@ -143,7 +152,7 @@ fn oversized_terminal_does_not_charge_or_copy_and_sources_refuse_at_capacity() {
     w.claim(1, 1);
     let before = w.records.clone();
     assert!(
-        matches!(end(&mut w,1,1,End::Finished { result:Result::Report { words:vec![0;1024].into_boxed_slice() },cancel_delegates:false },2),Reply::Refused(problem) if problem.why==Refusal::Contract)
+        matches!(end(&mut w,1,1,End::Finished { result:TaskResult::Report { words:vec![0;1024].into_boxed_slice() },cancel_delegates:false },2),Reply::Refused(problem) if problem.why==Refusal::Contract)
     );
     assert_eq!(w.records, before);
     let mut w = World::new(78, tasks::Limits { funders: 1, ..LIMITS });
@@ -154,6 +163,7 @@ fn oversized_terminal_does_not_charge_or_copy_and_sources_refuse_at_capacity() {
     );
     assert_eq!(w.records, before);
 }
+
 #[test]
 fn independent_referee_detects_omitted_ledger_save_and_actual_posting() {
     use temper_engine_tasks_world::accounting_referee::Accounting;
@@ -172,7 +182,7 @@ fn independent_referee_detects_omitted_ledger_save_and_actual_posting() {
     w.claim(1, 1);
     w.terminal_cause(
         1,
-        End::Finished { result: Result::Report { words: Box::new([1]) }, cancel_delegates: false },
+        End::Finished { result: TaskResult::Report { words: Box::new([1]) }, cancel_delegates: false },
         Cause::Priced { cumulative: 7 },
     );
     let before = w.records.clone();
@@ -185,6 +195,7 @@ fn independent_referee_detects_omitted_ledger_save_and_actual_posting() {
     judge.reset(&before);
     assert!(judge.committed(&bad).is_err());
 }
+
 #[test]
 fn delegate_expense_follows_actual_task_funding_chain_once() {
     let mut w = World::new(81, LIMITS);
@@ -200,7 +211,7 @@ fn delegate_expense_follows_actual_task_funding_chain_once() {
     assert_eq!(turn(&mut w, 2, 2, 1, None, 8), Reply::Turn(Accepted::New));
     w.terminal_cause(
         2,
-        End::Finished { result: Result::Report { words: Box::new([1]) }, cancel_delegates: false },
+        End::Finished { result: TaskResult::Report { words: Box::new([1]) }, cancel_delegates: false },
         Cause::Priced { cumulative: 12 },
     );
     w.settle(2);
@@ -208,7 +219,7 @@ fn delegate_expense_follows_actual_task_funding_chain_once() {
     w.restart();
     w.terminal_cause(
         1,
-        End::Finished { result: Result::Report { words: Box::new([1]) }, cancel_delegates: false },
+        End::Finished { result: TaskResult::Report { words: Box::new([1]) }, cancel_delegates: false },
         Cause::Priced { cumulative: 5 },
     );
     w.settle(1);

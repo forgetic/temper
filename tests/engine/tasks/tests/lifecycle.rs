@@ -1,10 +1,12 @@
 use temper_engine_domain_tasks::{
-    Active, Class, Contract, End, Ending, Event, Hold, Key, Party, Phase, Refusal, Result, Stage, Was,
+    Active, Class, Contract, End, Ending, Event, Hold, Key, Party, Phase, Refusal, Stage, TaskResult, Was,
 };
 use temper_engine_tasks_world::{LIMITS, Reply, World, task};
+
 fn refused(reply: &Reply, why: Refusal) {
     assert!(matches!(reply, Reply::Refused(problem) if problem.why == why), "expected {why:?}, got {reply:?}");
 }
+
 #[test]
 fn batch_is_atomic_and_cycles_and_limits_refuse_at_entrance() {
     for (limits, why) in [
@@ -70,6 +72,7 @@ fn batch_is_atomic_and_cycles_and_limits_refuse_at_entrance() {
         assert_eq!(w.records, before);
     }
 }
+
 #[test]
 fn tree_depth_and_delegate_limits_are_atomic() {
     for (limits, why) in [
@@ -84,6 +87,7 @@ fn tree_depth_and_delegate_limits_are_atomic() {
         assert_eq!(w.records, before);
     }
 }
+
 #[test]
 fn dependency_order_negative_verdict_starts_but_failure_holds() {
     for fail in [false, true] {
@@ -95,9 +99,9 @@ fn dependency_order_negative_verdict_starts_but_failure_holds() {
         assert!(!w.activations.contains(&2));
         w.claim(1, 1);
         let result = if fail {
-            Result::Failure { reason: Box::new([1]) }
+            TaskResult::Failure { reason: Box::new([1]) }
         } else {
-            Result::Verdict { code: 0, words: Box::new([]) }
+            TaskResult::Verdict { code: 0, words: Box::new([]) }
         };
         w.terminal(1, End::Finished { result, cancel_delegates: false });
         assert!(!w.activations.contains(&2));
@@ -114,6 +118,7 @@ fn dependency_order_negative_verdict_starts_but_failure_holds() {
         }
     }
 }
+
 #[test]
 fn every_failure_class_holds_after_its_retry_budget() {
     for class in [Class::Transient, Class::Permanent, Class::Run, Class::Agent, Class::Lost, Class::Invalid] {
@@ -134,6 +139,7 @@ fn every_failure_class_holds_after_its_retry_budget() {
         assert!(w.activations.is_empty());
     }
 }
+
 #[test]
 fn refusals_and_preparation_failure_do_not_spend_tries() {
     let mut w = World::new(5, LIMITS);
@@ -153,6 +159,7 @@ fn refusals_and_preparation_failure_do_not_spend_tries() {
     w.finish(1);
     w.settle(1);
 }
+
 #[test]
 fn held_running_task_waits_for_terminal_and_retains_its_hold() {
     let mut w = World::new(6, LIMITS);
@@ -160,7 +167,7 @@ fn held_running_task_waits_for_terminal_and_retains_its_hold() {
     w.claim(1, 1);
     w.send(Event::Hold { task: 1, why: Hold::Stopped });
     assert!(w.stops.contains(&(1, 1)));
-    w.terminal(1, End::Finished { result: Result::Report { words: Box::new([1]) }, cancel_delegates: false });
+    w.terminal(1, End::Finished { result: TaskResult::Report { words: Box::new([1]) }, cancel_delegates: false });
     assert!(w.closing.is_empty());
     assert!(matches!(w.record(1).phase, Phase::Held { was: Was::Closing(_), .. }));
     let before = w.records.clone();
@@ -176,6 +183,7 @@ fn held_running_task_waits_for_terminal_and_retains_its_hold() {
         }
     ));
 }
+
 #[test]
 fn corrected_finish_cancels_delegates_and_closes_deepest_first() {
     let mut w = World::new(7, LIMITS);
@@ -185,14 +193,14 @@ fn corrected_finish_cancels_delegates_and_closes_deepest_first() {
     w.claim(2, 2);
     w.make(Party::Task(2), vec![task(3, &[])]);
     w.claim(3, 3);
-    let finish = End::Finished { result: Result::Report { words: Box::new([9]) }, cancel_delegates: false };
+    let finish = End::Finished { result: TaskResult::Report { words: Box::new([9]) }, cancel_delegates: false };
     let before = w.records.clone();
     refused(&w.terminal(1, finish), Refusal::LiveDelegates);
     assert_eq!(w.records, before);
     w.observe(temper_engine_tasks_world::referee::Seen::Cancelled { task: 2 });
-    w.terminal(1, End::Finished { result: Result::Report { words: Box::new([1]) }, cancel_delegates: true });
+    w.terminal(1, End::Finished { result: TaskResult::Report { words: Box::new([1]) }, cancel_delegates: true });
     assert!(w.closing.is_empty());
-    w.terminal(3, End::Finished { result: Result::Report { words: Box::new([9]) }, cancel_delegates: false });
+    w.terminal(3, End::Finished { result: TaskResult::Report { words: Box::new([9]) }, cancel_delegates: false });
     w.terminal(2, End::Parked);
     assert_eq!(w.closing.iter().copied().collect::<Vec<_>>(), [3]);
     w.settle(3);
@@ -201,11 +209,12 @@ fn corrected_finish_cancels_delegates_and_closes_deepest_first() {
     assert!(w.closing.contains(&1));
     w.settle(1);
     assert!(
-        matches!(w.results.get(&3),Some(Ending::Cancelled { result:Some(Result::Report { words }),.. }) if words.as_ref()==[9])
+        matches!(w.results.get(&3),Some(Ending::Cancelled { result:Some(TaskResult::Report { words }),.. }) if words.as_ref()==[9])
     );
     assert!(matches!(w.results.get(&1), Some(Ending::Done(_))));
     w.referee.assert_passed(7);
 }
+
 #[test]
 fn lifetime_tree_limit_survives_delegate_ending() {
     let mut w = World::new(8, temper_engine_domain_tasks::Limits { tree_tasks: 2, ..LIMITS });
@@ -217,12 +226,16 @@ fn lifetime_tree_limit_survives_delegate_ending() {
     assert_eq!(w.record(1).made, 2);
     refused(&w.make(Party::Task(1), vec![task(3, &[])]), Refusal::Tree);
 }
+
 #[test]
 fn invalid_results_spend_invalid_tries_and_refused_held_closing_make_is_atomic() {
     let mut w = World::new(9, LIMITS);
     w.make(Party::Person(1), vec![task(1, &[])]);
     w.claim(1, 1);
-    w.terminal(1, End::Finished { result: Result::Verdict { code: 0, words: Box::new([]) }, cancel_delegates: false });
+    w.terminal(
+        1,
+        End::Finished { result: TaskResult::Verdict { code: 0, words: Box::new([]) }, cancel_delegates: false },
+    );
     assert_eq!(w.record(1).tries.invalid, 1);
     w.advance();
     w.claim(1, 2);
@@ -239,6 +252,7 @@ fn invalid_results_spend_invalid_tries_and_refused_held_closing_make_is_atomic()
     w.restart();
     assert_eq!(w.records, before);
 }
+
 #[test]
 fn cancelling_unfinished_dependency_siblings_finishes_in_either_settlement_order() {
     for order in [[2, 3], [3, 2]] {
@@ -249,7 +263,7 @@ fn cancelling_unfinished_dependency_siblings_finishes_in_either_settlement_order
         w.claim(2, 2);
         w.observe(temper_engine_tasks_world::referee::Seen::Cancelled { task: 2 });
         w.observe(temper_engine_tasks_world::referee::Seen::Cancelled { task: 3 });
-        w.terminal(1, End::Finished { result: Result::Report { words: Box::new([1]) }, cancel_delegates: true });
+        w.terminal(1, End::Finished { result: TaskResult::Report { words: Box::new([1]) }, cancel_delegates: true });
         w.terminal(2, End::Parked);
         assert!(w.closing.contains(&2) && w.closing.contains(&3));
         for task in order {

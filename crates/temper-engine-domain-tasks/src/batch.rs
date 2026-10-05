@@ -3,23 +3,27 @@
 use crate::domain::{Domain, record};
 use crate::{Authority, Contract, Executor, Last, Limits, New, Parameter, Party, Phase, Problem, Refusal, Spec, Was};
 use skein_lib::List;
+
 fn problem(task: Option<u64>, why: Refusal) -> Problem {
     Problem { task, why }
 }
-pub(crate) fn check(d: &Domain, l: &Limits, creator: Party, batch: &[New]) -> Result<(), Problem> {
+
+pub(crate) fn check(domain: &Domain, limits: &Limits, creator: Party, batch: &[New]) -> Result<(), Problem> {
     let size = u32::try_from(batch.len()).unwrap_or(u32::MAX);
     if size == 0 {
         return Err(problem(None, Refusal::Empty));
     }
-    if size > l.batch {
+    if size > limits.batch {
         return Err(problem(None, Refusal::Batch));
     }
-    if d.names.len().saturating_add(size) > l.tasks || d.tasks.capacity().saturating_sub(d.tasks.len()) < size {
+    if domain.names.len().saturating_add(size) > limits.tasks
+        || domain.tasks.capacity().saturating_sub(domain.tasks.len()) < size
+    {
         return Err(problem(None, Refusal::Live));
     }
     let parent = match creator {
         Party::Task(number) => {
-            let Some(parent) = record(d, number) else {
+            let Some(parent) = record(domain, number) else {
                 return Err(problem(Some(number), Refusal::Unknown));
             };
             match &parent.phase {
@@ -30,15 +34,15 @@ pub(crate) fn check(d: &Domain, l: &Limits, creator: Party, batch: &[New]) -> Re
                 },
                 Phase::Waiting | Phase::Active(_) => {}
             }
-            if u32::try_from(parent.delegates.len()).unwrap_or(u32::MAX).saturating_add(size) > l.delegates {
+            if u32::try_from(parent.delegates.len()).unwrap_or(u32::MAX).saturating_add(size) > limits.delegates {
                 return Err(problem(Some(number), Refusal::Delegates));
             }
-            if parent.depth.saturating_add(1) > l.depth {
+            if parent.depth.saturating_add(1) > limits.depth {
                 return Err(problem(Some(number), Refusal::Depth));
             }
-            let root = record(d, parent.root).expect("a live task's root is live");
+            let root = record(domain, parent.root).expect("a live task's root is live");
             if match root.made.checked_add(size) {
-                Some(total) => total > l.tree_tasks,
+                Some(total) => total > limits.tree_tasks,
                 None => true,
             } {
                 return Err(problem(Some(number), Refusal::Tree));
@@ -47,25 +51,26 @@ pub(crate) fn check(d: &Domain, l: &Limits, creator: Party, batch: &[New]) -> Re
         }
         Party::Person(_) | Party::Deployment { .. } => None,
     };
-    check_members(d, l, creator, batch, parent)?;
-    if !crate::funders::can_reserve(d, creator, batch) {
+    check_members(domain, limits, creator, batch, parent)?;
+    if !crate::funders::can_reserve(domain, creator, batch) {
         return Err(problem(None, Refusal::Funding));
     }
-    if !acyclic(d, l, creator, batch) {
+    if !acyclic(domain, limits, creator, batch) {
         return Err(problem(Some(batch.first().expect("nonempty batch admitted").number), Refusal::Cycle));
     }
     Ok(())
 }
+
 fn check_members(
-    d: &Domain,
-    l: &Limits,
+    domain: &Domain,
+    limits: &Limits,
     creator: Party,
     batch: &[New],
     parent: Option<&crate::TaskRecord>,
 ) -> Result<(), Problem> {
     for (at, new) in batch.iter().enumerate() {
         let number = Some(new.number);
-        if d.names.contains_key(&new.number) {
+        if domain.names.contains_key(&new.number) {
             return Err(problem(number, Refusal::Duplicate));
         }
         for earlier in batch.iter().take(at) {
@@ -83,8 +88,8 @@ fn check_members(
             Party::Deployment { .. } | Party::Task(_) | Party::Person(_) => {}
         }
         let mut in_project = 0_u32;
-        for (_, id) in &d.names {
-            if d.tasks.get(*id).expect("name indexes live task").record.project == new.project {
+        for (_, id) in &domain.names {
+            if domain.tasks.get(*id).expect("name indexes live task").record.project == new.project {
                 in_project = in_project.saturating_add(1);
             }
         }
@@ -93,13 +98,13 @@ fn check_members(
                 in_project = in_project.saturating_add(1);
             }
         }
-        if in_project > l.project_tasks {
+        if in_project > limits.project_tasks {
             return Err(problem(number, Refusal::Project));
         }
         match new.executor {
             Executor::Agent { charter } => {
                 let mut known = false;
-                for configured in &d.charters {
+                for configured in &domain.charters {
                     if *configured == charter {
                         known = true;
                     }
@@ -109,20 +114,20 @@ fn check_members(
                 }
             }
         }
-        if !valid_spec(l, &new.spec) {
+        if !valid_spec(limits, &new.spec) {
             return Err(problem(number, Refusal::Spec));
         }
-        if !valid_contract(l, &new.contract) {
+        if !valid_contract(limits, &new.contract) {
             return Err(problem(number, Refusal::Contract));
         }
-        if !valid_authority(l, &new.authority) {
+        if !valid_authority(limits, &new.authority) {
             return Err(problem(number, Refusal::AuthorityShape));
         }
         // Historical result admission belongs to an actual root input route.
         if !new.spec.inputs.is_empty() {
             return Err(problem(number, Refusal::Inputs));
         }
-        if new.dependencies.len() > usize::try_from(l.dependencies).expect("u32 fits usize") {
+        if new.dependencies.len() > usize::try_from(limits.dependencies).expect("u32 fits usize") {
             return Err(problem(number, Refusal::Dependencies));
         }
         for (index, dependency) in new.dependencies.iter().enumerate() {
@@ -139,7 +144,7 @@ fn check_members(
             }
             if !known && let Some(parent) = parent {
                 for delegate in &parent.delegates {
-                    if delegate == dependency && d.names.contains_key(dependency) {
+                    if delegate == dependency && domain.names.contains_key(dependency) {
                         known = true;
                     }
                 }
@@ -151,6 +156,7 @@ fn check_members(
     }
     Ok(())
 }
+
 pub(crate) fn contains(numbers: &[u64], number: u64) -> bool {
     for candidate in numbers {
         if *candidate == number {
@@ -159,9 +165,10 @@ pub(crate) fn contains(numbers: &[u64], number: u64) -> bool {
     }
     false
 }
-pub(crate) fn valid_spec(l: &Limits, spec: &Spec) -> bool {
-    if spec.parameters.len() > usize::try_from(l.parameters).expect("u32 fits usize")
-        || spec.inputs.len() > usize::try_from(l.inputs).expect("u32 fits usize")
+
+pub(crate) fn valid_spec(limits: &Limits, spec: &Spec) -> bool {
+    if spec.parameters.len() > usize::try_from(limits.parameters).expect("u32 fits usize")
+        || spec.inputs.len() > usize::try_from(limits.inputs).expect("u32 fits usize")
     {
         return false;
     }
@@ -184,17 +191,18 @@ pub(crate) fn valid_spec(l: &Limits, spec: &Spec) -> bool {
             Parameter::Number { .. } | Parameter::Resource { .. } => {}
         }
     }
-    bytes <= usize::try_from(l.spec_bytes).expect("u32 fits usize")
+    bytes <= usize::try_from(limits.spec_bytes).expect("u32 fits usize")
 }
-pub(crate) fn valid_contract(l: &Limits, contract: &Contract) -> bool {
+
+pub(crate) fn valid_contract(limits: &Limits, contract: &Contract) -> bool {
     match contract {
-        Contract::Report { words } | Contract::Change { words, .. } => *words <= l.result_bytes,
+        Contract::Report { words } | Contract::Change { words, .. } => *words <= limits.result_bytes,
         Contract::Verdict { choices } => {
-            if choices.is_empty() || choices.len() > usize::try_from(l.contract_choices).expect("u32 fits usize") {
+            if choices.is_empty() || choices.len() > usize::try_from(limits.contract_choices).expect("u32 fits usize") {
                 return false;
             }
             for (at, choice) in choices.iter().enumerate() {
-                if choice.words > l.result_bytes {
+                if choice.words > limits.result_bytes {
                     return false;
                 }
                 for earlier in choices.iter().take(at) {
@@ -207,15 +215,16 @@ pub(crate) fn valid_contract(l: &Limits, contract: &Contract) -> bool {
         }
     }
 }
-pub(crate) fn valid_authority(l: &Limits, value: &Authority) -> bool {
-    if value.grants.len() > usize::try_from(l.authority_grants).expect("u32 fits usize")
-        || value.delegation.kinds.len() > usize::try_from(l.executor_kinds).expect("u32 fits usize")
+
+pub(crate) fn valid_authority(limits: &Limits, value: &Authority) -> bool {
+    if value.grants.len() > usize::try_from(limits.authority_grants).expect("u32 fits usize")
+        || value.delegation.kinds.len() > usize::try_from(limits.executor_kinds).expect("u32 fits usize")
     {
         return false;
     }
     let mut bytes = 0_usize;
     for grant in &value.grants {
-        if grant.pattern.segments.len() > usize::try_from(l.authority_segments).expect("u32 fits usize") {
+        if grant.pattern.segments.len() > usize::try_from(limits.authority_segments).expect("u32 fits usize") {
             return false;
         }
         for segment in &grant.pattern.segments {
@@ -234,25 +243,25 @@ pub(crate) fn valid_authority(l: &Limits, value: &Authority) -> bool {
             }
         }
     }
-    bytes <= usize::try_from(l.authority_bytes).expect("u32 fits usize")
+    bytes <= usize::try_from(limits.authority_bytes).expect("u32 fits usize")
 }
 
 /// Include the delegation edges added to an existing creator, as well as all
 /// immutable existing dependencies: a reference to an ancestor can otherwise
 /// create a wait cycle without a cycle among the new tasks themselves.
-pub(crate) fn acyclic(d: &Domain, l: &Limits, creator: Party, batch: &[New]) -> bool {
-    let mut ordered = List::with_capacity(l.tasks);
-    let total = d.names.len().saturating_add(u32::try_from(batch.len()).unwrap_or(u32::MAX));
+pub(crate) fn acyclic(domain: &Domain, limits: &Limits, creator: Party, batch: &[New]) -> bool {
+    let mut ordered = List::with_capacity(limits.tasks);
+    let total = domain.names.len().saturating_add(u32::try_from(batch.len()).unwrap_or(u32::MAX));
     for _ in 0..total {
         let mut next = None;
-        for (number, _) in &d.names {
+        for (number, _) in &domain.names {
             if contains(ordered.as_slice(), *number) {
                 continue;
             }
-            let task = record(d, *number).expect("indexed task live");
+            let task = record(domain, *number).expect("indexed task live");
             let mut ready = true;
             for dependency in &task.dependencies {
-                if d.names.contains_key(dependency) && !contains(ordered.as_slice(), *dependency) {
+                if domain.names.contains_key(dependency) && !contains(ordered.as_slice(), *dependency) {
                     ready = false;
                 }
             }
@@ -280,7 +289,7 @@ pub(crate) fn acyclic(d: &Domain, l: &Limits, creator: Party, batch: &[New]) -> 
                 }
                 let mut ready = true;
                 for dependency in &new.dependencies {
-                    if (d.names.contains_key(dependency) || batch_has(batch, *dependency))
+                    if (domain.names.contains_key(dependency) || batch_has(batch, *dependency))
                         && !contains(ordered.as_slice(), *dependency)
                     {
                         ready = false;
@@ -299,6 +308,7 @@ pub(crate) fn acyclic(d: &Domain, l: &Limits, creator: Party, batch: &[New]) -> 
     }
     true
 }
+
 fn batch_has(batch: &[New], number: u64) -> bool {
     for new in batch {
         if new.number == number {
