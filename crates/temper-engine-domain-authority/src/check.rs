@@ -1,0 +1,683 @@
+//! Pure action checks and proposal needs (domain/authority.md, sections 8–9).
+
+use alloc::boxed::Box;
+
+use skein_lib::{List, Queue, Wall};
+
+use crate::limits::{authority_within, name_within, within};
+use crate::order::{differences, fit_lacks};
+use crate::{
+    Action, Answer, Authority, BatchAsk, Budget, Call, CallAsk, Checked, Delegate, Delegation, Domain, Effect,
+    EffectAsk, Fact, Finding, Grant, Holder, Last, Limits, PersonAsk, PersonRequest, Policy, ProposalKind, RequestKind,
+    Requirement, Role, RunAsk, Scopes, Source, Status, Tools, Writer, at_most, carve, grant_covers, left, max_out,
+    pattern_covers,
+};
+
+fn room(domain: &Domain, why: &Queue<Finding>) {
+    let count = max_out(domain.limits()).expect("domain validates its output bound");
+    assert!(why.room() >= count, "caller reserves every finding before a check");
+}
+
+fn find(answer: &mut Answer, why: &mut Queue<Finding>, strict: Answer, finding: Finding) {
+    *answer = (*answer).max(strict);
+    why.push(finding);
+}
+
+fn refuse(why: &mut Queue<Finding>, finding: Finding) -> Answer {
+    why.push(finding);
+    Answer::Refuse
+}
+
+fn checked(answer: Answer, numbers: Option<crate::Numbers>) -> Checked {
+    Checked { answer, numbers: if answer == Answer::Allow { numbers } else { None } }
+}
+
+fn ceilings(domain: &Domain, policy: &Policy, authority: &Authority, answer: &mut Answer, why: &mut Queue<Finding>) {
+    for source in [Source::Project, Source::Deployment] {
+        let ceiling = match source {
+            Source::Project => &policy.ceiling,
+            Source::Deployment => &domain.rules().ceiling,
+            Source::Task | Source::Role => unreachable!("only ceiling sources are iterated"),
+        };
+        let lacks = differences(
+            authority,
+            ceiling,
+            ceiling.delegation.tasks,
+            ceiling.delegation.depth,
+            ceiling.budget.spend,
+            &domain.rules().implies,
+        );
+        if !lacks.is_empty() {
+            find(answer, why, Answer::Refuse, Finding::Authority { source, lacks });
+        }
+    }
+}
+
+fn delegates_within(tasks: &[Delegate], limits: &Limits) -> bool {
+    if !within(tasks.len(), limits.batch) {
+        return false;
+    }
+    for task in tasks {
+        if !authority_within(&task.authority, limits) {
+            return false;
+        }
+    }
+    true
+}
+
+fn effect_within(effect: &Effect, limits: &Limits) -> bool {
+    name_within(&effect.name, limits)
+}
+
+/// Batch reservations are all-or-nothing. Every direct child consumes one
+/// lifetime task slot in addition to the capacity allotted below that child.
+#[must_use]
+pub fn check_batch(domain: &Domain, ask: &BatchAsk, why: &mut Queue<Finding>) -> Checked {
+    room(domain, why);
+    if !authority_within(&ask.creator, domain.limits()) || !delegates_within(&ask.tasks, domain.limits()) {
+        return checked(refuse(why, Finding::Oversized), None);
+    }
+    let Some(policy) = domain.policy(ask.project) else {
+        return checked(refuse(why, Finding::UnknownProject), None);
+    };
+    batch(domain, policy, &ask.creator, ask.numbers, ask.tasks_left, &ask.tasks, Source::Task, why)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a batch check borrows its values without allocating an intermediate ask"
+)]
+fn batch(
+    domain: &Domain,
+    policy: &Policy,
+    creator: &Authority,
+    numbers: crate::Numbers,
+    tasks_left: u32,
+    tasks: &[Delegate],
+    source: Source,
+    why: &mut Queue<Finding>,
+) -> Checked {
+    let task_answer = if source == Source::Task { Answer::Propose } else { Answer::Refuse };
+    let mut answer = Answer::Allow;
+    if numbers.spent.checked_add(numbers.spent_below).is_none() {
+        find(&mut answer, why, Answer::Refuse, Finding::Arithmetic);
+    }
+    let mut spend = Some(0_u64);
+    let mut count = Some(0_u32);
+    for task in tasks {
+        let lacks = fit_lacks(&task.authority, creator, &numbers, tasks_left, &domain.rules().implies);
+        if !lacks.is_empty() {
+            find(&mut answer, why, task_answer, Finding::Authority { source, lacks });
+        }
+        ceilings(domain, policy, &task.authority, &mut answer, why);
+        for origin in [source, Source::Project, Source::Deployment] {
+            let kinds = match origin {
+                Source::Task | Source::Role => &creator.delegation.kinds,
+                Source::Project => &policy.ceiling.delegation.kinds,
+                Source::Deployment => &domain.rules().ceiling.delegation.kinds,
+            };
+            if !kinds.contains(&task.executor) {
+                let strict = if origin == source { task_answer } else { Answer::Refuse };
+                find(&mut answer, why, strict, Finding::Executor { source: origin });
+            }
+        }
+        spend = match spend {
+            Some(sum) => sum.checked_add(task.authority.budget.spend),
+            None => None,
+        };
+        count = match count {
+            Some(sum) => match task.authority.delegation.tasks.checked_add(1) {
+                Some(capacity) => sum.checked_add(capacity),
+                None => None,
+            },
+            None => None,
+        };
+    }
+    let Some(spend) = spend else {
+        find(&mut answer, why, Answer::Refuse, Finding::Arithmetic);
+        return checked(answer, None);
+    };
+    let Some(count) = count else {
+        find(&mut answer, why, Answer::Refuse, Finding::Arithmetic);
+        return checked(answer, None);
+    };
+    for origin in [source, Source::Project, Source::Deployment] {
+        let ceiling = match origin {
+            Source::Task | Source::Role => creator,
+            Source::Project => &policy.ceiling,
+            Source::Deployment => &domain.rules().ceiling,
+        };
+        let capacity =
+            if origin == source { tasks_left.min(ceiling.delegation.tasks) } else { ceiling.delegation.tasks };
+        let budget = if origin == source { left(numbers).min(ceiling.budget.spend) } else { ceiling.budget.spend };
+        let strict = if origin == source { task_answer } else { Answer::Refuse };
+        if count > capacity {
+            find(&mut answer, why, strict, Finding::Tasks { source: origin });
+        }
+        if spend > budget {
+            find(&mut answer, why, strict, Finding::Spend { source: origin });
+        }
+    }
+    let reserved = if answer == Answer::Allow {
+        match carve(numbers, &[spend]) {
+            Some(numbers) => Some(numbers),
+            None => {
+                find(&mut answer, why, Answer::Refuse, Finding::Arithmetic);
+                None
+            }
+        }
+    } else {
+        None
+    };
+    checked(answer, reserved)
+}
+
+fn has_grant(authority: &Authority, effect: &Effect, domain: &Domain) -> bool {
+    for grant in &authority.grants {
+        if grant_covers(grant, effect.connector, effect.kind, &effect.name, &domain.rules().implies) {
+            return true;
+        }
+    }
+    false
+}
+
+fn grants(
+    domain: &Domain,
+    policy: &Policy,
+    authority: &Authority,
+    effect: &Effect,
+    answer: &mut Answer,
+    why: &mut Queue<Finding>,
+) {
+    for source in [Source::Task, Source::Project, Source::Deployment] {
+        let holder = match source {
+            Source::Task => authority,
+            Source::Project => &policy.ceiling,
+            Source::Deployment => &domain.rules().ceiling,
+            Source::Role => unreachable!("only task and ceiling sources are iterated"),
+        };
+        if !has_grant(holder, effect, domain) {
+            let strict = if source == Source::Task { Answer::Propose } else { Answer::Refuse };
+            find(answer, why, strict, Finding::Grant { source });
+        }
+    }
+}
+
+fn requirements(
+    requirements: &[Requirement],
+    effect: &Effect,
+    facts: &[Fact],
+    answer: &mut Answer,
+    why: &mut Queue<Finding>,
+) {
+    for requirement in requirements {
+        if requirement.connector != effect.connector
+            || requirement.kind != effect.kind
+            || !pattern_covers(&requirement.pattern, &effect.name)
+        {
+            continue;
+        }
+        for kind in &requirement.facts {
+            let mut passed = false;
+            let mut pending = false;
+            let mut failed = false;
+            for fact in facts {
+                if fact.connector == effect.connector
+                    && fact.kind == *kind
+                    && fact.name == effect.name
+                    && fact.state == effect.state
+                {
+                    match fact.status {
+                        Status::Unknown | Status::Pending => pending = true,
+                        Status::Passed => passed = true,
+                        Status::Failed => failed = true,
+                    }
+                }
+            }
+            if failed {
+                find(answer, why, Answer::Refuse, Finding::Failed { connector: effect.connector, fact: *kind });
+            } else if pending || !passed {
+                find(answer, why, Answer::Wait, Finding::Required { connector: effect.connector, fact: *kind });
+            }
+        }
+    }
+}
+
+#[must_use]
+pub fn check_effect(domain: &Domain, ask: &EffectAsk, facts: &[Fact], why: &mut Queue<Finding>) -> Answer {
+    room(domain, why);
+    if !authority_within(&ask.authority, domain.limits())
+        || !effect_within(&ask.effect, domain.limits())
+        || !within(facts.len(), domain.limits().facts)
+    {
+        return refuse(why, Finding::Oversized);
+    }
+    for fact in facts {
+        if !name_within(&fact.name, domain.limits()) {
+            return refuse(why, Finding::Oversized);
+        }
+    }
+    let Some(policy) = domain.policy(ask.project) else {
+        return refuse(why, Finding::UnknownProject);
+    };
+    let mut answer = Answer::Allow;
+    grants(domain, policy, &ask.authority, &ask.effect, &mut answer, why);
+    requirements(&domain.rules().requirements, &ask.effect, facts, &mut answer, why);
+    requirements(&policy.requirements, &ask.effect, facts, &mut answer, why);
+    answer
+}
+
+#[must_use]
+pub fn check_run(domain: &Domain, ask: &RunAsk, why: &mut Queue<Finding>) -> Answer {
+    room(domain, why);
+    if !authority_within(&ask.authority, domain.limits())
+        || !within(ask.accounts.len(), domain.limits().accounts)
+        || !within(ask.writes.len(), domain.limits().writes)
+    {
+        return refuse(why, Finding::Oversized);
+    }
+    for write in &ask.writes {
+        if !effect_within(&write.effect, domain.limits()) {
+            return refuse(why, Finding::Oversized);
+        }
+    }
+    let Some(policy) = domain.policy(ask.project) else {
+        return refuse(why, Finding::UnknownProject);
+    };
+    let mut answer = Answer::Allow;
+    ceilings(domain, policy, &ask.authority, &mut answer, why);
+    if ask.numbers.spent.checked_add(ask.numbers.spent_below).is_none() {
+        find(&mut answer, why, Answer::Refuse, Finding::Arithmetic);
+    }
+    if ask.budget <= domain.rules().minimum_run_spend || ask.budget > left(ask.numbers) {
+        find(&mut answer, why, Answer::Wait, Finding::RunBudget);
+    }
+    if ask.budget > domain.rules().maximum_run_spend || ask.budget > ask.authority.budget.spend {
+        find(&mut answer, why, Answer::Refuse, Finding::RunCap);
+    }
+    if let Some(deadline) = ask.authority.budget.deadline
+        && ask.wall > deadline
+    {
+        find(&mut answer, why, Answer::Wait, Finding::Deadline);
+    }
+    for usable in &ask.accounts {
+        if !usable {
+            find(&mut answer, why, Answer::Wait, Finding::Account);
+        }
+    }
+    for write in &ask.writes {
+        grants(domain, policy, &ask.authority, &write.effect, &mut answer, why);
+        match write.held {
+            Writer::Task | Writer::Ancestor => {}
+            Writer::Pending | Writer::Other => find(&mut answer, why, Answer::Wait, Finding::Writer),
+        }
+    }
+    answer
+}
+
+#[must_use]
+pub fn check_call(domain: &Domain, ask: &CallAsk, why: &mut Queue<Finding>) -> Answer {
+    room(domain, why);
+    if !authority_within(&ask.authority, domain.limits()) || ask.family.0.count_ones() != 1 {
+        return refuse(why, Finding::Oversized);
+    }
+    match &ask.call {
+        Call::Read(effect) => {
+            if !effect_within(effect, domain.limits()) {
+                return refuse(why, Finding::Oversized);
+            }
+        }
+        Call::Note(scopes) => {
+            if scopes.0.count_ones() != 1 || scopes.0 & !15 != 0 {
+                return refuse(why, Finding::Oversized);
+            }
+        }
+        Call::Tool | Call::Message { .. } => {}
+    }
+    let Some(policy) = domain.policy(ask.project) else {
+        return refuse(why, Finding::UnknownProject);
+    };
+    let mut answer = Answer::Allow;
+    for source in [Source::Task, Source::Project, Source::Deployment] {
+        let holder = match source {
+            Source::Task => &ask.authority,
+            Source::Project => &policy.ceiling,
+            Source::Deployment => &domain.rules().ceiling,
+            Source::Role => unreachable!("only task and ceiling sources are iterated"),
+        };
+        if ask.family.0 & !holder.tools.0 != 0 {
+            let strict = if source == Source::Task { Answer::Propose } else { Answer::Refuse };
+            find(&mut answer, why, strict, Finding::Tool);
+        }
+    }
+    match &ask.call {
+        Call::Tool => {}
+        Call::Read(effect) => grants(domain, policy, &ask.authority, effect, &mut answer, why),
+        Call::Message { referenced } => {
+            if !referenced {
+                find(&mut answer, why, Answer::Refuse, Finding::Reference);
+            }
+        }
+        Call::Note(scopes) => {
+            for source in [Source::Task, Source::Project, Source::Deployment] {
+                let holder = match source {
+                    Source::Task => &ask.authority,
+                    Source::Project => &policy.ceiling,
+                    Source::Deployment => &domain.rules().ceiling,
+                    Source::Role => unreachable!("only task and ceiling sources are iterated"),
+                };
+                if scopes.0 & !holder.notes.0 != 0 {
+                    let strict = if source == Source::Task { Answer::Propose } else { Answer::Refuse };
+                    find(&mut answer, why, strict, Finding::Scope { source });
+                }
+            }
+        }
+    }
+    answer
+}
+
+fn action_within(action: &Action, limits: &Limits) -> bool {
+    match action {
+        Action::Batch(tasks) => delegates_within(tasks, limits),
+        Action::Effect(effect) => effect_within(effect, limits),
+        Action::Widen(authority) | Action::Amend(authority) => authority_within(authority, limits),
+        Action::Escalate { release } => match release {
+            Some(authority) => authority_within(authority, limits),
+            None => true,
+        },
+    }
+}
+
+fn proposal_kind(action: &Action) -> ProposalKind {
+    match action {
+        Action::Batch(_) => ProposalKind::Batch,
+        Action::Effect(_) => ProposalKind::Effect,
+        Action::Widen(_) => ProposalKind::Widen,
+        Action::Amend(_) => ProposalKind::Amend,
+        Action::Escalate { .. } => ProposalKind::Escalation,
+    }
+}
+
+fn give(
+    domain: &Domain,
+    policy: &Policy,
+    role: &Role,
+    ask: &PersonAsk,
+    authority: &Authority,
+    why: &mut Queue<Finding>,
+) -> Checked {
+    let mut answer = Answer::Allow;
+    let lacks = differences(
+        authority,
+        &role.authority,
+        ask.tasks_left.min(role.authority.delegation.tasks),
+        role.authority.delegation.depth,
+        left(ask.pool).min(role.authority.budget.spend),
+        &domain.rules().implies,
+    );
+    if !lacks.is_empty() {
+        find(&mut answer, why, Answer::Refuse, Finding::Authority { source: Source::Role, lacks });
+    }
+    ceilings(domain, policy, authority, &mut answer, why);
+    let numbers = match carve(ask.pool, &[authority.budget.spend]) {
+        Some(numbers) => Some(numbers),
+        None => {
+            find(&mut answer, why, Answer::Refuse, Finding::Arithmetic);
+            None
+        }
+    };
+    checked(answer, numbers)
+}
+
+/// A person's request checks their role and funding. An accepted effect
+/// must additionally pass `check_effect` on pinned facts in the same commit.
+#[must_use]
+pub fn check_request(domain: &Domain, ask: &PersonAsk, why: &mut Queue<Finding>) -> Checked {
+    room(domain, why);
+    let admitted = match &ask.request {
+        PersonRequest::Create(tasks) => delegates_within(tasks, domain.limits()),
+        PersonRequest::Allot(authority) | PersonRequest::Amend(authority) | PersonRequest::Move(authority) => {
+            authority_within(authority, domain.limits())
+        }
+        PersonRequest::Accept(action) => action_within(action, domain.limits()),
+        PersonRequest::Cancel | PersonRequest::Release | PersonRequest::Watch | PersonRequest::Policy => true,
+    };
+    if !admitted {
+        return checked(refuse(why, Finding::Oversized), None);
+    }
+    let Some(policy) = domain.policy(ask.project) else {
+        return checked(refuse(why, Finding::UnknownProject), None);
+    };
+    let Some(role) = domain.role(ask.project, ask.role) else {
+        return checked(refuse(why, Finding::UnknownRole), None);
+    };
+    let kind = match &ask.request {
+        PersonRequest::Create(_) => RequestKind::Create,
+        PersonRequest::Allot(_) => RequestKind::Allot,
+        PersonRequest::Accept(_) => RequestKind::Accept,
+        PersonRequest::Amend(_) => RequestKind::Amend,
+        PersonRequest::Move(_) => RequestKind::Move,
+        PersonRequest::Cancel => RequestKind::Cancel,
+        PersonRequest::Release => RequestKind::Release,
+        PersonRequest::Watch => RequestKind::Watch,
+        PersonRequest::Policy => RequestKind::Policy,
+    };
+    if !role.requests.allows(kind) {
+        return checked(refuse(why, Finding::Unpermitted), None);
+    }
+    if needs_funding(&ask.request) && ask.pool.budget > role.period_spend {
+        return checked(refuse(why, Finding::PeriodSpend), None);
+    }
+    match &ask.request {
+        PersonRequest::Create(tasks) => {
+            if !delegates_within(tasks, domain.limits()) {
+                return checked(refuse(why, Finding::Oversized), None);
+            }
+            batch(domain, policy, &role.authority, ask.pool, ask.tasks_left, tasks, Source::Role, why)
+        }
+        PersonRequest::Allot(authority) | PersonRequest::Amend(authority) | PersonRequest::Move(authority) => {
+            if !authority_within(authority, domain.limits()) {
+                return checked(refuse(why, Finding::Oversized), None);
+            }
+            give(domain, policy, role, ask, authority, why)
+        }
+        PersonRequest::Accept(action) => {
+            if !action_within(action, domain.limits()) {
+                return checked(refuse(why, Finding::Oversized), None);
+            }
+            if !role.decides.allows(proposal_kind(action)) {
+                return checked(refuse(why, Finding::Undecidable), None);
+            }
+            match action {
+                Action::Batch(tasks) => {
+                    batch(domain, policy, &role.authority, ask.pool, ask.tasks_left, tasks, Source::Role, why)
+                }
+                Action::Effect(effect) => {
+                    let mut answer = Answer::Allow;
+                    if !has_grant(&role.authority, effect, domain) {
+                        find(&mut answer, why, Answer::Refuse, Finding::Grant { source: Source::Role });
+                    }
+                    if !has_grant(&policy.ceiling, effect, domain) {
+                        find(&mut answer, why, Answer::Refuse, Finding::Grant { source: Source::Project });
+                    }
+                    if !has_grant(&domain.rules().ceiling, effect, domain) {
+                        find(&mut answer, why, Answer::Refuse, Finding::Grant { source: Source::Deployment });
+                    }
+                    checked(answer, Some(ask.pool))
+                }
+                Action::Widen(authority) | Action::Amend(authority) => give(domain, policy, role, ask, authority, why),
+                Action::Escalate { release } => match release {
+                    Some(authority) => give(domain, policy, role, ask, authority, why),
+                    None => checked(Answer::Allow, Some(ask.pool)),
+                },
+            }
+        }
+        PersonRequest::Cancel | PersonRequest::Release | PersonRequest::Watch | PersonRequest::Policy => {
+            checked(Answer::Allow, Some(ask.pool))
+        }
+    }
+}
+
+fn batch_has_spend(tasks: &[Delegate]) -> bool {
+    for task in tasks {
+        if task.authority.budget.spend != 0 {
+            return true;
+        }
+    }
+    false
+}
+
+fn needs_funding(request: &PersonRequest) -> bool {
+    match request {
+        PersonRequest::Create(tasks) => batch_has_spend(tasks),
+        PersonRequest::Allot(authority) | PersonRequest::Amend(authority) | PersonRequest::Move(authority) => {
+            authority.budget.spend != 0
+        }
+        PersonRequest::Accept(action) => match action {
+            Action::Batch(tasks) => batch_has_spend(tasks),
+            Action::Widen(authority) | Action::Amend(authority) => authority.budget.spend != 0,
+            Action::Effect(_) => false,
+            Action::Escalate { release } => match release {
+                Some(authority) => authority.budget.spend != 0,
+                None => false,
+            },
+        },
+        PersonRequest::Cancel | PersonRequest::Release | PersonRequest::Watch | PersonRequest::Policy => false,
+    }
+}
+
+fn empty() -> Authority {
+    Authority {
+        tools: Tools(0),
+        grants: Box::new([]),
+        delegation: Delegation { kinds: Box::new([]), tasks: 0, depth: 0 },
+        budget: Budget { spend: 0, deadline: Some(Wall::EPOCH) },
+        notes: Scopes(0),
+    }
+}
+
+/// Construct an owned least value, bounded by the caller-admitted action.
+/// Unlike the borrowed checks, constructing this result copies owned bytes.
+#[must_use]
+pub fn needs(action: &Action) -> Option<Authority> {
+    match action {
+        Action::Batch(tasks) => batch_needs(tasks),
+        Action::Effect(effect) => {
+            let mut authority = empty();
+            authority.grants = Box::new([Grant {
+                connector: effect.connector,
+                kind: effect.kind,
+                pattern: crate::Pattern { segments: effect.name.segments.clone(), last: Last::None },
+            }]);
+            Some(authority)
+        }
+        Action::Widen(authority) | Action::Amend(authority) => Some(authority.clone()),
+        Action::Escalate { release } => match release {
+            Some(authority) => Some(authority.clone()),
+            None => Some(empty()),
+        },
+    }
+}
+
+#[expect(clippy::manual_map, reason = "the foundation's step subset uses exhaustive matching without closures")]
+fn batch_needs(tasks: &[Delegate]) -> Option<Authority> {
+    let mut grant_count = 0_u32;
+    let mut kind_count = 0_u32;
+    for task in tasks {
+        grant_count = grant_count.checked_add(u32::try_from(task.authority.grants.len()).ok()?)?;
+        kind_count =
+            kind_count.checked_add(u32::try_from(task.authority.delegation.kinds.len()).ok()?.checked_add(1)?)?;
+    }
+    let mut grants = List::with_capacity(grant_count);
+    let mut kinds = List::with_capacity(kind_count);
+    let mut authority = empty();
+    for task in tasks {
+        let child = &task.authority;
+        authority.tools.0 |= child.tools.0;
+        authority.notes.0 |= child.notes.0;
+        authority.delegation.tasks = authority.delegation.tasks.checked_add(child.delegation.tasks.checked_add(1)?)?;
+        authority.delegation.depth = authority.delegation.depth.max(child.delegation.depth.checked_add(1)?);
+        authority.budget.spend = authority.budget.spend.checked_add(child.budget.spend)?;
+        authority.budget.deadline = match authority.budget.deadline {
+            Some(so_far) => match child.budget.deadline {
+                Some(deadline) => Some(so_far.max(deadline)),
+                None => None,
+            },
+            None => None,
+        };
+        for grant in &child.grants {
+            grants.push(grant.clone()).expect("all child grants were counted");
+        }
+        kinds.push(task.executor).expect("every child executor was counted");
+        for kind in &child.delegation.kinds {
+            kinds.push(*kind).expect("all delegated executors were counted");
+        }
+    }
+    authority.grants = grants.into_boxed();
+    authority.delegation.kinds = kinds.into_boxed();
+    Some(authority)
+}
+
+fn needed_within(authority: &Authority, limits: &Limits) -> bool {
+    let mut aggregate = *limits;
+    let count = limits.batch.max(1);
+    let Some(grants) = limits.grants.checked_mul(count) else {
+        return false;
+    };
+    let Some(one) = limits.executors.checked_add(1) else {
+        return false;
+    };
+    let Some(executors) = one.checked_mul(count) else {
+        return false;
+    };
+    aggregate.grants = grants;
+    aggregate.executors = executors;
+    authority_within(authority, &aggregate)
+}
+
+/// The caller supplies an eligible ancestor/role and its verified distance
+/// to the proposer. The action's needs already include its creation depth.
+#[must_use]
+pub fn covers(domain: &Domain, needed: &Authority, holder: &Holder, below: u32) -> bool {
+    if !needed_within(needed, domain.limits()) {
+        return false;
+    }
+    let (project, authority, numbers, tasks_left) = match holder {
+        Holder::Task { project, authority, numbers, tasks_left } => (*project, authority, *numbers, *tasks_left),
+        Holder::Person { project, role, proposal, pool, tasks_left } => {
+            let Some(role) = domain.role(*project, *role) else {
+                return false;
+            };
+            if !role.requests.allows(RequestKind::Accept)
+                || !role.decides.allows(*proposal)
+                || (needed.budget.spend != 0 && pool.budget > role.period_spend)
+            {
+                return false;
+            }
+            (*project, &role.authority, *pool, *tasks_left)
+        }
+    };
+    if !authority_within(authority, domain.limits()) || numbers.spent.checked_add(numbers.spent_below).is_none() {
+        return false;
+    }
+    let Some(policy) = domain.policy(project) else {
+        return false;
+    };
+    if !at_most(needed, &policy.ceiling, &domain.rules().implies)
+        || !at_most(needed, &domain.rules().ceiling, &domain.rules().implies)
+    {
+        return false;
+    }
+    let Some(depth) = authority.delegation.depth.checked_sub(below) else {
+        return false;
+    };
+    differences(
+        needed,
+        authority,
+        tasks_left.min(authority.delegation.tasks),
+        depth,
+        left(numbers).min(authority.budget.spend),
+        &domain.rules().implies,
+    )
+    .is_empty()
+}

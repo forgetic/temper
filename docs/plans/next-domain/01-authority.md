@@ -13,7 +13,7 @@ the cutover. Overview and conventions: README.md.
   values its caller gathers, and a small state holding only the
   deployment's rules and each live project's policy, changed by events.
 - **It keeps no numbers.** The numbers against each funder (budget,
-  spent, spent by ended tasks it funded, reserved) are the tasks child
+  spent, spent by closed allotments it funded, reserved) are the tasks child
   domain's (`tasks.md`, section 3); the root passes them in, and a check's
   answer says what they become (`authority.md`, section 2).
 - **It knows no connector.** Names are paths of byte segments and kinds
@@ -37,6 +37,7 @@ crates/temper-engine-domain-authority/src/
 ├── numbers.rs      Numbers, Funder, Funding; left, carve, settle, charge, move_funding
 ├── rules.rs        Rules (the deployment's), Policy (a project's), Role, Requirement, LandingRule, Implies
 ├── check.rs        check_batch, check_effect, check_run, check_request, check_call, needs, covers
+├── boundary.rs     the owned questions, actions, holders, answers, facts and findings
 ├── domain.rs       Domain (rules and policies in force), step: policies added, changed, dropped
 ├── limits.rs       Limits, worst_case
 └── tests.rs        the laws, the sweeps, every check's cells
@@ -115,12 +116,25 @@ pub fn at_most(a: &Authority, b: &Authority, implies: &Implies) -> bool;
 /// at most it, with the creator's depth less one and its tasks and spend
 /// replaced by what is left. Each part that does not fit is written to
 /// `lacks`, so a refusal can name it and a proposal can ask for it.
-pub fn fits(child: &Authority, creator: &Authority, left: &Numbers, implies: &Implies, lacks: &mut Queue<Lack>) -> bool;
+pub fn fits(
+    child: &Authority,
+    creator: &Authority,
+    numbers: &Numbers,
+    tasks_left: u32,
+    implies: &Implies,
+    lacks: &mut Queue<Lack>,
+) -> bool;
 ```
 
 Pattern order is decided segment by segment, never by enumerating names.
 Kinds are ordered by the connector's `Implies` table (for the forge,
 `push` implies `branch` on what it covers, and `land` implies nothing).
+`tasks_left` is lifetime capacity from the tasks child, distinct from the
+four funding numbers. Fitting caps current spend and task capacity at the
+creator's authority, reduces depth by one and refuses a depth-zero creator.
+Its queue needs `FITS_MAX_OUT` slots; `Lack` names every missing component.
+Checks use the same component comparison as a `Lacks` value in a finding.
+A batch additionally consumes one direct task per child and sums its budgets.
 
 ### 2.3 Numbers
 
@@ -190,7 +204,7 @@ existing unspent allotments without mixing funding sources.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Answer {
     Allow,
-    /// Facts a connector has yet to report, which nobody clears by deciding.
+    /// Facts or funding, deadline, account or writer readiness still lacking.
     Wait,
     /// Beyond the task, within what someone above it may accept.
     Propose,
@@ -217,14 +231,60 @@ pub struct Checked {
 ```
 
 `Domain` holds `Rules` and `Map<u32, Policy>`, bounded by the limits on
-projects, roles and landing rules; its `step` takes `Event::Policy {
+projects, roles and requirements; its `step` takes `Event::Policy {
 project, policy }` and `Event::Dropped { project }`, the root sending them
 at a restart and as a person changes a policy (`people.md`, 5.2). It
 emits nothing but facts.
 
+01c's concrete policy and question vocabulary:
+
+- `Rules`: deployment authority ceiling, period spend, minimum and maximum
+  run spend, validated connector implications, generic requirements.
+- `Policy`: project ceiling and period spend, numbered roles and requirements.
+  Each `Role` has authority, period spend, request rights and proposal rights.
+  `Domain::new(rules, limits)` validates configuration and memory/output bounds;
+  policy events refuse invalid replacements before changing the table. `step`
+  emits one `PolicyFact` (added, changed, dropped or refused).
+- `BatchAsk`: project, creator authority, current `Numbers`, separate
+  `tasks_left`, and executor/authority `Delegate` values. Allowed funding is
+  carved once for the sum, with no output numbers on wait, propose or refuse.
+- `EffectAsk`: project, authority and an `Effect` with connector, kind, full
+  `Name` and 32-byte opaque state pin. `Requirement` names exact connector and
+  effect kind, a resource pattern and fact kind numbers. `Fact` has connector,
+  fact kind, full name, exact state and unknown/pending/passed/failed status.
+  Every applicable deployment and project requirement must pass; conflicting
+  reports preserve failure and pending status. Landing-specific requirements
+  and their independent sweep remain 01d.
+- `RunAsk`: project, authority, numbers, offered budget, wall time, account
+  usability values and all workspace `Write` resources with writer holds.
+  Funds, deadlines, accounts and writer readiness wait; an authority gap
+  proposes; caps, ceilings and invalid accounting refuse.
+- `PersonAsk`: project, role, pool numbers, task capacity and a typed request
+  (create, allot, accept, amend, move, cancel, release, watch, policy). Giving
+  authority checks the role and hard ceilings and reserves available funding;
+  accepting additionally checks proposal rights. The root still checks an
+  accepted effect against pinned facts before committing it.
+- `CallAsk`: project, authority, exactly one configured family bit and a tool,
+  read, message reference or note scope. Calls stay under both hard ceilings.
+- `Action`: batch, effect, widening, amendment or escalation with optional
+  release authority. `needs` constructs the least owned value from admitted
+  data, with direct creation included in batch depth and count. `Holder` is
+  an eligible ancestor task or a person's role with actual current funding
+  and task capacity. `covers` uses the root-verified distance and proposal
+  rights, without counting creation depth twice.
+
+`Limits` bounds every owned configuration collection and question collection,
+path segment and byte count. Checks refuse oversized inputs first and allocate
+nothing. Their caller reserves `max_out(limits)` finding slots. `worst_case`
+counts held configuration boxes and the full policy map's node bound; asks,
+`needs` results and finding queues belong to the caller. Startup refuses
+overflowing memory or output bounds. Role and policy changes commit as facts;
+funding numbers, topology, references and in-flight attempts remain the root's
+and tasks child's inputs, never retained policy state.
+
 ## 3. Tests
 
-Step tests only (`authority.md`, section 11), in `src/tests.rs`, sized
+Step tests only (`authority.md`, section 11), in `src/tests*.rs`, sized
 for the default suite:
 
 - **The order against an independent statement.** A small universe of
@@ -232,8 +292,9 @@ for the default suite:
   pattern's set of covered names enumerated naively; `at_most` on patterns
   agrees with set inclusion over every pair of a generated sample.
 - **Its laws,** over generated authorities: reflexive, transitive;
-  `fits` never answers yes where `at_most` (with the creator's numbers
-  as its budget) answers no.
+  `fits` never answers yes where `at_most` (with the creator's available
+  spend and task capacity capped at its authority, and depth less one)
+  answers no.
 - **Carving and settling** over generated funding trees: every task's
   spend counted exactly once at the top, never above what funded it but
   by the overruns charged; a moved task's funding returned and reserved

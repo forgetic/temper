@@ -151,7 +151,13 @@ Authority
   worlds check its laws (section 11).
 - **Fitting.** A delegate's authority A fits under its creator B, given
   the numbers kept against B, when A is at most B with B's depth less
-  one and B's tasks and spend replaced by what B has left. Fitting is
+  one and B's tasks and spend replaced by what B has left, each capped by
+  B's original ceiling. Available lifetime task capacity is a separate
+  input kept by the tasks child: the four funding numbers cannot say how
+  many tasks remain. Depth zero cannot create a delegate, even one whose
+  own depth is zero. A batch additionally counts one task for each direct
+  child, plus the future capacity it gives that child, and sums its
+  reservations. Fitting is
   what a batch, an amendment and an acceptance are checked against; the
   order alone is what the laws are about.
 - **Narrowing** is giving a delegate an authority that fits. It is
@@ -296,13 +302,22 @@ Every check answers one of four, each saying why:
 
 - **allow;**
 - **wait** for facts a connector has yet to report (CI on the exact
-  head, a gate's verdict), which nobody clears by deciding;
+  head, a gate's verdict), or readiness before a run (budget, accounts,
+  writer holds). A decision alone substitutes for neither a fact nor
+  the required readiness;
 - **propose:** beyond the task's authority, within what someone above
   it may accept;
 - **refuse:** beyond the project's policy or the deployment's rules, or
   against a fact (CI failed), which no acceptance changes.
 
-A check answers the strictest of what it found.
+A check answers the strictest of what it found, in that order, and writes
+every independent finding to a bounded queue whose room its caller
+reserves. Oversized questions and absent policies are refused at admission;
+there is no default project policy. Rules and policies are immutable during
+a check. Policy events add, replace or drop one bounded table entry and
+emit a fact; an invalid or over-capacity replacement retains the old entry.
+Roles' authority and period spending fit under their project, and project
+policy fits under the deployment, before either is admitted.
 
 ### 8.1 Batches
 
@@ -312,6 +327,9 @@ task's executor kind and charter, and the batch's tasks, depth, budgets
 and deadlines are within what its creator has left. Beyond any of these,
 the answer is propose; beyond the project's ceiling, refuse. Allowed, the
 answer gives the creator's numbers after the reservations.
+It reserves only when the whole batch allows; every other answer carries
+no replacement numbers. The count consumed is the sum of one plus each
+child's delegation capacity; spend is the sum of its children’s budgets.
 
 ### 8.2 Effects
 
@@ -329,6 +347,13 @@ An effect is checked when it is decided, against facts pinned to what it
 names (a head, not a branch), and the effect carries its condition to
 the system: a merge is made at exactly the head it was decided on, so
 facts read for that head stay true while it is made.
+The generic requirement names connector facts that must have passed, on
+one exact effect kind and matching resource pattern. Each report matches
+the effect's connector, full resource name and exact state pin, as well as
+the required fact kind. Missing, unknown or pending reports wait; a failed
+report refuses. Conflicting reports cannot clear a failure or pending
+status. Grant implications do not remove requirements from the requested
+effect kind. Deployment and project requirements both apply.
 
 ### 8.3 Runs
 
@@ -340,6 +365,11 @@ included, is covered by a push grant of the task and held by the task or
 by the task above it that holds it (connectors.md, 3.3). A run that
 fails this check is not started: its task waits for its budget (held, if
 nothing will free one), its account, or its writer slot.
+The root supplies the offered run budget and one usability status for each
+model account the charter uses. The budget must be above the deployment's
+minimum, no greater than its run cap, task authority or available funding;
+resource holds name this task or an ancestor. Authority deficits may be
+proposed, while a hard ceiling or accounting overflow refuses.
 
 ### 8.4 People's requests
 
@@ -347,12 +377,21 @@ Before a person's request is acted on (people.md, section 5): their
 role in the project allows the request and, for what gives authority (a
 task created, a budget allotted, a proposal accepted), what it gives
 fits under their role's authority and what their pool has left.
+An acceptance additionally needs that role's right to decide that proposal
+kind. Funding asks name the complete future allotment to reserve, respecting
+the single-funder rule in section 7. The request check does not replace an
+accepted effect's check on pinned facts; the root performs both before that
+acceptance and action commit. Non-funding requests still need their specific
+role permission.
 
 ### 8.5 Tool calls
 
 Before an agent's call is served: its family is among the task's tools,
 and a read it makes is covered by a grant. A message to a task needs a
 reference to it (tasks.md, 7.5); a note needs its scope.
+The root translates the registered tool to exactly one configured family
+bit and a note to exactly one scope. Reads, tools and notes remain within
+project and deployment ceilings too; missing message standing refuses.
 
 ## 9. Proposals
 
@@ -370,6 +409,12 @@ proposals wait and how they move is tasks.md, section 8.
   effect, the one grant that covers it; for a widening, what it asks
   for. The holder that accepts funds all of it (below), whatever the
   proposer has.
+  A batch's needed depth is one plus its deepest child's depth, and its
+  task count includes each direct child. The least value may repeat grants
+  or executor kinds; their order is set-like. An effect needs one singleton
+  resource grant, with no spend or delegated task capacity. Constructing
+  this owned value copies bounded input data; borrowed checks allocate
+  nothing.
 - **An escalation needs** nothing more than standing above the held task,
   unless releasing it needs what the task lacks (budget, time, a grant):
   then it needs that, as a widening would.
@@ -378,6 +423,11 @@ proposals wait and how they move is tasks.md, section 8.
   action's depth plus how far below the holder the proposer is): a task
   above the proposer, or a person whose role decides that kind of
   proposal and whose pool has the budget left.
+  The caller verifies the holder's standing and its distance to the
+  proposer. Coverage adds that distance to the action's already-counted
+  depth; it does not subtract another creation level. Available task
+  capacity and funding are separate current inputs. The person's role
+  needs both the acceptance permission and rights for the proposal kind.
 - **An acceptance funds the action** from the accepter: the budgets of a
   batch's tasks are reserved from the accepter, which is recorded as
   their funder; a widening moves budget or a grant from the accepter

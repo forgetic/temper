@@ -2,7 +2,52 @@
 
 use alloc::boxed::Box;
 
-use crate::{Authority, Grant, Last, Name, Pattern};
+use skein_lib::Queue;
+
+use crate::{Authority, Grant, Last, Name, Numbers, Pattern, left};
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Lack {
+    Tools,
+    Grants,
+    Executors,
+    Tasks,
+    Depth,
+    Spend,
+    Deadline,
+    Notes,
+}
+
+/// Every independent component that failed; a check can name all of them
+/// in one bounded finding without losing the stricter answer.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[expect(clippy::struct_excessive_bools, reason = "these are independent component deficits, not lifecycle state")]
+pub struct Lacks {
+    pub tools: bool,
+    pub grants: bool,
+    pub executors: bool,
+    pub tasks: bool,
+    pub depth: bool,
+    pub spend: bool,
+    pub deadline: bool,
+    pub notes: bool,
+}
+
+impl Lacks {
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        !(self.tools
+            || self.grants
+            || self.executors
+            || self.tasks
+            || self.depth
+            || self.spend
+            || self.deadline
+            || self.notes)
+    }
+}
+
+pub const FITS_MAX_OUT: u32 = 8;
 
 /// On one connector, granting `kind` also grants `implies`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -55,6 +100,16 @@ impl Implies {
             }
         }
         false
+    }
+
+    #[must_use]
+    pub fn len(&self) -> u32 {
+        u32::try_from(self.pairs.len()).expect("constructor bounds pairs by a u32")
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.pairs.is_empty()
     }
 }
 
@@ -126,14 +181,83 @@ pub fn grant_covers(grant: &Grant, connector: u16, kind: u16, name: &Name, impli
 /// and executors need not make equal values to make equivalent authority.
 #[must_use]
 pub fn at_most(a: &Authority, b: &Authority, implies: &Implies) -> bool {
-    if a.tools.0 & !b.tools.0 != 0
-        || a.notes.0 & !b.notes.0 != 0
-        || a.delegation.tasks > b.delegation.tasks
-        || a.delegation.depth > b.delegation.depth
-        || a.budget.spend > b.budget.spend
-    {
-        return false;
+    differences(a, b, b.delegation.tasks, b.delegation.depth, b.budget.spend, implies).is_empty()
+}
+
+/// Whether the child's authority fits, with spend and lifetime task
+/// capacity taken from separate current inputs (domain/authority.md, 5).
+/// The caller reserves `FITS_MAX_OUT` queue slots. A batch additionally
+/// consumes one task slot for each immediate child and sums reservations.
+#[must_use]
+pub fn fits(
+    child: &Authority,
+    creator: &Authority,
+    numbers: &Numbers,
+    tasks_left: u32,
+    implies: &Implies,
+    lacks: &mut Queue<Lack>,
+) -> bool {
+    assert!(lacks.room() >= FITS_MAX_OUT, "caller reserves every fitting finding");
+    let parts = fit_lacks(child, creator, numbers, tasks_left, implies);
+    if parts.tools {
+        lacks.push(Lack::Tools);
     }
+    if parts.grants {
+        lacks.push(Lack::Grants);
+    }
+    if parts.executors {
+        lacks.push(Lack::Executors);
+    }
+    if parts.tasks {
+        lacks.push(Lack::Tasks);
+    }
+    if parts.depth {
+        lacks.push(Lack::Depth);
+    }
+    if parts.spend {
+        lacks.push(Lack::Spend);
+    }
+    if parts.deadline {
+        lacks.push(Lack::Deadline);
+    }
+    if parts.notes {
+        lacks.push(Lack::Notes);
+    }
+    parts.is_empty()
+}
+
+pub(crate) fn fit_lacks(
+    child: &Authority,
+    creator: &Authority,
+    numbers: &Numbers,
+    tasks_left: u32,
+    implies: &Implies,
+) -> Lacks {
+    let mut parts = differences(
+        child,
+        creator,
+        tasks_left.min(creator.delegation.tasks),
+        creator.delegation.depth.saturating_sub(1),
+        left(*numbers).min(creator.budget.spend),
+        implies,
+    );
+    if creator.delegation.depth == 0 {
+        parts.depth = true;
+    }
+    if numbers.spent.checked_add(numbers.spent_below).is_none() {
+        parts.spend = true;
+    }
+    parts
+}
+
+pub(crate) fn differences(
+    a: &Authority,
+    b: &Authority,
+    tasks: u32,
+    depth: u32,
+    spend: u64,
+    implies: &Implies,
+) -> Lacks {
     let deadline_fits = match a.budget.deadline {
         Some(deadline) => match b.budget.deadline {
             Some(ceiling) => deadline <= ceiling,
@@ -141,12 +265,19 @@ pub fn at_most(a: &Authority, b: &Authority, implies: &Implies) -> bool {
         },
         None => b.budget.deadline.is_none(),
     };
-    if !deadline_fits {
-        return false;
-    }
+    let mut lacks = Lacks {
+        tools: a.tools.0 & !b.tools.0 != 0,
+        grants: false,
+        executors: false,
+        tasks: a.delegation.tasks > tasks,
+        depth: a.delegation.depth > depth,
+        spend: a.budget.spend > spend,
+        deadline: !deadline_fits,
+        notes: a.notes.0 & !b.notes.0 != 0,
+    };
     for kind in &a.delegation.kinds {
         if !b.delegation.kinds.contains(kind) {
-            return false;
+            lacks.executors = true;
         }
     }
     for grant in &a.grants {
@@ -158,8 +289,8 @@ pub fn at_most(a: &Authority, b: &Authority, implies: &Implies) -> bool {
             }
         }
         if !covered {
-            return false;
+            lacks.grants = true;
         }
     }
-    true
+    lacks
 }
