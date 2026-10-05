@@ -49,6 +49,7 @@ place and their integration, as [README.md](README.md) states.
 | Shared fake checkout (skein) | merged locally | skein 5e52dd9 | Gate passed; 997 focused / 3.824 s; 63 fuzzy / 24.571 s. |
 | Shared fake checkout (temper) | merged | 71bdab9 | Gate passed; 2,256 focused / 10.520 s; 38 fuzzy / 29.344 s. |
 | 05s2 smith agent copy | merged locally | smith 8a959a5 | Gate passed; 351 focused / 1.435 s; 8 fuzzy / 2.674 s; serial 351 / 4.446 s, 8 / 6.278 s. |
+| 05s3 temper legacy agent rename | merged | 669bb52 | Gate passed; 2,256 focused / 10.283 s; 38 fuzzy / 28.851 s; behavior unchanged. |
 
 ## What remains open
 
@@ -82,7 +83,7 @@ place and their integration, as [README.md](README.md) states.
 
 **05s — smith**
 
-- Provision smith's forge remotes; freeze temper's legacy copy (05s3).
+- Provision smith's forge remotes; preserve the frozen legacy agent until cutover.
 - Build the generic run, tools and host, then channel/protocol and temper's half (05s4–7).
 - Build the local host domain and worlds (05s8); move shared kit to skein as section 6 requires.
 
@@ -104,6 +105,6 @@ place and their integration, as [README.md](README.md) states.
 
 ## Resume point
 
-- Active: freeze temper's legacy agent (05s3), build smith's generic results (05s4), and gate actual root escalation routes (02d).
+- Active: build smith's generic results (05s4) and gate actual root escalation routes (02d).
 - Parked drafts: `next-domain/02e-depth-draft` (`a60bf1c`), `next-domain/04b2` (`0eff9dc`), `next-domain/05f` (`c33941c`). These have not passed the merge gate.
 - Shared skein revision is local and cached; fresh-machine fetches need its authorized publication. Forgejo v16.0.5 job-log client repairs remain open.
