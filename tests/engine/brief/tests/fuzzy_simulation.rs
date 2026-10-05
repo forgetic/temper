@@ -31,9 +31,16 @@ fn random_worlds_settle_with_every_ending_reached() {
 #[test]
 fn task_sections_settle_across_random_bounds_and_terminal_races() {
     let mut judged = 0;
+    let mut endings = BTreeSet::new();
     for seed in 0..64 {
         let world = run(Settings { task_sections: true, ..Settings::random(seed) });
         judged += world.judged().0;
+        endings.extend(world.stats().endings.keys().copied());
     }
     assert!(judged > 500, "the referee checked task sections across the sweep");
+    // Task sources name one task. The item-list truncation outcome belongs
+    // to the legacy Dependencies source; every applicable outcome is checked.
+    let missed: Vec<&str> =
+        ENDINGS.iter().copied().filter(|ending| *ending != "items cut" && !endings.contains(ending)).collect();
+    assert!(missed.is_empty(), "task section worlds reached every ending: {missed:?} were not");
 }
