@@ -242,6 +242,17 @@ impl Settings {
     }
 }
 
+// The outside worker makes two recovery sends in order: its retained answer,
+// then one explicit post-ACK resend. This transport sequence is independent
+// of the person's one authenticated result request (domain/engine.md, 7.6).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum TerminalRecovery {
+    NotRequested,
+    AwaitingRetainedAck,
+    AwaitingReplayAck,
+    Complete,
+}
+
 /// Complete frozen world state between iterations; only the store and scripts
 /// outlive replacement of the root process (domain/engine.md, section 15).
 #[derive(Debug)]
@@ -268,9 +279,8 @@ pub struct World {
     assignment: Option<engine::Assignment>,
     pending_turn: Option<u32>,
     pending_answer: bool,
-    terminal_recovery_sent: bool,
+    terminal_recovery: TerminalRecovery,
     recovery_clock_offset: u64,
-    terminal_replay_sent: bool,
     terminal_snapshot: Option<BTreeMap<temper_engine_domain::Key, Record>>,
 }
 
@@ -297,9 +307,8 @@ impl World {
             assignment: None,
             pending_turn: None,
             pending_answer: false,
-            terminal_recovery_sent: false,
+            terminal_recovery: TerminalRecovery::NotRequested,
             recovery_clock_offset: 0,
-            terminal_replay_sent: false,
             terminal_snapshot: None,
             settings,
         };
@@ -434,8 +443,12 @@ impl World {
         {
             self.turn(1);
         }
-        if self.settings.terminal_restart && self.restarts == 1 && self.domain.ready() && !self.terminal_recovery_sent {
-            self.terminal_recovery_sent = true;
+        if self.settings.terminal_restart
+            && self.restarts == 1
+            && self.domain.ready()
+            && self.terminal_recovery == TerminalRecovery::NotRequested
+        {
+            self.terminal_recovery = TerminalRecovery::AwaitingRetainedAck;
             let assignment = self.assignment.as_ref().expect("worker retains terminal claim");
             self.queue(
                 engine::Event::ReadResult {
@@ -447,7 +460,7 @@ impl World {
             );
             self.answer();
         }
-        if self.terminal_recovery_sent
+        if self.terminal_recovery != TerminalRecovery::NotRequested
             && self.recovery_clock_offset == 0
             && !self.events.iter().any(|(_, event)| matches!(event, engine::Event::Answer { .. }))
         {
@@ -566,18 +579,23 @@ impl World {
             Delivery::Acknowledge { channel, task, attempt } => {
                 assert_eq!(channel, Token::new(7));
                 self.pending_answer = false;
-                if self.settings.terminal_restart && self.terminal_replay_sent {
-                    self.referee
-                        .replayed_answer_ack(&self.store.rows, task, attempt)
-                        .expect("fenced duplicate answer receives ACK without another terminal");
-                } else {
-                    self.referee
-                        .answer_ack(&self.store.rows, task, attempt)
-                        .expect("priced terminal durable before ACK");
-                    if self.settings.terminal_restart {
-                        self.terminal_replay_sent = true;
-                        self.answer();
+                match self.terminal_recovery {
+                    TerminalRecovery::AwaitingReplayAck => {
+                        self.referee
+                            .replayed_answer_ack(&self.store.rows, task, attempt)
+                            .expect("fenced duplicate answer receives ACK without another terminal");
+                        self.terminal_recovery = TerminalRecovery::Complete;
                     }
+                    TerminalRecovery::NotRequested | TerminalRecovery::AwaitingRetainedAck => {
+                        self.referee
+                            .answer_ack(&self.store.rows, task, attempt)
+                            .expect("priced terminal durable before ACK");
+                        if self.settings.terminal_restart {
+                            self.terminal_recovery = TerminalRecovery::AwaitingReplayAck;
+                            self.answer();
+                        }
+                    }
+                    TerminalRecovery::Complete => panic!("ACK after both scripted sends completed"),
                 }
             }
             Delivery::TurnBusy { turn, .. } => self.turn(turn),
@@ -587,7 +605,7 @@ impl World {
                 .expect("committed result reaches person once"),
             Delivery::ResultReply { to, person, task, words } => {
                 assert!(
-                    self.settings.terminal_restart && self.terminal_recovery_sent,
+                    self.settings.terminal_restart && self.terminal_recovery != TerminalRecovery::NotRequested,
                     "named result must be requested after restart"
                 );
                 assert_eq!(to.into_token(), Token::new(103), "one actual named result request terminal");
@@ -617,7 +635,8 @@ impl World {
 
     fn settled(&self) -> bool {
         self.referee.done()
-            && (!self.settings.terminal_restart || self.referee.terminal_replay_done())
+            && (!self.settings.terminal_restart
+                || (self.terminal_recovery == TerminalRecovery::Complete && self.referee.terminal_replay_done()))
             && !self.pending_answer
             && self.events.is_empty()
             && self.store.pending.is_empty()
