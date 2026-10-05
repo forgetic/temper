@@ -155,6 +155,8 @@ over, and what is not yet carried over is listed as owed.
   with temper's permission. The change procedure's lazy updates and
   resolutions rest on the first two. They are checked against Forgejo 15
   with the conformance tool in step 00, before step 04 builds on them.
+  These are historical v15 observations. The target is Forgejo v16.0.5;
+  its supported API supplies job logs (`domain/forge.md`, 20.1).
 - **The durable-state convention:** how a child domain's changes become
   part of the root's one commit. Every new child depends on it, so it is
   fixed in step 00 (section 5.2), not discovered in step 06.
@@ -552,3 +554,34 @@ Step 08 writes the separate plans for work below the domain, as
 those plans and the design revisions they require, not implementation of
 the lower layers during this migration. Its notes and contractions are
 implemented before those plans are written.
+
+## 8. Current order and independent review
+
+Finish the full charged 06a walking story before adding depth in 02d–e,
+04b–f or 05f–g. Only the finite funding and atomic admission slice of 02e
+needed by that story comes forward. Already-started deeper work stays on
+its branch. Once the story passes, audit every tasks event and request
+against an actual root route; merge or remove unused variants and put root
+mechanics in the root unless `domain/tasks.md` assigns them to the hub.
+Record the resulting contracts in `domain/engine.md` and `domain/tasks.md`
+in the same branch. Resume paused increments in the plan's order only
+after the walking story, tasks audit, documentation backfill and five
+style checks have passed.
+
+Every increment keeps the existing independent review and four-check gate.
+Review rejects undocumented new public items. Its checklist includes:
+
+- Module docs name the child's kept state, what it never knows, entry
+  points and contracts. Public boundary types, variants and fields document
+  their sender, contract, terminal event and applicable bounds.
+- Re-export names explicitly; no `pub use module::*`.
+- Name the tasks result `Outcome` or `TaskResult`, preserving the standard
+  `Result` name for fallible operations.
+- Use descriptive parameters such as `domain` and `limits`.
+- Separate items with blank lines, matching the existing crates.
+- Cite `domain/<file>.md` and its section throughout new code.
+
+Backfill authority, tasks, people and the root in one doc-comments-only
+increment, through the gate. Companion code-style changes stay separately
+reviewable in the same pass. Before 05g, confirm payload and wire golden
+fixtures have a documented code regeneration command and drift tests.

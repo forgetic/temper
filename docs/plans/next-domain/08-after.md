@@ -87,7 +87,9 @@ own, written from that revision, not here:
   per forge (`credentials.md`, as the design's README revises it);
 - **the forge's protocol:** the new calls of `forge.md`, section 17, with
   fixtures from step 00a's captures; repositories adopted at runtime, on
-  several forges;
+  several forges; target Forgejo v16.0.5, with job listing and bounded
+  plaintext job-log API reads pinned to the failing job attempt, backed by
+  v16 conformance exchanges (`domain/forge.md`, 20.1);
 - **the engine's `iterate` and shell,** the first simulated world and the
   real loop (`docs/design/testing.md`, sections 2.3 and 2.4).
 

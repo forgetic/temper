@@ -54,9 +54,13 @@ push/synchronized-pull-request webhooks from a completed run.
 binary's Swagger Actions paths; it is separate from the wire exchanges.
 Its conclusions and bounded fallbacks are in `domain/forge.md`, section
 20: comparison ignores paging, write permission cannot read protection,
-and the supported REST API has no job-log route. Guessed `jobs` and
-`logs` routes return 404; this says nothing about every internal or web
-route. The observed failed status's description and link remain usable.
+and the v15 supported REST API has no job-log route. Guessed `jobs` and
+`logs` routes return 404 on that version. The migration target is now
+Forgejo v16.0.5: its supported API lists a run's jobs and reads a job's
+plaintext logs, with attempt selection and byte ranges. The client assumes
+API log reads. Keep the v15 exchanges unchanged as historical evidence;
+new v16 conformance captures must cover the supported routes specified in
+`domain/forge.md`, 20.1.
 
 Other protection settings and other Actions workflow/runner configurations
 remain unverified. Tagged-source fixtures state their separate provenance.

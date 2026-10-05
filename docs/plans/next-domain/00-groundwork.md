@@ -45,7 +45,11 @@ Forgejo 15 binary on a loopback listener and scratch data, as
 The answers go into `forge.md`, section 20 (each question moved to a
 fact, or to a changed design), and the captured exchanges become
 fixtures for `temper-forge-forgejo` in step 08. Markdown and fixtures
-only.
+only. Those captures describe v15; the target is now **Forgejo v16.0.5**.
+Its supported per-job log API supersedes the log fallback in the table
+(`domain/forge.md`, 20.1). Step 04 assumes API log reads; step 08's protocol
+plan requires v16 conformance exchanges for job listing, attempt selection
+and bounded plaintext log reads.
 
 ### 00b: dead drafts and the paused forge increment
 

@@ -385,9 +385,10 @@ starts from current code. It never updates only because its base moved.
   head; a gate's remarks; or, for a clean update whose CI then fails (a
   semantic conflict), the base merged in and what landed in it. It pushes
   a new head, and the change is checked again.
-  On Forgejo 15 the supported REST API has no job-log read (section 20);
-  the brief carries the failed status's description and link instead of
-  promising a log. An adapter may add output when a supported read exists.
+  The target is Forgejo v16.0.5. The client reads the failed job's
+  plaintext log through the API, bounded by the repair brief's byte budget
+  (section 20). It pins the job attempt and reports truncation; a failed
+  read is recorded explicitly alongside the status description and link.
 - **A resolution** is a task for an agent whose workspace starts from a
   merge in progress: the base merged into the branch, the conflicting
   files marked. The agent edits them and runs the checks, with no git
@@ -780,7 +781,27 @@ idle are bounded by the limits.
 
 ## 20. Forgejo facts and open questions
 
-### 20.1 Groundwork observations
+### 20.1 Target version and groundwork observations
+
+The target is **Forgejo v16.0.5**. Job logs are readable through its
+supported API; the client and repair procedures assume this capability.
+The tagged [v16.0.5 API specification](https://codeberg.org/forgejo/forgejo/src/tag/v16.0.5/templates/swagger/v1_json.tmpl)
+defines:
+
+- `GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs` to name a run's
+  jobs and attempts;
+- `GET /repos/{owner}/{repo}/actions/jobs/{job_id}/logs?attempt={attempt}`
+  for one job's plaintext log, with HTTP byte ranges (`200` or `206`);
+- `GET /repos/{owner}/{repo}/actions/runs/{run_id}/logs` for a ZIP of the
+  latest attempts' logs. Repair briefs use the bounded per-job read.
+
+A log read names the exact job attempt associated with the failing head;
+its owned bytes count against the client's reply and brief limits. Missing,
+forbidden or failed reads are explicit outcomes, not an unsupported-API
+fallback. Tagged-source inspection establishes the API contract; the v15
+capture below is historical evidence and does not verify v16 responses,
+permission behavior or byte-range handling. The v16 protocol conformance
+work must retain real exchanges for these routes.
 
 Checked against the verified Forgejo 15.0.0 binary, in disposable SQLite
 state on loopback, with a non-admin write collaborator and an isolated
@@ -797,15 +818,16 @@ not a claim about every Forgejo deployment.
 | Conflicting merge-style update | `POST .../pulls/{n}/update?style=merge` returns `409`, with message `merge failed because of conflict`; the head is unchanged. This specific refusal is a conflict resolution. Other failures still require a fresh read before deciding what happened. | `00a-conflicting-update`, `00a-conflict-head-after` |
 | Clean update and CI | Update returns `200` with an empty body, moves the head, emits push and synchronized pull-request webhooks, and starts the configured push workflow on exactly that new head. Its deliberate failure appears in both Actions and the combined commit status, with a description and job link. CI must be checked again at that head. | `00a-clean-update`, `00a-clean-pull-after`, `00a-runs-after-update`, `00a-updated-head-status`; both retained webhooks |
 | File and commit listing | Pull-request files page correctly: with `limit=1`, three pages contain distinct files and the fourth is empty; their commit URLs name the current head. Comparison returns all three files and commits on every `page=1..4&limit=1`, even with `MAX_RESPONSE_ITEMS=2`; paging is ignored. Apply the bounded, conservative handling of section 7.3. | `00a-pull-files-page-1` through `-4`, `00a-comparison-page-1` through `-4` |
-| Failed Actions log | A real failed job and its status are readable with the write token. The running binary's REST Swagger has no job-log route; attempted run `jobs` and `logs` routes both return `404`. This establishes no supported REST log read, not that every web or internal route is unreadable. The repair brief uses the status description and link (8.4). | `00a-run-at-updated-head`, `00a-tasks-after-update`, `00a-probe-jobs`, `00a-probe-logs`; extracted `next_domain.actions_api_paths` |
+| Failed Actions log | A real failed job and its status are readable with the write token. The running binary's REST Swagger has no job-log route; attempted run `jobs` and `logs` routes both return `404`. This establishes the absence of a supported REST log read on v15 only. It is superseded for the v16.0.5 target by the API contract above; repair briefs read job logs (8.4). | `00a-run-at-updated-head`, `00a-tasks-after-update`, `00a-probe-jobs`, `00a-probe-logs`; extracted `next_domain.actions_api_paths` |
 | Branch at a commit | `POST .../branches` with `old_ref_name` equal to a full commit id returns `201` and creates the branch at exactly that commit. No worker push is needed to create or recreate it. | `00a-main`, `00a-create-commit-origin` |
 | Protection with write permission | Both listing protections and reading the existing `main` protection return `403`: `user should be an owner or a collaborator with admin write of a repository`. Adoption records protection as unknown (section 4). The token's user is non-admin and its repository permission is `write`. | `00a-writer-user`, `00a-writer-permission`, `00a-protect-main`, `00a-protection-list-as-writer`, `00a-protection-as-writer` |
 | Conditional merge and retarget | A merge naming the old head returns `409`, with message `head out of date`. After retargeting, merging the current head returns `200` with an empty body, records the retargeted base and merge commit, advances only that base and leaves `main` unchanged. Read the current base and head before landing. | `00a-merge-stale-head`, `00a-retarget-pull`, `00a-merge-retargeted-current-head`, `00a-retargeted-merged-pull`, `00a-retarget-base-after`, `00a-main-after-retarget` |
 
 Every prerequisite of step 00a is resolved by an observation or its
-specified fallback. Large comparison completeness, other workflow
-configurations and unsupported log routes are not inferred from this
-small fixture. The retarget probe changes the base before the merge; it
+specified fallback for the probed v15 configuration. Large comparison
+completeness and other workflow configurations are not inferred from this
+small fixture. The v16.0.5 log routes require their own conformance
+exchanges. The retarget probe changes the base before the merge; it
 does not establish an atomic condition on both base and head, or behavior
 when a person retargets concurrently with the merge.
 
