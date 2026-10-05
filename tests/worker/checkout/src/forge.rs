@@ -283,8 +283,8 @@ impl Remote for Forge {
         Ok(created_of(created))
     }
 
-    fn push(&mut self, remote: &[u8], branch: &[u8], commit: u64) -> Result<Pushed, Fault> {
-        let op = Git::Push { branch: branch.into(), commit, expected: None };
+    fn push(&mut self, remote: &[u8], branch: &[u8], commit: u64, expected: Option<u64>) -> Result<Pushed, Fault> {
+        let op = Git::Push { branch: branch.into(), commit, expected };
         let Answer::Pushed(pushed) = self.call(remote, WORKER, op)? else {
             panic!("a push is answered with how it went");
         };
@@ -298,14 +298,24 @@ impl Remote for Forge {
         self.domain.object(commit).expect("a commit of the store").parent
     }
 
+    fn merge_parent(&self, commit: u64) -> Option<u64> {
+        self.domain.object(commit).expect("a commit of the store").merge_parent
+    }
+
     fn tree(&self, commit: u64) -> Tree {
         let object = self.domain.object(commit).expect("a commit of the store");
         object.tree.iter().map(|(path, content)| (path.to_vec(), content.to_vec())).collect()
     }
 
-    fn store(&mut self, parent: u64, tree: Tree) -> Option<u64> {
-        let committed = temper_fake_forge_domain::commit(&mut self.domain, &CONFIG, parent, files(tree));
-        committed.expect("the forge's store has room for every commit")
+    fn store(&mut self, parent: u64, merging: Option<u64>, tree: Tree) -> Option<u64> {
+        match merging {
+            Some(second) => Some(
+                temper_fake_forge_domain::merge_commit(&mut self.domain, &CONFIG, parent, second, files(tree))
+                    .expect("the forge's store has room for every merge"),
+            ),
+            None => temper_fake_forge_domain::commit(&mut self.domain, &CONFIG, parent, files(tree))
+                .expect("the forge's store has room for every commit"),
+        }
     }
 }
 

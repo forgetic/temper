@@ -286,7 +286,15 @@ passing with the same counts.
    match arms. It does not implement runtime domain behavior or v2
    protocol translations (05c–05g).
 3. **05c the checkout and the fake checkout:** merges, two parents,
-   expected heads.
+   expected heads. This is split into **05c1**, the fake git foundation,
+   and **05c2**, the checkout state machine and parent boundary. 05c is
+   complete only after both. 05c1 adds fetched two-parent graphs, a local
+   three-way merge with markers, explicit resolved two-parent commits
+   (including unchanged trees), and expected-head pushes. The world's
+   existing callers keep ordinary one-parent/fast-forward defaults.
+   05c2 prepares `Start::Merge`, forwards bounded repository/path
+   conflicts, retains the second parent until committed, and carries
+   expected heads through successful and ambiguous pushes.
 4. **05d the host and the worker's root:** transcripts, turns, spend,
    merges in progress, mid-run pushes, graces.
 5. **05e the session:** turns told, opening from a transcript, pricing.

@@ -449,7 +449,15 @@ its types (testing-strategy.md, section 4):
 - **git:** a remote of refs and commits, and local working trees, with
   fast-forward rules, merges that conflict, failing fetches, refused
   pushes, another party moving a branch, and pushes that land and say
-  they timed out.
+  they timed out. The fake checkout's local merge combines nonoverlapping
+  line edits and whole-file additions/deletions, leaving markers for
+  conflicting edits. Its histories have a single merge base; both
+  parents are cloned and fetched, with converging ancestors visited once.
+  A merge commit refuses markers remaining in an originally conflicted
+  path; deletion resolves that path. Explicit merge commits always record
+  both parents, including a tree unchanged from a parent. The remote's
+  expected-head condition also rejects a stale head that would otherwise
+  allow an ordinary fast-forward.
 
 Each child domain has a world of its own, its parent and neighbours
 scripted in it. The whole worker's world has all four, the agents'

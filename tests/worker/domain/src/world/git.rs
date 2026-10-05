@@ -425,9 +425,14 @@ impl Remote for Line<'_> {
         })
     }
 
-    fn push(&mut self, remote: &[u8], branch: &[u8], commit: u64) -> Result<Pushed, fake::Fault> {
-        let Answer::Pushed(pushed) = self.git(remote, Call::Push { branch: branch.into(), commit, expected: None })?
-        else {
+    fn push(
+        &mut self,
+        remote: &[u8],
+        branch: &[u8],
+        commit: u64,
+        expected: Option<u64>,
+    ) -> Result<Pushed, fake::Fault> {
+        let Answer::Pushed(pushed) = self.git(remote, Call::Push { branch: branch.into(), commit, expected })? else {
             panic!("a push is answered with how it went");
         };
         Ok(match pushed {
@@ -440,14 +445,24 @@ impl Remote for Line<'_> {
         self.forge.object(commit).expect("a commit of the store").parent
     }
 
+    fn merge_parent(&self, commit: u64) -> Option<u64> {
+        self.forge.object(commit).expect("a commit of the store").merge_parent
+    }
+
     fn tree(&self, commit: u64) -> Files {
         tree(self.forge, commit)
     }
 
-    fn store(&mut self, parent: u64, tree: Files) -> Option<u64> {
+    fn store(&mut self, parent: u64, merging: Option<u64>, tree: Files) -> Option<u64> {
         let files = tree.into_iter().map(|(path, content)| File { path: path.into(), content: content.into() });
-        let committed = forge::commit(self.forge, &self.env.limits, parent, files.collect());
-        committed.expect("the forge's store has room for every commit")
+        match merging {
+            Some(second) => Some(
+                forge::merge_commit(self.forge, &self.env.limits, parent, second, files.collect())
+                    .expect("the forge's store has room for every merge"),
+            ),
+            None => forge::commit(self.forge, &self.env.limits, parent, files.collect())
+                .expect("the forge's store has room for every commit"),
+        }
     }
 }
 

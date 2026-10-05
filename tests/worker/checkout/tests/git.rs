@@ -155,3 +155,117 @@ fn the_forge_fails_as_scripted() {
     assert_eq!(fetch, Ok(first), "fetching is not refused");
     assert!(forge.moves().is_empty(), "what failed moved nothing");
 }
+
+#[test]
+fn a_clean_merge_combines_independent_lines_and_records_two_parents() {
+    let (mut forge, mut checkout, first) = cloned(&[(b"code", b"one\ntwo\nthree\n")]);
+    checkout.write(b"w/temper/code", b"ONE\ntwo\nthree\n");
+    let ours = git::commit(&mut forge, &mut checkout, b"w/temper", first).expect("local parent").expect("changed");
+    let theirs = forge.advance(b"forge/temper", b"main", b"code", b"one\ntwo\nTHREE\n");
+    git::fetch(&mut forge, &mut checkout, b"forge/temper", b"w/temper", Want::Commit(theirs)).expect("remote parent");
+    let merged = git::merge(&forge, &mut checkout, b"w/temper", theirs).expect("fetched");
+    assert!(merged.conflicts.is_empty());
+    assert_eq!(files(&checkout), tree(&[(b"code", b"ONE\ntwo\nTHREE\n")]));
+    let commit = git::commit_merging(&mut forge, &mut checkout, b"w/temper", ours, theirs).expect("clean merge");
+    assert_eq!(forge.parent(commit), Some(ours));
+    assert_eq!(forge.merge_parent(commit), Some(theirs));
+    assert_eq!(
+        git::push_expected(&mut forge, &checkout, b"forge/temper", b"w/temper", commit, b"main", theirs),
+        Ok(Pushed::Pushed)
+    );
+    // Clone only the merge tip: both sides of its converging graph must arrive.
+    let mut fresh = Checkout::new();
+    git::clone_repository(&mut forge, &mut fresh, b"forge/temper", b"new/temper").expect("clone");
+    for ancestor in [first, ours, theirs, commit] {
+        git::check_out(&forge, &mut fresh, b"new/temper", ancestor).expect("both parents were cloned");
+    }
+    let mut fetched = Checkout::new();
+    fetched.mkdir(b"fetched/temper/.git");
+    git::fetch(&mut forge, &mut fetched, b"forge/temper", b"fetched/temper", Want::Commit(commit))
+        .expect("fetch merge");
+    for ancestor in [first, ours, theirs, commit] {
+        git::check_out(&forge, &mut fetched, b"fetched/temper", ancestor).expect("both parents were fetched");
+    }
+}
+
+#[test]
+fn conflicts_preserve_markers_and_refuse_commit_until_resolved_or_deleted() {
+    let (mut forge, mut checkout, first) = cloned(&[(b"code", b"old\n")]);
+    checkout.write(b"w/temper/code", b"ours\n");
+    let ours = git::commit(&mut forge, &mut checkout, b"w/temper", first).expect("parent").expect("changed");
+    let theirs = forge.advance(b"forge/temper", b"main", b"code", b"theirs\n");
+    git::fetch(&mut forge, &mut checkout, b"forge/temper", b"w/temper", Want::Commit(theirs)).expect("fetch");
+    assert_eq!(git::merge(&forge, &mut checkout, b"w/temper", theirs).expect("merge").conflicts, [b"code".to_vec()]);
+    assert_eq!(checkout.content(b"w/temper/code"), Some(&b"<<<<<<< ours\nours\n=======\ntheirs\n>>>>>>> theirs\n"[..]));
+    assert_eq!(
+        git::commit_merging(&mut forge, &mut checkout, b"w/temper", ours, theirs),
+        Err(git::CommitFailure::Unresolved { files: vec![b"code".to_vec()] })
+    );
+    assert_eq!(forge.branch(b"forge/temper", b"main"), Some(theirs));
+    checkout.remove(b"w/temper/code");
+    let resolved =
+        git::commit_merging(&mut forge, &mut checkout, b"w/temper", ours, theirs).expect("deletion resolves");
+    assert!(forge.tree(resolved).is_empty());
+    assert_eq!(resolved, theirs + 1, "refused commit made no object");
+}
+
+#[test]
+fn even_an_unchanged_merge_tree_is_committed_and_a_stale_expected_head_refuses() {
+    let (mut forge, mut checkout, first) = cloned(&[(b"code", b"old")]);
+    let theirs = forge.advance(b"forge/temper", b"main", b"code", b"new");
+    git::fetch(&mut forge, &mut checkout, b"forge/temper", b"w/temper", Want::Commit(theirs)).expect("fetch");
+    assert!(git::merge(&forge, &mut checkout, b"w/temper", theirs).expect("merge").conflicts.is_empty());
+    let merged =
+        git::commit_merging(&mut forge, &mut checkout, b"w/temper", first, theirs).expect("unchanged records merge");
+    assert_eq!(forge.tree(merged), forge.tree(theirs));
+    assert_eq!(forge.parent(merged), Some(first));
+    assert_eq!(forge.merge_parent(merged), Some(theirs));
+    assert_eq!(
+        git::push_expected(&mut forge, &checkout, b"forge/temper", b"w/temper", merged, b"main", first),
+        Ok(Pushed::Rejected)
+    );
+    assert_eq!(forge.branch(b"forge/temper", b"main"), Some(theirs));
+    assert_eq!(
+        git::push_expected(&mut forge, &checkout, b"forge/temper", b"w/temper", merged, b"main", theirs),
+        Ok(Pushed::Pushed)
+    );
+}
+
+#[test]
+fn an_unfetched_merge_parent_refuses_without_touching_the_tree() {
+    let (mut forge, mut checkout, first) = cloned(&[(b"code", b"old")]);
+    let theirs = forge.advance(b"forge/temper", b"main", b"code", b"new");
+    assert_eq!(git::merge(&forge, &mut checkout, b"w/temper", theirs), Err(NotFetched));
+    assert_eq!(
+        git::commit_merging(&mut forge, &mut checkout, b"w/temper", first, theirs),
+        Err(git::CommitFailure::NotFetched)
+    );
+    assert_eq!(files(&checkout), tree(&[(b"code", b"old")]));
+    assert!(!checkout.exists(b"w/temper/.git/MERGE_HEAD"));
+}
+
+#[test]
+fn merges_preserve_additions_deletions_and_modify_delete_conflicts() {
+    let (mut forge, mut checkout, first) = cloned(&[(b"clean", b"old"), (b"conflict", b"old")]);
+    checkout.write(b"w/temper/conflict", b"modified");
+    checkout.write(b"w/temper/ours", b"added");
+    let ours = git::commit(&mut forge, &mut checkout, b"w/temper", first).expect("parent").expect("changed");
+    let theirs = forge.store(first, None, tree(&[(b"theirs", b"added too")])).expect("deletions change tree");
+    assert_eq!(forge.push(b"forge/temper", b"main", theirs, None), Ok(Pushed::Pushed));
+    git::fetch(&mut forge, &mut checkout, b"forge/temper", b"w/temper", Want::Commit(theirs)).expect("fetch");
+    let merged = git::merge(&forge, &mut checkout, b"w/temper", theirs).expect("merge");
+    assert_eq!(merged.conflicts, [b"conflict".to_vec()]);
+    assert!(!checkout.exists(b"w/temper/clean"), "the unchanged file takes the other side's deletion");
+    assert_eq!(checkout.content(b"w/temper/ours"), Some(&b"added"[..]));
+    assert_eq!(checkout.content(b"w/temper/theirs"), Some(&b"added too"[..]));
+    assert_eq!(
+        checkout.content(b"w/temper/conflict"),
+        Some(&b"<<<<<<< ours\nmodified\n=======\n\n>>>>>>> theirs\n"[..])
+    );
+    checkout.write(b"w/temper/conflict", b"resolved");
+    let committed = git::commit_merging(&mut forge, &mut checkout, b"w/temper", ours, theirs).expect("resolved");
+    assert_eq!(
+        forge.tree(committed),
+        tree(&[(b"conflict", b"resolved"), (b"ours", b"added"), (b"theirs", b"added too")])
+    );
+}
