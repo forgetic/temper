@@ -53,13 +53,13 @@ overlap deferred (README.md, 3.3):
 | Crate | What goes, or changes |
 |---|---|
 | `temper-channel` | `payload/v1.rs`; the second version renumbered the first, since nothing has shipped (`channel.md`, 4.5) |
-| `temper-worker-protocol`, `temper-agent-protocol` | their first-version translations |
-| `temper-worker-domain-host`, `-agent`, `temper-agent-domain*` | snapshots: `Assignment::snapshot`, `Finish::Parked`'s snapshot, the agent's refusal of a start that carries one |
+| `temper-worker-protocol` | its first-version translations |
+| `temper-worker-domain-host`, `-agent` | snapshots: `Assignment::snapshot`, `Finish::Parked`'s snapshot |
+| `temper-worker-domain-agent` | replaced by `smith-host-domain` as the worker's agent child, once no run speaks the first version (05s-smith.md, 05s6) |
 | `temper-worker-domain-checkout` | creating a missing base branch from the default branch (`worker.md`, section 11); `Op::Push`'s expected head no longer optional |
 | `temper-engine-domain-fleet` | the graces at the hello no longer optional |
 | `temper-engine-domain-brief` | the `Item`, `Comments`, `Dependencies` and `Plan` sources and kinds |
 | `temper-engine-domain-views` | `Subject::Item` renamed `Task`, `Board` renamed `Project`, and their chunks |
-| `temper-agent-domain-run` | the grants' `forge` flag and outlets, for the charter's tool families |
 | `testing/temper-fake-forge-domain` | its wiki; labels as anything but display; a push that names no expected head |
 | `temper-forge-forgejo`, `testing/temper-fake-forge-protocol` | wiki pages, listing by label, label writes but for display, the wiki's webhook, the person in a key's marker (`forge.md`, section 19) |
 | everywhere | the citations still naming deleted documents or sections |
@@ -80,8 +80,13 @@ own, written from that revision, not here:
 - **the web:** HTTP and live streams on skein's server and SSE writer;
   signing in through the forge's OAuth, the sign-ins' tokens in the
   store's secret records; JSON both ways; rendering transcripts' turns;
+- **the worker's agent link:** `smith-channel`'s host half over an agent
+  process's pipes, spawning smith's binary in a contained process tree
+  (`worker.md`, section 9);
+- **what goes to skein,** as 05s-smith.md, section 6 lists, where a step
+  has not taken it already;
 - **credentials:** an LLM account's refresh token moved from
-  `temper-oauth`'s file record into the store's secret records, still
+  its file record into the store's secret records, still
   written by the engine's protocol layer; the web's OAuth client; git
   identities, webhook secrets and API tokens per adopted repository and
   per forge (`credentials.md`, as the design's README revises it);

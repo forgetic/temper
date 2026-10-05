@@ -240,6 +240,10 @@ have, and acknowledges each.
   copy of one already committed is acknowledged again and dropped.
 - **Answers** (7.4): finished, the result checked against the contract
   and the state now, the task closing; parked, idle; failed, by class.
+- **Charters, tools and messages are the root's own types.** smith's
+  charter, its host tools and its messages appear only in the engine's
+  protocol layer (07a; `agent.md`, sections 4 and 5), so the root's run
+  and tool routes do not wait for 05s.
 - **Calls** (7.3) are named by attempt and name, checked, decided once,
   committed with their answer, and answered after the commit; one seen
   before is answered from its record:

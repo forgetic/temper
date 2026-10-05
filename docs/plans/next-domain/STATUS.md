@@ -32,6 +32,7 @@ The focused fixture gate skips its two explicit regeneration tests.
 | 05d worker turns and transcript lifecycle | merged | e2a6a71 | Gate passed; 2,172 focused / 6.761 s; 32 fuzzy / 25.290 s. |
 | 05e session transcripts and pricing | merged | 8b91ed3 | Gate passed; 2,187 focused / 5.116 s; 33 fuzzy / 17.917 s. |
 | 06a walking skeleton | story merged | 429647c | Gate passed; 2,270 focused / 10.521 s; 38 fuzzy / 29.586 s; root serial 40 / 0.168 s, 3 / 0.740 s. |
+| 05s0 smith's design | merged; smith's first commit | 8b32f55; smith 874c4d7 | Markdown only: smith's `docs/design/domain/`; temper's `agent.md` rewritten; this plan revised. |
 | 06a tasks boundary audit | merged | c6d07ef | Gate passed; 2,249 focused / 5.861 s; 37 fuzzy / 17.878 s; root serial 46 / 0.190 s, tasks 37 / 0.167 s. |
 | Boundary style | merged | 5ca23b7 | Gate passed; 2,249 focused / 8.630 s; 37 fuzzy / 27.153 s. |
 | Field-doc formatting companion | merged with backfill | a718c70 | Final backfill gate; 2,249 focused / 11.273 s; 37 fuzzy / 29.489 s. |
@@ -65,8 +66,15 @@ The focused fixture gate skips its two explicit regeneration tests.
 
 **05 — runtime**
 
-- Keep 05f–g parked; preserve native run/tool work on its branch.
+- 05f–g replaced by 05s (smith); keep their branch (`next-domain/05f`) to port into 05s4 and 05s5.
 - Carry remaining v2 watchdog, cancellation and kill coverage into runtime verification.
+
+**05s — smith**
+
+- Make `ai/smith` on the forge, with its GitHub backup.
+- 05s1 smith's workspace; 05s2 the agent copied; 05s3 temper's moved aside.
+- 05s4 the run and tools, generic; 05s6 the host domain; 05s5 the channel, protocol and binary; 05s7 temper's half.
+- Shared kit to skein as 05s-smith.md, section 6 says.
 
 **06 — root**
 

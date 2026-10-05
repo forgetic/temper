@@ -291,6 +291,22 @@ What this design changes in each, for the migration plan:
 | 9. Open questions | smith's `run.md`, 15, `session.md`, 11, `tools.md`, 8; agent.md, 10 |
 | 10. Not built yet | smith's `session.md`, 8 (context management), `tools.md`, 8 (the commands' environment), `run.md`, 5.1 (MCP); agent.md, 11 |
 
+### 6.4 `drafts/core.md`
+
+| Section | Now |
+|---|---|
+| 1. In one page | core.md, 1 |
+| 2. temper and external systems | core.md, 7; forge.md, 4 |
+| 3. The five primitives | core.md, 3; in depth in tasks.md, authority.md, connectors.md |
+| 3.6 The store and the outbox | core.md, 4; engine.md, 5; connectors.md, 4 |
+| 4. Plans and coordinators | core.md, 6 |
+| 5. Communication | tasks.md, 7 |
+| 6. The forge connector | forge.md |
+| 7.1 A goal, as tasks | core.md, 9 |
+| 7.2 Landing, step by step | forge.md, 15 |
+| 8. What carries over | this section, and each document's "From today" |
+| 9. Open questions | core.md, 11, and each document's |
+
 ### 6.5 This directory's `agent.md`, before smith
 
 The agent's document of 2026-10-04, which code and plans cite as
@@ -313,19 +329,3 @@ The agent's document of 2026-10-04, which code and plans cite as
 | 9. The world | smith's documents, each; agent.md, section 9 |
 | 10. Open questions | smith's `run.md`, section 15; agent.md, section 10 |
 | 11. From today | smith's `run.md`, section 14; agent.md, section 11 |
-
-### 6.4 `drafts/core.md`
-
-| Section | Now |
-|---|---|
-| 1. In one page | core.md, 1 |
-| 2. temper and external systems | core.md, 7; forge.md, 4 |
-| 3. The five primitives | core.md, 3; in depth in tasks.md, authority.md, connectors.md |
-| 3.6 The store and the outbox | core.md, 4; engine.md, 5; connectors.md, 4 |
-| 4. Plans and coordinators | core.md, 6 |
-| 5. Communication | tasks.md, 7 |
-| 6. The forge connector | forge.md |
-| 7.1 A goal, as tasks | core.md, 9 |
-| 7.2 Landing, step by step | forge.md, 15 |
-| 8. What carries over | this section, and each document's "From today" |
-| 9. Open questions | core.md, 11, and each document's |

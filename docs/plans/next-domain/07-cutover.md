@@ -12,11 +12,15 @@ conventions: README.md.
   task and attempt with no packing, the second payload version, turns and
   their acknowledgements; its connections, credentials and OAuth carry
   over.
+- It writes smith's charters: the brief and messages rendered, the
+  engine's tools declared as smith's host tools, decoded and answered
+  (`agent.md`, sections 4 and 5).
 - The system worlds, `tests/agent/domain` and `tests/worker/domain`, run
   the new root, with the new engine world as their library, on the
-  channel's second version.
-- The legacy crates and worlds of README.md, 4.1, are deleted, with the
-  legacy translation in the engine's protocol layer.
+  channel's second version, and smith's agent.
+- The legacy crates and worlds of README.md, 4.1, and temper's legacy
+  agent (05s-smith.md, section 3), are deleted, with the legacy
+  translation in the engine's protocol layer.
 - `docs/design/` describes what is built again.
 
 ## 2. Before it starts
@@ -67,6 +71,13 @@ of this step:
   messages, turns and their acknowledgements among them), `payload.rs`
   (the second version's charter, messages, calls, outcomes and turns to
   and from the new root's types);
+- write temper's half of the agent there (`agent.md`, section 11), on
+  `smith-channel` and `smith-transcript`: the root's charter encoded as
+  smith's, the brief's typed sections and messages rendered as smith's
+  text, the engine's tools and connectors' reads declared as host tools
+  with their schemas, their calls decoded and their answers rendered;
+  the brief's rendering and the verdict lists come from
+  `temper-legacy-agent-protocol`'s temper half, ported;
 - `tests/engine/protocol` gains the new translation's tests (every record
   both ways, every refusal of a peer's malformed name or payload), beside
   the legacy ones.
@@ -77,7 +88,8 @@ of this step:
   `temper-engine-domain-world` (the new engine world's store, people,
   scripted workers' names and referee) and `temper-engine-forge-world`
   (the connector world's translation), and on 07a's translation; their
-  channel speaks the second version;
+  channel speaks the second version; each run is smith's agent, from
+  smith by git, with smith's fake LLM;
 - their people act on the web only; issues handed in become chats and
   goals; records an earlier life wrote become the store an earlier life
   committed;
@@ -89,7 +101,9 @@ The legacy engine world still runs, alone, until 07d.
 ### 07c the engine's protocol layer switches
 
 The listener, the connections, credentials and OAuth deliver the new
-root's `Event`s and take its `Request`s; the `legacy` module and the
+root's `Event`s and take its `Request`s, its LLM accounts' tokens
+refreshed with `smith-oauth` (or skein's client, 05s-smith.md,
+section 6) in place of `temper-oauth`; the `legacy` module and the
 dependency on `temper-legacy-engine-domain` go; `tests/engine/protocol`'s
 legacy tests go with them, and `tests/worker/protocol`, whose socket
 worlds pair a worker with the engine's end of the link, moves to the new
@@ -98,8 +112,10 @@ payload version; workers and agents still speak both until step 08.
 
 ### 07d the legacy engine deleted
 
-The five legacy crates and four legacy worlds, their workspace members
-and dependency entries, and their lines in `Cargo.lock`. Nothing else may
+The five legacy crates and four legacy worlds, temper's legacy agent
+with its providers, its fake LLM and its worlds, and `temper-oauth`;
+their workspace members and dependency entries, and their lines in
+`Cargo.lock`. Nothing else may
 need to change: if something does, it was still using the legacy engine,
 and that is fixed first in its own increment.
 
@@ -109,8 +125,9 @@ and that is fixed first in its own increment.
   `agent-domain.md`; `docs/design/domain/` describes what is built;
 - revise, per the design's README, section 5: `protocol.md` (the store
   and the web as boundaries, their order of building, runs by task),
-  `channel.md` (the second version, as step 05 built it; its section 14),
-  `llm.md`, `docs/design/forge.md` (what goes, the new calls, adoption at
+  `channel.md` (the second version, as step 05 built it, the agent's hop
+  now smith's; its section 14), `llm.md` (to smith's protocol design, but
+  for the engine tools' half), `docs/design/forge.md` (what goes, the new calls, adoption at
   runtime), `testing.md` (sections 2.1, 4.5, 7 and 8: the new worlds, the
   fake store, the system worlds), `performance.md` (turns, transcripts, the
   working set of tasks), `docs/development/protocol-implementation.md`;
@@ -122,7 +139,8 @@ Markdown, but for the citations in code, which run the gate.
 
 ## 4. Done when
 
-- `rg -i legacy crates tests testing` finds nothing;
+- `rg -i legacy crates tests testing` finds nothing, nor
+  `rg 'temper-(agent|llm|oauth|fake-llm)'`;
 - the system worlds pass on the new root with every story mapped;
 - the two suites are within their budgets with the legacy worlds gone,
   and README.md, 5.5 records their new shares;

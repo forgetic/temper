@@ -12,6 +12,13 @@ passing unchanged. What goes (snapshots, the first payloads, base
 branches made by the worker) goes in step 08. Overview and conventions:
 README.md.
 
+**The agent leaves for smith** (05s-smith.md). 05e, its session, is
+merged here and is where smith's copy starts; 05f and 05g are replaced by
+05s, which builds the run, the tools and the agent's protocol in smith,
+generic, and temper's half of the second version in 05s7. Section 2.3,
+the agent's tests in section 3 and 05f and 05g in section 4 are kept as
+what 05s ports.
+
 ## 1. Why this is extension, not replacement
 
 - **Runs are already named by tokens** in the fleet, the worker and the
@@ -111,6 +118,11 @@ only two output slots and the fleet's existing `max_out` bound suffices.
 the conflicted files in the agent's start.
 
 ### 2.3 The agent
+
+What follows was the agent's part of this step; the session's is merged
+(05e), and the rest is built in smith by 05s4, in smith's terms (host
+tools for the engine's tools, `deliver` for the push, a contract with
+fields for `OutcomeSpec`).
 
 `temper-agent-domain-session`:
 
@@ -243,8 +255,9 @@ not a domain parser.
 
 - `temper-worker-protocol`: the new link kinds; payloads still passed
   through as bytes.
-- `temper-agent-protocol`: version 2's charter, messages, calls and
-  outcomes translated to and from the agent's domain; the tools' schemas,
+- `temper-agent-protocol`, now smith's (05s5) but for temper's half,
+  which the engine's protocol layer writes (07a): version 2's charter,
+  messages, calls and outcomes translated to and from the agent's domain; the tools' schemas,
   decoding and rendering for every engine tool, each connector's reads and
   `wait`; `finish` with the result contract (`llm.md`, as the design's
   README, section 5, revises it).
@@ -345,16 +358,18 @@ passing with the same counts.
    gate still enforces the shared 15/60-second limits.
 6. **05f the run and the tools:** messages, waiting and parking, the
    engine's tools, contracts, merges in progress, the budget in the unit.
+   Replaced by 05s4, in smith; its parked branch is ported there.
 7. **05g the agent's and the worker's protocol translations** of the
-   second version.
+   second version. Replaced by 05s5 (the agent's, in smith) and 05s7 (the
+   worker's, and temper's channel carrying smith's charter).
 
 05c to 05f are independent of each other once 05b has fixed the
 payloads' shapes; 05g follows them.
 
 ## 5. Done when
 
-- every item of `worker.md`, section 11 ("New") and `agent.md`, section
-  11 has a story in its crate's world;
+- every item of `worker.md`, section 11 ("New") has a story in its
+  crate's world, and the agent's are 05s's;
 - the system worlds pass unchanged, on the first version;
 - nothing of the first version, snapshots or base-branch creation has
   been removed (step 08 does that).

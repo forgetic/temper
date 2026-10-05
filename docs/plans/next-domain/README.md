@@ -16,7 +16,8 @@ today's
 documents are named by path (`docs/design/forge.md`, the forge's protocol
 layer) or as "the current `engine-domain.md`"; skein's foundation
 documents by their file names (`programming-model.md`,
-`testing-strategy.md`).
+`testing-strategy.md`); smith's design documents, in smith's repository,
+with smith's name (smith's `run.md`).
 
 ## 1. In one page
 
@@ -31,9 +32,14 @@ documents by their file names (`programming-model.md`,
   has caught up (step 06); then one cutover (step 07) switches them over
   and deletes it.
 - **What the design only adds to is extended in place.** The fleet, the
-  worker, the agent, the channel, the brief, the views, the fake forge
-  and the fake checkout gain variants and fields beside what they have.
-  The old engine never sends the new ones, so its tests do not move.
+  worker, the channel, the brief, the views, the fake forge and the fake
+  checkout gain variants and fields beside what they have. The old
+  engine never sends the new ones, so its tests do not move.
+- **The agent leaves for smith** (step 05s): a kit for flexible LLM
+  agents in its own repository, which temper takes as it takes skein.
+  smith starts from a copy of temper's agent and is made generic there;
+  temper's agent is frozen as legacy until the cutover switches the
+  system worlds to smith's.
 - **What goes, goes after the cutover** (step 08): snapshots, the
   channel's first payloads, the wiki, labels as an index, base branches
   the worker makes, the old names in views and briefs. Deleting is the
@@ -50,14 +56,17 @@ documents by their file names (`programming-model.md`,
 00 groundwork ──┬──► 01 authority ─────────┐
                 ├──► 02 tasks ─────────────┤
                 ├──► 03 people ────────────┼──► 06 root ──► 07 cutover ──► 08 after
-                ├──► 04 forge connector ───┤      ▲
-                └──► 05 runtime ───────────┴──────┘
-                     (fleet, worker, agent, channel)
+                ├──► 04 forge connector ───┤      ▲             ▲
+                ├──► 05 runtime ───────────┴──────┘             │
+                │    (fleet, worker, channel; the session)      │
+                └──► 05s smith ─────────────────────────────────┘
+                     (the agent, in smith's repository)
 ```
 
 01 to 05 run in parallel once 00 is merged; 06 starts with its skeleton
 once 01, 02, 03 and the first increment of 05 are in, and takes 04 and
-the rest of 05 as they arrive.
+the rest of 05 as they arrive. 05s replaces 05f and 05g; the cutover
+needs it.
 
 ## 2. My assessment
 
@@ -75,7 +84,7 @@ the rest of 05 as they arrive.
 | `brief`, `views`, `accounts` (2.3k, 2.2k, 0.5k) | kept: new sections, subjects named by task | extended; renamed after |
 | `notes` (2.5k / 1.8k) | from the wiki to the store | converted after the cutover |
 | worker, four crates (13.5k / 16.9k) | changed little: turns, transcripts, merges in progress, expected heads | extended |
-| agent, four crates (15.3k / 19.1k) | engine tools, messages, waiting, result contracts, spend, turns | extended |
+| agent, four crates (15.3k / 19.1k), its providers, OAuth and fake LLM | moves to smith, made generic there: host tools, messages, waiting, result contracts, delivery, spend, turns | built beside, in smith's repository, from a copy; temper's frozen |
 | `temper-channel` (12.1k, of it 5.7k tests) | link extended; payloads redone (2.7k) | second payload version beside the first |
 | `temper-engine-protocol` (4.9k) | translation redone (1.7k); connections, credentials, OAuth kept | converted at the cutover |
 
@@ -107,8 +116,15 @@ through a hybrid would test behaviour that is going. So the old root is
 strangled rather than converged: frozen beside the new one, kept green
 while that is cheap, switched off in one cutover, deleted. The step-by-step
 convergence you asked for happens where it pays: in the fleet, the
-worker, the agent, the channel, the brief and the views, which extend
-first and contract after (section 3).
+worker, the channel, the brief and the views, which extend first and
+contract after (section 3).
+
+The agent was to extend in place too, and its session did (05e). It now
+leaves for smith, which speaks only the second version and smith's own
+channel, while the system worlds need temper's agent on the first until
+the cutover. So the agent is built beside as well, in smith's
+repository, from a copy, and temper's is frozen (05s-smith.md,
+section 1).
 
 Keeping the old engine running is not free. It bites in four places, and
 each step says how it is handled:
@@ -245,6 +261,10 @@ From step 00 to step 07 the legacy crates and worlds:
 | `tests/engine/plan` | `tests/legacy/engine/plan` (`temper-legacy-engine-plan-world`) |
 | `tests/engine/forge` | `tests/legacy/engine/forge` (`temper-legacy-engine-forge-world`) |
 
+Step 05s3 moves temper's agent aside the same way: its crates, its
+providers and its fake LLM, and its worlds but the system world
+(05s-smith.md, section 3).
+
 Two of these names the design gives to new crates (the root, and the
 forge connector's top) and two of the paths to new worlds (the engine's
 and the forge connector's); the other five move so that everything
@@ -281,6 +301,11 @@ documents by that path from its first line: `//! (domain/tasks.md,
 section 4)`, so `domain/forge.md` (the connector) and `forge.md` (the
 protocol layer, as code cites it today) are never confused. Citations in
 kept code are repointed as each crate is touched, and the rest at step 08.
+
+smith's design is in smith's repository, `docs/design/domain/`, its
+first commit; temper's `agent.md` says what temper takes from smith and
+fills in, and the design's README, 6.5, where the previous `agent.md`'s
+sections went, for the citations that name them.
 
 ## 5. Conventions every step follows
 
@@ -488,6 +513,10 @@ Authority has step tests only.
 | forge connector world | 0.5 | 4 |
 | new root world | 0.5 | 4 |
 
+The agent's worlds are copied into smith (05s2) and measured against
+smith's own budgets; temper's legacy copies keep their shares above until
+07d removes them.
+
 These allotments add at most 2.2 focused and 16 fuzzy seconds of serial
 work to the overlap. They are targets, not proof that concurrent suites
 fit: every code increment still runs both enforced profiles in full.
@@ -514,9 +543,10 @@ only Markdown skips the checks, as the workflow says.
 | 02 [tasks](02-tasks.md) | `temper-engine-domain-tasks`, `tests/engine/tasks` | 00 | none |
 | 03 [people](03-people.md) | `temper-engine-domain-people`, `tests/engine/people` | 00 | none |
 | 04 [forge connector](04-forge-connector.md) | the connector's four crates, `tests/engine/forge`; the fake forge grown | 00 | the fake forge, extended |
-| 05 [runtime](05-runtime.md) | fleet, worker, agent and channel extended; payload version 2 | 00 | extended; legacy match arms |
+| 05 [runtime](05-runtime.md) | fleet, worker and channel extended; the session (05e); payload version 2 | 00 | extended; legacy match arms |
+| 05s [smith](05s-smith.md) | the agent copied into smith's repository and made generic there; temper's moved aside; the channel's agent hop to smith | 05e; README.md, section 8's gates | renames only |
 | 06 [root](06-root.md) | `temper-engine-domain`, `tests/engine/domain`; brief and views extended | 01, 02, 03, 05a; then 04, 05 | extended |
-| 07 [cutover](07-cutover.md) | engine protocol converted; system worlds moved; legacy deleted | 06 | the engine protocol; the system worlds; legacy deleted |
+| 07 [cutover](07-cutover.md) | engine protocol converted, writing smith's charters; system worlds moved, on smith's agent; legacy deleted | 06, 05s | the engine protocol; the system worlds; legacy deleted |
 | 08 [after](08-after.md) | notes into the store; contractions; what comes below the domain | 07 | contracted |
 
 ## 7. Where each owed change lands
@@ -539,8 +569,10 @@ the step that does it:
 | | names by task; no repository packing | 05 (wire), 07 (engine translation) |
 | | snapshots go; a versioned turn payload | 05 (beside), 08 (gone) |
 | | caps and sizes; its section 14 rewritten | 05 |
+| smith | the agent's domain, protocol, providers and channel hop to smith's repository; temper's half in the engine's protocol layer | 05s; 07a |
 | `credentials.md` | the refresh token in the store's secret records; the web's OAuth client; credentials per adopted repository | 08 (follow-on plan) |
-| `llm.md` | schemas for every engine tool, connectors' reads and `wait`; `finish` with the result contract; turns encoded with their names; completions priced | 05 |
+| `llm.md` | to smith's protocol design: `finish` with the result contract; turns encoded with their names; completions priced; host tools' schemas passed through | 05s5 |
+| | temper's half: schemas, decoding and rendering for every engine tool and connectors' reads | 07a |
 | `docs/design/forge.md` | records, outcome blocks, the wiki, nonces, the person in a marker go | 00 (drafts), 08 (the rest) |
 | | the new calls | 04 (fake), 08 (Forgejo protocol plan) |
 | | repositories adopted at runtime, on several forges | 04 (domain), 08 (protocol plan) |
@@ -558,7 +590,7 @@ implemented before those plans are written.
 ## 8. Current order and independent review
 
 Finish the full charged 06a walking story before adding depth in 02d–e,
-04b–f or 05f–g. Only the finite funding and atomic admission slice of 02e
+04b–f or the agent's runtime (05f–g, now 05s). Only the finite funding and atomic admission slice of 02e
 needed by that story comes forward. Already-started deeper work stays on
 its branch. Once the story passes, audit every tasks event and request
 against an actual root route; merge or remove unused variants and put root
@@ -566,7 +598,8 @@ mechanics in the root unless `domain/tasks.md` assigns them to the hub.
 Record the resulting contracts in `domain/engine.md` and `domain/tasks.md`
 in the same branch. Resume paused increments in the plan's order only
 after the walking story, tasks audit, documentation backfill and five
-style checks have passed.
+style checks have passed. The agent's runtime then resumes as step 05s,
+in smith's repository: 05f and 05g are ported into it, not merged.
 
 Every increment keeps the existing independent review and four-check gate.
 Review rejects undocumented new public items. Its checklist includes:
