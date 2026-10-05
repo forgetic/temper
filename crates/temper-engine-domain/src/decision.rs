@@ -32,7 +32,7 @@ pub enum Output {
 pub struct Decision {
     limits: Limits,
     writes: List<Write>,
-    deliveries: List<Delivery>,
+    deliveries: Queue<Delivery>,
 }
 #[derive(Debug)]
 struct Held {
@@ -55,7 +55,7 @@ impl Decision {
         Decision {
             limits: *l,
             writes: List::with_capacity(l.writes.checked_sub(1).expect("header slot reserved")),
-            deliveries: List::with_capacity(l.deliveries),
+            deliveries: Queue::with_capacity(l.deliveries),
         }
     }
     /// A replacement at the same key keeps its original position. All child
@@ -97,7 +97,7 @@ impl Decision {
         if !within {
             return Err(delivery);
         }
-        self.deliveries.push(delivery)
+        self.deliveries.try_push(delivery)
     }
 }
 impl Journal {
@@ -179,7 +179,7 @@ pub fn fresh(j: &mut Journal, family: Family) -> Option<u64> {
 }
 /// Return ownership on refusal. The root must call `takes` before making
 /// the decision; this defensive check does not undo already-routed children.
-pub fn accept(j: &mut Journal, l: &Limits, decision: Decision, out: &mut Queue<Output>) -> Result<(), Decision> {
+pub fn accept(j: &mut Journal, l: &Limits, mut decision: Decision, out: &mut Queue<Output>) -> Result<(), Decision> {
     assert!(out.room() >= 1, "one root journal output reserved");
     if !takes(j, l)
         || decision.limits != *l
@@ -194,13 +194,20 @@ pub fn accept(j: &mut Journal, l: &Limits, decision: Decision, out: &mut Queue<O
         j.deployment.commits = j.deployment.commits.checked_add(1).expect("admitted commit number");
         let mut writes = List::with_capacity(decision.writes.len().checked_add(1).expect("reserved header slot"));
         writes.push(Write::Save(Record::Deployment(j.deployment))).expect("header slot reserved");
-        for write in decision.writes.into_boxed() {
+        for at in 0..decision.writes.len() {
+            let source = decision.writes.get_mut(at).expect("admitted write index");
+            let key = source.key();
+            // The source list is consumed in this step. An erase is a
+            // payload-free terminal placeholder, never submitted again.
+            let write = core::mem::replace(source, Write::Erase(key));
             writes.push(write).expect("admitted decision writes");
         }
         out.push(Output::Commit { number: j.deployment.commits, writes: writes.into_boxed() });
         j.dirty = false;
     }
-    for delivery in decision.deliveries.into_boxed() {
+    drop(decision.writes);
+    for _ in 0..decision.deliveries.len() {
+        let delivery = decision.deliveries.pop().expect("admitted delivery count");
         j.held.push(Held { after: j.deployment.commits, delivery });
     }
     Ok(())
@@ -238,7 +245,7 @@ pub fn worst_case(l: &Limits) -> Option<u64> {
     }
     Queue::<Held>::worst_case(l.held)?
         .checked_add(List::<Write>::worst_case(l.writes)?.checked_mul(2)?)?
-        .checked_add(List::<Delivery>::worst_case(l.deliveries)?)?
+        .checked_add(Queue::<Delivery>::worst_case(l.deliveries)?)?
         .checked_add(u64::from(l.writes).checked_mul(u64::from(l.transcript_bytes))?)?
         .checked_add(u64::from(l.held).checked_add(u64::from(l.deliveries))?.checked_mul(u64::from(l.result_bytes))?)
 }
