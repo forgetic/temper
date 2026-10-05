@@ -43,6 +43,8 @@ unavailable; the design records bounded/unknown handling and status links.
 | 01a authority values and order | merged, `2d38f2b` | all four workflow checks passed; focused 1,778/1,778 in 7.918 s, fuzzy 26/26 in 22.367 s, one ignored finding; authority serial total 0.087 s |
 | 01b funding arithmetic | merged, `c80d438` | all four workflow checks passed; focused 1,829/1,829 in 5.256 s, fuzzy 28/28 in 22.473 s, one ignored finding; authority serial total 0.115 s |
 | 01c authority policies and checks | merged, `e21dafb` | independent review passed; all four workflow checks passed; focused 1,850/1,850 in 4.888 s, fuzzy 28/28 in 18.143 s, one ignored finding; complete authority serial total 0.131 s |
+| 01d landing requirements | merged, `e9aea6d` | independent review corrected missing-facts refusal precedence; all four workflow checks passed; focused 2,118/2,118 in 4.506 s, fuzzy 30/30 in 16.345 s, one ignored finding; authority serial total 0.164 s |
+| 02a tasks batches and lifecycle | merged, `376cbd4` | independent review corrected held-closing creation and exhaustive matches; recovery regression passed; all four workflow checks passed; focused 2,115/2,115 in 5.532 s, fuzzy 30/30 in 20.070 s, one ignored finding; tasks serial focused 0.117 s, fuzzy 0.781 s |
 | 03a people sign-in and chat requests | merged, `959795f` | all four workflow checks passed; focused 1,822/1,822 in 7.251 s, fuzzy 28/28 in 22.695 s, one ignored finding; targeted people serial total 0.098 s before the added root-pressure regression |
 | 04a1 fake forge git foundations | merged, `0d09efc` | all four workflow checks passed; focused 1,833/1,833 in 6.661 s, fuzzy 28/28 in 22.321 s, one ignored finding; 68 targeted tests passed in 0.054 s |
 | 04a1 bounded traversal correction | merged, `0eb1ff0` | all four workflow checks passed; focused 1,833/1,833 in 9.325 s, fuzzy 28/28 in 27.457 s, one ignored finding; traversal uses a configured bounded `for` |
@@ -84,12 +86,22 @@ while adding typed v2 schemas, negotiation, bounded unknown-kind skipping,
 turns/transcripts, independent bytes and heap checks. Runtime translations
 and behavior remain later increments.
 
-Steps 01, 03, 04 and 05 are partially implemented. Landing requirements
-(01d) and tasks/batches/lifecycle (02a) are finishing review and validation.
-02a review corrections reject creation under held closing parents, preserve
-restorable records and use exhaustive matching; they are not yet merged.
-The forge client (04b) has its own worktree. Checkout extension (05c) is
-prepared separately. Steps 06 through 08 remain.
+Step 01 is complete. Landing checks pin CI to the exact head, apply clean
+lineage only where configured, count distinct eligible reviewers, and
+combine deployment, project and change gates without weakening refusals.
+The root remains responsible for authenticating facts and checking them in
+the committing decision. Missing landing facts do not hide an invalid role.
+
+02a implements bounded atomic task batches, dependency admission, lifecycle,
+closing, cancellation and validated durable restoration. Creation under a
+held closing parent refuses without mutation; result credits survive closing
+and recovery. Root integration and messages remain later task increments.
+
+Steps 02 through 05 are partially implemented. Task messaging (02b), the
+forge client (04b), checkout merges (05c) and worker turns (05d) are in
+isolated worktrees. The client API foundation is under review; its required
+world verification must pass before any client code reaches main. Steps 06
+through 08 remain.
 
 After groundwork, the plan's finer dependencies still apply: tasks needs
 authority's value and number shapes; the root's walking skeleton needs
