@@ -22,35 +22,7 @@
 //!   fake and ends the test with a [`Verdict`].
 
 pub mod heap;
-mod ledger;
-mod referee;
-mod schedule;
-mod stage;
-mod trace;
-
-pub use ledger::Ledger;
-pub use referee::{Expectations, Failure, Judge, Referee, Verdict};
-pub use schedule::{Key, Schedule};
-pub use stage::Stage;
-pub use trace::{Trace, assert_replays};
-
-use skein_lib::{Duration, Rng};
-
-/// Durations drawn uniformly from `min..=max`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Span {
-    pub min: Duration,
-    pub max: Duration,
-}
-
-impl Span {
-    #[must_use]
-    pub const fn millis(min: u64, max: u64) -> Span {
-        Span { min: Duration::from_millis(min), max: Duration::from_millis(max) }
-    }
-
-    /// A duration drawn from the span.
-    pub fn draw(self, rng: &mut Rng) -> Duration {
-        Duration::from_nanos(rng.between(self.min.as_nanos(), self.max.as_nanos()))
-    }
-}
+// Legacy test import paths stay stable while smith uses the shared kit directly.
+pub use skein_world::domain::{
+    Expectations, Failure, Judge, Key, Ledger, Referee, Schedule, Span, Stage, Trace, Verdict, assert_replays,
+};
