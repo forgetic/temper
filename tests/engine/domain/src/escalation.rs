@@ -88,6 +88,21 @@ struct AskInput {
     ask: people::Ask,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum ReadPurpose {
+    Requester,
+    FinalRole,
+    Rejected,
+}
+
+#[derive(Clone, Debug)]
+struct PendingRead {
+    to: Token,
+    owner: usize,
+    escalation: tasks::Escalation,
+    purpose: ReadPurpose,
+}
+
 /// Frozen world including real root state, store and pending outside scripts.
 /// Referee predictions come from inputs and durable boundary evidence, never
 /// from a private-state query (domain/engine.md, section 7.7).
@@ -105,6 +120,8 @@ pub struct World {
     assigned: usize,
     worker_answer: WorkerAnswer,
     asks: BTreeMap<Token, AskInput>,
+    pending_read: Option<PendingRead>,
+    next_read: u64,
     sign_in_script: SignInScript,
     first_choice: Option<(usize, u64, people::EscalationDecision, u8)>,
     iteration: u32,
@@ -192,6 +209,8 @@ impl World {
             assigned: 0,
             worker_answer: WorkerAnswer::Idle,
             asks: BTreeMap::new(),
+            pending_read: None,
+            next_read: 300,
             sign_in_script: SignInScript::Waiting,
             first_choice: None,
             iteration: 0,
@@ -286,16 +305,40 @@ impl World {
     }
 
     fn read(&mut self, to: u64, owner: usize, escalation: tasks::Escalation) {
-        let person = self.people[owner].expect("signed-in named reader");
-        self.referee.read(Token::new(to), person, escalation);
+        let purpose = match to {
+            201 => ReadPurpose::Requester,
+            202 => ReadPurpose::FinalRole,
+            204 => ReadPurpose::Rejected,
+            _ => panic!("named initial read purpose"),
+        };
+        self.read_input(PendingRead { to: Token::new(to), owner, escalation, purpose }, 0);
+    }
+
+    fn read_input(&mut self, read: PendingRead, delay: u32) {
+        assert!(self.pending_read.is_none(), "at most one current-view script obligation");
+        let person = self.people[read.owner].expect("signed-in named reader");
+        self.referee.read(read.to, person, read.escalation.clone());
         self.queue(
             engine::Event::ReadEscalation {
-                reply_to: ReplyTo::new(Token::new(to)),
-                sign_in: self.sessions[owner].expect("signed-in named reader"),
+                reply_to: ReplyTo::new(read.to),
+                sign_in: self.sessions[read.owner].expect("signed-in named reader"),
                 task: self.task.expect("named chat"),
             },
-            0,
+            delay,
         );
+        self.pending_read = Some(read);
+    }
+
+    fn retry_read(&mut self, to: Token, refusal: people::Refusal) {
+        self.referee
+            .read_refused(to, people::Reply::Refused(refusal))
+            .expect("current-view pressure consumes exactly one retryable read right");
+        let mut read = self.pending_read.take().expect("pending outside current-view read");
+        assert_eq!(read.to, to, "pressure terminal consumes its actual read right");
+        assert!(self.next_read < 316, "at most sixteen fresh pressure retries in this finite script");
+        read.to = Token::new(self.next_read);
+        self.next_read += 1;
+        self.read_input(read, 1);
     }
 
     fn answer(&mut self) {
@@ -612,18 +655,25 @@ impl World {
             }
             Delivery::WebReply { to, reply: people::Reply::Refused(refusal), .. } => {
                 let token = to.into_token();
-                assert_eq!(token, Token::new(232), "sole immediate key-conflict right");
-                self.referee
-                    .replied(&self.store.rows, token, people::Reply::Refused(refusal))
-                    .expect("immediate refusal preserves the original saved winner");
-                self.asks.remove(&token).expect("one pending outside conflict terminal");
+                if self.pending_read.as_ref().is_some_and(|read| read.to == token) {
+                    assert_eq!(refusal, people::Refusal::Busy, "retryable current-view refusal for {token:?}");
+                    self.retry_read(token, refusal);
+                } else {
+                    assert_eq!(token, Token::new(232), "sole immediate key-conflict right; refusal {refusal:?}");
+                    self.referee
+                        .replied(&self.store.rows, token, people::Reply::Refused(refusal))
+                        .expect("immediate refusal preserves the original saved winner");
+                    self.asks.remove(&token).expect("one pending outside conflict terminal");
+                }
             }
             Delivery::EscalationReply { to, person, context } => {
                 let token = to.into_token();
                 self.referee.viewed(&self.store.rows, token, person, &context).expect("independent durable held view");
-                match token.raw() {
-                    201 => self.initial_choice(),
-                    202 => self.ask(
+                let read = self.pending_read.take().expect("pending outside current-view read");
+                assert_eq!(read.to, token, "view consumes its actual read right");
+                match read.purpose {
+                    ReadPurpose::Requester => self.initial_choice(),
+                    ReadPurpose::FinalRole => self.ask(
                         211,
                         1,
                         11,
@@ -631,8 +681,7 @@ impl World {
                         people::EscalationDecision::Pass,
                         people::Outcome::Refused(people::Refusal::NoFurther),
                     ),
-                    204 => {}
-                    _ => panic!("unscripted named read right"),
+                    ReadPurpose::Rejected => {}
                 }
             }
             Delivery::Assigned { channel, assignment } => {
@@ -693,6 +742,7 @@ impl World {
         self.referee.done()
             && self.worker_answer == WorkerAnswer::Idle
             && self.asks.is_empty()
+            && self.pending_read.is_none()
             && self.events.is_empty()
             && self.store.pending.is_empty()
             && self.out.is_empty()

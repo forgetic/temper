@@ -82,6 +82,8 @@ pub struct Referee {
     acknowledgements: BTreeSet<u64>,
     asks: BTreeMap<Token, AskReply>,
     reads: BTreeMap<Token, (u64, tasks::Escalation)>,
+    read_terminals: BTreeSet<Token>,
+    busy_reads: BTreeSet<Token>,
     start_replies: u32,
     results: u32,
 }
@@ -140,6 +142,8 @@ impl Referee {
             acknowledgements: BTreeSet::new(),
             asks: BTreeMap::new(),
             reads: BTreeMap::new(),
+            read_terminals: BTreeSet::new(),
+            busy_reads: BTreeSet::new(),
             start_replies: 0,
             results: 0,
         }
@@ -177,6 +181,7 @@ impl Referee {
     /// Register one expected current held view before a named authenticated read
     /// (domain/engine.md, section 7.7).
     pub fn read(&mut self, to: Token, person: u64, escalation: tasks::Escalation) {
+        assert!(!self.read_terminals.contains(&to), "a retry requires a fresh named read right");
         assert!(self.reads.insert(to, (person, escalation)).is_none(), "one fresh reply right per named read");
     }
 
@@ -489,6 +494,32 @@ impl Referee {
         Ok(())
     }
 
+    /// Consume an immediate `Busy` terminal for an outstanding current-view read.
+    /// The person must retry using a fresh right; no keyed outcome is saved
+    /// (domain/engine.md, section 7.7; domain/people.md, section 5.1.2).
+    ///
+    /// # Errors
+    /// Rejects unsolicited/duplicate terminals and a different wrapper or refusal.
+    pub fn read_refused(&mut self, to: Token, reply: people::Reply) -> Result<(), &'static str> {
+        if !self.reads.contains_key(&to) {
+            return Err("unsolicited or duplicate read-pressure terminal");
+        }
+        if reply != people::Reply::Refused(people::Refusal::Busy) {
+            return Err("read pressure requires immediate retryable Busy refusal");
+        }
+        self.reads.remove(&to);
+        self.read_terminals.insert(to);
+        self.busy_reads.insert(to);
+        Ok(())
+    }
+
+    /// Count independently consumed pressure terminals; successful retried views
+    /// remain separate obligations (domain/engine.md, section 7.7).
+    #[must_use]
+    pub fn busy_reads(&self) -> usize {
+        self.busy_reads.len()
+    }
+
     /// Check one authenticated held view and its durable semantic record.
     ///
     /// # Errors
@@ -520,6 +551,7 @@ impl Referee {
             return Err("held view preceded routed priced durability");
         }
         self.reads.remove(&to);
+        self.read_terminals.insert(to);
         Ok(())
     }
 
