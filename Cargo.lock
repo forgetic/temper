@@ -295,7 +295,12 @@ name = "temper-engine-domain"
 version = "0.0.0"
 dependencies = [
  "skein-lib",
+ "temper-engine-domain-accounts",
+ "temper-engine-domain-authority",
+ "temper-engine-domain-brief",
+ "temper-engine-domain-fleet",
  "temper-engine-domain-people",
+ "temper-engine-domain-tasks",
 ]
 
 [[package]]
@@ -360,6 +365,12 @@ version = "0.0.0"
 dependencies = [
  "skein-lib",
  "temper-engine-domain",
+ "temper-engine-domain-accounts",
+ "temper-engine-domain-authority",
+ "temper-engine-domain-brief",
+ "temper-engine-domain-fleet",
+ "temper-engine-domain-people",
+ "temper-engine-domain-tasks",
  "temper-world",
 ]
 

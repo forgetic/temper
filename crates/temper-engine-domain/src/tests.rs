@@ -230,3 +230,50 @@ fn counter_and_commit_overflow_cannot_reuse_names() {
     assert!(!takes(&j, &LIMITS));
     assert_eq!(j.deployment().tasks, u64::MAX);
 }
+
+#[test]
+fn deep_child_rows_and_arbitrary_internal_payloads_are_refused_before_retention() {
+    use temper_engine_domain_fleet as fleet;
+    use temper_engine_domain_people as people;
+    let limits =
+        crate::JournalLimits { commits: 1, held: 2, writes: 2, deliveries: 2, transcript_bytes: 4, result_bytes: 4 };
+    let mut decision = Decision::new(&limits);
+    let row = Record::People(people::Stored::Person {
+        number: 1,
+        identity: people::Identity {
+            key: people::IdentityKey { forge: 1, user: 1 },
+            login: b"abc".as_slice().into(),
+            name: b"de".as_slice().into(),
+        },
+    });
+    assert_eq!(crate::record_bytes(&row), Some(5));
+    assert!(decision.write(&limits, Write::Save(row)).is_err());
+    let callback = Delivery::Fleet(fleet::Event::Hello {
+        channel: Token::new(1),
+        hello: fleet::Hello { graces: None, slots: 1, workstreams: Box::new([]), hosting: Box::new([]) },
+    });
+    assert!(
+        decision.deliver(&limits, callback).is_err(),
+        "arbitrary fleet events cannot bypass bounds through the journal"
+    );
+}
+
+#[test]
+fn held_assignment_checks_owned_bytes_and_section_backing_before_acceptance() {
+    use temper_engine_domain_accounts as accounts;
+    use temper_engine_domain_brief as brief;
+    let limits =
+        crate::JournalLimits { commits: 1, held: 1, writes: 1, deliveries: 1, transcript_bytes: 4, result_bytes: 4 };
+    let mut decision = Decision::new(&limits);
+    let assignment = crate::engine::Assignment {
+        task: 1,
+        attempt: 1,
+        charter: 1,
+        sections: Box::new([brief::Section {
+            kind: brief::Kind::Task,
+            body: brief::Body::Text(b"12345".as_slice().into()),
+        }]),
+        grant: accounts::Grant { account: 1, generation: 1, valid: skein_lib::Duration::from_secs(1) },
+    };
+    assert!(decision.deliver(&limits, Delivery::Assigned { channel: Token::new(1), assignment }).is_err());
+}

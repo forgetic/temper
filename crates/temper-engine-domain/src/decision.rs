@@ -14,31 +14,119 @@ pub struct Limits {
     pub transcript_bytes: u32,
     pub result_bytes: u32,
 }
+
 #[derive(PartialEq, Eq, Debug)]
 pub enum Delivery {
-    Reply { to: ReplyTo, reply: people::Reply },
-    AcknowledgeTurn { channel: Token, task: u64, attempt: u64, turn: u32 },
-    Acknowledge { channel: Token, task: u64, attempt: u64 },
-    Cancel { channel: Token, task: u64, attempt: u64 },
-    Result { person: u64, task: u64, words: Box<[u8]> },
+    Reply {
+        to: ReplyTo,
+        reply: people::Reply,
+    },
+    AcknowledgeTurn {
+        channel: Token,
+        task: u64,
+        attempt: u64,
+        turn: u32,
+    },
+    Acknowledge {
+        channel: Token,
+        task: u64,
+        attempt: u64,
+    },
+    Cancel {
+        channel: Token,
+        task: u64,
+        attempt: u64,
+    },
+    /// Root to fleet after durability; the root resumes it internally (domain/engine.md, 5.2).
+    Fleet(
+        /// Only bounded `Start`, `TurnKept`, `Acknowledge` and `Cancel` callbacks are admitted (domain/engine.md, 5.2).
+        temper_engine_domain_fleet::Event,
+    ),
+    /// Root to worker: complete bounded assignment after its claim commit (domain/engine.md, 7.1).
+    Assigned {
+        /// Worker protocol destination, bounded by fleet worker room (domain/worker.md, 2).
+        channel: Token,
+        /// Complete claim/brief/grant; section slots and owned bytes validated at journal admission (domain/engine.md, 7.1 and 9).
+        assignment: crate::engine::Assignment,
+    },
+    /// Root to web: terminal reply, with newly allocated session when signing in (domain/people.md, 3).
+    WebReply {
+        /// Web-issued right to this one terminal reply (domain/people.md, 11).
+        to: ReplyTo,
+        /// New root-issued session on a sign-in reply; absent for other replies (domain/people.md, 3).
+        sign_in: Option<u64>,
+        /// Secret-free people terminal, held after the decision it names (domain/people.md, 5.1).
+        reply: people::Reply,
+    },
+    /// Root to worker: the hello exceeded bounded fleet room (domain/worker.md, 2).
+    Refuse {
+        /// Worker protocol destination, bounded by fleet worker room (domain/worker.md, 2).
+        channel: Token,
+    },
+    /// Root resumes authenticated historical result IO only after prior commits (domain/engine.md, 5.3).
+    ReadResult {
+        /// Root-owned load waiter identity; internal routing consumes this notice once (domain/engine.md, 5.3).
+        waiter: Token,
+    },
+    /// Root to worker: fleet lacked turn admission room; keep the body and
+    /// retry after a backoff, without charging (domain/worker.md, 2).
+    TurnBusy {
+        /// Current worker protocol channel (domain/worker.md, 2).
+        channel: Token,
+        /// Durable task/claim identity (domain/engine.md, 7.2).
+        task: u64,
+        /// Activation fence checked by fleet (domain/engine.md, 7.2).
+        attempt: u64,
+        /// Positive turn retained by the sender for retry (domain/engine.md, 7.2).
+        turn: u32,
+    },
+    /// Root to store after its prerequisite commits, resumed internally (domain/engine.md, 5.3).
+    Load {
+        /// Root-owned load waiter identity; internal routing consumes this notice once (domain/engine.md, 5.3).
+        waiter: Token,
+        /// Closed key range, validated by the root load child (domain/engine.md, 5.3).
+        range: crate::Range,
+        /// Exclusive validated page continuation, or range beginning (domain/engine.md, 5.3).
+        after: Option<Key>,
+    },
+    /// Root to authenticated web reader: terminal derived from an ended task (domain/people.md, 6).
+    ResultReply {
+        /// Web-issued right to this one terminal reply (domain/people.md, 11).
+        to: ReplyTo,
+        /// Authenticated requester number from people session and ended task (domain/people.md, 6).
+        person: u64,
+        /// Durable ended task number naming this result, never a separate inbox record (domain/people.md, 6).
+        task: u64,
+        /// Owned result text bounded by journal `result_bytes` (domain/people.md, 6).
+        words: Box<[u8]>,
+    },
+    Result {
+        person: u64,
+        task: u64,
+        words: Box<[u8]>,
+    },
 }
+
 #[derive(PartialEq, Eq, Debug)]
 pub enum Output {
     Commit { number: u64, writes: Box<[Write]> },
     Deliver(Delivery),
     Stop,
 }
+
 #[derive(Debug)]
 pub struct Decision {
     limits: Limits,
     writes: List<Write>,
     deliveries: Queue<Delivery>,
 }
+
 #[derive(Debug)]
 struct Held {
     after: u64,
     delivery: Delivery,
 }
+
 #[derive(Debug)]
 pub struct Journal {
     limits: Limits,
@@ -48,6 +136,7 @@ pub struct Journal {
     stopped: bool,
     held: Queue<Held>,
 }
+
 impl Decision {
     #[must_use]
     pub fn new(l: &Limits) -> Decision {
@@ -70,7 +159,11 @@ impl Decision {
                     && row.turn != 0
                     && row.transcript.len() <= usize::try_from(l.transcript_bytes).expect("u32 fits usize")
             }
-            Write::Erase(Key::Turn { .. }) => true,
+            Write::Erase(Key::Turn { .. } | Key::Tasks(_) | Key::People(_)) => true,
+            Write::Save(Record::Tasks(_) | Record::People(_)) => match crate::store::owned_bytes(&write) {
+                Some(bytes) => bytes <= u64::from(l.transcript_bytes),
+                None => false,
+            },
         };
         if !within {
             return Err(write);
@@ -88,11 +181,20 @@ impl Decision {
     pub fn deliver(&mut self, l: &Limits, delivery: Delivery) -> Result<(), Delivery> {
         assert!(*l == self.limits, "decision uses its configured limits");
         let within = match &delivery {
-            Delivery::Result { words, .. } => words.len() <= usize::try_from(l.result_bytes).expect("u32 fits usize"),
+            Delivery::Result { words, .. } | Delivery::ResultReply { words, .. } => {
+                words.len() <= usize::try_from(l.result_bytes).expect("u32 fits usize")
+            }
+            Delivery::Fleet(event) => fleet_delivery_within(event, l),
+            Delivery::Assigned { assignment, .. } => assignment_within(assignment, l),
             Delivery::Reply { .. }
             | Delivery::AcknowledgeTurn { .. }
             | Delivery::Acknowledge { .. }
-            | Delivery::Cancel { .. } => true,
+            | Delivery::Cancel { .. }
+            | Delivery::WebReply { .. }
+            | Delivery::Refuse { .. }
+            | Delivery::ReadResult { .. }
+            | Delivery::TurnBusy { .. }
+            | Delivery::Load { .. } => true,
         };
         if !within {
             return Err(delivery);
@@ -100,6 +202,7 @@ impl Decision {
         self.deliveries.try_push(delivery)
     }
 }
+
 impl Journal {
     /// An empty store needs the deployment identity committed even before its
     /// first task. The id is a root input, drawn once by the shell at startup.
@@ -136,6 +239,16 @@ impl Journal {
     #[must_use]
     pub const fn stopped(&self) -> bool {
         self.stopped
+    }
+    /// Shell completion fence: no dirty header, held delivery or unanswered
+    /// issued commit remains. A stopped journal is not complete
+    /// (domain/engine.md, 5.2 and 5.7).
+    #[must_use]
+    pub fn quiescent(&self) -> bool {
+        !self.stopped && !self.dirty && self.held.is_empty() && self.durable == self.deployment.commits
+    }
+    pub(crate) fn held_room(&self) -> u32 {
+        self.held.room()
     }
     #[must_use]
     pub fn ready(&self) -> bool {
@@ -221,6 +334,7 @@ pub fn committed(j: &mut Journal, number: u64) {
     assert!(number <= j.deployment.commits, "store answers only issued commits");
     j.durable = number;
 }
+
 pub fn resume(j: &mut Journal, out: &mut Queue<Output>) {
     assert!(out.room() >= 1, "one root ready output reserved");
     if j.ready() {
@@ -228,6 +342,7 @@ pub fn resume(j: &mut Journal, out: &mut Queue<Output>) {
         out.push(Output::Deliver(held.delivery));
     }
 }
+
 pub fn uncommitted(j: &mut Journal, number: u64, out: &mut Queue<Output>) {
     assert!(out.room() >= 1, "one root stop output reserved");
     if j.stopped || number <= j.durable {
@@ -238,6 +353,7 @@ pub fn uncommitted(j: &mut Journal, number: u64, out: &mut Queue<Output>) {
     // Nothing is released, including outputs tagged with a later commit.
     out.push(Output::Stop);
 }
+
 #[must_use]
 pub fn worst_case(l: &Limits) -> Option<u64> {
     if l.commits == 0 || l.writes == 0 || l.held < l.deliveries || l.deliveries == 0 {
@@ -246,6 +362,58 @@ pub fn worst_case(l: &Limits) -> Option<u64> {
     Queue::<Held>::worst_case(l.held)?
         .checked_add(List::<Write>::worst_case(l.writes)?.checked_mul(2)?)?
         .checked_add(Queue::<Delivery>::worst_case(l.deliveries)?)?
-        .checked_add(u64::from(l.writes).checked_mul(u64::from(l.transcript_bytes))?)?
-        .checked_add(u64::from(l.held).checked_add(u64::from(l.deliveries))?.checked_mul(u64::from(l.result_bytes))?)
+        .checked_add(u64::from(l.writes).checked_mul(2)?.checked_mul(u64::from(l.transcript_bytes))?)?
+        .checked_add(u64::from(l.held).checked_add(u64::from(l.deliveries))?.checked_mul(
+            u64::from(l.result_bytes).max(u64::from(l.transcript_bytes)).checked_add(List::<
+                temper_engine_domain_brief::Section,
+            >::worst_case(
+                l.deliveries
+            )?)?,
+        )?)
+}
+
+fn fleet_delivery_within(event: &temper_engine_domain_fleet::Event, limits: &Limits) -> bool {
+    use temper_engine_domain_fleet::Event;
+    match event {
+        Event::Start { workstream, .. } => {
+            workstream.len() <= usize::try_from(limits.transcript_bytes).expect("u32 fits usize")
+        }
+        Event::TurnKept { .. } | Event::Acknowledge { .. } | Event::Cancel { .. } => true,
+        Event::Adopt { .. }
+        | Event::Inbound { .. }
+        | Event::Relayed { .. }
+        | Event::Loaded
+        | Event::Grant { .. }
+        | Event::Rejected { .. }
+        | Event::Exhausted { .. }
+        | Event::Hello { .. }
+        | Event::Lost { .. }
+        | Event::Answer { .. }
+        | Event::Turn { .. }
+        | Event::TurnBusy { .. }
+        | Event::Relay { .. }
+        | Event::Bounced { .. }
+        | Event::Told { .. } => false,
+    }
+}
+
+fn assignment_within(assignment: &crate::engine::Assignment, limits: &Limits) -> bool {
+    if assignment.task == 0
+        || assignment.attempt == 0
+        || assignment.sections.len() > usize::try_from(limits.deliveries).expect("u32 fits usize")
+    {
+        return false;
+    }
+    let mut owned = 0_u64;
+    for section in &assignment.sections {
+        let bytes = match &section.body {
+            temper_engine_domain_brief::Body::Text(bytes) => u64::try_from(bytes.len()).expect("usize fits u64"),
+            temper_engine_domain_brief::Body::Missing(_) => 0,
+        };
+        let Some(total) = owned.checked_add(bytes) else {
+            return false;
+        };
+        owned = total;
+    }
+    owned <= u64::from(limits.result_bytes)
 }

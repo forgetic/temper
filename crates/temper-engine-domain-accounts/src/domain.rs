@@ -78,6 +78,20 @@ impl Domain {
         }
     }
 
+    /// Root completion fence: true while a refresh, keep or cancellation awaits
+    /// its terminal. Future refresh/retry timers alone are idle; this query
+    /// neither cancels IO nor changes grants (domain/engine.md, 8; credentials.md, 5).
+    #[must_use]
+    pub fn waiting(&self) -> bool {
+        for (_, account) in &self.accounts {
+            match account.phase {
+                Phase::Refreshing { .. } | Phase::Closing { .. } => return true,
+                Phase::Fresh { .. } | Phase::Retrying { .. } | Phase::Revoked => {}
+            }
+        }
+        false
+    }
+
     #[must_use]
     pub fn accounts(&self) -> u32 {
         self.accounts.len()

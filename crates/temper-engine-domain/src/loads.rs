@@ -120,6 +120,12 @@ impl Loads {
         assert!(worst_case(limits).is_some(), "valid root load limits");
         Loads { limits: *limits, entries: Slab::with_capacity(limits.loads) }
     }
+    /// Shell completion fence: no issued page awaits its terminal or reclaim.
+    /// Abandoned IO remains counted until its actual answer (domain/engine.md, 5.3).
+    #[must_use]
+    pub fn quiescent(&self) -> bool {
+        self.entries.is_empty()
+    }
 }
 
 /// Admit one root request or refuse before issuing IO (domain/engine.md, 5.3).
@@ -256,13 +262,7 @@ fn check(entry: &Entry, limits: &Limits, rows: &[Record], next: Option<Key>) -> 
             return Err(Failure::Order);
         }
         previous = Some(key);
-        let owned = match row {
-            Record::Deployment(_) => 0,
-            Record::Turn(turn) => match u64::try_from(turn.transcript.len()) {
-                Ok(bytes) => bytes,
-                Err(_) => return Err(Failure::Bytes),
-            },
-        };
+        let owned = crate::store::record_bytes(row).ok_or(Failure::Bytes)?;
         let size = u64::try_from(size_of::<Record>())
             .expect("record slot fits u64")
             .checked_add(owned)
@@ -282,8 +282,8 @@ fn check(entry: &Entry, limits: &Limits, rows: &[Record], next: Option<Key>) -> 
             return Err(Failure::Cursor);
         }
         match entry.range {
-            Range::Deployment => return Err(Failure::Cursor),
-            Range::Turns { .. } => {}
+            Range::Deployment | Range::TaskResult { .. } => return Err(Failure::Cursor),
+            Range::Turns { .. } | Range::Tasks | Range::People => {}
         }
     }
     if bytes.checked_add(removed_bytes).ok_or(Failure::Bytes)? > u64::from(limits.reply_bytes) {
@@ -299,7 +299,8 @@ fn check(entry: &Entry, limits: &Limits, rows: &[Record], next: Option<Key>) -> 
 
 fn valid_range(range: Range) -> bool {
     match range {
-        Range::Deployment => true,
+        Range::Deployment | Range::Tasks | Range::People => true,
+        Range::TaskResult { task } => task != 0,
         Range::Turns { task, attempt } => task != 0 && attempt != 0,
     }
 }

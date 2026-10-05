@@ -66,7 +66,7 @@ pub struct RequestKey {
     pub person: u64,
     pub key: [u8; 16],
 }
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Key {
     Person(u64),
     SignIn(u64),

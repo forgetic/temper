@@ -93,6 +93,28 @@ impl Domain {
     pub const fn facts_lost(&self) -> u64 {
         self.lost
     }
+    /// Root checks whether startup loaded a project's durable roles before
+    /// seeding its empty bootstrap table (domain/people.md, sections 3.1 and 4).
+    /// This read grants no role and changes nothing; sign-in applies owners.
+    #[must_use]
+    pub fn has_project(&self, project: u32) -> bool {
+        self.roles.contains_key(&project)
+    }
+
+    /// Root reads an authenticated unexpired session to derive a task result
+    /// for its requester (domain/people.md, sections 3 and 6). This read changes
+    /// no session, role or inbox state; unknown/expired sign-ins are refused.
+    #[must_use]
+    pub fn person(&self, sign_in: u64, wall: Wall) -> Option<u64> {
+        if !self.ready() {
+            return None;
+        }
+        let session = self.sign_ins.get(&sign_in)?;
+        if session.expires <= wall {
+            return None;
+        }
+        Some(session.person)
+    }
     #[must_use]
     pub fn ready(&self) -> bool {
         match self.phase {

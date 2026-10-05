@@ -1,0 +1,265 @@
+use temper_engine_domain::{Key, Record, Write};
+use temper_engine_domain_people as people;
+use temper_engine_domain_tasks as tasks;
+use temper_engine_domain_world::walking::{Settings, World, run_replayed};
+use temper_engine_domain_world::walking_referee::{FINAL_SPEND, REPORT, WalkingReferee};
+
+fn settled() -> World {
+    let mut world = World::new(Settings::calm(65));
+    world.run();
+    world
+}
+
+fn ended(world: &World) -> &tasks::TaskRecord {
+    world
+        .store
+        .rows
+        .values()
+        .find_map(|row| match row {
+            Record::Tasks(tasks::Stored::Ended(record)) => Some(record.as_ref()),
+            Record::Deployment(_)
+            | Record::Turn(_)
+            | Record::People(_)
+            | Record::Tasks(
+                tasks::Stored::Live(_)
+                | tasks::Stored::Stub(_)
+                | tasks::Stored::Message(_)
+                | tasks::Stored::ArchivedMessage(_)
+                | tasks::Stored::Receipt(_)
+                | tasks::Stored::Offer(_)
+                | tasks::Stored::Question(_)
+                | tasks::Stored::Subscription(_)
+                | tasks::Stored::History(_)
+                | tasks::Stored::Closure(_)
+                | tasks::Stored::Funding { .. }
+                | tasks::Stored::Ledger(_)
+                | tasks::Stored::Admission(_),
+            ) => None,
+        })
+        .expect("story ended its one task")
+}
+
+#[test]
+fn chat_claim_two_charged_turns_and_result_survive_a_lost_commit_completion() {
+    let mut world = World::new(Settings::calm(61));
+    world.run();
+    assert!(world.referee.done());
+    assert_eq!(world.restarts, 1);
+    assert!(world.pages > 8, "tiny one-row pages restore the real child records");
+    assert!(world.store.pending.is_empty());
+}
+
+#[test]
+fn walking_story_replays_exactly_with_store_and_page_latency() {
+    let settings = Settings { commit_delay: 2, page_delay: 1, ..Settings::calm(62) };
+    let first = run_replayed(settings);
+    let mut replay = World::new(settings);
+    replay.run();
+    assert_eq!(first.trace, replay.trace);
+    assert_eq!(first.store.rows, replay.store.rows);
+}
+
+#[test]
+fn saturated_observation_queues_change_no_walking_decision() {
+    let mut observed = World::new(Settings::calm(63));
+    observed.run();
+    let mut saturated = World::new(Settings { facts: false, ..Settings::calm(63) });
+    saturated.run();
+    assert_eq!(observed.trace, saturated.trace);
+    assert_eq!(observed.store.rows, saturated.store.rows);
+}
+
+#[test]
+fn walking_story_also_settles_without_a_restart() {
+    let mut world = World::new(Settings { restart: false, ..Settings::calm(64) });
+    world.run();
+    assert_eq!(world.restarts, 0);
+    assert!(world.referee.done());
+}
+
+#[test]
+fn walking_referee_rejects_duplicate_transaction_keys_and_transcripts() {
+    let world = settled();
+    let task = ended(&world);
+    let row = world
+        .store
+        .rows
+        .get(&Key::Turn { task: task.number, attempt: task.attempt, turn: 1 })
+        .expect("first turn")
+        .clone();
+    let mut charged = task.clone();
+    charged.turn = 1;
+    charged.run_spent = 3;
+    charged.numbers.spent = 3;
+    let charged = Record::Tasks(tasks::Stored::Live(Box::new(charged)));
+    let writes = [Write::Save(charged.clone()), Write::Save(row.clone()), Write::Save(row.clone())];
+    assert_eq!(WalkingReferee::default().commit(&writes), Err("same key written twice in one decision"));
+    let writes = [Write::Save(charged), Write::Save(row)];
+    let mut referee = WalkingReferee::default();
+    referee.commit(&writes).expect("first transcript");
+    assert_eq!(referee.commit(&writes), Err("transcript committed twice"));
+}
+
+#[test]
+fn walking_referee_rejects_split_turn_and_terminal_transactions() {
+    let world = settled();
+    let task = ended(&world);
+    let turn = world
+        .store
+        .rows
+        .get(&Key::Turn { task: task.number, attempt: task.attempt, turn: 1 })
+        .expect("first transcript")
+        .clone();
+    assert_eq!(
+        WalkingReferee::default().commit(&[Write::Save(turn)]),
+        Err("transcript and accepted charge are not one transaction")
+    );
+    let terminal = world.store.rows.get(&Key::Tasks(tasks::Key::Ended(task.number))).expect("terminal").clone();
+    assert_eq!(
+        WalkingReferee::default().commit(&[Write::Save(terminal)]),
+        Err("terminal and funding posting are not one transaction")
+    );
+}
+
+#[test]
+fn walking_referee_rejects_web_replies_without_their_atomic_records() {
+    let world = settled();
+    let task = ended(&world);
+    let tasks::Party::Person(person) = task.requester else { panic!("person requester") };
+    let sign_in = world.store.header().sign_ins;
+    let mut rows = world.store.rows.clone();
+    rows.remove(&Key::People(people::Key::Person(person)));
+    assert_eq!(
+        WalkingReferee::default().signed_in(&rows, person, sign_in),
+        Err("sign-in reply before durable identity")
+    );
+    let mut referee = WalkingReferee::default();
+    referee.signed_in(&world.store.rows, person, sign_in).expect("authenticated person");
+    rows = world.store.rows.clone();
+    rows.remove(&Key::People(people::Key::Answer(people::RequestKey { person, key: [5; 16] })));
+    assert_eq!(referee.started(&rows, task.number), Err("chat reply before keyed answer commit"));
+}
+
+#[test]
+fn walking_referee_rejects_duplicate_sign_in_and_chat_replies() {
+    let world = settled();
+    let task = ended(&world);
+    let tasks::Party::Person(person) = task.requester else { panic!("person requester") };
+    assert_eq!(
+        world.referee.clone().signed_in(&world.store.rows, person, world.store.header().sign_ins),
+        Err("person received sign-in reply twice")
+    );
+    assert_eq!(
+        world.referee.clone().started(&world.store.rows, task.number),
+        Err("person received chat-start reply twice")
+    );
+}
+
+#[test]
+fn walking_referee_rejects_wrong_task_or_uncommitted_or_duplicate_assignment() {
+    use skein_lib::Duration;
+    use temper_engine_domain::engine::Assignment;
+    use temper_engine_domain_accounts::Grant;
+    use temper_engine_domain_brief::{Body, Kind, Section};
+    let world = settled();
+    let task = ended(&world);
+    let mut assignment = Assignment {
+        task: task.number,
+        attempt: task.attempt,
+        charter: 1,
+        sections: Box::new([Section {
+            kind: Kind::Task,
+            body: Body::Text(
+                format!(
+                    "say hello\n[Report: at most 128 bytes]\n[Requested by person {}]\n",
+                    match task.requester {
+                        tasks::Party::Person(person) => person,
+                        tasks::Party::Task(_) | tasks::Party::Deployment { .. } => panic!("person requester"),
+                    }
+                )
+                .into_bytes()
+                .into_boxed_slice(),
+            ),
+        }]),
+        grant: Grant { account: 1, generation: 1, valid: Duration::from_secs(60) },
+    };
+    assignment.task = task.number + 1;
+    assert_eq!(
+        world.referee.clone().assigned(&world.store.rows, &assignment),
+        Err("assignment names another person's task")
+    );
+    assignment.task = task.number;
+    assert_eq!(
+        world.referee.clone().assigned(&world.store.rows, &assignment),
+        Err("assignment without committed claim phase")
+    );
+    let mut rows = world.store.rows.clone();
+    let Some(Record::Tasks(tasks::Stored::Ended(record))) = rows.get_mut(&Key::Tasks(tasks::Key::Ended(task.number)))
+    else {
+        panic!("task row")
+    };
+    record.phase = tasks::Phase::Active(tasks::Active::Claimed { attempt: task.attempt });
+    assert_eq!(world.referee.clone().assigned(&rows, &assignment), Err("one claim assigned twice across restart"));
+}
+
+#[test]
+fn walking_referee_rejects_turn_ack_before_transcript_and_charge() {
+    let world = settled();
+    let task = ended(&world);
+    let mut rows = world.store.rows.clone();
+    rows.remove(&Key::Turn { task: task.number, attempt: task.attempt, turn: 1 });
+    assert_eq!(
+        world.referee.clone().turn_ack(&rows, task.number, task.attempt, 1),
+        Err("turn ACK before durable transcript")
+    );
+    rows = world.store.rows.clone();
+    let Some(Record::Tasks(tasks::Stored::Ended(record))) = rows.get_mut(&Key::Tasks(tasks::Key::Ended(task.number)))
+    else {
+        panic!("ended task")
+    };
+    record.numbers.spent = 0;
+    assert_eq!(
+        world.referee.clone().turn_ack(&rows, task.number, task.attempt, 1),
+        Err("turn ACK before atomic charge")
+    );
+}
+
+#[test]
+fn walking_referee_rejects_answer_ack_before_final_charge() {
+    let world = settled();
+    let task = ended(&world);
+    let mut rows = world.store.rows.clone();
+    let Some(Record::Tasks(tasks::Stored::Ended(record))) = rows.get_mut(&Key::Tasks(tasks::Key::Ended(task.number)))
+    else {
+        panic!("ended task")
+    };
+    record.numbers.spent = FINAL_SPEND - 1;
+    assert_eq!(
+        world.referee.clone().answer_ack(&rows, task.number, task.attempt),
+        Err("answer ACK before exact terminal charge")
+    );
+}
+
+#[test]
+fn walking_referee_rejects_a_lost_or_duplicate_funding_posting_and_result() {
+    let world = settled();
+    let task = ended(&world);
+    let tasks::Party::Person(person) = task.requester else { panic!("person requester") };
+    for wrong in [0, FINAL_SPEND * 2] {
+        let mut rows = world.store.rows.clone();
+        let pool = tasks::Funder::Pool { project: 1, person, period: 1 };
+        let Some(Record::Tasks(tasks::Stored::Ledger(record))) = rows.get_mut(&Key::Tasks(tasks::Key::Ledger(pool)))
+        else {
+            panic!("person pool")
+        };
+        record.numbers.spent_below = wrong;
+        assert_eq!(
+            world.referee.clone().result(&rows, person, task.number, REPORT),
+            Err("final charge was lost, duplicated or posted to another source")
+        );
+    }
+    assert_eq!(
+        world.referee.clone().result(&world.store.rows, person, task.number, REPORT),
+        Err("person received result twice")
+    );
+}

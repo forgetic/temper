@@ -311,6 +311,89 @@ the durable records as `Restore` followed by `Restored`. It serves paged
 loads in the child's own vocabulary. Restart is therefore tested before
 the root is built, including decisions whose effects have yet to settle.
 
+### 5.7 The first root's concrete handoffs (06a)
+
+The walking root settles the following choices before extending the routes:
+
+- **Cold header first.** A worker hello arriving before the deployment page
+  ends is retained in bounded cold room, with its host/workstream arrays
+  checked before retention. At most one hello per channel and at most fleet
+  workers are retained; excess or duplicate hellos are refused immediately.
+  Cold known losses coalesce by channel, and stale losses consume no room.
+  Further hellos retry after startup so they cannot pressure an issued page.
+  No writing decision can precede that page: a
+  restored header must not replace numbers already allocated in this process.
+  An empty store commits its new header; an existing header is durable already.
+- **Bootstrap roles are records.** Configured owner projects missing from the
+  people pages get an empty roles record in the startup decision. Signing in
+  applies the configured owner identity through the people child. Existing
+  durable roles are restored and retained. The root's closed translation is
+  owner → authority role 0, maintainer → 1, member → 2, observer → 3; project
+  policy supplies the authority and request permissions for those numbers.
+- **Callbacks are held too.** Fleet `Start`, `TurnKept` and `Acknowledge` are
+  internal effects following the same journal barrier as worker/web outputs.
+  Releasing one moves it to bounded root work; journal pressure cannot discard
+  it. All child saves and erases caused by its synchronous callbacks join the
+  decision before that decision closes. Startup hands every restored claim to
+  the fleet before `Loaded` and before making any new assignment. New decisions
+  and timers reserve three delivery batches of journal room: the admitted
+  batch, its internal callbacks' follow-up effects, and one decision's room
+  to route those callbacks. A blocked callback is routed before consuming
+  another held callback or admitting new work. A channel loss changes only
+  fleet topology/deadlines immediately; it emits no saves or effects.
+- **Run readiness retains its cause.** A credential-only wait keeps one task
+  number in bounded due room, reconsidered when the real account becomes
+  usable. Deadline, budget and other static authority failures become task
+  holds, so they cannot spin the ready pass or block unrelated placements.
+  Fleet refusal or withdrawal clears the prepared assignment and routes an
+  uncharged refused activation; a refused charged terminal becomes an
+  uncharged invalid activation and its eventual durable fleet acknowledgement.
+  Rejected cumulative spend or oversized result bytes are never precharged.
+- **A chat's workstream is its task number,** encoded as eight big-endian
+  bytes. It is nonempty and stable across attempts, and root-issued global
+  task numbers prevent different chats from sharing a stream accidentally.
+  Connector resource placement and writer slots join in 06e.
+- **Funding is one child's.** The configured current period and a person's
+  finite pool are admitted through tasks only after the real project/role
+  policy allows their ceilings. `Make` reserves that pool atomically. A turn
+  and terminal each use the hub's charged admission, not a charge followed by
+  a separate event. Exact admission records and the original finite ledger
+  are loaded at restart; the root keeps no copy of their balances.
+- **The task section is concrete.** For this chat it starts with the person's
+  spec, then its report contract's byte bound, then its requester. A task
+  requester chain is followed nearest first within depth/part/read bounds;
+  omitted farthest entries add their exact byte omission to the last kept
+  part. The brief child owns rendering, required-section admission and cuts.
+- **A person's result comes from its ended task.** The committed ending may
+  produce a live result notice; losing that notice loses no inbox record.
+  Reconnecting web clients request that named task's result using a valid
+  restored sign-in. The root loads its ended row after prior commits, checks
+  the requester, and consumes the read's one reply destination. Startup does
+  not replay an unsolicited result notice, and no second persistent people
+  inbox is introduced. The broader inbox/read-position routes join in 06d.
+- **Idleness is a root fence.** After reclaim, `quiescent` requires finished
+  startup, no unfinished page or commit, no held delivery or synchronous
+  callback, no body/result waiter, no brief read and no fleet ready/call/turn
+  obligation. Account refresh/keep/cancellation terminals also remain owed.
+  Live idle workers and sessions, assigned workers awaiting external answers,
+  and future task/account timers do not prevent shell idleness. A walking
+  story also requires its independent referee's final result condition. The
+  shell must additionally own and drain its pending external
+  input/output queues; the root predicate cannot inspect those queues.
+- **Deep bytes are checked before retention.** Wrapped child rows count
+  their boxed records, slice slots and nested bytes. The whole decoded page
+  is checked before restoring any prefix. The journal separately admits
+  bounded assignments and the closed internal callback set; an arbitrary
+  fleet hello cannot be smuggled through a held callback. Its memory bound
+  includes simultaneous decision/scratch copies and held section slots. Root
+  configuration also prices all cold fleet outputs plus the next load in one
+  decision, and requires each decoded page to fit the synchronous route room.
+
+The walking vocabulary remains limited to sign-in, keyed chats, worker
+hello/loss, turns, terminals, named historical results and account refresh
+terminals. Later tools and connector routes are separate increments; the
+root's store wrappers do not expose a blanket child-event pass-through.
+
 ## 6. Restart
 
 A restart is a cold start that rebuilds everything a decision reads from

@@ -10,6 +10,12 @@ publish.workspace = true
 skein-lib.workspace = true
 temper-world.workspace = true
 temper-engine-domain.workspace = true
+temper-engine-domain-people.workspace = true
+temper-engine-domain-tasks.workspace = true
+temper-engine-domain-fleet.workspace = true
+temper-engine-domain-brief.workspace = true
+temper-engine-domain-accounts.workspace = true
+temper-engine-domain-authority.workspace = true
 
 [lints.rust]
 unsafe_code = "forbid"
