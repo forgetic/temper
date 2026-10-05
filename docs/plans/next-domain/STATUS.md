@@ -57,6 +57,7 @@ unavailable; the design records bounded/unknown handling and status links.
 | 05c2 checkout merge state and ownership | merged, `8e94482` | independent review found no blockers; all four workflow checks passed; focused 2,132/2,132 in 5.396 s, fuzzy 31/31 in 21.190 s, one ignored finding; checkout world serial 0.545 s focused and 0.815 s fuzzy |
 | 05d worker turns and transcript lifecycle | merged, `e2a6a71` | independent review found no confirmed blockers; all four workflow checks passed; focused 2,172/2,172 in 6.761 s, fuzzy 32/32 in 25.290 s, one ignored finding; new worker root turn scenarios and memory checks take 0.048 s focused and 0.039 s fuzzy within shared runtime headroom |
 | 05e session transcripts and pricing | merged, `8b91ed3` | independent review corrected allocation before waking-tail admission, with a negative counted-memory regression; all four workflow checks passed; focused 2,187/2,187 in 5.116 s, fuzzy 33/33 in 17.917 s, one ignored finding; idle session serial delta +0.019 s focused and +0.000 s fuzzy at reported precision |
+| 06a journal and task-brief foundation | merged, `e74678e`; 06a incomplete | independent review corrected partial-buffer transfer allocation, with counted-memory regressions; all four workflow checks passed; focused 2,228/2,228 in 5.652 s, fuzzy 36/36 in 20.108 s, one ignored finding; root world idle serial 0.027 s focused and 0.017 s fuzzy; brief world idle delta +0.074 s focused and +0.244 s fuzzy |
 
 
 01a checks pattern inclusion against independently enumerated names and
@@ -126,10 +127,14 @@ still in an isolated worktree. Session turns, concrete history, pricing and
 answered/withdrawn child spend are merged. Restored waking results are sized
 before allocation; owned-IO terminal races, complete-state replay and fuzzy
 outcome coverage are verified. Whole-run aggregation and native tools (05f)
-are being implemented. The root skeleton (06a) has a brief seam and ordered
-journal/store world in its worktree; partial-list memory transfer has been
-corrected after independent review and awaits its final gate. Its complete
-charged story needs 02e's
+are being implemented. The root's task-brief seam and ordered journal/store
+foundation are merged. The partial-list transfer regression measured 127,960
+bytes against the original 88,160-byte bound before the fix; moving owned
+buffers without shrinking them passes that unchanged bound. Task-brief
+random worlds assert every applicable ending; item-list truncation belongs
+to the legacy dependency-list source. Child record wrappers, paged loads,
+routing and the complete charged walking story remain required before 06a
+is complete. That story needs 02e's
 finite funding ledger and atomic turn/answer admission, which is brought
 forward after 02c. Task amendments and moves are merged: persisted narrowing
 reissues stops after restart, and two reserved immutable control offers per
