@@ -7,7 +7,7 @@ this document takes as given. How its code is written is skein's
 `docs/foundation/programming-model.md`, which the client follows as every
 temper component does; how it is tested is skein's `testing-strategy.md`,
 as `../testing.md` applies it. Why there is no framework is section 8;
-what this asks of the rest of temper, section 9; what is open, section 10.
+what this asks of temper and skein, section 9; what is open, section 10.
 
 ## 1. In one page
 
@@ -34,8 +34,10 @@ what this asks of the rest of temper, section 9; what is open, section 10.
   reads the tree by role, name and text and presses what a person would.
   No browser, no WebAssembly and no fake DOM library are involved.
 - **A real browser at the top, driven from Rust.** A few scenarios run in
-  headless Chromium, driven over the DevTools protocol by a step machine
-  in the same loop as the engine: the person's other face.
+  headless Chromium, driven over the DevTools protocol by `skein-browser`,
+  skein's browser testing kit: a step machine in the same loop as the
+  engine, with nothing beyond skein but the browser. It is the person's
+  other face.
 
 ## 2. The client
 
@@ -245,12 +247,19 @@ emits, never the client's state (testing-strategy.md, section 7).
   `--remote-debugging-pipe`, it speaks the DevTools protocol (CDP) as
   JSON documents, each ending in a NUL byte, on the child's descriptors 3
   and 4. There is no WebSocket, WebDriver or Node.
-- **The driver is a step machine** over skein's io (the spawned child and
-  its pipes) and `skein-json`, in the real loop beside the engine: one
-  thread, no async runtime, no CDP crate. It speaks only the part of CDP
-  the DOM face needs: open a page, query the accessibility tree, dispatch
-  input, read console messages and exceptions, and take a screenshot
-  when a test fails.
+- **The driver is skein's:** `skein-browser`, a testing kit for any
+  service with a web. It launches Chromium, frames CDP over the pipe, and
+  speaks the part of CDP a test needs: open a page, query the
+  accessibility tree by role and name, dispatch input, read console
+  messages and exceptions, and take a screenshot when a test fails. It is
+  a step machine over skein's io (the spawned child and its pipes) and
+  `skein-json`, in the real loop beside the service: one thread, no async
+  runtime, and no dependency beyond skein. Chromium is the one thing it
+  needs from outside. It goes into skein from the start rather than
+  once a second service needs it (testing-strategy.md, section 7), since
+  nothing in it is temper's.
+- **temper's part is the person's DOM face,** which turns the person's
+  queries and actions (7.2) into `skein-browser`'s.
 - **What only a browser shows:** the shell (patches keep focus, caret,
   selection and scroll; events carry the right tokens; session storage
   survives a reload; a panic reloads) and the bundle (it loads under its
@@ -288,7 +297,7 @@ in the browser tier.
 The choice stays reversible. A framework could render the same tree, and
 the domain, its worlds and its scenarios would not change.
 
-## 9. What this asks of the rest of temper
+## 9. What this asks of temper and skein
 
 - **The engine:** the web protocol's server side in its protocol layer,
   over `temper-web-wire`; serving the bundle; the reads and streams of ux
@@ -296,11 +305,12 @@ the domain, its worlds and its scenarios would not change.
 - **`../protocol.md`:** the web protocol moves from the foreign
   protocols to temper's own (section 5).
 - **`../testing.md`:** people act on the client (7.2); the browser as a
-  tier (7.3); the layout gains the native shell, the person's two faces
-  and the CDP driver, under `testing/`.
-- **skein:** a spawned child with two more pipes, at descriptors 3 and 4,
-  for the driver. The native shell needs only what skein has: the HTTP
-  client and the server-sent events reader.
+  tier (7.3); the layout gains the native shell and the person's two
+  faces, under `testing/`.
+- **skein:** `skein-browser` (7.3), designed in skein's `docs/design`,
+  and for it a spawned child with two more pipes, at descriptors 3 and 4.
+  The native shell needs only what skein has: the HTTP client and the
+  server-sent events reader.
 - **The toolchain:** the standard library for `wasm32-unknown-unknown`
   (the development machine's rustc is Debian's, without rustup, so
   `libstd-rust-dev-wasm32`) and the wasm-bindgen CLI. Chromium is
