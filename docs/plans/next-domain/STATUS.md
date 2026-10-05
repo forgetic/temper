@@ -53,6 +53,7 @@ place and their integration, as [README.md](README.md) states.
 | 05s4 smith generic results | merged locally | smith 14cd733 | Gate passed; 368 focused / 1.509 s; 8 fuzzy / 2.820 s; serial 368 / 4.359 s, 8 / 6.150 s. |
 | 05s4 smith generic delivery | merged locally | smith 2a621a5 | Gate passed; 394 focused / 1.613 s; 9 fuzzy / 2.530 s; serial 394 / 4.429 s, 9 / 6.229 s. |
 | 05s4 smith declared host tools | merged locally | smith ab15cae | Gate passed; 411 focused / 1.786 s; 9 fuzzy / 3.111 s; serial 411 / 4.764 s, 9 / 15.212 s. |
+| 05s6 smith V2 host supervision | merged locally | smith eb46ecc | Gate passed; 459 focused / 1.606 s; 10 fuzzy / 2.593 s; serial 459 / 5.001 s, 10 / 6.569 s. |
 | 02d1 actual escalation routes | merged; broader escalation open | 754ca84 | Gate passed; 2,277 focused / 5.850 s; 39 fuzzy / 24.314 s; root serial 68 / 0.393 s, 5 / 1.293 s. |
 | 03c role administration and live rerouting | merged; narrow dependency | 6dfa4d2 | Gate passed; 2,292 focused / 10.993 s; 40 fuzzy / 26.798 s; root serial 78 / 0.490 s, 6 / 1.435 s. |
 
@@ -90,8 +91,8 @@ place and their integration, as [README.md](README.md) states.
 **05s — smith**
 
 - Provision smith's forge remotes; preserve the frozen legacy agent until cutover.
-- Continue messages, wait, parking/resume and the remaining run increments; finish V2 host validation, then channel/protocol and temper's half (05s4–7).
-- Build the local host domain and worlds (05s8); move shared kit to skein as section 6 requires.
+- Replace copied provider/OAuth ownership with the shared Skein LLM client; continue messages/wait/parking/resume and remaining run increments (05s2a, 05s4).
+- Build channel/protocol, Temper's runtime half and local-host worlds (05s5, 05s7–8); shared kit belongs in Skein.
 
 **06 — root**
 
@@ -111,6 +112,6 @@ place and their integration, as [README.md](README.md) states.
 
 ## Resume point
 
-- Active: validate smith's V2 process host (05s6) and build messages/wait/parking/resume (05s4); generic host tools are merged. Smith has priority at the user's request.
+- Active: replace Smith's provider clients with `skein-llm` (shared changes first) and build messages/wait/parking/resume; generic host tools and V2 host supervision are merged. Smith has priority.
 - Parked drafts: `next-domain/02e-depth-draft` (`a60bf1c`), `next-domain/04b2` (`0eff9dc`), `next-domain/05f` (`c33941c`). These have not passed the merge gate.
 - Shared skein revision is local and cached; fresh-machine fetches need its authorized publication. Forgejo v16.0.5 job-log client repairs remain open.

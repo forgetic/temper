@@ -20,8 +20,8 @@ README.md.
   temper's agent into smith in place would make one crate serve both, the
   hybrid the plan avoids everywhere else.
 - **So smith starts from a copy,** as the new root is built beside the
-  old: the agent's crates as they are after 05e, its providers, its OAuth
-  client, its fake LLM and their worlds; and 05d's agent child of the
+  old: the agent's crates as they are after 05e, its fake LLM and
+  their worlds; and 05d's agent child of the
   worker, for smith's host domain. What the parked 05f branch built of
   the run and the tools is ported where it fits smith's design, not
   merged.
@@ -64,9 +64,9 @@ README.md.
 | `temper-agent-domain-session` | `smith-domain-session` | `temper-legacy-agent-domain-session` |
 | `temper-agent-domain-tools` | `smith-domain-tools` | `temper-legacy-agent-domain-tools` |
 | `temper-agent-protocol` | `smith-protocol`, its agent half | `temper-legacy-agent-protocol` |
-| `temper-llm-anthropic`, `temper-llm-openai` | `smith-llm-anthropic`, `smith-llm-openai` | `temper-legacy-llm-anthropic`, `temper-legacy-llm-openai` |
-| `temper-oauth` | `smith-oauth` | kept by its name: the engine's protocol layer uses it until 07c |
-| `testing/temper-fake-llm-domain`, `-protocol` | `smith-fake-llm-domain`, `-protocol` | `testing/temper-legacy-fake-llm-domain`, `-protocol` |
+| `temper-llm-anthropic`, `temper-llm-openai` | shared `skein-llm::client::Client`; no Smith provider crates | `temper-legacy-llm-anthropic`, `temper-legacy-llm-openai` |
+| `temper-oauth` | no Smith copy; credentials are supplied by the host | kept by its name: the engine's protocol layer uses it until 07c |
+| `testing/temper-fake-llm-domain`, `-protocol` | shared `skein-fake-llm-domain`, `-protocol`; Smith owns application scripts/worlds | `testing/temper-legacy-fake-llm-domain`, `-protocol` |
 | `temper-worker-domain-agent` | `smith-host-domain` | kept, extended, until step 08 swaps the worker's child |
 | `tests/agent/{tools,session,run,protocol}`, `tests/fake-llm` | smith's `tests/{tools,session,run,protocol,fake-llm}` | `tests/legacy/agent/{tools,session,run,protocol}`, `tests/legacy/fake-llm` |
 | `tests/agent/domain` | smith's `tests/agent`, on a scripted host | kept by its path: a system world, moved at 07b |
@@ -84,8 +84,7 @@ and owed to skein. The gate passes on it.
 ### 05s2 the agent copied (smith)
 
 - **From a named temper commit,** which the commit message gives: the
-  four agent crates, the providers, the OAuth client, the fake LLM and
-  their worlds, under smith's names (section 3), with `use` lines and
+  four agent crates, the fake LLM and their worlds, under smith's names (section 3), with `use` lines and
   citations repointed to smith's documents.
 - **The top-level world rehosted:** temper's ran the agent under the real
   worker and engine; smith's runs it under a scripted host (smith's
@@ -93,6 +92,29 @@ and owed to skein. The gate passes on it.
 - **Behaviour unchanged:** every copied story passes as it did, measured
   with smith's serial profile, and the shares recorded in smith's
   `workflow.md`. The protocol crate waits for smith's channel (05s5).
+
+The original 05s2 copy also included provider codecs and an OAuth client.
+Those are historical migration evidence, not Smith's design. The shared-client
+correction below removes that ownership before further protocol work.
+
+### 05s2a the shared LLM client (skein, then smith)
+
+- **Shared ownership:** remove Smith's copied provider clients and wire
+  fixtures. Provider dialects, authentication headers and replay codecs belong
+  to `skein-llm::client::Client`; generic wire-peer fakes belong in Skein too.
+  Smith receives host-owned credentials and owns no sign-in, refresh or
+  provider claim decoder. Preserve Temper's credential owner and frozen
+  legacy providers until cutover; later generic OAuth belongs in Skein.
+- **An actual consumer:** Smith's protocol translates its provider-neutral
+  vocabulary, offered schemas and opaque replay to the shared client. Retry,
+  deadline, budget and tool policy stay in its domains. Shape either interface
+  to eliminate needless conversions or duplicated state. Adding a dependency
+  without using the client does not complete this correction.
+- **Shared first:** missing mechanisms and wire fakes land through Skein's
+  independent review and gates before consumer updates. Verify copied provider
+  test and archive coverage in Skein before deleting it from Smith; keep Smith
+  consumer translation and lifecycle tests. Update both designs, named source
+  mappings and measured shares through their own repository gates.
 
 ### 05s3 temper's agent moved aside (temper)
 
@@ -129,7 +151,8 @@ Stories: smith's `run.md`, section 13, in smith's run and agent worlds.
   frames with a documented regeneration command and drift tests.
 - `smith-transcript`: turns' encoding, from 05e's versioned records.
 - `smith-protocol`: the agent's half of `temper-agent-protocol`:
-  providers, tools' schemas, decoding and rendering, `finish`'s schema
+  the provider-neutral `skein-llm` client boundary, tools' schemas, decoding
+  and rendering, `finish`'s schema
   generated from the contract, host tools' schemas passed through;
   without temper's half (the brief's rendering, the engine's charter's
   mapping), which 07a writes in temper.
@@ -198,15 +221,15 @@ each of the others to take it:
   sealed by constructors, the channel's state machine): once 05s5 has
   smith's beside temper's;
 - **an OAuth client** (sign-in, refresh, tokens as secrets): from
-  `smith-oauth`, when temper's web signs people in with the forge
-  (08-after.md, section 3);
+  Temper's credential owner when its web signs people in with the forge
+  (08-after.md, section 3); Smith receives credentials from its host;
 - **supervised process trees** (spawning within a deadline, cancel then
   terminate then kill, proof that a tree is empty): from
   `smith-host-domain`, if temper's worker needs them beyond its agent
   child.
 
-Each follows skein's own conventions and review; what is about LLMs,
-conversations, tools or runs stays in smith, and what is about tasks,
+Each follows skein's own conventions and review. LLM wire clients and shared
+wire fakes belong in Skein; agent conversations, tool and run policy stay in Smith, and what is about tasks,
 authority or connectors in temper.
 
 ## 7. Order
@@ -219,6 +242,7 @@ authority or connectors in temper.
 05s4 + 05s6 ──► 05s8 (local host)
 ```
 
+The shared-client correction (05s2a) precedes further Smith protocol work.
 The step starts after README.md, section 8's gates (the walking story,
 the tasks audit, the documentation backfill and the style checks). 05f
 and 05g stay parked meanwhile and are ported, not merged. 07 needs 05s

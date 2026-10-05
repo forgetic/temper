@@ -68,7 +68,7 @@ agent    smith: LLM work, one run per process, reporting to its worker
 |---|---|---|
 | the engine's domain | none | transcripts are bytes; the charter is temper's own |
 | the engine's protocol layer | `smith-channel` (charter, calls, answers, messages), `smith-transcript` | encoding charters, decoding host tools' calls, rendering their answers; the web rendering turns |
-| the engine's protocol layer | `smith-oauth` | refreshing LLM accounts' tokens (`credentials.md`) |
+| the engine's protocol layer | `temper-oauth` until the shared OAuth machine | refreshing host-owned LLM accounts' tokens (`credentials.md`); Smith receives grants |
 | the worker's domain | `smith-host-domain` | its agent child: processes, the channel's rules, the watchdog, cancel then kill |
 | the worker's protocol layer | `smith-channel`, the host's half | the channel over an agent's pipes |
 | workers' machines | `smith`, the binary | the agent process |
@@ -256,13 +256,15 @@ host:
 
 ## 11. From today
 
-- **The agent's crates move to smith:** `temper-agent-domain` and its
-  children, `temper-llm-anthropic`, `temper-llm-openai`, `temper-oauth`,
-  and `temper-fake-llm-domain` and `temper-fake-llm-protocol`, with their
-  worlds, as smith's crates of the same parts (smith's `README.md`,
-  section 4).
+- **The agent's domains move to Smith:** `temper-agent-domain` and its
+  children, with their worlds. Smith uses Skein's provider-neutral
+  `skein-llm::client::Client`; provider wire codecs and shared wire-peer
+  fakes belong in Skein. Smith owns no provider client or OAuth refresh
+  implementation. The host supplies credentials (`credentials.md`);
+  Temper's existing credential owner remains until its planned cutover.
 - **`temper-agent-protocol` splits:** the agent process's half (the
-  channel's agent side, providers, tools' schemas, rendering the prompt)
+  channel's agent side, the shared LLM client boundary, tools' schemas,
+  rendering the prompt)
   is smith's `smith-protocol`; temper's half (rendering the brief,
   mapping the charter, the verdict lists fixed in code, the engine tools'
   schemas and answers) stays, as the engine's protocol layer's.
