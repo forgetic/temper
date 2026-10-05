@@ -224,11 +224,8 @@ fn real_root_state_and_complete_walking_handoffs_fit_the_declared_counted_bound(
 
 #[test]
 fn held_reasons_history_queries_and_real_escalation_handoffs_fit_counted_root_memory() {
-    use temper_engine_domain_world::{escalation, escalation_referee::Story, walking};
-    let mut limits = walking::limits();
-    limits.people.initial_owners = 2;
-    limits.people.requests = 8;
-    limits.tasks.retries.run.retries = 0;
+    use temper_engine_domain_world::{escalation, escalation_referee::Story};
+    let limits = escalation::limits();
     let bound = root::engine::worst_case(&limits).expect("all escalation retained and transient ownership priced");
     for story in [Story::PassRelease, Story::RaceReject] {
         let meter = Meter::new();

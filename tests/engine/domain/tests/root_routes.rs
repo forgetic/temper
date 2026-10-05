@@ -783,13 +783,8 @@ fn escalation_archive_driver() -> (Driver, temper_engine_domain::EscalationDecis
         .values()
         .find_map(|row| if let Record::EscalationDecision(archive) = row { Some(archive.clone()) } else { None })
         .expect("actual completed escalation archive");
-    let mut configured = limits();
-    configured.people.requests = 8;
-    configured.people.initial_owners = 2;
-    configured.tasks.retries.run.retries = 0;
+    let configured = escalation::limits();
     let mut driver = Driver::configured(world.store, config(9200), &configured);
-    driver.settle();
-    driver.sign_in();
     driver.settle();
     (driver, archive)
 }
@@ -798,7 +793,7 @@ fn escalation_archive_driver() -> (Driver, temper_engine_domain::EscalationDecis
 fn failed_named_escalation_history_read_closes_once_and_same_key_retries() {
     let (mut driver, archive) = escalation_archive_driver();
     let rows = driver.store.rows.clone();
-    let session = driver.session();
+    let session = driver.store.header().sign_ins;
     driver.delivered.clear();
     driver.fail_archive_once = true;
     driver.send(engine::Event::Ask {
@@ -854,10 +849,7 @@ fn held_waiting_store() -> Store {
 }
 
 fn held_driver(store: Store) -> Driver {
-    let mut configured = limits();
-    configured.people.initial_owners = 2;
-    configured.people.requests = 8;
-    configured.tasks.retries.run.retries = 0;
+    let configured = temper_engine_domain_world::escalation::limits();
     Driver::configured(store, config(9202), &configured)
 }
 
@@ -944,12 +936,13 @@ fn rejected_restore_stays_rejected_and_current_read_checks_privacy_and_both_expi
         .find_map(|row| if let Record::Tasks(tasks::Stored::Live(task)) = row { Some(task.number) } else { None })
         .expect("rejected held task");
     let before = world.store.rows.clone();
-    let mut driver = held_driver(world.store);
+    let mut configured = escalation::limits();
+    configured.people.people = 3;
+    configured.people.sign_ins = 3;
+    let mut driver = Driver::configured(world.store, config(9203), &configured);
     driver.settle();
     assert_eq!(driver.store.rows, before, "rejection never reopens or reroutes at startup");
-    driver.sign_in();
-    driver.settle();
-    let owner_session = driver.session();
+    let owner_session = 1;
     driver.delivered.clear();
     driver.send(engine::Event::ReadEscalation {
         reply_to: ReplyTo::new(Token::new(910)),

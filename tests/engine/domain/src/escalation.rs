@@ -155,6 +155,22 @@ fn config(seed: u64) -> engine::Config {
     config
 }
 
+/// Exact configured child and root capacities for this finite escalation world;
+/// memory and route regressions reuse them rather than drift from the driver
+/// (domain/engine.md, section 7.7).
+#[must_use]
+pub fn limits() -> engine::Limits {
+    let mut limits = walking::limits();
+    limits.tasks.retries.run.retries = 0;
+    limits.people.initial_owners = 2;
+    limits.people.requests = 8;
+    limits.journal.writes = tasks::max_out(&limits.tasks) * 8
+        + people::max_out(&limits.people) * 4
+        + limits.people.pending * 2
+        + fleet::max_out(&limits.fleet) * 4;
+    limits
+}
+
 impl World {
     /// Build actual children/policy, with two initial owners and zero run retries.
     /// Initial policy grants Create/Accept and escalation decisions, omitting direct Release.
@@ -162,10 +178,7 @@ impl World {
     /// (domain/engine.md, section 7.7; domain/tasks.md, section 15).
     #[must_use]
     pub fn new(settings: Settings) -> World {
-        let mut limits = walking::limits();
-        limits.tasks.retries.run.retries = 0;
-        limits.people.initial_owners = 2;
-        limits.people.requests = 8;
+        let limits = limits();
         let config = config(settings.seed);
         let mut world = World {
             domain: engine::Domain::new(config, &limits),
