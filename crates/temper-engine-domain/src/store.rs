@@ -28,6 +28,27 @@ pub enum Key {
     Deployment,
     Turn { task: u64, attempt: u64, turn: u32 },
 }
+/// Root-owned ranges. Children's ranges join with their record wrappers.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Range {
+    Deployment,
+    Turns { task: u64, attempt: u64 },
+}
+impl Range {
+    #[must_use]
+    pub const fn contains(self, key: Key) -> bool {
+        match self {
+            Range::Deployment => match key {
+                Key::Deployment => true,
+                Key::Turn { .. } => false,
+            },
+            Range::Turns { task, attempt } => match key {
+                Key::Deployment => false,
+                Key::Turn { task: found, attempt: run, turn } => found == task && run == attempt && turn != 0,
+            },
+        }
+    }
+}
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct TurnRecord {
     pub task: u64,

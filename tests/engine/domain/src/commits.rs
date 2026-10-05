@@ -1,8 +1,8 @@
 use skein_lib::{Queue, Rng, Token, Wall};
 use std::collections::{BTreeMap, VecDeque};
 use temper_engine_domain::{
-    self as root, Decision, Delivery, Deployment, Family, Journal, JournalLimits, Key, Output, Record, TurnRecord,
-    Write,
+    self as root, Decision, Delivery, Deployment, Family, Journal, JournalLimits, Key, Output, Range, Record,
+    TurnRecord, Write,
 };
 
 pub const LIMITS: JournalLimits =
@@ -55,6 +55,23 @@ impl Store {
             panic!("deployment");
         };
         *header
+    }
+    /// Key-range paging, derived directly from the fake store's durable map.
+    /// Each page is a separate request and has a cursor only when rows remain.
+    #[must_use]
+    pub fn page(&self, range: Range, after: Option<Key>, most: u32) -> (Box<[Record]>, Option<Key>) {
+        let selected: Vec<Record> = self.rows.iter().filter(|(key, _)| {
+            let within = match range {
+                Range::Deployment => **key == Key::Deployment,
+                Range::Turns { task, attempt } => matches!(key, Key::Turn { task: found, attempt: run, turn } if *found == task && *run == attempt && *turn != 0),
+            };
+            within && after.is_none_or(|old| **key > old)
+        }).map(|(_, row)| row.clone()).collect();
+        let count = usize::try_from(most).expect("small page");
+        let more = selected.len() > count;
+        let rows: Box<[Record]> = selected.into_iter().take(count).collect();
+        let next = if more { Some(rows.last().expect("positive page").key()) } else { None };
+        (rows, next)
     }
 }
 impl Default for Store {

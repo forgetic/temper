@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 extern crate alloc;
 mod decision;
+pub mod loads;
 mod store;
 #[cfg(test)]
 mod tests;
@@ -13,4 +14,4 @@ pub use decision::{
     Decision, Delivery, Journal, Limits as JournalLimits, Output, accept, committed, fresh, resume, takes, uncommitted,
     worst_case,
 };
-pub use store::{Deployment, Family, Key, Record, TurnRecord, Write};
+pub use store::{Deployment, Family, Key, Range, Record, TurnRecord, Write};

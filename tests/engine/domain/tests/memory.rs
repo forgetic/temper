@@ -6,6 +6,68 @@ use temper_world::heap::{self, Meter};
 static HEAP: heap::Counting = heap::Counting;
 
 #[test]
+fn retired_and_abandoned_load_slots_and_a_partial_page_fit_without_payload_clones() {
+    use root::{Range, loads};
+    let slot = u32::try_from(core::mem::size_of::<Record>()).expect("small slot");
+    let limits =
+        loads::Limits { loads: 2, rows: 4, bytes: slot * 2 + 8, reply_bytes: 4 * (slot + 4), transcript_bytes: 4 };
+    let mut out = Queue::<loads::Request>::with_capacity(1);
+    let meter = Meter::new();
+    let mut domain = loads::Loads::new(&limits);
+    let incoming: Box<[Record]> = (1..=4)
+        .map(|turn| {
+            Record::Turn(TurnRecord {
+                task: 1,
+                attempt: 1,
+                turn,
+                spent: 0,
+                read: None,
+                at: Wall::EPOCH,
+                transcript: vec![b'x'; 4].into_boxed_slice(),
+            })
+        })
+        .collect();
+    let mut addresses = [core::ptr::null(); 4];
+    for (address, row) in addresses.iter_mut().zip(incoming.iter()) {
+        let Record::Turn(row) = row else {
+            panic!("turn");
+        };
+        *address = row.transcript.as_ptr();
+    }
+    let first = loads::begin(&mut domain, Token::new(1), Range::Turns { task: 1, attempt: 1 }, None, 4, &mut out)
+        .expect("first slot");
+    drop(out.pop().expect("first IO"));
+    let second = loads::begin(&mut domain, Token::new(2), Range::Deployment, None, 1, &mut out).expect("second slot");
+    drop(out.pop().expect("second IO"));
+    loads::abandon(&mut domain, second);
+    meter.start();
+    loads::loaded(&mut domain, first, incoming, None, &mut out);
+    let measured = meter.end();
+    let loads::Request::Loaded { rows, cut, .. } = out.pop().expect("partial page") else {
+        panic!("loaded");
+    };
+    assert_eq!(rows.len(), 2);
+    assert_eq!(cut.expect("cut").rows, 2);
+    for (row, original) in rows.iter().zip(addresses) {
+        let Record::Turn(row) = row else {
+            panic!("turn");
+        };
+        assert_eq!(row.transcript.as_ptr(), original, "owned bytes moved directly");
+    }
+    drop(rows);
+    meter.check(measured, loads::worst_case(&limits).expect("valid bound"), limits);
+    assert!(
+        loads::begin(&mut domain, Token::new(3), Range::Deployment, None, 1, &mut out).is_none(),
+        "retired and abandoned both retain slots"
+    );
+    loads::reclaim(&mut domain);
+    assert!(loads::begin(&mut domain, Token::new(3), Range::Deployment, None, 1, &mut out).is_some());
+    drop(out.pop().expect("reclaimed first slot"));
+    loads::unloaded(&mut domain, second, &mut out);
+    assert!(out.is_empty(), "abandoned terminal does not wake its old waiter");
+}
+
+#[test]
 fn partial_delivery_transfer_never_allocates_a_second_shrinking_container() {
     let limits = root::JournalLimits {
         commits: 1,

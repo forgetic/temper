@@ -355,6 +355,12 @@ step 07.
    event. Begin brief, journal and load work beside 02c; bring the funding
    seam forward before running the complete story. The root never keeps a
    second copy of the child's funding ledger.
+   The next foundation adds fenced one-terminal loads for the root-owned
+   deployment and turn ranges: bounded row/order/cursor validation,
+   whole-prefix byte cuts with exact omission reports, abandonment retaining
+   IO capacity until the terminal, and key-range paging in the independent
+   fake store. Child ranges and actual startup/brief routing still join in
+   the walking story; its dispatch must wait for the commits a load reads.
 2. **06b runs.** Parking and resuming from a transcript, or fresh past the
    resume limit with the tail in the brief; messages relayed only once
    committed; cancels; failures by class, backoff, holds; saved work;

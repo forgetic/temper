@@ -201,6 +201,23 @@ What decides nothing waits for nothing: facts streamed to watchers
   prepared to resume, a person's page.
 - **Bounded:** the loads in flight, and the bytes a load brings, are
   limits; a load past its bytes is cut, and says how much.
+- **Pages:** rows are strictly increasing in the requested key range,
+  after its exclusive cursor. When more rows remain, the continuation is
+  the last returned key; an empty page never claims a continuation. A byte
+  cut keeps a whole prefix and reports omitted rows and bytes. Its cursor
+  is the last kept key, or the original cursor if no row fits, so a caller
+  detects nonprogress and falls back rather than treating it as an empty
+  end of range. Each page sees the commits answered before its own request;
+  paging does not promise a snapshot across several requests.
+  The store request also names the hard decoded reply-byte bound, enforced
+  before its protocol hands ownership to the root. This receive bound may
+  exceed a waiting brief's or resumed transcript's kept-prefix budget; the
+  root counts both the incoming page and temporary prefix slots in its
+  worst case. A reply past the hard bound is malformed, not retained.
+- **Abandonment:** a waiter may cease waiting, but an issued load keeps
+  its slot until its actual store terminal arrives. That terminal releases
+  capacity without waking the abandoned waiter; a stale token cannot
+  complete a later load in that slot.
 
 ### 5.4 What the store keeps
 
