@@ -867,10 +867,10 @@ fn restored_waiting_rechecks_snapshot_membership_and_same_holder_changes_nothing
         .rows
         .values()
         .find_map(|row| {
-            if let Record::Tasks(tasks::Stored::Live(task)) = row {
-                if let tasks::Party::Person(person) = task.requester {
-                    return Some(person);
-                }
+            if let Record::Tasks(tasks::Stored::Live(task)) = row
+                && let tasks::Party::Person(person) = task.requester
+            {
+                return Some(person);
             }
             None
         })
@@ -1062,7 +1062,21 @@ fn coalesced_history_waiters_survive_simultaneous_io_completion_under_full_journ
                 reply: people::Reply::Outcome(people::Outcome::EscalationDecided { by, .. }),
                 ..
             } => Some((to.into_token().raw(), by)),
-            _ => None,
+            Delivery::WebReply { .. }
+            | Delivery::Reply { .. }
+            | Delivery::AcknowledgeTurn { .. }
+            | Delivery::Acknowledge { .. }
+            | Delivery::Cancel { .. }
+            | Delivery::Fleet(_)
+            | Delivery::Assigned { .. }
+            | Delivery::Refuse { .. }
+            | Delivery::ReadResult { .. }
+            | Delivery::TurnBusy { .. }
+            | Delivery::Load { .. }
+            | Delivery::Result { .. }
+            | Delivery::ResultReply { .. }
+            | Delivery::EscalationReply { .. }
+            | Delivery::ReadEscalationDecision { .. } => None,
         })
         .collect();
     assert_eq!(replies.len(), 16);
