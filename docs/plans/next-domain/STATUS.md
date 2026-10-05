@@ -43,6 +43,11 @@ place and their integration, as [README.md](README.md) states.
 | Four-crate documentation backfill | merged | 6f0698a | Gate passed; 2,249 focused / 11.273 s; 37 fuzzy / 29.489 s; 33 files comment-only. |
 | Channel golden regeneration | merged | e0aa8f3 | Gate passed; 2,251 focused / 11.393 s; 37 fuzzy / 29.164 s; 218 binaries regenerate unchanged. |
 
+| Shared domain-world kit (skein) | merged locally | skein 3cbd792 | Gate passed; 983 focused / 4.210 s; 62 fuzzy / 23.355 s. |
+| Shared domain-world kit (temper) | merged | c51bb5c | Gate passed; 2,251 focused / 10.826 s; 37 fuzzy / 28.978 s. |
+| 05s1 smith workspace | merged locally | smith e60ab48 | Gate passed; 2 focused / 0.004 s; 1 fuzzy / 0.006 s. |
+| 06a terminal commit restart | merged | 2e83cc2 | Gate passed; 2,256 focused / 11.832 s; 38 fuzzy / 29.735 s; root serial 51 / 0.287 s, 4 / 0.927 s. |
+
 ## What remains open
 
 **00 — groundwork**
@@ -75,14 +80,14 @@ place and their integration, as [README.md](README.md) states.
 
 **05s — smith**
 
-- Set up smith's workspace and forge remotes; copy the agent and freeze temper's legacy copy (05s1–3).
+- Provision smith's forge remotes; copy the agent and freeze temper's legacy copy (05s2–3).
 - Build the generic run, tools and host, then channel/protocol and temper's half (05s4–7).
 - Build the local host domain and worlds (05s8); move shared kit to skein as section 6 requires.
 
 **06 — root**
 
 - Continue 06b–f: run, tool, people and forge routes; broader restarts and worst-case worlds.
-- Recovery after terminal commit but before ACK/result release remains owed.
+- Cover the remaining run, tool and connector restart cuts in 06b–f.
 
 **07 — cutover**
 
@@ -97,6 +102,6 @@ place and their integration, as [README.md](README.md) states.
 
 ## Resume point
 
-- Resume authorized: extract shared domain-world kit to skein, start 05s1, and close the owed terminal restart cut.
+- Active: prepare the named agent copy (05s2) and actual root escalation routes (02d).
 - Parked drafts: `next-domain/02e-depth-draft` (`a60bf1c`), `next-domain/04b2` (`0eff9dc`), `next-domain/05f` (`c33941c`). These have not passed the merge gate.
-- Forgejo v16.0.5 job logs are API-readable; update the parked client accordingly. Terminal-commit-before-ACK/result restart coverage remains open.
+- Shared skein revision is local and cached; fresh-machine fetches need its authorized publication. Forgejo v16.0.5 job-log client repairs remain open.
