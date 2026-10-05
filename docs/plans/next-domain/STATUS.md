@@ -52,6 +52,7 @@ unavailable; the design records bounded/unknown handling and status links.
 | 05a fleet turns and graces | merged, `c6513cb` | all four workflow checks passed; focused 1,794/1,794 in 7.478 s, fuzzy 27/27 in 22.515 s, one ignored finding; fleet focused serial total 0.144 s and fuzzy 0.508 s |
 | 05b versioned channel and typed payloads | merged, `d3cc9c3` | parent review corrected relay byte bounds and added distinct-value fixtures; all four workflow checks passed; focused 2,091/2,091 in 7.184 s, fuzzy 29/29 in 17.783 s, one ignored finding; channel world serial 0.115 s focused and 0.272 s fuzzy before final scalar fixtures |
 | 05c1 fake checkout git foundation | merged, `41eda2b` | all four workflow checks passed; focused 2,123/2,123 in 5.274 s, fuzzy 30/30 in 21.425 s, one ignored finding; physical-git scenarios verify conflict markers, two parents, graph transfer and conditional pushes |
+| 05c2 checkout merge state and ownership | merged, `8e94482` | independent review found no blockers; all four workflow checks passed; focused 2,132/2,132 in 5.396 s, fuzzy 31/31 in 21.190 s, one ignored finding; checkout world serial 0.545 s focused and 0.815 s fuzzy |
 
 
 01a checks pattern inclusion against independently enumerated names and
@@ -98,11 +99,17 @@ closing, cancellation and validated durable restoration. Creation under a
 held closing parent refuses without mutation; result credits survive closing
 and recovery. Root integration and messages remain later task increments.
 
+05c is complete: the checkout prepares real fake-git merges, forwards owned
+conflict sets, retains the second parent through marker refusal, and advances
+expected heads only after successful or verified pushes. Saves leave that
+condition intact. Cancellation races settle before releasing the workspace;
+counted memory includes maximum retired and live conflict payloads. The real
+git protocol's enforcement of these typed contracts remains later work.
+
 Steps 02 through 05 are partially implemented. Task messaging (02b), the
-forge client (04b), checkout merges (05c) and worker turns (05d) are in
-isolated worktrees. The client API foundation is under review; its required
-world verification must pass before any client code reaches main. Steps 06
-through 08 remain.
+forge client (04b) and worker turns (05d) are in isolated worktrees. The
+client API foundation is under review; its required world verification must
+pass before any client code reaches main. Steps 06 through 08 remain.
 
 After groundwork, the plan's finer dependencies still apply: tasks needs
 authority's value and number shapes; the root's walking skeleton needs
