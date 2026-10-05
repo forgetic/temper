@@ -526,11 +526,14 @@ impl World {
                 self.ask_input(to, &input);
             }
         }
-        if self.settings.cut == Cut::Held
+        if self.settings.cut != Cut::None
             && self.recovery == Recovery::Sent
             && self.clock_offset == 0
             && !self.events.iter().any(|(_, event)| matches!(event, engine::Event::Answer { .. }))
         {
+            // A decision can commit its new claim before assignment escapes.
+            // No worker may invent hosting that claim; let actual fleet grace
+            // retire it and any retained old answer (domain/engine.md, 7.7).
             self.clock_offset = 6_000_000_000;
         }
     }

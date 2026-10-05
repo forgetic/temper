@@ -4,7 +4,7 @@
 
 use skein_lib::Token;
 use std::collections::{BTreeMap, BTreeSet};
-use temper_engine_domain::{EscalationDecisionRecord, Key, Record, Write, engine::Assignment};
+use temper_engine_domain::{EscalationDecisionRecord, Key, Record, TerminalRecord, Write, engine::Assignment};
 use temper_engine_domain_brief::{Body, Kind};
 use temper_engine_domain_people as people;
 use temper_engine_domain_tasks as tasks;
@@ -76,6 +76,8 @@ pub struct Referee {
     people: [Option<u64>; 2],
     task: Option<u64>,
     assignments: Vec<u64>,
+    claims: BTreeSet<u64>,
+    unplaced_claims: BTreeSet<u64>,
     offers: BTreeMap<u64, (u64, people::EscalationDecision)>,
     archives: BTreeMap<u64, EscalationDecisionRecord>,
     terminals: BTreeSet<u64>,
@@ -136,6 +138,8 @@ impl Referee {
             people: [None, None],
             task: None,
             assignments: Vec::new(),
+            claims: BTreeSet::new(),
+            unplaced_claims: BTreeSet::new(),
             offers: BTreeMap::new(),
             archives: BTreeMap::new(),
             terminals: BTreeSet::new(),
@@ -337,17 +341,18 @@ impl Referee {
                     && !writes.iter().any(|write| matches!(write, Write::Save(Record::EscalationDecision(archive)) if archive.task == record.number && archive.revision == revision)) {
                     return Err("semantic decision without same-transaction archive");
                 }
-                if let tasks::Phase::Active(tasks::Active::Claimed { attempt }) = record.phase
-                    && !writes.iter().any(|write| matches!(write, Write::Save(Record::RunProof(proof)) if proof.task == record.number && proof.attempt == attempt && proof.turn.is_none() && proof.terminal.is_none())) {
-                    return Err("claimed task without same-transaction fresh proof");
+                if let tasks::Phase::Active(tasks::Active::Claimed { attempt }) = record.phase {
+                    if !writes.iter().any(|write| matches!(write, Write::Save(Record::RunProof(proof)) if proof.task == record.number && proof.attempt == attempt && proof.turn.is_none() && proof.terminal.is_none())) {
+                        return Err("claimed task without same-transaction fresh proof");
+                    }
+                    self.claims.insert(attempt);
                 }
             }
             if let Write::Save(Record::Terminal(terminal)) = write {
-                let index = self
-                    .assignments
-                    .iter()
-                    .position(|attempt| *attempt == terminal.attempt)
-                    .ok_or("terminal without worker assignment")?;
+                let Some(index) = self.assignments.iter().position(|attempt| *attempt == terminal.attempt) else {
+                    self.unplaced_terminal(writes, terminal)?;
+                    continue;
+                };
                 if Some(terminal.task) != self.task {
                     return Err("terminal names another task");
                 }
@@ -442,6 +447,47 @@ impl Referee {
             }
         }
         Ok(())
+    }
+
+    fn unplaced_terminal(&mut self, writes: &[Write], terminal: &TerminalRecord) -> Result<(), &'static str> {
+        if Some(terminal.task) != self.task
+            || !self.claims.contains(&terminal.attempt)
+            || terminal.cumulative != 0
+            || terminal.end != tasks::End::Refused
+        {
+            return Err("unassigned claim did not retire as an unpriced refusal");
+        }
+        let record = saved_task(writes, terminal.task).ok_or("unassigned refusal without atomic task state")?;
+        if record.attempt != terminal.attempt
+            || record.numbers.spent != 3
+            || record.run_spent != 0
+            || record.turn != 0
+            || record.tries != tasks::Tries::NONE
+            || record.last_answer != Some(terminal.attempt)
+            || !matches!(record.phase, tasks::Phase::Active(tasks::Active::BackingOff { .. }))
+        {
+            return Err("unassigned refusal spent a try or changed accepted expense");
+        }
+        if !writes.iter().any(|write| matches!(write, Write::Save(Record::RunProof(proof)) if proof.task == terminal.task && proof.attempt == terminal.attempt && proof.turn.is_none() && proof.terminal.as_ref() == Some(terminal))) {
+            return Err("unassigned refusal and canonical proof are not atomic");
+        }
+        if writes.iter().any(|write| {
+            matches!(write, Write::Save(Record::Tasks(tasks::Stored::Ledger(_) | tasks::Stored::Closure(_))))
+        }) {
+            return Err("unassigned refusal changed the authentic funding ledger");
+        }
+        if !self.unplaced_claims.insert(terminal.attempt) {
+            return Err("unassigned claim retired twice");
+        }
+        Ok(())
+    }
+
+    /// Count durable claims whose assignment never escaped and whose canonical
+    /// refusal preserved expense and failure tries (domain/engine.md, section 7.7;
+    /// domain/tasks.md, section 5.2).
+    #[must_use]
+    pub fn unplaced_claims(&self) -> usize {
+        self.unplaced_claims.len()
     }
 
     /// Check outcome replies against their durable answers and immediate key-conflict

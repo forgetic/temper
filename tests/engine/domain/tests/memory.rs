@@ -227,7 +227,7 @@ fn held_reasons_history_queries_and_real_escalation_handoffs_fit_counted_root_me
     use temper_engine_domain_world::{escalation, escalation_referee::Story};
     let limits = escalation::limits();
     let bound = root::engine::worst_case(&limits).expect("all escalation retained and transient ownership priced");
-    for story in [Story::PassRelease, Story::RaceReject] {
+    for story in [Story::Release, Story::PassRelease, Story::RaceReject] {
         let meter = Meter::new();
         meter.start();
         let mut world = escalation::World::new(escalation::Settings {

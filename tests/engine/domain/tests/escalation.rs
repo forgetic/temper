@@ -113,6 +113,46 @@ fn held_and_decision_commit_cuts_restore_paged_real_children_and_exact_scripts()
         assert!(world.referee.done());
         world.referee.final_state(&world.store.rows).expect("no repeated charge or failed hold reopen");
     }
+    let world = run_replayed(Settings {
+        cut: Cut::Decision,
+        commit_delay: 1,
+        page_delay: 0,
+        ..Settings::calm(9210, Story::Release)
+    });
+    assert_eq!(world.restarts, 1);
+    assert_eq!(world.referee.unplaced_claims(), 1, "claim committed with release before assignment reached worker");
+    world.referee.final_state(&world.store.rows).expect("unassigned claim spent no try or extra expense");
+    let writes = world
+        .transactions
+        .iter()
+        .find(|writes| {
+            writes.iter().any(
+                |write| matches!(write, Write::Save(Record::Terminal(terminal)) if terminal.end == tasks::End::Refused),
+            )
+        })
+        .expect("actual unassigned-claim refusal transaction");
+    for corruption in 0..3 {
+        let mut altered = writes.clone();
+        match corruption {
+            0 => altered.retain(|write| !matches!(write, Write::Save(Record::RunProof(_)))),
+            1 => {
+                for write in &mut altered {
+                    if let Write::Save(Record::Tasks(tasks::Stored::Live(task))) = write {
+                        task.tries.lost = 1;
+                    }
+                }
+            }
+            2 => {
+                for write in &mut altered {
+                    if let Write::Save(Record::Terminal(terminal)) = write {
+                        terminal.end = tasks::End::Failed(tasks::Class::Lost);
+                    }
+                }
+            }
+            _ => unreachable!("three independent topology corruptions"),
+        }
+        assert!(world.referee.clone().commit(&altered).is_err(), "unassigned topology corruption {corruption}");
+    }
 }
 
 #[test]

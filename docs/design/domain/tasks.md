@@ -678,7 +678,7 @@ broader task-tree escalation and deployment recovery remain later work.
 | Claim | Keep | `brief_outputs` Rendered, after brief and grant; root reserves proof room first |
 | Turn | Merge charged admission; remove unpriced Turn | `fleet_outputs` Turned, correlated to the root's owned worker payload |
 | Started | Keep | `fleet_outputs` Placed |
-| Activation | Merge charged and unpriced causes | `fleet_outputs` Answered uses Priced; Lost/Withdrawn/Refused use Unpriced; `tasks_outputs` rejected answer normalizes Invalid unpriced |
+| Activation | Merge charged and unpriced causes | `fleet_outputs` Answered uses Priced; Lost uses Unpriced and becomes Refused without a kept turn (no try, §5.2), otherwise Failed(Lost); Withdrawn/Refused use Unpriced; `tasks_outputs` rejected answer normalizes Invalid unpriced |
 | PreparationFailed | Keep | `brief_outputs` Failed/Refused or exhausted run/grant/proof room; `tasks_outputs` rejected Claim |
 | Hold | Keep | `activate`, for authority deadline, budget or other static findings |
 | Settled | Keep | `tasks_outputs` Close, after this slice's synchronous closing effects |

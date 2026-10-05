@@ -1606,12 +1606,20 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
             ),
             fleet::Request::Lost { to, run, attempt } => {
                 let _answered = to.into_token();
-                remember_unpriced_terminal(domain, run, attempt, tasks::End::Failed(tasks::Class::Lost));
+                let proof = domain.proofs.get(&run.raw()).expect("lost claim has reserved durable evidence");
+                assert!(proof.attempt == attempt.raw(), "lost callback belongs to current proof");
+                // This root slice issues no calls. A claim without a kept turn
+                // has no durable execution and spends no try (domain/tasks.md, 5.2).
+                let end = match proof.turn {
+                    None => tasks::End::Refused,
+                    Some(_) => tasks::End::Failed(tasks::Class::Lost),
+                };
+                remember_unpriced_terminal(domain, run, attempt, end.clone());
                 domain.work.push(Work::Tasks(tasks::Event::Activation {
                     reply_to: internal(u64::MAX),
                     task: run.raw(),
                     attempt: attempt.raw(),
-                    end: tasks::End::Failed(tasks::Class::Lost),
+                    end,
                     cause: tasks::Cause::Unpriced,
                 }));
             }

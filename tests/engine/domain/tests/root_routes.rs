@@ -1,6 +1,6 @@
 use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
 use std::collections::VecDeque;
-use temper_engine_domain::{Delivery, Record, engine};
+use temper_engine_domain::{Delivery, Record, Write, engine};
 use temper_engine_domain_accounts as accounts;
 use temper_engine_domain_fleet as fleet;
 use temper_engine_domain_people as people;
@@ -1087,4 +1087,85 @@ fn coalesced_history_waiters_survive_simultaneous_io_completion_under_full_journ
         assert_eq!(by, archive.by);
     }
     assert!(driver.root.quiescent(), "all query/pending/store obligations retired");
+}
+
+#[test]
+fn restored_loss_spends_a_try_only_after_a_real_durable_turn() {
+    for kept_turn in [false, true] {
+        let mut original = Driver::new(Store::new());
+        original.send(engine::Event::Hello {
+            channel: Token::new(7),
+            hello: fleet::Hello {
+                graces: Some(Duration::from_secs(1)),
+                slots: 1,
+                workstreams: Box::new([]),
+                hosting: Box::new([]),
+            },
+        });
+        original.settle();
+        original.sign_in();
+        original.settle();
+        original.send(engine::Event::Ask {
+            reply_to: ReplyTo::new(Token::new(501)),
+            sign_in: original.session(),
+            key: [18; 16],
+            ask: people::Ask::StartChat { project: 1, words: QUESTION.into() },
+        });
+        original.settle();
+        let assignment = original
+            .delivered
+            .iter()
+            .find_map(|delivery| {
+                if let Delivery::Assigned { assignment, .. } = delivery { Some(assignment.clone()) } else { None }
+            })
+            .expect("actual worker assignment before loss");
+        if kept_turn {
+            turn(&mut original, &assignment, 1, 3);
+            original.settle();
+            assert!(original.delivered.iter().any(|delivery| matches!(delivery, Delivery::AcknowledgeTurn { task, attempt, turn: 1, .. } if *task == assignment.task && *attempt == assignment.attempt)));
+        }
+        let ledgers: Vec<_> = original
+            .store
+            .rows
+            .values()
+            .filter_map(|row| {
+                if let Record::Tasks(tasks::Stored::Ledger(ledger)) = row { Some(ledger.clone()) } else { None }
+            })
+            .collect();
+        let mut restored = Driver::new(original.store);
+        restored.settle();
+        restored.env.now = Time::from_nanos(6_000_000_000);
+        restored.env.wall = Wall::from_nanos(6_000_000_000);
+        engine::fire(&mut restored.root, &restored.env, &mut restored.out);
+        restored.collect();
+        let end = if kept_turn { tasks::End::Failed(tasks::Class::Lost) } else { tasks::End::Refused };
+        let cumulative = if kept_turn { 3 } else { 0 };
+        assert_eq!(restored.store.pending.len(), 1, "one canonical loss transaction");
+        let writes = &restored.store.pending.front().expect("loss transaction").1;
+        let canonical = writes
+            .iter()
+            .find_map(|write| if let Write::Save(Record::Terminal(terminal)) = write { Some(terminal) } else { None })
+            .expect("loss commits actual canonical terminal");
+        assert_eq!(
+            (canonical.task, canonical.attempt, canonical.cumulative),
+            (assignment.task, assignment.attempt, cumulative),
+        );
+        assert_eq!(canonical.end, end);
+        assert!(writes.iter().any(|write| matches!(write, Write::Save(Record::RunProof(proof)) if proof.task == assignment.task && proof.attempt == assignment.attempt && proof.terminal.as_ref() == Some(canonical))), "canonical terminal and proof share one commit");
+        assert!(writes.iter().any(|write| matches!(write, Write::Save(Record::Tasks(tasks::Stored::Live(task))) if task.number == assignment.task && task.numbers.spent == cumulative && task.run_spent == cumulative && task.last_answer == Some(assignment.attempt) && task.tries.lost == u32::from(kept_turn))), "canonical terminal and correct failure tries share one commit");
+        restored.settle();
+        let after: Vec<_> = restored
+            .store
+            .rows
+            .values()
+            .filter_map(|row| {
+                if let Record::Tasks(tasks::Stored::Ledger(ledger)) = row { Some(ledger.clone()) } else { None }
+            })
+            .collect();
+        assert_eq!(after, ledgers, "topology loss never charges or posts funding again");
+        assert!(
+            !restored.delivered.iter().any(|delivery| matches!(delivery, Delivery::Acknowledge { .. })),
+            "no worker terminal was offered after restart"
+        );
+    }
 }

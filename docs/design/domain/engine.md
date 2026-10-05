@@ -718,7 +718,21 @@ configured fallback before Fleet Loaded. Same holder changes nothing;
 changed holder advances its checked revision, stopping startup if exhausted.
 A final-role holder never moves down to a requester. Rejected remains rejected.
 Live role administration/loss rerouting is deferred to the following real
-03b/02d SetRoles integration, which has no root entrance in this increment.
+03c/02d SetRoles integration, which has no root entrance in this increment.
+
+A release may commit a fresh claim in the same transaction as its decision
+archive, before any assignment reaches the worker. A cut there leaves a real
+unlocated adopted claim. The outside recovery world advances past fleet's
+five-second grace after startup and retained worker inputs have been delivered,
+within authenticated session/account validity. Root canonicalizes fleet loss
+with no kept turn to Refused: this current root slice issues no calls, so there
+is no durable execution and no task try is spent (tasks.md, 5.2). A kept turn
+preserves Failed(Lost) and consumes the genuine loss retry. The canonical
+terminal, matching live proof and unchanged task expense are one commit; the
+next actual assignment has a fresh attempt, while lifetime expense remains 3
+until the successful attempt adds 2. Future actual call routing must extend
+the root's durable execution evidence before this no-execution rule can apply
+to calls.
 
 Route room includes two retained callbacks per pending people flight; the
 delivery reserve includes pending times waiters history replies alongside

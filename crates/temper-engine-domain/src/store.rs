@@ -276,7 +276,7 @@ pub struct TerminalRecord {
     pub attempt: u64,
     /// Accepted cumulative expense for a priced worker offer or unchanged expense for an unpriced root terminal; child counters change once (domain/engine.md, 7.4).
     pub cumulative: u64,
-    /// Exact bounded worker terminal, even when child lifecycle normalizes it; a refused answer archives root's unpriced Invalid normalization, and topology routes archive their actual Lost/Refused terminal (domain/engine.md, 7.4).
+    /// Exact bounded worker terminal, even when child lifecycle normalizes it; a refused answer archives root's unpriced Invalid normalization, and topology routes archive root's canonical terminal: an unlocated claim with no kept turn is `Refused` without spending a try, otherwise loss is `Failed(Lost)`. This root slice issues no calls (domain/engine.md, 7.4 and 7.7; domain/tasks.md, 5.2).
     pub end: temper_engine_domain_tasks::End,
 }
 
