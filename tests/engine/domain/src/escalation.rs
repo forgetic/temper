@@ -189,7 +189,9 @@ pub fn limits() -> engine::Limits {
     limits.journal.writes = tasks::max_out(&limits.tasks) * 8
         + people::max_out(&limits.people) * 4
         + limits.people.pending * 2
-        + fleet::max_out(&limits.fleet) * 4;
+        + fleet::max_out(&limits.fleet) * 4
+        + limits.tasks.tasks
+        + 4;
     limits
 }
 

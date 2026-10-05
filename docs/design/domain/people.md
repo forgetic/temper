@@ -200,8 +200,47 @@ current view, not an inbox or new persistent people record.
 Current roles are queried through the narrow borrowed role(person,project)
 projection by actual root holder selection and decision/read checks. It does
 not authenticate and allocates nothing. Root authenticates its caller first;
-person(sign_in,now,wall) checks both expiry clocks. Live role administration and
-membership-loss rerouting await a real root SetRoles route in the next integration.
+person(sign_in,now,wall) checks both expiry clocks. The current SetRoles route below rechecks live Waiting recipients when membership changes.
+
+#### 5.1.3 Current keyed role administration (partial 03c/02d)
+
+SetRoles replaces the complete holdings of one existing project. Admission
+requires a live authenticated sign-in and current Owner membership; root checks
+PersonRequest::Policy against the current authority policy again immediately
+before application. The roster is bounded by holdings. Each person must be
+positive, already known to people and unique; zero or duplicate identities
+refuse Limit, unknown people or projects refuse Unknown. Oversized entrance
+refuses before any roster clone. Removing the requesting owner is permitted
+because standing is checked against membership before the replacement.
+
+The actual root producer of ApplyRoles is engine::roles::begin. Its request
+names the original admitted SetRoles flight, rather than another roster copy
+or a child receipt. People checks readiness, that flight's typed request,
+existing project, current Owner and every holding before Save Roles. It then
+returns exactly one correlated RolesApplied terminal. Refusals make no role
+write. Root consumes that terminal, finishes semantic Waiting rerouting and
+returns Decided; RolesSet(project) saves with the membership and affected task
+rows in one atomic root commit. The external reply waits for durability.
+
+The actual boundary inventory for this addition is:
+
+| Surface | Actual producer | Actual consumer |
+| --- | --- | --- |
+| Ask::SetRoles | Authenticated engine Ask | People admission, then root people_outputs → roles::begin |
+| Event::ApplyRoles | Root roles::begin after complete preflight | People apply_roles, using the original pending flight |
+| Request::RolesApplied | People ApplyRoles terminal | Root roles::begin, then semantic recheck or refused keyed completion |
+| Outcome::RolesSet | Root roles::begin after successful recheck | People Decided/save_answer, then durable WebReply and saved-key replay |
+
+A repeated key and identical request uses the original saved outcome even if
+membership has since changed. A conflicting request refuses KeyConflict
+without changing that winner. A new request from a removed owner refuses Role;
+an eligible current owner still needs Policy permission. Saved role asks own a
+bounded roster, priced independently of the current project membership row.
+Busy/NotReady remain transient, without a completed key, as in 5.1.1.
+
+This implements only the role-administration dependency for live held-chat
+rerouting. Policy edits, pool administration, timed key retention, inboxes and
+broader owner requests remain later parts of 03c; no such event is exposed here.
 
 ### 5.2 The project itself
 

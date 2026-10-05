@@ -652,6 +652,25 @@ pub enum Accepted {
 /// 4–5 and 14). (domain/engine.md, section 7.5).
 #[derive(PartialEq, Eq, Debug)]
 pub enum Event {
+    /// Root `SetRoles` preflight: inspect only current person-requested `Waiting`
+    /// contexts without mutation; one typed terminal even before readiness (domain/tasks.md, 16; domain/engine.md, 7.8).
+    InspectEscalations {
+        /// Stage-local root right consumed once by `EscalationsInspected`
+        /// (domain/tasks.md, 16).
+        reply_to: ReplyTo,
+        /// Root-validated project whose current `Waiting` tasks are inspected (domain/tasks.md, 16).
+        project: u32,
+    },
+    /// Root after successful `ApplyRoles` in the same synchronous decision; emit
+    /// existing `EscalationNeeded` for `Waiting` only and one completion (domain/tasks.md, 16).
+    RecheckEscalations {
+        /// Stage-local root right consumed by `EscalationsRechecked`
+        /// (domain/tasks.md, 16).
+        reply_to: ReplyTo,
+        /// Same preflight project; rejected/currently unheld tasks stay inert
+        /// (domain/tasks.md, 16).
+        project: u32,
+    },
     /// Root queries one bounded held view for actual named reads/decisions;
     /// returns one `EscalationInspected`, including absent (domain/tasks.md, 15).
     InspectEscalation {
@@ -866,6 +885,24 @@ pub enum Event {
 /// sections 5 and 14). (domain/engine.md, section 7.5).
 #[derive(PartialEq, Eq, Debug)]
 pub enum Request {
+    /// Terminal read-only `SetRoles` preflight; snapshot is owned transient root
+    /// context, not retained state (domain/tasks.md, 16; domain/engine.md, 7.8).
+    EscalationsInspected {
+        /// Echoed stage-local right (domain/tasks.md, 16).
+        reply_to: ReplyTo,
+        /// At most `Limits::tasks` `Waiting` contexts without owned rejection
+        /// reasons; only `NotReady` can refuse (domain/tasks.md, 16).
+        result: Result<Box<[crate::EscalationContext]>, Refusal>,
+    },
+    /// Terminal for `RecheckEscalations` after its existing `EscalationNeeded` outputs; root
+    /// completes the keyed role flight after routing them (domain/tasks.md, 16).
+    EscalationsRechecked {
+        /// Echoed stage-local right, consumed once (domain/tasks.md, 16).
+        reply_to: ReplyTo,
+        /// Success or `NotReady` before any recheck output
+        /// (domain/tasks.md, 16).
+        result: Result<(), Refusal>,
+    },
     /// Tasks asks root to resolve its new held person chat in this atomic
     /// decision; no outward notice precedes commitment (domain/tasks.md, 15).
     EscalationNeeded {

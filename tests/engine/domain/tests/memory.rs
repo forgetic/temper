@@ -243,3 +243,21 @@ fn held_reasons_history_queries_and_real_escalation_handoffs_fit_counted_root_me
         meter.check(measured, bound, limits);
     }
 }
+
+#[test]
+fn candidate_rosters_waiting_snapshots_keyed_history_and_recovery_fit_counted_memory() {
+    use temper_engine_domain_world::roles::{Base, Settings, limits, reroute_replayed};
+    let limits = limits();
+    let bound = root::engine::worst_case(&limits).expect("role snapshots and every roster copy priced");
+    let meter = Meter::new();
+    meter.start();
+    let world = reroute_replayed(
+        Settings { cut: true, commit_delay: 1, page_delay: 1, ..Settings::calm(9311, Base::Requester) },
+        1,
+    );
+    assert_eq!(world.referee.replacements, 1);
+    let measured = meter.end();
+    // Includes the fake store, immutable before-observers and exact replay
+    // transcript in addition to real children and every root transient copy.
+    meter.check(measured, bound, limits);
+}

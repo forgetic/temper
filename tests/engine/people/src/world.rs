@@ -313,7 +313,7 @@ impl World {
                         people::step(&mut self.domain, &self.env, Event::Decided { request, outcome }, &mut self.out);
                     }
                 }
-                Request::RolesRefused { .. } => {
+                Request::RolesApplied { .. } | Request::RolesRefused { .. } => {
                     self.ending("busy");
                 }
                 Request::RestoreRefused { .. } => panic!("valid world records must restore"),

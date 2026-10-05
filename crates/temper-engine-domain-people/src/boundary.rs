@@ -76,10 +76,21 @@ pub struct Holding {
 
 /// Supported requests grow with the increments that implement them; typed
 /// variants for goals, tasks, inboxes, notes and watches will be added there.
-/// Typed keyed request currently supported by people; only chat creation is implemented in this
-/// increment. (domain/people.md, sections 5.1 and 12.1).
+/// Current typed keyed requests are chat creation, held-chat decisions and
+/// narrow role administration (domain/people.md, sections 5.1 and 12.1).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Ask {
+    /// Authenticated Owner's complete project roster replacement; root checks
+    /// Policy permission and held-recipient preflight before applying it
+    /// (domain/people.md, 5.1.3; domain/engine.md, 7.8).
+    SetRoles {
+        /// Existing configured project; unknown projects refuse without mutation
+        /// (domain/people.md, 5.1.3).
+        project: u32,
+        /// At most `Limits::holdings` unique positive existing people; validated
+        /// by this child before replacement (domain/people.md, 5.1.3).
+        holdings: Box<[Holding]>,
+    },
     /// Decide one held chat's exact semantic revision. Root verifies current
     /// waiting recipient and authority; admission authenticates the session and
     /// reserves keyed-answer room (domain/people.md, section 5.1.2).
@@ -181,6 +192,13 @@ pub enum Refusal {
 /// 12.1).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Outcome {
+    /// Root accepted one roster and all affected `Waiting` recipients atomically;
+    /// saved keyed replay does not apply the roster again (domain/people.md, 5.1.3).
+    RolesSet {
+        /// Project whose membership changed; no task authority or funding changed
+        /// (domain/people.md, 5.1.3).
+        project: u32,
+    },
     /// Root's committed current or historical decision for one task revision;
     /// first commit decides a race (domain/people.md, 5.1.2).
     EscalationDecided {
@@ -328,6 +346,17 @@ impl Stored {
 /// cross this boundary without protocol secrets. (domain/people.md, sections 3–5 and 12.1).
 #[derive(PartialEq, Eq, Debug)]
 pub enum Event {
+    /// Root's synchronous application after authority/revision/capacity preflight.
+    /// Reads the original admitted roster, preserves membership on refusal and
+    /// returns exactly one `RolesApplied` (domain/people.md, 5.1.3).
+    ApplyRoles {
+        /// Root's stage-local reply right, consumed by `RolesApplied`
+        /// (domain/people.md, 5.1.3; domain/engine.md, 7.8).
+        reply_to: ReplyTo,
+        /// Live `SetRoles` flight from `Route`; no synthetic or completed token is
+        /// authorized (domain/people.md, 5.1.3).
+        request: Token,
+    },
     /// Root supplies a fresh person candidate and a fresh sign-in number. Only a new identity
     /// uses the person candidate; existing identities keep their durable person number, and unused
     /// person candidates leave gaps (domain/people.md, section 3.1; domain/engine.md, section 4).
@@ -411,6 +440,18 @@ pub enum Event {
 /// replies until required writes are durable. (domain/people.md, sections 5.1.1 and 12.1).
 #[derive(PartialEq, Eq, Debug)]
 pub enum Request {
+    /// Terminal for `ApplyRoles`; success `Save` precedes this output, but the root
+    /// completes the keyed flight only after task recheck (domain/people.md, 5.1.3).
+    RolesApplied {
+        /// Echoed root stage-local right, consumed exactly once (domain/people.md, 5.1.3).
+        reply_to: ReplyTo,
+        /// Echoed admitted flight; root returns `Decided` after the whole decision
+        /// (domain/people.md, 5.1.3).
+        request: Token,
+        /// Success, or readiness/identity/roster/project/standing refusal before
+        /// mutation; bounds use `Limits::holdings` (domain/people.md, 5.1.3).
+        result: Result<(), Refusal>,
+    },
     /// New eligible keyed flight for the root's authority/task decision; duplicate callers share
     /// this route. (domain/people.md, sections 5.1.1 and 12.1).
     Route {

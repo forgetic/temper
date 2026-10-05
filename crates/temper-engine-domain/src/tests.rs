@@ -265,6 +265,23 @@ fn deep_child_rows_and_arbitrary_internal_payloads_are_refused_before_retention(
     });
     assert_eq!(crate::record_bytes(&row), Some(5));
     assert!(decision.write(&limits, Write::Save(row)).is_err());
+    let roster_answer = Record::People(people::Stored::Answer {
+        key: people::RequestKey { person: 1, key: [1; 16] },
+        ask: people::Ask::SetRoles {
+            project: 1,
+            holdings: Box::new([people::Holding { person: 1, role: people::Role::Owner }]),
+        },
+        outcome: people::Outcome::RolesSet { project: 1 },
+        at: skein_lib::Wall::EPOCH,
+    });
+    assert_eq!(
+        crate::record_bytes(&roster_answer),
+        Some(u64::try_from(size_of::<people::Holding>()).expect("holding slot"))
+    );
+    assert!(
+        decision.write(&limits, Write::Save(roster_answer)).is_err(),
+        "saved keyed roster has separately owned bounded bytes"
+    );
     let callback = Delivery::Fleet(fleet::Event::Hello {
         channel: Token::new(1),
         hello: fleet::Hello { graces: None, slots: 1, workstreams: Box::new([]), hosting: Box::new([]) },

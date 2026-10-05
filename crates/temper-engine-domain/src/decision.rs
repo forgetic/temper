@@ -239,6 +239,13 @@ pub struct Journal {
 }
 
 impl Decision {
+    /// Root-only preflight of unused write/delivery slots before a synchronous
+    /// role replacement; no reservation can interleave with another mutation
+    /// (domain/engine.md, 7.8).
+    pub(crate) fn room_for(&self, writes: u32, deliveries: u32) -> bool {
+        self.writes.room() >= writes && self.deliveries.room() >= deliveries
+    }
+
     /// Allocate one transient decision from validated startup limits; no effect
     /// is issued until `accept` (domain/engine.md, 5.1–5.2).
     #[must_use]

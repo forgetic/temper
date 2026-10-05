@@ -123,6 +123,24 @@ pub fn max_out(limits: &Limits) -> u32 {
 /// effects before external replies. (domain/tasks.md, sections 2, 4–5, 10 and 14).
 pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     match event {
+        Event::InspectEscalations { reply_to, project } => {
+            let result = crate::escalation::project_contexts(domain, &env.limits, project);
+            out.push(Request::EscalationsInspected { reply_to, result });
+            return;
+        }
+        Event::RecheckEscalations { reply_to, project } => {
+            let result = match crate::escalation::project_contexts(domain, &env.limits, project) {
+                Ok(contexts) => {
+                    for context in contexts {
+                        out.push(Request::EscalationNeeded { context: Box::new(context) });
+                    }
+                    Ok(())
+                }
+                Err(refusal) => Err(refusal),
+            };
+            out.push(Request::EscalationsRechecked { reply_to, result });
+            return;
+        }
         Event::InspectEscalation { reply_to, task } => {
             out.push(Request::EscalationInspected { reply_to, context: crate::escalation::context(domain, task) });
         }

@@ -332,3 +332,30 @@ fn validate(
         }
     }
 }
+
+/// Read-only root preflight/recheck snapshot, at most one Waiting context per
+/// live task, with explicit readiness terminal (domain/tasks.md, 16).
+pub(crate) fn project_contexts(
+    domain: &Domain,
+    limits: &Limits,
+    project: u32,
+) -> Result<Box<[EscalationContext]>, crate::Refusal> {
+    if !domain.ready() {
+        return Err(crate::Refusal::NotReady);
+    }
+    let mut contexts = skein_lib::List::with_capacity(limits.tasks);
+    for (number, _) in &domain.names {
+        let task = record(domain, *number).expect("live name");
+        let waiting = match task.escalation {
+            Escalation::Waiting { .. } => true,
+            Escalation::Unheld { .. } | Escalation::Routing { .. } | Escalation::Rejected { .. } => false,
+        };
+        if task.project == project
+            && waiting
+            && let Some(context) = context(domain, *number)
+        {
+            contexts.push(*context).expect("one context per bounded live task");
+        }
+    }
+    Ok(contexts.into_boxed())
+}

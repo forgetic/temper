@@ -4,9 +4,9 @@
 //! `Save`/`Erase` join the parent's decision; the parent holds replies until
 //! durable (domain/engine.md, 5.6). Inboxes and adoption follow later.
 //!
-//! The current boundary supports typed `StartChat` and authenticated escalation decisions; inboxes, adoption,
+//! The current boundary supports typed `StartChat`, authenticated escalation decisions and narrow keyed `SetRoles` administration; inboxes, adoption,
 //! person tasks and timed key retention remain later increments
-//! (domain/people.md, sections 5.1.1 and 12.1). This child never sees forge
+//! (domain/people.md, sections 5.1.1–5.1.3 and 12.1). This child never sees forge
 //! credentials, protocol bytes, task internals or authority policy state.
 //! The root supplies authenticated identities and authoritative role changes.
 //! It mints fresh deployment person candidates and sign-in numbers; the protocol

@@ -84,26 +84,34 @@ pub(super) fn supported(domain: &Domain, task: &tasks::TaskRecord) -> bool {
     }
 }
 
-pub(super) fn needed(domain: &mut Domain, context: Box<tasks::EscalationContext>) {
-    let holder = if covers(domain, &context, context.requester, domain.people.role(context.requester, context.project))
-    {
-        tasks::EscalationHolder::Person(context.requester)
-    } else {
-        let Some(holder) = fallback(domain, context.project) else {
-            domain.startup = super::Startup::Failed;
-            return;
-        };
-        holder
-    };
-    // A final role never moves down to a requester on recheck/restart.
-    let holder = match context.escalation {
+/// Pure recipient selection for actual startup/live routing and candidate-roster
+/// preflight; preserves a final-role holder (domain/engine.md, 7.7–7.8).
+pub(super) fn recipient(
+    domain: &Domain,
+    context: &tasks::EscalationContext,
+    requester_role: Option<people::Role>,
+) -> Option<tasks::EscalationHolder> {
+    match context.escalation {
         tasks::Escalation::Waiting { holder: tasks::EscalationHolder::Role { .. }, .. } => {
-            fallback(domain, context.project).expect("current root requires fallback")
+            fallback(domain, context.project)
         }
         tasks::Escalation::Unheld { .. }
         | tasks::Escalation::Routing { .. }
         | tasks::Escalation::Waiting { .. }
-        | tasks::Escalation::Rejected { .. } => holder,
+        | tasks::Escalation::Rejected { .. } => {
+            if covers(domain, context, context.requester, requester_role) {
+                Some(tasks::EscalationHolder::Person(context.requester))
+            } else {
+                fallback(domain, context.project)
+            }
+        }
+    }
+}
+
+pub(super) fn needed(domain: &mut Domain, context: Box<tasks::EscalationContext>) {
+    let Some(holder) = recipient(domain, &context, domain.people.role(context.requester, context.project)) else {
+        domain.startup = super::Startup::Failed;
+        return;
     };
     match context.escalation {
         tasks::Escalation::Waiting { revision, holder: old } if old != holder && revision == u64::MAX => {

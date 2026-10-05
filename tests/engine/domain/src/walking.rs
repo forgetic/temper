@@ -73,8 +73,12 @@ pub fn limits() -> engine::Limits {
         grace: Duration::from_secs(5),
         facts: 2,
     };
-    let writes =
-        tasks::max_out(&tasks) * 8 + people::max_out(&people) * 4 + people.pending * 2 + fleet::max_out(&fleet) * 4;
+    let writes = tasks::max_out(&tasks) * 8
+        + people::max_out(&people) * 4
+        + people.pending * 2
+        + fleet::max_out(&fleet) * 4
+        + tasks.tasks
+        + 4;
     engine::Limits {
         authority: authority_limits(),
         journal: JournalLimits {

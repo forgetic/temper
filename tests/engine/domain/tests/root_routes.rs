@@ -1004,7 +1004,9 @@ fn coalesced_history_waiters_survive_simultaneous_io_completion_under_full_journ
     configured.journal.writes = tasks::max_out(&configured.tasks) * 8
         + people::max_out(&configured.people) * 4
         + configured.people.pending * 2
-        + fleet::max_out(&configured.fleet) * 4;
+        + fleet::max_out(&configured.fleet) * 4
+        + configured.tasks.tasks
+        + 4;
     configured.journal.deliveries =
         configured.tasks.tasks * 4 + 8 + configured.people.pending * configured.people.waiters;
     configured.journal.held = configured.journal.deliveries * 3 + 16;
@@ -1170,5 +1172,262 @@ fn restored_loss_spends_a_try_only_after_a_real_durable_turn() {
             !restored.delivered.iter().any(|delivery| matches!(delivery, Delivery::Acknowledge { .. })),
             "no worker terminal was offered after restart"
         );
+    }
+}
+
+fn administration_config(seed: u64) -> engine::Config {
+    use temper_engine_domain_authority as authority;
+    let mut config = config(seed);
+    let mut policy = config.authority.policy(1).expect("actual project").clone();
+    policy.roles[0].requests = authority::Requests(1 | 4 | 256);
+    let mut findings = Queue::with_capacity(authority::POLICY_MAX_OUT);
+    authority::step(&mut config.authority, authority::Event::Policy { project: 1, policy }, &mut findings);
+    assert_eq!(findings.pop(), Some(authority::PolicyFact::Changed { project: 1 }));
+    config
+}
+
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one real-store route proves multi-task atomicity, pressure retry and whole-cohort overflow rollback"
+)]
+fn multiple_waiting_recipients_preflight_together_and_full_journal_refuses_without_a_saved_key() {
+    use temper_engine_domain_world::roles;
+    let prior = roles::World::new(roles::Settings::calm(9310, roles::Base::Requester));
+    let sessions = prior.sessions;
+    let people = prior.people;
+    let mut configured = roles::limits();
+    configured.people.sign_ins = 8;
+    configured.journal.writes = tasks::max_out(&configured.tasks) * 8
+        + people::max_out(&configured.people) * 4
+        + configured.people.pending * 2
+        + fleet::max_out(&configured.fleet) * 4
+        + configured.tasks.tasks
+        + 4;
+    let mut driver = Driver::configured(prior.store, administration_config(9310), &configured);
+    driver.settle();
+    hello(&mut driver);
+    driver.settle();
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(1200)),
+        sign_in: sessions[0],
+        key: [120; 16],
+        ask: people::Ask::StartChat { project: 1, words: QUESTION.into() },
+    });
+    driver.settle();
+    let assignment = assigned(&driver);
+    driver.send(engine::Event::Answer {
+        channel: Token::new(7),
+        task: assignment.task,
+        attempt: assignment.attempt,
+        cumulative: 3,
+        end: tasks::End::Failed(tasks::Class::Run),
+    });
+    driver.settle();
+    let original: Vec<_> = driver
+        .store
+        .rows
+        .values()
+        .filter_map(|row| match row {
+            Record::Tasks(tasks::Stored::Live(record)) => Some(record.clone()),
+            Record::Deployment(_)
+            | Record::People(_)
+            | Record::Tasks(tasks::Stored::Ended(_) | tasks::Stored::Ledger(_) | tasks::Stored::Closure(_))
+            | Record::Turn(_)
+            | Record::RunProof(_)
+            | Record::Terminal(_)
+            | Record::EscalationDecision(_) => None,
+        })
+        .collect();
+    assert_eq!(original.len(), 2, "two genuine task admissions and priced failures");
+    for record in &original {
+        assert_eq!(
+            record.escalation,
+            tasks::Escalation::Waiting { revision: 1, holder: tasks::EscalationHolder::Person(people[0]) }
+        );
+    }
+    let before = driver.store.rows.clone();
+    let ask = people::Ask::SetRoles {
+        project: 1,
+        holdings: Box::new([people::Holding { person: people[1], role: people::Role::Owner }]),
+    };
+    driver.delivered.clear();
+    driver.sign_in();
+    driver.sign_in();
+    driver.sign_in();
+    assert_eq!(driver.store.pending.len(), 3, "real issued journal pressure");
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(1201)),
+        sign_in: sessions[1],
+        key: [121; 16],
+        ask: ask.clone(),
+    });
+    assert!(matches!(
+        driver.delivered.last(),
+        Some(Delivery::WebReply { reply: people::Reply::Refused(people::Refusal::Busy), .. })
+    ));
+    driver.settle();
+    let answer_key = temper_engine_domain::Key::People(people::Key::Answer(people::RequestKey {
+        person: people[1],
+        key: [121; 16],
+    }));
+    assert!(!driver.store.rows.contains_key(&answer_key), "pressure remains retryable");
+    driver.delivered.clear();
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(1202)),
+        sign_in: sessions[1],
+        key: [121; 16],
+        ask,
+    });
+    assert!(driver.delivered.is_empty(), "no role success before durability");
+    let (_, writes) = driver.store.pending.front().expect("one serialized role decision");
+    assert!(writes.iter().any(|write| matches!(write, Write::Save(Record::People(people::Stored::Roles { holdings, .. })) if holdings.as_ref() == [people::Holding { person: people[1], role: people::Role::Owner }])));
+    assert!(writes.iter().any(|write| matches!(write, Write::Save(Record::People(people::Stored::Answer { key, outcome: people::Outcome::RolesSet { project: 1 }, .. })) if key.person == people[1] && key.key == [121;16])));
+    for record in &original {
+        let mut expected = record.clone();
+        expected.escalation =
+            tasks::Escalation::Waiting { revision: 2, holder: tasks::EscalationHolder::Role { project: 1, role: 0 } };
+        assert!(
+            writes.iter().any(
+                |write| matches!(write, Write::Save(Record::Tasks(tasks::Stored::Live(actual))) if *actual == expected)
+            ),
+            "each exact affected task belongs to the same cohort"
+        );
+    }
+    assert!(
+        !writes.iter().any(|write| matches!(
+            write,
+            Write::Save(
+                Record::Tasks(tasks::Stored::Ledger(_))
+                    | Record::RunProof(_)
+                    | Record::Terminal(_)
+                    | Record::Turn(_)
+                    | Record::EscalationDecision(_)
+            )
+        )),
+        "role change never rewrites economic or accepted-work evidence"
+    );
+    driver.settle();
+
+    let mut overflow_store = Store::new();
+    overflow_store.rows = before;
+    let Some(Record::Tasks(tasks::Stored::Live(last))) =
+        overflow_store.rows.get_mut(&temper_engine_domain::Key::Tasks(tasks::Key::Live(assignment.task)))
+    else {
+        panic!("genuine second held task");
+    };
+    last.escalation =
+        tasks::Escalation::Waiting { revision: u64::MAX, holder: tasks::EscalationHolder::Person(people[0]) };
+    let unchanged = overflow_store.rows.clone();
+    let mut overflow = Driver::configured(overflow_store, administration_config(9310), &configured);
+    overflow.settle();
+    overflow.delivered.clear();
+    overflow.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(1203)),
+        sign_in: sessions[1],
+        key: [122; 16],
+        ask: people::Ask::SetRoles {
+            project: 1,
+            holdings: Box::new([people::Holding { person: people[1], role: people::Role::Owner }]),
+        },
+    });
+    overflow.settle();
+    assert!(matches!(
+        overflow.delivered.last(),
+        Some(Delivery::WebReply {
+            reply: people::Reply::Outcome(people::Outcome::Refused(people::Refusal::Limit)),
+            ..
+        })
+    ));
+    for (key, row) in unchanged {
+        assert_eq!(
+            overflow.store.rows.get(&key),
+            Some(&row),
+            "one exhausted candidate rolls back every task and membership row"
+        );
+    }
+}
+
+#[test]
+fn read_only_role_stages_have_one_not_ready_terminal_and_empty_projects_need_no_financial_ledger() {
+    let mut insufficient = temper_engine_domain_world::roles::limits();
+    assert!(engine::worst_case(&insufficient).is_some(), "valid role cascade factory");
+    insufficient.journal.writes -= 1;
+    assert!(
+        engine::worst_case(&insufficient).is_none(),
+        "exact cross-route room includes the complete role handoff cohort"
+    );
+    let mut oversized = temper_engine_domain_world::roles::limits();
+    oversized.people.holdings = oversized.journal.transcript_bytes;
+    assert!(engine::worst_case(&oversized).is_none(), "one roster-bearing durable row must fit before any clone");
+    let configured = limits();
+    let mut child = tasks::Domain::new(&configured.tasks, 9312, Box::new([1]));
+    let environment = Env { now: Time::ZERO, wall: Wall::EPOCH, limits: configured.tasks };
+    let mut out = Queue::with_capacity(tasks::max_out(&configured.tasks));
+    for request in [1300, 1301] {
+        let event = if request == 1300 {
+            tasks::Event::InspectEscalations { reply_to: ReplyTo::new(Token::new(request)), project: 1 }
+        } else {
+            tasks::Event::RecheckEscalations { reply_to: ReplyTo::new(Token::new(request)), project: 1 }
+        };
+        tasks::step(&mut child, &environment, event, &mut out);
+        assert_eq!(out.len(), 1);
+        match out.pop().expect("one startup terminal") {
+            tasks::Request::EscalationsInspected { reply_to, result } => {
+                assert_eq!(reply_to.into_token(), Token::new(request));
+                assert_eq!(result, Err(tasks::Refusal::NotReady));
+            }
+            tasks::Request::EscalationsRechecked { reply_to, result } => {
+                assert_eq!(reply_to.into_token(), Token::new(request));
+                assert_eq!(result, Err(tasks::Refusal::NotReady));
+            }
+            tasks::Request::EscalationNeeded { .. }
+            | tasks::Request::EscalationInspected { .. }
+            | tasks::Request::EscalationDecided { .. }
+            | tasks::Request::Made { .. }
+            | tasks::Request::Refused { .. }
+            | tasks::Request::Done { .. }
+            | tasks::Request::Acknowledged { .. }
+            | tasks::Request::TurnAcknowledged { .. }
+            | tasks::Request::Activate { .. }
+            | tasks::Request::Stop { .. }
+            | tasks::Request::Adopt { .. }
+            | tasks::Request::Close { .. }
+            | tasks::Request::Ended { .. }
+            | tasks::Request::Save { .. }
+            | tasks::Request::Erase { .. }
+            | tasks::Request::RestoreRefused { .. } => panic!("no mutation or lost startup terminal"),
+        }
+    }
+    tasks::step(&mut child, &environment, tasks::Event::Restored, &mut out);
+    assert!(out.is_empty());
+    tasks::step(
+        &mut child,
+        &environment,
+        tasks::Event::InspectEscalations { reply_to: ReplyTo::new(Token::new(1302)), project: 1 },
+        &mut out,
+    );
+    match out.pop().expect("one empty snapshot terminal") {
+        tasks::Request::EscalationsInspected { reply_to, result } => {
+            assert_eq!(reply_to.into_token(), Token::new(1302));
+            assert!(result.expect("root validates project").is_empty());
+        }
+        tasks::Request::EscalationsRechecked { .. }
+        | tasks::Request::EscalationNeeded { .. }
+        | tasks::Request::EscalationInspected { .. }
+        | tasks::Request::EscalationDecided { .. }
+        | tasks::Request::Made { .. }
+        | tasks::Request::Refused { .. }
+        | tasks::Request::Done { .. }
+        | tasks::Request::Acknowledged { .. }
+        | tasks::Request::TurnAcknowledged { .. }
+        | tasks::Request::Activate { .. }
+        | tasks::Request::Stop { .. }
+        | tasks::Request::Adopt { .. }
+        | tasks::Request::Close { .. }
+        | tasks::Request::Ended { .. }
+        | tasks::Request::Save { .. }
+        | tasks::Request::Erase { .. }
+        | tasks::Request::RestoreRefused { .. } => panic!("one named snapshot"),
     }
 }

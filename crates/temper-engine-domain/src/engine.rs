@@ -19,9 +19,14 @@
 //! repository contents or secret credential bytes (domain/engine.md, 2 and 5.5).
 //! Its closed input vocabulary has no blanket child-event pass-through. Tools,
 //! connectors and the broader people/run routes remain later increments (5.7).
+//! Actual keyed role administration preflights Waiting recipients, then commits
+//! membership, semantic rerouting and keyed completion together without IO
+//! (domain/engine.md, 7.8). Root candidate/snapshot carriers are transient.
 //! Child facts are disposable observations; [`Domain::quiescent`] reports
 //! internal idleness, while an external referee establishes final story results.
 mod escalation;
+
+mod roles;
 
 use crate::{
     Decision, Delivery, Family, Journal, JournalLimits, Key, Output, Range, Record, RunProof, TerminalRecord,
@@ -1084,10 +1089,16 @@ fn people_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decisio
                     let Some(role) = role else { unreachable!("chat membership admitted") };
                     make_chat(domain, env, request, person, project, role, ask);
                 }
+                people::Ask::SetRoles { holdings, .. } => {
+                    roles::begin(domain, env, decision, request, person, project, holdings);
+                }
                 people::Ask::DecideEscalation { task, revision, decision, .. } => {
                     escalation::begin(domain, request, person, role, project, task, revision, decision);
                 }
             },
+            people::Request::RolesApplied { .. } => {
+                unreachable!("serialized roles route consumes application terminal")
+            }
             people::Request::RolesRefused { .. } | people::Request::RestoreRefused { .. } => {
                 domain.startup = Startup::Failed;
             }
@@ -1182,7 +1193,9 @@ fn make_chat(
     assert!(domain.made.insert(request, number) == Ok(None), "people route has unique pending key");
     let words = match ask {
         people::Ask::StartChat { words, .. } => words,
-        people::Ask::DecideEscalation { .. } => unreachable!("decision routed separately"),
+        people::Ask::DecideEscalation { .. } | people::Ask::SetRoles { .. } => {
+            unreachable!("other asks routed separately")
+        }
     };
     domain.work.push(Work::Tasks(tasks::Event::Make {
         reply_to: ReplyTo::new(request),
@@ -1298,6 +1311,9 @@ fn activate(domain: &mut Domain, env: &Env<Limits>, task: Box<tasks::RunContext>
 fn tasks_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, out: &mut Queue<tasks::Request>) {
     for _ in 0..out.len() {
         match out.pop().expect("tasks output count") {
+            tasks::Request::EscalationsInspected { .. } | tasks::Request::EscalationsRechecked { .. } => {
+                unreachable!("serialized roles route consumes project terminals")
+            }
             tasks::Request::EscalationNeeded { context } => escalation::needed(domain, context),
             tasks::Request::EscalationInspected { reply_to, context } => {
                 escalation::inspected(domain, env, decision, reply_to.into_token(), context);
@@ -2048,7 +2064,9 @@ fn route_bound(limits: &Limits) -> Option<u32> {
         // Every in-flight historical decision may complete under journal pressure:
         // one retained IO terminal and one people Decided callback per flight.
         .checked_add(limits.people.pending.checked_mul(2)?)?
-        .checked_add(fleet::max_out(&limits.fleet).checked_mul(4)?)
+        .checked_add(fleet::max_out(&limits.fleet).checked_mul(4)?)?
+        // One serialized role cohort revisits each Waiting task, then answers.
+        .checked_add(limits.tasks.tasks.checked_add(4)?)
 }
 
 /// Count participating child state, fixed handoffs, decoded input and all
@@ -2093,6 +2111,15 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         return None;
     }
     let mut bytes = crate::worst_case(&limits.journal)?;
+    // Role administration owns one incoming/routed candidate and application
+    // scratch copies independently of people's pending/completed asks. Semantic
+    // inspection/recheck arrays contain Waiting contexts only (no reason bytes).
+    let roster_bytes =
+        u64::from(limits.people.holdings).checked_mul(u64::try_from(size_of::<people::Holding>()).ok()?)?;
+    bytes = bytes
+        .checked_add(roster_bytes.checked_mul(4)?)?
+        .checked_add(List::<tasks::EscalationContext>::worst_case(limits.tasks.tasks)?.checked_mul(2)?)?
+        .checked_add(u64::try_from(size_of::<tasks::EscalationContext>()).ok()?)?;
     let cold = limits.fleet.workers;
     let hello = u64::from(limits.fleet.slots)
         .checked_mul(u64::try_from(size_of::<fleet::Hosted>()).ok()?)?
@@ -2157,7 +2184,9 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     bytes
         .checked_add(Queue::<authority::Finding>::worst_case(authority::max_out(&limits.authority)?)?)?
         .checked_add(Queue::<tasks::Request>::worst_case(tasks::max_out(&limits.tasks))?)?
-        .checked_add(Queue::<people::Request>::worst_case(people::max_out(&limits.people))?)?
+        // The outer Ask output queue stays allocated while the serialized
+        // application owns its separate bounded people terminal/save queue.
+        .checked_add(Queue::<people::Request>::worst_case(people::max_out(&limits.people))?.checked_mul(2)?)?
         .checked_add(Queue::<fleet::Request>::worst_case(fleet::max_out(&limits.fleet))?)?
         .checked_add(Queue::<brief::Request>::worst_case(brief::max_out(&limits.brief))?)?
         .checked_add(Queue::<Request>::worst_case(max_out(limits))?)?

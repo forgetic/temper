@@ -8,3 +8,8 @@ pub mod walking_referee;
 pub mod escalation;
 /// Independent escalation obligations (domain/engine.md, section 7.7).
 pub mod escalation_referee;
+
+/// Authenticated role-change driver over real held-chat records (domain/engine.md, section 7.8).
+pub mod roles;
+/// Independent role-cohort and recipient evidence (domain/engine.md, section 7.8).
+pub mod roles_referee;

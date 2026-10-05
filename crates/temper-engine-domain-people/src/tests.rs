@@ -86,6 +86,7 @@ fn reply(rows: &[Request]) -> Reply {
             Request::Save { .. }
             | Request::Erase { .. }
             | Request::Route { .. }
+            | Request::RolesApplied { .. }
             | Request::RolesRefused { .. }
             | Request::RestoreRefused { .. } => None,
         })
@@ -99,6 +100,7 @@ fn route(rows: &[Request]) -> Token {
             Request::Save { .. }
             | Request::Erase { .. }
             | Request::Reply { .. }
+            | Request::RolesApplied { .. }
             | Request::RolesRefused { .. }
             | Request::RestoreRefused { .. } => None,
         })
@@ -269,6 +271,7 @@ fn is_reply(request: &Request) -> bool {
         Request::Save { .. }
         | Request::Erase { .. }
         | Request::Route { .. }
+        | Request::RolesApplied { .. }
         | Request::RolesRefused { .. }
         | Request::RestoreRefused { .. } => false,
     }
@@ -283,6 +286,7 @@ fn is_answer(request: &Request) -> bool {
         Request::Reply { .. }
         | Request::Erase { .. }
         | Request::Route { .. }
+        | Request::RolesApplied { .. }
         | Request::RolesRefused { .. }
         | Request::RestoreRefused { .. } => false,
     }
@@ -297,6 +301,7 @@ fn is_roles(request: &Request) -> bool {
         Request::Reply { .. }
         | Request::Erase { .. }
         | Request::Route { .. }
+        | Request::RolesApplied { .. }
         | Request::RolesRefused { .. }
         | Request::RestoreRefused { .. } => false,
     }
@@ -413,6 +418,7 @@ fn authenticated_escalation_decisions_route_without_membership_and_io_pressure_i
         Request::Reply { .. }
         | Request::Save { .. }
         | Request::Erase { .. }
+        | Request::RolesApplied { .. }
         | Request::RolesRefused { .. }
         | Request::RestoreRefused { .. } => false,
     }));

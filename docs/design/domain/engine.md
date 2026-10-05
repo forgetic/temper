@@ -717,8 +717,7 @@ restored Waiting context then rechecks current membership/coverage and the
 configured fallback before Fleet Loaded. Same holder changes nothing;
 changed holder advances its checked revision, stopping startup if exhausted.
 A final-role holder never moves down to a requester. Rejected remains rejected.
-Live role administration/loss rerouting is deferred to the following real
-03c/02d SetRoles integration, which has no root entrance in this increment.
+Section 7.8 adds the narrow actual SetRoles integration for live membership changes; the original 02d1 boundary alone had no such entrance.
 
 A release may commit a fresh claim in the same transaction as its decision
 archive, before any assignment reaches the worker. A cut there leaves a real
@@ -749,6 +748,72 @@ is hidden in the finite query map. The independent world uses real children,
 two authenticated owners, priced retry failure3 and fresh success2, paged
 store, held/decision durability cuts, first-winner races, stale history queries,
 facts neutrality and complete-state replay. These cover 02d1, not full02d.
+
+### 7.8 Authenticated role administration and live reroute (partial 03c/02d)
+
+The actual entrance is keyed Ask::SetRoles(project, holdings) through people.
+It requires an authenticated current Owner and PersonRequest::Policy. Root's
+roles::begin consumes Route and the bounded owned candidate roster; no extra
+public engine event or generic policy callback is introduced. Root rechecks
+current Owner membership and actual Policy permission immediately before
+application. Authority policy and task funding are read narrowly, never copied
+into a second mutable ledger.
+
+The operation is serialized within one root decision, with no IO, external
+input or intervening membership mutation across these stages:
+
+1. InspectEscalations returns a bounded owned snapshot of current Waiting
+   person-chat contexts, including a terminal refusal before child readiness.
+   Tasks owns no project registry; the existing project was checked by people
+   and current authority before inspection. Root computes candidate recipients
+   using the original requester or final policy role and checks every changed
+   revision for overflow. Same holder needs neither revision nor task write.
+2. Before mutation, root reserves membership, all changed Waiting rows and the
+   keyed answer plus the bounded reply fanout in the current Decision. Root
+   discards candidate and inspection scratch, rechecks current standing and
+   Policy, then calls people ApplyRoles with the original admitted flight.
+   People validates positive existing unique bounded identities and the project
+   before replacing its authoritative row; RolesApplied is consumed once.
+3. On success, root calls RecheckEscalations. Existing EscalationNeeded callbacks
+   use the new membership and produce existing RoutedEscalation events. The
+   correlated completion queues Decided RolesSet after these callbacks. The
+   membership row, every changed Waiting task row and saved keyed answer close
+   as one coalesced commit; all external answers wait for store durability.
+
+Refusal before application leaves membership and tasks unchanged and has one
+keyed terminal. Transient Busy/NotReady remain retryable without caching a key.
+A removed holder cannot decide the new Waiting revision after the commit. The
+requester remains permitted to read its own hold; current decision standing is
+checked independently. Rerouting creates no accepted escalation archive, and
+old-revision history retains the existing missing-evidence refusal. Waiting at
+the final policy role never moves back to the requester. Rejected remains inert.
+Authority, original task/pool/period source, expense and try counters are exact.
+
+People prices pending and completed roster asks by the maximum of words and
+holdings times Holding size. Root separately prices four transient roster
+copies, two live-task-sized Waiting context arrays and one temporary boxed
+context. Inspection arrays own no rejected reason. Route room adds tasks plus
+four handoffs to the existing checked cascade reserve; application reserves
+changed tasks plus two writes, waiters deliveries and all Waiting reroute
+handoffs plus keyed completion before child mutation. Both simultaneously
+allocated people output queues are priced independently.
+The existing pending-times-waiters delivery composition still bounds all keyed
+replies. Journal per-row admission prices both the role row and roster-bearing
+answer. Invalid arithmetic or insufficient configured capacities refuses startup
+before allocating or applying any membership. Stages carry their actual people
+flight token as an ephemeral typed reply correlation, with no new durable
+number, receipt table, retained candidate map or history load.
+
+The real-store world restores genuine requester-held, final-role and rejected
+chats through paged startup and saved authenticated sessions. It checks exact
+role/task/keyed-answer cohorts, both owner-race orders, saved replay/conflicts,
+current Policy/Owner/expiry refusals, checked overflow rollback, invalid IDs,
+same-holder/rejected/funding neutrality, facts neutrality and a durability cut
+before the role reply. Independent corruption checks first accept the original
+transaction against its actual pre-commit observer, then require each altered
+cohort's specific error. This is the partial 03c roles dependency and live 02d
+rerouting integration; policy/pool/inbox/procedure or ancestor/delegation depth
+is not implemented.
 
 ## 8. The fleet
 

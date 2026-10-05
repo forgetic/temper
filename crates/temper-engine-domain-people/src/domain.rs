@@ -198,6 +198,10 @@ pub fn max_out(limits: &Limits) -> u32 {
 /// until required atomic writes are durable. (domain/people.md, sections 2–5 and 12.1).
 pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     match event {
+        Event::ApplyRoles { reply_to, request } => {
+            let result = apply_roles(domain, env, request, out);
+            out.push(Request::RolesApplied { reply_to, request, result });
+        }
         Event::Restore { record } => restore(domain, env, record, out),
         Event::Restored => restored(domain, env, out),
         Event::SignedIn { reply_to, person, sign_in, identity } => {
@@ -257,6 +261,47 @@ fn valid_identity(limits: &Limits, identity: &Identity) -> bool {
         Some(bytes) => bytes <= usize::try_from(limits.identity_bytes).expect("u32 fits usize"),
         None => false,
     }
+}
+
+fn apply_roles(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    request: Token,
+    out: &mut Queue<Request>,
+) -> Result<(), Refusal> {
+    if !domain.ready() {
+        return Err(Refusal::NotReady);
+    }
+    let flight = domain.pending.get(Id::from_token(request)).ok_or(Refusal::Unknown)?;
+    let project = match &flight.ask {
+        Ask::SetRoles { project, .. } => *project,
+        Ask::StartChat { .. } | Ask::DecideEscalation { .. } => return Err(Refusal::Unknown),
+    };
+    if !domain.roles.contains_key(&project) {
+        return Err(Refusal::Unknown);
+    }
+    if role(domain, flight.key.person, project) != Some(Role::Owner) {
+        return Err(Refusal::Role);
+    }
+    let holdings = match &flight.ask {
+        Ask::SetRoles { holdings, .. } => {
+            valid_roles(domain, &env.limits, project, holdings)?;
+            for holding in holdings {
+                if holding.person == 0 {
+                    return Err(Refusal::Limit);
+                }
+                if !domain.people.contains_key(&holding.person) {
+                    return Err(Refusal::Unknown);
+                }
+            }
+            holdings.clone()
+        }
+        Ask::StartChat { .. } | Ask::DecideEscalation { .. } => unreachable!("validated roster flight"),
+    };
+    out.push(Request::Save { record: Stored::Roles { project, holdings: holdings.clone() } });
+    let saved = domain.roles.insert(project, holdings);
+    assert!(saved.is_ok(), "existing role row replaces without consuming capacity");
+    Ok(())
 }
 
 fn valid_roles(domain: &Domain, limits: &Limits, project: u32, holdings: &[Holding]) -> Result<(), Refusal> {
@@ -396,12 +441,15 @@ fn end_signin(domain: &mut Domain, number: u64, out: &mut Queue<Request>) {
 
 fn project(ask: &Ask) -> u32 {
     match ask {
-        Ask::StartChat { project, .. } | Ask::DecideEscalation { project, .. } => *project,
+        Ask::SetRoles { project, .. } | Ask::StartChat { project, .. } | Ask::DecideEscalation { project, .. } => {
+            *project
+        }
     }
 }
 
 fn valid_ask(limits: &Limits, ask: &Ask) -> bool {
     match ask {
+        Ask::SetRoles { holdings, .. } => holdings.len() <= usize::try_from(limits.holdings).expect("u32 fits usize"),
         Ask::StartChat { words, .. } => words.len() <= usize::try_from(limits.words).expect("u32 fits usize"),
         Ask::DecideEscalation { task, revision, decision, .. } => {
             *task != 0
@@ -471,6 +519,15 @@ fn admit_ask(
     let project = project(&ask);
     let role = role(domain, key.person, project);
     let refusal = match &ask {
+        Ask::SetRoles { .. } => {
+            if !domain.roles.contains_key(&project) {
+                Some(Refusal::Unknown)
+            } else if role == Some(Role::Owner) {
+                None
+            } else {
+                Some(Refusal::Role)
+            }
+        }
         Ask::StartChat { .. } => match role {
             Some(Role::Owner | Role::Maintainer | Role::Member) => None,
             Some(Role::Observer) | None => Some(Refusal::Role),
@@ -521,7 +578,8 @@ fn decided(domain: &mut Domain, env: &Env<Limits>, id: Id<Pending>, outcome: Out
         // A refused admission is retryable with the same key, including
         // pressure reported by tasks or another child through the root.
         Outcome::Refused(Refusal::Busy | Refusal::NotReady) => {}
-        Outcome::Started { .. }
+        Outcome::RolesSet { .. }
+        | Outcome::Started { .. }
         | Outcome::EscalationDecided { .. }
         | Outcome::Refused(
             Refusal::NoFurther

@@ -667,7 +667,7 @@ complete. The first-turn durable/lost-completion restart and bounded final Repor
 are covered (engine.md, 7.6). Section 15 adds the actual 02d1 held-chat route;
 broader task-tree escalation and deployment recovery remain later work.
 
-### 14.1 Events: sixteen actual root constructors
+### 14.1 Events: eighteen actual root constructors
 
 | Event | Decision | Concrete caller |
 | --- | --- | --- |
@@ -686,6 +686,8 @@ broader task-tree escalation and deployment recovery remain later work.
 | Restored | Keep | `startup_page`, after all current root proof pages validate; Waiting escalation holders are rechecked before Fleet Loaded |
 | InspectEscalation | Add actual 02d1 route | `engine::escalation::read` and `begin`, after direct-read/session or keyed-decision admission |
 | RoutedEscalation | Add actual 02d1 callback | `engine::escalation::needed`, after current membership/coverage and policy fallback selection |
+| InspectEscalations | Add actual partial 03c/02d preflight | `engine::roles::inspected`, bounded read-only Waiting snapshot before membership mutation |
+| RecheckEscalations | Add actual partial 03c/02d callback | `engine::roles::recheck`, after successful people ApplyRoles in the same synchronous root decision |
 | DecideEscalation | Add actual 02d1 route | `engine::escalation::inspected`, after exact revision/standing checks and real release authority |
 
 Uncalled events are removed: ForgetAdmission, Control, Amend, Move, Charge,
@@ -695,7 +697,7 @@ RememberStub and ForgetStub. ChargedTurn merges into Turn; ChargedActivation
 merges into Activation. Standalone Cancel is uncalled; legitimate
 `Finished { cancel_delegates: true }` still closes a delegate tree.
 
-### 14.2 Requests: sixteen actual root consumers
+### 14.2 Requests: eighteen actual root consumers
 
 | Request | Decision | Concrete consumer |
 | --- | --- | --- |
@@ -714,6 +716,8 @@ merges into Activation. Standalone Cancel is uncalled; legitimate
 | RestoreRefused | Keep | `tasks_outputs`, stops startup before continuation or Fleet Loaded |
 | EscalationNeeded | Add actual 02d1 consumer | `engine::escalation::needed`, resolves a newly held chat or rechecks a restored Waiting holder |
 | EscalationInspected | Add actual 02d1 consumer | `engine::escalation::inspected`, authenticated read or keyed decision using one reserved root query slot |
+| EscalationsInspected | Add actual partial 03c/02d terminal | `engine::roles::inspected`, consumes one stage-local right and validates candidate recipient revisions |
+| EscalationsRechecked | Add actual partial 03c/02d terminal | `engine::roles::recheck`, consumes one stage-local right after collecting existing Needed callbacks |
 | EscalationDecided | Add actual 02d1 consumer | `engine::escalation::completed`, saves root archive and people keyed outcome with the semantic state |
 
 Sent, Inbox, Relay, Observe, Notify, Timer and Topic have no reachable producer
@@ -793,3 +797,35 @@ Ancestor/delegate proposal routing, generic release/amend/cancel entrances,
 live project-role administration and holder-loss rerouting are not implemented
 by 02d1. The latter requires a following actual SetRoles entrance and consumer
 in the 03b/02d integration; no dormant recheck notification is introduced here.
+
+## 16. Live membership rerouting (partial 03c/02d)
+
+Tasks owns only the current held lifecycle. Its actual InspectEscalations input
+comes from root's authenticated SetRoles route and returns one bounded owned
+array of current person-requested Waiting contexts for the named project. A
+not-ready child returns one NotReady terminal. An empty array is valid: tasks
+has no separate project registry, and people/root validate the project before
+this query. Inspection has no writes or closing/dependency progress; it cannot
+cause an unrelated semantic change during preflight.
+
+Root computes recipients using the candidate roster and the same authority
+coverage/final-role selector as normal EscalationNeeded. It checks every changed
+holder's revision and reserves the complete atomic cohort before people changes
+membership. After ApplyRoles succeeds, RecheckEscalations returns existing
+EscalationNeeded for each Waiting context and one correlated completion. Root
+sends actual RoutedEscalation under the new membership in the same decision.
+The recheck itself is read-only and bounded by live task capacity. There is no
+raw task peek, roster copy, transport receipt or historical table in tasks.
+
+Same holder causes no revision or task write. Changed holder advances the
+checked revision once; exhaustion refuses the whole administration operation
+before membership changes. A Waiting final-role recipient never regresses to
+the requester. Rejected remains rejected, including its original reason, and
+Unheld/Routing tasks are not a role-administration candidate. Task authority,
+original funder, accepted expense, retries and root execution evidence remain
+unchanged. Rerouting is not a decided escalation, so it creates no accepted
+decision archive for the obsolete revision.
+
+This is the narrow actual live-membership integration required by 02d. Broader
+policy/release/amendment, task ancestry/delegation and inbox routing are absent;
+the retained boundary is justified by the constructors and consumers in 14.

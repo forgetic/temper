@@ -312,6 +312,8 @@ impl World {
                 | Request::Close { .. }
                 | Request::RestoreRefused { .. }
                 | Request::EscalationNeeded { .. }
+                | Request::EscalationsInspected { .. }
+                | Request::EscalationsRechecked { .. }
                 | Request::EscalationInspected { .. }
                 | Request::EscalationDecided { .. } => {}
             }
@@ -386,7 +388,10 @@ impl World {
                     self.observe(Seen::Closing { task });
                 }
                 Request::RestoreRefused { problem } => panic!("world store corrupted: {problem:?}"),
-                Request::EscalationInspected { .. } | Request::EscalationDecided { .. } => {
+                Request::EscalationsInspected { .. }
+                | Request::EscalationsRechecked { .. }
+                | Request::EscalationInspected { .. }
+                | Request::EscalationDecided { .. } => {
                     panic!("this child world sends no escalation decisions")
                 }
             }
