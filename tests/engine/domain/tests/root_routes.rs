@@ -1129,7 +1129,7 @@ fn restored_loss_spends_a_try_only_after_a_real_durable_turn() {
             .rows
             .values()
             .filter_map(|row| {
-                if let Record::Tasks(tasks::Stored::Ledger(ledger)) = row { Some(ledger.clone()) } else { None }
+                if let Record::Tasks(tasks::Stored::Ledger(ledger)) = row { Some(*ledger) } else { None }
             })
             .collect();
         let mut restored = Driver::new(original.store);
@@ -1159,7 +1159,7 @@ fn restored_loss_spends_a_try_only_after_a_real_durable_turn() {
             .rows
             .values()
             .filter_map(|row| {
-                if let Record::Tasks(tasks::Stored::Ledger(ledger)) = row { Some(ledger.clone()) } else { None }
+                if let Record::Tasks(tasks::Stored::Ledger(ledger)) = row { Some(*ledger) } else { None }
             })
             .collect();
         assert_eq!(after, ledgers, "topology loss never charges or posts funding again");
