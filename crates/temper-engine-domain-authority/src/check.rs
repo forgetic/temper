@@ -252,6 +252,11 @@ pub fn check_effect(domain: &Domain, ask: &EffectAsk, facts: &[Fact], why: &mut 
     {
         return refuse(why, Finding::Oversized);
     }
+    if let Some(landing) = &ask.landing
+        && !crate::limits::landing_within(landing, domain.limits())
+    {
+        return refuse(why, Finding::Oversized);
+    }
     for fact in facts {
         if !name_within(&fact.name, domain.limits()) {
             return refuse(why, Finding::Oversized);
@@ -264,6 +269,7 @@ pub fn check_effect(domain: &Domain, ask: &EffectAsk, facts: &[Fact], why: &mut 
     grants(domain, policy, &ask.authority, &ask.effect, &mut answer, why);
     requirements(&domain.rules().requirements, &ask.effect, facts, &mut answer, why);
     requirements(&policy.requirements, &ask.effect, facts, &mut answer, why);
+    crate::landing::check(domain, policy, ask, &mut answer, why);
     answer
 }
 

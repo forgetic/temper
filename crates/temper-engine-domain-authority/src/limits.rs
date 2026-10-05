@@ -1,11 +1,14 @@
-//! Admission, queue room and owned policy memory (domain/authority.md, 6–8).
+//! Admission, queue room and owned policy memory (domain/authority.md, 6–10).
 
 use alloc::boxed::Box;
 use core::mem::size_of;
 
 use skein_lib::Map;
 
-use crate::{Authority, Executor, Grant, Implication, Name, Pattern, Policy, Requirement, Role};
+use crate::{
+    Approval, Authority, Executor, Gate, Grant, Implication, Landing, LandingRule, Name, Pattern, Policy, Requirement,
+    Role,
+};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Limits {
@@ -21,6 +24,12 @@ pub struct Limits {
     pub batch: u32,
     pub accounts: u32,
     pub writes: u32,
+    pub landing_rules: u32,
+    pub gates: u32,
+    pub approvals: u32,
+    pub heads: u32,
+    pub verdicts: u32,
+    pub reviews: u32,
 }
 
 /// Room for the largest check, including every independent reason.
@@ -28,7 +37,9 @@ pub struct Limits {
 pub fn max_out(limits: &Limits) -> Option<u32> {
     let batch = limits.batch.checked_mul(6)?.checked_add(12)?;
     let run = limits.writes.checked_mul(4)?.checked_add(limits.accounts)?.checked_add(10)?;
-    let effect = limits.requirements.checked_mul(limits.facts)?.checked_mul(2)?.checked_add(8)?;
+    let one_landing = limits.gates.checked_add(limits.approvals.checked_mul(2)?)?.checked_add(2)?;
+    let landing = limits.landing_rules.checked_mul(2)?.checked_mul(one_landing)?.checked_add(limits.gates)?;
+    let effect = limits.requirements.checked_mul(limits.facts)?.checked_mul(2)?.checked_add(8)?.checked_add(landing)?;
     Some(batch.max(run).max(effect))
 }
 
@@ -37,7 +48,7 @@ pub fn max_out(limits: &Limits) -> Option<u32> {
 #[must_use]
 pub fn worst_case(limits: &Limits) -> Option<u64> {
     let authority = authority_heap(limits)?;
-    let requirements = requirement_heap(limits)?;
+    let requirements = requirement_heap(limits)?.checked_add(landing_heap(limits)?)?;
     let role_heap = bytes(u64::from(limits.roles), size_of::<Role>())?
         .checked_add(authority.checked_mul(u64::from(limits.roles))?)?;
     let policy = authority.checked_add(requirements)?.checked_add(role_heap)?;
@@ -70,6 +81,42 @@ fn requirement_heap(limits: &Limits) -> Option<u64> {
         .checked_add(pattern_heap(limits)?)?
         .checked_add(bytes(u64::from(limits.facts), size_of::<u16>())?)?;
     u64::from(limits.requirements).checked_mul(one)
+}
+
+fn landing_heap(limits: &Limits) -> Option<u64> {
+    let one = u64::try_from(size_of::<LandingRule>())
+        .ok()?
+        .checked_add(pattern_heap(limits)?)?
+        .checked_add(bytes(u64::from(limits.gates), size_of::<Gate>())?)?
+        .checked_add(bytes(u64::from(limits.approvals), size_of::<Approval>())?)?;
+    u64::from(limits.landing_rules).checked_mul(one)
+}
+
+pub(crate) fn landing_rules_within(rules: &[LandingRule], limits: &Limits) -> bool {
+    if !within(rules.len(), limits.landing_rules) {
+        return false;
+    }
+    for rule in rules {
+        if !pattern_within(&rule.pattern, limits)
+            || !within(rule.gates.len(), limits.gates)
+            || !within(rule.approvals.len(), limits.approvals)
+        {
+            return false;
+        }
+        for approval in &rule.approvals {
+            if approval.people == 0 || approval.people > limits.reviews {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+pub(crate) fn landing_within(landing: &Landing, limits: &Limits) -> bool {
+    within(landing.clean.len(), limits.heads)
+        && within(landing.gates.len(), limits.gates)
+        && within(landing.verdicts.len(), limits.verdicts)
+        && within(landing.reviews.len(), limits.reviews)
 }
 
 pub(crate) fn within(len: usize, limit: u32) -> bool {

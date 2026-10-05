@@ -1,5 +1,5 @@
 //! What a task may do, as an owned value with a preorder, its carved funding,
-//! and the rules each action passes (domain/authority.md, sections 3–9;
+//! and the rules each action passes (domain/authority.md, sections 3–10;
 //! programming-model.md, 4.5).
 //!
 //! Pure policy over values supplied by the engine's root: resource coverage,
@@ -20,6 +20,7 @@ extern crate alloc;
 mod boundary;
 mod check;
 mod domain;
+mod landing;
 mod limits;
 mod numbers;
 mod order;
@@ -27,14 +28,16 @@ mod rules;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_landing;
+#[cfg(test)]
 mod tests_numbers;
 #[cfg(test)]
 mod tests_policy;
 mod value;
 
 pub use boundary::{
-    Action, Answer, BatchAsk, Call, CallAsk, Checked, Delegate, Effect, EffectAsk, Fact, Finding, Holder, PersonAsk,
-    PersonRequest, RunAsk, Source, Status, Write, Writer,
+    Action, Answer, BatchAsk, Call, CallAsk, Checked, Ci, Delegate, Effect, EffectAsk, Fact, Finding, Head, Holder,
+    Landing, PersonAsk, PersonRequest, Review, RunAsk, Source, Status, Verdict, Write, Writer,
 };
 pub use check::{check_batch, check_call, check_effect, check_request, check_run, covers, needs};
 pub use domain::{Domain, Event, POLICY_MAX_OUT, PolicyFact, PolicyRefusal, step};
@@ -42,5 +45,8 @@ pub use limits::{Limits, max_out, worst_case};
 pub use numbers::{Charged, Funder, Funding, Moved, Numbers, carve, charge, left, move_funding, settle};
 pub use order::{FITS_MAX_OUT, Lack, Lacks, fits};
 pub use order::{Implication, Implies, at_most, grant_at_most, grant_covers, pattern_at_most, pattern_covers};
-pub use rules::{Policy, ProposalKind, Proposals, RequestKind, Requests, Requirement, Role, Rules};
+pub use rules::{
+    Approval, Freshness, Gate, LandingRule, Policy, ProposalKind, Proposals, RequestKind, Requests, Requirement, Role,
+    Rules,
+};
 pub use value::{Authority, Budget, Delegation, Executor, Grant, Last, Name, Pattern, Scopes, Tools};

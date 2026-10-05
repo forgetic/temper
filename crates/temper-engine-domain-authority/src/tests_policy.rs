@@ -27,6 +27,12 @@ const LIMITS: Limits = Limits {
     batch: 3,
     accounts: 2,
     writes: 2,
+    landing_rules: 0,
+    gates: 0,
+    approvals: 0,
+    heads: 0,
+    verdicts: 0,
+    reviews: 0,
 };
 
 fn numbers(budget: u64) -> Numbers {
@@ -67,6 +73,7 @@ fn rules(ceiling: Authority) -> Rules {
         )
         .unwrap(),
         requirements: Box::new([requirement(7)]),
+        landing: Box::new([]),
     }
 }
 fn role(ceiling: Authority) -> Role {
@@ -78,6 +85,7 @@ fn policy(ceiling: Authority) -> Policy {
         ceiling,
         period_spend: 500,
         requirements: Box::new([requirement(8)]),
+        landing: Box::new([]),
     }
 }
 fn apply(domain: &mut Domain, event: Event) -> PolicyFact {
@@ -137,7 +145,7 @@ fn effect_cells_use_pinned_facts_and_the_independent_strictest_statement() {
                     if !task_granted {
                         task.grants = Box::new([]);
                     }
-                    let ask = EffectAsk { project: 1, authority: task, effect: effect() };
+                    let ask = EffectAsk { project: 1, authority: task, effect: effect(), landing: None };
                     let mut reported = fact(7, status);
                     if !pinned {
                         reported.state = [2; 32];
@@ -163,7 +171,7 @@ fn effect_cells_use_pinned_facts_and_the_independent_strictest_statement() {
         }
     }
     let domain = domain();
-    let ask = EffectAsk { project: 1, authority: authority(), effect: effect() };
+    let ask = EffectAsk { project: 1, authority: authority(), effect: effect(), landing: None };
     for wrong in 0_u8..3 {
         let mut reported = fact(7, Status::Passed);
         match wrong {
@@ -784,6 +792,12 @@ fn check_full_policy_memory() {
         batch: u32::MAX,
         accounts: u32::MAX,
         writes: u32::MAX,
+        landing_rules: u32::MAX,
+        gates: u32::MAX,
+        approvals: u32::MAX,
+        heads: u32::MAX,
+        verdicts: u32::MAX,
+        reviews: u32::MAX,
     };
     assert_eq!(worst_case(&enormous), None, "overflowing memory is never wrapped");
     assert_eq!(max_out(&enormous), None, "overflowing queue bounds are never wrapped");

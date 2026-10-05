@@ -12,6 +12,7 @@ pub struct Rules {
     pub maximum_run_spend: u64,
     pub implies: Implies,
     pub requirements: Box<[Requirement]>,
+    pub landing: Box<[LandingRule]>,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -20,6 +21,7 @@ pub struct Policy {
     pub period_spend: u64,
     pub roles: Box<[Role]>,
     pub requirements: Box<[Requirement]>,
+    pub landing: Box<[LandingRule]>,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -40,6 +42,40 @@ pub struct Requirement {
     pub kind: u16,
     pub pattern: Pattern,
     pub facts: Box<[u16]>,
+}
+
+/// A verdict may carry only over the clean updates verified by the root.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Freshness {
+    Exact,
+    Clean,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Gate {
+    pub number: u32,
+    pub blocking: bool,
+    pub freshness: Freshness,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Approval {
+    pub role: u32,
+    pub people: u32,
+    pub freshness: Freshness,
+}
+
+/// Requirements on one connector's exact landing kind and branch pattern
+/// (domain/authority.md, 10; forge.md, 8.3). These add to change gates.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct LandingRule {
+    pub connector: u16,
+    pub kind: u16,
+    pub pattern: Pattern,
+    pub ci: bool,
+    pub up_to_date: bool,
+    pub gates: Box<[Gate]>,
+    pub approvals: Box<[Approval]>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]

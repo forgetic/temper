@@ -4,7 +4,7 @@ use alloc::boxed::Box;
 
 use skein_lib::Wall;
 
-use crate::{Authority, Executor, Name, Numbers, ProposalKind, Scopes, Tools};
+use crate::{Authority, Executor, Gate, Name, Numbers, ProposalKind, Scopes, Tools};
 
 /// Ordered from least to most strict: deciding never clears a fact failure.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -47,6 +47,13 @@ pub enum Finding {
     Unpermitted,
     Undecidable,
     PeriodSpend,
+    LandingMissing,
+    LandingPin,
+    Ci { status: Status },
+    Behind { status: Status },
+    Gate { number: u32, status: Status },
+    Approval { role: u32, have: u32, want: u32 },
+    ReviewFailed { role: u32 },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -85,6 +92,49 @@ pub struct EffectAsk {
     pub project: u32,
     pub authority: Authority,
     pub effect: Effect,
+    pub landing: Option<Landing>,
+}
+
+pub type Head = [u8; 32];
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Ci {
+    pub head: Head,
+    pub status: Status,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Verdict {
+    pub gate: u32,
+    pub head: Head,
+    pub status: Status,
+}
+
+/// Only authenticated people's latest reviews, with root-verified roles.
+/// Agent reviews use gate verdicts and cannot count as human approvals.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Review {
+    pub person: u64,
+    pub role: u32,
+    pub head: Head,
+    pub status: Status,
+}
+
+/// Facts read together for this exact head and landing branch's tip.
+/// All verdicts and authenticated latest reviews belong to the effect's
+/// named change and branch; the root resolves gate identities and roles.
+/// `clean` contains only predecessor heads linked to `head` entirely by
+/// temper's clean updates since the last repair or conflict resolution.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct Landing {
+    pub head: Head,
+    pub tip: Head,
+    pub contains_tip: Status,
+    pub ci: Ci,
+    pub clean: Box<[Head]>,
+    pub gates: Box<[Gate]>,
+    pub verdicts: Box<[Verdict]>,
+    pub reviews: Box<[Review]>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]

@@ -458,6 +458,38 @@ authority says:
   Gates a project wants on every landing (a review with a lens, a
   person's approval) are added here; gates a plan wants on one change
   are its own (forge.md, 8.3), and add to these, never replace them.
+  A rule names the connector, exact landing kind and branch resource
+  pattern, whether CI and containment of the current branch tip are
+  required, its gates, and approvals by role and distinct-person count.
+  The root configures the default rule; authority embeds no connector
+  kinds or branch names. Every applicable deployment and project rule
+  applies, together with the change's blocking gates. Advisory gates
+  add no wait or refusal, even when they fail.
+- **Concrete landing facts** accompany the effect: its head, the branch
+  tip whose containment was checked, CI's head and status, predecessor
+  heads reachable through only temper's clean updates, gate verdicts at
+  heads, and people's reviews with their verified project roles. The
+  root supplies one coherent snapshot for the named change and branch,
+  authenticates reviewers, resolves gate identities and verifies the
+  clean-update lineage. Agent verdicts are gates, never human approvals.
+  Authority requires the landing head to equal the effect's exact state
+  pin. Missing landing facts wait when a rule applies; an ordinary effect
+  with no applicable landing rule needs none.
+- **Freshness** is explicit per gate or approval: this exact head, or a
+  predecessor joined to it entirely by those clean updates. CI always
+  requires this exact head. After a repair or conflict resolution, the
+  root drops that lineage, so old verdicts cannot carry. Missing or
+  pending valid verdicts wait; a valid failed verdict refuses. Conflicting
+  reports cannot clear a failure or pending gate. A person's duplicate
+  approvals count once; a conflicting pending report by that person
+  supplies no approval. A valid request for changes from the required
+  role refuses; stale requests do not survive a broken lineage.
+- **Containment** is a fact about the exact landing head and branch tip
+  in that snapshot, not authority's own git calculation. Unknown or
+  pending containment waits; known absence refuses that effect. The root
+  and forge refresh these facts when either head or base changes and
+  carry the checked head into the conditional merge. Authority retains
+  no live connector state and cannot prevent the base changing during I/O.
 - **Who decides what:** for each kind of proposal (a goal's budget past
   a threshold, a landing into a branch the tree was not granted), the
   role that may accept it.
@@ -479,6 +511,12 @@ generated facts, a sweep of the landing rule checked against an
 independent statement of it. The engine's world exercises it in place
 (engine.md, section 15), whose referee holds the first promise of
 core.md, section 10.
+The landing sweep also checks exact versus carried verdicts, CI that
+never carries, role eligibility and distinct people, contradictory reports,
+and additional gates that never loosen the answer. Its independent
+statement gathers valid heads and people into sets, separate from the
+check's bounded scans. Full owned landing-rule boxes are included in the
+domain's memory bound; question facts and finding queues are the root's.
 
 ## 12. From today
 

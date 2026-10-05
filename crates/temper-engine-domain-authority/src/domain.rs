@@ -2,7 +2,7 @@
 
 use skein_lib::{Map, Queue};
 
-use crate::limits::{authority_within, requirements_within, within};
+use crate::limits::{authority_within, landing_rules_within, requirements_within, within};
 use crate::{Limits, Policy, Role, Rules, at_most, max_out, worst_case};
 
 #[derive(Debug)]
@@ -43,6 +43,7 @@ impl Domain {
         worst_case(&limits)?;
         if !authority_within(&rules.ceiling, &limits)
             || !requirements_within(&rules.requirements, &limits)
+            || !landing_rules_within(&rules.landing, &limits)
             || rules.implies.len() > limits.implications
             || rules.minimum_run_spend >= rules.maximum_run_spend
             || rules.maximum_run_spend > rules.ceiling.budget.spend
@@ -113,6 +114,7 @@ fn invalid(domain: &Domain, policy: &Policy) -> Option<PolicyRefusal> {
     if !authority_within(&policy.ceiling, &domain.limits)
         || !within(policy.roles.len(), domain.limits.roles)
         || !requirements_within(&policy.requirements, &domain.limits)
+        || !landing_rules_within(&policy.landing, &domain.limits)
     {
         return Some(PolicyRefusal::Oversized);
     }
@@ -134,6 +136,17 @@ fn invalid(domain: &Domain, policy: &Policy) -> Option<PolicyRefusal> {
         }
         for earlier in policy.roles.get(..position).expect("enumerated position is in the roles") {
             if earlier.number == role.number {
+                return Some(PolicyRefusal::InvalidRole);
+            }
+        }
+    }
+    for rule in &policy.landing {
+        for approval in &rule.approvals {
+            let mut exists = false;
+            for role in &policy.roles {
+                exists |= role.number == approval.role;
+            }
+            if !exists {
                 return Some(PolicyRefusal::InvalidRole);
             }
         }

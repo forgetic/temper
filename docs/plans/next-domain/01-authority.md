@@ -37,6 +37,7 @@ crates/temper-engine-domain-authority/src/
 ├── numbers.rs      Numbers, Funder, Funding; left, carve, settle, charge, move_funding
 ├── rules.rs        Rules (the deployment's), Policy (a project's), Role, Requirement, LandingRule, Implies
 ├── check.rs        check_batch, check_effect, check_run, check_request, check_call, needs, covers
+├── landing.rs      concrete landing requirements: exact CI, carried gates, role approvals, tip containment
 ├── boundary.rs     the owned questions, actions, holders, answers, facts and findings
 ├── domain.rs       Domain (rules and policies in force), step: policies added, changed, dropped
 ├── limits.rs       Limits, worst_case
@@ -253,8 +254,8 @@ emits nothing but facts.
   effect kind, a resource pattern and fact kind numbers. `Fact` has connector,
   fact kind, full name, exact state and unknown/pending/passed/failed status.
   Every applicable deployment and project requirement must pass; conflicting
-  reports preserve failure and pending status. Landing-specific requirements
-  and their independent sweep remain 01d.
+  reports preserve failure and pending status. Its optional owned `Landing`
+  payload supplies the concrete facts for landing-specific requirements.
 - `RunAsk`: project, authority, numbers, offered budget, wall time, account
   usability values and all workspace `Write` resources with writer holds.
   Funds, deadlines, accounts and writer readiness wait; an authority gap
@@ -281,6 +282,50 @@ counts held configuration boxes and the full policy map's node bound; asks,
 overflowing memory or output bounds. Role and policy changes commit as facts;
 funding numbers, topology, references and in-flight attempts remain the root's
 and tasks child's inputs, never retained policy state.
+
+### 2.5 Landing requirements
+
+`Rules::landing` and `Policy::landing` are bounded boxes of `LandingRule`:
+connector, exact effect kind, branch pattern, `ci` and `up_to_date` flags,
+`Gate` requirements and `Approval` requirements. These are conjoined with
+generic requirements, all other matching landing rules and the change gates
+in `EffectAsk::landing`. The root configures default-main CI and tip checks;
+ordinary effects without a matching landing rule retain the generic check.
+
+`Landing` owns a 32-byte `head` and `tip`, a `contains_tip: Status`, `Ci {
+head, status }`, clean predecessor heads, change gates, gate `Verdict`s and
+human `Review`s. Authority checks `head == Effect::state`; the root gathers
+the exact head/tip snapshot for the effect's named change and branch,
+verifies clean lineage and role membership, and refreshes it on head or base
+movement. It carries the checked head into the forge's conditional merge;
+authority cannot enforce connector atomicity over a moving base.
+
+A `Gate` has a stable number resolved by the root, whether it blocks, and
+`Freshness::{Exact,Clean}`. A `Verdict` reports gate number, head and status.
+A `Review` reports authenticated person's number, verified role, head and
+status; agent reviews supply verdicts rather than count as people.
+`Approval { role, people, freshness }` needs that many distinct eligible
+people. Role equality is exact, not an implicit ordering; the root translates
+its role memberships. Configured approval counts are positive and bounded
+by `Limits::reviews`; project approval roles must exist in that policy.
+Deployment approval roles are checked against each queried project before
+inspecting landing facts; a missing payload cannot hide an unknown-role
+refusal.
+
+CI never carries. An exact requirement ignores earlier heads; a clean
+requirement also admits verified clean predecessors. Repairs and conflict
+resolution remove that provenance. Missing/unknown/pending facts wait;
+valid failures refuse, including known absence of the named tip. Advisory
+gates hold nothing. Duplicate or contradictory reports never inflate an
+approval, clear a failed verdict, or clear a pending gate. The root supplies
+the latest person's review, not a history that would resurrect an obsolete
+request for changes.
+
+`Limits` additionally bounds landing-rule tables, gates per rule/change,
+approvals per rule, clean heads, verdicts and reviews. Admission checks all
+lengths before scans. `max_out` includes every deployment/project/change
+finding, and `worst_case` counts rule tables, nested patterns and owned gate
+and approval boxes. Landing question boxes are counted by their caller.
 
 ## 3. Tests
 
@@ -314,7 +359,8 @@ for the default suite:
 2. **01b numbers:** `numbers.rs`, the funding-tree tests.
 3. **01c rules, policies and checks:** `rules.rs`, `check.rs`, `domain.rs`,
    every check's cells.
-4. **01d requirements and landing rules:** the landing sweep.
+4. **01d requirements and landing rules:** `landing.rs`, concrete pinned
+   facts, the independent generated landing sweep and full landing memory.
 
 Each is a branch through the gate; none touches another crate. 01a and
 01b are what step 02 needs first (`tasks` carries authority as its own

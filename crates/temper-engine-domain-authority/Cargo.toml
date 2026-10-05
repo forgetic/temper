@@ -1,6 +1,6 @@
 [package]
 name = "temper-engine-domain-authority"
-description = "Authority values and their order: the engine's authority child domain, sans-io"
+description = "Authority, funding and action checks: the engine's authority child domain, sans-io"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
