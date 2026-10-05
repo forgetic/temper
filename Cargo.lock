@@ -107,14 +107,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "skein-fake-checkout"
+version = "0.0.0"
+source = "git+https://git.ekanayaka.io/ai/skein.git#5e52dd9cd8793094bf49c8bf75f9cffac027814f"
+
+[[package]]
 name = "skein-heap"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/skein.git#3cbd792c6b9147b497c665d17f349352145ed9f2"
+source = "git+https://git.ekanayaka.io/ai/skein.git#5e52dd9cd8793094bf49c8bf75f9cffac027814f"
 
 [[package]]
 name = "skein-http"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/skein.git#3cbd792c6b9147b497c665d17f349352145ed9f2"
+source = "git+https://git.ekanayaka.io/ai/skein.git#5e52dd9cd8793094bf49c8bf75f9cffac027814f"
 dependencies = [
  "skein-lib",
 ]
@@ -122,7 +127,7 @@ dependencies = [
 [[package]]
 name = "skein-io"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/skein.git#3cbd792c6b9147b497c665d17f349352145ed9f2"
+source = "git+https://git.ekanayaka.io/ai/skein.git#5e52dd9cd8793094bf49c8bf75f9cffac027814f"
 dependencies = [
  "skein-lib",
 ]
@@ -130,7 +135,7 @@ dependencies = [
 [[package]]
 name = "skein-json"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/skein.git#3cbd792c6b9147b497c665d17f349352145ed9f2"
+source = "git+https://git.ekanayaka.io/ai/skein.git#5e52dd9cd8793094bf49c8bf75f9cffac027814f"
 dependencies = [
  "skein-lib",
 ]
@@ -138,12 +143,12 @@ dependencies = [
 [[package]]
 name = "skein-lib"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/skein.git#3cbd792c6b9147b497c665d17f349352145ed9f2"
+source = "git+https://git.ekanayaka.io/ai/skein.git#5e52dd9cd8793094bf49c8bf75f9cffac027814f"
 
 [[package]]
 name = "skein-shell"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/skein.git#3cbd792c6b9147b497c665d17f349352145ed9f2"
+source = "git+https://git.ekanayaka.io/ai/skein.git#5e52dd9cd8793094bf49c8bf75f9cffac027814f"
 dependencies = [
  "io-uring",
  "libc",
@@ -154,7 +159,7 @@ dependencies = [
 [[package]]
 name = "skein-sim"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/skein.git#3cbd792c6b9147b497c665d17f349352145ed9f2"
+source = "git+https://git.ekanayaka.io/ai/skein.git#5e52dd9cd8793094bf49c8bf75f9cffac027814f"
 dependencies = [
  "skein-io",
  "skein-lib",
@@ -163,7 +168,7 @@ dependencies = [
 [[package]]
 name = "skein-world"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/skein.git#3cbd792c6b9147b497c665d17f349352145ed9f2"
+source = "git+https://git.ekanayaka.io/ai/skein.git#5e52dd9cd8793094bf49c8bf75f9cffac027814f"
 dependencies = [
  "skein-heap",
  "skein-io",
@@ -497,6 +502,9 @@ dependencies = [
 [[package]]
 name = "temper-fake-checkout"
 version = "0.0.0"
+dependencies = [
+ "skein-fake-checkout",
+]
 
 [[package]]
 name = "temper-fake-forge-domain"
