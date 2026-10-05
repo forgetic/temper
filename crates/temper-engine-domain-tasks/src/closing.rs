@@ -177,6 +177,7 @@ pub(crate) fn progress(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Reques
                         task_mut(d, number).expect("waiting task live").record.phase =
                             Phase::Held { was: Was::Waiting, why: Hold::Dependency(dependency) };
                         publish(d, env, number, out);
+                        crate::refs::notify(d, number, crate::Notice::Held(Hold::Dependency(dependency)), out);
                         fact(d, Fact::Held { task: number, why: Hold::Dependency(dependency) });
                         changed = true;
                     } else if ready {
@@ -187,7 +188,7 @@ pub(crate) fn progress(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Reques
                     }
                 }
                 Phase::Closing(closing) => match closing.stage {
-                    Stage::Delegates if task.delegates.is_empty() => {
+                    Stage::Delegates if task.delegates.is_empty() && task.results_due.is_empty() => {
                         let ending = closing.ending.clone();
                         let task = task_mut(d, number).expect("closing task live");
                         task.record.phase = Phase::Closing(Closing { stage: Stage::Effects, ending: ending.clone() });
@@ -232,6 +233,10 @@ fn end_task(d: &mut Domain, env: &Env<Limits>, number: u64, out: &mut Queue<Requ
     };
     let mut ended = task.clone();
     ended.phase = Phase::Ended(ending.clone());
+    crate::inbox::archive(d, number, out);
+    crate::refs::end(d, number, out);
+    crate::refs::notify(d, number, crate::Notice::Ended(ending.clone()), out);
+    d.wakes.cancel(number);
     let id = d.names.remove(&number).expect("ending name exists");
     d.tasks.retire(id);
     d.alarms.cancel(number);
@@ -262,8 +267,26 @@ fn end_task(d: &mut Domain, env: &Env<Limits>, number: u64, out: &mut Queue<Requ
 pub(crate) fn needed(d: &Domain, number: u64) -> bool {
     for (_, id) in &d.names {
         let task = &d.tasks.get(*id).expect("name indexes live task").record;
-        if crate::batch::contains(&task.dependencies, number) || crate::batch::contains(&task.spec.inputs, number) {
+        if crate::batch::contains(&task.dependencies, number)
+            || crate::batch::contains(&task.spec.inputs, number)
+            || crate::batch::contains(&task.references, number)
+            || crate::batch::contains(&task.results_due, number)
+        {
             return true;
+        }
+    }
+    for (_, envelope) in &d.messages {
+        match envelope.message {
+            crate::Message::Result { task, .. } | crate::Message::Notice { target: task, .. } if task == number => {
+                return true;
+            }
+            crate::Message::Words { .. }
+            | crate::Message::Question { .. }
+            | crate::Message::Answer { .. }
+            | crate::Message::Result { .. }
+            | crate::Message::News { .. }
+            | crate::Message::Notice { .. }
+            | crate::Message::Timer { .. } => {}
         }
     }
     false

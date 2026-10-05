@@ -70,7 +70,7 @@ fn valid_stage(task: &TaskRecord, closing: &Closing, l: &Limits) -> bool {
         && match closing.stage {
             Stage::Run { attempt } => attempt != 0 && attempt == task.attempt && task.last_answer != Some(attempt),
             Stage::Delegates => true,
-            Stage::Effects | Stage::Settled => task.delegates.is_empty(),
+            Stage::Effects | Stage::Settled => task.delegates.is_empty() && task.results_due.is_empty(),
         }
 }
 fn valid_phase(task: &TaskRecord, l: &Limits) -> bool {
@@ -94,6 +94,9 @@ fn valid_record(d: &Domain, l: &Limits, task: &TaskRecord) -> bool {
         || task.made == 0
         || task.made > l.tree_tasks
         || task.delegates.len() > usize::try_from(l.delegates).expect("u32 fits usize")
+        || !crate::wake::valid(&task.policy)
+        || task.references.len() > usize::try_from(l.references).expect("u32 fits usize")
+        || task.results_due.len() > usize::try_from(l.delegates).expect("u32 fits usize")
         || task.dependencies.len() > usize::try_from(l.dependencies).expect("u32 fits usize")
     {
         return false;
@@ -105,12 +108,20 @@ fn valid_record(d: &Domain, l: &Limits, task: &TaskRecord) -> bool {
     {
         return false;
     }
+    if task.turn != 0 && task.attempt == 0 {
+        return false;
+    }
+    if let Some(read) = task.last_read
+        && (task.turn == 0 || read == 0 || read > task.last_message)
+    {
+        return false;
+    }
     if let Some(attempt) = task.last_answer
         && (attempt == 0 || attempt > task.attempt)
     {
         return false;
     }
-    for numbers in [&*task.delegates, &*task.dependencies, &*task.spec.inputs] {
+    for numbers in [&*task.delegates, &*task.dependencies, &*task.spec.inputs, &*task.references, &*task.results_due] {
         for (at, number) in numbers.iter().enumerate() {
             for earlier in numbers.iter().take(at) {
                 if earlier == number {
@@ -147,7 +158,10 @@ pub(crate) fn restore(d: &mut Domain, env: &Env<Limits>, stored: Stored, out: &m
             {
                 return failed(d, Some(number), Refusal::Restore, out);
             }
-            let id = d.tasks.insert(Task { record: *task, alarm: None }).expect("restored task admitted");
+            let id = d
+                .tasks
+                .insert(Task { record: *task, alarm: None, wake_alarms: [None; 3] })
+                .expect("restored task admitted");
             let indexed = d.names.insert(number, id);
             assert!(indexed == Ok(None), "restored name admitted");
         }
@@ -165,6 +179,12 @@ pub(crate) fn restore(d: &mut Domain, env: &Env<Limits>, stored: Stored, out: &m
         // Historical ended rows are read through RememberStub at runtime;
         // they cannot accidentally return an ended task to the live arena.
         Stored::Ended(task) => failed(d, Some(task.number), Refusal::Restore, out),
+        Stored::ArchivedMessage(_) => failed(d, None, Refusal::Restore, out),
+        Stored::Message(_) | Stored::Offer(_) | Stored::Receipt(_) | Stored::Question(_) | Stored::Subscription(_) => {
+            if !crate::inbox::restore(d, env, stored) {
+                failed(d, None, Refusal::Restore, out);
+            }
+        }
     }
 }
 fn failed(d: &mut Domain, task: Option<u64>, why: Refusal, out: &mut Queue<Request>) {
@@ -233,7 +253,7 @@ fn links(d: &Domain, env: &Env<Limits>, task: &TaskRecord) -> bool {
     }
     for dependency in &task.dependencies {
         if let Some(other) = record(d, *dependency) {
-            if other.requester != task.requester || other.project != task.project {
+            if other.project != task.project {
                 return false;
             }
         } else if let Some(stub) = d.stubs.get(dependency) {
@@ -262,6 +282,9 @@ fn links(d: &Domain, env: &Env<Limits>, task: &TaskRecord) -> bool {
             }
         }
     }
+    if !reference_links(d, task) {
+        return false;
+    }
     for input in &task.spec.inputs {
         if !d.stubs.contains_key(input) {
             return false;
@@ -279,29 +302,8 @@ pub(crate) fn restored(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Reques
             return failed(d, Some(*number), Refusal::Restore, out);
         }
     }
-    // Reject persisted dependency cycles independently of row order.
-    let mut ordered = skein_lib::List::with_capacity(env.limits.tasks);
-    for _ in 0..d.names.len() {
-        let mut next = None;
-        for (number, _) in &d.names {
-            if crate::batch::contains(ordered.as_slice(), *number) {
-                continue;
-            }
-            let mut ready = true;
-            for dependency in &record(d, *number).expect("name indexes task").dependencies {
-                if d.names.contains_key(dependency) && !crate::batch::contains(ordered.as_slice(), *dependency) {
-                    ready = false;
-                }
-            }
-            if ready {
-                next = Some(*number);
-                break;
-            }
-        }
-        let Some(number) = next else {
-            return failed(d, None, Refusal::Cycle, out);
-        };
-        ordered.push(number).expect("one ordered entry per live task");
+    if !crate::batch::acyclic(d, &env.limits, Party::Person(0), &[]) || !crate::inbox::links(d, env) {
+        return failed(d, None, Refusal::Restore, out);
     }
     d.startup = Startup::Ready;
     let numbers = snapshot(d, env.limits.tasks);
@@ -342,4 +344,36 @@ pub(crate) fn restored(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Reques
             Phase::Ended(_) => unreachable!("ended record not restored into live arena"),
         }
     }
+    crate::refs::restored(d, env, out);
+    for (_, offer) in &d.offers {
+        out.push(Request::Relay {
+            task: offer.envelope.task,
+            attempt: offer.attempt,
+            envelope: offer.envelope.clone(),
+        });
+    }
+}
+
+fn reference_links(d: &Domain, task: &TaskRecord) -> bool {
+    for reference in &task.references {
+        if *reference == task.number {
+            return false;
+        }
+        match record(d, *reference) {
+            Some(other) => {
+                if other.project != task.project {
+                    return false;
+                }
+            }
+            None => match d.stubs.get(reference) {
+                Some(stub) => {
+                    if stub.project != task.project {
+                        return false;
+                    }
+                }
+                None => return false,
+            },
+        }
+    }
+    true
 }

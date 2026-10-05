@@ -132,9 +132,11 @@ dependencies among them.
 - **Dependencies** name tasks in the same batch, or live tasks the
   creator references: its own delegates, or a task it was introduced to
   (7.5). A task's dependencies are never added to once it is made
-  (section 6), so a batch can never close a cycle through tasks already
-  made, and the check is over the batch alone and the edges it adds. A
-  result of a task that has ended reaches a new task as one of its
+  (section 6). Admission checks the combined graph of existing dependencies
+  and delegation waits with the new edges: an introduced reference can
+  otherwise make a new child depend on an ancestor, or join two existing
+  subtrees into a wait cycle. References alone are visibility, not wait
+  edges. A result of a task that has ended reaches a new task as one of its
   inputs (section 3), not as a dependency.
 - **Checked whole,** before anything of it exists:
   - every task well formed: a known executor kind, a charter or
@@ -299,7 +301,10 @@ which may amend, cancel or re-address it.
   after the decision is durable; replaying its accepted answer changes
   neither the task nor its tries.
 - **Delivered once,** as a message to the requester, committed with the
-  task's end. The root commits this requester message in the same decision
+  task's end. The child's durable result credit remains until the root
+  delivers that actual message in the same decision; a closing requester
+  cannot advance past delegates with an undelivered result credit. The root
+  commits this requester message in the same decision
   as the ended record (`engine.md`, 5.6); restoration of the historical
   record does not send another message. A person requester sees it in the
   web. A cancellation can retain a completed result alongside its reason,
@@ -386,6 +391,34 @@ are entries of its own (section 8), which always wake it.
   - *refused at the sender's entrance:* words and questions, past the
     bound: a person is told the inbox is full, an agent's tool call
     answers so.
+- **Named by the root.** Message, question and subscription numbers are
+  fresh root-issued values. Accepted user messages retain bounded receipts
+  containing the complete call: an exact replay acknowledges the old
+  outcome, a changed call using its number is refused, and pressure refusals
+  consume no receipt. The root retains the logical call key across pressure
+  retries (`Busy`, `Inbox`, `NotReady`) and assigns a fresh message candidate
+  when other deliveries have meanwhile committed. Only final outcomes are
+  cached. Increasing committed message IDs keep an old read-through from
+  taking a later delivery. An open question reserves both answer inbox
+  capacity
+  and an answer receipt before the question is accepted. The root retires a
+  receipt only after its own call history no longer needs it.
+- **Taken by committed turns.** Each attempt starts at turn zero. A turn
+  advances by one; already committed turns acknowledge without taking
+  anything again. The root gives a claim the message IDs in its actual
+  brief. Each live relay saves an immutable offered payload before delivery.
+  A read-through takes only IDs offered to that attempt, so an older message
+  kept by policy survives reading a newer live relay. An older deferred ID
+  may later be read by a new attempt. Offers are bounded; when their table
+  is full, new messages stay in the inbox until a turn frees offer room.
+- **Merged with a fresh ID.** A replacement hint keeps the oldest arrival
+  time and accumulated occurrence count, but receives a fresh root number.
+  Reached batch thresholds are durable and survive holds, wall corrections
+  and restoration.
+  An old offered payload stays immutable; committing its read cannot take
+  the replacement. Subscription capacity reserves its largest replacement
+  even when the current hint is smaller. An ended task's unread messages
+  become archived rows in the same decision as its end.
 - **Relayed live.** A task with a running run has what its policy lets
   through relayed to it as it arrives (engine.md, 7.4); what it does not
   take before its run ends stays.
@@ -430,6 +463,13 @@ A subscription is a task's standing interest in what changes:
   references;
 - **a timer.**
 
+The child asks the root to deliver a task notice or timer with a fresh
+message number. The root completes these callbacks, and each delegate-result
+callback, before committing or returning the decision. Startup restoration
+rejects an unfinished callback record; `Restore`/`Restored` are only the
+startup barrier. A subscription to an ended referenced task reads its
+historical result through the root in that same decision.
+
 Subscriptions end with the task. A tracked task's subscription to the
 landings in its subtree's repositories is the engine's to keep, not its
 executor's (forge.md, section 7). Their number per task is bounded.
@@ -441,7 +481,10 @@ executor's (forge.md, section 7). Their number per task is bounded.
   its requester, its delegates, and one it was introduced to. A task
   introduces two tasks it references (a coordinator two of its
   delegates) by giving each a reference to the other, within their
-  limits. References are kept with the task, and end with it.
+  limits. A requester reserves an explicit reference for each admitted
+  delegate,
+  retaining its visibility after the delegate ends until it forgets the
+  reference. References are kept with the task, and end with it.
 - **People** message the tasks their role lets them see (people.md,
   section 5).
 - **No broadcast.** Who may talk to whom stays visible and bounded.

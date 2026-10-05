@@ -23,12 +23,16 @@ pub(crate) fn claim(
     to: ReplyTo,
     number: u64,
     attempt: u64,
+    readable: &[u64],
     out: &mut Queue<Request>,
 ) {
     let to = match entrance(d, to, number) {
         Ok(to) => to,
         Err((to, why)) => return refused(to, Some(number), why, out),
     };
+    if !crate::inbox::claimable(d, number, readable) {
+        return refused(to, Some(number), Refusal::Read, out);
+    }
     let task = task_mut(d, number).expect("entrance names task");
     if attempt <= task.record.attempt {
         return refused(to, Some(number), Refusal::Attempt, out);
@@ -37,8 +41,11 @@ pub(crate) fn claim(
         return refused(to, Some(number), Refusal::State, out);
     }
     task.record.attempt = attempt;
+    task.record.turn = 0;
+    task.record.last_read = None;
     task.record.phase = Phase::Active(Active::Claimed { attempt });
     publish(d, env, number, out);
+    crate::inbox::offer(d, number, attempt, readable, out);
     fact(d, Fact::Claimed { task: number, attempt });
     out.push(Request::Done { reply_to: to });
 }
@@ -213,7 +220,15 @@ pub(crate) fn activation(
         Some(why) => Phase::Held { was: was(next), why },
         None => next,
     };
+    let held_notice = match task.record.phase {
+        Phase::Held { why, .. } => Some(why),
+        Phase::Waiting | Phase::Active(_) | Phase::Closing(_) | Phase::Ended(_) => None,
+    };
+    crate::inbox::clear_offers(d, number, out);
     publish(d, env, number, out);
+    if let Some(why) = held_notice {
+        crate::refs::notify(d, number, crate::Notice::Held(why), out);
+    }
     out.push(Request::Acknowledged { reply_to: to, task: number, attempt, accepted: Accepted::New });
 }
 pub(crate) fn was(phase: Phase) -> Was {
@@ -280,6 +295,7 @@ pub(crate) fn hold(d: &mut Domain, env: &Env<Limits>, number: u64, why: Hold, ou
     let old = core::mem::replace(&mut task.record.phase, Phase::Waiting);
     task.record.phase = Phase::Held { was: was(old), why };
     publish(d, env, number, out);
+    crate::refs::notify(d, number, crate::Notice::Held(why), out);
     fact(d, Fact::Held { task: number, why });
 }
 pub(crate) fn release(d: &mut Domain, env: &Env<Limits>, to: ReplyTo, number: u64, out: &mut Queue<Request>) {

@@ -38,6 +38,23 @@ pub(crate) fn check(d: &Domain, l: &Limits, creator: Party, batch: &[New]) -> Re
             if u32::try_from(parent.delegates.len()).unwrap_or(u32::MAX).saturating_add(size) > l.delegates {
                 return Err(problem(Some(number), Refusal::Delegates));
             }
+            if u32::try_from(parent.results_due.len()).unwrap_or(u32::MAX).saturating_add(size) > l.delegates
+                || !crate::inbox::room(
+                    d,
+                    l,
+                    number,
+                    size,
+                    usize::try_from(l.result_bytes)
+                        .expect("u32 fits usize")
+                        .saturating_mul(2)
+                        .saturating_mul(batch.len()),
+                )
+            {
+                return Err(problem(Some(number), Refusal::Inbox));
+            }
+            if u32::try_from(parent.references.len()).unwrap_or(u32::MAX).saturating_add(size) > l.references {
+                return Err(problem(Some(number), Refusal::Busy));
+            }
             if parent.depth.saturating_add(1) > l.depth {
                 return Err(problem(Some(number), Refusal::Depth));
             }
@@ -53,34 +70,8 @@ pub(crate) fn check(d: &Domain, l: &Limits, creator: Party, batch: &[New]) -> Re
         Party::Person(_) | Party::Deployment { .. } => None,
     };
     check_members(d, l, creator, batch, parent)?;
-    let mut ordered = List::with_capacity(l.batch);
-    for _ in 0..size {
-        let mut next = None;
-        for new in batch {
-            if contains(ordered.as_slice(), new.number) {
-                continue;
-            }
-            let mut ready = true;
-            for dependency in &new.dependencies {
-                let mut internal = false;
-                for sibling in batch {
-                    if sibling.number == *dependency {
-                        internal = true;
-                    }
-                }
-                if internal && !contains(ordered.as_slice(), *dependency) {
-                    ready = false;
-                }
-            }
-            if ready {
-                next = Some(new.number);
-                break;
-            }
-        }
-        let Some(number) = next else {
-            return Err(problem(Some(batch.first().expect("nonempty batch admitted").number), Refusal::Cycle));
-        };
-        ordered.push(number).expect("one ordered task per batch task");
+    if !acyclic(d, l, creator, batch) {
+        return Err(problem(Some(batch.first().expect("nonempty batch admitted").number), Refusal::Cycle));
     }
     Ok(())
 }
@@ -137,6 +128,9 @@ fn check_members(
                 }
             }
         }
+        if !crate::wake::valid(&new.policy) {
+            return Err(problem(number, Refusal::Message));
+        }
         if !valid_spec(l, &new.spec) {
             return Err(problem(number, Refusal::Spec));
         }
@@ -173,6 +167,9 @@ fn check_members(
                     }
                 }
             }
+            if !known && let Some(parent) = parent {
+                known = contains(&parent.references, *dependency) && d.names.contains_key(dependency);
+            }
             if !known {
                 return Err(problem(number, Refusal::Dependencies));
             }
@@ -193,6 +190,13 @@ pub(crate) fn valid_spec(l: &Limits, spec: &Spec) -> bool {
         || spec.inputs.len() > usize::try_from(l.inputs).expect("u32 fits usize")
     {
         return false;
+    }
+    for (at, input) in spec.inputs.iter().enumerate() {
+        for earlier in spec.inputs.iter().take(at) {
+            if earlier == input {
+                return false;
+            }
+        }
     }
     let mut bytes = spec.words.len();
     for parameter in &spec.parameters {
@@ -257,4 +261,75 @@ pub(crate) fn valid_authority(l: &Limits, value: &Authority) -> bool {
         }
     }
     bytes <= usize::try_from(l.authority_bytes).expect("u32 fits usize")
+}
+
+/// Include the delegation edges added to an existing creator, as well as all
+/// immutable existing dependencies: a reference to an ancestor can otherwise
+/// create a wait cycle without a cycle among the new tasks themselves.
+pub(crate) fn acyclic(d: &Domain, l: &Limits, creator: Party, batch: &[New]) -> bool {
+    let mut ordered = List::with_capacity(l.tasks);
+    let total = d.names.len().saturating_add(u32::try_from(batch.len()).unwrap_or(u32::MAX));
+    for _ in 0..total {
+        let mut next = None;
+        for (number, _) in &d.names {
+            if contains(ordered.as_slice(), *number) {
+                continue;
+            }
+            let task = record(d, *number).expect("indexed task live");
+            let mut ready = true;
+            for dependency in &task.dependencies {
+                if d.names.contains_key(dependency) && !contains(ordered.as_slice(), *dependency) {
+                    ready = false;
+                }
+            }
+            for delegate in &task.delegates {
+                if !contains(ordered.as_slice(), *delegate) {
+                    ready = false;
+                }
+            }
+            if creator == Party::Task(*number) {
+                for new in batch {
+                    if !contains(ordered.as_slice(), new.number) {
+                        ready = false;
+                    }
+                }
+            }
+            if ready {
+                next = Some(*number);
+                break;
+            }
+        }
+        if next.is_none() {
+            for new in batch {
+                if contains(ordered.as_slice(), new.number) {
+                    continue;
+                }
+                let mut ready = true;
+                for dependency in &new.dependencies {
+                    if (d.names.contains_key(dependency) || batch_has(batch, *dependency))
+                        && !contains(ordered.as_slice(), *dependency)
+                    {
+                        ready = false;
+                    }
+                }
+                if ready {
+                    next = Some(new.number);
+                    break;
+                }
+            }
+        }
+        let Some(number) = next else {
+            return false;
+        };
+        ordered.push(number).expect("admitted graph bounded by live task capacity");
+    }
+    true
+}
+fn batch_has(batch: &[New], number: u64) -> bool {
+    for new in batch {
+        if new.number == number {
+            return true;
+        }
+    }
+    false
 }

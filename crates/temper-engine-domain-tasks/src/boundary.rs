@@ -1,4 +1,7 @@
-use crate::{Authority, Class, Funder, Numbers, Tries};
+use crate::{
+    Authority, Class, Envelope, Funder, MessageKey, NewsClass, Notice, Numbers, Offer, Question, Receipt, Subscription,
+    Tries, UserMessage, WakePolicy,
+};
 use alloc::boxed::Box;
 use skein_lib::{ReplyTo, Wall};
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -116,6 +119,7 @@ pub struct New {
     pub numbers: Numbers,
     pub funder: Funder,
     pub dependencies: Box<[u64]>,
+    pub policy: WakePolicy,
 }
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct TaskRecord {
@@ -132,6 +136,12 @@ pub struct TaskRecord {
     pub funder: Funder,
     pub dependencies: Box<[u64]>,
     pub delegates: Box<[u64]>,
+    pub references: Box<[u64]>,
+    pub results_due: Box<[u64]>,
+    pub policy: WakePolicy,
+    pub last_message: u64,
+    pub turn: u32,
+    pub last_read: Option<u64>,
     /// Tasks made in this subtree over its life, including itself.
     pub made: u32,
     pub attempt: u64,
@@ -155,12 +165,24 @@ pub enum Key {
     Live(u64),
     Ended(u64),
     Stub(u64),
+    Message(MessageKey),
+    ArchivedMessage(MessageKey),
+    Receipt(u64),
+    Offer(MessageKey),
+    Question(u64),
+    Subscription(u64),
 }
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Stored {
     Live(Box<TaskRecord>),
     Ended(Box<TaskRecord>),
     Stub(Stub),
+    Message(Envelope),
+    ArchivedMessage(Envelope),
+    Receipt(Receipt),
+    Offer(Offer),
+    Question(Question),
+    Subscription(Subscription),
 }
 impl Stored {
     #[must_use]
@@ -169,6 +191,12 @@ impl Stored {
             Stored::Live(record) => Key::Live(record.number),
             Stored::Ended(record) => Key::Ended(record.number),
             Stored::Stub(stub) => Key::Stub(stub.number),
+            Stored::Message(message) => Key::Message(message.key()),
+            Stored::ArchivedMessage(message) => Key::ArchivedMessage(message.key()),
+            Stored::Receipt(receipt) => Key::Receipt(receipt.number),
+            Stored::Offer(offer) => Key::Offer(offer.envelope.key()),
+            Stored::Question(question) => Key::Question(question.number),
+            Stored::Subscription(subscription) => Key::Subscription(subscription.number),
         }
     }
 }
@@ -198,6 +226,14 @@ pub enum Refusal {
     Unheld,
     Reason,
     Restore,
+    Reference,
+    Inbox,
+    Message,
+    Question,
+    Subscription,
+    Read,
+    Turn,
+    KeyConflict,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Problem {
@@ -225,6 +261,75 @@ pub enum Event {
         reply_to: ReplyTo,
         task: u64,
         attempt: u64,
+        readable: Box<[u64]>,
+    },
+    Send {
+        reply_to: ReplyTo,
+        number: u64,
+        task: u64,
+        from: Party,
+        message: UserMessage,
+    },
+    Peek {
+        reply_to: ReplyTo,
+        task: u64,
+        bytes: u32,
+    },
+    Turn {
+        reply_to: ReplyTo,
+        task: u64,
+        attempt: u64,
+        turn: u32,
+        read: Option<u64>,
+    },
+    DeliverResult {
+        reply_to: ReplyTo,
+        number: u64,
+        task: u64,
+        delegate: u64,
+        ending: Ending,
+    },
+    DeliverNotice {
+        reply_to: ReplyTo,
+        number: u64,
+        subscription: u64,
+        notice: Notice,
+    },
+    DeliverTimer {
+        reply_to: ReplyTo,
+        number: u64,
+        subscription: u64,
+    },
+    News {
+        reply_to: ReplyTo,
+        number: u64,
+        subscription: u64,
+        class: NewsClass,
+        words: Box<[u8]>,
+    },
+    ForgetReceipt {
+        reply_to: ReplyTo,
+        number: u64,
+    },
+    Introduce {
+        reply_to: ReplyTo,
+        by: Party,
+        left: u64,
+        right: u64,
+    },
+    ForgetReference {
+        reply_to: ReplyTo,
+        task: u64,
+        target: u64,
+    },
+    Subscribe {
+        reply_to: ReplyTo,
+        subscription: Subscription,
+    },
+    Unsubscribe {
+        reply_to: ReplyTo,
+        task: u64,
+        subscription: u64,
     },
     Started {
         task: u64,
@@ -290,6 +395,43 @@ pub enum Request {
         task: u64,
         attempt: u64,
         accepted: Accepted,
+    },
+    Sent {
+        reply_to: ReplyTo,
+        number: u64,
+        accepted: Accepted,
+    },
+    Inbox {
+        reply_to: ReplyTo,
+        messages: Box<[Envelope]>,
+        more: bool,
+    },
+    TurnAcknowledged {
+        reply_to: ReplyTo,
+        task: u64,
+        attempt: u64,
+        turn: u32,
+        accepted: Accepted,
+    },
+    Relay {
+        task: u64,
+        attempt: u64,
+        envelope: Envelope,
+    },
+    Observe {
+        subscription: u64,
+        target: u64,
+    },
+    Notify {
+        subscription: u64,
+        notice: Notice,
+    },
+    Timer {
+        subscription: u64,
+    },
+    Topic {
+        subscription: Subscription,
+        present: bool,
     },
     Activate {
         task: u64,

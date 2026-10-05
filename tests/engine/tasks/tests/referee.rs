@@ -211,3 +211,115 @@ fn stored_limits() {
         limits: Box::new(temper_engine_domain_tasks::Limits { project_tasks: 1, ..LIMITS }),
     }]);
 }
+#[test]
+fn inbox_referee_catches_each_new_initial_invariant_without_child_state() {
+    use temper_engine_domain_tasks::{self as tasks, Key, Message, Party, Stored, UserMessage};
+    use temper_engine_tasks_world::{LIMITS, World, inbox_referee::Inbox, task};
+    let mut w = World::new(81, LIMITS);
+    let mut root = task(1, &[]);
+    root.policy.words = tasks::Rule::Never;
+    w.make(Party::Person(1), vec![root]);
+    w.make(Party::Task(1), vec![task(2, &[])]);
+    w.claim(1, 1);
+    w.mail(1, Party::Task(2), UserMessage::Words { words: Box::new([1]) });
+    w.mail(1, Party::Person(1), UserMessage::Words { words: Box::new([2]) });
+    let rows = w.records.clone();
+    for broken in 0..11 {
+        let mut bad = rows.clone();
+        let mut limits = LIMITS;
+        match broken {
+            0 => {
+                let row = bad.remove(&Key::Receipt(1)).expect("receipt");
+                bad.insert(Key::Receipt(999), row);
+            }
+            1 => {
+                if let Some(Stored::Message(envelope)) =
+                    bad.get_mut(&Key::Message(tasks::MessageKey { task: 1, number: 1 }))
+                {
+                    envelope.hits = 0;
+                }
+            }
+            2 => {
+                if let Some(Stored::Message(envelope)) =
+                    bad.get_mut(&Key::Message(tasks::MessageKey { task: 1, number: 1 }))
+                {
+                    envelope.message =
+                        Message::News { subscription: 1, class: tasks::NewsClass::Dropped, words: Box::new([]) };
+                }
+            }
+            3 => {
+                if let Some(Stored::Offer(offer)) = bad.get_mut(&Key::Offer(tasks::MessageKey { task: 1, number: 2 })) {
+                    offer.attempt = 99;
+                }
+            }
+            4 => {
+                let q = tasks::Question { number: 3, asker: 1, answerer: 999 };
+                bad.insert(Key::Question(3), Stored::Question(q));
+            }
+            5 => {
+                let sub = tasks::Subscription {
+                    number: 3,
+                    task: 1,
+                    kind: tasks::SubscriptionKind::Topic { connector: 1, topic: 1 },
+                    pending: true,
+                };
+                bad.insert(Key::Subscription(3), Stored::Subscription(sub));
+            }
+            6 => {
+                if let Some(Stored::Live(record)) = bad.get_mut(&Key::Live(1)) {
+                    record.references = Box::new([2, 2]);
+                }
+            }
+            7 => {
+                if let Some(Stored::Live(record)) = bad.get_mut(&Key::Live(1)) {
+                    record.results_due = Box::new([999]);
+                }
+            }
+            8 => limits.inbox_messages = 1,
+            9 => limits.inbox_bytes = 1,
+            10 => limits.receipts = 0,
+            _ => unreachable!(),
+        }
+        assert!(Inbox::default().committed(&bad, &limits, &[]).is_err(), "independent invariant {broken}");
+    }
+    rejected_reads(&rows);
+}
+fn rejected_reads(
+    rows: &std::collections::BTreeMap<temper_engine_domain_tasks::Key, temper_engine_domain_tasks::Stored>,
+) {
+    use temper_engine_domain_tasks::{self as tasks, Key, Stored};
+    use temper_engine_tasks_world::{
+        LIMITS,
+        inbox_referee::{Inbox, Read},
+    };
+    let read = Read { task: 1, attempt: 1, turn: 1, through: Some(2) };
+    let mut taken = rows.clone();
+    if let Some(Stored::Live(record)) = taken.get_mut(&Key::Live(1)) {
+        record.turn = 1;
+        record.last_read = Some(2);
+    }
+    taken.remove(&Key::Message(tasks::MessageKey { task: 1, number: 2 }));
+    taken.remove(&Key::Offer(tasks::MessageKey { task: 1, number: 2 }));
+    let mut judge = Inbox::default();
+    judge.reset(rows);
+    assert!(judge.committed(&taken, &LIMITS, &[read]).is_ok());
+    for broken in 0..4 {
+        let mut bad = taken.clone();
+        let mut read = read;
+        match broken {
+            0 => read.through = Some(999),
+            1 => read.turn = 3,
+            2 => {
+                bad.remove(&Key::Message(tasks::MessageKey { task: 1, number: 1 }));
+            }
+            3 => {
+                let key = Key::Message(tasks::MessageKey { task: 1, number: 2 });
+                bad.insert(key, rows[&key].clone());
+            }
+            _ => unreachable!(),
+        }
+        let mut judge = Inbox::default();
+        judge.reset(rows);
+        assert!(judge.committed(&bad, &LIMITS, &[read]).is_err(), "read invariant {broken}");
+    }
+}

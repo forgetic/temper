@@ -5,7 +5,12 @@ use temper_engine_tasks_world::{LIMITS, Reply, World, task};
 fn refused(reply: &Reply, why: Refusal) {
     match reply {
         Reply::Refused(problem) => assert_eq!(problem.why, why),
-        Reply::Made(_) | Reply::Done | Reply::Acknowledged(_) => panic!("expected refusal {why:?}"),
+        Reply::Made(_)
+        | Reply::Done
+        | Reply::Acknowledged(_)
+        | Reply::Sent(_)
+        | Reply::Inbox(_, _)
+        | Reply::Turn(_) => panic!("expected refusal {why:?}"),
     }
 }
 #[test]
@@ -60,7 +65,15 @@ fn batch_is_atomic_and_cycles_and_limits_refuse_at_entrance() {
             | Refusal::LiveDelegates
             | Refusal::Unheld
             | Refusal::Reason
-            | Refusal::Restore => unreachable!(),
+            | Refusal::Restore
+            | Refusal::Reference
+            | Refusal::Inbox
+            | Refusal::Message
+            | Refusal::Question
+            | Refusal::Subscription
+            | Refusal::Read
+            | Refusal::Turn
+            | Refusal::KeyConflict => unreachable!(),
         }
         refused(&w.make(Party::Person(1), vec![task(1, &[]), new]), why);
         assert_eq!(w.live(), 0);

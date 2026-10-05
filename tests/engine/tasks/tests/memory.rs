@@ -58,7 +58,7 @@ impl Measured {
         let reply_to = self.to();
         self.event(Event::Prepare { reply_to, task: number });
         let reply_to = self.to();
-        self.event(Event::Claim { reply_to, task: number, attempt: number });
+        self.event(Event::Claim { reply_to, task: number, attempt: number, readable: Box::new([]) });
         self.event(Event::Started { task: number, attempt: number });
     }
 }
@@ -114,7 +114,7 @@ fn saturated_payloads_graph_backoff_held_closing_retirement_and_restore_fit() {
             let reply_to = m.to();
             m.event(Event::Prepare { reply_to, task: number });
             let reply_to = m.to();
-            m.event(Event::Claim { reply_to, task: number, attempt: number + 10 });
+            m.event(Event::Claim { reply_to, task: number, attempt: number + 10, readable: Box::new([]) });
             let reply_to = m.to();
             m.event(Event::Activation {
                 reply_to,
@@ -210,4 +210,75 @@ fn filled(l: Limits, number: u64) -> temper_engine_domain_tasks::New {
     new.authority.delegation.kinds =
         vec![AuthorityExecutor::Charter(1); usize::try_from(l.executor_kinds).expect("small bound")].into_boxed_slice();
     new
+}
+#[test]
+fn saturated_inboxes_offers_receipts_questions_subscriptions_and_restore_fit() {
+    use temper_engine_domain_tasks::{Interest, NewsClass, Subscription, SubscriptionKind, UserMessage};
+    let l = Limits {
+        tasks: 2,
+        stubs: 4,
+        inbox_messages: 4,
+        inbox_bytes: 256,
+        message_bytes: 64,
+        subscriptions: 2,
+        questions: 1,
+        receipts: 4,
+        offers: 4,
+        references: 1,
+        ..LIMITS
+    };
+    let mut w = temper_engine_tasks_world::World::new(9, l);
+    w.make(Party::Person(1), vec![task(1, &[]), task(2, &[])]);
+    let reply_to = w.to();
+    w.send(Event::Introduce { reply_to, by: Party::Person(1), left: 1, right: 2 });
+    w.claim(1, 1);
+    w.claim(2, 2);
+    w.mail(2, Party::Task(1), UserMessage::Question { words: vec![1; 64].into_boxed_slice() });
+    w.mail(1, Party::Task(2), UserMessage::Words { words: vec![2; 64].into_boxed_slice() });
+    let reply_to = w.to();
+    w.send(Event::Subscribe {
+        reply_to,
+        subscription: Subscription {
+            number: 1,
+            task: 1,
+            kind: SubscriptionKind::Topic { connector: 1, topic: 1 },
+            pending: false,
+        },
+    });
+    let reply_to = w.to();
+    w.send(Event::Subscribe {
+        reply_to,
+        subscription: Subscription {
+            number: 2,
+            task: 2,
+            kind: SubscriptionKind::Task { target: 1, interest: Interest::StateAndResult },
+            pending: false,
+        },
+    });
+    for _ in 0..2 {
+        let number = w.number();
+        let reply_to = w.to();
+        w.send(Event::News {
+            reply_to,
+            number,
+            subscription: 1,
+            class: NewsClass::Wakes,
+            words: vec![3; 64].into_boxed_slice(),
+        });
+    }
+    w.mail(2, Party::Person(1), UserMessage::Words { words: vec![4; 64].into_boxed_slice() });
+    let rows = w.records.values().cloned().collect::<Vec<_>>();
+    // The world's parent/store allocations predate this child's meter.
+    let mut m = Measured::new(l);
+    for record in &rows {
+        m.event(Event::Restore { record: record.clone() });
+    }
+    m.event(Event::Restored);
+    let reply_to = m.to();
+    m.event(Event::Turn { reply_to, task: 1, attempt: 1, turn: 1, read: Some(3) });
+    m.event(Event::Hold { task: 1, why: Hold::Stopped });
+    let reply_to = m.to();
+    m.event(Event::Activation { reply_to, task: 1, attempt: 1, end: End::Parked });
+    let reply_to = m.to();
+    m.event(Event::Release { reply_to, task: 1 });
 }

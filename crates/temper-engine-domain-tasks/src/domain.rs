@@ -12,6 +12,7 @@ pub(crate) struct Alarm {
 pub(crate) struct Task {
     pub record: TaskRecord,
     pub alarm: Option<Alarm>,
+    pub wake_alarms: [Option<Alarm>; 3],
 }
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Startup {
@@ -26,6 +27,13 @@ pub struct Domain {
     pub(crate) names: Map<u64, Id<Task>>,
     pub(crate) stubs: Map<u64, Stub>,
     pub(crate) alarms: Deadlines<u64>,
+    pub(crate) wakes: Deadlines<u64>,
+    pub(crate) timers: Deadlines<u64>,
+    pub(crate) messages: Map<crate::MessageKey, crate::Envelope>,
+    pub(crate) offers: Map<crate::MessageKey, crate::Offer>,
+    pub(crate) receipts: Map<u64, crate::Receipt>,
+    pub(crate) questions: Map<u64, crate::Question>,
+    pub(crate) subscriptions: Map<u64, crate::Subscription>,
     pub(crate) charters: Box<[u32]>,
     pub(crate) rng: Rng,
     facts: Queue<Fact>,
@@ -47,6 +55,13 @@ impl Domain {
             names: Map::with_capacity(l.tasks),
             stubs: Map::with_capacity(l.stubs),
             alarms: Deadlines::with_capacity(l.tasks),
+            wakes: Deadlines::with_capacity(l.tasks),
+            timers: Deadlines::with_capacity(l.subscriptions),
+            messages: Map::with_capacity(crate::inbox::capacity(l).expect("valid message capacity")),
+            offers: Map::with_capacity(l.offers),
+            receipts: Map::with_capacity(l.receipts),
+            questions: Map::with_capacity(l.questions),
+            subscriptions: Map::with_capacity(l.subscriptions),
             charters,
             rng: Rng::new(seed),
             facts: Queue::with_capacity(l.facts),
@@ -59,7 +74,7 @@ impl Domain {
     }
     #[must_use]
     pub fn next_deadline(&self) -> Option<Time> {
-        self.alarms.next()
+        [self.alarms.next(), self.wakes.next(), self.timers.next()].into_iter().flatten().min()
     }
     #[must_use]
     pub fn is_due(&self, now: Time) -> bool {
@@ -80,7 +95,15 @@ impl Domain {
     }
 }
 pub(crate) fn output_bound(l: &Limits) -> Option<u32> {
-    l.tasks.checked_mul(16)?.checked_add(l.stubs.checked_mul(2)?)?.checked_add(l.batch.checked_mul(2)?)?.checked_add(4)
+    l.tasks
+        .checked_mul(20)?
+        .checked_add(l.stubs.checked_mul(2)?)?
+        .checked_add(l.batch.checked_mul(2)?)?
+        .checked_add(crate::inbox::capacity(l)?.checked_mul(4)?)?
+        .checked_add(l.offers.checked_mul(3)?)?
+        .checked_add(l.subscriptions.checked_mul(4)?)?
+        .checked_add(l.questions.checked_mul(2)?)?
+        .checked_add(8)
 }
 /// Cascading dependency and closing decisions touch at most the bounded live
 /// set; each task advances through a constant number of phases in one step.
@@ -96,7 +119,37 @@ pub fn step(d: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Req
         Event::Restored => crate::stored::restored(d, env, out),
         Event::Make { reply_to, creator, batch } => make(d, env, reply_to, creator, batch, out),
         Event::Prepare { reply_to, task } => crate::run::prepare(d, env, reply_to, task, out),
-        Event::Claim { reply_to, task, attempt } => crate::run::claim(d, env, reply_to, task, attempt, out),
+        Event::Claim { reply_to, task, attempt, readable } => {
+            crate::run::claim(d, env, reply_to, task, attempt, &readable, out);
+        }
+        Event::Send { reply_to, number, task, from, message } => {
+            crate::inbox::send(d, env, reply_to, number, task, from, message, out);
+        }
+        Event::Peek { reply_to, task, bytes } => crate::inbox::peek(d, reply_to, task, bytes, out),
+        Event::Turn { reply_to, task, attempt, turn, read } => {
+            crate::inbox::turn(d, env, reply_to, task, attempt, turn, read, out);
+        }
+        Event::DeliverResult { reply_to, number, task, delegate, ending } => {
+            crate::inbox::result(d, env, reply_to, number, task, delegate, ending, out);
+        }
+        Event::DeliverNotice { reply_to, number, subscription, notice } => {
+            crate::refs::notice(d, env, reply_to, number, subscription, notice, out);
+        }
+        Event::DeliverTimer { reply_to, number, subscription } => {
+            crate::refs::timer(d, env, reply_to, number, subscription, out);
+        }
+        Event::News { reply_to, number, subscription, class, words } => {
+            crate::refs::news(d, env, reply_to, number, subscription, class, words, out);
+        }
+        Event::ForgetReceipt { reply_to, number } => crate::inbox::forget_receipt(d, reply_to, number, out),
+        Event::Introduce { reply_to, by, left, right } => {
+            crate::refs::introduce(d, env, reply_to, by, left, right, out);
+        }
+        Event::ForgetReference { reply_to, task, target } => crate::refs::forget(d, env, reply_to, task, target, out),
+        Event::Subscribe { reply_to, subscription } => crate::refs::subscribe(d, env, reply_to, subscription, out),
+        Event::Unsubscribe { reply_to, task, subscription } => {
+            crate::refs::unsubscribe(d, reply_to, task, subscription, out);
+        }
         Event::Started { task, attempt } => crate::run::started(d, env, task, attempt, out),
         Event::Activation { reply_to, task, attempt, end } => {
             crate::run::activation(d, env, reply_to, task, attempt, end, out);
@@ -109,6 +162,7 @@ pub fn step(d: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Req
     }
     if d.ready() {
         crate::closing::progress(d, env, out);
+        crate::wake::progress(d, env, out);
     }
 }
 /// One backoff expiration per iteration; a wall-clock correction does not
@@ -135,7 +189,10 @@ pub fn fire(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
             | Phase::Ended(_) => {}
         }
     }
+    crate::refs::fire(d, env, out);
+    let _: Option<u64> = d.wakes.expire(env.now);
     crate::closing::progress(d, env, out);
+    crate::wake::progress(d, env, out);
 }
 pub(crate) fn record(d: &Domain, number: u64) -> Option<&TaskRecord> {
     Some(&d.tasks.get(*d.names.get(&number)?).expect("name indexes live task").record)
@@ -232,15 +289,10 @@ fn make(d: &mut Domain, env: &Env<Limits>, to: ReplyTo, creator: Party, batch: B
     }
     let count = numbers.len();
     if let Some(number) = parent {
-        let mut delegates = List::with_capacity(env.limits.delegates);
         let old = task_mut(d, number).expect("creator admitted");
-        for delegate in &old.record.delegates {
-            delegates.push(*delegate).expect("existing delegate admitted");
-        }
-        for new in &batch {
-            delegates.push(new.number).expect("new delegates admitted");
-        }
-        old.record.delegates = delegates.into_boxed();
+        old.record.delegates = append(env.limits.delegates, &old.record.delegates, &batch);
+        old.record.results_due = append(env.limits.delegates, &old.record.results_due, &batch);
+        old.record.references = append(env.limits.references, &old.record.references, &batch);
         // Count each made task in all ancestors, so ending a delegate does not
         // make lifetime tree capacity reappear.
         let mut ancestor = Some(number);
@@ -274,6 +326,12 @@ fn make(d: &mut Domain, env: &Env<Limits>, to: ReplyTo, creator: Party, batch: B
                 funder: new.funder,
                 dependencies: new.dependencies,
                 delegates: Box::new([]),
+                references: Box::new([]),
+                results_due: Box::new([]),
+                policy: new.policy,
+                last_message: 0,
+                turn: 0,
+                last_read: None,
                 made: 1,
                 attempt: 0,
                 last_answer: None,
@@ -282,6 +340,7 @@ fn make(d: &mut Domain, env: &Env<Limits>, to: ReplyTo, creator: Party, batch: B
                 phase: Phase::Waiting,
             },
             alarm: None,
+            wake_alarms: [None; 3],
         };
         let id = d.tasks.insert(task).expect("batch slab room admitted");
         let indexed = d.names.insert(number, id);
@@ -290,4 +349,15 @@ fn make(d: &mut Domain, env: &Env<Limits>, to: ReplyTo, creator: Party, batch: B
         fact(d, Fact::Made { task: number, requester: creator });
     }
     out.push(Request::Made { reply_to: to, tasks: numbers.into_boxed() });
+}
+
+fn append(capacity: u32, old: &[u64], batch: &[New]) -> Box<[u64]> {
+    let mut numbers = List::with_capacity(capacity);
+    for number in old {
+        numbers.push(*number).expect("existing numbers admitted");
+    }
+    for new in batch {
+        numbers.push(new.number).expect("new numbers admitted");
+    }
+    numbers.into_boxed()
 }

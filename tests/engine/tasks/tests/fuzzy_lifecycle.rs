@@ -5,7 +5,21 @@ fn random_faults_and_restart_cuts_preserve_lifecycle_and_reach_every_initial_end
     for seed in 0..256 {
         let (trace, results) = run_story(seed);
         assert_eq!(results, 5);
-        for ending in ["status: Done", "status: Failed", "status: Cancelled", "Held", "Release", "Refused", "Restore"] {
+        for ending in [
+            "status: Done",
+            "status: Failed",
+            "status: Cancelled",
+            "Held",
+            "Release",
+            "Refused",
+            "Restore",
+            "Question",
+            "Answer",
+            "News",
+            "class: Kept",
+            "class: Dropped",
+            "Turn {",
+        ] {
             if trace.iter().any(|line| line.contains(ending)) {
                 seen.insert(ending);
             }
@@ -13,7 +27,21 @@ fn random_faults_and_restart_cuts_preserve_lifecycle_and_reach_every_initial_end
     }
     // Results are independent referee observations; hold/release, refusal and
     // restore markers come from the store and actual input boundaries.
-    for ending in ["status: Done", "status: Failed", "status: Cancelled", "Held", "Release", "Refused", "Restore"] {
+    for ending in [
+        "status: Done",
+        "status: Failed",
+        "status: Cancelled",
+        "Held",
+        "Release",
+        "Refused",
+        "Restore",
+        "Question",
+        "Answer",
+        "News",
+        "class: Kept",
+        "class: Dropped",
+        "Turn {",
+    ] {
         assert!(seen.contains(ending), "sweep reaches {ending}");
     }
 }

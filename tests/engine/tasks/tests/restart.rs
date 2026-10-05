@@ -18,7 +18,7 @@ fn make_and_claim_have_independent_before_and_after_durable_cuts() {
     let reply_to = w.to();
     w.send(Event::Prepare { reply_to, task: 2 });
     let reply_to = w.to();
-    w.stage(Event::Claim { reply_to, task: 2, attempt: 10 });
+    w.stage(Event::Claim { reply_to, task: 2, attempt: 10, readable: Box::new([]) });
     assert!(w.runs.is_empty());
     w.restart();
     assert_eq!(w.record(2).attempt, 0);
@@ -26,7 +26,7 @@ fn make_and_claim_have_independent_before_and_after_durable_cuts() {
     let reply_to = w.to();
     w.send(Event::Prepare { reply_to, task: 2 });
     let reply_to = w.to();
-    w.stage(Event::Claim { reply_to, task: 2, attempt: 11 });
+    w.stage(Event::Claim { reply_to, task: 2, attempt: 11, readable: Box::new([]) });
     w.durable();
     assert!(w.runs.is_empty());
     w.restart();
@@ -63,7 +63,7 @@ fn stale_claims_and_replayed_terminal_are_typed_and_do_not_mutate() {
     w.make(Party::Person(1), vec![task(1, &[])]);
     w.claim(1, 4);
     let reply_to = w.to();
-    w.send(Event::Claim { reply_to, task: 1, attempt: 4 });
+    w.send(Event::Claim { reply_to, task: 1, attempt: 4, readable: Box::new([]) });
     assert!(
         matches!(w.replies.last_key_value().expect("reply").1, Reply::Refused(problem) if problem.why == Refusal::Attempt)
     );
@@ -235,4 +235,65 @@ fn wall_correction_does_not_move_a_live_backoff_but_restore_reprojects_it() {
     w.restart();
     w.advance();
     assert!(w.activations.contains(&1));
+}
+#[test]
+fn restore_rejects_inbox_corruption_and_unfinished_root_callbacks() {
+    use skein_lib::Queue;
+    use temper_engine_domain_tasks::{Domain, Request, step};
+    let mut w = World::new(53, LIMITS);
+    w.make(Party::Person(1), vec![task(1, &[])]);
+    w.claim(1, 1);
+    w.mail(1, Party::Person(1), temper_engine_domain_tasks::UserMessage::Words { words: Box::new([1]) });
+    for broken in 0..6 {
+        let mut rows = w.records.values().cloned().collect::<Vec<_>>();
+        match broken {
+            0 => {
+                for row in &mut rows {
+                    if let Stored::Offer(offer) = row {
+                        offer.attempt = 99;
+                    }
+                }
+            }
+            1 => {
+                for row in &mut rows {
+                    if let Stored::Message(envelope) = row {
+                        envelope.number = 99;
+                    }
+                }
+            }
+            2 => rows.push(Stored::Subscription(temper_engine_domain_tasks::Subscription {
+                number: 1,
+                task: 1,
+                kind: temper_engine_domain_tasks::SubscriptionKind::Topic { connector: 1, topic: 1 },
+                pending: true,
+            })),
+            3 => {
+                rows.push(Stored::Question(temper_engine_domain_tasks::Question { number: 2, asker: 1, answerer: 99 }));
+            }
+            4 => {
+                for row in &mut rows {
+                    if let Stored::Message(envelope) = row {
+                        envelope.message =
+                            temper_engine_domain_tasks::Message::Words { words: vec![1; 65].into_boxed_slice() };
+                    }
+                }
+            }
+            5 => {
+                for row in &mut rows {
+                    if let Stored::Live(record) = row {
+                        record.last_read = Some(99);
+                    }
+                }
+            }
+            _ => unreachable!(),
+        }
+        let mut d = Domain::new(&LIMITS, 1, Box::new([1]));
+        let mut out = Queue::with_capacity(temper_engine_domain_tasks::max_out(&LIMITS));
+        for record in rows {
+            step(&mut d, &w.env, Event::Restore { record }, &mut out);
+        }
+        step(&mut d, &w.env, Event::Restored, &mut out);
+        assert!(!d.ready());
+        assert!(std::iter::from_fn(|| out.pop()).any(|request| matches!(request, Request::RestoreRefused { .. })));
+    }
 }

@@ -28,6 +28,14 @@ pub const LIMITS: Limits = Limits {
     executor_kinds: 3,
     retries: Retries { transient: RETRY, permanent: RETRY, run: RETRY, agent: RETRY, lost: RETRY, invalid: RETRY },
     facts: 16,
+    references: 8,
+    inbox_messages: 32,
+    inbox_bytes: 2048,
+    message_bytes: 64,
+    questions: 16,
+    subscriptions: 16,
+    receipts: 64,
+    offers: 64,
 };
 #[must_use]
 pub fn authority() -> Authority {
@@ -51,6 +59,7 @@ pub fn task(number: u64, dependencies: &[u64]) -> New {
         numbers: Numbers { budget: 100, spent: 0, spent_below: 0, reserved: 0 },
         funder: Funder::Period { project: 1, period: 0 },
         dependencies: dependencies.into(),
+        policy: tasks::WakePolicy::DEFAULT,
     }
 }
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -59,6 +68,9 @@ pub enum Reply {
     Done,
     Refused(Problem),
     Acknowledged(Accepted),
+    Sent(Accepted),
+    Inbox(Vec<tasks::Envelope>, bool),
+    Turn(Accepted),
 }
 #[derive(Debug)]
 pub struct World {
@@ -74,6 +86,11 @@ pub struct World {
     pub closing: BTreeSet<u64>,
     pub results: BTreeMap<u64, Ending>,
     pub facts: Vec<Fact>,
+    pub relays: BTreeMap<(u64, u64, u64), tasks::Envelope>,
+    pub topics: BTreeMap<u64, tasks::Subscription>,
+    message: u64,
+    pub inbox_referee: crate::inbox_referee::Inbox,
+    reads: Vec<crate::inbox_referee::Read>,
     pub consume_facts: bool,
     pub referee: Referee<Tasks>,
     pub trace: Trace,
@@ -97,6 +114,11 @@ impl World {
             closing: BTreeSet::new(),
             results: BTreeMap::new(),
             facts: Vec::new(),
+            relays: BTreeMap::new(),
+            topics: BTreeMap::new(),
+            message: 0,
+            inbox_referee: crate::inbox_referee::Inbox::default(),
+            reads: Vec::new(),
             consume_facts: true,
             referee: Referee::new(Tasks::default()),
             trace: Trace::default(),
@@ -106,6 +128,129 @@ impl World {
         };
         world.send(Event::Restored);
         world
+    }
+    pub fn number(&mut self) -> u64 {
+        self.message += 1;
+        self.message
+    }
+    #[must_use]
+    pub fn messages(&self, task: u64) -> Vec<tasks::Envelope> {
+        self.records
+            .values()
+            .filter_map(|row| match row {
+                Stored::Message(envelope) if envelope.task == task => Some(envelope.clone()),
+                Stored::Message(_)
+                | Stored::Live(_)
+                | Stored::Ended(_)
+                | Stored::Stub(_)
+                | Stored::ArchivedMessage(_)
+                | Stored::Receipt(_)
+                | Stored::Offer(_)
+                | Stored::Question(_)
+                | Stored::Subscription(_) => None,
+            })
+            .collect()
+    }
+    pub fn mail(&mut self, task: u64, from: Party, message: tasks::UserMessage) -> Reply {
+        let number = self.number();
+        self.mail_number(number, task, from, message)
+    }
+    pub fn mail_number(&mut self, number: u64, task: u64, from: Party, message: tasks::UserMessage) -> Reply {
+        self.message = self.message.max(number);
+        let reply_to = self.to();
+        let call = self.call;
+        self.send(Event::Send { reply_to, number, task, from, message });
+        self.replies[&call].clone()
+    }
+    pub fn turn(&mut self, task: u64, turn: u32, read: Option<u64>) -> Reply {
+        let attempt = self.record(task).attempt;
+        let reply_to = self.to();
+        let call = self.call;
+        self.send(Event::Turn { reply_to, task, attempt, turn, read });
+        self.replies[&call].clone()
+    }
+    fn callbacks(&mut self) {
+        let mut at = 0;
+        while at < self.pending.len() {
+            let event = match &self.pending[at] {
+                Request::Ended { task, requester: Party::Task(parent), ending } => {
+                    Some((0, *parent, *task, Some(ending.clone()), None))
+                }
+                Request::Observe { subscription, target } => {
+                    let ending = match self.records.get(&Key::Ended(*target)) {
+                        Some(Stored::Ended(record)) => match &record.phase {
+                            tasks::Phase::Ended(ending) => ending.clone(),
+                            tasks::Phase::Waiting
+                            | tasks::Phase::Active(_)
+                            | tasks::Phase::Closing(_)
+                            | tasks::Phase::Held { .. } => panic!("historical row ended"),
+                        },
+                        Some(
+                            Stored::Live(_)
+                            | Stored::Stub(_)
+                            | Stored::Message(_)
+                            | Stored::ArchivedMessage(_)
+                            | Stored::Receipt(_)
+                            | Stored::Offer(_)
+                            | Stored::Question(_)
+                            | Stored::Subscription(_),
+                        )
+                        | None => panic!("root loads the authoritative ended row"),
+                    };
+                    Some((1, *subscription, 0, None, Some(tasks::Notice::Ended(ending))))
+                }
+                Request::Notify { subscription, notice } => Some((1, *subscription, 0, None, Some(notice.clone()))),
+                Request::Timer { subscription } => Some((2, *subscription, 0, None, None)),
+                Request::Made { .. }
+                | Request::Refused { .. }
+                | Request::Done { .. }
+                | Request::Acknowledged { .. }
+                | Request::Sent { .. }
+                | Request::Inbox { .. }
+                | Request::TurnAcknowledged { .. }
+                | Request::Relay { .. }
+                | Request::Topic { .. }
+                | Request::Activate { .. }
+                | Request::Stop { .. }
+                | Request::Adopt { .. }
+                | Request::Close { .. }
+                | Request::Ended { requester: Party::Person(_) | Party::Deployment { .. }, .. }
+                | Request::Save { .. }
+                | Request::Erase { .. }
+                | Request::RestoreRefused { .. } => None,
+            };
+            at += 1;
+            if let Some((kind, target, delegate, ending, notice)) = event {
+                let number = self.number();
+                let reply_to = self.to();
+                let event = match kind {
+                    0 => Event::DeliverResult {
+                        reply_to,
+                        number,
+                        task: target,
+                        delegate,
+                        ending: ending.expect("result callback carries ending"),
+                    },
+                    1 => Event::DeliverNotice {
+                        reply_to,
+                        number,
+                        subscription: target,
+                        notice: notice.expect("notice callback carries notice"),
+                    },
+                    2 => Event::DeliverTimer { reply_to, number, subscription: target },
+                    _ => unreachable!(),
+                };
+                self.trace.log(self.env.now, format_args!("{event:?}"));
+                tasks::step(&mut self.domain, &self.env, event, &mut self.out);
+                while let Some(request) = self.out.pop() {
+                    assert!(
+                        !matches!(request, Request::Refused { .. }),
+                        "guaranteed callback must have reserved room: {request:?}"
+                    );
+                    self.pending.push(request);
+                }
+            }
+        }
     }
     pub fn to(&mut self) -> ReplyTo {
         self.call += 1;
@@ -124,10 +269,48 @@ impl World {
     }
     pub fn stage(&mut self, event: Event) {
         assert!(self.pending.is_empty(), "one parent decision at a time");
+        let read = match &event {
+            Event::Turn { task, attempt, turn, read, .. } => {
+                Some(crate::inbox_referee::Read { task: *task, attempt: *attempt, turn: *turn, through: *read })
+            }
+            Event::Make { .. }
+            | Event::Prepare { .. }
+            | Event::Claim { .. }
+            | Event::Send { .. }
+            | Event::Peek { .. }
+            | Event::DeliverResult { .. }
+            | Event::DeliverNotice { .. }
+            | Event::DeliverTimer { .. }
+            | Event::News { .. }
+            | Event::ForgetReceipt { .. }
+            | Event::Introduce { .. }
+            | Event::ForgetReference { .. }
+            | Event::Subscribe { .. }
+            | Event::Unsubscribe { .. }
+            | Event::Started { .. }
+            | Event::Activation { .. }
+            | Event::PreparationFailed { .. }
+            | Event::Hold { .. }
+            | Event::Release { .. }
+            | Event::Cancel { .. }
+            | Event::Settled { .. }
+            | Event::RememberStub { .. }
+            | Event::ForgetStub { .. }
+            | Event::Restore { .. }
+            | Event::Restored => None,
+        };
         self.trace.log(self.env.now, format_args!("{event:?}"));
         tasks::step(&mut self.domain, &self.env, event, &mut self.out);
         while let Some(request) = self.out.pop() {
             self.pending.push(request);
+        }
+        if let Some(read) = read
+            && self
+                .pending
+                .iter()
+                .any(|request| matches!(request, Request::TurnAcknowledged { accepted: Accepted::New, .. }))
+        {
+            self.reads.push(read);
         }
         if self.consume_facts {
             while let Some(fact) = self.domain.pop_fact() {
@@ -142,6 +325,7 @@ impl World {
     }
     /// Commit records and requester mail together, then allow delivery later.
     pub fn durable(&mut self) {
+        self.callbacks();
         self.commit += 1;
         let mut terminals = Vec::new();
         let mut ended = Vec::new();
@@ -160,7 +344,15 @@ impl World {
                 Request::Acknowledged { task, attempt, accepted: Accepted::New, .. } => {
                     terminals.push((*task, *attempt));
                 }
-                Request::Made { .. }
+                Request::Sent { .. }
+                | Request::Inbox { .. }
+                | Request::TurnAcknowledged { .. }
+                | Request::Relay { .. }
+                | Request::Observe { .. }
+                | Request::Notify { .. }
+                | Request::Timer { .. }
+                | Request::Topic { .. }
+                | Request::Made { .. }
                 | Request::Refused { .. }
                 | Request::Done { .. }
                 | Request::Acknowledged { accepted: Accepted::Already, .. }
@@ -171,6 +363,12 @@ impl World {
                 | Request::RestoreRefused { .. } => {}
             }
         }
+        if self.domain.ready() {
+            self.inbox_referee
+                .committed(&self.records, &self.env.limits, &self.reads)
+                .expect("independent inbox invariants");
+        }
+        self.reads.clear();
         self.observe(Seen::Durable { commit: self.commit });
         let made = self
             .records
@@ -182,7 +380,15 @@ impl World {
                     dependencies: record.dependencies.to_vec(),
                     depth: record.depth,
                 }),
-                Stored::Live(_) | Stored::Ended(_) | Stored::Stub(_) => None,
+                Stored::Live(_)
+                | Stored::Ended(_)
+                | Stored::Stub(_)
+                | Stored::Message(_)
+                | Stored::ArchivedMessage(_)
+                | Stored::Receipt(_)
+                | Stored::Offer(_)
+                | Stored::Question(_)
+                | Stored::Subscription(_) => None,
             })
             .collect::<Vec<_>>();
         for seen in made {
@@ -200,7 +406,36 @@ impl World {
         let requests = std::mem::take(&mut self.pending);
         for request in requests {
             match request {
-                Request::Save { .. } | Request::Erase { .. } | Request::Ended { .. } => {}
+                Request::Save { .. }
+                | Request::Erase { .. }
+                | Request::Ended { .. }
+                | Request::Observe { .. }
+                | Request::Notify { .. }
+                | Request::Timer { .. } => {}
+                Request::Sent { reply_to, accepted, .. } => self.reply(reply_to, Reply::Sent(accepted)),
+                Request::Inbox { reply_to, messages, more } => {
+                    self.reply(reply_to, Reply::Inbox(messages.into_vec(), more));
+                }
+                Request::TurnAcknowledged { reply_to, accepted, .. } => self.reply(reply_to, Reply::Turn(accepted)),
+                Request::Relay { task, attempt, envelope } => {
+                    assert_eq!(self.runs.get(&task), Some(&attempt), "relay reaches actual adopted/live executor");
+                    let key = (task, attempt, envelope.number);
+                    assert_eq!(
+                        self.records.get(&Key::Offer(envelope.key())),
+                        Some(&Stored::Offer(tasks::Offer { attempt, envelope: envelope.clone() })),
+                        "offered payload durable before relay"
+                    );
+                    if let Some(old) = self.relays.insert(key, envelope.clone()) {
+                        assert_eq!(old, envelope, "replayed relay has identical payload");
+                    }
+                }
+                Request::Topic { subscription, present } => {
+                    if present {
+                        self.topics.insert(subscription.number, subscription);
+                    } else {
+                        self.topics.remove(&subscription.number);
+                    }
+                }
                 Request::Made { reply_to, tasks } => self.reply(reply_to, Reply::Made(tasks.into_vec())),
                 Request::Refused { reply_to, problem } => self.reply(reply_to, Reply::Refused(problem)),
                 Request::Done { reply_to } => self.reply(reply_to, Reply::Done),
@@ -228,7 +463,14 @@ impl World {
             .values()
             .filter_map(|record| match record {
                 Stored::Live(record) => Some(*record.clone()),
-                Stored::Ended(_) | Stored::Stub(_) => None,
+                Stored::Ended(_)
+                | Stored::Stub(_)
+                | Stored::Message(_)
+                | Stored::ArchivedMessage(_)
+                | Stored::Receipt(_)
+                | Stored::Offer(_)
+                | Stored::Question(_)
+                | Stored::Subscription(_) => None,
             })
             .collect();
         let stubs = self.records.keys().filter(|key| matches!(key, Key::Stub(_))).count();
@@ -248,7 +490,14 @@ impl World {
     pub fn record(&self, number: u64) -> &tasks::TaskRecord {
         match self.records.get(&Key::Live(number)).expect("task live") {
             Stored::Live(record) => record,
-            Stored::Ended(_) | Stored::Stub(_) => unreachable!("key is live"),
+            Stored::Ended(_)
+            | Stored::Stub(_)
+            | Stored::Message(_)
+            | Stored::ArchivedMessage(_)
+            | Stored::Receipt(_)
+            | Stored::Offer(_)
+            | Stored::Question(_)
+            | Stored::Subscription(_) => unreachable!("key is live"),
         }
     }
     pub fn make(&mut self, creator: Party, batch: Vec<New>) -> Reply {
@@ -263,7 +512,15 @@ impl World {
             .keys()
             .filter_map(|key| match key {
                 Key::Live(number) if !before.contains(key) => Some(*number),
-                Key::Live(_) | Key::Ended(_) | Key::Stub(_) => None,
+                Key::Live(_)
+                | Key::Ended(_)
+                | Key::Stub(_)
+                | Key::Message(_)
+                | Key::ArchivedMessage(_)
+                | Key::Receipt(_)
+                | Key::Offer(_)
+                | Key::Question(_)
+                | Key::Subscription(_) => None,
             })
             .collect();
         self.observe(Seen::Batch { members, accepted: matches!(reply, Reply::Made(_)), made });
@@ -277,7 +534,8 @@ impl World {
         self.send(Event::Prepare { reply_to, task });
         let reply_to = self.to();
         let call = self.call;
-        self.send(Event::Claim { reply_to, task, attempt });
+        let readable = self.messages(task).iter().map(|message| message.number).collect::<Vec<_>>().into_boxed_slice();
+        self.send(Event::Claim { reply_to, task, attempt, readable });
         assert_eq!(self.replies.get(&call), Some(&Reply::Done), "fresh claim accepted");
         assert!(self.runs.insert(task, attempt).is_none(), "one physical run per task");
         self.observe(Seen::Assigned { task, attempt, after: self.commit, adopted: false });
@@ -297,6 +555,12 @@ impl World {
             .map(|record| match record {
                 Stored::Live(record) | Stored::Ended(record) => record.attempt,
                 Stored::Stub(stub) => stub.attempt,
+                Stored::Message(_)
+                | Stored::ArchivedMessage(_)
+                | Stored::Receipt(_)
+                | Stored::Offer(_)
+                | Stored::Question(_)
+                | Stored::Subscription(_) => 0,
             })
             .max()
             .unwrap_or(0)
@@ -327,12 +591,18 @@ impl World {
     }
     pub fn restart(&mut self) {
         self.pending.clear();
+        self.reads.clear();
+        self.inbox_referee.reset(&self.records);
         self.domain = Domain::new(&self.env.limits, self.seed, Box::new([1]));
         self.activations.clear();
         self.stops.clear();
         self.closing.clear();
-        let rows =
-            self.records.values().filter(|record| !matches!(record, Stored::Ended(_))).cloned().collect::<Vec<_>>();
+        let rows = self
+            .records
+            .values()
+            .filter(|record| !matches!(record, Stored::Ended(_) | Stored::ArchivedMessage(_)))
+            .cloned()
+            .collect::<Vec<_>>();
         for record in rows {
             self.send(Event::Restore { record });
         }
@@ -381,6 +651,40 @@ pub fn run_story_facts(seed: u64, consume_facts: bool) -> (Vec<String>, usize) {
     world.claim(1, 1);
     world.make(Party::Task(1), vec![task(2, &[]), task(3, &[2])]);
     world.claim_fresh(2);
+    // Inbox decisions travel through the same durable root and real agents.
+    let question = world.number();
+    world.mail_number(question, 1, Party::Task(2), tasks::UserMessage::Question { words: Box::new([1]) });
+    world.mail(2, Party::Task(1), tasks::UserMessage::Answer { question, words: Box::new([2]) });
+    let reply_to = world.to();
+    world.send(Event::Subscribe {
+        reply_to,
+        subscription: tasks::Subscription {
+            number: 1,
+            task: 1,
+            kind: tasks::SubscriptionKind::Topic { connector: 1, topic: 1 },
+            pending: false,
+        },
+    });
+    for _ in 0..rng.between(1, 4) {
+        let number = world.number();
+        let reply_to = world.to();
+        let class = match rng.below(3) {
+            0 => tasks::NewsClass::Wakes,
+            1 => tasks::NewsClass::Kept,
+            2 => tasks::NewsClass::Dropped,
+            _ => unreachable!("three news classes"),
+        };
+        world.send(Event::News { reply_to, number, subscription: 1, class, words: Box::new([3]) });
+    }
+    world.mail(1, Party::Person(1), tasks::UserMessage::Words { words: Box::new([4]) });
+    let read = world.messages(1).last().expect("person words present").number;
+    let reply_to = world.to();
+    world.stage(Event::Turn { reply_to, task: 1, attempt: 1, turn: 1, read: Some(read) });
+    if rng.chance(500) {
+        world.durable();
+    }
+    world.restart();
+    world.turn(1, 1, Some(read));
     match rng.below(4) {
         0 => {
             world.terminal(2, End::Refused);

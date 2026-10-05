@@ -345,7 +345,26 @@ Replay agrees with facts consumed or left full. The seeded fuzzy lifecycle
 sweep adds failures, held/released tasks, failed dependency results,
 refusals, restarts and complete subtree cancellation within the tasks
 world allotment (`docs/plans/next-domain/README.md`, 5.5). Later increments
-extend this same world with inboxes, references, procedures and funding.
+extend this same world with procedures, amendments, proposals and funding.
+
+The 02b parent completes result, notice, historical-result read and timer
+callbacks before making a decision durable, then releases actual relays to
+its scripted running agent. Each claim names its brief's readable IDs.
+The separate inbox referee observes persisted rows and committed reads,
+checking whole-message and promise capacity, message identities, offer
+fences, reference bounds, callback closure and exactly the offered prefix
+consumed by a turn. Its negative table violates each new invariant and each
+read rule independently. Focused stories cut message admission and turns
+before/after durability, merge a newer hint over an old offer, keep a
+policy-deferred older message, fill inboxes while accepting promised results
+and answers, cancel at full capacity, accept an introduced dependency and
+refuse a cycle spanning existing subtrees, restore held inboxes and timers,
+and clean subscriptions at owner end. The randomized lifecycle story now
+also asks/answers a question, mixes classified news and person words, commits
+or discards a drawn turn before restart, and replays with facts consumed or
+full. Counted-heap saturation includes inbox, offer, receipt, question and
+subscription arenas and cold restoration. The whole tasks world keeps its
+0.5 s focused and 4 s fuzzy serial allotments across increments.
 
 ### 4.5 Temper's own components
 

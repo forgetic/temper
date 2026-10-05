@@ -126,8 +126,7 @@ pub(crate) enum Active {
 ### 2.2 Its vocabulary
 
 A sketch of the complete target; later increments add their variants
-when they implement the behavior. Section 2.4 describes the narrower
-implemented 02a contract.
+when they implement the behavior. Sections 2.4 and 2.5 describe the implemented 02a and 02b contracts.
 
 ```rust
 /// parent -> tasks
@@ -263,9 +262,9 @@ carried authority delegation kinds include charters, procedures and roles.
 
 Dependency admission initially accepts members of this batch and the
 creator's existing live direct delegates. Introduced references are 02b.
-The introduced-sibling refusal story in section 3 conflicts with the
-broader reference rule in `tasks.md`, section 4; 02b must settle that story
-explicitly when introduction lands. Ended tasks are inputs, not new
+02b follows the normative reference rule in `tasks.md`, section 4, and
+accepts legal introduced dependencies; the old contrary story is corrected
+in section 3. Ended tasks are inputs, not new
 dependencies. The root may load a trustworthy ended summary through
 bounded, reply-bearing `RememberStub`, in the same decision as `Make`.
 `ForgetStub` refuses while a live dependency or input names the stub;
@@ -296,6 +295,61 @@ reproject stored wall backoffs once, and request adoption of committed
 claims before new work. Due/preparing work is rebuilt; closing gates are
 reissued idempotently. General paging remains 02f.
 
+### 2.5 Implemented 02b contract
+
+Messages have root-issued IDs. `Send` carries only implemented user words,
+questions and answers; `Peek` returns whole oldest messages within a byte
+budget and reports what waits. `Claim.readable` names the actual brief's
+messages. Reply-bearing `Turn` commits a sequential attempt-local turn and
+its read-through over durable immutable offers. A turn takes only offered
+IDs, preserving policy-kept older messages. Merging replaces a hint with a
+fresh ID while retaining its oldest arrival and occurrence count. Live
+relays and replies escape only after their offers, receipts and task/message
+records commit. Accepted terminal answers clear offers, retaining unread
+messages; ending archives those messages.
+
+Batch admission reserves each delegate's terminal result capacity before
+mutation. `results_due` persists the credit until `DeliverResult` converts it
+into an inbox row; the root completes every `Ended` → `DeliverResult` in
+that same decision. Open questions reserve answer inbox and receipt capacity.
+Bounded exact-call receipts admit retries without duplicate messages; a
+changed call gives `KeyConflict`, pressure saves no receipt, and
+root-managed `ForgetReceipt` follows retirement of root call history.
+The root keeps a logical call key stable across pressure retries. It treats
+child `Busy`, `Inbox` and `NotReady` as retryable pressure, caching only the
+final outcome. If other deliveries commit meanwhile, retry dispatch uses a
+fresh message candidate, preserving increasing committed message IDs; it
+must never reuse a refused low candidate beneath a later read-through.
+Replaying an accepted candidate still uses that candidate's saved receipt.
+Cancellation uses its existing durable control phase and never competes for
+ordinary inbox room. Future amendments and proposal decisions add their
+message variants only when their behavior lands.
+
+`Introduce` grants reciprocal bounded explicit references only when its
+introducer sees both live tasks in the same project. A requester reserves
+an explicit reference for each admitted delegate,
+so its visibility survives that delegate ending until it forgets the
+reference. Pending result credits and subscriptions prevent forgetting it;
+reference pressure is retryable `Busy` after room is released. Dependencies
+may use the creator's introduced live references. The admission and restore
+checks
+include existing dependencies and parent-to-delegate waits, not merely the
+batch-local graph. Ended references, unread results/notices and dependencies
+keep stubs; subscriptions prevent removing their explicit reference.
+
+`Subscribe` supports referenced task state/result, opaque connector topics,
+and once/periodic timers. `Notify`, `Observe` and `Timer` are real root
+callbacks completed before commit; `Observe` loads an ended referenced task's
+kept result. `Topic` registers/removes actual connector interest. News can
+be lowered from wakes to kept/dropped by policy. The closed policy controls
+each supported kind, batches permitted kinds by count or oldest age, and
+always wakes for person words. Monotonic deadlines project wall times once
+while live and reproject on restart. Reached batching thresholds persist
+with messages even while held, surviving clock correction and restart.
+Holds preserve inboxes and interests;
+subscriptions end with their owner. `Restore` rejects malformed rows,
+missing links, overcommitted capacity and unfinished callback state.
+
 ## 3. The world
 
 `tests/engine/tasks`, package `temper-engine-tasks-world`, shaped as
@@ -316,8 +370,9 @@ README.md, 5.4. The world is the hub's parent and plays:
 
 Its stories, from `tasks.md`, section 11, each a focused test: a batch
 made whole or refused whole; a plan of spikes, a choice and changes, run
-in dependency order; a dependency on an introduced sibling refused, then
-a subscription to it and a delegation with its result as an input; a
+in dependency order; a legal dependency on an introduced sibling accepted,
+a cross-subtree dependency/delegation wait cycle refused atomically, then a
+subscription to the sibling and its ended result used as an input; a
 negative verdict starting dependents, a failure holding them; a delegate
 held past its tries, escalated two levels to a person, released and
 finished; a coordinator woken once by a burst; a cancel closing three
