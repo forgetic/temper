@@ -44,6 +44,8 @@ unavailable; the design records bounded/unknown handling and status links.
 | 01b funding arithmetic | merged, `c80d438` | all four workflow checks passed; focused 1,829/1,829 in 5.256 s, fuzzy 28/28 in 22.473 s, one ignored finding; authority serial total 0.115 s |
 | 03a people sign-in and chat requests | merged, `959795f` | all four workflow checks passed; focused 1,822/1,822 in 7.251 s, fuzzy 28/28 in 22.695 s, one ignored finding; targeted people serial total 0.098 s before the added root-pressure regression |
 | 04a1 fake forge git foundations | merged, `0d09efc` | all four workflow checks passed; focused 1,833/1,833 in 6.661 s, fuzzy 28/28 in 22.321 s, one ignored finding; 68 targeted tests passed in 0.054 s |
+| 04a1 bounded traversal correction | merged, `0eb1ff0` | all four workflow checks passed; focused 1,833/1,833 in 9.325 s, fuzzy 28/28 in 27.457 s, one ignored finding; traversal uses a configured bounded `for` |
+| 04a2 fake forge API additions | merged, `6f8a73e` | all four workflow checks passed on the final reviewed tip; focused 1,843/1,843 in 6.235 s, fuzzy 28/28 in 23.993 s, one ignored finding; 78 targeted tests in 0.073 s |
 | 05a fleet turns and graces | merged, `c6513cb` | all four workflow checks passed; focused 1,794/1,794 in 7.478 s, fuzzy 27/27 in 22.515 s, one ignored finding; fleet focused serial total 0.144 s and fuzzy 0.508 s |
 
 01a checks pattern inclusion against independently enumerated names and
@@ -63,10 +65,18 @@ merge trees, conditional pushes, converging histories at the store limit,
 and measured memory. Existing fake-forge callers supply first-version
 defaults.
 
-Steps 01, 03, 04 and 05 are partially implemented. Rules and checks (01c),
-tasks/batches/lifecycle (02a), and channel version two (05b) are in isolated
-worktrees. The remaining fake-forge API additions (04a2) follow its git
-foundations; 04a is not yet complete. Steps 06 through 08 remain.
+04a2 adds complete bounded file/comparison reads, clean two-parent updates
+with CI on the new head, conflict refusal without mutation, adoption
+metadata and branch creation through the API. It follows the observed
+comparison and job-log fallbacks. Review corrections cover temporary status
+arrays, REST/git transport independence, oversized delayed-write inputs,
+and exhaustive matching. New reads are measured at their ownership bounds.
+04a is complete; the connector client, policy and top still follow.
+
+Steps 01, 03, 04 and 05 are partially implemented. Rules and checks (01c)
+and channel version two (05b) are committed in isolated worktrees under
+review. Tasks/batches/lifecycle (02a) is finishing its world validation.
+Steps 06 through 08 remain.
 
 After groundwork, the plan's finer dependencies still apply: tasks needs
 authority's value and number shapes; the root's walking skeleton needs
