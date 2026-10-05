@@ -1,7 +1,7 @@
 # Migration status
 
-Paused at the user’s request after merging the ready work into this checkout’s
-main. Local branches only; nothing has been pushed. Counts below are the full
+Resumed at the user’s request on 2026-10-05 with the joint temper/smith
+goal. Local branches only; nothing has been pushed. Counts below are the full
 workspace gate at the listed source tip; fuzzy runs retain one ignored finding.
 Detailed implementation and review evidence belongs in commit messages.
 The focused fixture gate skips its two explicit regeneration tests.
@@ -56,7 +56,7 @@ place and their integration, as [README.md](README.md) states.
 
 - Finish retired-source and recurring funding depth in 02e.
 - Restore inbox, amendment and move surface only with actual root routes.
-- Keep 02d–e parked until the user resumes; then follow the plan’s order.
+- Resume 02d with actual root/people escalation routes before 02e depth.
 
 **03 — people**
 
@@ -97,6 +97,6 @@ place and their integration, as [README.md](README.md) states.
 
 ## Resume point
 
-- Resume in plan order after an explicit user instruction; keep gate, independent review and legacy rules.
+- Resume authorized: extract shared domain-world kit to skein, start 05s1, and close the owed terminal restart cut.
 - Parked drafts: `next-domain/02e-depth-draft` (`a60bf1c`), `next-domain/04b2` (`0eff9dc`), `next-domain/05f` (`c33941c`). These have not passed the merge gate.
 - Forgejo v16.0.5 job logs are API-readable; update the parked client accordingly. Terminal-commit-before-ACK/result restart coverage remains open.

@@ -20,8 +20,8 @@ integration with smith. Copying the existing agent into smith alone does
 not complete the goal. Both repositories follow skein's foundation
 documents, independent review and their own exact-tip gates. Features
 explicitly deferred by the designs remain deferred; the lower-layer
-follow-on plans retain their existing scope. Implementation remains
-paused until the user asks to resume.
+follow-on plans retain their existing scope. Implementation resumed
+on 2026-10-05 at the user’s request, with this revised joint goal.
 
 **Citations.** A bare file name names a document of the next design
 (`tasks.md`, `forge.md`), as the design's own README does: in
