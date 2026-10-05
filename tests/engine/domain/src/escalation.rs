@@ -342,10 +342,10 @@ impl World {
         match self.settings.story {
             Story::Release => self.winning_choice(0, 1, people::EscalationDecision::Release, 10),
             Story::Reject => {
-                self.winning_choice(0, 1, people::EscalationDecision::Reject { reason: REASON.into() }, 10)
+                self.winning_choice(0, 1, people::EscalationDecision::Reject { reason: REASON.into() }, 10);
             }
             Story::PassRelease | Story::RaceRelease | Story::RaceReject => {
-                self.winning_choice(0, 1, people::EscalationDecision::Pass, 10)
+                self.winning_choice(0, 1, people::EscalationDecision::Pass, 10);
             }
         }
     }
@@ -525,7 +525,7 @@ impl World {
                 }
                 engine::Request::Deliver(delivery) => self.delivery(delivery),
                 engine::Request::Account(accounts::Request::Refresh { account, generation }) => {
-                    self.queue(engine::Event::Refreshed { account, generation, valid: Duration::from_secs(60) }, 0)
+                    self.queue(engine::Event::Refreshed { account, generation, valid: Duration::from_secs(60) }, 0);
                 }
                 engine::Request::Account(
                     accounts::Request::Keep { .. }
