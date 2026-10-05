@@ -5,10 +5,10 @@
 //! provider and a fake forge, talking through a system world.
 
 use skein_lib::Duration;
-use temper_agent_domain::run::outcome::Declared;
-use temper_agent_domain::run::{Answer, Exhausted, Failure, Push};
 use temper_agent_domain_world::desk::{CODING, Hand, Reviewer, Work};
 use temper_agent_domain_world::{CALM, Job, Run, Settings, Span, World};
+use temper_legacy_agent_domain::run::outcome::Declared;
+use temper_legacy_agent_domain::run::{Answer, Exhausted, Failure, Push};
 use temper_legacy_engine_domain::Outcome;
 use temper_legacy_engine_domain::plan::{Budget, Verdict};
 use temper_legacy_engine_domain::work::{Hold, Phase};
@@ -233,7 +233,7 @@ fn a_push_the_forge_refuses_is_told_to_the_llm_which_finishes_again() {
     assert_eq!(run.pushes.len(), 2);
     for push in &run.pushes {
         let Push::Failed { failure } = push else { panic!("the forge refused the push") };
-        assert_eq!(failure.reason, temper_agent_domain::run::PushReason::Refused);
+        assert_eq!(failure.reason, temper_legacy_agent_domain::run::PushReason::Refused);
         assert_eq!(failure.repository, Some(0));
         assert_eq!(failure.diagnostic.output(), b"remote: push refused");
     }

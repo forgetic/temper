@@ -6,13 +6,13 @@
 use std::collections::BTreeMap;
 
 use skein_lib::{Duration, Time, Token};
-use temper_agent_domain::run::outcome::{Change, Declared};
-use temper_agent_domain::run::{Answer, Spend};
 use temper_agent_domain_world::desk::{self, CODING, Hand, Work};
 use temper_agent_domain_world::referee::{Meeting, POSTED, Report, Repository, STORY, Seen};
 use temper_agent_domain_world::{CALM, Job, channel, protocol};
 use temper_fake_checkout::git::Tree;
 use temper_fake_forge_domain::Observation;
+use temper_legacy_agent_domain::run::outcome::{Change, Declared};
+use temper_legacy_agent_domain::run::{Answer, Spend};
 use temper_legacy_engine_domain::forge::Position;
 use temper_legacy_engine_domain::work::{Class, Hold, Phase};
 use temper_legacy_engine_domain::{Item, Outcome, Posted};

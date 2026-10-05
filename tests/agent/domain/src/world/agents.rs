@@ -5,14 +5,14 @@
 //! disk, in the working trees the worker prepared.
 
 use skein_lib::{Duration, ReplyTo, Time, Token};
-use temper_agent_domain::run::facts::{self as run_facts, Return};
-use temper_agent_domain::run::outcome::{Child, Declared, Field, Verdict};
-use temper_agent_domain::run::{self, Spend};
-use temper_agent_domain::tools::{Done, Fault, Op};
-use temper_agent_domain::{self as agent, Event, Fact, Request, session, tools};
-use temper_agent_tools_world::translate as io;
 use temper_fake_checkout as fake;
-use temper_fake_llm_domain as provider;
+use temper_legacy_agent_domain::run::facts::{self as run_facts, Return};
+use temper_legacy_agent_domain::run::outcome::{Child, Declared, Field, Verdict};
+use temper_legacy_agent_domain::run::{self, Spend};
+use temper_legacy_agent_domain::tools::{Done, Fault, Op};
+use temper_legacy_agent_domain::{self as agent, Event, Fact, Request, session, tools};
+use temper_legacy_agent_tools_world::translate as io;
+use temper_legacy_fake_llm_domain as provider;
 
 use super::{Call, Checking, Checks, Delivery, Owner, Pending, Process, Work, World, answer_kind, files};
 use crate::channel::{self, Toward};

@@ -6,14 +6,14 @@
 //! measured in every entry point, as the loop calls them.
 
 use skein_lib::{Duration, Env, Queue, ReplyTo, Rng, Time, Token, Wall};
-use temper_agent_domain::llm::{Completion, Decoded, Failure, Problem, Prompt, Said, Served, Stop, Usage};
-use temper_agent_domain::run::charter::{Checkout, Endpoint, Families, Grants, Llm, Repository, Tools};
-use temper_agent_domain::run::outcome::{Change, ChangeSpec, Child, Children, Declared, Field, OutcomeSpec};
-use temper_agent_domain::run::outcome::{Verdict, VerdictRule};
-use temper_agent_domain::run::{self, Ask, Charter};
-use temper_agent_domain::tools::{Call, Done, Entry, Exit, Fault, Hit, Kind, Name, Op, Part, Path, Version};
-use temper_agent_domain::{Domain, Event, Limits, Request, fire, max_out, resume, step, worst_case};
 use temper_agent_domain_world::TIGHT;
+use temper_legacy_agent_domain::llm::{Completion, Decoded, Failure, Problem, Prompt, Said, Served, Stop, Usage};
+use temper_legacy_agent_domain::run::charter::{Checkout, Endpoint, Families, Grants, Llm, Repository, Tools};
+use temper_legacy_agent_domain::run::outcome::{Change, ChangeSpec, Child, Children, Declared, Field, OutcomeSpec};
+use temper_legacy_agent_domain::run::outcome::{Verdict, VerdictRule};
+use temper_legacy_agent_domain::run::{self, Ask, Charter};
+use temper_legacy_agent_domain::tools::{Call, Done, Entry, Exit, Fault, Hit, Kind, Name, Op, Part, Path, Version};
+use temper_legacy_agent_domain::{Domain, Event, Limits, Request, fire, max_out, resume, step, worst_case};
 use temper_world::heap::{self, Meter};
 
 #[global_allocator]
@@ -53,13 +53,13 @@ const LIMITS: Limits = Limits {
         facts: 32,
         ..TIGHT.run
     },
-    session: temper_agent_domain::session::Limits {
+    session: temper_legacy_agent_domain::session::Limits {
         sessions: 4,
         messages: 12,
         session_bytes: 4096,
         parallel_tools: 2,
         facts: 32,
-        tools: temper_agent_domain::tools::Limits {
+        tools: temper_legacy_agent_domain::tools::Limits {
             kits: 4,
             calls: 2,
             file_bytes: 512,
@@ -244,8 +244,8 @@ impl Driver {
             // Most charters as large as a run may hold, some a byte larger.
             let brief = limits.run.run_bytes - 900 + self.rng.below(901);
             return Some(Event::Start {
-                grants: Box::new([temper_agent_domain::Grant {
-                    name: temper_agent_domain::GrantName { account: 0, generation: 0 },
+                grants: Box::new([temper_legacy_agent_domain::Grant {
+                    name: temper_legacy_agent_domain::GrantName { account: 0, generation: 0 },
                     valid: Duration::from_secs(100_000),
                 }]),
                 reply_to: ReplyTo::new(worker),
@@ -467,12 +467,12 @@ fn a_domain_driven_at_random_stays_within_its_worst_case_at_every_entry_point() 
         accounts: LIMITS.accounts,
         skew: LIMITS.skew,
         run: run::Limits { runs: 3, conversations: 8, run_conversations: 4, calls: 8, ..LIMITS.run },
-        session: temper_agent_domain::session::Limits {
+        session: temper_legacy_agent_domain::session::Limits {
             sessions: 8,
             messages: 24,
             session_bytes: 8192,
             parallel_tools: 3,
-            tools: temper_agent_domain::tools::Limits { kits: 8, calls: 3, ..LIMITS.session.tools },
+            tools: temper_legacy_agent_domain::tools::Limits { kits: 8, calls: 3, ..LIMITS.session.tools },
             ..LIMITS.session
         },
     };

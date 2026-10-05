@@ -82,13 +82,13 @@
 //! outlets) and their answers (agent-domain.md, section 10).
 
 use skein_lib::{ReplyTo, Time, Token};
-use temper_agent_domain::run::charter::Checkout;
-use temper_agent_domain::run::facts as run_facts;
-use temper_agent_domain::run::outcome::{Change, Declared};
-use temper_agent_domain::run::{self, Budget};
-use temper_agent_domain::session;
-use temper_agent_domain::tools;
-use temper_agent_domain::{Event, Fact, Request};
+use temper_legacy_agent_domain::run::charter::Checkout;
+use temper_legacy_agent_domain::run::facts as run_facts;
+use temper_legacy_agent_domain::run::outcome::{Change, Declared};
+use temper_legacy_agent_domain::run::{self, Budget};
+use temper_legacy_agent_domain::session;
+use temper_legacy_agent_domain::tools;
+use temper_legacy_agent_domain::{Event, Fact, Request};
 use temper_legacy_engine_domain::Outcome;
 use temper_legacy_engine_domain::plan;
 use temper_worker_domain_agent::channel::{Ask, Down, Finish, Push, Reply, RunFailure, Up};
@@ -148,9 +148,9 @@ pub fn down(down: Down, link: &Link) -> Option<Event> {
     }
 }
 
-fn grant(named: temper_worker_domain_agent::channel::Grant) -> temper_agent_domain::Grant {
-    temper_agent_domain::Grant {
-        name: temper_agent_domain::GrantName { account: named.account, generation: named.generation },
+fn grant(named: temper_worker_domain_agent::channel::Grant) -> temper_legacy_agent_domain::Grant {
+    temper_legacy_agent_domain::Grant {
+        name: temper_legacy_agent_domain::GrantName { account: named.account, generation: named.generation },
         valid: named.valid,
     }
 }
@@ -241,7 +241,7 @@ fn failure(failure: run::Failure) -> RunFailure {
 /// A push's commit message: the change's title, then its body after a blank
 /// line, if it has one.
 fn message(change: &Change) -> Box<[u8]> {
-    temper_agent_protocol::payload::message(change, temper_channel::Sizes::STARTING.detail)
+    temper_legacy_agent_protocol::payload::message(change, temper_channel::Sizes::STARTING.detail)
         .expect("the domain-tier push message fits")
 }
 
@@ -334,7 +334,7 @@ pub fn charter(bytes: &[u8], checkout: Checkout) -> run::Charter {
             });
         }
     }
-    temper_agent_protocol::payload::charter(
+    temper_legacy_agent_protocol::payload::charter(
         bytes,
         checkout,
         &endpoints,
@@ -350,13 +350,13 @@ pub const NOTE: &[u8] = b"note";
 pub fn split(budget: plan::Budget) -> Budget {
     Budget::from_tokens(budget.turns, budget.tokens, budget.time)
 }
-pub const REPORT: &[u8] = temper_agent_protocol::payload::REPORT;
-pub const APPROVE: &[u8] = temper_agent_protocol::payload::APPROVE;
-pub const REQUEST: &[u8] = temper_agent_protocol::payload::REQUEST;
+pub const REPORT: &[u8] = temper_legacy_agent_protocol::payload::REPORT;
+pub const APPROVE: &[u8] = temper_legacy_agent_protocol::payload::APPROVE;
+pub const REQUEST: &[u8] = temper_legacy_agent_protocol::payload::REQUEST;
 
 #[must_use]
 pub fn outcome(declared: &Declared) -> Box<[u8]> {
-    temper_agent_protocol::payload::outcome(declared, &temper_channel::Sizes::STARTING)
+    temper_legacy_agent_protocol::payload::outcome(declared, &temper_channel::Sizes::STARTING)
         .expect("the declared outcome fits the domain-tier deployment")
 }
 #[must_use]

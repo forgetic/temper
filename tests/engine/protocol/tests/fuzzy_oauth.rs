@@ -1,7 +1,7 @@
 use skein_lib::Duration;
 use temper_engine_protocol::oauth::Event;
 use temper_engine_protocol_world::oauth_socket::World;
-use temper_fake_llm_protocol::oauth::{Body, Plan};
+use temper_legacy_fake_llm_protocol::oauth::{Body, Plan};
 #[test]
 fn seeded_short_transfers_and_raced_close_preserve_save_order_and_single_rotation() {
     for seed in 0..12 {

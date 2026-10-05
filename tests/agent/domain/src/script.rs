@@ -8,7 +8,7 @@
 //! The scripts follow the fixture ([`crate::fixture`]): the answer in
 //! `src/lib.rs` is 42 and the checks want 43.
 
-use temper_fake_llm_domain::api::{Finish, Line, Script, Turn};
+use temper_legacy_fake_llm_domain::api::{Finish, Line, Script, Turn};
 
 /// What a run is for, which picks the script of its main conversation.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]

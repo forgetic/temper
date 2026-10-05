@@ -1,0 +1,13 @@
+[package]
+name = "temper-legacy-agent-domain-tools"
+description = "What a session does to the checkout: the agent domain's tools child domain, sans-io"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+skein-lib.workspace = true
+
+[lints]
+workspace = true

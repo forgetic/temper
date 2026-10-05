@@ -12,8 +12,8 @@ use temper_engine_protocol::{
     credentials,
     oauth::{self, Effect, Event, Owner},
 };
-use temper_fake_llm_protocol::oauth as issuer;
 use temper_legacy_engine_domain::{self as engine, accounts};
+use temper_legacy_fake_llm_protocol::oauth as issuer;
 pub const SERVER: Token = Token::new(u64::MAX);
 #[must_use]
 pub fn issuer_limits() -> issuer::Limits {

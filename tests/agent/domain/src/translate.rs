@@ -3,11 +3,11 @@
 //! deliberately preserves the fake's max_tokens/cache-write semantics; the
 //! separate protocol worlds exercise provider wire documents.
 use skein_lib::Duration;
-use temper_agent_domain::{llm as agent, tools};
-use temper_agent_protocol::{Limits, render, tools as grammar, translate};
 use temper_channel::wire::Provider;
-use temper_fake_llm_domain::api as provider;
-use temper_llm_openai as openai;
+use temper_legacy_agent_domain::{llm as agent, tools};
+use temper_legacy_agent_protocol::{Limits, render, tools as grammar, translate};
+use temper_legacy_fake_llm_domain::api as provider;
+use temper_legacy_llm_openai as openai;
 
 pub(crate) fn limits() -> Limits {
     Limits {

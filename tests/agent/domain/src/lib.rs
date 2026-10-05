@@ -44,7 +44,7 @@
 //!   worker commits is what the agent left;
 //! - **the agents' other neighbours:** a fake LLM provider's domain, which
 //!   plays scripted jobs, cued by the guidance of the step a run is for, or
-//!   wanders at random ([`temper_fake_llm_domain`], [`script`]), with the
+//!   wanders at random ([`temper_legacy_fake_llm_domain`], [`script`]), with the
 //!   protocol layers on both sides, which only the world sees both vocabularies
 //!   of ([`translate`]); and io, running the tools' file operations and
 //!   commands and the runs' own looks and checks on the disk.

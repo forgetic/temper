@@ -1,13 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use skein_lib::{Duration, Env, Queue, Rng, Time, Token, Wall};
-use temper_agent_domain::run::outcome::Declared;
-use temper_agent_domain::run::{self, Spend};
-use temper_agent_domain::{self as agent, Event, Fact, Limits, Request, session, tools};
 use temper_fake_checkout::Checkout;
 use temper_fake_checkout::git::Tree as Files;
 use temper_fake_forge_domain::{self as forge, Skew};
-use temper_fake_llm_domain as provider;
+use temper_legacy_agent_domain::run::outcome::Declared;
+use temper_legacy_agent_domain::run::{self, Spend};
+use temper_legacy_agent_domain::{self as agent, Event, Fact, Limits, Request, session, tools};
 use temper_legacy_engine_domain::plan::Budget;
 use temper_legacy_engine_domain::{self as engine, Item};
 use temper_legacy_engine_domain_world::deployment::{self, MAIN, REPOSITORIES};
@@ -15,6 +14,7 @@ use temper_legacy_engine_domain_world::mirror::Mirror;
 use temper_legacy_engine_domain_world::referee as engine_referee;
 use temper_legacy_engine_domain_world::store::{self, Store};
 use temper_legacy_engine_domain_world::translate::Asked;
+use temper_legacy_fake_llm_domain as provider;
 use temper_worker_checkout_world::translate as io;
 use temper_worker_domain::checkout::git::Op;
 use temper_worker_domain::{self as worker, host};
@@ -948,8 +948,8 @@ struct Call {
     /// The deadline's delivery, withdrawn when the call ends first.
     deadline: Key,
     /// The frozen offer, so an answer cannot call a tool this prompt omitted.
-    grants: temper_agent_domain::tools::Grants,
-    served: Box<[temper_agent_domain::llm::Served]>,
+    grants: temper_legacy_agent_domain::tools::Grants,
+    served: Box<[temper_legacy_agent_domain::llm::Served]>,
 }
 
 /// An operation of the tools in flight, as io keeps it.
@@ -964,7 +964,7 @@ enum Work {
     /// A file operation, run on the disk then.
     File(tools::Op),
     /// A command started, finished then.
-    Command(temper_agent_tools_world::translate::Started),
+    Command(temper_legacy_agent_tools_world::translate::Started),
     /// Nothing more: it ends so (it failed to start, timed out, or was
     /// cancelled).
     Ending(tools::Done),

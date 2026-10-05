@@ -1,0 +1,23 @@
+[package]
+name = "temper-legacy-agent-protocol"
+description = "Agent channel translation and bounded LLM client stacks"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+skein-lib.workspace = true
+skein-io.workspace = true
+skein-http.workspace = true
+skein-json.workspace = true
+temper-channel.workspace = true
+temper-legacy-agent-domain.workspace = true
+temper-legacy-agent-domain-run.workspace = true
+temper-legacy-agent-domain-session.workspace = true
+temper-legacy-agent-domain-tools.workspace = true
+temper-legacy-llm-anthropic.workspace = true
+temper-legacy-llm-openai.workspace = true
+
+[lints]
+workspace = true

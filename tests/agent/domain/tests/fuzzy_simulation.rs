@@ -4,9 +4,9 @@
 
 use std::collections::BTreeMap;
 
-use temper_agent_domain::run::outcome::Declared;
-use temper_agent_domain::run::{Answer, Failure};
 use temper_agent_domain_world::{Run, Settings, Stats, World};
+use temper_legacy_agent_domain::run::outcome::Declared;
+use temper_legacy_agent_domain::run::{Answer, Failure};
 
 const ITERATIONS: u32 = 400_000;
 

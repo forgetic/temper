@@ -1,7 +1,11 @@
 # The agent's domain layer
 
-This describes the agent as built. The migration extends it towards
-`domain/agent.md` (`docs/plans/next-domain/05-runtime.md`).
+This describes the frozen legacy agent used during the overlap. Its crates,
+providers and component worlds now carry `legacy` in their names and paths;
+the historical names below describe the same behavior. The system world stays
+at `tests/agent/domain` until cutover. New agent work belongs to smith
+(`docs/plans/next-domain/05s-smith.md`, sections 3 and 4); `domain/agent.md`
+defines temper's use of it.
 
 Provisional, 2026-10-02. What the temper agent does, as a domain layer:
 its parts, what each is responsible for, and how they fit together. The
