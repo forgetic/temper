@@ -55,6 +55,7 @@ unavailable; the design records bounded/unknown handling and status links.
 | 05c1 fake checkout git foundation | merged, `41eda2b` | all four workflow checks passed; focused 2,123/2,123 in 5.274 s, fuzzy 30/30 in 21.425 s, one ignored finding; physical-git scenarios verify conflict markers, two parents, graph transfer and conditional pushes |
 | 05c2 checkout merge state and ownership | merged, `8e94482` | independent review found no blockers; all four workflow checks passed; focused 2,132/2,132 in 5.396 s, fuzzy 31/31 in 21.190 s, one ignored finding; checkout world serial 0.545 s focused and 0.815 s fuzzy |
 | 05d worker turns and transcript lifecycle | merged, `e2a6a71` | independent review found no confirmed blockers; all four workflow checks passed; focused 2,172/2,172 in 6.761 s, fuzzy 32/32 in 25.290 s, one ignored finding; new worker root turn scenarios and memory checks take 0.048 s focused and 0.039 s fuzzy within shared runtime headroom |
+| 05e session transcripts and pricing | merged, `8b91ed3` | independent review corrected allocation before waking-tail admission, with a negative counted-memory regression; all four workflow checks passed; focused 2,187/2,187 in 5.116 s, fuzzy 33/33 in 17.917 s, one ignored finding; idle session serial delta +0.019 s focused and +0.000 s fuzzy at reported precision |
 
 
 01a checks pattern inclusion against independently enumerated names and
@@ -120,8 +121,16 @@ replay, cumulative spend, stable call names, owned conflict paths and checked
 stop graces. V2 watchdog, cancellation and kill races still need broader
 coverage in later runtime verification; the existing randomized host/agent
 worlds exercise v1. Protocol translation remains 05g. The forge client is
-still in an isolated worktree. Session turns, transcripts and pricing
-(05e) are being extended, and the root skeleton (06a) is being prepared.
+still in an isolated worktree. Session turns, concrete history, pricing and
+answered/withdrawn child spend are merged. Restored waking results are sized
+before allocation; owned-IO terminal races, complete-state replay and fuzzy
+outcome coverage are verified. Whole-run aggregation and native tools (05f)
+are being implemented. The root skeleton (06a) has a brief seam and ordered
+journal/store world in its worktree; partial-list memory transfer is being
+corrected after independent review. Its complete charged story needs 02e's
+finite funding ledger and atomic turn/answer admission, which is brought
+forward after 02c. Task amendment/move review found restart cancellation and
+control-offer pressure issues that are being repaired before merging.
 The client API foundation's required world verification must pass before
 any client code reaches main. Steps 07 and 08 remain.
 
