@@ -58,7 +58,13 @@ struct AskReply {
     person: u64,
     key: [u8; 16],
     ask: people::Ask,
-    outcome: people::Outcome,
+    terminal: ExpectedTerminal,
+}
+
+#[derive(Clone, Debug)]
+enum ExpectedTerminal {
+    Outcome(people::Outcome),
+    KeyConflict { saved_ask: people::Ask, saved_outcome: people::Outcome },
 }
 
 /// Outside observer of exactly the scripted people, decisions and worker costs.
@@ -143,9 +149,29 @@ impl Referee {
     /// dispatch, including stale winners and refusals (domain/people.md, section 5.1.2).
     pub fn ask(&mut self, to: Token, person: u64, key: [u8; 16], ask: people::Ask, outcome: people::Outcome) {
         assert!(
-            self.asks.insert(to, AskReply { person, key, ask, outcome }).is_none(),
+            self.asks.insert(to, AskReply { person, key, ask, terminal: ExpectedTerminal::Outcome(outcome) }).is_none(),
             "one fresh reply right per script ask"
         );
+    }
+
+    /// Register an immediate key-conflict refusal and freeze the existing saved
+    /// request/outcome; no new answered key is expected (domain/people.md, section 5.1.1).
+    pub fn key_conflict(
+        &mut self,
+        rows: &BTreeMap<Key, Record>,
+        to: Token,
+        person: u64,
+        key: [u8; 16],
+        ask: people::Ask,
+    ) {
+        let Some(Record::People(people::Stored::Answer { ask: saved_ask, outcome, .. })) =
+            rows.get(&Key::People(people::Key::Answer(people::RequestKey { person, key })))
+        else {
+            panic!("key-conflict probe follows its durable winning answer");
+        };
+        assert_ne!(*saved_ask, ask, "conflicting probe changes the request under the original key");
+        let terminal = ExpectedTerminal::KeyConflict { saved_ask: saved_ask.clone(), saved_outcome: *outcome };
+        assert!(self.asks.insert(to, AskReply { person, key, ask, terminal }).is_none(), "fresh conflict reply right");
     }
 
     /// Register one expected current held view before a named authenticated read
@@ -413,8 +439,8 @@ impl Referee {
         Ok(())
     }
 
-    /// Check every keyed web terminal against its registered input and durable
-    /// answer; historical losers must retain the original winner.
+    /// Check outcome replies against their durable answers and immediate key-conflict
+    /// refusals against the unchanged original answer; historical losers retain the winner.
     ///
     /// # Errors
     /// Rejects unsolicited/duplicate replies, changed winner or missing durability
@@ -423,31 +449,40 @@ impl Referee {
         &mut self,
         rows: &BTreeMap<Key, Record>,
         to: Token,
-        outcome: people::Outcome,
+        reply: people::Reply,
     ) -> Result<(), &'static str> {
         let expected = self.asks.get(&to).ok_or("unsolicited or duplicate keyed terminal")?;
-        if outcome != expected.outcome {
-            return Err("keyed terminal differs from independently expected outcome");
-        }
         let Some(Record::People(people::Stored::Answer { ask, outcome: saved, .. })) = rows
             .get(&Key::People(people::Key::Answer(people::RequestKey { person: expected.person, key: expected.key })))
         else {
             return Err("keyed terminal before durable answer");
         };
-        if outcome == people::Outcome::Refused(people::Refusal::KeyConflict) {
-            if *ask == expected.ask {
-                return Err("key conflict did not differ from saved request");
+        match &expected.terminal {
+            ExpectedTerminal::KeyConflict { saved_ask, saved_outcome } => {
+                if reply != people::Reply::Refused(people::Refusal::KeyConflict) {
+                    return Err("key conflict requires the immediate refusal wrapper");
+                }
+                if *ask == expected.ask || ask != saved_ask || saved != saved_outcome {
+                    return Err("key conflict changed the original durable winner");
+                }
             }
-        } else if *ask != expected.ask || *saved != outcome {
-            return Err("keyed terminal and durable answer differ");
-        }
-        if let people::Outcome::EscalationDecided { task, revision, by, choice: answer } = outcome {
-            let Some(Record::EscalationDecision(archive)) = rows.get(&Key::EscalationDecision { task, revision })
-            else {
-                return Err("decision reply before durable archive");
-            };
-            if archive.by != by || choice(&archive.decision) != answer {
-                return Err("reply changed archived race winner");
+            ExpectedTerminal::Outcome(outcome) => {
+                if reply != people::Reply::Outcome(*outcome) {
+                    return Err("keyed terminal differs from independently expected outcome wrapper");
+                }
+                if *ask != expected.ask || saved != outcome {
+                    return Err("keyed terminal and durable answer differ");
+                }
+                if let people::Outcome::EscalationDecided { task, revision, by, choice: answer } = *outcome {
+                    let Some(Record::EscalationDecision(archive)) =
+                        rows.get(&Key::EscalationDecision { task, revision })
+                    else {
+                        return Err("decision reply before durable archive");
+                    };
+                    if archive.by != by || choice(&archive.decision) != answer {
+                        return Err("reply changed archived race winner");
+                    }
+                }
             }
         }
         self.asks.remove(&to);

@@ -1,6 +1,7 @@
 //! Held-chat requester/final-role stories and independent evidence negatives
 //! (domain/engine.md, section 7.7; domain/tasks.md, section 15).
 
+use skein_lib::Token;
 use temper_engine_domain::{EscalationDecisionRecord, Key, Record, Write};
 use temper_engine_domain_people as people;
 use temper_engine_domain_tasks as tasks;
@@ -233,4 +234,48 @@ fn referee_rejects_missing_terminal_evidence_duplicate_outputs_and_double_fundin
         }
     }
     assert_eq!(world.referee.final_state(&rows), Err("expense lost doubled or posted to wrong funding source"));
+}
+
+#[test]
+fn key_conflict_requires_immediate_refusal_and_preserves_the_saved_winner() {
+    let world = settled(Story::Release);
+    let archive = archives(&world)[0];
+    let to = Token::new(999);
+    let key = people::RequestKey { person: archive.by, key: [10; 16] };
+    let conflict = people::Ask::DecideEscalation {
+        project: 1,
+        task: archive.task,
+        revision: archive.revision,
+        decision: people::EscalationDecision::Reject { reason: REASON.into() },
+    };
+    let mut referee = before_decision(&world, archive);
+    referee.key_conflict(&world.store.rows, to, key.person, key.key, conflict.clone());
+    assert_eq!(
+        referee.clone().replied(
+            &world.store.rows,
+            to,
+            people::Reply::Outcome(people::Outcome::Refused(people::Refusal::KeyConflict)),
+        ),
+        Err("key conflict requires the immediate refusal wrapper")
+    );
+    for changed_ask in [false, true] {
+        let mut rows = world.store.rows.clone();
+        let Some(Record::People(people::Stored::Answer { ask, outcome, .. })) =
+            rows.get_mut(&Key::People(people::Key::Answer(key)))
+        else {
+            panic!("original saved winner");
+        };
+        if changed_ask {
+            *ask = conflict.clone();
+        } else {
+            *outcome = people::Outcome::Refused(people::Refusal::KeyConflict);
+        }
+        assert_eq!(
+            referee.clone().replied(&rows, to, people::Reply::Refused(people::Refusal::KeyConflict)),
+            Err("key conflict changed the original durable winner")
+        );
+    }
+    referee
+        .replied(&world.store.rows, to, people::Reply::Refused(people::Refusal::KeyConflict))
+        .expect("direct refusal with the original durable winner unchanged");
 }

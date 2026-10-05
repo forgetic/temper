@@ -388,7 +388,23 @@ impl World {
             }
             people::EscalationDecision::Reject { .. } => people::EscalationDecision::Release,
         };
-        self.ask(232, owner, key, revision, different, people::Outcome::Refused(people::Refusal::KeyConflict));
+        let token = Token::new(232);
+        let ask = people::Ask::DecideEscalation {
+            project: 1,
+            task: self.task.expect("chat started"),
+            revision,
+            decision: different,
+        };
+        let input = AskInput { owner, key: [key; 16], ask: ask.clone() };
+        self.referee.key_conflict(
+            &self.store.rows,
+            token,
+            self.people[owner].expect("signed-in actor"),
+            input.key,
+            ask,
+        );
+        assert!(self.asks.insert(token, input.clone()).is_none(), "fresh conflict request right");
+        self.ask_input(token, &input);
         if !self.settings.story.succeeds() {
             self.read(
                 204,
@@ -576,7 +592,7 @@ impl World {
             Delivery::WebReply { to, reply: people::Reply::Outcome(outcome), .. } => {
                 let token = to.into_token();
                 self.referee
-                    .replied(&self.store.rows, token, outcome)
+                    .replied(&self.store.rows, token, people::Reply::Outcome(outcome))
                     .expect("independent keyed terminal and archive referee");
                 self.asks.remove(&token).expect("one pending outside ask terminal");
                 match token.raw() {
@@ -593,6 +609,14 @@ impl World {
                     230 | 231 | 232 | 221 => {}
                     _ => panic!("unscripted terminal right"),
                 }
+            }
+            Delivery::WebReply { to, reply: people::Reply::Refused(refusal), .. } => {
+                let token = to.into_token();
+                assert_eq!(token, Token::new(232), "sole immediate key-conflict right");
+                self.referee
+                    .replied(&self.store.rows, token, people::Reply::Refused(refusal))
+                    .expect("immediate refusal preserves the original saved winner");
+                self.asks.remove(&token).expect("one pending outside conflict terminal");
             }
             Delivery::EscalationReply { to, person, context } => {
                 let token = to.into_token();
