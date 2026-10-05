@@ -42,11 +42,14 @@ unavailable; the design records bounded/unknown handling and status links.
 |---|---|---|
 | 01a authority values and order | merged, `2d38f2b` | all four workflow checks passed; focused 1,778/1,778 in 7.918 s, fuzzy 26/26 in 22.367 s, one ignored finding; authority serial total 0.087 s |
 | 01b funding arithmetic | merged, `c80d438` | all four workflow checks passed; focused 1,829/1,829 in 5.256 s, fuzzy 28/28 in 22.473 s, one ignored finding; authority serial total 0.115 s |
+| 01c authority policies and checks | merged, `e21dafb` | independent review passed; all four workflow checks passed; focused 1,850/1,850 in 4.888 s, fuzzy 28/28 in 18.143 s, one ignored finding; complete authority serial total 0.131 s |
 | 03a people sign-in and chat requests | merged, `959795f` | all four workflow checks passed; focused 1,822/1,822 in 7.251 s, fuzzy 28/28 in 22.695 s, one ignored finding; targeted people serial total 0.098 s before the added root-pressure regression |
 | 04a1 fake forge git foundations | merged, `0d09efc` | all four workflow checks passed; focused 1,833/1,833 in 6.661 s, fuzzy 28/28 in 22.321 s, one ignored finding; 68 targeted tests passed in 0.054 s |
 | 04a1 bounded traversal correction | merged, `0eb1ff0` | all four workflow checks passed; focused 1,833/1,833 in 9.325 s, fuzzy 28/28 in 27.457 s, one ignored finding; traversal uses a configured bounded `for` |
 | 04a2 fake forge API additions | merged, `6f8a73e` | all four workflow checks passed on the final reviewed tip; focused 1,843/1,843 in 6.235 s, fuzzy 28/28 in 23.993 s, one ignored finding; 78 targeted tests in 0.073 s |
 | 05a fleet turns and graces | merged, `c6513cb` | all four workflow checks passed; focused 1,794/1,794 in 7.478 s, fuzzy 27/27 in 22.515 s, one ignored finding; fleet focused serial total 0.144 s and fuzzy 0.508 s |
+| 05b versioned channel and typed payloads | merged, `d3cc9c3` | parent review corrected relay byte bounds and added distinct-value fixtures; all four workflow checks passed; focused 2,091/2,091 in 7.184 s, fuzzy 29/29 in 17.783 s, one ignored finding; channel world serial 0.115 s focused and 0.272 s fuzzy before final scalar fixtures |
+
 
 01a checks pattern inclusion against independently enumerated names and
 authority ordering laws. 05a adds bounded turn admission, commitment
@@ -73,10 +76,20 @@ arrays, REST/git transport independence, oversized delayed-write inputs,
 and exhaustive matching. New reads are measured at their ownership bounds.
 04a is complete; the connector client, policy and top still follow.
 
-Steps 01, 03, 04 and 05 are partially implemented. Rules and checks (01c)
-and channel version two (05b) are committed in isolated worktrees under
-review. Tasks/batches/lifecycle (02a) is finishing its world validation.
-Steps 06 through 08 remain.
+01c implements bounded policy lifecycle, strictest action checks, current
+funding/task-capacity fitting and proposal coverage. Generic connector facts
+are pinned to the effect's full resource and state; accepted effects need
+another check in the same root commit. 05b preserves explicit v1 callers
+while adding typed v2 schemas, negotiation, bounded unknown-kind skipping,
+turns/transcripts, independent bytes and heap checks. Runtime translations
+and behavior remain later increments.
+
+Steps 01, 03, 04 and 05 are partially implemented. Landing requirements
+(01d) and tasks/batches/lifecycle (02a) are finishing review and validation.
+02a review corrections reject creation under held closing parents, preserve
+restorable records and use exhaustive matching; they are not yet merged.
+The forge client (04b) has its own worktree. Checkout extension (05c) is
+prepared separately. Steps 06 through 08 remain.
 
 After groundwork, the plan's finer dependencies still apply: tasks needs
 authority's value and number shapes; the root's walking skeleton needs
