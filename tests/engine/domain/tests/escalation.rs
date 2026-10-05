@@ -131,7 +131,13 @@ fn held_and_decision_commit_cuts_restore_paged_real_children_and_exact_scripts()
             )
         })
         .expect("actual unassigned-claim refusal transaction");
-    for corruption in 0..3 {
+    let before = world.unplaced_referee.as_ref().expect("actual pre-transaction outside observer");
+    assert_eq!(before.clone().commit(writes), Ok(()), "unaltered transaction passes the identical observer");
+    for (corruption, expected) in [
+        (0, "unassigned refusal and canonical proof are not atomic"),
+        (1, "unassigned refusal spent a try or changed accepted expense"),
+        (2, "unassigned claim did not retire as an unpriced refusal"),
+    ] {
         let mut altered = writes.clone();
         match corruption {
             0 => altered.retain(|write| !matches!(write, Write::Save(Record::RunProof(_)))),
@@ -151,7 +157,7 @@ fn held_and_decision_commit_cuts_restore_paged_real_children_and_exact_scripts()
             }
             _ => unreachable!("three independent topology corruptions"),
         }
-        assert!(world.referee.clone().commit(&altered).is_err(), "unassigned topology corruption {corruption}");
+        assert_eq!(before.clone().commit(&altered), Err(expected), "unassigned topology corruption {corruption}");
     }
 }
 

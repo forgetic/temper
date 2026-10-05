@@ -137,6 +137,11 @@ pub struct World {
     /// (domain/engine.md, section 7.7).
     pub referee: Referee,
 
+    /// Outside observer immediately before the one unassigned-claim terminal
+    /// cohort, retained for positive-control and corruption checks; never a
+    /// root-state oracle (domain/engine.md, section 7.7).
+    pub unplaced_referee: Option<Referee>,
+
     /// Exact boundary trace, excluding optional diagnostic observations
     /// (domain/engine.md, section 7.7).
     pub trace: Vec<String>,
@@ -220,6 +225,7 @@ impl World {
             frozen_cut: None,
             store: Store::new(),
             referee: Referee::new(settings.story),
+            unplaced_referee: None,
             trace: Vec::new(),
             transactions: Vec::new(),
             restarts: 0,
@@ -566,6 +572,10 @@ impl World {
             self.trace.push(format!("output {request:?}"));
             match request {
                 engine::Request::Commit { number, writes } => {
+                    if writes.iter().any(|write| matches!(write, Write::Save(Record::Terminal(terminal)) if terminal.end == tasks::End::Refused)) {
+                        assert!(self.unplaced_referee.is_none(), "one unassigned-claim terminal in this script");
+                        self.unplaced_referee = Some(self.referee.clone());
+                    }
                     self.referee.commit(&writes).expect("independent escalation transaction referee");
                     self.transactions.push(writes.to_vec());
                     if self.store.pending.is_empty() {
