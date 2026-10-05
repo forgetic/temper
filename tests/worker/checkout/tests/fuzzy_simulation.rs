@@ -43,7 +43,7 @@ fn random_worlds_settle_with_every_client_heard() {
             *count += more;
         }
         for (_, client) in world.clients() {
-            let kind = match client.prepared.expect("every prepare ends") {
+            let kind = match client.prepared.as_ref().expect("every prepare ends") {
                 Prepared::Ready { .. } => "ready".to_string(),
                 Prepared::Refused { refusal } => format!("{refusal:?}"),
                 Prepared::Failed { failure: Failure::Missing { missing, .. } } => format!("missing {missing:?}"),
@@ -54,6 +54,7 @@ fn random_worlds_settle_with_every_client_heard() {
             for (saved, landings) in &client.landings {
                 for landing in landings {
                     let kind = match landing {
+                        Landing::Conflicted { .. } => panic!("legacy clients do not prepare merges"),
                         Landing::Landed { .. } => "landed",
                         Landing::Moved => "moved",
                         Landing::Refused | Landing::Explained { fault: Fault::Refused, .. } => "refused",

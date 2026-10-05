@@ -16,10 +16,6 @@ use temper_worker_domain_host as host;
 
 /// Something that happened in a child domain, or to the engine link.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "fixed diagnostic tails keep boundary records bounded without allocation"
-)]
 pub enum Fact {
     /// In the host child domain.
     Host { fact: host::Fact },

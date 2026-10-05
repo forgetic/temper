@@ -9,12 +9,11 @@
 
 use skein_lib::{Queue, Token};
 
-use crate::boundary::{Prepared, Refusal};
-use crate::git::{Done, Kind};
+use crate::boundary::{Failure, Refusal};
+use crate::git::{Commit, Fault, Kind};
 
 /// Something that happened for the client `client`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-#[expect(clippy::large_enum_variant, reason = "bounded diagnostics stay inline and are included in worst_case")]
 pub enum Fact {
     /// A prepare, a push or a save was refused at the entrance.
     Refused { client: Token, refusal: Refusal },
@@ -23,16 +22,40 @@ pub enum Fact {
     /// An operation was asked of io.
     Started { client: Token, op: Kind },
     /// The operation in flight ended so.
-    Ended { client: Token, done: Done },
+    Ended { client: Token, done: Ending },
     /// The client asked to abort or release while an operation was in
     /// flight, which is cancelled.
     Aborting { client: Token },
     /// The prepare ended.
-    Prepared { client: Token, prepared: Prepared },
+    Prepared { client: Token, prepared: Preparation },
     /// The push, or the save, ended with the repositories counted so.
     Pushed { client: Token, to: Target, tally: Tally },
     /// The workspace is back in the cache.
     Released { client: Token },
+}
+
+/// Content-free operation end; diagnostics and path payloads remain with
+/// their boundary receiver and are never copied into the facts queue.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Ending {
+    Succeeded,
+    Fetched { commit: Commit },
+    Committed { commit: Commit },
+    Unchanged,
+    Exists,
+    Rejected,
+    Merged,
+    Conflicted { files: u32 },
+    Failed { fault: Fault },
+}
+
+/// Content-free preparation end.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Preparation {
+    Ready { workspace: Token, conflicts: u64 },
+    Refused { refusal: Refusal },
+    Failed { failure: Failure },
+    Aborted,
 }
 
 /// How a prepare found its workspace in the cache.
@@ -85,7 +108,6 @@ impl Facts {
     }
 
     /// Keeps `fact` if there is room for it, and counts it otherwise.
-    #[expect(clippy::large_types_passed_by_value, reason = "a bounded fact moves into its fixed-capacity queue")]
     pub(crate) fn push(&mut self, fact: Fact) {
         if self.queue.try_push(fact).is_err() {
             self.lost = self.lost.saturating_add(1);

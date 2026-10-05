@@ -109,6 +109,9 @@ pub struct Repository {
     pub identity: u32,
     /// The branch a change is pushed to, if the repository may be written.
     pub push: Option<Box<[u8]>>,
+    /// Exact old head required for the push branch; None retains v1's
+    /// ordinary fast-forward. Successful pushes advance this condition.
+    pub expected: Option<Commit>,
 }
 
 /// Where a repository starts. Whatever the workspace held, nothing local is
@@ -125,6 +128,9 @@ pub enum Start {
     Commit { commit: Commit },
     /// Saved work: the tip of the saved-work branch, which must exist.
     Saved { branch: Box<[u8]> },
+    /// Fetch the branch and base, check out the branch and leave their merge
+    /// in progress. The next commit records both parents even if unchanged.
+    Merge { branch: Box<[u8]>, base: Commit },
 }
 
 /// A commit's message.
@@ -135,17 +141,24 @@ pub struct Message {
 }
 
 /// How a prepare ended.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Prepared {
     /// The workspace is ready, in the directory io names `workspace`: each
     /// repository at its starting point.
-    Ready { workspace: Token },
+    Ready { workspace: Token, conflicts: Box<[Conflicts]> },
     /// Refused at the entrance: nothing is held.
     Refused { refusal: Refusal },
     /// It failed: the hold stays, for the client to release.
     Failed { failure: Failure },
     /// It was aborted: the hold stays, for the client to release.
     Aborted,
+}
+
+/// Originally conflicted paths in one repository, named by its spec index.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct Conflicts {
+    pub repository: u32,
+    pub files: Box<[Box<[u8]>]>,
 }
 
 /// Why a prepare failed.
@@ -190,9 +203,12 @@ pub enum Outcome {
 /// way that may have landed (it ran out of time, broke, or lost the forge on
 /// the way) is checked by fetching its branch: it landed if the branch is at
 /// its commit.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 #[expect(clippy::large_enum_variant, reason = "bounded diagnostics stay inline and are included in worst_case")]
 pub enum Landing {
+    /// Originally conflicted paths still contain a merge marker. No commit
+    /// or push was made for this repository.
+    Conflicted { files: Box<[Box<[u8]>]> },
     /// A failed commit or push, with bounded diagnostics supplied by io.
     Explained { fault: crate::git::Fault, diagnostic: crate::git::PushDiagnostic },
     /// `commit` is on the branch now.

@@ -31,6 +31,8 @@ pub const LIMITS: Limits = Limits {
     repositories: 3,
     name_bytes: 64,
     message_bytes: 256,
+    conflicts: 0,
+    path_bytes: 0,
     remote_timeout: Duration::from_secs(60),
     local_timeout: Duration::from_secs(10),
     facts: 256,
@@ -537,7 +539,14 @@ impl World {
             };
             let push = if writable { Some(base.clone().into()) } else { None };
             let identity = IDENTITY;
-            let spec = Repository { name: name.clone().into(), remote: remote.clone().into(), start, identity, push };
+            let spec = Repository {
+                expected: None,
+                name: name.clone().into(),
+                remote: remote.clone().into(),
+                start,
+                identity,
+                push,
+            };
             repositories.push(spec);
             repos.push(Repo { name, remote, writable, commit });
         }
@@ -558,6 +567,7 @@ impl World {
             match self.rng.below(7) {
                 0 => key = Vec::new(),
                 1 => repositories.push(Repository {
+                    expected: None,
                     name: first.clone(),
                     remote: first,
                     start: Start::Branch { branch: b"main".as_slice().into() },
@@ -738,7 +748,7 @@ impl World {
                 client.hold = Some(hold);
                 assert!(self.holds.insert(hold, name).is_none(), "every hold has a name of its own");
             }
-            Request::Prepared { client, prepared } => self.prepared(client.raw(), prepared),
+            Request::Prepared { client, prepared } => self.prepared(client.raw(), &prepared),
             Request::Pushed { client, outcome } => self.pushed(client.raw(), outcome, false),
             Request::Saved { client, outcome } => self.pushed(client.raw(), outcome, true),
             Request::Released { client } => self.released(client.raw()),
@@ -747,17 +757,17 @@ impl World {
         }
     }
 
-    fn prepared(&mut self, name: u64, prepared: Prepared) {
+    fn prepared(&mut self, name: u64, prepared: &Prepared) {
         let client = self.clients.get_mut(&name).expect("the domain answers a client that asked");
         assert_eq!(client.operation.take(), Some(Operation::Prepare), "a prepare ends once");
         assert!(client.prepared.is_none(), "a client prepares once");
-        client.prepared = Some(prepared);
+        client.prepared = Some(prepared.clone());
         let stats = &mut self.stats;
         match prepared {
-            Prepared::Ready { workspace } => {
+            Prepared::Ready { workspace, .. } => {
                 stats.ready += 1;
-                client.workspace = Some(workspace);
-                self.check_ready(name, workspace);
+                client.workspace = Some(*workspace);
+                self.check_ready(name, *workspace);
             }
             Prepared::Refused { refusal } => {
                 assert!(client.hold.is_none(), "a prepare refused holds nothing");
@@ -840,6 +850,7 @@ impl World {
             let repo = &client.repos[index];
             let left = &client.left[index];
             match landing {
+                Landing::Conflicted { .. } => panic!("legacy clients do not prepare merges"),
                 Landing::Landed { commit } => {
                     assert!(repo.writable, "only a writable repository is pushed");
                     let tree = self.forge.tree(translate::fake(*commit));
@@ -978,7 +989,12 @@ impl World {
                 assert_eq!(attempt.verified, Verified::Not, "a push is verified once");
                 Some(remote.to_vec())
             }
-            Op::Fetch { .. } | Op::Make { .. } | Op::Clone { .. } | Op::Create { .. } | Op::CheckOut { .. } => {
+            Op::Fetch { .. }
+            | Op::Make { .. }
+            | Op::Clone { .. }
+            | Op::Create { .. }
+            | Op::CheckOut { .. }
+            | Op::Merge { .. } => {
                 panic!("a push or a save commits, pushes and verifies, nothing else: {op:?}")
             }
             Op::Commit { .. } => None,
@@ -1035,7 +1051,9 @@ impl World {
                 | Done::Exists
                 | Done::Rejected
                 | Done::Failed { .. }
-                | Done::FailedWithOutput { .. } => Verified::Failed,
+                | Done::FailedWithOutput { .. }
+                | Done::Merged
+                | Done::Conflicted { .. } => Verified::Failed,
             };
         }
         self.stage.push(Event::Done { owner, done });
@@ -1072,7 +1090,8 @@ impl World {
             | Op::Fetch { .. }
             | Op::Create { .. }
             | Op::Commit { .. }
-            | Op::Push { .. } => {}
+            | Op::Push { .. }
+            | Op::Merge { .. } => {}
         }
         let creates = op.kind() == Kind::Create;
         self.forge.at(self.now);
@@ -1103,7 +1122,9 @@ impl World {
             | Done::Unchanged
             | Done::Rejected
             | Done::Failed { .. }
-            | Done::FailedWithOutput { .. } => {}
+            | Done::FailedWithOutput { .. }
+            | Done::Merged
+            | Done::Conflicted { .. } => {}
         }
         done
     }

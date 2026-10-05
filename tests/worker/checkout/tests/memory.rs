@@ -8,8 +8,8 @@
 use skein_lib::{Duration, Env, Queue, Time, Token, Wall};
 use temper_worker_domain_checkout::git::{Commit, Done, Fault, Kind, Missing};
 use temper_worker_domain_checkout::{
-    Domain, Event, Limits, MAX_OUT, Message, Outcome, Prepared, Refusal, Repository, Request, Spec, Start, step,
-    worst_case,
+    Domain, Event, Limits, MAX_OUT, Message, Outcome, Preparation, Prepared, Refusal, Repository, Request, Spec, Start,
+    step, worst_case,
 };
 use temper_world::heap::{self, Meter};
 
@@ -21,6 +21,8 @@ const LIMITS: Limits = Limits {
     repositories: 2,
     name_bytes: 32,
     message_bytes: 128,
+    conflicts: 0,
+    path_bytes: 0,
     remote_timeout: Duration::from_secs(60),
     local_timeout: Duration::from_secs(10),
     facts: 16,
@@ -49,7 +51,7 @@ fn commit(n: u32) -> Commit {
 enum Asked {
     Held { hold: Token },
     Io { op: Kind },
-    Prepared { prepared: Prepared },
+    Prepared { prepared: Preparation },
     Pushed,
     Saved,
     Refused { refusal: Refusal },
@@ -64,6 +66,7 @@ fn full_spec(limits: &Limits, n: u32) -> Spec {
     let mut repositories = Vec::new();
     for place in 0..limits.repositories {
         repositories.push(Repository {
+            expected: None,
             name: name(limits.name_bytes, place),
             remote: name(limits.name_bytes, place),
             start: Start::Base { branch: name(limits.name_bytes, place) },
@@ -95,7 +98,10 @@ impl Fill {
     fn new(limits: Limits) -> Fill {
         let bound = worst_case(&limits).expect("the test limits fit");
         let env = Env { now: Time::ZERO, wall: Wall::EPOCH, limits };
-        Fill { domain: Domain::new(&limits), env, out: Queue::with_capacity(MAX_OUT), meter: Meter::new(), bound }
+        let out = Queue::with_capacity(MAX_OUT);
+        let meter = Meter::new();
+        let domain = Domain::new(&limits);
+        Fill { domain, env, out, meter, bound }
     }
 
     fn step(&mut self, event: Event) -> Vec<Asked> {
@@ -107,7 +113,20 @@ impl Fill {
             asked.push(match request {
                 Request::Held { hold, .. } => Asked::Held { hold },
                 Request::Io { op, .. } => Asked::Io { op: op.kind() },
-                Request::Prepared { prepared, .. } => Asked::Prepared { prepared },
+                Request::Prepared { prepared, .. } => Asked::Prepared {
+                    prepared: match prepared {
+                        Prepared::Ready { workspace, conflicts } => Preparation::Ready {
+                            workspace,
+                            conflicts: conflicts
+                                .iter()
+                                .map(|row| u64::try_from(row.files.len()).expect("an admitted path count fits u32"))
+                                .sum(),
+                        },
+                        Prepared::Refused { refusal } => Preparation::Refused { refusal },
+                        Prepared::Failed { failure } => Preparation::Failed { failure },
+                        Prepared::Aborted => Preparation::Aborted,
+                    },
+                },
                 Request::Pushed { outcome: Outcome::Pushed { .. }, .. } => Asked::Pushed,
                 Request::Saved { outcome: Outcome::Pushed { .. }, .. } => Asked::Saved,
                 Request::Pushed { outcome: Outcome::Refused { refusal }, .. }
@@ -120,7 +139,6 @@ impl Fill {
         asked
     }
 
-    #[expect(clippy::large_types_passed_by_value, reason = "the driver hands an owned terminal to the step")]
     fn done(&mut self, hold: Token, done: Done) -> Vec<Asked> {
         self.step(Event::Done { owner: hold, done })
     }
@@ -146,7 +164,7 @@ impl Fill {
             if place + 1 < limits.repositories {
                 assert_eq!(next[..], [Asked::Io { op: Kind::Fetch }]);
             } else {
-                let [Asked::Prepared { prepared: Prepared::Ready { .. } }] = next[..] else {
+                let [Asked::Prepared { prepared: Preparation::Ready { .. } }] = next[..] else {
                     panic!("the workspace is ready: {next:?}");
                 };
             }
@@ -196,7 +214,7 @@ fn fill(limits: Limits) {
     }
     // Every workspace is held: another prepare is refused.
     let another = Event::Prepare { client: Token::new(1 << 40), spec: full_spec(&limits, 1 << 20) };
-    let [Asked::Prepared { prepared: Prepared::Refused { refusal: Refusal::Full } }] = fill.step(another)[..] else {
+    let [Asked::Prepared { prepared: Preparation::Refused { refusal: Refusal::Full } }] = fill.step(another)[..] else {
         panic!("every workspace is held");
     };
     // Released, each once its save has landed: no reclaim point yet.

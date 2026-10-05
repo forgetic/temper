@@ -120,9 +120,12 @@ impl World {
                 let part = match &op {
                     Op::Commit { .. } | Op::Fetch { want: Want::Branch { .. }, .. } => pushing,
                     Op::Push { branch, .. } => pushing && !self.save_branches.contains(&**branch),
-                    Op::Make { .. } | Op::Clone { .. } | Op::Fetch { .. } | Op::Create { .. } | Op::CheckOut { .. } => {
-                        false
-                    }
+                    Op::Make { .. }
+                    | Op::Clone { .. }
+                    | Op::Fetch { .. }
+                    | Op::Create { .. }
+                    | Op::CheckOut { .. }
+                    | Op::Merge { .. } => false,
                 };
                 assert!(
                     part,
@@ -169,7 +172,12 @@ impl World {
         };
         let prepares = match &pending.work {
             Work::Perform(op) | Work::Ambiguous(op) => match op {
-                Op::Make { .. } | Op::Clone { .. } | Op::Fetch { .. } | Op::Create { .. } | Op::CheckOut { .. } => true,
+                Op::Make { .. }
+                | Op::Clone { .. }
+                | Op::Fetch { .. }
+                | Op::Create { .. }
+                | Op::CheckOut { .. }
+                | Op::Merge { .. } => true,
                 Op::Commit { .. } | Op::Push { .. } => false,
             },
             Work::Ending(_) => true,
@@ -215,7 +223,7 @@ impl World {
             let refusing = match op.kind() {
                 Kind::Create => self.rng.chance(self.settings.git.refusing_creates),
                 Kind::Push => self.rng.chance(self.settings.git.refusing),
-                Kind::Make | Kind::Clone | Kind::Fetch | Kind::CheckOut | Kind::Commit => false,
+                Kind::Make | Kind::Clone | Kind::Fetch | Kind::CheckOut | Kind::Merge | Kind::Commit => false,
             };
             forge::set_reachable(&mut self.forge, remote, reachable);
             forge::set_refusing(&mut self.forge, remote, refusing);
@@ -228,7 +236,8 @@ impl World {
             | Op::Fetch { .. }
             | Op::Create { .. }
             | Op::Commit { .. }
-            | Op::Push { .. } => None,
+            | Op::Push { .. }
+            | Op::Merge { .. } => None,
         };
         let pushed = match &op {
             Op::Push { at, remote, commit, branch, .. } => {
@@ -239,6 +248,7 @@ impl World {
             | Op::Fetch { .. }
             | Op::Create { .. }
             | Op::CheckOut { .. }
+            | Op::Merge { .. }
             | Op::Commit { .. } => None,
         };
         let mut spill = Vec::new();
@@ -290,7 +300,9 @@ impl World {
             | Done::Unchanged
             | Done::Exists
             | Done::Failed { .. }
-            | Done::FailedWithOutput { .. } => {}
+            | Done::FailedWithOutput { .. }
+            | Done::Merged
+            | Done::Conflicted { .. } => {}
         }
         done
     }

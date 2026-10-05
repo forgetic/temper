@@ -358,7 +358,8 @@ fn ended(
     then: &mut Then,
 ) -> State {
     match prepared {
-        checkout::Prepared::Ready { workspace: directory } => {
+        checkout::Prepared::Ready { workspace: directory, conflicts } => {
+            assert!(conflicts.is_empty(), "legacy host cannot prepare a merge");
             assert!(!abandoned, "a released hold's prepare ends aborted");
             then.host = Some(host::Event::Prepared { owner, workspace: client });
             State::Ready { hold: hold.expect("a prepare that ran was held"), directory, asked: None }

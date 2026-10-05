@@ -81,10 +81,12 @@ use core::mem;
 use skein_lib::bytes::{copy_of, find};
 use skein_lib::{Env, Id, List, Queue, Slab, Token};
 
-use crate::boundary::{Failure, Landing, Message, Outcome, Prepared, Refusal, Repository, Request, Spec, Start};
+use crate::boundary::{
+    Conflicts, Failure, Landing, Message, Outcome, Prepared, Refusal, Repository, Request, Spec, Start,
+};
 use crate::cache::{Cache, Workspace, count};
 use crate::domain::Domain;
-use crate::facts::{Cached, Fact, Facts, Tally, Target};
+use crate::facts::{Cached, Ending, Fact, Facts, Preparation, Tally, Target};
 use crate::git::{Commit, Done, Fault, Missing, Op, Place, Want};
 use crate::limits::Limits;
 
@@ -104,6 +106,8 @@ struct Holding {
     repositories: Box<[Repository]>,
     /// Where each repository checked out so far stands, in the same order.
     tips: List<Tips>,
+    /// Moved to the client exactly once when preparation succeeds.
+    conflicts: List<Conflicts>,
 }
 
 /// Where a repository stands: the commit it was checked out at, the commit
@@ -115,6 +119,8 @@ pub(crate) struct Tips {
     start: Commit,
     head: Commit,
     pushed: Commit,
+    merging: Option<Commit>,
+    expected: Option<Commit>,
 }
 
 #[derive(Debug)]
@@ -161,6 +167,20 @@ enum PrepareStep {
         repository: u32,
         commit: Commit,
     },
+    FetchBase {
+        repository: u32,
+        ours: Commit,
+        base: Commit,
+    },
+    CheckOutMerge {
+        repository: u32,
+        ours: Commit,
+        base: Commit,
+    },
+    Merge {
+        repository: u32,
+        theirs: Commit,
+    },
 }
 
 /// A push or a save under way.
@@ -181,7 +201,7 @@ enum To {
 }
 
 /// The operation a pushing hold waits for.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 #[expect(clippy::large_enum_variant, reason = "bounded diagnostics stay inline and are included in worst_case")]
 enum PushStep {
     Commit {
@@ -233,7 +253,8 @@ pub(crate) fn prepare(domain: &mut Domain, env: &Env<Limits>, client: Token, spe
     };
     domain.facts.push(Fact::Held { client, cached });
     let tips = List::with_capacity(count(repositories.len()));
-    let holding = Holding { client, workspace, repositories, tips };
+    let conflicts = List::with_capacity(count(repositories.len()));
+    let holding = Holding { client, workspace, repositories, tips, conflicts };
     let hold = Hold { holding, state: State::Closed };
     let id = domain.holds.insert(hold).expect("room for a hold for each workspace, and as many released");
     out.push(Request::Held { client, hold: id.token() });
@@ -311,33 +332,21 @@ fn ask(domain: &mut Domain, hold: Token, now: Asked, out: &mut Queue<Request>) {
 }
 
 /// Terminal for an operation: what the hold does next.
-#[expect(
-    clippy::large_types_passed_by_value,
-    reason = "owned terminal diagnostics pass through the step without allocation"
-)]
 pub(crate) fn done(domain: &mut Domain, env: &Env<Limits>, owner: Token, done: Done, out: &mut Queue<Request>) {
     let mark = out.len();
+    let done = bounded_done(done, &env.limits);
     let id = Id::from_token(owner);
     let hold = domain.holds.get_mut(id).expect("a hold lives until its operation has ended");
-    let told = match done {
-        Done::FailedWithOutput { fault, .. } => Done::Failed { fault },
-        other @ (Done::Failed { .. }
-        | Done::Succeeded
-        | Done::Fetched { .. }
-        | Done::Committed { .. }
-        | Done::Unchanged
-        | Done::Exists
-        | Done::Rejected) => other,
-    };
+    let told = ending(&done);
     domain.facts.push(Fact::Ended { client: hold.holding.client, done: told });
-    if damages(done) {
+    if damages(&done) {
         domain.cache.spoil(hold.holding.workspace);
     }
     let state = mem::replace(&mut hold.state, State::Closed);
     let holding = &mut hold.holding;
     hold.state = match state {
         State::Preparing { step, asked } => {
-            let next = prepared(holding, &mut domain.cache, step, done);
+            let next = prepared(holding, &mut domain.cache, step, done, &env.limits);
             prepare_next(holding, id, next, asked, env, out)
         }
         State::Pushing { push, step, asked } => pushed(holding, id, push, step, asked, done, env, out),
@@ -375,7 +384,9 @@ fn tell(facts: &mut Facts, client: Token, out: &Queue<Request>, mark: u32) {
     for request in out.iter().skip(made) {
         let fact = match request {
             Request::Held { .. } => continue,
-            Request::Prepared { client, prepared } => Fact::Prepared { client: *client, prepared: *prepared },
+            Request::Prepared { client, prepared } => {
+                Fact::Prepared { client: *client, prepared: preparation(prepared) }
+            }
             Request::Pushed { client, outcome } => pushed_fact(*client, Target::Push, outcome),
             Request::Saved { client, outcome } => pushed_fact(*client, Target::Saved, outcome),
             Request::Released { client } => Fact::Released { client: *client },
@@ -390,6 +401,81 @@ fn pushed_fact(client: Token, to: Target, outcome: &Outcome) -> Fact {
     match outcome {
         Outcome::Pushed { landings } => Fact::Pushed { client, to, tally: tally(landings) },
         Outcome::Refused { refusal } => Fact::Refused { client, refusal: *refusal },
+    }
+}
+
+fn ending(done: &Done) -> Ending {
+    match done {
+        Done::Succeeded => Ending::Succeeded,
+        Done::Fetched { commit } => Ending::Fetched { commit: *commit },
+        Done::Committed { commit } => Ending::Committed { commit: *commit },
+        Done::Unchanged => Ending::Unchanged,
+        Done::Exists => Ending::Exists,
+        Done::Rejected => Ending::Rejected,
+        Done::Merged => Ending::Merged,
+        Done::Conflicted { files } => Ending::Conflicted { files: count(files.len()) },
+        Done::Failed { fault } | Done::FailedWithOutput { fault, .. } => Ending::Failed { fault: *fault },
+    }
+}
+
+fn preparation(prepared: &Prepared) -> Preparation {
+    match prepared {
+        Prepared::Ready { workspace, conflicts } => {
+            let mut paths = 0_u64;
+            for conflict in conflicts {
+                paths = paths
+                    .checked_add(u64::from(count(conflict.files.len())))
+                    .expect("bounded repository/path product fits u64");
+            }
+            Preparation::Ready { workspace: *workspace, conflicts: paths }
+        }
+        Prepared::Refused { refusal } => Preparation::Refused { refusal: *refusal },
+        Prepared::Failed { failure } => Preparation::Failed { failure: *failure },
+        Prepared::Aborted => Preparation::Aborted,
+    }
+}
+
+fn paths_fit(files: &[Box<[u8]>], limits: &Limits) -> bool {
+    let Ok(length) = u32::try_from(files.len()) else {
+        return false;
+    };
+    if length == 0 || length > limits.conflicts {
+        return false;
+    }
+    for (position, file) in files.iter().enumerate() {
+        let Ok(length) = u32::try_from(file.len()) else {
+            return false;
+        };
+        if length == 0 || length > limits.path_bytes {
+            return false;
+        }
+        for earlier in files.iter().take(position) {
+            if earlier == file {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn bounded_done(done: Done, limits: &Limits) -> Done {
+    match done {
+        Done::Conflicted { files } => {
+            if paths_fit(&files, limits) {
+                Done::Conflicted { files }
+            } else {
+                Done::Failed { fault: Fault::Broken }
+            }
+        }
+        other @ (Done::Succeeded
+        | Done::Fetched { .. }
+        | Done::Committed { .. }
+        | Done::Unchanged
+        | Done::Exists
+        | Done::Rejected
+        | Done::Merged
+        | Done::Failed { .. }
+        | Done::FailedWithOutput { .. }) => other,
     }
 }
 
@@ -412,16 +498,22 @@ fn follow(holds: &mut Slab<Hold>, cache: &mut Cache, id: Id<Hold>) {
 /// Preparing, done: where the prepare goes from the operation `step` that
 /// ended so.
 #[expect(
-    clippy::large_types_passed_by_value,
-    reason = "owned terminal diagnostics pass through the step without allocation"
+    clippy::too_many_lines,
+    reason = "the legacy preparation transition table remains together until its step-08 contraction"
 )]
-fn prepared(holding: &mut Holding, cache: &mut Cache, step: PrepareStep, done: Done) -> Next {
+fn prepared(holding: &mut Holding, cache: &mut Cache, step: PrepareStep, done: Done, limits: &Limits) -> Next {
     let last = count(holding.repositories.len()).checked_sub(1).expect("a spec names a repository");
     match step {
         PrepareStep::Make => match done {
             Done::Succeeded => Next::Step(PrepareStep::Clone { repository: 0 }),
             Done::Failed { fault: _ } | Done::FailedWithOutput { fault: _, .. } => Next::Failed(Failure::Transient),
-            Done::Fetched { .. } | Done::Committed { .. } | Done::Unchanged | Done::Exists | Done::Rejected => {
+            Done::Fetched { .. }
+            | Done::Committed { .. }
+            | Done::Unchanged
+            | Done::Exists
+            | Done::Rejected
+            | Done::Merged
+            | Done::Conflicted { .. } => {
                 unreachable!("io ends a make with its own terminals")
             }
         },
@@ -432,12 +524,23 @@ fn prepared(holding: &mut Holding, cache: &mut Cache, step: PrepareStep, done: D
                 Next::Step(PrepareStep::Fetch { repository: 0 })
             }
             Done::Failed { fault } | Done::FailedWithOutput { fault, .. } => Next::Failed(failure(repository, fault)),
-            Done::Fetched { .. } | Done::Committed { .. } | Done::Unchanged | Done::Exists | Done::Rejected => {
+            Done::Fetched { .. }
+            | Done::Committed { .. }
+            | Done::Unchanged
+            | Done::Exists
+            | Done::Rejected
+            | Done::Merged
+            | Done::Conflicted { .. } => {
                 unreachable!("io ends a clone with its own terminals")
             }
         },
         PrepareStep::Fetch { repository } => match done {
-            Done::Fetched { commit } => Next::Step(PrepareStep::CheckOut { repository, commit }),
+            Done::Fetched { commit } => match nth(holding, repository).start {
+                Start::Merge { base, .. } => Next::Step(PrepareStep::FetchBase { repository, ours: commit, base }),
+                Start::Base { .. } | Start::Branch { .. } | Start::Commit { .. } | Start::Saved { .. } => {
+                    Next::Step(PrepareStep::CheckOut { repository, commit })
+                }
+            },
             Done::Failed { fault: Fault::Missing { missing: Missing::Branch } }
             | Done::FailedWithOutput { fault: Fault::Missing { missing: Missing::Branch }, .. }
                 if creates_base(holding, repository) =>
@@ -445,14 +548,26 @@ fn prepared(holding: &mut Holding, cache: &mut Cache, step: PrepareStep, done: D
                 Next::Step(PrepareStep::Default { repository })
             }
             Done::Failed { fault } | Done::FailedWithOutput { fault, .. } => Next::Failed(failure(repository, fault)),
-            Done::Succeeded | Done::Committed { .. } | Done::Unchanged | Done::Exists | Done::Rejected => {
+            Done::Succeeded
+            | Done::Committed { .. }
+            | Done::Unchanged
+            | Done::Exists
+            | Done::Rejected
+            | Done::Merged
+            | Done::Conflicted { .. } => {
                 unreachable!("io ends a fetch with its own terminals")
             }
         },
         PrepareStep::Default { repository } => match done {
             Done::Fetched { commit } => Next::Step(PrepareStep::Create { repository, commit }),
             Done::Failed { fault } | Done::FailedWithOutput { fault, .. } => Next::Failed(failure(repository, fault)),
-            Done::Succeeded | Done::Committed { .. } | Done::Unchanged | Done::Exists | Done::Rejected => {
+            Done::Succeeded
+            | Done::Committed { .. }
+            | Done::Unchanged
+            | Done::Exists
+            | Done::Rejected
+            | Done::Merged
+            | Done::Conflicted { .. } => {
                 unreachable!("io ends a fetch with its own terminals")
             }
         },
@@ -460,7 +575,12 @@ fn prepared(holding: &mut Holding, cache: &mut Cache, step: PrepareStep, done: D
             Done::Succeeded => Next::Step(PrepareStep::CheckOut { repository, commit }),
             Done::Exists => Next::Step(PrepareStep::Refetch { repository }),
             Done::Failed { fault } | Done::FailedWithOutput { fault, .. } => Next::Failed(failure(repository, fault)),
-            Done::Fetched { .. } | Done::Committed { .. } | Done::Unchanged | Done::Rejected => {
+            Done::Fetched { .. }
+            | Done::Committed { .. }
+            | Done::Unchanged
+            | Done::Rejected
+            | Done::Merged
+            | Done::Conflicted { .. } => {
                 unreachable!("io ends a creation with its own terminals")
             }
         },
@@ -470,13 +590,25 @@ fn prepared(holding: &mut Holding, cache: &mut Cache, step: PrepareStep, done: D
             Done::Failed { fault: Fault::Missing { .. } }
             | Done::FailedWithOutput { fault: Fault::Missing { .. }, .. } => Next::Failed(Failure::Transient),
             Done::Failed { fault } | Done::FailedWithOutput { fault, .. } => Next::Failed(failure(repository, fault)),
-            Done::Succeeded | Done::Committed { .. } | Done::Unchanged | Done::Exists | Done::Rejected => {
+            Done::Succeeded
+            | Done::Committed { .. }
+            | Done::Unchanged
+            | Done::Exists
+            | Done::Rejected
+            | Done::Merged
+            | Done::Conflicted { .. } => {
                 unreachable!("io ends a fetch with its own terminals")
             }
         },
         PrepareStep::CheckOut { repository, commit } => match done {
             Done::Succeeded => {
-                let tips = Tips { start: commit, head: commit, pushed: commit };
+                let tips = Tips {
+                    start: commit,
+                    head: commit,
+                    pushed: commit,
+                    merging: None,
+                    expected: nth(holding, repository).expected,
+                };
                 holding.tips.push(tips).expect("room for each repository's tips");
                 if repository < last {
                     Next::Step(PrepareStep::Fetch { repository: after(repository) })
@@ -485,17 +617,93 @@ fn prepared(holding: &mut Holding, cache: &mut Cache, step: PrepareStep, done: D
                 }
             }
             Done::Failed { fault: _ } | Done::FailedWithOutput { fault: _, .. } => Next::Failed(Failure::Transient),
-            Done::Fetched { .. } | Done::Committed { .. } | Done::Unchanged | Done::Exists | Done::Rejected => {
+            Done::Fetched { .. }
+            | Done::Committed { .. }
+            | Done::Unchanged
+            | Done::Exists
+            | Done::Rejected
+            | Done::Merged
+            | Done::Conflicted { .. } => {
                 unreachable!("io ends a checkout with its own terminals")
             }
         },
+        merge @ (PrepareStep::FetchBase { .. } | PrepareStep::CheckOutMerge { .. } | PrepareStep::Merge { .. }) => {
+            prepared_merge(holding, merge, done, limits)
+        }
     }
+}
+
+fn prepared_merge(holding: &mut Holding, step: PrepareStep, done: Done, limits: &Limits) -> Next {
+    let last = count(holding.repositories.len()).checked_sub(1).expect("a spec names a repository");
+    match step {
+        PrepareStep::FetchBase { repository, ours, base } => match done {
+            Done::Fetched { commit } => {
+                assert_eq!(commit, base, "fetching an exact commit returns that commit");
+                Next::Step(PrepareStep::CheckOutMerge { repository, ours, base })
+            }
+            Done::Failed { fault } | Done::FailedWithOutput { fault, .. } => Next::Failed(failure(repository, fault)),
+            Done::Succeeded
+            | Done::Committed { .. }
+            | Done::Unchanged
+            | Done::Exists
+            | Done::Rejected
+            | Done::Merged
+            | Done::Conflicted { .. } => unreachable!("io ends a fetch with its own terminals"),
+        },
+        PrepareStep::CheckOutMerge { repository, ours, base } => match done {
+            Done::Succeeded => {
+                let tips = Tips {
+                    start: ours,
+                    head: ours,
+                    pushed: ours,
+                    merging: Some(base),
+                    expected: nth(holding, repository).expected,
+                };
+                holding.tips.push(tips).expect("room for each repository's tips");
+                Next::Step(PrepareStep::Merge { repository, theirs: base })
+            }
+            Done::Failed { .. } | Done::FailedWithOutput { .. } => Next::Failed(Failure::Transient),
+            Done::Fetched { .. }
+            | Done::Committed { .. }
+            | Done::Unchanged
+            | Done::Exists
+            | Done::Rejected
+            | Done::Merged
+            | Done::Conflicted { .. } => unreachable!("io ends a checkout with its own terminals"),
+        },
+        PrepareStep::Merge { repository, .. } => match done {
+            Done::Merged => after_merged(repository, last),
+            Done::Conflicted { files } => {
+                assert!(paths_fit(&files, limits), "terminal admission bounds retained paths");
+                holding.conflicts.push(Conflicts { repository, files }).expect("room for each repository's conflicts");
+                after_merged(repository, last)
+            }
+            Done::Failed { .. } | Done::FailedWithOutput { .. } => Next::Failed(Failure::Transient),
+            Done::Succeeded
+            | Done::Fetched { .. }
+            | Done::Committed { .. }
+            | Done::Unchanged
+            | Done::Exists
+            | Done::Rejected => unreachable!("io ends a merge with its own terminals"),
+        },
+        PrepareStep::Make
+        | PrepareStep::Clone { .. }
+        | PrepareStep::Fetch { .. }
+        | PrepareStep::Default { .. }
+        | PrepareStep::Create { .. }
+        | PrepareStep::Refetch { .. }
+        | PrepareStep::CheckOut { .. } => unreachable!("merge preparation has only its own steps"),
+    }
+}
+
+fn after_merged(repository: u32, last: u32) -> Next {
+    if repository < last { Next::Step(PrepareStep::Fetch { repository: after(repository) }) } else { Next::Ready }
 }
 
 /// Preparing, done: the next operation, or the prepare's end, which an abort
 /// or a release turns into aborted.
 fn prepare_next(
-    holding: &Holding,
+    holding: &mut Holding,
     id: Id<Hold>,
     next: Next,
     asked: Asked,
@@ -507,7 +715,9 @@ fn prepare_next(
         Asked::Nothing => match next {
             Next::Step(step) => prepare_step(holding, id, step, env, out),
             Next::Ready => {
-                let prepared = Prepared::Ready { workspace: holding.workspace.token() };
+                let conflicts = mem::replace(&mut holding.conflicts, List::with_capacity(0));
+                let prepared =
+                    Prepared::Ready { workspace: holding.workspace.token(), conflicts: conflicts.into_boxed() };
                 out.push(Request::Prepared { client, prepared });
                 State::Ready
             }
@@ -547,9 +757,10 @@ fn prepare_step(
         PrepareStep::Fetch { repository } | PrepareStep::Refetch { repository } => {
             let repository = nth(holding, repository);
             let want = match &repository.start {
-                Start::Base { branch } | Start::Branch { branch } | Start::Saved { branch } => {
-                    Want::Branch { branch: copy_of(branch) }
-                }
+                Start::Base { branch }
+                | Start::Branch { branch }
+                | Start::Saved { branch }
+                | Start::Merge { branch, .. } => Want::Branch { branch: copy_of(branch) },
                 Start::Commit { commit } => Want::Commit { commit: *commit },
             };
             let remote = copy_of(&repository.remote);
@@ -566,7 +777,7 @@ fn prepare_step(
             let repository = nth(holding, repository);
             let branch = match &repository.start {
                 Start::Base { branch } => copy_of(branch),
-                Start::Branch { .. } | Start::Commit { .. } | Start::Saved { .. } => {
+                Start::Branch { .. } | Start::Commit { .. } | Start::Saved { .. } | Start::Merge { .. } => {
                     unreachable!("only a base branch is created")
                 }
             };
@@ -576,6 +787,21 @@ fn prepare_step(
         }
         PrepareStep::CheckOut { repository, commit } => {
             Op::CheckOut { at: place(workspace, nth(holding, repository)), commit }
+        }
+        PrepareStep::FetchBase { repository, base, .. } => {
+            let repository = nth(holding, repository);
+            Op::Fetch {
+                at: place(workspace, repository),
+                remote: copy_of(&repository.remote),
+                want: Want::Commit { commit: base },
+                identity: repository.identity,
+            }
+        }
+        PrepareStep::CheckOutMerge { repository, ours, .. } => {
+            Op::CheckOut { at: place(workspace, nth(holding, repository)), commit: ours }
+        }
+        PrepareStep::Merge { repository, theirs } => {
+            Op::Merge { at: place(workspace, nth(holding, repository)), theirs }
         }
     };
     io(id, op, env, out);
@@ -620,7 +846,8 @@ fn push_from(
         let parent = tips(holding, repository).head;
         let title = copy_of(&push.message.title);
         let body = copy_of(&push.message.body);
-        io(id, Op::Commit { at, parent, title, body, identity: spec.identity }, env, out);
+        let merging = tips(holding, repository).merging;
+        io(id, Op::Commit { at, parent, merging, title, body, identity: spec.identity }, env, out);
         return State::Pushing { push, step: PushStep::Commit { repository }, asked: Asked::Nothing };
     }
     answer(holding.client, &push.to, Outcome::Pushed { landings: push.landings.into_boxed() }, out);
@@ -630,10 +857,6 @@ fn push_from(
 /// Pushing, done: what came of the repository in flight, then the next one,
 /// or the end, which an abort or a release brings forward.
 #[expect(clippy::too_many_arguments, reason = "a cell handler takes the state's parts and the event's")]
-#[expect(
-    clippy::large_types_passed_by_value,
-    reason = "owned terminal diagnostics pass through the step without allocation"
-)]
 fn pushed(
     holding: &mut Holding,
     id: Id<Hold>,
@@ -663,8 +886,8 @@ fn pushed(
             },
         },
         PushStep::Push { repository } => match pushed_to(holding, &push.to, repository, done) {
-            Some(landing) => (repository, landing),
-            None => return verify(holding, id, push, repository, asked, done, env, out),
+            Ok(landing) => (repository, landing),
+            Err(failure) => return verify(holding, id, push, repository, asked, failure, env, out),
         },
         PushStep::Verify { repository, failure } => {
             (repository, verified(holding, &push.to, repository, done, failure))
@@ -679,20 +902,21 @@ fn pushed(
 
 /// Pushing, a commit done: the repository's new head, if it committed, or
 /// why it failed.
-#[expect(
-    clippy::large_types_passed_by_value,
-    reason = "owned terminal diagnostics pass through the step without allocation"
-)]
 #[expect(clippy::result_large_err, reason = "the fixed diagnostic terminal is returned without allocation")]
 fn committed(holding: &mut Holding, repository: u32, done: Done) -> Result<(), Done> {
     match done {
         Done::Committed { commit } => {
-            tips_mut(holding, repository).head = commit;
+            let tips = tips_mut(holding, repository);
+            tips.head = commit;
+            tips.merging = None;
             Ok(())
         }
-        Done::Unchanged => Ok(()),
-        failure @ (Done::Failed { .. } | Done::FailedWithOutput { .. }) => Err(failure),
-        Done::Succeeded | Done::Fetched { .. } | Done::Exists | Done::Rejected => {
+        Done::Unchanged => {
+            assert!(tips(holding, repository).merging.is_none(), "an explicit merge is never unchanged");
+            Ok(())
+        }
+        failure @ (Done::Failed { .. } | Done::FailedWithOutput { .. } | Done::Conflicted { .. }) => Err(failure),
+        Done::Succeeded | Done::Fetched { .. } | Done::Exists | Done::Rejected | Done::Merged => {
             unreachable!("io ends a commit with its own terminals")
         }
     }
@@ -726,7 +950,11 @@ fn push_commit(
     let at = place(holding.workspace.token(), spec);
     let remote = copy_of(&spec.remote);
     let identity = spec.identity;
-    io(id, Op::Push { at, remote, commit, branch, identity }, env, out);
+    let expected = match push.to {
+        To::Branches => tips(holding, repository).expected,
+        To::Saved { .. } => None,
+    };
+    io(id, Op::Push { at, remote, commit, branch, expected, identity }, env, out);
     State::Pushing { push, step: PushStep::Push { repository }, asked: Asked::Nothing }
 }
 
@@ -734,23 +962,26 @@ fn push_commit(
 /// all the same, to be verified. A commit that landed on its push branch is
 /// the base of the next push.
 #[expect(
-    clippy::large_types_passed_by_value,
-    reason = "owned terminal diagnostics pass through the step without allocation"
+    clippy::result_large_err,
+    reason = "the ambiguous owned terminal is retained for verification without allocation"
 )]
-fn pushed_to(holding: &mut Holding, to: &To, repository: u32, done: Done) -> Option<Landing> {
+fn pushed_to(holding: &mut Holding, to: &To, repository: u32, done: Done) -> Result<Landing, Done> {
     match done {
-        Done::Succeeded => Some(land(holding, to, repository)),
-        Done::Rejected => Some(Landing::Moved),
-        Done::Failed { fault: Fault::TimedOut | Fault::Broken | Fault::Unreachable | Fault::Cancelled }
+        Done::Succeeded => Ok(land(holding, to, repository)),
+        Done::Rejected => Ok(Landing::Moved),
+        failure @ (Done::Failed { fault: Fault::TimedOut | Fault::Broken | Fault::Unreachable | Fault::Cancelled }
         | Done::FailedWithOutput {
             fault: Fault::TimedOut | Fault::Broken | Fault::Unreachable | Fault::Cancelled,
             ..
-        } => None,
+        }) => Err(failure),
         failure @ (Done::Failed { fault: Fault::Missing { .. } | Fault::Refused }
-        | Done::FailedWithOutput { fault: Fault::Missing { .. } | Fault::Refused, .. }) => {
-            Some(failed_landing(failure))
-        }
-        Done::Fetched { .. } | Done::Committed { .. } | Done::Unchanged | Done::Exists => {
+        | Done::FailedWithOutput { fault: Fault::Missing { .. } | Fault::Refused, .. }) => Ok(failed_landing(failure)),
+        Done::Fetched { .. }
+        | Done::Committed { .. }
+        | Done::Unchanged
+        | Done::Exists
+        | Done::Merged
+        | Done::Conflicted { .. } => {
             unreachable!("io ends a push with its own terminals")
         }
     }
@@ -759,10 +990,6 @@ fn pushed_to(holding: &mut Holding, to: &To, repository: u32, done: Done) -> Opt
 /// Asks io for the branch a push that may have landed went to, whether the
 /// client asked to abort or not: one more operation, bounded as any.
 #[expect(clippy::too_many_arguments, reason = "a cell handler takes the fields it touches")]
-#[expect(
-    clippy::large_types_passed_by_value,
-    reason = "owned terminal diagnostics pass through the step without allocation"
-)]
 fn verify(
     holding: &Holding,
     id: Id<Hold>,
@@ -784,15 +1011,17 @@ fn verify(
 
 /// Pushing, a verification done: the push landed if its branch is at the
 /// commit it pushed.
-#[expect(
-    clippy::large_types_passed_by_value,
-    reason = "owned terminal diagnostics pass through the step without allocation"
-)]
 fn verified(holding: &mut Holding, to: &To, repository: u32, done: Done, failure: Done) -> Landing {
     match done {
         Done::Fetched { commit } if commit == tips(holding, repository).head => land(holding, to, repository),
         Done::Fetched { .. } | Done::Failed { .. } | Done::FailedWithOutput { .. } => failed_landing(failure),
-        Done::Succeeded | Done::Committed { .. } | Done::Unchanged | Done::Exists | Done::Rejected => {
+        Done::Succeeded
+        | Done::Committed { .. }
+        | Done::Unchanged
+        | Done::Exists
+        | Done::Rejected
+        | Done::Merged
+        | Done::Conflicted { .. } => {
             unreachable!("io ends a fetch with its own terminals")
         }
     }
@@ -803,7 +1032,12 @@ fn verified(holding: &mut Holding, to: &To, repository: u32, done: Done, failure
 fn land(holding: &mut Holding, to: &To, repository: u32) -> Landing {
     let tips = tips_mut(holding, repository);
     match to {
-        To::Branches => tips.pushed = tips.head,
+        To::Branches => {
+            tips.pushed = tips.head;
+            if tips.expected.is_some() {
+                tips.expected = Some(tips.head);
+            }
+        }
         To::Saved { .. } => {}
     }
     Landing::Landed { commit: tips.head }
@@ -866,11 +1100,7 @@ fn io(id: Id<Hold>, op: Op, env: &Env<Limits>, out: &mut Queue<Request>) {
 
 /// Whether an operation that ended so may have left its repository damaged:
 /// git was killed, or failed on the worker's side.
-#[expect(
-    clippy::large_types_passed_by_value,
-    reason = "owned terminal diagnostics pass through the step without allocation"
-)]
-const fn damages(done: Done) -> bool {
+const fn damages(done: &Done) -> bool {
     match done {
         Done::Failed { fault: Fault::Broken | Fault::TimedOut | Fault::Cancelled }
         | Done::FailedWithOutput { fault: Fault::Broken | Fault::TimedOut | Fault::Cancelled, .. } => true,
@@ -881,7 +1111,9 @@ const fn damages(done: Done) -> bool {
         | Done::Committed { .. }
         | Done::Unchanged
         | Done::Exists
-        | Done::Rejected => false,
+        | Done::Rejected
+        | Done::Merged
+        | Done::Conflicted { .. } => false,
     }
 }
 
@@ -896,12 +1128,9 @@ const fn failure(repository: u32, fault: Fault) -> Failure {
 }
 
 /// What a failed invocation said, retaining its diagnostic output.
-#[expect(
-    clippy::large_types_passed_by_value,
-    reason = "owned terminal diagnostics pass through the step without allocation"
-)]
 fn failed_landing(done: Done) -> Landing {
     match done {
+        Done::Conflicted { files } => Landing::Conflicted { files },
         Done::Failed { fault } => Landing::Explained { fault, diagnostic: crate::git::PushDiagnostic::empty() },
         Done::FailedWithOutput { fault, diagnostic } => Landing::Explained { fault, diagnostic },
         Done::Succeeded
@@ -909,7 +1138,8 @@ fn failed_landing(done: Done) -> Landing {
         | Done::Committed { .. }
         | Done::Unchanged
         | Done::Exists
-        | Done::Rejected => unreachable!("only a failed invocation is explained"),
+        | Done::Rejected
+        | Done::Merged => unreachable!("only a failed invocation is explained"),
     }
 }
 
@@ -919,7 +1149,9 @@ fn tally(landings: &[Landing]) -> Tally {
         let counted = match landing {
             Landing::Landed { .. } => &mut tally.landed,
             Landing::Moved => &mut tally.moved,
-            Landing::Refused | Landing::Explained { fault: Fault::Refused, .. } => &mut tally.refused,
+            Landing::Conflicted { .. } | Landing::Refused | Landing::Explained { fault: Fault::Refused, .. } => {
+                &mut tally.refused
+            }
             Landing::Failed | Landing::Explained { .. } => &mut tally.failed,
             Landing::Unchanged => &mut tally.unchanged,
             Landing::Aborted => &mut tally.aborted,
@@ -944,6 +1176,7 @@ fn fits(spec: &Spec, limits: &Limits) -> bool {
         let start = match &repository.start {
             Start::Base { branch } | Start::Branch { branch } | Start::Saved { branch } => named(branch, limits),
             Start::Commit { .. } => true,
+            Start::Merge { branch, .. } => named(branch, limits) && limits.conflicts > 0 && limits.path_bytes > 0,
         };
         let push = match &repository.push {
             Some(branch) => named(branch, limits),
@@ -951,7 +1184,7 @@ fn fits(spec: &Spec, limits: &Limits) -> bool {
         };
         let directory = named(&repository.name, limits) && component(&repository.name);
         let reached = named(&repository.remote, limits);
-        if !directory || !reached || !start || !push {
+        if !directory || !reached || !start || !push || (repository.expected.is_some() && repository.push.is_none()) {
             return false;
         }
         for earlier in spec.repositories.iter().take(place) {
@@ -1002,7 +1235,7 @@ fn creates_base(holding: &Holding, repository: u32) -> bool {
     let spec = nth(holding, repository);
     let base = match spec.start {
         Start::Base { .. } => true,
-        Start::Branch { .. } | Start::Commit { .. } | Start::Saved { .. } => false,
+        Start::Branch { .. } | Start::Commit { .. } | Start::Saved { .. } | Start::Merge { .. } => false,
     };
     base && spec.push.is_some()
 }

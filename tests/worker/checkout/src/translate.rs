@@ -47,6 +47,7 @@ pub fn workspace(op: &Op) -> Token {
         | Op::Fetch { at, .. }
         | Op::Create { at, .. }
         | Op::CheckOut { at, .. }
+        | Op::Merge { at, .. }
         | Op::Commit { at, .. }
         | Op::Push { at, .. } => at.workspace,
     }
@@ -61,7 +62,7 @@ pub fn identity(op: &Op) -> Option<u32> {
         | Op::Create { identity, .. }
         | Op::Commit { identity, .. }
         | Op::Push { identity, .. } => Some(*identity),
-        Op::Make { .. } | Op::CheckOut { .. } => None,
+        Op::Make { .. } | Op::CheckOut { .. } | Op::Merge { .. } => None,
     }
 }
 
@@ -72,7 +73,7 @@ pub fn remote(op: &Op) -> Option<&[u8]> {
         Op::Clone { remote, .. } | Op::Fetch { remote, .. } | Op::Create { remote, .. } | Op::Push { remote, .. } => {
             Some(remote)
         }
-        Op::Make { .. } | Op::CheckOut { .. } | Op::Commit { .. } => None,
+        Op::Make { .. } | Op::CheckOut { .. } | Op::Merge { .. } | Op::Commit { .. } => None,
     }
 }
 
@@ -120,18 +121,41 @@ pub fn perform(forge: &mut impl Remote, disk: &mut Checkout, op: Op) -> Done {
             checked_out.expect("a checkout is of a commit fetched into the repository");
             Done::Succeeded
         }
-        Op::Commit { at, parent, title, body: _, identity: _ } => {
+        Op::Commit { at, parent, merging, title, body: _, identity: _ } => {
             assert_cloned(disk, &at);
             assert!(!title.is_empty(), "a commit has a title");
-            let committed = git::commit(forge, disk, &path(&at), fake(parent));
-            match committed.expect("a commit is on a commit the repository has") {
-                Some(committed) => Done::Committed { commit: commit(committed) },
-                None => Done::Unchanged,
+            match merging {
+                None => match git::commit(forge, disk, &path(&at), fake(parent)).expect("parent is locally fetched") {
+                    Some(committed) => Done::Committed { commit: commit(committed) },
+                    None => Done::Unchanged,
+                },
+                Some(second) => match git::commit_merging(forge, disk, &path(&at), fake(parent), fake(second)) {
+                    Ok(committed) => Done::Committed { commit: commit(committed) },
+                    Err(git::CommitFailure::Unresolved { files }) => {
+                        Done::Conflicted { files: files.into_iter().map(Vec::into_boxed_slice).collect() }
+                    }
+                    Err(git::CommitFailure::NotFetched) => panic!("both merge parents are locally fetched"),
+                },
             }
         }
-        Op::Push { at, remote, commit, branch, identity: _ } => {
+        Op::Merge { at, theirs } => {
             assert_cloned(disk, &at);
-            match git::push(forge, disk, &remote, &path(&at), fake(commit), &branch) {
+            let merged = git::merge(forge, disk, &path(&at), fake(theirs)).expect("merge parent is locally fetched");
+            if merged.conflicts.is_empty() {
+                Done::Merged
+            } else {
+                Done::Conflicted { files: merged.conflicts.into_iter().map(Vec::into_boxed_slice).collect() }
+            }
+        }
+        Op::Push { at, remote, commit, branch, expected, identity: _ } => {
+            assert_cloned(disk, &at);
+            let pushed = match expected {
+                Some(expected) => {
+                    git::push_expected(forge, disk, &remote, &path(&at), fake(commit), &branch, fake(expected))
+                }
+                None => git::push(forge, disk, &remote, &path(&at), fake(commit), &branch),
+            };
+            match pushed {
                 Ok(Pushed::Pushed) => Done::Succeeded,
                 Ok(Pushed::Rejected) => Done::Rejected,
                 Err(git::Fault::Refused) => Done::FailedWithOutput {

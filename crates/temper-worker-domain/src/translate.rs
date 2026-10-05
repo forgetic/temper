@@ -35,7 +35,7 @@ fn repository(repository: host::Repository) -> checkout::Repository {
         host::Access::ReadOnly => None,
         host::Access::Writable { push } => Some(push),
     };
-    checkout::Repository { name, remote, start: self::start(start), identity, push }
+    checkout::Repository { name, remote, start: self::start(start), identity, push, expected: None }
 }
 
 fn start(start: host::Start) -> checkout::Start {
@@ -111,6 +111,7 @@ pub(crate) fn landings(outcome: checkout::Outcome, repositories: u32) -> Box<[ho
 
 fn landing(landing: &checkout::Landing) -> host::Landing {
     match landing {
+        checkout::Landing::Conflicted { .. } => unreachable!("legacy host cannot prepare a merge"),
         checkout::Landing::Explained { fault, diagnostic } => host::Landing::Explained {
             failure: host::PushFailure {
                 repository: None,

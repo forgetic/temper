@@ -33,6 +33,8 @@ const LIMITS: Limits = Limits {
         repositories: 2,
         name_bytes: 16,
         message_bytes: 64,
+        conflicts: 0,
+        path_bytes: 0,
         remote_timeout: Duration::from_secs(60),
         local_timeout: Duration::from_secs(10),
         facts: 64,
@@ -258,6 +260,7 @@ fn done(op: &Op, changed: bool) -> git::Done {
         Op::Fetch { .. } => git::Done::Fetched { commit: Commit::new([1; 32]) },
         Op::Commit { .. } if changed => git::Done::Committed { commit: Commit::new(COMMITTED) },
         Op::Commit { .. } => git::Done::Unchanged,
+        Op::Merge { .. } => unreachable!("legacy assignments do not request merges"),
     }
 }
 

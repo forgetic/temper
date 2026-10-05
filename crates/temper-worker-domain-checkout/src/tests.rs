@@ -17,12 +17,23 @@ const LIMITS: Limits = Limits {
     repositories: 2,
     name_bytes: 16,
     message_bytes: 64,
+    conflicts: 0,
+    path_bytes: 0,
     remote_timeout: Duration::from_secs(60),
     local_timeout: Duration::from_secs(10),
     facts: 64,
 };
 
 const NOW: Time = Time::from_nanos(1_000);
+
+const MERGES: Limits = Limits { conflicts: 4, path_bytes: 32, ..LIMITS };
+
+fn merge_spec() -> Spec {
+    let mut repo = repository(b"a", true);
+    repo.start = Start::Merge { branch: bytes(b"main"), base: commit(7) };
+    repo.expected = Some(commit(1));
+    Spec { key: bytes(b"merge"), repositories: Box::new([repo]) }
+}
 
 /// The domain, its environment and room for one step's output.
 struct Harness {
@@ -71,7 +82,6 @@ impl Harness {
 
     /// Ends the operation in flight for `hold` with `done`, which asks for the
     /// next operation: returns it.
-    #[expect(clippy::large_types_passed_by_value, reason = "the driver hands an owned terminal to the step")]
     fn next(&mut self, hold: Token, done: Done) -> Op {
         io(self.one(Event::Done { owner: hold, done }), hold)
     }
@@ -96,7 +106,9 @@ impl Harness {
         let (hold, mut op) = self.prepare(client, spec);
         for _ in 0..16_u32 {
             let done = match &op {
+                Op::Fetch { want: Want::Commit { commit }, .. } => Done::Fetched { commit: *commit },
                 Op::Fetch { at, .. } => Done::Fetched { commit: start_of(at) },
+                Op::Merge { .. } => Done::Merged,
                 Op::Make { .. } | Op::Clone { .. } | Op::Create { .. } | Op::CheckOut { .. } | Op::Push { .. } => {
                     Done::Succeeded
                 }
@@ -107,7 +119,7 @@ impl Harness {
                     assert_eq!(owner, hold, "an operation is the hold's");
                     op = next;
                 }
-                Request::Prepared { client: to, prepared: Prepared::Ready { workspace: _ } } => {
+                Request::Prepared { client: to, prepared: Prepared::Ready { workspace: _, .. } } => {
                     assert_eq!(to, Token::new(client), "the client's token is echoed");
                     return hold;
                 }
@@ -169,6 +181,7 @@ fn repository(name: &[u8], writable: bool) -> Repository {
         start: Start::Branch { branch: bytes(b"main") },
         identity: 0,
         push,
+        expected: None,
     }
 }
 
@@ -254,6 +267,7 @@ fn workspace_of(op: &Op) -> Token {
         | Op::Fetch { at, .. }
         | Op::Create { at, .. }
         | Op::CheckOut { at, .. }
+        | Op::Merge { at, .. }
         | Op::Commit { at, .. }
         | Op::Push { at, .. } => at.workspace,
     }
@@ -278,7 +292,10 @@ fn a_new_workspace_is_made_then_each_repository_cloned_fetched_and_checked_out()
     let check_out_b = Op::CheckOut { at: place(workspace, b"b"), commit: commit(2) };
     assert_eq!(h.next(hold, Done::Fetched { commit: commit(2) }), check_out_b);
     let ready = h.one(Event::Done { owner: hold, done: Done::Succeeded });
-    assert_eq!(ready, Request::Prepared { client: Token::new(7), prepared: Prepared::Ready { workspace } });
+    assert_eq!(
+        ready,
+        Request::Prepared { client: Token::new(7), prepared: Prepared::Ready { workspace, conflicts: Box::new([]) } }
+    );
     assert_eq!((h.domain.workspaces(), h.domain.idle(), h.domain.holds()), (1, 0, 1));
 }
 
@@ -518,11 +535,14 @@ fn a_push_commits_the_tree_on_its_start_and_pushes_it_to_the_push_branch() {
     let mut h = Harness::new(LIMITS);
     let hold = h.ready(1, two(b"w"));
     let commit_op = io(h.one(Event::Push { hold, message: message() }), hold);
-    let Op::Commit { at, parent, title, body, identity } = commit_op else { panic!("a commit: {commit_op:?}") };
+    let Op::Commit { at, parent, title, body, identity, merging: None } = commit_op else {
+        panic!("a commit: {commit_op:?}")
+    };
     assert_eq!((&*at.repository, parent), (&b"a"[..], commit(1)), "the writable one, on its start");
     assert_eq!((&*title, &*body, identity), (&b"Fix it"[..], &b"Because."[..], 0));
     let push = h.next(hold, Done::Committed { commit: commit(11) });
-    let expected = Op::Push { at, remote: remote(b"a"), commit: commit(11), branch: bytes(b"main"), identity: 0 };
+    let expected =
+        Op::Push { at, remote: remote(b"a"), commit: commit(11), branch: bytes(b"main"), expected: None, identity: 0 };
     assert_eq!(push, expected);
     let end = h.one(Event::Done { owner: hold, done: Done::Succeeded });
     assert_eq!(
@@ -880,7 +900,7 @@ fn the_facts_tell_what_happened_and_drop_what_does_not_fit() {
     let expected = [
         Fact::Held { client, cached: Cached::New },
         Fact::Started { client, op: Kind::Make },
-        Fact::Ended { client, done: Done::Succeeded },
+        Fact::Ended { client, done: crate::Ending::Succeeded },
         Fact::Started { client, op: Kind::Clone },
     ];
     assert_eq!(facts.as_slice(), &expected);
@@ -943,5 +963,113 @@ fn failed_commit_or_refused_push_returns_git_diagnostics() {
         let fault = if commit_failed { Fault::Broken } else { Fault::Refused };
         let end = h.one(Event::Done { owner: hold, done: Done::FailedWithOutput { fault, diagnostic } });
         assert_eq!(&*landings(end), &[Landing::Explained { fault, diagnostic }]);
+    }
+}
+
+#[test]
+fn merge_preparation_transfers_conflict_paths_and_facts_keep_only_counts() {
+    let mut h = Harness::new(MERGES);
+    let (hold, _) = h.prepare(1, merge_spec());
+    h.next(hold, Done::Succeeded);
+    let fetch = h.next(hold, Done::Succeeded);
+    let Op::Fetch { want: Want::Branch { .. }, .. } = fetch else { panic!("branch fetch") };
+    let base = h.next(hold, Done::Fetched { commit: commit(1) });
+    let Op::Fetch { want: Want::Commit { commit: c }, .. } = base else { panic!("base fetch") };
+    assert_eq!(c, commit(7));
+    let Op::CheckOut { commit: c, .. } = h.next(hold, Done::Fetched { commit: commit(7) }) else {
+        panic!("checkout branch")
+    };
+    assert_eq!(c, commit(1));
+    let Op::Merge { theirs, .. } = h.next(hold, Done::Succeeded) else { panic!("merge") };
+    assert_eq!(theirs, commit(7));
+    let files = Box::new([bytes(b"src/a"), bytes(b"src/b")]);
+    let ready = h.one(Event::Done { owner: hold, done: Done::Conflicted { files } });
+    let Request::Prepared { prepared: Prepared::Ready { workspace, conflicts }, .. } = ready else {
+        panic!("ready with conflicts")
+    };
+    assert_eq!(&*conflicts, &[crate::Conflicts { repository: 0, files: Box::new([bytes(b"src/a"), bytes(b"src/b")]) }]);
+    let facts = h.facts();
+    assert!(
+        facts.as_slice().contains(&Fact::Ended { client: Token::new(1), done: crate::Ending::Conflicted { files: 2 } })
+    );
+    assert!(facts.as_slice().contains(&Fact::Prepared {
+        client: Token::new(1),
+        prepared: crate::Preparation::Ready { workspace, conflicts: 2 }
+    }));
+}
+
+#[test]
+fn merge_marker_refusal_preserves_second_parent_until_commit_and_verification_advances_expected_head() {
+    let mut h = Harness::new(MERGES);
+    let hold = h.ready(1, merge_spec());
+    let asked = io(h.one(Event::Push { hold, message: message() }), hold);
+    let Op::Commit { parent, merging, .. } = asked else { panic!("merge commit") };
+    assert_eq!((parent, merging), (commit(1), Some(commit(7))));
+    let end = h.one(Event::Done { owner: hold, done: Done::Conflicted { files: Box::new([bytes(b"src/a")]) } });
+    assert_eq!(
+        end,
+        Request::Pushed {
+            client: Token::new(1),
+            outcome: Outcome::Pushed {
+                landings: Box::new([Landing::Conflicted { files: Box::new([bytes(b"src/a")]) }])
+            }
+        }
+    );
+    let retried = io(h.one(Event::Push { hold, message: message() }), hold);
+    let Op::Commit { merging, .. } = retried else { panic!("retry merge commit") };
+    assert_eq!(merging, Some(commit(7)));
+    let push = h.next(hold, Done::Committed { commit: commit(9) });
+    let Op::Push { expected, .. } = push else { panic!("conditional push") };
+    assert_eq!(expected, Some(commit(1)));
+    let Op::Fetch { want: Want::Branch { .. }, .. } = h.next(hold, failed(Fault::TimedOut)) else {
+        panic!("verification")
+    };
+    let landed = h.one(Event::Done { owner: hold, done: Done::Fetched { commit: commit(9) } });
+    assert_eq!(
+        landed,
+        Request::Pushed {
+            client: Token::new(1),
+            outcome: Outcome::Pushed { landings: Box::new([Landing::Landed { commit: commit(9) }]) }
+        }
+    );
+    let next = io(h.one(Event::Push { hold, message: message() }), hold);
+    let Op::Commit { merging, parent, .. } = next else { panic!("ordinary commit") };
+    assert_eq!((parent, merging), (commit(9), None));
+    let next = h.next(hold, Done::Committed { commit: commit(10) });
+    let Op::Push { expected, .. } = next else { panic!("next conditional push") };
+    assert_eq!(expected, Some(commit(9)));
+}
+
+#[test]
+fn merge_starts_require_configured_path_room_and_missing_branches_are_never_created() {
+    let mut h = Harness::new(LIMITS);
+    assert_eq!(
+        h.one(Event::Prepare { client: Token::new(1), spec: merge_spec() }),
+        Request::Prepared { client: Token::new(1), prepared: Prepared::Refused { refusal: Refusal::Invalid } }
+    );
+    let mut h = Harness::new(MERGES);
+    let (hold, _) = h.prepare(1, merge_spec());
+    h.next(hold, Done::Succeeded);
+    h.next(hold, Done::Succeeded);
+    assert_eq!(
+        h.one(Event::Done { owner: hold, done: failed(Fault::Missing { missing: Missing::Branch }) }),
+        Request::Prepared {
+            client: Token::new(1),
+            prepared: Prepared::Failed { failure: Failure::Missing { repository: 0, missing: Missing::Branch } }
+        }
+    );
+}
+
+#[test]
+fn oversized_or_duplicate_terminal_paths_are_dropped_without_retention() {
+    let cases: [Box<[Box<[u8]>]>; 2] =
+        [Box::new([bytes(b"same"), bytes(b"same")]), Box::new([bytes(b"012345678901234567890123456789012")])];
+    for files in cases {
+        let mut h = Harness::new(MERGES);
+        let hold = h.ready(1, merge_spec());
+        h.one(Event::Push { hold, message: message() });
+        let end = h.one(Event::Done { owner: hold, done: Done::Conflicted { files } });
+        let Request::Pushed { outcome: Outcome::Pushed { landings }, .. } = end else { panic!("ended") };
+        let Landing::Explained { fault: Fault::Broken, .. } = &landings[0] else { panic!("broken terminal") };
     }
 }

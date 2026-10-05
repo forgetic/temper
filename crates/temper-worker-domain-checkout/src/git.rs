@@ -74,15 +74,22 @@ pub enum Op {
     /// Make the repository's working tree exactly `commit`'s tree: what is not
     /// in it is removed, and the git directory is left as it is.
     CheckOut { at: Place, commit: Commit },
+    /// Merge fetched `theirs` into the checked-out branch, without committing;
+    /// leave conflict markers and merge state on disk. Ends Merged/Conflicted.
+    Merge { at: Place, theirs: Commit },
     /// Commit the working tree exactly as it is, on `parent`, with the message
     /// `title` and `body`, authored as `identity`. Ends in `Committed`, or in
-    /// `Unchanged` if the tree is `parent`'s.
-    Commit { at: Place, parent: Commit, title: Box<[u8]>, body: Box<[u8]>, identity: u32 },
+    /// `Unchanged` if the tree is `parent`'s and `merging` is None. With a
+    /// second parent it always records both parents; before doing so io
+    /// refuses markers remaining in originally conflicted paths, ending
+    /// `Conflicted` with those paths (domain/worker.md, 4.1 and section 5).
+    Commit { at: Place, parent: Commit, merging: Option<Commit>, title: Box<[u8]>, body: Box<[u8]>, identity: u32 },
     /// Push `commit` to `branch` on the forge, as a fast-forward, never forced:
     /// a branch that does not exist is created, and one that is not an
     /// ancestor of `commit` is left where it is, and the operation ends in
-    /// `Rejected`.
-    Push { at: Place, remote: Box<[u8]>, commit: Commit, branch: Box<[u8]>, identity: u32 },
+    /// `Rejected`. A supplied `expected` is an additional exact old-head
+    /// condition, including when ordinary ancestry would permit the push.
+    Push { at: Place, remote: Box<[u8]>, commit: Commit, branch: Box<[u8]>, expected: Option<Commit>, identity: u32 },
 }
 
 /// What a fetch asks for.
@@ -97,9 +104,15 @@ pub enum Want {
 }
 
 /// io's terminal for an operation.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 #[expect(clippy::large_enum_variant, reason = "bounded diagnostics stay inline and are included in worst_case")]
 pub enum Done {
+    /// Merge has no unresolved paths; the next explicit merge commit still
+    /// records both parents. No commit was made by the merge operation.
+    Merged,
+    /// Merge left conflicts, or a merge commit refused remaining markers.
+    /// Paths are bounded by the checkout's conflict/path limits.
+    Conflicted { files: Box<[Box<[u8]>]> },
     /// `Make`, `Clone`, `Create`, `CheckOut`, `Push`: done as asked.
     Succeeded,
     /// `Fetch`: what was asked for is at `commit`, now in the repository.
@@ -153,6 +166,7 @@ pub enum Kind {
     Fetch,
     Create,
     CheckOut,
+    Merge,
     Commit,
     Push,
 }
@@ -166,6 +180,7 @@ impl Op {
             Op::Fetch { .. } => Kind::Fetch,
             Op::Create { .. } => Kind::Create,
             Op::CheckOut { .. } => Kind::CheckOut,
+            Op::Merge { .. } => Kind::Merge,
             Op::Commit { .. } => Kind::Commit,
             Op::Push { .. } => Kind::Push,
         }
@@ -176,7 +191,7 @@ impl Op {
     pub const fn is_remote(&self) -> bool {
         match self {
             Op::Clone { .. } | Op::Fetch { .. } | Op::Create { .. } | Op::Push { .. } => true,
-            Op::Make { .. } | Op::CheckOut { .. } | Op::Commit { .. } => false,
+            Op::Make { .. } | Op::CheckOut { .. } | Op::Merge { .. } | Op::Commit { .. } => false,
         }
     }
 }

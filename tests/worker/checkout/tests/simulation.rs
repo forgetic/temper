@@ -15,7 +15,7 @@ fn at(secs: u64) -> Time {
 }
 
 fn prepared(world: &World, client: u64) -> Prepared {
-    world.client(client).prepared.expect("every client's prepare ends")
+    world.client(client).prepared.clone().expect("every client's prepare ends")
 }
 
 /// The landings of a client's pushes and saves, in order.
@@ -25,7 +25,7 @@ fn landings(world: &World, client: u64) -> Vec<(bool, Vec<Landing>)> {
 
 /// What a client's first repository's pushes came to.
 fn first_landings(world: &World, client: u64) -> Vec<Landing> {
-    landings(world, client).into_iter().map(|(_, landings)| landings[0]).collect()
+    landings(world, client).into_iter().map(|(_, landings)| landings[0].clone()).collect()
 }
 
 #[test]
@@ -131,6 +131,7 @@ fn a_branch_another_party_advanced_makes_the_push_moved_and_nothing_is_forced() 
         world.run(ITERATIONS);
         for landing in first_landings(&world, client) {
             match landing {
+                Landing::Conflicted { .. } => panic!("legacy clients do not prepare merges"),
                 Landing::Landed { .. } => {}
                 Landing::Moved => moved += 1,
                 other @ (Landing::Failed

@@ -42,7 +42,9 @@ mod limits;
 #[cfg(test)]
 mod tests;
 
-pub use boundary::{Event, Failure, Landing, Message, Outcome, Prepared, Refusal, Repository, Request, Spec, Start};
+pub use boundary::{
+    Conflicts, Event, Failure, Landing, Message, Outcome, Prepared, Refusal, Repository, Request, Spec, Start,
+};
 pub use domain::{Domain, MAX_OUT, step};
-pub use facts::{Cached, Fact, Tally, Target};
+pub use facts::{Cached, Ending, Fact, Preparation, Tally, Target};
 pub use limits::{Limits, worst_case};

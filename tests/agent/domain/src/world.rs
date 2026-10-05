@@ -176,6 +176,8 @@ pub const WORKER: worker::Limits = worker::Limits {
         repositories: 2,
         name_bytes: 32,
         message_bytes: 8192,
+        conflicts: 0,
+        path_bytes: 0,
         remote_timeout: Duration::from_secs(60),
         local_timeout: Duration::from_secs(10),
         facts: 256,

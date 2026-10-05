@@ -473,9 +473,12 @@ impl World {
             let part = match &op {
                 Op::Commit { .. } | Op::Fetch { want: Want::Branch { .. }, .. } => pushing,
                 Op::Push { branch, .. } => pushing && !self.save_branches.contains(&**branch),
-                Op::Make { .. } | Op::Clone { .. } | Op::Fetch { .. } | Op::Create { .. } | Op::CheckOut { .. } => {
-                    false
-                }
+                Op::Make { .. }
+                | Op::Clone { .. }
+                | Op::Fetch { .. }
+                | Op::Create { .. }
+                | Op::CheckOut { .. }
+                | Op::Merge { .. } => false,
             };
             assert!(
                 part,
@@ -500,6 +503,7 @@ impl World {
             | Op::Fetch { .. }
             | Op::Create { .. }
             | Op::CheckOut { .. }
+            | Op::Merge { .. }
             | Op::Push { .. } => None,
         };
         let pushed = match &op {
@@ -509,6 +513,7 @@ impl World {
             | Op::Fetch { .. }
             | Op::Create { .. }
             | Op::CheckOut { .. }
+            | Op::Merge { .. }
             | Op::Commit { .. } => None,
         };
         // A remote operation may not reach the forge.

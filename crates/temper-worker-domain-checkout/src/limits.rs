@@ -2,7 +2,7 @@ use alloc::boxed::Box;
 
 use skein_lib::{Duration, Id, List, Map, Queue, Slab};
 
-use crate::boundary::{Landing, Repository};
+use crate::boundary::{Conflicts, Landing, Repository};
 use crate::cache::{Cloned, Workspace};
 use crate::facts::Fact;
 use crate::hold::{Hold, Tips};
@@ -21,6 +21,11 @@ pub struct Limits {
     pub name_bytes: u32,
     /// The longest commit message, its title and body together.
     pub message_bytes: u32,
+    /// Maximum originally or still conflicted paths per repository. Zero
+    /// disables merge starts while retaining legacy preparation behavior.
+    pub conflicts: u32,
+    /// Maximum bytes of one full relative conflicted path.
+    pub path_bytes: u32,
     /// How long an operation that reaches the forge may take: a clone, a
     /// fetch, a branch's creation, a push.
     pub remote_timeout: Duration,
@@ -66,7 +71,15 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     let push = List::<Landing>::worst_case(limits.repositories)?
         .checked_add(u64::from(limits.message_bytes))?
         .checked_add(name)?;
-    let each = spec.checked_add(List::<Tips>::worst_case(limits.repositories)?)?.checked_add(push)?;
+    let paths = List::<Box<[u8]>>::worst_case(limits.conflicts)?
+        .checked_add(u64::from(limits.conflicts).checked_mul(u64::from(limits.path_bytes))?)?;
+    let path_sets = u64::from(limits.repositories).checked_mul(paths)?;
+    let preparing = List::<Conflicts>::worst_case(limits.repositories)?.checked_add(path_sets)?;
+    let pushing = push.checked_add(path_sets)?;
+    let each = spec
+        .checked_add(List::<Tips>::worst_case(limits.repositories)?)?
+        .checked_add(preparing)?
+        .checked_add(pushing)?;
     let held = u64::from(hold_slots).checked_mul(each)?;
     let facts = Queue::<Fact>::worst_case(limits.facts)?;
     workspaces

@@ -158,6 +158,7 @@ impl Measured {
                         | Op::Push { .. } => Done::Succeeded,
                         Op::Fetch { .. } => Done::Fetched { commit },
                         Op::Commit { .. } => Done::Committed { commit },
+                        Op::Merge { .. } => panic!("legacy memory driver has no merge assignments"),
                     };
                     self.owed.push_back(Owed::Done { owner, done });
                 }
