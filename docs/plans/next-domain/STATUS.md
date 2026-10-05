@@ -17,8 +17,8 @@ Detailed implementation and review evidence belongs in commit messages.
 | 01c authority policies and checks | merged | e21dafb | Gate passed; 1,850 focused / 4.888 s; 28 fuzzy / 18.143 s. |
 | 01d landing requirements | merged | e9aea6d | Gate passed; 2,118 focused / 4.506 s; 30 fuzzy / 16.345 s. |
 | 02a tasks batches and lifecycle | merged | 376cbd4 | Gate passed; 2,115 focused / 5.532 s; 30 fuzzy / 20.070 s. |
-| 02b task inboxes, references and wakes | merged | 1cfd373 | Gate passed; 2,145 focused / 5.042 s; 31 fuzzy / 18.227 s. |
-| 02c task amendments and moves | merged | ec38fcc | Gate passed; 2,207 focused / 5.086 s; 34 fuzzy / 18.911 s. |
+| 02b task inboxes, references and wakes | merged; dormant surface parked | 1cfd373 | Gate passed; 2,145 focused / 5.042 s; 31 fuzzy / 18.227 s. |
+| 02c task amendments and moves | merged; dormant surface parked | ec38fcc | Gate passed; 2,207 focused / 5.086 s; 34 fuzzy / 18.911 s. |
 | 02e finite funding seam | seam merged; depth parked | c987a083, 061030e | Gate passed; 2,237 focused / 5.649 s; 36 fuzzy / 20.113 s; tasks serial 65 / 0.356 s, 2 / 3.111 s. |
 | 03a people sign-in and chat requests | merged | 959795f | Gate passed; 1,822 focused / 7.251 s; 28 fuzzy / 22.695 s. |
 | 04a1 fake forge git foundations | merged | 0d09efc, 0eb1ff0 | Gate passed; 1,833 focused / 9.325 s; 28 fuzzy / 27.457 s. |
@@ -29,7 +29,8 @@ Detailed implementation and review evidence belongs in commit messages.
 | 05c2 checkout merge state and ownership | merged | 8e94482 | Gate passed; 2,132 focused / 5.396 s; 31 fuzzy / 21.190 s. |
 | 05d worker turns and transcript lifecycle | merged | e2a6a71 | Gate passed; 2,172 focused / 6.761 s; 32 fuzzy / 25.290 s. |
 | 05e session transcripts and pricing | merged | 8b91ed3 | Gate passed; 2,187 focused / 5.116 s; 33 fuzzy / 17.917 s. |
-| 06a walking skeleton | story merged; audit open | 429647c | Gate passed; 2,270 focused / 10.521 s; 38 fuzzy / 29.586 s; root serial 40 / 0.168 s, 3 / 0.740 s. |
+| 06a walking skeleton | story merged | 429647c | Gate passed; 2,270 focused / 10.521 s; 38 fuzzy / 29.586 s; root serial 40 / 0.168 s, 3 / 0.740 s. |
+| 06a tasks boundary audit | merged | c6d07ef | Gate passed; 2,249 focused / 5.861 s; 37 fuzzy / 17.878 s; root serial 46 / 0.190 s, tasks 37 / 0.167 s. |
 
 ## What remains open
 
@@ -44,9 +45,9 @@ Detailed implementation and review evidence belongs in commit messages.
 
 **02 — tasks**
 
-- Finite funding and atomic charged admission are merged; 02e depth stays parked.
-- After the walking story, audit every event/request against actual root routes.
-- Keep 02d–e depth parked until that audit passes, then resume in plan order.
+- Finish retired-source and recurring funding depth in 02e.
+- Restore inbox, amendment and move surface only with actual root routes.
+- Keep 02d–e parked through documentation/style gates, then resume in plan order.
 
 **03 — people**
 
@@ -67,7 +68,7 @@ Detailed implementation and review evidence belongs in commit messages.
 
 **06 — root**
 
-- Complete the tasks route audit, documentation backfill and five style checks before resuming child depth.
+- Complete documentation backfill and five style checks before resuming child depth.
 - Continue 06b–f: run, tool, people and forge routes; broader restarts and worst-case worlds.
 - Recovery after terminal commit but before ACK/result release remains owed.
 
