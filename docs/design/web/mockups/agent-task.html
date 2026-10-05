@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent task · temper</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="terminal-chat.css">
+  <link rel="stylesheet" href="agent-task.css">
+  <script defer src="agent-task.js"></script>
+</head>
+<body class="terminal-variant agent-task-page">
+  <div class="terminal-shell">
+    <header class="terminal-topbar">
+      <a class="terminal-brand" href="chats.html" aria-label="temper chats"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 1.5c1.5 5.6 2.9 7 8.5 8.5-5.6 1.5-7 2.9-8.5 8.5C10.5 12.9 9.1 11.5 3.5 10 9.1 8.5 10.5 7.1 12 1.5Z"/><circle cx="18.5" cy="18.5" r="2" fill="currentColor"/></svg><span>temper</span></a>
+      <span class="terminal-divider" aria-hidden="true"></span>
+      <span class="terminal-project">temper <span aria-hidden="true">⌄</span></span>
+      <nav class="terminal-nav" aria-label="Main navigation"><a href="inbox.html">Inbox <span class="terminal-count">3</span></a><a href="chats.html">Chats</a><a href="board.html">Board</a><a href="changes.html">Changes</a><a class="active" aria-current="page" href="task.html">Tasks</a></nav>
+      <div class="terminal-top-right"><span class="terminal-live"><i class="status-dot"></i> Live</span></div>
+      <details class="terminal-mobile-menu"><summary aria-label="Open navigation">☰</summary><nav aria-label="Mobile navigation"><a href="inbox.html">Inbox</a><a href="chats.html">Chats</a><a href="board.html">Board</a><a href="changes.html">Changes</a><a href="task.html">Tasks</a></nav></details>
+    </header>
+
+    <div class="agent-lineage"><a href="task.html">← T21 Refresh token handling</a><span>/</span><span class="agent-lineage-current">T26 Integration tests</span></div>
+    <div class="terminal-chatbar agent-taskbar">
+      <div class="terminal-chat-identity"><span class="terminal-number">T26</span><strong class="terminal-title">Integration tests</strong><span class="terminal-phase"><i class="pill-dot"></i> Running · testing refresh failures</span></div>
+      <div class="terminal-chat-meta"><span class="agent-charter">Agent · test writer</span><span class="agent-spend">2.3 / 6 spent</span><button type="button" data-amend>Amend</button><button type="button" data-stop>Stop</button></div>
+    </div>
+
+    <main class="terminal-thread" aria-label="Agent task transcript">
+      <div class="terminal-thread-inner">
+        <div class="agent-brief"><span class="agent-kicker">TASK BRIEF</span><p class="agent-brief-text"></p><div class="agent-brief-meta"></div></div>
+        <div class="agent-transcript"></div>
+        <div class="agent-live-slot" aria-live="polite"></div>
+      </div>
+    </main>
+
+    <footer class="terminal-composer-area agent-steer-area">
+      <div class="agent-steer-note">Steer this task · words reach its live run at the next turn.</div>
+      <div class="terminal-composer"><span class="terminal-input-prompt" aria-hidden="true">›</span><textarea rows="1" aria-label="Write to agent task" placeholder="Write to this agent…"></textarea><span class="terminal-input-hint">Enter to send · Shift+Enter for newline</span><button type="button" class="terminal-send" aria-label="Send words to agent task">↑</button></div>
+    </footer>
+  </div>
+</body>
+</html>

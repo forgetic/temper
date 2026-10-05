@@ -1,38 +1,71 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>OAuth login? · temper</title><link rel="stylesheet" href="style.css"></head>
-<body><div class="app">
-  <aside class="sidebar" aria-label="Main navigation">
-    <a class="brand" href="chats.html"><svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 1.5c1.5 5.6 2.9 7 8.5 8.5-5.6 1.5-7 2.9-8.5 8.5C10.5 12.9 9.1 11.5 3.5 10 9.1 8.5 10.5 7.1 12 1.5Z"/><circle cx="18.5" cy="18.5" r="2" fill="currentColor"/></svg><span>temper</span></a>
-    <div class="workspace"><span class="project-avatar">t</span><span>temper</span><span class="chevron">⌄</span></div>
-    <nav class="nav-group"><span class="nav-label">Your workspace</span>
-      <a class="nav-link" href="inbox.html"><svg class="nav-icon"><use href="icons.svg#inbox"/></svg><span>Inbox</span><b class="count">3</b></a>
-      <a class="nav-link active" href="chats.html"><svg class="nav-icon"><use href="icons.svg#chat"/></svg><span>Chats</span></a>
-      <hr class="nav-divider"><span class="nav-label">Project · temper</span>
-      <a class="nav-link" href="board.html"><svg class="nav-icon"><use href="icons.svg#board"/></svg><span>Board</span></a>
-      <a class="nav-link" href="changes.html"><svg class="nav-icon"><use href="icons.svg#changes"/></svg><span>Changes</span></a>
-      <a class="nav-link" href="task.html"><svg class="nav-icon"><use href="icons.svg#tasks"/></svg><span>Tasks</span></a>
-    </nav>
-    <div class="sidebar-bottom"><div class="status"><i class="status-dot"></i> All systems live</div><div class="profile"><span class="avatar">P</span><div><strong>Pat</strong><small>Project owner</small></div></div></div>
-  </aside>
-  <main class="main">
-    <header class="topbar"><div class="breadcrumbs"><a href="chats.html">Chats</a><span class="sep">/</span><strong>OAuth login?</strong></div><div class="top-actions"><span class="status"><i class="status-dot"></i> Live</span><a class="icon-button" href="inbox.html" aria-label="Inbox"><svg><use href="icons.svg#inbox"/></svg></a><button class="icon-button" aria-label="More chat actions" title="Mockup only"><svg><use href="icons.svg#more"/></svg></button></div></header>
-    <div class="chat-layout">
-      <div class="chat-main">
-        <div class="chat-head"><div class="chat-head-inner"><div class="eyebrow">Chat · T0</div><h1 class="chat-title">OAuth login?</h1><div class="chat-head-bottom"><div class="meta-row"><span class="tag green"><i class="pill-dot"></i> Waiting for you</span><span>temper</span><span>Started today at 09:41</span></div><div class="button-row"><button class="button ghost" title="Mockup only">Stop</button><button class="button ghost" title="Mockup only">Close</button></div></div></div></div>
-        <div class="conversation">
-          <div class="message user"><div><div class="user-bubble">I'd like the web to support OAuth login. What would it take?</div><div class="message-time" style="text-align:right">09:41 · Read</div></div></div>
-          <div class="message agent"><div class="agent-mark">✳</div><div class="message-body"><p>That crosses the web, the people domain, and configuration. I’ll trace the current sign-in path and check where an OAuth provider would fit.</p><div class="message-time">09:42</div></div></div>
-          <div class="work-line">Read sign-in flow and project policy · 6 tool calls <span class="muted">▾</span></div>
-          <div class="message agent"><div class="agent-mark">✳</div><div class="message-body"><p>Two choices shape the work: should the first version support one configured provider, or several? And should existing forge sign-in remain available?</p><div class="message-time">09:45</div></div></div>
-          <div class="message user"><div><div class="user-bubble">Start with one configured provider. Keep forge sign-in as a fallback.</div><div class="message-time" style="text-align:right">09:47 · Read</div></div></div>
-          <div class="message agent"><div class="agent-mark">✳</div><div class="message-body"><p>That gives us a small first scope. I’ve proposed a goal with a coordinator so the design and implementation can be planned together. You would own it after accepting.</p><div class="message-time">09:49</div></div></div>
-          <article class="card inline-card"><div class="card-top"><div><div class="meta-row"><span class="tag accent">Proposal</span><span>From <span class="task-chip"><b>T0</b> OAuth login?</span></span></div><h3>Add OAuth login</h3></div><span class="muted tiny">Waiting 4 min</span></div><p>A coordinator would add one configured OAuth provider to the web while keeping forge sign-in available. The goal would be yours and appear on the project board.</p><div class="proposal-items"><div class="proposal-item"><span class="label">Executor</span><span>Coordinator · new goal T1</span></div><div class="proposal-item"><span class="label">Authority</span><span>Land into <strong>main</strong> in ai/temper</span></div><div class="proposal-item"><span class="label">Budget</span><span>40 from your pool · 120 left this period, 80 after</span></div></div><div class="button-row"><button class="button primary" title="Visual mockup; no request is sent">Accept goal</button><button class="button" title="Visual mockup; no request is sent">Reject with reason</button><a href="inbox.html" class="button ghost">View in inbox ↗</a></div></article>
-          <div class="divider-label">T0 is waiting for your decision</div>
-        </div>
-        <div class="composer-wrap"><div class="composer"><textarea aria-label="Message T0" placeholder="Message T0…"></textarea><div class="composer-foot"><span>Words sent now reach the chat at its next turn.</span><button class="send-button" aria-label="Send message" title="Visual mockup; no request is sent"><svg><use href="icons.svg#arrow"/></svg></button></div></div></div>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OAuth login? · temper</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="terminal-chat.css">
+  <script defer src="terminal-chat.js"></script>
+</head>
+<body class="terminal-variant">
+  <div class="terminal-shell">
+    <header class="terminal-topbar">
+      <a class="terminal-brand" href="chats.html" aria-label="temper chats">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 1.5c1.5 5.6 2.9 7 8.5 8.5-5.6 1.5-7 2.9-8.5 8.5C10.5 12.9 9.1 11.5 3.5 10 9.1 8.5 10.5 7.1 12 1.5Z"/><circle cx="18.5" cy="18.5" r="2" fill="currentColor"/></svg>
+        <span>temper</span>
+      </a>
+      <span class="terminal-divider" aria-hidden="true"></span>
+      <span class="terminal-project">temper <span aria-hidden="true">⌄</span></span>
+      <nav class="terminal-nav" aria-label="Main navigation">
+        <a href="inbox.html">Inbox <span class="terminal-count">3</span></a>
+        <a class="active" href="chats.html">Chats</a>
+        <a href="board.html">Board</a>
+        <a href="changes.html">Changes</a>
+        <a href="task.html">Tasks</a>
+      </nav>
+      <div class="terminal-top-right">
+        <span class="terminal-live"><i class="status-dot"></i> Live</span>
       </div>
-      <aside class="chat-aside" aria-label="Chat context"><div class="aside-section"><div class="aside-title">This chat</div><div class="aside-panel"><div class="kv"><span>Task</span><strong>T0 · Agent</strong></div><div class="kv"><span>Project</span><strong>temper</strong></div><div class="kv"><span>Spent</span><strong>1.8 / 8</strong></div><div class="kv"><span>Repository</span><strong>ai/temper</strong></div></div></div><div class="aside-section"><div class="aside-title">Proposed goals</div><div class="aside-list"><div><span class="task-chip"><b>T1</b> Add OAuth login</span><small>Waiting for your acceptance</small></div></div></div><div class="aside-section"><div class="aside-title">Delegated work</div><p>Nothing delegated yet.</p></div><div class="aside-section"><div class="aside-title">Budget</div><div class="progress"><span style="width:22.5%"></span></div><p class="mini-stat">1.8 spent · 6.2 left</p></div></aside>
+      <details class="terminal-mobile-menu">
+        <summary aria-label="Open navigation">☰</summary>
+        <nav aria-label="Mobile navigation">
+          <a href="inbox.html">Inbox</a><a href="chats.html">Chats</a><a href="board.html">Board</a><a href="changes.html">Changes</a><a href="task.html">Tasks</a>
+        </nav>
+      </details>
+    </header>
+
+    <div class="terminal-chatbar">
+      <div class="terminal-chat-identity"><span class="terminal-number">T0</span><strong class="terminal-title">OAuth login?</strong><span class="terminal-phase"><i class="pill-dot"></i> Waiting for you</span></div>
+      <div class="terminal-chat-meta"><span>Agent</span><span>1.8 / 8 spent</span><button type="button" data-chat-stop>Stop</button><button type="button" data-chat-close>Close</button></div>
     </div>
-  </main>
-</div><script defer src="app.js"></script></body></html>
+
+    <main class="terminal-thread" aria-label="Conversation">
+      <div class="terminal-thread-inner">
+        <div class="terminal-seed">
+          <div class="terminal-day">Today · started 09:41</div>
+          <section class="terminal-turn terminal-turn-user"><div class="terminal-role">You <time>09:41</time></div><div class="terminal-turn-content"><span class="terminal-prompt">›</span><p>I'd like the web to support OAuth login. What would it take?</p></div></section>
+          <section class="terminal-turn"><div class="terminal-role">Temper <time>09:42</time></div><div class="terminal-turn-content"><span class="terminal-prompt agent">✳</span><p>That crosses the web, the people domain, and configuration. I’ll trace the current sign-in path and check where an OAuth provider would fit.</p></div></section>
+          <details class="terminal-work"><summary>Read sign-in flow and project policy <span>6 tool calls</span></summary><div class="terminal-work-detail">Read web sign-in path · Read people domain · Checked project policy · No changes made</div></details>
+          <section class="terminal-turn"><div class="terminal-role">Temper <time>09:45</time></div><div class="terminal-turn-content"><span class="terminal-prompt agent">✳</span><p>Two choices shape the work: should the first version support one configured provider, or several? And should existing forge sign-in remain available?</p></div></section>
+          <section class="terminal-turn terminal-turn-user"><div class="terminal-role">You <time>09:47</time></div><div class="terminal-turn-content"><span class="terminal-prompt">›</span><p>Start with one configured provider. Keep forge sign-in as a fallback.</p></div></section>
+          <section class="terminal-turn"><div class="terminal-role">Temper <time>09:49</time></div><div class="terminal-turn-content"><span class="terminal-prompt agent">✳</span><p>That gives us a small first scope. I’ve proposed a goal with a coordinator so the design and implementation can be planned together. You would own it after accepting.</p></div></section>
+          <article class="terminal-proposal" aria-label="Goal proposal">
+            <div class="terminal-proposal-heading"><span class="terminal-proposal-type">PROPOSAL</span><span class="terminal-proposal-wait">waiting 4 min</span></div>
+            <h2>Add OAuth login</h2>
+            <p>A coordinator would add one configured OAuth provider to the web while keeping forge sign-in available. The goal would be yours and appear on the project board.</p>
+            <dl><div><dt>Goal</dt><dd>T1 · Coordinator</dd></div><div><dt>Authority</dt><dd>Land into main in ai/temper</dd></div><div><dt>Budget</dt><dd>40 from your pool · 120 left, 80 after</dd></div></dl>
+            <div class="terminal-proposal-actions"><button type="button" class="terminal-primary" data-accept>Accept goal</button><button type="button" data-reject>Reject with reason</button><a href="inbox.html">Open in inbox ↗</a></div>
+            <div class="terminal-proposal-result" hidden></div>
+          </article>
+        </div>
+        <div class="terminal-added-messages"></div>
+      </div>
+    </main>
+
+    <footer class="terminal-composer-area">
+      <div class="terminal-composer"><span class="terminal-input-prompt" aria-hidden="true">›</span><textarea rows="1" aria-label="Message T0" placeholder="Message T0…"></textarea><span class="terminal-input-hint">Enter to send · Shift+Enter for newline</span><button type="button" class="terminal-send" aria-label="Send message">↑</button></div>
+    </footer>
+  </div>
+</body>
+</html>

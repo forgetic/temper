@@ -114,7 +114,7 @@
   function renderNav() {
     const count = [state.proposal === 'pending', !state.choice,
       state.held === 'pending' && state.taskStatus !== 'cancelled'].filter(Boolean).length;
-    $$('.sidebar .count').forEach(node => { node.textContent = count; node.hidden = count === 0; });
+    $$('.terminal-count, .sidebar .count').forEach(node => { node.textContent = count; node.hidden = count === 0; });
   }
 
   let inboxKind = 'all';
@@ -359,6 +359,12 @@
   }
   function bindChats() {
     const input = $('.welcome textarea');
+    const autosize = () => {
+      input.style.height = '22px';
+      input.style.height = `${Math.min(Math.max(input.scrollHeight, 22), 160)}px`;
+      input.style.overflowY = input.scrollHeight > 160 ? 'auto' : 'hidden';
+    };
+    input.addEventListener('input', autosize);
     const start = () => {
       const words = input.value.trim();
       if (!words) { input.focus(); return; }
@@ -384,6 +390,7 @@
       event.preventDefault();
       toast('This chat is sample data; T0 has the conversation mockup.');
     }));
+    autosize();
   }
 
   let boardFilter = 'live';
@@ -476,17 +483,27 @@
       $('#overview > p').textContent = state.taskAmend;
     }
     const t27 = $$('.plan-row').find(row => row.textContent.includes('T27'));
+    const t26 = $$('.plan-row').find(row => row.textContent.includes('T26'));
+    if (t26) {
+      const phase = $('.phase', t26);
+      const stopped = state.agentTasks?.T26?.status === 'stopped';
+      phase.textContent = stopped ? 'Held · stopped by Pat' : 'Running';
+      phase.className = `phase ${stopped ? 'held' : ''}`;
+    }
     if (t27) {
       const phase = $('.phase', t27);
+      const stopped = state.agentTasks?.T27?.status === 'stopped';
       phase.textContent = state.taskStatus === 'cancelled' ? 'Cancelled'
-        : state.held === 'released' ? 'Starting · tries reset' : 'Held · out of tries';
-      phase.className = `phase ${state.taskStatus === 'cancelled' ? '' : state.held === 'released' ? 'good' : 'held'}`;
+        : stopped ? 'Held · stopped by Pat' : state.held === 'released' ? 'Running · tries reset' : 'Held · out of tries';
+      phase.className = `phase ${state.taskStatus === 'cancelled' ? '' : stopped ? 'held' : state.held === 'released' ? 'good' : 'held'}`;
     }
     const notice = $('.notice.red');
-    notice.hidden = state.held === 'released' || state.taskStatus === 'cancelled';
+    const t27Stopped = state.agentTasks?.T27?.status === 'stopped';
+    notice.hidden = (state.held === 'released' && !t27Stopped) || state.taskStatus === 'cancelled';
     if (state.held === 'left') notice.querySelector('div').textContent = `T27 remains held. Pat's reason: ${state.heldReason}`;
+    if (t27Stopped) notice.querySelector('div').textContent = 'T27 was stopped by Pat. Its committed review is saved; release it to continue.';
     const heldCount = $$('.side-card .kv').find(row => row.textContent.includes('Held below'));
-    if (heldCount) $('strong', heldCount).textContent = state.held === 'released' || state.taskStatus === 'cancelled' ? '0 tasks' : '1 task';
+    if (heldCount) $('strong', heldCount).textContent = (state.held === 'released' && !t27Stopped) || state.taskStatus === 'cancelled' ? '0 tasks' : '1 task';
     const rows = $$('.plan-row');
     rows.forEach(row => {
       row.hidden = heldOnly && !row.textContent.includes('T27');
