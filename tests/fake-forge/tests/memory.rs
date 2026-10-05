@@ -129,6 +129,50 @@ struct Measured {
     calls: u64,
 }
 
+#[test]
+fn full_merge_history_and_both_parent_traversals_stay_bounded() {
+    let mut forge = Measured::new();
+    let repository = name(b'r', 0);
+    let mut configured = setup(0);
+    configured.protection = None;
+    let first = temper_fake_forge_domain::repository(&mut forge.domain, &CONFIG, configured);
+    temper_fake_forge_domain::grant(&mut forge.domain, &repository, AUTHOR, Permission::Write);
+    let mut left = first;
+    let mut right = first;
+    for _ in 1..LIMITS.commits {
+        let files = tree(b'm');
+        forge.meter.start();
+        let next = temper_fake_forge_domain::merge_commit(&mut forge.domain, &CONFIG, left, right, files)
+            .expect("one commit per free store slot");
+        let measured = forge.meter.end();
+        forge.meter.check(measured, forge.bound, "a merge commit");
+        left = right;
+        right = next;
+    }
+    forge.meter.start();
+    assert!(forge.domain.is_ancestor(first, right));
+    assert!(forge.domain.is_ancestor(left, right));
+    let measured = forge.meter.end();
+    forge.meter.check(measured, forge.bound, "both-parent ancestry");
+    forge.ok(AUTHOR, &repository, Op::Git(Git::Push { branch: name(b'w', 0), commit: right, expected: None }));
+    assert_eq!(forge.domain.has(&repository).len(), LIMITS.commits);
+    // Reading mergeability walks both histories as a real merge-base read does.
+    forge.ok(AUTHOR, &repository, Op::Git(Git::Create { branch: name(b'w', 1), commit: left }));
+    let number = forge
+        .ok(
+            AUTHOR,
+            &repository,
+            Op::Write(Write::OpenPull {
+                title: text(LIMITS.title_bytes, b't'),
+                body: text(LIMITS.body_bytes, b'b'),
+                head: name(b'w', 0),
+                base: name(b'w', 1),
+            }),
+        )
+        .expect("a pull was opened");
+    forge.ok(AUTHOR, &repository, Op::Read(Read::Pull { number }));
+}
+
 impl Measured {
     fn new() -> Measured {
         let bound = worst_case(&LIMITS).expect("the test limits fit");
@@ -231,7 +275,7 @@ fn fill(forge: &mut Measured, index: u64, first: u64) {
         let commit = temper_fake_forge_domain::commit(&mut forge.domain, &config, first, tree(content))
             .expect("room")
             .expect("a change");
-        let push = Op::Git(Git::Push { branch: name(b'w', branch), commit });
+        let push = Op::Git(Git::Push { branch: name(b'w', branch), commit, expected: None });
         forge.ok(AUTHOR, &repository, push);
     }
     // Two pull requests, and two issues carrying every label.

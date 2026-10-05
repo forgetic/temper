@@ -289,7 +289,7 @@ impl Domain {
         &self.repositories.get(self.id(repository)).expect("a repository of the forge").has
     }
 
-    /// The commit `commit`: its parent and its tree. A working tree's git
+    /// The commit `commit`: its parents and its tree. A working tree's git
     /// fetching it walks its parents here.
     #[must_use]
     pub fn object(&self, commit: u64) -> Option<&Object> {

@@ -956,7 +956,7 @@ impl World {
                 return;
             }
         };
-        let op = forge_api::Op::Git(Git::Push { branch: branch.clone(), commit });
+        let op = forge_api::Op::Git(Git::Push { branch: branch.clone(), commit, expected: None });
         let at = usize::try_from(repository).expect("few");
         let theirs = Theirs::Push { worker, item, attempt, repository, branch, commit };
         self.call(WORKER, REPOSITORIES[at], op, theirs);

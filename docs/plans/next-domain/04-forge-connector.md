@@ -276,7 +276,14 @@ it.
 ## 6. Increments
 
 1. **04a the fake forge grows** (section 4), with its tests; nothing
-   uses the additions yet but their own tests.
+   uses the additions yet but their own tests. The first reviewable part,
+   **04a1 git foundations**, adds an optional second parent, a resolved
+   merge commit that is made even for an unchanged tree, both-parent
+   ancestry and object transfer, and conditional pushes. Existing callers
+   supply no expected head and keep their first-version behavior. The
+   remaining **04a2 API additions** implement the reads and update operation
+   in section 4 against the groundwork observations; 04a is complete only
+   when both parts pass their gates.
 2. **04b `client`:** copied from the legacy forge, trimmed, then
    adapted to live resources and outbox entries; its own step tests,
    ported from the legacy forge's where they still hold.

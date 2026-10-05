@@ -99,12 +99,15 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     let timers = Deadlines::<Alarm>::worst_case(timers(limits)?)?;
     let observations = Queue::<Observation>::worst_case(limits.observations)?
         .checked_add(times(limits.observations, observation(limits)?)?)?;
-    // A merge walks the base's history into a set, and makes a tree it may
+    // A merge walks both histories into sets, using a bounded work queue
+    // that visits each commit once, and makes a tree it may
     // refuse; a branch moving or a status reported lists the pull requests
     // that follow it; what a call brings is held until it is stored or
     // dropped; a write replaces what an item held, an observation is made
     // before a full queue drops it.
     let scratch = Set::<u64>::worst_case(limits.commits)?
+        .checked_mul(2)?
+        .checked_add(Queue::<u64>::worst_case(limits.commits)?)?
         .checked_add(tree(limits)?)?
         .checked_add(List::<u64>::worst_case(limits.items)?)?
         .checked_add(call(limits)?)?

@@ -426,7 +426,8 @@ impl Remote for Line<'_> {
     }
 
     fn push(&mut self, remote: &[u8], branch: &[u8], commit: u64) -> Result<Pushed, fake::Fault> {
-        let Answer::Pushed(pushed) = self.git(remote, Call::Push { branch: branch.into(), commit })? else {
+        let Answer::Pushed(pushed) = self.git(remote, Call::Push { branch: branch.into(), commit, expected: None })?
+        else {
             panic!("a push is answered with how it went");
         };
         Ok(match pushed {

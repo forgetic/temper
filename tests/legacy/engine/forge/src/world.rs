@@ -695,7 +695,7 @@ impl World {
             self.end("push refused");
             return;
         };
-        let op = forge_api::Op::Git(Git::Push { branch: branch.clone().into_boxed_slice(), commit });
+        let op = forge_api::Op::Git(Git::Push { branch: branch.clone().into_boxed_slice(), commit, expected: None });
         self.call(WORKER, repository, op, Theirs::Push { item, branch });
     }
 

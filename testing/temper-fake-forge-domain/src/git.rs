@@ -1,5 +1,5 @@
 //! The forge's git, the remote side: each repository's branches and the
-//! commits it has, over one store where a commit is a parent and a tree of
+//! commits it has, over one store where a commit has up to two parents and a tree of
 //! paths to contents, named by a count so a seed replays to the same names.
 //!
 //! It keeps git's rules: a push moves a branch only by a fast-forward, or
@@ -15,7 +15,7 @@
 use alloc::boxed::Box;
 
 use skein_lib::bytes::copy_of;
-use skein_lib::{Env, Id, List, Map, Set};
+use skein_lib::{Env, Id, List, Map, Queue, Set};
 
 use crate::api::{Answer, Change, Created, Error, File, Git, Head, Permission, Pushed, Want, What};
 use crate::domain::{self, Config, Domain};
@@ -28,11 +28,14 @@ use crate::{ci, issues};
 /// Files by their paths, with their content.
 pub type Tree = Map<Box<[u8]>, Box<[u8]>>;
 
-/// A commit: its parent, unless it is a repository's first, and its tree,
+/// A commit: its first parent, unless it is a repository's first, its
+/// optional merge parent, and its tree,
 /// files by their paths.
 #[derive(Debug)]
 pub struct Object {
     pub parent: Option<u64>,
+    /// The second parent of a merge, preserved even when its tree is unchanged.
+    pub merge_parent: Option<u64>,
     pub tree: Tree,
 }
 
@@ -78,13 +81,15 @@ pub(crate) fn same(a: &Tree, b: &Tree) -> bool {
 pub(crate) fn is_ancestor(domain: &Domain, ancestor: u64, commit: u64) -> bool {
     let mut at = Some(commit);
     for _ in 0..=domain.commits.len() {
-        let Some(current) = at else {
-            return false;
-        };
+        let Some(current) = at else { return false };
         if current == ancestor {
             return true;
         }
-        at = parent(domain, current);
+        let object = domain.commits.get(&current).expect("a commit of the store");
+        if object.merge_parent.is_some() {
+            return ancestors(domain, current).contains(&ancestor);
+        }
+        at = object.parent;
     }
     false
 }
@@ -94,25 +99,63 @@ pub(crate) fn merge_base(domain: &Domain, a: u64, b: u64) -> Option<u64> {
     let mut history = Set::with_capacity(domain.commits.len());
     let mut at = Some(b);
     for _ in 0..=domain.commits.len() {
-        let Some(current) = at else {
-            break;
-        };
+        let Some(current) = at else { break };
+        let object = domain.commits.get(&current).expect("a commit of the store");
+        if object.merge_parent.is_some() {
+            drop(history);
+            return graph_base(domain, a, b);
+        }
         history.insert(current).expect("a history no longer than the store");
-        at = parent(domain, current);
+        at = object.parent;
     }
     let mut at = Some(a);
     for _ in 0..=domain.commits.len() {
         let current = at?;
+        let object = domain.commits.get(&current).expect("a commit of the store");
+        if object.merge_parent.is_some() {
+            drop(history);
+            return graph_base(domain, a, b);
+        }
         if history.contains(&current) {
             return Some(current);
         }
-        at = parent(domain, current);
+        at = object.parent;
     }
     None
 }
 
-fn parent(domain: &Domain, commit: u64) -> Option<u64> {
-    domain.commits.get(&commit).expect("a commit of the store").parent
+fn graph_base(domain: &Domain, a: u64, b: u64) -> Option<u64> {
+    let ours = ancestors(domain, a);
+    let theirs = ancestors(domain, b);
+    let mut newest = None;
+    // Commit names grow with creation. A shared descendant is newer than
+    // every shared ancestor; unrelated common bases use a deterministic tie.
+    for &commit in &ours {
+        if theirs.contains(&commit) {
+            newest = Some(commit);
+        }
+    }
+    newest
+}
+
+/// Traverse both parents without recursion. Each object enters the work
+/// list once, so scratch is bounded by the store, including converging DAGs.
+pub(crate) fn ancestors(domain: &Domain, commit: u64) -> Set<u64> {
+    let mut found = Set::with_capacity(domain.commits.len());
+    let mut todo = Queue::with_capacity(domain.commits.len());
+    found.insert(commit).expect("a commit of the store");
+    todo.push(commit);
+    while let Some(current) = todo.pop() {
+        let object = domain.commits.get(&current).expect("parents are commits of the store");
+        for parent in [object.parent, object.merge_parent] {
+            if let Some(parent) = parent
+                && found.insert(parent).expect("a history no longer than the store")
+            {
+                todo.push(parent);
+            }
+        }
+    }
+    found
 }
 
 /// What git asks of the repository `id`, as `user`.
@@ -154,7 +197,7 @@ pub(crate) fn serve(
                 Err(what) => Err(Error::Missing(what)),
             }
         }
-        Git::Push { branch, commit } => push(domain, env, id, user, &branch, commit),
+        Git::Push { branch, commit, expected } => push(domain, env, id, user, &branch, commit, expected),
         Git::Create { branch, commit } => create(domain, env, id, user, &branch, commit),
     }
 }
@@ -167,6 +210,7 @@ fn push(
     user: u64,
     branch: &[u8],
     commit: u64,
+    expected: Option<u64>,
 ) -> Result<Answer, Error> {
     let repository = domain.repositories.get(id).expect("a repository of the forge");
     repository.require(user, Permission::Write)?;
@@ -181,6 +225,17 @@ fn push(
         return Err(Error::Missing(What::Commit));
     }
     let tip = repository.branches.get(branch).copied();
+    if let Some(expected) = expected
+        && tip != Some(expected)
+    {
+        domain.observations.push(Observation::Rejected {
+            repository: copy_of(&repository.name),
+            branch: copy_of(branch),
+            commit,
+            by: user,
+        });
+        return Ok(Answer::Pushed(Pushed::Rejected));
+    }
     match tip {
         Some(tip) => {
             if !is_ancestor(domain, tip, commit) {
@@ -206,14 +261,21 @@ fn push(
     // The repository takes the commit and those before it it lacks.
     let mut next = Some(commit);
     for _ in 0..=domain.commits.len() {
-        let Some(pushed) = next else {
+        let Some(pushed) = next else { break };
+        let object = domain.commits.get(&pushed).expect("a commit of the store");
+        if object.merge_parent.is_some() {
+            let history = ancestors(domain, pushed);
+            let repository = domain.repositories.get_mut(id).expect("a repository of the forge");
+            for &ancestor in &history {
+                repository.has.insert(ancestor).expect("a repository has room for every commit");
+            }
             break;
-        };
+        }
+        next = object.parent;
         let repository = domain.repositories.get_mut(id).expect("a repository of the forge");
         if !repository.has.insert(pushed).expect("a repository has room for every commit") {
             break;
         }
-        next = parent(domain, pushed);
     }
     let repository = domain.repositories.get_mut(id).expect("a repository of the forge");
     repository.branches.insert(copy_of(branch), commit).expect("checked for room above");

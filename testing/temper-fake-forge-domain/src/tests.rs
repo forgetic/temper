@@ -79,6 +79,64 @@ const MAIN: &[u8] = b"main";
 /// The first commit of the first repository set up.
 const FIRST: u64 = 1;
 
+#[test]
+fn a_resolved_merge_keeps_both_parents_even_with_an_unchanged_tree() {
+    let mut h = Harness::new(CALM);
+    let ours = h.commit(FIRST, &[(b"ours", b"one")]);
+    let theirs = h.commit(FIRST, &[(b"theirs", b"two")]);
+    h.push(ENGINE, b"work", ours).unwrap();
+    let tree = h.domain.inspect(&CALM, REPOSITORY, &Read::Tree { commit: ours }).unwrap();
+    let Answer::Tree(tree) = tree else { unreachable!("the fetched tree") };
+    let merged = crate::merge_commit(&mut h.domain, &CALM, ours, theirs, tree).unwrap();
+    let object = h.domain.object(merged).unwrap();
+    assert_eq!(object.parent, Some(ours));
+    assert_eq!(object.merge_parent, Some(theirs));
+    assert!(h.domain.is_ancestor(ours, merged));
+    assert!(h.domain.is_ancestor(theirs, merged));
+    assert_eq!(crate::git::merge_base(&h.domain, merged, theirs), Some(theirs));
+    assert_eq!(h.push(ENGINE, b"work", merged), Ok(Answer::Pushed(Pushed::Pushed)));
+    assert!(h.domain.has(REPOSITORY).contains(&theirs), "fetch includes the second parent's history");
+    // Fast-forward through the second parent is allowed too.
+    assert_eq!(h.push(ENGINE, b"other", theirs), Ok(Answer::Pushed(Pushed::Pushed)));
+    assert_eq!(h.push(ENGINE, b"other", merged), Ok(Answer::Pushed(Pushed::Pushed)));
+}
+
+#[test]
+fn conditional_push_never_moves_a_branch_whose_head_changed() {
+    let mut h = Harness::new(CALM);
+    let first = h.commit(FIRST, &[(b"one", b"one")]);
+    let second = h.commit(first, &[(b"two", b"two")]);
+    h.push(ENGINE, b"work", first).unwrap();
+    h.push(ENGINE, b"work", second).unwrap();
+    let third = h.commit(second, &[(b"two", b"three")]);
+    let op = Op::Git(Git::Push { branch: copy_of(b"work"), commit: third, expected: Some(first) });
+    assert_eq!(h.call(ENGINE, op), Ok(Answer::Pushed(Pushed::Rejected)));
+    assert_eq!(h.branch(b"work"), Some(second));
+    assert!(!h.domain.has(REPOSITORY).contains(&third), "a refused push transfers no objects");
+    let op = Op::Git(Git::Push { branch: copy_of(b"work"), commit: third, expected: Some(second) });
+    assert_eq!(h.call(ENGINE, op), Ok(Answer::Pushed(Pushed::Pushed)));
+    let op = Op::Git(Git::Push { branch: copy_of(b"missing"), commit: third, expected: Some(third) });
+    assert_eq!(h.call(ENGINE, op), Ok(Answer::Pushed(Pushed::Rejected)));
+    assert_eq!(h.branch(b"missing"), None);
+}
+
+#[test]
+fn a_converging_merge_dag_visits_each_commit_once() {
+    let mut h = Harness::new(CALM);
+    let mut left = FIRST;
+    let mut right = FIRST;
+    for _ in 1..LIMITS.commits {
+        let next = crate::merge_commit(&mut h.domain, &CALM, left, right, files(&[])).unwrap();
+        left = right;
+        right = next;
+    }
+    assert_eq!(crate::git::ancestors(&h.domain, right).len(), LIMITS.commits);
+    assert!(h.domain.is_ancestor(FIRST, right));
+    assert_eq!(crate::git::merge_base(&h.domain, right, left), Some(left));
+    assert_eq!(h.push(ENGINE, b"work", right), Ok(Answer::Pushed(Pushed::Pushed)));
+    assert_eq!(h.domain.has(REPOSITORY).len(), LIMITS.commits);
+}
+
 /// A repository whose `main` holds a readme and a CI cue file, with two
 /// labels, one CI context passing after five seconds, and a subscriber.
 fn setup() -> Setup {
@@ -385,7 +443,7 @@ impl Harness {
     }
 
     fn push(&mut self, user: u64, branch: &[u8], commit: u64) -> Result<Answer, Error> {
-        self.call(user, Op::Git(Git::Push { branch: copy_of(branch), commit }))
+        self.call(user, Op::Git(Git::Push { branch: copy_of(branch), commit, expected: None }))
     }
 
     fn pull(&self, number: u64) -> Pull {
@@ -1512,7 +1570,7 @@ fn run(seed: u64) -> Run {
     for op in [
         create(b"one", b"body", &[]),
         write(Write::Comment { number: 1, body: copy_of(b"hi") }),
-        Op::Git(Git::Push { branch: copy_of(b"work"), commit: work }),
+        Op::Git(Git::Push { branch: copy_of(b"work"), commit: work, expected: None }),
         write(Write::OpenPull {
             title: copy_of(b"t"),
             body: copy_of(b""),
@@ -1979,7 +2037,7 @@ fn every_call_is_answered_once_under_every_fault() {
                 let op = match rng.below(6) {
                     0 => create(b"issue", b"body", &[]),
                     1 => write(Write::Comment { number: 1, body: copy_of(b"hi") }),
-                    2 => Op::Git(Git::Push { branch: copy_of(b"work"), commit: work }),
+                    2 => Op::Git(Git::Push { branch: copy_of(b"work"), commit: work, expected: None }),
                     3 => open_op(b"work"),
                     4 => merge(1, work),
                     _ => read(Read::Items {

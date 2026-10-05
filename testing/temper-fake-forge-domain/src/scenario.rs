@@ -36,7 +36,7 @@ pub fn repository(domain: &mut Domain, config: &Config, setup: Setup) -> u64 {
         fit_names(&protection.contexts, limits.contexts, limits).expect("contexts within the limits");
     }
     let tree = git::tree(limits, tree).expect("a first tree within the limits");
-    let first = git::store(domain, Object { parent: None, tree }).expect("room for a first commit");
+    let first = git::store(domain, Object { parent: None, merge_parent: None, tree }).expect("room for a first commit");
     let mut repository = Repository::new(limits, copy_of(&name), default, first, checks, protection, hooked);
     for label in labels {
         repository.labels.insert(label).expect("a repository's labels are within the limits");
@@ -78,8 +78,24 @@ pub fn commit(domain: &mut Domain, config: &Config, parent: u64, tree: Box<[File
     if git::same(&object.tree, &tree) {
         return Ok(None);
     }
-    let commit = git::store(domain, Object { parent: Some(parent), tree })?;
+    let commit = git::store(domain, Object { parent: Some(parent), merge_parent: None, tree })?;
     Ok(Some(commit))
+}
+
+/// A worker commits a resolved merge, with both fetched parents. Unlike an
+/// ordinary commit, an unchanged tree still records the merge ancestry.
+pub fn merge_commit(
+    domain: &mut Domain,
+    config: &Config,
+    parent: u64,
+    merge_parent: u64,
+    files: Box<[File]>,
+) -> Result<u64, Error> {
+    if !domain.commits.contains_key(&parent) || !domain.commits.contains_key(&merge_parent) {
+        return Err(Error::Missing(What::Commit));
+    }
+    let tree = git::tree(&config.limits, files)?;
+    git::store(domain, Object { parent: Some(parent), merge_parent: Some(merge_parent), tree })
 }
 
 /// Another party commits on `branch` of `repository`, writing `path` with
@@ -105,7 +121,7 @@ pub fn advance(
         return Err(Error::TooLarge);
     }
     tree.insert(copy_of(path), copy_of(content)).expect("checked for room above");
-    let commit = git::store(domain, Object { parent: Some(tip), tree })?;
+    let commit = git::store(domain, Object { parent: Some(tip), merge_parent: None, tree })?;
     let repository = domain.repositories.get_mut(id).expect("a repository of the forge");
     repository.has.insert(commit).expect("a repository has room for every commit");
     repository.branches.insert(copy_of(branch), commit).expect("the branch is there");

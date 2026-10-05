@@ -284,7 +284,7 @@ impl Remote for Forge {
     }
 
     fn push(&mut self, remote: &[u8], branch: &[u8], commit: u64) -> Result<Pushed, Fault> {
-        let op = Git::Push { branch: branch.into(), commit };
+        let op = Git::Push { branch: branch.into(), commit, expected: None };
         let Answer::Pushed(pushed) = self.call(remote, WORKER, op)? else {
             panic!("a push is answered with how it went");
         };

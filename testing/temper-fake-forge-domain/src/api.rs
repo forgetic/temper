@@ -240,8 +240,11 @@ pub enum Git {
     /// [`Answer::Commit`].
     Fetch { want: Want },
     /// Moves `branch` to `commit`, a commit of the store, as a fast-forward,
-    /// or creates it. Answered by [`Answer::Pushed`].
-    Push { branch: Box<[u8]>, commit: u64 },
+    /// or creates it. When `expected` is given the branch must be exactly
+    /// there; a moved or missing head is rejected without transferring any
+    /// objects. `None` keeps the unconditional fast-forward behavior.
+    /// Answered by [`Answer::Pushed`].
+    Push { branch: Box<[u8]>, commit: u64, expected: Option<u64> },
     /// Creates `branch` at `commit`, which the repository has, only if it is
     /// nowhere. Answered by [`Answer::Branch`].
     Create { branch: Box<[u8]>, commit: u64 },
