@@ -45,6 +45,7 @@ unavailable; the design records bounded/unknown handling and status links.
 | 01c authority policies and checks | merged, `e21dafb` | independent review passed; all four workflow checks passed; focused 1,850/1,850 in 4.888 s, fuzzy 28/28 in 18.143 s, one ignored finding; complete authority serial total 0.131 s |
 | 01d landing requirements | merged, `e9aea6d` | independent review corrected missing-facts refusal precedence; all four workflow checks passed; focused 2,118/2,118 in 4.506 s, fuzzy 30/30 in 16.345 s, one ignored finding; authority serial total 0.164 s |
 | 02a tasks batches and lifecycle | merged, `376cbd4` | independent review corrected held-closing creation and exhaustive matches; recovery regression passed; all four workflow checks passed; focused 2,115/2,115 in 5.532 s, fuzzy 30/30 in 20.070 s, one ignored finding; tasks serial focused 0.117 s, fuzzy 0.781 s |
+| 02b task inboxes, references and wakes | merged, `1cfd373` | independent review corrected oversized copying before admission, with a negative counted-memory regression; all four workflow checks passed; focused 2,145/2,145 in 5.042 s, fuzzy 31/31 in 18.227 s, one ignored finding; tasks world serial 0.220 s focused and 2.519 s fuzzy |
 | 03a people sign-in and chat requests | merged, `959795f` | all four workflow checks passed; focused 1,822/1,822 in 7.251 s, fuzzy 28/28 in 22.695 s, one ignored finding; targeted people serial total 0.098 s before the added root-pressure regression |
 | 04a1 fake forge git foundations | merged, `0d09efc` | all four workflow checks passed; focused 1,833/1,833 in 6.661 s, fuzzy 28/28 in 22.321 s, one ignored finding; 68 targeted tests passed in 0.054 s |
 | 04a1 bounded traversal correction | merged, `0eb1ff0` | all four workflow checks passed; focused 1,833/1,833 in 9.325 s, fuzzy 28/28 in 27.457 s, one ignored finding; traversal uses a configured bounded `for` |
@@ -107,9 +108,16 @@ counted memory includes maximum retired and live conflict payloads. The real
 git protocol's enforcement of these typed contracts remains later work.
 
 Steps 02 through 05 are partially implemented. Task messaging (02b), the
-forge client (04b) and worker turns (05d) are in isolated worktrees. The
-client API foundation is under review; its required world verification must
-pass before any client code reaches main. Steps 06 through 08 remain.
+forge client (04b) and worker turns (05d) have been developed independently.
+02b is merged: whole inbox messages, immutable offered payloads and read
+fences, reserved result/answer credits, bounded references and subscriptions,
+and durable wake eligibility. Root callbacks must complete before the one
+decision commits; pressure retries preserve the call key and use a fresh
+message candidate after intervening delivery. The forge client and worker
+are still in isolated worktrees. Session turns, transcripts and pricing
+(05e) are being extended, and the root skeleton (06a) is being prepared.
+The client API foundation's required world verification must pass before
+any client code reaches main. Steps 07 and 08 remain.
 
 After groundwork, the plan's finer dependencies still apply: tasks needs
 authority's value and number shapes; the root's walking skeleton needs
