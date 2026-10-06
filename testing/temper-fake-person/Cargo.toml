@@ -1,0 +1,15 @@
+[package]
+name = "temper-fake-person"
+description = "A scripted person with a tree face for the web worlds"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+skein-lib.workspace = true
+temper-web-domain.workspace = true
+temper-web-view.workspace = true
+
+[lints]
+workspace = true

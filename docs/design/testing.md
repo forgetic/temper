@@ -518,7 +518,10 @@ suite headroom (next-domain/README.md, 5.5); legacy focused coverage stays.
 ```
 crates/*/src/tests.rs           step tests
 testing/temper-fake-*           fakes, as step crates: the forge and the LLM provider
+testing/temper-fake-person      the web person's scripts and tree face (a DOM face later)
 tests/world                     the world harness: schedule, stage, ledger, trace, heap, referee
+tests/web/domain                the client domain and view with a scripted engine
+tests/web/engine                the client with the real engine root
 tests/<component>/<child>       a child domain's world, temper-<component>-<child>-world
 tests/<component>/domain        a component's world: the engine's, and the system worlds
 tests/*/*/tests/*.rs            a world's focused tests
@@ -576,7 +579,13 @@ The fakes:
 - **People:** scripted in the engine's world (4.4), and reused by the
   whole worker's; the agent's top-level world scripts its own, and the
   engine child domains' worlds script what people do through the parent
-  they script.
+  they script. The web client has `temper-fake-person`: scripts find
+  roles, accessible names and text through a tree face, then act through
+  the view's node ids. The same scripts can later use a DOM face in the
+  browser world. `tests/web/domain` drives the client domain and view
+  against a scripted engine; `tests/web/engine` will use the same person
+  against the real root. Every view patch is applied to a model DOM and
+  checked against the new tree, including node ids.
 
 The checks:
 
