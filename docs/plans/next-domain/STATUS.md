@@ -17,6 +17,7 @@ protocol drafts and lower-layer integration are parked for later work.
 | Alignment 01: grant patterns | merged | see alignment branch commit | Two terminal forms; exact grants cover one name, open grants cover matching descendants. Gate passed: 2,366 focused / 11.760 s; 42 fuzzy / 29.817 s. |
 | Alignment 02: lost run | merged | see alignment branch commit | Root records every lost claim as `Failed(Lost)` with one lost try, including no-turn and release-recovery cuts. Gate passed: 2,366 focused / 5.896 s; 42 fuzzy / 27.617 s. |
 | Alignment 03: funding state | merged | see alignment branch commit | Removed parked-move allotment generations, historical spend and closure rows; ended rows and source postings remain atomic. Gate passed: 2,366 focused / 11.181 s; 42 fuzzy / 28.374 s. |
+| Alignment 04: slice records and citations | merged | see alignment branch commit | Current slice limits and result-delivery stopgap recorded below; code citations repointed to restored sections or dropped. Gate passed: 2,366 focused / 7.141 s; 42 fuzzy / 27.745 s. |
 | 00a Forgejo facts | merged | fa97784 | Gate passed; 1,772 focused / 7.440 s; 26 fuzzy / 22.148 s. |
 | 00b dead drafts | merged | 9acb981 | Gate passed; 1,772 focused and 26 fuzzy; baseline counts unchanged. |
 | 00c legacy rename | merged | d8385dc | Gate passed; 1,772 focused / 7.495 s; 26 fuzzy / 22.159 s. |
@@ -118,6 +119,14 @@ remain on `checkpoint/migration/transcript-codec`, outside main.
 | 05s5 full transcript codec | draft moved to scratch; source absent | smith bbe922f | No codec implementation or tests; incomplete manifests remain on checkpoint branch. |
 | 05s4 activation-qualified host calls | merged locally | smith 5aa22cb, 774f618 | Final-tip fmt/clippy pass; 591 focused / 3.954 s; 11 fuzzy / 4.432 s; serial 591 / 9.488 s, 11 / 9.102 s. |
 
+## Alignment slice limits
+
+- The root rejects restored non-person requesters, non-Report contracts, and delegates until it has routes for them.
+- Release reopens only holds caused by exhausted retries; other holds answer `NeedsAmend`.
+- Role administration reroutes held chats only.
+- Escalation selects the role named by project policy (domain/tasks.md, section 8).
+- A live notice followed by `ReadResult` of a named ended task is the current result-delivery stopgap. Step 06d must replace it with one committed message to the requester (domain/tasks.md, section 5.6).
+
 ## What remains open
 
 **00 — groundwork**
@@ -172,7 +181,7 @@ remain on `checkpoint/migration/transcript-codec`, outside main.
 
 ## Resume point
 
-- Smith first: audit and implement typed recovery/domain contracts; protocol changes are outside the goal.
+- Smith first: resume its domain alignment plan; protocol changes are outside the goal.
 - Existing IO/TLS/channel checkpoints are merged; protocol adoption and codec implementation remain deferred.
 - Kernel gates pass after restart; browser repair remains deferred in its separate profile.
 - Keep parked 02e/04b2/05f branches, exact-tip gates and Forgejo v16.0.5 API job-log assumption.

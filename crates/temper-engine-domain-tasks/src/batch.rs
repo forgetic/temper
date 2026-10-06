@@ -1,5 +1,4 @@
-//! Whole-batch structural and financial admission (domain/tasks.md, sections
-//! 4, 10 and 14). Bounded immutable dependencies and delegation waits are checked
+//! Whole-batch structural and financial admission (domain/tasks.md, sections 4 and 10). Bounded immutable dependencies and delegation waits are checked
 //! together before mutation; tasks does not judge root-authorized authority.
 use crate::domain::{Domain, record};
 use crate::{Authority, Contract, Executor, Last, Limits, New, Parameter, Party, Phase, Problem, Refusal, Spec, Was};

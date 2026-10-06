@@ -1,6 +1,6 @@
 //! Real root/children, two authenticated owners, paged durable fake store and
 //! scripted priced worker for held-chat decisions. Service policy and transport
-//! are driven only through actual boundaries (domain/engine.md, section 7.7).
+//! are driven only through actual boundaries.
 
 use crate::commits::Store;
 use crate::escalation_referee::{QUESTION, REASON, REPORT, Referee, Story};
@@ -15,47 +15,44 @@ use temper_engine_domain_people as people;
 use temper_engine_domain_tasks as tasks;
 
 /// One durable process cut, without changing the outside scripts or store
-/// (domain/engine.md, section 7.7).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Cut {
-    /// Keep the process throughout (domain/engine.md, section 7.7).
+    /// Keep the process throughout.
     None,
 
     /// Lose completion after priced failure and requester hold apply, before ACK
-    /// (domain/engine.md, sections 7.6 and 7.7).
     Held,
 
     /// Lose completion after the first accepted decision's atomic archive applies,
-    /// before its keyed reply escapes (domain/engine.md, section 7.7).
+    /// before its keyed reply escapes.
     Decision,
 }
 
 /// Finite deterministic scenario configuration, with tiny pages and optional
-/// diagnostic saturation (domain/engine.md, section 7.7; testing-strategy.md, section 3).
+/// diagnostic saturation (testing-strategy.md, section 3).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Settings {
-    /// Real child's reproducible seed (domain/engine.md, section 7.7).
+    /// Real child's reproducible seed.
     pub seed: u64,
 
-    /// Outside people decisions, including both race outcomes (domain/engine.md, section 7.7).
+    /// Outside people decisions, including both race outcomes.
     pub story: Story,
 
-    /// At most one durable cut (domain/engine.md, section 7.7).
+    /// At most one durable cut.
     pub cut: Cut,
 
-    /// Extra iterations before applying each submitted commit (domain/engine.md, section 7.7).
+    /// Extra iterations before applying each submitted commit.
     pub commit_delay: u32,
 
-    /// Extra iterations before returning a captured one-row page (domain/engine.md, section 7.7).
+    /// Extra iterations before returning a captured one-row page.
     pub page_delay: u32,
 
-    /// Drain facts or deliberately saturate their tiny queues (domain/engine.md, section 7.7).
+    /// Drain facts or deliberately saturate their tiny queues.
     pub facts: bool,
 }
 
 impl Settings {
     /// Calm no-cut story; callers vary only outside configuration
-    /// (domain/engine.md, section 7.7).
     #[must_use]
     pub const fn calm(seed: u64, story: Story) -> Settings {
         Settings { seed, story, cut: Cut::None, commit_delay: 0, page_delay: 0, facts: true }
@@ -105,7 +102,7 @@ struct PendingRead {
 
 /// Frozen world including real root state, store and pending outside scripts.
 /// Referee predictions come from inputs and durable boundary evidence, never
-/// from a private-state query (domain/engine.md, section 7.7).
+/// from a private-state query.
 #[derive(Debug)]
 pub struct World {
     settings: Settings,
@@ -130,30 +127,26 @@ pub struct World {
     recovery: Recovery,
     frozen_cut: Option<Cut>,
     /// Ordered atomic fake store, shared with existing journal/load worlds
-    /// (domain/engine.md, section 7.7).
     pub store: Store,
 
     /// Outside obligations and independent committed evidence checks
-    /// (domain/engine.md, section 7.7).
     pub referee: Referee,
 
     /// Outside observer immediately before the one unassigned-claim terminal
     /// cohort, retained for positive-control and corruption checks; never a
-    /// root-state oracle (domain/engine.md, section 7.7).
+    /// root-state oracle.
     pub unplaced_referee: Option<Referee>,
 
     /// Exact boundary trace, excluding optional diagnostic observations
-    /// (domain/engine.md, section 7.7).
     pub trace: Vec<String>,
 
     /// Submitted atomic cohorts retained for meaningful corruption negatives
-    /// (domain/engine.md, section 7.7).
     pub transactions: Vec<Vec<Write>>,
 
-    /// Actual process cuts injected by this world (domain/engine.md, section 7.7).
+    /// Actual process cuts injected by this world.
     pub restarts: u32,
 
-    /// Real paged requests, including named archive IO (domain/engine.md, section 7.7).
+    /// Real paged requests, including named archive IO.
     pub pages: u32,
 }
 
@@ -179,7 +172,6 @@ fn config(seed: u64) -> engine::Config {
 
 /// Exact configured child and root capacities for this finite escalation world;
 /// memory and route regressions reuse them rather than drift from the driver
-/// (domain/engine.md, section 7.7).
 #[must_use]
 pub fn limits() -> engine::Limits {
     let mut limits = walking::limits();
@@ -199,7 +191,6 @@ impl World {
     /// Build actual children/policy, with two initial owners and zero run retries.
     /// Initial policy grants Create/Accept and escalation decisions, omitting direct Release.
     /// Outside requests use the authenticated root boundary
-    /// (domain/engine.md, section 7.7; domain/tasks.md, section 15).
     #[must_use]
     pub fn new(settings: Settings) -> World {
         let limits = limits();
@@ -483,7 +474,7 @@ impl World {
     }
 
     /// Drive one actual root iteration and later fake-store terminals; no direct
-    /// child calls or private-state decisions occur (domain/engine.md, section 7.7).
+    /// child calls or private-state decisions occur.
     pub fn iterate(&mut self) {
         self.iteration += 1;
         let now = u64::from(self.iteration) * 1_000_000 + self.clock_offset;
@@ -541,7 +532,7 @@ impl World {
         {
             // A decision can commit its new claim before assignment escapes.
             // No worker may invent hosting that claim; let actual fleet grace
-            // retire it and any retained old answer (domain/engine.md, 7.7).
+            // retire it and any retained old answer.
             self.clock_offset = 6_000_000_000;
         }
     }
@@ -741,7 +732,6 @@ impl World {
 
     /// Complete every outside obligation and actual pending IO within 600 passes.
     /// A held rejected task is a final story condition, not hidden work
-    /// (domain/engine.md, section 7.7; domain/tasks.md, section 15).
     pub fn run(&mut self) {
         for _ in 0..600 {
             if self.settled() {
@@ -786,8 +776,7 @@ impl World {
 }
 
 /// Compare complete frozen root/children/store/scripts each iteration, including
-/// diagnostic state with the same settings (domain/engine.md, section 7.7;
-/// testing-strategy.md, section 6).
+/// diagnostic state with the same settings (testing-strategy.md, section 6).
 #[must_use]
 pub fn run_replayed(settings: Settings) -> World {
     let mut first = World::new(settings);

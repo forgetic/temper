@@ -17,7 +17,7 @@ use skein_lib::Wall;
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Deployment {
     /// Shell-supplied identity committed on the deployment's first start and
-    /// restored thereafter; exactly sixteen bytes (domain/engine.md, 5.4 and 5.7).
+    /// restored thereafter; exactly sixteen bytes (domain/engine.md, section 5.4).
     pub id: [u8; 16],
     /// Last task number allocated by the root; zero before its first allocation,
     /// never reset or reused (domain/engine.md, 5.4; domain/tasks.md, 2).
@@ -29,13 +29,13 @@ pub struct Deployment {
     /// and no secret session bytes are held here (domain/people.md, 3 and 11).
     pub sign_ins: u64,
     /// Last root-allocated message number; retained for the broader inbox routes,
-    /// not allocated by the current chat story (domain/engine.md, 5.4 and 5.7).
+    /// not allocated by the current chat story (domain/engine.md, section 5.4).
     pub messages: u64,
     /// Last activation number allocated for a claim; the candidate may leave a
     /// gap if preparation fails (domain/engine.md, 5.4 and 7.1).
     pub runs: u64,
     /// Last root-allocated call number; current 06a routes no tool calls
-    /// (domain/engine.md, 5.4, 5.7 and 7.3).
+    /// (domain/engine.md, sections 5.4 and 7.3).
     pub calls: u64,
     /// Last issued ordered commit. A restored header is already durable; a live
     /// journal may await this number's store terminal (domain/engine.md, 5.1).
@@ -53,7 +53,7 @@ pub enum Family {
     Person,
     /// Secret-free sign-in candidates supplied to people (domain/people.md, 3).
     SignIn,
-    /// Message identities reserved for later inbox routes (domain/engine.md, 5.7).
+    /// Message identities reserved for later inbox routes.
     Message,
     /// Fresh attempt identities saved at claims (domain/engine.md, 7.1).
     Run,
@@ -67,11 +67,11 @@ pub enum Family {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Key {
     /// Root's immutable decided held-chat revision; read only by named race
-    /// replay, never restored into live state (domain/engine.md, 7.7).
+    /// replay, never restored into live state.
     EscalationDecision {
-        /// Positive root-issued task (domain/engine.md, 7.7).
+        /// Positive root-issued task.
         task: u64,
-        /// Positive semantic revision, unique within task (domain/engine.md, 7.7).
+        /// Positive semantic revision, unique within task.
         revision: u64,
     },
     /// Singleton deployment header key (domain/engine.md, 5.4).
@@ -98,7 +98,7 @@ pub enum Key {
         attempt: u64,
     },
     /// Child semantic task/financial record key; transport proofs have root
-    /// keys and no child receipt family exists (domain/tasks.md, 2 and 14; domain/engine.md, 7.5).
+    /// keys and no child receipt family exists (domain/tasks.md, section 2).
     Tasks(
         /// Tasks-issued key, preserved under the root wrapper without reinterpretation (domain/tasks.md, 2).
         temper_engine_domain_tasks::Key,
@@ -117,11 +117,11 @@ pub enum Key {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Range {
     /// Exactly one root-owned decision archive for a stale authenticated
-    /// decision; no unbounded history restore (domain/engine.md, 7.7).
+    /// decision; no unbounded history restore.
     EscalationDecision {
-        /// Positive named task (domain/engine.md, 7.7).
+        /// Positive named task.
         task: u64,
-        /// Positive decided semantic revision (domain/engine.md, 7.7).
+        /// Positive decided semantic revision.
         revision: u64,
     },
     /// Singleton header read by the root at startup; at most one row and no
@@ -129,11 +129,11 @@ pub enum Range {
     Deployment,
     /// Root startup pages only child Live/Ledger state; historical Ended
     /// rows stay outside this range. Actual root-supported task shapes validate
-    /// before child restoration (domain/engine.md, 6 and 7.5).
+    /// before child restoration (domain/engine.md, section 6).
     Tasks,
     /// Root pages current claims only, at most tasks `tasks` rows; every proof
     /// must correlate with its loaded live row before tasks Restored or fleet
-    /// adoption. Historical transcripts/terminals are excluded (domain/engine.md, 6 and 7.5).
+    /// adoption. Historical transcripts/terminals are excluded (domain/engine.md, section 6).
     RunProofs,
     /// Root startup reads every people child row before accepting people (domain/engine.md, 6).
     People,
@@ -144,7 +144,7 @@ pub enum Range {
     },
     /// Historical committed transcript turns for one task/attempt; the root
     /// load seam supports this range, though 06a does not resume transcripts
-    /// (domain/engine.md, 5.3, 5.7 and 7.2).
+    /// (domain/engine.md, sections 5.3 and 7.2).
     Turns {
         /// Positive durable task number; admitted ranges reject zero
         /// (domain/engine.md, 5.3 and 7.2).
@@ -253,7 +253,7 @@ pub struct TurnRecord {
     /// represented by `u64` (domain/engine.md, 7.2).
     pub spent: u64,
     /// No message fence is admitted in this current route; tasks refuses `Some`
-    /// before mutation until an actual inbox route joins (domain/engine.md, 7.2 and 7.5; domain/tasks.md, 14).
+    /// before mutation until an actual inbox route joins (domain/engine.md, section 7.2).
     pub read: Option<u64>,
     /// Injected wall time when the root accepted the turn; it survives restart
     /// without depending on the process clock (domain/engine.md, 5.4 and 7.2).
@@ -295,7 +295,7 @@ pub struct TurnProof {
 /// Claim reserves map room before child mutation and replaces this row. Ending
 /// erases it atomically; immutable transcript/terminal archives never enter the
 /// live map. Startup validates every row or stops, dropping none silently
-/// (domain/engine.md, 6, 7.2 and 7.5).
+/// (domain/engine.md, sections 6 and 7.2).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct RunProof {
     /// Positive task identity allocated by root; unique in the live proof table (domain/engine.md, 5.4).
@@ -307,30 +307,29 @@ pub struct RunProof {
     /// Typed accepted worker offer or actual root-translated unpriced terminal;
     /// present iff the child answered this current attempt. At most twice task
     /// result bytes before normalization; cleared on replacement/end
-    /// (domain/engine.md, 7.4 and 7.5).
+    /// (domain/engine.md, section 7.4).
     pub terminal: Option<TerminalRecord>,
 }
 
 /// Root-owned immutable first accepted decision for one held-chat revision.
 /// Saved atomically with semantic task change and keyed people outcome; bounded
-/// reason is never restored into a live archive map (domain/engine.md, 7.7).
+/// reason is never restored into a live archive map.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct EscalationDecisionRecord {
     /// Actual child's project, used to authenticate historical reads rather
-    /// than trust the caller's project (domain/engine.md, 7.7).
+    /// than trust the caller's project.
     pub project: u32,
     /// Actual person requester from the accepted bounded semantic context;
     /// current requester/policy-role standing controls replay privacy
-    /// (domain/engine.md, 7.7).
     pub requester: u64,
-    /// Positive task identity (domain/engine.md, 7.7).
+    /// Positive task identity.
     pub task: u64,
-    /// Positive checked semantic revision (domain/engine.md, 7.7).
+    /// Positive checked semantic revision.
     pub revision: u64,
-    /// Positive authenticated winning person (domain/engine.md, 7.7).
+    /// Positive authenticated winning person.
     pub by: u64,
     /// Exact accepted bounded choice; rejection reason fits journal `result_bytes`/`transcript_bytes`
-    /// and both child bounds before mutation (domain/engine.md, 7.7).
+    /// and both child bounds before mutation.
     pub decision: temper_engine_domain_people::EscalationDecision,
 }
 
@@ -340,9 +339,9 @@ pub struct EscalationDecisionRecord {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Record {
     /// Root's immutable semantic decision evidence; not task-owned transport
-    /// state (domain/engine.md, 7.7).
+    /// state.
     EscalationDecision(
-        /// Exact bounded accepted choice (domain/engine.md, 7.7).
+        /// Exact bounded accepted choice.
         EscalationDecisionRecord,
     ),
     /// Fixed deployment counters, saved only by the journal (domain/engine.md, 5.4).
@@ -360,11 +359,11 @@ pub enum Record {
     Terminal(
         /// Root-owned exact bounded worker offer or canonical root-translated
         /// topology/Invalid terminal at accepted expense, within result admission
-        /// bounds (domain/engine.md, 7.4 and 7.5).
+        /// bounds (domain/engine.md, section 7.4).
         TerminalRecord,
     ),
     /// Child's authentic task or funding row; root transport proofs have
-    /// their own variants. All writes share the root decision (domain/engine.md, 5.6 and 7.5).
+    /// their own variants. All writes share the root decision (domain/engine.md, section 5.6).
     Tasks(
         /// Owned child row, deep bytes checked before journal or load retention (domain/engine.md, 5.3 and 5.6).
         temper_engine_domain_tasks::Stored,

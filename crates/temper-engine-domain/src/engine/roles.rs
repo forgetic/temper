@@ -1,7 +1,8 @@
 //! Serialized authenticated role administration and held-recipient preflight.
 //! Candidate rosters and waiting contexts are temporary root-owned snapshots;
 //! all membership, semantic rerouting and keyed completion share one decision
-//! (domain/engine.md, section 7.8; domain/tasks.md, section 16).
+
+//! Current role administration covers only rerouting held chats.
 
 use super::{Decision, Domain, Env, Limits, ReplyTo, Token, Work, authority, escalation, people, save, tasks};
 use crate::{Record, Write};
@@ -118,7 +119,7 @@ fn preflight(
 }
 
 /// Consume one actual people route, preflight bounded Waiting contexts and
-/// commit membership/rerouting/keyed completion together (domain/engine.md, 7.8).
+/// commit membership/rerouting/keyed completion together.
 pub(super) fn begin(
     domain: &mut Domain,
     env: &Env<Limits>,

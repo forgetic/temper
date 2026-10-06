@@ -1,6 +1,6 @@
 //! Actual held-chat reads, routing and authenticated decisions. Root owns
 //! transport/query slots and immutable decision evidence; tasks owns the held
-//! lifecycle (domain/engine.md, 7.7; domain/tasks.md, 15).
+//! lifecycle.
 
 use super::{
     Decision, Delivery, Domain, Env, Id, Limits, Read, ReplyTo, Request, Token, Work, authority, emit, people, save,
@@ -38,6 +38,7 @@ pub(super) fn role_number(role: people::Role) -> u32 {
 }
 
 fn fallback(domain: &Domain, project: u32) -> Option<tasks::EscalationHolder> {
+    // The policy names the escalation role; this slice resolves that role here.
     let role = domain.config.authority.policy(project)?.escalation_role?;
     if role > 3 {
         return None;
@@ -85,7 +86,7 @@ pub(super) fn supported(domain: &Domain, task: &tasks::TaskRecord) -> bool {
 }
 
 /// Pure recipient selection for actual startup/live routing and candidate-roster
-/// preflight; preserves a final-role holder (domain/engine.md, 7.7–7.8).
+/// preflight; preserves a final-role holder.
 pub(super) fn recipient(
     domain: &Domain,
     context: &tasks::EscalationContext,

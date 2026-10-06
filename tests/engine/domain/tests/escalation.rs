@@ -1,5 +1,4 @@
 //! Held-chat requester/final-role stories and independent evidence negatives
-//! (domain/engine.md, section 7.7; domain/tasks.md, section 15).
 
 use skein_lib::Token;
 use temper_engine_domain::{EscalationDecisionRecord, Key, Record, Write};

@@ -1,8 +1,7 @@
 //! Actual authenticated role asks on the real root and children, restored from
 //! genuine held-chat transactions through the shared ordered fake store. The
 //! world retains only outside session/request scripts and durable evidence;
-//! no worker claim is invented (domain/engine.md, section 7.8;
-//! domain/people.md, section 5.1.3; domain/tasks.md, section 15).
+//! no worker claim is invented (domain/people.md, section 5.1).
 
 use crate::commits::Store;
 use crate::escalation;
@@ -18,30 +17,27 @@ use temper_engine_domain_people as people;
 use temper_engine_domain_tasks as tasks;
 
 /// Actual held-chat state at which the previous process stops
-/// (domain/tasks.md, section 15).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Base {
-    /// Requester holds Waiting revision one (domain/tasks.md, section 15).
+    /// Requester holds Waiting revision one.
     Requester,
 
     /// Requester passed to the final policy role at revision two
-    /// (domain/tasks.md, section 15).
     FinalRole,
 
     /// Requester rejected, retaining its durable reason
-    /// (domain/tasks.md, section 15).
     Rejected,
 }
 
 /// Tiny outside scheduling and startup configuration; child capacities remain
-/// immutable throughout the run (domain/engine.md, section 7.7).
+/// immutable throughout the run.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[expect(clippy::struct_excessive_bools, reason = "independent outside fault and observation switches remain explicit")]
 pub struct Settings {
-    /// Deterministic real-child seed (domain/engine.md, section 7.7).
+    /// Deterministic real-child seed.
     pub seed: u64,
 
-    /// Genuine previous root story (domain/tasks.md, section 15).
+    /// Genuine previous root story.
     pub base: Base,
 
     /// Lose one successful role commit completion after atomic application
@@ -49,15 +45,12 @@ pub struct Settings {
     pub cut: bool,
 
     /// Delay each atomic store application by this many passes
-    /// (domain/engine.md, section 7.7).
     pub commit_delay: u32,
 
     /// Delay each captured one-row restore page by this many passes
-    /// (domain/engine.md, section 7.7).
     pub page_delay: u32,
 
     /// Drain optional facts or saturate their tiny queues
-    /// (domain/engine.md, section 7.7).
     pub facts: bool,
 
     /// Current owner's policy permits Policy as well as Create/Accept
@@ -65,7 +58,7 @@ pub struct Settings {
     pub policy: bool,
 
     /// Actual durable Waiting row reaches checked revision exhaustion before
-    /// this fresh process starts (domain/tasks.md, section 15).
+    /// this fresh process starts.
     pub exhausted: bool,
 
     /// Start beyond both saved session expiry clocks
@@ -75,7 +68,6 @@ pub struct Settings {
 
 impl Settings {
     /// Calm authenticated requester-held role story
-    /// (domain/engine.md, section 7.7).
     #[must_use]
     pub const fn calm(seed: u64, base: Base) -> Settings {
         Settings {
@@ -100,7 +92,7 @@ struct Input {
 }
 
 /// One loop with actual root outputs, paged Store, authenticated outside people,
-/// and the independent transaction observer (domain/engine.md, section 7.7).
+/// and the independent transaction observer.
 #[derive(Debug)]
 pub struct World {
     settings: Settings,
@@ -122,33 +114,30 @@ pub struct World {
     /// (domain/people.md, section 3).
     pub people: [u64; 2],
 
-    /// Genuine held-chat identity (domain/tasks.md, section 15).
+    /// Genuine held-chat identity.
     pub task: u64,
 
     /// Shared atomic fake store, without a second persistence implementation
-    /// (domain/engine.md, section 7.7).
     pub store: Store,
 
     /// Exact evidence before the role story, including accepted expense and
-    /// original finite funding (domain/tasks.md, section 15).
+    /// original finite funding.
     pub initial_rows: BTreeMap<Key, Record>,
 
     /// Independent registered asks and observed transactions
-    /// (domain/engine.md, section 7.7).
     pub referee: Referee,
 
     /// Actual pre-transaction observer paired with each submitted cohort, for
     /// positive-control and specific corruption negatives
-    /// (domain/engine.md, section 7.7).
     pub cohorts: Vec<(Referee, Vec<Write>)>,
 
-    /// Exact non-diagnostic boundary trace (domain/engine.md, section 7.7).
+    /// Exact non-diagnostic boundary trace.
     pub trace: Vec<String>,
 
-    /// Actual captured ordered pages (domain/engine.md, section 7.7).
+    /// Actual captured ordered pages.
     pub pages: u32,
 
-    /// Actual durable role-commit cuts (domain/engine.md, section 7.7).
+    /// Actual durable role-commit cuts.
     pub restarts: u32,
 }
 
@@ -167,7 +156,6 @@ fn config(settings: Settings) -> engine::Config {
 }
 
 /// Exact immutable child/root capacities for this bounded two-person story
-/// (domain/engine.md, section 7.7).
 #[must_use]
 pub fn limits() -> engine::Limits {
     let mut limits = escalation::limits();
@@ -203,7 +191,6 @@ fn snapshot(settings: Settings) -> Store {
 impl World {
     /// Restore genuine held-chat rows and saved sessions through actual root
     /// startup pages; no direct child inputs are used
-    /// (domain/engine.md, section 7.7).
     #[must_use]
     pub fn new(settings: Settings) -> World {
         let mut store = snapshot(settings);
@@ -309,7 +296,7 @@ impl World {
     /// Register one outside keyed ask and its exact expected wrapper. `reroute`
     /// names the scenario's independently expected requester-to-final-role move;
     /// unchanged/final/rejected rows are expected to emit no task writes
-    /// (domain/people.md, section 5.1.3; domain/tasks.md, section 16).
+    /// (domain/people.md, section 5.1).
     pub fn ask(&mut self, owner: usize, key: u8, ask: people::Ask, reply: people::Reply, reroute: bool) {
         let replacement = if matches!(reply, people::Reply::Outcome(people::Outcome::RolesSet { .. })) {
             let people::Ask::SetRoles { holdings, .. } = &ask else {
@@ -342,7 +329,7 @@ impl World {
     }
 
     /// Current task from the fake store's observable durable evidence, never the
-    /// child's private state (domain/engine.md, section 7.7).
+    /// child's private state.
     #[must_use]
     pub fn task_record(&self) -> &tasks::TaskRecord {
         let Some(Record::Tasks(tasks::Stored::Live(record))) =
@@ -354,7 +341,7 @@ impl World {
     }
 
     /// Complete all registered outside replies and actual pending store IO
-    /// within a bounded number of iterations (domain/engine.md, section 7.7).
+    /// within a bounded number of iterations.
     pub fn run(&mut self) {
         for _ in 0..500 {
             if self.settled() {
@@ -366,7 +353,7 @@ impl World {
     }
 
     /// One real root iteration, with later fake-store terminals and optional
-    /// fact draining (domain/engine.md, section 7.7).
+    /// fact draining.
     pub fn iterate(&mut self) {
         self.iteration += 1;
         let nanos = u64::from(self.iteration) * 1_000_000 + if self.settings.expired { 61_000_000_000 } else { 0 };
@@ -504,7 +491,7 @@ impl World {
 
 /// Replay complete frozen real-root/store/script state after every iteration.
 /// The supplied outside operation is retained in both worlds before stepping
-/// (domain/engine.md, section 7.7; testing-strategy.md, section 6).
+/// (testing-strategy.md, section 6).
 #[must_use]
 pub fn reroute_replayed(settings: Settings, winner: usize) -> World {
     let mut first = World::new(settings);

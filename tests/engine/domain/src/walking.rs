@@ -225,7 +225,7 @@ pub struct Settings {
     /// World script cuts after the final ended/financial transaction is applied
     /// before its completion or ACK/result release; mutually exclusive with
     /// `restart`. Retained worker answer and authenticated named result read
-    /// recover through the real root routes (domain/engine.md, section 7.6).
+    /// recover through the real root routes.
     pub terminal_restart: bool,
     /// Drain observational child facts or leave their tiny queues saturated.
     pub facts: bool,
@@ -241,7 +241,7 @@ impl Settings {
     /// Script one final-commit process cut and one extra worker terminal resend.
     /// The person requests the named ended result with their restored session;
     /// the fake checks exactly one result and unchanged durable rows after cut
-    /// (domain/engine.md, section 7.6; domain/people.md, section 6).
+    /// (domain/people.md, section 6).
     #[must_use]
     pub const fn terminal(seed: u64) -> Settings {
         Settings { seed, commit_delay: 0, page_delay: 0, restart: false, terminal_restart: true, facts: true }
@@ -250,7 +250,7 @@ impl Settings {
 
 // The outside worker makes two recovery sends in order: its retained answer,
 // then one explicit post-ACK resend. This transport sequence is independent
-// of the person's one authenticated result request (domain/engine.md, 7.6).
+// of the person's one authenticated result request.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum TerminalRecovery {
     NotRequested,

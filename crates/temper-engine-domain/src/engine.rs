@@ -1,10 +1,10 @@
 //! The concrete 06a root: bounded child ownership and synchronous decision
-//! routing for a charged person chat (domain/engine.md, 3–7 and 5.7).
+//! routing for a charged person chat (domain/engine.md, sections 3–7).
 //! [`Domain`] keeps task/funding state in tasks, policy in authority, identities
 //! and keyed requests in people, placement in fleet, task text gathering in
 //! brief and secret-free credential lifetimes in accounts. Its own state is
 //! commits, loads, candidate numbers, bounded current-claim replay evidence and
-//! unfinished handoffs between children (domain/engine.md, 7.5).
+//! unfinished handoffs between children.
 //!
 //! The shell/protocol supplies [`Event`]s to [`step`], drains durable effects
 //! through [`resume`], fires child timers through [`fire`] and reclaims at the
@@ -13,15 +13,15 @@
 //! release. Startup reads the header first, pages child state and current root
 //! proofs, validates their identities/expense/terminal correlation, then permits
 //! child restoration consequences. It adopts every restored claim before fleet
-//! `Loaded` allows new placement (domain/engine.md, 6 and 7.5).
+//! `Loaded` allows new placement (domain/engine.md, section 6).
 //!
 //! The root never knows file descriptors, wire encodings, kernel races,
 //! repository contents or secret credential bytes (domain/engine.md, 2 and 5.5).
 //! Its closed input vocabulary has no blanket child-event pass-through. Tools,
 //! connectors and the broader people/run routes remain later increments (5.7).
 //! Actual keyed role administration preflights Waiting recipients, then commits
-//! membership, semantic rerouting and keyed completion together without IO
-//! (domain/engine.md, 7.8). Root candidate/snapshot carriers are transient.
+//! membership, semantic rerouting and keyed completion together without IO.
+//! Root candidate/snapshot carriers are transient.
 //! Child facts are disposable observations; [`Domain::quiescent`] reports
 //! internal idleness, while an external referee establishes final story results.
 mod escalation;
@@ -51,7 +51,7 @@ pub struct Limits {
     /// Paged store reads; every startup page must fit whole (domain/engine.md, 5.3).
     pub loads: loads::Limits,
     /// Authentic task/funding room, also bounding root current-claim proof slots;
-    /// transport evidence belongs to root (domain/tasks.md, 2 and 14; domain/engine.md, 7.5).
+    /// transport evidence belongs to root (domain/tasks.md, section 2).
     pub tasks: tasks::Limits,
     /// Deployment/project policy and finding room, supplied at startup (domain/authority.md, 6).
     pub authority: authority::Limits,
@@ -75,20 +75,20 @@ pub struct Config {
     pub seed: u64,
     /// Bootstrap project/identity owners supplied by deployment configuration,
     /// at most people `initial_owners`; sign-in authentication matches their
-    /// identity keys rather than trusting a request's role (domain/people.md, 3.1).
+    /// identity keys rather than trusting a request's role (domain/people.md, section 3).
     pub owners: Box<[people::InitialOwner]>,
     /// Validated deployment and project policy; no duplicated policy values (domain/authority.md, 6).
     pub authority: authority::Domain,
     /// Charter selected for chats; admitted by tasks as the configured executor (domain/people.md, 7).
     pub charter: u32,
     /// Finite period number used to address project/person funding ledgers;
-    /// restoring an existing ledger never resets it (domain/authority.md, 7; domain/engine.md, 5.7).
+    /// restoring an existing ledger never resets it (domain/authority.md, 7).
     pub period: u64,
     /// Initial project period budget, checked against current project policy
-    /// before its first opening; restored funding wins (domain/authority.md, 7; domain/engine.md, 5.7).
+    /// before its first opening; restored funding wins (domain/authority.md, 7).
     pub period_budget: u64,
     /// Initial person pool budget, checked against the authenticated role's
-    /// period ceiling before carving; restored funding wins (domain/people.md, 7; domain/engine.md, 5.7).
+    /// period ceiling before carving; restored funding wins (domain/people.md, section 7).
     pub person_budget: u64,
     /// Exact task authority checked for each authenticated chat (domain/authority.md, 8.4).
     pub chat_authority: authority::Authority,
@@ -114,7 +114,7 @@ pub struct Assignment {
     pub charter: u32,
     /// Owned required task section, at most brief `sections` and `brief_bytes`;
     /// includes specification, report contract and the actual person requester.
-    /// Task/deployment lineage awaits its actual root route (domain/engine.md, 5.7, 7.5 and 9).
+    /// Task/deployment lineage awaits its actual root route (domain/engine.md, section 9).
     pub sections: Box<[brief::Section]>,
     /// Secret-free account grant; token bytes stay in the protocol (domain/engine.md, section 8; docs/design/credentials.md, 5).
     pub grant: accounts::Grant,
@@ -126,14 +126,14 @@ pub struct Assignment {
 pub struct Turn {
     /// Positive consecutive worker turn; fleet fences accepted/pending duplicates
     /// before child admission using the restored kept turn. Root owns durable
-    /// latest-turn evidence (domain/engine.md, 7.2 and 7.5; domain/tasks.md, 14).
+    /// latest-turn evidence (domain/engine.md, section 7.2).
     pub number: u32,
     /// Worker-priced cumulative spend for this attempt, not a new delta. Tasks
     /// validates monotonicity and charges the accepted delta atomically
-    /// (domain/authority.md, 7; domain/engine.md, 5.7 and 7.2).
+    /// (domain/authority.md, 7; domain/engine.md, section 7.2).
     pub cumulative: u64,
     /// Must be `None` in this actual route; nonempty read fences are refused
-    /// until a real inbox route joins (domain/tasks.md, 14; domain/engine.md, 7.5).
+    /// until a real inbox route joins.
     pub read: Option<u64>,
     /// Owned transcript, bounded by journal transcript bytes before fleet admission (domain/engine.md, 7.2).
     pub transcript: Box<[u8]>,
@@ -147,18 +147,18 @@ pub struct Turn {
 #[derive(Debug)]
 pub enum Event {
     /// Authenticated named held-chat read; one bounded view or refusal terminal,
-    /// without persistent inbox/history restore (domain/engine.md, 7.7).
+    /// without persistent inbox/history restore.
     ReadEscalation {
-        /// One web-issued reply right (domain/engine.md, 7.7).
+        /// One web-issued reply right.
         reply_to: ReplyTo,
-        /// Root-issued session, checked against both clocks (domain/engine.md, 7.7).
+        /// Root-issued session, checked against both clocks.
         sign_in: u64,
-        /// Positive chat task known from Started (domain/engine.md, 7.7).
+        /// Positive chat task known from Started.
         task: u64,
     },
     /// Shell to root: begin cold paged restoration and account setup. Repeated
     /// starts are inert; readiness follows all restored/adopted claims, or a
-    /// terminal startup/storage failure emits `Stop` (domain/engine.md, 5.7 and 6).
+    /// terminal startup/storage failure emits `Stop` (domain/engine.md, section 6).
     Start,
     /// Store's cumulative successful terminal for issued commits (domain/engine.md, 5.1).
     Committed {
@@ -197,11 +197,11 @@ pub enum Event {
     /// Web's keyed chat request; the people child authenticates session and role (domain/people.md, 5.1).
     Ask {
         /// Web-issued right to one keyed request terminal; duplicates can join bounded
-        /// people waiters, each still replied to once (domain/people.md, 5.1.1 and 11).
+        /// people waiters, each still replied to once (domain/people.md, sections 5.1 and 11).
         reply_to: ReplyTo,
         /// Root-issued durable secret-free session number; authenticated and expired by people (domain/people.md, 3).
         sign_in: u64,
-        /// Web-issued fixed request key, scoped by person and persisted with the exact typed ask (domain/people.md, 5.1.1).
+        /// Web-issued fixed request key, scoped by person and persisted with the exact typed ask (domain/people.md, section 5.1).
         key: [u8; 16],
         /// Typed chat request with words bounded by people words before routing (domain/people.md, 5.1).
         ask: people::Ask,
@@ -209,17 +209,17 @@ pub enum Event {
     /// Worker first reports its bounded slots and hosted attempts (domain/worker.md, 2).
     Hello {
         /// Protocol-issued opaque channel identity; at most fleet `workers` are retained
-        /// cold, and fleet admits the live channel (domain/engine.md, 5.7; domain/worker.md, 2).
+        /// cold, and fleet admits the live channel (domain/worker.md, 2).
         channel: Token,
         /// Worker slot/host/workstream report, bounded by fleet limits before cold retention (domain/worker.md, 2).
         hello: fleet::Hello,
     },
     /// Protocol to root: channel closed. Known cold losses coalesce; unknown
     /// losses are inert. Live loss changes fleet topology/deadlines immediately
-    /// without a commit or outward terminal (domain/engine.md, 5.7; domain/worker.md, 2).
+    /// without a commit or outward terminal (domain/worker.md, 2).
     Lost {
         /// Protocol-issued identity of the channel that closed; duplicates/unknown
-        /// channels consume no queued handoff room (domain/engine.md, 5.7).
+        /// channels consume no queued handoff room.
         channel: Token,
     },
     /// Worker to root: numbered body for its current claim. A valid admitted
@@ -235,13 +235,13 @@ pub enum Event {
         /// Positive root-issued activation number; fleet fences stale worker bodies (domain/engine.md, 7.1).
         attempt: u64,
         /// Owned numbered transcript and cumulative charge; the root bounds bytes
-        /// before payload retention (domain/engine.md, 5.7 and 7.2).
+        /// before payload retention (domain/engine.md, section 7.2).
         turn: Turn,
     },
     /// Worker to root: attempt terminal retained until ACK. Accepted charge and
     /// task state commit first; pressure asks for retry. A refused charged
     /// terminal becomes an uncharged invalid activation before its durable ACK
-    /// (domain/engine.md, 5.7 and 7.4).
+    /// (domain/engine.md, section 7.4).
     Answer {
         /// Worker protocol sender checked by fleet against the hosted attempt
         /// (domain/worker.md, 2 and 8).
@@ -253,19 +253,19 @@ pub enum Event {
         attempt: u64,
         /// Whole priced spend for this attempt; tasks checks monotonicity and
         /// semantic admission atomically, while root/fleet owns transport replay
-        /// evidence and fencing (domain/engine.md, 7.2, 7.4 and 7.5).
+        /// evidence and fencing (domain/engine.md, sections 7.2 and 7.4).
         cumulative: u64,
         /// Owned task terminal; root retained payload bytes are at most twice tasks
         /// `result_bytes`, then tasks checks result/contract admission against
-        /// its stricter result bound (domain/engine.md, 5.7 and 7.4).
+        /// its stricter result bound (domain/engine.md, section 7.4).
         end: tasks::End,
     },
     /// Web to root: read a named historical result. People validates the session;
     /// the loaded ended task must name its person as requester. Ends once with
-    /// `ResultReply` or a refused `WebReply` (domain/engine.md, 5.7; domain/people.md, 6).
+    /// `ResultReply` or a refused `WebReply` (domain/people.md, section 6).
     ReadResult {
         /// Web-issued right moved into one bounded result waiter; consumes one
-        /// terminal result/refusal reply (domain/engine.md, 5.7; domain/people.md, 11).
+        /// terminal result/refusal reply (domain/people.md, section 11).
         reply_to: ReplyTo,
         /// Root-issued durable secret-free session number; authenticated and expired by people (domain/people.md, 3).
         sign_in: u64,
@@ -362,7 +362,7 @@ pub enum Request {
     },
     /// Root to shell: failed storage/startup requires stopping this process;
     /// no terminal is owed to this notice and held effects remain unreleased
-    /// (domain/engine.md, 5.1 and 5.7).
+    /// (domain/engine.md, section 5.1).
     Stop,
 }
 
@@ -416,7 +416,7 @@ enum Startup {
 /// Root owns every participating child and all unfinished handoffs; no child
 /// effect bypasses its decision journal. Bounded activation contexts replace
 /// raw task peeks; current proofs are root-owned and authentic financial state
-/// stays in tasks (domain/engine.md, 3–5 and 7.5; domain/tasks.md, 14).
+/// stays in tasks (domain/engine.md, sections 3–5).
 #[derive(Debug)]
 pub struct Domain {
     limits: Limits,
@@ -450,7 +450,7 @@ impl Domain {
     /// Allocate the root and fixed child room from shell-supplied configuration
     /// and validated cross-child limits. Checks bounded authority/bootstrap
     /// configuration; issues no request. Startup pages/account setup begin only
-    /// on `Event::Start` (domain/engine.md, 4, 5.7 and 6).
+    /// on `Event::Start` (domain/engine.md, sections 4 and 6).
     #[must_use]
     pub fn new(mut config: Config, limits: &Limits) -> Domain {
         assert!(worst_case(limits).is_some(), "root limits are valid");
@@ -511,7 +511,7 @@ impl Domain {
     /// Pure readiness query: true only after all child/current proof pages
     /// validate, tasks restoration consequences finish routing, and every
     /// restored claim reaches fleet before `Loaded`. New work enters only then
-    /// (domain/engine.md, 6 and 7.5).
+    /// (domain/engine.md, section 6).
     #[must_use]
     pub fn ready(&self) -> bool {
         self.startup == Startup::Running && !self.journal.stopped()
@@ -521,7 +521,7 @@ impl Domain {
     /// remains unfinished. Call after the iteration's reclaim; sessions, idle
     /// workers, assigned workers awaiting external answers and future task/account
     /// timers are permitted. Story completion also requires the shell's independent
-    /// final result condition. This query never cancels work (domain/engine.md, 5.7).
+    /// final result condition. This query never cancels work.
     #[must_use]
     pub fn quiescent(&self) -> bool {
         self.ready()
@@ -595,7 +595,7 @@ impl Domain {
 
 /// One outward commit, or one ready delivery, or a bounded account step;
 /// reserve before every `step`, `resume` and `fire` call. Pure constant query,
-/// four output slots; emits no effect or terminal (domain/engine.md, 5.2 and 5.7).
+/// four output slots; emits no effect or terminal (domain/engine.md, section 5.2).
 #[must_use]
 pub const fn max_out(_limits: &Limits) -> u32 {
     4
@@ -639,7 +639,7 @@ fn save(decision: &mut Decision, limits: &Limits, write: Write) {
 /// limits with injected time. Refused web/worker calls get terminal/busy notices
 /// before child mutation; admitted effects may wait in the journal until store
 /// durability. Account operations keep their own secret-free terminal contract
-/// (domain/engine.md, 5.7 and 8).
+/// (domain/engine.md, section 8).
 #[expect(
     clippy::too_many_lines,
     reason = "one exhaustive admission match keeps every input before a single decision close"
@@ -828,6 +828,8 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
             return;
         }
         Event::ReadResult { reply_to, sign_in, task } => {
+            // Current slice stopgap: the person reads a named ended task after a live notice.
+            // Result delivery becomes one committed requester message with the 06d inbox route.
             if task == 0 {
                 out.push(Request::Deliver(Delivery::WebReply {
                     to: reply_to,
@@ -921,7 +923,6 @@ fn journal_outputs(journal_out: &mut Queue<Output>, out: &mut Queue<Request>) {
 /// The shell reserves `max_out` output slots. Deferred callbacks run before
 /// another held callback is consumed; other ready work may produce one commit.
 /// This pass never waits for IO or drops a retained callback on pressure
-/// (domain/engine.md, 5.7).
 pub fn resume(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
     assert!(out.room() >= max_out(&env.limits), "root ready output room");
     if domain.journal.stopped() || domain.startup == Startup::Failed {
@@ -1013,7 +1014,7 @@ pub fn resume(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) 
 /// The shell reserves `max_out` slots and supplies injected monotonic/wall time.
 /// Account timers may emit bounded protocol actions independently; root routes
 /// that mutate tasks/fleet wait for whole-decision admission. Their store and
-/// account outcomes enter later through `step` (domain/engine.md, 5.7 and 8).
+/// account outcomes enter later through `step` (domain/engine.md, section 8).
 pub fn fire(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
     if domain.journal.stopped() || domain.startup == Startup::Failed {
         return;
@@ -1216,7 +1217,7 @@ fn make_chat(
 
 /// Consume the actual child activation context for authority/account readiness
 /// and the person-chat brief; retain only credential waits and drop the context
-/// on claim/failure (domain/engine.md, 5.7, 7.1, 7.5 and 9).
+/// on claim/failure (domain/engine.md, sections 7.1 and 9).
 fn activate(domain: &mut Domain, env: &Env<Limits>, task: Box<tasks::RunContext>) {
     let number = task.task;
     if !domain.ready() {
@@ -2061,11 +2062,11 @@ fn route_bound(limits: &Limits) -> Option<u32> {
 /// simultaneously retained owned payloads, including current proofs, terminal
 /// scratch copies, transient restore correlations and preparation contexts.
 /// Child limits validate before route capacity arithmetic; malformed or
-/// unrepresentable bounds return `None` (domain/engine.md, 4, 5.3 and 7.5).
+/// unrepresentable bounds return `None` (domain/engine.md, sections 4 and 5.3).
 /// Pure startup heap calculation, excluding allocator overhead. Child declared
 /// output bounds must already be representable; checked root arithmetic or
 /// refused child/cross-route bounds return `None`. It allocates no state and
-/// emits no request or terminal (domain/engine.md, 4 and 5.7).
+/// emits no request or terminal (domain/engine.md, section 4).
 #[must_use]
 pub fn worst_case(limits: &Limits) -> Option<u64> {
     let task_bytes = tasks::worst_case(&limits.tasks)?;
@@ -2280,7 +2281,7 @@ fn prefix(bytes: &[u8], most: usize) -> &[u8] {
 
 /// Render only the current person Report task section from its temporary
 /// activation context, without a raw child query or invented ancestor route
-/// (domain/engine.md, 7.5 and 9).
+/// (domain/engine.md, section 9).
 fn task_read(record: &tasks::RunContext, parts: u32, bytes: u32) -> brief::Read {
     let words = match &record.contract {
         tasks::Contract::Report { words } => *words,
@@ -2421,7 +2422,7 @@ fn proof_turn(proof: &RunProof) -> u32 {
 
 /// Validate one root row against transient metadata from the owned live-task
 /// startup page. A current answered attempt requires a matching typed terminal;
-/// topology terminals retain unchanged accepted expense (domain/engine.md, 7.5).
+/// topology terminals retain unchanged accepted expense.
 fn valid_proof(proof: &RunProof, expected: &RestoringProof, limits: &Limits) -> bool {
     if proof.task == 0 || proof.attempt == 0 {
         return false;
@@ -2449,6 +2450,8 @@ fn valid_proof(proof: &RunProof, expected: &RestoringProof, limits: &Limits) -> 
 }
 
 fn supported_task(task: &tasks::TaskRecord, charter: u32) -> bool {
+    // Current root slice restores only person-requested Report chats without delegates.
+    // Reject other durable task shapes at startup until their root routes exist.
     let requester = match task.requester {
         tasks::Party::Person(_) => true,
         tasks::Party::Task(_) | tasks::Party::Deployment { .. } => false,
@@ -2490,7 +2493,7 @@ fn supported_person(requester: tasks::Party, highest: u64) -> bool {
 /// Reject unsupported root shapes and identities above durable high-water
 /// marks before child restoration. Proof rows consume exact transient live-row
 /// correlations and never load archive history into the live map
-/// (domain/engine.md, 6 and 7.5; domain/tasks.md, 14).
+/// (domain/engine.md, section 6).
 fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
     match row {
         Record::Deployment(deployment) => domain.journal = Journal::new(deployment, &env.limits.journal),

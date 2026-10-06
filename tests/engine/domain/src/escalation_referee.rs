@@ -1,6 +1,6 @@
 //! Independent escalation obligations from the two people and worker scripts.
 //! Reads only submitted boundaries and atomic store evidence, never root/child
-//! private state (domain/engine.md, section 7.7; domain/tasks.md, section 15).
+//! private state.
 
 use skein_lib::Token;
 use std::collections::{BTreeMap, BTreeSet};
@@ -9,44 +9,42 @@ use temper_engine_domain_brief::{Body, Kind};
 use temper_engine_domain_people as people;
 use temper_engine_domain_tasks as tasks;
 
-/// Independently supplied opening words (domain/engine.md, section 7.7).
+/// Independently supplied opening words.
 pub const QUESTION: &[u8] = b"retry held chat";
 
-/// Independently supplied successful second-attempt result (domain/tasks.md, section 15).
+/// Independently supplied successful second-attempt result.
 pub const REPORT: &[u8] = b"released report";
 
-/// Bounded rejection script, retained while held (domain/tasks.md, section 15).
+/// Bounded rejection script, retained while held.
 pub const REASON: &[u8] = b"keep held";
 
 /// Finite outside choices, without live role administration or delegates
-/// (domain/engine.md, section 7.7; domain/tasks.md, section 15).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Story {
-    /// Requester releases revision one (domain/tasks.md, section 15).
+    /// Requester releases revision one.
     Release,
 
-    /// Requester passes; second owner releases final-role revision two (domain/tasks.md, section 15).
+    /// Requester passes; second owner releases final-role revision two.
     PassRelease,
 
-    /// Requester rejects and leaves the chat held (domain/tasks.md, section 15).
+    /// Requester rejects and leaves the chat held.
     Reject,
 
-    /// Final-role release wins over the other owner's rejection (domain/engine.md, section 7.7).
+    /// Final-role release wins over the other owner's rejection.
     RaceRelease,
 
-    /// Final-role rejection wins over the other owner's release (domain/engine.md, section 7.7).
+    /// Final-role rejection wins over the other owner's release.
     RaceReject,
 }
 
 impl Story {
     /// Whether the outside script ends with a report or a durable rejection
-    /// (domain/tasks.md, section 15).
     #[must_use]
     pub const fn succeeds(self) -> bool {
         matches!(self, Story::Release | Story::PassRelease | Story::RaceRelease)
     }
 
-    /// Whether revision one moves to the final policy role (domain/tasks.md, section 15).
+    /// Whether revision one moves to the final policy role.
     #[must_use]
     pub const fn passes(self) -> bool {
         matches!(self, Story::PassRelease | Story::RaceRelease | Story::RaceReject)
@@ -69,7 +67,6 @@ enum ExpectedTerminal {
 
 /// Outside observer of exactly the scripted people, decisions and worker costs.
 /// It owns obligations, not a second live task/authority model
-/// (domain/engine.md, section 7.7; domain/tasks.md, section 15).
 #[derive(Clone, Debug)]
 pub struct Referee {
     story: Story,
@@ -130,7 +127,6 @@ fn choice(decision: &people::EscalationDecision) -> people::EscalationChoice {
 
 impl Referee {
     /// No identities or obligations exist until boundary stimuli/terminals occur
-    /// (domain/engine.md, section 7.7).
     #[must_use]
     pub fn new(story: Story) -> Referee {
         Referee {
@@ -154,7 +150,7 @@ impl Referee {
     }
 
     /// Register the exact keyed ask and independently expected terminal before
-    /// dispatch, including stale winners and refusals (domain/people.md, section 5.1.2).
+    /// dispatch, including stale winners and refusals (domain/people.md, section 5.1).
     pub fn ask(&mut self, to: Token, person: u64, key: [u8; 16], ask: people::Ask, outcome: people::Outcome) {
         assert!(
             self.asks.insert(to, AskReply { person, key, ask, terminal: ExpectedTerminal::Outcome(outcome) }).is_none(),
@@ -163,7 +159,7 @@ impl Referee {
     }
 
     /// Register an immediate key-conflict refusal and freeze the existing saved
-    /// request/outcome; no new answered key is expected (domain/people.md, section 5.1.1).
+    /// request/outcome; no new answered key is expected (domain/people.md, section 5.1).
     pub fn key_conflict(
         &mut self,
         rows: &BTreeMap<Key, Record>,
@@ -183,14 +179,13 @@ impl Referee {
     }
 
     /// Register one expected current held view before a named authenticated read
-    /// (domain/engine.md, section 7.7).
     pub fn read(&mut self, to: Token, person: u64, escalation: tasks::Escalation) {
         assert!(!self.read_terminals.contains(&to), "a retry requires a fresh named read right");
         assert!(self.reads.insert(to, (person, escalation)).is_none(), "one fresh reply right per named read");
     }
 
     /// Register the first scripted semantic winner for one revision; race losers
-    /// never become a second expected mutation (domain/engine.md, section 7.7).
+    /// never become a second expected mutation.
     pub fn offer(&mut self, revision: u64, by: u64, decision: people::EscalationDecision) {
         assert!(self.offers.insert(revision, (by, decision)).is_none(), "one scripted winner per semantic revision");
     }
@@ -251,7 +246,7 @@ impl Referee {
     ///
     /// # Errors
     /// Rejects early, duplicate, wrong-task or stale-price assignments
-    /// (domain/engine.md, sections 7.1 and 7.7).
+    /// (domain/engine.md, section 7.1).
     pub fn assigned(&mut self, rows: &BTreeMap<Key, Record>, assignment: &Assignment) -> Result<(), &'static str> {
         if self.task != Some(assignment.task) {
             return Err("assignment for another task");
@@ -305,7 +300,7 @@ impl Referee {
     ///
     /// # Errors
     /// Rejects split hold/decision/terminal transactions, duplicate keys/effects,
-    /// bad prices or unscripted decision evidence (domain/engine.md, section 7.7).
+    /// bad prices or unscripted decision evidence.
     #[expect(clippy::too_many_lines, reason = "one outside pass checks each independent atomic evidence family")]
     pub fn commit(&mut self, writes: &[Write]) -> Result<(), &'static str> {
         let mut keys = BTreeSet::new();
@@ -499,7 +494,7 @@ impl Referee {
     ///
     /// # Errors
     /// Rejects unsolicited/duplicate replies, changed winner or missing durability
-    /// (domain/engine.md, section 7.7; domain/people.md, section 5.1.2).
+    /// (domain/people.md, section 5.1).
     pub fn replied(
         &mut self,
         rows: &BTreeMap<Key, Record>,
@@ -546,7 +541,7 @@ impl Referee {
 
     /// Consume an immediate `Busy` terminal for an outstanding current-view read.
     /// The person must retry using a fresh right; no keyed outcome is saved
-    /// (domain/engine.md, section 7.7; domain/people.md, section 5.1.2).
+    /// (domain/people.md, section 5.1).
     ///
     /// # Errors
     /// Rejects unsolicited/duplicate terminals and a different wrapper or refusal.
@@ -564,7 +559,7 @@ impl Referee {
     }
 
     /// Count independently consumed pressure terminals; successful retried views
-    /// remain separate obligations (domain/engine.md, section 7.7).
+    /// remain separate obligations.
     #[must_use]
     pub fn busy_reads(&self) -> usize {
         self.busy_reads.len()
@@ -574,7 +569,6 @@ impl Referee {
     ///
     /// # Errors
     /// Rejects duplicate/wrong reader, wrong revision/recipient or premature view
-    /// (domain/engine.md, section 7.7; domain/tasks.md, section 15).
     pub fn viewed(
         &mut self,
         rows: &BTreeMap<Key, Record>,
@@ -609,7 +603,7 @@ impl Referee {
     ///
     /// # Errors
     /// Rejects duplicates, wrong fences or an ACK preceding its charge
-    /// (domain/engine.md, sections 7.4 and 7.7).
+    /// (domain/engine.md, section 7.4).
     pub fn acknowledged(
         &mut self,
         rows: &BTreeMap<Key, Record>,
@@ -644,7 +638,6 @@ impl Referee {
     ///
     /// # Errors
     /// Rejects wrong words/reader, missing ending, duplicate result or bad spend
-    /// (domain/engine.md, section 7.7; domain/tasks.md, section 15).
     pub fn result(
         &mut self,
         rows: &BTreeMap<Key, Record>,
@@ -670,7 +663,7 @@ impl Referee {
     ///
     /// # Errors
     /// Rejects lost/doubled prices, held reopening or wrong final funding
-    /// (domain/tasks.md, sections 12 and 15).
+    /// (domain/tasks.md, section 12).
     pub fn final_state(&self, rows: &BTreeMap<Key, Record>) -> Result<(), &'static str> {
         let number = self.task.ok_or("no script task")?;
         let record = task(rows, number).ok_or("missing final task")?;
@@ -723,7 +716,7 @@ impl Referee {
     }
 
     /// All outside obligations complete; the driver separately checks pending
-    /// queues, real root quiescence and durable final state (domain/engine.md, section 7.7).
+    /// queues, real root quiescence and durable final state.
     #[must_use]
     pub fn done(&self) -> bool {
         self.people.iter().all(Option::is_some)

@@ -1,7 +1,6 @@
 //! Authenticated Owner/Policy role administration, atomic live reroute, keyed
 //! races and specific independent-evidence negatives
-//! (domain/people.md, section 5.1.3; domain/tasks.md, section 16;
-//! domain/engine.md, section 7.8).
+//! (domain/people.md, section 5.1).
 
 use temper_engine_domain::{Key, Record, Write, engine};
 use temper_engine_domain_people as people;

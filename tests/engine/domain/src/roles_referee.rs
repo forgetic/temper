@@ -1,7 +1,6 @@
 //! Independent role-administration obligations over submitted transactions and
 //! durable replies. The observer owns the outside roster/holder expectations;
-//! it never reads root or child state (domain/people.md, section 5.1.3;
-//! domain/tasks.md, section 16; domain/engine.md, section 7.7).
+//! it never reads root or child state (domain/people.md, section 5.1).
 
 use skein_lib::Token;
 use std::collections::{BTreeMap, BTreeSet};
@@ -17,7 +16,7 @@ pub struct Replacement {
     pub holdings: Box<[people::Holding]>,
 
     /// Exact expected Waiting rows; every other task field remains byte-for-byte
-    /// equal to its previous durable evidence (domain/tasks.md, section 16).
+    /// equal to its previous durable evidence.
     pub tasks: BTreeMap<u64, tasks::TaskRecord>,
 }
 
@@ -32,27 +31,26 @@ struct Obligation {
 
 /// Frozen pre-transaction observer used unchanged by positive controls and
 /// corruption negatives. Its ledger consists entirely of actual store rows
-/// and registered outside asks (domain/engine.md, section 7.7).
+/// and registered outside asks.
 #[derive(Clone, Debug)]
 pub struct Referee {
     rows: BTreeMap<Key, Record>,
     asks: BTreeMap<Token, Obligation>,
     terminals: BTreeSet<Token>,
     /// Number of successful atomic role replacements observed
-    /// (domain/people.md, section 5.1.3).
+    /// (domain/people.md, section 5.1).
     pub replacements: u32,
 }
 
 impl Referee {
     /// Start from actual pre-transaction durable evidence
-    /// (domain/engine.md, section 7.7).
     #[must_use]
     pub fn new(rows: BTreeMap<Key, Record>) -> Referee {
         Referee { rows, asks: BTreeMap::new(), terminals: BTreeSet::new(), replacements: 0 }
     }
 
     /// Register one authenticated outside call before dispatch; duplicate keys
-    /// may have distinct reply rights (domain/people.md, section 5.1.1).
+    /// may have distinct reply rights (domain/people.md, section 5.1).
     pub fn ask(
         &mut self,
         to: Token,
@@ -73,7 +71,7 @@ impl Referee {
     /// # Errors
     /// Names missing cohort members, unauthorized changes, duplicate writes,
     /// altered funding, or a task field differing from the scripted expectation
-    /// (domain/engine.md, section 5.1; domain/tasks.md, section 16).
+    /// (domain/engine.md, section 5.1).
     #[expect(
         clippy::too_many_lines,
         reason = "one independent atomic-cohort check names each specific violated contract"
@@ -225,7 +223,7 @@ impl Referee {
     /// # Errors
     /// Rejects unsolicited/duplicate replies, wrong wrappers/outcomes, replies
     /// before durability, or admission refusals that replaced an existing key
-    /// (domain/people.md, section 5.1.1; domain/engine.md, section 5.3).
+    /// (domain/people.md, section 5.1; domain/engine.md, section 5.3).
     pub fn replied(
         &mut self,
         rows: &BTreeMap<Key, Record>,
@@ -263,7 +261,7 @@ impl Referee {
     }
 
     /// All registered terminal rights were consumed exactly once
-    /// (domain/people.md, section 5.1.1).
+    /// (domain/people.md, section 5.1).
     #[must_use]
     pub fn done(&self) -> bool {
         self.asks.is_empty()

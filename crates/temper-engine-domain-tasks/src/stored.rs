@@ -1,5 +1,5 @@
 //! Cold admission of bounded live rows and complete link validation
-//! (domain/tasks.md, sections 2, 5 and 14). Only Live/Ledger enter startup;
+//! (domain/tasks.md, sections 2 and 5). Only Live/Ledger enter startup;
 //! historical Ended rows stay in root storage. Successful restoration
 //! reconstructs activations, claims, closing gates and projected retry timers;
 //! failed restoration never becomes ready through more input.

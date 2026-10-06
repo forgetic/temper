@@ -1,6 +1,5 @@
 //! Small complete escalation/cut matrix with injected latency, exact frozen-state
-//! replay and observation saturation (domain/engine.md, section 7.7;
-//! testing-strategy.md, section 8).
+//! replay and observation saturation (testing-strategy.md, section 8).
 
 use std::collections::BTreeSet;
 use temper_engine_domain_world::escalation::{Cut, Settings, run_replayed};

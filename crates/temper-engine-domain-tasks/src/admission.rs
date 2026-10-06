@@ -1,5 +1,5 @@
 //! Admission of new priced turns and activation terminals over authentic task
-//! counters (domain/tasks.md, section 14; domain/engine.md, section 7.5).
+//! counters.
 //! Preflights lifecycle and eventual financial representability before mutation.
 //! Keeps no receipt table; root owns exact transport payload replay proofs.
 use crate::domain::{Domain, entrance, publish, record, refused, task_mut};

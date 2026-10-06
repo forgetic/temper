@@ -1,5 +1,4 @@
-//! Bounded dependency and closing cascades (domain/tasks.md, sections 5.1,
-//! 5.6 and 14). Tasks owns live topology and actual financial settlement;
+//! Bounded dependency and closing cascades (domain/tasks.md, sections 5.1 and 5.6). Tasks owns live topology and actual financial settlement;
 //! root completes Close obligations. No historical result credit or inbox
 //! remains here, and ending a task does not replay its result after restart.
 use crate::domain::{Domain, activate, fact, publish, record, snapshot, task_mut};

@@ -1,6 +1,5 @@
 //! The tasks child: bounded live lifecycle, immutable dependencies and authentic
-//! finite funding (programming-model.md, section 4.5; domain/tasks.md, sections
-//! 2–5, 10 and 14). It keeps live task rows and name indices, retry timers,
+//! finite funding (programming-model.md, section 4.5; domain/tasks.md, sections 2–5 and 10). It keeps live task rows and name indices, retry timers,
 //! configured agent charters, period/pool ledgers and optional diagnostic facts.
 //! It never knows protocol bytes, worker channels, connector internals, people
 //! authentication or the authority child's policy tables. Root supplies those
@@ -10,7 +9,7 @@
 //! enter `Restore`; `Restored` validates the complete live graph and authentic
 //! financial reservations before bounded activation/adoption outputs. Historical
 //! ended rows remain in root storage and cannot re-enter live state
-//! (domain/tasks.md, section 14).
+
 //!
 //! `step` receives root-authorized batches, finite-source inputs and actual
 //! lifecycle notifications. Reply-bearing inputs have one terminal reply;
@@ -18,7 +17,7 @@
 //! the whole lifecycle/financial admission before posting the new cumulative
 //! expense delta. Root owns exact transport replay proof and transcript rows;
 //! tasks keeps no replay receipt, inbox, historical stub or result-delivery credit
-//! (domain/tasks.md, section 14; domain/engine.md, section 7.5).
+
 //!
 //! `Request::Activate` carries a temporary bounded `RunContext`, not rendered
 //! bytes or a second mutable task ledger. Root gathers the actual brief and
@@ -26,23 +25,22 @@
 //! `Ended`, the historical task row, and original-source
 //! posting share one atomic decision. The current root exposes person result notices and
 //! delays outward replies/effects until durability; historical result reads
-//! remain the root's route (domain/tasks.md, sections 5.6 and 14;
-//! domain/engine.md, sections 5.6, 7.1, 7.5 and 9).
+//! remain the root's route (domain/tasks.md, section 5.6; domain/engine.md, sections 5.6, 7.1 and 9).
 //!
 //! `fire` expires at most one projected retry timer per call and advances bounded
 //! cascades. Caller reserves free `Request` room from `max_out`; `worst_case`
 //! counts retained containers/payloads and bounded scratch, while callers count
 //! queues and owned output copies. `stored_bytes` measures existing row heap
 //! without cloning; `Domain::funding` borrows authentic finite accounting without
-//! creating a mutable root shadow (domain/tasks.md, sections 10 and 14).
+//! creating a mutable root shadow (domain/tasks.md, section 10).
 //! Current chat construction supplies a report contract and empty parameters.
 //! A held person chat owns one bounded semantic escalation revision/recipient
 //! or rejected reason. Root authenticates its actual read/decision route, resolves
 //! eligibility and owns immutable transport history; this child accepts/rejects/
-//! passes only the authorized exact revision (domain/tasks.md, 15).
+//! passes only the authorized exact revision.
 //! Agent execution is the current executor route; nonempty historical inputs,
 //! inbox/wake/proposal, general amend/cancel/release/move and source-retirement
-//! entrypoints are absent from this contracted API (domain/tasks.md, section 14).
+//! entrypoints are absent from this contracted API.
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
 extern crate alloc;

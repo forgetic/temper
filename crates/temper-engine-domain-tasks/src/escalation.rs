@@ -1,5 +1,5 @@
 //! Held person-chat decisions, independent of root authentication, policy and
-//! transport history (domain/tasks.md, sections 8 and 15; domain/engine.md, 7.7).
+//! transport history (domain/tasks.md, section 8).
 
 use crate::domain::{Domain, activate, publish, record, task_mut};
 use crate::{Active, Hold, Limits, Party, Phase, Request, Tries, Was};
@@ -7,66 +7,62 @@ use alloc::boxed::Box;
 use skein_lib::{Env, Queue, ReplyTo};
 
 /// Semantic recipient of one held chat decision. Root verifies current membership
-/// and coverage; tasks keeps only this bounded identity (domain/tasks.md, 15).
+/// and coverage; tasks keeps only this bounded identity.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum EscalationHolder {
-    /// The chat's person requester, eligible under current policy (domain/tasks.md, 15).
+    /// The chat's person requester, eligible under current policy.
     Person(
-        /// Positive requester identity, supplied by root (domain/tasks.md, 15).
+        /// Positive requester identity, supplied by root.
         u64,
     ),
     /// Final project policy role; any authenticated current holder may decide
-    /// first, and passing further refuses (domain/tasks.md, 15).
+    /// first, and passing further refuses.
     Role {
-        /// Project of the held chat, checked by tasks (domain/tasks.md, 15).
+        /// Project of the held chat, checked by tasks.
         project: u32,
         /// Policy role selected and checked by root, bounded by authority roles
-        /// (domain/tasks.md, 15; domain/authority.md, 9).
+        /// (domain/authority.md, 9).
         role: u32,
     },
 }
 
 /// One semantic state per task; no receipt table, inbox or historical archive.
-/// Root archives decisions; rejected chats remain held (domain/tasks.md, 15).
+/// Root archives decisions; rejected chats remain held.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Escalation {
     /// No current held decision; retain the last revision to prevent reuse
-    /// (domain/tasks.md, 15).
     Unheld {
         /// Zero initially; checked revision advances on each hold/pass
-        /// (domain/tasks.md, 15).
         revision: u64,
     },
     /// Root owes an eligible requester or final policy role in this same atomic
-    /// decision; not a durable unresolved route (domain/tasks.md, 15).
+    /// decision; not a durable unresolved route.
     Routing {
-        /// Positive per-task semantic revision (domain/tasks.md, 15).
+        /// Positive per-task semantic revision.
         revision: u64,
     },
     /// One durable pending decision; no task activation can escape the hold
-    /// (domain/tasks.md, 15).
     Waiting {
-        /// Positive revision echoed by reads and decisions (domain/tasks.md, 15).
+        /// Positive revision echoed by reads and decisions.
         revision: u64,
         /// Root-resolved current recipient; membership stays root's concern
-        /// (domain/tasks.md, 15).
         holder: EscalationHolder,
     },
     /// One completed rejection; retain reason while held without reopening or
-    /// rerouting. Historical transport outcome stays root-owned (domain/tasks.md, 15).
+    /// rerouting. Historical transport outcome stays root-owned.
     Rejected {
-        /// Decided semantic revision (domain/tasks.md, 15).
+        /// Decided semantic revision.
         revision: u64,
-        /// Authenticated person reported by root (domain/tasks.md, 15).
+        /// Authenticated person reported by root.
         by: u64,
-        /// Rejection words, at most task `result_bytes` (domain/tasks.md, 15).
+        /// Rejection words, at most task `result_bytes`.
         reason: Box<[u8]>,
     },
 }
 
 impl Escalation {
     /// Pure projection of this task's checked semantic revision; no allocation,
-    /// mutation or root-issued identity is involved (domain/tasks.md, 15).
+    /// mutation or root-issued identity is involved.
     #[must_use]
     pub const fn revision(&self) -> u64 {
         match self {
@@ -79,65 +75,62 @@ impl Escalation {
 }
 
 /// Root-authorized semantic choice for the exact waiting revision. No authority
-/// widening or generic release surface is implied (domain/tasks.md, 15).
+/// widening or generic release surface is implied.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum EscalationDecision {
     /// Lift a retry-exhaustion hold, reset tries, and rejudge readiness
-    /// (domain/tasks.md, 5.5 and 15).
+    /// (domain/tasks.md, section 5.5).
     Release,
-    /// Decide once while leaving the task held (domain/tasks.md, 15).
+    /// Decide once while leaving the task held.
     Reject {
-        /// At most `result_bytes`, checked before mutation (domain/tasks.md, 15).
+        /// At most `result_bytes`, checked before mutation.
         reason: Box<[u8]>,
     },
     /// Persist the root-verified final policy role and advance revision; a role
-    /// holder cannot pass further (domain/tasks.md, 15).
+    /// holder cannot pass further.
     Pass {
         /// Final policy role, checked by root and structurally by tasks
-        /// (domain/tasks.md, 15).
         holder: EscalationHolder,
     },
 }
 
 /// Semantic terminal for one root decision call. Root commits accepted state
-/// and its own typed archive with people's keyed answer (domain/tasks.md, 15).
+/// and its own typed archive with people's keyed answer.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum EscalationOutcome {
-    /// Retry hold lifted, with normal activation consequences (domain/tasks.md, 15).
+    /// Retry hold lifted, with normal activation consequences.
     Released,
-    /// Reason retained; no activation or automatic reroute (domain/tasks.md, 15).
+    /// Reason retained; no activation or automatic reroute.
     Rejected,
-    /// Waiting moved to the final policy role (domain/tasks.md, 15).
+    /// Waiting moved to the final policy role.
     Passed {
-        /// New checked pending revision (domain/tasks.md, 15).
+        /// New checked pending revision.
         revision: u64,
     },
     /// No exact live pending revision; root may read its own historical outcome
-    /// (domain/tasks.md, 15; domain/engine.md, 7.7).
     Stale,
-    /// A policy-role decision cannot pass further (domain/tasks.md, 15).
+    /// A policy-role decision cannot pass further.
     NoFurther,
     /// This hold requires a real amendment route, currently absent
-    /// (domain/tasks.md, 15).
     NeedsAmend,
-    /// Input/revision capacity failed before mutation (domain/tasks.md, 15).
+    /// Input/revision capacity failed before mutation.
     Limit,
 }
 
 /// Temporary task-to-root held view; not a second task/funding ledger. Root
-/// authenticates reads and decisions against this exact context (domain/tasks.md, 15).
+/// authenticates reads and decisions against this exact context.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct EscalationContext {
-    /// Positive held task identity (domain/tasks.md, 15).
+    /// Positive held task identity.
     pub task: u64,
-    /// Policy project checked by root (domain/tasks.md, 15).
+    /// Policy project checked by root.
     pub project: u32,
-    /// Person requester whose standing root verifies (domain/tasks.md, 15).
+    /// Person requester whose standing root verifies.
     pub requester: u64,
-    /// Preserved semantic hold reason (domain/tasks.md, 15).
+    /// Preserved semantic hold reason.
     pub why: Hold,
     /// Exactly one bounded current revision/status; rejection owns at most
-    /// `result_bytes` (domain/tasks.md, 15).
+    /// `result_bytes`.
     pub escalation: Escalation,
 }
 
@@ -296,6 +289,8 @@ fn validate(
 ) -> EscalationOutcome {
     match decision {
         EscalationDecision::Release => {
+            // Current slice can reopen only a retry-exhausted active task; other holds
+            // need amendment routes and answer NeedsAmend here.
             if task.escalation.revision() == u64::MAX {
                 return EscalationOutcome::Limit;
             }
@@ -334,7 +329,7 @@ fn validate(
 }
 
 /// Read-only root preflight/recheck snapshot, at most one Waiting context per
-/// live task, with explicit readiness terminal (domain/tasks.md, 16).
+/// live task, with explicit readiness terminal.
 pub(crate) fn project_contexts(
     domain: &Domain,
     limits: &Limits,

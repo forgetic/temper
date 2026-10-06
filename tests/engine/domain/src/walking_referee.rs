@@ -337,7 +337,7 @@ impl WalkingReferee {
     /// The fake store checks the one applied terminal transaction before losing
     /// its completion. No worker ACK or person result has escaped the old root;
     /// the ended row, exact typed evidence and posted funding are durable, and
-    /// the live proof is erased (domain/engine.md, section 7.6).
+    /// the live proof is erased.
     ///
     /// # Errors
     /// Names a premature/late cut, missing terminal evidence or changed expense.
@@ -386,7 +386,7 @@ impl WalkingReferee {
 
     /// The worker resends once after its recovered ACK. This separate transport
     /// ACK is permitted only for the same ended fence and unchanged terminal;
-    /// it adds no task commit, charge or person result (domain/engine.md, 7.6).
+    /// it adds no task commit, charge or person result.
     ///
     /// # Errors
     /// Names an unsolicited/repeated replay ACK or changed durable evidence.
@@ -409,7 +409,6 @@ impl WalkingReferee {
 
     /// The outside worker has consumed the ACK for its one explicit post-ACK
     /// terminal resend; this does not count a second logical result or terminal
-    /// (domain/engine.md, section 7.6).
     #[must_use]
     pub fn terminal_replay_done(&self) -> bool {
         self.replayed_answer_acknowledgements == 1

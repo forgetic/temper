@@ -1,6 +1,6 @@
 //! Small bounded role-reroute sweep with all genuine semantic starting states,
 //! both owner orders, durable cuts and deterministic delayed-store replay
-//! (domain/engine.md, section 7.8; testing-strategy.md, section 8).
+//! (testing-strategy.md, section 8).
 
 use std::collections::BTreeSet;
 use temper_engine_domain_world::roles::{Base, Settings, reroute_replayed};

@@ -1,5 +1,5 @@
 //! Pure borrowed durable-row heap measurement for root journal/load admission
-//! (domain/tasks.md, sections 2 and 14; domain/engine.md, sections 5.3 and 5.6).
+//! (domain/tasks.md, section 2; domain/engine.md, sections 5.3 and 5.6).
 //! Measures existing ownership without allocating or cloning; shape admission
 //! remains with tasks and authority decisions remain with root policy checks.
 use crate::{Authority, Contract, Ending, Last, Parameter, Phase, Spec, Stored, TaskRecord, TaskResult, Was};
@@ -9,7 +9,7 @@ use core::mem::{size_of, size_of_val};
 /// slice backing arrays and nested bytes, excluding the inline `Stored` slot. `Ledger`
 /// own no heap. Returns `None` on sum overflow; allocates/copies nothing and admits neither shape
 /// nor authority. Root separately counts inline slots and queues (domain/engine.md, sections 5.3
-/// and 5.6). (domain/tasks.md, sections 2, 10 and 14).
+/// and 5.6). (domain/tasks.md, sections 2 and 10).
 #[must_use]
 pub fn stored_bytes(record: &Stored) -> Option<u64> {
     match record {
