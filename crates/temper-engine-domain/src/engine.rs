@@ -2697,8 +2697,13 @@ fn header_loaded(startup: Startup) -> bool {
 }
 
 fn hello_within(hello: &fleet::Hello, limits: &fleet::Limits) -> bool {
+    let stop_before_grace = match hello.graces {
+        Some(duration) => duration < limits.grace,
+        None => false,
+    };
     if hello.hosting.len() > usize::try_from(limits.slots).expect("u32 fits usize")
         || hello.workstreams.len() > usize::try_from(limits.workstreams).expect("u32 fits usize")
+        || !stop_before_grace
     {
         return false;
     }

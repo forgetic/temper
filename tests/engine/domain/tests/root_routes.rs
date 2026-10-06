@@ -1923,3 +1923,86 @@ fn saved_work_reaches_the_next_attempt() {
     assert_eq!(second.saved.as_ref(), [3]);
     assert!(second.attempt > first.attempt);
 }
+
+#[test]
+fn a_worker_lost_mid_run_resumes_at_the_last_committed_turn() {
+    let (mut driver, first) = chat_driver();
+    turn(&mut driver, &first, 1, 1);
+    driver.settle();
+    assert!(driver.store.rows.contains_key(&Key::Turn { task: first.task, attempt: first.attempt, turn: 1 }));
+    driver.send(engine::Event::Lost { channel: Token::new(7) });
+    driver.env.now = Time::from_nanos(Duration::from_secs(6).as_nanos());
+    driver.env.wall = Wall::from_nanos(Duration::from_secs(6).as_nanos());
+    engine::fire(&mut driver.root, &driver.env, &mut driver.out);
+    driver.collect();
+    driver.settle();
+    let Some(Record::Tasks(tasks::Stored::Live(task))) =
+        driver.store.rows.get(&Key::Tasks(tasks::Key::Live(first.task)))
+    else {
+        panic!("lost task waits for retry")
+    };
+    assert_eq!(task.tries.lost, 1);
+    driver.env.now = Time::from_nanos(Duration::from_secs(7).as_nanos());
+    driver.env.wall = Wall::from_nanos(Duration::from_secs(7).as_nanos());
+    engine::fire(&mut driver.root, &driver.env, &mut driver.out);
+    driver.collect();
+    driver.send(engine::Event::Hello {
+        channel: Token::new(8),
+        hello: fleet::Hello {
+            graces: Some(Duration::from_secs(1)),
+            slots: 1,
+            workstreams: Box::new([]),
+            hosting: Box::new([]),
+        },
+    });
+    driver.settle();
+    let second = assigned_from_last(&driver.delivered);
+    assert!(second.attempt > first.attempt);
+    assert_eq!(second.transcript.len(), 1);
+    assert_eq!(second.transcript[0].as_ref(), b"step");
+}
+
+#[test]
+fn a_worker_frozen_past_its_grace_gets_no_next_attempt_until_its_sum_has_passed() {
+    let (mut driver, first) = chat_driver();
+    driver.send(engine::Event::Hello {
+        channel: Token::new(8),
+        hello: fleet::Hello {
+            graces: Some(Duration::from_secs(5)),
+            slots: 1,
+            workstreams: Box::new([]),
+            hosting: Box::new([]),
+        },
+    });
+    assert!(
+        driver.delivered.iter().any(|delivery| matches!(delivery, Delivery::Refuse { channel }
+        if *channel == Token::new(8))),
+        "a worker whose stop bound reaches engine grace cannot place runs"
+    );
+    driver.send(engine::Event::Lost { channel: Token::new(7) });
+    driver.env.now = Time::from_nanos(Duration::from_secs(4).as_nanos());
+    driver.env.wall = Wall::from_nanos(Duration::from_secs(4).as_nanos());
+    engine::fire(&mut driver.root, &driver.env, &mut driver.out);
+    driver.collect();
+    for _ in 0..10 {
+        driver.advance(true);
+    }
+    let Some(Record::Tasks(tasks::Stored::Live(task))) =
+        driver.store.rows.get(&Key::Tasks(tasks::Key::Live(first.task)))
+    else {
+        panic!("held claim")
+    };
+    assert_eq!(task.tries.lost, 0);
+    assert_eq!(driver.delivered.iter().filter(|delivery| matches!(delivery, Delivery::Assigned { .. })).count(), 1);
+    driver.env.now = Time::from_nanos(Duration::from_secs(6).as_nanos());
+    driver.env.wall = Wall::from_nanos(Duration::from_secs(6).as_nanos());
+    engine::fire(&mut driver.root, &driver.env, &mut driver.out);
+    driver.collect();
+    driver.settle();
+    let Some(Record::Tasks(tasks::Stored::Live(task))) =
+        driver.store.rows.get(&Key::Tasks(tasks::Key::Live(first.task)))
+    else {
+        panic!("retryable lost task")
+    };
+    assert_eq!(task.tries.lost, 1);
+}
