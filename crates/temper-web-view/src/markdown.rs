@@ -223,7 +223,9 @@ fn inline(line: &[u8], builder: &mut Builder) {
             plain = at;
             continue;
         }
+        let image = line.get(..at).expect("prefix lies in line").last() == Some(&b'!');
         if remaining.starts_with(b"[")
+            && !image
             && let Some((end, label, url)) = link(line, at)
         {
             flush(line, plain, at, builder);

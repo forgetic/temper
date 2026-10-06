@@ -221,6 +221,24 @@ fn markdown_does_not_turn_unclosed_fence_into_code() {
 }
 
 #[test]
+fn markdown_image_stays_literal_text() {
+    let limits = Limits { nodes: 16, patches: 32, depth: 4, markdown_depth: 1 };
+    let mut builder = Builder::new(limits.nodes, limits.depth);
+    builder.open(Element::Section);
+    markdown::read(b"![diagram](https://example.org/a.png)", &limits, &mut builder);
+    builder.close();
+    let tree = builder.finish();
+    let mut literal = false;
+    for node in tree.nodes() {
+        if node.text.as_deref() == Some(b"![diagram](https://example.org/a.png)".as_slice()) {
+            literal = true;
+        }
+        assert_ne!(node.element, Element::Link, "an image is not a link");
+    }
+    assert!(literal, "an image remains literal text");
+}
+
+#[test]
 fn clock_uses_persons_offset_across_midnight() {
     let before = Wall::from_nanos(86_340_000_000_000);
     assert_eq!(words::clock(before, Offset(0)).as_ref(), b"23:59");
