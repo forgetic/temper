@@ -653,6 +653,8 @@ impl World {
                         tasks::Escalation::Waiting {
                             revision: 2,
                             holder: tasks::EscalationHolder::Role { project: 1, role: 0 },
+                            entry: 1,
+                            since: self.environment.wall,
                         },
                     ),
                     210 | 220 => self.after_choice(outcome),
@@ -710,6 +712,8 @@ impl World {
                         tasks::Escalation::Waiting {
                             revision: 1,
                             holder: tasks::EscalationHolder::Person(self.people[0].expect("requester")),
+                            entry: 1,
+                            since: self.environment.wall,
                         },
                     );
                 }

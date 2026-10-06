@@ -173,33 +173,28 @@ fn valid_escalation(task: &TaskRecord, limits: &Limits) -> bool {
         Phase::Waiting | Phase::Active(_) | Phase::Closing(_) | Phase::Ended(_) => false,
     };
     match &task.escalation {
-        crate::Escalation::Unheld { revision } => {
-            *revision != u64::MAX
-                && match task.requester {
-                    Party::Person(_) => !held,
-                    Party::Task(_) | Party::Deployment { .. } => *revision == 0,
-                }
-        }
+        crate::Escalation::Unheld { revision } => *revision != u64::MAX && !held,
         crate::Escalation::Routing { .. } => false,
-        crate::Escalation::Waiting { revision, holder } => {
+        crate::Escalation::Waiting { revision, holder, entry, .. } => {
             *revision != 0
+                && *entry != 0
                 && held
-                && match task.requester {
-                    Party::Person(requester) => match holder {
-                        crate::EscalationHolder::Person(person) => *person != 0 && *person == requester,
-                        crate::EscalationHolder::Role { project, .. } => *project == task.project,
-                    },
-                    Party::Task(_) | Party::Deployment { .. } => false,
+                && match holder {
+                    crate::EscalationHolder::Task(parent) => *parent != 0 && *parent != task.number,
+                    crate::EscalationHolder::Person(person) => {
+                        *person != 0
+                            && match task.requester {
+                                Party::Person(requester) => *person == requester,
+                                Party::Task(_) | Party::Deployment { .. } => true,
+                            }
+                    }
+                    crate::EscalationHolder::Role { project, .. } => *project == task.project,
                 }
         }
         crate::Escalation::Rejected { revision, by, reason } => {
             *revision != 0
                 && *by != 0
                 && held
-                && match task.requester {
-                    Party::Person(_) => true,
-                    Party::Task(_) | Party::Deployment { .. } => false,
-                }
                 && reason.len() <= usize::try_from(limits.result_bytes).expect("u32 fits usize")
         }
     }
@@ -268,7 +263,7 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
         let Some(total) = bytes.checked_add(word.words.len()) else { return false };
         bytes = total;
         let requester = match word.kind {
-            crate::MessageKind::Proposal { .. } => false,
+            crate::MessageKind::Proposal { .. } | crate::MessageKind::Escalation { .. } => false,
             crate::MessageKind::Words | crate::MessageKind::Question | crate::MessageKind::Answer { .. } => {
                 match word.from {
                     Party::Person(person) => task.requester == Party::Person(person),
@@ -304,7 +299,9 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
             crate::MessageKind::Notice { .. } | crate::MessageKind::News { .. } => {
                 limits.result_bytes.max(limits.message_bytes)
             }
-            crate::MessageKind::Proposal { .. } | crate::MessageKind::Timer { .. } => 0,
+            crate::MessageKind::Proposal { .. }
+            | crate::MessageKind::Escalation { .. }
+            | crate::MessageKind::Timer { .. } => 0,
         };
         if word.number <= previous
             || word.number > task.last_message
@@ -313,6 +310,7 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
                     word.words.is_empty()
                 }
                 crate::MessageKind::Proposal { .. }
+                | crate::MessageKind::Escalation { .. }
                 | crate::MessageKind::Result(_)
                 | crate::MessageKind::ProposalDecision { .. }
                 | crate::MessageKind::Amendment { .. }

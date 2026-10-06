@@ -184,7 +184,30 @@ impl Referee {
                 if found.is_none() {
                     return Err("roles and changed waiting rows are not atomic");
                 }
-                if found != Some(expected_task) {
+                let Some(found) = found else { return Err("roles and changed waiting rows are not atomic") };
+                let mut comparable = found.clone();
+                match (&mut comparable.escalation, &expected_task.escalation) {
+                    (
+                        tasks::Escalation::Waiting { since: actual, .. },
+                        tasks::Escalation::Waiting { since: earliest, .. },
+                    ) if *actual >= *earliest => *actual = *earliest,
+                    (tasks::Escalation::Waiting { .. }, tasks::Escalation::Waiting { .. })
+                    | (
+                        tasks::Escalation::Unheld { .. }
+                        | tasks::Escalation::Routing { .. }
+                        | tasks::Escalation::Rejected { .. },
+                        _,
+                    )
+                    | (
+                        _,
+                        tasks::Escalation::Unheld { .. }
+                        | tasks::Escalation::Routing { .. }
+                        | tasks::Escalation::Rejected { .. },
+                    ) => {
+                        return Err("reroute timestamp precedes the request");
+                    }
+                }
+                if &comparable != expected_task {
                     return Err("reroute changed more than expected holder and revision");
                 }
             }

@@ -74,6 +74,10 @@ pub struct CallKey {
 /// Exact typed answer kept for replay across a lost channel or root restart.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum CallAnswer {
+    /// One held descendant decision reached its semantic terminal.
+    EscalationDecided { task: u64, revision: u64, outcome: temper_engine_domain_tasks::EscalationOutcome },
+    /// A task holder's held-decision call was refused before mutation.
+    EscalationRefused(temper_engine_domain_tasks::Problem),
     /// Proposal entered its proposer's durable pending state.
     Proposed { proposal: u64 },
     /// Proposal was accepted, rejected, passed, or withdrawn.
@@ -531,6 +535,8 @@ pub fn record_bytes(record: &Record) -> Option<u64> {
             | CallAnswer::Proposed { .. }
             | CallAnswer::ProposalDecided { .. }
             | CallAnswer::ProposalRefused(_)
+            | CallAnswer::EscalationDecided { .. }
+            | CallAnswer::EscalationRefused(_)
             | CallAnswer::Controlled
             | CallAnswer::ControlRefused(_)
             | CallAnswer::ControlDenied { .. }

@@ -74,6 +74,7 @@ pub(crate) fn message(
     let sendable = match word.kind {
         MessageKind::Words | MessageKind::Question | MessageKind::Answer { .. } => true,
         MessageKind::Proposal { .. }
+        | MessageKind::Escalation { .. }
         | MessageKind::Amendment { .. }
         | MessageKind::ProposalDecision { .. }
         | MessageKind::Result(_)
@@ -122,6 +123,7 @@ pub(crate) fn message(
             Some(question)
         }
         MessageKind::Proposal { .. }
+        | MessageKind::Escalation { .. }
         | MessageKind::Amendment { .. }
         | MessageKind::ProposalDecision { .. }
         | MessageKind::Result(_)
@@ -199,6 +201,7 @@ pub(crate) fn delegate_result(
         MessageKind::Result(_) => {}
         MessageKind::Words
         | MessageKind::Proposal { .. }
+        | MessageKind::Escalation { .. }
         | MessageKind::ProposalDecision { .. }
         | MessageKind::Amendment { .. }
         | MessageKind::Question
@@ -266,6 +269,11 @@ pub(crate) fn readable(domain: &Domain, task: u64, read: Option<u64>) -> bool {
                 }
             }
             for word in crate::proposals::waiting_for(domain, task) {
+                if word.number == number {
+                    return true;
+                }
+            }
+            for word in crate::escalation::waiting_for(domain, task) {
                 if word.number == number {
                     return true;
                 }

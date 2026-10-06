@@ -174,10 +174,10 @@ fn snapshot(settings: Settings) -> Store {
         previous.iterate();
         let waiting = previous.store.rows.values().any(|row| {
             matches!(row, Record::Tasks(tasks::Stored::Live(record)) if matches!(record.escalation,
-                tasks::Escalation::Waiting { revision: 1, holder: tasks::EscalationHolder::Person(_) }
+                tasks::Escalation::Waiting { revision: 1, holder: tasks::EscalationHolder::Person(_), .. }
                     if settings.base == Base::Requester)
                 || matches!(record.escalation,
-                    tasks::Escalation::Waiting { revision: 2, holder: tasks::EscalationHolder::Role { .. } }
+                    tasks::Escalation::Waiting { revision: 2, holder: tasks::EscalationHolder::Role { .. }, .. }
                     if settings.base == Base::FinalRole))
         });
         let acknowledged = previous.trace.iter().any(|entry| entry.starts_with("output Deliver(Acknowledge {"));
@@ -309,7 +309,7 @@ impl World {
             let mut changed = BTreeMap::new();
             if reroute {
                 let mut record = self.task_record().clone();
-                let tasks::Escalation::Waiting { revision, holder: tasks::EscalationHolder::Person(_) } =
+                let tasks::Escalation::Waiting { revision, holder: tasks::EscalationHolder::Person(_), .. } =
                     record.escalation
                 else {
                     panic!("scripted reroute starts at actual requester Waiting");
@@ -317,6 +317,8 @@ impl World {
                 record.escalation = tasks::Escalation::Waiting {
                     revision: revision.checked_add(1).expect("successful script is not exhausted"),
                     holder: tasks::EscalationHolder::Role { project: 1, role: 0 },
+                    entry: self.store.header().messages.checked_add(1).expect("next durable message"),
+                    since: self.environment.wall,
                 };
                 changed.insert(record.number, record);
             }

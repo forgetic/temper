@@ -50,6 +50,8 @@ pub struct Limits {
     pub message_bytes: u32,
     /// Time an undecided proposal waits at a nonfinal holder before passing upward.
     pub proposal_stall: skein_lib::Duration,
+    /// Time an undecided escalation waits at a nonfinal holder before passing upward.
+    pub escalation_stall: skein_lib::Duration,
     /// Maximum writable repository tags whose saved-work branch has committed work for one task.
     pub saved_repositories: u32,
     /// Maximum distinct-code choices in a nonempty verdict contract.
@@ -86,6 +88,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         || limits.message_bytes == 0
         || limits.message_bytes > limits.inbox_bytes
         || limits.proposal_stall == skein_lib::Duration::ZERO
+        || limits.escalation_stall == skein_lib::Duration::ZERO
     {
         return None;
     }
@@ -136,6 +139,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     Slab::<Task>::worst_case(limits.tasks)?
         .checked_add(Map::<crate::Funder, crate::FundingRecord>::worst_case(limits.funders)?)?
         .checked_add(Map::<u64, Id<Task>>::worst_case(limits.tasks)?)?
+        .checked_add(Deadlines::<u64>::worst_case(limits.tasks)?)?
         .checked_add(Deadlines::<u64>::worst_case(limits.tasks)?)?
         .checked_add(Deadlines::<u64>::worst_case(limits.tasks)?)?
         .checked_add(Deadlines::<u64>::worst_case(limits.tasks.checked_mul(limits.subscriptions)?)?)?

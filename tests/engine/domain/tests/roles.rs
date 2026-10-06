@@ -47,10 +47,10 @@ fn owner_policy_roster_and_requester_loss_commit_together_then_old_holder_has_no
     world.ask(1, 70, ask.clone(), successful(), true);
     world.run();
     assert_eq!(world.referee.replacements, 1, "two same-key calls share one actual route");
-    assert_eq!(
+    assert!(matches!(
         world.task_record().escalation,
-        tasks::Escalation::Waiting { revision: 2, holder: tasks::EscalationHolder::Role { project: 1, role: 0 } }
-    );
+        tasks::Escalation::Waiting { revision: 2, holder: tasks::EscalationHolder::Role { project: 1, role: 0 }, .. }
+    ));
     let mut expected = before;
     expected.escalation = world.task_record().escalation.clone();
     assert_eq!(*world.task_record(), expected, "authority, original funder, expense and tries stay exact");

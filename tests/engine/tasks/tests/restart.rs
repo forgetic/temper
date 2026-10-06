@@ -1,3 +1,4 @@
+use skein_lib::Wall;
 use temper_engine_domain_tasks::{Active, End, Event, Key, Party, Phase, Refusal, Stored, TaskResult};
 use temper_engine_tasks_world::{LIMITS, Reply, World, task};
 
@@ -384,9 +385,14 @@ fn unresolved_or_inconsistent_escalation_rows_refuse_before_retention() {
         task.escalation = match corrupt {
             0 => Escalation::Routing { revision: 1 },
             1 => Escalation::Unheld { revision: 0 },
-            2 => Escalation::Waiting { revision: 0, holder: EscalationHolder::Person(1) },
-            3 => Escalation::Waiting { revision: 1, holder: EscalationHolder::Person(2) },
-            4 => Escalation::Waiting { revision: 1, holder: EscalationHolder::Role { project: 2, role: 0 } },
+            2 => Escalation::Waiting { revision: 0, holder: EscalationHolder::Person(1), entry: 1, since: Wall::EPOCH },
+            3 => Escalation::Waiting { revision: 1, holder: EscalationHolder::Person(2), entry: 1, since: Wall::EPOCH },
+            4 => Escalation::Waiting {
+                revision: 1,
+                holder: EscalationHolder::Role { project: 2, role: 0 },
+                entry: 1,
+                since: Wall::EPOCH,
+            },
             5 => Escalation::Rejected {
                 revision: 1,
                 by: 1,
@@ -419,7 +425,12 @@ fn waiting_restore_requests_recheck_once_and_identical_recipient_changes_nothing
                 task.escalation = if rejected {
                     Escalation::Rejected { revision: 4, by: 1, reason: b"no".as_slice().into() }
                 } else {
-                    Escalation::Waiting { revision: 4, holder: EscalationHolder::Person(1) }
+                    Escalation::Waiting {
+                        revision: 4,
+                        holder: EscalationHolder::Person(1),
+                        entry: 1,
+                        since: source.env.wall,
+                    }
                 };
             }
             step(&mut domain, &source.env, Event::Restore { record }, &mut out);
@@ -436,7 +447,7 @@ fn waiting_restore_requests_recheck_once_and_identical_recipient_changes_nothing
         step(
             &mut domain,
             &source.env,
-            Event::RoutedEscalation { task: 1, revision: 4, holder: EscalationHolder::Person(1) },
+            Event::RoutedEscalation { task: 1, revision: 4, holder: EscalationHolder::Person(1), entry: 1 },
             &mut out,
         );
         assert!(out.is_empty(), "same selected recipient emits no save");

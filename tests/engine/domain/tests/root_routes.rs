@@ -2230,7 +2230,7 @@ fn restored_waiting_rechecks_snapshot_membership_and_same_holder_changes_nothing
     let mut changed = held_driver(store);
     changed.settle();
     assert!(!changed.stopped);
-    assert!(changed.store.rows.values().any(|row| matches!(row, Record::Tasks(tasks::Stored::Live(task)) if task.escalation == tasks::Escalation::Waiting { revision: 2, holder: tasks::EscalationHolder::Role { project: 1, role: 0 } })));
+    assert!(changed.store.rows.values().any(|row| matches!(row, Record::Tasks(tasks::Stored::Live(task)) if matches!(task.escalation, tasks::Escalation::Waiting { revision: 2, holder: tasks::EscalationHolder::Role { project: 1, role: 0 }, .. }))));
     assert!(
         !changed
             .delivered
@@ -2244,8 +2244,12 @@ fn exhausted_revision_with_changed_restored_holder_stops_without_committing() {
     let mut store = held_waiting_store();
     for row in store.rows.values_mut() {
         if let Record::Tasks(tasks::Stored::Live(task)) = row {
-            task.escalation =
-                tasks::Escalation::Waiting { revision: u64::MAX, holder: tasks::EscalationHolder::Person(1) };
+            task.escalation = tasks::Escalation::Waiting {
+                revision: u64::MAX,
+                holder: tasks::EscalationHolder::Person(1),
+                entry: 1,
+                since: Wall::EPOCH,
+            };
         }
         if let Record::People(people::Stored::Roles { holdings, .. }) = row {
             *holdings =
@@ -2590,10 +2594,11 @@ fn multiple_waiting_recipients_preflight_together_and_full_journal_refuses_witho
         .collect();
     assert_eq!(original.len(), 2, "two genuine task admissions and priced failures");
     for record in &original {
-        assert_eq!(
+        assert!(matches!(
             record.escalation,
-            tasks::Escalation::Waiting { revision: 1, holder: tasks::EscalationHolder::Person(people[0]) }
-        );
+            tasks::Escalation::Waiting { revision: 1, holder: tasks::EscalationHolder::Person(person), .. }
+                if person == people[0]
+        ));
     }
     let before = driver.store.rows.clone();
     let ask = people::Ask::SetRoles {
@@ -2634,12 +2639,30 @@ fn multiple_waiting_recipients_preflight_together_and_full_journal_refuses_witho
     assert!(writes.iter().any(|write| matches!(write, Write::Save(Record::People(people::Stored::Answer { key, outcome: people::Outcome::RolesSet { project: 1 }, .. })) if key.person == people[1] && key.key == [121;16])));
     for record in &original {
         let mut expected = record.clone();
-        expected.escalation =
-            tasks::Escalation::Waiting { revision: 2, holder: tasks::EscalationHolder::Role { project: 1, role: 0 } };
+        let tasks::Escalation::Waiting { entry: old_entry, .. } = record.escalation else {
+            panic!("source is waiting")
+        };
         assert!(
-            writes.iter().any(
-                |write| matches!(write, Write::Save(Record::Tasks(tasks::Stored::Live(actual))) if *actual == expected)
-            ),
+            writes.iter().any(|write| match write {
+                Write::Save(Record::Tasks(tasks::Stored::Live(actual))) if actual.number == record.number => {
+                    match actual.escalation {
+                        tasks::Escalation::Waiting {
+                            revision: 2,
+                            holder: tasks::EscalationHolder::Role { project: 1, role: 0 },
+                            entry,
+                            ..
+                        } if entry > old_entry => {
+                            expected.escalation = actual.escalation.clone();
+                            **actual == *expected
+                        }
+                        tasks::Escalation::Unheld { .. }
+                        | tasks::Escalation::Routing { .. }
+                        | tasks::Escalation::Waiting { .. }
+                        | tasks::Escalation::Rejected { .. } => false,
+                    }
+                }
+                Write::Save(_) | Write::Erase(_) => false,
+            }),
             "each exact affected task belongs to the same cohort"
         );
     }
@@ -2666,13 +2689,17 @@ fn multiple_waiting_recipients_preflight_together_and_full_journal_refuses_witho
     else {
         panic!("genuine second held task");
     };
-    last.escalation =
-        tasks::Escalation::Waiting { revision: u64::MAX, holder: tasks::EscalationHolder::Person(people[0]) };
-    let mut expected_header = overflow_store.header();
-    expected_header.commits = expected_header.commits.checked_add(1).expect("one saved refusal commit");
-    let unchanged = overflow_store.rows.clone();
+    last.escalation = tasks::Escalation::Waiting {
+        revision: u64::MAX,
+        holder: tasks::EscalationHolder::Person(people[0]),
+        entry: 1,
+        since: Wall::EPOCH,
+    };
     let mut overflow = Driver::configured(overflow_store, administration_config(9310), &configured);
     overflow.settle();
+    let mut expected_header = overflow.store.header();
+    expected_header.commits = expected_header.commits.checked_add(1).expect("one saved refusal commit");
+    let unchanged = overflow.store.rows.clone();
     overflow.delivered.clear();
     overflow.send(engine::Event::Ask {
         reply_to: ReplyTo::new(Token::new(1203)),
@@ -2754,6 +2781,7 @@ fn read_only_role_stages_have_one_not_ready_terminal_and_empty_projects_need_no_
             | tasks::Request::EscalationDecided { .. }
             | tasks::Request::ProposalDecided { .. }
             | tasks::Request::ProposalStalled { .. }
+            | tasks::Request::EscalationStalled { .. }
             | tasks::Request::Made { .. }
             | tasks::Request::Refused { .. }
             | tasks::Request::Done { .. }
@@ -2792,6 +2820,7 @@ fn read_only_role_stages_have_one_not_ready_terminal_and_empty_projects_need_no_
         | tasks::Request::EscalationDecided { .. }
         | tasks::Request::ProposalDecided { .. }
         | tasks::Request::ProposalStalled { .. }
+        | tasks::Request::EscalationStalled { .. }
         | tasks::Request::Made { .. }
         | tasks::Request::Refused { .. }
         | tasks::Request::Done { .. }
@@ -3084,6 +3113,140 @@ fn a_run_failing_transiently_is_retried_then_held_past_its_tries() {
     };
     assert_eq!(task.tries.transient, 2);
     assert!(matches!(task.phase, tasks::Phase::Held { why: tasks::Hold::Failures(tasks::Class::Transient), .. }));
+}
+
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    clippy::wildcard_enum_match_arm,
+    reason = "the one end-to-end story checks each routing stage"
+)]
+fn a_delegate_held_past_its_tries_is_escalated_two_levels_to_a_person_released_and_finished() {
+    let (mut driver, root) = batch_fixture_with(3, 4);
+    let mut holder = report_delegate(b"middle", Box::new([]));
+    holder.authority.budget.spend = 50;
+    holder.authority.delegation.kinds = Box::new([tasks::AuthorityExecutor::Charter(1)]);
+    holder.authority.delegation.tasks = 2;
+    holder.authority.delegation.depth = 3;
+    let middle = call_batch(&mut driver, &root, 601, Box::new([holder]))[0];
+    let middle_run = assigned_task(&driver, middle);
+    let leaf = call_batch(&mut driver, &middle_run, 602, Box::new([report_delegate(b"leaf", Box::new([]))]))[0];
+    let first = assigned_task(&driver, leaf);
+    driver.send(engine::Event::Answer {
+        channel: Token::new(7),
+        task: leaf,
+        attempt: first.attempt,
+        cumulative: 0,
+        end: tasks::End::Failed(tasks::Class::Transient),
+        saved: None,
+    });
+    driver.settle();
+    driver.env.now = Time::from_nanos(Duration::from_secs(2).as_nanos());
+    driver.env.wall = Wall::from_nanos(Duration::from_secs(2).as_nanos());
+    engine::fire(&mut driver.root, &driver.env, &mut driver.out);
+    driver.collect();
+    driver.settle();
+    let second = assigned_from_last(&driver.delivered);
+    assert_eq!(second.task, leaf);
+    driver.send(engine::Event::Answer {
+        channel: Token::new(7),
+        task: leaf,
+        attempt: second.attempt,
+        cumulative: 0,
+        end: tasks::End::Failed(tasks::Class::Transient),
+        saved: None,
+    });
+    driver.settle();
+    let held = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(leaf))).expect("held delegate");
+    let revision = match held {
+        Record::Tasks(tasks::Stored::Live(row)) => match row.escalation {
+            tasks::Escalation::Waiting { revision, holder: tasks::EscalationHolder::Task(task), .. }
+                if task == middle =>
+            {
+                revision
+            }
+            ref other => panic!("first recipient must be middle: {other:?}"),
+        },
+        other => panic!("held delegate row: {other:?}"),
+    };
+    assert!(driver.delivered.iter().any(|item| matches!(item,
+        Delivery::Inbound { task, word, .. } if *task == middle
+            && word.kind == tasks::MessageKind::Escalation { task: leaf, revision })));
+    tool_call(
+        &mut driver,
+        &middle_run,
+        603,
+        engine::Tool::DecideEscalation { task: leaf, revision, decision: engine::EscalationChoice::Pass },
+    );
+    assert!(driver.delivered.iter().any(|item| matches!(item,
+        Delivery::CallAnswer { call, answer: temper_engine_domain::CallAnswer::EscalationDecided { outcome: tasks::EscalationOutcome::Passed { .. }, .. }, .. }
+            if *call == Token::new(603))));
+    let held = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(leaf))).expect("held delegate");
+    let second_revision = match held {
+        Record::Tasks(tasks::Stored::Live(row)) => match row.escalation {
+            tasks::Escalation::Waiting { revision, holder: tasks::EscalationHolder::Task(task), .. }
+                if task == root.task =>
+            {
+                revision
+            }
+            ref other => panic!("second recipient must be root task: {other:?}"),
+        },
+        other => panic!("held delegate row: {other:?}"),
+    };
+    assert!(second_revision > revision);
+    tool_call(
+        &mut driver,
+        &root,
+        604,
+        engine::Tool::DecideEscalation {
+            task: leaf,
+            revision: second_revision,
+            decision: engine::EscalationChoice::Pass,
+        },
+    );
+    let held = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(leaf))).expect("held delegate");
+    let person_revision = match held {
+        Record::Tasks(tasks::Stored::Live(row)) => match row.escalation {
+            tasks::Escalation::Waiting { revision, holder: tasks::EscalationHolder::Person(_), .. } => revision,
+            ref other => panic!("third recipient must be person: {other:?}"),
+        },
+        other => panic!("held delegate row: {other:?}"),
+    };
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(605)),
+        sign_in: driver.session(),
+        key: [65; 16],
+        ask: people::Ask::DecideEscalation {
+            project: 1,
+            task: leaf,
+            revision: person_revision,
+            decision: people::EscalationDecision::Release,
+        },
+    });
+    driver.settle();
+    assert!(driver.delivered.iter().any(|item| matches!(item,
+        Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::EscalationDecided {
+            task, choice: people::EscalationChoice::Released, ..
+        }), .. } if *task == leaf)));
+    let third = assigned_from_last(&driver.delivered);
+    assert_eq!(third.task, leaf);
+    assert!(third.attempt > second.attempt);
+    driver.send(engine::Event::Answer {
+        channel: Token::new(7),
+        task: leaf,
+        attempt: third.attempt,
+        cumulative: 0,
+        end: tasks::End::Finished {
+            result: tasks::TaskResult::Report { words: b"finished".as_slice().into() },
+            cancel_delegates: false,
+        },
+        saved: None,
+    });
+    driver.settle();
+    assert!(matches!(
+        driver.store.rows.get(&Key::Tasks(tasks::Key::Ended(leaf))),
+        Some(Record::Tasks(tasks::Stored::Ended(_)))
+    ));
 }
 
 #[test]

@@ -81,6 +81,8 @@ pub struct Subscription {
 /// Kind of a durable task-inbox message (domain/tasks.md, sections 5.6 and 7).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum MessageKind {
+    /// Virtual, durable held decision entry projected from the held task.
+    Escalation { task: u64, revision: u64 },
     /// Virtual inbox entry for a pending proposal; its reason is in `Word::words`.
     /// The proposal owns its durable state and takes no inbox room.
     Proposal { proposer: u64, proposal: u64, kind: crate::ProposalKind },
@@ -763,6 +765,7 @@ pub enum Event {
         revision: u64,
         /// Root-verified eligible requester or final policy role.
         holder: crate::EscalationHolder,
+        entry: u64,
     },
     /// Root has authenticated the current recipient and checked authority;
     /// one `EscalationDecided` terminal follows.
@@ -774,6 +777,8 @@ pub enum Event {
         revision: u64,
         /// Positive authenticated deciding person.
         by: u64,
+        /// Root-numbered next holder entry on pass only.
+        entry: Option<u64>,
         /// Bounded authorized release/reject/pass choice.
         decision: crate::EscalationDecision,
     },
@@ -919,6 +924,8 @@ pub enum Event {
 /// saves/erases with effects and delays outward replies until durability. (domain/tasks.md, section 5).
 #[derive(PartialEq, Eq, Debug)]
 pub enum Request {
+    /// One nonfinal held decision passed its configured wait.
+    EscalationStalled { task: u64, revision: u64, holder: crate::EscalationHolder },
     /// One nonfinal holder's wait bound elapsed; root chooses the next holder.
     ProposalStalled { proposer: u64, proposal: u64, holder: crate::ProposalHolder },
     /// Exact semantic proposal decision terminal for a named call or keyed person request.

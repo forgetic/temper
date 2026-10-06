@@ -31,6 +31,7 @@ pub const LIMITS: Limits = Limits {
     inbox_bytes: 128,
     message_bytes: 32,
     proposal_stall: Duration::from_millis(10),
+    escalation_stall: Duration::from_secs(3600),
     saved_repositories: 2,
     contract_choices: 4,
     charters: 2,
@@ -289,6 +290,7 @@ impl World {
             | Request::EscalationDecided { .. }
             | Request::ProposalDecided { .. }
             | Request::ProposalStalled { .. }
+            | Request::EscalationStalled { .. }
             | Request::Made { .. }
             | Request::Refused { .. }
             | Request::Done { .. }
@@ -393,6 +395,7 @@ impl World {
                         task: context.task,
                         revision: context.escalation.revision(),
                         holder: tasks::EscalationHolder::Person(context.requester),
+                        entry: 1,
                     },
                     &mut self.out,
                 );
@@ -480,6 +483,7 @@ impl World {
                 | Request::EscalationDecided { .. }
                 | Request::ProposalDecided { .. }
                 | Request::ProposalStalled { .. }
+                | Request::EscalationStalled { .. }
                 | Request::Sent { .. }
                 | Request::Relay { .. }
                 | Request::Notify { .. }
@@ -537,7 +541,8 @@ impl World {
                 | Request::Relay { .. }
                 | Request::Notify { .. }
                 | Request::Timer { .. }
-                | Request::ProposalStalled { .. } => {}
+                | Request::ProposalStalled { .. }
+                | Request::EscalationStalled { .. } => {}
                 Request::Sent { reply_to, .. }
                 | Request::Done { reply_to }
                 | Request::ProposalDecided { reply_to, .. } => self.reply(reply_to, Reply::Done),
@@ -730,7 +735,8 @@ impl World {
                 | Request::EscalationInspected { .. }
                 | Request::EscalationDecided { .. }
                 | Request::ProposalDecided { .. }
-                | Request::ProposalStalled { .. } => {}
+                | Request::ProposalStalled { .. }
+                | Request::EscalationStalled { .. } => {}
             }
             self.pending.push(request);
         }

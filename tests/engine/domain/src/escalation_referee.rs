@@ -15,6 +15,16 @@ pub const QUESTION: &[u8] = b"retry held chat";
 /// Independently supplied successful second-attempt result.
 pub const REPORT: &[u8] = b"released report";
 
+fn same_decision(actual: &tasks::Escalation, expected: &tasks::Escalation) -> bool {
+    match (actual, expected) {
+        (
+            tasks::Escalation::Waiting { revision: current, holder: actual, .. },
+            tasks::Escalation::Waiting { revision: named, holder: expected, .. },
+        ) => current == named && actual == expected,
+        _ => actual == expected,
+    }
+}
+
 /// Bounded rejection script, retained while held.
 pub const REASON: &[u8] = b"keep held";
 
@@ -319,22 +329,21 @@ impl Referee {
                 return Err("unscripted transcript in terminal-only worker story");
             }
             if let Write::Save(Record::Tasks(tasks::Stored::Live(record))) = write {
-                let decided_revision = match &record.escalation {
-                    tasks::Escalation::Unheld { revision } | tasks::Escalation::Rejected { revision, .. }
-                        if *revision != 0 =>
-                    {
-                        Some(*revision)
-                    }
-                    tasks::Escalation::Waiting { revision, holder: tasks::EscalationHolder::Role { .. } }
-                        if *revision == 2 =>
-                    {
-                        Some(1)
-                    }
-                    tasks::Escalation::Unheld { .. }
-                    | tasks::Escalation::Routing { .. }
-                    | tasks::Escalation::Waiting { .. }
-                    | tasks::Escalation::Rejected { .. } => None,
-                };
+                let decided_revision =
+                    match &record.escalation {
+                        tasks::Escalation::Unheld { revision } | tasks::Escalation::Rejected { revision, .. }
+                            if *revision != 0 =>
+                        {
+                            Some(*revision)
+                        }
+                        tasks::Escalation::Waiting {
+                            revision, holder: tasks::EscalationHolder::Role { .. }, ..
+                        } if *revision == 2 => Some(1),
+                        tasks::Escalation::Unheld { .. }
+                        | tasks::Escalation::Routing { .. }
+                        | tasks::Escalation::Waiting { .. }
+                        | tasks::Escalation::Rejected { .. } => None,
+                    };
                 if let Some(revision) = decided_revision
                     && self.offers.contains_key(&revision) && !self.archives.contains_key(&revision)
                     && !writes.iter().any(|write| matches!(write, Write::Save(Record::EscalationDecision(archive)) if archive.task == record.number && archive.revision == revision)) {
@@ -363,11 +372,10 @@ impl Referee {
                         || record.numbers.spent != 3
                         || record.run_spent != 3
                         || !held(record)
-                        || record.escalation
-                            != (tasks::Escalation::Waiting {
-                                revision: 1,
-                                holder: tasks::EscalationHolder::Person(self.people[0].ok_or("hold before identity")?),
-                            })
+                        || !matches!(record.escalation, tasks::Escalation::Waiting {
+                            revision: 1,
+                            holder: tasks::EscalationHolder::Person(person), ..
+                        } if person == self.people[0].ok_or("hold before identity")?)
                     {
                         return Err("failure charge and routed hold are not atomic");
                     }
@@ -428,11 +436,10 @@ impl Referee {
                     }
                     people::EscalationDecision::Pass => {
                         held(record)
-                            && record.escalation
-                                == (tasks::Escalation::Waiting {
-                                    revision: archive.revision + 1,
-                                    holder: tasks::EscalationHolder::Role { project: 1, role: 0 },
-                                })
+                            && matches!(record.escalation, tasks::Escalation::Waiting {
+                                revision,
+                                holder: tasks::EscalationHolder::Role { project: 1, role: 0 }, ..
+                            } if revision == archive.revision + 1)
                     }
                 };
                 if !semantic || record.numbers.spent != 3 {
@@ -582,7 +589,7 @@ impl Referee {
             || context.project != 1
             || Some(context.requester) != self.people[0]
             || context.why != tasks::Hold::Failures(tasks::Class::Run)
-            || context.escalation != *expected
+            || !same_decision(&context.escalation, expected)
         {
             return Err("held view differs from scripted authenticated revision");
         }

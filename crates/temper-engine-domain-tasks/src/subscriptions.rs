@@ -16,6 +16,7 @@ fn hint_of(kind: MessageKind) -> Option<u64> {
         | MessageKind::News { subscription, .. } => Some(subscription),
         MessageKind::Words
         | MessageKind::Proposal { .. }
+        | MessageKind::Escalation { .. }
         | MessageKind::ProposalDecision { .. }
         | MessageKind::Amendment { .. }
         | MessageKind::Question
@@ -186,6 +187,7 @@ pub(crate) fn notice(domain: &mut Domain, env: &Env<Limits>, number: u64, mut wo
         },
         MessageKind::Words
         | MessageKind::Proposal { .. }
+        | MessageKind::Escalation { .. }
         | MessageKind::ProposalDecision { .. }
         | MessageKind::Amendment { .. }
         | MessageKind::Question

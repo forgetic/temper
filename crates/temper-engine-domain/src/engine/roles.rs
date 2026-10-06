@@ -63,6 +63,7 @@ fn inspected(
             | tasks::Request::EscalationDecided { .. }
             | tasks::Request::ProposalDecided { .. }
             | tasks::Request::ProposalStalled { .. }
+            | tasks::Request::EscalationStalled { .. }
             | tasks::Request::Made { .. }
             | tasks::Request::Refused { .. }
             | tasks::Request::Done { .. }
@@ -108,7 +109,7 @@ fn preflight(
             return Err(people::Refusal::Authority);
         };
         match context.escalation {
-            tasks::Escalation::Waiting { revision, holder: old } => {
+            tasks::Escalation::Waiting { revision, holder: old, .. } => {
                 if old != holder {
                     if revision.checked_add(1).is_none() {
                         return Err(people::Refusal::Limit);
@@ -229,6 +230,7 @@ fn recheck(domain: &mut Domain, env: &Env<Limits>, request: Token, project: u32)
             | tasks::Request::EscalationDecided { .. }
             | tasks::Request::ProposalDecided { .. }
             | tasks::Request::ProposalStalled { .. }
+            | tasks::Request::EscalationStalled { .. }
             | tasks::Request::Made { .. }
             | tasks::Request::Refused { .. }
             | tasks::Request::Done { .. }

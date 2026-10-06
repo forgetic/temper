@@ -359,16 +359,16 @@ impl Decision {
             }
             Delivery::EscalationReply { context, .. } => {
                 context.task != 0
-                    && context.requester != 0
                     && match &context.escalation {
                         temper_engine_domain_tasks::Escalation::Rejected { revision, by, reason } => {
                             *revision != 0
                                 && *by != 0
                                 && reason.len() <= usize::try_from(limits.result_bytes).expect("u32 fits usize")
                         }
-                        temper_engine_domain_tasks::Escalation::Waiting { revision, holder } => {
+                        temper_engine_domain_tasks::Escalation::Waiting { revision, holder, .. } => {
                             *revision != 0
                                 && match holder {
+                                    temper_engine_domain_tasks::EscalationHolder::Task(task) => *task != 0,
                                     temper_engine_domain_tasks::EscalationHolder::Person(person) => {
                                         *person != 0 && *person == context.requester
                                     }

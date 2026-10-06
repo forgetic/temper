@@ -160,6 +160,8 @@ pub enum Tool {
     Decide { proposer: u64, proposal: u64, decision: ProposalChoice },
     /// Withdraw this task's still-pending proposal.
     Withdraw { proposal: u64 },
+    /// Resolve one held delegate currently waiting at this task.
+    DecideEscalation { task: u64, revision: u64, decision: EscalationChoice },
     /// Create one authorized batch of direct task delegates.
     Delegate { batch: Box<[Delegate]> },
     /// Amend one live delegate after authority fitting and finite source checks.
@@ -201,6 +203,14 @@ pub enum ProposedAction {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum ProposalChoice {
     Accept,
+    Reject { reason: Box<[u8]> },
+    Pass,
+}
+
+/// A task ancestor's decision on one held descendant.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum EscalationChoice {
+    Release,
     Reject { reason: Box<[u8]> },
     Pass,
 }
@@ -480,6 +490,7 @@ pub enum Request {
 enum Work {
     Tasks(tasks::Event),
     PersonProposal(tasks::Event),
+    TaskEscalation(tasks::Event),
     People(people::Event),
     Fleet(fleet::Event),
     Brief(brief::Event),
@@ -565,6 +576,7 @@ struct RestoringProof {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum RoutedCall {
+    Escalation { key: CallKey, task: u64, revision: u64 },
     Propose { key: CallKey, proposal: u64 },
     Decide { key: CallKey, proposal: u64 },
     Withdraw { key: CallKey, proposal: u64 },
@@ -1009,7 +1021,9 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
             if let Some(why) = call_shape(&body.tool, &env.limits.tasks) {
                 body.tool = match body.tool {
                     Tool::Message { .. } => Tool::RejectedMessage(why),
-                    Tool::Amend { .. } | Tool::Cancel { .. } | Tool::Release { .. } => Tool::RejectedControl(why),
+                    Tool::Amend { .. } | Tool::Cancel { .. } | Tool::Release { .. } | Tool::DecideEscalation { .. } => {
+                        Tool::RejectedControl(why)
+                    }
                     Tool::Propose { .. } | Tool::Decide { .. } | Tool::Withdraw { .. } => Tool::RejectedProposal(why),
                     Tool::Delegate { .. }
                     | Tool::Introduce { .. }
@@ -1261,7 +1275,7 @@ pub fn fire(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
     let mut decision = Decision::new(&env.limits.journal);
     let mut tasks_out = Queue::with_capacity(tasks::max_out(&env.limits.tasks));
     tasks::fire(&mut domain.tasks, &environment_tasks(env), &mut tasks_out);
-    tasks_outputs(domain, env, &mut decision, &mut tasks_out, false);
+    tasks_outputs(domain, env, &mut decision, &mut tasks_out, false, false);
     let mut fleet_out = Queue::with_capacity(fleet::max_out(&env.limits.fleet));
     fleet::fire(&mut domain.fleet, &environment_fleet(env), &mut fleet_out);
     fleet_outputs(domain, env, &mut decision, &mut fleet_out);
@@ -1287,12 +1301,17 @@ fn route_into(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision) {
             Work::Tasks(event) => {
                 let mut out = Queue::with_capacity(tasks::max_out(&env.limits.tasks));
                 tasks::step(&mut domain.tasks, &environment_tasks(env), event, &mut out);
-                tasks_outputs(domain, env, decision, &mut out, false);
+                tasks_outputs(domain, env, decision, &mut out, false, false);
             }
             Work::PersonProposal(event) => {
                 let mut out = Queue::with_capacity(tasks::max_out(&env.limits.tasks));
                 tasks::step(&mut domain.tasks, &environment_tasks(env), event, &mut out);
-                tasks_outputs(domain, env, decision, &mut out, true);
+                tasks_outputs(domain, env, decision, &mut out, true, false);
+            }
+            Work::TaskEscalation(event) => {
+                let mut out = Queue::with_capacity(tasks::max_out(&env.limits.tasks));
+                tasks::step(&mut domain.tasks, &environment_tasks(env), event, &mut out);
+                tasks_outputs(domain, env, decision, &mut out, false, true);
             }
             Work::People(event) => {
                 let mut out = Queue::with_capacity(people::max_out(&env.limits.people));
@@ -1671,7 +1690,8 @@ fn call_needs_input(tool: &Tool) -> bool {
         | Tool::Amend { .. }
         | Tool::Propose { .. }
         | Tool::Decide { .. }
-        | Tool::Withdraw { .. } => false,
+        | Tool::Withdraw { .. }
+        | Tool::DecideEscalation { .. } => false,
         Tool::Delegate { batch } => {
             for member in batch {
                 if !member.spec.inputs.is_empty() {
@@ -1737,6 +1757,14 @@ fn call_shape(tool: &Tool, limits: &tasks::Limits) -> Option<tasks::Refusal> {
                 Some(tasks::Refusal::Read)
             }
             ProposalChoice::Accept | ProposalChoice::Reject { .. } | ProposalChoice::Pass => None,
+        },
+        Tool::DecideEscalation { decision, .. } => match decision {
+            EscalationChoice::Reject { reason }
+                if reason.len() > usize::try_from(limits.result_bytes).expect("u32 fits usize") =>
+            {
+                Some(tasks::Refusal::Read)
+            }
+            EscalationChoice::Release | EscalationChoice::Reject { .. } | EscalationChoice::Pass => None,
         },
         Tool::Withdraw { .. }
         | Tool::Unavailable
@@ -2260,9 +2288,13 @@ fn tasks_outputs(
     decision: &mut Decision,
     out: &mut Queue<tasks::Request>,
     person_proposal: bool,
+    task_escalation: bool,
 ) {
     for _ in 0..out.len() {
         match out.pop().expect("tasks output count") {
+            tasks::Request::EscalationStalled { task, revision, holder } => {
+                escalation::stalled(domain, task, revision, holder);
+            }
             tasks::Request::Notify { task, subscription, target, state, words } => {
                 let number = crate::fresh(&mut domain.journal, Family::Message).expect("notification number admitted");
                 domain.work.push(Work::Tasks(tasks::Event::Notice {
@@ -2300,7 +2332,7 @@ fn tasks_outputs(
                         .limits
                         .tasks
                         .inbox_messages
-                        .checked_add(env.limits.tasks.tasks)
+                        .checked_add(env.limits.tasks.tasks.checked_mul(2).expect("two decision kinds per task"))
                         .expect("validated virtual proposal room");
                     context.inbox = append_word(&context.inbox, &word, capacity);
                     context.last_message = word.number;
@@ -2318,6 +2350,7 @@ fn tasks_outputs(
                         RoutedCall::Introduce(_)
                         | RoutedCall::Propose { .. }
                         | RoutedCall::Decide { .. }
+                        | RoutedCall::Escalation { .. }
                         | RoutedCall::Withdraw { .. }
                         | RoutedCall::Accepting { .. }
                         | RoutedCall::Subscribe { .. }
@@ -2337,10 +2370,12 @@ fn tasks_outputs(
             }
             tasks::Request::Relay { task, attempt, previous, word } => {
                 let previous = match word.kind {
-                    tasks::MessageKind::Proposal { .. } => match domain.proofs.get(&task) {
-                        Some(proof) => proof.offered,
-                        None => None,
-                    },
+                    tasks::MessageKind::Proposal { .. } | tasks::MessageKind::Escalation { .. } => {
+                        match domain.proofs.get(&task) {
+                            Some(proof) => proof.offered,
+                            None => None,
+                        }
+                    }
                     tasks::MessageKind::ProposalDecision { .. }
                     | tasks::MessageKind::Words
                     | tasks::MessageKind::Amendment { .. }
@@ -2361,7 +2396,24 @@ fn tasks_outputs(
                 escalation::inspected(domain, env, decision, reply_to.into_token(), context);
             }
             tasks::Request::EscalationDecided { reply_to, task, revision, outcome } => {
-                escalation::completed(domain, env, decision, reply_to.into_token(), task, revision, outcome);
+                if task_escalation {
+                    let token = reply_to.into_token();
+                    let route = domain.routing_calls.remove(&token).expect("task escalation decision route");
+                    let RoutedCall::Escalation { key, task: named, revision: current } = route else {
+                        unreachable!("task escalation route kind")
+                    };
+                    assert!(task == named && revision == current, "exact task escalation terminal");
+                    decide_call(
+                        domain,
+                        &env.limits,
+                        decision,
+                        ReplyTo::new(token),
+                        key,
+                        CallAnswer::EscalationDecided { task, revision, outcome },
+                    );
+                } else {
+                    escalation::completed(domain, env, decision, reply_to.into_token(), task, revision, outcome);
+                }
             }
             tasks::Request::ProposalDecided { reply_to, proposer, number, outcome } => {
                 let token = reply_to.into_token();
@@ -2400,6 +2452,7 @@ fn tasks_outputs(
                     RoutedCall::Propose { .. }
                     | RoutedCall::Accepting { .. }
                     | RoutedCall::Decide { .. }
+                    | RoutedCall::Escalation { .. }
                     | RoutedCall::Withdraw { .. }
                     | RoutedCall::Message(_)
                     | RoutedCall::Introduce(_)
@@ -2557,6 +2610,7 @@ fn tasks_outputs(
                             (key, CallAnswer::SubscriptionRefused(problem))
                         }
                         RoutedCall::Control(key) => (key, CallAnswer::ControlRefused(problem)),
+                        RoutedCall::Escalation { key, .. } => (key, CallAnswer::EscalationRefused(problem)),
                         RoutedCall::Propose { key, .. }
                         | RoutedCall::Decide { key, .. }
                         | RoutedCall::Withdraw { key, .. }
@@ -2795,7 +2849,7 @@ fn tasks_outputs(
                         RoutedCall::Unsubscribe(key) => (key, CallAnswer::Unsubscribed),
                         RoutedCall::Control(key) => (key, CallAnswer::Controlled),
                         RoutedCall::Message(_) => unreachable!("message calls produce Sent"),
-                        RoutedCall::Decide { .. } | RoutedCall::Withdraw { .. } => {
+                        RoutedCall::Decide { .. } | RoutedCall::Withdraw { .. } | RoutedCall::Escalation { .. } => {
                             unreachable!("proposal decisions produce their own terminal")
                         }
                     };
@@ -3097,6 +3151,9 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                         }
                         Tool::Withdraw { proposal } => {
                             proposals::withdraw_call(domain, env, decision, reply_to, key, proposal);
+                        }
+                        Tool::DecideEscalation { task, revision, decision: choice } => {
+                            escalation::task_decide(domain, env, decision, reply_to, key, task, revision, choice);
                         }
                         Tool::Amend { target, amendment } => {
                             amend_call(domain, env, decision, reply_to, key, target, amendment);
@@ -4035,12 +4092,15 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
             u64::from(limits.brief.brief_bytes)
                 .checked_add(List::<brief::Section>::worst_case(limits.brief.sections)?)?
                 .checked_add(u64::from(limits.tasks.inbox_bytes))?
-                .checked_add(u64::from(limits.tasks.tasks).checked_mul(u64::from(limits.tasks.message_bytes))?)?
+                .checked_add(
+                    u64::from(limits.tasks.tasks)
+                        .checked_mul(u64::from(limits.tasks.message_bytes).checked_add(32)?)?,
+                )?
                 .checked_add(u64::from(limits.tasks.saved_repositories).checked_mul(4)?)?
                 .checked_add(u64::from(limits.journal.transcript_bytes))?
                 .checked_add(List::<Box<[u8]>>::worst_case(limits.journal.transcript_bytes)?)?
                 .checked_add(
-                    u64::from(limits.tasks.inbox_messages.checked_add(limits.tasks.tasks)?)
+                    u64::from(limits.tasks.inbox_messages.checked_add(limits.tasks.tasks.checked_mul(2)?)?)
                         .checked_mul(u64::try_from(size_of::<tasks::Word>()).ok()?)?,
                 )?,
         )?,
@@ -4674,6 +4734,9 @@ fn valid_call_answer(answer: &CallAnswer, deployment: &crate::Deployment, limits
         CallAnswer::Proposed { proposal } | CallAnswer::ProposalDecided { proposal, .. } => {
             *proposal != 0 && *proposal <= deployment.messages
         }
+        CallAnswer::EscalationDecided { task, revision, .. } => {
+            *task != 0 && *task <= deployment.tasks && *revision != 0
+        }
         CallAnswer::Sent { message } => *message != 0 && *message <= deployment.messages,
         CallAnswer::Subscribed { subscription } => *subscription != 0 && *subscription <= deployment.messages,
         CallAnswer::Delegated(numbers) => {
@@ -4700,6 +4763,7 @@ fn valid_call_answer(answer: &CallAnswer, deployment: &crate::Deployment, limits
         }
         CallAnswer::MessageRefused(problem)
         | CallAnswer::ProposalRefused(problem)
+        | CallAnswer::EscalationRefused(problem)
         | CallAnswer::SubscriptionRefused(problem)
         | CallAnswer::DelegationRefused(problem)
         | CallAnswer::ControlRefused(problem) => match problem.task {

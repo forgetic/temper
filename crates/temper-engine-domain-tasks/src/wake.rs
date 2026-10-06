@@ -22,7 +22,10 @@ pub(crate) fn valid(policy: &WakePolicy) -> bool {
 fn category(kind: MessageKind) -> u8 {
     match kind {
         MessageKind::Words => 0,
-        MessageKind::Amendment { .. } | MessageKind::ProposalDecision { .. } | MessageKind::Proposal { .. } => 7,
+        MessageKind::Amendment { .. }
+        | MessageKind::ProposalDecision { .. }
+        | MessageKind::Proposal { .. }
+        | MessageKind::Escalation { .. } => 7,
         MessageKind::Question => 1,
         MessageKind::Answer { .. } => 2,
         MessageKind::Result(_) => 3,
@@ -39,9 +42,10 @@ fn rule(domain: &Domain, number: u64, word: &Word) -> WakeRule {
             Party::Person(_) => WakeRule::Immediate,
             Party::Task(_) | Party::Deployment { .. } => task.wake.words,
         },
-        MessageKind::Amendment { .. } | MessageKind::ProposalDecision { .. } | MessageKind::Proposal { .. } => {
-            WakeRule::Immediate
-        }
+        MessageKind::Amendment { .. }
+        | MessageKind::ProposalDecision { .. }
+        | MessageKind::Proposal { .. }
+        | MessageKind::Escalation { .. } => WakeRule::Immediate,
         MessageKind::Question => {
             if task.wake.questions {
                 WakeRule::Immediate

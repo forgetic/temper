@@ -38,6 +38,7 @@ pub struct Domain {
     pub(crate) timers: Deadlines<u64>,
     pub(crate) wakes: Deadlines<u64>,
     pub(crate) proposal_alarms: Deadlines<u64>,
+    pub(crate) escalation_alarms: Deadlines<u64>,
     pub(crate) funding: Map<crate::Funder, crate::FundingRecord>,
     pub(crate) charters: Box<[u32]>,
     pub(crate) rng: Rng,
@@ -67,6 +68,7 @@ impl Domain {
             timers: Deadlines::with_capacity(limits.tasks.checked_mul(limits.subscriptions).expect("timer room")),
             wakes: Deadlines::with_capacity(limits.tasks),
             proposal_alarms: Deadlines::with_capacity(limits.tasks),
+            escalation_alarms: Deadlines::with_capacity(limits.tasks),
             funding: Map::with_capacity(limits.funders),
             charters,
             rng: Rng::new(seed),
@@ -107,6 +109,12 @@ impl Domain {
     #[must_use]
     pub fn proposal(&self, proposer: u64, number: u64) -> Option<crate::Proposal> {
         crate::proposals::context(self, proposer, number)
+    }
+
+    /// Clone one bounded held decision context for root's current route.
+    #[must_use]
+    pub fn escalation(&self, task: u64) -> Option<Box<crate::EscalationContext>> {
+        crate::escalation::context(self, task)
     }
 
     #[must_use]
@@ -201,11 +209,11 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
         Event::InspectEscalation { reply_to, task } => {
             out.push(Request::EscalationInspected { reply_to, context: crate::escalation::context(domain, task) });
         }
-        Event::RoutedEscalation { task, revision, holder } => {
-            crate::escalation::routed(domain, env, task, revision, holder, out);
+        Event::RoutedEscalation { task, revision, holder, entry } => {
+            crate::escalation::routed(domain, env, task, revision, holder, entry, out);
         }
-        Event::DecideEscalation { reply_to, task, revision, by, decision } => {
-            crate::escalation::decide(domain, env, reply_to, task, revision, by, decision, out);
+        Event::DecideEscalation { reply_to, task, revision, by, entry, decision } => {
+            crate::escalation::decide(domain, env, reply_to, task, revision, by, entry, decision, out);
         }
         Event::OpenPeriod { reply_to, project, period, budget } => {
             crate::funders::open(domain, reply_to, project, period, budget, out);
@@ -239,6 +247,8 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
             if domain.ready() {
                 crate::proposals::rearm_all(domain, env);
                 crate::proposals::wake_restored(domain, env, out);
+                crate::escalation::rearm_all(domain, env);
+                crate::escalation::wake_restored(domain, env, out);
             }
         }
     }
@@ -257,6 +267,7 @@ pub fn fire(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
     crate::subscriptions::timer_due(domain, env, out);
     crate::wake::fire(domain, env, out);
     crate::proposals::fire(domain, env, out);
+    crate::escalation::fire(domain, env, out);
     if let Some(number) = domain.alarms.expire(env.now)
         && let Some(task) = task_mut(domain, number)
     {
@@ -318,13 +329,18 @@ pub(crate) fn entrance(domain: &Domain, to: ReplyTo, number: u64) -> Result<Repl
 pub(crate) fn activate(domain: &Domain, number: u64, out: &mut Queue<Request>) {
     let task = record(domain, number).expect("activation names live task");
     let waiting = crate::proposals::waiting_for(domain, number);
+    let escalations = crate::escalation::waiting_for(domain, number);
     let capacity = task.inbox.len().checked_add(waiting.len()).expect("bounded inbox and proposals");
+    let capacity = capacity.checked_add(escalations.len()).expect("bounded inbox and decisions");
     let mut unordered = List::with_capacity(u32::try_from(capacity).expect("bounded inbox and proposals"));
     for word in &task.inbox {
         unordered.push(word.clone()).expect("actual inbox counted");
     }
     for word in waiting {
         unordered.push(word).expect("virtual proposal counted");
+    }
+    for word in escalations {
+        unordered.push(word).expect("virtual escalation counted");
     }
     let mut inbox = List::with_capacity(unordered.len());
     let mut previous = 0_u64;
@@ -412,6 +428,7 @@ pub(crate) fn publish(domain: &mut Domain, env: &Env<Limits>, number: u64, out: 
     };
     task.alarm = alarm;
     out.push(Request::Save { record: Stored::Live(Box::new(task.record.clone())) });
+    crate::escalation::schedule(domain, env, number);
     if escalation {
         out.push(Request::EscalationNeeded {
             context: crate::escalation::context(domain, number).expect("new held person context"),
@@ -431,6 +448,7 @@ pub(crate) fn publish(domain: &mut Domain, env: &Env<Limits>, number: u64, out: 
     }
     if unavailable {
         crate::proposals::holder_unavailable(domain, number, out);
+        crate::escalation::holder_unavailable(domain, number, out);
     }
 }
 

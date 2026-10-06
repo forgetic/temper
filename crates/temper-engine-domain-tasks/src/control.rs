@@ -159,6 +159,7 @@ pub(crate) fn amend(
             }
             MessageKind::Words
             | MessageKind::Proposal { .. }
+            | MessageKind::Escalation { .. }
             | MessageKind::ProposalDecision { .. }
             | MessageKind::Question
             | MessageKind::Answer { .. }
