@@ -173,3 +173,30 @@ fn stale_button_press_after_task_changes_does_nothing() {
     assert_eq!(world.engine.decision_count, 0);
     assert!(world.tab.view.tree().find(stale).is_none());
 }
+
+#[test]
+fn unsent_reason_survives_immediate_reload() {
+    let mut world = World::new(Settings::calm(211), Scenario::held(27, b"Review memory"));
+    world.run(&mut Person::new(Box::from([
+        Step::Go { address: Address::Task { number: 27, section: None } },
+        Step::See { find: Find::named(Role::Button, b"Leave held"), within: Duration::from_secs(1) },
+        Step::Press { find: Find::named(Role::Button, b"Leave held") },
+        Step::Type {
+            find: Find::named(Role::TextBox, b"Reason"),
+            words: Box::from(b"Need a second review".as_slice()),
+        },
+        Step::Reload,
+        Step::See { find: Find::named(Role::Button, b"Leave held"), within: Duration::from_secs(1) },
+        Step::Press { find: Find::named(Role::Button, b"Leave held") },
+    ])));
+    let field = world
+        .tab
+        .view
+        .tree()
+        .nodes()
+        .iter()
+        .find(|node| node.name.as_deref() == Some(b"Reason".as_slice()))
+        .expect("reason field");
+    assert_eq!(field.value.as_ref().expect("value").text.as_ref(), b"Need a second review");
+    assert_eq!(world.engine.decision_count, 0);
+}
