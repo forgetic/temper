@@ -211,6 +211,40 @@ fn a_watch_begins_with_its_snapshot() {
 }
 
 #[test]
+fn a_watched_run_shows_each_committed_turn_once_to_run_and_item_watchers() {
+    let mut h = Harness::following(LIMITS, policy(Capture::Nothing));
+    h.watch(1, Subject::Run(RUN));
+    h.watch(2, Subject::Item(ITEM));
+    assert!(h.step(Event::Turn { run: RUN, attempt: OTHER_RUN, number: 1 }).is_empty());
+    assert!(h.step(Event::Turn { run: OTHER_RUN, attempt: ATTEMPT, number: 1 }).is_empty());
+    let expected = Chunk::Report {
+        run: RUN,
+        attempt: ATTEMPT,
+        kind: Kind::Progress,
+        at: Time::ZERO,
+        content: Box::from(1_u32.to_be_bytes()),
+    };
+    assert_eq!(
+        &*h.step(Event::Turn { run: RUN, attempt: ATTEMPT, number: 1 }),
+        [
+            deliver(1, 0, Box::new([expected])),
+            deliver(
+                2,
+                0,
+                Box::new([Chunk::Report {
+                    run: RUN,
+                    attempt: ATTEMPT,
+                    kind: Kind::Progress,
+                    at: Time::ZERO,
+                    content: Box::from(1_u32.to_be_bytes())
+                }])
+            ),
+        ]
+    );
+    assert!(h.facts().as_slice().contains(&Fact::Turn { watchers: 2 }));
+}
+
+#[test]
 fn a_watch_ended_frees_its_place_at_once() {
     let mut h = Harness::new(Limits { watchers: 1, ..LIMITS });
     h.watch(1, Subject::Board(0));

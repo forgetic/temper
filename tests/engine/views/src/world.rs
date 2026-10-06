@@ -504,6 +504,7 @@ impl World {
                 Fact::Followed
                 | Fact::Unfollowed
                 | Fact::Reported { kept: Kept::Nothing | Kept::Shape | Kept::Content, .. }
+                | Fact::Turn { .. }
                 | Fact::Dropped { dropped: Dropped::Unfollowed | Dropped::Oversized }
                 | Fact::Changed { .. }
                 | Fact::Watching
@@ -1045,7 +1046,7 @@ fn taken(event: &Event) -> Option<Seen> {
         }
         Event::Unwatch { watcher } => Seen::Unwatch { watcher: watcher.raw() },
         Event::Delivered { watcher, done } => Seen::Delivered { watcher: watcher.raw(), done: *done },
-        Event::Appended { .. } | Event::Expired { .. } => return None,
+        Event::Turn { .. } | Event::TaskPhase { .. } | Event::Appended { .. } | Event::Expired { .. } => return None,
     })
 }
 
@@ -1070,6 +1071,8 @@ fn describe(event: &Event) -> String {
             format!("started {} attempt {} for {} {policy:?}", run.raw(), attempt.raw(), item.raw())
         }
         Event::Reported { run, kind, content } => format!("reported {} {kind:?} {} bytes", run.raw(), content.len()),
+        Event::Turn { run, attempt, number } => format!("turn {} attempt {} number {number}", run.raw(), attempt.raw()),
+        Event::TaskPhase { item, phase, .. } => format!("task phase {} {phase}", item.raw()),
         Event::Finished { run } => format!("finished {}", run.raw()),
         Event::Phase { item, repository, phase } => format!("phase {} of {repository} {phase}", item.raw()),
         Event::Watch { watcher, subject, snapshot } => {

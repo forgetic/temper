@@ -47,7 +47,46 @@ pub struct Domain {
     lost: u64,
 }
 
+/// One bounded live row projected for an authenticated tree or goal watch.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ViewTask {
+    pub number: u64,
+    pub project: u32,
+    pub requester: Party,
+    pub phase: u32,
+    pub tracked: Option<u32>,
+}
+
+/// Stable codes carried by the views child; details stay in task history.
+#[must_use]
+pub fn view_phase(phase: &Phase) -> u32 {
+    match phase {
+        Phase::Waiting => 0,
+        Phase::Active(_) => 1,
+        Phase::Closing(_) => 2,
+        Phase::Held { .. } => 3,
+        Phase::Ended(_) => 4,
+    }
+}
+
 impl Domain {
+    /// Borrowed live projection copied into a bounded result for snapshot construction.
+    #[must_use]
+    pub fn view_tasks(&self) -> Box<[ViewTask]> {
+        let mut rows = List::with_capacity(self.names.capacity());
+        for (number, _) in &self.names {
+            let row = record(self, *number).expect("indexed live row");
+            rows.push(ViewTask {
+                number: *number,
+                project: row.project,
+                requester: row.requester,
+                phase: view_phase(&row.phase),
+                tracked: row.tracked,
+            })
+            .expect("one row per live name");
+        }
+        rows.into_boxed()
+    }
     /// Create restoring state from validated `limits`, deterministic `seed` and unique configured
     /// `charters` bounded by `limits.charters`. Panics on invalid/unrepresentable limits or
     /// malformed charter configuration; no task becomes active until `Restore`/`Restored`

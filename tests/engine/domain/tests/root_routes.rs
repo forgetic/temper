@@ -7,6 +7,7 @@ use temper_engine_domain_brief as brief;
 use temper_engine_domain_fleet as fleet;
 use temper_engine_domain_people as people;
 use temper_engine_domain_tasks as tasks;
+use temper_engine_domain_views as views;
 use temper_engine_domain_world::commits::Store;
 use temper_engine_domain_world::walking::{Settings, World, config, limits};
 use temper_engine_domain_world::walking_referee::{FINAL_SPEND, QUESTION, REPORT};
@@ -18,6 +19,7 @@ struct Driver {
     events: VecDeque<engine::Event>,
     store: Store,
     delivered: Vec<Delivery>,
+    viewed: Vec<views::Request>,
     serial: u64,
     accounts: Vec<accounts::Request>,
     stopped: bool,
@@ -40,6 +42,7 @@ impl Driver {
             events: VecDeque::from([engine::Event::Start]),
             store,
             delivered: Vec::new(),
+            viewed: Vec::new(),
             serial: 100,
             accounts: Vec::new(),
             stopped: false,
@@ -79,6 +82,19 @@ impl Driver {
                     }
                 }
                 engine::Request::Deliver(delivery) => self.delivered.push(delivery),
+                engine::Request::View(request) => match request {
+                    views::Request::Append { owner, .. } => {
+                        self.events.push_back(engine::Event::ViewAppended { owner, done: true });
+                    }
+                    views::Request::Expire { owner, .. } => {
+                        self.events.push_back(engine::Event::ViewExpired { owner, done: true });
+                    }
+                    views::Request::Watching { .. }
+                    | views::Request::Refused { .. }
+                    | views::Request::Deliver { .. }
+                    | views::Request::Ended { .. } => self.viewed.push(request),
+                },
+                engine::Request::WatchRefused { .. } => panic!("root route test did not request an invalid watch"),
                 engine::Request::Account(request) => self.accounts.push(request),
                 engine::Request::Stop => self.stopped = true,
                 engine::Request::CallBusy { call, .. } => self.call_busy.push(call),
@@ -135,6 +151,7 @@ impl Driver {
                 | Delivery::AcknowledgeTurn { .. }
                 | Delivery::Cancel { .. }
                 | Delivery::Result { .. }
+                | Delivery::View(_)
                 | Delivery::Fleet(_)
                 | Delivery::Assigned { .. }
                 | Delivery::Refuse { .. }
@@ -180,6 +197,148 @@ fn turn(driver: &mut Driver, assignment: &engine::Assignment, number: u32, cumul
         attempt: assignment.attempt,
         turn: engine::Turn { number, cumulative, read: None, transcript: b"step".as_slice().into() },
     });
+}
+
+#[test]
+fn a_watched_run_shows_each_turn_as_it_commits() {
+    let (mut driver, assignment) = batch_fixture();
+    driver.send(engine::Event::Watch {
+        watcher: Token::new(770),
+        sign_in: driver.session(),
+        subject: views::Subject::Run(Token::new(assignment.task)),
+    });
+    assert!(driver.viewed.iter().any(|request| matches!(request,
+        views::Request::Watching { watcher } if *watcher == Token::new(770)
+    )));
+    assert!(driver.viewed.iter().any(|request| matches!(request,
+        views::Request::Deliver { watcher, chunks, .. }
+            if *watcher == Token::new(770) && matches!(&**chunks, [views::Chunk::Snapshot { .. }])
+    )));
+    driver.send(engine::Event::ViewDelivered { watcher: Token::new(770), done: true });
+    driver.viewed.clear();
+    turn(&mut driver, &assignment, 1, 2);
+    assert!(!driver.viewed.iter().any(|request| matches!(request,
+        views::Request::Deliver { chunks, .. } if chunks.iter().any(|chunk| matches!(chunk,
+            views::Chunk::Report { kind: views::Kind::Progress, .. }
+        ))
+    )));
+    driver.settle();
+    assert!(driver.viewed.iter().any(|request| matches!(request,
+        views::Request::Deliver { watcher, chunks, missed: 0 }
+            if *watcher == Token::new(770) && matches!(&**chunks,
+                [views::Chunk::Report { run, attempt, kind: views::Kind::Progress, content, .. }]
+                    if *run == Token::new(assignment.task)
+                        && *attempt == Token::new(assignment.attempt)
+                        && content.as_ref() == 1_u32.to_be_bytes())
+    )));
+    driver.send(engine::Event::ViewDelivered { watcher: Token::new(770), done: true });
+    driver.viewed.clear();
+    turn(&mut driver, &assignment, 2, 4);
+    driver.settle();
+    assert!(driver.viewed.iter().any(|request| matches!(request,
+        views::Request::Deliver { watcher, chunks, missed: 0 }
+            if *watcher == Token::new(770) && matches!(&**chunks,
+                [views::Chunk::Report { kind: views::Kind::Progress, content, .. }]
+                    if content.as_ref() == 2_u32.to_be_bytes())
+    )));
+}
+
+#[test]
+#[expect(clippy::wildcard_enum_match_arm, reason = "select the exact named tree snapshot")]
+fn a_task_tree_watch_carries_a_child_phase_after_its_commit() {
+    let (mut driver, assignment) = batch_fixture_with(2, 2);
+    driver.send(engine::Event::Watch {
+        watcher: Token::new(771),
+        sign_in: driver.session(),
+        subject: views::Subject::Item(Token::new(assignment.task)),
+    });
+    let snapshot = driver
+        .viewed
+        .iter()
+        .find_map(|request| match request {
+            views::Request::Deliver { watcher, chunks, .. } if *watcher == Token::new(771) => match &**chunks {
+                [views::Chunk::Snapshot { content, .. }] => Some(content.as_ref()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .expect("task tree snapshot");
+    assert_eq!(&snapshot[..8], &assignment.task.to_be_bytes());
+    driver.send(engine::Event::ViewDelivered { watcher: Token::new(771), done: true });
+    driver.viewed.clear();
+    let child = call_batch(&mut driver, &assignment, 772, Box::new([report_delegate(b"child", Box::new([]))]))[0];
+    assert!(driver.viewed.iter().any(|request| matches!(request,
+        views::Request::Deliver { watcher, chunks, .. } if *watcher == Token::new(771)
+            && chunks.iter().any(|chunk| matches!(chunk,
+                views::Chunk::Phase { item, .. } if *item == Token::new(child)
+            ))
+    )));
+}
+
+#[test]
+#[expect(clippy::wildcard_enum_match_arm, reason = "select the exact named goal snapshot and outcome")]
+fn a_project_goals_watch_shows_a_later_priority_change() {
+    let (mut driver, _, _, maintainer_session, _, member_session) = people_roles_driver();
+    driver.send(engine::Event::Hello {
+        channel: Token::new(7),
+        hello: fleet::Hello {
+            graces: Some(Duration::from_secs(1)),
+            slots: 2,
+            workstreams: Box::new([]),
+            hosting: Box::new([]),
+        },
+    });
+    driver.settle();
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(773)),
+        sign_in: member_session,
+        key: [239; 16],
+        ask: people::Ask::SetGoal { project: 1, spec: b"goal".as_slice().into(), charter: 1, budget: 20, priority: 1 },
+    });
+    driver.settle();
+    let task = driver
+        .delivered
+        .iter()
+        .find_map(|delivery| match delivery {
+            Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::GoalStarted { task }), .. } => {
+                Some(*task)
+            }
+            _ => None,
+        })
+        .expect("goal started");
+    driver.send(engine::Event::Watch {
+        watcher: Token::new(774),
+        sign_in: maintainer_session,
+        subject: views::Subject::Board(1),
+    });
+    let snapshot = driver
+        .viewed
+        .iter()
+        .find_map(|request| match request {
+            views::Request::Deliver { watcher, chunks, .. } if *watcher == Token::new(774) => match &**chunks {
+                [views::Chunk::Snapshot { content, .. }] => Some(content.as_ref()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .expect("project goals snapshot");
+    assert_eq!(&snapshot[..8], &task.to_be_bytes());
+    driver.send(engine::Event::ViewDelivered { watcher: Token::new(774), done: true });
+    driver.viewed.clear();
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(775)),
+        sign_in: maintainer_session,
+        key: [240; 16],
+        ask: people::Ask::Prioritise { project: 1, goals: Box::new([(task, 7)]) },
+    });
+    driver.settle();
+    assert!(driver.viewed.iter().any(|request| matches!(request,
+        views::Request::Deliver { watcher, chunks, .. } if *watcher == Token::new(774)
+            && chunks.iter().any(|chunk| matches!(chunk,
+                views::Chunk::Report { run, kind: views::Kind::Progress, content, .. }
+                    if *run == Token::new(task) && content[4..] == 7_u32.to_be_bytes()
+            ))
+    )));
 }
 
 fn people_roles_config(seed: u64) -> (engine::Config, engine::Limits) {
@@ -752,6 +911,7 @@ fn durable_start_turn_and_answer_callbacks_survive_full_journal_pressure() {
             | Delivery::AcknowledgeTurn { .. }
             | Delivery::Cancel { .. }
             | Delivery::Result { .. }
+            | Delivery::View(_)
             | Delivery::Fleet(_)
             | Delivery::WebReply { .. }
             | Delivery::Refuse { .. }
@@ -1218,6 +1378,7 @@ fn assigned(driver: &Driver) -> engine::Assignment {
             | Delivery::AcknowledgeTurn { .. }
             | Delivery::Cancel { .. }
             | Delivery::Result { .. }
+            | Delivery::View(_)
             | Delivery::Fleet(_)
             | Delivery::WebReply { .. }
             | Delivery::Refuse { .. }
@@ -3478,6 +3639,7 @@ fn coalesced_history_waiters_survive_simultaneous_io_completion_under_full_journ
             | Delivery::AcknowledgeTurn { .. }
             | Delivery::Acknowledge { .. }
             | Delivery::Cancel { .. }
+            | Delivery::View(_)
             | Delivery::Fleet(_)
             | Delivery::Assigned { .. }
             | Delivery::Refuse { .. }
@@ -3966,6 +4128,7 @@ fn assigned_from_last(delivered: &[Delivery]) -> engine::Assignment {
             | Delivery::AcknowledgeTurn { .. }
             | Delivery::Acknowledge { .. }
             | Delivery::Cancel { .. }
+            | Delivery::View(_)
             | Delivery::Fleet(_)
             | Delivery::WebReply { .. }
             | Delivery::Refuse { .. }
@@ -4008,6 +4171,7 @@ fn say(driver: &mut Driver, task: u64, key: u8) -> u64 {
             | Delivery::AcknowledgeTurn { .. }
             | Delivery::Acknowledge { .. }
             | Delivery::Cancel { .. }
+            | Delivery::View(_)
             | Delivery::Fleet(_)
             | Delivery::Assigned { .. }
             | Delivery::WebReply { .. }

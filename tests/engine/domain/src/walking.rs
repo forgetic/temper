@@ -137,6 +137,20 @@ pub fn limits() -> engine::Limits {
             spent_attention: Duration::from_secs(1),
             facts: 2,
         },
+        views: temper_engine_domain_views::Limits {
+            runs: 2,
+            watchers: 4,
+            backlog: 2,
+            report_bytes: 64,
+            snapshot_bytes: 128,
+            records: 2,
+            batch_bytes: 128,
+            appends: 1,
+            flush: Duration::from_secs(1),
+            retention: Duration::from_secs(60),
+            sweep: Duration::from_secs(10),
+            facts: 8,
+        },
     }
 }
 
@@ -575,6 +589,7 @@ impl World {
                     1,
                 ),
                 engine::Request::CallBusy { .. } => panic!("walking story sent no calls"),
+                engine::Request::View(_) | engine::Request::WatchRefused { .. } => panic!("unrequested view output"),
                 engine::Request::Stop => panic!("walking story stopped: {:?}", self.trace),
             }
         }
@@ -582,6 +597,7 @@ impl World {
 
     fn delivery(&mut self, delivery: Delivery) {
         match delivery {
+            Delivery::View(_) => panic!("internal view event reached shell"),
             Delivery::WebReply { sign_in, reply: people::Reply::SignedIn { person, .. }, .. } => {
                 let sign_in = sign_in.expect("web sign-in receives its new session");
                 self.referee.signed_in(&self.store.rows, person, sign_in).expect("durable sign-in");

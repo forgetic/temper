@@ -604,6 +604,7 @@ impl World {
                 engine::Request::AnswerBusy { .. } => self.answer(),
                 engine::Request::TurnBusy { .. } => panic!("outside worker offered no turns"),
                 engine::Request::CallBusy { .. } => panic!("escalation world sent no calls"),
+                engine::Request::View(_) | engine::Request::WatchRefused { .. } => panic!("unrequested view output"),
                 engine::Request::Stop => panic!("escalation root stopped: {:?}", self.trace),
             }
         }
@@ -615,6 +616,7 @@ impl World {
     )]
     fn delivery(&mut self, delivery: Delivery) {
         match delivery {
+            Delivery::View(_) => panic!("internal view event reached shell"),
             Delivery::WebReply { to, sign_in, reply: people::Reply::SignedIn { person, .. } } => {
                 let index = usize::try_from(to.into_token().raw() - 101).expect("two named sign-in reply rights");
                 let session = sign_in.expect("fresh authenticated session");

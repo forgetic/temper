@@ -488,6 +488,7 @@ impl World {
                 | engine::Request::TurnBusy { .. } => {
                     panic!("held role world offers no worker answers")
                 }
+                engine::Request::View(_) | engine::Request::WatchRefused { .. } => panic!("unrequested view output"),
                 engine::Request::Stop => panic!("role root stopped: {:?}", self.trace),
             }
         }

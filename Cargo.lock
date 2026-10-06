@@ -251,6 +251,7 @@ dependencies = [
  "temper-engine-domain-fleet",
  "temper-engine-domain-people",
  "temper-engine-domain-tasks",
+ "temper-engine-domain-views",
 ]
 
 [[package]]
@@ -344,6 +345,7 @@ dependencies = [
  "temper-engine-domain-fleet",
  "temper-engine-domain-people",
  "temper-engine-domain-tasks",
+ "temper-engine-domain-views",
  "temper-world",
 ]
 

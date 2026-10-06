@@ -24,6 +24,10 @@ pub enum Fact {
         watchers: u32,
         kept: Kept,
     },
+    /// One committed turn reached this many run and item watchers.
+    Turn {
+        watchers: u32,
+    },
     /// A report was dropped, for `dropped`.
     Dropped {
         dropped: Dropped,

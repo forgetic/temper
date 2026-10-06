@@ -16,6 +16,7 @@ temper-engine-domain-fleet.workspace = true
 temper-engine-domain-brief.workspace = true
 temper-engine-domain-accounts.workspace = true
 temper-engine-domain-authority.workspace = true
+temper-engine-domain-views.workspace = true
 
 [lints.rust]
 unsafe_code = "forbid"

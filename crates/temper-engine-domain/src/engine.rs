@@ -46,6 +46,7 @@ use temper_engine_domain_brief as brief;
 use temper_engine_domain_fleet as fleet;
 use temper_engine_domain_people as people;
 use temper_engine_domain_tasks as tasks;
+use temper_engine_domain_views as views;
 
 /// Root startup bounds, supplied by configuration and immutable at every step
 /// (domain/engine.md, 4–5). `worst_case` checks the cross-child route, page,
@@ -71,6 +72,8 @@ pub struct Limits {
     pub brief: brief::Limits,
     /// Secret-free credential policy.
     pub accounts: accounts::Limits,
+    /// Live watches, backlogs and expendable trace room.
+    pub views: views::Limits,
 }
 
 /// Startup configuration owned by the root, bounded by the corresponding
@@ -272,6 +275,16 @@ pub struct Call {
 /// be dropped by fleet. Store and refresh variants are terminals, not new calls.
 #[derive(Debug)]
 pub enum Event {
+    /// An authenticated person opens one live run, task-tree or project-goal watch.
+    Watch { watcher: Token, sign_in: u64, subject: views::Subject },
+    /// A person or stream stops one watch.
+    Unwatch { watcher: Token },
+    /// One watcher delivery was consumed or dropped by its stream.
+    ViewDelivered { watcher: Token, done: bool },
+    /// Expendable trace append terminal.
+    ViewAppended { owner: Token, done: bool },
+    /// Expendable trace expiry terminal.
+    ViewExpired { owner: Token, done: bool },
     /// Deployment configuration starts one durable core recurring procedure.
     StartRecurring { project: u32, authority: tasks::Authority, template: tasks::RecurringTemplate },
     /// Deployment configuration opens a newer period and wakes its recurring procedures.
@@ -439,6 +452,10 @@ pub enum Event {
 /// terminal; deliveries are notices or consume a `ReplyTo` (domain/engine.md, 5).
 #[derive(PartialEq, Eq, Debug)]
 pub enum Request {
+    /// Live view/watch or expendable trace request routed to the shell.
+    View(views::Request),
+    /// A watch failed authentication or project standing before views admission.
+    WatchRefused { watcher: Token, refusal: people::Refusal },
     /// Root had no decision or payload room; worker retries the same name.
     CallBusy { channel: Token, task: u64, attempt: u64, call: Token },
     /// Ordered atomic transaction; store ends with Committed or Uncommitted.
@@ -662,6 +679,9 @@ pub struct Domain {
     fleet: fleet::Domain,
     brief: brief::Domain,
     accounts: accounts::Domain,
+    views: views::Domain,
+    watching: Map<Token, u64>,
+    view_phases: Map<u64, (u32, Option<u32>)>,
     loads: loads::Loads,
     assignments: Map<u64, Assignment>,
     payloads: Slab<Option<Payload>>,
@@ -739,6 +759,9 @@ impl Domain {
             fleet: fleet::Domain::new(&limits.fleet),
             brief: brief::Domain::new(&limits.brief),
             accounts: accounts::Domain::new(&limits.accounts),
+            views: views::Domain::new(&limits.views, skein_lib::Time::ZERO),
+            watching: Map::with_capacity(limits.views.watchers),
+            view_phases: Map::with_capacity(limits.tasks.tasks),
             loads: loads::Loads::new(&limits.loads),
             assignments: Map::with_capacity(limits.tasks.tasks),
             payloads: Slab::with_capacity(payload_slots(limits).expect("valid payload room")),
@@ -844,6 +867,7 @@ impl Domain {
         self.people.reclaim();
         self.fleet.reclaim();
         self.brief.reclaim();
+        self.views.reclaim();
         self.payloads.reclaim();
         self.result_reads.reclaim();
         loads::reclaim(&mut self.loads);
@@ -867,6 +891,9 @@ impl Domain {
         for _ in 0..self.limits.accounts.facts {
             let _fact = self.accounts.pop_fact();
         }
+        for _ in 0..self.limits.views.facts {
+            let _fact = self.views.pop_fact();
+        }
     }
 }
 
@@ -874,8 +901,155 @@ impl Domain {
 /// `step`, `resume` and `fire` call. Pure constant query, four output slots; emits no effect or
 /// terminal.
 #[must_use]
-pub const fn max_out(_limits: &Limits) -> u32 {
-    4
+pub const fn max_out(limits: &Limits) -> u32 {
+    let viewed = views::max_out(&limits.views).saturating_add(4);
+    if viewed > 4 { viewed } else { 4 }
+}
+
+fn environment_views(env: &Env<Limits>) -> Env<views::Limits> {
+    Env { now: env.now, wall: env.wall, limits: env.limits.views }
+}
+
+fn view_policy() -> views::Policy {
+    views::Policy {
+        text: views::Capture::Nothing,
+        progress: views::Capture::Nothing,
+        calls: views::Capture::Nothing,
+        tools: views::Capture::Nothing,
+        usage: views::Capture::Nothing,
+    }
+}
+
+fn view_outputs(domain: &mut Domain, output: &mut Queue<views::Request>, out: &mut Queue<Request>) {
+    for _ in 0..output.len() {
+        let request = output.pop().expect("view output count");
+        match request {
+            views::Request::Ended { watcher, .. } | views::Request::Refused { watcher, .. } => {
+                domain.watching.remove(&watcher);
+            }
+            views::Request::Watching { .. }
+            | views::Request::Deliver { .. }
+            | views::Request::Append { .. }
+            | views::Request::Expire { .. } => {}
+        }
+        out.push(Request::View(request));
+    }
+}
+
+fn view_step(domain: &mut Domain, env: &Env<Limits>, event: views::Event, out: &mut Queue<Request>) {
+    let mut child = Queue::with_capacity(views::max_out(&env.limits.views));
+    views::step(&mut domain.views, &environment_views(env), event, &mut child);
+    view_outputs(domain, &mut child, out);
+}
+
+fn view_byte(bytes: &mut List<u8>, value: &[u8]) -> Option<()> {
+    for byte in value {
+        bytes.push(*byte).ok()?;
+    }
+    Some(())
+}
+
+fn in_tree(rows: &[tasks::ViewTask], number: u64, ancestor: u64, depth: u32) -> bool {
+    let mut current = number;
+    for _ in 0..=depth {
+        if current == ancestor {
+            return true;
+        }
+        let mut next = None;
+        for row in rows {
+            if row.number == current {
+                next = match row.requester {
+                    tasks::Party::Task(parent) => Some(parent),
+                    tasks::Party::Person(_) | tasks::Party::Deployment { .. } => None,
+                };
+                break;
+            }
+        }
+        let Some(parent) = next else { return false };
+        current = parent;
+    }
+    false
+}
+
+/// The snapshot's fixed rows carry task number, phase and priority in that order.
+/// A run snapshot carries its attempt and last committed turn.
+fn view_snapshot(domain: &Domain, subject: views::Subject, bound: u32) -> Option<Box<[u8]>> {
+    let mut bytes = List::with_capacity(bound);
+    match subject {
+        views::Subject::Run(run) => {
+            let proof = domain.proofs.get(&run.raw())?;
+            view_byte(&mut bytes, &proof.attempt.to_be_bytes())?;
+            let turn = match proof.turn {
+                Some(turn) => turn.turn,
+                None => 0,
+            };
+            view_byte(&mut bytes, &turn.to_be_bytes())?;
+        }
+        views::Subject::Item(ancestor) => {
+            let rows = domain.tasks.view_tasks();
+            for row in &rows {
+                if in_tree(&rows, row.number, ancestor.raw(), domain.limits.tasks.depth) {
+                    view_byte(&mut bytes, &row.number.to_be_bytes())?;
+                    view_byte(&mut bytes, &row.phase.to_be_bytes())?;
+                    view_byte(&mut bytes, &row.tracked.unwrap_or(0).to_be_bytes())?;
+                }
+            }
+        }
+        views::Subject::Board(project) => {
+            let rows = domain.tasks.view_tasks();
+            for row in &rows {
+                if row.project == project && row.tracked.is_some() {
+                    view_byte(&mut bytes, &row.number.to_be_bytes())?;
+                    view_byte(&mut bytes, &row.phase.to_be_bytes())?;
+                    view_byte(&mut bytes, &row.tracked.unwrap_or(0).to_be_bytes())?;
+                }
+            }
+        }
+    }
+    Some(bytes.into_boxed())
+}
+
+fn view_task_saved(domain: &mut Domain, limits: &Limits, decision: &mut Decision, task: &tasks::TaskRecord) {
+    let phase = tasks::view_phase(&task.phase);
+    let current = (phase, task.tracked);
+    let changed = match domain.view_phases.get(&task.number) {
+        Some(previous) => *previous != current,
+        None => true,
+    };
+    if phase == 4 {
+        domain.view_phases.remove(&task.number);
+    } else {
+        domain.view_phases.insert(task.number, current).expect("one live phase per task");
+    }
+    if !changed || domain.watching.is_empty() {
+        return;
+    }
+    let mut trees = List::with_capacity(limits.tasks.depth.saturating_add(1));
+    trees.push(Token::new(task.number)).expect("self is in its own bounded tree");
+    let mut requester = task.requester;
+    for _ in 0..limits.tasks.depth {
+        requester = match requester {
+            tasks::Party::Task(parent) => {
+                trees.push(Token::new(parent)).expect("bounded ancestor depth");
+                match domain.tasks.delegation(parent) {
+                    Some(context) => context.requester,
+                    None => break,
+                }
+            }
+            tasks::Party::Person(_) | tasks::Party::Deployment { .. } => break,
+        };
+    }
+    emit(
+        decision,
+        limits,
+        Delivery::View(Box::new(views::Event::TaskPhase {
+            item: Token::new(task.number),
+            trees: trees.into_boxed(),
+            project: task.project,
+            phase,
+            priority: task.tracked,
+        })),
+    );
 }
 
 fn environment_tasks(env: &Env<Limits>) -> Env<tasks::Limits> {
@@ -927,6 +1101,58 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
         return;
     }
     match event {
+        Event::Watch { watcher, sign_in, subject } => {
+            if !domain.ready() || !domain.journal.quiescent() || !domain.work.is_empty() {
+                out.push(Request::View(views::Request::Refused { watcher, refusal: views::Refusal::Busy }));
+                return;
+            }
+            let person = domain.people.person(sign_in, env.now, env.wall);
+            let project = match subject {
+                views::Subject::Run(task) | views::Subject::Item(task) => match domain.tasks.delegation(task.raw()) {
+                    Some(context) => Some(context.project),
+                    None => None,
+                },
+                views::Subject::Board(project) => Some(project),
+            };
+            let (Some(person), Some(project)) = (person, project) else {
+                out.push(Request::WatchRefused { watcher, refusal: people::Refusal::Unknown });
+                return;
+            };
+            if domain.people.role(person, project).is_none() {
+                out.push(Request::WatchRefused { watcher, refusal: people::Refusal::Standing });
+                return;
+            }
+            if domain.watching.contains_key(&watcher) || domain.watching.len() >= env.limits.views.watchers {
+                out.push(Request::View(views::Request::Refused { watcher, refusal: views::Refusal::Busy }));
+                return;
+            }
+            domain.watching.insert(watcher, person).expect("one bounded watcher");
+            let Some(snapshot) = view_snapshot(domain, subject, env.limits.views.snapshot_bytes) else {
+                domain.watching.remove(&watcher);
+                out.push(Request::View(views::Request::Refused { watcher, refusal: views::Refusal::Oversized }));
+                return;
+            };
+            view_step(domain, env, views::Event::Watch { watcher, subject, snapshot }, out);
+            return;
+        }
+        Event::Unwatch { watcher } => {
+            if domain.watching.contains_key(&watcher) {
+                view_step(domain, env, views::Event::Unwatch { watcher }, out);
+            }
+            return;
+        }
+        Event::ViewDelivered { watcher, done } => {
+            view_step(domain, env, views::Event::Delivered { watcher, done }, out);
+            return;
+        }
+        Event::ViewAppended { owner, done } => {
+            view_step(domain, env, views::Event::Appended { owner, done }, out);
+            return;
+        }
+        Event::ViewExpired { owner, done } => {
+            view_step(domain, env, views::Event::Expired { owner, done }, out);
+            return;
+        }
         Event::StartRecurring { project, authority, template } => {
             if domain.ready() && admits(domain, &env.limits) {
                 start_recurring(domain, env, project, authority, template);
@@ -1281,6 +1507,10 @@ pub fn resume(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) 
     if let Some(output) = journal_out.pop() {
         match output {
             Output::Deliver(Delivery::Fleet(event)) => domain.work.push(Work::Fleet(event)),
+            Output::Deliver(Delivery::View(event)) => {
+                view_step(domain, env, *event, out);
+                return;
+            }
             Output::Deliver(Delivery::Relay { task, attempt, previous, word }) => {
                 let event = Token::new(word.number);
                 assert!(domain.relaying.replace(PendingRelay { previous, word }).is_none(), "one relay at a time");
@@ -1399,6 +1629,11 @@ pub fn fire(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
         return;
     }
     account_fire(domain, env, out);
+    if !domain.watching.is_empty() {
+        let mut view_out = Queue::with_capacity(views::max_out(&env.limits.views));
+        views::fire(&mut domain.views, &environment_views(env), &mut view_out);
+        view_outputs(domain, &mut view_out, out);
+    }
     if !domain.ready() || !admits(domain, &env.limits) {
         return;
     }
@@ -3383,6 +3618,7 @@ fn tasks_outputs(
                 }
                 match &record {
                     tasks::Stored::Live(task) | tasks::Stored::Ended(task) => {
+                        view_task_saved(domain, &env.limits, decision, task);
                         domain.work.push(Work::People(people::Event::Waiting {
                             task: task.number,
                             entries: inbox::entries(domain, task),
@@ -3778,6 +4014,15 @@ fn tasks_outputs(
                 }
                 if accepted == tasks::Accepted::New {
                     retire_calls(domain, &env.limits, decision, task, attempt, turn);
+                    emit(
+                        decision,
+                        &env.limits,
+                        Delivery::View(Box::new(views::Event::Turn {
+                            run: Token::new(task),
+                            attempt: Token::new(attempt),
+                            number: turn,
+                        })),
+                    );
                 }
                 emit(
                     decision,
@@ -3808,6 +4053,19 @@ fn tasks_outputs(
             }
             tasks::Request::Activate { context } => domain.work.push(Work::Activate(context)),
             tasks::Request::Adopt { task, attempt, kept } => {
+                let mut view_out = Queue::with_capacity(views::max_out(&env.limits.views));
+                views::step(
+                    &mut domain.views,
+                    &environment_views(env),
+                    views::Event::Started {
+                        run: Token::new(task),
+                        attempt: Token::new(attempt),
+                        item: Token::new(task),
+                        policy: view_policy(),
+                    },
+                    &mut view_out,
+                );
+                assert!(view_out.is_empty(), "restored run following has no external effect");
                 domain.adopted.push(fleet::Event::Adopt {
                     reply_to: internal(task),
                     run: Token::new(task),
@@ -3823,6 +4081,7 @@ fn tasks_outputs(
             tasks::Request::Close { task, .. } => domain.work.push(Work::Tasks(tasks::Event::Settled { task })),
             tasks::Request::Ended { task, requester, ending } => {
                 let position = domain.ending_positions.remove(&task).expect("ended row assigned its result position");
+                emit(decision, &env.limits, Delivery::View(Box::new(views::Event::Finished { run: Token::new(task) })));
                 retire_calls(domain, &env.limits, decision, task, u64::MAX, u32::MAX);
                 drop(domain.proofs.remove(&task));
                 save(decision, &env.limits, Write::Erase(Key::RunProof { task }));
@@ -4040,6 +4299,11 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
             fleet::Request::Assign { channel, run, attempt } => {
                 let assignment = domain.assignments.remove(&run.raw()).expect("durable claim has prepared assignment");
                 assert!(assignment.attempt == attempt.raw(), "assignment names current attempt");
+                emit(
+                    decision,
+                    &env.limits,
+                    Delivery::View(Box::new(views::Event::Started { run, attempt, item: run, policy: view_policy() })),
+                );
                 emit(decision, &env.limits, Delivery::Assigned { channel, assignment });
             }
             fleet::Request::Placed { run, attempt } => {
@@ -5121,6 +5385,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     let authority_bytes = authority::worst_case(&limits.authority)?;
     let brief_bytes = brief::worst_case(&limits.brief)?;
     let account_bytes = accounts::worst_case(&limits.accounts)?;
+    let view_bytes = views::worst_case(&limits.views)?;
     let load_bytes = loads::worst_case(&limits.loads)?;
     let routes = route_bound(limits)?;
     let tool_bytes = u64::from(limits.tasks.batch).checked_mul(row_bound(limits)?)?;
@@ -5128,6 +5393,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     let inbox_bytes = u64::from(limits.people.inbox_entries)
         .checked_mul(u64::try_from(inbox_entry).ok()?.checked_add(u64::from(limits.journal.result_bytes))?)?;
     if limits.journal.writes < routes
+        || limits.views.report_bytes < 8
         || limits.call_records == 0
         || limits.call_records > limits.journal.writes.checked_sub(routes)?
         || limits.journal.deliveries
@@ -5168,12 +5434,25 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_add(List::<(Token, bool)>::worst_case(cold)?)?
         .checked_add(u64::from(cold).checked_mul(hello)?)?
         .checked_add(List::<u32>::worst_case(limits.people.projects)?)?;
-    for child in
-        [task_bytes, authority_bytes.checked_mul(3)?, people_bytes, fleet_bytes, brief_bytes, account_bytes, load_bytes]
-    {
+    for child in [
+        task_bytes,
+        authority_bytes.checked_mul(3)?,
+        people_bytes,
+        fleet_bytes,
+        brief_bytes,
+        account_bytes,
+        load_bytes,
+        view_bytes,
+    ] {
         bytes = bytes.checked_add(child)?;
     }
     bytes = bytes
+        .checked_add(Map::<Token, u64>::worst_case(limits.views.watchers)?)?
+        .checked_add(Map::<u64, (u32, Option<u32>)>::worst_case(limits.tasks.tasks)?)?
+        .checked_add(u64::from(limits.views.snapshot_bytes))?
+        .checked_add(
+            u64::from(limits.tasks.depth.saturating_add(1)).checked_mul(u64::try_from(size_of::<Token>()).ok()?)?,
+        )?
         .checked_add(Queue::<Work>::worst_case(routes)?)?
         .checked_add(Queue::<fleet::Event>::worst_case(limits.tasks.tasks.checked_mul(2)?)?)?
         .checked_add(Queue::<Box<tasks::RunContext>>::worst_case(limits.tasks.tasks)?)?;
@@ -5802,6 +6081,11 @@ fn discard_after_stop(domain: &mut Domain, event: Event) {
         | Event::ReadResult { .. }
         | Event::ReadInbox { .. }
         | Event::ViewInbox { .. }
+        | Event::Watch { .. }
+        | Event::Unwatch { .. }
+        | Event::ViewDelivered { .. }
+        | Event::ViewAppended { .. }
+        | Event::ViewExpired { .. }
         | Event::Refreshed { .. }
         | Event::RefreshFailed { .. } => {}
     }
@@ -6040,6 +6324,9 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
                         )
                         .is_err()
                 {
+                    domain.startup = Startup::Failed;
+                }
+                if domain.view_phases.insert(task.number, (tasks::view_phase(&task.phase), task.tracked)).is_err() {
                     domain.startup = Startup::Failed;
                 }
                 domain.work.push(Work::People(people::Event::Waiting {

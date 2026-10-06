@@ -78,7 +78,7 @@ pub use boundary::{
     WakePolicy, WakeRule, Was, Word,
 };
 pub use control::{Amendment, Change, Control, History};
-pub use domain::{Domain, fire, max_out, step};
+pub use domain::{Domain, ViewTask, fire, max_out, step, view_phase};
 pub use escalation::{Escalation, EscalationContext, EscalationDecision, EscalationHolder, EscalationOutcome};
 pub use facts::Fact;
 pub use failures::{Class, Retries, Retry, Tries};

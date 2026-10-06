@@ -160,11 +160,16 @@ pub enum Event {
     /// followed, or past the limits, is dropped, and its watchers told they
     /// missed it.
     Reported { run: Token, kind: Kind, content: Box<[u8]> },
+    /// The parent's durable commit accepted this named turn exactly once.
+    Turn { run: Token, attempt: Token, number: u32 },
     /// The run `run` ended: nothing more comes of it.
     Finished { run: Token },
     /// The item `item`, of the repository at `repository` in the deployment's
     /// list, went to `phase`, a code the parent defines.
     Phase { item: Token, repository: u32, phase: u32 },
+    /// One committed task phase or goal priority; `trees` lists the task and
+    /// each live requester tree that contains it.
+    TaskPhase { item: Token, trees: Box<[Token]>, project: u32, phase: u32, priority: Option<u32> },
     /// A person watches `subject`, under the parent's token `watcher`, from
     /// `snapshot`, what the parent knows of it now, which is delivered first.
     /// Answered by exactly one `Watching` or `Refused`.

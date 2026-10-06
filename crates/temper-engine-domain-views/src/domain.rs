@@ -172,8 +172,12 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
     match event {
         Event::Started { run, attempt, item, policy } => started(domain, run, Run { item, attempt, policy }),
         Event::Reported { run, kind, content } => reported(domain, env, run, kind, content, out),
+        Event::Turn { run, attempt, number } => turned(domain, env, run, attempt, number, out),
         Event::Finished { run } => finished(domain, run, out),
         Event::Phase { item, repository, phase } => changed(domain, env, item, repository, phase, out),
+        Event::TaskPhase { item, trees, project, phase, priority } => {
+            task_changed(domain, env, item, &trees, project, phase, priority, out);
+        }
         Event::Watch { watcher, subject, snapshot } => watch::watch(domain, env, watcher, subject, snapshot, out),
         Event::Unwatch { watcher } => watch::unwatch(domain, watcher, out),
         Event::Delivered { watcher, done } => watch::delivered(domain, watcher, done, out),
@@ -256,6 +260,18 @@ fn reported(
     domain.facts.push(Fact::Dropped { dropped });
 }
 
+/// One durable turn streams once to the run and its item. It is a live fact,
+/// not an expendable report or a trace record.
+fn turned(domain: &mut Domain, env: &Env<Limits>, run: Token, attempt: Token, number: u32, out: &mut Queue<Request>) {
+    let Some(&Run { item, attempt: current, .. }) = domain.runs.get(&run) else { return };
+    if current != attempt || number == 0 {
+        return;
+    }
+    let head = Head::Report { run, attempt, kind: Kind::Progress, at: env.now };
+    let watchers = watch::offer(domain, Subject::Run(run), Subject::Item(item), head, &number.to_be_bytes(), out);
+    domain.facts.push(Fact::Turn { watchers });
+}
+
 /// A run ended: it is no longer followed, and its watchers end.
 fn finished(domain: &mut Domain, run: Token, out: &mut Queue<Request>) {
     if domain.runs.remove(&run).is_some() {
@@ -270,6 +286,40 @@ fn finished(domain: &mut Domain, run: Token, out: &mut Queue<Request>) {
 fn changed(domain: &mut Domain, env: &Env<Limits>, item: Token, repository: u32, phase: u32, out: &mut Queue<Request>) {
     let head = Head::Phase { item, phase, at: env.now };
     let watchers = watch::offer(domain, Subject::Item(item), Subject::Board(repository), head, &[], out);
+    domain.facts.push(Fact::Changed { watchers });
+}
+
+#[expect(clippy::too_many_arguments, reason = "one committed task watch event names its tree and goal projection")]
+fn task_changed(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    item: Token,
+    trees: &[Token],
+    project: u32,
+    phase: u32,
+    priority: Option<u32>,
+    out: &mut Queue<Request>,
+) {
+    let mut watchers = 0_u32;
+    let head = Head::Phase { item, phase, at: env.now };
+    for tree in trees {
+        watchers =
+            watchers.saturating_add(watch::offer(domain, Subject::Item(*tree), Subject::Item(*tree), head, &[], out));
+    }
+    if let Some(priority) = priority {
+        let head = Head::Report { run: item, attempt: Token::new(0), kind: Kind::Progress, at: env.now };
+        let a = phase.to_be_bytes();
+        let b = priority.to_be_bytes();
+        let content = [a[0], a[1], a[2], a[3], b[0], b[1], b[2], b[3]];
+        watchers = watchers.saturating_add(watch::offer(
+            domain,
+            Subject::Board(project),
+            Subject::Board(project),
+            head,
+            &content,
+            out,
+        ));
+    }
     domain.facts.push(Fact::Changed { watchers });
 }
 
