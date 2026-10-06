@@ -17,3 +17,7 @@
     what it is.
 - temper's own design documents are in `docs/design/`; `testing.md` is how
   the testing strategy applies to temper.
+- `jig/` is jig, the kit temper's core is being carved into
+  (`docs/design/drafts/jig.md`). It is built here until it moves to its
+  own repository, and its own `jig/AGENTS.md` applies to everything under
+  it. temper cites jig's documents as jig's `<file>.md`, never by a path.
