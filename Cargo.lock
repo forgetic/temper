@@ -282,6 +282,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-engine-domain-forge-change"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+ "temper-engine-domain-authority",
+]
+
+[[package]]
 name = "temper-engine-domain-forge-client"
 version = "0.0.0"
 dependencies = [

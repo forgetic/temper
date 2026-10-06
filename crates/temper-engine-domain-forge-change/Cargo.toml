@@ -1,0 +1,16 @@
+[package]
+name = "temper-engine-domain-forge-change"
+description = "Pure change procedure and landing queue policy for the forge connector"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+skein-lib.workspace = true
+
+[dev-dependencies]
+temper-engine-domain-authority = { path = "../temper-engine-domain-authority" }
+
+[lints]
+workspace = true
