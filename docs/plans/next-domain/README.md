@@ -625,14 +625,17 @@ Every increment keeps the existing independent review and four-check gate.
 Review rejects undocumented new public items. Its checklist includes:
 
 - Module docs name the child's kept state, what it never knows, entry
-  points and contracts. Public boundary types, variants and fields document
-  their sender, contract, terminal event and applicable bounds.
+  points and contracts. Each public type and variant has one line of
+  prose: what it is, who sends it and, where it has one, its terminal
+  event. A field is documented only when its name and type do not say
+  it: units, bounds, invariants.
 - Re-export names explicitly; no `pub use module::*`.
 - Name the tasks result `Outcome` or `TaskResult`, preserving the standard
   `Result` name for fallible operations.
 - Use descriptive parameters such as `domain` and `limits`.
 - Separate items with blank lines, matching the existing crates.
-- Cite `domain/<file>.md` and its section throughout new code.
+- Cite `domain/<file>.md` with a specific section, at module or type
+  level; never stamp a citation on every field.
 
 Backfill authority, tasks, people and the root in one doc-comments-only
 increment, through the gate. Companion code-style changes stay separately
