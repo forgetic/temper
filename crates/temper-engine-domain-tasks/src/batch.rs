@@ -37,6 +37,14 @@ pub(crate) fn check(domain: &Domain, limits: &Limits, creator: Party, batch: &[N
             if u32::try_from(parent.delegates.len()).unwrap_or(u32::MAX).saturating_add(size) > limits.delegates {
                 return Err(problem(Some(number), Refusal::Delegates));
             }
+            let Some(result_bytes) =
+                usize::try_from(limits.result_bytes).expect("u32 fits usize").checked_mul(batch.len())
+            else {
+                return Err(problem(Some(number), Refusal::Busy));
+            };
+            if !crate::inbox::room(domain, limits, number, size, result_bytes) {
+                return Err(problem(Some(number), Refusal::Busy));
+            }
             if parent.depth.saturating_add(1) > limits.depth {
                 return Err(problem(Some(number), Refusal::Depth));
             }
@@ -123,10 +131,6 @@ fn check_members(
         if !valid_authority(limits, &new.authority) {
             return Err(problem(number, Refusal::AuthorityShape));
         }
-        // Historical result admission belongs to an actual root input route.
-        if !new.spec.inputs.is_empty() {
-            return Err(problem(number, Refusal::Inputs));
-        }
         if new.dependencies.len() > usize::try_from(limits.dependencies).expect("u32 fits usize") {
             return Err(problem(number, Refusal::Dependencies));
         }
@@ -166,7 +170,9 @@ pub(crate) fn contains(numbers: &[u64], number: u64) -> bool {
     false
 }
 
-pub(crate) fn valid_spec(limits: &Limits, spec: &Spec) -> bool {
+/// Pure bounded shape check used by the root before retaining a call body.
+#[must_use]
+pub fn valid_spec(limits: &Limits, spec: &Spec) -> bool {
     if spec.parameters.len() > usize::try_from(limits.parameters).expect("u32 fits usize")
         || spec.inputs.len() > usize::try_from(limits.inputs).expect("u32 fits usize")
     {
@@ -194,7 +200,9 @@ pub(crate) fn valid_spec(limits: &Limits, spec: &Spec) -> bool {
     bytes <= usize::try_from(limits.spec_bytes).expect("u32 fits usize")
 }
 
-pub(crate) fn valid_contract(limits: &Limits, contract: &Contract) -> bool {
+/// Pure bounded result-contract shape check before retaining a call body.
+#[must_use]
+pub fn valid_contract(limits: &Limits, contract: &Contract) -> bool {
     match contract {
         Contract::Report { words } | Contract::Change { words, .. } => *words <= limits.result_bytes,
         Contract::Verdict { choices } => {
@@ -216,7 +224,9 @@ pub(crate) fn valid_contract(limits: &Limits, contract: &Contract) -> bool {
     }
 }
 
-pub(crate) fn valid_authority(limits: &Limits, value: &Authority) -> bool {
+/// Pure bounded permission-value shape check before retaining a call body.
+#[must_use]
+pub fn valid_authority(limits: &Limits, value: &Authority) -> bool {
     if value.grants.len() > usize::try_from(limits.authority_grants).expect("u32 fits usize")
         || value.delegation.kinds.len() > usize::try_from(limits.executor_kinds).expect("u32 fits usize")
     {

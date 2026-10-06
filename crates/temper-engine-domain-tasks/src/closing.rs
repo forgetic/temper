@@ -174,7 +174,16 @@ pub(crate) fn progress(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<R
                     }
                     Stage::Run { .. } | Stage::Effects | Stage::Delegates => {}
                     Stage::Settled => {
+                        let requester = task.requester;
                         end_task(domain, env, number, out);
+                        if match requester {
+                            Party::Task(_) => true,
+                            Party::Person(_) | Party::Deployment { .. } => false,
+                        } {
+                            // Root must insert the delegate's result before its
+                            // requester can advance its own closing gate.
+                            return;
+                        }
                         changed = true;
                     }
                 },

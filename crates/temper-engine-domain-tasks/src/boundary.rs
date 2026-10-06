@@ -6,14 +6,35 @@ use crate::{Authority, Class, Funder, Numbers, Tries};
 use alloc::boxed::Box;
 use skein_lib::{ReplyTo, Wall};
 
-/// One durable whole message of a person's words in a task's bounded inbox
+/// Kind of a durable task-inbox message (domain/tasks.md, sections 5.6 and 7).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum MessageKind {
+    /// Whole words from a person or referenced task.
+    Words,
+    /// A delegate's terminal result, sent with its end.
+    Result(ResultKind),
+}
+
+/// Typed terminal shape carried with a delegate's bounded message words.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum ResultKind {
+    Report,
+    Verdict { code: u32 },
+    Change { connector: u16, kind: u16, resource: u64 },
+    Failed,
+    Cancelled,
+}
+
+/// One durable whole message in a task's bounded inbox
 /// (domain/tasks.md, section 7.2).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Word {
     /// Root-issued commit-order message identity.
     pub number: u64,
-    /// Authenticated sender, checked against this task's requester.
+    /// Root-verified sender, checked against requester or live delegate.
     pub from: Party,
+    /// Typed reason this message entered the inbox.
+    pub kind: MessageKind,
     /// Whole bounded words, never cut while in the inbox.
     pub words: Box<[u8]>,
     /// Injected time of admission, for oldest-first reads.
@@ -553,6 +574,9 @@ pub enum Accepted {
 pub enum Event {
     /// Admit authenticated person words to a live chat and wake or relay after their commit.
     Message { reply_to: ReplyTo, project: u32, task: u64, word: Word },
+    /// Root delivers a just-ended delegate's result to its task requester in
+    /// the same decision that archived the delegate.
+    DelegateResult { task: u64, word: Word },
     /// Root `SetRoles` preflight: inspect only current person-requested `Waiting`
     /// contexts without mutation; one typed terminal even before readiness.
     InspectEscalations {
@@ -915,6 +939,10 @@ pub struct RunContext {
     pub last_message: u64,
     /// Whole unread words carried into a newly prepared run brief.
     pub inbox: Box<[Word]>,
+    /// Current direct children and their lifecycle at preparation time.
+    pub delegates: Box<[DelegateState]>,
+    /// Immutable dependency identities whose ended results the root loads.
+    pub dependencies: Box<[u64]>,
     /// Repository tags whose next workspace starts from this task's saved-work branch.
     pub saved: Box<[u32]>,
     /// Last claimed attempt; a task-wide transcript load must not use turns from a later claim.
@@ -937,4 +965,20 @@ pub struct RunContext {
     /// Borrowed-then-copied authentic financial snapshot for this preparation; root does not mutate
     /// or persist it as a shadow ledger.
     pub numbers: Numbers,
+}
+
+/// One direct child's current lifecycle in its requester's next brief.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct DelegateState {
+    pub task: u64,
+    pub phase: Phase,
+}
+
+/// Temporary authority and accounting view for a run's delegation call.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct DelegationContext {
+    pub project: u32,
+    pub authority: Authority,
+    pub numbers: Numbers,
+    pub tasks_left: u32,
 }

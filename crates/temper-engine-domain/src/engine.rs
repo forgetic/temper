@@ -153,8 +153,31 @@ pub struct Turn {
 /// (domain/engine.md, section 7.3). Later routes extend this vocabulary.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Tool {
+    /// Create one authorized batch of direct task delegates.
+    Delegate { batch: Box<[Delegate]> },
+    /// Root-normalized whole-batch shape refusal after bounded ingress.
+    Rejected(tasks::Refusal),
     /// The engine records an unavailable answer for a route not yet installed.
     Unavailable,
+}
+
+/// A dependency named by a delegate call before the root allocates task IDs.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Dependency {
+    /// One member of the same batch, by zero-based position.
+    Batch(u32),
+    /// A live task already referenced by the creator.
+    Existing(u64),
+}
+
+/// One proposed direct child; the root supplies its ID, requester and funder.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Delegate {
+    pub executor: tasks::Executor,
+    pub spec: tasks::Spec,
+    pub contract: tasks::Contract,
+    pub authority: tasks::Authority,
+    pub dependencies: Box<[Dependency]>,
 }
 
 /// A run-named tool call. The root fills the task and attempt from the
@@ -409,6 +432,8 @@ enum Work {
     Activate(Box<tasks::RunContext>),
     EscalationLoaded { waiter: Token, rows: Box<[Record]> },
     EscalationFailed { waiter: Token },
+    DelegateValidated { to: Token, key: CallKey, batch: Box<[Delegate]> },
+    DelegateInputRefused { to: Token, key: CallKey },
 }
 
 #[derive(Debug)]
@@ -424,6 +449,33 @@ enum Read {
     Result(results::Read),
     Escalation(escalation::Query),
     Transcript { task: u64 },
+    Dependency(DependencyRead),
+    InputCheck(InputCheck),
+}
+
+#[derive(Debug)]
+struct InputCheck {
+    to: Token,
+    key: CallKey,
+    batch: Box<[Delegate]>,
+    ids: Box<[u64]>,
+    at: u32,
+    project: u32,
+}
+
+#[derive(Debug)]
+struct HistoricalResult {
+    task: u64,
+    kind: tasks::ResultKind,
+    words: Box<[u8]>,
+}
+
+#[derive(Debug)]
+struct DependencyRead {
+    task: u64,
+    ids: Box<[u64]>,
+    at: u32,
+    results: List<HistoricalResult>,
 }
 
 /// Bounded recent opaque conversation while a due task's store pages are read.
@@ -487,7 +539,10 @@ pub struct Domain {
     result_reads: Slab<Option<Read>>,
     reading_results: Map<u64, Token>,
     result_pages: Queue<ResultPage>,
+    dependency_results: Map<u64, Box<[HistoricalResult]>>,
     made: Map<Token, u64>,
+    delegating: Map<Token, CallKey>,
+    ending_positions: Map<u64, u64>,
     saying: Map<Token, u64>,
     relaying: Option<PendingRelay>,
     claiming: Map<u64, u64>,
@@ -495,6 +550,7 @@ pub struct Domain {
     transcripts: Map<u64, Transcript>,
     proofs: Map<u64, RunProof>,
     calls: Map<CallKey, CallAnswer>,
+    pending_calls: Map<CallKey, bool>,
     restoring_proofs: Map<u64, RestoringProof>,
     work: Queue<Work>,
     before_header: Queue<Work>,
@@ -555,7 +611,10 @@ impl Domain {
             result_reads: Slab::with_capacity(limits.loads.loads),
             reading_results: Map::with_capacity(limits.loads.loads),
             result_pages: Queue::with_capacity(limits.loads.loads),
+            dependency_results: Map::with_capacity(limits.tasks.tasks),
             made: Map::with_capacity(limits.people.pending),
+            delegating: Map::with_capacity(limits.fleet.calls),
+            ending_positions: Map::with_capacity(limits.tasks.tasks),
             saying: Map::with_capacity(limits.people.pending),
             relaying: None,
             claiming: Map::with_capacity(limits.tasks.tasks),
@@ -563,6 +622,7 @@ impl Domain {
             transcripts: Map::with_capacity(limits.tasks.tasks),
             proofs: Map::with_capacity(limits.tasks.tasks),
             calls: Map::with_capacity(limits.call_records),
+            pending_calls: Map::with_capacity(limits.call_records),
             restoring_proofs: Map::with_capacity(limits.tasks.tasks),
             work: Queue::with_capacity(route_bound(limits).expect("valid routes")),
             before_header: Queue::with_capacity(limits.fleet.workers),
@@ -604,7 +664,11 @@ impl Domain {
             && self.result_reads.is_empty()
             && self.reading_results.is_empty()
             && self.result_pages.is_empty()
+            && self.dependency_results.is_empty()
+            && self.pending_calls.is_empty()
             && self.made.is_empty()
+            && self.delegating.is_empty()
+            && self.ending_positions.is_empty()
             && self.saying.is_empty()
             && self.relaying.is_none()
             && self.claiming.is_empty()
@@ -847,7 +911,7 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
             }
             domain.work.push(Work::People(people::Event::Ask { reply_to, sign_in, key, ask }));
         }
-        Event::Call { channel, task, attempt, call, body } => {
+        Event::Call { channel, task, attempt, call, mut body } => {
             let key = CallKey { task, attempt, completion: body.completion, position: body.position };
             if !domain.ready()
                 || !admits(domain, &env.limits)
@@ -855,10 +919,16 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
                 || attempt == 0
                 || body.completion == 0
                 || domain.fleet.calls() >= env.limits.fleet.calls
-                || (!domain.calls.contains_key(&key) && domain.calls.len() >= env.limits.call_records)
+                || domain.pending_calls.contains_key(&key)
+                || (call_needs_input(&body.tool) && domain.result_reads.len() >= domain.result_reads.capacity())
+                || (!domain.calls.contains_key(&key)
+                    && domain.calls.len().saturating_add(domain.pending_calls.len()) >= env.limits.call_records)
             {
                 out.push(Request::CallBusy { channel, task, attempt, call });
                 return;
+            }
+            if let Some(why) = call_shape(&body.tool, &env.limits.tasks) {
+                body.tool = Tool::Rejected(why);
             }
             let Ok(id) = domain.payloads.insert(Some(Payload::Call { key, body })) else {
                 out.push(Request::CallBusy { channel, task, attempt, call });
@@ -978,6 +1048,7 @@ fn journal_outputs(journal_out: &mut Queue<Output>, out: &mut Queue<Request>) {
 /// is full. The shell reserves `max_out` output slots. Deferred callbacks run before another held
 /// callback is consumed; other ready work may produce one commit. This pass never waits for IO or
 /// drops a retained callback on pressure
+#[expect(clippy::too_many_lines, reason = "root release path routes each held delivery exhaustively")]
 pub fn resume(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
     assert!(out.room() >= max_out(&env.limits), "root ready output room");
     if domain.journal.stopped() || domain.startup == Startup::Failed {
@@ -1017,7 +1088,11 @@ pub fn resume(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) 
                 let Some(Some(read)) = domain.result_reads.get(Id::from_token(waiter)) else { return };
                 let (task, revision) = match read {
                     Read::Escalation(escalation::Query::Decide { task, revision, .. }) => (*task, *revision),
-                    Read::Result(_) | Read::Transcript { .. } | Read::Escalation(escalation::Query::Read { .. }) => {
+                    Read::Result(_)
+                    | Read::Transcript { .. }
+                    | Read::Dependency(_)
+                    | Read::InputCheck(_)
+                    | Read::Escalation(escalation::Query::Read { .. }) => {
                         unreachable!("decision archive waiter")
                     }
                 };
@@ -1033,7 +1108,9 @@ pub fn resume(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) 
                 };
                 match read {
                     Read::Result(_) => request_load(domain, waiter, Range::EndedResults, None, out),
-                    Read::Escalation(_) | Read::Transcript { .. } => unreachable!("result waiter"),
+                    Read::Escalation(_) | Read::Transcript { .. } | Read::Dependency(_) | Read::InputCheck(_) => {
+                        unreachable!("result waiter")
+                    }
                 }
                 return;
             }
@@ -1138,6 +1215,17 @@ fn route_into(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision) {
             Work::Activate(task) => activate(domain, env, decision, task),
             Work::EscalationLoaded { waiter, rows } => escalation::loaded(domain, env, waiter, rows),
             Work::EscalationFailed { waiter } => escalation::failed(domain, waiter),
+            Work::DelegateValidated { to, key, batch } => {
+                delegate_call(domain, env, decision, ReplyTo::new(to), key, batch, true);
+            }
+            Work::DelegateInputRefused { to, key } => decide_call(
+                domain,
+                &env.limits,
+                decision,
+                ReplyTo::new(to),
+                key,
+                CallAnswer::DelegationRefused(tasks::Problem { task: Some(key.task), why: tasks::Refusal::Inputs }),
+            ),
         }
     }
     assert!(domain.work.is_empty(), "finite synchronous root handoffs finish within the configured route bound");
@@ -1174,7 +1262,13 @@ fn people_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decisio
                         reply_to: ReplyTo::new(request),
                         project,
                         task,
-                        word: tasks::Word { number: message, from: tasks::Party::Person(person), words, at: env.wall },
+                        word: tasks::Word {
+                            number: message,
+                            from: tasks::Party::Person(person),
+                            kind: tasks::MessageKind::Words,
+                            words,
+                            at: env.wall,
+                        },
                     }));
                 }
                 people::Ask::StartChat { .. } => {
@@ -1422,7 +1516,15 @@ fn activate(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, tas
             &env.limits,
             Delivery::Load { waiter: waiter.token(), range: Range::TaskTranscript { task: number }, after: None },
         ),
-        None => start_brief(domain, number),
+        None => {
+            if let Some((waiter, first)) = begin_dependency_read(domain, number) {
+                emit(
+                    decision,
+                    &env.limits,
+                    Delivery::Load { waiter, range: Range::TaskResult { task: first }, after: None },
+                );
+            }
+        }
     }
 }
 
@@ -1437,6 +1539,285 @@ fn retire_calls(domain: &mut Domain, limits: &Limits, decision: &mut Decision, t
         let _answer = domain.calls.remove(&key);
         save(decision, limits, Write::Erase(Key::Call(key)));
     }
+}
+
+fn relay_call(domain: &mut Domain, limits: &Limits, decision: &mut Decision, to: ReplyTo, answer: CallAnswer) {
+    let id = domain.payloads.insert(Some(Payload::CallAnswer(answer))).expect("answer payload room reserved");
+    emit(decision, limits, Delivery::Fleet(fleet::Event::Relayed { to, answer: id.token() }));
+}
+
+fn call_needs_input(tool: &Tool) -> bool {
+    match tool {
+        Tool::Unavailable | Tool::Rejected(_) => false,
+        Tool::Delegate { batch } => {
+            for member in batch {
+                if !member.spec.inputs.is_empty() {
+                    return true;
+                }
+            }
+            false
+        }
+    }
+}
+
+fn call_shape(tool: &Tool, limits: &tasks::Limits) -> Option<tasks::Refusal> {
+    match tool {
+        Tool::Unavailable | Tool::Rejected(_) => None,
+        Tool::Delegate { batch } => {
+            if batch.len() > usize::try_from(limits.batch).expect("u32 fits usize") {
+                return Some(tasks::Refusal::Batch);
+            }
+            for member in batch {
+                if !tasks::valid_spec(limits, &member.spec) {
+                    return Some(tasks::Refusal::Spec);
+                }
+                if !tasks::valid_contract(limits, &member.contract) {
+                    return Some(tasks::Refusal::Contract);
+                }
+                if !tasks::valid_authority(limits, &member.authority) {
+                    return Some(tasks::Refusal::AuthorityShape);
+                }
+                if member.dependencies.len() > usize::try_from(limits.dependencies).expect("u32 fits usize") {
+                    return Some(tasks::Refusal::Dependencies);
+                }
+            }
+            None
+        }
+    }
+}
+
+fn decide_call(
+    domain: &mut Domain,
+    limits: &Limits,
+    decision: &mut Decision,
+    to: ReplyTo,
+    key: CallKey,
+    answer: CallAnswer,
+) {
+    let _pending = domain.pending_calls.remove(&key);
+    if !current_proof(domain, key.task, key.attempt) {
+        relay_call(domain, limits, decision, to, answer);
+        return;
+    }
+    let _number = crate::fresh(&mut domain.journal, Family::Call).expect("admitted call counter");
+    assert!(domain.calls.insert(key, answer.clone()) == Ok(None), "call record room reserved");
+    save(decision, limits, Write::Save(Record::Call(crate::CallRecord { key, answer: answer.clone() })));
+    relay_call(domain, limits, decision, to, answer);
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "one delegated call checks authority, inputs and the atomic batch before routing"
+)]
+fn delegate_call(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    decision: &mut Decision,
+    to: ReplyTo,
+    key: CallKey,
+    batch: Box<[Delegate]>,
+    validated: bool,
+) {
+    if !current_proof(domain, key.task, key.attempt) {
+        decide_call(
+            domain,
+            &env.limits,
+            decision,
+            to,
+            key,
+            CallAnswer::DelegationRefused(tasks::Problem { task: Some(key.task), why: tasks::Refusal::State }),
+        );
+        return;
+    }
+    let Some(context) = domain.tasks.delegation(key.task) else {
+        decide_call(
+            domain,
+            &env.limits,
+            decision,
+            to,
+            key,
+            CallAnswer::DelegationRefused(tasks::Problem { task: Some(key.task), why: tasks::Refusal::Unknown }),
+        );
+        return;
+    };
+    if batch.is_empty() || batch.len() > usize::try_from(env.limits.tasks.batch).expect("u32 fits usize") {
+        decide_call(
+            domain,
+            &env.limits,
+            decision,
+            to,
+            key,
+            CallAnswer::DelegationRefused(tasks::Problem { task: None, why: tasks::Refusal::Batch }),
+        );
+        return;
+    }
+    let mut asked = List::with_capacity(env.limits.tasks.batch);
+    for member in &batch {
+        let executor = match member.executor {
+            tasks::Executor::Agent { charter } => authority::Executor::Charter(charter),
+        };
+        asked
+            .push(authority::Delegate { executor, authority: authority_value(&member.authority) })
+            .expect("bounded delegation request");
+    }
+    let mut findings =
+        Queue::with_capacity(authority::max_out(domain.config.authority.limits()).expect("findings bound"));
+    let checked = authority::check_batch(
+        &domain.config.authority,
+        &authority::BatchAsk {
+            project: context.project,
+            creator: authority_value(&context.authority),
+            numbers: authority_numbers(context.numbers),
+            tasks_left: context.tasks_left,
+            tasks: asked.into_boxed(),
+        },
+        &mut findings,
+    );
+    if checked.answer != authority::Answer::Allow {
+        let mut found =
+            List::with_capacity(authority::max_out(domain.config.authority.limits()).expect("findings bound"));
+        for _ in 0..findings.len() {
+            found.push(findings.pop().expect("finding count")).expect("finding bound");
+        }
+        decide_call(
+            domain,
+            &env.limits,
+            decision,
+            to,
+            key,
+            CallAnswer::DelegationDenied { answer: checked.answer, findings: found.into_boxed() },
+        );
+        return;
+    }
+    if !validated {
+        let capacity = batch
+            .len()
+            .checked_mul(usize::try_from(env.limits.tasks.inputs).expect("u32 fits usize"))
+            .expect("bounded batch input count");
+        let mut ids = List::with_capacity(u32::try_from(capacity).expect("bounded input IDs"));
+        for member in &batch {
+            if member.spec.inputs.len() > usize::try_from(env.limits.tasks.inputs).expect("u32 fits usize") {
+                decide_call(
+                    domain,
+                    &env.limits,
+                    decision,
+                    to,
+                    key,
+                    CallAnswer::DelegationRefused(tasks::Problem { task: None, why: tasks::Refusal::Inputs }),
+                );
+                return;
+            }
+            for &input in &member.spec.inputs {
+                let mut known = false;
+                for &id in &ids {
+                    if id == input {
+                        known = true;
+                    }
+                }
+                if !known {
+                    ids.push(input).expect("bounded input ID count");
+                }
+            }
+        }
+        if !ids.is_empty() {
+            let first = *ids.get(0).expect("nonempty input IDs");
+            let to = to.into_token();
+            let read = InputCheck { to, key, batch, ids: ids.into_boxed(), at: 0, project: context.project };
+            let waiter =
+                domain.result_reads.insert(Some(Read::InputCheck(read))).expect("preflighted input read slot").token();
+            assert!(domain.pending_calls.insert(key, true).is_ok(), "reserved call record room");
+            emit(
+                decision,
+                &env.limits,
+                Delivery::Load { waiter, range: Range::TaskResult { task: first }, after: None },
+            );
+            return;
+        }
+    }
+    let mut numbers = List::with_capacity(env.limits.tasks.batch);
+    for _ in &batch {
+        let Some(number) = crate::fresh(&mut domain.journal, Family::Task) else {
+            decide_call(
+                domain,
+                &env.limits,
+                decision,
+                to,
+                key,
+                CallAnswer::DelegationRefused(tasks::Problem { task: None, why: tasks::Refusal::Live }),
+            );
+            return;
+        };
+        numbers.push(number).expect("bounded delegation IDs");
+    }
+    let mut created = List::with_capacity(env.limits.tasks.batch);
+    for (index, member) in batch.into_iter().enumerate() {
+        let index = u32::try_from(index).expect("batch length fits u32");
+        let mut dependencies = List::with_capacity(env.limits.tasks.dependencies);
+        for dependency in member.dependencies {
+            let number = match dependency {
+                Dependency::Batch(at) => match numbers.get(at) {
+                    Some(number) => *number,
+                    None => {
+                        decide_call(
+                            domain,
+                            &env.limits,
+                            decision,
+                            to,
+                            key,
+                            CallAnswer::DelegationRefused(tasks::Problem {
+                                task: numbers.get(index).copied(),
+                                why: tasks::Refusal::Dependencies,
+                            }),
+                        );
+                        return;
+                    }
+                },
+                Dependency::Existing(number) => number,
+            };
+            if dependencies.push(number).is_err() {
+                decide_call(
+                    domain,
+                    &env.limits,
+                    decision,
+                    to,
+                    key,
+                    CallAnswer::DelegationRefused(tasks::Problem {
+                        task: numbers.get(index).copied(),
+                        why: tasks::Refusal::Dependencies,
+                    }),
+                );
+                return;
+            }
+        }
+        created
+            .push(tasks::New {
+                number: *numbers.get(index).expect("one ID per member"),
+                project: context.project,
+                executor: member.executor,
+                spec: member.spec,
+                contract: member.contract,
+                authority: member.authority.clone(),
+                numbers: tasks::Numbers {
+                    budget: member.authority.budget.spend,
+                    spent: 0,
+                    spent_below: 0,
+                    reserved: 0,
+                },
+                funder: tasks::Funder::Task(key.task),
+                dependencies: dependencies.into_boxed(),
+            })
+            .expect("bounded delegation batch");
+    }
+    let token = to.into_token();
+    if !validated {
+        assert!(domain.pending_calls.insert(key, true).is_ok(), "reserved call record room");
+    }
+    assert!(domain.delegating.insert(token, key) == Ok(None), "one pending delegated call");
+    domain.work.push(Work::Tasks(tasks::Event::Make {
+        reply_to: ReplyTo::new(token),
+        creator: tasks::Party::Task(key.task),
+        batch: created.into_boxed(),
+    }));
 }
 
 #[expect(clippy::too_many_lines, reason = "the closed child vocabulary is routed exhaustively inside one decision")]
@@ -1474,6 +1855,10 @@ fn tasks_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                         let position = crate::fresh(&mut domain.journal, Family::Message)
                             .expect("ending position preflighted before mutation");
                         task.result_position = position;
+                        assert!(
+                            domain.ending_positions.insert(task.number, position) == Ok(None),
+                            "one ending position per ended task"
+                        );
                         if let tasks::Party::Person(person) = task.requester {
                             domain.people.remember_result(
                                 &env.limits.people,
@@ -1490,16 +1875,37 @@ fn tasks_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
             tasks::Request::Erase { key } => save(decision, &env.limits, Write::Erase(Key::Tasks(key))),
             tasks::Request::Made { reply_to, tasks } => {
                 let request = reply_to.into_token();
-                let expected = domain.made.remove(&request).expect("pending make route");
-                assert!(tasks.as_ref() == [expected], "one exact chat created");
-                domain.work.push(Work::People(people::Event::Decided {
-                    request,
-                    outcome: people::Outcome::Started { task: expected },
-                }));
+                match domain.delegating.remove(&request) {
+                    Some(key) => decide_call(
+                        domain,
+                        &env.limits,
+                        decision,
+                        ReplyTo::new(request),
+                        key,
+                        CallAnswer::Delegated(tasks),
+                    ),
+                    None => {
+                        let expected = domain.made.remove(&request).expect("pending make route");
+                        assert!(tasks.as_ref() == [expected], "one exact chat created");
+                        domain.work.push(Work::People(people::Event::Decided {
+                            request,
+                            outcome: people::Outcome::Started { task: expected },
+                        }));
+                    }
+                }
             }
             tasks::Request::Refused { reply_to, problem } => {
                 let token = reply_to.into_token();
-                if domain.made.remove(&token).is_some() {
+                if let Some(key) = domain.delegating.remove(&token) {
+                    decide_call(
+                        domain,
+                        &env.limits,
+                        decision,
+                        ReplyTo::new(token),
+                        key,
+                        CallAnswer::DelegationRefused(problem),
+                    );
+                } else if domain.made.remove(&token).is_some() {
                     domain.work.push(Work::People(people::Event::Decided {
                         request: token,
                         outcome: people::Outcome::Refused(people::Refusal::Limit),
@@ -1652,6 +2058,7 @@ fn tasks_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
             ),
             tasks::Request::Close { task, .. } => domain.work.push(Work::Tasks(tasks::Event::Settled { task })),
             tasks::Request::Ended { task, requester, ending } => {
+                let position = domain.ending_positions.remove(&task).expect("ended row assigned its result position");
                 retire_calls(domain, &env.limits, decision, task, u64::MAX, u32::MAX);
                 drop(domain.proofs.remove(&task));
                 save(decision, &env.limits, Write::Erase(Key::RunProof { task }));
@@ -1659,9 +2066,18 @@ fn tasks_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                     tasks::Party::Person(person) => {
                         emit(decision, &env.limits, Delivery::Result { person, task, words: ending_words(ending) });
                     }
-                    tasks::Party::Task(_) | tasks::Party::Deployment { .. } => {
-                        unreachable!("06a only makes person chats")
+                    tasks::Party::Task(parent) => {
+                        let (kind, words) = result_notice(ending);
+                        let word = tasks::Word {
+                            number: position,
+                            from: tasks::Party::Task(task),
+                            kind: tasks::MessageKind::Result(kind),
+                            words,
+                            at: env.wall,
+                        };
+                        domain.work.push(Work::Tasks(tasks::Event::DelegateResult { task: parent, word }));
                     }
+                    tasks::Party::Deployment { .. } => {}
                 }
             }
             tasks::Request::Done { reply_to } => {
@@ -1708,6 +2124,7 @@ fn brief_outputs(domain: &mut Domain, env: &Env<Limits>, _decision: &mut Decisio
             brief::Request::Rendered { reply_to, sections } => {
                 let task = reply_to.into_token().raw();
                 let context = domain.contexts.remove(&task).expect("rendered task owns context");
+                drop(domain.dependency_results.remove(&task));
                 let transcript = domain.transcripts.remove(&task).expect("rendered task owns loaded transcript");
                 let Some(attempt) = crate::fresh(&mut domain.journal, Family::Run) else {
                     domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
@@ -1761,6 +2178,7 @@ fn brief_outputs(domain: &mut Domain, env: &Env<Limits>, _decision: &mut Decisio
             brief::Request::Failed { reply_to, .. } | brief::Request::Refused { reply_to, .. } => {
                 let task = reply_to.into_token().raw();
                 drop(domain.contexts.remove(&task));
+                drop(domain.dependency_results.remove(&task));
                 drop(domain.transcripts.remove(&task));
                 domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
             }
@@ -1911,29 +2329,23 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                 };
                 assert!(key.task == run.raw() && key.attempt == attempt.raw(), "fleet call envelope is unchanged");
                 assert!(current_proof(domain, key.task, key.attempt), "fleet only relays a current claim");
-                let answer = match domain.calls.get(&key) {
-                    Some(answer) => answer.clone(),
-                    None => {
-                        let answer = match body.tool {
-                            Tool::Unavailable => CallAnswer::Unavailable,
-                        };
-                        let _number = crate::fresh(&mut domain.journal, Family::Call).expect("admitted call counter");
-                        assert!(domain.calls.insert(key, answer.clone()) == Ok(None), "call record room reserved");
-                        save(
-                            decision,
+                match domain.calls.get(&key).cloned() {
+                    Some(answer) => relay_call(domain, &env.limits, decision, reply_to, answer),
+                    None => match body.tool {
+                        Tool::Unavailable => {
+                            decide_call(domain, &env.limits, decision, reply_to, key, CallAnswer::Unavailable);
+                        }
+                        Tool::Rejected(why) => decide_call(
+                            domain,
                             &env.limits,
-                            Write::Save(Record::Call(crate::CallRecord { key, answer: answer.clone() })),
-                        );
-                        answer
-                    }
-                };
-                let id =
-                    domain.payloads.insert(Some(Payload::CallAnswer(answer))).expect("answer payload room reserved");
-                emit(
-                    decision,
-                    &env.limits,
-                    Delivery::Fleet(fleet::Event::Relayed { to: reply_to, answer: id.token() }),
-                );
+                            decision,
+                            reply_to,
+                            key,
+                            CallAnswer::DelegationRefused(tasks::Problem { task: None, why }),
+                        ),
+                        Tool::Delegate { batch } => delegate_call(domain, env, decision, reply_to, key, batch, false),
+                    },
+                }
             }
             fleet::Request::Relayed { channel, run, attempt, call, answer } => {
                 let Some(Payload::CallAnswer(answer)) = take_payload(domain, answer) else {
@@ -2000,8 +2412,81 @@ fn request_load(domain: &mut Domain, waiter: Token, range: Range, after: Option<
 fn transcript_waiter(domain: &Domain, waiter: Token) -> bool {
     match domain.result_reads.get(Id::from_token(waiter)) {
         Some(Some(Read::Transcript { .. })) => true,
-        Some(Some(Read::Result(_) | Read::Escalation(_)) | None) | None => false,
+        Some(Some(Read::Result(_) | Read::Escalation(_) | Read::Dependency(_) | Read::InputCheck(_)) | None) | None => {
+            false
+        }
     }
+}
+
+fn dependency_waiter(domain: &Domain, waiter: Token) -> bool {
+    match domain.result_reads.get(Id::from_token(waiter)) {
+        Some(Some(Read::Dependency(_))) => true,
+        Some(Some(Read::Result(_) | Read::Escalation(_) | Read::Transcript { .. } | Read::InputCheck(_)) | None)
+        | None => false,
+    }
+}
+
+fn input_waiter(domain: &Domain, waiter: Token) -> bool {
+    match domain.result_reads.get(Id::from_token(waiter)) {
+        Some(Some(Read::InputCheck(_))) => true,
+        Some(Some(Read::Result(_) | Read::Escalation(_) | Read::Transcript { .. } | Read::Dependency(_)) | None)
+        | None => false,
+    }
+}
+
+fn input_failed(domain: &mut Domain, waiter: Token) {
+    let Some(Read::InputCheck(read)) = take_read(domain, waiter) else { return };
+    domain.result_reads.retire(Id::from_token(waiter));
+    domain.work.push(Work::DelegateInputRefused { to: read.to, key: read.key });
+}
+
+fn input_loaded(domain: &mut Domain, waiter: Token, rows: Box<[Record]>, next: Option<Key>, out: &mut Queue<Request>) {
+    let Some(Some(Read::InputCheck(read))) = domain.result_reads.get(Id::from_token(waiter)) else { return };
+    let wanted = *read.ids.get(usize::try_from(read.at).expect("bounded input index")).expect("requested input");
+    let project = read.project;
+    let creator = read.key.task;
+    if next.is_some() || rows.len() != 1 {
+        input_failed(domain, waiter);
+        return;
+    }
+    let row = match rows.into_iter().next().expect("one input result row") {
+        Record::Tasks(tasks::Stored::Ended(row)) => row,
+        Record::Call(_)
+        | Record::Deployment(_)
+        | Record::EscalationDecision(_)
+        | Record::Turn(_)
+        | Record::RunProof(_)
+        | Record::Terminal(_)
+        | Record::Tasks(_)
+        | Record::People(_) => {
+            input_failed(domain, waiter);
+            return;
+        }
+    };
+    if row.number != wanted
+        || row.project != project
+        || row.requester != tasks::Party::Task(creator)
+        || !match row.phase {
+            tasks::Phase::Ended(_) => true,
+            tasks::Phase::Waiting | tasks::Phase::Active(_) | tasks::Phase::Closing(_) | tasks::Phase::Held { .. } => {
+                false
+            }
+        }
+    {
+        input_failed(domain, waiter);
+        return;
+    }
+    let Some(Some(Read::InputCheck(read))) = domain.result_reads.get_mut(Id::from_token(waiter)) else {
+        unreachable!("input read survives validation")
+    };
+    read.at = read.at.checked_add(1).expect("bounded input index");
+    if let Some(&next) = read.ids.get(usize::try_from(read.at).expect("bounded input index")) {
+        request_load(domain, waiter, Range::TaskResult { task: next }, None, out);
+        return;
+    }
+    let Some(Read::InputCheck(read)) = take_read(domain, waiter) else { unreachable!("completed input read") };
+    domain.result_reads.retire(Id::from_token(waiter));
+    domain.work.push(Work::DelegateValidated { to: read.to, key: read.key, batch: read.batch });
 }
 
 fn load_outputs(
@@ -2013,6 +2498,22 @@ fn load_outputs(
     for _ in 0..load_out.len() {
         match load_out.pop().expect("load terminal count") {
             loads::Request::Loaded { waiter, rows, next, cut } => {
+                if input_waiter(domain, waiter) {
+                    if cut.is_some() {
+                        input_failed(domain, waiter);
+                    } else {
+                        input_loaded(domain, waiter, rows, next, out);
+                    }
+                    return;
+                }
+                if dependency_waiter(domain, waiter) {
+                    if cut.is_some() {
+                        dependency_failed(domain, waiter);
+                    } else {
+                        dependency_loaded(domain, waiter, rows, next, out);
+                    }
+                    return;
+                }
                 if transcript_waiter(domain, waiter) {
                     transcript_loaded(domain, waiter, rows, next, cut, out);
                     return;
@@ -2020,7 +2521,11 @@ fn load_outputs(
                 if cut.is_some() {
                     let archive = match domain.result_reads.get(Id::from_token(waiter)) {
                         Some(Some(Read::Escalation(_))) => true,
-                        Some(Some(Read::Result(_) | Read::Transcript { .. }) | None) | None => false,
+                        Some(
+                            Some(Read::Result(_) | Read::Transcript { .. } | Read::Dependency(_) | Read::InputCheck(_))
+                            | None,
+                        )
+                        | None => false,
                     };
                     if archive {
                         domain.work.push(Work::EscalationFailed { waiter });
@@ -2037,7 +2542,11 @@ fn load_outputs(
                 } else {
                     let archive = match domain.result_reads.get(Id::from_token(waiter)) {
                         Some(Some(Read::Escalation(_))) => true,
-                        Some(Some(Read::Result(_) | Read::Transcript { .. }) | None) | None => false,
+                        Some(
+                            Some(Read::Result(_) | Read::Transcript { .. } | Read::Dependency(_) | Read::InputCheck(_))
+                            | None,
+                        )
+                        | None => false,
                     };
                     if archive {
                         domain.work.push(Work::EscalationLoaded { waiter, rows });
@@ -2047,6 +2556,14 @@ fn load_outputs(
                 }
             }
             loads::Request::Unloaded { waiter, .. } => {
+                if input_waiter(domain, waiter) {
+                    input_failed(domain, waiter);
+                    return;
+                }
+                if dependency_waiter(domain, waiter) {
+                    dependency_failed(domain, waiter);
+                    return;
+                }
                 if transcript_waiter(domain, waiter) {
                     transcript_failed(domain, waiter);
                     return;
@@ -2057,7 +2574,11 @@ fn load_outputs(
                 } else {
                     let archive = match domain.result_reads.get(Id::from_token(waiter)) {
                         Some(Some(Read::Escalation(_))) => true,
-                        Some(Some(Read::Result(_) | Read::Transcript { .. }) | None) | None => false,
+                        Some(
+                            Some(Read::Result(_) | Read::Transcript { .. } | Read::Dependency(_) | Read::InputCheck(_))
+                            | None,
+                        )
+                        | None => false,
                     };
                     if archive {
                         domain.work.push(Work::EscalationFailed { waiter });
@@ -2077,6 +2598,99 @@ fn transcript_failed(domain: &mut Domain, waiter: Token) {
     drop(domain.contexts.remove(&task));
     drop(domain.transcripts.remove(&task));
     domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
+}
+
+fn begin_dependency_read(domain: &mut Domain, task: u64) -> Option<(Token, u64)> {
+    let context = domain.contexts.get(&task).expect("preparing task context");
+    let count = context.dependencies.len().checked_add(context.spec.inputs.len()).expect("bounded input count");
+    if count == 0 {
+        start_brief(domain, task);
+        return None;
+    }
+    let mut ids = List::with_capacity(u32::try_from(count).expect("bounded dependency count"));
+    for &dependency in &context.dependencies {
+        ids.push(dependency).expect("dependency identity room");
+    }
+    for &input in &context.spec.inputs {
+        ids.push(input).expect("input identity room");
+    }
+    let first = *ids.get(0).expect("nonempty result identities");
+    let read = DependencyRead {
+        task,
+        ids: ids.into_boxed(),
+        at: 0,
+        results: List::with_capacity(u32::try_from(count).expect("bounded result count")),
+    };
+    let Ok(waiter) = domain.result_reads.insert(Some(Read::Dependency(read))) else {
+        drop(domain.contexts.remove(&task));
+        drop(domain.transcripts.remove(&task));
+        domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
+        return None;
+    };
+    Some((waiter.token(), first))
+}
+
+fn dependency_failed(domain: &mut Domain, waiter: Token) {
+    let Some(Read::Dependency(read)) = take_read(domain, waiter) else { return };
+    domain.result_reads.retire(Id::from_token(waiter));
+    drop(domain.contexts.remove(&read.task));
+    drop(domain.transcripts.remove(&read.task));
+    domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task: read.task }));
+}
+
+fn dependency_loaded(
+    domain: &mut Domain,
+    waiter: Token,
+    rows: Box<[Record]>,
+    next: Option<Key>,
+    out: &mut Queue<Request>,
+) {
+    let Some(Some(Read::Dependency(read))) = domain.result_reads.get(Id::from_token(waiter)) else { return };
+    let wanted = *read.ids.get(usize::try_from(read.at).expect("bounded index")).expect("one requested result");
+    let project = domain.contexts.get(&read.task).expect("preparing task context").project;
+    if next.is_some() || rows.len() != 1 {
+        dependency_failed(domain, waiter);
+        return;
+    }
+    let row = match rows.into_iter().next().expect("one dependency result row") {
+        Record::Tasks(tasks::Stored::Ended(row)) => row,
+        Record::Call(_)
+        | Record::Deployment(_)
+        | Record::EscalationDecision(_)
+        | Record::Turn(_)
+        | Record::RunProof(_)
+        | Record::Terminal(_)
+        | Record::Tasks(_)
+        | Record::People(_) => {
+            dependency_failed(domain, waiter);
+            return;
+        }
+    };
+    if row.number != wanted || row.project != project {
+        dependency_failed(domain, waiter);
+        return;
+    }
+    let tasks::Phase::Ended(ending) = row.phase else {
+        dependency_failed(domain, waiter);
+        return;
+    };
+    let (kind, words) = result_notice(ending);
+    let Some(Some(Read::Dependency(read))) = domain.result_reads.get_mut(Id::from_token(waiter)) else {
+        unreachable!("read survives validation")
+    };
+    read.results.push(HistoricalResult { task: wanted, kind, words }).expect("one result per bounded ID");
+    read.at = read.at.checked_add(1).expect("bounded result index");
+    if let Some(&next) = read.ids.get(usize::try_from(read.at).expect("bounded index")) {
+        request_load(domain, waiter, Range::TaskResult { task: next }, None, out);
+        return;
+    }
+    let Some(Read::Dependency(read)) = take_read(domain, waiter) else { unreachable!("complete dependency read") };
+    domain.result_reads.retire(Id::from_token(waiter));
+    assert!(
+        domain.dependency_results.insert(read.task, read.results.into_boxed()).is_ok(),
+        "one preparation result set"
+    );
+    start_brief(domain, read.task);
 }
 
 fn transcript_loaded(
@@ -2143,24 +2757,26 @@ fn transcript_loaded(
     }
     let Some(Read::Transcript { .. }) = take_read(domain, waiter) else { unreachable!("finished transcript read") };
     domain.result_reads.retire(Id::from_token(waiter));
-    start_brief(domain, task);
+    if let Some((waiter, first)) = begin_dependency_read(domain, task) {
+        request_load(domain, waiter, Range::TaskResult { task: first }, None, out);
+    }
 }
 
 fn start_brief(domain: &mut Domain, task: u64) {
     let context = domain.contexts.get(&task).expect("loaded task context");
     let transcript = domain.transcripts.get(&task).expect("prepared transcript state");
     let oversized = transcript.bytes > u64::from(domain.config.resume_bytes);
-    let mut wanted = List::with_capacity(3);
+    let mut wanted = List::with_capacity(domain.limits.brief.sections);
     wanted
         .push(brief::Wanted { source: brief::Source::Task { task, part: brief::TaskPart::Spec }, required: true })
         .expect("task brief room");
-    if context.tries != tasks::Tries::NONE {
+    if !context.dependencies.is_empty() || !context.spec.inputs.is_empty() {
         wanted
             .push(brief::Wanted {
-                source: brief::Source::Task { task, part: brief::TaskPart::Attempts },
-                required: false,
+                source: brief::Source::Task { task, part: brief::TaskPart::Dependencies },
+                required: true,
             })
-            .expect("attempt brief room");
+            .expect("dependency result section room");
     }
     if oversized {
         wanted
@@ -2169,6 +2785,22 @@ fn start_brief(domain: &mut Domain, task: u64) {
                 required: true,
             })
             .expect("tail brief room");
+    }
+    if !context.delegates.is_empty() && wanted.room() > 0 {
+        wanted
+            .push(brief::Wanted {
+                source: brief::Source::Task { task, part: brief::TaskPart::Delegates },
+                required: false,
+            })
+            .expect("delegate section room");
+    }
+    if context.tries != tasks::Tries::NONE && wanted.room() > 0 {
+        wanted
+            .push(brief::Wanted {
+                source: brief::Source::Task { task, part: brief::TaskPart::Attempts },
+                required: false,
+            })
+            .expect("attempt brief room");
     }
     domain.work.push(Work::Brief(brief::Event::Render { reply_to: internal(task), sections: wanted.into_boxed() }));
 }
@@ -2309,6 +2941,21 @@ fn ending_words(ending: tasks::Ending) -> Box<[u8]> {
             Some(result) => result_words(result),
             None => reason,
         },
+    }
+}
+
+fn result_notice(ending: tasks::Ending) -> (tasks::ResultKind, Box<[u8]>) {
+    match ending {
+        tasks::Ending::Done(result) => match result {
+            tasks::TaskResult::Report { words } => (tasks::ResultKind::Report, words),
+            tasks::TaskResult::Verdict { code, words } => (tasks::ResultKind::Verdict { code }, words),
+            tasks::TaskResult::Change { connector, kind, resource, words } => {
+                (tasks::ResultKind::Change { connector, kind, resource }, words)
+            }
+            tasks::TaskResult::Failure { reason } => (tasks::ResultKind::Failed, reason),
+        },
+        tasks::Ending::Failed { reason } => (tasks::ResultKind::Failed, reason),
+        tasks::Ending::Cancelled { reason, .. } => (tasks::ResultKind::Cancelled, reason),
     }
 }
 
@@ -2463,6 +3110,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     let account_bytes = accounts::worst_case(&limits.accounts)?;
     let load_bytes = loads::worst_case(&limits.loads)?;
     let routes = route_bound(limits)?;
+    let tool_bytes = u64::from(limits.tasks.batch).checked_mul(row_bound(limits)?)?;
     let inbox_bytes = u64::from(limits.people.inbox_entries).checked_mul(
         u64::try_from(size_of::<crate::ResultEntry>()).ok()?.checked_add(u64::from(limits.journal.result_bytes))?,
     )?;
@@ -2521,7 +3169,9 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     )?;
     bytes = bytes.checked_add(Slab::<Option<Payload>>::worst_case(payload_slots(limits)?)?)?.checked_add(
         u64::from(payload_slots(limits)?).checked_mul(
-            u64::from(limits.journal.transcript_bytes).max(u64::from(limits.tasks.result_bytes).checked_mul(2)?),
+            u64::from(limits.journal.transcript_bytes)
+                .max(u64::from(limits.tasks.result_bytes).checked_mul(2)?)
+                .max(tool_bytes),
         )?,
     )?;
     bytes = bytes.checked_add(
@@ -2545,7 +3195,35 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_add(Map::<Token, u64>::worst_case(limits.people.pending)?)?;
     bytes = bytes
         .checked_add(Map::<Token, u64>::worst_case(limits.people.pending)?)?
+        .checked_add(Map::<Token, CallKey>::worst_case(limits.fleet.calls)?)?
+        .checked_add(Map::<u64, u64>::worst_case(limits.tasks.tasks)?)?
+        .checked_add(Map::<CallKey, bool>::worst_case(limits.call_records)?)?
+        .checked_add(Map::<u64, Box<[HistoricalResult]>>::worst_case(limits.tasks.tasks)?)?
         .checked_add(u64::from(limits.tasks.message_bytes))?;
+    let result_count = u64::from(limits.tasks.dependencies).checked_add(u64::from(limits.tasks.inputs))?;
+    let result_view =
+        u64::try_from(size_of::<HistoricalResult>()).ok()?.checked_add(u64::from(limits.tasks.result_bytes))?;
+    bytes = bytes
+        .checked_add(u64::from(limits.tasks.tasks).checked_mul(result_count)?.checked_mul(result_view)?)?
+        .checked_add(u64::from(limits.loads.loads).checked_mul(result_count)?.checked_mul(result_view)?)?
+        .checked_add(
+            u64::from(limits.loads.loads)
+                .checked_mul(u64::from(limits.tasks.batch))?
+                .checked_mul(row_bound(limits)?)?,
+        )?
+        .checked_add(u64::from(limits.call_records).checked_mul(u64::from(limits.tasks.batch))?.checked_mul(8)?)?
+        .checked_add(
+            u64::from(limits.call_records)
+                .checked_mul(u64::from(authority::max_out(&limits.authority)?))?
+                .checked_mul(u64::try_from(size_of::<authority::Finding>()).ok()?)?,
+        )?
+        .checked_add(
+            u64::from(limits.tasks.tasks).checked_mul(u64::from(limits.tasks.delegates))?.checked_mul(
+                u64::try_from(size_of::<tasks::DelegateState>())
+                    .ok()?
+                    .checked_add(u64::from(limits.tasks.result_bytes).checked_mul(2)?)?,
+            )?,
+        )?;
     bytes = bytes
         .checked_add(Map::<u64, u64>::worst_case(limits.tasks.tasks)?)?
         .checked_add(Map::<u64, RunProof>::worst_case(limits.tasks.tasks)?)?
@@ -2720,6 +3398,14 @@ fn task_section(domain: &Domain, task: u64, part: brief::TaskPart, parts: u32, b
             Some(context) => task_read(context, parts, bytes),
             None => brief::Read::Failed,
         },
+        brief::TaskPart::Delegates => match domain.contexts.get(&task) {
+            Some(context) => delegates_read(&context.delegates, bytes),
+            None => brief::Read::Failed,
+        },
+        brief::TaskPart::Dependencies => match domain.dependency_results.get(&task) {
+            Some(results) => dependency_read(results, bytes),
+            None => brief::Read::Failed,
+        },
         brief::TaskPart::Attempts => match domain.contexts.get(&task) {
             Some(context) => attempt_read(context.tries, bytes),
             None => brief::Read::Failed,
@@ -2768,6 +3454,100 @@ fn attempt_read(tries: tasks::Tries, bytes: u32) -> brief::Read {
     }]))
 }
 
+fn delegate_phase(phase: &tasks::Phase) -> &'static [u8] {
+    match phase {
+        tasks::Phase::Waiting => b"waiting",
+        tasks::Phase::Active(active) => match active {
+            tasks::Active::Idle => b"idle",
+            tasks::Active::Due | tasks::Active::Preparing => b"due",
+            tasks::Active::Claimed { .. } | tasks::Active::Running { .. } => b"running",
+            tasks::Active::BackingOff { .. } => b"backing off",
+        },
+        tasks::Phase::Closing(_) => b"closing",
+        tasks::Phase::Held { .. } => b"held",
+        tasks::Phase::Ended(_) => b"ended",
+    }
+}
+
+fn delegates_read(delegates: &[tasks::DelegateState], bytes: u32) -> brief::Read {
+    let mut total = 0_usize;
+    for delegate in delegates {
+        total = total
+            .checked_add(b"delegate ".len())
+            .expect("bounded delegate text")
+            .checked_add(Decimal::of(delegate.task).as_bytes().len())
+            .expect("bounded delegate ID")
+            .checked_add(b": ".len())
+            .expect("bounded delegate text")
+            .checked_add(delegate_phase(&delegate.phase).len())
+            .expect("bounded delegate phase")
+            .checked_add(1)
+            .expect("delegate newline");
+    }
+    let mut writer = Writer::new(total);
+    for delegate in delegates {
+        writer.put(b"delegate ").expect("measured delegate text");
+        writer.put(Decimal::of(delegate.task).as_bytes()).expect("measured delegate ID");
+        writer.put(b": ").expect("measured delegate text");
+        writer.put(delegate_phase(&delegate.phase)).expect("measured delegate phase");
+        writer.put(b"\n").expect("measured delegate newline");
+    }
+    let text = writer.finish();
+    brief::Read::Got(Box::new([text_part(&text, b"", b"", b"", bytes)]))
+}
+
+fn result_label(kind: tasks::ResultKind) -> &'static [u8] {
+    match kind {
+        tasks::ResultKind::Report => b"report",
+        tasks::ResultKind::Verdict { .. } => b"verdict",
+        tasks::ResultKind::Change { .. } => b"change",
+        tasks::ResultKind::Failed => b"failed",
+        tasks::ResultKind::Cancelled => b"cancelled",
+    }
+}
+
+fn dependency_read(results: &[HistoricalResult], bytes: u32) -> brief::Read {
+    let mut total = 0_usize;
+    for result in results {
+        total = total
+            .checked_add(b"task ".len())
+            .expect("bounded result text")
+            .checked_add(Decimal::of(result.task).as_bytes().len())
+            .expect("bounded result ID")
+            .checked_add(b": ".len())
+            .expect("bounded result text")
+            .checked_add(result_label(result.kind).len())
+            .expect("bounded result kind")
+            .checked_add(result.words.len())
+            .expect("bounded result words")
+            .checked_add(3)
+            .expect("result separators");
+        if let tasks::ResultKind::Verdict { code } = result.kind {
+            total = total
+                .checked_add(Decimal::of(u64::from(code)).as_bytes().len())
+                .expect("bounded verdict code")
+                .checked_add(1)
+                .expect("verdict space");
+        }
+    }
+    let mut writer = Writer::new(total);
+    for result in results {
+        writer.put(b"task ").expect("measured result text");
+        writer.put(Decimal::of(result.task).as_bytes()).expect("measured result ID");
+        writer.put(b": ").expect("measured result text");
+        writer.put(result_label(result.kind)).expect("measured result kind");
+        if let tasks::ResultKind::Verdict { code } = result.kind {
+            writer.put(b" ").expect("measured verdict space");
+            writer.put(Decimal::of(u64::from(code)).as_bytes()).expect("measured verdict code");
+        }
+        writer.put(b"\n").expect("measured result newline");
+        writer.put(&result.words).expect("measured result words");
+        writer.put(b"\n\n").expect("measured result separator");
+    }
+    let text = writer.finish();
+    brief::Read::Got(Box::new([text_part(&text, b"", b"", b"", bytes)]))
+}
+
 fn tail_read(transcript: &Transcript, bytes: u32) -> brief::Read {
     let kept = u64::from(bytes).min(transcript.kept);
     let skip = transcript.kept.checked_sub(kept).expect("tail within kept bytes");
@@ -2788,18 +3568,85 @@ fn tail_read(transcript: &Transcript, bytes: u32) -> brief::Read {
     }]))
 }
 
-/// Render only the current person Report task section from its temporary activation context,
-/// without a raw child query or invented ancestor route.
+fn add_text_len(total: &mut usize, fragment: &[u8]) {
+    *total = total.checked_add(fragment.len()).expect("bounded brief text");
+}
+
+fn contract_text(contract: &tasks::Contract) -> Box<[u8]> {
+    let mut room = 0_usize;
+    match contract {
+        tasks::Contract::Report { words } => {
+            for fragment in [b"[Report: at most ".as_slice(), Decimal::of(u64::from(*words)).as_bytes(), b" bytes]\n"] {
+                add_text_len(&mut room, fragment);
+            }
+        }
+        tasks::Contract::Verdict { choices } => {
+            add_text_len(&mut room, b"[Verdict choices:\n");
+            for choice in choices {
+                for fragment in [
+                    b"  ".as_slice(),
+                    Decimal::of(u64::from(choice.code)).as_bytes(),
+                    b": at most ",
+                    Decimal::of(u64::from(choice.words)).as_bytes(),
+                    b" bytes\n",
+                ] {
+                    add_text_len(&mut room, fragment);
+                }
+            }
+            add_text_len(&mut room, b"]\n");
+        }
+        tasks::Contract::Change { connector, kind, words } => {
+            for fragment in [
+                b"[Change connector ".as_slice(),
+                Decimal::of(u64::from(*connector)).as_bytes(),
+                b", kind ",
+                Decimal::of(u64::from(*kind)).as_bytes(),
+                b", at most ",
+                Decimal::of(u64::from(*words)).as_bytes(),
+                b" bytes]\n",
+            ] {
+                add_text_len(&mut room, fragment);
+            }
+        }
+    }
+    let mut writer = Writer::new(room);
+    match contract {
+        tasks::Contract::Report { words } => {
+            writer.put(b"[Report: at most ").expect("contract text room");
+            writer.put(Decimal::of(u64::from(*words)).as_bytes()).expect("contract text room");
+            writer.put(b" bytes]\n").expect("contract text room");
+        }
+        tasks::Contract::Verdict { choices } => {
+            writer.put(b"[Verdict choices:\n").expect("contract text room");
+            for choice in choices {
+                writer.put(b"  ").expect("contract text room");
+                writer.put(Decimal::of(u64::from(choice.code)).as_bytes()).expect("contract text room");
+                writer.put(b": at most ").expect("contract text room");
+                writer.put(Decimal::of(u64::from(choice.words)).as_bytes()).expect("contract text room");
+                writer.put(b" bytes\n").expect("contract text room");
+            }
+            writer.put(b"]\n").expect("contract text room");
+        }
+        tasks::Contract::Change { connector, kind, words } => {
+            writer.put(b"[Change connector ").expect("contract text room");
+            writer.put(Decimal::of(u64::from(*connector)).as_bytes()).expect("contract text room");
+            writer.put(b", kind ").expect("contract text room");
+            writer.put(Decimal::of(u64::from(*kind)).as_bytes()).expect("contract text room");
+            writer.put(b", at most ").expect("contract text room");
+            writer.put(Decimal::of(u64::from(*words)).as_bytes()).expect("contract text room");
+            writer.put(b" bytes]\n").expect("contract text room");
+        }
+    }
+    writer.finish()
+}
+
+/// Render an agent task's spec and typed contract from its activation snapshot.
 fn task_read(record: &tasks::RunContext, parts: u32, bytes: u32) -> brief::Read {
-    let words = match &record.contract {
-        tasks::Contract::Report { words } => *words,
-        tasks::Contract::Verdict { .. } | tasks::Contract::Change { .. } => return brief::Read::Failed,
-    };
     if parts == 0 {
         return brief::Read::Failed;
     }
-    let contract = Decimal::of(u64::from(words));
-    let first = text_part(&record.spec.words, b"\n[Report: at most ", contract.as_bytes(), b" bytes]\n", bytes);
+    let contract = contract_text(&record.contract);
+    let first = text_part(&record.spec.words, b"\n", &contract, b"", bytes);
     let remaining =
         bytes.checked_sub(u32::try_from(first.bytes.len()).expect("bounded task part")).expect("part within read");
     let part = match record.requester {
@@ -2807,7 +3654,14 @@ fn task_read(record: &tasks::RunContext, parts: u32, bytes: u32) -> brief::Read 
             let person = Decimal::of(person);
             text_part(b"[Requested by person ", person.as_bytes(), b"]\n", b"", remaining)
         }
-        tasks::Party::Task(_) | tasks::Party::Deployment { .. } => return brief::Read::Failed,
+        tasks::Party::Task(task) => {
+            let task = Decimal::of(task);
+            text_part(b"[Requested by task ", task.as_bytes(), b"]\n", b"", remaining)
+        }
+        tasks::Party::Deployment { project } => {
+            let project = Decimal::of(u64::from(project));
+            text_part(b"[Requested by deployment for project ", project.as_bytes(), b"]\n", b"", remaining)
+        }
     };
     let mut gathered = List::with_capacity(parts);
     gathered.push(first).expect("positive part room");
@@ -2978,28 +3832,10 @@ fn valid_proof(proof: &RunProof, expected: &RestoringProof, limits: &Limits) -> 
 }
 
 fn supported_task(task: &tasks::TaskRecord, charter: u32) -> bool {
-    // Current root slice restores only person-requested Report chats without delegates.
-    // Reject other durable task shapes at startup until their root routes exist.
-    let requester = match task.requester {
-        tasks::Party::Person(_) => true,
-        tasks::Party::Task(_) | tasks::Party::Deployment { .. } => false,
-    };
-    let contract = match task.contract {
-        tasks::Contract::Report { .. } => true,
-        tasks::Contract::Verdict { .. } | tasks::Contract::Change { .. } => false,
-    };
     let executor = match task.executor {
         tasks::Executor::Agent { charter: configured } => charter == configured,
     };
-    task.number != 0
-        && task.result_position == 0
-        && requester
-        && contract
-        && executor
-        && task.delegates.is_empty()
-        && task.dependencies.is_empty()
-        && task.waiting_on.is_empty()
-        && task.spec.inputs.is_empty()
+    task.number != 0 && task.result_position == 0 && executor
 }
 
 fn remember_unpriced_terminal(domain: &mut Domain, run: Token, attempt: Token, end: tasks::End) {
@@ -3012,10 +3848,43 @@ fn remember_unpriced_terminal(domain: &mut Domain, run: Token, attempt: Token, e
     proof.terminal = Some(TerminalRecord { task: run.raw(), attempt: attempt.raw(), cumulative, end });
 }
 
-fn supported_person(requester: tasks::Party, highest: u64) -> bool {
+fn supported_requester(requester: tasks::Party, people: u64, tasks: u64) -> bool {
     match requester {
-        tasks::Party::Person(person) => person != 0 && person <= highest,
-        tasks::Party::Task(_) | tasks::Party::Deployment { .. } => false,
+        tasks::Party::Person(person) => person != 0 && person <= people,
+        tasks::Party::Task(task) => task != 0 && task <= tasks,
+        tasks::Party::Deployment { .. } => true,
+    }
+}
+
+fn valid_call_answer(answer: &CallAnswer, deployment: &crate::Deployment, limits: &Limits) -> bool {
+    match answer {
+        CallAnswer::Unavailable => true,
+        CallAnswer::Delegated(numbers) => {
+            if numbers.is_empty() || numbers.len() > usize::try_from(limits.tasks.batch).expect("u32 fits usize") {
+                return false;
+            }
+            for (at, &number) in numbers.iter().enumerate() {
+                if number == 0 || number > deployment.tasks {
+                    return false;
+                }
+                for &earlier in numbers.iter().take(at) {
+                    if number == earlier {
+                        return false;
+                    }
+                }
+            }
+            true
+        }
+        CallAnswer::DelegationDenied { answer, findings } => {
+            *answer != authority::Answer::Allow
+                && findings.len()
+                    <= usize::try_from(authority::max_out(&limits.authority).expect("valid authority bound"))
+                        .expect("u32 fits usize")
+        }
+        CallAnswer::DelegationRefused(problem) => match problem.task {
+            Some(task) => task != 0 && task <= deployment.tasks,
+            None => true,
+        },
     }
 }
 
@@ -3031,6 +3900,7 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
                 && key.completion != 0
                 && key.task <= domain.journal.deployment().tasks
                 && key.attempt <= domain.journal.deployment().runs
+                && valid_call_answer(&record.answer, &domain.journal.deployment(), &env.limits)
                 && match domain.proofs.get(&key.task) {
                     Some(proof) => proof.attempt >= key.attempt,
                     None => false,
@@ -3050,7 +3920,11 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
                     || !escalation::supported(domain, task)
                     || task.number > domain.journal.deployment().tasks
                     || task.attempt > domain.journal.deployment().runs
-                    || !supported_person(task.requester, domain.journal.deployment().people)
+                    || !supported_requester(
+                        task.requester,
+                        domain.journal.deployment().people,
+                        domain.journal.deployment().tasks,
+                    )
                 {
                     domain.startup = Startup::Failed;
                     return;

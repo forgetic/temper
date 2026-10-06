@@ -5,8 +5,8 @@ use skein_lib::{Duration, Env, Queue, ReplyTo, Rng, Time, Token, Wall};
 use std::collections::{BTreeMap, BTreeSet};
 use temper_engine_domain_tasks::{
     self as tasks, Accepted, Authority, Budget, Cause, Contract, Delegation, Domain, End, Ending, Event, Executor,
-    Fact, Funder, Key, Limits, New, Numbers, Party, Problem, Request, Retries, Retry, RunContext, Scopes, Spec, Stored,
-    TaskResult, Tools,
+    Fact, Funder, Key, Limits, MessageKind, New, Numbers, Party, Problem, Request, ResultKind, Retries, Retry,
+    RunContext, Scopes, Spec, Stored, TaskResult, Tools, Word,
 };
 use temper_world::{Referee, Trace};
 
@@ -255,7 +255,8 @@ impl World {
             | Event::InspectEscalation { .. }
             | Event::RoutedEscalation { .. }
             | Event::DecideEscalation { .. }
-            | Event::Message { .. } => None,
+            | Event::Message { .. }
+            | Event::DelegateResult { .. } => None,
         };
         self.trace.log(self.env.now, format_args!("{event:?}"));
         tasks::step(&mut self.domain, &self.env, event, &mut self.out);
@@ -268,6 +269,33 @@ impl World {
                         task: context.task,
                         revision: context.escalation.revision(),
                         holder: tasks::EscalationHolder::Person(context.requester),
+                    },
+                    &mut self.out,
+                );
+            }
+            if let Request::Ended { task, requester: Party::Task(parent), ending } = &request {
+                let last = self.pending.iter().rev().find_map(|pending| {
+                    if let Request::Save { record: Stored::Live(row) } = pending
+                        && row.number == *parent
+                    {
+                        return Some(row.last_message);
+                    }
+                    None
+                });
+                let last = last.unwrap_or_else(|| self.record(*parent).last_message);
+                let (kind, words) = result_notice(ending.clone());
+                tasks::step(
+                    &mut self.domain,
+                    &self.env,
+                    Event::DelegateResult {
+                        task: *parent,
+                        word: Word {
+                            number: last.checked_add(1).expect("message number room"),
+                            from: Party::Task(*task),
+                            kind: MessageKind::Result(kind),
+                            words,
+                            at: self.env.wall,
+                        },
                     },
                     &mut self.out,
                 );
@@ -592,6 +620,21 @@ fn status(ending: &Ending) -> tasks::Status {
         Ending::Done(_) => tasks::Status::Done,
         Ending::Failed { .. } => tasks::Status::Failed,
         Ending::Cancelled { .. } => tasks::Status::Cancelled,
+    }
+}
+
+fn result_notice(ending: Ending) -> (ResultKind, Box<[u8]>) {
+    match ending {
+        Ending::Done(result) => match result {
+            TaskResult::Report { words } => (ResultKind::Report, words),
+            TaskResult::Verdict { code, words } => (ResultKind::Verdict { code }, words),
+            TaskResult::Change { connector, kind, resource, words } => {
+                (ResultKind::Change { connector, kind, resource }, words)
+            }
+            TaskResult::Failure { reason } => (ResultKind::Failed, reason),
+        },
+        Ending::Failed { reason } => (ResultKind::Failed, reason),
+        Ending::Cancelled { reason, .. } => (ResultKind::Cancelled, reason),
     }
 }
 

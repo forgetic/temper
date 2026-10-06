@@ -74,6 +74,15 @@ pub struct CallKey {
 /// Exact typed answer kept for replay across a lost channel or root restart.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum CallAnswer {
+    /// All members of an authorized batch, in call order.
+    Delegated(Box<[u64]>),
+    /// A whole batch declined by authority, with its independent findings.
+    DelegationDenied {
+        answer: temper_engine_domain_authority::Answer,
+        findings: Box<[temper_engine_domain_authority::Finding]>,
+    },
+    /// A whole batch refused by structural or finite-funding admission.
+    DelegationRefused(temper_engine_domain_tasks::Problem),
     /// The named tool is deferred to a later engine route.
     Unavailable,
 }
@@ -491,7 +500,14 @@ impl Write {
 pub fn record_bytes(record: &Record) -> Option<u64> {
     match record {
         Record::EscalationDecision(row) => decision_bytes(&row.decision),
-        Record::Call(_) | Record::Deployment(_) => Some(0),
+        Record::Call(row) => match &row.answer {
+            CallAnswer::Unavailable | CallAnswer::DelegationRefused(_) => Some(0),
+            CallAnswer::Delegated(numbers) => u64::try_from(numbers.len()).ok()?.checked_mul(8),
+            CallAnswer::DelegationDenied { findings, .. } => u64::try_from(findings.len())
+                .ok()?
+                .checked_mul(u64::try_from(size_of::<temper_engine_domain_authority::Finding>()).ok()?),
+        },
+        Record::Deployment(_) => Some(0),
         Record::Turn(turn) => u64::try_from(turn.transcript.len()).ok(),
         Record::RunProof(row) => match &row.terminal {
             Some(terminal) => terminal_bytes(terminal),

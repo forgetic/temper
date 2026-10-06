@@ -76,6 +76,21 @@ impl Domain {
         self.funding.get(&funder)
     }
 
+    /// Borrowed current creation ceiling; no mutable task ledger is copied
+    /// into the root or retained after this call's decision.
+    #[must_use]
+    pub fn delegation(&self, task: u64) -> Option<crate::DelegationContext> {
+        let record = record(self, task)?;
+        let made_below = record.made.checked_sub(1)?;
+        let tasks_left = record.authority.delegation.tasks.checked_sub(made_below)?;
+        Some(crate::DelegationContext {
+            project: record.project,
+            authority: record.authority.clone(),
+            numbers: record.numbers,
+            tasks_left,
+        })
+    }
+
     #[must_use]
     pub(crate) fn ready(&self) -> bool {
         self.startup == Startup::Ready
@@ -155,6 +170,7 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
         Event::Message { reply_to, project, task, word } => {
             crate::inbox::message(domain, env, reply_to, project, task, word, out);
         }
+        Event::DelegateResult { task, word } => crate::inbox::delegate_result(domain, env, task, word, out),
         Event::Prepare { reply_to, task } => crate::run::prepare(domain, env, reply_to, task, out),
         Event::Claim { reply_to, task, attempt } => crate::run::claim(domain, env, reply_to, task, attempt, out),
         Event::Turn { reply_to, task, attempt, turn, read, offered, cumulative } => {
@@ -245,11 +261,20 @@ pub(crate) fn entrance(domain: &Domain, to: ReplyTo, number: u64) -> Result<Repl
 
 pub(crate) fn activate(domain: &Domain, number: u64, out: &mut Queue<Request>) {
     let task = record(domain, number).expect("activation names live task");
+    let mut delegates = List::with_capacity(u32::try_from(task.delegates.len()).expect("bounded delegates"));
+    for child in &task.delegates {
+        let child_record = record(domain, *child).expect("live delegate named by requester");
+        delegates
+            .push(crate::DelegateState { task: *child, phase: child_record.phase.clone() })
+            .expect("bounded delegate snapshot");
+    }
     out.push(Request::Activate {
         context: Box::new(crate::RunContext {
             task: number,
             last_message: task.last_message,
             inbox: task.inbox.clone(),
+            delegates: delegates.into_boxed(),
+            dependencies: task.dependencies.clone(),
             saved: task.saved.clone(),
             previous_attempt: task.attempt,
             ever_turned: task.ever_turned,

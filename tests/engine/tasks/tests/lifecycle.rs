@@ -58,19 +58,19 @@ fn batch_is_atomic_and_cycles_and_limits_refuse_at_entrance() {
             },
             Refusal::AuthorityShape,
         ),
-        (
-            {
-                let mut n = task(2, &[]);
-                n.spec.inputs = Box::new([99]);
-                n
-            },
-            Refusal::Inputs,
-        ),
     ] {
         let before = w.records.clone();
         refused(&w.make(Party::Person(1), vec![task(1, &[]), new]), why);
         assert_eq!(w.records, before);
     }
+}
+
+#[test]
+fn bounded_historical_inputs_are_left_for_the_roots_archive_check() {
+    let mut w = World::new(101, LIMITS);
+    let mut next = task(2, &[]);
+    next.spec.inputs = Box::new([99]);
+    assert_eq!(w.make(Party::Person(1), vec![task(1, &[]), next]), Reply::Made(vec![1, 2]));
 }
 
 #[test]

@@ -65,6 +65,10 @@ pub enum Kind {
 pub enum TaskPart {
     /// Specification, result contract and requester lineage.
     Spec,
+    /// Direct delegates and their current lifecycle.
+    Delegates,
+    /// Historical inputs and dependency results read by the root.
+    Dependencies,
     /// Earlier failure classes and counts.
     Attempts,
     /// The newest committed transcript bytes when the resume limit was exceeded.
@@ -127,15 +131,15 @@ impl Source {
     pub fn kind(&self) -> Kind {
         match self {
             Source::Task { part: TaskPart::Spec, .. } => Kind::Task,
+            Source::Task { part: TaskPart::Delegates, .. } | Source::Plan { .. } => Kind::Plan,
+            Source::Task { part: TaskPart::Dependencies, .. } | Source::Dependencies(_) => Kind::Dependencies,
             Source::Task { part: TaskPart::Attempts, .. } | Source::Attempts(_) => Kind::Attempts,
             Source::Task { part: TaskPart::TranscriptTail, .. } => Kind::Transcript,
             Source::Item(_) => Kind::Item,
             Source::Comments { .. } => Kind::Comments,
-            Source::Dependencies(_) => Kind::Dependencies,
             Source::Ci { .. } => Kind::Ci,
             Source::Reviews { .. } => Kind::Reviews,
             Source::Pull { .. } => Kind::Pull,
-            Source::Plan { .. } => Kind::Plan,
             Source::Notes { .. } => Kind::Notes,
             Source::Template(_) => Kind::Template,
         }

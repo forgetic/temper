@@ -97,6 +97,7 @@ fn valid_escalation(task: &TaskRecord, limits: &Limits) -> bool {
     }
 }
 
+#[expect(clippy::too_many_lines, reason = "one complete restored task shape is checked before retention")]
 fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
     if task.run_spent > task.numbers.spent
         || crate::funders::total(task.numbers).is_none()
@@ -120,7 +121,9 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
     if task.turn != 0 && task.attempt == 0 {
         return false;
     }
-    if task.inbox.len() > usize::try_from(limits.inbox_messages).expect("u32 fits usize") {
+    if task.inbox.len().saturating_add(task.delegates.len())
+        > usize::try_from(limits.inbox_messages).expect("u32 fits usize")
+    {
         return false;
     }
     let mut previous = 0;
@@ -128,21 +131,40 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
     for word in &task.inbox {
         let Some(total) = bytes.checked_add(word.words.len()) else { return false };
         bytes = total;
-        let requester = match task.requester {
-            Party::Person(person) => word.from == Party::Person(person),
-            Party::Task(_) | Party::Deployment { .. } => false,
+        let requester = match (&word.kind, task.requester) {
+            (crate::MessageKind::Words, Party::Person(person)) => word.from == Party::Person(person),
+            (crate::MessageKind::Result(_), _) => match word.from {
+                Party::Task(_) => true,
+                Party::Person(_) | Party::Deployment { .. } => false,
+            },
+            (crate::MessageKind::Words, Party::Task(_) | Party::Deployment { .. }) => false,
+        };
+        let bound = match &word.kind {
+            crate::MessageKind::Words => limits.message_bytes,
+            crate::MessageKind::Result(_) => limits.result_bytes,
         };
         if word.number <= previous
             || word.number > task.last_message
-            || word.words.is_empty()
-            || word.words.len() > usize::try_from(limits.message_bytes).expect("u32 fits usize")
+            || (match &word.kind {
+                crate::MessageKind::Words => word.words.is_empty(),
+                crate::MessageKind::Result(_) => false,
+            })
+            || word.words.len() > usize::try_from(bound).expect("u32 fits usize")
             || !requester
         {
             return false;
         }
         previous = word.number;
     }
-    if bytes > usize::try_from(limits.inbox_bytes).expect("u32 fits usize") {
+    let Some(reserved) =
+        task.delegates.len().checked_mul(usize::try_from(limits.result_bytes).expect("u32 fits usize"))
+    else {
+        return false;
+    };
+    let Some(total) = bytes.checked_add(reserved) else {
+        return false;
+    };
+    if total > usize::try_from(limits.inbox_bytes).expect("u32 fits usize") {
         return false;
     }
     if task.saved.len() > usize::try_from(limits.saved_repositories).expect("u32 fits usize") {
@@ -305,9 +327,6 @@ fn links(domain: &Domain, env: &Env<Limits>, task: &TaskRecord) -> bool {
         | Phase::Ended(_) => false,
     };
     if engaged && !task.waiting_on.is_empty() {
-        return false;
-    }
-    if !task.spec.inputs.is_empty() {
         return false;
     }
     true

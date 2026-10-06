@@ -725,6 +725,11 @@ fn running_fixture() -> (Driver, engine::Assignment) {
     driver.settle();
     chat(&mut driver, 12);
     driver.settle();
+    assert!(
+        driver.delivered.iter().any(|item| matches!(item, Delivery::Assigned { .. })),
+        "delegate fixture delivery: {:?}",
+        driver.delivered
+    );
     let assignment = assigned(&driver);
     turn(&mut driver, &assignment, 1, 3);
     driver.settle();
@@ -739,6 +744,480 @@ fn unavailable_call(driver: &mut Driver, assignment: &engine::Assignment, call: 
         call: Token::new(call),
         body: engine::Call { completion: 2, position: 0, tool: engine::Tool::Unavailable },
     });
+}
+
+fn delegate_fixture() -> (Driver, engine::Assignment) {
+    let mut configuration = config(91);
+    let mut rules = configuration.authority.rules().clone();
+    rules.ceiling.delegation.depth = 2;
+    let mut policy = configuration.authority.policy(1).expect("fixture project").clone();
+    policy.ceiling.delegation.depth = 2;
+    policy.roles[0].authority.delegation.depth = 2;
+    let mut authority = temper_engine_domain_authority::Domain::new(rules, *configuration.authority.limits())
+        .expect("expanded fixture authority");
+    let mut policy_out = Queue::with_capacity(temper_engine_domain_authority::POLICY_MAX_OUT);
+    temper_engine_domain_authority::step(
+        &mut authority,
+        temper_engine_domain_authority::Event::Policy { project: 1, policy },
+        &mut policy_out,
+    );
+    assert_eq!(policy_out.pop(), Some(temper_engine_domain_authority::PolicyFact::Added { project: 1 }));
+    configuration.authority = authority;
+    configuration.chat_authority.delegation.kinds = Box::new([temper_engine_domain_authority::Executor::Charter(1)]);
+    configuration.chat_authority.delegation.tasks = 1;
+    configuration.chat_authority.delegation.depth = 1;
+    let mut driver = Driver::configured(Store::new(), configuration, &limits());
+    hello(&mut driver);
+    driver.settle();
+    driver.sign_in();
+    driver.settle();
+    chat(&mut driver, 12);
+    driver.settle();
+    assert!(
+        driver.delivered.iter().any(|item| matches!(item, Delivery::Assigned { .. })),
+        "delegate fixture delivery: {:?}",
+        driver.delivered
+    );
+    let assignment = assigned(&driver);
+    (driver, assignment)
+}
+
+fn batch_fixture() -> (Driver, engine::Assignment) {
+    let mut bounds = limits();
+    bounds.tasks.tasks = 4;
+    bounds.tasks.project_tasks = 4;
+    bounds.tasks.tree_tasks = 4;
+    bounds.tasks.delegates = 3;
+    bounds.tasks.batch = 3;
+    bounds.tasks.dependencies = 2;
+    bounds.tasks.inbox_messages = 6;
+    bounds.tasks.inbox_bytes = 384;
+    bounds.authority.batch = 3;
+    bounds.fleet.attempts = 5;
+    bounds.call_records = 4;
+    bounds.brief.sections = 5;
+    bounds.journal.writes = 3000;
+    bounds.journal.deliveries = 100;
+    bounds.journal.held = 300;
+    let mut configuration = config(92);
+    let mut rules = configuration.authority.rules().clone();
+    rules.ceiling.delegation.tasks = 4;
+    rules.ceiling.delegation.depth = 2;
+    let mut policy = configuration.authority.policy(1).expect("fixture project").clone();
+    policy.ceiling.delegation.tasks = 4;
+    policy.ceiling.delegation.depth = 2;
+    policy.roles[0].authority.delegation.tasks = 4;
+    policy.roles[0].authority.delegation.depth = 2;
+    let mut authority =
+        temper_engine_domain_authority::Domain::new(rules, bounds.authority).expect("larger fixture authority");
+    let mut policy_out = Queue::with_capacity(temper_engine_domain_authority::POLICY_MAX_OUT);
+    temper_engine_domain_authority::step(
+        &mut authority,
+        temper_engine_domain_authority::Event::Policy { project: 1, policy },
+        &mut policy_out,
+    );
+    assert_eq!(policy_out.pop(), Some(temper_engine_domain_authority::PolicyFact::Added { project: 1 }));
+    configuration.authority = authority;
+    configuration.chat_authority.delegation.kinds = Box::new([temper_engine_domain_authority::Executor::Charter(1)]);
+    configuration.chat_authority.delegation.tasks = 3;
+    configuration.chat_authority.delegation.depth = 1;
+    let mut driver = Driver::configured(Store::new(), configuration, &bounds);
+    hello(&mut driver);
+    driver.settle();
+    driver.sign_in();
+    driver.settle();
+    chat(&mut driver, 12);
+    driver.settle();
+    let assignment = assigned(&driver);
+    (driver, assignment)
+}
+
+fn report_delegate(words: &[u8], dependencies: Box<[engine::Dependency]>) -> engine::Delegate {
+    engine::Delegate {
+        executor: tasks::Executor::Agent { charter: 1 },
+        spec: tasks::Spec { words: words.into(), parameters: Box::new([]), inputs: Box::new([]) },
+        contract: tasks::Contract::Report { words: 128 },
+        authority: tasks::Authority {
+            tools: tasks::Tools(0),
+            grants: Box::new([]),
+            delegation: tasks::Delegation { kinds: Box::new([]), tasks: 0, depth: 0 },
+            budget: tasks::Budget { spend: 10, deadline: None },
+            notes: tasks::Scopes(0),
+        },
+        dependencies,
+    }
+}
+
+#[expect(clippy::wildcard_enum_match_arm, reason = "the script selects one delivery from the closed vocabulary")]
+fn call_batch(
+    driver: &mut Driver,
+    parent: &engine::Assignment,
+    call: u64,
+    batch: Box<[engine::Delegate]>,
+) -> Box<[u64]> {
+    driver.send(engine::Event::Call {
+        channel: Token::new(7),
+        task: parent.task,
+        attempt: parent.attempt,
+        call: Token::new(call),
+        body: engine::Call {
+            completion: 1,
+            position: u32::try_from(call).expect("small call"),
+            tool: engine::Tool::Delegate { batch },
+        },
+    });
+    for _ in 0..30 {
+        driver.advance(true);
+    }
+    driver
+        .delivered
+        .iter()
+        .find_map(|item| match item {
+            Delivery::CallAnswer {
+                call: answered,
+                answer: temper_engine_domain::CallAnswer::Delegated(numbers),
+                ..
+            } if *answered == Token::new(call) => Some(numbers.clone()),
+            _ => None,
+        })
+        .expect("whole batch answered")
+}
+
+#[expect(clippy::wildcard_enum_match_arm, reason = "the script selects one assignment from the closed vocabulary")]
+fn assigned_task(driver: &Driver, task: u64) -> engine::Assignment {
+    driver
+        .delivered
+        .iter()
+        .find_map(|item| match item {
+            Delivery::Assigned { assignment, .. } if assignment.task == task => Some(assignment.clone()),
+            _ => None,
+        })
+        .expect("task assigned")
+}
+
+fn park_task(driver: &mut Driver, assignment: &engine::Assignment) {
+    driver.send(engine::Event::Answer {
+        saved: None,
+        channel: Token::new(7),
+        task: assignment.task,
+        attempt: assignment.attempt,
+        cumulative: 0,
+        end: tasks::End::Parked,
+    });
+    for _ in 0..30 {
+        driver.advance(true);
+    }
+}
+
+fn finish_task(driver: &mut Driver, assignment: &engine::Assignment, result: tasks::TaskResult) {
+    driver.send(engine::Event::Answer {
+        saved: None,
+        channel: Token::new(7),
+        task: assignment.task,
+        attempt: assignment.attempt,
+        cumulative: 0,
+        end: tasks::End::Finished { result, cancel_delegates: false },
+    });
+    for _ in 0..30 {
+        driver.advance(true);
+    }
+}
+
+#[test]
+#[expect(clippy::wildcard_enum_match_arm, reason = "the script selects one answer from the closed vocabulary")]
+fn a_delegate_batch_and_its_named_answer_commit_together() {
+    let (mut driver, parent) = delegate_fixture();
+    let child_authority = tasks::Authority {
+        tools: tasks::Tools(0),
+        grants: Box::new([]),
+        delegation: tasks::Delegation { kinds: Box::new([]), tasks: 0, depth: 0 },
+        budget: tasks::Budget { spend: 10, deadline: None },
+        notes: tasks::Scopes(0),
+    };
+    driver.send(engine::Event::Call {
+        channel: Token::new(7),
+        task: parent.task,
+        attempt: parent.attempt,
+        call: Token::new(99),
+        body: engine::Call {
+            completion: 1,
+            position: 0,
+            tool: engine::Tool::Delegate {
+                batch: Box::new([engine::Delegate {
+                    executor: tasks::Executor::Agent { charter: 1 },
+                    spec: tasks::Spec {
+                        words: b"investigate".as_slice().into(),
+                        parameters: Box::new([]),
+                        inputs: Box::new([]),
+                    },
+                    contract: tasks::Contract::Report { words: 128 },
+                    authority: child_authority,
+                    dependencies: Box::new([]),
+                }]),
+            },
+        },
+    });
+    assert!(
+        !driver
+            .delivered
+            .iter()
+            .any(|item| matches!(item, Delivery::CallAnswer { call, .. } if *call == Token::new(99)))
+    );
+    for _ in 0..20 {
+        driver.advance(true);
+    }
+    let child = driver
+        .delivered
+        .iter()
+        .find_map(|item| match item {
+            Delivery::CallAnswer { call, answer: temper_engine_domain::CallAnswer::Delegated(numbers), .. }
+                if *call == Token::new(99) =>
+            {
+                Some(numbers[0])
+            }
+            _ => None,
+        })
+        .expect("delegation answer after commit");
+    assert!(driver.transactions.iter().any(|writes| {
+        writes.iter().any(|write| {
+            matches!(write, Write::Save(Record::Call(record))
+            if record.answer == temper_engine_domain::CallAnswer::Delegated(Box::new([child])))
+        }) && writes.iter().any(|write| {
+            matches!(write, Write::Save(Record::Tasks(tasks::Stored::Live(task)))
+                if task.number == child && task.requester == tasks::Party::Task(parent.task))
+        })
+    }));
+}
+
+#[test]
+#[expect(clippy::wildcard_enum_match_arm, reason = "the script selects one answer and assignment")]
+fn a_delegate_result_enters_its_requesters_inbox_with_the_end() {
+    let (mut driver, parent) = delegate_fixture();
+    let child_authority = tasks::Authority {
+        tools: tasks::Tools(0),
+        grants: Box::new([]),
+        delegation: tasks::Delegation { kinds: Box::new([]), tasks: 0, depth: 0 },
+        budget: tasks::Budget { spend: 10, deadline: None },
+        notes: tasks::Scopes(0),
+    };
+    driver.send(engine::Event::Call {
+        channel: Token::new(7),
+        task: parent.task,
+        attempt: parent.attempt,
+        call: Token::new(100),
+        body: engine::Call {
+            completion: 1,
+            position: 0,
+            tool: engine::Tool::Delegate {
+                batch: Box::new([engine::Delegate {
+                    executor: tasks::Executor::Agent { charter: 1 },
+                    spec: tasks::Spec {
+                        words: b"spike".as_slice().into(),
+                        parameters: Box::new([]),
+                        inputs: Box::new([]),
+                    },
+                    contract: tasks::Contract::Report { words: 128 },
+                    authority: child_authority,
+                    dependencies: Box::new([]),
+                }]),
+            },
+        },
+    });
+    for _ in 0..20 {
+        driver.advance(true);
+    }
+    let child = driver
+        .delivered
+        .iter()
+        .find_map(|item| match item {
+            Delivery::CallAnswer { call, answer: temper_engine_domain::CallAnswer::Delegated(numbers), .. }
+                if *call == Token::new(100) =>
+            {
+                Some(numbers[0])
+            }
+            _ => None,
+        })
+        .expect("one child was made");
+    driver.send(engine::Event::Answer {
+        saved: None,
+        channel: Token::new(7),
+        task: parent.task,
+        attempt: parent.attempt,
+        cumulative: 0,
+        end: tasks::End::Parked,
+    });
+    for _ in 0..30 {
+        driver.advance(true);
+    }
+    let child_assignment = driver
+        .delivered
+        .iter()
+        .find_map(|item| match item {
+            Delivery::Assigned { assignment, .. } if assignment.task == child => Some(assignment.clone()),
+            _ => None,
+        })
+        .expect("child starts after parent parks");
+    driver.send(engine::Event::Answer {
+        saved: None,
+        channel: Token::new(7),
+        task: child,
+        attempt: child_assignment.attempt,
+        cumulative: 0,
+        end: tasks::End::Finished {
+            result: tasks::TaskResult::Report { words: b"spike complete".as_slice().into() },
+            cancel_delegates: false,
+        },
+    });
+    for _ in 0..30 {
+        driver.advance(true);
+    }
+    let parent_row = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(parent.task))).expect("requester stays live");
+    let Record::Tasks(tasks::Stored::Live(parent_row)) = parent_row else { panic!("live requester row") };
+    assert!(parent_row.inbox.iter().any(|message| message.from == tasks::Party::Task(child)
+        && message.kind == tasks::MessageKind::Result(tasks::ResultKind::Report)
+        && message.words.as_ref() == b"spike complete"));
+    assert!(driver.transactions.iter().any(|writes| {
+        writes.iter().any(|write| matches!(write, Write::Save(Record::Tasks(tasks::Stored::Ended(task))) if task.number == child))
+            && writes.iter().any(|write| matches!(write, Write::Save(Record::Tasks(tasks::Stored::Live(task)))
+                if task.number == parent.task && task.inbox.iter().any(|message| message.from == tasks::Party::Task(child))))
+    }));
+}
+
+#[test]
+fn a_plan_of_spikes_a_choice_and_changes_runs_in_dependency_order() {
+    let (mut driver, parent) = batch_fixture();
+    let spike = report_delegate(b"spike", Box::new([]));
+    let mut choice = report_delegate(b"choose", Box::new([engine::Dependency::Batch(0)]));
+    choice.contract = tasks::Contract::Verdict { choices: Box::new([tasks::Verdict { code: 7, words: 128 }]) };
+    let mut change = report_delegate(b"change", Box::new([engine::Dependency::Batch(1)]));
+    change.contract = tasks::Contract::Change { connector: 1, kind: 2, words: 128 };
+    let numbers = call_batch(&mut driver, &parent, 110, Box::new([spike, choice, change]));
+    assert_eq!(numbers.len(), 3);
+    assert!(!driver.delivered.iter().any(|item| matches!(item, Delivery::Assigned { assignment, .. }
+        if assignment.task == numbers[1] || assignment.task == numbers[2])));
+    park_task(&mut driver, &parent);
+    let first = assigned_task(&driver, numbers[0]);
+    assert!(!driver.delivered.iter().any(|item| matches!(item, Delivery::Assigned { assignment, .. }
+        if assignment.task == numbers[1] || assignment.task == numbers[2])));
+    finish_task(&mut driver, &first, tasks::TaskResult::Report { words: b"spike says yes".as_slice().into() });
+    let second = assigned_task(&driver, numbers[1]);
+    assert!(second.sections.iter().any(|section| section.kind == brief::Kind::Dependencies
+        && matches!(&section.body, brief::Body::Text(text) if text.windows(b"spike says yes".len()).any(|part| part == b"spike says yes"))));
+    assert!(!driver.delivered.iter().any(|item| matches!(item, Delivery::Assigned { assignment, .. }
+        if assignment.task == numbers[2])));
+    finish_task(&mut driver, &second, tasks::TaskResult::Verdict { code: 7, words: b"choose path".as_slice().into() });
+    let third = assigned_task(&driver, numbers[2]);
+    assert!(third.sections.iter().any(|section| section.kind == brief::Kind::Dependencies
+        && matches!(&section.body, brief::Body::Text(text) if text.windows(b"verdict 7".len()).any(|part| part == b"verdict 7"))));
+    finish_task(
+        &mut driver,
+        &third,
+        tasks::TaskResult::Change { connector: 1, kind: 2, resource: 17, words: b"changed".as_slice().into() },
+    );
+    let parent_row = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(parent.task))).expect("parent remains live");
+    let Record::Tasks(tasks::Stored::Live(parent_row)) = parent_row else { panic!("parent row") };
+    assert_eq!(parent_row.inbox.len(), 3, "one durable result per delegate");
+}
+
+#[test]
+fn a_batch_beyond_authority_is_refused_whole() {
+    let (mut driver, parent) = batch_fixture();
+    let allowed = report_delegate(b"small", Box::new([]));
+    let mut excessive = report_delegate(b"large", Box::new([]));
+    excessive.authority.budget.spend = 200;
+    driver.send(engine::Event::Call {
+        channel: Token::new(7),
+        task: parent.task,
+        attempt: parent.attempt,
+        call: Token::new(111),
+        body: engine::Call {
+            completion: 1,
+            position: 111,
+            tool: engine::Tool::Delegate { batch: Box::new([allowed, excessive]) },
+        },
+    });
+    for _ in 0..30 {
+        driver.advance(true);
+    }
+    assert!(driver.delivered.iter().any(|item| matches!(item,
+        Delivery::CallAnswer { call, answer: temper_engine_domain::CallAnswer::DelegationDenied { findings, .. }, .. }
+            if *call == Token::new(111) && !findings.is_empty())));
+    assert_eq!(driver.store.header().tasks, parent.task, "no member received an ID");
+    assert!(!driver.store.rows.values().any(|row| matches!(row,
+        Record::Tasks(tasks::Stored::Live(task)) if task.requester == tasks::Party::Task(parent.task))));
+}
+
+#[test]
+fn a_negative_verdict_starts_dependents_and_a_failure_holds_them() {
+    let (mut driver, parent) = batch_fixture();
+    let mut verdict = report_delegate(b"check", Box::new([]));
+    verdict.contract = tasks::Contract::Verdict { choices: Box::new([tasks::Verdict { code: 0, words: 128 }]) };
+    let next = report_delegate(b"respond", Box::new([engine::Dependency::Batch(0)]));
+    let held = report_delegate(b"finish", Box::new([engine::Dependency::Batch(1)]));
+    let numbers = call_batch(&mut driver, &parent, 112, Box::new([verdict, next, held]));
+    park_task(&mut driver, &parent);
+    let first = assigned_task(&driver, numbers[0]);
+    finish_task(&mut driver, &first, tasks::TaskResult::Verdict { code: 0, words: b"no".as_slice().into() });
+    let second = assigned_task(&driver, numbers[1]);
+    assert!(second.sections.iter().any(|section| section.kind == brief::Kind::Dependencies
+        && matches!(&section.body, brief::Body::Text(text) if text.windows(b"verdict 0".len()).any(|part| part == b"verdict 0"))));
+    finish_task(&mut driver, &second, tasks::TaskResult::Failure { reason: b"blocked".as_slice().into() });
+    let row = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(numbers[2]))).expect("dependent held live");
+    let Record::Tasks(tasks::Stored::Live(task)) = row else { panic!("dependent row") };
+    assert!(matches!(task.phase, tasks::Phase::Held { why: tasks::Hold::Dependency(id), .. } if id == numbers[1]));
+    assert!(!driver.delivered.iter().any(|item| matches!(item, Delivery::Assigned { assignment, .. }
+        if assignment.task == numbers[2])));
+}
+
+#[test]
+#[expect(clippy::wildcard_enum_match_arm, reason = "the script selects the requester's next assignment")]
+fn an_ended_delegate_can_be_named_as_a_later_tasks_input() {
+    let (mut driver, parent) = batch_fixture();
+    let first = call_batch(&mut driver, &parent, 113, Box::new([report_delegate(b"first", Box::new([]))]));
+    park_task(&mut driver, &parent);
+    let first_assignment = assigned_task(&driver, first[0]);
+    finish_task(&mut driver, &first_assignment, tasks::TaskResult::Report { words: b"found it".as_slice().into() });
+    let parent_again = driver
+        .delivered
+        .iter()
+        .rev()
+        .find_map(|item| match item {
+            Delivery::Assigned { assignment, .. }
+                if assignment.task == parent.task && assignment.attempt > parent.attempt =>
+            {
+                Some(assignment.clone())
+            }
+            _ => None,
+        })
+        .expect("result wakes requester");
+    let mut second = report_delegate(b"use result", Box::new([]));
+    second.spec.inputs = Box::new([first[0]]);
+    let second = call_batch(&mut driver, &parent_again, 114, Box::new([second]));
+    park_task(&mut driver, &parent_again);
+    let assigned = assigned_task(&driver, second[0]);
+    assert!(assigned.sections.iter().any(|section| section.kind == brief::Kind::Dependencies
+        && matches!(&section.body, brief::Body::Text(text) if text.windows(b"found it".len()).any(|part| part == b"found it"))));
+}
+
+#[test]
+fn a_missing_historical_input_refuses_the_whole_batch() {
+    let (mut driver, parent) = batch_fixture();
+    let mut member = report_delegate(b"use missing", Box::new([]));
+    member.spec.inputs = Box::new([999]);
+    driver.send(engine::Event::Call {
+        channel: Token::new(7),
+        task: parent.task,
+        attempt: parent.attempt,
+        call: Token::new(115),
+        body: engine::Call { completion: 1, position: 115, tool: engine::Tool::Delegate { batch: Box::new([member]) } },
+    });
+    for _ in 0..30 {
+        driver.advance(true);
+    }
+    assert!(driver.delivered.iter().any(|item| matches!(item,
+        Delivery::CallAnswer { call, answer: temper_engine_domain::CallAnswer::DelegationRefused(problem), .. }
+            if *call == Token::new(115) && problem.why == tasks::Refusal::Inputs)));
+    assert_eq!(driver.store.header().tasks, parent.task);
 }
 
 #[test]
@@ -946,9 +1425,9 @@ fn invalid_current_proof_stops_before_any_restored_closing_effect_or_result() {
 }
 
 #[test]
-fn root_restore_refuses_task_shapes_without_an_actual_root_route() {
+fn root_restore_refuses_malformed_task_shapes() {
     let (driver, assignment) = running_fixture();
-    for unsupported in 0..3 {
+    for malformed in 0..3 {
         let mut store = Store::new();
         store.rows = driver.store.rows.clone();
         let Some(Record::Tasks(tasks::Stored::Live(task))) =
@@ -956,10 +1435,10 @@ fn root_restore_refuses_task_shapes_without_an_actual_root_route() {
         else {
             panic!("task");
         };
-        match unsupported {
-            0 => task.requester = tasks::Party::Deployment { project: 1 },
+        match malformed {
+            0 => task.requester = tasks::Party::Task(assignment.task),
             1 => task.executor = tasks::Executor::Agent { charter: 99 },
-            2 => task.contract = tasks::Contract::Verdict { choices: Box::new([tasks::Verdict { code: 1, words: 8 }]) },
+            2 => task.contract = tasks::Contract::Verdict { choices: Box::new([]) },
             _ => unreachable!(),
         }
         let before = store.rows.clone();

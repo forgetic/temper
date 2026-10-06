@@ -156,7 +156,11 @@ pub(super) fn read(
                 refuse_direct(to, people::Refusal::Busy, out);
                 return;
             }
-            Read::Result(_) | Read::Transcript { .. } | Read::Escalation(Query::Decide { .. }) => {
+            Read::Result(_)
+            | Read::Transcript { .. }
+            | Read::Dependency(_)
+            | Read::InputCheck(_)
+            | Read::Escalation(Query::Decide { .. }) => {
                 unreachable!("inserted named read")
             }
         },
@@ -247,7 +251,9 @@ pub(super) fn inspected(
     let Some(read) = super::take_read(domain, waiter) else { return };
     let query = match read {
         Read::Escalation(query) => query,
-        Read::Result(_) | Read::Transcript { .. } => unreachable!("escalation query terminal"),
+        Read::Result(_) | Read::Transcript { .. } | Read::Dependency(_) | Read::InputCheck(_) => {
+            unreachable!("escalation query terminal")
+        }
     };
     match query {
         Query::Read { to, person, task, .. } => {
@@ -378,7 +384,9 @@ pub(super) fn completed(
     let Some(read) = super::take_read(domain, waiter) else { return };
     let query = match read {
         Read::Escalation(query) => query,
-        Read::Result(_) | Read::Transcript { .. } => unreachable!("escalation query terminal"),
+        Read::Result(_) | Read::Transcript { .. } | Read::Dependency(_) | Read::InputCheck(_) => {
+            unreachable!("escalation query terminal")
+        }
     };
     let (request, requester, person, project, expected, current, decision) = match query {
         Query::Decide { request, requester, person, project, task, revision, decision, .. } => {
@@ -424,7 +432,9 @@ pub(super) fn loaded(domain: &mut Domain, env: &Env<Limits>, waiter: Token, rows
     let Some(read) = super::take_read(domain, waiter) else { return };
     let query = match read {
         Read::Escalation(query) => query,
-        Read::Result(_) | Read::Transcript { .. } => unreachable!("escalation query terminal"),
+        Read::Result(_) | Read::Transcript { .. } | Read::Dependency(_) | Read::InputCheck(_) => {
+            unreachable!("escalation query terminal")
+        }
     };
     let (request, person, project, task, revision) = match query {
         Query::Decide { request, person, project, task, revision, .. } => (request, person, project, task, revision),
@@ -502,7 +512,11 @@ pub(super) fn failed(domain: &mut Domain, waiter: Token) {
         Read::Escalation(Query::Decide { request, .. }) => {
             decided(domain, request, people::Outcome::Refused(people::Refusal::Busy));
         }
-        Read::Result(_) | Read::Transcript { .. } | Read::Escalation(Query::Read { .. }) => {
+        Read::Result(_)
+        | Read::Transcript { .. }
+        | Read::Dependency(_)
+        | Read::InputCheck(_)
+        | Read::Escalation(Query::Read { .. }) => {
             unreachable!("only decision history loads here")
         }
     }
