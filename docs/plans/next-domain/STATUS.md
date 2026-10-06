@@ -16,6 +16,7 @@ protocol drafts and lower-layer integration are parked for later work.
 |---|---|---|---|
 | Completion 00: temporary test budgets | merged | this commit | Focused cap 15→30 s and slow period 3→6 s; fuzzy cap 60→120 s and slow period 20→40 s until legacy deletion. Baseline: 2,365 focused / 12.644 s; 42 fuzzy / 30.381 s. Four-check gate passed: fmt, clippy, 2,365 focused / 10.875 s, 42 fuzzy / 32.725 s. |
 | Completion 06: forge client | merged | this commit | Rebased parked `04b2` client and world; top-owned entries and client progress, bounded Forgejo v16.0.5 job-log read. Gate passed: fmt, clippy, 2,445 focused / 7.806 s; 43 fuzzy / 31.597 s. |
+| Completion 06: forge change | merged | this commit | Pure change procedure and landing queue policy; gate passed: fmt, clippy, 2,456 focused / 11.655 s; 43 fuzzy / 31.051 s. |
 | Alignment 01: grant patterns | merged | fd61587b | Two terminal forms; exact grants cover one name, open grants cover matching descendants. Gate passed: 2,366 focused / 11.760 s; 42 fuzzy / 29.817 s. |
 | Alignment 02: lost run | merged | 4e05dff2 | Root records every lost claim as `Failed(Lost)` with one lost try, including no-turn and release-recovery cuts. Gate passed: 2,366 focused / 5.896 s; 42 fuzzy / 27.617 s. |
 | Alignment 03: funding state | merged | ab12cd84 | Removed parked-move allotment generations, historical spend and closure rows; ended rows and source postings remain atomic. Gate passed: 2,366 focused / 11.181 s; 42 fuzzy / 28.374 s. |
