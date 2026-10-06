@@ -105,6 +105,7 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
         || task.made == 0
         || task.made > limits.tree_tasks
         || task.delegates.len() > usize::try_from(limits.delegates).expect("u32 fits usize")
+        || task.references.len() > usize::try_from(limits.references).expect("u32 fits usize")
         || task.waiting_on.len() > usize::try_from(limits.dependencies).expect("u32 fits usize")
         || task.dependencies.len() > usize::try_from(limits.dependencies).expect("u32 fits usize")
     {
@@ -121,7 +122,7 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
     if task.turn != 0 && task.attempt == 0 {
         return false;
     }
-    if task.inbox.len().saturating_add(task.delegates.len())
+    if task.inbox.len().saturating_add(task.delegates.len()).saturating_add(task.questions.len())
         > usize::try_from(limits.inbox_messages).expect("u32 fits usize")
     {
         return false;
@@ -131,22 +132,31 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
     for word in &task.inbox {
         let Some(total) = bytes.checked_add(word.words.len()) else { return false };
         bytes = total;
-        let requester = match (&word.kind, task.requester) {
-            (crate::MessageKind::Words, Party::Person(person)) => word.from == Party::Person(person),
-            (crate::MessageKind::Result(_), _) => match word.from {
+        let requester = match word.kind {
+            crate::MessageKind::Words | crate::MessageKind::Question | crate::MessageKind::Answer { .. } => {
+                match word.from {
+                    Party::Person(person) => task.requester == Party::Person(person),
+                    Party::Task(_) => true,
+                    Party::Deployment { .. } => false,
+                }
+            }
+            crate::MessageKind::Result(_) => match word.from {
                 Party::Task(_) => true,
                 Party::Person(_) | Party::Deployment { .. } => false,
             },
-            (crate::MessageKind::Words, Party::Task(_) | Party::Deployment { .. }) => false,
         };
         let bound = match &word.kind {
-            crate::MessageKind::Words => limits.message_bytes,
+            crate::MessageKind::Words | crate::MessageKind::Question | crate::MessageKind::Answer { .. } => {
+                limits.message_bytes
+            }
             crate::MessageKind::Result(_) => limits.result_bytes,
         };
         if word.number <= previous
             || word.number > task.last_message
             || (match &word.kind {
-                crate::MessageKind::Words => word.words.is_empty(),
+                crate::MessageKind::Words | crate::MessageKind::Question | crate::MessageKind::Answer { .. } => {
+                    word.words.is_empty()
+                }
                 crate::MessageKind::Result(_) => false,
             })
             || word.words.len() > usize::try_from(bound).expect("u32 fits usize")
@@ -164,6 +174,12 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
     let Some(total) = bytes.checked_add(reserved) else {
         return false;
     };
+    let Some(answer_reserved) =
+        task.questions.len().checked_mul(usize::try_from(limits.message_bytes).expect("u32 fits usize"))
+    else {
+        return false;
+    };
+    let Some(total) = total.checked_add(answer_reserved) else { return false };
     if total > usize::try_from(limits.inbox_bytes).expect("u32 fits usize") {
         return false;
     }
@@ -182,12 +198,22 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
     {
         return false;
     }
-    for numbers in [&*task.delegates, &*task.dependencies, &*task.spec.inputs, &*task.waiting_on] {
+    for numbers in [&*task.delegates, &*task.references, &*task.dependencies, &*task.spec.inputs, &*task.waiting_on] {
         for (at, number) in numbers.iter().enumerate() {
             for earlier in numbers.iter().take(at) {
                 if earlier == number {
                     return false;
                 }
+            }
+        }
+    }
+    for (at, credit) in task.questions.iter().enumerate() {
+        if credit.number == 0 || credit.answerer == 0 {
+            return false;
+        }
+        for earlier in task.questions.iter().take(at) {
+            if earlier.number == credit.number {
+                return false;
             }
         }
     }
@@ -300,6 +326,14 @@ fn links(domain: &Domain, env: &Env<Limits>, task: &TaskRecord) -> bool {
     }
     if descendants_made > task.made {
         return false;
+    }
+    for reference in &task.references {
+        let Some(peer) = record(domain, *reference) else {
+            return false;
+        };
+        if peer.project != task.project || !crate::batch::contains(&peer.references, task.number) {
+            return false;
+        }
     }
     for dependency in &task.waiting_on {
         if !crate::batch::contains(&task.dependencies, *dependency) {

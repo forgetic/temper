@@ -1,6 +1,6 @@
 //! Bounded person-chat words and atomic turn reads (domain/tasks.md, section 7).
 use crate::domain::{Domain, publish, record, refused, task_mut};
-use crate::{Active, Limits, MessageKind, Party, Phase, Refusal, Request, Status, Word};
+use crate::{Active, Limits, MessageKind, Party, Phase, QuestionCredit, Refusal, Request, Status, Word};
 use skein_lib::{Env, List, Queue, ReplyTo};
 
 /// Account for messages already waiting and the result credit reserved for
@@ -9,7 +9,7 @@ pub(crate) fn room(domain: &Domain, limits: &Limits, task: u64, count: u32, byte
     let Some(record) = record(domain, task) else {
         return false;
     };
-    let reserved = record.delegates.len();
+    let Some(reserved) = record.delegates.len().checked_add(record.questions.len()) else { return false };
     let Some(total_count) = record.inbox.len().checked_add(reserved) else {
         return false;
     };
@@ -23,16 +23,25 @@ pub(crate) fn room(domain: &Domain, limits: &Limits, task: u64, count: u32, byte
         };
         total_bytes = sum;
     }
-    let Some(result_bytes) = reserved.checked_mul(usize::try_from(limits.result_bytes).expect("u32 fits usize")) else {
+    let Some(result_bytes) =
+        record.delegates.len().checked_mul(usize::try_from(limits.result_bytes).expect("u32 fits usize"))
+    else {
         return false;
     };
-    let Some(total_bytes) = total_bytes.checked_add(result_bytes) else {
+    let Some(answer_bytes) =
+        record.questions.len().checked_mul(usize::try_from(limits.message_bytes).expect("u32 fits usize"))
+    else {
+        return false;
+    };
+    let Some(total_bytes) = total_bytes.checked_add(result_bytes) else { return false };
+    let Some(total_bytes) = total_bytes.checked_add(answer_bytes) else {
         return false;
     };
     total_count <= usize::try_from(limits.inbox_messages).expect("u32 fits usize")
         && total_bytes <= usize::try_from(limits.inbox_bytes).expect("u32 fits usize")
 }
 
+#[expect(clippy::too_many_lines, reason = "one inbox entrance preflights message and answer credits before mutation")]
 pub(crate) fn message(
     domain: &mut Domain,
     env: &Env<Limits>,
@@ -48,18 +57,32 @@ pub(crate) fn message(
     let Some(task) = record(domain, number) else {
         return refused(to, Some(number), Refusal::Unknown, out);
     };
-    let requester = match task.requester {
-        Party::Person(person) => word.from == Party::Person(person),
-        Party::Task(_) | Party::Deployment { .. } => false,
+    let requester = match word.from {
+        Party::Person(person) => task.requester == Party::Person(person),
+        Party::Task(source) => crate::refs::allows(domain, source, number),
+        Party::Deployment { .. } => false,
     };
-    if task.project != project || !requester || word.kind != MessageKind::Words {
+    let sendable = match word.kind {
+        MessageKind::Words | MessageKind::Question | MessageKind::Answer { .. } => true,
+        MessageKind::Result(_) => false,
+    };
+    if task.project != project || !requester || !sendable {
         return refused(to, Some(number), Refusal::State, out);
     }
-    let active = match task.phase {
-        Phase::Active(_) => true,
-        Phase::Waiting | Phase::Closing(_) | Phase::Held { .. } | Phase::Ended(_) => false,
+    let available = match task.phase {
+        Phase::Active(_) | Phase::Waiting | Phase::Held { was: crate::Was::Waiting | crate::Was::Active(_), .. } => {
+            true
+        }
+        Phase::Closing(_) | Phase::Held { was: crate::Was::Closing(_), .. } | Phase::Ended(_) => false,
     };
-    if !active {
+    let person_waiting = match word.from {
+        Party::Person(_) => match task.phase {
+            Phase::Active(_) => false,
+            Phase::Waiting | Phase::Closing(_) | Phase::Held { .. } | Phase::Ended(_) => true,
+        },
+        Party::Task(_) | Party::Deployment { .. } => false,
+    };
+    if !available || person_waiting {
         return refused(to, Some(number), Refusal::State, out);
     }
     if word.number == 0
@@ -69,8 +92,33 @@ pub(crate) fn message(
     {
         return refused(to, Some(number), Refusal::Read, out);
     }
-    if !room(domain, &env.limits, number, 1, word.words.len()) {
+    let answer = match word.kind {
+        MessageKind::Words | MessageKind::Question => None,
+        MessageKind::Answer { question } => {
+            let mut valid = false;
+            for credit in &task.questions {
+                if credit.number == question && word.from == Party::Task(credit.answerer) {
+                    valid = true;
+                }
+            }
+            if !valid {
+                return refused(to, Some(number), Refusal::Reference, out);
+            }
+            Some(question)
+        }
+        MessageKind::Result(_) => unreachable!("result has its reserved root entrance"),
+    };
+    if answer.is_none() && !room(domain, &env.limits, number, 1, word.words.len()) {
         return refused(to, Some(number), Refusal::Busy, out);
+    }
+    if word.kind == MessageKind::Question {
+        let source = match word.from {
+            Party::Task(source) => source,
+            Party::Person(_) | Party::Deployment { .. } => return refused(to, Some(number), Refusal::Reference, out),
+        };
+        if !room(domain, &env.limits, source, 1, usize::try_from(env.limits.message_bytes).expect("u32 fits usize")) {
+            return refused(to, Some(source), Refusal::Busy, out);
+        }
     }
     let phase = task.phase.clone();
     let previous = match task.last_message {
@@ -85,13 +133,26 @@ pub(crate) fn message(
     let task = task_mut(domain, number).expect("admitted task still live");
     task.record.last_message = word.number;
     task.record.inbox = inbox.into_boxed();
+    if let Some(question) = answer {
+        let mut credits = List::with_capacity(env.limits.inbox_messages);
+        for credit in &task.record.questions {
+            if credit.number != question {
+                credits.push(*credit).expect("credit subset bounded");
+            }
+        }
+        task.record.questions = credits.into_boxed();
+    }
     let mut wake = false;
     let mut relay = None;
     match phase {
         Phase::Active(Active::Idle) => wake = true,
         Phase::Active(Active::Claimed { attempt } | Active::Running { attempt }) => relay = Some(attempt),
-        Phase::Active(Active::Due | Active::Preparing | Active::BackingOff { .. }) => {}
-        Phase::Waiting | Phase::Closing(_) | Phase::Held { .. } | Phase::Ended(_) => unreachable!("active entrance"),
+        Phase::Active(Active::Due | Active::Preparing | Active::BackingOff { .. })
+        | Phase::Waiting
+        | Phase::Held { was: crate::Was::Waiting | crate::Was::Active(_), .. } => {}
+        Phase::Closing(_) | Phase::Held { was: crate::Was::Closing(_), .. } | Phase::Ended(_) => {
+            unreachable!("message entrance excluded closing")
+        }
     }
     if wake {
         task.record.phase = Phase::Active(Active::Due);
@@ -102,6 +163,20 @@ pub(crate) fn message(
     }
     if let Some(attempt) = relay {
         out.push(Request::Relay { task: number, attempt, previous, word: word.clone() });
+    }
+    if word.kind == MessageKind::Question {
+        let source = match word.from {
+            Party::Task(source) => source,
+            Party::Person(_) | Party::Deployment { .. } => unreachable!("question source checked"),
+        };
+        let source_row = task_mut(domain, source).expect("referenced questioner remains live");
+        let mut credits = List::with_capacity(env.limits.inbox_messages);
+        for credit in &source_row.record.questions {
+            credits.push(*credit).expect("question credits bounded");
+        }
+        credits.push(QuestionCredit { number: word.number, answerer: number }).expect("answer room reserved");
+        source_row.record.questions = credits.into_boxed();
+        publish(domain, env, source, out);
     }
     out.push(Request::Sent { reply_to: to, task: number, word });
 }
@@ -124,7 +199,7 @@ pub(crate) fn delegate_result(
         ) => Status::Done,
         MessageKind::Result(crate::ResultKind::Failed) => Status::Failed,
         MessageKind::Result(crate::ResultKind::Cancelled) => Status::Cancelled,
-        MessageKind::Words => return,
+        MessageKind::Words | MessageKind::Question | MessageKind::Answer { .. } => return,
     };
     if !match word.from {
         Party::Task(_) => true,

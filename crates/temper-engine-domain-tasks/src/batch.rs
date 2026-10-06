@@ -153,6 +153,9 @@ fn check_members(
                     }
                 }
             }
+            if !known && let Some(parent) = parent {
+                known = contains(&parent.references, *dependency) && domain.names.contains_key(dependency);
+            }
             if !known {
                 return Err(problem(number, Refusal::Dependencies));
             }

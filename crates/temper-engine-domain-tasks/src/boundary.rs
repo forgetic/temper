@@ -11,6 +11,10 @@ use skein_lib::{ReplyTo, Wall};
 pub enum MessageKind {
     /// Whole words from a person or referenced task.
     Words,
+    /// A bounded question for which the sender keeps answer room.
+    Question,
+    /// Answer to a named question previously asked of this sender.
+    Answer { question: u64 },
     /// A delegate's terminal result, sent with its end.
     Result(ResultKind),
 }
@@ -39,6 +43,13 @@ pub struct Word {
     pub words: Box<[u8]>,
     /// Injected time of admission, for oldest-first reads.
     pub at: Wall,
+}
+
+/// An unanswered question and the task allowed to use its reserved answer room.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct QuestionCredit {
+    pub number: u64,
+    pub answerer: u64,
 }
 
 /// Root-verified requester/creator identity; requester topology and actual financial source are
@@ -413,6 +424,10 @@ pub struct TaskRecord {
     /// Current live direct delegates, bounded by `Limits::delegates`; requester ending waits until
     /// they are gone.
     pub delegates: Box<[u64]>,
+    /// Introduced peer tasks this task may message or name as a live dependency.
+    pub references: Box<[u64]>,
+    /// Open questions with one reserved answer slot apiece.
+    pub questions: Box<[QuestionCredit]>,
     /// Latest newly admitted contiguous turn in the current attempt; `new` `Claim` starts at zero.
     pub turn: u32,
     /// Newest message ever admitted, including those taken by committed turns.
@@ -513,6 +528,8 @@ pub enum Refusal {
     Depth,
     /// Creator's live delegate list cannot fit the batch.
     Delegates,
+    /// A sender lacks a live delegation or introduced reference to the target.
+    Reference,
     /// `Dependency` count, uniqueness or current-live/same-batch identity is invalid.
     Dependencies,
     /// Combined live delegation waits and immutable dependencies would cycle.
@@ -572,6 +589,8 @@ pub enum Accepted {
 /// notifications have no reply destination and may be ignored if stale. (domain/tasks.md, sections 4–5).
 #[derive(PartialEq, Eq, Debug)]
 pub enum Event {
+    /// Give two live tasks referenced by the introducer reciprocal references.
+    Introduce { reply_to: ReplyTo, by: u64, left: u64, right: u64 },
     /// Admit authenticated person words to a live chat and wake or relay after their commit.
     Message { reply_to: ReplyTo, project: u32, task: u64, word: Word },
     /// Root delivers a just-ended delegate's result to its task requester in

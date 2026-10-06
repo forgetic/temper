@@ -133,6 +133,9 @@ pub fn max_out(limits: &Limits) -> u32 {
 /// effects before external replies.
 pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     match event {
+        Event::Introduce { reply_to, by, left, right } => {
+            crate::refs::introduce(domain, env, reply_to, by, left, right, out);
+        }
         Event::InspectEscalations { reply_to, project } => {
             let result = crate::escalation::project_contexts(domain, &env.limits, project);
             out.push(Request::EscalationsInspected { reply_to, result });
@@ -404,6 +407,8 @@ fn make(
                 waiting_on: new.dependencies.clone(),
                 dependencies: new.dependencies,
                 delegates: Box::new([]),
+                references: Box::new([]),
+                questions: Box::new([]),
                 turn: 0,
                 last_message: 0,
                 inbox: Box::new([]),

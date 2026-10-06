@@ -26,6 +26,7 @@ pub fn limits() -> engine::Limits {
         tree_tasks: 2,
         depth: 1,
         delegates: 1,
+        references: 2,
         batch: 1,
         dependencies: 1,
         inputs: 1,

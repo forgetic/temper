@@ -19,6 +19,7 @@ pub const LIMITS: Limits = Limits {
     tree_tasks: 16,
     depth: 4,
     delegates: 8,
+    references: 8,
     batch: 8,
     dependencies: 8,
     inputs: 4,
@@ -256,6 +257,7 @@ impl World {
             | Event::RoutedEscalation { .. }
             | Event::DecideEscalation { .. }
             | Event::Message { .. }
+            | Event::Introduce { .. }
             | Event::DelegateResult { .. } => None,
         };
         self.trace.log(self.env.now, format_args!("{event:?}"));
@@ -403,11 +405,10 @@ impl World {
                 | Request::Erase { .. }
                 | Request::Ended { .. }
                 | Request::EscalationNeeded { .. }
-                | Request::Sent { .. }
                 | Request::Relay { .. } => {}
+                Request::Sent { reply_to, .. } | Request::Done { reply_to } => self.reply(reply_to, Reply::Done),
                 Request::Made { reply_to, tasks } => self.reply(reply_to, Reply::Made(tasks.into_vec())),
                 Request::Refused { reply_to, problem } => self.reply(reply_to, Reply::Refused(problem)),
-                Request::Done { reply_to } => self.reply(reply_to, Reply::Done),
                 Request::Acknowledged { reply_to, accepted, .. } => self.reply(reply_to, Reply::Acknowledged(accepted)),
                 Request::TurnAcknowledged { reply_to, accepted, .. } => self.reply(reply_to, Reply::Turn(accepted)),
                 Request::Activate { context } => {

@@ -74,6 +74,35 @@ fn bounded_historical_inputs_are_left_for_the_roots_archive_check() {
 }
 
 #[test]
+fn a_dependency_on_an_introduced_sibling_is_accepted_and_a_cross_subtree_wait_cycle_refused() {
+    for cycle in [false, true] {
+        let mut w = World::new(102 + u64::from(cycle), LIMITS);
+        w.make(Party::Person(1), vec![task(1, &[])]);
+        let right = if cycle { task(3, &[2]) } else { task(3, &[]) };
+        w.make(Party::Task(1), vec![task(2, &[]), right]);
+        refused(&w.make(Party::Task(2), vec![task(4, &[3])]), Refusal::Dependencies);
+        let reply_to = w.to();
+        let key = reply_to.into_token().raw();
+        w.send(Event::Introduce {
+            reply_to: skein_lib::ReplyTo::new(skein_lib::Token::new(key)),
+            by: 1,
+            left: 2,
+            right: 3,
+        });
+        assert_eq!(w.replies[&key], Reply::Done);
+        assert_eq!(w.record(2).references.as_ref(), [3]);
+        assert_eq!(w.record(3).references.as_ref(), [2]);
+        let answer = w.make(Party::Task(2), vec![task(4, &[3])]);
+        if cycle {
+            refused(&answer, Refusal::Cycle);
+        } else {
+            assert_eq!(answer, Reply::Made(vec![4]));
+        }
+        w.restart();
+    }
+}
+
+#[test]
 fn tree_depth_and_delegate_limits_are_atomic() {
     for (limits, why) in [
         (temper_engine_domain_tasks::Limits { tree_tasks: 1, ..LIMITS }, Refusal::Tree),

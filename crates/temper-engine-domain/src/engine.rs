@@ -155,10 +155,24 @@ pub struct Turn {
 pub enum Tool {
     /// Create one authorized batch of direct task delegates.
     Delegate { batch: Box<[Delegate]> },
+    /// Send whole bounded words to a task the caller references.
+    Message { target: u64, form: MessageForm, words: Box<[u8]> },
+    /// Give two tasks referenced by the caller reciprocal references.
+    Introduce { left: u64, right: u64 },
     /// Root-normalized whole-batch shape refusal after bounded ingress.
     Rejected(tasks::Refusal),
+    /// Root-normalized message shape refusal before retaining its words.
+    RejectedMessage(tasks::Refusal),
     /// The engine records an unavailable answer for a route not yet installed.
     Unavailable,
+}
+
+/// The sendable portion of the task inbox vocabulary.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MessageForm {
+    Words,
+    Question,
+    Answer { question: u64 },
 }
 
 /// A dependency named by a delegate call before the root allocates task IDs.
@@ -542,6 +556,7 @@ pub struct Domain {
     dependency_results: Map<u64, Box<[HistoricalResult]>>,
     made: Map<Token, u64>,
     delegating: Map<Token, CallKey>,
+    routing_calls: Map<Token, CallKey>,
     ending_positions: Map<u64, u64>,
     saying: Map<Token, u64>,
     relaying: Option<PendingRelay>,
@@ -614,6 +629,7 @@ impl Domain {
             dependency_results: Map::with_capacity(limits.tasks.tasks),
             made: Map::with_capacity(limits.people.pending),
             delegating: Map::with_capacity(limits.fleet.calls),
+            routing_calls: Map::with_capacity(limits.fleet.calls),
             ending_positions: Map::with_capacity(limits.tasks.tasks),
             saying: Map::with_capacity(limits.people.pending),
             relaying: None,
@@ -666,6 +682,7 @@ impl Domain {
             && self.result_pages.is_empty()
             && self.dependency_results.is_empty()
             && self.pending_calls.is_empty()
+            && self.routing_calls.is_empty()
             && self.made.is_empty()
             && self.delegating.is_empty()
             && self.ending_positions.is_empty()
@@ -928,7 +945,14 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
                 return;
             }
             if let Some(why) = call_shape(&body.tool, &env.limits.tasks) {
-                body.tool = Tool::Rejected(why);
+                body.tool = match body.tool {
+                    Tool::Message { .. } => Tool::RejectedMessage(why),
+                    Tool::Delegate { .. }
+                    | Tool::Introduce { .. }
+                    | Tool::Rejected(_)
+                    | Tool::RejectedMessage(_)
+                    | Tool::Unavailable => Tool::Rejected(why),
+                };
             }
             let Ok(id) = domain.payloads.insert(Some(Payload::Call { key, body })) else {
                 out.push(Request::CallBusy { channel, task, attempt, call });
@@ -1548,7 +1572,11 @@ fn relay_call(domain: &mut Domain, limits: &Limits, decision: &mut Decision, to:
 
 fn call_needs_input(tool: &Tool) -> bool {
     match tool {
-        Tool::Unavailable | Tool::Rejected(_) => false,
+        Tool::Unavailable
+        | Tool::Rejected(_)
+        | Tool::RejectedMessage(_)
+        | Tool::Message { .. }
+        | Tool::Introduce { .. } => false,
         Tool::Delegate { batch } => {
             for member in batch {
                 if !member.spec.inputs.is_empty() {
@@ -1562,7 +1590,17 @@ fn call_needs_input(tool: &Tool) -> bool {
 
 fn call_shape(tool: &Tool, limits: &tasks::Limits) -> Option<tasks::Refusal> {
     match tool {
-        Tool::Unavailable | Tool::Rejected(_) => None,
+        Tool::Unavailable | Tool::Rejected(_) | Tool::RejectedMessage(_) | Tool::Introduce { .. } => None,
+        Tool::Message { form, words, .. } => {
+            if words.is_empty() || words.len() > usize::try_from(limits.message_bytes).expect("u32 fits usize") {
+                return Some(tasks::Refusal::Read);
+            }
+            match form {
+                MessageForm::Answer { question } if *question == 0 => return Some(tasks::Refusal::Read),
+                MessageForm::Words | MessageForm::Question | MessageForm::Answer { .. } => {}
+            }
+            None
+        }
         Tool::Delegate { batch } => {
             if batch.len() > usize::try_from(limits.batch).expect("u32 fits usize") {
                 return Some(tasks::Refusal::Batch);
@@ -1603,6 +1641,67 @@ fn decide_call(
     assert!(domain.calls.insert(key, answer.clone()) == Ok(None), "call record room reserved");
     save(decision, limits, Write::Save(Record::Call(crate::CallRecord { key, answer: answer.clone() })));
     relay_call(domain, limits, decision, to, answer);
+}
+
+#[expect(clippy::too_many_arguments, reason = "the named message route carries root, call and whole words")]
+fn message_call(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    decision: &mut Decision,
+    to: ReplyTo,
+    key: CallKey,
+    target: u64,
+    form: MessageForm,
+    words: Box<[u8]>,
+) {
+    let Some(context) = domain.tasks.delegation(key.task) else {
+        decide_call(
+            domain,
+            &env.limits,
+            decision,
+            to,
+            key,
+            CallAnswer::MessageRefused(tasks::Problem { task: Some(key.task), why: tasks::Refusal::Unknown }),
+        );
+        return;
+    };
+    let Some(number) = crate::fresh(&mut domain.journal, Family::Message) else {
+        decide_call(
+            domain,
+            &env.limits,
+            decision,
+            to,
+            key,
+            CallAnswer::MessageRefused(tasks::Problem { task: Some(target), why: tasks::Refusal::Busy }),
+        );
+        return;
+    };
+    let token = to.into_token();
+    assert!(domain.pending_calls.insert(key, true).is_ok(), "call record room reserved");
+    assert!(domain.routing_calls.insert(token, key) == Ok(None), "one live routed call");
+    domain.work.push(Work::Tasks(tasks::Event::Message {
+        reply_to: ReplyTo::new(token),
+        project: context.project,
+        task: target,
+        word: tasks::Word {
+            number,
+            from: tasks::Party::Task(key.task),
+            kind: match form {
+                MessageForm::Words => tasks::MessageKind::Words,
+                MessageForm::Question => tasks::MessageKind::Question,
+                MessageForm::Answer { question } => tasks::MessageKind::Answer { question },
+            },
+            words,
+            at: env.wall,
+        },
+    }));
+}
+
+fn introduce_call(domain: &mut Domain, to: ReplyTo, key: CallKey, left: u64, right: u64) {
+    let token = to.into_token();
+    assert!(domain.pending_calls.insert(key, true).is_ok(), "call record room reserved");
+    assert!(domain.routing_calls.insert(token, key) == Ok(None), "one live routed call");
+    domain.work.push(Work::Tasks(tasks::Event::Introduce { reply_to: ReplyTo::new(token), by: key.task, left, right }));
 }
 
 #[expect(
@@ -1826,15 +1925,27 @@ fn tasks_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
         match out.pop().expect("tasks output count") {
             tasks::Request::Sent { reply_to, task, word } => {
                 let request = reply_to.into_token();
-                assert!(domain.saying.remove(&request) == Some(task), "matching pending say flight");
                 if let Some(context) = domain.contexts.get_mut(&task) {
                     context.inbox = append_word(&context.inbox, &word, env.limits.tasks.inbox_messages);
                     context.last_message = word.number;
                 }
-                domain.work.push(Work::People(people::Event::Decided {
-                    request,
-                    outcome: people::Outcome::Said { task, message: word.number },
-                }));
+                match domain.routing_calls.remove(&request) {
+                    Some(key) => decide_call(
+                        domain,
+                        &env.limits,
+                        decision,
+                        ReplyTo::new(request),
+                        key,
+                        CallAnswer::Sent { message: word.number },
+                    ),
+                    None => {
+                        assert!(domain.saying.remove(&request) == Some(task), "matching pending say flight");
+                        domain.work.push(Work::People(people::Event::Decided {
+                            request,
+                            outcome: people::Outcome::Said { task, message: word.number },
+                        }));
+                    }
+                }
             }
             tasks::Request::Relay { task, attempt, previous, word } => {
                 emit(decision, &env.limits, Delivery::Relay { task, attempt, previous, word });
@@ -1896,7 +2007,16 @@ fn tasks_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
             }
             tasks::Request::Refused { reply_to, problem } => {
                 let token = reply_to.into_token();
-                if let Some(key) = domain.delegating.remove(&token) {
+                if let Some(key) = domain.routing_calls.remove(&token) {
+                    decide_call(
+                        domain,
+                        &env.limits,
+                        decision,
+                        ReplyTo::new(token),
+                        key,
+                        CallAnswer::MessageRefused(problem),
+                    );
+                } else if let Some(key) = domain.delegating.remove(&token) {
                     decide_call(
                         domain,
                         &env.limits,
@@ -1925,6 +2045,7 @@ fn tasks_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                             | tasks::Refusal::Tree
                             | tasks::Refusal::Depth
                             | tasks::Refusal::Delegates
+                            | tasks::Refusal::Reference
                             | tasks::Refusal::Dependencies
                             | tasks::Refusal::Cycle
                             | tasks::Refusal::Executor
@@ -2082,7 +2203,16 @@ fn tasks_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
             }
             tasks::Request::Done { reply_to } => {
                 let task = reply_to.into_token().raw();
-                if let Some(attempt) = domain.claiming.remove(&task) {
+                if let Some(key) = domain.routing_calls.remove(&Token::new(task)) {
+                    decide_call(
+                        domain,
+                        &env.limits,
+                        decision,
+                        ReplyTo::new(Token::new(task)),
+                        key,
+                        CallAnswer::Introduced,
+                    );
+                } else if let Some(attempt) = domain.claiming.remove(&task) {
                     let proof = domain.proofs.get(&task).expect("claim proof pre-reserved");
                     save(decision, &env.limits, Write::Save(Record::RunProof(proof.clone())));
                     emit(
@@ -2343,7 +2473,21 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                             key,
                             CallAnswer::DelegationRefused(tasks::Problem { task: None, why }),
                         ),
+                        Tool::RejectedMessage(why) => decide_call(
+                            domain,
+                            &env.limits,
+                            decision,
+                            reply_to,
+                            key,
+                            CallAnswer::MessageRefused(tasks::Problem { task: None, why }),
+                        ),
                         Tool::Delegate { batch } => delegate_call(domain, env, decision, reply_to, key, batch, false),
+                        Tool::Message { target, form, words } => {
+                            message_call(domain, env, decision, reply_to, key, target, form, words);
+                        }
+                        Tool::Introduce { left, right } => {
+                            introduce_call(domain, reply_to, key, left, right);
+                        }
                     },
                 }
             }
@@ -3196,6 +3340,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     bytes = bytes
         .checked_add(Map::<Token, u64>::worst_case(limits.people.pending)?)?
         .checked_add(Map::<Token, CallKey>::worst_case(limits.fleet.calls)?)?
+        .checked_add(Map::<Token, CallKey>::worst_case(limits.fleet.calls)?)?
         .checked_add(Map::<u64, u64>::worst_case(limits.tasks.tasks)?)?
         .checked_add(Map::<CallKey, bool>::worst_case(limits.call_records)?)?
         .checked_add(Map::<u64, Box<[HistoricalResult]>>::worst_case(limits.tasks.tasks)?)?
@@ -3858,7 +4003,8 @@ fn supported_requester(requester: tasks::Party, people: u64, tasks: u64) -> bool
 
 fn valid_call_answer(answer: &CallAnswer, deployment: &crate::Deployment, limits: &Limits) -> bool {
     match answer {
-        CallAnswer::Unavailable => true,
+        CallAnswer::Unavailable | CallAnswer::Introduced => true,
+        CallAnswer::Sent { message } => *message != 0 && *message <= deployment.messages,
         CallAnswer::Delegated(numbers) => {
             if numbers.is_empty() || numbers.len() > usize::try_from(limits.tasks.batch).expect("u32 fits usize") {
                 return false;
@@ -3881,7 +4027,7 @@ fn valid_call_answer(answer: &CallAnswer, deployment: &crate::Deployment, limits
                     <= usize::try_from(authority::max_out(&limits.authority).expect("valid authority bound"))
                         .expect("u32 fits usize")
         }
-        CallAnswer::DelegationRefused(problem) => match problem.task {
+        CallAnswer::MessageRefused(problem) | CallAnswer::DelegationRefused(problem) => match problem.task {
             Some(task) => task != 0 && task <= deployment.tasks,
             None => true,
         },

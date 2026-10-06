@@ -74,6 +74,12 @@ pub struct CallKey {
 /// Exact typed answer kept for replay across a lost channel or root restart.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum CallAnswer {
+    /// Message entered its target's inbox at this commit position.
+    Sent { message: u64 },
+    /// Reciprocal task references were installed.
+    Introduced,
+    /// A message or introduction failed its live reference or inbox check.
+    MessageRefused(temper_engine_domain_tasks::Problem),
     /// All members of an authorized batch, in call order.
     Delegated(Box<[u64]>),
     /// A whole batch declined by authority, with its independent findings.
@@ -501,7 +507,11 @@ pub fn record_bytes(record: &Record) -> Option<u64> {
     match record {
         Record::EscalationDecision(row) => decision_bytes(&row.decision),
         Record::Call(row) => match &row.answer {
-            CallAnswer::Unavailable | CallAnswer::DelegationRefused(_) => Some(0),
+            CallAnswer::Unavailable
+            | CallAnswer::Introduced
+            | CallAnswer::Sent { .. }
+            | CallAnswer::MessageRefused(_)
+            | CallAnswer::DelegationRefused(_) => Some(0),
             CallAnswer::Delegated(numbers) => u64::try_from(numbers.len()).ok()?.checked_mul(8),
             CallAnswer::DelegationDenied { findings, .. } => u64::try_from(findings.len())
                 .ok()?

@@ -56,6 +56,7 @@ mod funders;
 mod inbox;
 mod limits;
 mod owned;
+mod refs;
 mod run;
 mod stored;
 #[cfg(test)]
@@ -64,8 +65,8 @@ mod value;
 pub use batch::{valid_authority, valid_contract, valid_spec};
 pub use boundary::{
     Accepted, Active, Cause, Closing, Contract, DelegateState, DelegationContext, End, Ending, Event, Executor, Hold,
-    Key, MessageKind, New, Parameter, Party, Phase, Problem, Refusal, Request, ResultKind, RunContext, Spec, Stage,
-    Status, Stored, TaskRecord, TaskResult, Verdict, Was, Word,
+    Key, MessageKind, New, Parameter, Party, Phase, Problem, QuestionCredit, Refusal, Request, ResultKind, RunContext,
+    Spec, Stage, Status, Stored, TaskRecord, TaskResult, Verdict, Was, Word,
 };
 pub use domain::{Domain, fire, max_out, step};
 pub use escalation::{Escalation, EscalationContext, EscalationDecision, EscalationHolder, EscalationOutcome};

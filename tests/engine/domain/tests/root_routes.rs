@@ -895,6 +895,65 @@ fn assigned_task(driver: &Driver, task: u64) -> engine::Assignment {
         .expect("task assigned")
 }
 
+fn tool_call(driver: &mut Driver, source: &engine::Assignment, call: u64, tool: engine::Tool) {
+    driver.send(engine::Event::Call {
+        channel: Token::new(7),
+        task: source.task,
+        attempt: source.attempt,
+        call: Token::new(call),
+        body: engine::Call { completion: 1, position: u32::try_from(call).expect("small call"), tool },
+    });
+    for _ in 0..30 {
+        driver.advance(true);
+    }
+}
+
+#[test]
+fn introduced_siblings_can_exchange_named_words_after_the_references_commit() {
+    let (mut driver, parent) = batch_fixture();
+    let numbers = call_batch(
+        &mut driver,
+        &parent,
+        201,
+        Box::new([report_delegate(b"left", Box::new([])), report_delegate(b"right", Box::new([]))]),
+    );
+    for _ in 0..30 {
+        driver.advance(true);
+    }
+    tool_call(
+        &mut driver,
+        &parent,
+        202,
+        engine::Tool::Message {
+            target: numbers[1],
+            form: engine::MessageForm::Words,
+            words: b"before".as_slice().into(),
+        },
+    );
+    assert!(driver.delivered.iter().any(|delivery| matches!(delivery,
+        Delivery::CallAnswer { call, answer: temper_engine_domain::CallAnswer::Sent { .. }, .. }
+        if *call == Token::new(202))));
+    tool_call(&mut driver, &parent, 203, engine::Tool::Introduce { left: numbers[0], right: numbers[1] });
+    assert!(driver.delivered.iter().any(|delivery| matches!(delivery,
+        Delivery::CallAnswer { call, answer: temper_engine_domain::CallAnswer::Introduced, .. }
+        if *call == Token::new(203))));
+    let Some(Record::Tasks(tasks::Stored::Live(left))) =
+        driver.store.rows.get(&Key::Tasks(tasks::Key::Live(numbers[0])))
+    else {
+        panic!("left task live")
+    };
+    assert_eq!(left.references.as_ref(), [numbers[1]]);
+    let Some(Record::Tasks(tasks::Stored::Live(right))) =
+        driver.store.rows.get(&Key::Tasks(tasks::Key::Live(numbers[1])))
+    else {
+        panic!("right task live")
+    };
+    assert_eq!(right.references.as_ref(), [numbers[0]]);
+    assert!(
+        right.inbox.iter().any(|word| word.from == tasks::Party::Task(parent.task) && word.words.as_ref() == b"before")
+    );
+}
+
 fn park_task(driver: &mut Driver, assignment: &engine::Assignment) {
     driver.send(engine::Event::Answer {
         saved: None,

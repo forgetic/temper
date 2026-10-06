@@ -23,6 +23,8 @@ pub struct Limits {
     pub depth: u32,
     /// Maximum live direct delegates of one requester task.
     pub delegates: u32,
+    /// Maximum introduced peer references per live task.
+    pub references: u32,
     /// Maximum directly created tasks in one atomic nonempty `Make` batch.
     pub batch: u32,
     /// Maximum immutable dependency identities per task; also bounds its remaining live
@@ -94,12 +96,16 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     let payload = u64::from(limits.spec_bytes)
         .checked_add(u64::from(limits.inbox_bytes))?
         .checked_add(u64::from(limits.inbox_messages).checked_mul(u64::try_from(size_of::<crate::Word>()).ok()?)?)?
+        .checked_add(
+            u64::from(limits.inbox_messages).checked_mul(u64::try_from(size_of::<crate::QuestionCredit>()).ok()?)?,
+        )?
         .checked_add(u64::from(limits.saved_repositories).checked_mul(4)?)?
         .checked_add(u64::from(limits.result_bytes).checked_mul(3)?)?
         .checked_add(u64::from(limits.parameters).checked_mul(u64::try_from(size_of::<Parameter>()).ok()?)?)?
         .checked_add(u64::from(limits.inputs).checked_mul(8)?)?
         .checked_add(u64::from(limits.dependencies).checked_mul(16)?)?
         .checked_add(u64::from(limits.delegates).checked_mul(8)?)?
+        .checked_add(u64::from(limits.references).checked_mul(8)?)?
         .checked_add(u64::from(limits.contract_choices).checked_mul(u64::try_from(size_of::<Verdict>()).ok()?)?)?
         .checked_add(u64::from(limits.authority_grants).checked_mul(u64::try_from(size_of::<Grant>()).ok()?)?)?
         .checked_add(segments)?
