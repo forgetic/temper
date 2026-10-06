@@ -430,16 +430,17 @@ of the authority it needs; an escalation is a held task waiting for a
 decision. authority.md, section 9 says what may be proposed, what an
 action needs, and what an acceptance funds.
 
-- **Their state.** A proposal: the proposing task; the action, as the
-  tool or the step asked for it (a batch, an effect, an amendment, a
-  widening of its own authority); its reason, in words; whether the
+- **Their state.** A proposal: its proposer, a task or a person asking
+  in the web for a goal beyond their allotment (people.md, 5.1); the
+  action, as the tool, the step or the request asked for it (a batch, an
+  effect, an amendment, a widening of its own authority); its reason, in words; whether the
   tasks it makes are to be the accepter's; where it waits; and pending,
   accepted, rejected or withdrawn. An escalation is part of its held
   task's state: one per held task, never more. Both are kept in the
   store, and pending ones in this child domain.
 - **Admitted once.** A proposal is admitted at its entrance, the
-  `propose` call or the step that asks, against the pending proposals
-  allowed per task and in the deployment, and refused there if they are
+  `propose` call, the step or the person's request that asks, against the
+  pending proposals allowed per proposer and in the deployment, and refused there if they are
   full; an escalation needs no room beyond its held task. Neither takes
   room in any inbox: each shows as an entry in the inbox of whoever it
   waits for, and those it passes on the way hear a notice, which merges.
@@ -449,8 +450,10 @@ action needs, and what an acceptance funds.
   tree's root task is whoever requested it: a person is the next holder
   there, when their authority covers it; past them, or past a root the
   deployment requested, it waits for the people whose role the project's
-  policy names for that kind of decision (people.md, section 4). Where one waits is decided again when that holder ends, is
-  held, or no longer covers it, and when it stalls (below).
+  policy names for that kind of decision (people.md, section 4). A
+  person's own proposal waits there from the start. Where one waits is
+  decided again when that holder ends, is held, or no longer covers it,
+  and when it stalls (below).
 - **Waking.** It always wakes the task it waits for (7.3), is relayed to
   that task's live run as messages are, and is in the brief of its next
   run (engine.md, section 9); for a person, it appears in their inbox at
