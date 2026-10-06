@@ -42,6 +42,11 @@ fn valid_stage(task: &TaskRecord, closing: &Closing, limits: &Limits) -> bool {
 }
 
 fn valid_phase(task: &TaskRecord, limits: &Limits) -> bool {
+    if let Executor::Person(_) = task.executor
+        && !person_phase(&task.phase)
+    {
+        return false;
+    }
     match &task.phase {
         Phase::Active(Active::Claimed { attempt } | Active::Running { attempt })
         | Phase::Held { was: Was::Active(Active::Claimed { attempt } | Active::Running { attempt }), .. } => {
@@ -56,6 +61,30 @@ fn valid_phase(task: &TaskRecord, limits: &Limits) -> bool {
             ..
         } => true,
         Phase::Ended(_) => false,
+    }
+}
+
+fn person_phase(phase: &Phase) -> bool {
+    match phase {
+        Phase::Waiting
+        | Phase::Active(Active::Due | Active::Idle)
+        | Phase::Held { was: Was::Waiting | Was::Active(Active::Due | Active::Idle), .. }
+        | Phase::Closing(Closing { stage: Stage::Delegates | Stage::Effects | Stage::Settled, .. })
+        | Phase::Held {
+            was: Was::Closing(Closing { stage: Stage::Delegates | Stage::Effects | Stage::Settled, .. }),
+            ..
+        } => true,
+        Phase::Active(
+            Active::Preparing | Active::Claimed { .. } | Active::Running { .. } | Active::BackingOff { .. },
+        )
+        | Phase::Closing(Closing { stage: Stage::Run { .. }, .. })
+        | Phase::Held {
+            was:
+                Was::Active(Active::Preparing | Active::Claimed { .. } | Active::Running { .. } | Active::BackingOff { .. }),
+            ..
+        }
+        | Phase::Held { was: Was::Closing(Closing { stage: Stage::Run { .. }, .. }), .. }
+        | Phase::Ended(_) => false,
     }
 }
 
@@ -411,7 +440,7 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
     }
     match task.executor {
         Executor::Agent { charter } => {
-            if task.recurring.is_some() {
+            if task.recurring.is_some() || task.taken_by.is_some() {
                 return false;
             }
             for configured in &domain.charters {
@@ -423,7 +452,8 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
         }
         Executor::Procedure { connector: 0, code: 1 } => match &task.recurring {
             Some(state) => {
-                state.template.key != 0
+                task.taken_by.is_none()
+                    && state.template.key != 0
                     && crate::recurring::valid_template(
                         limits,
                         task.project,
@@ -438,8 +468,25 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
             }
             None => false,
         },
-        Executor::Procedure { connector, code } => connector != 0 && code != 0 && task.recurring.is_none(),
+        Executor::Procedure { connector, code } => {
+            connector != 0 && code != 0 && task.recurring.is_none() && task.taken_by.is_none()
+        }
+        Executor::Person(crate::PersonAddress::Person(person)) => {
+            person != 0 && task.taken_by.is_none() && task.recurring.is_none() && person_counters(task)
+        }
+        Executor::Person(crate::PersonAddress::Role(role)) => {
+            role != 0 && task.taken_by != Some(0) && task.recurring.is_none() && person_counters(task)
+        }
     }
+}
+
+fn person_counters(task: &TaskRecord) -> bool {
+    task.attempt == 0
+        && task.run_spent == 0
+        && task.turn == 0
+        && task.last_answer.is_none()
+        && !task.ever_turned
+        && task.saved.is_empty()
 }
 
 pub(crate) fn restore(domain: &mut Domain, env: &Env<Limits>, stored: Stored, out: &mut Queue<Request>) {

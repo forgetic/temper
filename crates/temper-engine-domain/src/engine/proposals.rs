@@ -37,7 +37,7 @@ fn kind(action: &tasks::ProposalAction) -> (tasks::ProposalKind, authority::Prop
     }
 }
 
-fn action_for_check(action: &tasks::ProposalAction) -> authority::Action {
+fn action_for_check(action: &tasks::ProposalAction) -> Option<authority::Action> {
     match action {
         tasks::ProposalAction::Batch(batch) => {
             let mut members = List::with_capacity(u32::try_from(batch.len()).expect("bounded proposed batch"));
@@ -45,18 +45,19 @@ fn action_for_check(action: &tasks::ProposalAction) -> authority::Action {
                 let executor = match member.executor {
                     tasks::Executor::Agent { charter } => authority::Executor::Charter(charter),
                     tasks::Executor::Procedure { code, .. } => authority::Executor::Procedure(code),
+                    tasks::Executor::Person(_) => return None,
                 };
                 members
                     .push(authority::Delegate { executor, authority: authority_value(&member.authority) })
                     .expect("bounded proposed batch");
             }
-            authority::Action::Batch(members.into_boxed())
+            Some(authority::Action::Batch(members.into_boxed()))
         }
-        tasks::ProposalAction::Amend { amendment, .. } => {
-            authority::Action::Amend(authority_value(amendment.authority.as_ref().expect("proposal amendment widens")))
-        }
-        tasks::ProposalAction::Widen { authority, .. } => authority::Action::Widen(authority_value(authority)),
-        tasks::ProposalAction::Release { .. } => authority::Action::Escalate { release: None },
+        tasks::ProposalAction::Amend { amendment, .. } => Some(authority::Action::Amend(authority_value(
+            amendment.authority.as_ref().expect("proposal amendment widens"),
+        ))),
+        tasks::ProposalAction::Widen { authority, .. } => Some(authority::Action::Widen(authority_value(authority))),
+        tasks::ProposalAction::Release { .. } => Some(authority::Action::Escalate { release: None }),
     }
 }
 
@@ -122,7 +123,7 @@ pub(super) fn holder(
     after: Option<tasks::ProposalHolder>,
 ) -> Option<tasks::ProposalHolder> {
     let context = domain.tasks.delegation(proposer)?;
-    let checked = action_for_check(action);
+    let checked = action_for_check(action)?;
     let needed = authority::needs(&checked)?;
     let (kind, policy_kind) = kind(action);
     let mut next = context.requester;
@@ -246,7 +247,9 @@ pub(super) fn propose_call(
         ProposedAction::Widen { task, authority } => tasks::ProposalAction::Widen { task, authority },
         ProposedAction::Release { task } => tasks::ProposalAction::Release { task },
     };
-    let checked = action_for_check(&action);
+    let Some(checked) = action_for_check(&action) else {
+        return refused(domain, env, decision, to, key, tasks::Refusal::Executor);
+    };
     let Some(needed) = authority::needs(&checked) else {
         return refused(domain, env, decision, to, key, tasks::Refusal::AuthorityShape);
     };
@@ -369,7 +372,10 @@ fn accept(
     key: CallKey,
     proposal: tasks::Proposal,
 ) {
-    let Some(needed) = authority::needs(&action_for_check(&proposal.action)) else {
+    let Some(action) = action_for_check(&proposal.action) else {
+        return refused(domain, env, decision, to, key, tasks::Refusal::Executor);
+    };
+    let Some(needed) = authority::needs(&action) else {
         return refused(domain, env, decision, to, key, tasks::Refusal::AuthorityShape);
     };
     let Some(depth) = distance(domain, proposal.proposer, key.task) else {
@@ -497,9 +503,12 @@ pub(super) fn person_decide(
     }
     let next = match choice {
         people::ProposalDecision::Accept => {
+            let Some(action) = action_for_check(&proposal.action) else {
+                return person_refused(domain, request, people::Refusal::Authority);
+            };
             if !covers_person(
                 domain,
-                &authority::needs(&action_for_check(&proposal.action)).expect("admitted proposal needs"),
+                &authority::needs(&action).expect("admitted proposal needs"),
                 person,
                 project,
                 proposal_kind,

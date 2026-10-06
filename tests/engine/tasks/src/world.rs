@@ -318,6 +318,9 @@ impl World {
             | Event::TickRecurring { .. }
             | Event::RecurringBatch { .. }
             | Event::Procedure { .. }
+            | Event::TakePerson { .. }
+            | Event::HandBackPerson { .. }
+            | Event::AnswerPerson { .. }
             | Event::Control { .. }
             | Event::Propose { .. }
             | Event::DecideProposal { .. }
@@ -359,6 +362,9 @@ impl World {
             | Event::TickRecurring { .. }
             | Event::RecurringBatch { .. }
             | Event::Procedure { .. }
+            | Event::TakePerson { .. }
+            | Event::HandBackPerson { .. }
+            | Event::AnswerPerson { .. }
             | Event::Control { .. }
             | Event::Move { .. }
             | Event::Propose { .. }

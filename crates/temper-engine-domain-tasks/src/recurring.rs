@@ -146,7 +146,7 @@ pub(crate) fn valid_template(limits: &Limits, project: u32, budget: u64, batch: 
         let Some(local) = index.checked_add(1) else { return false };
         let core_member = match member.executor {
             Executor::Procedure { connector: 0, .. } => true,
-            Executor::Agent { .. } | Executor::Procedure { .. } => false,
+            Executor::Agent { .. } | Executor::Procedure { .. } | Executor::Person(_) => false,
         };
         if member.number != u64::try_from(local).expect("bounded batch")
             || member.project != project

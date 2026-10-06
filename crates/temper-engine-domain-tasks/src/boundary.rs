@@ -172,6 +172,15 @@ pub enum Executor {
     },
     /// Connector or core procedure stepped by its owner through the root.
     Procedure { connector: u16, code: u32 },
+    /// A person or any current holder of a project role answers in the people inbox.
+    Person(PersonAddress),
+}
+
+/// Opaque person-task destination; root authenticates the identity or role membership.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum PersonAddress {
+    Person(u64),
+    Role(u32),
 }
 
 /// What to do when a new period arrives before the preceding batch has ended.
@@ -550,6 +559,8 @@ pub struct TaskRecord {
     /// Structural depth below that root, bounded by `Limits::depth`.
     pub depth: u32,
     pub executor: Executor,
+    /// Current role-task holder; direct-person tasks never need a claim.
+    pub taken_by: Option<u64>,
     /// Durable core recurring template and last considered period.
     pub recurring: Option<Box<RecurringState>>,
     /// Owned bounded specification; live state has empty historical inputs.
@@ -752,6 +763,12 @@ pub enum Event {
     RecurringBatch { task: u64, period: u64, numbers: Box<[u64]> },
     /// Fenced decision from the owner of one due procedure task.
     Procedure { reply_to: ReplyTo, task: u64, step: u64, decision: ProcedureDecision },
+    /// Root-authenticated role holder takes an active person task from every role inbox.
+    TakePerson { reply_to: ReplyTo, task: u64, person: u64 },
+    /// The current holder returns a role task to the role inbox.
+    HandBackPerson { reply_to: ReplyTo, task: u64, person: u64 },
+    /// Root-authenticated addressee answers a live person task under its result contract.
+    AnswerPerson { reply_to: ReplyTo, task: u64, person: u64, result: TaskResult },
     /// Root-authorized bounded proposal and resolved first holder.
     Propose { reply_to: ReplyTo, proposal: crate::Proposal },
     /// Root-checked current holder resolves a pending proposal after executing an acceptance.

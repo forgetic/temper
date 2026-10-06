@@ -118,7 +118,9 @@ impl Domain {
             return None;
         }
         match record.executor {
-            crate::Executor::Procedure { connector: 0, code: 1 } | crate::Executor::Agent { .. } => None,
+            crate::Executor::Procedure { connector: 0, code: 1 }
+            | crate::Executor::Agent { .. }
+            | crate::Executor::Person(_) => None,
             crate::Executor::Procedure { connector, code } => Some((connector, code, record.attempt.checked_add(1)?)),
         }
     }
@@ -136,7 +138,7 @@ impl Domain {
             deciding: match record.phase {
                 Phase::Waiting | Phase::Active(_) => match record.executor {
                     crate::Executor::Agent { .. } => true,
-                    crate::Executor::Procedure { .. } => false,
+                    crate::Executor::Procedure { .. } | crate::Executor::Person(_) => false,
                 },
                 Phase::Closing(_) | Phase::Held { .. } | Phase::Ended(_) => false,
             },
@@ -208,6 +210,15 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
         }
         Event::Procedure { reply_to, task, step, decision } => {
             crate::procedure::stepped(domain, env, reply_to, task, step, decision, out);
+        }
+        Event::TakePerson { reply_to, task, person } => {
+            crate::person::take(domain, env, reply_to, task, person, out);
+        }
+        Event::HandBackPerson { reply_to, task, person } => {
+            crate::person::hand_back(domain, env, reply_to, task, person, out);
+        }
+        Event::AnswerPerson { reply_to, task, person, result } => {
+            crate::person::answer(domain, env, reply_to, task, person, result, out);
         }
         Event::Propose { reply_to, proposal } => {
             crate::proposals::propose(domain, env, reply_to, proposal, out);
@@ -383,6 +394,10 @@ pub(crate) fn entrance(domain: &Domain, to: ReplyTo, number: u64) -> Result<Repl
 
 pub(crate) fn activate(domain: &Domain, number: u64, out: &mut Queue<Request>) {
     let task = record(domain, number).expect("activation names live task");
+    match task.executor {
+        crate::Executor::Person(_) => return,
+        crate::Executor::Agent { .. } | crate::Executor::Procedure { .. } => {}
+    }
     let waiting = crate::proposals::waiting_for(domain, number);
     let escalations = crate::escalation::waiting_for(domain, number);
     let capacity = task.inbox.len().checked_add(waiting.len()).expect("bounded inbox and proposals");
@@ -574,6 +589,7 @@ pub(crate) fn make(
                 root: root.unwrap_or(number),
                 depth,
                 executor: new.executor,
+                taken_by: None,
                 recurring: match new.recurring {
                     Some(template) => Some(Box::new(crate::RecurringState {
                         template: *template,

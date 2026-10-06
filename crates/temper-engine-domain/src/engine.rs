@@ -1692,7 +1692,7 @@ fn activate(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, tas
         return;
     }
     match task.executor {
-        tasks::Executor::Procedure { connector: 0, code: 1 } => return,
+        tasks::Executor::Procedure { connector: 0, code: 1 } | tasks::Executor::Person(_) => return,
         tasks::Executor::Procedure { connector, code } => {
             let Some(step) = task.previous_attempt.checked_add(1) else {
                 domain.work.push(Work::Tasks(tasks::Event::Hold { task: number, why: tasks::Hold::Effects }));
@@ -2282,6 +2282,17 @@ fn delegate_call(
         let executor = match member.executor {
             tasks::Executor::Agent { charter } => authority::Executor::Charter(charter),
             tasks::Executor::Procedure { code, .. } => authority::Executor::Procedure(code),
+            tasks::Executor::Person(_) => {
+                decide_call(
+                    domain,
+                    &env.limits,
+                    decision,
+                    to,
+                    key,
+                    CallAnswer::DelegationRefused(tasks::Problem { task: None, why: tasks::Refusal::Executor }),
+                );
+                return;
+            }
         };
         asked
             .push(authority::Delegate { executor, authority: authority_value(&member.authority) })
@@ -2477,6 +2488,7 @@ fn procedure_step(
                 let executor = match member.executor {
                     tasks::Executor::Agent { charter } => authority::Executor::Charter(charter),
                     tasks::Executor::Procedure { code, .. } => authority::Executor::Procedure(code),
+                    tasks::Executor::Person(_) => return,
                 };
                 asked
                     .push(authority::Delegate { executor, authority: authority_value(&member.authority) })
@@ -2554,6 +2566,12 @@ fn start_recurring(
     authority: tasks::Authority,
     template: tasks::RecurringTemplate,
 ) {
+    for member in &template.batch {
+        match member.executor {
+            tasks::Executor::Person(_) => return,
+            tasks::Executor::Agent { .. } | tasks::Executor::Procedure { .. } => {}
+        }
+    }
     for task in domain.tasks.recurring_tasks(project) {
         if domain.tasks.recurring_template(task).expect("identified recurring task").key == template.key {
             return;
@@ -2617,6 +2635,7 @@ fn tasks_outputs(
                     let executor = match member.executor {
                         tasks::Executor::Agent { charter } => authority::Executor::Charter(charter),
                         tasks::Executor::Procedure { code, .. } => authority::Executor::Procedure(code),
+                        tasks::Executor::Person(_) => unreachable!("person template refused at root admission"),
                     };
                     asked
                         .push(authority::Delegate { executor, authority: authority_value(&member.authority) })
@@ -5089,6 +5108,7 @@ fn supported_task(task: &tasks::TaskRecord, charter: u32) -> bool {
     let executor = match task.executor {
         tasks::Executor::Agent { charter: configured } => charter == configured,
         tasks::Executor::Procedure { connector, code } => connector != 0 && code != 0,
+        tasks::Executor::Person(_) => false,
     };
     task.number != 0 && task.result_position == 0 && executor
 }

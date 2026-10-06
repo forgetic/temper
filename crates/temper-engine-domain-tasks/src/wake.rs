@@ -115,6 +115,7 @@ pub(crate) fn after_message(
     let decision = match record(domain, number).expect("message task live").executor {
         crate::Executor::Procedure { .. } => WakeRule::Immediate,
         crate::Executor::Agent { .. } => rule(domain, number, &word),
+        crate::Executor::Person(_) => WakeRule::Never,
     };
     let ready = match decision {
         WakeRule::Never => false,

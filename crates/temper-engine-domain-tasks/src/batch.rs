@@ -69,6 +69,7 @@ pub(crate) fn check(domain: &Domain, limits: &Limits, creator: Party, batch: &[N
     Ok(())
 }
 
+#[expect(clippy::too_many_lines, reason = "one batch member validates its complete creation shape")]
 fn check_members(
     domain: &Domain,
     limits: &Limits,
@@ -126,6 +127,10 @@ fn check_members(
                     return Err(problem(number, Refusal::Executor));
                 }
             }
+            Executor::Person(crate::PersonAddress::Person(0) | crate::PersonAddress::Role(0)) => {
+                return Err(problem(number, Refusal::Executor));
+            }
+            Executor::Person(_) => {}
         }
         if !valid_recurring(limits, creator, new) {
             return Err(problem(number, Refusal::Spec));

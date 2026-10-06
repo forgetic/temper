@@ -31,6 +31,12 @@ pub(crate) fn prepare(domain: &mut Domain, env: &Env<Limits>, to: ReplyTo, numbe
         Err((to, why)) => return refused(to, Some(number), why, out),
     };
     let task = task_mut(domain, number).expect("entrance names task");
+    match task.record.executor {
+        crate::Executor::Agent { .. } => {}
+        crate::Executor::Procedure { .. } | crate::Executor::Person(_) => {
+            return refused(to, Some(number), Refusal::Executor, out);
+        }
+    }
     if task.record.phase != Phase::Active(Active::Due) {
         return refused(to, Some(number), Refusal::State, out);
     }

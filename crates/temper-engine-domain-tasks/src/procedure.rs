@@ -26,7 +26,7 @@ pub(crate) fn stepped(
     };
     match task.executor {
         Executor::Procedure { .. } => {}
-        Executor::Agent { .. } => return refused(to, Some(number), Refusal::Executor, out),
+        Executor::Agent { .. } | Executor::Person(_) => return refused(to, Some(number), Refusal::Executor, out),
     }
     if task.phase != Phase::Active(Active::Due) || task.attempt.checked_add(1) != Some(step) {
         return refused(to, Some(number), Refusal::Attempt, out);
