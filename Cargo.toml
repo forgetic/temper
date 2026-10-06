@@ -3,6 +3,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/temper-web-domain",
     "crates/temper-legacy-agent-domain",
     "crates/temper-legacy-agent-domain-run",
     "crates/temper-legacy-agent-domain-session",
@@ -76,6 +77,7 @@ rust-version = "1.95"
 publish = false
 
 [workspace.dependencies]
+temper-web-domain = { path = "crates/temper-web-domain" }
 skein-lib = { git = "https://git.ekanayaka.io/ai/skein.git" }
 skein-io = { git = "https://git.ekanayaka.io/ai/skein.git" }
 skein-http = { git = "https://git.ekanayaka.io/ai/skein.git" }

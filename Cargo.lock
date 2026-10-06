@@ -711,6 +711,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-web-domain"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+]
+
+[[package]]
 name = "temper-worker-agent-world"
 version = "0.0.0"
 dependencies = [
