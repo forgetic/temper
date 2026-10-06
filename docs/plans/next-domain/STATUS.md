@@ -157,6 +157,7 @@ remain on `checkpoint/migration/transcript-codec`, outside main.
 | 05s8 local host 3.2: delivery in place | merged locally | smith 1cf1d29 | fmt/clippy pass; 583 focused / 12.521 s; 12 fuzzy / 10.007 s; local serial 34 / 0.288 s. |
 | 05s8 local host 3.3: configured push | merged locally | smith 844d4c3 | fmt/clippy pass; 585 focused / 3.738 s; 12 fuzzy / 4.550 s; local serial 36 / 0.166 s. |
 | 05s8 local host 05: delivery intent and restart reconciliation | merged locally | smith 5164339 | fmt/clippy pass; 591 focused / 3.366 s; 12 fuzzy / 4.301 s; local serial 41 / 0.185 s focused and 1 / 0.035 s fuzzy. |
+| 05s8 local host 05: waking notice read fence | merged locally | smith c3ff7a6 | fmt/clippy pass; 592 focused / 3.630 s; 12 fuzzy / 4.408 s. |
 
 ## Alignment slice limits
 
