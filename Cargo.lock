@@ -282,6 +282,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-engine-domain-forge-client"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+]
+
+[[package]]
 name = "temper-engine-domain-notes"
 version = "0.0.0"
 dependencies = [
@@ -330,6 +337,16 @@ version = "0.0.0"
 dependencies = [
  "skein-lib",
  "temper-engine-domain-fleet",
+ "temper-world",
+]
+
+[[package]]
+name = "temper-engine-forge-client-world"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+ "temper-engine-domain-forge-client",
+ "temper-fake-forge-domain",
  "temper-world",
 ]
 

@@ -1,0 +1,13 @@
+[package]
+name = "temper-engine-domain-forge-client"
+description = "Bounded forge working set, outbox, API and request budget"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+skein-lib.workspace = true
+
+[lints]
+workspace = true

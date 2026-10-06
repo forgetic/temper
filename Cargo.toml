@@ -17,6 +17,7 @@ members = [
     "crates/temper-engine-domain-brief",
     "crates/temper-engine-domain-fleet",
     "crates/temper-legacy-engine-domain-forge",
+    "crates/temper-engine-domain-forge-client",
     "crates/temper-engine-domain-notes",
     "crates/temper-engine-domain-people",
     "crates/temper-engine-domain-tasks",
@@ -51,6 +52,7 @@ members = [
     "tests/engine/brief",
     "tests/engine/domain",
     "tests/engine/fleet",
+    "tests/engine/forge/client",
     "tests/legacy/engine/forge",
     "tests/legacy/engine/domain",
     "tests/engine/notes",
@@ -123,6 +125,8 @@ temper-legacy-engine-domain = { path = "crates/temper-legacy-engine-domain" }
 temper-engine-domain-brief = { path = "crates/temper-engine-domain-brief" }
 temper-engine-domain-fleet = { path = "crates/temper-engine-domain-fleet" }
 temper-legacy-engine-domain-forge = { path = "crates/temper-legacy-engine-domain-forge" }
+temper-engine-domain-forge-client = { path = "crates/temper-engine-domain-forge-client" }
+temper-engine-forge-client-world = { path = "tests/engine/forge/client" }
 temper-engine-domain-notes = { path = "crates/temper-engine-domain-notes" }
 temper-legacy-engine-domain-plan = { path = "crates/temper-legacy-engine-domain-plan" }
 temper-legacy-engine-domain-rules = { path = "crates/temper-legacy-engine-domain-rules" }
