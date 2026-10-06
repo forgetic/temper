@@ -360,7 +360,7 @@ fn restore_refuses_task_funding_outside_its_requester_ancestry() {
             Stored::Live(task) if task.number == 1 => task.numbers.reserved = 100,
             Stored::Live(task) if task.number == 2 => task.funder = Funder::Task(1),
             Stored::Ledger(ledger) => ledger.numbers.reserved = 100,
-            Stored::Live(_) | Stored::Ended(_) => {}
+            Stored::Live(_) | Stored::Ended(_) | Stored::History(_) => {}
         }
     }
     let mut domain = Domain::new(&LIMITS, 34, Box::new([1]));

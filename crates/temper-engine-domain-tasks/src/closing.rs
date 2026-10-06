@@ -64,7 +64,13 @@ fn previous_result(phase: &Phase) -> Option<TaskResult> {
     }
 }
 
-fn cancel_tree(domain: &mut Domain, env: &Env<Limits>, ancestor: u64, reason: &[u8], out: &mut Queue<Request>) {
+pub(crate) fn cancel_tree(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    ancestor: u64,
+    reason: &[u8],
+    out: &mut Queue<Request>,
+) {
     let mut selected = List::with_capacity(env.limits.tasks);
     for (number, _) in &domain.names {
         if below(domain, *number, ancestor, env.limits.tasks) {

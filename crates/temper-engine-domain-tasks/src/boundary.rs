@@ -83,6 +83,8 @@ pub struct Subscription {
 pub enum MessageKind {
     /// Whole words from a person or referenced task.
     Words,
+    /// Latest committed amendment, always waking and merging by task.
+    Amendment { revision: u64 },
     /// A bounded question for which the sender keeps answer room.
     Question,
     /// Answer to a named question previously asked of this sender.
@@ -472,6 +474,10 @@ pub struct New {
 /// does not maintain a mutable copy of this ledger. (domain/tasks.md, sections 3 and 5).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct TaskRecord {
+    /// Last committed semantic change to this task; history rows are keyed by this sequence.
+    pub revision: u64,
+    /// An admitted authority narrowing stopped the current run; its terminal starts the task anew.
+    pub narrowing: bool,
     /// Root-issued commit order for an ended result; zero while live and until the root saves an ending.
     pub result_position: u64,
     /// One bounded semantic held-chat decision and checked revision. Root owns
@@ -546,6 +552,8 @@ pub struct TaskRecord {
 /// in this child. (domain/tasks.md, section 2).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Key {
+    /// Immutable plan change outside the live arena.
+    History { task: u64, revision: u64 },
     /// Logical mutable live-task row.
     Live(/** `Live` task identity whose row is replaced or erased. */ u64),
     /// Logical historical ended-task row.
@@ -558,6 +566,8 @@ pub enum Key {
 /// belong to startup restoration. (domain/tasks.md, section 2).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Stored {
+    /// Committed change read on demand, never restored as live state.
+    History(crate::History),
     /// Current bounded live task state, emitted on mutation and admitted once at startup.
     Live(
         /** Owned boxed bounded live task row; startup validates its shape and later validates graph/financial links. */
@@ -583,6 +593,7 @@ impl Stored {
     #[must_use]
     pub const fn key(&self) -> Key {
         match self {
+            Stored::History(row) => Key::History { task: row.task, revision: row.revision },
             Stored::Live(record) => Key::Live(record.number),
             Stored::Ended(record) => Key::Ended(record.number),
             Stored::Ledger(record) => Key::Ledger(record.funder),
@@ -679,6 +690,10 @@ pub enum Accepted {
 /// notifications have no reply destination and may be ignored if stale. (domain/tasks.md, sections 4–5).
 #[derive(PartialEq, Eq, Debug)]
 pub enum Event {
+    /// Root-checked live ancestor controls a delegate and its subtree.
+    Control { reply_to: ReplyTo, by: u64, task: u64, control: crate::Control },
+    /// Root-checked amendment of a live delegate, with a fresh commit-order message number.
+    Amend { reply_to: ReplyTo, by: u64, task: u64, message: u64, stop_run: bool, amendment: crate::Amendment },
     /// Install one root-numbered standing interest for a current task.
     Subscribe { reply_to: ReplyTo, task: u64, subscription: Subscription },
     /// Remove one interest owned by a current task.
@@ -1097,6 +1112,7 @@ pub struct DelegateState {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct DelegationContext {
     pub project: u32,
+    pub requester: Party,
     pub authority: Authority,
     pub numbers: Numbers,
     pub tasks_left: u32,

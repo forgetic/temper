@@ -48,6 +48,7 @@ mod admission;
 mod batch;
 mod boundary;
 mod closing;
+mod control;
 mod domain;
 mod escalation;
 mod facts;
@@ -71,6 +72,7 @@ pub use boundary::{
     ResultKind, ResultsWake, RunContext, Spec, Stage, Status, Stored, Subscription, SubscriptionKind, TaskRecord,
     TaskResult, Verdict, WakePolicy, WakeRule, Was, Word,
 };
+pub use control::{Amendment, Change, Control, History};
 pub use domain::{Domain, fire, max_out, step};
 pub use escalation::{Escalation, EscalationContext, EscalationDecision, EscalationHolder, EscalationOutcome};
 pub use facts::Fact;

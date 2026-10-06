@@ -23,7 +23,7 @@ fn ended(world: &World) -> &tasks::TaskRecord {
             | Record::RunProof(_)
             | Record::EscalationDecision(_)
             | Record::Terminal(_)
-            | Record::Tasks(tasks::Stored::Live(_) | tasks::Stored::Ledger(_))
+            | Record::Tasks(tasks::Stored::Live(_) | tasks::Stored::Ledger(_) | tasks::Stored::History(_))
             | Record::Call(_) => None,
         })
         .expect("story ended its one task")

@@ -307,6 +307,8 @@ impl World {
             Event::Turn { task, cumulative, .. }
             | Event::Activation { task, cause: Cause::Priced { cumulative }, .. } => Some((*task, *cumulative)),
             Event::OpenPeriod { .. }
+            | Event::Control { .. }
+            | Event::Amend { .. }
             | Event::CarvePool { .. }
             | Event::Make { .. }
             | Event::Prepare { .. }
@@ -331,10 +333,14 @@ impl World {
             | Event::Notice { .. } => None,
         };
         match event {
+            Event::Amend { message, .. } => {
+                self.message = self.message.max(*message);
+            }
             Event::Message { word, .. } | Event::DelegateResult { word, .. } | Event::Notice { word, .. } => {
                 self.message = self.message.max(word.number);
             }
             Event::OpenPeriod { .. }
+            | Event::Control { .. }
             | Event::CarvePool { .. }
             | Event::Make { .. }
             | Event::Prepare { .. }
@@ -493,7 +499,7 @@ impl World {
                     dependencies: record.dependencies.to_vec(),
                     depth: record.depth,
                 }),
-                Stored::Live(_) | Stored::Ended(_) | Stored::Ledger(_) => None,
+                Stored::Live(_) | Stored::Ended(_) | Stored::Ledger(_) | Stored::History(_) => None,
             })
             .collect::<Vec<_>>();
         for seen in made {
@@ -554,7 +560,7 @@ impl World {
             .values()
             .filter_map(|row| match row {
                 Stored::Live(record) => Some(*record.clone()),
-                Stored::Ended(_) | Stored::Ledger(_) => None,
+                Stored::Ended(_) | Stored::Ledger(_) | Stored::History(_) => None,
             })
             .collect();
         self.observe(Seen::Stored { live, limits: Box::new(self.env.limits) });
@@ -576,7 +582,7 @@ impl World {
     pub fn record(&self, number: u64) -> &tasks::TaskRecord {
         match &self.records[&Key::Live(number)] {
             Stored::Live(record) => record,
-            Stored::Ended(_) | Stored::Ledger(_) => unreachable!("live key"),
+            Stored::Ended(_) | Stored::Ledger(_) | Stored::History(_) => unreachable!("live key"),
         }
     }
 
@@ -592,7 +598,7 @@ impl World {
             .keys()
             .filter_map(|key| match key {
                 Key::Live(number) if !before.contains(key) => Some(*number),
-                Key::Live(_) | Key::Ended(_) | Key::Ledger(_) => None,
+                Key::Live(_) | Key::Ended(_) | Key::Ledger(_) | Key::History { .. } => None,
             })
             .collect();
         self.observe(Seen::Batch { members, accepted: matches!(reply, Reply::Made(_)), made });
@@ -636,7 +642,7 @@ impl World {
             .values()
             .filter_map(|row| match row {
                 Stored::Live(record) | Stored::Ended(record) => Some(record.attempt),
-                Stored::Ledger(_) => None,
+                Stored::Ledger(_) | Stored::History(_) => None,
             })
             .max()
             .unwrap_or(0)

@@ -783,10 +783,15 @@ fn delegate_fixture() -> (Driver, engine::Assignment) {
 }
 
 fn batch_fixture() -> (Driver, engine::Assignment) {
+    batch_fixture_with(1, 1)
+}
+
+fn batch_fixture_with(slots: u32, depth: u32) -> (Driver, engine::Assignment) {
     let mut bounds = limits();
     bounds.tasks.tasks = 4;
     bounds.tasks.project_tasks = 4;
     bounds.tasks.tree_tasks = 4;
+    bounds.tasks.depth = depth;
     bounds.tasks.delegates = 3;
     bounds.tasks.batch = 3;
     bounds.tasks.dependencies = 2;
@@ -794,6 +799,7 @@ fn batch_fixture() -> (Driver, engine::Assignment) {
     bounds.tasks.inbox_bytes = 384;
     bounds.authority.batch = 3;
     bounds.fleet.attempts = 5;
+    bounds.fleet.slots = slots;
     bounds.call_records = 4;
     bounds.brief.sections = 5;
     bounds.journal.writes = 3000;
@@ -802,12 +808,12 @@ fn batch_fixture() -> (Driver, engine::Assignment) {
     let mut configuration = config(92);
     let mut rules = configuration.authority.rules().clone();
     rules.ceiling.delegation.tasks = 4;
-    rules.ceiling.delegation.depth = 2;
+    rules.ceiling.delegation.depth = depth + 1;
     let mut policy = configuration.authority.policy(1).expect("fixture project").clone();
     policy.ceiling.delegation.tasks = 4;
-    policy.ceiling.delegation.depth = 2;
+    policy.ceiling.delegation.depth = depth + 1;
     policy.roles[0].authority.delegation.tasks = 4;
-    policy.roles[0].authority.delegation.depth = 2;
+    policy.roles[0].authority.delegation.depth = depth + 1;
     let mut authority =
         temper_engine_domain_authority::Domain::new(rules, bounds.authority).expect("larger fixture authority");
     let mut policy_out = Queue::with_capacity(temper_engine_domain_authority::POLICY_MAX_OUT);
@@ -820,9 +826,17 @@ fn batch_fixture() -> (Driver, engine::Assignment) {
     configuration.authority = authority;
     configuration.chat_authority.delegation.kinds = Box::new([temper_engine_domain_authority::Executor::Charter(1)]);
     configuration.chat_authority.delegation.tasks = 3;
-    configuration.chat_authority.delegation.depth = 1;
+    configuration.chat_authority.delegation.depth = depth;
     let mut driver = Driver::configured(Store::new(), configuration, &bounds);
-    hello(&mut driver);
+    driver.send(engine::Event::Hello {
+        channel: Token::new(7),
+        hello: fleet::Hello {
+            graces: Some(Duration::from_secs(1)),
+            slots,
+            workstreams: Box::new([]),
+            hosting: Box::new([]),
+        },
+    });
     driver.settle();
     driver.sign_in();
     driver.settle();
@@ -907,6 +921,208 @@ fn tool_call(driver: &mut Driver, source: &engine::Assignment, call: u64, tool: 
     for _ in 0..30 {
         driver.advance(true);
     }
+}
+
+#[test]
+fn an_amendment_reaches_a_live_run() {
+    let (mut driver, parent) = batch_fixture_with(2, 1);
+    let member = report_delegate(b"original", Box::new([]));
+    let mut wider = member.authority.clone();
+    wider.budget.spend = 20;
+    let child = call_batch(&mut driver, &parent, 90, Box::new([member]))[0];
+    let running = assigned_task(&driver, child);
+    tool_call(
+        &mut driver,
+        &parent,
+        91,
+        engine::Tool::Amend {
+            target: child,
+            amendment: tasks::Amendment {
+                spec: Some(tasks::Spec {
+                    words: b"revised".as_slice().into(),
+                    parameters: Box::new([]),
+                    inputs: Box::new([]),
+                }),
+                wake: None,
+                dependencies: None,
+                authority: Some(wider),
+                reason: b"the target changed".as_slice().into(),
+            },
+        },
+    );
+    assert!(driver.delivered.iter().any(|item| matches!(item,
+        Delivery::CallAnswer { call, answer: temper_engine_domain::CallAnswer::Controlled, .. }
+            if *call == Token::new(91))));
+    assert!(driver.transactions.iter().any(|writes| {
+        writes.iter().any(|write| {
+            matches!(write, Write::Save(Record::Call(record))
+            if record.answer == temper_engine_domain::CallAnswer::Controlled)
+        }) && writes.iter().any(|write| {
+            matches!(write, Write::Save(Record::Tasks(tasks::Stored::Live(task)))
+            if task.number == child && task.spec.words.as_ref() == b"revised" && task.numbers.budget == 20)
+        }) && writes.iter().any(|write| {
+            matches!(write, Write::Save(Record::Tasks(tasks::Stored::History(row)))
+            if row.task == child && row.change == tasks::Change::Amended)
+        })
+    }));
+    assert!(driver.delivered.iter().any(|item| matches!(item,
+        Delivery::Inbound { task, attempt, word, .. }
+            if *task == child && *attempt == running.attempt
+                && matches!(word.kind, tasks::MessageKind::Amendment { .. }))));
+    let Some(Record::Tasks(tasks::Stored::Live(parent_row))) =
+        driver.store.rows.get(&Key::Tasks(tasks::Key::Live(parent.task)))
+    else {
+        panic!("parent funder")
+    };
+    assert_eq!(parent_row.numbers.reserved, 20);
+}
+
+#[test]
+fn a_narrowing_stops_the_old_run_and_offers_the_amendment_to_the_next() {
+    let (mut driver, parent) = batch_fixture_with(2, 1);
+    let member = report_delegate(b"child", Box::new([]));
+    let mut narrower = member.authority.clone();
+    narrower.budget.spend = 5;
+    let child = call_batch(&mut driver, &parent, 90, Box::new([member]))[0];
+    let first = assigned_task(&driver, child);
+    tool_call(
+        &mut driver,
+        &parent,
+        91,
+        engine::Tool::Amend {
+            target: child,
+            amendment: tasks::Amendment {
+                spec: None,
+                wake: None,
+                dependencies: None,
+                authority: Some(narrower),
+                reason: b"smaller scope".as_slice().into(),
+            },
+        },
+    );
+    assert!(driver.delivered.iter().any(|item| matches!(item, Delivery::Cancel { task, attempt, .. }
+        if *task == child && *attempt == first.attempt)));
+    driver.send(engine::Event::Answer {
+        saved: None,
+        channel: Token::new(7),
+        task: child,
+        attempt: first.attempt,
+        cumulative: 0,
+        end: tasks::End::Parked,
+    });
+    driver.settle();
+    let second = assigned_from_last(&driver.delivered);
+    assert_eq!(second.task, child);
+    assert!(second.attempt > first.attempt);
+    assert!(second.inbox.iter().any(
+        |word| matches!(word.kind, tasks::MessageKind::Amendment { .. }) && word.words.as_ref() == b"smaller scope"
+    ));
+    let Some(Record::Tasks(tasks::Stored::Live(task))) = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(child)))
+    else {
+        panic!("amended child live")
+    };
+    assert_eq!(task.numbers.budget, 5);
+    assert!(!task.narrowing);
+}
+
+#[test]
+#[expect(clippy::wildcard_enum_match_arm, reason = "the story selects its two stopped runs")]
+fn a_cancel_closes_three_levels_with_runs_live_deepest_first() {
+    let (mut driver, parent) = batch_fixture_with(3, 2);
+    let mut child_spec = report_delegate(b"child", Box::new([]));
+    child_spec.authority.delegation =
+        tasks::Delegation { kinds: Box::new([tasks::AuthorityExecutor::Charter(1)]), tasks: 1, depth: 1 };
+    let child = call_batch(&mut driver, &parent, 90, Box::new([child_spec]))[0];
+    let child_run = assigned_task(&driver, child);
+    let grandchild =
+        call_batch(&mut driver, &child_run, 91, Box::new([report_delegate(b"grandchild", Box::new([]))]))[0];
+    let grandchild_run = assigned_task(&driver, grandchild);
+    tool_call(
+        &mut driver,
+        &parent,
+        92,
+        engine::Tool::Cancel { target: child, reason: b"goal withdrawn".as_slice().into() },
+    );
+    let stopped: Vec<_> = driver
+        .delivered
+        .iter()
+        .filter_map(|item| match item {
+            Delivery::Cancel { task, attempt, .. } => Some((*task, *attempt)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(stopped, [(grandchild, grandchild_run.attempt), (child, child_run.attempt)]);
+    assert!(driver.delivered.iter().any(|item| matches!(item,
+        Delivery::CallAnswer { call, answer: temper_engine_domain::CallAnswer::Controlled, .. }
+            if *call == Token::new(92))));
+    for run in [&grandchild_run, &child_run] {
+        driver.send(engine::Event::Answer {
+            saved: None,
+            channel: Token::new(7),
+            task: run.task,
+            attempt: run.attempt,
+            cumulative: 0,
+            end: tasks::End::Parked,
+        });
+        driver.settle();
+    }
+    let endings: Vec<_> = driver
+        .transactions
+        .iter()
+        .flat_map(|writes| writes.iter())
+        .filter_map(|write| match write {
+            Write::Save(Record::Tasks(tasks::Stored::Ended(task))) => Some((task.number, task.phase.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(endings.len(), 2);
+    assert_eq!(endings[0].0, grandchild);
+    assert_eq!(endings[1].0, child);
+    assert!(endings.iter().all(|(_, phase)| matches!(phase, tasks::Phase::Ended(tasks::Ending::Cancelled { .. }))));
+}
+
+#[test]
+fn release_tool_resets_a_delegates_exhausted_tries() {
+    let (mut driver, parent) = batch_fixture_with(2, 1);
+    let child = call_batch(&mut driver, &parent, 90, Box::new([report_delegate(b"child", Box::new([]))]))[0];
+    let first = assigned_task(&driver, child);
+    driver.send(engine::Event::Answer {
+        saved: None,
+        channel: Token::new(7),
+        task: child,
+        attempt: first.attempt,
+        cumulative: 0,
+        end: tasks::End::Failed(tasks::Class::Run),
+    });
+    driver.settle();
+    driver.env.now = Time::from_nanos(Duration::from_secs(2).as_nanos());
+    driver.env.wall = Wall::from_nanos(Duration::from_secs(2).as_nanos());
+    engine::fire(&mut driver.root, &driver.env, &mut driver.out);
+    driver.collect();
+    driver.settle();
+    let second = assigned_from_last(&driver.delivered);
+    assert_eq!(second.task, child);
+    driver.send(engine::Event::Answer {
+        saved: None,
+        channel: Token::new(7),
+        task: child,
+        attempt: second.attempt,
+        cumulative: 0,
+        end: tasks::End::Failed(tasks::Class::Run),
+    });
+    driver.settle();
+    tool_call(&mut driver, &parent, 91, engine::Tool::Release { target: child });
+    assert!(driver.delivered.iter().any(|item| matches!(item,
+        Delivery::CallAnswer { call, answer: temper_engine_domain::CallAnswer::Controlled, .. }
+            if *call == Token::new(91))));
+    let Some(Record::Tasks(tasks::Stored::Live(task))) = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(child)))
+    else {
+        panic!("released child remains live")
+    };
+    assert_eq!(task.tries, tasks::Tries::NONE);
+    assert!(matches!(task.phase, tasks::Phase::Active(_)));
+    assert!(driver.delivered.iter().any(|item| matches!(item, Delivery::Assigned { assignment, .. }
+        if assignment.task == child && assignment.attempt > second.attempt)));
 }
 
 #[test]
@@ -2137,7 +2353,7 @@ fn multiple_waiting_recipients_preflight_together_and_full_journal_refuses_witho
             Record::Tasks(tasks::Stored::Live(record)) => Some(record.clone()),
             Record::Deployment(_)
             | Record::People(_)
-            | Record::Tasks(tasks::Stored::Ended(_) | tasks::Stored::Ledger(_))
+            | Record::Tasks(tasks::Stored::Ended(_) | tasks::Stored::Ledger(_) | tasks::Stored::History(_))
             | Record::Turn(_)
             | Record::RunProof(_)
             | Record::Terminal(_)

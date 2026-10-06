@@ -88,7 +88,7 @@ impl Accounting {
                             Stored::Live(child) if child.funder == Funder::Task(task.number) => {
                                 Some(child.numbers.budget)
                             }
-                            Stored::Live(_) | Stored::Ended(_) | Stored::Ledger(_) => None,
+                            Stored::Live(_) | Stored::Ended(_) | Stored::Ledger(_) | Stored::History(_) => None,
                         })
                         .sum();
                     if reserved != task.numbers.reserved {
@@ -108,7 +108,7 @@ impl Accounting {
                             Stored::Ledger(pool) if pool.parent == Some(ledger.funder) && !pool.closed => {
                                 Some(pool.numbers.budget)
                             }
-                            Stored::Live(_) | Stored::Ended(_) | Stored::Ledger(_) => None,
+                            Stored::Live(_) | Stored::Ended(_) | Stored::Ledger(_) | Stored::History(_) => None,
                         })
                         .sum();
                     let posted = self.newly_settled(rows, ledger.funder);
@@ -131,7 +131,7 @@ impl Accounting {
                         return Err("original source identity changed");
                     }
                 }
-                Stored::Ended(_) => {}
+                Stored::Ended(_) | Stored::History(_) => {}
             }
         }
         self.before = rows.clone();

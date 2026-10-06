@@ -74,6 +74,12 @@ pub struct CallKey {
 /// Exact typed answer kept for replay across a lost channel or root restart.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum CallAnswer {
+    /// A named task control change entered the same durable decision.
+    Controlled,
+    /// A named task control change was refused without mutation.
+    ControlRefused(temper_engine_domain_tasks::Problem),
+    /// A requested widening needs a holder or violates a hard ceiling.
+    ControlDenied { answer: temper_engine_domain_authority::Answer },
     /// Message entered its target's inbox at this commit position.
     Sent { message: u64 },
     /// Reciprocal task references were installed.
@@ -246,7 +252,9 @@ impl Range {
             Range::Tasks => match key {
                 Key::Tasks(child) => match child {
                     temper_engine_domain_tasks::Key::Live(_) | temper_engine_domain_tasks::Key::Ledger(_) => true,
-                    temper_engine_domain_tasks::Key::Ended(_) => false,
+                    temper_engine_domain_tasks::Key::Ended(_) | temper_engine_domain_tasks::Key::History { .. } => {
+                        false
+                    }
                 },
                 Key::Call(_)
                 | Key::EscalationDecision { .. }
@@ -514,6 +522,9 @@ pub fn record_bytes(record: &Record) -> Option<u64> {
         Record::EscalationDecision(row) => decision_bytes(&row.decision),
         Record::Call(row) => match &row.answer {
             CallAnswer::Unavailable
+            | CallAnswer::Controlled
+            | CallAnswer::ControlRefused(_)
+            | CallAnswer::ControlDenied { .. }
             | CallAnswer::Introduced
             | CallAnswer::Sent { .. }
             | CallAnswer::MessageRefused(_)

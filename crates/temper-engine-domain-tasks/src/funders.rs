@@ -104,6 +104,65 @@ pub(crate) fn reserve(domain: &mut Domain, env: &Env<Limits>, batch: &[crate::Ne
     }
 }
 
+/// Replace one live allotment and its authentic reservation in one child decision.
+/// The caller checks policy authority; this preflights both finite balances.
+pub(crate) fn can_resize(domain: &Domain, number: u64, budget: u64) -> bool {
+    let Some(task) = record(domain, number) else { return false };
+    let mut next = task.numbers;
+    next.budget = budget;
+    if available(next).is_none() {
+        return false;
+    }
+    let source = match task.funder {
+        Funder::Task(parent) => match record(domain, parent) {
+            Some(parent) => parent.numbers,
+            None => return false,
+        },
+        Funder::Pool { .. } | Funder::Period { .. } => match domain.funding.get(&task.funder) {
+            Some(ledger) if !ledger.closed => ledger.numbers,
+            Some(_) | None => return false,
+        },
+    };
+    let mut next_source = source;
+    let Some(released) = source.reserved.checked_sub(task.numbers.budget) else { return false };
+    let Some(reserved) = released.checked_add(budget) else {
+        return false;
+    };
+    next_source.reserved = reserved;
+    available(next_source).is_some()
+}
+
+pub(crate) fn resize(domain: &mut Domain, env: &Env<Limits>, number: u64, budget: u64, out: &mut Queue<Request>) {
+    assert!(can_resize(domain, number, budget), "allotment preflighted");
+    let task = record(domain, number).expect("live allotment");
+    let source = task.funder;
+    let old = task.numbers.budget;
+    match source {
+        Funder::Task(parent) => {
+            let reserved = record(domain, parent).expect("live task source").numbers.reserved;
+            let replaced = reserved
+                .checked_sub(old)
+                .expect("reservation preflighted")
+                .checked_add(budget)
+                .expect("reservation preflighted");
+            task_mut(domain, parent).expect("live task source").record.numbers.reserved = replaced;
+            publish(domain, env, parent, out);
+        }
+        Funder::Pool { .. } | Funder::Period { .. } => {
+            let ledger = domain.funding.get_mut(&source).expect("finite source");
+            ledger.numbers.reserved = ledger
+                .numbers
+                .reserved
+                .checked_sub(old)
+                .expect("reservation preflighted")
+                .checked_add(budget)
+                .expect("reservation preflighted");
+            save_funding(domain, source, out);
+        }
+    }
+    task_mut(domain, number).expect("live allotment").record.numbers.budget = budget;
+}
+
 pub(crate) fn end(domain: &mut Domain, env: &Env<Limits>, number: u64, out: &mut Queue<Request>) {
     let task = record(domain, number).expect("ending task live");
     let funder = task.funder;

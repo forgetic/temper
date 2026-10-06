@@ -12,6 +12,7 @@ use core::mem::{size_of, size_of_val};
 #[must_use]
 pub fn stored_bytes(record: &Stored) -> Option<u64> {
     match record {
+        Stored::History(row) => bytes(row.reason.len()),
         Stored::Live(task) | Stored::Ended(task) => task_bytes(task),
         Stored::Ledger(_) => Some(0),
     }

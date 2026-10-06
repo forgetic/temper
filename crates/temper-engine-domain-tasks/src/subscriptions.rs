@@ -14,7 +14,11 @@ fn hint_of(kind: MessageKind) -> Option<u64> {
         MessageKind::Notice { subscription, .. }
         | MessageKind::Timer { subscription }
         | MessageKind::News { subscription, .. } => Some(subscription),
-        MessageKind::Words | MessageKind::Question | MessageKind::Answer { .. } | MessageKind::Result(_) => None,
+        MessageKind::Words
+        | MessageKind::Amendment { .. }
+        | MessageKind::Question
+        | MessageKind::Answer { .. }
+        | MessageKind::Result(_) => None,
     }
 }
 
@@ -178,7 +182,11 @@ pub(crate) fn notice(domain: &mut Domain, env: &Env<Limits>, number: u64, mut wo
             SubscriptionKind::Topic { .. } => class != NewsClass::Dropped,
             SubscriptionKind::Task { .. } | SubscriptionKind::Timer { .. } => false,
         },
-        MessageKind::Words | MessageKind::Question | MessageKind::Answer { .. } | MessageKind::Result(_) => false,
+        MessageKind::Words
+        | MessageKind::Amendment { .. }
+        | MessageKind::Question
+        | MessageKind::Answer { .. }
+        | MessageKind::Result(_) => false,
     };
     if !matching
         || word.number == 0

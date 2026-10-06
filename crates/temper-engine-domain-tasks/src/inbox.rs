@@ -69,9 +69,11 @@ pub(crate) fn message(
     };
     let sendable = match word.kind {
         MessageKind::Words | MessageKind::Question | MessageKind::Answer { .. } => true,
-        MessageKind::Result(_) | MessageKind::Notice { .. } | MessageKind::Timer { .. } | MessageKind::News { .. } => {
-            false
-        }
+        MessageKind::Amendment { .. }
+        | MessageKind::Result(_)
+        | MessageKind::Notice { .. }
+        | MessageKind::Timer { .. }
+        | MessageKind::News { .. } => false,
     };
     if task.project != project || !requester || !sendable {
         return refused(to, Some(number), Refusal::State, out);
@@ -113,7 +115,11 @@ pub(crate) fn message(
             }
             Some(question)
         }
-        MessageKind::Result(_) | MessageKind::Notice { .. } | MessageKind::Timer { .. } | MessageKind::News { .. } => {
+        MessageKind::Amendment { .. }
+        | MessageKind::Result(_)
+        | MessageKind::Notice { .. }
+        | MessageKind::Timer { .. }
+        | MessageKind::News { .. } => {
             unreachable!("root hints have reserved entrances")
         }
     };
@@ -184,6 +190,7 @@ pub(crate) fn delegate_result(
     match word.kind {
         MessageKind::Result(_) => {}
         MessageKind::Words
+        | MessageKind::Amendment { .. }
         | MessageKind::Question
         | MessageKind::Answer { .. }
         | MessageKind::Notice { .. }

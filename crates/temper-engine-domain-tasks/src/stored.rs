@@ -121,15 +121,30 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
     {
         return false;
     }
-    if task.turn != 0 && task.attempt == 0 {
+    if (task.turn != 0 && task.attempt == 0) || (task.narrowing && crate::run::run_attempt(&task.phase).is_none()) {
         return false;
     }
     let Some((subscription_count, subscription_bytes)) = crate::subscriptions::credit(task, limits) else {
         return false;
     };
+    let mut amendments = 0_usize;
+    let mut amendment_bytes = 0_usize;
+    for word in &task.inbox {
+        if let crate::MessageKind::Amendment { revision } = word.kind {
+            if amendments != 0 {
+                return false;
+            }
+            amendments = 1;
+            amendment_bytes = word.words.len();
+            if revision == 0 || revision > task.revision || amendments > 1 {
+                return false;
+            }
+        }
+    }
     if task
         .inbox
         .len()
+        .saturating_sub(amendments)
         .saturating_add(task.delegates.len())
         .saturating_add(task.questions.len())
         .saturating_add(subscription_count)
@@ -150,7 +165,7 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
                     Party::Deployment { .. } => false,
                 }
             }
-            crate::MessageKind::Result(_) => match word.from {
+            crate::MessageKind::Amendment { .. } | crate::MessageKind::Result(_) => match word.from {
                 Party::Task(_) => true,
                 Party::Person(_) | Party::Deployment { .. } => false,
             },
@@ -161,9 +176,10 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
             crate::MessageKind::Timer { .. } => word.from == Party::Task(task.number),
         };
         let bound = match &word.kind {
-            crate::MessageKind::Words | crate::MessageKind::Question | crate::MessageKind::Answer { .. } => {
-                limits.message_bytes
-            }
+            crate::MessageKind::Words
+            | crate::MessageKind::Amendment { .. }
+            | crate::MessageKind::Question
+            | crate::MessageKind::Answer { .. } => limits.message_bytes,
             crate::MessageKind::Result(_) => limits.result_bytes,
             crate::MessageKind::Notice { .. } | crate::MessageKind::News { .. } => {
                 limits.result_bytes.max(limits.message_bytes)
@@ -177,6 +193,7 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
                     word.words.is_empty()
                 }
                 crate::MessageKind::Result(_)
+                | crate::MessageKind::Amendment { .. }
                 | crate::MessageKind::Notice { .. }
                 | crate::MessageKind::News { .. }
                 | crate::MessageKind::Timer { .. } => false,
@@ -194,7 +211,8 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
     else {
         return false;
     };
-    let Some(total) = bytes.checked_add(reserved) else {
+    let Some(ordinary_bytes) = bytes.checked_sub(amendment_bytes) else { return false };
+    let Some(total) = ordinary_bytes.checked_add(reserved) else {
         return false;
     };
     let Some(answer_reserved) =
@@ -303,6 +321,7 @@ pub(crate) fn restore(domain: &mut Domain, env: &Env<Limits>, stored: Stored, ou
         // Historical ended rows stay outside the live arena;
         // they cannot accidentally return an ended task to the live arena.
         Stored::Ended(task) => failed(domain, Some(task.number), Refusal::Restore, out),
+        Stored::History(row) => failed(domain, Some(row.task), Refusal::Restore, out),
         Stored::Ledger(record) => {
             if !crate::funders::restore_funding(domain, record) {
                 failed(domain, None, Refusal::Restore, out);

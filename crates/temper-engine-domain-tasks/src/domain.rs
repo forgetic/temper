@@ -90,6 +90,7 @@ impl Domain {
         let tasks_left = record.authority.delegation.tasks.checked_sub(made_below)?;
         Some(crate::DelegationContext {
             project: record.project,
+            requester: record.requester,
             authority: record.authority.clone(),
             numbers: record.numbers,
             tasks_left,
@@ -139,6 +140,12 @@ pub fn max_out(limits: &Limits) -> u32 {
 /// effects before external replies.
 pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     match event {
+        Event::Control { reply_to, by, task, control } => {
+            crate::control::apply(domain, env, reply_to, by, task, control, out);
+        }
+        Event::Amend { reply_to, by, task, message, stop_run, amendment } => {
+            crate::control::amend(domain, env, reply_to, by, task, message, stop_run, amendment, out);
+        }
         Event::Subscribe { reply_to, task, subscription } => {
             crate::subscriptions::subscribe(domain, env, reply_to, task, subscription, out);
         }
@@ -414,6 +421,8 @@ fn make(
         let number = new.number;
         let task = Task {
             record: TaskRecord {
+                revision: 0,
+                narrowing: false,
                 result_position: 0,
                 escalation: crate::Escalation::Unheld { revision: 0 },
                 number,

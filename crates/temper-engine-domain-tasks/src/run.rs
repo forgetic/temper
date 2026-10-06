@@ -189,6 +189,8 @@ pub(crate) fn activation(
         | Phase::Held { was: Was::Waiting | Was::Active(_), .. }
         | Phase::Ended(_) => None,
     };
+    let narrowed = old.narrowing;
+    let end = if narrowed { End::Parked } else { end };
     let end = match end {
         End::Finished { result, cancel_delegates } => {
             if valid_result(&old.contract, &result, &env.limits) {
@@ -228,7 +230,7 @@ pub(crate) fn activation(
                 let task = task_mut(domain, number).expect("terminal names live task");
                 task.record.tries = Tries::NONE;
                 task.record.refusals = 0;
-                Phase::Active(Active::Idle)
+                if narrowed { Phase::Active(Active::Due) } else { Phase::Active(Active::Idle) }
             }
             End::Failed(class) => failure(domain, env, number, class),
             End::Refused => pause(domain, env, number),
@@ -236,6 +238,7 @@ pub(crate) fn activation(
     };
     let task = task_mut(domain, number).expect("terminal names live task");
     task.record.last_answer = Some(attempt);
+    task.record.narrowing = false;
     if let Some(tags) = saved {
         task.record.saved = tags;
     }
@@ -244,6 +247,9 @@ pub(crate) fn activation(
         None => next,
     };
     publish(domain, env, number, out);
+    if narrowed && record(domain, number).expect("amended task live").phase == Phase::Active(Active::Due) {
+        crate::domain::activate(domain, number, out);
+    }
     out.push(Request::Acknowledged { reply_to: to, task: number, attempt, accepted: Accepted::New });
 }
 

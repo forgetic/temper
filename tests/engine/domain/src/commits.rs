@@ -72,7 +72,7 @@ impl Store {
                 Range::Deployment => **key == Key::Deployment,
                 Range::Tasks => match key {
                     Key::Tasks(temper_engine_domain_tasks::Key::Live(_) | temper_engine_domain_tasks::Key::Ledger(_)) => true,
-                    Key::Tasks(temper_engine_domain_tasks::Key::Ended(_))
+                    Key::Tasks(temper_engine_domain_tasks::Key::Ended(_) | temper_engine_domain_tasks::Key::History { .. })
                         | Key::Call(_) | Key::EscalationDecision { .. } | Key::Deployment | Key::Turn { .. } | Key::RunProof { .. } | Key::Terminal { .. } | Key::People(_) => false,
                 },
                 Range::EndedResults => matches!(key, Key::Tasks(temper_engine_domain_tasks::Key::Ended(number)) if *number != 0),

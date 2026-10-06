@@ -165,7 +165,12 @@ impl Referee {
                         Some(record.as_ref())
                     }
                     Write::Save(
-                        Record::Tasks(tasks::Stored::Live(_) | tasks::Stored::Ended(_) | tasks::Stored::Ledger(_))
+                        Record::Tasks(
+                            tasks::Stored::Live(_)
+                            | tasks::Stored::Ended(_)
+                            | tasks::Stored::Ledger(_)
+                            | tasks::Stored::History(_),
+                        )
                         | Record::People(_)
                         | Record::Call(_)
                         | Record::Deployment(_)
