@@ -4,9 +4,10 @@
   `docs/development/workflow.md`; main moves only when they all pass. A
   change to Markdown files only skips them (same document).
 - The default test suite (unit tests and the worlds' focused tests under
-  `tests/`) takes at most 15 seconds; the fuzzy suite (the worlds'
-  `tests/fuzzy_*.rs`, randomized tests) at most 1 minute. Keep new tests
-  within these budgets: see the same document.
+  `tests/`) takes at most 30 seconds; the fuzzy suite (the worlds'
+  `tests/fuzzy_*.rs`, randomized tests) at most 2 minutes. These allowances
+  are doubled while legacy runs and return when it is deleted at plan step
+  07d. Keep new tests within these budgets: see the same document.
 - temper is built on skein, the io and generic-protocol kit, and follows
   the foundation documents in the `docs/foundation` directory of skein's
   repository. temper's code and documents cite them by file name:

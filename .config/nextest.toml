@@ -1,13 +1,13 @@
 # The two test suites (docs/development/workflow.md): the focused one, every
-# test but the fuzzy ones, within 15 seconds; and the fuzzy one, the test
-# binaries named fuzzy_* beside each world's focused tests, within a minute. A
+# test but the fuzzy ones, within 30 seconds; and the fuzzy one, the test
+# binaries named fuzzy_* beside each world's focused tests, within 2 minutes. A
 # suite past its budget fails, naming the tests it stopped; a test past its
 # slow period is flagged SLOW as it runs.
 
 [profile.default]
 default-filter = "not binary(/^fuzzy_/)"
-global-timeout = "15s"
-slow-timeout = { period = "3s" }
+global-timeout = "30s"
+slow-timeout = { period = "6s" }
 
 # The worlds' tests first, the longest, then the many short unit tests behind
 # them, so that the run ends close to its total over the threads.
@@ -17,8 +17,8 @@ priority = 10
 
 [profile.fuzzy]
 default-filter = "binary(/^fuzzy_/)"
-global-timeout = "60s"
-slow-timeout = { period = "20s" }
+global-timeout = "120s"
+slow-timeout = { period = "40s" }
 
 # Measuring, not gating: no budget. With -j 1, each test's own time:
 #   cargo nextest run --workspace --profile measure -j 1
