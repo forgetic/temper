@@ -60,7 +60,7 @@ pub(super) fn begin(
     let id = match domain.result_reads.insert(Some(RootRead::Result(read))) {
         Ok(id) => id,
         Err(Some(RootRead::Result(read))) => return refuse(read.to, people::Refusal::Busy, out),
-        Err(Some(RootRead::Escalation(_)) | None) => unreachable!("inserted result read"),
+        Err(Some(RootRead::Escalation(_) | RootRead::Transcript { .. }) | None) => unreachable!("inserted result read"),
     };
     let indexed = domain.reading_results.insert(person, id.token());
     assert!(indexed == Ok(None), "one result read per authenticated person");

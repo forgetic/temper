@@ -2,6 +2,7 @@ use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
 use std::collections::VecDeque;
 use temper_engine_domain::{Delivery, Key, Record, Write, engine};
 use temper_engine_domain_accounts as accounts;
+use temper_engine_domain_brief as brief;
 use temper_engine_domain_fleet as fleet;
 use temper_engine_domain_people as people;
 use temper_engine_domain_tasks as tasks;
@@ -1763,4 +1764,84 @@ fn words_to_a_parked_chat_wake_it() {
     assert_eq!(next.inbox.len(), 1);
     assert_eq!(next.inbox[0].number, number);
     assert_eq!(next.inbox[0].words.as_ref(), [44]);
+}
+
+#[test]
+fn a_chat_parks_and_resumes_from_its_transcript() {
+    let (mut driver, first) = chat_driver();
+    driver.send(engine::Event::Turn {
+        channel: Token::new(7),
+        task: first.task,
+        attempt: first.attempt,
+        turn: engine::Turn { number: 1, cumulative: 1, read: None, transcript: b"first".as_slice().into() },
+    });
+    driver.settle();
+    driver.send(engine::Event::Answer {
+        channel: Token::new(7),
+        task: first.task,
+        attempt: first.attempt,
+        cumulative: 1,
+        end: tasks::End::Parked,
+    });
+    driver.settle();
+    say(&mut driver, first.task, 45);
+    let second = assigned_from_last(&driver.delivered);
+    assert_eq!(second.transcript.len(), 1);
+    assert_eq!(second.transcript[0].as_ref(), b"first");
+    driver.send(engine::Event::Turn {
+        channel: Token::new(7),
+        task: second.task,
+        attempt: second.attempt,
+        turn: engine::Turn { number: 1, cumulative: 1, read: None, transcript: b"second".as_slice().into() },
+    });
+    driver.settle();
+    driver.send(engine::Event::Answer {
+        channel: Token::new(7),
+        task: second.task,
+        attempt: second.attempt,
+        cumulative: 1,
+        end: tasks::End::Parked,
+    });
+    driver.settle();
+    say(&mut driver, second.task, 46);
+    let third = assigned_from_last(&driver.delivered);
+    assert_eq!(third.transcript.len(), 2);
+    assert_eq!(third.transcript[0].as_ref(), b"first");
+    assert_eq!(third.transcript[1].as_ref(), b"second");
+    assert!(third.attempt > second.attempt);
+}
+
+#[test]
+fn a_chat_past_the_resume_limit_starts_fresh_with_the_tail_in_its_brief() {
+    let (mut driver, first) = chat_driver();
+    let mut body = vec![b'x'; 300];
+    body[298..].copy_from_slice(b"yz");
+    driver.send(engine::Event::Turn {
+        channel: Token::new(7),
+        task: first.task,
+        attempt: first.attempt,
+        turn: engine::Turn { number: 1, cumulative: 1, read: None, transcript: body.into_boxed_slice() },
+    });
+    driver.settle();
+    driver.send(engine::Event::Answer {
+        channel: Token::new(7),
+        task: first.task,
+        attempt: first.attempt,
+        cumulative: 1,
+        end: tasks::End::Parked,
+    });
+    driver.settle();
+    say(&mut driver, first.task, 47);
+    let next = assigned_from_last(&driver.delivered);
+    assert!(next.transcript.is_empty());
+    let tail = next
+        .sections
+        .iter()
+        .find_map(|section| match &section.body {
+            brief::Body::Text(bytes) if section.kind == brief::Kind::Transcript => Some(bytes),
+            brief::Body::Text(_) | brief::Body::Missing(_) => None,
+        })
+        .expect("bounded transcript tail section");
+    assert!(tail.ends_with(b"yz"), "the newest conversation bytes survive the cut");
+    assert!(tail.len() <= 128, "tail fits its section budget");
 }

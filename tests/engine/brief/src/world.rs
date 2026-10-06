@@ -493,7 +493,10 @@ impl World {
         head[..8].copy_from_slice(&self.rng.below(1000).to_be_bytes());
         let head = Commit(head);
         match kind {
-            Kind::Task => Source::Task { task: item.number },
+            Kind::Task => Source::Task { task: item.number, part: temper_engine_domain_brief::TaskPart::Spec },
+            Kind::Transcript => {
+                Source::Task { task: item.number, part: temper_engine_domain_brief::TaskPart::TranscriptTail }
+            }
             Kind::Item => Source::Item(item),
             Kind::Comments => Source::Comments { item, since: self.rng.below(50) },
             Kind::Dependencies => {

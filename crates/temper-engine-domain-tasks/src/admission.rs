@@ -79,6 +79,7 @@ pub(crate) fn turn(
     let task = &mut task_mut(domain, number).expect("turn admitted").record;
     task.turn = turn;
     crate::inbox::take(task, read);
+    task.ever_turned = true;
     post(domain, environment, number, cumulative, spent, out);
     out.push(Request::TurnAcknowledged { reply_to: to, task: number, attempt, turn, accepted: Accepted::New });
 }

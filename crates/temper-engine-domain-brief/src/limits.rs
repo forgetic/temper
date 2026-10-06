@@ -57,7 +57,7 @@ pub struct Budgets {
 /// The budget of a section of `kind`.
 pub(crate) fn budget(budgets: &Budgets, kind: Kind) -> u32 {
     match kind {
-        Kind::Task => budgets.task,
+        Kind::Task | Kind::Transcript => budgets.task,
         Kind::Item => budgets.item,
         Kind::Comments => budgets.comments,
         Kind::Dependencies => budgets.dependencies,
@@ -72,8 +72,9 @@ pub(crate) fn budget(budgets: &Budgets, kind: Kind) -> u32 {
 }
 
 /// The kinds, in the order a brief usually has them.
-pub(crate) const KINDS: [Kind; 11] = [
+pub(crate) const KINDS: [Kind; 12] = [
     Kind::Task,
+    Kind::Transcript,
     Kind::Item,
     Kind::Comments,
     Kind::Dependencies,

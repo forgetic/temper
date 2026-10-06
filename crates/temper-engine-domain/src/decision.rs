@@ -666,7 +666,14 @@ fn assignment_within(assignment: &crate::engine::Assignment, limits: &Limits) ->
         };
         owned = total;
     }
-    let within = match owned.checked_add(inbox_bytes) {
+    let mut transcript = 0_u64;
+    for turn in &assignment.transcript {
+        let Some(total) = transcript.checked_add(u64::try_from(turn.len()).expect("usize fits u64")) else {
+            return false;
+        };
+        transcript = total;
+    }
+    let within = match transcript.checked_add(inbox_bytes) {
         Some(all) => all <= u64::from(limits.transcript_bytes),
         None => false,
     };

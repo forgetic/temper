@@ -83,7 +83,7 @@ mod limits;
 mod tests;
 
 pub use boundary::{
-    Body, Commit, Event, Fit, Item, Keep, Kind, Part, Read, Refusal, Request, Section, Source, Unread, Wanted,
+    Body, Commit, Event, Fit, Item, Keep, Kind, Part, Read, Refusal, Request, Section, Source, TaskPart, Unread, Wanted,
 };
 pub use domain::{Domain, fire, max_out, step};
 pub use facts::{Fact, Gathered};

@@ -398,6 +398,8 @@ pub struct TaskRecord {
     pub last_message: u64,
     /// Whole unread words in increasing root message order.
     pub inbox: Box<[Word]>,
+    /// Some attempt of this task committed a turn, so its next preparation must read its transcript.
+    pub ever_turned: bool,
     /// Lifetime tasks made in this subtree, including itself, bounded by `Limits::tree_tasks`;
     /// ending delegates does not return capacity.
     pub made: u32,
@@ -908,6 +910,12 @@ pub struct RunContext {
     pub last_message: u64,
     /// Whole unread words carried into a newly prepared run brief.
     pub inbox: Box<[Word]>,
+    /// Last claimed attempt; a task-wide transcript load must not use turns from a later claim.
+    pub previous_attempt: u64,
+    /// Whether a committed conversation exists across this task's attempts.
+    pub ever_turned: bool,
+    /// Failure classes seen before this preparation, for the brief's attempt summary.
+    pub tries: Tries,
     pub project: u32,
     /// Implemented task executor, currently an agent charter selected by root.
     pub executor: Executor,

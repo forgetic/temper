@@ -79,6 +79,7 @@ impl Store {
                 Range::People => matches!(key, Key::People(_)),
                 Range::TaskResult { task } => matches!(key, Key::Tasks(temper_engine_domain_tasks::Key::Ended(number)) if *number == task),
                 Range::Turns { task, attempt } => matches!(key, Key::Turn { task: found, attempt: run, turn } if *found == task && *run == attempt && *turn != 0),
+                Range::TaskTranscript { task } => matches!(key, Key::Turn { task: found, attempt, turn } if *found == task && *attempt != 0 && *turn != 0),
             };
             within && after.is_none_or(|old| **key > old)
         }).map(|(_, row)| row.clone()).collect();

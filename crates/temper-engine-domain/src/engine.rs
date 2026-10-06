@@ -81,6 +81,9 @@ pub struct Config {
     pub authority: authority::Domain,
     /// Charter selected for chats; admitted by tasks as the configured executor.
     pub charter: u32,
+    /// Maximum committed conversation bytes across a task's attempts that may be resumed whole.
+    /// A longer transcript starts the next run fresh with its bounded tail in the brief.
+    pub resume_bytes: u32,
     /// Finite period number used to address project/person funding ledgers; restoring an existing
     /// ledger never resets it.
     pub period: u64,
@@ -101,7 +104,7 @@ pub struct Config {
 }
 
 /// A complete claim's assignment, root to worker after durability; its
-/// task section is bounded by brief limits (domain/engine.md, 7.1 and 9).
+/// brief sections are bounded by brief limits (domain/engine.md, 7.1 and 9).
 /// Its attempt ends through the worker answer route; the worker keeps its
 /// terminal body until a durable ACK, with channel loss handled by fleet grace.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -111,12 +114,13 @@ pub struct Assignment {
     pub attempt: u64,
     /// Configured charter, never selected by the worker.
     pub charter: u32,
-    /// Owned required task section, at most brief `sections` and `brief_bytes`; includes
-    /// specification, report contract and the actual person requester. Task/deployment lineage
-    /// awaits its actual root route.
+    /// Owned task, attempt and transcript-tail sections, at most brief `sections` and
+    /// `brief_bytes`. Task/deployment lineage awaits its root route.
     pub sections: Box<[brief::Section]>,
     /// Whole unread words offered to this attempt, oldest first.
     pub inbox: Box<[tasks::Word]>,
+    /// Ordered opaque committed turn bodies of this task, empty for a fresh run.
+    pub transcript: Box<[Box<[u8]>]>,
     /// Secret-free account grant; token bytes stay in the protocol.
     pub grant: accounts::Grant,
 }
@@ -385,6 +389,17 @@ enum Payload {
 enum Read {
     Result(results::Read),
     Escalation(escalation::Query),
+    Transcript { task: u64 },
+}
+
+/// Bounded recent opaque conversation while a due task's store pages are read.
+/// Empty turn bodies need no slot: they add nothing to a resumed conversation.
+#[derive(Debug)]
+struct Transcript {
+    previous_attempt: u64,
+    bytes: u64,
+    kept: u64,
+    turns: Queue<Box<[u8]>>,
 }
 
 #[derive(Debug)]
@@ -443,6 +458,7 @@ pub struct Domain {
     relaying: Option<PendingRelay>,
     claiming: Map<u64, u64>,
     contexts: Map<u64, Box<tasks::RunContext>>,
+    transcripts: Map<u64, Transcript>,
     proofs: Map<u64, RunProof>,
     restoring_proofs: Map<u64, RestoringProof>,
     work: Queue<Work>,
@@ -461,6 +477,10 @@ impl Domain {
     #[must_use]
     pub fn new(mut config: Config, limits: &Limits) -> Domain {
         assert!(worst_case(limits).is_some(), "root limits are valid");
+        assert!(
+            config.resume_bytes > 0 && config.resume_bytes <= limits.journal.transcript_bytes,
+            "configured task transcript bound fits the root's owned-byte limit"
+        );
         assert!(*config.authority.limits() == limits.authority, "root prices its exact authority limits");
         assert!(authority_within(&config.chat_authority, limits), "chat authority shape bounded before copying");
         let mut projects = List::with_capacity(limits.people.projects);
@@ -505,6 +525,7 @@ impl Domain {
             relaying: None,
             claiming: Map::with_capacity(limits.tasks.tasks),
             contexts: Map::with_capacity(limits.tasks.tasks),
+            transcripts: Map::with_capacity(limits.tasks.tasks),
             proofs: Map::with_capacity(limits.tasks.tasks),
             restoring_proofs: Map::with_capacity(limits.tasks.tasks),
             work: Queue::with_capacity(route_bound(limits).expect("valid routes")),
@@ -552,6 +573,7 @@ impl Domain {
             && self.relaying.is_none()
             && self.claiming.is_empty()
             && self.contexts.is_empty()
+            && self.transcripts.is_empty()
             && self.restoring_proofs.is_empty()
             && self.signing_in.is_none()
             && self.brief.briefs() == 0
@@ -933,7 +955,7 @@ pub fn resume(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) 
                 let Some(Some(read)) = domain.result_reads.get(Id::from_token(waiter)) else { return };
                 let (task, revision) = match read {
                     Read::Escalation(escalation::Query::Decide { task, revision, .. }) => (*task, *revision),
-                    Read::Result(_) | Read::Escalation(escalation::Query::Read { .. }) => {
+                    Read::Result(_) | Read::Transcript { .. } | Read::Escalation(escalation::Query::Read { .. }) => {
                         unreachable!("decision archive waiter")
                     }
                 };
@@ -949,7 +971,7 @@ pub fn resume(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) 
                 };
                 match read {
                     Read::Result(_) => request_load(domain, waiter, Range::EndedResults, None, out),
-                    Read::Escalation(_) => unreachable!("result waiter"),
+                    Read::Escalation(_) | Read::Transcript { .. } => unreachable!("result waiter"),
                 }
                 return;
             }
@@ -1051,7 +1073,7 @@ fn route_into(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision) {
                 brief::step(&mut domain.brief, &environment_brief(env), event, &mut out);
                 brief_outputs(domain, env, decision, &mut out);
             }
-            Work::Activate(task) => activate(domain, env, task),
+            Work::Activate(task) => activate(domain, env, decision, task),
             Work::EscalationLoaded { waiter, rows } => escalation::loaded(domain, env, waiter, rows),
             Work::EscalationFailed { waiter } => escalation::failed(domain, waiter),
         }
@@ -1224,7 +1246,8 @@ fn make_chat(
 
 /// Consume the actual child activation context for authority/account readiness and the person-chat
 /// brief; retain only credential waits and drop the context on claim/failure.
-fn activate(domain: &mut Domain, env: &Env<Limits>, task: Box<tasks::RunContext>) {
+#[expect(clippy::too_many_lines, reason = "authority check and transcript preparation are one activation route")]
+fn activate(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, task: Box<tasks::RunContext>) {
     let number = task.task;
     if !domain.ready() {
         remember_due(domain, task);
@@ -1301,12 +1324,44 @@ fn activate(domain: &mut Domain, env: &Env<Limits>, task: Box<tasks::RunContext>
             return;
         }
     }
+    let previous_attempt = task.previous_attempt;
+    let has_transcript = task.ever_turned;
+    let waiter = if has_transcript {
+        match domain.result_reads.insert(Some(Read::Transcript { task: number })) {
+            Ok(waiter) => Some(waiter),
+            Err(_) => {
+                remember_due(domain, task);
+                return;
+            }
+        }
+    } else {
+        None
+    };
     assert!(domain.contexts.insert(number, task).is_ok(), "bounded activation context");
+    assert!(
+        domain
+            .transcripts
+            .insert(
+                number,
+                Transcript {
+                    previous_attempt,
+                    bytes: 0,
+                    kept: 0,
+                    turns: Queue::with_capacity(domain.config.resume_bytes),
+                }
+            )
+            .is_ok(),
+        "one transcript preparation per live task"
+    );
     domain.work.push(Work::Tasks(tasks::Event::Prepare { reply_to: internal(number), task: number }));
-    domain.work.push(Work::Brief(brief::Event::Render {
-        reply_to: internal(number),
-        sections: Box::new([brief::Wanted { source: brief::Source::Task { task: number }, required: true }]),
-    }));
+    match waiter {
+        Some(waiter) => emit(
+            decision,
+            &env.limits,
+            Delivery::Load { waiter: waiter.token(), range: Range::TaskTranscript { task: number }, after: None },
+        ),
+        None => start_brief(domain, number),
+    }
 }
 
 #[expect(clippy::too_many_lines, reason = "the closed child vocabulary is routed exhaustively inside one decision")]
@@ -1551,10 +1606,7 @@ fn brief_outputs(domain: &mut Domain, env: &Env<Limits>, _decision: &mut Decisio
         match out.pop().expect("brief output count") {
             brief::Request::Read { owner, source, parts, bytes, .. } => {
                 let read = match source {
-                    brief::Source::Task { task } => match domain.contexts.get(&task) {
-                        Some(record) => task_read(record, parts, bytes),
-                        None => brief::Read::Failed,
-                    },
+                    brief::Source::Task { task, part } => task_section(domain, task, part, parts, bytes),
                     brief::Source::Item(_)
                     | brief::Source::Comments { .. }
                     | brief::Source::Dependencies(_)
@@ -1571,6 +1623,7 @@ fn brief_outputs(domain: &mut Domain, env: &Env<Limits>, _decision: &mut Decisio
             brief::Request::Rendered { reply_to, sections } => {
                 let task = reply_to.into_token().raw();
                 let context = domain.contexts.remove(&task).expect("rendered task owns context");
+                let transcript = domain.transcripts.remove(&task).expect("rendered task owns loaded transcript");
                 let Some(attempt) = crate::fresh(&mut domain.journal, Family::Run) else {
                     domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
                     continue;
@@ -1588,8 +1641,22 @@ fn brief_outputs(domain: &mut Domain, env: &Env<Limits>, _decision: &mut Decisio
                     domain.proofs.insert(task, RunProof { task, attempt, offered, turn: None, terminal: None }).is_ok(),
                     "claim proof reserved before child mutation"
                 );
-                let assignment =
-                    Assignment { task, attempt, charter: domain.config.charter, sections, inbox: context.inbox, grant };
+                let mut turns = List::with_capacity(transcript.turns.len());
+                if transcript.bytes <= u64::from(domain.config.resume_bytes) {
+                    let mut kept = transcript.turns;
+                    for _ in 0..kept.len() {
+                        turns.push(kept.pop().expect("counted transcript turn")).expect("bounded transcript turns");
+                    }
+                }
+                let assignment = Assignment {
+                    task,
+                    attempt,
+                    charter: domain.config.charter,
+                    sections,
+                    inbox: context.inbox,
+                    transcript: turns.into_boxed(),
+                    grant,
+                };
                 assert!(domain.assignments.insert(task, assignment).is_ok(), "assignment fits live task room");
                 assert!(domain.claiming.insert(task, attempt) == Ok(None), "one pending claim per task");
                 domain.work.push(Work::Tasks(tasks::Event::Claim { reply_to: internal(task), task, attempt }));
@@ -1597,6 +1664,7 @@ fn brief_outputs(domain: &mut Domain, env: &Env<Limits>, _decision: &mut Decisio
             brief::Request::Failed { reply_to, .. } | brief::Request::Refused { reply_to, .. } => {
                 let task = reply_to.into_token().raw();
                 drop(domain.contexts.remove(&task));
+                drop(domain.transcripts.remove(&task));
                 domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
             }
             brief::Request::Room => {}
@@ -1748,11 +1816,18 @@ fn request_load(domain: &mut Domain, waiter: Token, range: Range, after: Option<
     let mut load_out = Queue::with_capacity(1);
     let most = match range {
         Range::Deployment | Range::TaskResult { .. } | Range::EscalationDecision { .. } => 1,
-        Range::Tasks | Range::EndedResults | Range::People | Range::RunProofs | Range::Turns { .. } => {
-            domain.limits.loads.rows
-        }
+        Range::Tasks
+        | Range::EndedResults
+        | Range::People
+        | Range::RunProofs
+        | Range::Turns { .. }
+        | Range::TaskTranscript { .. } => domain.limits.loads.rows,
     };
     if loads::begin(&mut domain.loads, waiter, range, after, most, &mut load_out).is_none() {
+        if let Range::TaskTranscript { .. } = range {
+            transcript_failed(domain, waiter);
+            return;
+        }
         match range {
             Range::EscalationDecision { .. } => {
                 domain.work.push(Work::EscalationFailed { waiter });
@@ -1764,6 +1839,7 @@ fn request_load(domain: &mut Domain, waiter: Token, range: Range, after: Option<
             | Range::People
             | Range::RunProofs
             | Range::Turns { .. }
+            | Range::TaskTranscript { .. }
             | Range::TaskResult { .. } => {
                 unreachable!("startup/result load room reserved")
             }
@@ -1777,6 +1853,13 @@ fn request_load(domain: &mut Domain, waiter: Token, range: Range, after: Option<
     }
 }
 
+fn transcript_waiter(domain: &Domain, waiter: Token) -> bool {
+    match domain.result_reads.get(Id::from_token(waiter)) {
+        Some(Some(Read::Transcript { .. })) => true,
+        Some(Some(Read::Result(_) | Read::Escalation(_)) | None) | None => false,
+    }
+}
+
 fn load_outputs(
     domain: &mut Domain,
     env: &Env<Limits>,
@@ -1786,10 +1869,14 @@ fn load_outputs(
     for _ in 0..load_out.len() {
         match load_out.pop().expect("load terminal count") {
             loads::Request::Loaded { waiter, rows, next, cut } => {
+                if transcript_waiter(domain, waiter) {
+                    transcript_loaded(domain, waiter, rows, next, cut, out);
+                    return;
+                }
                 if cut.is_some() {
                     let archive = match domain.result_reads.get(Id::from_token(waiter)) {
                         Some(Some(Read::Escalation(_))) => true,
-                        Some(Some(Read::Result(_)) | None) | None => false,
+                        Some(Some(Read::Result(_) | Read::Transcript { .. }) | None) | None => false,
                     };
                     if archive {
                         domain.work.push(Work::EscalationFailed { waiter });
@@ -1806,7 +1893,7 @@ fn load_outputs(
                 } else {
                     let archive = match domain.result_reads.get(Id::from_token(waiter)) {
                         Some(Some(Read::Escalation(_))) => true,
-                        Some(Some(Read::Result(_)) | None) | None => false,
+                        Some(Some(Read::Result(_) | Read::Transcript { .. }) | None) | None => false,
                     };
                     if archive {
                         domain.work.push(Work::EscalationLoaded { waiter, rows });
@@ -1816,13 +1903,17 @@ fn load_outputs(
                 }
             }
             loads::Request::Unloaded { waiter, .. } => {
+                if transcript_waiter(domain, waiter) {
+                    transcript_failed(domain, waiter);
+                    return;
+                }
                 if waiter == Token::new(u64::MAX) {
                     domain.startup = Startup::Failed;
                     out.push(Request::Stop);
                 } else {
                     let archive = match domain.result_reads.get(Id::from_token(waiter)) {
                         Some(Some(Read::Escalation(_))) => true,
-                        Some(Some(Read::Result(_)) | None) | None => false,
+                        Some(Some(Read::Result(_) | Read::Transcript { .. }) | None) | None => false,
                     };
                     if archive {
                         domain.work.push(Work::EscalationFailed { waiter });
@@ -1834,6 +1925,108 @@ fn load_outputs(
             loads::Request::Load { .. } => unreachable!("terminal methods never issue IO"),
         }
     }
+}
+
+fn transcript_failed(domain: &mut Domain, waiter: Token) {
+    let Some(Read::Transcript { task }) = take_read(domain, waiter) else { return };
+    domain.result_reads.retire(Id::from_token(waiter));
+    drop(domain.contexts.remove(&task));
+    drop(domain.transcripts.remove(&task));
+    domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
+}
+
+fn transcript_loaded(
+    domain: &mut Domain,
+    waiter: Token,
+    rows: Box<[Record]>,
+    next: Option<Key>,
+    cut: Option<loads::Cut>,
+    out: &mut Queue<Request>,
+) {
+    if cut.is_some() {
+        transcript_failed(domain, waiter);
+        return;
+    }
+    let Some(Some(Read::Transcript { task })) = domain.result_reads.get(Id::from_token(waiter)) else { return };
+    let task = *task;
+    let transcript = domain.transcripts.get_mut(&task).expect("load belongs to prepared task");
+    let bound = u64::from(domain.config.resume_bytes);
+    for row in rows {
+        let Record::Turn(turn) = row else {
+            transcript_failed(domain, waiter);
+            return;
+        };
+        if turn.task != task || turn.attempt > transcript.previous_attempt || turn.attempt == 0 || turn.turn == 0 {
+            transcript_failed(domain, waiter);
+            return;
+        }
+        let length = u64::try_from(turn.transcript.len()).expect("stored turn size fits u64");
+        let Some(total) = transcript.bytes.checked_add(length) else {
+            transcript_failed(domain, waiter);
+            return;
+        };
+        transcript.bytes = total;
+        if length == 0 {
+            continue;
+        }
+        let body = if length > bound {
+            let start = turn
+                .transcript
+                .len()
+                .checked_sub(usize::try_from(bound).expect("u32 bound fits usize"))
+                .expect("oversize turn has tail");
+            Box::<[u8]>::from(turn.transcript.get(start..).expect("tail starts inside stored turn"))
+        } else {
+            turn.transcript
+        };
+        let body_len = u64::try_from(body.len()).expect("bounded turn fits u64");
+        for _ in 0..transcript.turns.len() {
+            if transcript.kept.checked_add(body_len).expect("two bounded tails") <= bound {
+                break;
+            }
+            let old = transcript.turns.pop().expect("overfull transcript has an older turn");
+            transcript.kept = transcript
+                .kept
+                .checked_sub(u64::try_from(old.len()).expect("bounded old turn"))
+                .expect("old turn was counted");
+        }
+        transcript.turns.push(body);
+        transcript.kept = transcript.kept.checked_add(body_len).expect("bounded transcript tail");
+    }
+    if let Some(after) = next {
+        request_load(domain, waiter, Range::TaskTranscript { task }, Some(after), out);
+        return;
+    }
+    let Some(Read::Transcript { .. }) = take_read(domain, waiter) else { unreachable!("finished transcript read") };
+    domain.result_reads.retire(Id::from_token(waiter));
+    start_brief(domain, task);
+}
+
+fn start_brief(domain: &mut Domain, task: u64) {
+    let context = domain.contexts.get(&task).expect("loaded task context");
+    let transcript = domain.transcripts.get(&task).expect("prepared transcript state");
+    let oversized = transcript.bytes > u64::from(domain.config.resume_bytes);
+    let mut wanted = List::with_capacity(3);
+    wanted
+        .push(brief::Wanted { source: brief::Source::Task { task, part: brief::TaskPart::Spec }, required: true })
+        .expect("task brief room");
+    if context.tries != tasks::Tries::NONE {
+        wanted
+            .push(brief::Wanted {
+                source: brief::Source::Task { task, part: brief::TaskPart::Attempts },
+                required: false,
+            })
+            .expect("attempt brief room");
+    }
+    if oversized {
+        wanted
+            .push(brief::Wanted {
+                source: brief::Source::Task { task, part: brief::TaskPart::TranscriptTail },
+                required: true,
+            })
+            .expect("tail brief room");
+    }
+    domain.work.push(Work::Brief(brief::Event::Render { reply_to: internal(task), sections: wanted.into_boxed() }));
 }
 
 fn startup_page(
@@ -1882,7 +2075,11 @@ fn startup_page(
         Range::People => Some(Range::Tasks),
         Range::Tasks => Some(Range::RunProofs),
         Range::RunProofs => None,
-        Range::EscalationDecision { .. } | Range::Turns { .. } | Range::TaskResult { .. } | Range::EndedResults => {
+        Range::EscalationDecision { .. }
+        | Range::Turns { .. }
+        | Range::TaskTranscript { .. }
+        | Range::TaskResult { .. }
+        | Range::EndedResults => {
             unreachable!("startup range")
         }
     };
@@ -2181,6 +2378,13 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_add(Map::<u64, RestoringProof>::worst_case(limits.tasks.tasks)?)?
         .checked_add(Map::<u64, Box<tasks::RunContext>>::worst_case(limits.tasks.tasks)?)?
         .checked_add(u64::from(limits.tasks.tasks).checked_mul(u64::from(limits.tasks.result_bytes).checked_mul(2)?)?)?
+        .checked_add(Map::<u64, Transcript>::worst_case(limits.tasks.tasks)?)?
+        .checked_add(
+            u64::from(limits.tasks.tasks).checked_mul(
+                Queue::<Box<[u8]>>::worst_case(limits.journal.transcript_bytes)?
+                    .checked_add(u64::from(limits.journal.transcript_bytes))?,
+            )?,
+        )?
         .checked_add(u64::from(limits.tasks.result_bytes).checked_mul(6)?)?
         // One routing/view context per live task plus an incoming clone; the
         // rejected reason is additional to the context's boxed inline slot.
@@ -2197,6 +2401,8 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
             u64::from(limits.brief.brief_bytes)
                 .checked_add(List::<brief::Section>::worst_case(limits.brief.sections)?)?
                 .checked_add(u64::from(limits.tasks.inbox_bytes))?
+                .checked_add(u64::from(limits.journal.transcript_bytes))?
+                .checked_add(List::<Box<[u8]>>::worst_case(limits.journal.transcript_bytes)?)?
                 .checked_add(
                     u64::from(limits.tasks.inbox_messages)
                         .checked_mul(u64::try_from(size_of::<tasks::Word>()).ok()?)?,
@@ -2321,6 +2527,83 @@ fn prefix(bytes: &[u8], most: usize) -> &[u8] {
     bytes.get(..end).expect("UTF-8 prefix within source")
 }
 
+fn task_section(domain: &Domain, task: u64, part: brief::TaskPart, parts: u32, bytes: u32) -> brief::Read {
+    if parts == 0 {
+        return brief::Read::Failed;
+    }
+    match part {
+        brief::TaskPart::Spec => match domain.contexts.get(&task) {
+            Some(context) => task_read(context, parts, bytes),
+            None => brief::Read::Failed,
+        },
+        brief::TaskPart::Attempts => match domain.contexts.get(&task) {
+            Some(context) => attempt_read(context.tries, bytes),
+            None => brief::Read::Failed,
+        },
+        brief::TaskPart::TranscriptTail => match domain.transcripts.get(&task) {
+            Some(transcript) => tail_read(transcript, bytes),
+            None => brief::Read::Failed,
+        },
+    }
+}
+
+fn attempt_read(tries: tasks::Tries, bytes: u32) -> brief::Read {
+    let classes: [(&[u8], u32); 6] = [
+        (b"transient: ", tries.transient),
+        (b"permanent: ", tries.permanent),
+        (b"run: ", tries.run),
+        (b"agent: ", tries.agent),
+        (b"lost: ", tries.lost),
+        (b"invalid: ", tries.invalid),
+    ];
+    let mut total = 0_usize;
+    for (name, count) in classes {
+        if count > 0 {
+            total = total
+                .checked_add(name.len())
+                .expect("bounded attempt label")
+                .checked_add(Decimal::of(u64::from(count)).as_bytes().len())
+                .expect("bounded count")
+                .checked_add(1)
+                .expect("newline");
+        }
+    }
+    let mut writer = Writer::new(total.min(usize::try_from(bytes).expect("u32 fits usize")));
+    for (name, count) in classes {
+        if count > 0 {
+            for fragment in [name, Decimal::of(u64::from(count)).as_bytes(), b"\n"] {
+                let kept = prefix(fragment, writer.room());
+                writer.put(kept).expect("attempt prefix fits");
+            }
+        }
+    }
+    let text = writer.finish();
+    brief::Read::Got(Box::new([brief::Part {
+        left: u64::try_from(total.checked_sub(text.len()).expect("written prefix")).expect("usize fits u64"),
+        bytes: text,
+    }]))
+}
+
+fn tail_read(transcript: &Transcript, bytes: u32) -> brief::Read {
+    let kept = u64::from(bytes).min(transcript.kept);
+    let skip = transcript.kept.checked_sub(kept).expect("tail within kept bytes");
+    let mut writer = Writer::new(usize::try_from(kept).expect("u32 bound fits usize"));
+    let mut passed = 0_u64;
+    for turn in &transcript.turns {
+        let end = passed.checked_add(u64::try_from(turn.len()).expect("bounded turn")).expect("bounded retained tail");
+        if end > skip {
+            let from = usize::try_from(skip.saturating_sub(passed)).expect("bounded offset");
+            writer.put(turn.get(from..).expect("tail starts inside retained turn")).expect("tail fits chosen budget");
+        }
+        passed = end;
+    }
+    let text = writer.finish();
+    brief::Read::Got(Box::new([brief::Part {
+        left: transcript.bytes.saturating_sub(u64::try_from(text.len()).expect("bounded tail")),
+        bytes: text,
+    }]))
+}
+
 /// Render only the current person Report task section from its temporary activation context,
 /// without a raw child query or invented ancestor route.
 fn task_read(record: &tasks::RunContext, parts: u32, bytes: u32) -> brief::Read {
@@ -2368,6 +2651,7 @@ fn header_loaded(startup: Startup) -> bool {
             | Range::RunProofs
             | Range::EscalationDecision { .. }
             | Range::Turns { .. }
+            | Range::TaskTranscript { .. }
             | Range::TaskResult { .. },
         )
         | Startup::Adopting

@@ -46,6 +46,8 @@ pub struct Commit(pub [u8; 32]);
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Kind {
     Task,
+    /// Opaque conversation tail from a task past its whole-resume bound.
+    Transcript,
     Item,
     Comments,
     Dependencies,
@@ -58,6 +60,17 @@ pub enum Kind {
     Template,
 }
 
+/// One section of a task's root-supplied run brief (domain/engine.md, section 9).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum TaskPart {
+    /// Specification, result contract and requester lineage.
+    Spec,
+    /// Earlier failure classes and counts.
+    Attempts,
+    /// The newest committed transcript bytes when the resume limit was exceeded.
+    TranscriptTail,
+}
+
 /// Where a section's content comes from, in the brief's own terms; the
 /// parent knows how to read each. The parts of each are in the order given
 /// here, which is the order the cut relies on.
@@ -66,7 +79,7 @@ pub enum Source {
     /// The task's spec and contract, followed by its requester lineage, nearest first. Later
     /// ancestors go first when cut. The parent supplies bounded concrete text; no child types cross
     /// this boundary.
-    Task { task: u64 },
+    Task { task: u64, part: TaskPart },
     /// The item and its lineage: the item first, then its parent, and so on
     /// up. The farthest ancestors are cut first, then the tail of what is
     /// left.
@@ -113,14 +126,15 @@ impl Source {
     #[must_use]
     pub fn kind(&self) -> Kind {
         match self {
-            Source::Task { .. } => Kind::Task,
+            Source::Task { part: TaskPart::Spec, .. } => Kind::Task,
+            Source::Task { part: TaskPart::Attempts, .. } | Source::Attempts(_) => Kind::Attempts,
+            Source::Task { part: TaskPart::TranscriptTail, .. } => Kind::Transcript,
             Source::Item(_) => Kind::Item,
             Source::Comments { .. } => Kind::Comments,
             Source::Dependencies(_) => Kind::Dependencies,
             Source::Ci { .. } => Kind::Ci,
             Source::Reviews { .. } => Kind::Reviews,
             Source::Pull { .. } => Kind::Pull,
-            Source::Attempts(_) => Kind::Attempts,
             Source::Plan { .. } => Kind::Plan,
             Source::Notes { .. } => Kind::Notes,
             Source::Template(_) => Kind::Template,

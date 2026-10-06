@@ -509,7 +509,7 @@ impl Expectations for Briefs {
 pub fn shape(kind: Kind) -> (Keep, Fit) {
     match kind {
         Kind::Task | Kind::Item | Kind::Pull | Kind::Plan | Kind::Template => (Keep::Start, Fit::Run),
-        Kind::Comments | Kind::Attempts => (Keep::End, Fit::Run),
+        Kind::Comments | Kind::Attempts | Kind::Transcript => (Keep::End, Fit::Run),
         Kind::Dependencies | Kind::Reviews => (Keep::Start, Fit::Each),
         Kind::Ci => (Keep::End, Fit::Each),
         Kind::Notes => (Keep::Start, Fit::Lines),
@@ -521,7 +521,7 @@ pub fn shape(kind: Kind) -> (Keep, Fit) {
 pub fn budget(limits: &Limits, kind: Kind) -> u32 {
     let budgets = &limits.budgets;
     match kind {
-        Kind::Task => budgets.task,
+        Kind::Task | Kind::Transcript => budgets.task,
         Kind::Item => budgets.item,
         Kind::Comments => budgets.comments,
         Kind::Dependencies => budgets.dependencies,
@@ -823,7 +823,7 @@ fn follows(kind: Kind, parts: &[Part], kept: &[usize]) -> bool {
             let edge = whole.iter().position(|whole| !whole).unwrap_or(parts.len());
             none.iter().skip(edge + 1).all(|none| *none)
         }
-        Kind::Comments | Kind::Attempts => {
+        Kind::Comments | Kind::Attempts | Kind::Transcript => {
             let edge = whole.iter().rposition(|whole| !whole).map_or(0, |edge| edge + 1);
             none.iter().take(edge.saturating_sub(1)).all(|none| *none)
         }
@@ -852,9 +852,14 @@ fn follows(kind: Kind, parts: &[Part], kept: &[usize]) -> bool {
 /// one step more of its measure would add.
 fn slack(kind: Kind, parts: &[Part]) -> usize {
     match kind {
-        Kind::Task | Kind::Item | Kind::Pull | Kind::Plan | Kind::Template | Kind::Comments | Kind::Attempts => {
-            CUT_LINE + 4
-        }
+        Kind::Task
+        | Kind::Item
+        | Kind::Pull
+        | Kind::Plan
+        | Kind::Template
+        | Kind::Comments
+        | Kind::Attempts
+        | Kind::Transcript => CUT_LINE + 4,
         Kind::Dependencies | Kind::Reviews | Kind::Ci => (CUT_LINE + 4) * (parts.len() + 1),
         Kind::Notes => parts.iter().map(|part| part.bytes.len()).max().unwrap_or(0) + CUT_LINE,
     }

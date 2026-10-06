@@ -140,14 +140,15 @@ pub enum Range {
         /// Positive root-issued ended task key; terminal page has at most one row.
         task: u64,
     },
-    /// Historical committed transcript turns for one task/attempt; the root load seam supports this
-    /// range, though 06a does not resume transcripts.
+    /// Historical committed transcript turns for one task and attempt.
     Turns {
         /// Positive durable task number; admitted ranges reject zero.
         task: u64,
         /// Positive root-issued activation; other attempts cannot match.
         attempt: u64,
     },
+    /// All committed turns of one task, in attempt and turn order, for preparing its next run.
+    TaskTranscript { task: u64 },
 }
 
 impl Range {
@@ -229,6 +230,15 @@ impl Range {
             },
             Range::Turns { task, attempt } => match key {
                 Key::Turn { task: found, attempt: run, turn } => found == task && run == attempt && turn != 0,
+                Key::EscalationDecision { .. }
+                | Key::Deployment
+                | Key::RunProof { .. }
+                | Key::Terminal { .. }
+                | Key::Tasks(_)
+                | Key::People(_) => false,
+            },
+            Range::TaskTranscript { task } => match key {
+                Key::Turn { task: found, attempt, turn } => task != 0 && found == task && attempt != 0 && turn != 0,
                 Key::EscalationDecision { .. }
                 | Key::Deployment
                 | Key::RunProof { .. }
