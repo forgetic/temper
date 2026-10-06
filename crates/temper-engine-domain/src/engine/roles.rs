@@ -62,6 +62,7 @@ fn inspected(
             | tasks::Request::EscalationInspected { .. }
             | tasks::Request::EscalationDecided { .. }
             | tasks::Request::ProposalDecided { .. }
+            | tasks::Request::ProposalRerouteNeeded { .. }
             | tasks::Request::ProposalStalled { .. }
             | tasks::Request::EscalationStalled { .. }
             | tasks::Request::Made { .. }
@@ -229,6 +230,7 @@ fn recheck(domain: &mut Domain, env: &Env<Limits>, request: Token, project: u32)
             | tasks::Request::EscalationInspected { .. }
             | tasks::Request::EscalationDecided { .. }
             | tasks::Request::ProposalDecided { .. }
+            | tasks::Request::ProposalRerouteNeeded { .. }
             | tasks::Request::ProposalStalled { .. }
             | tasks::Request::EscalationStalled { .. }
             | tasks::Request::Made { .. }

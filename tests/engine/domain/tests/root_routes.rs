@@ -787,6 +787,14 @@ fn batch_fixture() -> (Driver, engine::Assignment) {
 }
 
 fn batch_fixture_with(slots: u32, depth: u32) -> (Driver, engine::Assignment) {
+    batch_fixture_with_pool(slots, depth, 500)
+}
+
+fn batch_fixture_with_pool(slots: u32, depth: u32, pool_budget: u64) -> (Driver, engine::Assignment) {
+    batch_fixture_custom(slots, depth, pool_budget, false)
+}
+
+fn batch_fixture_custom(slots: u32, depth: u32, pool_budget: u64, second_owner: bool) -> (Driver, engine::Assignment) {
     let mut bounds = limits();
     bounds.tasks.tasks = 4;
     bounds.tasks.project_tasks = 4;
@@ -797,6 +805,9 @@ fn batch_fixture_with(slots: u32, depth: u32) -> (Driver, engine::Assignment) {
     bounds.tasks.dependencies = 2;
     bounds.tasks.inbox_messages = 6;
     bounds.tasks.inbox_bytes = 384;
+    if second_owner {
+        bounds.people.initial_owners = 2;
+    }
     bounds.authority.batch = 3;
     bounds.fleet.attempts = 5;
     bounds.fleet.slots = slots;
@@ -806,6 +817,13 @@ fn batch_fixture_with(slots: u32, depth: u32) -> (Driver, engine::Assignment) {
     bounds.journal.deliveries = 100;
     bounds.journal.held = 300;
     let mut configuration = config(92);
+    configuration.person_budget = pool_budget;
+    if second_owner {
+        configuration.owners = Box::new([
+            people::InitialOwner { project: 1, identity: people::IdentityKey { forge: 1, user: 7 } },
+            people::InitialOwner { project: 1, identity: people::IdentityKey { forge: 1, user: 8 } },
+        ]);
+    }
     let mut rules = configuration.authority.rules().clone();
     rules.ceiling.delegation.tasks = 4;
     rules.ceiling.delegation.depth = depth + 1;
@@ -2780,6 +2798,7 @@ fn read_only_role_stages_have_one_not_ready_terminal_and_empty_projects_need_no_
             | tasks::Request::EscalationInspected { .. }
             | tasks::Request::EscalationDecided { .. }
             | tasks::Request::ProposalDecided { .. }
+            | tasks::Request::ProposalRerouteNeeded { .. }
             | tasks::Request::ProposalStalled { .. }
             | tasks::Request::EscalationStalled { .. }
             | tasks::Request::Made { .. }
@@ -2819,6 +2838,7 @@ fn read_only_role_stages_have_one_not_ready_terminal_and_empty_projects_need_no_
         | tasks::Request::EscalationInspected { .. }
         | tasks::Request::EscalationDecided { .. }
         | tasks::Request::ProposalDecided { .. }
+        | tasks::Request::ProposalRerouteNeeded { .. }
         | tasks::Request::ProposalStalled { .. }
         | tasks::Request::EscalationStalled { .. }
         | tasks::Request::Made { .. }
@@ -3247,6 +3267,210 @@ fn a_delegate_held_past_its_tries_is_escalated_two_levels_to_a_person_released_a
         driver.store.rows.get(&Key::Tasks(tasks::Key::Ended(leaf))),
         Some(Record::Tasks(tasks::Stored::Ended(_)))
     ));
+}
+
+#[test]
+fn a_moved_task_is_funded_anew_by_its_new_requester() {
+    let (mut driver, root) = batch_fixture_with(3, 2);
+    let mut child_spec = report_delegate(b"long goal", Box::new([]));
+    child_spec.authority.budget.spend = 50;
+    child_spec.authority.delegation.kinds = Box::new([tasks::AuthorityExecutor::Charter(1)]);
+    child_spec.authority.delegation.tasks = 1;
+    child_spec.authority.delegation.depth = 1;
+    let child = call_batch(&mut driver, &root, 620, Box::new([child_spec]))[0];
+    let child_run = assigned_task(&driver, child);
+    let grandchild = call_batch(&mut driver, &child_run, 621, Box::new([report_delegate(b"subgoal", Box::new([]))]))[0];
+    driver.send(engine::Event::Turn {
+        channel: Token::new(7),
+        task: child,
+        attempt: child_run.attempt,
+        turn: engine::Turn { number: 1, cumulative: 5, read: None, transcript: b"worked".as_slice().into() },
+    });
+    driver.settle();
+    let person = driver.store.header().people;
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(622)),
+        sign_in: driver.session(),
+        key: [62; 16],
+        ask: people::Ask::Move { project: 1, task: child, reason: b"keep the goal".as_slice().into() },
+    });
+    driver.settle();
+    assert!(driver.delivered.iter().any(|item| matches!(item,
+        Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::Moved { task }), .. } if *task == child)));
+    let Some(Record::Tasks(tasks::Stored::Live(moved))) = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(child)))
+    else {
+        panic!("moved task remains live")
+    };
+    assert_eq!(moved.requester, tasks::Party::Person(person));
+    assert_eq!(moved.funder, tasks::Funder::Pool { project: 1, person, period: 1 });
+    assert_eq!(moved.numbers, tasks::Numbers { budget: 45, spent: 0, spent_below: 0, reserved: 10 });
+    assert_eq!(moved.root, child);
+    assert_eq!(moved.depth, 0);
+    let Some(Record::Tasks(tasks::Stored::Live(beneath))) =
+        driver.store.rows.get(&Key::Tasks(tasks::Key::Live(grandchild)))
+    else {
+        panic!("grandchild remains live")
+    };
+    assert_eq!((beneath.root, beneath.depth), (child, 1));
+    let Some(Record::Tasks(tasks::Stored::Live(old))) = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(root.task)))
+    else {
+        panic!("old requester remains live")
+    };
+    assert!(!old.delegates.contains(&child));
+    assert!(old.references.contains(&child));
+    assert_eq!((old.numbers.reserved, old.numbers.spent_below), (0, 5));
+    driver.send(engine::Event::Answer {
+        channel: Token::new(7),
+        task: root.task,
+        attempt: root.attempt,
+        cumulative: 0,
+        end: tasks::End::Finished {
+            result: tasks::TaskResult::Report { words: b"chat done".as_slice().into() },
+            cancel_delegates: false,
+        },
+        saved: None,
+    });
+    driver.settle();
+    assert!(driver.store.rows.contains_key(&Key::Tasks(tasks::Key::Live(child))));
+    assert!(driver.store.rows.contains_key(&Key::Tasks(tasks::Key::Live(grandchild))));
+}
+
+#[test]
+fn a_move_the_new_funder_cannot_cover_is_refused_whole() {
+    let (mut driver, root) = batch_fixture_with_pool(2, 1, 100);
+    let child = call_batch(&mut driver, &root, 630, Box::new([report_delegate(b"child", Box::new([]))]))[0];
+    let before_parent = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(root.task))).cloned();
+    let before_child = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(child))).cloned();
+    let pool = tasks::Funder::Pool { project: 1, person: driver.store.header().people, period: 1 };
+    let before_pool = driver.store.rows.get(&Key::Tasks(tasks::Key::Ledger(pool))).cloned();
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(631)),
+        sign_in: driver.session(),
+        key: [63; 16],
+        ask: people::Ask::Move { project: 1, task: child, reason: b"out of room".as_slice().into() },
+    });
+    driver.settle();
+    assert!(driver.delivered.iter().any(|item| matches!(
+        item,
+        Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::Refused(people::Refusal::Authority)), .. }
+    )));
+    assert_eq!(driver.store.rows.get(&Key::Tasks(tasks::Key::Live(root.task))), before_parent.as_ref());
+    assert_eq!(driver.store.rows.get(&Key::Tasks(tasks::Key::Live(child))), before_child.as_ref());
+    assert_eq!(driver.store.rows.get(&Key::Tasks(tasks::Key::Ledger(pool))), before_pool.as_ref());
+}
+
+#[test]
+fn a_move_carves_the_new_persons_pool_in_the_same_commit() {
+    let (mut driver, root) = batch_fixture_custom(2, 1, 500, true);
+    let child = call_batch(&mut driver, &root, 640, Box::new([report_delegate(b"second owner goal", Box::new([]))]))[0];
+    driver.send(engine::Event::SignedIn {
+        reply_to: ReplyTo::new(Token::new(641)),
+        identity: people::Identity {
+            key: people::IdentityKey { forge: 1, user: 8 },
+            login: b"second".as_slice().into(),
+            name: b"Second".as_slice().into(),
+        },
+    });
+    driver.settle();
+    let session = driver.store.header().sign_ins;
+    let person = driver.store.header().people;
+    let pool = tasks::Funder::Pool { project: 1, person, period: 1 };
+    assert!(!driver.store.rows.contains_key(&Key::Tasks(tasks::Key::Ledger(pool))));
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(642)),
+        sign_in: session,
+        key: [64; 16],
+        ask: people::Ask::Move { project: 1, task: child, reason: b"adopt goal".as_slice().into() },
+    });
+    driver.settle();
+    assert!(driver.delivered.iter().any(|item| matches!(item,
+        Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::Moved { task }), .. } if *task == child)));
+    assert!(driver.transactions.iter().any(|writes| {
+        writes.iter().any(|write| matches!(write,
+            Write::Save(Record::Tasks(tasks::Stored::Live(row))) if row.number == child && row.requester == tasks::Party::Person(person)))
+        && writes.iter().any(|write| matches!(write,
+            Write::Save(Record::Tasks(tasks::Stored::Ledger(row))) if row.funder == pool && row.numbers.reserved == 10))
+        && writes.iter().any(|write| matches!(write,
+            Write::Save(Record::People(people::Stored::Answer { outcome: people::Outcome::Moved { task }, .. })) if *task == child))
+    }));
+}
+
+#[test]
+fn moving_a_held_delegate_rechecks_its_escalation_recipient() {
+    let (mut driver, root) = batch_fixture_with(2, 1);
+    let child = call_batch(&mut driver, &root, 650, Box::new([report_delegate(b"held goal", Box::new([]))]))[0];
+    let first = assigned_task(&driver, child);
+    driver.send(engine::Event::Answer {
+        channel: Token::new(7),
+        task: child,
+        attempt: first.attempt,
+        cumulative: 0,
+        end: tasks::End::Failed(tasks::Class::Transient),
+        saved: None,
+    });
+    driver.settle();
+    driver.env.now = Time::from_nanos(Duration::from_secs(2).as_nanos());
+    driver.env.wall = Wall::from_nanos(Duration::from_secs(2).as_nanos());
+    engine::fire(&mut driver.root, &driver.env, &mut driver.out);
+    driver.collect();
+    driver.settle();
+    let second = assigned_from_last(&driver.delivered);
+    driver.send(engine::Event::Answer {
+        channel: Token::new(7),
+        task: child,
+        attempt: second.attempt,
+        cumulative: 0,
+        end: tasks::End::Failed(tasks::Class::Transient),
+        saved: None,
+    });
+    driver.settle();
+    let before = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(child))).expect("held child");
+    assert!(matches!(before, Record::Tasks(tasks::Stored::Live(row)) if matches!(row.escalation,
+        tasks::Escalation::Waiting { holder: tasks::EscalationHolder::Task(parent), .. } if parent == root.task)));
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(651)),
+        sign_in: driver.session(),
+        key: [65; 16],
+        ask: people::Ask::Move { project: 1, task: child, reason: b"adopt held work".as_slice().into() },
+    });
+    driver.settle();
+    let person = driver.store.header().people;
+    let after = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(child))).expect("moved held child");
+    assert!(matches!(after, Record::Tasks(tasks::Stored::Live(row)) if matches!(row.escalation,
+        tasks::Escalation::Waiting { holder: tasks::EscalationHolder::Person(found), .. } if found == person)));
+}
+
+#[test]
+fn moving_a_proposer_rechecks_its_decision_holder() {
+    let (mut driver, root) = batch_fixture_with(2, 2);
+    let child = call_batch(&mut driver, &root, 660, Box::new([report_delegate(b"goal", Box::new([]))]))[0];
+    let run = assigned_task(&driver, child);
+    tool_call(
+        &mut driver,
+        &run,
+        661,
+        engine::Tool::Propose {
+            action: engine::ProposedAction::Batch(Box::new([report_delegate(b"helper", Box::new([]))])),
+            reason: b"need help".as_slice().into(),
+            as_holder: false,
+        },
+    );
+    let before = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(child))).expect("proposer live");
+    assert!(matches!(before, Record::Tasks(tasks::Stored::Live(row)) if matches!(&row.proposal,
+        Some(proposal) if matches!(proposal.state,
+            tasks::ProposalState::Pending { holder: tasks::ProposalHolder::Task(holder), .. } if holder == root.task))));
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(662)),
+        sign_in: driver.session(),
+        key: [66; 16],
+        ask: people::Ask::Move { project: 1, task: child, reason: b"adopt proposal".as_slice().into() },
+    });
+    driver.settle();
+    let person = driver.store.header().people;
+    let after = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(child))).expect("moved proposer");
+    assert!(matches!(after, Record::Tasks(tasks::Stored::Live(row)) if matches!(&row.proposal,
+        Some(proposal) if matches!(proposal.state,
+            tasks::ProposalState::Pending { holder: tasks::ProposalHolder::Person(holder), .. } if holder == person))));
 }
 
 #[test]

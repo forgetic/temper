@@ -289,6 +289,7 @@ impl World {
             | Request::EscalationInspected { .. }
             | Request::EscalationDecided { .. }
             | Request::ProposalDecided { .. }
+            | Request::ProposalRerouteNeeded { .. }
             | Request::ProposalStalled { .. }
             | Request::EscalationStalled { .. }
             | Request::Made { .. }
@@ -318,6 +319,7 @@ impl World {
             | Event::WithdrawProposal { .. }
             | Event::StalledProposal { .. }
             | Event::Amend { .. }
+            | Event::Move { .. }
             | Event::CarvePool { .. }
             | Event::Make { .. }
             | Event::Prepare { .. }
@@ -350,6 +352,7 @@ impl World {
             }
             Event::OpenPeriod { .. }
             | Event::Control { .. }
+            | Event::Move { .. }
             | Event::Propose { .. }
             | Event::DecideProposal { .. }
             | Event::WithdrawProposal { .. }
@@ -482,6 +485,7 @@ impl World {
                 | Request::EscalationInspected { .. }
                 | Request::EscalationDecided { .. }
                 | Request::ProposalDecided { .. }
+                | Request::ProposalRerouteNeeded { .. }
                 | Request::ProposalStalled { .. }
                 | Request::EscalationStalled { .. }
                 | Request::Sent { .. }
@@ -541,6 +545,7 @@ impl World {
                 | Request::Relay { .. }
                 | Request::Notify { .. }
                 | Request::Timer { .. }
+                | Request::ProposalRerouteNeeded { .. }
                 | Request::ProposalStalled { .. }
                 | Request::EscalationStalled { .. } => {}
                 Request::Sent { reply_to, .. }
@@ -735,6 +740,7 @@ impl World {
                 | Request::EscalationInspected { .. }
                 | Request::EscalationDecided { .. }
                 | Request::ProposalDecided { .. }
+                | Request::ProposalRerouteNeeded { .. }
                 | Request::ProposalStalled { .. }
                 | Request::EscalationStalled { .. } => {}
             }

@@ -573,6 +573,7 @@ pub fn record_bytes(record: &Record) -> Option<u64> {
                     .checked_mul(u64::try_from(size_of::<temper_engine_domain_people::Holding>()).ok()?),
                 temper_engine_domain_people::Ask::StartChat { words, .. }
                 | temper_engine_domain_people::Ask::Say { words, .. } => u64::try_from(words.len()).ok(),
+                temper_engine_domain_people::Ask::Move { reason, .. } => u64::try_from(reason.len()).ok(),
                 temper_engine_domain_people::Ask::DecideEscalation { decision, .. } => decision_bytes(decision),
                 temper_engine_domain_people::Ask::DecideProposal { decision, .. } => match decision {
                     temper_engine_domain_people::ProposalDecision::Accept

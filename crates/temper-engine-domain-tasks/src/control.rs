@@ -52,7 +52,14 @@ pub enum Change {
     ProposalWithdrawn,
 }
 
-fn history(domain: &mut Domain, number: u64, by: Party, change: Change, reason: &[u8], out: &mut Queue<Request>) {
+pub(crate) fn history(
+    domain: &mut Domain,
+    number: u64,
+    by: Party,
+    change: Change,
+    reason: &[u8],
+    out: &mut Queue<Request>,
+) {
     let task = task_mut(domain, number).expect("history task live");
     task.record.revision = task.record.revision.checked_add(1).expect("revision preflighted");
     out.push(Request::Save {

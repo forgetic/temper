@@ -359,7 +359,11 @@ fn apply_roles(
     let flight = domain.pending.get(Id::from_token(request)).ok_or(Refusal::Unknown)?;
     let project = match &flight.ask {
         Ask::SetRoles { project, .. } => *project,
-        Ask::StartChat { .. } | Ask::DecideEscalation { .. } | Ask::DecideProposal { .. } | Ask::Say { .. } => {
+        Ask::StartChat { .. }
+        | Ask::DecideEscalation { .. }
+        | Ask::DecideProposal { .. }
+        | Ask::Say { .. }
+        | Ask::Move { .. } => {
             return Err(Refusal::Unknown);
         }
     };
@@ -382,7 +386,11 @@ fn apply_roles(
             }
             holdings.clone()
         }
-        Ask::StartChat { .. } | Ask::DecideEscalation { .. } | Ask::DecideProposal { .. } | Ask::Say { .. } => {
+        Ask::StartChat { .. }
+        | Ask::DecideEscalation { .. }
+        | Ask::DecideProposal { .. }
+        | Ask::Say { .. }
+        | Ask::Move { .. } => {
             unreachable!("validated roster flight")
         }
     };
@@ -533,12 +541,16 @@ fn project(ask: &Ask) -> u32 {
         | Ask::StartChat { project, .. }
         | Ask::DecideEscalation { project, .. }
         | Ask::DecideProposal { project, .. }
-        | Ask::Say { project, .. } => *project,
+        | Ask::Say { project, .. }
+        | Ask::Move { project, .. } => *project,
     }
 }
 
 fn valid_ask(limits: &Limits, ask: &Ask) -> bool {
     match ask {
+        Ask::Move { task, reason, .. } => {
+            *task != 0 && reason.len() <= usize::try_from(limits.words).expect("u32 fits usize")
+        }
         Ask::SetRoles { holdings, .. } => holdings.len() <= usize::try_from(limits.holdings).expect("u32 fits usize"),
         Ask::StartChat { words, .. } => words.len() <= usize::try_from(limits.words).expect("u32 fits usize"),
         Ask::Say { task, words, .. } => {
@@ -569,6 +581,14 @@ fn valid_ask(limits: &Limits, ask: &Ask) -> bool {
 
 fn valid_answer_shape(ask: &Ask, outcome: Outcome) -> bool {
     match outcome {
+        Outcome::Moved { task } => match ask {
+            Ask::Move { task: named, .. } => *named == task,
+            Ask::SetRoles { .. }
+            | Ask::StartChat { .. }
+            | Ask::DecideEscalation { .. }
+            | Ask::DecideProposal { .. }
+            | Ask::Say { .. } => false,
+        },
         Outcome::RolesSet { project: answered } => match ask {
             Ask::SetRoles { project, holdings } => {
                 if *project != answered {
@@ -586,28 +606,43 @@ fn valid_answer_shape(ask: &Ask, outcome: Outcome) -> bool {
                 }
                 true
             }
-            Ask::StartChat { .. } | Ask::DecideEscalation { .. } | Ask::DecideProposal { .. } | Ask::Say { .. } => {
-                false
-            }
+            Ask::StartChat { .. }
+            | Ask::DecideEscalation { .. }
+            | Ask::DecideProposal { .. }
+            | Ask::Say { .. }
+            | Ask::Move { .. } => false,
         },
         Outcome::Started { task } => match ask {
             Ask::StartChat { .. } => task != 0,
-            Ask::SetRoles { .. } | Ask::DecideEscalation { .. } | Ask::DecideProposal { .. } | Ask::Say { .. } => false,
+            Ask::SetRoles { .. }
+            | Ask::DecideEscalation { .. }
+            | Ask::DecideProposal { .. }
+            | Ask::Say { .. }
+            | Ask::Move { .. } => false,
         },
         Outcome::Said { task, message } => match ask {
             Ask::Say { task: named, .. } => *named == task && message != 0,
             Ask::SetRoles { .. }
             | Ask::StartChat { .. }
             | Ask::DecideEscalation { .. }
-            | Ask::DecideProposal { .. } => false,
+            | Ask::DecideProposal { .. }
+            | Ask::Move { .. } => false,
         },
         Outcome::EscalationDecided { .. } => match ask {
             Ask::DecideEscalation { .. } => true,
-            Ask::SetRoles { .. } | Ask::StartChat { .. } | Ask::DecideProposal { .. } | Ask::Say { .. } => false,
+            Ask::SetRoles { .. }
+            | Ask::StartChat { .. }
+            | Ask::DecideProposal { .. }
+            | Ask::Say { .. }
+            | Ask::Move { .. } => false,
         },
         Outcome::ProposalDecided { proposer, proposal, .. } => match ask {
             Ask::DecideProposal { proposer: named, proposal: number, .. } => *named == proposer && *number == proposal,
-            Ask::SetRoles { .. } | Ask::StartChat { .. } | Ask::DecideEscalation { .. } | Ask::Say { .. } => false,
+            Ask::SetRoles { .. }
+            | Ask::StartChat { .. }
+            | Ask::DecideEscalation { .. }
+            | Ask::Say { .. }
+            | Ask::Move { .. } => false,
         },
         // Invalid rosters and unknown targets can be legitimate saved refusals.
         Outcome::Refused(_) => true,
@@ -686,7 +721,7 @@ fn admit_ask(
             Some(Role::Owner | Role::Maintainer | Role::Member) => None,
             Some(Role::Observer) | None => Some(Refusal::Role),
         },
-        Ask::DecideEscalation { .. } | Ask::DecideProposal { .. } => None,
+        Ask::DecideEscalation { .. } | Ask::DecideProposal { .. } | Ask::Move { .. } => None,
     };
     if let Some(refusal) = refusal {
         let outcome = Outcome::Refused(refusal);
@@ -735,6 +770,7 @@ fn decided(domain: &mut Domain, env: &Env<Limits>, id: Id<Pending>, outcome: Out
         Outcome::RolesSet { .. }
         | Outcome::Started { .. }
         | Outcome::Said { .. }
+        | Outcome::Moved { .. }
         | Outcome::EscalationDecided { .. }
         | Outcome::ProposalDecided { .. }
         | Outcome::Refused(
@@ -855,12 +891,17 @@ fn restored(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
                         }
                     }
                 }
-                Ask::StartChat { .. } | Ask::DecideEscalation { .. } | Ask::DecideProposal { .. } | Ask::Say { .. } => {
+                Ask::StartChat { .. }
+                | Ask::DecideEscalation { .. }
+                | Ask::DecideProposal { .. }
+                | Ask::Say { .. }
+                | Ask::Move { .. } => {
                     unreachable!("restored role success has a matching roster ask");
                 }
             },
             Outcome::Started { .. }
             | Outcome::Said { .. }
+            | Outcome::Moved { .. }
             | Outcome::EscalationDecided { .. }
             | Outcome::ProposalDecided { .. }
             | Outcome::Refused(_) => {}

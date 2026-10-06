@@ -631,6 +631,7 @@ pub struct Domain {
     routing_people_proposals: Map<Token, PersonProposalRoute>,
     ending_positions: Map<u64, u64>,
     saying: Map<Token, u64>,
+    moving: Map<Token, u64>,
     relaying: Option<PendingRelay>,
     claiming: Map<u64, u64>,
     contexts: Map<u64, Box<tasks::RunContext>>,
@@ -705,6 +706,7 @@ impl Domain {
             routing_people_proposals: Map::with_capacity(limits.people.pending),
             ending_positions: Map::with_capacity(limits.tasks.tasks),
             saying: Map::with_capacity(limits.people.pending),
+            moving: Map::with_capacity(limits.people.pending),
             relaying: None,
             claiming: Map::with_capacity(limits.tasks.tasks),
             contexts: Map::with_capacity(limits.tasks.tasks),
@@ -761,6 +763,7 @@ impl Domain {
             && self.delegating.is_empty()
             && self.ending_positions.is_empty()
             && self.saying.is_empty()
+            && self.moving.is_empty()
             && self.relaying.is_none()
             && self.claiming.is_empty()
             && self.contexts.is_empty()
@@ -1396,6 +1399,9 @@ fn people_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decisio
                 people::Ask::SetRoles { holdings, .. } => {
                     roles::begin(domain, env, decision, request, person, project, holdings);
                 }
+                people::Ask::Move { task, reason, .. } => {
+                    move_for_person(domain, env, request, person, role, project, task, reason);
+                }
                 people::Ask::DecideEscalation { task, revision, decision, .. } => {
                     escalation::begin(domain, request, person, role, project, task, revision, decision);
                 }
@@ -1413,6 +1419,103 @@ fn people_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decisio
             }
         }
     }
+}
+
+#[expect(clippy::too_many_arguments, reason = "one authenticated keyed move carries its person, project and target")]
+fn move_for_person(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    request: Token,
+    person: u64,
+    role: Option<people::Role>,
+    project: u32,
+    task: u64,
+    reason: Box<[u8]>,
+) {
+    let Some(context) = domain.tasks.delegation(task) else {
+        domain.work.push(Work::People(people::Event::Decided {
+            request,
+            outcome: people::Outcome::Refused(people::Refusal::Ended),
+        }));
+        return;
+    };
+    if context.project != project || role.is_none() {
+        domain.work.push(Work::People(people::Event::Decided {
+            request,
+            outcome: people::Outcome::Refused(people::Refusal::Standing),
+        }));
+        return;
+    }
+    let role_number = escalation::role_number(role.expect("checked member"));
+    let Some(role_policy) = domain.config.authority.role(project, role_number) else {
+        unreachable!("member belongs to configured policy")
+    };
+    if !role_policy.requests.allows(authority::RequestKind::Amend) {
+        domain.work.push(Work::People(people::Event::Decided {
+            request,
+            outcome: people::Outcome::Refused(people::Refusal::Authority),
+        }));
+        return;
+    }
+    let Some(policy) = domain.config.authority.policy(project) else { unreachable!("configured policy") };
+    if domain.config.period_budget > policy.period_spend || domain.config.person_budget > role_policy.period_spend {
+        domain.work.push(Work::People(people::Event::Decided {
+            request,
+            outcome: people::Outcome::Refused(people::Refusal::Authority),
+        }));
+        return;
+    }
+    let Some(spent) = context.numbers.spent.checked_add(context.numbers.spent_below) else {
+        domain.work.push(Work::People(people::Event::Decided {
+            request,
+            outcome: people::Outcome::Refused(people::Refusal::Limit),
+        }));
+        return;
+    };
+    let Some(left) = context.numbers.budget.checked_sub(spent) else {
+        domain.work.push(Work::People(people::Event::Decided {
+            request,
+            outcome: people::Outcome::Refused(people::Refusal::Limit),
+        }));
+        return;
+    };
+    let pool = tasks::Funder::Pool { project, person, period: domain.config.period };
+    let pool_numbers = match domain.tasks.funding(pool) {
+        Some(record) => record.numbers,
+        None => tasks::Numbers { budget: domain.config.person_budget, spent: 0, spent_below: 0, reserved: 0 },
+    };
+    let mut giving = authority_value(&context.authority);
+    giving.budget.spend = left;
+    let mut findings =
+        Queue::with_capacity(authority::max_out(domain.config.authority.limits()).expect("authority output"));
+    let checked = authority::check_request(
+        &domain.config.authority,
+        &authority::PersonAsk {
+            project,
+            role: role_number,
+            pool: authority_numbers(pool_numbers),
+            tasks_left: env.limits.tasks.tree_tasks,
+            request: authority::PersonRequest::Move(giving),
+        },
+        &mut findings,
+    );
+    if checked.answer != authority::Answer::Allow {
+        domain.work.push(Work::People(people::Event::Decided {
+            request,
+            outcome: people::Outcome::Refused(people::Refusal::Authority),
+        }));
+        return;
+    }
+    assert!(domain.moving.insert(request, task) == Ok(None), "one move flight per keyed request");
+    domain.work.push(Work::Tasks(tasks::Event::Move {
+        reply_to: ReplyTo::new(request),
+        task,
+        person,
+        period: domain.config.period,
+        pool_budget: domain.config.person_budget,
+        period_budget: domain.config.period_budget,
+        reason,
+    }));
 }
 
 #[expect(clippy::too_many_lines, reason = "chat admission keeps the keyed person request and task creation together")]
@@ -1501,7 +1604,8 @@ fn make_chat(
         people::Ask::DecideEscalation { .. }
         | people::Ask::DecideProposal { .. }
         | people::Ask::SetRoles { .. }
-        | people::Ask::Say { .. } => {
+        | people::Ask::Say { .. }
+        | people::Ask::Move { .. } => {
             unreachable!("other asks routed separately")
         }
     };
@@ -2479,6 +2583,15 @@ fn tasks_outputs(
                     domain.work.push(Work::Tasks(tasks::Event::StalledProposal { proposer, proposal, holder: next }));
                 }
             }
+            tasks::Request::ProposalRerouteNeeded { proposer, proposal } => {
+                if let Some(pending) = domain.tasks.proposal(proposer, proposal)
+                    && let tasks::ProposalState::Pending { holder: current, .. } = pending.state
+                    && let Some(next) = proposals::holder(domain, proposer, &pending.action, None)
+                    && current != next
+                {
+                    domain.work.push(Work::Tasks(tasks::Event::StalledProposal { proposer, proposal, holder: next }));
+                }
+            }
             tasks::Request::Save { record } => {
                 let record = match record {
                     tasks::Stored::Ended(mut task) => {
@@ -2563,6 +2676,39 @@ fn tasks_outputs(
             }
             tasks::Request::Refused { reply_to, problem } => {
                 let token = reply_to.into_token();
+                if domain.moving.remove(&token).is_some() {
+                    domain.work.push(Work::People(people::Event::Decided {
+                        request: token,
+                        outcome: people::Outcome::Refused(match problem.why {
+                            tasks::Refusal::Busy | tasks::Refusal::NotReady => people::Refusal::Busy,
+                            tasks::Refusal::Unknown => people::Refusal::Ended,
+                            tasks::Refusal::Reference | tasks::Refusal::State => people::Refusal::Standing,
+                            tasks::Refusal::Funding => people::Refusal::Authority,
+                            tasks::Refusal::Duplicate
+                            | tasks::Refusal::Empty
+                            | tasks::Refusal::Batch
+                            | tasks::Refusal::Live
+                            | tasks::Refusal::Project
+                            | tasks::Refusal::Tree
+                            | tasks::Refusal::Depth
+                            | tasks::Refusal::Delegates
+                            | tasks::Refusal::Subscription
+                            | tasks::Refusal::Dependencies
+                            | tasks::Refusal::Cycle
+                            | tasks::Refusal::Executor
+                            | tasks::Refusal::Spec
+                            | tasks::Refusal::Contract
+                            | tasks::Refusal::AuthorityShape
+                            | tasks::Refusal::Inputs
+                            | tasks::Refusal::Attempt
+                            | tasks::Refusal::LiveDelegates
+                            | tasks::Refusal::Restore
+                            | tasks::Refusal::Read
+                            | tasks::Refusal::Turn => people::Refusal::Limit,
+                        }),
+                    }));
+                    continue;
+                }
                 let person_route = if person_proposal { domain.routing_people_proposals.remove(&token) } else { None };
                 if let Some(route) = person_route {
                     let request = match route {
@@ -2807,6 +2953,13 @@ fn tasks_outputs(
             }
             tasks::Request::Done { reply_to } => {
                 let task = reply_to.into_token().raw();
+                if let Some(moved) = domain.moving.remove(&Token::new(task)) {
+                    domain.work.push(Work::People(people::Event::Decided {
+                        request: Token::new(task),
+                        outcome: people::Outcome::Moved { task: moved },
+                    }));
+                    continue;
+                }
                 let person_route =
                     if person_proposal { domain.routing_people_proposals.remove(&Token::new(task)) } else { None };
                 if let Some(PersonProposalRoute::Accepting { request, person, proposer, proposal, message }) =
@@ -4022,6 +4175,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         )?
         .checked_add(Map::<Token, u64>::worst_case(limits.people.pending)?)?;
     bytes = bytes
+        .checked_add(Map::<Token, u64>::worst_case(limits.people.pending)?)?
         .checked_add(Map::<Token, u64>::worst_case(limits.people.pending)?)?
         .checked_add(Map::<Token, CallKey>::worst_case(limits.fleet.calls)?)?
         .checked_add(Map::<Token, RoutedCall>::worst_case(limits.fleet.calls)?)?

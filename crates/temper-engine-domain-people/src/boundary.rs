@@ -75,6 +75,8 @@ pub struct ResultRef {
 /// narrow role administration (domain/people.md, section 5.1).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Ask {
+    /// Adopt a live task as this authenticated person's own goal, retaining its old requester's reference.
+    Move { project: u32, task: u64, reason: Box<[u8]> },
     /// Authenticated keyed decision for a proposal waiting at this person or a policy role.
     DecideProposal { project: u32, proposer: u64, proposal: u64, decision: ProposalDecision },
     /// Authenticated requester's whole words to an existing chat.
@@ -189,6 +191,8 @@ pub enum Refusal {
 /// nontransient outcomes with the parent's task decision. (domain/people.md, section 5.1).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Outcome {
+    /// The task now belongs to the requesting person, with its remaining funding transferred.
+    Moved { task: u64 },
     /// Keyed answer to one current or historical proposal decision.
     ProposalDecided { proposer: u64, proposal: u64, choice: ProposalChoice },
     /// Words were durably admitted under the root-issued message number.

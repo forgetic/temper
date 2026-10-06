@@ -297,7 +297,7 @@ pub struct FundingRecord {
     pub closed: bool,
 }
 
-fn save_funding(domain: &Domain, funder: Funder, out: &mut Queue<Request>) {
+pub(crate) fn save_funding(domain: &Domain, funder: Funder, out: &mut Queue<Request>) {
     let ledger = *domain.funding.get(&funder).expect("funding admitted");
     out.push(Request::Save { record: Stored::Ledger(ledger) });
 }

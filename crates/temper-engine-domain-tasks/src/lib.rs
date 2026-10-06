@@ -56,6 +56,7 @@ mod failures;
 mod funders;
 mod inbox;
 mod limits;
+mod moving;
 mod owned;
 mod proposals;
 mod refs;

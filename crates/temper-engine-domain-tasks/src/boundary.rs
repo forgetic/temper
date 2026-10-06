@@ -719,6 +719,16 @@ pub enum Event {
     Control { reply_to: ReplyTo, by: Party, task: u64, control: crate::Control },
     /// Root-checked amendment of a live delegate, with a fresh commit-order message number.
     Amend { reply_to: ReplyTo, by: Party, task: u64, message: u64, stop_run: bool, amendment: crate::Amendment },
+    /// Root-authorized person adoption of one live task, with its reservation moved to that person's pool.
+    Move {
+        reply_to: ReplyTo,
+        task: u64,
+        person: u64,
+        period: u64,
+        pool_budget: u64,
+        period_budget: u64,
+        reason: Box<[u8]>,
+    },
     /// Install one root-numbered standing interest for a current task.
     Subscribe { reply_to: ReplyTo, task: u64, subscription: Subscription },
     /// Remove one interest owned by a current task.
@@ -924,6 +934,8 @@ pub enum Event {
 /// saves/erases with effects and delays outward replies until durability. (domain/tasks.md, section 5).
 #[derive(PartialEq, Eq, Debug)]
 pub enum Request {
+    /// A changed requester tree asks root to recheck the current proposal recipient from the nearest holder.
+    ProposalRerouteNeeded { proposer: u64, proposal: u64 },
     /// One nonfinal held decision passed its configured wait.
     EscalationStalled { task: u64, revision: u64, holder: crate::EscalationHolder },
     /// One nonfinal holder's wait bound elapsed; root chooses the next holder.
