@@ -2,6 +2,7 @@ use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
 use std::collections::VecDeque;
 use temper_engine_domain::{Delivery, Key, Record, Write, engine};
 use temper_engine_domain_accounts as accounts;
+use temper_engine_domain_authority as authority;
 use temper_engine_domain_brief as brief;
 use temper_engine_domain_fleet as fleet;
 use temper_engine_domain_people as people;
@@ -181,6 +182,262 @@ fn turn(driver: &mut Driver, assignment: &engine::Assignment, number: u32, cumul
     });
 }
 
+fn people_roles_config(seed: u64) -> (engine::Config, engine::Limits) {
+    let mut limits = limits();
+    limits.authority.roles = 4;
+    limits.people.people = 4;
+    limits.people.sign_ins = 4;
+    limits.people.holdings = 4;
+    limits.people.requests = 8;
+    limits.people.pending = 4;
+    limits.journal.writes = 1000;
+    limits.journal.deliveries = 40;
+    limits.journal.held = 120;
+    let mut config = config(seed);
+    let mut authority =
+        authority::Domain::new(config.authority.rules().clone(), limits.authority).expect("larger policy room");
+    let mut policy = config.authority.policy(1).expect("configured project").clone();
+    let owner = policy.roles[0].clone();
+    let mut maintainer = owner.clone();
+    maintainer.number = 1;
+    let mut member = owner.clone();
+    member.number = 2;
+    member.authority.budget.spend = 100;
+    member.period_spend = 500;
+    member.decides = authority::Proposals(0);
+    let mut observer = owner.clone();
+    observer.number = 3;
+    observer.requests = authority::Requests(128);
+    observer.decides = authority::Proposals(0);
+    policy.roles = Box::new([owner, maintainer, member, observer]);
+    let mut out = Queue::with_capacity(authority::POLICY_MAX_OUT);
+    authority::step(&mut authority, authority::Event::Policy { project: 1, policy }, &mut out);
+    assert_eq!(out.pop(), Some(authority::PolicyFact::Added { project: 1 }));
+    config.authority = authority;
+    (config, limits)
+}
+
+fn sign_in_person(driver: &mut Driver, user: u64, reply: u64) -> (u64, u64) {
+    driver.send(engine::Event::SignedIn {
+        reply_to: ReplyTo::new(Token::new(reply)),
+        identity: people::Identity {
+            key: people::IdentityKey { forge: 1, user },
+            login: b"person".as_slice().into(),
+            name: b"Person".as_slice().into(),
+        },
+    });
+    driver.settle();
+    (driver.store.header().people, driver.store.header().sign_ins)
+}
+
+fn people_roles_driver() -> (Driver, u64, u64, u64, u64, u64) {
+    let (config, limits) = people_roles_config(219);
+    let mut driver = Driver::configured(Store::new(), config, &limits);
+    driver.settle();
+    let (owner, owner_session) = sign_in_person(&mut driver, 7, 2001);
+    let (maintainer, maintainer_session) = sign_in_person(&mut driver, 8, 2002);
+    let (member, member_session) = sign_in_person(&mut driver, 9, 2003);
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(2004)),
+        sign_in: owner_session,
+        key: [200; 16],
+        ask: people::Ask::SetRoles {
+            project: 1,
+            holdings: Box::new([
+                people::Holding { person: owner, role: people::Role::Owner },
+                people::Holding { person: maintainer, role: people::Role::Maintainer },
+                people::Holding { person: member, role: people::Role::Member },
+            ]),
+        },
+    });
+    driver.settle();
+    (driver, owner_session, maintainer, maintainer_session, member, member_session)
+}
+
+#[test]
+fn a_member_starts_a_chat_and_an_observer_is_refused() {
+    let (mut driver, owner_session, maintainer, _, member, member_session) = people_roles_driver();
+    let (observer, observer_session) = sign_in_person(&mut driver, 11, 2030);
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(2031)),
+        sign_in: owner_session,
+        key: [207; 16],
+        ask: people::Ask::SetRoles {
+            project: 1,
+            holdings: Box::new([
+                people::Holding { person: 1, role: people::Role::Owner },
+                people::Holding { person: maintainer, role: people::Role::Maintainer },
+                people::Holding { person: member, role: people::Role::Member },
+                people::Holding { person: observer, role: people::Role::Observer },
+            ]),
+        },
+    });
+    driver.settle();
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(2033)),
+        sign_in: observer_session,
+        key: [209; 16],
+        ask: people::Ask::StartChat { project: 1, words: b"hello".as_slice().into() },
+    });
+    driver.settle();
+    assert!(driver.delivered.iter().any(|delivery| matches!(
+        delivery,
+        Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::Refused(people::Refusal::Role)), .. }
+    )));
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(2032)),
+        sign_in: member_session,
+        key: [208; 16],
+        ask: people::Ask::StartChat { project: 1, words: b"hello".as_slice().into() },
+    });
+    for _ in 0..20 {
+        driver.advance(true);
+        if driver.delivered.iter().any(|delivery| {
+            matches!(
+                delivery,
+                Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::Started { .. }), .. }
+            )
+        }) {
+            break;
+        }
+    }
+    assert!(driver.delivered.iter().any(|delivery| matches!(
+        delivery,
+        Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::Started { .. }), .. }
+    )));
+}
+
+#[test]
+#[expect(clippy::wildcard_enum_match_arm, reason = "select one web outcome among unrelated deliveries")]
+fn a_members_goal_past_their_allotment_becomes_a_proposal_a_maintainer_accepts() {
+    let (mut driver, _, maintainer, maintainer_session, member, member_session) = people_roles_driver();
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(2010)),
+        sign_in: member_session,
+        key: [201; 16],
+        ask: people::Ask::SetGoal {
+            project: 1,
+            spec: b"ship a goal".as_slice().into(),
+            charter: 1,
+            budget: 150,
+            priority: 7,
+        },
+    });
+    driver.settle();
+    let proposal = driver
+        .delivered
+        .iter()
+        .find_map(|delivery| match delivery {
+            Delivery::WebReply {
+                reply: people::Reply::Outcome(people::Outcome::GoalProposed { proposal }), ..
+            } => Some(*proposal),
+            _ => None,
+        })
+        .expect("member receives proposal identity");
+    assert!(!driver.store.rows.values().any(|row| matches!(row, Record::Tasks(tasks::Stored::Live(_)))));
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(2011)),
+        sign_in: maintainer_session,
+        key: [202; 16],
+        ask: people::Ask::DecideProposal {
+            project: 1,
+            proposer: member,
+            proposal,
+            decision: people::ProposalDecision::Accept,
+        },
+    });
+    driver.settle();
+    assert!(driver.delivered.iter().any(|delivery| matches!(delivery,
+        Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::ProposalDecided {
+            proposer, proposal: decided, choice: people::ProposalChoice::Accepted, ..
+        }), .. } if *proposer == member && *decided == proposal
+    )));
+    assert!(driver.store.rows.values().any(|row| matches!(row,
+        Record::Tasks(tasks::Stored::Live(task))
+            if task.requester == tasks::Party::Person(member) && task.tracked == Some(7)
+    )));
+    assert!(matches!(driver.store.rows.get(&Key::Tasks(tasks::Key::PersonProposal(proposal))),
+        Some(Record::Tasks(tasks::Stored::PersonProposal(row)))
+            if row.state == tasks::PersonProposalState::Accepted { by: tasks::Party::Person(maintainer) }
+    ));
+}
+
+#[test]
+#[expect(clippy::wildcard_enum_match_arm, reason = "select one web outcome among unrelated deliveries")]
+fn two_maintainers_decide_one_proposal_and_the_second_is_told_by_whom_and_how() {
+    let (mut driver, owner_session, first, first_session, member, member_session) = people_roles_driver();
+    let (second, second_session) = sign_in_person(&mut driver, 10, 2020);
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(2021)),
+        sign_in: owner_session,
+        key: [203; 16],
+        ask: people::Ask::SetRoles {
+            project: 1,
+            holdings: Box::new([
+                people::Holding { person: 1, role: people::Role::Owner },
+                people::Holding { person: first, role: people::Role::Maintainer },
+                people::Holding { person: second, role: people::Role::Maintainer },
+                people::Holding { person: member, role: people::Role::Member },
+            ]),
+        },
+    });
+    driver.settle();
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(2022)),
+        sign_in: member_session,
+        key: [204; 16],
+        ask: people::Ask::SetGoal {
+            project: 1,
+            spec: b"race for goal".as_slice().into(),
+            charter: 1,
+            budget: 150,
+            priority: 3,
+        },
+    });
+    driver.settle();
+    let proposal = driver
+        .delivered
+        .iter()
+        .find_map(|delivery| match delivery {
+            Delivery::WebReply {
+                reply: people::Reply::Outcome(people::Outcome::GoalProposed { proposal }), ..
+            } => Some(*proposal),
+            _ => None,
+        })
+        .expect("member proposed goal");
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(2023)),
+        sign_in: first_session,
+        key: [205; 16],
+        ask: people::Ask::DecideProposal {
+            project: 1,
+            proposer: member,
+            proposal,
+            decision: people::ProposalDecision::Accept,
+        },
+    });
+    driver.settle();
+    let before = driver.delivered.len();
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(2024)),
+        sign_in: second_session,
+        key: [206; 16],
+        ask: people::Ask::DecideProposal {
+            project: 1,
+            proposer: member,
+            proposal,
+            decision: people::ProposalDecision::Reject { reason: b"too late".as_slice().into() },
+        },
+    });
+    driver.settle();
+    assert!(driver.delivered[before..].iter().any(|delivery| matches!(delivery,
+        Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::ProposalDecided {
+            proposer, proposal: named, by, choice: people::ProposalChoice::Accepted,
+        }), .. } if *proposer == member && *named == proposal && *by == first
+    )));
+    assert!(driver.store.rows.contains_key(&Key::ProposalDecision(proposal)));
+}
+
 #[test]
 fn durable_start_turn_and_answer_callbacks_survive_full_journal_pressure() {
     let mut driver = Driver::new(Store::new());
@@ -280,6 +537,7 @@ fn restart_recovers_named_ended_result_without_replaying_a_raw_notice() {
             | Record::People(_)
             | Record::RunProof(_)
             | Record::EscalationDecision(_)
+            | Record::ProposalDecision(_)
             | Record::Terminal(_)
             | Record::Call(_) => None,
         })
@@ -398,6 +656,7 @@ fn a_full_inbox_pages_the_rest_from_the_store() {
             Record::Tasks(tasks::Stored::Ended(task)) => Some(task.as_ref().clone()),
             Record::Call(_)
             | Record::EscalationDecision(_)
+            | Record::ProposalDecision(_)
             | Record::Deployment(_)
             | Record::Turn(_)
             | Record::RunProof(_)
@@ -598,6 +857,53 @@ fn a_person_task_addressed_to_a_role_taken_by_one_handed_back_answered_by_anothe
     assert!(driver.delivered.iter().any(|item| matches!(item,
         Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::PersonAnswered { task: found }), .. } if *found == task)), "{:?}", driver.delivered);
     assert!(driver.store.rows.contains_key(&Key::Tasks(tasks::Key::Ended(task))));
+}
+
+#[test]
+fn a_person_stops_a_run_and_releases_it() {
+    let (mut driver, assignment) = running_fixture();
+    let session = driver.session();
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(980)),
+        sign_in: session,
+        key: [80; 16],
+        ask: people::Ask::Stop { project: 1, task: assignment.task },
+    });
+    for _ in 0..40 {
+        driver.advance(true);
+    }
+    assert!(driver.delivered.iter().any(|item| matches!(item,
+        Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::Stopped { task }), .. }
+            if *task == assignment.task)));
+    assert!(driver.delivered.iter().any(|item| matches!(item,
+        Delivery::Cancel { task, attempt, .. } if *task == assignment.task && *attempt == assignment.attempt)));
+    let Some(Record::Tasks(tasks::Stored::Live(row))) =
+        driver.store.rows.get(&Key::Tasks(tasks::Key::Live(assignment.task)))
+    else {
+        panic!("stopped task")
+    };
+    assert!(matches!(row.phase, tasks::Phase::Held { why: tasks::Hold::Stopped, .. }));
+    driver.send(engine::Event::Answer {
+        channel: Token::new(7),
+        task: assignment.task,
+        attempt: assignment.attempt,
+        cumulative: 0,
+        end: tasks::End::Parked,
+        saved: None,
+    });
+    driver.settle();
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(981)),
+        sign_in: session,
+        key: [81; 16],
+        ask: people::Ask::Release { project: 1, task: assignment.task },
+    });
+    for _ in 0..40 {
+        driver.advance(true);
+    }
+    assert!(driver.delivered.iter().any(|item| matches!(item,
+        Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::Released { task }), .. }
+            if *task == assignment.task)));
 }
 
 fn hello(driver: &mut Driver) {
@@ -841,6 +1147,7 @@ fn invalid_nonfinal_task_restore_page_stops_before_issuing_its_continuation() {
             | Record::People(_)
             | Record::RunProof(_)
             | Record::EscalationDecision(_)
+            | Record::ProposalDecision(_)
             | Record::Terminal(_)
             | Record::Call(_) => None,
         })
@@ -923,6 +1230,7 @@ fn authenticated_result_query_refuses_monotonic_expiry_after_backward_wall_jump_
             | Record::People(_)
             | Record::RunProof(_)
             | Record::EscalationDecision(_)
+            | Record::ProposalDecision(_)
             | Record::Terminal(_)
             | Record::Call(_) => None,
         })
@@ -1324,7 +1632,7 @@ fn a_chats_goal_accepted_as_its_persons_outlives_the_chat() {
         },
     });
     driver.settle();
-    assert!(driver.delivered.iter().any(|item| matches!(item, Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::ProposalDecided { proposer, proposal: found, choice: people::ProposalChoice::Accepted }), .. } if *proposer == child && *found == proposal)));
+    assert!(driver.delivered.iter().any(|item| matches!(item, Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::ProposalDecided { proposer, proposal: found, choice: people::ProposalChoice::Accepted, .. }), .. } if *proposer == child && *found == proposal)));
     let goal_number = driver
         .store
         .rows
@@ -1430,7 +1738,7 @@ fn a_proposal_routed_past_a_procedure_to_a_person_is_accepted() {
     assert!(
         driver.delivered.iter().any(|item| matches!(item,
             Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::ProposalDecided {
-                proposer, proposal: found, choice: people::ProposalChoice::Accepted,
+                proposer, proposal: found, choice: people::ProposalChoice::Accepted, ..
             }), .. } if *proposer == child && *found == proposal
         )),
         "deliveries: {:?}",
@@ -1455,6 +1763,7 @@ fn a_recurring_procedure_uses_the_root_period_route() {
         dependencies: Box::new([]),
         wake: tasks::WakePolicy::DEFAULT,
         recurring: None,
+        tracked: None,
     };
     member.authority.budget.spend = 10;
     let mut authority = report_delegate(b"template", Box::new([])).authority;
@@ -3060,11 +3369,17 @@ fn multiple_waiting_recipients_preflight_together_and_full_journal_refuses_witho
             Record::Tasks(tasks::Stored::Live(record)) => Some(record.clone()),
             Record::Deployment(_)
             | Record::People(_)
-            | Record::Tasks(tasks::Stored::Ended(_) | tasks::Stored::Ledger(_) | tasks::Stored::History(_))
+            | Record::Tasks(
+                tasks::Stored::Ended(_)
+                | tasks::Stored::Ledger(_)
+                | tasks::Stored::History(_)
+                | tasks::Stored::PersonProposal(_),
+            )
             | Record::Turn(_)
             | Record::RunProof(_)
             | Record::Terminal(_)
             | Record::EscalationDecision(_)
+            | Record::ProposalDecision(_)
             | Record::Call(_) => None,
         })
         .collect();
@@ -3151,6 +3466,7 @@ fn multiple_waiting_recipients_preflight_together_and_full_journal_refuses_witho
                     | Record::Terminal(_)
                     | Record::Turn(_)
                     | Record::EscalationDecision(_)
+                    | Record::ProposalDecision(_)
             )
         )),
         "role change never rewrites economic or accepted-work evidence"
@@ -3220,6 +3536,7 @@ fn multiple_waiting_recipients_preflight_together_and_full_journal_refuses_witho
 }
 
 #[test]
+#[expect(clippy::too_many_lines, reason = "one complete role-stage admission story")]
 fn read_only_role_stages_have_one_not_ready_terminal_and_empty_projects_need_no_financial_ledger() {
     let mut insufficient = temper_engine_domain_world::roles::limits();
     assert!(engine::worst_case(&insufficient).is_some(), "valid role cascade factory");
@@ -3256,6 +3573,8 @@ fn read_only_role_stages_have_one_not_ready_terminal_and_empty_projects_need_no_
             | tasks::Request::EscalationInspected { .. }
             | tasks::Request::EscalationDecided { .. }
             | tasks::Request::ProposalDecided { .. }
+            | tasks::Request::PersonProposed { .. }
+            | tasks::Request::PersonProposalDecided { .. }
             | tasks::Request::ProposalRerouteNeeded { .. }
             | tasks::Request::ProposalStalled { .. }
             | tasks::Request::EscalationStalled { .. }
@@ -3297,6 +3616,8 @@ fn read_only_role_stages_have_one_not_ready_terminal_and_empty_projects_need_no_
         | tasks::Request::EscalationInspected { .. }
         | tasks::Request::EscalationDecided { .. }
         | tasks::Request::ProposalDecided { .. }
+        | tasks::Request::PersonProposed { .. }
+        | tasks::Request::PersonProposalDecided { .. }
         | tasks::Request::ProposalRerouteNeeded { .. }
         | tasks::Request::ProposalStalled { .. }
         | tasks::Request::EscalationStalled { .. }

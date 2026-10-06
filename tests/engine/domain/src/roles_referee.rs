@@ -104,7 +104,8 @@ impl Referee {
                     | Record::Turn(_)
                     | Record::RunProof(_)
                     | Record::Terminal(_)
-                    | Record::EscalationDecision(_),
+                    | Record::EscalationDecision(_)
+                    | Record::ProposalDecision(_),
                 )
                 | Write::Erase(_) => None,
             })
@@ -132,7 +133,8 @@ impl Referee {
                     | Record::Turn(_)
                     | Record::RunProof(_)
                     | Record::Terminal(_)
-                    | Record::EscalationDecision(_),
+                    | Record::EscalationDecision(_)
+                    | Record::ProposalDecision(_),
                 )
                 | Write::Erase(_) => None,
             })
@@ -169,7 +171,8 @@ impl Referee {
                             tasks::Stored::Live(_)
                             | tasks::Stored::Ended(_)
                             | tasks::Stored::Ledger(_)
-                            | tasks::Stored::History(_),
+                            | tasks::Stored::History(_)
+                            | tasks::Stored::PersonProposal(_),
                         )
                         | Record::People(_)
                         | Record::Call(_)
@@ -177,7 +180,8 @@ impl Referee {
                         | Record::Turn(_)
                         | Record::RunProof(_)
                         | Record::Terminal(_)
-                        | Record::EscalationDecision(_),
+                        | Record::EscalationDecision(_)
+                        | Record::ProposalDecision(_),
                     )
                     | Write::Erase(_) => None,
                 });
@@ -227,6 +231,7 @@ impl Referee {
                     | Record::RunProof(_)
                     | Record::Terminal(_)
                     | Record::EscalationDecision(_)
+                    | Record::ProposalDecision(_)
                     | Record::Turn(_),
                 )
                 | Write::Erase(
@@ -235,6 +240,7 @@ impl Referee {
                     | Key::RunProof { .. }
                     | Key::Terminal { .. }
                     | Key::EscalationDecision { .. }
+                    | Key::ProposalDecision(_)
                     | Key::Turn { .. },
                 ) => return Err("role administration changed funding or accepted work"),
                 Write::Save(Record::People(_) | Record::Deployment(_)) | Write::Erase(Key::People(_)) => {}

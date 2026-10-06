@@ -305,7 +305,8 @@ pub(super) fn read(
                 refuse_direct(to, people::Refusal::Busy, out);
                 return;
             }
-            Read::Result(_)
+            Read::Proposal(_)
+            | Read::Result(_)
             | Read::Inbox(_)
             | Read::Transcript { .. }
             | Read::Dependency(_)
@@ -392,6 +393,7 @@ fn standing(context: &tasks::EscalationContext, person: u64, role: Option<people
     }
 }
 
+#[expect(clippy::too_many_lines, reason = "bounded escalation inspection and all terminal cases")]
 pub(super) fn inspected(
     domain: &mut Domain,
     env: &Env<Limits>,
@@ -402,7 +404,12 @@ pub(super) fn inspected(
     let Some(read) = super::take_read(domain, waiter) else { return };
     let query = match read {
         Read::Escalation(query) => query,
-        Read::Result(_) | Read::Inbox(_) | Read::Transcript { .. } | Read::Dependency(_) | Read::InputCheck(_) => {
+        Read::Result(_)
+        | Read::Inbox(_)
+        | Read::Proposal(_)
+        | Read::Transcript { .. }
+        | Read::Dependency(_)
+        | Read::InputCheck(_) => {
             unreachable!("escalation query terminal")
         }
     };
@@ -548,7 +555,12 @@ pub(super) fn completed(
     let Some(read) = super::take_read(domain, waiter) else { return };
     let query = match read {
         Read::Escalation(query) => query,
-        Read::Result(_) | Read::Inbox(_) | Read::Transcript { .. } | Read::Dependency(_) | Read::InputCheck(_) => {
+        Read::Result(_)
+        | Read::Inbox(_)
+        | Read::Proposal(_)
+        | Read::Transcript { .. }
+        | Read::Dependency(_)
+        | Read::InputCheck(_) => {
             unreachable!("escalation query terminal")
         }
     };
@@ -596,7 +608,12 @@ pub(super) fn loaded(domain: &mut Domain, env: &Env<Limits>, waiter: Token, rows
     let Some(read) = super::take_read(domain, waiter) else { return };
     let query = match read {
         Read::Escalation(query) => query,
-        Read::Result(_) | Read::Inbox(_) | Read::Transcript { .. } | Read::Dependency(_) | Read::InputCheck(_) => {
+        Read::Result(_)
+        | Read::Inbox(_)
+        | Read::Proposal(_)
+        | Read::Transcript { .. }
+        | Read::Dependency(_)
+        | Read::InputCheck(_) => {
             unreachable!("escalation query terminal")
         }
     };
@@ -664,7 +681,8 @@ pub(super) fn loaded(domain: &mut Domain, env: &Env<Limits>, waiter: Token, rows
                 | Record::Terminal(_)
                 | Record::Tasks(_)
                 | Record::People(_)
-                | Record::EscalationDecision(_) => {}
+                | Record::EscalationDecision(_)
+                | Record::ProposalDecision(_) => {}
             }
         }
     }
@@ -678,7 +696,8 @@ pub(super) fn failed(domain: &mut Domain, waiter: Token) {
         Read::Escalation(Query::Decide { request, .. }) => {
             decided(domain, request, people::Outcome::Refused(people::Refusal::Busy));
         }
-        Read::Result(_)
+        Read::Proposal(_)
+        | Read::Result(_)
         | Read::Inbox(_)
         | Read::Transcript { .. }
         | Read::Dependency(_)

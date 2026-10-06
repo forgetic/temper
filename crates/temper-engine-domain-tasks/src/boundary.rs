@@ -531,6 +531,8 @@ pub struct New {
     pub wake: WakePolicy,
     /// Present only for the core recurring procedure; template members cannot recur.
     pub recurring: Option<Box<RecurringTemplate>>,
+    /// Goal priority when people track this task; absent for ordinary work.
+    pub tracked: Option<u32>,
 }
 
 /// Owned durable task state emitted to root storage; root uses `RunContext` for preparation and
@@ -569,6 +571,8 @@ pub struct TaskRecord {
     pub taken_by: Option<u64>,
     /// Durable core recurring template and last considered period.
     pub recurring: Option<Box<RecurringState>>,
+    /// Goal priority retained with the task for project ordering.
+    pub tracked: Option<u32>,
     /// Owned bounded specification; live state has empty historical inputs.
     pub spec: Spec,
     pub contract: Contract,
@@ -625,6 +629,8 @@ pub struct TaskRecord {
 /// in this child. (domain/tasks.md, section 2).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Key {
+    /// A person-origin proposal, retained as history after its decision.
+    PersonProposal(u64),
     /// Immutable plan change outside the live arena.
     History { task: u64, revision: u64 },
     /// Logical mutable live-task row.
@@ -639,6 +645,8 @@ pub enum Key {
 /// belong to startup restoration. (domain/tasks.md, section 2).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Stored {
+    /// Pending or decided person-origin goal proposal.
+    PersonProposal(Box<crate::PersonProposal>),
     /// Committed change read on demand, never restored as live state.
     History(crate::History),
     /// Current bounded live task state, emitted on mutation and admitted once at startup.
@@ -666,6 +674,7 @@ impl Stored {
     #[must_use]
     pub const fn key(&self) -> Key {
         match self {
+            Stored::PersonProposal(row) => Key::PersonProposal(row.number),
             Stored::History(row) => Key::History { task: row.task, revision: row.revision },
             Stored::Live(record) => Key::Live(record.number),
             Stored::Ended(record) => Key::Ended(record.number),
@@ -763,6 +772,17 @@ pub enum Accepted {
 /// notifications have no reply destination and may be ignored if stale. (domain/tasks.md, sections 4–5).
 #[derive(PartialEq, Eq, Debug)]
 pub enum Event {
+    /// Root admits a person's goal proposal after validating policy and shape.
+    ProposePerson { reply_to: ReplyTo, proposal: crate::PersonProposal },
+    /// Root commits a policy holder's decision on a person-origin goal proposal.
+    DecidePersonProposal {
+        reply_to: ReplyTo,
+        proposer: u64,
+        proposal: u64,
+        by: Party,
+        message: Option<u64>,
+        decision: crate::ProposalDecision,
+    },
     /// A newly opened project period makes the core recurring procedure due.
     TickRecurring { task: u64, period: u64 },
     /// Root supplies fresh identities for the template batch requested by the core procedure.
@@ -1010,6 +1030,10 @@ pub enum Event {
 /// saves/erases with effects and delays outward replies until durability. (domain/tasks.md, section 5).
 #[derive(PartialEq, Eq, Debug)]
 pub enum Request {
+    /// Terminal for one admitted person-origin goal proposal.
+    PersonProposed { reply_to: ReplyTo, proposal: u64 },
+    /// Terminal for one person-origin goal decision.
+    PersonProposalDecided { reply_to: ReplyTo, proposer: u64, number: u64, outcome: crate::ProposalOutcome },
     /// The core procedure needs one whole root-numbered template batch in this period.
     RecurringDue { task: u64, period: u64, members: u32 },
     /// A changed requester tree asks root to recheck the current proposal recipient from the nearest holder.

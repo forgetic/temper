@@ -320,9 +320,8 @@ impl Decision {
     pub fn write(&mut self, limits: &Limits, write: Write) -> Result<(), Write> {
         assert!(*limits == self.limits, "decision uses its configured limits");
         let within = match &write {
-            Write::Save(Record::Deployment(_)) | Write::Erase(Key::Deployment | Key::EscalationDecision { .. }) => {
-                false
-            }
+            Write::Save(Record::Deployment(_))
+            | Write::Erase(Key::Deployment | Key::EscalationDecision { .. } | Key::ProposalDecision(_)) => false,
             Write::Save(Record::Turn(row)) => {
                 row.task != 0
                     && row.attempt != 0
@@ -353,6 +352,7 @@ impl Decision {
                         }
                     }
             }
+            Write::Save(Record::ProposalDecision(row)) => row.project != 0 && row.proposal != 0 && row.by != 0,
             Write::Save(Record::Tasks(_) | Record::People(_) | Record::RunProof(_) | Record::Terminal(_)) => {
                 match crate::store::owned_bytes(&write) {
                     Some(bytes) => bytes <= u64::from(limits.transcript_bytes),

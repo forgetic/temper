@@ -6,9 +6,165 @@ use super::{
     CallKey, Decision, Dependency, Domain, Env, Family, Limits, PersonProposalRoute, ProposalChoice, ProposedAction,
     ReplyTo, RoutedCall, Token, Work, authority, authority_numbers, authority_value, current_proof, people, tasks,
 };
-use crate::CallAnswer;
+use crate::{CallAnswer, ProposalDecisionRecord};
 use alloc::boxed::Box;
 use skein_lib::List;
+
+/// One bounded named historical lookup after a proposal left live memory.
+#[derive(Debug)]
+pub(super) struct Query {
+    request: Token,
+    person: u64,
+    project: u32,
+    proposer: u64,
+    proposal: u64,
+}
+
+#[expect(clippy::too_many_arguments, reason = "one keyed proposal decision has one named archive identity")]
+pub(super) fn historical_begin(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    barrier: &mut Decision,
+    request: Token,
+    person: u64,
+    project: u32,
+    proposer: u64,
+    proposal: u64,
+) {
+    let read = Query { request, person, project, proposer, proposal };
+    let Ok(id) = domain.result_reads.insert(Some(super::Read::Proposal(read))) else {
+        return person_refused(domain, request, people::Refusal::Busy);
+    };
+    super::emit(
+        barrier,
+        &env.limits,
+        super::Delivery::Load { waiter: id.token(), range: super::Range::ProposalDecision { proposal }, after: None },
+    );
+}
+
+pub(super) fn historical_loaded(domain: &mut Domain, waiter: Token, rows: Box<[super::Record]>) {
+    let Some(super::Read::Proposal(query)) = super::take_read(domain, waiter) else {
+        unreachable!("proposal archive owns its read")
+    };
+    domain.result_reads.retire(super::Id::from_token(waiter));
+    let mut answer = people::Outcome::Refused(people::Refusal::Unknown);
+    if rows.len() == 1 {
+        for row in rows {
+            match row {
+                super::Record::ProposalDecision(row)
+                    if row.proposal == query.proposal
+                        && row.project == query.project
+                        && row.proposal <= domain.journal.deployment().messages
+                        && row.by != 0
+                        && row.by <= domain.journal.deployment().people
+                        && match row.proposer {
+                            tasks::Party::Person(number) | tasks::Party::Task(number) => number == query.proposer,
+                            tasks::Party::Deployment { .. } => false,
+                        } =>
+                {
+                    let allowed = query.person == row.by
+                        || policy_standing(
+                            domain,
+                            query.person,
+                            query.project,
+                            match row.kind {
+                                tasks::ProposalKind::Batch => authority::ProposalKind::Batch,
+                                tasks::ProposalKind::Amend => authority::ProposalKind::Amend,
+                                tasks::ProposalKind::Widen => authority::ProposalKind::Widen,
+                                tasks::ProposalKind::Release => authority::ProposalKind::Escalation,
+                            },
+                        );
+                    answer = if allowed {
+                        people::Outcome::ProposalDecided {
+                            proposer: query.proposer,
+                            proposal: query.proposal,
+                            by: row.by,
+                            choice: row.choice,
+                        }
+                    } else {
+                        people::Outcome::Refused(people::Refusal::Standing)
+                    };
+                }
+                super::Record::ProposalDecision(_)
+                | super::Record::Call(_)
+                | super::Record::Deployment(_)
+                | super::Record::Turn(_)
+                | super::Record::RunProof(_)
+                | super::Record::Terminal(_)
+                | super::Record::Tasks(_)
+                | super::Record::People(_)
+                | super::Record::EscalationDecision(_) => {}
+            }
+        }
+    }
+    domain.work.push(Work::People(people::Event::Decided { request: query.request, outcome: answer }));
+}
+
+pub(super) fn historical_failed(domain: &mut Domain, waiter: Token) {
+    let Some(super::Read::Proposal(query)) = super::take_read(domain, waiter) else {
+        unreachable!("proposal archive owns its read")
+    };
+    domain.result_reads.retire(super::Id::from_token(waiter));
+    person_refused(domain, query.request, people::Refusal::Busy);
+}
+
+/// Extract one immutable person-facing final decision from the child's durable row.
+pub(super) fn decision_record(row: &tasks::Stored) -> Option<ProposalDecisionRecord> {
+    match row {
+        tasks::Stored::PersonProposal(row) => {
+            let (by, choice) = match &row.state {
+                tasks::PersonProposalState::Accepted { by: tasks::Party::Person(by) } => {
+                    (*by, people::ProposalChoice::Accepted)
+                }
+                tasks::PersonProposalState::Rejected { by: tasks::Party::Person(by), .. } => {
+                    (*by, people::ProposalChoice::Rejected)
+                }
+                tasks::PersonProposalState::Pending { .. }
+                | tasks::PersonProposalState::Accepted {
+                    by: tasks::Party::Task(_) | tasks::Party::Deployment { .. },
+                }
+                | tasks::PersonProposalState::Rejected {
+                    by: tasks::Party::Task(_) | tasks::Party::Deployment { .. },
+                    ..
+                } => return None,
+            };
+            Some(ProposalDecisionRecord {
+                project: row.project,
+                proposer: tasks::Party::Person(row.proposer),
+                proposal: row.number,
+                kind: tasks::ProposalKind::Batch,
+                by,
+                choice,
+            })
+        }
+        tasks::Stored::History(history) => {
+            let proposal = history.proposal.as_ref()?;
+            let (by, choice) = match &proposal.state {
+                tasks::ProposalState::Accepted { by: tasks::Party::Person(by) } => {
+                    (*by, people::ProposalChoice::Accepted)
+                }
+                tasks::ProposalState::Rejected { by: tasks::Party::Person(by), .. } => {
+                    (*by, people::ProposalChoice::Rejected)
+                }
+                tasks::ProposalState::Pending { .. }
+                | tasks::ProposalState::Withdrawn
+                | tasks::ProposalState::Accepted { by: tasks::Party::Task(_) | tasks::Party::Deployment { .. } }
+                | tasks::ProposalState::Rejected {
+                    by: tasks::Party::Task(_) | tasks::Party::Deployment { .. }, ..
+                } => return None,
+            };
+            Some(ProposalDecisionRecord {
+                project: proposal.project,
+                proposer: tasks::Party::Task(proposal.proposer),
+                proposal: proposal.number,
+                kind: kind(&proposal.action).0,
+                by,
+                choice,
+            })
+        }
+        tasks::Stored::Live(_) | tasks::Stored::Ended(_) | tasks::Stored::Ledger(_) => None,
+    }
+}
 
 fn refused(
     domain: &mut Domain,
@@ -208,6 +364,7 @@ fn materialize(
                 dependencies: dependencies.into_boxed(),
                 wake: member.wake,
                 recurring: None,
+                tracked: None,
             })
             .expect("bounded proposed batch");
     }
@@ -539,7 +696,7 @@ pub(super) fn person_decide(
     assert!(
         domain
             .routing_people_proposals
-            .insert(request, PersonProposalRoute::Deciding { request, proposer, proposal: number })
+            .insert(request, PersonProposalRoute::Deciding { request, proposer, proposal: number, by: person })
             == Ok(None),
         "one person proposal route"
     );

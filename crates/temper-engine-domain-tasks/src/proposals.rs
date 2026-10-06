@@ -120,6 +120,178 @@ pub struct Proposal {
     pub state: ProposalState,
 }
 
+/// A person's pending goal request, kept separately from task-origin proposals.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct PersonProposal {
+    pub number: u64,
+    pub proposer: u64,
+    pub project: u32,
+    pub goal: New,
+    pub state: PersonProposalState,
+}
+
+/// Durable decision on a person-origin goal; terminal rows remain in the store.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum PersonProposalState {
+    Pending { since: Wall },
+    Accepted { by: Party },
+    Rejected { by: Party, reason: Box<[u8]>, message: u64, at: Wall },
+}
+
+/// A restored or newly proposed goal has the same bounded shape as a future root make.
+pub(crate) fn valid_person_proposal(proposal: &PersonProposal, limits: &Limits) -> bool {
+    if proposal.number == 0
+        || proposal.proposer == 0
+        || proposal.project == 0
+        || proposal.goal.number == 0
+        || proposal.goal.project != proposal.project
+        || proposal.goal.tracked.is_none()
+        || proposal.goal.recurring.is_some()
+        || !proposal.goal.dependencies.is_empty()
+        || !crate::valid_spec(limits, &proposal.goal.spec)
+        || !crate::valid_contract(limits, &proposal.goal.contract)
+        || !crate::valid_authority(limits, &proposal.goal.authority)
+        || !crate::wake::valid(&proposal.goal.wake)
+        || proposal.goal.numbers.budget == 0
+        || proposal.goal.numbers.spent != 0
+        || proposal.goal.numbers.spent_below != 0
+        || proposal.goal.numbers.reserved != 0
+    {
+        return false;
+    }
+    let executor = match proposal.goal.executor {
+        crate::Executor::Agent { charter } => charter != 0,
+        crate::Executor::Person(_) | crate::Executor::Procedure { .. } => false,
+    };
+    let funder = match proposal.goal.funder {
+        crate::Funder::Pool { project, person, .. } => project == proposal.project && person == proposal.proposer,
+        crate::Funder::Task(_) | crate::Funder::Period { .. } | crate::Funder::Recurring { .. } => false,
+    };
+    let state = match &proposal.state {
+        PersonProposalState::Pending { .. } => true,
+        PersonProposalState::Accepted { by } => match by {
+            Party::Person(person) => *person != 0,
+            Party::Task(_) | Party::Deployment { .. } => false,
+        },
+        PersonProposalState::Rejected { by, reason, message, .. } => match by {
+            Party::Person(person) => {
+                *person != 0
+                    && *message != 0
+                    && reason.len() <= usize::try_from(limits.message_bytes).expect("u32 fits usize")
+            }
+            Party::Task(_) | Party::Deployment { .. } => false,
+        },
+    };
+    executor && funder && state
+}
+
+/// Admit one policy-bound person proposal without creating its goal task.
+pub(crate) fn propose_person(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    to: ReplyTo,
+    proposal: PersonProposal,
+    out: &mut Queue<Request>,
+) {
+    if !domain.ready() {
+        return refused(to, None, Refusal::NotReady, out);
+    }
+    if !valid_person_proposal(&proposal, &env.limits)
+        || match proposal.state {
+            PersonProposalState::Pending { .. } => false,
+            PersonProposalState::Accepted { .. } | PersonProposalState::Rejected { .. } => true,
+        }
+    {
+        return refused(to, None, Refusal::Read, out);
+    }
+    if domain.person_proposals.len() >= env.limits.tasks || domain.person_proposals.contains_key(&proposal.number) {
+        return refused(to, None, Refusal::Busy, out);
+    }
+    for (_, old) in &domain.person_proposals {
+        if old.proposer == proposal.proposer {
+            return refused(to, None, Refusal::Busy, out);
+        }
+    }
+    let number = proposal.number;
+    let saved = domain.person_proposals.insert(number, proposal.clone());
+    assert!(saved == Ok(None), "admitted person proposal has room");
+    out.push(Request::Save { record: Stored::PersonProposal(Box::new(proposal)) });
+    out.push(Request::PersonProposed { reply_to: to, proposal: number });
+}
+
+/// Finish one exact policy decision after root has made an accepted goal.
+#[expect(clippy::too_many_arguments, reason = "one exact person proposal decision and its output")]
+pub(crate) fn decide_person(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    to: ReplyTo,
+    proposer: u64,
+    number: u64,
+    by: Party,
+    message: Option<u64>,
+    decision: ProposalDecision,
+    out: &mut Queue<Request>,
+) {
+    if !domain.ready() {
+        return refused(to, None, Refusal::NotReady, out);
+    }
+    let Some(old) = domain.person_proposals.get(&number) else {
+        return out.push(Request::PersonProposalDecided {
+            reply_to: to,
+            proposer,
+            number,
+            outcome: ProposalOutcome::Stale,
+        });
+    };
+    if old.proposer != proposer {
+        return refused(to, None, Refusal::Unknown, out);
+    }
+    if match old.state {
+        PersonProposalState::Pending { .. } => false,
+        PersonProposalState::Accepted { .. } | PersonProposalState::Rejected { .. } => true,
+    } {
+        return out.push(Request::PersonProposalDecided {
+            reply_to: to,
+            proposer,
+            number,
+            outcome: ProposalOutcome::Stale,
+        });
+    }
+    let outcome = match &decision {
+        ProposalDecision::Accept => {
+            if record(domain, old.goal.number).is_none() {
+                return refused(to, None, Refusal::State, out);
+            }
+            ProposalOutcome::Accepted
+        }
+        ProposalDecision::Reject { reason } => {
+            if reason.len() > usize::try_from(env.limits.message_bytes).expect("u32 fits usize")
+                || match message {
+                    Some(number) => number == 0,
+                    None => true,
+                }
+            {
+                return refused(to, None, Refusal::Read, out);
+            }
+            ProposalOutcome::Rejected
+        }
+        ProposalDecision::Pass { .. } => return refused(to, None, Refusal::State, out),
+    };
+    let mut proposal = domain.person_proposals.remove(&number).expect("checked pending proposal");
+    proposal.state = match decision {
+        ProposalDecision::Accept => PersonProposalState::Accepted { by },
+        ProposalDecision::Reject { reason } => PersonProposalState::Rejected {
+            by,
+            reason,
+            message: message.expect("checked rejection message"),
+            at: env.wall,
+        },
+        ProposalDecision::Pass { .. } => unreachable!("person proposal has final policy holder"),
+    };
+    out.push(Request::Save { record: Stored::PersonProposal(Box::new(proposal)) });
+    out.push(Request::PersonProposalDecided { reply_to: to, proposer, number, outcome });
+}
+
 /// Root-authenticated decision for the current holder.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum ProposalDecision {

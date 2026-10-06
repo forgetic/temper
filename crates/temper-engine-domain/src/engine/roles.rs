@@ -82,7 +82,9 @@ fn inspected(
             | tasks::Request::Relay { .. }
             | tasks::Request::Notify { .. }
             | tasks::Request::Timer { .. }
-            | tasks::Request::RecurringDue { .. } => unreachable!("inspection is read-only"),
+            | tasks::Request::RecurringDue { .. }
+            | tasks::Request::PersonProposed { .. }
+            | tasks::Request::PersonProposalDecided { .. } => unreachable!("inspection is read-only"),
         }
     }
     match terminal.expect("inspection has a terminal") {
@@ -248,8 +250,12 @@ fn recheck(domain: &mut Domain, env: &Env<Limits>, request: Token, project: u32)
             | tasks::Request::Erase { .. }
             | tasks::Request::RestoreRefused { .. }
             | tasks::Request::Sent { .. }
-            | tasks::Request::Relay { .. } => unreachable!("recheck emits waiting contexts and terminal"),
-            tasks::Request::Notify { .. } | tasks::Request::Timer { .. } | tasks::Request::RecurringDue { .. } => {
+            | tasks::Request::Relay { .. }
+            | tasks::Request::PersonProposed { .. }
+            | tasks::Request::PersonProposalDecided { .. }
+            | tasks::Request::Notify { .. }
+            | tasks::Request::Timer { .. }
+            | tasks::Request::RecurringDue { .. } => {
                 unreachable!("recheck emits waiting contexts and terminal")
             }
         }

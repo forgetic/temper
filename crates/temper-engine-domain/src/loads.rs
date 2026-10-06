@@ -300,7 +300,10 @@ fn check(entry: &Entry, limits: &Limits, rows: &[Record], next: Option<Key>) -> 
             return Err(Failure::Cursor);
         }
         match entry.range {
-            Range::Deployment | Range::TaskResult { .. } | Range::EscalationDecision { .. } => {
+            Range::Deployment
+            | Range::TaskResult { .. }
+            | Range::EscalationDecision { .. }
+            | Range::ProposalDecision { .. } => {
                 return Err(Failure::Cursor);
             }
             Range::Turns { .. }
@@ -330,6 +333,7 @@ fn valid_range(range: Range) -> bool {
         }
         Range::TaskResult { task } | Range::TaskTranscript { task } => task != 0,
         Range::EscalationDecision { task, revision } => task != 0 && revision != 0,
+        Range::ProposalDecision { proposal } => proposal != 0,
         Range::Turns { task, attempt } => task != 0 && attempt != 0,
     }
 }

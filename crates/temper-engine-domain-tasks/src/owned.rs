@@ -3,8 +3,8 @@
 //! Measures existing ownership without allocating or cloning; shape admission
 //! remains with tasks and authority decisions remain with root policy checks.
 use crate::{
-    Authority, Contract, Ending, Last, Parameter, Phase, Proposal, ProposalAction, ProposalState, Spec, Stored,
-    TaskRecord, TaskResult, Was,
+    Authority, Contract, Ending, Last, Parameter, PersonProposalState, Phase, Proposal, ProposalAction, ProposalState,
+    Spec, Stored, TaskRecord, TaskResult, Was,
 };
 use core::mem::{size_of, size_of_val};
 
@@ -15,6 +15,17 @@ use core::mem::{size_of, size_of_val};
 #[must_use]
 pub fn stored_bytes(record: &Stored) -> Option<u64> {
     match record {
+        Stored::PersonProposal(row) => {
+            let mut total = bytes(size_of::<crate::PersonProposal>())?
+                .checked_add(spec_bytes(&row.goal.spec)?)?
+                .checked_add(authority_bytes(&row.goal.authority)?)?
+                .checked_add(contract_bytes(&row.goal.contract)?)?
+                .checked_add(bytes(size_of_val(&*row.goal.dependencies))?)?;
+            if let PersonProposalState::Rejected { reason, .. } = &row.state {
+                total = total.checked_add(bytes(reason.len())?)?;
+            }
+            Some(total)
+        }
         Stored::History(row) => {
             let mut total = bytes(row.reason.len())?;
             if let Some(proposal) = &row.proposal {

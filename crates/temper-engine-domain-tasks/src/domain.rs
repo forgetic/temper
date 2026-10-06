@@ -40,6 +40,7 @@ pub struct Domain {
     pub(crate) proposal_alarms: Deadlines<u64>,
     pub(crate) escalation_alarms: Deadlines<u64>,
     pub(crate) funding: Map<crate::Funder, crate::FundingRecord>,
+    pub(crate) person_proposals: Map<u64, crate::PersonProposal>,
     pub(crate) charters: Box<[u32]>,
     pub(crate) rng: Rng,
     facts: Queue<Fact>,
@@ -70,6 +71,7 @@ impl Domain {
             proposal_alarms: Deadlines::with_capacity(limits.tasks),
             escalation_alarms: Deadlines::with_capacity(limits.tasks),
             funding: Map::with_capacity(limits.funders),
+            person_proposals: Map::with_capacity(limits.tasks),
             charters,
             rng: Rng::new(seed),
             facts: Queue::with_capacity(limits.facts),
@@ -154,6 +156,13 @@ impl Domain {
         crate::proposals::context(self, proposer, number)
     }
 
+    /// Clone one pending person-origin goal proposal for the root's authority check.
+    #[must_use]
+    pub fn person_proposal(&self, proposer: u64, number: u64) -> Option<crate::PersonProposal> {
+        let proposal = self.person_proposals.get(&number)?;
+        if proposal.proposer == proposer { Some(proposal.clone()) } else { None }
+    }
+
     /// Clone one bounded held decision context for root's current route.
     #[must_use]
     pub fn escalation(&self, task: u64) -> Option<Box<crate::EscalationContext>> {
@@ -204,6 +213,12 @@ pub fn max_out(limits: &Limits) -> u32 {
 #[expect(clippy::too_many_lines, reason = "the closed task event vocabulary dispatches to focused handlers")]
 pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     match event {
+        Event::ProposePerson { reply_to, proposal } => {
+            crate::proposals::propose_person(domain, env, reply_to, proposal, out);
+        }
+        Event::DecidePersonProposal { reply_to, proposer, proposal, by, message, decision } => {
+            crate::proposals::decide_person(domain, env, reply_to, proposer, proposal, by, message, decision, out);
+        }
         Event::TickRecurring { task, period } => crate::recurring::tick(domain, env, task, period, out),
         Event::RecurringBatch { task, period, numbers } => {
             crate::recurring::make_batch(domain, env, task, period, &numbers, out);
@@ -593,6 +608,7 @@ pub(crate) fn make(
                 depth,
                 executor: new.executor,
                 taken_by: None,
+                tracked: new.tracked,
                 recurring: match new.recurring {
                     Some(template) => Some(Box::new(crate::RecurringState {
                         template: *template,

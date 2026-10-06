@@ -497,6 +497,23 @@ pub(crate) fn restore(domain: &mut Domain, env: &Env<Limits>, stored: Stored, ou
         Startup::Restoring => {}
     }
     match stored {
+        Stored::PersonProposal(row) => {
+            if !crate::proposals::valid_person_proposal(&row, &env.limits) {
+                return failed(domain, None, Refusal::Restore, out);
+            }
+            match row.state {
+                crate::PersonProposalState::Pending { .. } => {
+                    if domain.person_proposals.len() >= env.limits.tasks
+                        || domain.person_proposals.contains_key(&row.number)
+                    {
+                        return failed(domain, None, Refusal::Restore, out);
+                    }
+                    let inserted = domain.person_proposals.insert(row.number, *row);
+                    assert!(inserted == Ok(None), "restored person proposal admitted");
+                }
+                crate::PersonProposalState::Accepted { .. } | crate::PersonProposalState::Rejected { .. } => {}
+            }
+        }
         Stored::Live(task) => {
             let number = task.number;
             if domain.names.contains_key(&number) || domain.tasks.is_full() || !valid_record(domain, &env.limits, &task)

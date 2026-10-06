@@ -128,6 +128,8 @@ pub struct CallRecord {
 /// handles (domain/engine.md, 5.3–5.6).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Key {
+    /// Immutable outcome of a person-decided proposal, loaded by its root-issued number.
+    ProposalDecision(u64),
     /// Root's immutable decided held-chat revision; read only by named race
     /// replay, never restored into live state.
     EscalationDecision {
@@ -180,6 +182,8 @@ pub enum Key {
 /// request on their own and promise no cross-page snapshot (domain/engine.md, 5.3).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Range {
+    /// One immutable decision for a later authenticated proposal caller.
+    ProposalDecision { proposal: u64 },
     /// Exactly one root-owned decision archive for a stale authenticated
     /// decision; no unbounded history restore.
     EscalationDecision {
@@ -227,9 +231,21 @@ impl Range {
     #[expect(clippy::too_many_lines, reason = "all store families are checked exhaustively in one range matcher")]
     pub const fn contains(self, key: Key) -> bool {
         match self {
+            Range::ProposalDecision { proposal } => match key {
+                Key::ProposalDecision(number) => proposal != 0 && number == proposal,
+                Key::Call(_)
+                | Key::EscalationDecision { .. }
+                | Key::Deployment
+                | Key::Turn { .. }
+                | Key::RunProof { .. }
+                | Key::Terminal { .. }
+                | Key::Tasks(_)
+                | Key::People(_) => false,
+            },
             Range::Calls => match key {
                 Key::Call(call) => call.task != 0 && call.attempt != 0 && call.completion != 0,
                 Key::EscalationDecision { .. }
+                | Key::ProposalDecision(_)
                 | Key::Deployment
                 | Key::Turn { .. }
                 | Key::RunProof { .. }
@@ -242,6 +258,7 @@ impl Range {
                     task != 0 && revision != 0 && task == found && revision == current
                 }
                 Key::Call(_)
+                | Key::ProposalDecision(_)
                 | Key::Deployment
                 | Key::Turn { .. }
                 | Key::RunProof { .. }
@@ -253,6 +270,7 @@ impl Range {
                 Key::Deployment => true,
                 Key::Call(_)
                 | Key::EscalationDecision { .. }
+                | Key::ProposalDecision(_)
                 | Key::Turn { .. }
                 | Key::RunProof { .. }
                 | Key::Terminal { .. }
@@ -261,13 +279,16 @@ impl Range {
             },
             Range::Tasks => match key {
                 Key::Tasks(child) => match child {
-                    temper_engine_domain_tasks::Key::Live(_) | temper_engine_domain_tasks::Key::Ledger(_) => true,
+                    temper_engine_domain_tasks::Key::Live(_)
+                    | temper_engine_domain_tasks::Key::Ledger(_)
+                    | temper_engine_domain_tasks::Key::PersonProposal(_) => true,
                     temper_engine_domain_tasks::Key::Ended(_) | temper_engine_domain_tasks::Key::History { .. } => {
                         false
                     }
                 },
                 Key::Call(_)
                 | Key::EscalationDecision { .. }
+                | Key::ProposalDecision(_)
                 | Key::Deployment
                 | Key::Turn { .. }
                 | Key::RunProof { .. }
@@ -278,6 +299,7 @@ impl Range {
                 Key::Tasks(temper_engine_domain_tasks::Key::Ended(number)) => number != 0,
                 Key::Call(_)
                 | Key::EscalationDecision { .. }
+                | Key::ProposalDecision(_)
                 | Key::Deployment
                 | Key::Turn { .. }
                 | Key::RunProof { .. }
@@ -289,6 +311,7 @@ impl Range {
                 Key::People(_) => true,
                 Key::Call(_)
                 | Key::EscalationDecision { .. }
+                | Key::ProposalDecision(_)
                 | Key::Deployment
                 | Key::Turn { .. }
                 | Key::RunProof { .. }
@@ -299,6 +322,7 @@ impl Range {
                 Key::RunProof { task } => task != 0,
                 Key::Call(_)
                 | Key::EscalationDecision { .. }
+                | Key::ProposalDecision(_)
                 | Key::Deployment
                 | Key::Turn { .. }
                 | Key::Terminal { .. }
@@ -309,6 +333,7 @@ impl Range {
                 Key::Tasks(temper_engine_domain_tasks::Key::Ended(number)) => task == number,
                 Key::Call(_)
                 | Key::EscalationDecision { .. }
+                | Key::ProposalDecision(_)
                 | Key::Tasks(_)
                 | Key::Deployment
                 | Key::Turn { .. }
@@ -320,6 +345,7 @@ impl Range {
                 Key::Turn { task: found, attempt: run, turn } => found == task && run == attempt && turn != 0,
                 Key::Call(_)
                 | Key::EscalationDecision { .. }
+                | Key::ProposalDecision(_)
                 | Key::Deployment
                 | Key::RunProof { .. }
                 | Key::Terminal { .. }
@@ -330,6 +356,7 @@ impl Range {
                 Key::Turn { task: found, attempt, turn } => task != 0 && found == task && attempt != 0 && turn != 0,
                 Key::Call(_)
                 | Key::EscalationDecision { .. }
+                | Key::ProposalDecision(_)
                 | Key::Deployment
                 | Key::RunProof { .. }
                 | Key::Terminal { .. }
@@ -439,11 +466,24 @@ pub struct EscalationDecisionRecord {
     pub decision: temper_engine_domain_people::EscalationDecision,
 }
 
+/// Immutable decision evidence for a person-facing proposal race.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct ProposalDecisionRecord {
+    pub project: u32,
+    pub proposer: temper_engine_domain_tasks::Party,
+    pub proposal: u64,
+    pub kind: temper_engine_domain_tasks::ProposalKind,
+    pub by: u64,
+    pub choice: temper_engine_domain_people::ProposalChoice,
+}
+
 /// Owned typed row sent root to store in a commit or returned store to root in
 /// a bounded page. The transaction/page, not each row, has the store terminal
 /// (domain/engine.md, 5.1, 5.3 and 5.6).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Record {
+    /// The first committed final proposal decision, read by later callers.
+    ProposalDecision(ProposalDecisionRecord),
     /// Named host-tool decision committed with the action it caused.
     Call(CallRecord),
     /// Root's immutable semantic decision evidence; not task-owned transport
@@ -486,6 +526,7 @@ impl Record {
     #[must_use]
     pub const fn key(&self) -> Key {
         match self {
+            Record::ProposalDecision(row) => Key::ProposalDecision(row.proposal),
             Record::Call(row) => Key::Call(row.key),
             Record::EscalationDecision(row) => Key::EscalationDecision { task: row.task, revision: row.revision },
             Record::Deployment(_) => Key::Deployment,
@@ -552,7 +593,7 @@ pub fn record_bytes(record: &Record) -> Option<u64> {
                 .ok()?
                 .checked_mul(u64::try_from(size_of::<temper_engine_domain_authority::Finding>()).ok()?),
         },
-        Record::Deployment(_) => Some(0),
+        Record::ProposalDecision(_) | Record::Deployment(_) => Some(0),
         Record::Turn(turn) => u64::try_from(turn.transcript.len()).ok(),
         Record::RunProof(row) => match &row.terminal {
             Some(terminal) => terminal_bytes(terminal),
@@ -568,14 +609,18 @@ pub fn record_bytes(record: &Record) -> Option<u64> {
                 .ok()?
                 .checked_mul(u64::try_from(size_of::<temper_engine_domain_people::Holding>()).ok()?),
             temper_engine_domain_people::Stored::Answer { ask, .. } => match ask {
+                temper_engine_domain_people::Ask::SetGoal { spec, .. } => u64::try_from(spec.len()).ok(),
                 temper_engine_domain_people::Ask::SetRoles { holdings, .. } => u64::try_from(holdings.len())
                     .ok()?
                     .checked_mul(u64::try_from(size_of::<temper_engine_domain_people::Holding>()).ok()?),
                 temper_engine_domain_people::Ask::StartChat { words, .. }
                 | temper_engine_domain_people::Ask::Say { words, .. } => u64::try_from(words.len()).ok(),
-                temper_engine_domain_people::Ask::Move { reason, .. } => u64::try_from(reason.len()).ok(),
+                temper_engine_domain_people::Ask::Move { reason, .. }
+                | temper_engine_domain_people::Ask::Cancel { reason, .. } => u64::try_from(reason.len()).ok(),
                 temper_engine_domain_people::Ask::TakePerson { .. }
-                | temper_engine_domain_people::Ask::HandBackPerson { .. } => Some(0),
+                | temper_engine_domain_people::Ask::HandBackPerson { .. }
+                | temper_engine_domain_people::Ask::Stop { .. }
+                | temper_engine_domain_people::Ask::Release { .. } => Some(0),
                 temper_engine_domain_people::Ask::AnswerPerson { result, .. } => match result {
                     temper_engine_domain_people::PersonResult::Report { words }
                     | temper_engine_domain_people::PersonResult::Verdict { words, .. } => {

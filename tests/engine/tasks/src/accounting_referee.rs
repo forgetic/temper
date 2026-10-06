@@ -69,6 +69,7 @@ impl Accounting {
     /// # Errors
     /// Rejects changed identities, missing postings, lost reservations or
     /// invented expense at the durable boundary (domain/tasks.md, 2).
+    #[expect(clippy::too_many_lines, reason = "accounting referee checks all durable row forms")]
     pub fn committed(&mut self, rows: &BTreeMap<Key, Stored>) -> Result<(), &'static str> {
         for (key, old) in &self.before {
             if matches!(old, Stored::Ended(_)) && rows.get(key) != Some(old) {
@@ -114,7 +115,11 @@ impl Accounting {
                             Stored::Live(child) if child.funder == Funder::Task(task.number) => {
                                 Some(child.numbers.budget)
                             }
-                            Stored::Live(_) | Stored::Ended(_) | Stored::Ledger(_) | Stored::History(_) => None,
+                            Stored::Live(_)
+                            | Stored::Ended(_)
+                            | Stored::Ledger(_)
+                            | Stored::History(_)
+                            | Stored::PersonProposal(_) => None,
                         })
                         .sum();
                     if reserved != task.numbers.reserved {
@@ -134,7 +139,11 @@ impl Accounting {
                             Stored::Ledger(pool) if pool.parent == Some(ledger.funder) && !pool.closed => {
                                 Some(pool.numbers.budget)
                             }
-                            Stored::Live(_) | Stored::Ended(_) | Stored::Ledger(_) | Stored::History(_) => None,
+                            Stored::Live(_)
+                            | Stored::Ended(_)
+                            | Stored::Ledger(_)
+                            | Stored::History(_)
+                            | Stored::PersonProposal(_) => None,
                         })
                         .sum();
                     let posted = self.newly_settled(rows, ledger.funder);
@@ -159,7 +168,7 @@ impl Accounting {
                         return Err("original source identity changed");
                     }
                 }
-                Stored::Ended(_) | Stored::History(_) => {}
+                Stored::Ended(_) | Stored::History(_) | Stored::PersonProposal(_) => {}
             }
         }
         self.before = rows.clone();

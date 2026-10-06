@@ -68,6 +68,7 @@ pub fn task(number: u64, dependencies: &[u64]) -> New {
         dependencies: dependencies.into(),
         wake: tasks::WakePolicy::DEFAULT,
         recurring: None,
+        tracked: None,
     }
 }
 
@@ -291,6 +292,8 @@ impl World {
             | Request::EscalationInspected { .. }
             | Request::EscalationDecided { .. }
             | Request::ProposalDecided { .. }
+            | Request::PersonProposed { .. }
+            | Request::PersonProposalDecided { .. }
             | Request::ProposalRerouteNeeded { .. }
             | Request::ProposalStalled { .. }
             | Request::EscalationStalled { .. }
@@ -323,6 +326,8 @@ impl World {
             | Event::AnswerPerson { .. }
             | Event::Control { .. }
             | Event::Propose { .. }
+            | Event::ProposePerson { .. }
+            | Event::DecidePersonProposal { .. }
             | Event::DecideProposal { .. }
             | Event::WithdrawProposal { .. }
             | Event::StalledProposal { .. }
@@ -368,6 +373,8 @@ impl World {
             | Event::Control { .. }
             | Event::Move { .. }
             | Event::Propose { .. }
+            | Event::ProposePerson { .. }
+            | Event::DecidePersonProposal { .. }
             | Event::DecideProposal { .. }
             | Event::WithdrawProposal { .. }
             | Event::StalledProposal { .. }
@@ -500,6 +507,8 @@ impl World {
                 | Request::EscalationInspected { .. }
                 | Request::EscalationDecided { .. }
                 | Request::ProposalDecided { .. }
+                | Request::PersonProposed { .. }
+                | Request::PersonProposalDecided { .. }
                 | Request::ProposalRerouteNeeded { .. }
                 | Request::ProposalStalled { .. }
                 | Request::EscalationStalled { .. }
@@ -535,7 +544,11 @@ impl World {
                     dependencies: record.dependencies.to_vec(),
                     depth: record.depth,
                 }),
-                Stored::Live(_) | Stored::Ended(_) | Stored::Ledger(_) | Stored::History(_) => None,
+                Stored::Live(_)
+                | Stored::Ended(_)
+                | Stored::Ledger(_)
+                | Stored::History(_)
+                | Stored::PersonProposal(_) => None,
             })
             .collect::<Vec<_>>();
         for seen in made {
@@ -564,7 +577,9 @@ impl World {
                 | Request::ProposalRerouteNeeded { .. }
                 | Request::ProposalStalled { .. }
                 | Request::EscalationStalled { .. } => {}
-                Request::Sent { reply_to, .. }
+                Request::PersonProposed { reply_to, .. }
+                | Request::PersonProposalDecided { reply_to, .. }
+                | Request::Sent { reply_to, .. }
                 | Request::Done { reply_to }
                 | Request::ProposalDecided { reply_to, .. } => self.reply(reply_to, Reply::Done),
                 Request::Made { reply_to, tasks } => {
@@ -607,7 +622,7 @@ impl World {
             .values()
             .filter_map(|row| match row {
                 Stored::Live(record) => Some(*record.clone()),
-                Stored::Ended(_) | Stored::Ledger(_) | Stored::History(_) => None,
+                Stored::Ended(_) | Stored::Ledger(_) | Stored::History(_) | Stored::PersonProposal(_) => None,
             })
             .collect();
         self.observe(Seen::Stored { live, limits: Box::new(self.env.limits) });
@@ -629,7 +644,9 @@ impl World {
     pub fn record(&self, number: u64) -> &tasks::TaskRecord {
         match &self.records[&Key::Live(number)] {
             Stored::Live(record) => record,
-            Stored::Ended(_) | Stored::Ledger(_) | Stored::History(_) => unreachable!("live key"),
+            Stored::Ended(_) | Stored::Ledger(_) | Stored::History(_) | Stored::PersonProposal(_) => {
+                unreachable!("live key")
+            }
         }
     }
 
@@ -645,7 +662,7 @@ impl World {
             .keys()
             .filter_map(|key| match key {
                 Key::Live(number) if !before.contains(key) => Some(*number),
-                Key::Live(_) | Key::Ended(_) | Key::Ledger(_) | Key::History { .. } => None,
+                Key::Live(_) | Key::Ended(_) | Key::Ledger(_) | Key::History { .. } | Key::PersonProposal(_) => None,
             })
             .collect();
         self.observe(Seen::Batch { members, accepted: matches!(reply, Reply::Made(_)), made });
@@ -689,7 +706,7 @@ impl World {
             .values()
             .filter_map(|row| match row {
                 Stored::Live(record) | Stored::Ended(record) => Some(record.attempt),
-                Stored::Ledger(_) | Stored::History(_) => None,
+                Stored::Ledger(_) | Stored::History(_) | Stored::PersonProposal(_) => None,
             })
             .max()
             .unwrap_or(0)
@@ -762,6 +779,8 @@ impl World {
                 | Request::EscalationInspected { .. }
                 | Request::EscalationDecided { .. }
                 | Request::ProposalDecided { .. }
+                | Request::PersonProposed { .. }
+                | Request::PersonProposalDecided { .. }
                 | Request::ProposalRerouteNeeded { .. }
                 | Request::ProposalStalled { .. }
                 | Request::EscalationStalled { .. } => {}

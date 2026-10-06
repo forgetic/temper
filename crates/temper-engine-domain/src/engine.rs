@@ -26,6 +26,7 @@
 //! Child facts are disposable observations; [`Domain::quiescent`] reports
 //! internal idleness, while an external referee establishes final story results.
 mod escalation;
+mod goals;
 mod inbox;
 mod proposals;
 mod results;
@@ -516,6 +517,8 @@ enum Work {
     Activate(Box<tasks::RunContext>),
     EscalationLoaded { waiter: Token, rows: Box<[Record]> },
     EscalationFailed { waiter: Token },
+    ProposalLoaded { waiter: Token, rows: Box<[Record]> },
+    ProposalFailed { waiter: Token },
     DelegateValidated { to: Token, key: CallKey, batch: Box<[Delegate]> },
     DelegateInputRefused { to: Token, key: CallKey },
 }
@@ -533,6 +536,7 @@ enum Read {
     Result(results::Read),
     Inbox(inbox::Read),
     Escalation(escalation::Query),
+    Proposal(proposals::Query),
     Transcript { task: u64 },
     Dependency(DependencyRead),
     InputCheck(InputCheck),
@@ -610,7 +614,7 @@ enum RoutedCall {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum PersonProposalRoute {
-    Deciding { request: Token, proposer: u64, proposal: u64 },
+    Deciding { request: Token, proposer: u64, proposal: u64, by: u64 },
     Accepting { request: Token, person: u64, proposer: u64, proposal: u64, message: u64 },
 }
 
@@ -619,6 +623,8 @@ enum PersonTaskRoute {
     Take(u64),
     HandBack(u64),
     Answer(u64),
+    Cancel(u64),
+    Release(u64),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -628,6 +634,13 @@ enum Startup {
     Adopting,
     Running,
     Failed,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum GoalRoute {
+    Proposing { proposal: u64 },
+    Accepting { proposer: u64, proposal: u64, by: u64, task: u64 },
+    Deciding { proposer: u64, proposal: u64, by: u64 },
 }
 
 /// Root owns every participating child and all unfinished handoffs; no child
@@ -652,7 +665,8 @@ pub struct Domain {
     reading_results: Map<u64, Token>,
     result_pages: Queue<ResultPage>,
     dependency_results: Map<u64, Box<[HistoricalResult]>>,
-    made: Map<Token, u64>,
+    made: Map<Token, (u64, bool)>,
+    goal_routes: Map<Token, GoalRoute>,
     delegating: Map<Token, CallKey>,
     routing_calls: Map<Token, RoutedCall>,
     routing_people_proposals: Map<Token, PersonProposalRoute>,
@@ -729,6 +743,7 @@ impl Domain {
             result_pages: Queue::with_capacity(limits.loads.loads),
             dependency_results: Map::with_capacity(limits.tasks.tasks),
             made: Map::with_capacity(limits.people.pending),
+            goal_routes: Map::with_capacity(limits.people.pending),
             delegating: Map::with_capacity(limits.fleet.calls),
             routing_calls: Map::with_capacity(limits.fleet.calls),
             routing_people_proposals: Map::with_capacity(limits.people.pending),
@@ -789,6 +804,7 @@ impl Domain {
             && self.routing_calls.is_empty()
             && self.routing_people_proposals.is_empty()
             && self.made.is_empty()
+            && self.goal_routes.is_empty()
             && self.delegating.is_empty()
             && self.ending_positions.is_empty()
             && self.saying.is_empty()
@@ -1236,7 +1252,14 @@ pub fn resume(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) 
             Some(Some(Read::Inbox(_))) => inbox::page(domain, env, page.waiter, page.rows, page.next, out),
             Some(Some(Read::Result(_))) => results::page(domain, env, page.waiter, page.rows, page.next, out),
             Some(
-                Some(Read::Escalation(_) | Read::Transcript { .. } | Read::Dependency(_) | Read::InputCheck(_)) | None,
+                Some(
+                    Read::Escalation(_)
+                    | Read::Proposal(_)
+                    | Read::Transcript { .. }
+                    | Read::Dependency(_)
+                    | Read::InputCheck(_),
+                )
+                | None,
             )
             | None => unreachable!("queued person page has its live read"),
         }
@@ -1276,7 +1299,8 @@ pub fn resume(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) 
                     | Read::Transcript { .. }
                     | Read::Dependency(_)
                     | Read::InputCheck(_)
-                    | Read::Escalation(escalation::Query::Read { .. }) => {
+                    | Read::Escalation(escalation::Query::Read { .. })
+                    | Read::Proposal(_) => {
                         unreachable!("decision archive waiter")
                     }
                 };
@@ -1294,6 +1318,7 @@ pub fn resume(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) 
                     Read::Result(_) => request_load(domain, waiter, Range::EndedResults, None, out),
                     Read::Inbox(_)
                     | Read::Escalation(_)
+                    | Read::Proposal(_)
                     | Read::Transcript { .. }
                     | Read::Dependency(_)
                     | Read::InputCheck(_) => {
@@ -1309,6 +1334,7 @@ pub fn resume(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) 
                         Some(
                             Read::Result(_)
                             | Read::Escalation(_)
+                            | Read::Proposal(_)
                             | Read::Transcript { .. }
                             | Read::Dependency(_)
                             | Read::InputCheck(_),
@@ -1431,6 +1457,8 @@ fn route_into(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision) {
             Work::Activate(task) => activate(domain, env, decision, task),
             Work::EscalationLoaded { waiter, rows } => escalation::loaded(domain, env, waiter, rows),
             Work::EscalationFailed { waiter } => escalation::failed(domain, waiter),
+            Work::ProposalLoaded { waiter, rows } => proposals::historical_loaded(domain, waiter, rows),
+            Work::ProposalFailed { waiter } => proposals::historical_failed(domain, waiter),
             Work::DelegateValidated { to, key, batch } => {
                 delegate_call(domain, env, decision, ReplyTo::new(to), key, batch, true);
             }
@@ -1465,6 +1493,23 @@ fn people_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decisio
                 emit(decision, &env.limits, Delivery::WebReply { to, sign_in: domain.signing_in, reply });
             }
             people::Request::Route { request, person, project, role, ask } => match ask {
+                people::Ask::SetGoal { spec, charter, budget, priority, .. } => {
+                    goals::start(
+                        domain,
+                        env,
+                        request,
+                        person,
+                        project,
+                        role.expect("goal membership admitted"),
+                        spec,
+                        charter,
+                        budget,
+                        priority,
+                    );
+                }
+                people::Ask::Stop { .. } | people::Ask::Cancel { .. } | people::Ask::Release { .. } => {
+                    route_person_control(domain, request, person, project, role, ask);
+                }
                 people::Ask::TakePerson { .. }
                 | people::Ask::HandBackPerson { .. }
                 | people::Ask::AnswerPerson { .. } => {
@@ -1508,9 +1553,17 @@ fn people_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decisio
                     escalation::begin(domain, request, person, role, project, task, revision, decision);
                 }
                 people::Ask::DecideProposal { proposer, proposal, decision: choice, .. } => {
-                    proposals::person_decide(
-                        domain, env, decision, request, person, role, project, proposer, proposal, choice,
-                    );
+                    if domain.tasks.person_proposal(proposer, proposal).is_some() {
+                        goals::decide(domain, env, request, person, role, project, proposer, proposal, choice);
+                    } else if domain.tasks.proposal(proposer, proposal).is_some() {
+                        proposals::person_decide(
+                            domain, env, decision, request, person, role, project, proposer, proposal, choice,
+                        );
+                    } else {
+                        proposals::historical_begin(
+                            domain, env, decision, request, person, project, proposer, proposal,
+                        );
+                    }
                 }
             },
             people::Request::RolesApplied { .. } => {
@@ -1548,7 +1601,11 @@ fn route_person_task(
         | people::Ask::Say { .. }
         | people::Ask::SetRoles { .. }
         | people::Ask::DecideEscalation { .. }
-        | people::Ask::StartChat { .. } => unreachable!("person-task route owns its ask"),
+        | people::Ask::StartChat { .. }
+        | people::Ask::Stop { .. }
+        | people::Ask::Cancel { .. }
+        | people::Ask::Release { .. }
+        | people::Ask::SetGoal { .. } => unreachable!("person-task route owns its ask"),
     };
     let Some(context) = domain.tasks.delegation(task) else {
         domain.work.push(Work::People(people::Event::Decided {
@@ -1569,7 +1626,11 @@ fn route_person_task(
                         | people::Ask::Say { .. }
                         | people::Ask::SetRoles { .. }
                         | people::Ask::DecideEscalation { .. }
-                        | people::Ask::StartChat { .. } => unreachable!("person-task route owns its ask"),
+                        | people::Ask::StartChat { .. }
+                        | people::Ask::Stop { .. }
+                        | people::Ask::Cancel { .. }
+                        | people::Ask::Release { .. }
+                        | people::Ask::SetGoal { .. } => unreachable!("person-task route owns its ask"),
                     }
             }
             tasks::Executor::Person(tasks::PersonAddress::Role(address)) => {
@@ -1581,7 +1642,11 @@ fn route_person_task(
                     | people::Ask::Say { .. }
                     | people::Ask::SetRoles { .. }
                     | people::Ask::DecideEscalation { .. }
-                    | people::Ask::StartChat { .. } => unreachable!("person-task route owns its ask"),
+                    | people::Ask::StartChat { .. }
+                    | people::Ask::Stop { .. }
+                    | people::Ask::Cancel { .. }
+                    | people::Ask::Release { .. }
+                    | people::Ask::SetGoal { .. } => unreachable!("person-task route owns its ask"),
                 };
                 handing_back
                     || match role {
@@ -1615,10 +1680,154 @@ fn route_person_task(
         | people::Ask::Say { .. }
         | people::Ask::SetRoles { .. }
         | people::Ask::DecideEscalation { .. }
-        | people::Ask::StartChat { .. } => unreachable!("person-task route owns its ask"),
+        | people::Ask::StartChat { .. }
+        | people::Ask::Stop { .. }
+        | people::Ask::Cancel { .. }
+        | people::Ask::Release { .. }
+        | people::Ask::SetGoal { .. } => unreachable!("person-task route owns its ask"),
     };
     assert!(domain.person_tasks.insert(request, route) == Ok(None), "one routed person task per keyed flight");
     domain.work.push(Work::Tasks(event));
+}
+
+fn person_tree(domain: &Domain, person: u64, task: u64) -> bool {
+    let mut next = task;
+    for _ in 0..=domain.limits.tasks.depth {
+        let Some(context) = domain.tasks.delegation(next) else { return false };
+        match context.requester {
+            tasks::Party::Person(requester) => return requester == person,
+            tasks::Party::Task(parent) => next = parent,
+            tasks::Party::Deployment { .. } => return false,
+        }
+    }
+    false
+}
+
+fn person_control_refused(domain: &mut Domain, request: Token, why: people::Refusal) {
+    domain.work.push(Work::People(people::Event::Decided { request, outcome: people::Outcome::Refused(why) }));
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "one authenticated control route checks standing and authority before task mutation"
+)]
+fn route_person_control(
+    domain: &mut Domain,
+    request: Token,
+    person: u64,
+    project: u32,
+    role: Option<people::Role>,
+    ask: people::Ask,
+) {
+    let task = match &ask {
+        people::Ask::Stop { task, .. } | people::Ask::Cancel { task, .. } | people::Ask::Release { task, .. } => *task,
+        people::Ask::TakePerson { .. }
+        | people::Ask::HandBackPerson { .. }
+        | people::Ask::AnswerPerson { .. }
+        | people::Ask::Move { .. }
+        | people::Ask::DecideProposal { .. }
+        | people::Ask::Say { .. }
+        | people::Ask::SetRoles { .. }
+        | people::Ask::DecideEscalation { .. }
+        | people::Ask::StartChat { .. }
+        | people::Ask::SetGoal { .. } => {
+            unreachable!("control route owns its ask")
+        }
+    };
+    let Some(context) = domain.tasks.delegation(task) else {
+        return person_control_refused(domain, request, people::Refusal::Ended);
+    };
+    let Some(holding) = role else {
+        return person_control_refused(domain, request, people::Refusal::Role);
+    };
+    let any_task = match holding {
+        people::Role::Owner | people::Role::Maintainer => true,
+        people::Role::Member | people::Role::Observer => false,
+    };
+    if context.project != project || !any_task && !person_tree(domain, person, task) {
+        return person_control_refused(domain, request, people::Refusal::Standing);
+    }
+    let pool = tasks::Funder::Pool { project, person, period: domain.config.period };
+    let numbers = match domain.tasks.funding(pool) {
+        Some(record) => record.numbers,
+        None => tasks::Numbers { budget: 0, spent: 0, spent_below: 0, reserved: 0 },
+    };
+    let action = match &ask {
+        people::Ask::Stop { .. } | people::Ask::Cancel { .. } => authority::PersonRequest::Cancel,
+        people::Ask::Release { .. } => authority::PersonRequest::Release,
+        people::Ask::TakePerson { .. }
+        | people::Ask::HandBackPerson { .. }
+        | people::Ask::AnswerPerson { .. }
+        | people::Ask::Move { .. }
+        | people::Ask::DecideProposal { .. }
+        | people::Ask::Say { .. }
+        | people::Ask::SetRoles { .. }
+        | people::Ask::DecideEscalation { .. }
+        | people::Ask::StartChat { .. }
+        | people::Ask::SetGoal { .. } => {
+            unreachable!("control route owns its ask")
+        }
+    };
+    let mut findings =
+        Queue::with_capacity(authority::max_out(domain.config.authority.limits()).expect("bounded findings"));
+    let checked = authority::check_request(
+        &domain.config.authority,
+        &authority::PersonAsk {
+            project,
+            role: escalation::role_number(holding),
+            pool: authority_numbers(numbers),
+            tasks_left: context.tasks_left,
+            request: action,
+        },
+        &mut findings,
+    );
+    if checked.answer != authority::Answer::Allow {
+        return person_control_refused(domain, request, people::Refusal::Authority);
+    }
+    match ask {
+        people::Ask::Stop { .. } => {
+            domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::Stopped }));
+            domain
+                .work
+                .push(Work::People(people::Event::Decided { request, outcome: people::Outcome::Stopped { task } }));
+        }
+        people::Ask::Cancel { reason, .. } => {
+            if reason.len() > usize::try_from(domain.limits.tasks.result_bytes).expect("u32 fits usize") {
+                return person_control_refused(domain, request, people::Refusal::Limit);
+            }
+            assert!(domain.person_tasks.insert(request, PersonTaskRoute::Cancel(task)) == Ok(None), "one cancel route");
+            domain.work.push(Work::Tasks(tasks::Event::Control {
+                reply_to: ReplyTo::new(request),
+                by: tasks::Party::Person(person),
+                task,
+                control: tasks::Control::Cancel { reason },
+            }));
+        }
+        people::Ask::Release { .. } => {
+            assert!(
+                domain.person_tasks.insert(request, PersonTaskRoute::Release(task)) == Ok(None),
+                "one release route"
+            );
+            domain.work.push(Work::Tasks(tasks::Event::Control {
+                reply_to: ReplyTo::new(request),
+                by: tasks::Party::Person(person),
+                task,
+                control: tasks::Control::Release,
+            }));
+        }
+        people::Ask::TakePerson { .. }
+        | people::Ask::HandBackPerson { .. }
+        | people::Ask::AnswerPerson { .. }
+        | people::Ask::Move { .. }
+        | people::Ask::DecideProposal { .. }
+        | people::Ask::Say { .. }
+        | people::Ask::SetRoles { .. }
+        | people::Ask::DecideEscalation { .. }
+        | people::Ask::StartChat { .. }
+        | people::Ask::SetGoal { .. } => {
+            unreachable!("control route owns its ask")
+        }
+    }
 }
 
 #[expect(clippy::too_many_arguments, reason = "one authenticated keyed move carries its person, project and target")]
@@ -1798,7 +2007,7 @@ fn make_chat(
         }));
         return;
     };
-    assert!(domain.made.insert(request, number) == Ok(None), "people route has unique pending key");
+    assert!(domain.made.insert(request, (number, false)) == Ok(None), "people route has unique pending key");
     let words = match ask {
         people::Ask::StartChat { words, .. } => words,
         people::Ask::DecideEscalation { .. }
@@ -1808,7 +2017,11 @@ fn make_chat(
         | people::Ask::Move { .. }
         | people::Ask::TakePerson { .. }
         | people::Ask::HandBackPerson { .. }
-        | people::Ask::AnswerPerson { .. } => {
+        | people::Ask::AnswerPerson { .. }
+        | people::Ask::Stop { .. }
+        | people::Ask::Cancel { .. }
+        | people::Ask::Release { .. }
+        | people::Ask::SetGoal { .. } => {
             unreachable!("other asks routed separately")
         }
     };
@@ -1832,6 +2045,7 @@ fn make_chat(
             dependencies: Box::new([]),
             wake: tasks::WakePolicy::DEFAULT,
             recurring: None,
+            tracked: None,
         }]),
     }));
 }
@@ -2613,6 +2827,7 @@ fn delegate_call(
                 dependencies: dependencies.into_boxed(),
                 wake: member.wake,
                 recurring: None,
+                tracked: None,
             })
             .expect("bounded delegation batch");
     }
@@ -2710,6 +2925,7 @@ fn procedure_step(
                         dependencies: dependencies.into_boxed(),
                         wake: member.wake,
                         recurring: None,
+                        tracked: None,
                     })
                     .expect("bounded procedure batch");
             }
@@ -2772,6 +2988,7 @@ fn start_recurring(
             dependencies: Box::new([]),
             wake: tasks::WakePolicy::DEFAULT,
             recurring: Some(Box::new(template)),
+            tracked: None,
         }]),
     }));
     domain.work.push(Work::Tasks(tasks::Event::TickRecurring { task: number, period }));
@@ -2788,6 +3005,34 @@ fn tasks_outputs(
 ) {
     for _ in 0..out.len() {
         match out.pop().expect("tasks output count") {
+            tasks::Request::PersonProposed { reply_to, proposal } => {
+                let request = reply_to.into_token();
+                let route = domain.goal_routes.remove(&request).expect("person proposal route");
+                assert!(route == GoalRoute::Proposing { proposal }, "exact proposed identity");
+                domain.work.push(Work::People(people::Event::Decided {
+                    request,
+                    outcome: people::Outcome::GoalProposed { proposal },
+                }));
+            }
+            tasks::Request::PersonProposalDecided { reply_to, proposer, number, outcome } => {
+                let request = reply_to.into_token();
+                let route = domain.goal_routes.remove(&request).expect("goal decision route");
+                let GoalRoute::Deciding { proposer: named, proposal, by } = route else {
+                    unreachable!("goal decision terminal stage")
+                };
+                assert!(named == proposer && proposal == number, "exact goal decision");
+                let choice = match outcome {
+                    tasks::ProposalOutcome::Accepted => people::ProposalChoice::Accepted,
+                    tasks::ProposalOutcome::Rejected => people::ProposalChoice::Rejected,
+                    tasks::ProposalOutcome::Passed => people::ProposalChoice::Passed,
+                    tasks::ProposalOutcome::Withdrawn => people::ProposalChoice::Withdrawn,
+                    tasks::ProposalOutcome::Stale => people::ProposalChoice::Stale,
+                };
+                domain.work.push(Work::People(people::Event::Decided {
+                    request,
+                    outcome: people::Outcome::ProposalDecided { proposer, proposal: number, by, choice },
+                }));
+            }
             tasks::Request::RecurringDue { task, period, members } => {
                 let Some(context) = domain.tasks.delegation(task) else { continue };
                 let Some(template) = domain.tasks.recurring_template(task) else { continue };
@@ -2966,11 +3211,11 @@ fn tasks_outputs(
                 let token = reply_to.into_token();
                 let person_route = if person_proposal { domain.routing_people_proposals.remove(&token) } else { None };
                 if let Some(route) = person_route {
-                    let request = match route {
-                        PersonProposalRoute::Deciding { request, proposer: named, proposal }
+                    let (request, by) = match route {
+                        PersonProposalRoute::Deciding { request, proposer: named, proposal, by }
                             if named == proposer && proposal == number =>
                         {
-                            request
+                            (request, by)
                         }
                         PersonProposalRoute::Deciding { .. } | PersonProposalRoute::Accepting { .. } => {
                             unreachable!("matching person proposal decision")
@@ -2985,7 +3230,7 @@ fn tasks_outputs(
                     };
                     domain.work.push(Work::People(people::Event::Decided {
                         request,
-                        outcome: people::Outcome::ProposalDecided { proposer, proposal: number, choice },
+                        outcome: people::Outcome::ProposalDecided { proposer, proposal: number, by, choice },
                     }));
                     continue;
                 }
@@ -3036,11 +3281,20 @@ fn tasks_outputs(
                 }
             }
             tasks::Request::Save { record } => {
+                if let Some(archive) = proposals::decision_record(&record) {
+                    save(decision, &env.limits, Write::Save(Record::ProposalDecision(archive)));
+                }
                 match &record {
                     tasks::Stored::Live(task) | tasks::Stored::Ended(task) => {
                         domain.work.push(Work::People(people::Event::Waiting {
                             task: task.number,
                             entries: inbox::entries(domain, task),
+                        }));
+                    }
+                    tasks::Stored::PersonProposal(row) => {
+                        domain.work.push(Work::People(people::Event::Waiting {
+                            task: row.goal.number,
+                            entries: inbox::person_proposal_entries(domain, row),
                         }));
                     }
                     tasks::Stored::Ledger(_) | tasks::Stored::History(_) => {}
@@ -3063,7 +3317,10 @@ fn tasks_outputs(
                         }
                         tasks::Stored::Ended(task)
                     }
-                    tasks::Stored::Live(_) | tasks::Stored::Ledger(_) | tasks::Stored::History(_) => record,
+                    tasks::Stored::Live(_)
+                    | tasks::Stored::Ledger(_)
+                    | tasks::Stored::History(_)
+                    | tasks::Stored::PersonProposal(_) => record,
                 };
                 save(decision, &env.limits, Write::Save(Record::Tasks(record)));
             }
@@ -3071,6 +3328,22 @@ fn tasks_outputs(
             tasks::Request::Made { reply_to, tasks } => {
                 let request = reply_to.into_token();
                 if request.raw() >= u64::MAX - 2 {
+                    continue;
+                }
+                if let Some(GoalRoute::Accepting { proposer, proposal, by, task }) =
+                    domain.goal_routes.get(&request).copied()
+                {
+                    assert!(tasks.as_ref() == [task], "accepted goal task made");
+                    let inserted = domain.goal_routes.insert(request, GoalRoute::Deciding { proposer, proposal, by });
+                    assert!(inserted.is_ok(), "goal route replaced");
+                    domain.work.push(Work::Tasks(tasks::Event::DecidePersonProposal {
+                        reply_to: ReplyTo::new(request),
+                        proposer,
+                        proposal,
+                        by: tasks::Party::Person(by),
+                        message: None,
+                        decision: tasks::ProposalDecision::Accept,
+                    }));
                     continue;
                 }
                 let person_route =
@@ -3081,7 +3354,7 @@ fn tasks_outputs(
                     assert!(request == named, "person acceptance correlation");
                     domain
                         .routing_people_proposals
-                        .insert(request, PersonProposalRoute::Deciding { request, proposer, proposal })
+                        .insert(request, PersonProposalRoute::Deciding { request, proposer, proposal, by: person })
                         .expect("person route room");
                     domain.work.push(Work::PersonProposal(tasks::Event::DecideProposal {
                         reply_to: ReplyTo::new(request),
@@ -3120,17 +3393,53 @@ fn tasks_outputs(
                         CallAnswer::Delegated(tasks),
                     ),
                     None => {
-                        let expected = domain.made.remove(&request).expect("pending make route");
-                        assert!(tasks.as_ref() == [expected], "one exact chat created");
+                        let (expected, goal) = domain.made.remove(&request).expect("pending make route");
+                        assert!(tasks.as_ref() == [expected], "one exact person task created");
                         domain.work.push(Work::People(people::Event::Decided {
                             request,
-                            outcome: people::Outcome::Started { task: expected },
+                            outcome: if goal {
+                                people::Outcome::GoalStarted { task: expected }
+                            } else {
+                                people::Outcome::Started { task: expected }
+                            },
                         }));
                     }
                 }
             }
             tasks::Request::Refused { reply_to, problem } => {
                 let token = reply_to.into_token();
+                if domain.goal_routes.remove(&token).is_some() {
+                    domain.work.push(Work::People(people::Event::Decided {
+                        request: token,
+                        outcome: people::Outcome::Refused(match problem.why {
+                            tasks::Refusal::Busy | tasks::Refusal::NotReady => people::Refusal::Busy,
+                            tasks::Refusal::Funding | tasks::Refusal::AuthorityShape => people::Refusal::Authority,
+                            tasks::Refusal::Unknown | tasks::Refusal::State => people::Refusal::Ended,
+                            tasks::Refusal::Duplicate
+                            | tasks::Refusal::Empty
+                            | tasks::Refusal::Batch
+                            | tasks::Refusal::Live
+                            | tasks::Refusal::Project
+                            | tasks::Refusal::Tree
+                            | tasks::Refusal::Depth
+                            | tasks::Refusal::Delegates
+                            | tasks::Refusal::Subscription
+                            | tasks::Refusal::Dependencies
+                            | tasks::Refusal::Cycle
+                            | tasks::Refusal::Executor
+                            | tasks::Refusal::Spec
+                            | tasks::Refusal::Contract
+                            | tasks::Refusal::Inputs
+                            | tasks::Refusal::Attempt
+                            | tasks::Refusal::LiveDelegates
+                            | tasks::Refusal::Restore
+                            | tasks::Refusal::Read
+                            | tasks::Refusal::Turn
+                            | tasks::Refusal::Reference => people::Refusal::Limit,
+                        }),
+                    }));
+                    continue;
+                }
                 if domain.person_tasks.remove(&token).is_some() {
                     let why = match problem.why {
                         tasks::Refusal::Busy | tasks::Refusal::NotReady => people::Refusal::Busy,
@@ -3447,6 +3756,8 @@ fn tasks_outputs(
                         PersonTaskRoute::Take(task) => people::Outcome::PersonTaken { task },
                         PersonTaskRoute::HandBack(task) => people::Outcome::PersonHandedBack { task },
                         PersonTaskRoute::Answer(task) => people::Outcome::PersonAnswered { task },
+                        PersonTaskRoute::Cancel(task) => people::Outcome::Cancelled { task },
+                        PersonTaskRoute::Release(task) => people::Outcome::Released { task },
                     };
                     domain.work.push(Work::People(people::Event::Decided { request: Token::new(task), outcome }));
                     continue;
@@ -3465,7 +3776,7 @@ fn tasks_outputs(
                 {
                     domain
                         .routing_people_proposals
-                        .insert(request, PersonProposalRoute::Deciding { request, proposer, proposal })
+                        .insert(request, PersonProposalRoute::Deciding { request, proposer, proposal, by: person })
                         .expect("person acceptance route room");
                     domain.work.push(Work::PersonProposal(tasks::Event::DecideProposal {
                         reply_to: ReplyTo::new(request),
@@ -3848,7 +4159,10 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
 fn request_load(domain: &mut Domain, waiter: Token, range: Range, after: Option<Key>, out: &mut Queue<Request>) {
     let mut load_out = Queue::with_capacity(1);
     let most = match range {
-        Range::Deployment | Range::TaskResult { .. } | Range::EscalationDecision { .. } => 1,
+        Range::Deployment
+        | Range::TaskResult { .. }
+        | Range::EscalationDecision { .. }
+        | Range::ProposalDecision { .. } => 1,
         Range::Calls
         | Range::Tasks
         | Range::EndedResults
@@ -3863,6 +4177,10 @@ fn request_load(domain: &mut Domain, waiter: Token, range: Range, after: Option<
             return;
         }
         match range {
+            Range::ProposalDecision { .. } => {
+                domain.work.push(Work::ProposalFailed { waiter });
+                return;
+            }
             Range::EscalationDecision { .. } => {
                 domain.work.push(Work::EscalationFailed { waiter });
                 return;
@@ -3892,7 +4210,32 @@ fn transcript_waiter(domain: &Domain, waiter: Token) -> bool {
     match domain.result_reads.get(Id::from_token(waiter)) {
         Some(Some(Read::Transcript { .. })) => true,
         Some(
-            Some(Read::Result(_) | Read::Inbox(_) | Read::Escalation(_) | Read::Dependency(_) | Read::InputCheck(_))
+            Some(
+                Read::Result(_)
+                | Read::Inbox(_)
+                | Read::Escalation(_)
+                | Read::Proposal(_)
+                | Read::Dependency(_)
+                | Read::InputCheck(_),
+            )
+            | None,
+        )
+        | None => false,
+    }
+}
+
+fn proposal_waiter(domain: &Domain, waiter: Token) -> bool {
+    match domain.result_reads.get(Id::from_token(waiter)) {
+        Some(Some(Read::Proposal(_))) => true,
+        Some(
+            Some(
+                Read::Result(_)
+                | Read::Inbox(_)
+                | Read::Escalation(_)
+                | Read::Transcript { .. }
+                | Read::Dependency(_)
+                | Read::InputCheck(_),
+            )
             | None,
         )
         | None => false,
@@ -3906,6 +4249,7 @@ fn inbox_waiter(domain: &Domain, waiter: Token) -> bool {
             Some(
                 Read::Result(_)
                 | Read::Escalation(_)
+                | Read::Proposal(_)
                 | Read::Transcript { .. }
                 | Read::Dependency(_)
                 | Read::InputCheck(_),
@@ -3921,7 +4265,12 @@ fn dependency_waiter(domain: &Domain, waiter: Token) -> bool {
         Some(Some(Read::Dependency(_))) => true,
         Some(
             Some(
-                Read::Result(_) | Read::Inbox(_) | Read::Escalation(_) | Read::Transcript { .. } | Read::InputCheck(_),
+                Read::Result(_)
+                | Read::Inbox(_)
+                | Read::Escalation(_)
+                | Read::Proposal(_)
+                | Read::Transcript { .. }
+                | Read::InputCheck(_),
             )
             | None,
         )
@@ -3934,7 +4283,12 @@ fn input_waiter(domain: &Domain, waiter: Token) -> bool {
         Some(Some(Read::InputCheck(_))) => true,
         Some(
             Some(
-                Read::Result(_) | Read::Inbox(_) | Read::Escalation(_) | Read::Transcript { .. } | Read::Dependency(_),
+                Read::Result(_)
+                | Read::Inbox(_)
+                | Read::Escalation(_)
+                | Read::Proposal(_)
+                | Read::Transcript { .. }
+                | Read::Dependency(_),
             )
             | None,
         )
@@ -3962,6 +4316,7 @@ fn input_loaded(domain: &mut Domain, waiter: Token, rows: Box<[Record]>, next: O
         Record::Call(_)
         | Record::Deployment(_)
         | Record::EscalationDecision(_)
+        | Record::ProposalDecision(_)
         | Record::Turn(_)
         | Record::RunProof(_)
         | Record::Terminal(_)
@@ -4035,9 +4390,18 @@ fn load_outputs(
                     }
                     return;
                 }
+                if proposal_waiter(domain, waiter) {
+                    if cut.is_some() || next.is_some() {
+                        domain.work.push(Work::ProposalFailed { waiter });
+                    } else {
+                        domain.work.push(Work::ProposalLoaded { waiter, rows });
+                    }
+                    return;
+                }
                 if cut.is_some() {
                     let archive = match domain.result_reads.get(Id::from_token(waiter)) {
                         Some(Some(Read::Escalation(_))) => true,
+                        Some(Some(Read::Proposal(_))) => unreachable!("proposal handled above"),
                         Some(
                             Some(
                                 Read::Result(_)
@@ -4065,6 +4429,7 @@ fn load_outputs(
                 } else {
                     let archive = match domain.result_reads.get(Id::from_token(waiter)) {
                         Some(Some(Read::Escalation(_))) => true,
+                        Some(Some(Read::Proposal(_))) => unreachable!("proposal handled above"),
                         Some(
                             Some(
                                 Read::Result(_)
@@ -4101,12 +4466,17 @@ fn load_outputs(
                     inbox::failed(domain, waiter, people::Refusal::Busy, out);
                     return;
                 }
+                if proposal_waiter(domain, waiter) {
+                    domain.work.push(Work::ProposalFailed { waiter });
+                    return;
+                }
                 if waiter == Token::new(u64::MAX) {
                     domain.startup = Startup::Failed;
                     out.push(Request::Stop);
                 } else {
                     let archive = match domain.result_reads.get(Id::from_token(waiter)) {
                         Some(Some(Read::Escalation(_))) => true,
+                        Some(Some(Read::Proposal(_))) => unreachable!("proposal handled above"),
                         Some(
                             Some(
                                 Read::Result(_)
@@ -4196,6 +4566,7 @@ fn dependency_loaded(
         Record::Call(_)
         | Record::Deployment(_)
         | Record::EscalationDecision(_)
+        | Record::ProposalDecision(_)
         | Record::Turn(_)
         | Record::RunProof(_)
         | Record::Terminal(_)
@@ -4392,6 +4763,7 @@ fn startup_page(
         Range::RunProofs => Some(Range::Calls),
         Range::Calls => None,
         Range::EscalationDecision { .. }
+        | Range::ProposalDecision { .. }
         | Range::Turns { .. }
         | Range::TaskTranscript { .. }
         | Range::TaskResult { .. }
@@ -5236,6 +5608,7 @@ fn header_loaded(startup: Startup) -> bool {
             | Range::People
             | Range::RunProofs
             | Range::EscalationDecision { .. }
+            | Range::ProposalDecision { .. }
             | Range::Turns { .. }
             | Range::TaskTranscript { .. }
             | Range::TaskResult { .. },
@@ -5517,6 +5890,21 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
         Record::Deployment(deployment) => domain.journal = Journal::new(deployment, &env.limits.journal),
         Record::People(record) => domain.work.push(Work::People(people::Event::Restore { record })),
         Record::Tasks(record) => match record {
+            tasks::Stored::PersonProposal(ref row) => {
+                if row.number > domain.journal.deployment().messages
+                    || row.proposer > domain.journal.deployment().people
+                    || row.goal.number > domain.journal.deployment().tasks
+                    || domain.config.authority.policy(row.project).is_none()
+                {
+                    domain.startup = Startup::Failed;
+                    return;
+                }
+                domain.work.push(Work::People(people::Event::Waiting {
+                    task: row.goal.number,
+                    entries: inbox::person_proposal_entries(domain, row),
+                }));
+                domain.work.push(Work::Tasks(tasks::Event::Restore { record }));
+            }
             tasks::Stored::Ended(_) => {
                 unreachable!("historical child rows excluded from startup")
             }
@@ -5573,7 +5961,7 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
                 domain.startup = Startup::Failed;
             }
         }
-        Record::Turn(_) | Record::Terminal(_) | Record::EscalationDecision(_) => {
+        Record::Turn(_) | Record::Terminal(_) | Record::EscalationDecision(_) | Record::ProposalDecision(_) => {
             unreachable!("startup excludes archive families")
         }
     }

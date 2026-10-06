@@ -110,6 +110,14 @@ pub struct ResultRef {
 /// narrow role administration (domain/people.md, section 5.1).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Ask {
+    /// Start a tracked goal at the requested charter, budget and priority.
+    SetGoal { project: u32, spec: Box<[u8]>, charter: u32, budget: u64, priority: u32 },
+    /// Hold a live run for this person's decision, cancelling its current claim.
+    Stop { project: u32, task: u64 },
+    /// Cancel a task and its descendants with a bounded reason.
+    Cancel { project: u32, task: u64, reason: Box<[u8]> },
+    /// Lift a held task's cause and rejudge it.
+    Release { project: u32, task: u64 },
     /// Claim one role-addressed person task for this authenticated person.
     TakePerson { project: u32, task: u64 },
     /// Give this person's current role task claim back to its role.
@@ -243,6 +251,16 @@ pub enum Refusal {
 /// nontransient outcomes with the parent's task decision. (domain/people.md, section 5.1).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Outcome {
+    /// One tracked goal was durably created within the caller's allotment.
+    GoalStarted { task: u64 },
+    /// A tracked goal awaits the policy role's budget decision.
+    GoalProposed { proposal: u64 },
+    /// A person stopped one live task for a later release or decision.
+    Stopped { task: u64 },
+    /// A person cancelled one task and its descendants.
+    Cancelled { task: u64 },
+    /// A person released a held task.
+    Released { task: u64 },
     /// One role-addressed task was durably claimed.
     PersonTaken { task: u64 },
     /// The claimant durably returned the task to its role.
@@ -252,7 +270,7 @@ pub enum Outcome {
     /// The task now belongs to the requesting person, with its remaining funding transferred.
     Moved { task: u64 },
     /// Keyed answer to one current or historical proposal decision.
-    ProposalDecided { proposer: u64, proposal: u64, choice: ProposalChoice },
+    ProposalDecided { proposer: u64, proposal: u64, by: u64, choice: ProposalChoice },
     /// Words were durably admitted under the root-issued message number.
     Said { task: u64, message: u64 },
     /// Root accepted one roster and all affected `Waiting` recipients atomically; saved keyed

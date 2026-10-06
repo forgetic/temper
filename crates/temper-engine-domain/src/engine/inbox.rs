@@ -10,6 +10,43 @@ use crate::Write;
 use alloc::boxed::Box;
 use skein_lib::{List, Queue};
 
+/// Project one durable person-origin goal proposal into policy or proposer inboxes.
+pub(super) fn person_proposal_entries(domain: &Domain, row: &tasks::PersonProposal) -> Box<[people::Entry]> {
+    let mut entries = List::with_capacity(4);
+    match &row.state {
+        tasks::PersonProposalState::Pending { since } => {
+            for role in 0..4 {
+                if let Some(policy) = domain.config.authority.role(row.project, role)
+                    && policy.decides.allows(authority::ProposalKind::Batch)
+                {
+                    entries
+                        .push(people::Entry {
+                            task: row.goal.number,
+                            project: row.project,
+                            whom: people::Whom::Role { project: row.project, role },
+                            kind: people::EntryKind::Proposal { number: row.number },
+                            at: *since,
+                        })
+                        .expect("one entry per policy role");
+                }
+            }
+        }
+        tasks::PersonProposalState::Rejected { message, at, .. } => {
+            entries
+                .push(people::Entry {
+                    task: row.goal.number,
+                    project: row.project,
+                    whom: people::Whom::Person(row.proposer),
+                    kind: people::EntryKind::Reply { message: *message },
+                    at: *at,
+                })
+                .expect("one rejection reply");
+        }
+        tasks::PersonProposalState::Accepted { .. } => {}
+    }
+    entries.into_boxed()
+}
+
 #[derive(Clone, Copy, Debug)]
 enum Stage {
     Live,
@@ -90,6 +127,7 @@ pub(super) fn failed(domain: &mut Domain, waiter: Token, why: people::Refusal, o
         Some(
             RootRead::Result(_)
             | RootRead::Escalation(_)
+            | RootRead::Proposal(_)
             | RootRead::Transcript { .. }
             | RootRead::Dependency(_)
             | RootRead::InputCheck(_),
@@ -170,6 +208,7 @@ pub(super) fn page(
         Some(
             RootRead::Result(_)
             | RootRead::Escalation(_)
+            | RootRead::Proposal(_)
             | RootRead::Transcript { .. }
             | RootRead::Dependency(_)
             | RootRead::InputCheck(_),
@@ -181,6 +220,32 @@ pub(super) fn page(
     for row in rows {
         match read.stage {
             Stage::Live => match row {
+                Record::Tasks(tasks::Stored::PersonProposal(row)) => {
+                    for entry in person_proposal_entries(domain, &row) {
+                        if !visible(domain, read.person, entry) {
+                            continue;
+                        }
+                        match entry.kind {
+                            people::EntryKind::Reply { message } => {
+                                if message == 0 || message > domain.journal.deployment().messages {
+                                    return failed_owned(domain, waiter, read, people::Refusal::Limit, out);
+                                }
+                                if message > read.position && (!read.frozen_high || message <= read.high) {
+                                    if !read.frozen_high {
+                                        read.high = read.high.max(message);
+                                    }
+                                    keep(&mut read, crate::InboxViewEntry::Waiting(entry));
+                                }
+                            }
+                            people::EntryKind::Proposal { .. } => {
+                                keep(&mut read, crate::InboxViewEntry::Waiting(entry));
+                            }
+                            people::EntryKind::Question { .. }
+                            | people::EntryKind::Escalation { .. }
+                            | people::EntryKind::PersonTask => unreachable!("person proposal entry kinds"),
+                        }
+                    }
+                }
                 Record::Tasks(tasks::Stored::Live(task)) => {
                     for entry in entries(domain, &task) {
                         if visible(domain, read.person, entry) {
@@ -214,11 +279,13 @@ pub(super) fn page(
                 | Record::Turn(_)
                 | Record::RunProof(_)
                 | Record::Terminal(_)
-                | Record::EscalationDecision(_) => {
+                | Record::EscalationDecision(_)
+                | Record::ProposalDecision(_) => {
                     unreachable!("live task range validates record family")
                 }
             },
             Stage::Ended => match row {
+                Record::Tasks(tasks::Stored::PersonProposal(_)) => unreachable!("ended result range has no proposal"),
                 Record::Tasks(tasks::Stored::Ended(task)) => {
                     if task.requester == tasks::Party::Person(read.person)
                         && task.result_position > read.position
@@ -257,7 +324,8 @@ pub(super) fn page(
                 | Record::Turn(_)
                 | Record::RunProof(_)
                 | Record::Terminal(_)
-                | Record::EscalationDecision(_) => {
+                | Record::EscalationDecision(_)
+                | Record::ProposalDecision(_) => {
                     unreachable!("ended result range validates record family")
                 }
             },

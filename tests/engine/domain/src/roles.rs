@@ -211,13 +211,19 @@ impl World {
                     | people::Stored::Roles { .. }
                     | people::Stored::Answer { .. },
                 )
-                | Record::Tasks(tasks::Stored::Ended(_) | tasks::Stored::Ledger(_) | tasks::Stored::History(_))
+                | Record::Tasks(
+                    tasks::Stored::Ended(_)
+                    | tasks::Stored::Ledger(_)
+                    | tasks::Stored::History(_)
+                    | tasks::Stored::PersonProposal(_),
+                )
                 | Record::Call(_)
                 | Record::Deployment(_)
                 | Record::Turn(_)
                 | Record::RunProof(_)
                 | Record::Terminal(_)
-                | Record::EscalationDecision(_) => {}
+                | Record::EscalationDecision(_)
+                | Record::ProposalDecision(_) => {}
             }
         }
         for row in store.rows.values() {
