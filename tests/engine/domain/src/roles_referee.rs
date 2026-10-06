@@ -93,7 +93,10 @@ impl Referee {
                 Write::Save(Record::People(people::Stored::Roles { project, holdings })) => Some((*project, holdings)),
                 Write::Save(
                     Record::People(
-                        people::Stored::Person { .. } | people::Stored::SignIn { .. } | people::Stored::Answer { .. },
+                        people::Stored::Person { .. }
+                        | people::Stored::ReadPosition { .. }
+                        | people::Stored::SignIn { .. }
+                        | people::Stored::Answer { .. },
                     )
                     | Record::Tasks(_)
                     | Record::Deployment(_)
@@ -117,7 +120,10 @@ impl Referee {
                 }
                 Write::Save(
                     Record::People(
-                        people::Stored::Person { .. } | people::Stored::SignIn { .. } | people::Stored::Roles { .. },
+                        people::Stored::Person { .. }
+                        | people::Stored::ReadPosition { .. }
+                        | people::Stored::SignIn { .. }
+                        | people::Stored::Roles { .. },
                     )
                     | Record::Tasks(_)
                     | Record::Deployment(_)

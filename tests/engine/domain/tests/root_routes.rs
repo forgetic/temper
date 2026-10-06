@@ -1,6 +1,6 @@
 use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
 use std::collections::VecDeque;
-use temper_engine_domain::{Delivery, Record, Write, engine};
+use temper_engine_domain::{Delivery, Key, Record, Write, engine};
 use temper_engine_domain_accounts as accounts;
 use temper_engine_domain_fleet as fleet;
 use temper_engine_domain_people as people;
@@ -20,6 +20,8 @@ struct Driver {
     accounts: Vec<accounts::Request>,
     stopped: bool,
     fail_archive_once: bool,
+    transactions: Vec<Vec<Write>>,
+    result_loads: Vec<(u32, usize)>,
 }
 
 impl Driver {
@@ -39,6 +41,8 @@ impl Driver {
             accounts: Vec::new(),
             stopped: false,
             fail_archive_once: false,
+            transactions: Vec::new(),
+            result_loads: Vec::new(),
         }
     }
 
@@ -51,9 +55,15 @@ impl Driver {
     fn collect(&mut self) {
         for _ in 0..self.out.len() {
             match self.out.pop().expect("output count") {
-                engine::Request::Commit { number, writes } => self.store.pending.push_back((number, writes)),
+                engine::Request::Commit { number, writes } => {
+                    self.transactions.push(writes.to_vec());
+                    self.store.pending.push_back((number, writes));
+                }
                 engine::Request::Load { owner, range, after, most, bytes } => {
                     let (rows, next) = self.store.page(range, after, most);
+                    if range == temper_engine_domain::Range::EndedResults {
+                        self.result_loads.push((most, rows.len()));
+                    }
                     assert!(rows.len() <= usize::try_from(most).expect("small count"));
                     assert!(bytes >= self.env.limits.loads.bytes);
                     if self.fail_archive_once && matches!(range, temper_engine_domain::Range::EscalationDecision { .. })
@@ -128,7 +138,8 @@ impl Driver {
                 | Delivery::ReadResult { .. }
                 | Delivery::TurnBusy { .. }
                 | Delivery::Load { .. }
-                | Delivery::ResultReply { .. } => None,
+                | Delivery::ResultReply { .. }
+                | Delivery::InboxPage { .. } => None,
             })
             .expect("durable sign-in reply")
     }
@@ -202,7 +213,8 @@ fn durable_start_turn_and_answer_callbacks_survive_full_journal_pressure() {
             | Delivery::ReadResult { .. }
             | Delivery::TurnBusy { .. }
             | Delivery::Load { .. }
-            | Delivery::ResultReply { .. } => None,
+            | Delivery::ResultReply { .. }
+            | Delivery::InboxPage { .. } => None,
         })
         .collect();
     assert_eq!(assignments.len(), 1);
@@ -261,7 +273,8 @@ fn restart_recovers_named_ended_result_without_replaying_a_raw_notice() {
     driver.send(engine::Event::ReadResult { reply_to: ReplyTo::new(Token::new(301)), sign_in: header.sign_ins, task });
     assert!(!driver.root.quiescent(), "held result query is an obligation");
     driver.settle();
-    assert_eq!(driver.store.header(), header, "reading ended history allocates no number or charge");
+    assert_eq!(driver.store.header().messages, header.messages, "reading allocates no result position");
+    assert_eq!(driver.store.header().tasks, header.tasks, "reading allocates no task");
     assert_eq!(driver.delivered.len(), 1);
     let Delivery::ResultReply { to, task: found, words, .. } = driver.delivered.pop().expect("one reply") else {
         panic!("task-derived result reply");
@@ -269,10 +282,90 @@ fn restart_recovers_named_ended_result_without_replaying_a_raw_notice() {
     assert_eq!(to.into_token(), Token::new(301));
     assert_eq!(found, task);
     assert_eq!(words.as_ref(), REPORT);
-    for _ in 0..20 {
-        driver.advance(true);
+    assert!(
+        driver.transactions.iter().any(|writes| writes.iter().any(|write| matches!(
+            write,
+            Write::Save(Record::People(people::Stored::ReadPosition { person: 1, position: 1 }))
+        ))),
+        "read position commits before reply"
+    );
+    driver.send(engine::Event::ReadResult { reply_to: ReplyTo::new(Token::new(302)), sign_in: header.sign_ins, task });
+    driver.settle();
+    assert!(
+        matches!(
+            driver.delivered.pop(),
+            Some(Delivery::WebReply { reply: people::Reply::Refused(people::Refusal::Unknown), .. })
+        ),
+        "a read result cannot be read twice"
+    );
+    let rows = driver.store.rows.clone();
+    let mut restarted = Driver::new(driver.store);
+    restarted.settle();
+    restarted.send(engine::Event::ReadInbox {
+        reply_to: ReplyTo::new(Token::new(303)),
+        sign_in: header.sign_ins,
+        most: 2,
+    });
+    restarted.settle();
+    assert!(matches!(restarted.delivered.pop(), Some(Delivery::InboxPage { entries, .. }) if entries.is_empty()));
+    assert_eq!(restarted.store.rows, rows, "read position survives restart");
+}
+
+#[test]
+fn unread_results_page_in_commit_order_across_restarts_with_bounded_loads() {
+    let mut world = World::new(Settings { restart: false, ..Settings::calm(9300) });
+    world.run();
+    let mut store = world.store;
+    let original =
+        store
+            .rows
+            .values()
+            .find_map(|row| {
+                if let Record::Tasks(tasks::Stored::Ended(task)) = row { Some(task.as_ref().clone()) } else { None }
+            })
+            .expect("one actual committed result");
+    store.rows.remove(&Key::Tasks(tasks::Key::Ended(original.number)));
+    for (task, position) in [(1_u64, 3_u64), (2, 1), (3, 4), (4, 2)] {
+        let mut row = original.clone();
+        row.number = task;
+        row.root = task;
+        row.result_position = position;
+        store.rows.insert(Key::Tasks(tasks::Key::Ended(task)), Record::Tasks(tasks::Stored::Ended(Box::new(row))));
     }
-    assert!(driver.delivered.is_empty(), "result reply consumed its one destination");
+    let Some(Record::Deployment(header)) = store.rows.get_mut(&Key::Deployment) else { panic!("header") };
+    header.tasks = 4;
+    header.messages = 4;
+    let sign_in = header.sign_ins;
+    let mut first = Driver::new(store);
+    first.settle();
+    first.send(engine::Event::ReadResult { reply_to: ReplyTo::new(Token::new(939)), sign_in, task: 1 });
+    first.settle();
+    assert!(
+        matches!(
+            first.delivered.pop(),
+            Some(Delivery::WebReply { reply: people::Reply::Refused(people::Refusal::Busy), .. })
+        ),
+        "a later named result cannot skip older unread results"
+    );
+    assert!(!first.store.rows.contains_key(&Key::People(people::Key::ReadPosition(1))));
+    first.send(engine::Event::ReadInbox { reply_to: ReplyTo::new(Token::new(940)), sign_in, most: 2 });
+    first.settle();
+    let Some(Delivery::InboxPage { entries, .. }) = first.delivered.pop() else { panic!("first page") };
+    assert_eq!(entries.iter().map(|entry| (entry.task, entry.position)).collect::<Vec<_>>(), [(2, 1), (4, 2)]);
+    assert!(first.result_loads.len() >= 4, "ended rows are paged through the existing load seam");
+    assert!(
+        first.result_loads.iter().all(|(most, rows)| *most <= first.env.limits.loads.rows
+            && *rows <= usize::try_from(*most).expect("bounded page"))
+    );
+    let mut second = Driver::new(first.store);
+    second.settle();
+    second.send(engine::Event::ReadInbox { reply_to: ReplyTo::new(Token::new(941)), sign_in, most: 2 });
+    second.settle();
+    let Some(Delivery::InboxPage { entries, .. }) = second.delivered.pop() else { panic!("second page") };
+    assert_eq!(entries.iter().map(|entry| (entry.task, entry.position)).collect::<Vec<_>>(), [(1, 3), (3, 4)]);
+    second.send(engine::Event::ReadInbox { reply_to: ReplyTo::new(Token::new(942)), sign_in, most: 2 });
+    second.settle();
+    assert!(matches!(second.delivered.pop(), Some(Delivery::InboxPage { entries, .. }) if entries.is_empty()));
 }
 
 fn hello(driver: &mut Driver) {
@@ -315,7 +408,8 @@ fn assigned(driver: &Driver) -> engine::Assignment {
             | Delivery::ReadResult { .. }
             | Delivery::TurnBusy { .. }
             | Delivery::Load { .. }
-            | Delivery::ResultReply { .. } => None,
+            | Delivery::ResultReply { .. }
+            | Delivery::InboxPage { .. } => None,
         })
         .expect("assigned chat")
 }
@@ -1140,7 +1234,8 @@ fn coalesced_history_waiters_survive_simultaneous_io_completion_under_full_journ
             | Delivery::Result { .. }
             | Delivery::ResultReply { .. }
             | Delivery::EscalationReply { .. }
-            | Delivery::ReadEscalationDecision { .. } => None,
+            | Delivery::ReadEscalationDecision { .. }
+            | Delivery::InboxPage { .. } => None,
         })
         .collect();
     assert_eq!(replies.len(), 16);

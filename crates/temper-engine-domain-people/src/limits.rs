@@ -13,6 +13,8 @@ use skein_lib::{Deadlines, Duration, Id, List, Map, Queue, Slab};
 pub struct Limits {
     /// Maximum retained people and forge/user index entries.
     pub people: u32,
+    /// Maximum cached unread result references per person; older entries are paged from tasks.
+    pub inbox_entries: u32,
     /// Maximum live secret-free sign-ins and expiry alarms.
     pub sign_ins: u32,
     /// Maximum retained project role sets.
@@ -65,6 +67,12 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     )?;
     people
         .checked_add(roles)?
+        .checked_add(Map::<u64, u64>::worst_case(limits.people)?)?
+        .checked_add(Map::<u64, Box<[crate::ResultRef]>>::worst_case(limits.people)?)?
+        .checked_add(
+            u64::from(limits.people).checked_mul(List::<crate::ResultRef>::worst_case(limits.inbox_entries)?)?,
+        )?
+        .checked_add(List::<crate::ResultRef>::worst_case(limits.inbox_entries)?)?
         .checked_add(Map::<u64, SignIn>::worst_case(limits.sign_ins)?)?
         .checked_add(Deadlines::<u64>::worst_case(limits.sign_ins)?)?
         .checked_add(Map::<RequestKey, Answered>::worst_case(limits.requests)?)?

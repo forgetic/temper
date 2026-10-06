@@ -343,6 +343,8 @@ pub struct New {
 /// does not maintain a mutable copy of this ledger. (domain/tasks.md, sections 3 and 5).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct TaskRecord {
+    /// Root-issued commit order for an ended result; zero while live and until the root saves an ending.
+    pub result_position: u64,
     /// One bounded semantic held-chat decision and checked revision. Root owns
     /// authentication, routing and historical receipts.
     pub escalation: crate::Escalation,

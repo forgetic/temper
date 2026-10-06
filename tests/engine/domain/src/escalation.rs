@@ -717,6 +717,7 @@ impl World {
                 .result(&self.store.rows, person, task, &words)
                 .expect("independent exact final report and funding"),
             Delivery::WebReply { .. }
+            | Delivery::InboxPage { .. }
             | Delivery::Reply { .. }
             | Delivery::Refuse { .. }
             | Delivery::Cancel { .. }

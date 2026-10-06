@@ -22,6 +22,7 @@ protocol drafts and lower-layer integration are parked for later work.
 | Alignment 06: parked move helpers | merged | e2d05d94 | Removed authority's unused move-funding values, transfer function and move-only tests; ordinary carve, charge and settle remain. Gate passed: 2,362 focused / 10.689 s; 42 fuzzy / 28.582 s. |
 | Alignment 07: relaxed domain code docs | merged | this commit | Removed field citation stamps and redundant field prose across the new engine and worker domains; module/type citations and real bounds remain. Four-check gate passed: fmt, clippy, 2,362 focused, 42 fuzzy. |
 | Alignment 08: release every hold | merged | this commit | Release restores the held phase, resets tries, and rejudges due work; a still-expired deadline creates a fresh hold and escalation. Four-check gate passed: fmt, clippy, focused and fuzzy. |
+| Alignment 09: derived result inbox | merged | this commit | Ended tasks carry root-issued commit order; people restores each person's monotonic read position. Authenticated bounded result pages and named reads commit that position with the reply; live notices remain. Four-check gate passed: fmt, clippy, focused and fuzzy. |
 | 00a Forgejo facts | merged | fa97784 | Gate passed; 1,772 focused / 7.440 s; 26 fuzzy / 22.148 s. |
 | 00b dead drafts | merged | 9acb981 | Gate passed; 1,772 focused and 26 fuzzy; baseline counts unchanged. |
 | 00c legacy rename | merged | d8385dc | Gate passed; 1,772 focused / 7.495 s; 26 fuzzy / 22.159 s. |
@@ -128,7 +129,7 @@ remain on `checkpoint/migration/transcript-codec`, outside main.
 - The root rejects restored non-person requesters, non-Report contracts, and delegates until it has routes for them.
 - Role administration reroutes held chats only.
 - Escalation selects the role named by project policy (domain/tasks.md, section 8).
-- A live notice followed by `ReadResult` of a named ended task is the current result-delivery stopgap. Step 06d must replace it with one committed message to the requester (domain/tasks.md, section 5.6).
+- Person-requested results are derived from committed ended tasks in result order. People caches bounded unread references and persists each person's read position; older entries are paged. Questions, proposals, person tasks and chat replies remain for 06d.
 
 ## What remains open
 

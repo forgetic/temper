@@ -325,7 +325,7 @@ fn walking_referee_rejects_missing_or_split_current_claim_turn_and_terminal_proo
 }
 
 #[test]
-fn final_transaction_survives_lost_completion_ack_and_result_without_another_write() {
+fn final_transaction_survives_lost_completion_and_named_read_commits_its_position() {
     let mut recovered = World::new(Settings::terminal(81));
     recovered.run();
     assert!(recovered.referee.done() && recovered.referee.terminal_replay_done());
@@ -334,11 +334,17 @@ fn final_transaction_survives_lost_completion_ack_and_result_without_another_wri
     assert!(recovered.store.pending.is_empty());
     let mut uninterrupted = World::new(Settings { restart: false, ..Settings::calm(81) });
     uninterrupted.run();
-    assert_eq!(recovered.store.rows, uninterrupted.store.rows, "same task, transcript, terminal and financial history");
-    assert_eq!(
-        recovered.store.applied, uninterrupted.store.applied,
-        "no recovery commit, duplicate expense or fresh assignment"
-    );
+    let mut recovered_rows = recovered.store.rows.clone();
+    let mut uninterrupted_rows = uninterrupted.store.rows.clone();
+    recovered_rows.remove(&Key::Deployment);
+    uninterrupted_rows.remove(&Key::Deployment);
+    recovered_rows.remove(&Key::People(people::Key::ReadPosition(1)));
+    assert_eq!(recovered_rows, uninterrupted_rows, "same task, transcript, terminal and financial history");
+    assert!(matches!(
+        recovered.store.rows.get(&Key::People(people::Key::ReadPosition(1))),
+        Some(Record::People(people::Stored::ReadPosition { position: 1, .. }))
+    ));
+    assert_eq!(recovered.store.applied, uninterrupted.store.applied + 1, "the only extra commit marks the read");
 }
 
 #[test]

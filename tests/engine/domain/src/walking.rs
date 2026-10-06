@@ -50,6 +50,7 @@ pub fn limits() -> engine::Limits {
     };
     let people = people::Limits {
         people: 2,
+        inbox_entries: 2,
         sign_ins: 2,
         projects: 1,
         holdings: 2,
@@ -426,7 +427,19 @@ impl World {
             }
         }
         if let Some(snapshot) = &self.terminal_snapshot {
-            assert_eq!(&self.store.rows, snapshot, "terminal recovery changes no durable row or commit counter");
+            for (key, row) in snapshot {
+                if !matches!(
+                    key,
+                    temper_engine_domain::Key::Deployment
+                        | temper_engine_domain::Key::People(people::Key::ReadPosition(_))
+                ) {
+                    assert_eq!(
+                        self.store.rows.get(key),
+                        Some(row),
+                        "terminal recovery preserves committed task and charge"
+                    );
+                }
+            }
         }
         if self.domain.ready() && !self.person_sent {
             self.person_sent = true;
@@ -501,7 +514,15 @@ impl World {
             self.trace.push(format!("output {request:?}"));
             match request {
                 engine::Request::Commit { number, writes } => {
-                    assert!(self.terminal_snapshot.is_none(), "terminal recovery must not submit another commit");
+                    if self.terminal_snapshot.is_some() {
+                        assert!(
+                            writes.iter().any(|write| matches!(
+                                write,
+                                temper_engine_domain::Write::Save(Record::People(people::Stored::ReadPosition { .. }))
+                            )),
+                            "terminal recovery only commits the person's read"
+                        );
+                    }
                     self.referee.commit(&writes).expect("independent transaction referee");
                     if self.store.pending.is_empty() {
                         self.commit_wait = self.settings.commit_delay;
@@ -609,7 +630,7 @@ impl World {
                 .referee
                 .result(&self.store.rows, person, task, &words)
                 .expect("committed result reaches person once"),
-            Delivery::ResultReply { to, person, task, words } => {
+            Delivery::ResultReply { to, person, task, words, .. } => {
                 assert!(
                     self.settings.terminal_restart && self.terminal_recovery != TerminalRecovery::NotRequested,
                     "named result must be requested after restart"
@@ -620,6 +641,7 @@ impl World {
                     .expect("committed result reaches person once");
             }
             Delivery::Reply { .. }
+            | Delivery::InboxPage { .. }
             | Delivery::EscalationReply { .. }
             | Delivery::WebReply { .. }
             | Delivery::Refuse { .. }

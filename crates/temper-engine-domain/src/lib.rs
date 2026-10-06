@@ -48,8 +48,8 @@ mod store;
 #[cfg(test)]
 mod tests;
 pub use decision::{
-    Decision, Delivery, Journal, Limits as JournalLimits, Output, accept, committed, fresh, resume, takes, uncommitted,
-    worst_case,
+    Decision, Delivery, Journal, Limits as JournalLimits, Output, ResultEntry, accept, committed, fresh, resume, takes,
+    uncommitted, worst_case,
 };
 pub use store::{
     Deployment, EscalationDecisionRecord, Family, Key, Range, Record, RunProof, TerminalRecord, TurnProof, TurnRecord,

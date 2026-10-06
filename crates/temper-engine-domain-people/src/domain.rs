@@ -5,7 +5,7 @@
 
 use crate::{
     Ask, Event, Fact, Holding, Identity, IdentityKey, InitialOwner, Key, Limits, Outcome, Refusal, Reply, Request,
-    RequestKey, Role, Stored,
+    RequestKey, ResultRef, Role, Stored,
 };
 use alloc::boxed::Box;
 use skein_lib::{Deadlines, Env, Id, List, Map, Queue, ReplyTo, Slab, Time, Token, Wall};
@@ -45,6 +45,8 @@ enum Phase {
 pub struct Domain {
     phase: Phase,
     people: Map<u64, Identity>,
+    read_positions: Map<u64, u64>,
+    unread: Map<u64, Box<[ResultRef]>>,
     identities: Map<IdentityKey, u64>,
     sign_ins: Map<u64, SignIn>,
     alarms: Deadlines<u64>,
@@ -80,6 +82,8 @@ impl Domain {
         Domain {
             phase: Phase::Restoring,
             people: Map::with_capacity(limits.people),
+            read_positions: Map::with_capacity(limits.people),
+            unread: Map::with_capacity(limits.people),
             identities: Map::with_capacity(limits.people),
             sign_ins: Map::with_capacity(limits.sign_ins),
             alarms: Deadlines::with_capacity(limits.sign_ins),
@@ -164,6 +168,88 @@ impl Domain {
             return None;
         }
         Some(session.person)
+    }
+
+    /// Last committed result read position for an existing person, or zero before any read.
+    #[must_use]
+    pub fn read_position(&self, person: u64) -> Option<u64> {
+        if !self.ready() || !self.people.contains_key(&person) {
+            return None;
+        }
+        Some(*self.read_positions.get(&person).unwrap_or(&0))
+    }
+
+    /// Currently cached unread result references, newest first; missing older entries are loaded from ended tasks.
+    #[must_use]
+    pub fn cached_results(&self, person: u64) -> Option<&[ResultRef]> {
+        if !self.ready() || !self.people.contains_key(&person) {
+            return None;
+        }
+        match self.unread.get(&person) {
+            Some(entries) => Some(entries.as_ref()),
+            None => Some(&[]),
+        }
+    }
+
+    /// Advance one authenticated person's position inside the root decision that replies.
+    /// The returned people row is saved with the reply's commit.
+    pub fn advance_read_position(&mut self, person: u64, position: u64) -> Option<Stored> {
+        let old = self.read_position(person)?;
+        if position <= old {
+            return None;
+        }
+        let saved = self.read_positions.insert(person, position);
+        assert!(saved.is_ok(), "one position per admitted person");
+        if let Some(cached) = self.unread.get(&person) {
+            let mut retained = List::with_capacity(u32::try_from(cached.len()).expect("cached result bound"));
+            for &entry in cached {
+                if entry.position > position {
+                    retained.push(entry).expect("subset of cached entries");
+                }
+            }
+            let saved = self.unread.insert(person, retained.into_boxed());
+            assert!(saved.is_ok(), "cached person already admitted");
+        }
+        Some(Stored::ReadPosition { person, position })
+    }
+
+    /// Cache up to the configured per-person entry bound; the store pages the rest.
+    pub fn remember_result(&mut self, limits: &Limits, person: u64, entry: ResultRef) {
+        if !self.ready()
+            || !self.people.contains_key(&person)
+            || entry.position <= self.read_position(person).unwrap_or(0)
+        {
+            return;
+        }
+        let cap = limits.inbox_entries;
+        if cap == 0 {
+            return;
+        }
+        let mut entries = List::with_capacity(cap);
+        if let Some(old) = self.unread.get(&person) {
+            for cached in old {
+                if cached.task == entry.task || cached.position == entry.position {
+                    return;
+                }
+            }
+            let mut inserted = false;
+            for &cached in old {
+                if !inserted && entry.position > cached.position {
+                    entries.push(entry).expect("new entry fits before a cached entry");
+                    inserted = true;
+                }
+                if entries.room() > 0 {
+                    entries.push(cached).expect("cache has room");
+                }
+            }
+            if !inserted && entries.room() > 0 {
+                entries.push(entry).expect("cache has room for latest entry");
+            }
+        } else {
+            entries.push(entry).expect("nonzero cache bound");
+        }
+        let saved = self.unread.insert(person, entries.into_boxed());
+        assert!(saved.is_ok(), "one cache per admitted person");
     }
 
     /// Pure query of completed, successful restoration; false during restoring and permanently
@@ -640,6 +726,12 @@ fn restore(domain: &mut Domain, env: &Env<Limits>, record: Stored, out: &mut Que
                 && !domain.identities.contains_key(&identity.key)
                 && domain.people.len() < env.limits.people
         }
+        Stored::ReadPosition { person, position } => {
+            person != &0
+                && *position != 0
+                && !domain.read_positions.contains_key(person)
+                && domain.read_positions.len() < env.limits.people
+        }
         Stored::SignIn { number, .. } => {
             !domain.sign_ins.contains_key(number) && domain.sign_ins.len() < env.limits.sign_ins
         }
@@ -662,6 +754,10 @@ fn restore(domain: &mut Domain, env: &Env<Limits>, record: Stored, out: &mut Que
             assert!(indexed == Ok(None), "restored identity admitted");
             let saved = domain.people.insert(number, identity);
             assert!(saved.is_ok(), "restored person admitted");
+        }
+        Stored::ReadPosition { person, position } => {
+            let saved = domain.read_positions.insert(person, position);
+            assert!(saved == Ok(None), "restored read position admitted");
         }
         Stored::SignIn { number, person, expires } => {
             let saved = domain.sign_ins.insert(number, SignIn { person, expires, due: deadline(env, expires) });
@@ -722,6 +818,11 @@ fn restored(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
                 }
             },
             Outcome::Started { .. } | Outcome::EscalationDecided { .. } | Outcome::Refused(_) => {}
+        }
+    }
+    for (person, _) in &domain.read_positions {
+        if !domain.people.contains_key(person) {
+            return restore_failed(domain, Key::ReadPosition(*person), Refusal::Unknown, out);
         }
     }
     domain.phase = Phase::Ready;

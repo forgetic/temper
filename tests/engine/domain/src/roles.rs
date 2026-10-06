@@ -206,7 +206,10 @@ impl World {
                 }
                 Record::Tasks(tasks::Stored::Live(record)) => task = record.number,
                 Record::People(
-                    people::Stored::SignIn { .. } | people::Stored::Roles { .. } | people::Stored::Answer { .. },
+                    people::Stored::SignIn { .. }
+                    | people::Stored::ReadPosition { .. }
+                    | people::Stored::Roles { .. }
+                    | people::Stored::Answer { .. },
                 )
                 | Record::Tasks(tasks::Stored::Ended(_) | tasks::Stored::Ledger(_))
                 | Record::Deployment(_)

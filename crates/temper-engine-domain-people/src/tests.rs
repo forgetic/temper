@@ -9,6 +9,7 @@ use skein_lib::{Duration, Env, List, Queue, ReplyTo, Time, Token, Wall};
 
 const LIMITS: Limits = Limits {
     people: 4,
+    inbox_entries: 2,
     sign_ins: 4,
     projects: 3,
     holdings: 4,
@@ -21,6 +22,41 @@ const LIMITS: Limits = Limits {
     sign_in_lifetime: Duration::from_secs(60),
     facts: 8,
 };
+
+#[test]
+fn result_cache_is_bounded_and_read_position_restores() {
+    let env = Env { now: Time::ZERO, wall: Wall::EPOCH, limits: LIMITS };
+    let mut out = Queue::with_capacity(max_out(&LIMITS));
+    let mut domain = Domain::new(&LIMITS, Box::new([]));
+    step(
+        &mut domain,
+        &env,
+        Event::Restore { record: Stored::Person { number: 1, identity: identity(0, 1) } },
+        &mut out,
+    );
+    step(&mut domain, &env, Event::Restored, &mut out);
+    for (task, position) in [(3, 3), (1, 1), (2, 2)] {
+        domain.remember_result(&LIMITS, 1, ResultRef { task, position });
+    }
+    assert_eq!(
+        domain.cached_results(1),
+        Some(&[ResultRef { task: 3, position: 3 }, ResultRef { task: 2, position: 2 }][..])
+    );
+    let row = domain.advance_read_position(1, 2).expect("monotonic read");
+    assert_eq!(row, Stored::ReadPosition { person: 1, position: 2 });
+    assert_eq!(domain.cached_results(1), Some(&[ResultRef { task: 3, position: 3 }][..]));
+    assert_eq!(domain.advance_read_position(1, 1), None, "position never moves backward");
+    let mut restored = Domain::new(&LIMITS, Box::new([]));
+    step(&mut restored, &env, Event::Restore { record: row }, &mut out);
+    step(
+        &mut restored,
+        &env,
+        Event::Restore { record: Stored::Person { number: 1, identity: identity(0, 1) } },
+        &mut out,
+    );
+    step(&mut restored, &env, Event::Restored, &mut out);
+    assert_eq!(restored.read_position(1), Some(2));
+}
 
 fn identity(forge: u32, user: u64) -> Identity {
     Identity { key: IdentityKey { forge, user }, login: Box::new([b'l']), name: Box::new([b'n']) }
@@ -138,7 +174,9 @@ fn saved_answer(rows: &[Request]) -> Stored {
         .find_map(|row| match row {
             Request::Save { record } => match record {
                 Stored::Answer { .. } => Some(record.clone()),
-                Stored::Person { .. } | Stored::SignIn { .. } | Stored::Roles { .. } => None,
+                Stored::Person { .. } | Stored::ReadPosition { .. } | Stored::SignIn { .. } | Stored::Roles { .. } => {
+                    None
+                }
             },
             Request::Reply { .. }
             | Request::Erase { .. }
@@ -503,7 +541,7 @@ fn is_answer(request: &Request) -> bool {
     match request {
         Request::Save { record } => match record {
             Stored::Answer { .. } => true,
-            Stored::Person { .. } | Stored::SignIn { .. } | Stored::Roles { .. } => false,
+            Stored::Person { .. } | Stored::ReadPosition { .. } | Stored::SignIn { .. } | Stored::Roles { .. } => false,
         },
         Request::Reply { .. }
         | Request::Erase { .. }
@@ -518,7 +556,9 @@ fn is_roles(request: &Request) -> bool {
     match request {
         Request::Save { record } => match record {
             Stored::Roles { .. } => true,
-            Stored::Person { .. } | Stored::SignIn { .. } | Stored::Answer { .. } => false,
+            Stored::Person { .. } | Stored::ReadPosition { .. } | Stored::SignIn { .. } | Stored::Answer { .. } => {
+                false
+            }
         },
         Request::Reply { .. }
         | Request::Erase { .. }

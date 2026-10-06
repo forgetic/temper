@@ -61,6 +61,14 @@ pub struct Holding {
     pub role: Role,
 }
 
+/// One derived unread result reference; its words remain in the ended task.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct ResultRef {
+    pub task: u64,
+    /// Root-issued order in which task results committed.
+    pub position: u64,
+}
+
 /// Supported requests grow with the increments that implement them; typed
 /// variants for goals, tasks, inboxes, notes and watches will be added there.
 /// Current typed keyed requests are chat creation, held-chat decisions and
@@ -219,6 +227,8 @@ pub struct RequestKey {
 pub enum Key {
     /// Logical person-record key.
     Person(u64),
+    /// One person's durable position in committed result order.
+    ReadPosition(u64),
     /// Logical secret-free sign-in-record key.
     SignIn(/** Root-issued deployment sign-in number; cookie secrets and token digests stay below the domain. */ u64),
     /// Logical per-project roles-record key.
@@ -238,6 +248,8 @@ pub enum Stored {
         /** Unique forge/user identity and bounded display bytes. */
         identity: Identity,
     },
+    /// Monotonic read position for the named person; no result is copied here.
+    ReadPosition { person: u64, position: u64 },
     /// Persistent secret-free sign-in; expired restored entries are erased when restore completes.
     SignIn {
         /** Root-issued sign-in number; at most `Limits::sign_ins` sign-in records are retained. */
@@ -275,6 +287,7 @@ impl Stored {
     pub const fn key(&self) -> Key {
         match self {
             Stored::Person { number, .. } => Key::Person(*number),
+            Stored::ReadPosition { person, .. } => Key::ReadPosition(*person),
             Stored::SignIn { number, .. } => Key::SignIn(*number),
             Stored::Roles { project, .. } => Key::Roles(*project),
             Stored::Answer { key, .. } => Key::Answer(*key),

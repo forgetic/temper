@@ -28,8 +28,7 @@ pub struct Deployment {
     /// Last sign-in candidate allocated by the root; persisted gaps are allowed and no secret
     /// session bytes are held here.
     pub sign_ins: u64,
-    /// Last root-allocated message number; retained for the broader inbox routes, not allocated by
-    /// the current chat story.
+    /// Last root-issued result position in commit order.
     pub messages: u64,
     /// Last activation number allocated for a claim; the candidate may leave a gap if preparation
     /// fails.
@@ -52,7 +51,7 @@ pub enum Family {
     Person,
     /// Secret-free sign-in candidates supplied to people.
     SignIn,
-    /// Message identities reserved for later inbox routes.
+    /// Result positions issued as tasks end.
     Message,
     /// Fresh attempt identities saved at claims.
     Run,
@@ -128,6 +127,8 @@ pub enum Range {
     /// Root startup pages only child Live/Ledger state; historical Ended rows stay outside this
     /// range. Actual root-supported task shapes validate before child restoration.
     Tasks,
+    /// Historical ended tasks, ordered by task key for bounded scans; each row carries its result position.
+    EndedResults,
     /// Root pages current claims only, at most tasks `tasks` rows; every proof must correlate with
     /// its loaded live row before tasks Restored or fleet adoption. Historical
     /// transcripts/terminals are excluded.
@@ -186,6 +187,16 @@ impl Range {
                 | Key::Turn { .. }
                 | Key::RunProof { .. }
                 | Key::Terminal { .. }
+                | Key::People(_) => false,
+            },
+            Range::EndedResults => match key {
+                Key::Tasks(temper_engine_domain_tasks::Key::Ended(number)) => number != 0,
+                Key::EscalationDecision { .. }
+                | Key::Deployment
+                | Key::Turn { .. }
+                | Key::RunProof { .. }
+                | Key::Terminal { .. }
+                | Key::Tasks(_)
                 | Key::People(_) => false,
             },
             Range::People => match key {
@@ -436,7 +447,8 @@ pub fn record_bytes(record: &Record) -> Option<u64> {
                 temper_engine_domain_people::Ask::StartChat { words, .. } => u64::try_from(words.len()).ok(),
                 temper_engine_domain_people::Ask::DecideEscalation { decision, .. } => decision_bytes(decision),
             },
-            temper_engine_domain_people::Stored::SignIn { .. } => Some(0),
+            temper_engine_domain_people::Stored::SignIn { .. }
+            | temper_engine_domain_people::Stored::ReadPosition { .. } => Some(0),
         },
     }
 }

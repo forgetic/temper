@@ -25,6 +25,7 @@
 //! Child facts are disposable observations; [`Domain::quiescent`] reports
 //! internal idleness, while an external referee establishes final story results.
 mod escalation;
+mod results;
 
 mod roles;
 
@@ -264,6 +265,13 @@ pub enum Event {
         /// authenticated person.
         task: u64,
     },
+    /// Authenticated bounded page of unread results, consumed in committed result order.
+    ReadInbox {
+        reply_to: ReplyTo,
+        sign_in: u64,
+        /// Positive maximum entries, capped by the configured per-person inbox limit.
+        most: u32,
+    },
     /// Account protocol completes a refresh with secret-free lifetime.
     Refreshed {
         /// Configured secret-free account number; bounded by accounts account room.
@@ -373,16 +381,16 @@ enum Payload {
 }
 
 #[derive(Debug)]
-struct ResultRead {
-    to: ReplyTo,
-    person: u64,
-    task: u64,
+enum Read {
+    Result(results::Read),
+    Escalation(escalation::Query),
 }
 
 #[derive(Debug)]
-enum Read {
-    Result(ResultRead),
-    Escalation(escalation::Query),
+struct ResultPage {
+    waiter: Token,
+    rows: Box<[Record]>,
+    next: Option<Key>,
 }
 
 #[derive(Debug)]
@@ -421,6 +429,8 @@ pub struct Domain {
     assignments: Map<u64, Assignment>,
     payloads: Slab<Option<Payload>>,
     result_reads: Slab<Option<Read>>,
+    reading_results: Map<u64, Token>,
+    result_pages: Queue<ResultPage>,
     made: Map<Token, u64>,
     claiming: Map<u64, u64>,
     contexts: Map<u64, Box<tasks::RunContext>>,
@@ -479,6 +489,8 @@ impl Domain {
             assignments: Map::with_capacity(limits.tasks.tasks),
             payloads: Slab::with_capacity(payload_slots(limits).expect("valid payload room")),
             result_reads: Slab::with_capacity(limits.loads.loads),
+            reading_results: Map::with_capacity(limits.loads.loads),
+            result_pages: Queue::with_capacity(limits.loads.loads),
             made: Map::with_capacity(limits.people.pending),
             claiming: Map::with_capacity(limits.tasks.tasks),
             contexts: Map::with_capacity(limits.tasks.tasks),
@@ -522,6 +534,8 @@ impl Domain {
             && self.assignments.is_empty()
             && self.payloads.is_empty()
             && self.result_reads.is_empty()
+            && self.reading_results.is_empty()
+            && self.result_pages.is_empty()
             && self.made.is_empty()
             && self.claiming.is_empty()
             && self.contexts.is_empty()
@@ -810,50 +824,11 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
             return;
         }
         Event::ReadResult { reply_to, sign_in, task } => {
-            // Current slice stopgap: the person reads a named ended task after a live notice.
-            // Result delivery becomes one committed requester message with the 06d inbox route.
-            if task == 0 {
-                out.push(Request::Deliver(Delivery::WebReply {
-                    to: reply_to,
-                    sign_in: None,
-                    reply: people::Reply::Refused(people::Refusal::Unknown),
-                }));
-                return;
-            }
-            let Some(person) = domain.people.person(sign_in, env.now, env.wall) else {
-                out.push(Request::Deliver(Delivery::WebReply {
-                    to: reply_to,
-                    sign_in: None,
-                    reply: people::Reply::Refused(people::Refusal::SignIn),
-                }));
-                return;
-            };
-            if !domain.ready() || !admits(domain, &env.limits) {
-                out.push(Request::Deliver(Delivery::WebReply {
-                    to: reply_to,
-                    sign_in: None,
-                    reply: people::Reply::Refused(people::Refusal::Busy),
-                }));
-                return;
-            }
-            let id = match domain.result_reads.insert(Some(Read::Result(ResultRead { to: reply_to, person, task }))) {
-                Ok(id) => id,
-                Err(read) => {
-                    let read = match read.expect("unadmitted result read retains reply") {
-                        Read::Result(read) => read,
-                        Read::Escalation(_) => unreachable!("inserted result read"),
-                    };
-                    out.push(Request::Deliver(Delivery::WebReply {
-                        to: read.to,
-                        sign_in: None,
-                        reply: people::Reply::Refused(people::Refusal::Busy),
-                    }));
-                    return;
-                }
-            };
-            let mut decision = Decision::new(&env.limits.journal);
-            emit(&mut decision, &env.limits, Delivery::ReadResult { waiter: id.token() });
-            close(domain, env, decision, out);
+            results::begin(domain, env, reply_to, sign_in, results::Query::Named { task }, out);
+            return;
+        }
+        Event::ReadInbox { reply_to, sign_in, most } => {
+            results::begin(domain, env, reply_to, sign_in, results::Query::Inbox { most }, out);
             return;
         }
     }
@@ -864,6 +839,8 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
 
 fn admits(domain: &Domain, limits: &Limits) -> bool {
     crate::takes(&domain.journal, &limits.journal)
+        && domain.journal.deployment().messages
+            <= u64::MAX.checked_sub(u64::from(limits.tasks.tasks)).expect("task count fits u64")
         && domain.work.is_empty()
         && domain.journal.held_room() >= limits.journal.deliveries.checked_mul(3).expect("root held reserve bounded")
 }
@@ -909,6 +886,11 @@ pub fn resume(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) 
     if domain.journal.stopped() || domain.startup == Startup::Failed {
         return;
     }
+    if !domain.result_pages.is_empty() && crate::takes(&domain.journal, &env.limits.journal) {
+        let page = domain.result_pages.pop().expect("pending result page");
+        results::page(domain, env, page.waiter, page.rows, page.next, out);
+        return;
+    }
     if !domain.work.is_empty() {
         if crate::takes(&domain.journal, &env.limits.journal) {
             let decision = route(domain, env);
@@ -943,11 +925,10 @@ pub fn resume(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) 
                 let Some(read) = read else {
                     return;
                 };
-                let task = match read {
-                    Read::Result(read) => read.task,
+                match read {
+                    Read::Result(_) => request_load(domain, waiter, Range::EndedResults, None, out),
                     Read::Escalation(_) => unreachable!("result waiter"),
-                };
-                request_load(domain, waiter, Range::TaskResult { task }, None, out);
+                }
                 return;
             }
             Output::Deliver(delivery) => {
@@ -1295,7 +1276,25 @@ fn tasks_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
             tasks::Request::EscalationDecided { reply_to, task, revision, outcome } => {
                 escalation::completed(domain, env, decision, reply_to.into_token(), task, revision, outcome);
             }
-            tasks::Request::Save { record } => save(decision, &env.limits, Write::Save(Record::Tasks(record))),
+            tasks::Request::Save { record } => {
+                let record = match record {
+                    tasks::Stored::Ended(mut task) => {
+                        let position = crate::fresh(&mut domain.journal, Family::Message)
+                            .expect("ending position preflighted before mutation");
+                        task.result_position = position;
+                        if let tasks::Party::Person(person) = task.requester {
+                            domain.people.remember_result(
+                                &env.limits.people,
+                                person,
+                                people::ResultRef { task: task.number, position },
+                            );
+                        }
+                        tasks::Stored::Ended(task)
+                    }
+                    tasks::Stored::Live(_) | tasks::Stored::Ledger(_) => record,
+                };
+                save(decision, &env.limits, Write::Save(Record::Tasks(record)));
+            }
             tasks::Request::Erase { key } => save(decision, &env.limits, Write::Erase(Key::Tasks(key))),
             tasks::Request::Made { reply_to, tasks } => {
                 let request = reply_to.into_token();
@@ -1637,7 +1636,9 @@ fn request_load(domain: &mut Domain, waiter: Token, range: Range, after: Option<
     let mut load_out = Queue::with_capacity(1);
     let most = match range {
         Range::Deployment | Range::TaskResult { .. } | Range::EscalationDecision { .. } => 1,
-        Range::Tasks | Range::People | Range::RunProofs | Range::Turns { .. } => domain.limits.loads.rows,
+        Range::Tasks | Range::EndedResults | Range::People | Range::RunProofs | Range::Turns { .. } => {
+            domain.limits.loads.rows
+        }
     };
     if loads::begin(&mut domain.loads, waiter, range, after, most, &mut load_out).is_none() {
         match range {
@@ -1647,6 +1648,7 @@ fn request_load(domain: &mut Domain, waiter: Token, range: Range, after: Option<
             }
             Range::Deployment
             | Range::Tasks
+            | Range::EndedResults
             | Range::People
             | Range::RunProofs
             | Range::Turns { .. }
@@ -1679,6 +1681,8 @@ fn load_outputs(
                     };
                     if archive {
                         domain.work.push(Work::EscalationFailed { waiter });
+                    } else if waiter != Token::new(u64::MAX) {
+                        results::failed(domain, waiter, people::Refusal::Limit, out);
                     } else {
                         domain.startup = Startup::Failed;
                         out.push(Request::Stop);
@@ -1695,7 +1699,7 @@ fn load_outputs(
                     if archive {
                         domain.work.push(Work::EscalationLoaded { waiter, rows });
                     } else {
-                        result_page(domain, waiter, rows, out);
+                        domain.result_pages.push(ResultPage { waiter, rows, next });
                     }
                 }
             }
@@ -1710,17 +1714,8 @@ fn load_outputs(
                     };
                     if archive {
                         domain.work.push(Work::EscalationFailed { waiter });
-                    } else if let Some(read) = take_read(domain, waiter) {
-                        let read = match read {
-                            Read::Result(read) => read,
-                            Read::Escalation(_) => unreachable!("result terminal"),
-                        };
-                        domain.result_reads.retire(Id::from_token(waiter));
-                        out.push(Request::Deliver(Delivery::WebReply {
-                            to: read.to,
-                            sign_in: None,
-                            reply: people::Reply::Refused(people::Refusal::Unknown),
-                        }));
+                    } else {
+                        results::failed(domain, waiter, people::Refusal::Busy, out);
                     }
                 }
             }
@@ -1775,7 +1770,7 @@ fn startup_page(
         Range::People => Some(Range::Tasks),
         Range::Tasks => Some(Range::RunProofs),
         Range::RunProofs => None,
-        Range::EscalationDecision { .. } | Range::Turns { .. } | Range::TaskResult { .. } => {
+        Range::EscalationDecision { .. } | Range::Turns { .. } | Range::TaskResult { .. } | Range::EndedResults => {
             unreachable!("startup range")
         }
     };
@@ -1825,66 +1820,6 @@ fn startup_page(
     }
     route_into(domain, env, &mut decision);
     close(domain, env, decision, out);
-}
-
-fn result_page(domain: &mut Domain, waiter: Token, rows: Box<[Record]>, out: &mut Queue<Request>) {
-    let id = Id::from_token(waiter);
-    let Some(read) = take_read(domain, waiter) else { return };
-    let read = match read {
-        Read::Result(read) => read,
-        Read::Escalation(_) => unreachable!("named result page"),
-    };
-    domain.result_reads.retire(id);
-    let mut record = None;
-    for row in rows {
-        match row {
-            Record::Tasks(tasks::Stored::Ended(task)) => record = Some(task),
-            Record::Tasks(tasks::Stored::Live(_) | tasks::Stored::Ledger(_))
-            | Record::Deployment(_)
-            | Record::People(_)
-            | Record::Turn(_)
-            | Record::RunProof(_)
-            | Record::Terminal(_)
-            | Record::EscalationDecision(_) => {
-                unreachable!("result range only contains ended row")
-            }
-        }
-    }
-    if let Some(task) = record
-        && task.number == read.task
-        && task.requester == tasks::Party::Person(read.person)
-    {
-        let ending = match task.phase {
-            tasks::Phase::Ended(ending) => Some(ending),
-            tasks::Phase::Waiting | tasks::Phase::Active(_) | tasks::Phase::Closing(_) | tasks::Phase::Held { .. } => {
-                None
-            }
-        };
-        let Some(ending) = ending else {
-            out.push(Request::Deliver(Delivery::WebReply {
-                to: read.to,
-                sign_in: None,
-                reply: people::Reply::Refused(people::Refusal::Unknown),
-            }));
-            return;
-        };
-        let words = ending_words(ending);
-        if words.len() > usize::try_from(domain.limits.journal.result_bytes).expect("u32 fits usize") {
-            out.push(Request::Deliver(Delivery::WebReply {
-                to: read.to,
-                sign_in: None,
-                reply: people::Reply::Refused(people::Refusal::Limit),
-            }));
-            return;
-        }
-        out.push(Request::Deliver(Delivery::ResultReply { to: read.to, person: read.person, task: read.task, words }));
-        return;
-    }
-    out.push(Request::Deliver(Delivery::WebReply {
-        to: read.to,
-        sign_in: None,
-        reply: people::Reply::Refused(people::Refusal::Unknown),
-    }));
 }
 
 fn account_event(domain: &mut Domain, env: &Env<Limits>, event: accounts::Event, out: &mut Queue<Request>) {
@@ -2044,6 +1979,7 @@ fn route_bound(limits: &Limits) -> Option<u32> {
 /// arithmetic or refused child/cross-route bounds return `None`. It allocates no state and emits no
 /// request or terminal.
 #[must_use]
+#[expect(clippy::too_many_lines, reason = "one checked sum of the root's bounded participating state")]
 pub fn worst_case(limits: &Limits) -> Option<u64> {
     let task_bytes = tasks::worst_case(&limits.tasks)?;
     let fleet_bytes = fleet::worst_case(&limits.fleet)?;
@@ -2053,6 +1989,9 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     let account_bytes = accounts::worst_case(&limits.accounts)?;
     let load_bytes = loads::worst_case(&limits.loads)?;
     let routes = route_bound(limits)?;
+    let inbox_bytes = u64::from(limits.people.inbox_entries).checked_mul(
+        u64::try_from(size_of::<crate::ResultEntry>()).ok()?.checked_add(u64::from(limits.journal.result_bytes))?,
+    )?;
     if limits.journal.writes < routes
         || limits.journal.deliveries
             < limits
@@ -2071,6 +2010,8 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         || limits.journal.result_bytes < limits.tasks.result_bytes
         || limits.journal.result_bytes < limits.people.words
         || limits.fleet.workstream_bytes < 8
+        || limits.people.inbox_entries == 0
+        || inbox_bytes > u64::from(limits.journal.transcript_bytes)
         || u64::from(limits.journal.transcript_bytes) < row_bound(limits)?
     {
         return None;
@@ -2105,6 +2046,10 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     )?;
     bytes = bytes
         .checked_add(Slab::<Option<Read>>::worst_case(limits.loads.loads)?)?
+        .checked_add(Map::<u64, Token>::worst_case(limits.loads.loads)?)?
+        .checked_add(Queue::<ResultPage>::worst_case(limits.loads.loads)?)?
+        .checked_add(u64::from(limits.loads.loads).checked_mul(u64::from(limits.loads.reply_bytes))?)?
+        .checked_add(u64::from(limits.loads.loads).checked_mul(inbox_bytes)?)?
         // Each reserved semantic/history query can retain one independent
         // rejection offer while child/people own their copies.
         .checked_add(u64::from(limits.loads.loads).checked_mul(u64::from(limits.people.words))?)?
@@ -2297,6 +2242,7 @@ fn header_loaded(startup: Startup) -> bool {
         Startup::Cold | Startup::Loading(Range::Deployment) | Startup::Failed => false,
         Startup::Loading(
             Range::Tasks
+            | Range::EndedResults
             | Range::People
             | Range::RunProofs
             | Range::EscalationDecision { .. }
@@ -2376,6 +2322,7 @@ fn discard_after_stop(domain: &mut Domain, event: Event) {
         | Event::Answer { .. }
         | Event::ReadEscalation { .. }
         | Event::ReadResult { .. }
+        | Event::ReadInbox { .. }
         | Event::Refreshed { .. }
         | Event::RefreshFailed { .. } => {}
     }
@@ -2439,6 +2386,7 @@ fn supported_task(task: &tasks::TaskRecord, charter: u32) -> bool {
         tasks::Executor::Agent { charter: configured } => charter == configured,
     };
     task.number != 0
+        && task.result_position == 0
         && requester
         && contract
         && executor

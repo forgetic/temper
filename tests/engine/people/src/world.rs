@@ -9,6 +9,7 @@ use temper_world::{Referee, Trace};
 
 pub const LIMITS: Limits = Limits {
     people: 8,
+    inbox_entries: 4,
     sign_ins: 8,
     projects: 3,
     holdings: 8,
@@ -238,7 +239,11 @@ impl World {
             }))
             .find_map(|row| match row {
                 Stored::SignIn { number, person, .. } if *number == sign_in => Some(*person),
-                Stored::SignIn { .. } | Stored::Person { .. } | Stored::Roles { .. } | Stored::Answer { .. } => None,
+                Stored::SignIn { .. }
+                | Stored::Person { .. }
+                | Stored::ReadPosition { .. }
+                | Stored::Roles { .. }
+                | Stored::Answer { .. } => None,
             })
             .unwrap_or(0);
         self.context = Some(RequestKey { person, key });

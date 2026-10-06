@@ -11,6 +11,7 @@
 //! failed storage emits one stop notice. No helper waits for its own effect.
 use crate::{Deployment, Family, Key, Record, Write};
 use alloc::boxed::Box;
+use core::mem::size_of;
 use skein_lib::{List, Queue, ReplyTo, Token};
 use temper_engine_domain_people as people;
 
@@ -43,6 +44,8 @@ pub struct Limits {
 /// resumed by the root and never passed to the protocol as child events.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Delivery {
+    /// Bounded page of committed unread results, consumed through its last position with this reply.
+    InboxPage { to: ReplyTo, person: u64, entries: Box<[ResultEntry]> },
     /// Root-to-authenticated named reader: one current durable held-chat view,
     /// derived from tasks without a persistent people inbox.
     EscalationReply {
@@ -162,11 +165,13 @@ pub enum Delivery {
         person: u64,
         /// Durable ended task number naming this result, never a separate inbox record.
         task: u64,
+        /// Result position committed as read with this reply.
+        position: u64,
         /// Owned result text bounded by journal `result_bytes`.
         words: Box<[u8]>,
     },
-    /// Root to the task requester: live notice of its durable ending, with no reply right or
-    /// persistent people inbox; historical reads use `ResultReply`.
+    /// Root to the task requester: live notice of its durable ending, with no reply right.
+    /// The unread entry remains derived from the ended task until its read position advances.
     Result {
         /// Durable person requester, checked by the task route.
         person: u64,
@@ -174,6 +179,15 @@ pub enum Delivery {
         /// Owned result text, at most journal `result_bytes`.
         words: Box<[u8]>,
     },
+}
+
+/// One result derived from a stored ended task; no separate person message row exists.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub struct ResultEntry {
+    pub position: u64,
+    pub task: u64,
+    /// Checked report or failure words from the ended task.
+    pub words: Box<[u8]>,
 }
 
 /// Journal to its root caller: at most one value per entry point; the caller
@@ -306,6 +320,28 @@ impl Decision {
         let within = match &delivery {
             Delivery::Result { words, .. } | Delivery::ResultReply { words, .. } => {
                 words.len() <= usize::try_from(limits.result_bytes).expect("u32 fits usize")
+            }
+            Delivery::InboxPage { entries, .. } => {
+                let mut bytes = Some(0_u64);
+                for entry in entries {
+                    if entry.words.len() > usize::try_from(limits.result_bytes).expect("u32 fits usize") {
+                        bytes = None;
+                        break;
+                    }
+                    bytes = match bytes {
+                        Some(total) => match total
+                            .checked_add(u64::try_from(size_of::<ResultEntry>()).expect("usize fits u64"))
+                        {
+                            Some(total) => total.checked_add(u64::try_from(entry.words.len()).expect("usize fits u64")),
+                            None => None,
+                        },
+                        None => None,
+                    };
+                }
+                match bytes {
+                    Some(bytes) => bytes <= u64::from(limits.transcript_bytes),
+                    None => false,
+                }
             }
             Delivery::EscalationReply { context, .. } => {
                 context.task != 0

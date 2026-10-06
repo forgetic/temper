@@ -74,6 +74,7 @@ impl Store {
                     Key::Tasks(temper_engine_domain_tasks::Key::Ended(_))
                         | Key::EscalationDecision { .. } | Key::Deployment | Key::Turn { .. } | Key::RunProof { .. } | Key::Terminal { .. } | Key::People(_) => false,
                 },
+                Range::EndedResults => matches!(key, Key::Tasks(temper_engine_domain_tasks::Key::Ended(number)) if *number != 0),
                 Range::RunProofs => matches!(key, Key::RunProof { task } if *task != 0),
                 Range::People => matches!(key, Key::People(_)),
                 Range::TaskResult { task } => matches!(key, Key::Tasks(temper_engine_domain_tasks::Key::Ended(number)) if *number == task),

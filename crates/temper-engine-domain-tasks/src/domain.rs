@@ -353,6 +353,7 @@ fn make(
         let number = new.number;
         let task = Task {
             record: TaskRecord {
+                result_position: 0,
                 escalation: crate::Escalation::Unheld { revision: 0 },
                 number,
                 project: new.project,

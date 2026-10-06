@@ -1,10 +1,10 @@
 //! People as parties (programming-model.md, 4.5; domain/people.md).
-//! Keeps identities, secret-free sign-ins, project roles and keyed answers.
+//! Keeps identities, secret-free sign-ins, project roles, keyed answers and each person's result read position.
 //! Knows tasks only by number; the parent checks authority and makes tasks.
 //! `Save`/`Erase` join the parent's decision; the parent holds replies until
-//! durable (domain/engine.md, 5.6). Inboxes and adoption follow later.
+//! durable (domain/engine.md, 5.6). Other inbox entries and adoption follow later.
 //!
-//! The current boundary supports typed `StartChat`, authenticated escalation decisions and narrow keyed `SetRoles` administration; inboxes, adoption,
+//! The current boundary supports typed `StartChat`, authenticated escalation decisions, derived result references and narrow keyed `SetRoles` administration; other inbox entries, adoption,
 //! person tasks and timed key retention remain later increments
 //! (domain/people.md, section 5.1). This child never sees forge
 //! credentials, protocol bytes, task internals or authority policy state.
@@ -43,7 +43,7 @@ mod limits;
 mod tests;
 pub use boundary::{
     Ask, EscalationChoice, EscalationDecision, Event, Holding, Identity, IdentityKey, InitialOwner, Key, Outcome,
-    Refusal, Reply, Request, RequestKey, Role, Stored,
+    Refusal, Reply, Request, RequestKey, ResultRef, Role, Stored,
 };
 pub use domain::{Domain, fire, max_out, step};
 pub use facts::Fact;
