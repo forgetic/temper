@@ -14,12 +14,12 @@ protocol drafts and lower-layer integration are parked for later work.
 
 | Increment | State | Commit | Evidence |
 |---|---|---|---|
-| Alignment 01: grant patterns | merged | see alignment branch commit | Two terminal forms; exact grants cover one name, open grants cover matching descendants. Gate passed: 2,366 focused / 11.760 s; 42 fuzzy / 29.817 s. |
-| Alignment 02: lost run | merged | see alignment branch commit | Root records every lost claim as `Failed(Lost)` with one lost try, including no-turn and release-recovery cuts. Gate passed: 2,366 focused / 5.896 s; 42 fuzzy / 27.617 s. |
-| Alignment 03: funding state | merged | see alignment branch commit | Removed parked-move allotment generations, historical spend and closure rows; ended rows and source postings remain atomic. Gate passed: 2,366 focused / 11.181 s; 42 fuzzy / 28.374 s. |
-| Alignment 04: slice records and citations | merged | see alignment branch commit | Current slice limits and result-delivery stopgap recorded below; code citations repointed to restored sections or dropped. Gate passed: 2,366 focused / 7.141 s; 42 fuzzy / 27.745 s. |
-| Alignment 05: pure grant order | merged | see alignment branch commit | Removed a terminal-byte clone from the exact grant inclusion query, preserving its no-allocation contract. Gate passed: 2,366 focused / 10.860 s; 42 fuzzy / 28.365 s. |
-| Alignment 06: parked move helpers | merged | see alignment branch commit | Removed authority's unused move-funding values, transfer function and move-only tests; ordinary carve, charge and settle remain. Gate passed: 2,362 focused / 10.689 s; 42 fuzzy / 28.582 s. |
+| Alignment 01: grant patterns | merged | fd61587b | Two terminal forms; exact grants cover one name, open grants cover matching descendants. Gate passed: 2,366 focused / 11.760 s; 42 fuzzy / 29.817 s. |
+| Alignment 02: lost run | merged | 4e05dff2 | Root records every lost claim as `Failed(Lost)` with one lost try, including no-turn and release-recovery cuts. Gate passed: 2,366 focused / 5.896 s; 42 fuzzy / 27.617 s. |
+| Alignment 03: funding state | merged | ab12cd84 | Removed parked-move allotment generations, historical spend and closure rows; ended rows and source postings remain atomic. Gate passed: 2,366 focused / 11.181 s; 42 fuzzy / 28.374 s. |
+| Alignment 04: slice records and citations | merged | d4c6e280 | Current slice limits and result-delivery stopgap recorded below; code citations repointed to restored sections or dropped. Gate passed: 2,366 focused / 7.141 s; 42 fuzzy / 27.745 s. |
+| Alignment 05: pure grant order | merged | 7fb2f3ea | Removed a terminal-byte clone from the exact grant inclusion query, preserving its no-allocation contract. Gate passed: 2,366 focused / 10.860 s; 42 fuzzy / 28.365 s. |
+| Alignment 06: parked move helpers | merged | e2d05d94 | Removed authority's unused move-funding values, transfer function and move-only tests; ordinary carve, charge and settle remain. Gate passed: 2,362 focused / 10.689 s; 42 fuzzy / 28.582 s. |
 | 00a Forgejo facts | merged | fa97784 | Gate passed; 1,772 focused / 7.440 s; 26 fuzzy / 22.148 s. |
 | 00b dead drafts | merged | 9acb981 | Gate passed; 1,772 focused and 26 fuzzy; baseline counts unchanged. |
 | 00c legacy rename | merged | d8385dc | Gate passed; 1,772 focused / 7.495 s; 26 fuzzy / 22.159 s. |
@@ -141,7 +141,7 @@ remain on `checkpoint/migration/transcript-codec`, outside main.
 **02 — tasks**
 
 - Finish retired-source and recurring funding depth in 02e.
-- Restore inbox, amendment and move surface only with actual root routes.
+- Restore inbox, amendment and move surface only with actual root routes; review the parked move-funding policy before 02c resumes.
 - Complete broader 02d task-tree escalation; live membership rerouting now has an actual root route.
 
 **03 — people**
