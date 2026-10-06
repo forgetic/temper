@@ -108,11 +108,12 @@ remain on `checkpoint/migration/transcript-codec`, outside main.
 | 05s4 session first-version contraction | merged | smith 2f324b0 | fmt/clippy pass; 567 focused / 3.138 s; 11 fuzzy / 3.917 s. |
 | 05s6 final global host accounting | merged | smith 1b62e06 | fmt/clippy pass; 572 focused / 3.866 s; 11 fuzzy / 4.064 s. |
 | 05s6 issued-message refusals | merged | smith d9a7040 | Final checkpoint gate: fmt/clippy pass; 589 focused / 5.126 s; 11 fuzzy / 5.575 s. |
-| 05s5 durable recovery design | design merged; implementation open | smith 39f51f3 | Five Markdown files independently reviewed; Rust/lock unchanged; documentation gate exemption. |
+| 05s5 durable recovery design | reverted | smith 39f51f3, 5aa22cb | Outside the 05s plan; no implementation scheduled. |
 | 05s5 native IO output | checkpoint merged; adoption deferred | skein 2888b0d | Combined checkpoint gate: 1,206 focused / 4.982 s; 71 fuzzy / 29.694 s; fmt/clippy and isolated TLS pass. |
 | 05s5 native TLS output | checkpoint merged; adoption deferred | skein 8c5455f | Combined checkpoint gate: 1,206 focused / 4.982 s; 71 fuzzy / 29.694 s; fmt/clippy and isolated TLS pass. |
 | 05s5 shared framing | checkpoint merged; adoption deferred | skein a423734, 8206468 | Combined gate: 1,206 focused / 4.982 s; 71 fuzzy / 29.694 s; fmt/clippy pass. |
-| 05s5 full transcript codec | design merged; source absent | smith bbe922f | Approved Markdown contract; no codec implementation or tests; incomplete manifests remain on checkpoint branch. |
+| 05s5 full transcript codec | draft moved to scratch; source absent | smith bbe922f | No codec implementation or tests; incomplete manifests remain on checkpoint branch. |
+| 05s4 activation-qualified host calls | merged locally | smith 5aa22cb | fmt/clippy pass; 591 focused / 4.218 s; 11 fuzzy / 4.576 s; serial 591 / 9.488 s, 11 / 9.102 s. |
 
 ## What remains open
 
@@ -147,7 +148,6 @@ remain on `checkpoint/migration/transcript-codec`, outside main.
 
 **05s — smith**
 
-- Implement typed durable recovery, scope admission and real commitment settlement in domain worlds.
 - Audit remaining Run, Session, Tools and Host contracts; keep Smith first and verify every domain increment.
 - Keep codecs, channel/protocol, IO/TLS and binaries parked; preserve SDK cleanup gates and frozen legacy rules.
 
