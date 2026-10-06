@@ -4,11 +4,15 @@ use temper_web_domain::{Address, Chats, Domain, FieldRef, Form, Page};
 
 use crate::binding::Binding;
 use crate::builder::Builder;
+use crate::confirm;
 use crate::frame;
+use crate::limits::Limits;
 use crate::tree::{Class, Element, Level, NodeKey, Role, State};
 use crate::words;
 
-pub fn build(builder: &mut Builder, domain: &Domain) {
+mod task;
+
+pub fn build(builder: &mut Builder, domain: &Domain, limits: &Limits) {
     builder.open(Element::Div);
     frame::build(builder, domain);
     builder.open(Element::Main);
@@ -22,8 +26,10 @@ pub fn build(builder: &mut Builder, domain: &Domain) {
         Page::SignIn { .. } => signin(builder),
         Page::Missing { address } => missing(builder, *address),
         Page::Chats(chats) => chats_page(builder, domain, chats),
+        Page::Task(page) => task::build(builder, domain, page, limits),
     }
     builder.close();
+    confirm::build(builder, domain);
     notices(builder, domain);
     builder.close();
 }

@@ -13,9 +13,12 @@ extern crate alloc;
 
 mod binding;
 mod builder;
+mod cards;
+mod confirm;
 mod diff;
 mod frame;
 mod limits;
+pub mod markdown;
 mod pages;
 mod render;
 mod tree;

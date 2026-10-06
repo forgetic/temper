@@ -197,6 +197,13 @@ held chat shows its card, to release or leave held. Words after the
 first, streaming and the conversation as a transcript follow as their
 routes are built.
 
+The held card names the revision it showed when its confirmation opened.
+If the hold changes before confirmation, the web asks the person to
+review it again. A request stays visibly pending until the engine says
+it is durable; if another tab decided first, the card says who did so,
+what they chose and when. An ended chat's report is read on reopening
+its page and rendered as Markdown from its stored words.
+
 ## 10. From the domain
 
 | The web | The domain |

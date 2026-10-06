@@ -44,6 +44,9 @@ chats pages, after `chats.html` and the mockups' top bar.
 - **Measures** building and diffing a chats page at its limits in a debug
   build, and records it here; if it is too slow for the worlds, the
   per-section build of README.md, section 8 is designed before W4.
+  The focused `chats_render_at_window_limit_and_decode_controls` test,
+  which fills the four-row window and renders/diffs the page, took
+  0.003 s under nextest's serial `measure` profile on 2026-10-06.
 - **Updates** `architecture.md`, section 4: the browser holds node ids,
   and bindings stay in the view's last tree; a press on a node gone from
   it is dropped as stale.

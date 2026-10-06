@@ -14,6 +14,7 @@ pub struct Attribute {
     pub classes: Classes,
     pub states: States,
     pub href: Option<Address>,
+    pub external: Option<Box<[u8]>>,
     pub bound: bool,
 }
 
@@ -25,6 +26,7 @@ impl Attribute {
             classes: node.classes,
             states: node.states,
             href: node.href,
+            external: node.external.clone(),
             bound: node.binding.is_some(),
         }
     }
@@ -216,8 +218,9 @@ pub fn diff(old: &Tree, new: &mut Tree, depth: u32, next_id: &mut u32, out: &mut
 }
 
 // Reverse moves use the next sibling as an already positioned anchor. A
-// parent with unchanged relative order needs no moves, including when rows
-// were merely inserted or removed.
+// parent with unchanged relative order needs no moves, including when nodes
+// were merely inserted or removed. Unkeyed siblings can also change order
+// when a new sibling of the same element takes an earlier positional match.
 fn move_reordered(new: &Tree, new_parents: &List<Option<u32>>, new_to_old: &List<Option<u32>>, out: &mut Queue<Patch>) {
     let mut children = List::with_capacity(new.len());
     for parent in 0..new.len() {
@@ -231,16 +234,14 @@ fn move_reordered(new: &Tree, new_parents: &List<Option<u32>>, new_to_old: &List
         let mut reordered = false;
         while child < end {
             let node = new.get(child).expect("child exists");
-            if node.key.is_some()
-                && let Some(old_index) = new_to_old.get(child).copied().flatten()
-            {
+            if let Some(old_index) = new_to_old.get(child).copied().flatten() {
                 if let Some(last) = last_old
                     && old_index < last
                 {
                     reordered = true;
                 }
                 last_old = Some(old_index);
-                children.push(child).expect("keyed children fit tree bound");
+                children.push(child).expect("matched children fit tree bound");
             }
             child = child.checked_add(node.size).expect("child extent fits u32");
         }
@@ -249,13 +250,9 @@ fn move_reordered(new: &Tree, new_parents: &List<Option<u32>>, new_to_old: &List
         }
         let parent_id = new.get(parent).expect("parent exists").id;
         for index in (0..children.len()).rev() {
-            let child = *children.get(index).expect("keyed child exists");
-            let node = new.get(child).expect("keyed child exists");
-            out.push(Patch::Move {
-                node: node.id,
-                parent: parent_id,
-                before: first_later_id(new, new_parents, child),
-            });
+            let child = *children.get(index).expect("matched child exists");
+            let node = new.get(child).expect("matched child exists");
+            out.push(Patch::Move { node: node.id, parent: parent_id, before: first_later_id(new, new_parents, child) });
         }
     }
 }

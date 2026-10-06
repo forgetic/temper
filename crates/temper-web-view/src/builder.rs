@@ -71,6 +71,9 @@ impl Builder {
     pub fn href(&mut self, address: Address) {
         self.node().href = Some(address);
     }
+    pub fn external(&mut self, url: &[u8]) {
+        self.node().external = Some(Box::from(url));
+    }
     pub fn bind(&mut self, binding: Binding) {
         self.node().binding = Some(binding);
     }

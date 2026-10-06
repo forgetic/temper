@@ -135,6 +135,12 @@ Its actions follow its reason (tasks.md, section 7), from:
 - **cancel** it, and everything below it (tasks.md, section 8);
 - **pass up,** when there is a holder above the person.
 
+When the same person holds the current and next role, the engine skips
+that self-pass and does not offer **pass up**. The card stays with that
+person until they release or leave it held, rather than leaving and
+reappearing under their other role. Releasing an out-of-tries hold starts
+a new run and counts its tries from zero.
+
 ### 4.3 Question
 
 A task the person asked for asks them something (`domain/tasks.md`,

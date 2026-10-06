@@ -37,7 +37,7 @@ pub fn render(view: &mut View, domain: &Domain, limits: &Limits, out: &mut Queue
     }
     let spare = view.spare.take().expect("view has a spare tree");
     let mut builder = Builder::reuse(spare, limits.depth);
-    pages::build(&mut builder, domain);
+    pages::build(&mut builder, domain, limits);
     let mut next = builder.finish();
     let last = view.last.as_ref().expect("view has a last tree");
     diff(last, &mut next, limits.depth, &mut view.next_id, out);

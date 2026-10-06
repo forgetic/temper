@@ -2,7 +2,7 @@
 
 use alloc::boxed::Box;
 use skein_lib::List;
-use temper_web_domain::Address;
+use temper_web_domain::{Address, ObjectKey};
 
 use crate::binding::Binding;
 
@@ -14,6 +14,7 @@ pub struct NodeId(pub u32);
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum NodeKey {
     Chat(u64),
+    Object(ObjectKey),
 }
 
 /// Heading level.
@@ -205,6 +206,8 @@ pub struct Node {
     pub text: Option<Box<[u8]>>,
     pub value: Option<Value>,
     pub href: Option<Address>,
+    /// A checked http(s) Markdown link, opened in a new tab by the shell.
+    pub external: Option<Box<[u8]>>,
     pub binding: Option<Binding>,
     pub size: u32,
 }
@@ -223,6 +226,7 @@ impl Node {
             text: None,
             value: None,
             href: None,
+            external: None,
             binding: None,
             size: 1,
         }
