@@ -68,43 +68,51 @@ protocol drafts and lower-layer integration are parked for later work.
 | 02d1 actual escalation routes | merged; broader escalation open | 754ca84 | Gate passed; 2,277 focused / 5.850 s; 39 fuzzy / 24.314 s; root serial 68 / 0.393 s, 5 / 1.293 s. |
 | 03c role administration and live rerouting | merged; narrow dependency | 6dfa4d2 | Gate passed; 2,292 focused / 10.993 s; 40 fuzzy / 26.798 s; root serial 78 / 0.490 s, 6 / 1.435 s. |
 
-Temporary checkpoints below live under `/tmp/temper-smith-resume/`; they have
-not moved any original main. Consumer checks do not waive Skein's mandatory
-workspace default, which currently fails io_uring setup with EPERM. Exact source,
-reviews and diagnostics are preserved in checkpoint commits and the local
-`target/next-domain-handoff` bundles and evidence.
+The 2026-10-06 restart restored writable repositories and kernel access.
+The checkpoints below are merged into the original Smith and Skein mains;
+all saved drafts also have local `checkpoint/*` branches in the original
+repositories. Smith's final source gate passed 589 focused / 5.126 s and
+11 fuzzy / 5.575 s; Skein's combined gate passed 1,206 focused / 4.982 s
+and 71 fuzzy / 29.694 s. Formatting, all-target Clippy and isolated TLS
+compilation passed. Real browser tests remain in their separate profile,
+with repair deferred. Exact logs, reviews and hashes remain in
+`target/next-domain-handoff/evidence/`.
+
+Protocol checkpoint merging preserves previously authored work; domain
+implementation remains the goal. Transcript manifests without Rust targets
+remain on `checkpoint/migration/transcript-codec`, outside main.
 
 | Increment | State | Commit | Evidence |
 |---|---|---|---|
-| 05s2a bounded raw argument history | reviewed temporary; shared gate open | skein 9f754b8 | Corrected native control / 0.005 s; mandatory default EPERM; full exact-tip gate open. |
-| 05s2a synchronized shared iteration clock | reviewed temporary; shared gate open | skein e86a7d6 | 129 scoped / 0.843 s; 64 fuzzy / 20.052 s; mandatory default remains EPERM. |
-| 05s2a preserved shared fake mechanics | reviewed temporary; shared gate open | skein 3bdc669 | 132 scoped / 0.838 s; 64 fuzzy / 18.997 s; mandatory default remains EPERM. |
-| 05s2a prepared raw Client adoption | reviewed temporary; shared gate open | skein bea1506 | 134 scoped / 0.855 s; 64 fuzzy / 15.773 s; mandatory default: 8 failures, 1,055 unrun. |
-| 05s2a bounded native peer ownership | reviewed temporary; shared gate open | skein 5bf93a6 | 138 scoped / 0.920 s; 64 fuzzy / 17.628 s; mandatory default: 8 failures, 1,059 unrun. |
-| 05s2a shared adapter and V2 messages | temporary draft checkpoint | smith 9b7990a | fmt/clippy pass; 489 focused / 1.895 s; 10 fuzzy / 4.362 s. |
-| 05s2a Smith public boundary documentation | reviewed temporary | smith edc583e | fmt/clippy pass; 489 focused / 1.937 s; 10 fuzzy / 4.294 s. |
-| 05s2a actual Client through root routes | reviewed temporary | smith 240838d | fmt/clippy pass; 490 focused / 1.983 s; 10 fuzzy / 4.310 s. |
-| 05s2a adapter owner and inventory controls | reviewed temporary | smith 9b8630e | fmt/clippy pass; 496 focused / 1.968 s; 10 fuzzy / 4.219 s. |
-| 05s4 actual submitted delivery and host ACKs | reviewed temporary | smith 9d2ec84 | fmt/clippy pass; 498 focused / 1.930 s; 10 fuzzy / 4.321 s. |
-| 05s4 attained root and caller-copy ownership | reviewed temporary | smith 8c51dff | fmt/clippy pass; 499 focused / 2.047 s; 10 fuzzy / 4.305 s. |
-| 05s4 observed bounded message sweep | reviewed temporary | smith a54edcb | fmt/clippy pass; 499 focused / 2.141 s; 11 fuzzy / 4.478 s. |
-| 05s4 native continuation and host origin | reviewed temporary | smith 8010bf4 | fmt/clippy pass; 504 focused / 2.103 s; 11 fuzzy / 4.403 s. |
-| 05s4 combined native root/caller memory | reviewed temporary | smith 1a0bdfe | fmt/clippy pass; 504 focused / 2.097 s; 11 fuzzy / 4.445 s. |
-| 05s2a exclusive actual provider backend | reviewed temporary | smith c645669 | fmt/clippy pass; 504 focused / 2.094 s; 11 fuzzy / 4.410 s. |
-| 05s4 genuine native root restore | reviewed temporary | smith 5b4bc94 | fmt/clippy pass; 505 focused / 2.285 s; 11 fuzzy / 4.958 s. |
-| 05s4 overlapping physical Client ownership | reviewed temporary | smith f9c9981 | fmt/clippy pass; 505 focused / 2.170 s; 11 fuzzy / 4.462 s. |
-| 05s4 caller conventions | reviewed temporary | smith 48dba1d | fmt/clippy pass; 512 focused / 2.233 s; 11 fuzzy / 3.993 s. |
-| 05s4 optional workspace and merge conflicts | reviewed temporary | smith 37599ef | fmt/clippy pass; 522 focused / 2.114 s; 11 fuzzy / 4.021 s. |
-| 05s4 instructions and titled brief | reviewed temporary | smith 440e87d | fmt/clippy pass; 529 focused / 2.145 s; 11 fuzzy / 3.910 s. |
-| 05s4 host-unit budget and completion gate | reviewed temporary | smith 9930191 | fmt/clippy pass; 560 focused / 2.255 s; 11 fuzzy / 3.928 s. |
-| 05s4 session first-version contraction | reviewed temporary | smith 2f324b0 | fmt/clippy pass; 567 focused / 3.138 s; 11 fuzzy / 3.917 s. |
-| 05s6 final global host accounting | reviewed temporary | smith 1b62e06 | fmt/clippy pass; 572 focused / 3.866 s; 11 fuzzy / 4.064 s. |
-| 05s6 issued-message refusals | reviewed temporary | smith d9a7040 | fmt/clippy pass; 589 focused / 3.262 s; 11 fuzzy / 3.804 s. |
-| 05s5 durable recovery design | reviewed temporary; implementation open | smith 39f51f3 | Five Markdown files independently reviewed; Rust/lock unchanged; documentation gate exemption. |
-| 05s5 native IO output | parked lower-layer draft; shared gates open | skein 2888b0d | 1,063/1,118 diagnostic / 1.977 s; 67 fuzzy / 15.750 s; default/browser EPERM. |
-| 05s5 native TLS output | parked lower-layer draft; shared gates open | skein fe36716 | 1,101/1,156 diagnostic / 3.180 s; 68 fuzzy / 15.748 s; default/browser EPERM. |
-| 05s5 shared framing | parked protocol draft | — | Source3 frozen, tests unrun; historical source2: 46 targeted / 0.033 s, 28 Clippy lints. |
-| 05s5 full transcript codec | approved contract parked; source absent | — | Independent contract review passed; 50 source pins and 250 legacy fixtures unchanged; no codec tests run. |
+| 05s2a bounded raw argument history | merged | skein a164071 | Combined checkpoint gate: 1,206 focused / 4.982 s; 71 fuzzy / 29.694 s; fmt/clippy pass. |
+| 05s2a synchronized shared iteration clock | merged | skein 39775d2 | Combined checkpoint gate: 1,206 focused / 4.982 s; 71 fuzzy / 29.694 s; fmt/clippy pass. |
+| 05s2a preserved shared fake mechanics | merged | skein ee224ef | Combined checkpoint gate: 1,206 focused / 4.982 s; 71 fuzzy / 29.694 s; fmt/clippy pass. |
+| 05s2a prepared raw Client adoption | merged | skein 843edad | Combined checkpoint gate: 1,206 focused / 4.982 s; 71 fuzzy / 29.694 s; fmt/clippy pass. |
+| 05s2a bounded native peer ownership | merged | skein 43bba37 | Combined checkpoint gate: 1,206 focused / 4.982 s; 71 fuzzy / 29.694 s; fmt/clippy pass. |
+| 05s2a shared adapter and V2 messages | merged | smith 9b7990a | fmt/clippy pass; 489 focused / 1.895 s; 10 fuzzy / 4.362 s. |
+| 05s2a Smith public boundary documentation | merged | smith edc583e | fmt/clippy pass; 489 focused / 1.937 s; 10 fuzzy / 4.294 s. |
+| 05s2a actual Client through root routes | merged | smith 240838d | fmt/clippy pass; 490 focused / 1.983 s; 10 fuzzy / 4.310 s. |
+| 05s2a adapter owner and inventory controls | merged | smith 9b8630e | fmt/clippy pass; 496 focused / 1.968 s; 10 fuzzy / 4.219 s. |
+| 05s4 actual submitted delivery and host ACKs | merged | smith 9d2ec84 | fmt/clippy pass; 498 focused / 1.930 s; 10 fuzzy / 4.321 s. |
+| 05s4 attained root and caller-copy ownership | merged | smith 8c51dff | fmt/clippy pass; 499 focused / 2.047 s; 10 fuzzy / 4.305 s. |
+| 05s4 observed bounded message sweep | merged | smith a54edcb | fmt/clippy pass; 499 focused / 2.141 s; 11 fuzzy / 4.478 s. |
+| 05s4 native continuation and host origin | merged | smith 8010bf4 | fmt/clippy pass; 504 focused / 2.103 s; 11 fuzzy / 4.403 s. |
+| 05s4 combined native root/caller memory | merged | smith 1a0bdfe | fmt/clippy pass; 504 focused / 2.097 s; 11 fuzzy / 4.445 s. |
+| 05s2a exclusive actual provider backend | merged | smith c645669 | fmt/clippy pass; 504 focused / 2.094 s; 11 fuzzy / 4.410 s. |
+| 05s4 genuine native root restore | merged | smith 5b4bc94 | fmt/clippy pass; 505 focused / 2.285 s; 11 fuzzy / 4.958 s. |
+| 05s4 overlapping physical Client ownership | merged | smith f9c9981 | fmt/clippy pass; 505 focused / 2.170 s; 11 fuzzy / 4.462 s. |
+| 05s4 caller conventions | merged | smith 48dba1d | fmt/clippy pass; 512 focused / 2.233 s; 11 fuzzy / 3.993 s. |
+| 05s4 optional workspace and merge conflicts | merged | smith 37599ef | fmt/clippy pass; 522 focused / 2.114 s; 11 fuzzy / 4.021 s. |
+| 05s4 instructions and titled brief | merged | smith 440e87d | fmt/clippy pass; 529 focused / 2.145 s; 11 fuzzy / 3.910 s. |
+| 05s4 host-unit budget and completion gate | merged | smith 9930191 | fmt/clippy pass; 560 focused / 2.255 s; 11 fuzzy / 3.928 s. |
+| 05s4 session first-version contraction | merged | smith 2f324b0 | fmt/clippy pass; 567 focused / 3.138 s; 11 fuzzy / 3.917 s. |
+| 05s6 final global host accounting | merged | smith 1b62e06 | fmt/clippy pass; 572 focused / 3.866 s; 11 fuzzy / 4.064 s. |
+| 05s6 issued-message refusals | merged | smith d9a7040 | Final checkpoint gate: fmt/clippy pass; 589 focused / 5.126 s; 11 fuzzy / 5.575 s. |
+| 05s5 durable recovery design | design merged; implementation open | smith 39f51f3 | Five Markdown files independently reviewed; Rust/lock unchanged; documentation gate exemption. |
+| 05s5 native IO output | checkpoint merged; adoption deferred | skein 2888b0d | Combined checkpoint gate: 1,206 focused / 4.982 s; 71 fuzzy / 29.694 s; fmt/clippy and isolated TLS pass. |
+| 05s5 native TLS output | checkpoint merged; adoption deferred | skein 8c5455f | Combined checkpoint gate: 1,206 focused / 4.982 s; 71 fuzzy / 29.694 s; fmt/clippy and isolated TLS pass. |
+| 05s5 shared framing | checkpoint merged; adoption deferred | skein a423734, 8206468 | Combined gate: 1,206 focused / 4.982 s; 71 fuzzy / 29.694 s; fmt/clippy pass. |
+| 05s5 full transcript codec | design merged; source absent | smith bbe922f | Approved Markdown contract; no codec implementation or tests; incomplete manifests remain on checkpoint branch. |
 
 ## What remains open
 
@@ -162,5 +170,6 @@ reviews and diagnostics are preserved in checkpoint commits and the local
 ## Resume point
 
 - Smith first: audit and implement typed recovery/domain contracts; protocol changes are outside the goal.
-- Protocol drafts are parked; failed shared kernel/browser gates remain failed and are not waived.
+- Existing IO/TLS/channel checkpoints are merged; protocol adoption and codec implementation remain deferred.
+- Kernel gates pass after restart; browser repair remains deferred in its separate profile.
 - Keep parked 02e/04b2/05f branches, exact-tip gates and Forgejo v16.0.5 API job-log assumption.
