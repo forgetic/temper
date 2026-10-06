@@ -136,6 +136,11 @@ remain on `checkpoint/migration/transcript-codec`, outside main.
 | 05s conformance 7: oversized host answer | merged locally | smith 5ad9630 | fmt/clippy pass; 546 focused / 4.664 s; 11 fuzzy / 5.946 s. |
 | 05s conformance 10: session ready list | merged locally | smith 9d4b91a | fmt/clippy pass; 546 focused / 3.300 s; 11 fuzzy / 4.466 s. |
 | 05s conformance 5: child workspace tools | merged locally | smith 51fe873 | fmt/clippy pass; 544 focused / 3.368 s; 11 fuzzy / 4.408 s. |
+| 05s8 local host 2.1: crate and charter | merged locally | smith 3efed66 | fmt/clippy pass; 547 focused / 3.376 s; 11 fuzzy / 4.335 s. |
+| 05s8 local host 2.2: in-process agent | merged locally | smith 1f06f6d | fmt/clippy pass; 548 focused / 3.254 s; 11 fuzzy / 4.013 s. |
+| 05s8 local host 2.3: transcripts and resume | merged locally | smith 361dd90 | fmt/clippy pass; 553 focused / 3.797 s; 11 fuzzy / 5.818 s. |
+| 05s8 local host 2.4: credentials, cancel and pressure | merged locally | smith 1276f7b | fmt/clippy pass; 557 focused / 3.526 s; 11 fuzzy / 4.548 s; local serial 10 / 0.044 s. |
+| 05s8 local host 2.5: referee, replay and randomness | merged locally | smith 7d98378 | fmt/clippy pass; 568 focused / 7.830 s; 12 fuzzy / 9.597 s; local serial 21 / 0.087 s focused and 1 / 0.033 s fuzzy. |
 
 ## Alignment slice limits
 
