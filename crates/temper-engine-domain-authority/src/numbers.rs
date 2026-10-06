@@ -1,11 +1,11 @@
-//! Carved funding, exact spend and transfers (domain/authority.md, section 7).
+//! Carved funding and exact spend (domain/authority.md, section 7).
 //!
 //! These functions own no counters: the tasks child keeps its own numbers,
 //! and the root translates their values. An arithmetic or accounting
 //! refusal returns `None` without changing any caller's state. Batch slices
 //! have already been admitted under the caller's task limit. The caller
-//! checks actual funder links and closes each durable allotment generation
-//! once; these snapshots cannot recognize a duplicate settlement.
+//! checks actual funder links and commits a task's settlement once; these
+//! snapshots cannot recognize a duplicate settlement.
 
 /// The four numbers against one current allotment. An overrun may put spend
 /// above the budget; it is still counted and leaves no available budget.
@@ -27,41 +27,6 @@ pub struct Numbers {
 
 /// Reservations name their actual funder, including its original period.
 /// Starting another period never changes this name or clears its counters.
-/// Actual durable funding source, including the original period; the caller validates links and
-/// generation identity. (domain/authority.md, section 7).
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub enum Funder {
-    /// An allotment funded by another task. (domain/authority.md, section 7).
-    Task(/** Actual funding task number, not necessarily the topology parent. (domain/authority.md, section 7). */ u64),
-    /// An allotment funded from a person's project-period pool. (domain/authority.md, section 7).
-    Pool {
-        /** Project owning the person's pool. (domain/authority.md, section 7). */
-        project: u32,
-        /** Person whose pool funded the allotment. (domain/authority.md, section 7). */
-        person: u64,
-        /** Original funding period, unchanged by rollover. (domain/authority.md, section 7). */
-        period: u64,
-    },
-    /// An allotment funded directly from a project period. (domain/authority.md, section 7).
-    Period {
-        /** Project whose period funded the allotment. (domain/authority.md, section 7). */
-        project: u32,
-        /** Original project funding period. (domain/authority.md, section 7). */
-        period: u64,
-    },
-}
-
-/// A funder and the snapshot the root gathered for this decision.
-/// Root-gathered funding snapshot for one checked decision, with no retained state here.
-/// (domain/authority.md, section 7).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct Funding {
-    /// Recorded actual funder. (domain/authority.md, section 7).
-    pub by: Funder,
-    /// That funder's accounting snapshot for the same decision. (domain/authority.md, section 7).
-    pub numbers: Numbers,
-}
-
 /// Spend charged even when it exceeded what was available.
 /// Successful actual-spend charge, including any amount beyond the available budget.
 /// (domain/authority.md, section 7).
@@ -73,33 +38,6 @@ pub struct Charged {
     /// Amount of this charge exceeding the pre-charge available budget. (domain/authority.md,
     /// section 7).
     pub overrun: u64,
-}
-
-/// A transfer either keeps the same allotment, or settles the old allotment
-/// and opens a new one for its unspent amount. Historical spend remains with
-/// the old funder; it is not charged again to the new one.
-/// Successful atomic value transfer; the caller commits all funding replacements and history
-/// together. (domain/authority.md, section 7).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum Moved {
-    /// Same actual funder: requires identical snapshots and no replacement budgets; preserves all
-    /// counters. (domain/authority.md, section 7).
-    Same {
-        /** Unchanged funding snapshot for the same actual funder. (domain/authority.md, section 7). */
-        funding: Funding,
-        /** Unchanged task allotment and reservations. (domain/authority.md, section 7). */
-        task: Numbers,
-    },
-    /// Different actual funder: settles old spend and reserves the unspent replacement without
-    /// charging historical spend again. (domain/authority.md, section 7).
-    Changed {
-        /** Old funder after the old allotment settles. (domain/authority.md, section 7). */
-        old: Funding,
-        /** New funder after reserving the replacement allotment. (domain/authority.md, section 7). */
-        new: Funding,
-        /** New task allotment carrying the unspent amount and checked replacement reservations. (domain/authority.md, section 7). */
-        task: Numbers,
-    },
 }
 
 /// What is available, never below zero. Sequential subtraction also handles
@@ -130,11 +68,10 @@ pub fn carve(funder: Numbers, budgets: &[u64]) -> Option<Numbers> {
 
 /// Close an allotment: remove its full reservation and count all its spend
 /// below its funder. Every allotment it funded must have settled first.
-/// This closes a task's final allotment, or an old one during a move.
-/// The caller verifies its recorded reservation and unclosed generation;
-/// aggregate numbers alone cannot identify an allotment.
-/// Pure checked closure returning replacement funder numbers or `None`; `ended` must have no open
-/// reservations and the caller must verify and close its recorded generation exactly once.
+/// The caller verifies its recorded reservation; aggregate numbers alone
+/// cannot identify a task or prevent duplicate settlement.
+/// Pure checked settlement returning replacement funder numbers or `None`; `ended` must have no open
+/// reservations and the caller must commit the end exactly once.
 /// (domain/authority.md, section 7).
 #[must_use]
 pub fn settle(funder: Numbers, ended: Numbers) -> Option<Numbers> {
@@ -159,47 +96,6 @@ pub fn charge(task: Numbers, amount: u64) -> Option<Charged> {
     let numbers = Numbers { spent: task.spent.checked_add(amount)?, ..task };
     spend(numbers)?;
     Some(Charged { numbers, overrun: amount.saturating_sub(available) })
-}
-
-/// Fund a moved task anew, atomically as values. The caller first computes
-/// the old funding subtree's settlement from leaves upwards, retaining the
-/// unspent amount for each live task. It gives the resulting zero-reserved
-/// root here, with the replacement directly funded tasks' budgets. Their
-/// reservations must fit in the new root's allotment; deeper replacements
-/// are checked by the caller before committing. An overrun that leaves too
-/// little for a promised task refuses the move, never trims it. The caller
-/// supplies every promised replacement, retaining each unspent amount;
-/// this function sees amounts, not the live tasks they belong to.
-/// Settlements, replacements and history records form one commit, with no
-/// intermediate externally visible end. Externally funded requester
-/// descendants are separate funding components, checked by the caller.
-///
-/// A move to the same actual funder leaves all counters and reservations
-/// intact: skip normalization and pass an empty replacement slice. Two
-/// different snapshots for that same funder are refused. Different periods
-/// name different funders even for the same person or project.
-/// Pure checked transfer over caller-admitted `replacement_budgets`; returns all replacement values
-/// or `None` with no partial mutation. Caller validates links, normalizes components and commits
-/// the whole transfer once. (domain/authority.md, section 7).
-#[must_use]
-pub fn move_funding(old: Funding, new: Funding, task: Numbers, replacement_budgets: &[u64]) -> Option<Moved> {
-    if old.by == new.by {
-        if old.numbers != new.numbers || !replacement_budgets.is_empty() {
-            return None;
-        }
-        spend(old.numbers)?;
-        spend(task)?;
-        return Some(Moved::Same { funding: old, task });
-    }
-    let old_numbers = settle(old.numbers, task)?;
-    let unspent = task.budget.saturating_sub(spend(task)?);
-    let new_numbers = carve(new.numbers, &[unspent])?;
-    let task = carve(Numbers { budget: unspent, spent: 0, spent_below: 0, reserved: 0 }, replacement_budgets)?;
-    Some(Moved::Changed {
-        old: Funding { numbers: old_numbers, ..old },
-        new: Funding { numbers: new_numbers, ..new },
-        task,
-    })
 }
 
 fn spend(numbers: Numbers) -> Option<u64> {

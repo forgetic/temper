@@ -24,7 +24,7 @@
 //! `max_out` bounds finding room and `worst_case` bounds retained policy heap;
 //! callers count question payloads and queues (domain/authority.md, section 11).
 //! This child never authenticates people, discovers task standing or funding
-//! links, executes effects, or recognizes duplicate settlement generations.
+//! links, executes effects, or recognizes duplicate settlements.
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
 
@@ -55,7 +55,7 @@ pub use boundary::{
 pub use check::{check_batch, check_call, check_effect, check_request, check_run, covers, needs};
 pub use domain::{Domain, Event, POLICY_MAX_OUT, PolicyFact, PolicyRefusal, step};
 pub use limits::{Limits, max_out, worst_case};
-pub use numbers::{Charged, Funder, Funding, Moved, Numbers, carve, charge, left, move_funding, settle};
+pub use numbers::{Charged, Numbers, carve, charge, left, settle};
 pub use order::{FITS_MAX_OUT, Lack, Lacks, fits};
 pub use order::{Implication, Implies, at_most, grant_at_most, grant_covers, pattern_at_most, pattern_covers};
 pub use rules::{
