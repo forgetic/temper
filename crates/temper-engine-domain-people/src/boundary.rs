@@ -101,7 +101,7 @@ pub enum Ask {
 /// people words; root also checks child/journal bounds (domain/people.md, section 5.1).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum EscalationDecision {
-    /// Rejudge a retry-exhausted held chat; no widening route is implied.
+    /// Lift the held chat's cause and rejudge it under current conditions.
     Release,
     /// Decide once while preserving the hold.
     Reject {
@@ -116,7 +116,7 @@ pub enum EscalationDecision {
 /// loser of a race; carries no second task state (domain/people.md, section 5.1).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum EscalationChoice {
-    /// Retry hold released.
+    /// Hold released.
     Released,
     /// Task remains held with rejection reason.
     Rejected,
@@ -130,8 +130,6 @@ pub enum EscalationChoice {
 pub enum Refusal {
     /// Final policy role cannot pass further; no state mutation.
     NoFurther,
-    /// Held cause needs an actual amendment route, currently absent.
-    NeedsAmend,
     /// Caller is not the current waiting recipient.
     Standing,
     /// Restoration is unfinished/failed, or the root reports transient admission unavailability.

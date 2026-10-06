@@ -854,6 +854,68 @@ fn held_driver(store: Store) -> Driver {
 }
 
 #[test]
+fn release_rejudges_a_still_expired_deadline_and_escalates_the_new_hold() {
+    let mut store = held_waiting_store();
+    let mut task_number = 0;
+    let mut requester = 0;
+    for row in store.rows.values_mut() {
+        if let Record::Tasks(tasks::Stored::Live(task)) = row {
+            task_number = task.number;
+            let tasks::Party::Person(person) = task.requester else { unreachable!() };
+            requester = person;
+            task.phase = tasks::Phase::Held { was: tasks::Was::Active(tasks::Active::Due), why: tasks::Hold::Deadline };
+            task.authority.budget.deadline = Some(Wall::EPOCH);
+        }
+    }
+    let sign_in = store
+        .rows
+        .values()
+        .find_map(|row| {
+            if let Record::People(people::Stored::SignIn { number, person, .. }) = row
+                && *person == requester
+            {
+                Some(*number)
+            } else {
+                None
+            }
+        })
+        .expect("requester session");
+    let mut driver = held_driver(store);
+    driver.settle();
+    driver.env.wall = Wall::from_nanos(1);
+    driver.delivered.clear();
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(990)),
+        sign_in,
+        key: [90; 16],
+        ask: people::Ask::DecideEscalation {
+            project: 1,
+            task: task_number,
+            revision: 1,
+            decision: people::EscalationDecision::Release,
+        },
+    });
+    driver.settle();
+    assert!(
+        driver.delivered.iter().any(|delivery| matches!(
+            delivery,
+            Delivery::WebReply {
+                reply: people::Reply::Outcome(people::Outcome::EscalationDecided {
+                    choice: people::EscalationChoice::Released,
+                    ..
+                }),
+                ..
+            }
+        )),
+        "{:?}",
+        driver.delivered
+    );
+    assert!(driver.store.rows.values().any(|row| matches!(row, Record::Tasks(tasks::Stored::Live(task))
+        if task.number == task_number && matches!(task.phase, tasks::Phase::Held { why: tasks::Hold::Deadline, .. })
+            && matches!(task.escalation, tasks::Escalation::Waiting { revision: 2, .. }))));
+}
+
+#[test]
 fn restored_waiting_rechecks_snapshot_membership_and_same_holder_changes_nothing() {
     let store = held_waiting_store();
     let rows = store.rows.clone();

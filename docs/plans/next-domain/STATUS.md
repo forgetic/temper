@@ -21,6 +21,7 @@ protocol drafts and lower-layer integration are parked for later work.
 | Alignment 05: pure grant order | merged | 7fb2f3ea | Removed a terminal-byte clone from the exact grant inclusion query, preserving its no-allocation contract. Gate passed: 2,366 focused / 10.860 s; 42 fuzzy / 28.365 s. |
 | Alignment 06: parked move helpers | merged | e2d05d94 | Removed authority's unused move-funding values, transfer function and move-only tests; ordinary carve, charge and settle remain. Gate passed: 2,362 focused / 10.689 s; 42 fuzzy / 28.582 s. |
 | Alignment 07: relaxed domain code docs | merged | this commit | Removed field citation stamps and redundant field prose across the new engine and worker domains; module/type citations and real bounds remain. Four-check gate passed: fmt, clippy, 2,362 focused, 42 fuzzy. |
+| Alignment 08: release every hold | merged | this commit | Release restores the held phase, resets tries, and rejudges due work; a still-expired deadline creates a fresh hold and escalation. Four-check gate passed: fmt, clippy, focused and fuzzy. |
 | 00a Forgejo facts | merged | fa97784 | Gate passed; 1,772 focused / 7.440 s; 26 fuzzy / 22.148 s. |
 | 00b dead drafts | merged | 9acb981 | Gate passed; 1,772 focused and 26 fuzzy; baseline counts unchanged. |
 | 00c legacy rename | merged | d8385dc | Gate passed; 1,772 focused / 7.495 s; 26 fuzzy / 22.159 s. |
@@ -125,7 +126,6 @@ remain on `checkpoint/migration/transcript-codec`, outside main.
 ## Alignment slice limits
 
 - The root rejects restored non-person requesters, non-Report contracts, and delegates until it has routes for them.
-- Release reopens only holds caused by exhausted retries; other holds answer `NeedsAmend`.
 - Role administration reroutes held chats only.
 - Escalation selects the role named by project policy (domain/tasks.md, section 8).
 - A live notice followed by `ReadResult` of a named ended task is the current result-delivery stopgap. Step 06d must replace it with one committed message to the requester (domain/tasks.md, section 5.6).

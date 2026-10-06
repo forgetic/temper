@@ -75,7 +75,7 @@ impl Escalation {
 /// widening or generic release surface is implied.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum EscalationDecision {
-    /// Lift a retry-exhaustion hold, reset tries, and rejudge readiness.
+    /// Lift any hold, reset tries, and rejudge readiness.
     Release,
     /// Decide once while leaving the task held.
     Reject {
@@ -94,7 +94,7 @@ pub enum EscalationDecision {
 /// and its own typed archive with people's keyed answer.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum EscalationOutcome {
-    /// Retry hold lifted, with normal activation consequences.
+    /// Hold lifted, with normal activation consequences.
     Released,
     /// Reason retained; no activation or automatic reroute.
     Rejected,
@@ -107,8 +107,6 @@ pub enum EscalationOutcome {
     Stale,
     /// A policy-role decision cannot pass further.
     NoFurther,
-    /// This hold requires a real amendment route, currently absent
-    NeedsAmend,
     /// Input/revision capacity failed before mutation.
     Limit,
 }
@@ -246,10 +244,7 @@ pub(crate) fn decide(
     }
     let changed = match outcome {
         EscalationOutcome::Released | EscalationOutcome::Rejected | EscalationOutcome::Passed { .. } => true,
-        EscalationOutcome::Stale
-        | EscalationOutcome::NoFurther
-        | EscalationOutcome::NeedsAmend
-        | EscalationOutcome::Limit => false,
+        EscalationOutcome::Stale | EscalationOutcome::NoFurther | EscalationOutcome::Limit => false,
     };
     if changed {
         let task = task_mut(domain, number).expect("decision validated live task");
@@ -258,7 +253,15 @@ pub(crate) fn decide(
                 task.record.escalation = Escalation::Unheld { revision };
                 task.record.tries = Tries::NONE;
                 task.record.refusals = 0;
-                task.record.phase = Phase::Active(Active::Due);
+                let Phase::Held { was, .. } = core::mem::replace(&mut task.record.phase, Phase::Waiting) else {
+                    unreachable!("release validated a held task")
+                };
+                task.record.phase = match was {
+                    Was::Waiting if task.record.waiting_on.is_empty() => Phase::Active(Active::Due),
+                    Was::Waiting => Phase::Waiting,
+                    Was::Active(active) => Phase::Active(active),
+                    Was::Closing(closing) => Phase::Closing(closing),
+                };
             }
             EscalationDecision::Reject { reason } => {
                 task.record.escalation = Escalation::Rejected { revision, by, reason }
@@ -269,7 +272,11 @@ pub(crate) fn decide(
             }
         }
         publish(domain, env, number, out);
-        if outcome == EscalationOutcome::Released {
+        let due = match record(domain, number) {
+            Some(task) => task.phase == Phase::Active(Active::Due),
+            None => false,
+        };
+        if outcome == EscalationOutcome::Released && due {
             activate(domain, number, out);
         }
     }
@@ -284,16 +291,12 @@ fn validate(
 ) -> EscalationOutcome {
     match decision {
         EscalationDecision::Release => {
-            // Current slice can reopen only a retry-exhausted active task; other holds
-            // need amendment routes and answer NeedsAmend here.
             if task.escalation.revision() == u64::MAX {
                 return EscalationOutcome::Limit;
             }
             match &task.phase {
-                Phase::Held { why: Hold::Failures(_), was: Was::Active(Active::Due) } => EscalationOutcome::Released,
-                Phase::Waiting | Phase::Active(_) | Phase::Closing(_) | Phase::Held { .. } | Phase::Ended(_) => {
-                    EscalationOutcome::NeedsAmend
-                }
+                Phase::Held { .. } => EscalationOutcome::Released,
+                Phase::Waiting | Phase::Active(_) | Phase::Closing(_) | Phase::Ended(_) => EscalationOutcome::Stale,
             }
         }
         EscalationDecision::Reject { reason } => {

@@ -394,10 +394,6 @@ pub(super) fn completed(
             decided(domain, request, people::Outcome::Refused(people::Refusal::NoFurther));
             return;
         }
-        tasks::EscalationOutcome::NeedsAmend => {
-            decided(domain, request, people::Outcome::Refused(people::Refusal::NeedsAmend));
-            return;
-        }
         tasks::EscalationOutcome::Limit => {
             decided(domain, request, people::Outcome::Refused(people::Refusal::Limit));
             return;

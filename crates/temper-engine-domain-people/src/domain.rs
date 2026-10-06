@@ -611,7 +611,6 @@ fn decided(domain: &mut Domain, env: &Env<Limits>, id: Id<Pending>, outcome: Out
         | Outcome::EscalationDecided { .. }
         | Outcome::Refused(
             Refusal::NoFurther
-            | Refusal::NeedsAmend
             | Refusal::Standing
             | Refusal::SignIn
             | Refusal::Role
