@@ -1,7 +1,8 @@
 use skein_lib::Duration;
 use temper_fake_person::{Find, Person, Step};
+use temper_web_domain::Address;
 use temper_web_domain_world::{Scenario, Settings, World};
-use temper_web_view::Role;
+use temper_web_view::{DomEvent, Role};
 
 fn submit(world: &mut World) {
     world.advance(Duration::from_millis(20));
@@ -23,6 +24,25 @@ fn restart_before_durable_resends_same_key() {
     world.advance(Duration::from_millis(150));
     assert_eq!(world.engine.creations, 1);
     assert_eq!(world.engine.durable.len(), 1);
+}
+
+#[test]
+fn offline_press_is_parked_until_the_watch_returns() {
+    let mut world = World::new(Settings::calm(208), Scenario::default());
+    world.advance(Duration::from_millis(20));
+    world.restart(Duration::from_millis(30));
+    let mut person = Person::new(Box::from([
+        Step::Type {
+            find: Find::named(Role::TextBox, b"Start a new chat"),
+            words: Box::from(b"Offline draft".as_slice()),
+        },
+        Step::Press { find: Find::named(Role::Button, b"Start chat") },
+    ]));
+    world.run(&mut person);
+    assert_eq!(world.engine.creations, 0);
+    assert_eq!(world.tab.saved.as_ref().expect("saved").pending.len(), 1);
+    world.advance(Duration::from_millis(150));
+    assert_eq!(world.engine.creations, 1);
 }
 
 #[test]
@@ -101,4 +121,55 @@ fn refused_chat_shows_a_reason() {
         within: Duration::from_secs(1),
     }]));
     world.run(&mut person);
+}
+
+#[test]
+fn revision_change_while_confirmation_is_open_prevents_decision() {
+    let mut world = World::new(Settings::calm(209), Scenario::held(27, b"Review memory"));
+    let mut person = Person::new(Box::from([
+        Step::Go { address: Address::Task { number: 27, section: None } },
+        Step::See { find: Find::named(Role::Button, b"Release task"), within: Duration::from_secs(1) },
+        Step::Press { find: Find::named(Role::Button, b"Release task") },
+    ]));
+    world.run(&mut person);
+    world.move_task_revision(27);
+    world.advance(Duration::from_millis(20));
+    let mut person = Person::new(Box::from([
+        Step::See {
+            find: Find {
+                within: Box::new([]),
+                target: temper_fake_person::Target::Text { text: Box::from(b"changed while this was open".as_slice()) },
+            },
+            within: Duration::from_secs(1),
+        },
+        Step::Press { find: Find::named(Role::Button, b"Confirm decision") },
+    ]));
+    world.run(&mut person);
+    world.settle();
+    assert_eq!(world.engine.decision_count, 0);
+}
+
+#[test]
+fn stale_button_press_after_task_changes_does_nothing() {
+    let mut world = World::new(Settings::calm(210), Scenario::held(27, b"Review memory"));
+    let mut person = Person::new(Box::from([
+        Step::Go { address: Address::Task { number: 27, section: None } },
+        Step::See { find: Find::named(Role::Button, b"Release task"), within: Duration::from_secs(1) },
+    ]));
+    world.run(&mut person);
+    let stale = world
+        .tab
+        .view
+        .tree()
+        .nodes()
+        .iter()
+        .find(|node| node.name.as_deref() == Some(b"Release task".as_slice()))
+        .expect("button")
+        .id;
+    world.end_task(27, b"Finished");
+    world.advance(Duration::from_millis(20));
+    world.act(DomEvent::Press { node: stale });
+    world.settle();
+    assert_eq!(world.engine.decision_count, 0);
+    assert!(world.tab.view.tree().find(stale).is_none());
 }

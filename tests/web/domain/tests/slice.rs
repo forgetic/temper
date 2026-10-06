@@ -2,7 +2,7 @@ use skein_lib::Duration;
 use temper_fake_person::{Find, Person, Step, Target};
 use temper_web_domain::Address;
 use temper_web_domain_world::{Scenario, Settings, World};
-use temper_web_view::Role;
+use temper_web_view::{Element, Role};
 
 fn chat_steps(words: &[u8]) -> Person {
     Person::new(Box::from([
@@ -77,4 +77,63 @@ fn seed_replays_the_same_boundary_trace() {
         world.settle();
     }
     assert_eq!(first.trace(), second.trace());
+}
+
+#[test]
+fn held_chat_can_be_released_from_its_page() {
+    let mut world = World::new(Settings::calm(104), Scenario::held(27, b"Review memory"));
+    let mut person = Person::new(Box::from([
+        Step::Go { address: Address::Task { number: 27, section: None } },
+        Step::See { find: Find::named(Role::Region, b"Your first words"), within: Duration::from_secs(1) },
+        Step::See { find: Find::named(Role::Region, b"Held task T27"), within: Duration::from_secs(1) },
+        Step::Press { find: Find::named(Role::Button, b"Release task") },
+        Step::See { find: Find::named(Role::Dialog, b"Confirm decision"), within: Duration::from_secs(1) },
+        Step::Press { find: Find::named(Role::Button, b"Confirm decision") },
+        Step::Gone { find: Find::named(Role::Region, b"Held task T27"), within: Duration::from_secs(1) },
+    ]));
+    world.run(&mut person);
+    world.settle();
+    assert_eq!(world.engine.decision_count, 1);
+    assert_eq!(world.engine.decisions.get(&27).expect("decision").1, temper_web_domain::Choice::Released);
+}
+
+#[test]
+fn held_chat_can_be_left_with_a_reason() {
+    let mut world = World::new(Settings::calm(105), Scenario::held(27, b"Review memory"));
+    let mut person = Person::new(Box::from([
+        Step::Go { address: Address::Task { number: 27, section: None } },
+        Step::See { find: Find::named(Role::Region, b"Held task T27"), within: Duration::from_secs(1) },
+        Step::Press { find: Find::named(Role::Button, b"Leave held") },
+        Step::Type { find: Find::named(Role::TextBox, b"Reason"), words: Box::from(b"Need another review".as_slice()) },
+        Step::Press { find: Find::named(Role::Button, b"Confirm decision") },
+        Step::Gone { find: Find::named(Role::Region, b"Held task T27"), within: Duration::from_secs(1) },
+    ]));
+    world.run(&mut person);
+    world.settle();
+    assert_eq!(world.engine.decision_count, 1);
+    assert_eq!(world.engine.reasons.get(&27).expect("reason").as_ref(), b"Need another review");
+}
+
+#[test]
+fn completed_chat_shows_report_after_reconnect_with_markdown_subset() {
+    let mut world = World::new(Settings::calm(106), Scenario::held(27, b"Review memory"));
+    let report = b"# Summary\n**Safe** and *checked*.\n- First\n- Second\n[Proof](https://example.org/proof) [unsafe](javascript:alert(1))";
+    world.end_task(27, report);
+    let mut person = Person::new(Box::from([
+        Step::Go { address: Address::Task { number: 27, section: None } },
+        Step::See { find: Find::named(Role::Region, b"Result for T27"), within: Duration::from_secs(1) },
+    ]));
+    world.run(&mut person);
+    world.drop_watch();
+    world.advance(Duration::from_millis(150));
+    let tree = world.tab.view.tree();
+    assert!(tree.nodes().iter().enumerate().any(|(at, node)| node.element == Element::Strong
+        && tree.nodes()[at..at + node.size as usize].iter().any(|child| child.text.as_deref() == Some(b"Safe"))));
+    assert!(tree.nodes().iter().enumerate().any(|(at, node)| node.element == Element::Emphasis
+        && tree.nodes()[at..at + node.size as usize].iter().any(|child| child.text.as_deref() == Some(b"checked"))));
+    assert!(tree.nodes().iter().any(|node| node.element == Element::Link
+        && node.external.as_deref() == Some(b"https://example.org/proof".as_slice())));
+    assert!(tree.nodes().iter().any(|node| node.text.as_deref().is_some_and(|text| {
+        text.windows(b"[unsafe](javascript:alert(1))".len()).any(|window| window == b"[unsafe](javascript:alert(1))")
+    })));
 }

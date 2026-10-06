@@ -14,6 +14,7 @@ pub struct Rules {
 
 #[derive(Debug)]
 pub enum Seen {
+    Existing { task: u64 },
     Submitted { key: Key },
     Durable { key: Key, task: u64 },
     Reloaded { before: Vec<u8>, after: Vec<u8> },
@@ -60,6 +61,9 @@ impl Expectations for Rules {
 
     fn observe(&mut self, seen: Seen, judge: &mut Judge<Name, Stimulus>) {
         match seen {
+            Seen::Existing { task } => {
+                self.tasks.insert(task);
+            }
             Seen::Submitted { key } => {
                 if self.submitted.insert(key) {
                     judge.expect(Name::Answer(key), Duration::from_secs(2));

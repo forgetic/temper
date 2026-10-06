@@ -8,8 +8,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use temper_fake_person::RandomPerson;
 use temper_fake_person::{Doing, Next, Person as ScriptedPerson, TreeFace, dom_event};
 use temper_web_domain::{
-    Address, Answer, Ask, Backoff, Event, Key, Outcome, Query, ReadResult, Request, Snapshot, StreamEnd, StreamEvent,
-    Watch,
+    Address, Answer, Ask, Backoff, Change, Event, Key, Outcome, Query, ReadResult, Request, Snapshot, StreamEnd,
+    StreamEvent, Watch,
 };
 use temper_web_view::DomEvent;
 use temper_world::Referee;
@@ -133,6 +133,7 @@ pub struct World {
     serial: u64,
     sends: BTreeSet<(u64, Token)>,
     watches: BTreeSet<(u64, Token)>,
+    watch_kinds: BTreeMap<(u64, Token), Watch>,
     live_watches: BTreeSet<(u64, Token)>,
     watch_live: bool,
     busy_next: bool,
@@ -155,6 +156,7 @@ impl World {
             serial: 0,
             sends: BTreeSet::new(),
             watches: BTreeSet::new(),
+            watch_kinds: BTreeMap::new(),
             live_watches: BTreeSet::new(),
             watch_live: false,
             busy_next: false,
@@ -162,6 +164,9 @@ impl World {
             trace: Vec::new(),
             settings,
         };
+        for chat in &world.engine.chats {
+            observe_at(&mut world.referee, world.now, Seen::Existing { task: chat.task });
+        }
         let requests = world.tab.start(&world.settings, world.now);
         world.route(requests);
         world.observe();
@@ -231,6 +236,7 @@ impl World {
                 Request::Open { stream, watch } => {
                     let epoch = self.tab.epoch;
                     assert!(self.watches.insert((epoch, stream)), "one open per watch");
+                    self.watch_kinds.insert((epoch, stream), watch);
                     self.watch_live = false;
                     self.later(Duration::ZERO, epoch, Due::Deliver(Event::Opened { stream }));
                     self.later(self.settings.latency, epoch, Due::Snapshot { stream, watch });
@@ -242,6 +248,7 @@ impl World {
                         "duplicate Close for {stream:?}; trace: {:?}",
                         self.trace.iter().rev().take(8).collect::<Vec<_>>()
                     );
+                    self.watch_kinds.remove(&(epoch, stream));
                     self.live_watches.remove(&(epoch, stream));
                     self.watch_live = !self.watches.is_empty() && self.watches == self.live_watches;
                     self.later(Duration::ZERO, epoch, Due::Deliver(Event::Ended { stream, end: StreamEnd::Closed }));
@@ -275,6 +282,7 @@ impl World {
             }
             Event::Ended { stream, .. } => {
                 self.watches.remove(&(self.tab.epoch, *stream));
+                self.watch_kinds.remove(&(self.tab.epoch, *stream));
                 self.live_watches.remove(&(self.tab.epoch, *stream));
                 self.watch_live = !self.watches.is_empty() && self.watches == self.live_watches;
             }
@@ -306,6 +314,7 @@ impl World {
                     match &event {
                         Event::Answered { request, .. } if !self.sends.contains(&(epoch, *request)) => return,
                         Event::Opened { stream } if !self.watches.contains(&(epoch, *stream)) => return,
+                        Event::Streamed { stream, .. } if !self.watches.contains(&(epoch, *stream)) => return,
                         Event::Start { .. }
                         | Event::Went { .. }
                         | Event::Act { .. }
@@ -323,12 +332,22 @@ impl World {
                     return;
                 }
                 let previous = self.engine.creations;
+                let prior_decisions = self.engine.decision_count;
+                let decided_task = match &ask {
+                    Ask::Decide { waiting: temper_web_domain::Waiting::Escalation { task }, .. } => Some(*task),
+                    Ask::StartChat { .. } => None,
+                };
                 let answer = self.engine.commit(key, ask, Wall::from_nanos(self.now.as_nanos()));
                 if self.engine.creations > previous {
                     self.stats.commits += 1;
                     if let Answer::Done(Outcome::Started { task }) = answer {
                         observe_at(&mut self.referee, self.now, Seen::Durable { key, task });
                     }
+                }
+                if self.engine.decision_count > prior_decisions
+                    && let Some(task) = decided_task
+                {
+                    self.notify_task(task);
                 }
                 if epoch == self.tab.epoch && self.sends.contains(&(epoch, request)) {
                     self.later(self.settings.latency, epoch, Due::Deliver(Event::Answered { request, answer }));
@@ -340,8 +359,12 @@ impl World {
                 }
                 let result = match query {
                     Query::Chats { project, .. } => self.engine.read_chats(project, self.settings.domain.window),
-                    Query::Escalation { .. } => ReadResult::Escalation(None),
-                    Query::Result { .. } => ReadResult::Result(None),
+                    Query::Escalation { task } => {
+                        ReadResult::Escalation(self.engine.task_snapshot(task).and_then(|snapshot| snapshot.escalation))
+                    }
+                    Query::Result { task } => {
+                        ReadResult::Result(self.engine.task_snapshot(task).and_then(|snapshot| snapshot.result))
+                    }
                 };
                 self.deliver(Event::Read { read, result });
             }
@@ -457,6 +480,7 @@ impl World {
     pub fn reload(&mut self) {
         *self.stats.faults.entry(Fault::Reload).or_default() += 1;
         self.watches.clear();
+        self.watch_kinds.clear();
         self.live_watches.clear();
         self.watch_live = false;
         self.sends.retain(|(epoch, _)| *epoch != self.tab.epoch);
@@ -535,6 +559,36 @@ impl World {
 
     pub fn settle(&mut self) {
         self.advance(Duration::from_millis(250));
+    }
+
+    fn notify_task(&mut self, task: u64) {
+        let Some(snapshot) = self.engine.task_snapshot(task) else {
+            return;
+        };
+        let followers: Vec<_> = self
+            .watch_kinds
+            .iter()
+            .filter_map(|((epoch, stream), watch)| {
+                (*watch == Watch::Task { number: task }).then_some((*epoch, *stream))
+            })
+            .collect();
+        for (epoch, stream) in followers {
+            self.later(
+                self.settings.latency,
+                epoch,
+                Due::Deliver(Event::Streamed { stream, event: StreamEvent::Change(Change::Task(snapshot.clone())) }),
+            );
+        }
+    }
+
+    pub fn move_task_revision(&mut self, task: u64) {
+        self.engine.move_revision(task);
+        self.notify_task(task);
+    }
+
+    pub fn end_task(&mut self, task: u64, words: &[u8]) {
+        self.engine.end(task, words);
+        self.notify_task(task);
     }
 
     pub fn random_step(&mut self, person: &mut RandomPerson) {

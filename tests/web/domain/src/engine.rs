@@ -4,7 +4,8 @@ use crate::scenario::Scenario;
 use skein_lib::Wall;
 use std::collections::BTreeMap;
 use temper_web_domain::{
-    Answer, Ask, ChatLine, Chip, Key, Outcome, PersonSnapshot, ReadResult, Refusal, TaskPhase, TaskSnapshot,
+    Answer, Ask, ChatLine, Chip, Choice, Decision, EndKind, Key, Outcome, PersonSnapshot, ReadResult, Refusal,
+    TaskPhase, TaskResult, TaskSnapshot, Waiting,
 };
 
 #[derive(Debug)]
@@ -14,9 +15,13 @@ pub struct Engine {
     pub person: temper_web_domain::Person,
     pub projects: Vec<temper_web_domain::Project>,
     pub chats: Vec<ChatLine>,
+    pub tasks: BTreeMap<u64, TaskSnapshot>,
     pub durable: BTreeMap<Key, (Ask, Answer)>,
+    pub decisions: BTreeMap<u64, (temper_web_domain::Person, Choice, Wall)>,
+    pub reasons: BTreeMap<u64, Box<[u8]>>,
     pub next_task: u64,
     pub creations: u64,
+    pub decision_count: u64,
 }
 
 impl Engine {
@@ -29,9 +34,13 @@ impl Engine {
             person: scenario.person,
             projects: scenario.projects,
             chats: scenario.chats,
+            tasks: scenario.tasks.into_iter().map(|task| (task.chip.task, task)).collect(),
             durable: BTreeMap::new(),
+            decisions: BTreeMap::new(),
+            reasons: BTreeMap::new(),
             next_task,
             creations: 0,
+            decision_count: 0,
         }
     }
 
@@ -64,6 +73,9 @@ impl Engine {
 
     #[must_use]
     pub fn task_snapshot(&self, number: u64) -> Option<TaskSnapshot> {
+        if let Some(task) = self.tasks.get(&number) {
+            return Some(task.clone());
+        }
         let row = self.chats.iter().find(|row| row.task == number)?;
         Some(TaskSnapshot {
             chip: Chip {
@@ -111,9 +123,59 @@ impl Engine {
                     Answer::Done(Outcome::Started { task })
                 }
             }
-            Ask::Decide { .. } => Answer::Refused(Refusal::Unknown),
+            Ask::Decide { waiting: Waiting::Escalation { task }, revision, decision } => {
+                self.decide(*task, *revision, decision, now)
+            }
         };
         self.durable.insert(key, (ask, answer.clone()));
         answer
+    }
+
+    fn decide(&mut self, task: u64, revision: u64, decision: &Decision, now: Wall) -> Answer {
+        if let Some((person, choice, at)) = self.decisions.get(&task) {
+            return Answer::Done(Outcome::DecidedBefore { by: person.clone(), choice: *choice, at: *at });
+        }
+        let Some(snapshot) = self.tasks.get_mut(&task) else {
+            return Answer::Refused(Refusal::Unknown);
+        };
+        if snapshot.chip.revision != revision {
+            return Answer::Refused(Refusal::Moved { revision: snapshot.chip.revision });
+        }
+        if snapshot.escalation.is_none() {
+            return Answer::Refused(Refusal::Ended);
+        }
+        let choice = match decision {
+            Decision::Release => Choice::Released,
+            Decision::Reject { reason } => {
+                self.reasons.insert(task, reason.clone());
+                Choice::Rejected
+            }
+            Decision::Pass => Choice::Passed,
+        };
+        if choice == Choice::Released {
+            snapshot.chip.phase = TaskPhase::Running;
+        }
+        snapshot.chip.revision = snapshot.chip.revision.saturating_add(1);
+        snapshot.escalation = None;
+        self.decisions.insert(task, (self.person.clone(), choice, now));
+        self.decision_count += 1;
+        Answer::Done(Outcome::Decided { choice })
+    }
+
+    pub fn move_revision(&mut self, task: u64) {
+        let snapshot = self.tasks.get_mut(&task).expect("task exists");
+        snapshot.chip.revision = snapshot.chip.revision.saturating_add(1);
+        if let Some(escalation) = &mut snapshot.escalation {
+            escalation.revision = snapshot.chip.revision;
+        }
+    }
+
+    pub fn end(&mut self, task: u64, words: &[u8]) {
+        let snapshot = self.tasks.get_mut(&task).expect("task exists");
+        snapshot.chip.phase = TaskPhase::Ended(EndKind::Done);
+        snapshot.chip.revision = snapshot.chip.revision.saturating_add(1);
+        snapshot.escalation = None;
+        snapshot.result =
+            Some(TaskResult { task, kind: EndKind::Done, words: Box::from(words), revision: snapshot.chip.revision });
     }
 }
