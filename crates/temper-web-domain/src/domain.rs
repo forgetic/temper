@@ -50,6 +50,7 @@ pub struct Domain {
     confirming: Option<Confirming>,
     timers: Deadlines<Timer>,
     new_chat: Field,
+    new_chat_edit_version: u64,
     reason: Field,
     notices: Queue<Notice>,
     facts: Queue<Fact>,
@@ -86,6 +87,7 @@ impl Domain {
             confirming: None,
             timers: Deadlines::with_capacity(timer_capacity),
             new_chat: Field::empty(),
+            new_chat_edit_version: 0,
             reason: Field::empty(),
             notices: Queue::with_capacity(limits.notices),
             facts: Queue::with_capacity(limits.facts),
@@ -720,7 +722,8 @@ fn start(
                     Some(ObjectKey::Escalation { task: *task })
                 }
             };
-            let pending = Pending { key: item.key, ask: item.ask.clone(), about, state: Sending::Parked };
+            let pending =
+                Pending { key: item.key, ask: item.ask.clone(), about, draft_version: None, state: Sending::Parked };
             let id = domain.requests.insert(pending).expect("saved pending count fits requests");
             let old = domain.pending.insert(item.key, id).expect("saved pending count fits requests");
             assert!(old.is_none(), "saved keys are unique");
@@ -743,6 +746,8 @@ fn act(domain: &mut Domain, env: &Env<Limits>, action: Action, out: &mut Queue<R
                 domain.notice(env, NoticeKind::WordsTooLong);
             } else {
                 domain.new_chat.text = text;
+                domain.new_chat_edit_version =
+                    domain.new_chat_edit_version.checked_add(1).expect("composer edit count remains representable");
                 domain.save(out);
             }
         }
@@ -856,6 +861,7 @@ fn confirm(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
         key,
         ask: Ask::Decide { waiting: Waiting::Escalation { task }, revision, decision },
         about: Some(object_key),
+        draft_version: None,
         state: Sending::Parked,
     };
     let Ok(request) = domain.requests.insert(pending) else {
@@ -903,6 +909,7 @@ fn submit_chat(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>)
         key,
         ask: Ask::StartChat { project, words: domain.new_chat.text.clone() },
         about: None,
+        draft_version: Some(domain.new_chat_edit_version),
         state: Sending::Parked,
     };
     let Ok(id) = domain.requests.insert(pending) else {
@@ -923,6 +930,7 @@ fn answered(domain: &mut Domain, env: &Env<Limits>, id: Id<Pending>, answer: Ans
     let key = pending.key;
     let ask = pending.ask.clone();
     let about = pending.about;
+    let draft_version = pending.draft_version;
     let attempt = match pending.state {
         Sending::InFlight { attempt } => attempt,
         Sending::Backoff { .. } | Sending::Parked => unreachable!("checked in-flight state"),
@@ -947,7 +955,9 @@ fn answered(domain: &mut Domain, env: &Env<Limits>, id: Id<Pending>, answer: Ans
             match outcome {
                 Outcome::Started { task } => {
                     let Ask::StartChat { words, .. } = ask else { unreachable!("Started answers StartChat") };
-                    if domain.new_chat.text.as_ref() == words.as_ref() {
+                    if draft_version == Some(domain.new_chat_edit_version)
+                        && domain.new_chat.text.as_ref() == words.as_ref()
+                    {
                         domain.new_chat.text = Box::from([]);
                         domain.new_chat.written = domain.new_chat.written.wrapping_add(1);
                     }

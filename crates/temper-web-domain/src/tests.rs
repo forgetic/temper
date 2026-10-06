@@ -145,6 +145,29 @@ fn start_snapshot_read_and_durable_chat() {
 }
 
 #[test]
+fn later_same_words_edit_survives_older_start_answer() {
+    let (mut domain, mut out, stream, _) = started(12);
+    signed_in(&mut domain, &mut out, stream);
+    let (request, _) = submit(&mut domain, &mut out);
+    step(
+        &mut domain,
+        &env(1),
+        Event::Act { action: Action::Edit { field: FieldRef::NewChat, text: Box::from(b"Fix login".as_slice()) } },
+        &mut out,
+    );
+    let Request::Save { .. } = pop(&mut out) else { panic!("later edit is saved") };
+    step(
+        &mut domain,
+        &env(2),
+        Event::Answered { request, answer: Answer::Done(Outcome::Started { task: 42 }) },
+        &mut out,
+    );
+    let Request::Save { saved } = pop(&mut out) else { panic!("answer saves state") };
+    assert_eq!(saved.drafts[0].text.as_ref(), b"Fix login", "later unsent edit survives old answer");
+    assert_eq!(domain.field(FieldRef::NewChat).expect("composer").written, 0, "domain does not clear later edit");
+}
+
+#[test]
 fn busy_retries_same_key_and_reload_restores_it() {
     let (mut domain, mut out, stream, _) = started(22);
     signed_in(&mut domain, &mut out, stream);
