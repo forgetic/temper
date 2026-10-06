@@ -29,7 +29,7 @@ pub(crate) struct Pending {
     pub key: Key,
     pub ask: Ask,
     pub about: Option<ObjectKey>,
-    /// Composer edit version at submission; absent for a request restored after reload.
+    /// Composer edit version at submission; absent for non-chat asks.
     pub draft_version: Option<u64>,
     pub state: Sending,
 }

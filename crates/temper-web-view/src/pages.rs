@@ -23,7 +23,7 @@ pub fn build(builder: &mut Builder, domain: &Domain, limits: &Limits) {
             builder.text(b"Connecting to temper");
             builder.close();
         }
-        Page::SignIn { .. } => signin(builder),
+        Page::SignIn { .. } => signin(builder, domain),
         Page::Missing { address } => missing(builder, *address),
         Page::Chats(chats) => chats_page(builder, domain, chats),
         Page::Task(page) => task::build(builder, domain, page, limits),
@@ -34,10 +34,16 @@ pub fn build(builder: &mut Builder, domain: &Domain, limits: &Limits) {
     builder.close();
 }
 
-fn signin(builder: &mut Builder) {
+fn signin(builder: &mut Builder, domain: &Domain) {
     builder.open(Element::Heading(Level::One));
     builder.text(b"Sign in to temper");
     builder.close();
+    if domain.account_mismatch() {
+        builder.open(Element::Paragraph);
+        builder.role(Role::Alert);
+        builder.text(b"This tab has saved work for another person. Sign in as that person to resume it.");
+        builder.close();
+    }
     builder.open(Element::Button);
     builder.name(b"Sign in");
     builder.bind(Binding::SignIn);

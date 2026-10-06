@@ -574,8 +574,11 @@ pub enum Sending {
   answer that retires a request saves again. Drafts are saved on a
   coalescing timer instead, since losing the last keystrokes loses
   nothing that was decided.
-- **Restored at start.** `Start` with what session storage kept sends each
-  request again with its key, before the page opens.
+- **Restored after identity.** `Start` with what session storage kept
+  opens the person watch. Once its snapshot names the saved work's owner,
+  the domain opens the page and sends each parked request again with its
+  original key. A different person sees a sign-in warning; the saved
+  work stays parked and hidden until its owner returns.
 - **Two in sequence.** "Amend, then release" and "words, then release" for a
   stopped chat are two requests (`ux/inbox.md`, section 9;
   `ux/chats.md`, section 7): the second, in `then`, is minted when the

@@ -95,6 +95,11 @@ fn task_started(seed: u64) -> (Domain, Queue<Request>, Token, Token, Id<Object>)
     (domain, out, person_stream, task_stream, id)
 }
 
+fn restore_person(domain: &mut Domain, out: &mut Queue<Request>, stream: Token) {
+    step(domain, &env(3), Event::Opened { stream }, out);
+    step(domain, &env(3), Event::Streamed { stream, event: StreamEvent::Snapshot(Snapshot::Person(person())) }, out);
+}
+
 #[test]
 fn release_is_saved_then_sent_and_lingers_after_answer() {
     let (mut domain, mut out, _, _, object) = task_started(201);
@@ -166,6 +171,34 @@ fn leaving_held_requires_reason_and_edit_saves_it() {
 }
 
 #[test]
+fn overlimit_reason_paste_restores_words_before_confirmation() {
+    let (mut domain, mut out, _, _, object) = task_started(212);
+    step(&mut domain, &env(0), Event::Act { action: Action::Intend { intent: Intent::LeaveHeld, object } }, &mut out);
+    step(
+        &mut domain,
+        &env(0),
+        Event::Act { action: Action::Edit { field: FieldRef::Reason, text: Box::from(b"Wait for review".as_slice()) } },
+        &mut out,
+    );
+    let Request::Save { .. } = pop(&mut out) else { panic!("reason saved") };
+    step(
+        &mut domain,
+        &env(0),
+        Event::Act { action: Action::Edit { field: FieldRef::Reason, text: Box::from([b'x'; 65]) } },
+        &mut out,
+    );
+    let field = domain.field(FieldRef::Reason).expect("reason exists");
+    assert_eq!(field.text.as_ref(), b"Wait for review", "oversized reason is rejected");
+    assert_eq!(field.written, 1, "view must restore the accepted reason");
+    step(&mut domain, &env(0), Event::Act { action: Action::Confirm }, &mut out);
+    let Request::Save { .. } = pop(&mut out) else { panic!("decision saved") };
+    let Request::Send { ask: Ask::Decide { decision: Decision::Reject { reason }, .. }, .. } = pop(&mut out) else {
+        panic!("decision sent")
+    };
+    assert_eq!(reason.as_ref(), b"Wait for review", "confirmed reason matches restored words");
+}
+
+#[test]
 fn restored_reason_reopens_only_for_its_task() {
     let (mut domain, mut out, _, _, object) = task_started(210);
     step(&mut domain, &env(1), Event::Act { action: Action::Intend { intent: Intent::LeaveHeld, object } }, &mut out);
@@ -195,16 +228,11 @@ fn restored_reason_reopens_only_for_its_task() {
     let Request::Open { stream: person_stream, watch: Watch::Person } = pop(&mut resumed) else {
         panic!("person watch opens")
     };
+    assert!(resumed.is_empty(), "saved task stays hidden until its person is verified");
+    restore_person(&mut reload, &mut resumed, person_stream);
     let Request::Open { stream: task_stream, watch: Watch::Task { number: 42 } } = pop(&mut resumed) else {
-        panic!("task watch opens")
+        panic!("task watch opens after the person is verified")
     };
-    step(&mut reload, &env(3), Event::Opened { stream: person_stream }, &mut resumed);
-    step(
-        &mut reload,
-        &env(3),
-        Event::Streamed { stream: person_stream, event: StreamEvent::Snapshot(Snapshot::Person(person())) },
-        &mut resumed,
-    );
     step(&mut reload, &env(3), Event::Opened { stream: task_stream }, &mut resumed);
     step(
         &mut reload,
@@ -237,8 +265,14 @@ fn restored_reason_reopens_only_for_its_task() {
         },
         &mut changed,
     );
-    let Request::Open { .. } = pop(&mut changed) else { panic!("person watch opens") };
-    let Request::Open { stream, .. } = pop(&mut changed) else { panic!("task watch opens") };
+    let Request::Open { stream: person_stream, watch: Watch::Person } = pop(&mut changed) else {
+        panic!("person watch opens")
+    };
+    assert!(changed.is_empty(), "task waits for its person");
+    restore_person(&mut other, &mut changed, person_stream);
+    let Request::Open { stream, watch: Watch::Task { number: 42 } } = pop(&mut changed) else {
+        panic!("task watch opens after the person is verified")
+    };
     step(&mut other, &env(3), Event::Opened { stream }, &mut changed);
     step(
         &mut other,
@@ -334,6 +368,26 @@ fn left_before_answer_stays_deciding_then_reports_other_decider() {
 }
 
 #[test]
+#[should_panic(expected = "decider name fits text bound")]
+fn oversized_decider_name_is_rejected_before_retention() {
+    let (mut domain, mut out, _, task_stream, _) = task_started(214);
+    let why = Why::Decided {
+        by: Person { number: 2, name: Box::from([b'x'; 65]) },
+        choice: Choice::Released,
+        at: Wall::EPOCH,
+    };
+    step(
+        &mut domain,
+        &env(0),
+        Event::Streamed {
+            stream: task_stream,
+            event: StreamEvent::Change(Change::Left { key: ObjectKey::Escalation { task: 42 }, why }),
+        },
+        &mut out,
+    );
+}
+
+#[test]
 fn stale_handle_is_refused_after_navigation() {
     let (mut domain, mut out, _, task_stream, object) = task_started(205);
     step(&mut domain, &env(0), Event::Act { action: Action::Go { address: Address::Chats } }, &mut out);
@@ -354,6 +408,7 @@ fn stale_handle_is_refused_after_navigation() {
 fn gone_task_reads_its_result() {
     let (mut domain, mut out, _, task_stream, _) = task_started(206);
     step(&mut domain, &env(0), Event::Ended { stream: task_stream, end: StreamEnd::Gone }, &mut out);
+    assert_eq!(domain.link(), LinkState::Behind, "gone task watch is no longer live");
     let Request::Read { read: escalation_read, query: Query::Escalation { task: 42 } } = pop(&mut out) else {
         panic!("gone task reads escalation")
     };
@@ -379,6 +434,32 @@ fn gone_task_reads_its_result() {
     let result = domain.object(page.result.expect("result card exists")).expect("result object exists");
     let Body::Ended(report) = &result.body else { panic!("result has typed body") };
     assert_eq!(report.words.as_ref(), b"# Fixed login", "Markdown words are kept whole");
+}
+
+#[test]
+fn refused_result_read_after_gone_task_ends_loading() {
+    let limits = limits();
+    let mut domain = Domain::new(&limits, 211);
+    let mut out = Queue::with_capacity(max_out(&limits));
+    step(
+        &mut domain,
+        &env(0),
+        Event::Start { address: Address::Task { number: 42, section: None }, saved: None, offset: Offset(0) },
+        &mut out,
+    );
+    let Request::Open { watch: Watch::Person, .. } = pop(&mut out) else { panic!("person watch opens") };
+    let Request::Open { stream, watch: Watch::Task { number: 42 } } = pop(&mut out) else { panic!("task watch opens") };
+    step(&mut domain, &env(0), Event::Ended { stream, end: StreamEnd::Gone }, &mut out);
+    let Request::Read { read, query: Query::Escalation { task: 42 } } = pop(&mut out) else {
+        panic!("escalation read follows gone watch")
+    };
+    step(&mut domain, &env(0), Event::Read { read, result: ReadResult::Escalation(None) }, &mut out);
+    let Request::Read { read, query: Query::Result { task: 42 } } = pop(&mut out) else {
+        panic!("result read follows escalation")
+    };
+    step(&mut domain, &env(0), Event::Read { read, result: ReadResult::Refused(Refusal::Role) }, &mut out);
+    let Page::Task(page) = domain.page() else { panic!("task page remains open") };
+    assert!(!page.loading, "terminal result refusal ends loading");
 }
 
 #[test]
@@ -443,6 +524,45 @@ fn unreachable_gone_read_retries_after_frame_reconnect() {
         panic!("fallback read reissued after frame snapshot")
     };
     assert_eq!(domain.link(), LinkState::Behind, "task page has no live watch after Gone");
+}
+
+#[test]
+fn missed_person_watch_does_not_strand_an_offline_decision() {
+    let (mut domain, mut out, frame_stream, task_stream, object) = task_started(213);
+    step(&mut domain, &env(0), Event::Ended { stream: task_stream, end: StreamEnd::Dropped }, &mut out);
+    assert!(domain.link().offline(), "task loss makes the link offline");
+    step(&mut domain, &env(0), Event::Act { action: Action::Intend { intent: Intent::Release, object } }, &mut out);
+    step(&mut domain, &env(0), Event::Act { action: Action::Confirm }, &mut out);
+    let Request::Save { saved } = pop(&mut out) else { panic!("decision is saved") };
+    assert_eq!(saved.pending.len(), 1, "offline decision is parked");
+    assert!(out.is_empty(), "parked decision is not yet sent");
+    step(
+        &mut domain,
+        &env(0),
+        Event::Streamed { stream: frame_stream, event: StreamEvent::Missed { count: 1 } },
+        &mut out,
+    );
+    assert_eq!(pop(&mut out), Request::Close { stream: frame_stream }, "missed watch closes");
+    assert!(domain.link().offline(), "missed watch retains the offline state");
+    step(&mut domain, &env(0), Event::Ended { stream: frame_stream, end: StreamEnd::Closed }, &mut out);
+    let at = domain.next_deadline().expect("backoff timer armed");
+    fire(&mut domain, &env(at.as_nanos()), &mut out);
+    let Request::Open { stream, watch } = pop(&mut out) else { panic!("a watch reopens") };
+    step(&mut domain, &env(at.as_nanos()), Event::Opened { stream }, &mut out);
+    let snapshot = match watch {
+        Watch::Person => Snapshot::Person(person()),
+        Watch::Task { number: 42 } => Snapshot::Task(snapshot(1)),
+        Watch::Task { .. } => panic!("only task 42 is watched"),
+    };
+    step(
+        &mut domain,
+        &env(at.as_nanos()),
+        Event::Streamed { stream, event: StreamEvent::Snapshot(snapshot) },
+        &mut out,
+    );
+    let Request::Send { ask: Ask::Decide { decision: Decision::Release, .. }, .. } = pop(&mut out) else {
+        panic!("a recovering snapshot sends the parked decision")
+    };
 }
 
 #[test]

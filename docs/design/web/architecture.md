@@ -116,7 +116,9 @@ shows, never growth.
   keeps focus, caret, selection, composition and scroll across a patch.
   An input's value is the person's: the view writes it only when the
   domain changes it, as when a composer is cleared once its words are
-  sent.
+  sent. When an edit exceeds the accepted bound, the domain advances the
+  field's write count and the view restores its last accepted value before
+  another press can submit it.
 - **Sized from the domain's limits.** A page's window and a card's fields
   bound its tree, so a tree always fits, and a diff's patches are bounded
   by the two trees.
@@ -178,12 +180,18 @@ shows, never growth.
   pushed. A task's address is its number (ux README, section 4).
 - **Session storage is the client's small store.** What a reload must not
   lose, its pending requests with their keys and the person's drafts, the
-  domain writes through the shell as it changes, and reads at start, and
-  then sends what is pending again with the same keys (ux README, 5.3).
+  domain writes through the shell as it changes, and reads at start. The
+  saved state names the person who owns it; after a reload, the domain
+  waits for the person watch to confirm that identity before it shows
+  the saved page or sends pending requests with their original keys. A
+  different sign-in leaves that work parked and shows an account warning
+  (ux README, 5.3).
   A step that creates a keyed request emits a whole-storage `Save` before
   its `Send`; the shell applies those outputs in order. Each accepted
   draft edit also emits `Save` in that step, so a reload immediately after
-  typing restores the person's words.
+  typing restores the person's words. Saved chat requests carry the edit
+  generation they submitted; an answer clears only that generation's draft,
+  including after a reload, while a later unsent edit remains.
   It is never the truth; the engine's store is.
 - **The frame's person watch stays open on every page.** Its first
   snapshot supplies the signed-in person, projects and inbox count. The

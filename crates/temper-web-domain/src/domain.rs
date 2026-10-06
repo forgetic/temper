@@ -30,6 +30,8 @@ pub(crate) enum Timer {
 pub struct Domain {
     started: bool,
     signed_out: bool,
+    owner: Option<u64>,
+    account_mismatch: bool,
     rng: Rng,
     wall: Wall,
     offset: Offset,
@@ -68,6 +70,8 @@ impl Domain {
         Domain {
             started: false,
             signed_out: false,
+            owner: None,
+            account_mismatch: false,
             rng: Rng::new(seed),
             wall: Wall::EPOCH,
             offset: Offset(0),
@@ -191,6 +195,12 @@ impl Domain {
         self.address
     }
 
+    /// A different sign-in is active while this tab retains another person's work.
+    #[must_use]
+    pub const fn account_mismatch(&self) -> bool {
+        self.account_mismatch
+    }
+
     fn changed(&mut self) {
         self.shown = self.shown.wrapping_add(1);
     }
@@ -219,15 +229,26 @@ impl Domain {
         for (key, id) in &self.pending {
             let request = self.requests.get(*id).expect("pending map names retained request");
             pending
-                .push(SavedPending { key: *key, ask: request.ask.clone() })
+                .push(SavedPending { key: *key, ask: request.ask.clone(), draft_version: request.draft_version })
                 .expect("pending list matches map capacity");
         }
         out.push(Request::Save {
             saved: Saved {
+                person: self.owner,
                 project: self.frame.project,
                 drafts: Box::from([
-                    SavedDraft { field: FieldRef::NewChat, text: self.new_chat.text.clone(), target: None },
-                    SavedDraft { field: FieldRef::Reason, text: self.reason.text.clone(), target: self.reason_target },
+                    SavedDraft {
+                        field: FieldRef::NewChat,
+                        text: self.new_chat.text.clone(),
+                        edit_version: self.new_chat_edit_version,
+                        target: None,
+                    },
+                    SavedDraft {
+                        field: FieldRef::Reason,
+                        text: self.reason.text.clone(),
+                        edit_version: 0,
+                        target: self.reason_target,
+                    },
                 ]),
                 pending: pending.into_boxed(),
             },
@@ -412,6 +433,12 @@ impl Domain {
 
     fn leave_object(&mut self, env: &Env<Limits>, key: ObjectKey, why: Why) {
         if let Some(id) = self.objects.find(key) {
+            if let Why::Decided { by, .. } = &why {
+                assert!(
+                    by.name.len() <= usize::try_from(env.limits.text).expect("u32 fits usize"),
+                    "decider name fits text bound"
+                );
+            }
             let until = env.now.saturating_add(env.limits.linger);
             let object = self.objects.get_mut(id).expect("indexed object exists");
             object.card = Card::Leaving { why, until };
@@ -500,15 +527,17 @@ impl Domain {
         self.changed();
     }
 
-    fn read_task(&mut self, env: &Env<Limits>, query: Query, out: &mut Queue<Request>) {
+    fn read_page(&mut self, env: &Env<Limits>, query: Query, out: &mut Queue<Request>) {
         match self.reads.insert(ReadSlot { query: query.clone(), generation: self.generation, abandoned: false }) {
             Ok(id) => {
                 self.page_read = Some(id);
                 out.push(Request::Read { read: id.token(), query });
             }
             Err(_) => {
-                if let Page::Task(page) = &mut self.page {
-                    page.loading = false;
+                match &mut self.page {
+                    Page::Chats(page) => page.loading = false,
+                    Page::Task(page) => page.loading = false,
+                    Page::Starting | Page::SignIn { .. } | Page::Missing { .. } => {}
                 }
                 self.notice(env, NoticeKind::ReadFull);
             }
@@ -544,6 +573,9 @@ impl Domain {
     }
 
     fn live(&mut self, env: &Env<Limits>, out: &mut Queue<Request>) {
+        if self.signed_out {
+            return;
+        }
         let was_offline = self.link.offline();
         let frame_live = match self.frame_stream {
             Some(id) => self.watch_live(id),
@@ -561,24 +593,35 @@ impl Domain {
         }
         if was_offline {
             self.notice(env, NoticeKind::CameBack);
-            let ids: List<Id<Pending>> = {
-                let mut ids = List::with_capacity(self.pending.capacity());
-                for (_, id) in &self.pending {
-                    ids.push(*id).expect("pending ids fit");
-                }
-                ids
+            self.resume_parked(out);
+            let retry = match &mut self.page {
+                Page::Chats(page) => page.retry.take(),
+                Page::Task(page) => page.retry.take(),
+                Page::Starting | Page::SignIn { .. } | Page::Missing { .. } => None,
             };
-            for id in &ids {
-                let state = self.requests.get(*id).expect("pending id exists").state;
-                if state.waiting() {
-                    self.timers.cancel(Timer::Retry(*id));
-                    self.send(*id, 1, out);
-                }
+            if let Some(query) = retry {
+                self.read_page(env, query, out);
             }
-            if let Page::Task(page) = &mut self.page
-                && let Some(query) = page.retry.take()
-            {
-                self.read_task(env, query, out);
+        }
+    }
+
+    fn resume_parked(&mut self, out: &mut Queue<Request>) {
+        let Some(person) = &self.frame.person else { return };
+        if self.signed_out || self.link.offline() || self.owner != Some(person.number) {
+            return;
+        }
+        let ids: List<Id<Pending>> = {
+            let mut ids = List::with_capacity(self.pending.capacity());
+            for (_, id) in &self.pending {
+                ids.push(*id).expect("pending ids fit");
+            }
+            ids
+        };
+        for id in &ids {
+            let state = self.requests.get(*id).expect("pending id exists").state;
+            if state.waiting() {
+                self.timers.cancel(Timer::Retry(*id));
+                self.send(*id, 1, out);
             }
         }
     }
@@ -685,6 +728,8 @@ fn start(
     domain.started = true;
     domain.offset = offset;
     if let Some(saved) = saved {
+        assert!(saved.pending.is_empty() || saved.person.is_some(), "saved requests name their person");
+        domain.owner = saved.person;
         domain.frame.project = saved.project;
         for draft in &saved.drafts {
             match draft.field {
@@ -695,6 +740,7 @@ fn start(
                     );
                     domain.new_chat.text.clone_from(&draft.text);
                     domain.new_chat.written = domain.new_chat.written.wrapping_add(1);
+                    domain.new_chat_edit_version = draft.edit_version;
                 }
                 FieldRef::Reason => {
                     assert!(
@@ -726,16 +772,26 @@ fn start(
                     Some(ObjectKey::Escalation { task: *task })
                 }
             };
-            let pending =
-                Pending { key: item.key, ask: item.ask.clone(), about, draft_version: None, state: Sending::Parked };
+            let pending = Pending {
+                key: item.key,
+                ask: item.ask.clone(),
+                about,
+                draft_version: item.draft_version,
+                state: Sending::Parked,
+            };
             let id = domain.requests.insert(pending).expect("saved pending count fits requests");
             let old = domain.pending.insert(item.key, id).expect("saved pending count fits requests");
             assert!(old.is_none(), "saved keys are unique");
-            domain.send(id, 1, out);
         }
     }
     domain.open_frame(out);
-    domain.open_page(env, address, out);
+    if domain.owner.is_some() {
+        domain.address = address;
+        domain.page = Page::Starting;
+        domain.changed();
+    } else {
+        domain.open_page(env, address, out);
+    }
 }
 
 fn act(domain: &mut Domain, env: &Env<Limits>, action: Action, out: &mut Queue<Request>) {
@@ -747,6 +803,8 @@ fn act(domain: &mut Domain, env: &Env<Limits>, action: Action, out: &mut Queue<R
                 return;
             }
             if text.len() > usize::try_from(env.limits.words).expect("u32 fits usize") {
+                domain.new_chat.written = domain.new_chat.written.wrapping_add(1);
+                domain.changed();
                 domain.notice(env, NoticeKind::WordsTooLong);
             } else {
                 domain.new_chat.text = text;
@@ -760,6 +818,8 @@ fn act(domain: &mut Domain, env: &Env<Limits>, action: Action, out: &mut Queue<R
                 return;
             }
             if text.len() > usize::try_from(env.limits.words).expect("u32 fits usize") {
+                domain.reason.written = domain.reason.written.wrapping_add(1);
+                domain.changed();
                 domain.notice(env, NoticeKind::WordsTooLong);
             } else {
                 domain.reason.text = text;
@@ -831,6 +891,10 @@ fn intend(domain: &mut Domain, env: &Env<Limits>, intent: Intent, id: Id<Object>
 }
 
 fn confirm(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
+    let Some(person) = &domain.frame.person else { return };
+    if domain.owner != Some(person.number) {
+        return;
+    }
     let Some(open) = &domain.confirming else {
         return;
     };
@@ -906,6 +970,10 @@ fn submit_chat(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>)
         Page::Starting | Page::SignIn { .. } | Page::Missing { .. } | Page::Task(_) => false,
     };
     if domain.signed_out || !chats {
+        return;
+    }
+    let Some(person) = &domain.frame.person else { return };
+    if domain.owner != Some(person.number) {
         return;
     }
     let Some(project) = domain.frame.project else {
@@ -1082,7 +1150,7 @@ fn read(domain: &mut Domain, env: &Env<Limits>, id: Id<ReadSlot>, result: ReadRe
                     page.escalation = object;
                 }
                 domain.changed();
-                domain.read_task(env, Query::Result { task }, out);
+                domain.read_page(env, Query::Result { task }, out);
             }
         }
         (Query::Result { task }, ReadResult::Result(value)) => {
@@ -1110,22 +1178,36 @@ fn read(domain: &mut Domain, env: &Env<Limits>, id: Id<ReadSlot>, result: ReadRe
             }
         }
         (_, ReadResult::SignedOut) => domain.sign_out(env, out),
-        (query, ReadResult::Unreachable) => {
-            if let Page::Task(page) = &mut domain.page {
-                page.retry = Some(query);
-            }
-            domain.disconnect(env, out);
-        }
+        (query, ReadResult::Unreachable) => unreachable_read(domain, env, query, out),
         (Query::Escalation { task }, ReadResult::Refused(refusal)) => {
             domain.notice(env, NoticeKind::Refused(refusal));
-            domain.read_task(env, Query::Result { task }, out);
+            domain.read_page(env, Query::Result { task }, out);
         }
-        (_, ReadResult::Refused(refusal)) => domain.notice(env, NoticeKind::Refused(refusal)),
+        (_, ReadResult::Refused(refusal)) => refused_read(domain, env, refusal),
         (Query::Chats { .. }, ReadResult::Escalation(_) | ReadResult::Result(_))
         | (Query::Escalation { .. } | Query::Result { .. }, ReadResult::Chats { .. })
         | (Query::Escalation { .. }, ReadResult::Result(_))
         | (Query::Result { .. }, ReadResult::Escalation(_)) => unreachable!("read terminal matches issued query"),
     }
+}
+
+fn unreachable_read(domain: &mut Domain, env: &Env<Limits>, query: Query, out: &mut Queue<Request>) {
+    match &mut domain.page {
+        Page::Chats(page) => page.retry = Some(query),
+        Page::Task(page) => page.retry = Some(query),
+        Page::Starting | Page::SignIn { .. } | Page::Missing { .. } => {}
+    }
+    domain.disconnect(env, out);
+}
+
+fn refused_read(domain: &mut Domain, env: &Env<Limits>, refusal: crate::Refusal) {
+    match &mut domain.page {
+        Page::Chats(page) => page.loading = false,
+        Page::Task(page) => page.loading = false,
+        Page::Starting | Page::SignIn { .. } | Page::Missing { .. } => {}
+    }
+    domain.changed();
+    domain.notice(env, NoticeKind::Refused(refusal));
 }
 
 fn opened(domain: &mut Domain, env: &Env<Limits>, id: Id<Stream>, _out: &mut Queue<Request>) {
@@ -1140,16 +1222,41 @@ fn opened(domain: &mut Domain, env: &Env<Limits>, id: Id<Stream>, _out: &mut Que
     }
 }
 
-fn apply_person(domain: &mut Domain, limits: &Limits, snapshot: PersonSnapshot) {
+fn apply_person(domain: &mut Domain, env: &Env<Limits>, snapshot: PersonSnapshot, out: &mut Queue<Request>) {
     assert!(
         snapshot.projects.len() <= usize::try_from(domain.frame.projects.capacity()).expect("u32 fits usize"),
         "person snapshot projects fit"
     );
-    let text = usize::try_from(limits.text).expect("u32 fits usize");
+    let text = usize::try_from(env.limits.text).expect("u32 fits usize");
     assert!(snapshot.person.name.len() <= text, "person name fits text bound");
     for project in &snapshot.projects {
         assert!(project.name.len() <= text, "project name fits text bound");
     }
+    if let Some(owner) = domain.owner
+        && owner != snapshot.person.number
+    {
+        domain.account_mismatch = true;
+        domain.signed_out = true;
+        if let Some(id) = domain.page_read.take() {
+            domain.reads.get_mut(id).expect("page read remains until terminal").abandoned = true;
+        }
+        domain.close_page_stream(out);
+        domain.objects.clear();
+        domain.confirming = None;
+        domain.frame.person = None;
+        domain.frame.projects.clear();
+        domain.frame.project = None;
+        domain.frame.inbox_count = 0;
+        domain.page = Page::SignIn { then: domain.address };
+        if !domain.link.offline() {
+            domain.link = LinkState::Behind;
+        }
+        domain.changed();
+        return;
+    }
+    let newly_identified = domain.owner.is_none();
+    domain.owner = Some(snapshot.person.number);
+    domain.account_mismatch = false;
     domain.frame.person = Some(snapshot.person);
     domain.frame.projects.clear();
     for project in snapshot.projects {
@@ -1173,6 +1280,16 @@ fn apply_person(domain: &mut Domain, limits: &Limits, snapshot: PersonSnapshot) 
     }
     domain.frame.inbox_count = snapshot.inbox_count;
     domain.signed_out = false;
+    let needs_page = match domain.page {
+        Page::Starting | Page::SignIn { .. } => true,
+        Page::Missing { .. } | Page::Chats(_) | Page::Task(_) => false,
+    };
+    if needs_page {
+        domain.open_page(env, domain.address, out);
+    }
+    if newly_identified && (!domain.new_chat.text.is_empty() || !domain.reason.text.is_empty()) {
+        domain.save(out);
+    }
     domain.changed();
 }
 
@@ -1190,8 +1307,9 @@ fn streamed(domain: &mut Domain, env: &Env<Limits>, id: Id<Stream>, event: Strea
         StreamEvent::Snapshot(Snapshot::Person(snapshot)) => {
             assert!(watch == Watch::Person, "person snapshot belongs to person watch");
             domain.streams.get_mut(id).expect("stream exists").state = Following::Live;
-            apply_person(domain, &env.limits, snapshot);
+            apply_person(domain, env, snapshot, out);
             domain.live(env, out);
+            domain.resume_parked(out);
         }
         StreamEvent::Snapshot(Snapshot::Task(snapshot)) => {
             let Watch::Task { number } = watch else { unreachable!("task snapshot belongs to task watch") };
@@ -1205,7 +1323,8 @@ fn streamed(domain: &mut Domain, env: &Env<Limits>, id: Id<Stream>, event: Strea
         StreamEvent::Change(Change::Person(snapshot)) => {
             assert!(watch == Watch::Person, "person change belongs to person watch");
             assert!(stream.state == Following::Live, "change follows snapshot");
-            apply_person(domain, &env.limits, snapshot);
+            apply_person(domain, env, snapshot, out);
+            domain.resume_parked(out);
         }
         StreamEvent::Change(Change::Task(snapshot)) => {
             let Watch::Task { number } = watch else { unreachable!("task change belongs to task watch") };
@@ -1229,7 +1348,9 @@ fn streamed(domain: &mut Domain, env: &Env<Limits>, id: Id<Stream>, event: Strea
         }
         StreamEvent::Missed { .. } => {
             domain.streams.get_mut(id).expect("stream exists").state = Following::Reopening;
-            domain.link = LinkState::Behind;
+            if !domain.link.offline() {
+                domain.link = LinkState::Behind;
+            }
             domain.changed();
             out.push(Request::Close { stream: id.token() });
             return;
@@ -1288,14 +1409,19 @@ fn ended(domain: &mut Domain, env: &Env<Limits>, id: Id<Stream>, end: StreamEnd,
             }
             StreamEnd::Gone if matches_task(watch) => {
                 domain.streams.retire(id);
-                if domain.page_stream == Some(id) {
+                let active_page = domain.page_stream == Some(id);
+                if active_page {
                     domain.page_stream = None;
+                }
+                if active_page && !domain.link.offline() {
+                    domain.link = LinkState::Behind;
+                    domain.changed();
                 }
                 if let Watch::Task { number } = watch
                     && let Page::Task(page) = &domain.page
                     && page.number == number
                 {
-                    domain.read_task(env, Query::Escalation { task: number }, out);
+                    domain.read_page(env, Query::Escalation { task: number }, out);
                 }
             }
             StreamEnd::Dropped | StreamEnd::Refused(_) | StreamEnd::Gone | StreamEnd::Closed => {

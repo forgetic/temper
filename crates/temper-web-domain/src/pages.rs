@@ -19,11 +19,12 @@ pub struct Chats {
     pub rows: List<ChatLine>,
     pub older: Option<Cursor>,
     pub loading: bool,
+    pub retry: Option<Query>,
 }
 
 impl Chats {
     pub(crate) fn new(window: u32) -> Chats {
-        Chats { rows: List::with_capacity(window), older: None, loading: true }
+        Chats { rows: List::with_capacity(window), older: None, loading: true, retry: None }
     }
 }
 

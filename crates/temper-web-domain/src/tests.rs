@@ -168,6 +168,150 @@ fn later_same_words_edit_survives_older_start_answer() {
 }
 
 #[test]
+fn restored_start_answer_clears_only_its_submitted_draft() {
+    for later_same_words in [false, true] {
+        let (mut domain, mut out, stream, _) = started(13);
+        signed_in(&mut domain, &mut out, stream);
+        step(
+            &mut domain,
+            &env(0),
+            Event::Act { action: Action::Edit { field: FieldRef::NewChat, text: Box::from(b"Fix login".as_slice()) } },
+            &mut out,
+        );
+        let Request::Save { .. } = pop(&mut out) else { panic!("draft edit saved") };
+        step(&mut domain, &env(0), Event::Act { action: Action::Submit { form: Form::NewChat } }, &mut out);
+        let Request::Save { mut saved } = pop(&mut out) else { panic!("submitted ask saved") };
+        let Request::Send { key, .. } = pop(&mut out) else { panic!("submitted ask sent") };
+        if later_same_words {
+            step(
+                &mut domain,
+                &env(1),
+                Event::Act {
+                    action: Action::Edit { field: FieldRef::NewChat, text: Box::from(b"Fix login".as_slice()) },
+                },
+                &mut out,
+            );
+            let Request::Save { saved: later } = pop(&mut out) else { panic!("later edit saved") };
+            saved = later;
+        }
+        let mut restored = Domain::new(&limits(), 14);
+        let mut resumed = output();
+        step(
+            &mut restored,
+            &env(2),
+            Event::Start { address: Address::Chats, saved: Some(saved), offset: Offset(0) },
+            &mut resumed,
+        );
+        let Request::Open { stream, watch: Watch::Person } = pop(&mut resumed) else {
+            panic!("identity watch opens before replay")
+        };
+        assert!(resumed.is_empty(), "saved ask waits for its person's snapshot");
+        step(&mut restored, &env(2), Event::Opened { stream }, &mut resumed);
+        step(
+            &mut restored,
+            &env(2),
+            Event::Streamed {
+                stream,
+                event: StreamEvent::Snapshot(Snapshot::Person(PersonSnapshot {
+                    person: Person { number: 1, name: Box::from(b"Ada".as_slice()) },
+                    projects: Box::from([Project { number: 7, name: Box::from(b"Temper".as_slice()) }]),
+                    inbox_count: 2,
+                })),
+            },
+            &mut resumed,
+        );
+        let mut replay = None;
+        let mut replay_key = None;
+        while let Some(request) = resumed.pop() {
+            if let Request::Send { request, key, .. } = request {
+                replay = Some(request);
+                replay_key = Some(key);
+            }
+        }
+        let replay = replay.expect("matching person replays the saved ask");
+        assert_eq!(replay_key, Some(key), "replay retains the key");
+        step(
+            &mut restored,
+            &env(3),
+            Event::Answered { request: replay, answer: Answer::Done(Outcome::Started { task: 42 }) },
+            &mut resumed,
+        );
+        let Request::Save { saved: answered } = pop(&mut resumed) else { panic!("answer updates storage") };
+        let expected = if later_same_words { b"Fix login".as_slice() } else { b"".as_slice() };
+        assert_eq!(answered.drafts[0].text.as_ref(), expected, "later unsent edit survives, submitted draft clears");
+        assert_eq!(restored.field(FieldRef::NewChat).expect("composer").text.as_ref(), expected);
+    }
+}
+
+#[test]
+fn saved_request_waits_for_its_person_across_account_switch() {
+    let (mut domain, mut out, stream, _) = started(16);
+    signed_in(&mut domain, &mut out, stream);
+    step(
+        &mut domain,
+        &env(0),
+        Event::Act { action: Action::Edit { field: FieldRef::NewChat, text: Box::from(b"A's words".as_slice()) } },
+        &mut out,
+    );
+    let Request::Save { .. } = pop(&mut out) else { panic!("draft saved") };
+    step(&mut domain, &env(0), Event::Act { action: Action::Submit { form: Form::NewChat } }, &mut out);
+    let Request::Save { saved } = pop(&mut out) else { panic!("ask saved") };
+    let Request::Send { key, .. } = pop(&mut out) else { panic!("ask sent for A") };
+    assert_eq!(saved.person, Some(1), "saved ask is bound to A");
+
+    let mut restored = Domain::new(&limits(), 17);
+    let mut resumed = output();
+    step(
+        &mut restored,
+        &env(1),
+        Event::Start { address: Address::Chats, saved: Some(saved), offset: Offset(0) },
+        &mut resumed,
+    );
+    let Request::Open { stream, watch: Watch::Person } = pop(&mut resumed) else { panic!("person watch opens") };
+    assert!(resumed.is_empty(), "no replay before identity is known");
+    let Page::Starting = restored.page() else { panic!("A's draft is hidden before identity is known") };
+    step(&mut restored, &env(1), Event::Opened { stream }, &mut resumed);
+    step(
+        &mut restored,
+        &env(1),
+        Event::Streamed {
+            stream,
+            event: StreamEvent::Snapshot(Snapshot::Person(PersonSnapshot {
+                person: Person { number: 2, name: Box::from(b"Bea".as_slice()) },
+                projects: Box::from([Project { number: 7, name: Box::from(b"Temper".as_slice()) }]),
+                inbox_count: 0,
+            })),
+        },
+        &mut resumed,
+    );
+    assert!(restored.account_mismatch(), "B cannot take over A's saved ask");
+    let Page::SignIn { .. } = restored.page() else { panic!("A's draft remains hidden from B") };
+    assert!(resumed.is_empty(), "B's snapshot sends no request");
+    step(
+        &mut restored,
+        &env(2),
+        Event::Streamed {
+            stream,
+            event: StreamEvent::Change(Change::Person(PersonSnapshot {
+                person: Person { number: 1, name: Box::from(b"Ada".as_slice()) },
+                projects: Box::from([Project { number: 7, name: Box::from(b"Temper".as_slice()) }]),
+                inbox_count: 0,
+            })),
+        },
+        &mut resumed,
+    );
+    let mut replayed = false;
+    for request in &resumed {
+        if let Request::Send { key: same, .. } = request {
+            assert_eq!(*same, key, "A resumes the same keyed ask");
+            replayed = true;
+        }
+    }
+    assert!(replayed, "A's return releases the parked ask");
+    assert!(!restored.account_mismatch(), "the account warning clears for A");
+}
+
+#[test]
 fn busy_retries_same_key_and_reload_restores_it() {
     let (mut domain, mut out, stream, _) = started(22);
     signed_in(&mut domain, &mut out, stream);
@@ -180,15 +324,18 @@ fn busy_retries_same_key_and_reload_restores_it() {
     assert_eq!(again, request, "retry uses same token");
     assert_eq!(same, key, "retry uses same key");
     let saved = Saved {
+        person: Some(1),
         project: Some(7),
         drafts: Box::from([SavedDraft {
             field: FieldRef::NewChat,
             text: Box::from(b"Fix login".as_slice()),
+            edit_version: 1,
             target: None,
         }]),
         pending: Box::from([SavedPending {
             key,
             ask: Ask::StartChat { project: 7, words: Box::from(b"Fix login".as_slice()) },
+            draft_version: Some(1),
         }]),
     };
     let mut reload = Domain::new(&limits(), 99);
@@ -199,8 +346,30 @@ fn busy_retries_same_key_and_reload_restores_it() {
         Event::Start { address: Address::Chats, saved: Some(saved), offset: Offset(0) },
         &mut resumed,
     );
-    let Request::Send { key: same, .. } = pop(&mut resumed) else { panic!("expected restored send") };
-    assert_eq!(same, key, "reload resends original key");
+    let Request::Open { stream, watch: Watch::Person } = pop(&mut resumed) else { panic!("person watch opens") };
+    assert!(resumed.is_empty(), "reload waits for the person snapshot");
+    step(&mut reload, &env(0), Event::Opened { stream }, &mut resumed);
+    step(
+        &mut reload,
+        &env(0),
+        Event::Streamed {
+            stream,
+            event: StreamEvent::Snapshot(Snapshot::Person(PersonSnapshot {
+                person: Person { number: 1, name: Box::from(b"Ada".as_slice()) },
+                projects: Box::from([Project { number: 7, name: Box::from(b"Temper".as_slice()) }]),
+                inbox_count: 2,
+            })),
+        },
+        &mut resumed,
+    );
+    let mut replayed = false;
+    for request in &resumed {
+        if let Request::Send { key: same, .. } = request {
+            assert_eq!(*same, key, "reload resends original key under the same person");
+            replayed = true;
+        }
+    }
+    assert!(replayed, "matching person snapshot releases saved ask");
     assert_eq!(reload.field(FieldRef::NewChat).expect("field exists").written, 1, "restore counts as a domain write");
 }
 
@@ -234,6 +403,55 @@ fn unreachable_parks_until_watch_reopens() {
     let Request::Send { key: same, .. } = pop(&mut out) else { panic!("expected resumed send") };
     assert_eq!(same, key, "parked ask resumes with same key");
     assert_eq!(domain.link(), LinkState::Live, "fresh snapshot restores live link");
+}
+
+#[test]
+fn unreachable_chats_read_retries_after_watch_recovery() {
+    let (mut domain, mut out, stream, read) = started(34);
+    signed_in(&mut domain, &mut out, stream);
+    step(&mut domain, &env(0), Event::Read { read, result: ReadResult::Unreachable }, &mut out);
+    assert_eq!(pop(&mut out), Request::Close { stream }, "unreachable read closes the watch");
+    let Page::Chats(chats) = domain.page() else { panic!("chats page remains open") };
+    assert!(chats.loading, "page waits for the retry");
+    step(&mut domain, &env(0), Event::Ended { stream, end: StreamEnd::Closed }, &mut out);
+    let at = domain.next_deadline().expect("reopen timer armed");
+    fire(&mut domain, &env(at.as_nanos()), &mut out);
+    assert_eq!(pop(&mut out), Request::Open { stream, watch: Watch::Person }, "watch reopens");
+    step(&mut domain, &env(at.as_nanos()), Event::Opened { stream }, &mut out);
+    step(
+        &mut domain,
+        &env(at.as_nanos()),
+        Event::Streamed {
+            stream,
+            event: StreamEvent::Snapshot(Snapshot::Person(PersonSnapshot {
+                person: Person { number: 1, name: Box::from(b"Ada".as_slice()) },
+                projects: Box::from([Project { number: 7, name: Box::from(b"Temper".as_slice()) }]),
+                inbox_count: 2,
+            })),
+        },
+        &mut out,
+    );
+    let Request::Read { read: again, query: Query::Chats { .. } } = pop(&mut out) else {
+        panic!("chats read retries after the snapshot")
+    };
+    step(
+        &mut domain,
+        &env(at.as_nanos()),
+        Event::Read { read: again, result: ReadResult::Chats { rows: Box::from([]), older: None } },
+        &mut out,
+    );
+    let Page::Chats(chats) = domain.page() else { panic!("chats page remains open") };
+    assert!(!chats.loading, "successful retry ends loading");
+    assert_eq!(domain.link(), LinkState::Live, "recovered watch makes the link live");
+}
+
+#[test]
+fn refused_chats_read_ends_loading() {
+    let (mut domain, mut out, _, read) = started(35);
+    step(&mut domain, &env(0), Event::Read { read, result: ReadResult::Refused(Refusal::Role) }, &mut out);
+    let Page::Chats(chats) = domain.page() else { panic!("chats page remains open") };
+    assert!(!chats.loading, "a terminal refusal ends loading");
+    assert!(out.is_empty(), "a refused read has no shell request");
 }
 
 #[test]
@@ -292,6 +510,32 @@ fn draft_edit_saves_each_value_without_writing_back() {
 }
 
 #[test]
+fn overlimit_paste_restores_accepted_composer_before_submit() {
+    let (mut domain, mut out, stream, _) = started(67);
+    signed_in(&mut domain, &mut out, stream);
+    step(
+        &mut domain,
+        &env(0),
+        Event::Act { action: Action::Edit { field: FieldRef::NewChat, text: Box::from(b"hi".as_slice()) } },
+        &mut out,
+    );
+    let Request::Save { .. } = pop(&mut out) else { panic!("accepted words saved") };
+    step(
+        &mut domain,
+        &env(0),
+        Event::Act { action: Action::Edit { field: FieldRef::NewChat, text: Box::from([b'x'; 65]) } },
+        &mut out,
+    );
+    let field = domain.field(FieldRef::NewChat).expect("composer exists");
+    assert_eq!(field.text.as_ref(), b"hi", "oversized paste is rejected");
+    assert_eq!(field.written, 1, "view must restore the accepted value");
+    step(&mut domain, &env(0), Event::Act { action: Action::Submit { form: Form::NewChat } }, &mut out);
+    let Request::Save { .. } = pop(&mut out) else { panic!("request saved") };
+    let Request::Send { ask: Ask::StartChat { words, .. }, .. } = pop(&mut out) else { panic!("request sent") };
+    assert_eq!(words.as_ref(), b"hi", "visible restored words match the submitted ask");
+}
+
+#[test]
 fn limits_reject_invalid_configuration() {
     let mut invalid = limits();
     invalid.streams = 0;
@@ -299,6 +543,9 @@ fn limits_reject_invalid_configuration() {
     invalid = limits();
     invalid.backoff.most = Duration::from_millis(1);
     assert!(worst_case(&invalid).is_none(), "maximum backoff is at least first");
+    invalid = limits();
+    invalid.words = invalid.text.checked_add(1).expect("test bound fits");
+    assert!(worst_case(&invalid).is_none(), "a submitted opening message must fit its task snapshot");
     assert!(worst_case(&limits()).is_some(), "normal limits validate");
 }
 

@@ -47,6 +47,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         || limits.projects == 0
         || limits.words == 0
         || limits.text == 0
+        || limits.words > limits.text
         || limits.backoff.first == Duration::ZERO
         || limits.backoff.most < limits.backoff.first
         || limits.heartbeat == Duration::ZERO

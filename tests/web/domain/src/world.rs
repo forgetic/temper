@@ -138,6 +138,7 @@ pub struct World {
     watch_live: bool,
     busy_next: bool,
     last_typed: Option<Vec<u8>>,
+    reload_before: Option<Vec<u8>>,
     trace: Vec<String>,
 }
 
@@ -161,6 +162,7 @@ impl World {
             watch_live: false,
             busy_next: false,
             last_typed: None,
+            reload_before: None,
             trace: Vec::new(),
             settings,
         };
@@ -270,6 +272,13 @@ impl World {
                 refused: is_refused(tree),
             },
         );
+        if let Some(node) =
+            tree.nodes().iter().find(|node| node.name.as_deref() == Some(b"Start a new chat".as_slice()))
+            && let Some(value) = &node.value
+            && let Some(before) = self.reload_before.take()
+        {
+            observe_at(&mut self.referee, self.now, Seen::Reloaded { before, after: value.text.to_vec() });
+        }
         if let Verdict::Failed(failure) = self.referee.verdict() {
             panic!("seed {}: {failure}; trace: {:?}", self.settings.seed, self.trace);
         }
@@ -487,20 +496,7 @@ impl World {
         let seed = self.rng.next_u64();
         let requests = self.tab.reload(&self.settings, seed, self.now);
         self.route(requests);
-        if self.tab.address == Address::Chats
-            && let Some(before) = &self.last_typed
-        {
-            let after = self
-                .tab
-                .view
-                .tree()
-                .nodes()
-                .iter()
-                .find(|node| node.name.as_deref() == Some(b"Start a new chat".as_slice()))
-                .and_then(|node| node.value.as_ref())
-                .map_or_else(Vec::new, |value| value.text.to_vec());
-            observe_at(&mut self.referee, self.now, Seen::Reloaded { before: before.clone(), after });
-        }
+        self.reload_before = if self.tab.address == Address::Chats { self.last_typed.clone() } else { None };
         self.observe();
     }
 

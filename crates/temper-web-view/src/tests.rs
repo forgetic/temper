@@ -112,6 +112,44 @@ fn domain_limits() -> DomainLimits {
 }
 
 #[test]
+fn rejected_paste_patches_browser_value_back_to_accepted_words() {
+    let limits = domain_limits();
+    let env = Env { now: Time::ZERO, wall: Wall::EPOCH, limits };
+    let mut domain = Domain::new(&limits, 15);
+    let mut requests = Queue::with_capacity(max_out(&limits));
+    step(&mut domain, &env, Event::Start { address: Address::Chats, saved: None, offset: Offset(0) }, &mut requests);
+    let view_limits = Limits::of(&limits).expect("valid view limits");
+    let mut view = View::new(&view_limits);
+    let mut patches = Queue::with_capacity(view_limits.patches);
+    render(&mut view, &domain, &view_limits, &mut patches);
+    while patches.pop().is_some() {}
+
+    step(
+        &mut domain,
+        &env,
+        Event::Act { action: Action::Edit { field: FieldRef::NewChat, text: Box::from(b"hi".as_slice()) } },
+        &mut requests,
+    );
+    render(&mut view, &domain, &view_limits, &mut patches);
+    assert!(patches.is_empty(), "an accepted edit leaves the browser-owned value alone");
+
+    step(
+        &mut domain,
+        &env,
+        Event::Act { action: Action::Edit { field: FieldRef::NewChat, text: Box::from([b'x'; 65]) } },
+        &mut requests,
+    );
+    render(&mut view, &domain, &view_limits, &mut patches);
+    let mut restored = false;
+    for patch in &patches {
+        if let Patch::Value { text, .. } = patch {
+            restored = text.as_ref() == b"hi";
+        }
+    }
+    assert!(restored, "rejected paste restores the value before a submit");
+}
+
+#[test]
 fn chats_render_at_window_limit_and_decode_controls() {
     let limits = domain_limits();
     let env = Env { now: Time::ZERO, wall: Wall::EPOCH, limits };
