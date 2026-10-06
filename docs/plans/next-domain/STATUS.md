@@ -186,7 +186,7 @@ remain on `checkpoint/migration/transcript-codec`, outside main.
 
 ## Resume point
 
-- Smith first: resume its domain alignment plan; protocol changes are outside the goal.
+- Smith's domain alignment plan has merged steps 1–4 and the shared Skein repin locally. Audit the current implementation against smith's `docs/design/domain/` and report any further drift; incomplete features may remain. Smith protocol changes are outside this goal.
 - Existing IO/TLS/channel checkpoints are merged; protocol adoption and codec implementation remain deferred.
 - Kernel gates pass after restart; browser repair remains deferred in its separate profile.
 - Keep parked 02e/04b2/05f branches, exact-tip gates and Forgejo v16.0.5 API job-log assumption.
