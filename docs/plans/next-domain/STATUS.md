@@ -167,6 +167,7 @@ remain on `checkpoint/migration/transcript-codec`, outside main.
 
 - Audit remaining Run, Session, Tools and Host contracts; keep Smith first and verify every domain increment.
 - Keep codecs, channel/protocol, IO/TLS and binaries parked; preserve SDK cleanup gates and frozen legacy rules.
+- Skein's OAuth client remains open: port the fake rotating issuer from Smith `d218817:testing/smith-fake-llm-protocol/src/oauth.rs` when building it.
 
 **06 — root**
 
