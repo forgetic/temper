@@ -314,7 +314,10 @@ fn io_up(
         io::Event::Listening { .. }
         | io::Event::Accepted { .. }
         | io::Event::Connecting { .. }
-        | io::Event::Connected { .. } => {}
+        | io::Event::Connected { .. }
+        | io::Event::Output { .. }
+        | io::Event::Spawned { .. }
+        | io::Event::Exited { .. } => {}
     }
 }
 

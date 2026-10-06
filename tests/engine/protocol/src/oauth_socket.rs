@@ -314,7 +314,10 @@ impl World {
             io::Event::Listening { .. }
             | io::Event::Accepted { .. }
             | io::Event::Connecting { .. }
-            | io::Event::Connected { .. } => panic!("server-side socket events only"),
+            | io::Event::Connected { .. }
+            | io::Event::Output { .. }
+            | io::Event::Spawned { .. }
+            | io::Event::Exited { .. } => panic!("server-side socket events only"),
         }
     }
     fn collect(&mut self) {

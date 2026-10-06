@@ -297,6 +297,7 @@ pub fn up(
         }
     }
 }
+#[expect(clippy::too_many_lines, reason = "one exhaustive socket event route including unrelated process events")]
 fn io_up(
     owner: &mut Owner,
     env: &Env<Limits>,
@@ -402,7 +403,11 @@ fn io_up(
                 Phase::Saving | Phase::Closing => retire(owner, id),
             }
         }
-        io::Event::Listening { .. } | io::Event::Accepted { .. } => {}
+        io::Event::Listening { .. }
+        | io::Event::Accepted { .. }
+        | io::Event::Output { .. }
+        | io::Event::Spawned { .. }
+        | io::Event::Exited { .. } => {}
     }
 }
 fn input(

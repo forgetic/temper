@@ -272,7 +272,10 @@ impl World {
                     io::Request::Listen { .. }
                     | io::Request::Bind { .. }
                     | io::Request::Reject { .. }
-                    | io::Request::Close { .. },
+                    | io::Request::Close { .. }
+                    | io::Request::Output { .. }
+                    | io::Request::Spawn { .. }
+                    | io::Request::Signal { .. },
                 ) => panic!("plaintext connect effects only"),
             }
         }

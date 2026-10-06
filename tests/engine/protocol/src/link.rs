@@ -305,6 +305,9 @@ impl World {
                     }
                 }
                 Effect::Io(io::Request::Listen { .. } | io::Request::Connect { .. }) => {}
+                Effect::Io(io::Request::Output { .. } | io::Request::Spawn { .. } | io::Request::Signal { .. }) => {
+                    panic!("listener does not request native process operations")
+                }
                 Effect::Security(Security::Output { owner, down }) => {
                     let socket = self.socket(owner);
                     self.stream(socket, down);

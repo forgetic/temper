@@ -546,7 +546,11 @@ pub fn up(
             link.stalled = None;
             out.push(worker::Event::Lost);
         }
-        skein_io::Event::Listening { .. } | skein_io::Event::Accepted { .. } => {}
+        skein_io::Event::Listening { .. }
+        | skein_io::Event::Accepted { .. }
+        | skein_io::Event::Output { .. }
+        | skein_io::Event::Spawned { .. }
+        | skein_io::Event::Exited { .. } => {}
     }
 }
 pub fn resume(

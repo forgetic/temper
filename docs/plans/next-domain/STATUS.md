@@ -23,6 +23,7 @@ protocol drafts and lower-layer integration are parked for later work.
 | Alignment 07: relaxed domain code docs | merged | this commit | Removed field citation stamps and redundant field prose across the new engine and worker domains; module/type citations and real bounds remain. Four-check gate passed: fmt, clippy, 2,362 focused, 42 fuzzy. |
 | Alignment 08: release every hold | merged | this commit | Release restores the held phase, resets tries, and rejudges due work; a still-expired deadline creates a fresh hold and escalation. Four-check gate passed: fmt, clippy, focused and fuzzy. |
 | Alignment 09: derived result inbox | merged | this commit | Ended tasks carry root-issued commit order; people restores each person's monotonic read position. Authenticated bounded result pages and named reads commit that position with the reply; live notices remain. Four-check gate passed: fmt, clippy, focused and fuzzy. |
+| Alignment 10: Skein repin | merged | this commit | All nine locked Skein packages use main `82064688da6ddb2befb777bb310f1b1d27db6956`; protocol routes and worlds account for new native process IO variants. Four-check gate passed: fmt, clippy, focused and fuzzy. |
 | 00a Forgejo facts | merged | fa97784 | Gate passed; 1,772 focused / 7.440 s; 26 fuzzy / 22.148 s. |
 | 00b dead drafts | merged | 9acb981 | Gate passed; 1,772 focused and 26 fuzzy; baseline counts unchanged. |
 | 00c legacy rename | merged | d8385dc | Gate passed; 1,772 focused / 7.495 s; 26 fuzzy / 22.159 s. |

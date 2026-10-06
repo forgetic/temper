@@ -143,7 +143,10 @@ impl World {
                 skein_io::Request::Connect { .. }
                 | skein_io::Request::Listen { .. }
                 | skein_io::Request::Bind { .. }
-                | skein_io::Request::Reject { .. } => panic!("stream already bound"),
+                | skein_io::Request::Reject { .. }
+                | skein_io::Request::Output { .. }
+                | skein_io::Request::Spawn { .. }
+                | skein_io::Request::Signal { .. } => panic!("stream already bound"),
             }
         }
         while let Some(event) = self.worker_up.pop() {
