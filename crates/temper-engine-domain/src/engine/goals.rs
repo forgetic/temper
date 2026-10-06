@@ -20,7 +20,7 @@ fn pool(domain: &Domain, project: u32, person: u64) -> (tasks::Funder, tasks::Nu
     (source, numbers)
 }
 
-fn ensure_pool(domain: &mut Domain, project: u32, person: u64) {
+pub(super) fn ensure_pool(domain: &mut Domain, project: u32, person: u64) {
     let period = tasks::Funder::Period { project, period: domain.config.period };
     if domain.tasks.funding(period).is_none() {
         domain.work.push(Work::Tasks(tasks::Event::OpenPeriod {

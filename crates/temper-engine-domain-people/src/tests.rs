@@ -13,12 +13,14 @@ const LIMITS: Limits = Limits {
     sign_ins: 4,
     projects: 3,
     holdings: 4,
+    goals: 4,
     initial_owners: 3,
     requests: 4,
     pending: 2,
     waiters: 2,
     identity_bytes: 16,
     words: 8,
+    amendment_bytes: 256,
     sign_in_lifetime: Duration::from_secs(60),
     facts: 8,
 };
@@ -407,8 +409,10 @@ fn restored_role_success_requires_matching_ask_kind_and_project() {
         let mut test = Test::new(LIMITS);
         test.d = Domain::new(&LIMITS, Box::new([]));
         assert_eq!(
-            test.send_bounded(Event::Restore { record: Stored::Answer { key, ask, outcome, at: Wall::EPOCH } })
-                .as_slice(),
+            test.send_bounded(Event::Restore {
+                record: Stored::Answer { key, ask: Box::new(ask), outcome, at: Wall::EPOCH }
+            })
+            .as_slice(),
             [Request::RestoreRefused { key: Key::Answer(key), refusal: Refusal::Limit }]
         );
         assert!(test.send_bounded(Event::Restored).is_empty());
@@ -429,7 +433,7 @@ fn restored_successful_role_rosters_require_positive_unique_people() {
             test.send_bounded(Event::Restore {
                 record: Stored::Answer {
                     key,
-                    ask: Ask::SetRoles { project: 1, holdings },
+                    ask: Box::new(Ask::SetRoles { project: 1, holdings }),
                     outcome: Outcome::RolesSet { project: 1 },
                     at: Wall::EPOCH,
                 }
@@ -452,7 +456,10 @@ fn restored_role_success_checks_historical_people_and_project_after_all_rows_arr
             test.send_bounded(Event::Restore {
                 record: Stored::Answer {
                     key,
-                    ask: Ask::SetRoles { project, holdings: Box::new([Holding { person, role: Role::Member }]) },
+                    ask: Box::new(Ask::SetRoles {
+                        project,
+                        holdings: Box::new([Holding { person, role: Role::Member }])
+                    }),
                     outcome: Outcome::RolesSet { project },
                     at: Wall::EPOCH,
                 }
@@ -666,7 +673,7 @@ fn calls_before_restore_and_after_failed_restore_are_answered_not_ready() {
     test.send(Event::Restore {
         record: Stored::Answer {
             key: RequestKey { person: 99, key: [1; 16] },
-            ask: ask(1),
+            ask: Box::new(ask(1)),
             outcome: Outcome::Started { task: 90 },
             at: Wall::EPOCH,
         },

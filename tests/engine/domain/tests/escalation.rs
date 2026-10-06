@@ -314,7 +314,7 @@ fn key_conflict_requires_immediate_refusal_and_preserves_the_saved_winner() {
             panic!("original saved winner");
         };
         if changed_ask {
-            *ask = conflict.clone();
+            **ask = conflict.clone();
         } else {
             *outcome = people::Outcome::Refused(people::Refusal::KeyConflict);
         }

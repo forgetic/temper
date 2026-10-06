@@ -408,6 +408,26 @@ fn proposal_kind(kind: tasks::ProposalKind) -> authority::ProposalKind {
     }
 }
 
+fn question_answered(row: &tasks::TaskRecord, question: u64) -> bool {
+    for word in &row.inbox {
+        match word.kind {
+            tasks::MessageKind::Answer { question: answered } if answered == question => return true,
+            tasks::MessageKind::Answer { .. }
+            | tasks::MessageKind::Question
+            | tasks::MessageKind::Words
+            | tasks::MessageKind::Amendment { .. }
+            | tasks::MessageKind::Proposal { .. }
+            | tasks::MessageKind::ProposalDecision { .. }
+            | tasks::MessageKind::Escalation { .. }
+            | tasks::MessageKind::Notice { .. }
+            | tasks::MessageKind::Timer { .. }
+            | tasks::MessageKind::News { .. }
+            | tasks::MessageKind::Result(_) => {}
+        }
+    }
+    false
+}
+
 /// Project the currently waiting person-facing references of one task.
 #[expect(clippy::too_many_lines, reason = "one exhaustive task projection covers all person-facing waiting kinds")]
 pub(super) fn entries(domain: &Domain, row: &tasks::TaskRecord) -> Box<[people::Entry]> {
@@ -421,13 +441,17 @@ pub(super) fn entries(domain: &Domain, row: &tasks::TaskRecord) -> Box<[people::
         tasks::Party::Person(person) => {
             for word in &row.inbox {
                 match word.kind {
-                    tasks::MessageKind::Question => add(
-                        &mut entries,
-                        row,
-                        people::Whom::Person(person),
-                        people::EntryKind::Question { message: word.number },
-                        word.at,
-                    ),
+                    tasks::MessageKind::Question => {
+                        if !question_answered(row, word.number) {
+                            add(
+                                &mut entries,
+                                row,
+                                people::Whom::Person(person),
+                                people::EntryKind::Question { message: word.number },
+                                word.at,
+                            );
+                        }
+                    }
                     tasks::MessageKind::Answer { .. } => add(
                         &mut entries,
                         row,

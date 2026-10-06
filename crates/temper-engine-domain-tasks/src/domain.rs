@@ -253,6 +253,9 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
         Event::Amend { reply_to, by, task, message, stop_run, amendment } => {
             crate::control::amend(domain, env, reply_to, by, task, message, stop_run, amendment, out);
         }
+        Event::Prioritise { reply_to, project, by, goals } => {
+            crate::control::prioritise(domain, env, reply_to, project, by, &goals, out);
+        }
         Event::Move { reply_to, task, person, period, pool_budget, period_budget, reason } => {
             crate::moving::apply(domain, env, reply_to, task, person, period, pool_budget, period_budget, &reason, out);
         }

@@ -184,6 +184,7 @@ fn turn(driver: &mut Driver, assignment: &engine::Assignment, number: u32, cumul
 
 fn people_roles_config(seed: u64) -> (engine::Config, engine::Limits) {
     let mut limits = limits();
+    limits.fleet.slots = 2;
     limits.authority.roles = 4;
     limits.people.people = 4;
     limits.people.sign_ins = 4;
@@ -305,6 +306,285 @@ fn a_member_starts_a_chat_and_an_observer_is_refused() {
         delivery,
         Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::Started { .. }), .. }
     )));
+}
+
+#[test]
+#[expect(clippy::wildcard_enum_match_arm, reason = "select the named question delivery")]
+fn a_person_answers_a_numbered_question_from_their_task() {
+    let (mut driver, parent) = batch_fixture_with(2, 1);
+    let child = call_batch(&mut driver, &parent, 2034, Box::new([report_delegate(b"ask", Box::new([]))]))[0];
+    let asker = assigned_task(&driver, child);
+    tool_call(
+        &mut driver,
+        &asker,
+        2035,
+        engine::Tool::Message {
+            target: parent.task,
+            form: engine::MessageForm::Question,
+            words: b"ship?".as_slice().into(),
+        },
+    );
+    let question = driver
+        .delivered
+        .iter()
+        .find_map(|item| match item {
+            Delivery::CallAnswer { call, answer: temper_engine_domain::CallAnswer::Sent { message }, .. }
+                if *call == Token::new(2035) =>
+            {
+                Some(*message)
+            }
+            _ => None,
+        })
+        .expect("numbered question committed");
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(2036)),
+        sign_in: driver.session(),
+        key: [210; 16],
+        ask: people::Ask::AnswerQuestion { project: 1, task: parent.task, question, words: b"yes".as_slice().into() },
+    });
+    driver.settle();
+    assert!(driver.delivered.iter().any(|item| matches!(item,
+        Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::QuestionAnswered {
+            task, question: answered, ..
+        }), .. } if *task == parent.task && *answered == question
+    )));
+    let Some(Record::Tasks(tasks::Stored::Live(row))) =
+        driver.store.rows.get(&Key::Tasks(tasks::Key::Live(parent.task)))
+    else {
+        panic!("parent remains live")
+    };
+    assert!(
+        row.inbox
+            .iter()
+            .any(|word| word.kind == (tasks::MessageKind::Answer { question }) && word.from == tasks::Party::Person(1))
+    );
+}
+
+#[test]
+fn a_maintainer_prioritises_project_goals_and_a_member_cannot() {
+    let (mut driver, _, _, maintainer_session, _, member_session) = people_roles_driver();
+    driver.send(engine::Event::Hello {
+        channel: Token::new(7),
+        hello: fleet::Hello {
+            graces: Some(Duration::from_secs(1)),
+            slots: 2,
+            workstreams: Box::new([]),
+            hosting: Box::new([]),
+        },
+    });
+    driver.settle();
+    for index in 0..2 {
+        driver.send(engine::Event::Ask {
+            reply_to: ReplyTo::new(Token::new(2040 + index)),
+            sign_in: member_session,
+            key: [u8::try_from(211 + index).expect("small key"); 16],
+            ask: people::Ask::SetGoal {
+                project: 1,
+                spec: b"goal".as_slice().into(),
+                charter: 1,
+                budget: 20,
+                priority: 1,
+            },
+        });
+        driver.settle();
+    }
+    let goals: Vec<_> = driver
+        .store
+        .rows
+        .values()
+        .filter_map(|row| match row {
+            Record::Tasks(tasks::Stored::Live(task)) if task.tracked.is_some() => Some(task.number),
+            Record::Tasks(
+                tasks::Stored::Live(_)
+                | tasks::Stored::Ended(_)
+                | tasks::Stored::History(_)
+                | tasks::Stored::Ledger(_)
+                | tasks::Stored::PersonProposal(_),
+            )
+            | Record::People(_)
+            | Record::Call(_)
+            | Record::Deployment(_)
+            | Record::Turn(_)
+            | Record::RunProof(_)
+            | Record::Terminal(_)
+            | Record::EscalationDecision(_)
+            | Record::ProposalDecision(_) => None,
+        })
+        .collect();
+    assert_eq!(goals.len(), 2);
+    let priorities: Box<[(u64, u32)]> = Box::new([(goals[0], 4), (goals[1], 9)]);
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(2042)),
+        sign_in: member_session,
+        key: [213; 16],
+        ask: people::Ask::Prioritise { project: 1, goals: priorities.clone() },
+    });
+    driver.settle();
+    assert!(driver.delivered.iter().any(|delivery| matches!(
+        delivery,
+        Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::Refused(people::Refusal::Role)), .. }
+    )));
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(2043)),
+        sign_in: maintainer_session,
+        key: [214; 16],
+        ask: people::Ask::Prioritise { project: 1, goals: priorities.clone() },
+    });
+    driver.settle();
+    assert!(driver.delivered.iter().any(|delivery| matches!(
+        delivery,
+        Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::Prioritised { project: 1 }), .. }
+    )));
+    for (number, priority) in priorities {
+        let Some(Record::Tasks(tasks::Stored::Live(task))) =
+            driver.store.rows.get(&Key::Tasks(tasks::Key::Live(number)))
+        else {
+            panic!("goal remains live")
+        };
+        assert_eq!(task.tracked, Some(priority));
+    }
+}
+
+#[test]
+fn a_person_amends_their_live_task_and_the_change_reaches_its_run() {
+    let (mut driver, assignment) = batch_fixture();
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(2044)),
+        sign_in: driver.session(),
+        key: [215; 16],
+        ask: people::Ask::Amend {
+            project: 1,
+            task: assignment.task,
+            amendment: people::Amendment {
+                spec: Some(people::Spec {
+                    words: b"revised goal".as_slice().into(),
+                    parameters: Box::new([]),
+                    inputs: Box::new([]),
+                }),
+                wake: None,
+                dependencies: None,
+                authority: None,
+                reason: b"new context".as_slice().into(),
+            },
+        },
+    });
+    driver.settle();
+    assert!(driver.delivered.iter().any(|delivery| matches!(delivery,
+        Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::Amended { task }), .. }
+            if *task == assignment.task
+    )));
+    let Some(Record::Tasks(tasks::Stored::Live(row))) =
+        driver.store.rows.get(&Key::Tasks(tasks::Key::Live(assignment.task)))
+    else {
+        panic!("amended task remains live")
+    };
+    assert_eq!(row.spec.words.as_ref(), b"revised goal");
+    assert!(driver.store.rows.values().any(|record| matches!(record,
+        Record::Tasks(tasks::Stored::History(history))
+            if history.task == assignment.task && history.change == tasks::Change::Amended
+                && history.by == tasks::Party::Person(1)
+    )));
+}
+
+#[test]
+#[expect(clippy::wildcard_enum_match_arm, reason = "select the named proposal outcome")]
+fn a_members_wider_amendment_waits_for_a_maintainer_to_accept() {
+    let (mut driver, _, _, maintainer_session, _, member_session) = people_roles_driver();
+    driver.send(engine::Event::Hello {
+        channel: Token::new(7),
+        hello: fleet::Hello {
+            graces: Some(Duration::from_secs(1)),
+            slots: 2,
+            workstreams: Box::new([]),
+            hosting: Box::new([]),
+        },
+    });
+    driver.settle();
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(2045)),
+        sign_in: member_session,
+        key: [216; 16],
+        ask: people::Ask::SetGoal { project: 1, spec: b"goal".as_slice().into(), charter: 1, budget: 50, priority: 1 },
+    });
+    driver.settle();
+    let task = driver
+        .delivered
+        .iter()
+        .find_map(|delivery| match delivery {
+            Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::GoalStarted { task }), .. } => {
+                Some(*task)
+            }
+            _ => None,
+        })
+        .expect("goal committed");
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(2046)),
+        sign_in: member_session,
+        key: [217; 16],
+        ask: people::Ask::Amend {
+            project: 1,
+            task,
+            amendment: people::Amendment {
+                spec: None,
+                wake: None,
+                dependencies: None,
+                authority: Some(people::Authority {
+                    tools: 0,
+                    grants: Box::new([]),
+                    delegation: people::Delegation { kinds: Box::new([]), tasks: 0, depth: 0 },
+                    spend: 150,
+                    deadline: None,
+                    notes: 0,
+                }),
+                reason: b"more scope".as_slice().into(),
+            },
+        },
+    });
+    driver.settle();
+    let proposal = driver
+        .delivered
+        .iter()
+        .find_map(|delivery| match delivery {
+            Delivery::WebReply {
+                reply: people::Reply::Outcome(people::Outcome::AmendProposed { task: named, proposal }),
+                ..
+            } if *named == task => Some(*proposal),
+            _ => None,
+        })
+        .unwrap_or_else(|| {
+            panic!("widening proposal committed: {:?}", driver.delivered.iter().rev().take(4).collect::<Vec<_>>())
+        });
+    let Some(Record::Tasks(tasks::Stored::Live(row))) = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(task)))
+    else {
+        panic!("goal remains live")
+    };
+    assert_eq!(row.authority.budget.spend, 50);
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(2047)),
+        sign_in: maintainer_session,
+        key: [218; 16],
+        ask: people::Ask::DecideProposal {
+            project: 1,
+            proposer: task,
+            proposal,
+            decision: people::ProposalDecision::Accept,
+        },
+    });
+    driver.settle();
+    assert!(
+        driver.delivered.iter().any(|delivery| matches!(delivery,
+            Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::ProposalDecided {
+                proposer, proposal: decided, choice: people::ProposalChoice::Accepted, ..
+            }), .. } if *proposer == task && *decided == proposal
+        )),
+        "acceptance: {:?}",
+        driver.delivered.iter().rev().take(4).collect::<Vec<_>>()
+    );
+    let Some(Record::Tasks(tasks::Stored::Live(row))) = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(task)))
+    else {
+        panic!("goal remains live")
+    };
+    assert_eq!(row.authority.budget.spend, 150);
 }
 
 #[test]
@@ -3517,10 +3797,10 @@ fn multiple_waiting_recipients_preflight_together_and_full_journal_refuses_witho
         overflow.store.rows.get(&temper_engine_domain::Key::People(people::Key::Answer(refused_key))),
         Some(&Record::People(people::Stored::Answer {
             key: refused_key,
-            ask: people::Ask::SetRoles {
+            ask: Box::new(people::Ask::SetRoles {
                 project: 1,
                 holdings: Box::new([people::Holding { person: people[1], role: people::Role::Owner }]),
-            },
+            }),
             outcome: people::Outcome::Refused(people::Refusal::Limit),
             at: overflow.env.wall,
         })),

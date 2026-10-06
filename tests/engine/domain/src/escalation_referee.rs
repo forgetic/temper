@@ -70,6 +70,7 @@ struct AskReply {
 }
 
 #[derive(Clone, Debug)]
+#[expect(clippy::large_enum_variant, reason = "test referee keeps the exact prior typed ask inline")]
 enum ExpectedTerminal {
     Outcome(people::Outcome),
     KeyConflict { saved_ask: people::Ask, saved_outcome: people::Outcome },
@@ -183,8 +184,8 @@ impl Referee {
         else {
             panic!("key-conflict probe follows its durable winning answer");
         };
-        assert_ne!(*saved_ask, ask, "conflicting probe changes the request under the original key");
-        let terminal = ExpectedTerminal::KeyConflict { saved_ask: saved_ask.clone(), saved_outcome: *outcome };
+        assert_ne!(saved_ask.as_ref(), &ask, "conflicting probe changes the request under the original key");
+        let terminal = ExpectedTerminal::KeyConflict { saved_ask: saved_ask.as_ref().clone(), saved_outcome: *outcome };
         assert!(self.asks.insert(to, AskReply { person, key, ask, terminal }).is_none(), "fresh conflict reply right");
     }
 
@@ -242,7 +243,7 @@ impl Referee {
         if record.requester != tasks::Party::Person(person) || record.spec.words.as_ref() != QUESTION {
             return Err("start differs from requester script");
         }
-        if !matches!(rows.get(&Key::People(people::Key::Answer(people::RequestKey { person, key: [5; 16] }))), Some(Record::People(people::Stored::Answer { ask, outcome, .. })) if *ask == (people::Ask::StartChat { project: 1, words: QUESTION.into() }) && *outcome == (people::Outcome::Started { task: number }))
+        if !matches!(rows.get(&Key::People(people::Key::Answer(people::RequestKey { person, key: [5; 16] }))), Some(Record::People(people::Stored::Answer { ask, outcome, .. })) if ask.as_ref() == &(people::Ask::StartChat { project: 1, words: QUESTION.into() }) && *outcome == (people::Outcome::Started { task: number }))
         {
             return Err("start without its atomic keyed answer");
         }
@@ -445,7 +446,17 @@ impl Referee {
                 if !semantic || record.numbers.spent != 3 {
                     return Err("decision semantic change differs from archived choice");
                 }
-                let atomic = writes.iter().any(|write| matches!(write, Write::Save(Record::People(people::Stored::Answer { key, ask: people::Ask::DecideEscalation { project, task, revision, decision: asked }, outcome, .. })) if key.person == *by && *project == 1 && *task == archive.task && *revision == archive.revision && *asked == *decision && *outcome == (people::Outcome::EscalationDecided { task: archive.task, revision: archive.revision, by: *by, choice: choice(decision) })));
+                let atomic = writes.iter().any(|write| match write {
+                    Write::Save(Record::People(people::Stored::Answer { key, ask, outcome, .. })) => {
+                        matches!(ask.as_ref(), people::Ask::DecideEscalation { project, task, revision, decision: asked }
+                            if key.person == *by && *project == 1 && *task == archive.task
+                                && *revision == archive.revision && *asked == *decision
+                                && *outcome == (people::Outcome::EscalationDecided {
+                                    task: archive.task, revision: archive.revision, by: *by, choice: choice(decision),
+                                }))
+                    }
+                    Write::Save(_) | Write::Erase(_) => false,
+                });
                 if !atomic {
                     return Err("archive semantic change and keyed outcome are not one transaction");
                 }
@@ -519,7 +530,7 @@ impl Referee {
                 if reply != people::Reply::Refused(people::Refusal::KeyConflict) {
                     return Err("key conflict requires the immediate refusal wrapper");
                 }
-                if *ask == expected.ask || ask != saved_ask || saved != saved_outcome {
+                if ask.as_ref() == &expected.ask || ask.as_ref() != saved_ask || saved != saved_outcome {
                     return Err("key conflict changed the original durable winner");
                 }
             }
@@ -527,7 +538,7 @@ impl Referee {
                 if reply != people::Reply::Outcome(*outcome) {
                     return Err("keyed terminal differs from independently expected outcome wrapper");
                 }
-                if *ask != expected.ask || saved != outcome {
+                if ask.as_ref() != &expected.ask || saved != outcome {
                     return Err("keyed terminal and durable answer differ");
                 }
                 if let people::Outcome::EscalationDecided { task, revision, by, choice: answer } = *outcome {

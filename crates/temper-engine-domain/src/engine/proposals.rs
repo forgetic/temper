@@ -255,7 +255,10 @@ fn covers_person(
 ) -> bool {
     let Some(role) = domain.people.role(person, project) else { return false };
     let funder = tasks::Funder::Pool { project, person, period: domain.config.period };
-    let Some(pool) = domain.tasks.funding(funder) else { return false };
+    let numbers = match domain.tasks.funding(funder) {
+        Some(pool) => pool.numbers,
+        None => tasks::Numbers { budget: domain.config.person_budget, spent: 0, spent_below: 0, reserved: 0 },
+    };
     authority::covers(
         &domain.config.authority,
         needed,
@@ -263,7 +266,7 @@ fn covers_person(
             project,
             role: super::escalation::role_number(role),
             proposal: kind,
-            pool: authority_numbers(pool.numbers),
+            pool: authority_numbers(numbers),
             tasks_left: domain.limits.tasks.tree_tasks,
         },
         0,
@@ -711,13 +714,11 @@ pub(super) fn person_decide(
 }
 
 fn person_accept(domain: &mut Domain, _env: &Env<Limits>, request: Token, person: u64, proposal: tasks::Proposal) {
-    let Some(message) = crate::fresh(&mut domain.journal, Family::Message) else {
-        return person_refused(domain, request, people::Refusal::Limit);
-    };
     let event = match proposal.action {
         tasks::ProposalAction::Batch(mut batch) => {
             let creator =
                 if proposal.as_holder { tasks::Party::Person(person) } else { tasks::Party::Task(proposal.proposer) };
+            super::goals::ensure_pool(domain, proposal.project, person);
             for member in &mut batch {
                 member.funder = tasks::Funder::Pool { project: proposal.project, person, period: domain.config.period };
             }
@@ -767,6 +768,10 @@ fn person_accept(domain: &mut Domain, _env: &Env<Limits>, request: Token, person
             task,
             control: tasks::Control::Release,
         },
+    };
+    // The final decision follows the accepted amendment's own message in the same task inbox.
+    let Some(message) = crate::fresh(&mut domain.journal, Family::Message) else {
+        return person_refused(domain, request, people::Refusal::Limit);
     };
     assert!(
         domain.routing_people_proposals.insert(

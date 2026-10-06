@@ -36,12 +36,17 @@
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
 extern crate alloc;
+mod amendment;
 mod boundary;
 mod domain;
 mod facts;
 mod limits;
 #[cfg(test)]
 mod tests;
+pub use amendment::{
+    Amendment, Authority, Delegation, Executor, Grant, Last, Parameter, Pattern, ResultsWake, Spec, WakePolicy,
+    WakeRule, amendment_bytes,
+};
 pub use boundary::{
     Ask, Entry, EntryKind, EscalationChoice, EscalationDecision, Event, Holding, Identity, IdentityKey, InitialOwner,
     Key, Outcome, PersonResult, ProposalChoice, ProposalDecision, Refusal, Reply, Request, RequestKey, ResultRef, Role,

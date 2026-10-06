@@ -130,6 +130,12 @@ pub enum Ask {
     DecideProposal { project: u32, proposer: u64, proposal: u64, decision: ProposalDecision },
     /// Authenticated requester's whole words to an existing chat.
     Say { project: u32, task: u64, words: Box<[u8]> },
+    /// Answer a numbered question waiting in a task requested by this person.
+    AnswerQuestion { project: u32, task: u64, question: u64, words: Box<[u8]> },
+    /// Set the priorities of a bounded set of current project goals together.
+    Prioritise { project: u32, goals: Box<[(u64, u32)]> },
+    /// Amend a live task this person may steer, after root policy and funding checks.
+    Amend { project: u32, task: u64, amendment: crate::Amendment },
     /// Authenticated Owner's complete project roster replacement; root checks Policy permission and
     /// held-recipient preflight before applying it.
     SetRoles {
@@ -273,6 +279,14 @@ pub enum Outcome {
     ProposalDecided { proposer: u64, proposal: u64, by: u64, choice: ProposalChoice },
     /// Words were durably admitted under the root-issued message number.
     Said { task: u64, message: u64 },
+    /// A named question was answered with a durable message.
+    QuestionAnswered { task: u64, question: u64, message: u64 },
+    /// All named goal priorities were durably changed together.
+    Prioritised { project: u32 },
+    /// The named task accepted this person's amendment.
+    Amended { task: u64 },
+    /// A widening amendment waits for an authorized proposal holder.
+    AmendProposed { task: u64, proposal: u64 },
     /// Root accepted one roster and all affected `Waiting` recipients atomically; saved keyed
     /// replay does not apply the roster again.
     RolesSet {
@@ -378,7 +392,7 @@ pub enum Stored {
         /** Person-scoped completed key; restoration validates its person reference. */
         key: RequestKey,
         /** Original typed request with words bounded by `Limits::words`, compared on every retry. */
-        ask: Ask,
+        ask: Box<Ask>,
         /** Retained permanent outcome returned without remaking the decision. */
         outcome: Outcome,
         /** Wall time the answer was made; this increment has capacity-based retention, not timed eviction. */

@@ -267,10 +267,10 @@ fn deep_child_rows_and_arbitrary_internal_payloads_are_refused_before_retention(
     assert!(decision.write(&limits, Write::Save(row)).is_err());
     let roster_answer = Record::People(people::Stored::Answer {
         key: people::RequestKey { person: 1, key: [1; 16] },
-        ask: people::Ask::SetRoles {
+        ask: Box::new(people::Ask::SetRoles {
             project: 1,
             holdings: Box::new([people::Holding { person: 1, role: people::Role::Owner }]),
-        },
+        }),
         outcome: people::Outcome::RolesSet { project: 1 },
         at: Wall::EPOCH,
     });

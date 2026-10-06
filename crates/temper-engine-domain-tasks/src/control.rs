@@ -44,6 +44,7 @@ pub enum Change {
     Cancelled,
     Released,
     Amended,
+    Prioritised { priority: u32 },
     Moved,
     Proposed,
     ProposalPassed,
@@ -223,6 +224,52 @@ pub(crate) fn amend(
         out.push(Request::Stop { task: number, attempt });
     } else {
         crate::wake::after_message(domain, env, number, previous, word, out);
+    }
+    out.push(Request::Done { reply_to: to });
+}
+
+/// Apply one bounded whole-project priority edit after the root checked the person's role.
+pub(crate) fn prioritise(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    to: ReplyTo,
+    project: u32,
+    by: Party,
+    goals: &[(u64, u32)],
+    out: &mut Queue<Request>,
+) {
+    if !domain.ready() {
+        return refused(to, None, Refusal::NotReady, out);
+    }
+    let person = match by {
+        Party::Person(person) if person != 0 => person,
+        Party::Person(_) | Party::Task(_) | Party::Deployment { .. } => {
+            return refused(to, None, Refusal::Reference, out);
+        }
+    };
+    if project == 0 || goals.is_empty() || goals.len() > usize::try_from(env.limits.tasks).expect("u32 fits usize") {
+        return refused(to, None, Refusal::Read, out);
+    }
+    for (at, (number, _)) in goals.iter().enumerate() {
+        let Some(task) = record(domain, *number) else { return refused(to, Some(*number), Refusal::Unknown, out) };
+        let mutable = match task.phase {
+            Phase::Waiting | Phase::Active(_) | Phase::Held { was: Was::Waiting | Was::Active(_), .. } => true,
+            Phase::Closing(_) | Phase::Held { was: Was::Closing(_), .. } | Phase::Ended(_) => false,
+        };
+        if task.project != project || task.tracked.is_none() || task.revision == u64::MAX || !mutable {
+            return refused(to, Some(*number), Refusal::State, out);
+        }
+        for (earlier, _) in goals.iter().take(at) {
+            if earlier == number {
+                return refused(to, Some(*number), Refusal::Read, out);
+            }
+        }
+    }
+    for (number, priority) in goals {
+        let task = task_mut(domain, *number).expect("priority preflight found task");
+        task.record.tracked = Some(*priority);
+        history(domain, *number, Party::Person(person), Change::Prioritised { priority: *priority }, &[], out);
+        publish(domain, env, *number, out);
     }
     out.push(Request::Done { reply_to: to });
 }

@@ -332,6 +332,7 @@ impl World {
             | Event::WithdrawProposal { .. }
             | Event::StalledProposal { .. }
             | Event::Amend { .. }
+            | Event::Prioritise { .. }
             | Event::Move { .. }
             | Event::CarvePool { .. }
             | Event::Make { .. }
@@ -371,6 +372,7 @@ impl World {
             | Event::HandBackPerson { .. }
             | Event::AnswerPerson { .. }
             | Event::Control { .. }
+            | Event::Prioritise { .. }
             | Event::Move { .. }
             | Event::Propose { .. }
             | Event::ProposePerson { .. }

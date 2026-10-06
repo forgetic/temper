@@ -815,6 +815,8 @@ pub enum Event {
     Control { reply_to: ReplyTo, by: Party, task: u64, control: crate::Control },
     /// Root-checked amendment of a live delegate, with a fresh commit-order message number.
     Amend { reply_to: ReplyTo, by: Party, task: u64, message: u64, stop_run: bool, amendment: crate::Amendment },
+    /// Root-checked project maintainer changes several tracked goal priorities atomically.
+    Prioritise { reply_to: ReplyTo, project: u32, by: Party, goals: Box<[(u64, u32)]> },
     /// Root-authorized person adoption of one live task, with its reservation moved to that person's pool.
     Move {
         reply_to: ReplyTo,

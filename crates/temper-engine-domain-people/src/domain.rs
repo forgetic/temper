@@ -475,6 +475,9 @@ fn apply_roles(
         | Ask::DecideEscalation { .. }
         | Ask::DecideProposal { .. }
         | Ask::Say { .. }
+        | Ask::AnswerQuestion { .. }
+        | Ask::Prioritise { .. }
+        | Ask::Amend { .. }
         | Ask::Move { .. }
         | Ask::TakePerson { .. }
         | Ask::HandBackPerson { .. }
@@ -509,6 +512,9 @@ fn apply_roles(
         | Ask::DecideEscalation { .. }
         | Ask::DecideProposal { .. }
         | Ask::Say { .. }
+        | Ask::AnswerQuestion { .. }
+        | Ask::Prioritise { .. }
+        | Ask::Amend { .. }
         | Ask::Move { .. }
         | Ask::TakePerson { .. }
         | Ask::HandBackPerson { .. }
@@ -668,6 +674,9 @@ fn project(ask: &Ask) -> u32 {
         | Ask::DecideEscalation { project, .. }
         | Ask::DecideProposal { project, .. }
         | Ask::Say { project, .. }
+        | Ask::AnswerQuestion { project, .. }
+        | Ask::Prioritise { project, .. }
+        | Ask::Amend { project, .. }
         | Ask::Move { project, .. }
         | Ask::TakePerson { project, .. }
         | Ask::HandBackPerson { project, .. }
@@ -706,6 +715,31 @@ fn valid_ask(limits: &Limits, ask: &Ask) -> bool {
         Ask::StartChat { words, .. } => words.len() <= usize::try_from(limits.words).expect("u32 fits usize"),
         Ask::Say { task, words, .. } => {
             *task != 0 && !words.is_empty() && words.len() <= usize::try_from(limits.words).expect("u32 fits usize")
+        }
+        Ask::AnswerQuestion { task, question, words, .. } => {
+            *task != 0
+                && *question != 0
+                && !words.is_empty()
+                && words.len() <= usize::try_from(limits.words).expect("u32 fits usize")
+        }
+        Ask::Prioritise { goals, .. } => {
+            if goals.is_empty() || goals.len() > usize::try_from(limits.goals).expect("u32 fits usize") {
+                return false;
+            }
+            for (task, _) in goals {
+                if *task == 0 {
+                    return false;
+                }
+            }
+            true
+        }
+        Ask::Amend { task, amendment, .. } => {
+            *task != 0
+                && amendment.reason.len() <= usize::try_from(limits.words).expect("u32 fits usize")
+                && match crate::amendment_bytes(amendment) {
+                    Some(bytes) => bytes <= u64::from(limits.amendment_bytes),
+                    None => false,
+                }
         }
         Ask::DecideEscalation { task, revision, decision, .. } => {
             *task != 0
@@ -746,6 +780,9 @@ fn valid_answer_shape(ask: &Ask, outcome: Outcome) -> bool {
             | Ask::DecideEscalation { .. }
             | Ask::DecideProposal { .. }
             | Ask::Say { .. }
+            | Ask::AnswerQuestion { .. }
+            | Ask::Prioritise { .. }
+            | Ask::Amend { .. }
             | Ask::Move { .. } => false,
         },
         Outcome::GoalProposed { proposal } => match ask {
@@ -761,6 +798,9 @@ fn valid_answer_shape(ask: &Ask, outcome: Outcome) -> bool {
             | Ask::DecideEscalation { .. }
             | Ask::DecideProposal { .. }
             | Ask::Say { .. }
+            | Ask::AnswerQuestion { .. }
+            | Ask::Prioritise { .. }
+            | Ask::Amend { .. }
             | Ask::Move { .. } => false,
         },
         Outcome::Stopped { task } => match ask {
@@ -775,6 +815,9 @@ fn valid_answer_shape(ask: &Ask, outcome: Outcome) -> bool {
             | Ask::DecideEscalation { .. }
             | Ask::DecideProposal { .. }
             | Ask::Say { .. }
+            | Ask::AnswerQuestion { .. }
+            | Ask::Prioritise { .. }
+            | Ask::Amend { .. }
             | Ask::Move { .. }
             | Ask::SetGoal { .. } => false,
         },
@@ -790,6 +833,9 @@ fn valid_answer_shape(ask: &Ask, outcome: Outcome) -> bool {
             | Ask::DecideEscalation { .. }
             | Ask::DecideProposal { .. }
             | Ask::Say { .. }
+            | Ask::AnswerQuestion { .. }
+            | Ask::Prioritise { .. }
+            | Ask::Amend { .. }
             | Ask::Move { .. }
             | Ask::SetGoal { .. } => false,
         },
@@ -805,6 +851,9 @@ fn valid_answer_shape(ask: &Ask, outcome: Outcome) -> bool {
             | Ask::DecideEscalation { .. }
             | Ask::DecideProposal { .. }
             | Ask::Say { .. }
+            | Ask::AnswerQuestion { .. }
+            | Ask::Prioritise { .. }
+            | Ask::Amend { .. }
             | Ask::Move { .. }
             | Ask::SetGoal { .. } => false,
         },
@@ -817,6 +866,9 @@ fn valid_answer_shape(ask: &Ask, outcome: Outcome) -> bool {
             | Ask::DecideEscalation { .. }
             | Ask::DecideProposal { .. }
             | Ask::Say { .. }
+            | Ask::AnswerQuestion { .. }
+            | Ask::Prioritise { .. }
+            | Ask::Amend { .. }
             | Ask::Move { .. }
             | Ask::Stop { .. }
             | Ask::Cancel { .. }
@@ -832,6 +884,9 @@ fn valid_answer_shape(ask: &Ask, outcome: Outcome) -> bool {
             | Ask::DecideEscalation { .. }
             | Ask::DecideProposal { .. }
             | Ask::Say { .. }
+            | Ask::AnswerQuestion { .. }
+            | Ask::Prioritise { .. }
+            | Ask::Amend { .. }
             | Ask::Move { .. }
             | Ask::Stop { .. }
             | Ask::Cancel { .. }
@@ -847,6 +902,9 @@ fn valid_answer_shape(ask: &Ask, outcome: Outcome) -> bool {
             | Ask::DecideEscalation { .. }
             | Ask::DecideProposal { .. }
             | Ask::Say { .. }
+            | Ask::AnswerQuestion { .. }
+            | Ask::Prioritise { .. }
+            | Ask::Amend { .. }
             | Ask::Move { .. }
             | Ask::Stop { .. }
             | Ask::Cancel { .. }
@@ -860,6 +918,9 @@ fn valid_answer_shape(ask: &Ask, outcome: Outcome) -> bool {
             | Ask::DecideEscalation { .. }
             | Ask::DecideProposal { .. }
             | Ask::Say { .. }
+            | Ask::AnswerQuestion { .. }
+            | Ask::Prioritise { .. }
+            | Ask::Amend { .. }
             | Ask::TakePerson { .. }
             | Ask::HandBackPerson { .. }
             | Ask::AnswerPerson { .. }
@@ -889,6 +950,9 @@ fn valid_answer_shape(ask: &Ask, outcome: Outcome) -> bool {
             | Ask::DecideEscalation { .. }
             | Ask::DecideProposal { .. }
             | Ask::Say { .. }
+            | Ask::AnswerQuestion { .. }
+            | Ask::Prioritise { .. }
+            | Ask::Amend { .. }
             | Ask::Move { .. }
             | Ask::TakePerson { .. }
             | Ask::HandBackPerson { .. }
@@ -904,6 +968,9 @@ fn valid_answer_shape(ask: &Ask, outcome: Outcome) -> bool {
             | Ask::DecideEscalation { .. }
             | Ask::DecideProposal { .. }
             | Ask::Say { .. }
+            | Ask::AnswerQuestion { .. }
+            | Ask::Prioritise { .. }
+            | Ask::Amend { .. }
             | Ask::Move { .. }
             | Ask::TakePerson { .. }
             | Ask::HandBackPerson { .. }
@@ -916,9 +983,86 @@ fn valid_answer_shape(ask: &Ask, outcome: Outcome) -> bool {
         Outcome::Said { task, message } => match ask {
             Ask::Say { task: named, .. } => *named == task && message != 0,
             Ask::SetRoles { .. }
+            | Ask::AnswerQuestion { .. }
+            | Ask::Prioritise { .. }
+            | Ask::Amend { .. }
             | Ask::StartChat { .. }
             | Ask::DecideEscalation { .. }
             | Ask::DecideProposal { .. }
+            | Ask::Move { .. }
+            | Ask::TakePerson { .. }
+            | Ask::HandBackPerson { .. }
+            | Ask::AnswerPerson { .. }
+            | Ask::Stop { .. }
+            | Ask::Cancel { .. }
+            | Ask::Release { .. }
+            | Ask::SetGoal { .. } => false,
+        },
+        Outcome::QuestionAnswered { task, question, message } => match ask {
+            Ask::AnswerQuestion { task: named, question: asked, .. } => {
+                *named == task && *asked == question && message != 0
+            }
+            Ask::SetRoles { .. }
+            | Ask::StartChat { .. }
+            | Ask::DecideEscalation { .. }
+            | Ask::DecideProposal { .. }
+            | Ask::Say { .. }
+            | Ask::Move { .. }
+            | Ask::TakePerson { .. }
+            | Ask::HandBackPerson { .. }
+            | Ask::AnswerPerson { .. }
+            | Ask::Stop { .. }
+            | Ask::Cancel { .. }
+            | Ask::Release { .. }
+            | Ask::Prioritise { .. }
+            | Ask::Amend { .. }
+            | Ask::SetGoal { .. } => false,
+        },
+        Outcome::Prioritised { project: answered } => match ask {
+            Ask::Prioritise { project, .. } => *project == answered,
+            Ask::SetRoles { .. }
+            | Ask::StartChat { .. }
+            | Ask::DecideEscalation { .. }
+            | Ask::DecideProposal { .. }
+            | Ask::Say { .. }
+            | Ask::AnswerQuestion { .. }
+            | Ask::Move { .. }
+            | Ask::TakePerson { .. }
+            | Ask::HandBackPerson { .. }
+            | Ask::AnswerPerson { .. }
+            | Ask::Stop { .. }
+            | Ask::Cancel { .. }
+            | Ask::Release { .. }
+            | Ask::Amend { .. }
+            | Ask::SetGoal { .. } => false,
+        },
+        Outcome::Amended { task } => match ask {
+            Ask::Amend { task: named, .. } => *named == task,
+            Ask::SetRoles { .. }
+            | Ask::StartChat { .. }
+            | Ask::DecideEscalation { .. }
+            | Ask::DecideProposal { .. }
+            | Ask::Say { .. }
+            | Ask::AnswerQuestion { .. }
+            | Ask::Prioritise { .. }
+            | Ask::Move { .. }
+            | Ask::TakePerson { .. }
+            | Ask::HandBackPerson { .. }
+            | Ask::AnswerPerson { .. }
+            | Ask::Stop { .. }
+            | Ask::Cancel { .. }
+            | Ask::Release { .. }
+            | Ask::SetGoal { .. } => false,
+        },
+        Outcome::AmendProposed { task, proposal } => match ask {
+            Ask::Amend { task: named, .. } => *named == task && proposal != 0,
+            Ask::SetRoles { .. }
+            | Ask::StartChat { .. }
+            | Ask::DecideEscalation { .. }
+            | Ask::DecideProposal { .. }
+            | Ask::Say { .. }
+            | Ask::AnswerQuestion { .. }
+            | Ask::Prioritise { .. }
             | Ask::Move { .. }
             | Ask::TakePerson { .. }
             | Ask::HandBackPerson { .. }
@@ -934,6 +1078,9 @@ fn valid_answer_shape(ask: &Ask, outcome: Outcome) -> bool {
             | Ask::StartChat { .. }
             | Ask::DecideProposal { .. }
             | Ask::Say { .. }
+            | Ask::AnswerQuestion { .. }
+            | Ask::Prioritise { .. }
+            | Ask::Amend { .. }
             | Ask::Move { .. }
             | Ask::TakePerson { .. }
             | Ask::HandBackPerson { .. }
@@ -949,6 +1096,9 @@ fn valid_answer_shape(ask: &Ask, outcome: Outcome) -> bool {
             | Ask::StartChat { .. }
             | Ask::DecideEscalation { .. }
             | Ask::Say { .. }
+            | Ask::AnswerQuestion { .. }
+            | Ask::Prioritise { .. }
+            | Ask::Amend { .. }
             | Ask::Move { .. }
             | Ask::TakePerson { .. }
             | Ask::HandBackPerson { .. }
@@ -1035,7 +1185,15 @@ fn admit_ask(
             Some(Role::Owner | Role::Maintainer | Role::Member) => None,
             Some(Role::Observer) | None => Some(Refusal::Role),
         },
-        Ask::Say { .. } => match role {
+        Ask::Say { .. } | Ask::AnswerQuestion { .. } => match role {
+            Some(Role::Owner | Role::Maintainer | Role::Member) => None,
+            Some(Role::Observer) | None => Some(Refusal::Role),
+        },
+        Ask::Prioritise { .. } => match role {
+            Some(Role::Owner | Role::Maintainer) => None,
+            Some(Role::Member | Role::Observer) | None => Some(Refusal::Role),
+        },
+        Ask::Amend { .. } => match role {
             Some(Role::Owner | Role::Maintainer | Role::Member) => None,
             Some(Role::Observer) | None => Some(Refusal::Role),
         },
@@ -1075,7 +1233,7 @@ fn save_answer(
     outcome: Outcome,
     out: &mut Queue<Request>,
 ) {
-    out.push(Request::Save { record: Stored::Answer { key, ask: ask.clone(), outcome, at: env.wall } });
+    out.push(Request::Save { record: Stored::Answer { key, ask: Box::new(ask.clone()), outcome, at: env.wall } });
     let saved = domain.answers.insert(key, Answered { ask, outcome, at: env.wall });
     assert!(saved.is_ok(), "answer room reserved at request entrance");
     fact(domain, Fact::Answered { person: key.person });
@@ -1096,6 +1254,10 @@ fn decided(domain: &mut Domain, env: &Env<Limits>, id: Id<Pending>, outcome: Out
         Outcome::RolesSet { .. }
         | Outcome::Started { .. }
         | Outcome::Said { .. }
+        | Outcome::QuestionAnswered { .. }
+        | Outcome::Prioritised { .. }
+        | Outcome::Amended { .. }
+        | Outcome::AmendProposed { .. }
         | Outcome::Moved { .. }
         | Outcome::Stopped { .. }
         | Outcome::Cancelled { .. }
@@ -1180,7 +1342,7 @@ fn restore(domain: &mut Domain, env: &Env<Limits>, record: Stored, out: &mut Que
             assert!(saved.is_ok(), "restored roles admitted");
         }
         Stored::Answer { key, ask, outcome, at } => {
-            let saved = domain.answers.insert(key, Answered { ask, outcome, at });
+            let saved = domain.answers.insert(key, Answered { ask: *ask, outcome, at });
             assert!(saved.is_ok(), "restored answer admitted");
         }
     }
@@ -1229,6 +1391,9 @@ fn restored(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
                 | Ask::DecideEscalation { .. }
                 | Ask::DecideProposal { .. }
                 | Ask::Say { .. }
+                | Ask::AnswerQuestion { .. }
+                | Ask::Prioritise { .. }
+                | Ask::Amend { .. }
                 | Ask::Move { .. }
                 | Ask::TakePerson { .. }
                 | Ask::HandBackPerson { .. }
@@ -1242,6 +1407,10 @@ fn restored(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
             },
             Outcome::Started { .. }
             | Outcome::Said { .. }
+            | Outcome::QuestionAnswered { .. }
+            | Outcome::Prioritised { .. }
+            | Outcome::Amended { .. }
+            | Outcome::AmendProposed { .. }
             | Outcome::Moved { .. }
             | Outcome::PersonTaken { .. }
             | Outcome::PersonHandedBack { .. }

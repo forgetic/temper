@@ -111,16 +111,39 @@ pub(crate) fn message(
     let answer = match word.kind {
         MessageKind::Words | MessageKind::Question => None,
         MessageKind::Answer { question } => {
-            let mut valid = false;
-            for credit in &task.questions {
-                if credit.number == question && word.from == Party::Task(credit.answerer) {
-                    valid = true;
+            let valid = match word.from {
+                Party::Task(answerer) => {
+                    let mut found = false;
+                    for credit in &task.questions {
+                        if credit.number == question && answerer == credit.answerer {
+                            found = true;
+                        }
+                    }
+                    found
                 }
-            }
+                Party::Person(person) => {
+                    let mut found = false;
+                    if task.requester == Party::Person(person) {
+                        for prior in &task.inbox {
+                            if prior.number == question && prior.kind == MessageKind::Question {
+                                found = true;
+                            }
+                            if prior.kind == (MessageKind::Answer { question }) {
+                                found = false;
+                            }
+                        }
+                    }
+                    found
+                }
+                Party::Deployment { .. } => false,
+            };
             if !valid {
                 return refused(to, Some(number), Refusal::Reference, out);
             }
-            Some(question)
+            match word.from {
+                Party::Task(_) => Some(question),
+                Party::Person(_) | Party::Deployment { .. } => None,
+            }
         }
         MessageKind::Proposal { .. }
         | MessageKind::Escalation { .. }

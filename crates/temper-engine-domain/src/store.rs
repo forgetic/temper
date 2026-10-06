@@ -608,13 +608,20 @@ pub fn record_bytes(record: &Record) -> Option<u64> {
             temper_engine_domain_people::Stored::Roles { holdings, .. } => u64::try_from(holdings.len())
                 .ok()?
                 .checked_mul(u64::try_from(size_of::<temper_engine_domain_people::Holding>()).ok()?),
-            temper_engine_domain_people::Stored::Answer { ask, .. } => match ask {
+            temper_engine_domain_people::Stored::Answer { ask, .. } => match ask.as_ref() {
                 temper_engine_domain_people::Ask::SetGoal { spec, .. } => u64::try_from(spec.len()).ok(),
                 temper_engine_domain_people::Ask::SetRoles { holdings, .. } => u64::try_from(holdings.len())
                     .ok()?
                     .checked_mul(u64::try_from(size_of::<temper_engine_domain_people::Holding>()).ok()?),
+                temper_engine_domain_people::Ask::Prioritise { goals, .. } => {
+                    u64::try_from(goals.len()).ok()?.checked_mul(u64::try_from(size_of::<(u64, u32)>()).ok()?)
+                }
+                temper_engine_domain_people::Ask::Amend { amendment, .. } => {
+                    temper_engine_domain_people::amendment_bytes(amendment)
+                }
                 temper_engine_domain_people::Ask::StartChat { words, .. }
-                | temper_engine_domain_people::Ask::Say { words, .. } => u64::try_from(words.len()).ok(),
+                | temper_engine_domain_people::Ask::Say { words, .. }
+                | temper_engine_domain_people::Ask::AnswerQuestion { words, .. } => u64::try_from(words.len()).ok(),
                 temper_engine_domain_people::Ask::Move { reason, .. }
                 | temper_engine_domain_people::Ask::Cancel { reason, .. } => u64::try_from(reason.len()).ok(),
                 temper_engine_domain_people::Ask::TakePerson { .. }

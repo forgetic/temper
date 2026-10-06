@@ -25,6 +25,7 @@
 //! Root candidate/snapshot carriers are transient.
 //! Child facts are disposable observations; [`Domain::quiescent`] reports
 //! internal idleness, while an external referee establishes final story results.
+mod amendments;
 mod escalation;
 mod goals;
 mod inbox;
@@ -625,6 +626,9 @@ enum PersonTaskRoute {
     Answer(u64),
     Cancel(u64),
     Release(u64),
+    Prioritised(u32),
+    Amended(u64),
+    AmendProposed { task: u64, proposal: u64 },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -671,7 +675,7 @@ pub struct Domain {
     routing_calls: Map<Token, RoutedCall>,
     routing_people_proposals: Map<Token, PersonProposalRoute>,
     ending_positions: Map<u64, u64>,
-    saying: Map<Token, u64>,
+    saying: Map<Token, (u64, Option<u64>)>,
     moving: Map<Token, u64>,
     person_tasks: Map<Token, PersonTaskRoute>,
     relaying: Option<PendingRelay>,
@@ -1484,6 +1488,80 @@ fn append_word(existing: &[tasks::Word], word: &tasks::Word, capacity: u32) -> B
     words.into_boxed()
 }
 
+#[expect(clippy::too_many_arguments, reason = "one authenticated message route with optional question identity")]
+fn route_person_message(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    request: Token,
+    person: u64,
+    project: u32,
+    task: u64,
+    question: Option<u64>,
+    words: Box<[u8]>,
+) {
+    let Some(message) = crate::fresh(&mut domain.journal, Family::Message) else {
+        domain.work.push(Work::People(people::Event::Decided {
+            request,
+            outcome: people::Outcome::Refused(people::Refusal::Limit),
+        }));
+        return;
+    };
+    let kind = match question {
+        Some(number) => tasks::MessageKind::Answer { question: number },
+        None => tasks::MessageKind::Words,
+    };
+    assert!(domain.saying.insert(request, (task, question)) == Ok(None), "one person message flight");
+    domain.work.push(Work::Tasks(tasks::Event::Message {
+        reply_to: ReplyTo::new(request),
+        project,
+        task,
+        word: tasks::Word {
+            number: message,
+            from: tasks::Party::Person(person),
+            kind,
+            words,
+            at: env.wall,
+            hits: 1,
+            eligible: false,
+        },
+    }));
+}
+
+fn route_person_priorities(
+    domain: &mut Domain,
+    request: Token,
+    person: u64,
+    project: u32,
+    role: Option<people::Role>,
+    goals: Box<[(u64, u32)]>,
+) {
+    let allowed = match role {
+        Some(people::Role::Owner | people::Role::Maintainer) => {
+            match domain.config.authority.role(project, escalation::role_number(role.expect("checked role"))) {
+                Some(policy) => policy.requests.allows(authority::RequestKind::Amend),
+                None => false,
+            }
+        }
+        Some(people::Role::Member | people::Role::Observer) | None => false,
+    };
+    if !allowed {
+        return person_control_refused(domain, request, people::Refusal::Authority);
+    }
+    if goals.len() > usize::try_from(domain.limits.tasks.tasks).expect("u32 fits usize") {
+        return person_control_refused(domain, request, people::Refusal::Limit);
+    }
+    assert!(
+        domain.person_tasks.insert(request, PersonTaskRoute::Prioritised(project)) == Ok(None),
+        "one priority route"
+    );
+    domain.work.push(Work::Tasks(tasks::Event::Prioritise {
+        reply_to: ReplyTo::new(request),
+        project,
+        by: tasks::Party::Person(person),
+        goals,
+    }));
+}
+
 fn people_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, out: &mut Queue<people::Request>) {
     for _ in 0..out.len() {
         match out.pop().expect("people output count") {
@@ -1516,28 +1594,16 @@ fn people_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decisio
                     route_person_task(domain, request, person, project, role, ask);
                 }
                 people::Ask::Say { task, words, .. } => {
-                    let Some(message) = crate::fresh(&mut domain.journal, Family::Message) else {
-                        domain.work.push(Work::People(people::Event::Decided {
-                            request,
-                            outcome: people::Outcome::Refused(people::Refusal::Limit),
-                        }));
-                        continue;
-                    };
-                    assert!(domain.saying.insert(request, task) == Ok(None), "one pending say flight");
-                    domain.work.push(Work::Tasks(tasks::Event::Message {
-                        reply_to: ReplyTo::new(request),
-                        project,
-                        task,
-                        word: tasks::Word {
-                            number: message,
-                            from: tasks::Party::Person(person),
-                            kind: tasks::MessageKind::Words,
-                            words,
-                            at: env.wall,
-                            hits: 1,
-                            eligible: false,
-                        },
-                    }));
+                    route_person_message(domain, env, request, person, project, task, None, words);
+                }
+                people::Ask::AnswerQuestion { task, question, words, .. } => {
+                    route_person_message(domain, env, request, person, project, task, Some(question), words);
+                }
+                people::Ask::Prioritise { goals, .. } => {
+                    route_person_priorities(domain, request, person, project, role, goals);
+                }
+                people::Ask::Amend { task, amendment, .. } => {
+                    amendments::begin(domain, env, request, person, role, project, task, amendment);
                 }
                 people::Ask::StartChat { .. } => {
                     let Some(role) = role else { unreachable!("chat membership admitted") };
@@ -1584,6 +1650,7 @@ fn person_result(result: people::PersonResult) -> tasks::TaskResult {
     }
 }
 
+#[expect(clippy::too_many_lines, reason = "one exhaustive route handles all person task requests")]
 fn route_person_task(
     domain: &mut Domain,
     request: Token,
@@ -1599,6 +1666,9 @@ fn route_person_task(
         people::Ask::Move { .. }
         | people::Ask::DecideProposal { .. }
         | people::Ask::Say { .. }
+        | people::Ask::AnswerQuestion { .. }
+        | people::Ask::Prioritise { .. }
+        | people::Ask::Amend { .. }
         | people::Ask::SetRoles { .. }
         | people::Ask::DecideEscalation { .. }
         | people::Ask::StartChat { .. }
@@ -1624,6 +1694,9 @@ fn route_person_task(
                         people::Ask::Move { .. }
                         | people::Ask::DecideProposal { .. }
                         | people::Ask::Say { .. }
+                        | people::Ask::AnswerQuestion { .. }
+                        | people::Ask::Prioritise { .. }
+                        | people::Ask::Amend { .. }
                         | people::Ask::SetRoles { .. }
                         | people::Ask::DecideEscalation { .. }
                         | people::Ask::StartChat { .. }
@@ -1640,6 +1713,9 @@ fn route_person_task(
                     people::Ask::Move { .. }
                     | people::Ask::DecideProposal { .. }
                     | people::Ask::Say { .. }
+                    | people::Ask::AnswerQuestion { .. }
+                    | people::Ask::Prioritise { .. }
+                    | people::Ask::Amend { .. }
                     | people::Ask::SetRoles { .. }
                     | people::Ask::DecideEscalation { .. }
                     | people::Ask::StartChat { .. }
@@ -1678,6 +1754,9 @@ fn route_person_task(
         people::Ask::Move { .. }
         | people::Ask::DecideProposal { .. }
         | people::Ask::Say { .. }
+        | people::Ask::AnswerQuestion { .. }
+        | people::Ask::Prioritise { .. }
+        | people::Ask::Amend { .. }
         | people::Ask::SetRoles { .. }
         | people::Ask::DecideEscalation { .. }
         | people::Ask::StartChat { .. }
@@ -1727,6 +1806,9 @@ fn route_person_control(
         | people::Ask::Move { .. }
         | people::Ask::DecideProposal { .. }
         | people::Ask::Say { .. }
+        | people::Ask::AnswerQuestion { .. }
+        | people::Ask::Prioritise { .. }
+        | people::Ask::Amend { .. }
         | people::Ask::SetRoles { .. }
         | people::Ask::DecideEscalation { .. }
         | people::Ask::StartChat { .. }
@@ -1761,6 +1843,9 @@ fn route_person_control(
         | people::Ask::Move { .. }
         | people::Ask::DecideProposal { .. }
         | people::Ask::Say { .. }
+        | people::Ask::AnswerQuestion { .. }
+        | people::Ask::Prioritise { .. }
+        | people::Ask::Amend { .. }
         | people::Ask::SetRoles { .. }
         | people::Ask::DecideEscalation { .. }
         | people::Ask::StartChat { .. }
@@ -1821,6 +1906,9 @@ fn route_person_control(
         | people::Ask::Move { .. }
         | people::Ask::DecideProposal { .. }
         | people::Ask::Say { .. }
+        | people::Ask::AnswerQuestion { .. }
+        | people::Ask::Prioritise { .. }
+        | people::Ask::Amend { .. }
         | people::Ask::SetRoles { .. }
         | people::Ask::DecideEscalation { .. }
         | people::Ask::StartChat { .. }
@@ -2014,6 +2102,9 @@ fn make_chat(
         | people::Ask::DecideProposal { .. }
         | people::Ask::SetRoles { .. }
         | people::Ask::Say { .. }
+        | people::Ask::AnswerQuestion { .. }
+        | people::Ask::Prioritise { .. }
+        | people::Ask::Amend { .. }
         | people::Ask::Move { .. }
         | people::Ask::TakePerson { .. }
         | people::Ask::HandBackPerson { .. }
@@ -3152,11 +3243,17 @@ fn tasks_outputs(
                         unreachable!("only message calls produce Sent")
                     }
                     None => {
-                        assert!(domain.saying.remove(&request) == Some(task), "matching pending say flight");
-                        domain.work.push(Work::People(people::Event::Decided {
-                            request,
-                            outcome: people::Outcome::Said { task, message: word.number },
-                        }));
+                        let route = domain.saying.remove(&request);
+                        let outcome = match route {
+                            Some((named, None)) if named == task => {
+                                people::Outcome::Said { task, message: word.number }
+                            }
+                            Some((named, Some(question))) if named == task => {
+                                people::Outcome::QuestionAnswered { task, question, message: word.number }
+                            }
+                            Some(_) | None => unreachable!("matching pending person message flight"),
+                        };
+                        domain.work.push(Work::People(people::Event::Decided { request, outcome }));
                     }
                 }
             }
@@ -3758,6 +3855,11 @@ fn tasks_outputs(
                         PersonTaskRoute::Answer(task) => people::Outcome::PersonAnswered { task },
                         PersonTaskRoute::Cancel(task) => people::Outcome::Cancelled { task },
                         PersonTaskRoute::Release(task) => people::Outcome::Released { task },
+                        PersonTaskRoute::Prioritised(project) => people::Outcome::Prioritised { project },
+                        PersonTaskRoute::Amended(task) => people::Outcome::Amended { task },
+                        PersonTaskRoute::AmendProposed { task, proposal } => {
+                            people::Outcome::AmendProposed { task, proposal }
+                        }
                     };
                     domain.work.push(Work::People(people::Event::Decided { request: Token::new(task), outcome }));
                     continue;

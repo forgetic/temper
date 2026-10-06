@@ -108,6 +108,51 @@ fn a_question_keeps_room_for_its_answer_while_words_fill_the_inbox() {
 }
 
 #[test]
+fn a_person_answers_one_numbered_question_in_their_active_task() {
+    let mut world = World::new(830, LIMITS);
+    world.make(Party::Person(9), vec![task(1, &[])]);
+    world.make(Party::Task(1), vec![task(2, &[])]);
+    world.claim(1, 1);
+    assert!(matches!(task_words(&mut world, 2, 1, 1, MessageKind::Question), Reply::Done));
+    let reply_to = world.to();
+    let key = reply_to.into_token().raw();
+    world.send(Event::Message {
+        reply_to: ReplyTo::new(Token::new(key)),
+        project: 1,
+        task: 1,
+        word: Word {
+            number: 2,
+            from: Party::Person(9),
+            kind: MessageKind::Answer { question: 1 },
+            words: Box::from(&b"yes"[..]),
+            at: Wall::EPOCH,
+            hits: 1,
+            eligible: false,
+        },
+    });
+    assert_eq!(world.replies[&key], Reply::Done);
+    assert_eq!(world.record(1).inbox.len(), 2);
+    let reply_to = world.to();
+    let key = reply_to.into_token().raw();
+    world.send(Event::Message {
+        reply_to: ReplyTo::new(Token::new(key)),
+        project: 1,
+        task: 1,
+        word: Word {
+            number: 3,
+            from: Party::Person(9),
+            kind: MessageKind::Answer { question: 1 },
+            words: Box::from(&b"twice"[..]),
+            at: Wall::EPOCH,
+            hits: 1,
+            eligible: false,
+        },
+    });
+    assert!(matches!(world.replies[&key], Reply::Refused(problem) if problem.why == Refusal::Reference));
+    world.restart();
+}
+
+#[test]
 fn a_coordinator_is_woken_once_by_a_burst() {
     let mut world = World::new(84, LIMITS);
     let mut coordinator = task(1, &[]);

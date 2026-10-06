@@ -114,8 +114,8 @@ impl Referee {
             .iter()
             .filter_map(|write| match write {
                 Write::Save(Record::People(people::Stored::Answer { key, ask, outcome, .. })) => {
-                    if let people::Ask::SetRoles { .. } = ask {
-                        Some((*key, ask, *outcome))
+                    if let people::Ask::SetRoles { .. } = ask.as_ref() {
+                        Some((*key, ask.as_ref(), *outcome))
                     } else {
                         None
                     }
@@ -288,7 +288,7 @@ impl Referee {
                 }
             }
             people::Reply::Outcome(outcome) => {
-                if !matches!(rows.get(&answer_key), Some(Record::People(people::Stored::Answer { ask, outcome: saved, .. })) if *ask == obligation.ask && *saved == outcome)
+                if !matches!(rows.get(&answer_key), Some(Record::People(people::Stored::Answer { ask, outcome: saved, .. })) if ask.as_ref() == &obligation.ask && *saved == outcome)
                 {
                     return Err("role terminal before exact durable keyed answer");
                 }

@@ -21,6 +21,8 @@ pub struct Limits {
     pub projects: u32,
     /// Maximum unique-person holdings per project role set.
     pub holdings: u32,
+    /// Maximum goals whose priorities one keyed request changes together.
+    pub goals: u32,
     /// Maximum retained configured first-owner entries; also bounds bootstrap output matches.
     pub initial_owners: u32,
     /// Maximum completed keys plus slots reserved by pending flights; no timed eviction is
@@ -35,6 +37,8 @@ pub struct Limits {
     /// Maximum opening-word or escalation rejection-reason bytes per keyed ask, including pending
     /// and completed copies.
     pub words: u32,
+    /// Maximum owned bytes carried by one keyed task amendment.
+    pub amendment_bytes: u32,
     /// Nonzero configured lifetime projected once from admission's wall/monotonic environment.
     pub sign_in_lifetime: Duration,
     /// Capacity of optional content-free observations; overflow increments a diagnostic lost
@@ -55,8 +59,10 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     if limits.waiters == 0 || limits.sign_in_lifetime == Duration::ZERO {
         return None;
     }
-    let ask_bytes =
-        u64::from(limits.words).max(u64::from(limits.holdings).checked_mul(u64::try_from(size_of::<Holding>()).ok()?)?);
+    let ask_bytes = u64::from(limits.words)
+        .max(u64::from(limits.amendment_bytes))
+        .max(u64::from(limits.holdings).checked_mul(u64::try_from(size_of::<Holding>()).ok()?)?)
+        .max(u64::from(limits.goals).checked_mul(u64::try_from(size_of::<(u64, u32)>()).ok()?)?);
     let people = Map::<u64, Identity>::worst_case(limits.people)?
         .checked_add(Map::<IdentityKey, u64>::worst_case(limits.people)?)?
         .checked_add(u64::from(limits.people).checked_mul(u64::from(limits.identity_bytes))?)?;
