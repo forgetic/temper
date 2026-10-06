@@ -17,8 +17,9 @@
 //!
 //! The root never knows file descriptors, wire encodings, kernel races,
 //! repository contents or secret credential bytes (domain/engine.md, 2 and 5.5).
-//! Its closed input vocabulary has no blanket child-event pass-through. Tools,
-//! connectors and the broader people/run routes remain later increments (5.7).
+//! Its closed input vocabulary has no blanket child-event pass-through.
+//! Named call replay is rooted here; individual tool routes, connectors and
+//! broader people routes follow in later increments.
 //! Actual keyed role administration preflights Waiting recipients, then commits
 //! membership, semantic rerouting and keyed completion together without IO.
 //! Root candidate/snapshot carriers are transient.
@@ -30,8 +31,8 @@ mod results;
 mod roles;
 
 use crate::{
-    Decision, Delivery, Family, Journal, JournalLimits, Key, Output, Range, Record, RunProof, TerminalRecord,
-    TurnProof, TurnRecord, Write, loads,
+    CallAnswer, CallKey, Decision, Delivery, Family, Journal, JournalLimits, Key, Output, Range, Record, RunProof,
+    TerminalRecord, TurnProof, TurnRecord, Write, loads,
 };
 use alloc::boxed::Box;
 use skein_lib::{Decimal, Env, Id, List, Map, Queue, ReplyTo, Slab, Token, Writer};
@@ -60,6 +61,8 @@ pub struct Limits {
     pub people: people::Limits,
     /// Worker attempts and unacknowledged turns.
     pub fleet: fleet::Limits,
+    /// Maximum named decisions awaiting a turn or task end across live tasks.
+    pub call_records: u32,
     /// Required task section gathering and cuts.
     pub brief: brief::Limits,
     /// Secret-free credential policy.
@@ -123,6 +126,9 @@ pub struct Assignment {
     pub saved: Box<[u32]>,
     /// Ordered opaque committed turn bodies of this task, empty for a fresh run.
     pub transcript: Box<[Box<[u8]>]>,
+    /// Named answers committed after the task's last accepted turn. The
+    /// worker gives these to the new attempt before it can decide new calls.
+    pub answered: Box<[crate::CallRecord]>,
     /// Secret-free account grant; token bytes stay in the protocol.
     pub grant: accounts::Grant,
 }
@@ -143,6 +149,23 @@ pub struct Turn {
     pub transcript: Box<[u8]>,
 }
 
+/// One typed engine tool request from the current worker claim
+/// (domain/engine.md, section 7.3). Later routes extend this vocabulary.
+#[derive(PartialEq, Eq, Debug)]
+pub enum Tool {
+    /// The engine records an unavailable answer for a route not yet installed.
+    Unavailable,
+}
+
+/// A run-named tool call. The root fills the task and attempt from the
+/// worker envelope before looking up its durable decision.
+#[derive(PartialEq, Eq, Debug)]
+pub struct Call {
+    pub completion: u32,
+    pub position: u32,
+    pub tool: Tool,
+}
+
 /// External inputs to the walking root; store terminals always enter,
 /// worker bodies are bounded before retention (domain/engine.md, 5–7).
 /// Web calls own one terminal reply right. Valid current worker bodies are
@@ -150,6 +173,8 @@ pub struct Turn {
 /// be dropped by fleet. Store and refresh variants are terminals, not new calls.
 #[derive(Debug)]
 pub enum Event {
+    /// Worker host call, validated by fleet and decided once by the root.
+    Call { channel: Token, task: u64, attempt: u64, call: Token, body: Call },
     /// Authenticated named held-chat read; one bounded view or refusal terminal,
     /// without persistent inbox/history restore.
     ReadEscalation {
@@ -307,6 +332,8 @@ pub enum Event {
 /// terminal; deliveries are notices or consume a `ReplyTo` (domain/engine.md, 5).
 #[derive(PartialEq, Eq, Debug)]
 pub enum Request {
+    /// Root had no decision or payload room; worker retries the same name.
+    CallBusy { channel: Token, task: u64, attempt: u64, call: Token },
     /// Ordered atomic transaction; store ends with Committed or Uncommitted.
     Commit {
         /// Positive ordered commit number allocated by the journal, echoed by the store terminal;
@@ -386,6 +413,8 @@ enum Work {
 
 #[derive(Debug)]
 enum Payload {
+    Call { key: CallKey, body: Call },
+    CallAnswer(CallAnswer),
     Turn { task: u64, attempt: u64, body: Turn },
     Answer { task: u64, attempt: u64, cumulative: u64, end: tasks::End, saved: Option<Box<[u32]>> },
 }
@@ -465,6 +494,7 @@ pub struct Domain {
     contexts: Map<u64, Box<tasks::RunContext>>,
     transcripts: Map<u64, Transcript>,
     proofs: Map<u64, RunProof>,
+    calls: Map<CallKey, CallAnswer>,
     restoring_proofs: Map<u64, RestoringProof>,
     work: Queue<Work>,
     before_header: Queue<Work>,
@@ -532,6 +562,7 @@ impl Domain {
             contexts: Map::with_capacity(limits.tasks.tasks),
             transcripts: Map::with_capacity(limits.tasks.tasks),
             proofs: Map::with_capacity(limits.tasks.tasks),
+            calls: Map::with_capacity(limits.call_records),
             restoring_proofs: Map::with_capacity(limits.tasks.tasks),
             work: Queue::with_capacity(route_bound(limits).expect("valid routes")),
             before_header: Queue::with_capacity(limits.fleet.workers),
@@ -815,6 +846,31 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
                 return;
             }
             domain.work.push(Work::People(people::Event::Ask { reply_to, sign_in, key, ask }));
+        }
+        Event::Call { channel, task, attempt, call, body } => {
+            let key = CallKey { task, attempt, completion: body.completion, position: body.position };
+            if !domain.ready()
+                || !admits(domain, &env.limits)
+                || task == 0
+                || attempt == 0
+                || body.completion == 0
+                || domain.fleet.calls() >= env.limits.fleet.calls
+                || (!domain.calls.contains_key(&key) && domain.calls.len() >= env.limits.call_records)
+            {
+                out.push(Request::CallBusy { channel, task, attempt, call });
+                return;
+            }
+            let Ok(id) = domain.payloads.insert(Some(Payload::Call { key, body })) else {
+                out.push(Request::CallBusy { channel, task, attempt, call });
+                return;
+            };
+            domain.work.push(Work::Fleet(fleet::Event::Relay {
+                channel,
+                run: Token::new(task),
+                attempt: Token::new(attempt),
+                call,
+                body: id.token(),
+            }));
         }
         Event::Turn { channel, task, attempt, turn } => {
             if !domain.ready()
@@ -1370,6 +1426,19 @@ fn activate(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, tas
     }
 }
 
+fn retire_calls(domain: &mut Domain, limits: &Limits, decision: &mut Decision, task: u64, attempt: u64, turn: u32) {
+    let mut retired = List::with_capacity(limits.call_records);
+    for (&key, _) in &domain.calls {
+        if key.task == task && (key.attempt < attempt || (key.attempt == attempt && key.completion < turn)) {
+            retired.push(key).expect("all retained call names fit their configured bound");
+        }
+    }
+    for &key in &retired {
+        let _answer = domain.calls.remove(&key);
+        save(decision, limits, Write::Erase(Key::Call(key)));
+    }
+}
+
 #[expect(clippy::too_many_lines, reason = "the closed child vocabulary is routed exhaustively inside one decision")]
 fn tasks_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, out: &mut Queue<tasks::Request>) {
     for _ in 0..out.len() {
@@ -1502,6 +1571,9 @@ fn tasks_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                                 }));
                             }
                         }
+                        Payload::Call { .. } | Payload::CallAnswer(_) => {
+                            unreachable!("task refusal owns a task payload")
+                        }
                     }
                 }
             }
@@ -1510,7 +1582,9 @@ fn tasks_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                 let payload = take_payload(domain, token).expect("charged turn owns payload");
                 let body = match payload {
                     Payload::Turn { body, .. } => body,
-                    Payload::Answer { .. } => unreachable!("turn family"),
+                    Payload::Answer { .. } | Payload::Call { .. } | Payload::CallAnswer(_) => {
+                        unreachable!("turn family")
+                    }
                 };
                 let proof = domain.proofs.get_mut(&task).expect("turn proof reserved before child mutation");
                 assert!(proof.attempt == attempt, "turn callback retains its actual claim");
@@ -1531,6 +1605,9 @@ fn tasks_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                         })),
                     ),
                     tasks::Accepted::Already => {}
+                }
+                if accepted == tasks::Accepted::New {
+                    retire_calls(domain, &env.limits, decision, task, attempt, turn);
                 }
                 emit(
                     decision,
@@ -1575,6 +1652,7 @@ fn tasks_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
             ),
             tasks::Request::Close { task, .. } => domain.work.push(Work::Tasks(tasks::Event::Settled { task })),
             tasks::Request::Ended { task, requester, ending } => {
+                retire_calls(domain, &env.limits, decision, task, u64::MAX, u32::MAX);
                 drop(domain.proofs.remove(&task));
                 save(decision, &env.limits, Write::Erase(Key::RunProof { task }));
                 match requester {
@@ -1663,6 +1741,17 @@ fn brief_outputs(domain: &mut Domain, env: &Env<Limits>, _decision: &mut Decisio
                     inbox: context.inbox,
                     saved: context.saved,
                     transcript: turns.into_boxed(),
+                    answered: {
+                        let mut answered = List::with_capacity(domain.limits.call_records);
+                        for (&key, answer) in &domain.calls {
+                            if key.task == task && key.attempt < attempt {
+                                answered
+                                    .push(crate::CallRecord { key, answer: answer.clone() })
+                                    .expect("retained call bound");
+                            }
+                        }
+                        answered.into_boxed()
+                    },
                     grant,
                 };
                 assert!(domain.assignments.insert(task, assignment).is_ok(), "assignment fits live task room");
@@ -1710,7 +1799,9 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                 let payload = domain.payloads.get(Id::from_token(body)).expect("fleet returns owned token");
                 let payload = match payload.as_ref().expect("fleet returns owned payload") {
                     Payload::Turn { body: payload, .. } => payload,
-                    Payload::Answer { .. } => unreachable!("fleet returns turn family"),
+                    Payload::Answer { .. } | Payload::Call { .. } | Payload::CallAnswer(_) => {
+                        unreachable!("fleet returns turn family")
+                    }
                 };
                 domain.work.push(Work::Tasks(tasks::Event::Turn {
                     reply_to: ReplyTo::new(body),
@@ -1731,7 +1822,9 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                 let body = domain.payloads.get_mut(Id::from_token(payload)).expect("fleet returns owned token");
                 let (cumulative, end, saved) = match body.as_mut().expect("fleet returns owned payload") {
                     Payload::Answer { cumulative, end, saved, .. } => (*cumulative, end.clone(), saved.clone()),
-                    Payload::Turn { .. } => unreachable!("fleet returns answer family"),
+                    Payload::Turn { .. } | Payload::Call { .. } | Payload::CallAnswer(_) => {
+                        unreachable!("fleet returns answer family")
+                    }
                 };
                 let proof = domain.proofs.get_mut(&run.raw()).expect("terminal proof pre-reserved");
                 assert!(proof.attempt == attempt.raw(), "terminal callback belongs to current proof");
@@ -1812,11 +1905,49 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
             fleet::Request::Undelivered { .. } => {
                 drop(domain.relaying.take());
             }
+            fleet::Request::Relay { reply_to, run, attempt, body } => {
+                let Some(Payload::Call { key, body }) = take_payload(domain, body) else {
+                    unreachable!("fleet returns admitted call payload")
+                };
+                assert!(key.task == run.raw() && key.attempt == attempt.raw(), "fleet call envelope is unchanged");
+                assert!(current_proof(domain, key.task, key.attempt), "fleet only relays a current claim");
+                let answer = match domain.calls.get(&key) {
+                    Some(answer) => answer.clone(),
+                    None => {
+                        let answer = match body.tool {
+                            Tool::Unavailable => CallAnswer::Unavailable,
+                        };
+                        let _number = crate::fresh(&mut domain.journal, Family::Call).expect("admitted call counter");
+                        assert!(domain.calls.insert(key, answer.clone()) == Ok(None), "call record room reserved");
+                        save(
+                            decision,
+                            &env.limits,
+                            Write::Save(Record::Call(crate::CallRecord { key, answer: answer.clone() })),
+                        );
+                        answer
+                    }
+                };
+                let id =
+                    domain.payloads.insert(Some(Payload::CallAnswer(answer))).expect("answer payload room reserved");
+                emit(
+                    decision,
+                    &env.limits,
+                    Delivery::Fleet(fleet::Event::Relayed { to: reply_to, answer: id.token() }),
+                );
+            }
+            fleet::Request::Relayed { channel, run, attempt, call, answer } => {
+                let Some(Payload::CallAnswer(answer)) = take_payload(domain, answer) else {
+                    unreachable!("fleet relays an owned call answer")
+                };
+                emit(
+                    decision,
+                    &env.limits,
+                    Delivery::CallAnswer { channel, task: run.raw(), attempt: attempt.raw(), call, answer },
+                );
+            }
             fleet::Request::Grant { .. }
             | fleet::Request::Rejected { .. }
             | fleet::Request::Exhausted { .. }
-            | fleet::Request::Relayed { .. }
-            | fleet::Request::Relay { .. }
             | fleet::Request::Bounced { .. }
             | fleet::Request::Told { .. } => unreachable!("06a does not route tool/credential worker messages"),
         }
@@ -1827,7 +1958,8 @@ fn request_load(domain: &mut Domain, waiter: Token, range: Range, after: Option<
     let mut load_out = Queue::with_capacity(1);
     let most = match range {
         Range::Deployment | Range::TaskResult { .. } | Range::EscalationDecision { .. } => 1,
-        Range::Tasks
+        Range::Calls
+        | Range::Tasks
         | Range::EndedResults
         | Range::People
         | Range::RunProofs
@@ -1844,7 +1976,8 @@ fn request_load(domain: &mut Domain, waiter: Token, range: Range, after: Option<
                 domain.work.push(Work::EscalationFailed { waiter });
                 return;
             }
-            Range::Deployment
+            Range::Calls
+            | Range::Deployment
             | Range::Tasks
             | Range::EndedResults
             | Range::People
@@ -2085,7 +2218,8 @@ fn startup_page(
         Range::Deployment => Some(Range::People),
         Range::People => Some(Range::Tasks),
         Range::Tasks => Some(Range::RunProofs),
-        Range::RunProofs => None,
+        Range::RunProofs => Some(Range::Calls),
+        Range::Calls => None,
         Range::EscalationDecision { .. }
         | Range::Turns { .. }
         | Range::TaskTranscript { .. }
@@ -2291,7 +2425,12 @@ fn authority_value(value: &tasks::Authority) -> authority::Authority {
 }
 
 fn payload_slots(limits: &Limits) -> Option<u32> {
-    limits.fleet.turns.checked_add(limits.fleet.attempts)?.checked_mul(2)
+    limits
+        .fleet
+        .turns
+        .checked_add(limits.fleet.attempts)?
+        .checked_mul(2)?
+        .checked_add(limits.fleet.calls.checked_mul(2)?)
 }
 
 fn route_bound(limits: &Limits) -> Option<u32> {
@@ -2328,6 +2467,8 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         u64::try_from(size_of::<crate::ResultEntry>()).ok()?.checked_add(u64::from(limits.journal.result_bytes))?,
     )?;
     if limits.journal.writes < routes
+        || limits.call_records == 0
+        || limits.call_records > limits.journal.writes.checked_sub(routes)?
         || limits.journal.deliveries
             < limits
                 .tasks
@@ -2408,6 +2549,12 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     bytes = bytes
         .checked_add(Map::<u64, u64>::worst_case(limits.tasks.tasks)?)?
         .checked_add(Map::<u64, RunProof>::worst_case(limits.tasks.tasks)?)?
+        .checked_add(Map::<CallKey, CallAnswer>::worst_case(limits.call_records)?)?
+        .checked_add(
+            u64::from(limits.tasks.tasks)
+                .checked_mul(u64::from(limits.call_records))?
+                .checked_mul(u64::try_from(size_of::<crate::CallRecord>()).ok()?)?,
+        )?
         .checked_add(Map::<u64, RestoringProof>::worst_case(limits.tasks.tasks)?)?
         .checked_add(Map::<u64, Box<tasks::RunContext>>::worst_case(limits.tasks.tasks)?)?
         .checked_add(
@@ -2682,7 +2829,8 @@ fn header_loaded(startup: Startup) -> bool {
     match startup {
         Startup::Cold | Startup::Loading(Range::Deployment) | Startup::Failed => false,
         Startup::Loading(
-            Range::Tasks
+            Range::Calls
+            | Range::Tasks
             | Range::EndedResults
             | Range::People
             | Range::RunProofs
@@ -2769,6 +2917,7 @@ fn discard_after_stop(domain: &mut Domain, event: Event) {
         | Event::Hello { .. }
         | Event::Lost { .. }
         | Event::Turn { .. }
+        | Event::Call { .. }
         | Event::Answer { .. }
         | Event::ReadEscalation { .. }
         | Event::ReadResult { .. }
@@ -2875,6 +3024,21 @@ fn supported_person(requester: tasks::Party, highest: u64) -> bool {
 /// history into the live map.
 fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
     match row {
+        Record::Call(record) => {
+            let key = record.key;
+            let valid = key.task != 0
+                && key.attempt != 0
+                && key.completion != 0
+                && key.task <= domain.journal.deployment().tasks
+                && key.attempt <= domain.journal.deployment().runs
+                && match domain.proofs.get(&key.task) {
+                    Some(proof) => proof.attempt >= key.attempt,
+                    None => false,
+                };
+            if !valid || domain.calls.insert(key, record.answer).is_err() {
+                domain.startup = Startup::Failed;
+            }
+        }
         Record::Deployment(deployment) => domain.journal = Journal::new(deployment, &env.limits.journal),
         Record::People(record) => domain.work.push(Work::People(people::Event::Restore { record })),
         Record::Tasks(record) => match record {

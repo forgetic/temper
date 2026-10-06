@@ -99,6 +99,7 @@ impl Referee {
                         | people::Stored::Answer { .. },
                     )
                     | Record::Tasks(_)
+                    | Record::Call(_)
                     | Record::Deployment(_)
                     | Record::Turn(_)
                     | Record::RunProof(_)
@@ -126,6 +127,7 @@ impl Referee {
                         | people::Stored::Roles { .. },
                     )
                     | Record::Tasks(_)
+                    | Record::Call(_)
                     | Record::Deployment(_)
                     | Record::Turn(_)
                     | Record::RunProof(_)
@@ -165,6 +167,7 @@ impl Referee {
                     Write::Save(
                         Record::Tasks(tasks::Stored::Live(_) | tasks::Stored::Ended(_) | tasks::Stored::Ledger(_))
                         | Record::People(_)
+                        | Record::Call(_)
                         | Record::Deployment(_)
                         | Record::Turn(_)
                         | Record::RunProof(_)
@@ -192,13 +195,15 @@ impl Referee {
                 }
                 Write::Save(
                     Record::Tasks(_)
+                    | Record::Call(_)
                     | Record::RunProof(_)
                     | Record::Terminal(_)
                     | Record::EscalationDecision(_)
                     | Record::Turn(_),
                 )
                 | Write::Erase(
-                    Key::Tasks(_)
+                    Key::Call(_)
+                    | Key::Tasks(_)
                     | Key::RunProof { .. }
                     | Key::Terminal { .. }
                     | Key::EscalationDecision { .. }

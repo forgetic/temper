@@ -23,7 +23,8 @@ fn ended(world: &World) -> &tasks::TaskRecord {
             | Record::RunProof(_)
             | Record::EscalationDecision(_)
             | Record::Terminal(_)
-            | Record::Tasks(tasks::Stored::Live(_) | tasks::Stored::Ledger(_)) => None,
+            | Record::Tasks(tasks::Stored::Live(_) | tasks::Stored::Ledger(_))
+            | Record::Call(_) => None,
         })
         .expect("story ended its one task")
 }
@@ -180,6 +181,7 @@ fn walking_referee_rejects_wrong_task_or_uncommitted_or_duplicate_assignment() {
         inbox: Box::new([]),
         saved: Box::new([]),
         transcript: Box::new([]),
+        answered: Box::new([]),
         grant: Grant { account: 1, generation: 1, valid: Duration::from_secs(60) },
     };
     assignment.task = task.number + 1;

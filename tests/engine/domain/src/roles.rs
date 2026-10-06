@@ -212,6 +212,7 @@ impl World {
                     | people::Stored::Answer { .. },
                 )
                 | Record::Tasks(tasks::Stored::Ended(_) | tasks::Stored::Ledger(_))
+                | Record::Call(_)
                 | Record::Deployment(_)
                 | Record::Turn(_)
                 | Record::RunProof(_)
@@ -474,7 +475,9 @@ impl World {
                     | accounts::Request::Refused { .. }
                     | accounts::Request::Closed { .. },
                 ) => {}
-                engine::Request::AnswerBusy { .. } | engine::Request::TurnBusy { .. } => {
+                engine::Request::CallBusy { .. }
+                | engine::Request::AnswerBusy { .. }
+                | engine::Request::TurnBusy { .. } => {
                     panic!("held role world offers no worker answers")
                 }
                 engine::Request::Stop => panic!("role root stopped: {:?}", self.trace),

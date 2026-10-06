@@ -481,7 +481,8 @@ pub(super) fn loaded(domain: &mut Domain, env: &Env<Limits>, waiter: Token, rows
                         outcome = people::Outcome::EscalationDecided { task, revision, by: row.by, choice };
                     }
                 }
-                Record::Deployment(_)
+                Record::Call(_)
+                | Record::Deployment(_)
                 | Record::Turn(_)
                 | Record::RunProof(_)
                 | Record::Terminal(_)

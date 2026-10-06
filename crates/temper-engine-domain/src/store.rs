@@ -55,8 +55,35 @@ pub enum Family {
     Message,
     /// Fresh attempt identities saved at claims.
     Run,
-    /// Call identities reserved for later engine tool routes.
+    /// Count of distinct named calls newly decided by the engine.
     Call,
+}
+
+/// Stable call identity supplied by a run and scoped by the root's task and
+/// claim (domain/engine.md, sections 5.4 and 7.3).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct CallKey {
+    pub task: u64,
+    pub attempt: u64,
+    /// One-based assistant completion.
+    pub completion: u32,
+    /// Zero-based assistant block position.
+    pub position: u32,
+}
+
+/// Exact typed answer kept for replay across a lost channel or root restart.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum CallAnswer {
+    /// The named tool is deferred to a later engine route.
+    Unavailable,
+}
+
+/// One durable root call decision. The key, rather than a generated receipt,
+/// makes a repeated worker request find the same answer.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct CallRecord {
+    pub key: CallKey,
+    pub answer: CallAnswer,
 }
 
 /// Ordered fixed-size address of a durable row. Root-issued and child-issued
@@ -72,6 +99,8 @@ pub enum Key {
         /// Positive semantic revision, unique within task.
         revision: u64,
     },
+    /// A run's durable named host-tool decision, retained until its answer is in a turn.
+    Call(/** Task, attempt, completion and block position. */ CallKey),
     /// Singleton deployment header key.
     Deployment,
     /// Root-accepted transcript turn under one task and attempt.
@@ -122,6 +151,8 @@ pub enum Range {
         /// Positive decided semantic revision.
         revision: u64,
     },
+    /// Named call decisions for currently live tasks, restored before attempts are adopted.
+    Calls,
     /// Singleton header read by the root at startup; at most one row and no continuation.
     Deployment,
     /// Root startup pages only child Live/Ledger state; historical Ended rows stay outside this
@@ -156,13 +187,25 @@ impl Range {
     /// effect or terminal. Turn zero is invalid; continuation ordering is checked by the load
     /// owner. It does not validate a child row's payload or its task links.
     #[must_use]
+    #[expect(clippy::too_many_lines, reason = "all store families are checked exhaustively in one range matcher")]
     pub const fn contains(self, key: Key) -> bool {
         match self {
+            Range::Calls => match key {
+                Key::Call(call) => call.task != 0 && call.attempt != 0 && call.completion != 0,
+                Key::EscalationDecision { .. }
+                | Key::Deployment
+                | Key::Turn { .. }
+                | Key::RunProof { .. }
+                | Key::Terminal { .. }
+                | Key::Tasks(_)
+                | Key::People(_) => false,
+            },
             Range::EscalationDecision { task, revision } => match key {
                 Key::EscalationDecision { task: found, revision: current } => {
                     task != 0 && revision != 0 && task == found && revision == current
                 }
-                Key::Deployment
+                Key::Call(_)
+                | Key::Deployment
                 | Key::Turn { .. }
                 | Key::RunProof { .. }
                 | Key::Terminal { .. }
@@ -171,7 +214,8 @@ impl Range {
             },
             Range::Deployment => match key {
                 Key::Deployment => true,
-                Key::EscalationDecision { .. }
+                Key::Call(_)
+                | Key::EscalationDecision { .. }
                 | Key::Turn { .. }
                 | Key::RunProof { .. }
                 | Key::Terminal { .. }
@@ -183,7 +227,8 @@ impl Range {
                     temper_engine_domain_tasks::Key::Live(_) | temper_engine_domain_tasks::Key::Ledger(_) => true,
                     temper_engine_domain_tasks::Key::Ended(_) => false,
                 },
-                Key::EscalationDecision { .. }
+                Key::Call(_)
+                | Key::EscalationDecision { .. }
                 | Key::Deployment
                 | Key::Turn { .. }
                 | Key::RunProof { .. }
@@ -192,7 +237,8 @@ impl Range {
             },
             Range::EndedResults => match key {
                 Key::Tasks(temper_engine_domain_tasks::Key::Ended(number)) => number != 0,
-                Key::EscalationDecision { .. }
+                Key::Call(_)
+                | Key::EscalationDecision { .. }
                 | Key::Deployment
                 | Key::Turn { .. }
                 | Key::RunProof { .. }
@@ -202,7 +248,8 @@ impl Range {
             },
             Range::People => match key {
                 Key::People(_) => true,
-                Key::EscalationDecision { .. }
+                Key::Call(_)
+                | Key::EscalationDecision { .. }
                 | Key::Deployment
                 | Key::Turn { .. }
                 | Key::RunProof { .. }
@@ -211,7 +258,8 @@ impl Range {
             },
             Range::RunProofs => match key {
                 Key::RunProof { task } => task != 0,
-                Key::EscalationDecision { .. }
+                Key::Call(_)
+                | Key::EscalationDecision { .. }
                 | Key::Deployment
                 | Key::Turn { .. }
                 | Key::Terminal { .. }
@@ -220,7 +268,8 @@ impl Range {
             },
             Range::TaskResult { task } => match key {
                 Key::Tasks(temper_engine_domain_tasks::Key::Ended(number)) => task == number,
-                Key::EscalationDecision { .. }
+                Key::Call(_)
+                | Key::EscalationDecision { .. }
                 | Key::Tasks(_)
                 | Key::Deployment
                 | Key::Turn { .. }
@@ -230,7 +279,8 @@ impl Range {
             },
             Range::Turns { task, attempt } => match key {
                 Key::Turn { task: found, attempt: run, turn } => found == task && run == attempt && turn != 0,
-                Key::EscalationDecision { .. }
+                Key::Call(_)
+                | Key::EscalationDecision { .. }
                 | Key::Deployment
                 | Key::RunProof { .. }
                 | Key::Terminal { .. }
@@ -239,7 +289,8 @@ impl Range {
             },
             Range::TaskTranscript { task } => match key {
                 Key::Turn { task: found, attempt, turn } => task != 0 && found == task && attempt != 0 && turn != 0,
-                Key::EscalationDecision { .. }
+                Key::Call(_)
+                | Key::EscalationDecision { .. }
                 | Key::Deployment
                 | Key::RunProof { .. }
                 | Key::Terminal { .. }
@@ -354,6 +405,8 @@ pub struct EscalationDecisionRecord {
 /// (domain/engine.md, 5.1, 5.3 and 5.6).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Record {
+    /// Named host-tool decision committed with the action it caused.
+    Call(CallRecord),
     /// Root's immutable semantic decision evidence; not task-owned transport
     /// state.
     EscalationDecision(
@@ -394,6 +447,7 @@ impl Record {
     #[must_use]
     pub const fn key(&self) -> Key {
         match self {
+            Record::Call(row) => Key::Call(row.key),
             Record::EscalationDecision(row) => Key::EscalationDecision { task: row.task, revision: row.revision },
             Record::Deployment(_) => Key::Deployment,
             Record::Turn(row) => Key::Turn { task: row.task, attempt: row.attempt, turn: row.turn },
@@ -437,7 +491,7 @@ impl Write {
 pub fn record_bytes(record: &Record) -> Option<u64> {
     match record {
         Record::EscalationDecision(row) => decision_bytes(&row.decision),
-        Record::Deployment(_) => Some(0),
+        Record::Call(_) | Record::Deployment(_) => Some(0),
         Record::Turn(turn) => u64::try_from(turn.transcript.len()).ok(),
         Record::RunProof(row) => match &row.terminal {
             Some(terminal) => terminal_bytes(terminal),

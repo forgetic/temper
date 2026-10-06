@@ -44,6 +44,8 @@ pub struct Limits {
 /// resumed by the root and never passed to the protocol as child events.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Delivery {
+    /// One fleet-fenced named tool answer after its decision is durable.
+    CallAnswer { channel: Token, task: u64, attempt: u64, call: Token, answer: crate::CallAnswer },
     /// Committed words presented to fleet only after their task row commits.
     Relay { task: u64, attempt: u64, previous: Option<u64>, word: temper_engine_domain_tasks::Word },
     /// Fleet-selected live worker receives the whole committed word.
@@ -278,8 +280,14 @@ impl Decision {
                     && row.turn != 0
                     && row.transcript.len() <= usize::try_from(limits.transcript_bytes).expect("u32 fits usize")
             }
+            Write::Save(Record::Call(row)) => row.key.task != 0 && row.key.attempt != 0 && row.key.completion != 0,
             Write::Erase(
-                Key::Turn { .. } | Key::RunProof { .. } | Key::Terminal { .. } | Key::Tasks(_) | Key::People(_),
+                Key::Call(_)
+                | Key::Turn { .. }
+                | Key::RunProof { .. }
+                | Key::Terminal { .. }
+                | Key::Tasks(_)
+                | Key::People(_),
             ) => true,
             Write::Save(Record::EscalationDecision(row)) => {
                 row.task != 0
@@ -320,6 +328,7 @@ impl Decision {
     /// Retain one root effect for the decision, without releasing or issuing it. Bounds or capacity
     /// refusal returns ownership; successful admission ends through journal release after
     /// durability.
+    #[expect(clippy::result_large_err, reason = "bounded assignment ownership is returned intact on admission refusal")]
     pub fn deliver(&mut self, limits: &Limits, delivery: Delivery) -> Result<(), Delivery> {
         assert!(*limits == self.limits, "decision uses its configured limits");
         let within = match &delivery {
@@ -378,7 +387,8 @@ impl Decision {
                     && word.words.len() <= usize::try_from(limits.transcript_bytes).expect("u32 fits usize")
             }
             Delivery::Assigned { assignment, .. } => assignment_within(assignment, limits),
-            Delivery::Reply { .. }
+            Delivery::CallAnswer { .. }
+            | Delivery::Reply { .. }
             | Delivery::AcknowledgeTurn { .. }
             | Delivery::Acknowledge { .. }
             | Delivery::Cancel { .. }
@@ -613,10 +623,9 @@ fn fleet_delivery_within(event: &temper_engine_domain_fleet::Event, limits: &Lim
         Event::Start { workstream, .. } => {
             workstream.len() <= usize::try_from(limits.transcript_bytes).expect("u32 fits usize")
         }
-        Event::TurnKept { .. } | Event::Acknowledge { .. } | Event::Cancel { .. } => true,
+        Event::TurnKept { .. } | Event::Acknowledge { .. } | Event::Cancel { .. } | Event::Relayed { .. } => true,
         Event::Adopt { .. }
         | Event::Inbound { .. }
-        | Event::Relayed { .. }
         | Event::Loaded
         | Event::Grant { .. }
         | Event::Rejected { .. }
@@ -681,7 +690,30 @@ fn assignment_within(assignment: &crate::engine::Assignment, limits: &Limits) ->
         };
         transcript = total;
     }
-    let within = match transcript.checked_add(inbox_bytes) {
+    let mut previous = None;
+    for row in &assignment.answered {
+        let key = row.key;
+        if key.task != assignment.task
+            || key.attempt == 0
+            || key.attempt >= assignment.attempt
+            || key.completion == 0
+            || match previous {
+                Some(old) => key <= old,
+                None => false,
+            }
+        {
+            return false;
+        }
+        previous = Some(key);
+    }
+    let answered_bytes = u64::try_from(assignment.answered.len())
+        .expect("usize fits u64")
+        .checked_mul(u64::try_from(size_of::<crate::CallRecord>()).expect("usize fits u64"));
+    let total = match (transcript.checked_add(inbox_bytes), answered_bytes) {
+        (Some(transcript), Some(answered)) => transcript.checked_add(answered),
+        (None, _) | (_, None) => None,
+    };
+    let within = match total {
         Some(all) => all <= u64::from(limits.transcript_bytes),
         None => false,
     };

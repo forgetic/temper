@@ -83,7 +83,7 @@ pub fn limits() -> engine::Limits {
         + people.pending * 2
         + fleet::max_out(&fleet) * 4
         + tasks.tasks
-        + 4;
+        + 6;
     engine::Limits {
         authority: authority_limits(),
         journal: JournalLimits {
@@ -98,6 +98,7 @@ pub fn limits() -> engine::Limits {
         tasks,
         people,
         fleet,
+        call_records: 2,
         brief: brief::Limits {
             briefs: 2,
             sections: 3,
@@ -567,6 +568,7 @@ impl World {
                     },
                     1,
                 ),
+                engine::Request::CallBusy { .. } => panic!("walking story sent no calls"),
                 engine::Request::Stop => panic!("walking story stopped: {:?}", self.trace),
             }
         }
@@ -647,7 +649,8 @@ impl World {
                     .result(&self.store.rows, person, task, &words)
                     .expect("committed result reaches person once");
             }
-            Delivery::Reply { .. }
+            Delivery::CallAnswer { .. }
+            | Delivery::Reply { .. }
             | Delivery::InboxPage { .. }
             | Delivery::EscalationReply { .. }
             | Delivery::WebReply { .. }

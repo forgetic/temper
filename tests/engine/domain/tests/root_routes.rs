@@ -23,6 +23,7 @@ struct Driver {
     fail_archive_once: bool,
     transactions: Vec<Vec<Write>>,
     result_loads: Vec<(u32, usize)>,
+    call_busy: Vec<Token>,
 }
 
 impl Driver {
@@ -44,6 +45,7 @@ impl Driver {
             fail_archive_once: false,
             transactions: Vec::new(),
             result_loads: Vec::new(),
+            call_busy: Vec::new(),
         }
     }
 
@@ -78,6 +80,7 @@ impl Driver {
                 engine::Request::Deliver(delivery) => self.delivered.push(delivery),
                 engine::Request::Account(request) => self.accounts.push(request),
                 engine::Request::Stop => self.stopped = true,
+                engine::Request::CallBusy { call, .. } => self.call_busy.push(call),
                 engine::Request::TurnBusy { .. } | engine::Request::AnswerBusy { .. } => {
                     panic!("unexpected route refusal")
                 }
@@ -142,7 +145,8 @@ impl Driver {
                 | Delivery::Inbound { .. }
                 | Delivery::Load { .. }
                 | Delivery::ResultReply { .. }
-                | Delivery::InboxPage { .. } => None,
+                | Delivery::InboxPage { .. }
+                | Delivery::CallAnswer { .. } => None,
             })
             .expect("durable sign-in reply")
     }
@@ -219,7 +223,8 @@ fn durable_start_turn_and_answer_callbacks_survive_full_journal_pressure() {
             | Delivery::Inbound { .. }
             | Delivery::Load { .. }
             | Delivery::ResultReply { .. }
-            | Delivery::InboxPage { .. } => None,
+            | Delivery::InboxPage { .. }
+            | Delivery::CallAnswer { .. } => None,
         })
         .collect();
     assert_eq!(assignments.len(), 1);
@@ -269,7 +274,8 @@ fn restart_recovers_named_ended_result_without_replaying_a_raw_notice() {
             | Record::People(_)
             | Record::RunProof(_)
             | Record::EscalationDecision(_)
-            | Record::Terminal(_) => None,
+            | Record::Terminal(_)
+            | Record::Call(_) => None,
         })
         .expect("ended task");
     let mut driver = Driver::new(world.store);
@@ -417,7 +423,8 @@ fn assigned(driver: &Driver) -> engine::Assignment {
             | Delivery::Inbound { .. }
             | Delivery::Load { .. }
             | Delivery::ResultReply { .. }
-            | Delivery::InboxPage { .. } => None,
+            | Delivery::InboxPage { .. }
+            | Delivery::CallAnswer { .. } => None,
         })
         .expect("assigned chat")
 }
@@ -611,7 +618,8 @@ fn invalid_nonfinal_task_restore_page_stops_before_issuing_its_continuation() {
             | Record::People(_)
             | Record::RunProof(_)
             | Record::EscalationDecision(_)
-            | Record::Terminal(_) => None,
+            | Record::Terminal(_)
+            | Record::Call(_) => None,
         })
         .expect("ended fixture");
     record.spec.words = vec![b'x'; 65].into_boxed_slice();
@@ -692,7 +700,8 @@ fn authenticated_result_query_refuses_monotonic_expiry_after_backward_wall_jump_
             | Record::People(_)
             | Record::RunProof(_)
             | Record::EscalationDecision(_)
-            | Record::Terminal(_) => None,
+            | Record::Terminal(_)
+            | Record::Call(_) => None,
         })
         .expect("ended chat");
     let mut driver = Driver::new(world.store);
@@ -720,6 +729,138 @@ fn running_fixture() -> (Driver, engine::Assignment) {
     turn(&mut driver, &assignment, 1, 3);
     driver.settle();
     (driver, assignment)
+}
+
+fn unavailable_call(driver: &mut Driver, assignment: &engine::Assignment, call: u64) {
+    driver.send(engine::Event::Call {
+        channel: Token::new(7),
+        task: assignment.task,
+        attempt: assignment.attempt,
+        call: Token::new(call),
+        body: engine::Call { completion: 2, position: 0, tool: engine::Tool::Unavailable },
+    });
+}
+
+#[test]
+fn a_call_asked_twice_across_a_restart_is_decided_once() {
+    let (mut driver, assignment) = running_fixture();
+    unavailable_call(&mut driver, &assignment, 71);
+    assert!(
+        !driver
+            .delivered
+            .iter()
+            .any(|delivery| matches!(delivery, Delivery::CallAnswer { call, .. } if *call == Token::new(71))),
+        "the answer waits for its named decision to commit"
+    );
+    driver.settle();
+    assert!(matches!(
+        driver.store.rows.get(&Key::Call(temper_engine_domain::CallKey {
+            task: assignment.task,
+            attempt: assignment.attempt,
+            completion: 2,
+            position: 0,
+        })),
+        Some(Record::Call(record)) if record.answer == temper_engine_domain::CallAnswer::Unavailable
+    ));
+    assert_eq!(driver.store.header().calls, 1);
+    assert!(driver.delivered.iter().any(|delivery| matches!(
+        delivery,
+        Delivery::CallAnswer { channel, task, attempt, call, answer }
+            if *channel == Token::new(7)
+                && *task == assignment.task
+                && *attempt == assignment.attempt
+                && *call == Token::new(71)
+                && *answer == temper_engine_domain::CallAnswer::Unavailable
+    )));
+
+    let mut restarted = Driver::new(driver.store);
+    restarted.send(engine::Event::Hello {
+        channel: Token::new(7),
+        hello: fleet::Hello {
+            graces: Some(Duration::from_secs(1)),
+            slots: 1,
+            workstreams: Box::new([]),
+            hosting: Box::new([fleet::Hosted {
+                run: Token::new(assignment.task),
+                attempt: Token::new(assignment.attempt),
+                phase: fleet::Phase::Active,
+            }]),
+        },
+    });
+    restarted.settle();
+    unavailable_call(&mut restarted, &assignment, 72);
+    restarted.settle();
+    assert_eq!(restarted.store.header().calls, 1, "the repeated name did not make another decision");
+    assert!(restarted.delivered.iter().any(|delivery| matches!(
+        delivery,
+        Delivery::CallAnswer { call, answer, .. }
+            if *call == Token::new(72) && *answer == temper_engine_domain::CallAnswer::Unavailable
+    )));
+}
+
+#[test]
+fn a_lost_attempt_is_told_of_the_calls_committed_after_its_last_turn() {
+    let (mut driver, first) = running_fixture();
+    unavailable_call(&mut driver, &first, 81);
+    driver.settle();
+    driver.send(engine::Event::Lost { channel: Token::new(7) });
+    driver.env.now = Time::from_nanos(Duration::from_secs(6).as_nanos());
+    driver.env.wall = Wall::from_nanos(Duration::from_secs(6).as_nanos());
+    engine::fire(&mut driver.root, &driver.env, &mut driver.out);
+    driver.collect();
+    driver.settle();
+    driver.env.now = Time::from_nanos(Duration::from_secs(7).as_nanos());
+    driver.env.wall = Wall::from_nanos(Duration::from_secs(7).as_nanos());
+    engine::fire(&mut driver.root, &driver.env, &mut driver.out);
+    driver.collect();
+    driver.send(engine::Event::Hello {
+        channel: Token::new(8),
+        hello: fleet::Hello {
+            graces: Some(Duration::from_secs(1)),
+            slots: 1,
+            workstreams: Box::new([]),
+            hosting: Box::new([]),
+        },
+    });
+    driver.settle();
+    let second = assigned_from_last(&driver.delivered);
+    assert!(second.attempt > first.attempt);
+    assert_eq!(
+        second.answered.as_ref(),
+        [temper_engine_domain::CallRecord {
+            key: temper_engine_domain::CallKey { task: first.task, attempt: first.attempt, completion: 2, position: 0 },
+            answer: temper_engine_domain::CallAnswer::Unavailable,
+        }]
+    );
+}
+
+#[test]
+fn calls_answer_busy_under_backpressure_and_succeed_on_retry() {
+    let (mut driver, assignment) = running_fixture();
+    driver.sign_in();
+    driver.sign_in();
+    driver.sign_in();
+    assert_eq!(driver.store.pending.len(), 3, "three issued commits fill the journal");
+    unavailable_call(&mut driver, &assignment, 82);
+    assert_eq!(driver.call_busy.as_slice(), [Token::new(82)]);
+    assert_eq!(driver.store.header().calls, 0);
+    assert!(!driver.store.rows.keys().any(|key| matches!(key, Key::Call(_))));
+    driver.settle();
+    unavailable_call(&mut driver, &assignment, 82);
+    assert!(
+        !driver
+            .delivered
+            .iter()
+            .any(|delivery| matches!(delivery, Delivery::CallAnswer { call, .. } if *call == Token::new(82))),
+        "retry still waits for durability"
+    );
+    driver.settle();
+    assert_eq!(driver.store.header().calls, 1);
+    assert!(driver.delivered.iter().any(|delivery| matches!(
+        delivery,
+        Delivery::CallAnswer { call, answer, .. }
+            if *call == Token::new(82) && *answer == temper_engine_domain::CallAnswer::Unavailable
+    )));
 }
 
 #[test]
@@ -1175,7 +1316,7 @@ fn coalesced_history_waiters_survive_simultaneous_io_completion_under_full_journ
         + configured.people.pending * 2
         + fleet::max_out(&configured.fleet) * 4
         + configured.tasks.tasks
-        + 4;
+        + 6;
     configured.journal.deliveries =
         configured.tasks.tasks * 4 + 8 + configured.people.pending * configured.people.waiters;
     configured.journal.held = configured.journal.deliveries * 3 + 16;
@@ -1250,7 +1391,8 @@ fn coalesced_history_waiters_survive_simultaneous_io_completion_under_full_journ
             | Delivery::ResultReply { .. }
             | Delivery::EscalationReply { .. }
             | Delivery::ReadEscalationDecision { .. }
-            | Delivery::InboxPage { .. } => None,
+            | Delivery::InboxPage { .. }
+            | Delivery::CallAnswer { .. } => None,
         })
         .collect();
     assert_eq!(replies.len(), 16);
@@ -1375,7 +1517,7 @@ fn multiple_waiting_recipients_preflight_together_and_full_journal_refuses_witho
         + configured.people.pending * 2
         + fleet::max_out(&configured.fleet) * 4
         + configured.tasks.tasks
-        + 4;
+        + 6;
     let mut driver = Driver::configured(prior.store, administration_config(9310), &configured);
     driver.settle();
     hello(&mut driver);
@@ -1409,7 +1551,8 @@ fn multiple_waiting_recipients_preflight_together_and_full_journal_refuses_witho
             | Record::Turn(_)
             | Record::RunProof(_)
             | Record::Terminal(_)
-            | Record::EscalationDecision(_) => None,
+            | Record::EscalationDecision(_)
+            | Record::Call(_) => None,
         })
         .collect();
     assert_eq!(original.len(), 2, "two genuine task admissions and priced failures");
@@ -1662,6 +1805,7 @@ fn assigned_from_last(delivered: &[Delivery]) -> engine::Assignment {
             Delivery::Relay { .. }
             | Delivery::Inbound { .. }
             | Delivery::InboxPage { .. }
+            | Delivery::CallAnswer { .. }
             | Delivery::EscalationReply { .. }
             | Delivery::ReadEscalationDecision { .. }
             | Delivery::Reply { .. }
@@ -1700,6 +1844,7 @@ fn say(driver: &mut Driver, task: u64, key: u8) -> u64 {
             Delivery::Relay { .. }
             | Delivery::Inbound { .. }
             | Delivery::InboxPage { .. }
+            | Delivery::CallAnswer { .. }
             | Delivery::EscalationReply { .. }
             | Delivery::ReadEscalationDecision { .. }
             | Delivery::Reply { .. }

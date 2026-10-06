@@ -183,7 +183,7 @@ pub fn limits() -> engine::Limits {
         + limits.people.pending * 2
         + fleet::max_out(&limits.fleet) * 4
         + limits.tasks.tasks
-        + 4;
+        + 6;
     limits
 }
 
@@ -603,6 +603,7 @@ impl World {
                 ) => {}
                 engine::Request::AnswerBusy { .. } => self.answer(),
                 engine::Request::TurnBusy { .. } => panic!("outside worker offered no turns"),
+                engine::Request::CallBusy { .. } => panic!("escalation world sent no calls"),
                 engine::Request::Stop => panic!("escalation root stopped: {:?}", self.trace),
             }
         }
@@ -731,6 +732,7 @@ impl World {
             | Delivery::Relay { .. }
             | Delivery::Inbound { .. }
             | Delivery::Load { .. } => panic!("internal root callback leaked to world"),
+            Delivery::CallAnswer { .. } => panic!("escalation world sent no calls"),
         }
     }
 

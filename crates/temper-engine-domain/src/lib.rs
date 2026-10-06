@@ -52,6 +52,6 @@ pub use decision::{
     uncommitted, worst_case,
 };
 pub use store::{
-    Deployment, EscalationDecisionRecord, Family, Key, Range, Record, RunProof, TerminalRecord, TurnProof, TurnRecord,
-    Write, record_bytes,
+    CallAnswer, CallKey, CallRecord, Deployment, EscalationDecisionRecord, Family, Key, Range, Record, RunProof,
+    TerminalRecord, TurnProof, TurnRecord, Write, record_bytes,
 };
