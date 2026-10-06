@@ -6,7 +6,7 @@
 //! durable (domain/engine.md, 5.6). Adoption follows later.
 //!
 //! The current boundary supports typed `StartChat`, authenticated escalation decisions, derived inbox references and narrow keyed `SetRoles` administration; adoption,
-//! person task requests and timed key retention remain later increments
+//! timed key retention remains a later increment
 //! (domain/people.md, section 5.1). This child never sees forge
 //! credentials, protocol bytes, task internals or authority policy state.
 //! The root supplies authenticated identities and authoritative role changes.
@@ -44,7 +44,8 @@ mod limits;
 mod tests;
 pub use boundary::{
     Ask, Entry, EntryKind, EscalationChoice, EscalationDecision, Event, Holding, Identity, IdentityKey, InitialOwner,
-    Key, Outcome, ProposalChoice, ProposalDecision, Refusal, Reply, Request, RequestKey, ResultRef, Role, Stored, Whom,
+    Key, Outcome, PersonResult, ProposalChoice, ProposalDecision, Refusal, Reply, Request, RequestKey, ResultRef, Role,
+    Stored, Whom,
 };
 pub use domain::{Domain, fire, max_out, step};
 pub use facts::Fact;

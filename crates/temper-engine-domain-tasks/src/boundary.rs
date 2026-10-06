@@ -179,7 +179,9 @@ pub enum Executor {
 /// Opaque person-task destination; root authenticates the identity or role membership.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum PersonAddress {
+    /// One named person may answer without a role claim.
     Person(u64),
+    /// Any current holder of a project role may take and answer.
     Role(u32),
 }
 

@@ -431,22 +431,20 @@ pub(super) fn entries(domain: &Domain, row: &tasks::TaskRecord) -> Box<[people::
         },
         tasks::Escalation::Unheld { .. } | tasks::Escalation::Routing { .. } | tasks::Escalation::Rejected { .. } => {}
     }
-    if row.taken_by.is_none() {
-        match row.executor {
-            tasks::Executor::Person(tasks::PersonAddress::Person(person)) => {
+    match row.executor {
+        tasks::Executor::Person(tasks::PersonAddress::Person(person)) => {
+            if row.taken_by.is_none() {
                 add(&mut entries, row, people::Whom::Person(person), people::EntryKind::PersonTask, row.created_at);
             }
-            tasks::Executor::Person(tasks::PersonAddress::Role(role)) => {
-                add(
-                    &mut entries,
-                    row,
-                    people::Whom::Role { project: row.project, role },
-                    people::EntryKind::PersonTask,
-                    row.created_at,
-                );
-            }
-            tasks::Executor::Agent { .. } | tasks::Executor::Procedure { .. } => {}
         }
+        tasks::Executor::Person(tasks::PersonAddress::Role(role)) => {
+            let whom = match row.taken_by {
+                Some(person) => people::Whom::Person(person),
+                None => people::Whom::Role { project: row.project, role },
+            };
+            add(&mut entries, row, whom, people::EntryKind::PersonTask, row.created_at);
+        }
+        tasks::Executor::Agent { .. } | tasks::Executor::Procedure { .. } => {}
     }
     entries.into_boxed()
 }

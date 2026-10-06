@@ -475,8 +475,8 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
         Executor::Person(crate::PersonAddress::Person(person)) => {
             person != 0 && task.taken_by.is_none() && task.recurring.is_none() && person_counters(task)
         }
-        Executor::Person(crate::PersonAddress::Role(role)) => {
-            role != 0 && task.taken_by != Some(0) && task.recurring.is_none() && person_counters(task)
+        Executor::Person(crate::PersonAddress::Role(_)) => {
+            task.taken_by != Some(0) && task.recurring.is_none() && person_counters(task)
         }
     }
 }

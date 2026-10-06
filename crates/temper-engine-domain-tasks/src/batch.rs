@@ -127,10 +127,10 @@ fn check_members(
                     return Err(problem(number, Refusal::Executor));
                 }
             }
-            Executor::Person(crate::PersonAddress::Person(0) | crate::PersonAddress::Role(0)) => {
+            Executor::Person(crate::PersonAddress::Person(0)) => {
                 return Err(problem(number, Refusal::Executor));
             }
-            Executor::Person(_) => {}
+            Executor::Person(crate::PersonAddress::Person(_) | crate::PersonAddress::Role(_)) => {}
         }
         if !valid_recurring(limits, creator, new) {
             return Err(problem(number, Refusal::Spec));

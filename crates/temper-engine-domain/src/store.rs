@@ -574,6 +574,15 @@ pub fn record_bytes(record: &Record) -> Option<u64> {
                 temper_engine_domain_people::Ask::StartChat { words, .. }
                 | temper_engine_domain_people::Ask::Say { words, .. } => u64::try_from(words.len()).ok(),
                 temper_engine_domain_people::Ask::Move { reason, .. } => u64::try_from(reason.len()).ok(),
+                temper_engine_domain_people::Ask::TakePerson { .. }
+                | temper_engine_domain_people::Ask::HandBackPerson { .. } => Some(0),
+                temper_engine_domain_people::Ask::AnswerPerson { result, .. } => match result {
+                    temper_engine_domain_people::PersonResult::Report { words }
+                    | temper_engine_domain_people::PersonResult::Verdict { words, .. } => {
+                        u64::try_from(words.len()).ok()
+                    }
+                    temper_engine_domain_people::PersonResult::Failure { reason } => u64::try_from(reason.len()).ok(),
+                },
                 temper_engine_domain_people::Ask::DecideEscalation { decision, .. } => decision_bytes(decision),
                 temper_engine_domain_people::Ask::DecideProposal { decision, .. } => match decision {
                     temper_engine_domain_people::ProposalDecision::Accept

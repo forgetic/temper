@@ -110,6 +110,12 @@ pub struct ResultRef {
 /// narrow role administration (domain/people.md, section 5.1).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Ask {
+    /// Claim one role-addressed person task for this authenticated person.
+    TakePerson { project: u32, task: u64 },
+    /// Give this person's current role task claim back to its role.
+    HandBackPerson { project: u32, task: u64 },
+    /// Supply the bounded result required by an addressed person task.
+    AnswerPerson { project: u32, task: u64, result: PersonResult },
     /// Adopt a live task as this authenticated person's own goal, retaining its old requester's reference.
     Move { project: u32, task: u64, reason: Box<[u8]> },
     /// Authenticated keyed decision for a proposal waiting at this person or a policy role.
@@ -144,6 +150,17 @@ pub enum Ask {
         /** Opening words, bounded by `Limits::words` before any route or saved answer. */
         words: Box<[u8]>,
     },
+}
+
+/// A person's answer to a report, choice or failure contract; root translates it for tasks.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum PersonResult {
+    /// Freeform words for a report contract.
+    Report { words: Box<[u8]> },
+    /// One named choice with optional explanation.
+    Verdict { code: u32, words: Box<[u8]> },
+    /// The person could not complete the task.
+    Failure { reason: Box<[u8]> },
 }
 
 /// Keyed person's choice for a pending proposal.
@@ -226,6 +243,12 @@ pub enum Refusal {
 /// nontransient outcomes with the parent's task decision. (domain/people.md, section 5.1).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Outcome {
+    /// One role-addressed task was durably claimed.
+    PersonTaken { task: u64 },
+    /// The claimant durably returned the task to its role.
+    PersonHandedBack { task: u64 },
+    /// An addressed person's result was durably admitted.
+    PersonAnswered { task: u64 },
     /// The task now belongs to the requesting person, with its remaining funding transferred.
     Moved { task: u64 },
     /// Keyed answer to one current or historical proposal decision.

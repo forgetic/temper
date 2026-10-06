@@ -507,6 +507,99 @@ fn an_entry_addressed_to_a_role_leaves_every_inbox_once_one_acts() {
     }
 }
 
+#[test]
+fn a_person_task_addressed_to_a_role_taken_by_one_handed_back_answered_by_another() {
+    let (mut driver, root) = batch_fixture_custom(2, 1, 500, true, false, true);
+    let first = driver.session();
+    driver.send(engine::Event::SignedIn {
+        reply_to: ReplyTo::new(Token::new(970)),
+        identity: people::Identity {
+            key: people::IdentityKey { forge: 1, user: 8 },
+            login: b"second".as_slice().into(),
+            name: b"Second".as_slice().into(),
+        },
+    });
+    driver.settle();
+    let second = driver.store.header().sign_ins;
+    let mut delegate = report_delegate(b"Choose between the reports", Box::new([]));
+    delegate.executor = tasks::Executor::Person(tasks::PersonAddress::Role(0));
+    delegate.contract = tasks::Contract::Verdict {
+        choices: Box::new([tasks::Verdict { code: 1, words: 16 }, tasks::Verdict { code: 2, words: 16 }]),
+    };
+    let task = call_batch(&mut driver, &root, 971, Box::new([delegate]))[0];
+    for (at, session) in [first, second].into_iter().enumerate() {
+        driver.send(engine::Event::ViewInbox {
+            reply_to: ReplyTo::new(Token::new(972 + at as u64)),
+            sign_in: session,
+            most: 4,
+            before: None,
+        });
+        driver.settle();
+        assert!(driver.delivered.iter().any(|item| matches!(item,
+            Delivery::InboxView { entries, .. } if entries.iter().any(|entry| matches!(entry,
+                temper_engine_domain::InboxViewEntry::Waiting(people::Entry { task: found, kind: people::EntryKind::PersonTask, .. }) if *found == task)))));
+    }
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(974)),
+        sign_in: first,
+        key: [74; 16],
+        ask: people::Ask::TakePerson { project: 1, task },
+    });
+    driver.settle();
+    assert!(driver.delivered.iter().any(|item| matches!(item,
+        Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::PersonTaken { task: found }), .. } if *found == task)));
+    let Some(Record::Tasks(tasks::Stored::Live(row))) = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(task)))
+    else {
+        panic!("claimed task")
+    };
+    assert_eq!(row.taken_by, Some(1));
+    for (at, session) in [first, second].into_iter().enumerate() {
+        driver.send(engine::Event::ViewInbox {
+            reply_to: ReplyTo::new(Token::new(978 + at as u64)),
+            sign_in: session,
+            most: 4,
+            before: None,
+        });
+        driver.settle();
+        let Some(Delivery::InboxView { entries, .. }) = driver.delivered.last() else { panic!("claimed inbox") };
+        assert_eq!(entries.iter().any(|entry| matches!(entry,
+            temper_engine_domain::InboxViewEntry::Waiting(people::Entry { task: found, kind: people::EntryKind::PersonTask, .. }) if *found == task)), at == 0);
+    }
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(975)),
+        sign_in: first,
+        key: [75; 16],
+        ask: people::Ask::HandBackPerson { project: 1, task },
+    });
+    driver.settle();
+    let Some(Record::Tasks(tasks::Stored::Live(row))) = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(task)))
+    else {
+        panic!("returned task")
+    };
+    assert_eq!(row.taken_by, None);
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(976)),
+        sign_in: second,
+        key: [76; 16],
+        ask: people::Ask::TakePerson { project: 1, task },
+    });
+    driver.settle();
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(977)),
+        sign_in: second,
+        key: [77; 16],
+        ask: people::Ask::AnswerPerson {
+            project: 1,
+            task,
+            result: people::PersonResult::Verdict { code: 2, words: b"second".as_slice().into() },
+        },
+    });
+    driver.settle();
+    assert!(driver.delivered.iter().any(|item| matches!(item,
+        Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::PersonAnswered { task: found }), .. } if *found == task)), "{:?}", driver.delivered);
+    assert!(driver.store.rows.contains_key(&Key::Tasks(tasks::Key::Ended(task))));
+}
+
 fn hello(driver: &mut Driver) {
     driver.send(engine::Event::Hello {
         channel: Token::new(7),
@@ -921,7 +1014,7 @@ fn batch_fixture_with(slots: u32, depth: u32) -> (Driver, engine::Assignment) {
 }
 
 fn batch_fixture_with_pool(slots: u32, depth: u32, pool_budget: u64) -> (Driver, engine::Assignment) {
-    batch_fixture_custom(slots, depth, pool_budget, false, false)
+    batch_fixture_custom(slots, depth, pool_budget, false, false, false)
 }
 
 fn batch_fixture_custom(
@@ -930,6 +1023,7 @@ fn batch_fixture_custom(
     pool_budget: u64,
     second_owner: bool,
     procedure: bool,
+    person: bool,
 ) -> (Driver, engine::Assignment) {
     let mut bounds = limits();
     bounds.tasks.tasks = 4;
@@ -941,11 +1035,15 @@ fn batch_fixture_custom(
     bounds.tasks.dependencies = 2;
     bounds.tasks.inbox_messages = 6;
     bounds.tasks.inbox_bytes = 384;
+    if person {
+        bounds.tasks.contract_choices = 2;
+        bounds.people.requests = 8;
+    }
     if second_owner {
         bounds.people.initial_owners = 2;
     }
     bounds.authority.batch = 3;
-    if procedure {
+    if procedure || person {
         bounds.authority.executors = 2;
         bounds.tasks.executor_kinds = 2;
     }
@@ -965,16 +1063,20 @@ fn batch_fixture_custom(
         ]);
     }
     let mut rules = configuration.authority.rules().clone();
-    if procedure {
+    if procedure || person {
         rules.ceiling.delegation.kinds = Box::new([
             temper_engine_domain_authority::Executor::Charter(1),
-            temper_engine_domain_authority::Executor::Procedure(1),
+            if procedure {
+                temper_engine_domain_authority::Executor::Procedure(1)
+            } else {
+                temper_engine_domain_authority::Executor::Role(0)
+            },
         ]);
     }
     rules.ceiling.delegation.tasks = 4;
     rules.ceiling.delegation.depth = depth + 1;
     let mut policy = configuration.authority.policy(1).expect("fixture project").clone();
-    if procedure {
+    if procedure || person {
         policy.ceiling.delegation.kinds.clone_from(&rules.ceiling.delegation.kinds);
         policy.roles[0].authority.delegation.kinds.clone_from(&rules.ceiling.delegation.kinds);
     }
@@ -992,10 +1094,14 @@ fn batch_fixture_custom(
     );
     assert_eq!(policy_out.pop(), Some(temper_engine_domain_authority::PolicyFact::Added { project: 1 }));
     configuration.authority = authority;
-    configuration.chat_authority.delegation.kinds = if procedure {
+    configuration.chat_authority.delegation.kinds = if procedure || person {
         Box::new([
             temper_engine_domain_authority::Executor::Charter(1),
-            temper_engine_domain_authority::Executor::Procedure(1),
+            if procedure {
+                temper_engine_domain_authority::Executor::Procedure(1)
+            } else {
+                temper_engine_domain_authority::Executor::Role(0)
+            },
         ])
     } else {
         Box::new([temper_engine_domain_authority::Executor::Charter(1)])
@@ -1070,7 +1176,7 @@ fn call_batch(
             } if *answered == Token::new(call) => Some(numbers.clone()),
             _ => None,
         })
-        .expect("whole batch answered")
+        .unwrap_or_else(|| panic!("whole batch answered: {:?}", driver.delivered))
 }
 
 #[expect(clippy::wildcard_enum_match_arm, reason = "the script selects one assignment from the closed vocabulary")]
@@ -1242,7 +1348,7 @@ fn a_chats_goal_accepted_as_its_persons_outlives_the_chat() {
 
 #[test]
 fn a_proposal_routed_past_a_procedure_to_a_person_is_accepted() {
-    let (mut driver, root) = batch_fixture_custom(3, 3, 500, false, true);
+    let (mut driver, root) = batch_fixture_custom(3, 3, 500, false, true, false);
     let mut procedure = report_delegate(b"procedure", Box::new([]));
     procedure.executor = tasks::Executor::Procedure { connector: 1, code: 1 };
     procedure.authority.budget.spend = 50;
@@ -3721,7 +3827,7 @@ fn a_move_the_new_funder_cannot_cover_is_refused_whole() {
 
 #[test]
 fn a_move_carves_the_new_persons_pool_in_the_same_commit() {
-    let (mut driver, root) = batch_fixture_custom(2, 1, 500, true, false);
+    let (mut driver, root) = batch_fixture_custom(2, 1, 500, true, false, false);
     let child = call_batch(&mut driver, &root, 640, Box::new([report_delegate(b"second owner goal", Box::new([]))]))[0];
     driver.send(engine::Event::SignedIn {
         reply_to: ReplyTo::new(Token::new(641)),

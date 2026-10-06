@@ -615,6 +615,13 @@ enum PersonProposalRoute {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PersonTaskRoute {
+    Take(u64),
+    HandBack(u64),
+    Answer(u64),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Startup {
     Cold,
     Loading(Range),
@@ -652,6 +659,7 @@ pub struct Domain {
     ending_positions: Map<u64, u64>,
     saying: Map<Token, u64>,
     moving: Map<Token, u64>,
+    person_tasks: Map<Token, PersonTaskRoute>,
     relaying: Option<PendingRelay>,
     claiming: Map<u64, u64>,
     contexts: Map<u64, Box<tasks::RunContext>>,
@@ -727,6 +735,7 @@ impl Domain {
             ending_positions: Map::with_capacity(limits.tasks.tasks),
             saying: Map::with_capacity(limits.people.pending),
             moving: Map::with_capacity(limits.people.pending),
+            person_tasks: Map::with_capacity(limits.people.pending),
             relaying: None,
             claiming: Map::with_capacity(limits.tasks.tasks),
             contexts: Map::with_capacity(limits.tasks.tasks),
@@ -784,6 +793,7 @@ impl Domain {
             && self.ending_positions.is_empty()
             && self.saying.is_empty()
             && self.moving.is_empty()
+            && self.person_tasks.is_empty()
             && self.relaying.is_none()
             && self.claiming.is_empty()
             && self.contexts.is_empty()
@@ -1455,6 +1465,11 @@ fn people_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decisio
                 emit(decision, &env.limits, Delivery::WebReply { to, sign_in: domain.signing_in, reply });
             }
             people::Request::Route { request, person, project, role, ask } => match ask {
+                people::Ask::TakePerson { .. }
+                | people::Ask::HandBackPerson { .. }
+                | people::Ask::AnswerPerson { .. } => {
+                    route_person_task(domain, request, person, project, role, ask);
+                }
                 people::Ask::Say { task, words, .. } => {
                     let Some(message) = crate::fresh(&mut domain.journal, Family::Message) else {
                         domain.work.push(Work::People(people::Event::Decided {
@@ -1506,6 +1521,104 @@ fn people_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decisio
             }
         }
     }
+}
+
+fn person_result(result: people::PersonResult) -> tasks::TaskResult {
+    match result {
+        people::PersonResult::Report { words } => tasks::TaskResult::Report { words },
+        people::PersonResult::Verdict { code, words } => tasks::TaskResult::Verdict { code, words },
+        people::PersonResult::Failure { reason } => tasks::TaskResult::Failure { reason },
+    }
+}
+
+fn route_person_task(
+    domain: &mut Domain,
+    request: Token,
+    person: u64,
+    project: u32,
+    role: Option<people::Role>,
+    ask: people::Ask,
+) {
+    let task = match &ask {
+        people::Ask::TakePerson { task, .. }
+        | people::Ask::HandBackPerson { task, .. }
+        | people::Ask::AnswerPerson { task, .. } => *task,
+        people::Ask::Move { .. }
+        | people::Ask::DecideProposal { .. }
+        | people::Ask::Say { .. }
+        | people::Ask::SetRoles { .. }
+        | people::Ask::DecideEscalation { .. }
+        | people::Ask::StartChat { .. } => unreachable!("person-task route owns its ask"),
+    };
+    let Some(context) = domain.tasks.delegation(task) else {
+        domain.work.push(Work::People(people::Event::Decided {
+            request,
+            outcome: people::Outcome::Refused(people::Refusal::Ended),
+        }));
+        return;
+    };
+    let allowed = context.project == project
+        && match domain.tasks.executor(task).expect("live task has executor") {
+            tasks::Executor::Person(tasks::PersonAddress::Person(address)) => {
+                address == person
+                    && match &ask {
+                        people::Ask::AnswerPerson { .. } => true,
+                        people::Ask::TakePerson { .. } | people::Ask::HandBackPerson { .. } => false,
+                        people::Ask::Move { .. }
+                        | people::Ask::DecideProposal { .. }
+                        | people::Ask::Say { .. }
+                        | people::Ask::SetRoles { .. }
+                        | people::Ask::DecideEscalation { .. }
+                        | people::Ask::StartChat { .. } => unreachable!("person-task route owns its ask"),
+                    }
+            }
+            tasks::Executor::Person(tasks::PersonAddress::Role(address)) => {
+                let handing_back = match &ask {
+                    people::Ask::HandBackPerson { .. } => true,
+                    people::Ask::TakePerson { .. } | people::Ask::AnswerPerson { .. } => false,
+                    people::Ask::Move { .. }
+                    | people::Ask::DecideProposal { .. }
+                    | people::Ask::Say { .. }
+                    | people::Ask::SetRoles { .. }
+                    | people::Ask::DecideEscalation { .. }
+                    | people::Ask::StartChat { .. } => unreachable!("person-task route owns its ask"),
+                };
+                handing_back
+                    || match role {
+                        Some(holding) => escalation::role_number(holding) == address,
+                        None => false,
+                    }
+            }
+            tasks::Executor::Agent { .. } | tasks::Executor::Procedure { .. } => false,
+        };
+    if !allowed {
+        domain.work.push(Work::People(people::Event::Decided {
+            request,
+            outcome: people::Outcome::Refused(people::Refusal::Standing),
+        }));
+        return;
+    }
+    let (route, event) = match ask {
+        people::Ask::TakePerson { .. } => {
+            (PersonTaskRoute::Take(task), tasks::Event::TakePerson { reply_to: ReplyTo::new(request), task, person })
+        }
+        people::Ask::HandBackPerson { .. } => (
+            PersonTaskRoute::HandBack(task),
+            tasks::Event::HandBackPerson { reply_to: ReplyTo::new(request), task, person },
+        ),
+        people::Ask::AnswerPerson { result, .. } => (
+            PersonTaskRoute::Answer(task),
+            tasks::Event::AnswerPerson { reply_to: ReplyTo::new(request), task, person, result: person_result(result) },
+        ),
+        people::Ask::Move { .. }
+        | people::Ask::DecideProposal { .. }
+        | people::Ask::Say { .. }
+        | people::Ask::SetRoles { .. }
+        | people::Ask::DecideEscalation { .. }
+        | people::Ask::StartChat { .. } => unreachable!("person-task route owns its ask"),
+    };
+    assert!(domain.person_tasks.insert(request, route) == Ok(None), "one routed person task per keyed flight");
+    domain.work.push(Work::Tasks(event));
 }
 
 #[expect(clippy::too_many_arguments, reason = "one authenticated keyed move carries its person, project and target")]
@@ -1692,7 +1805,10 @@ fn make_chat(
         | people::Ask::DecideProposal { .. }
         | people::Ask::SetRoles { .. }
         | people::Ask::Say { .. }
-        | people::Ask::Move { .. } => {
+        | people::Ask::Move { .. }
+        | people::Ask::TakePerson { .. }
+        | people::Ask::HandBackPerson { .. }
+        | people::Ask::AnswerPerson { .. } => {
             unreachable!("other asks routed separately")
         }
     };
@@ -2269,6 +2385,24 @@ fn amend_call(
     }));
 }
 
+fn delegation_executor(domain: &Domain, project: u32, executor: tasks::Executor) -> Option<authority::Executor> {
+    match executor {
+        tasks::Executor::Agent { charter } => Some(authority::Executor::Charter(charter)),
+        tasks::Executor::Procedure { code, .. } => Some(authority::Executor::Procedure(code)),
+        tasks::Executor::Person(tasks::PersonAddress::Role(role)) => {
+            if role <= 3 {
+                Some(authority::Executor::Role(role))
+            } else {
+                None
+            }
+        }
+        tasks::Executor::Person(tasks::PersonAddress::Person(person)) => {
+            let holding = domain.people.role(person, project)?;
+            Some(authority::Executor::Role(escalation::role_number(holding)))
+        }
+    }
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "one delegated call checks authority, inputs and the atomic batch before routing"
@@ -2317,20 +2451,16 @@ fn delegate_call(
     }
     let mut asked = List::with_capacity(env.limits.tasks.batch);
     for member in &batch {
-        let executor = match member.executor {
-            tasks::Executor::Agent { charter } => authority::Executor::Charter(charter),
-            tasks::Executor::Procedure { code, .. } => authority::Executor::Procedure(code),
-            tasks::Executor::Person(_) => {
-                decide_call(
-                    domain,
-                    &env.limits,
-                    decision,
-                    to,
-                    key,
-                    CallAnswer::DelegationRefused(tasks::Problem { task: None, why: tasks::Refusal::Executor }),
-                );
-                return;
-            }
+        let Some(executor) = delegation_executor(domain, context.project, member.executor) else {
+            decide_call(
+                domain,
+                &env.limits,
+                decision,
+                to,
+                key,
+                CallAnswer::DelegationRefused(tasks::Problem { task: None, why: tasks::Refusal::Executor }),
+            );
+            return;
         };
         asked
             .push(authority::Delegate { executor, authority: authority_value(&member.authority) })
@@ -2523,11 +2653,7 @@ fn procedure_step(
                 if !member.spec.inputs.is_empty() {
                     return;
                 }
-                let executor = match member.executor {
-                    tasks::Executor::Agent { charter } => authority::Executor::Charter(charter),
-                    tasks::Executor::Procedure { code, .. } => authority::Executor::Procedure(code),
-                    tasks::Executor::Person(_) => return,
-                };
+                let Some(executor) = delegation_executor(domain, context.project, member.executor) else { return };
                 asked
                     .push(authority::Delegate { executor, authority: authority_value(&member.authority) })
                     .expect("bounded procedure batch");
@@ -3005,6 +3131,40 @@ fn tasks_outputs(
             }
             tasks::Request::Refused { reply_to, problem } => {
                 let token = reply_to.into_token();
+                if domain.person_tasks.remove(&token).is_some() {
+                    let why = match problem.why {
+                        tasks::Refusal::Busy | tasks::Refusal::NotReady => people::Refusal::Busy,
+                        tasks::Refusal::Unknown => people::Refusal::Ended,
+                        tasks::Refusal::State | tasks::Refusal::Executor | tasks::Refusal::Reference => {
+                            people::Refusal::Standing
+                        }
+                        tasks::Refusal::Funding | tasks::Refusal::AuthorityShape => people::Refusal::Authority,
+                        tasks::Refusal::Duplicate
+                        | tasks::Refusal::Empty
+                        | tasks::Refusal::Batch
+                        | tasks::Refusal::Live
+                        | tasks::Refusal::Project
+                        | tasks::Refusal::Tree
+                        | tasks::Refusal::Depth
+                        | tasks::Refusal::Delegates
+                        | tasks::Refusal::Subscription
+                        | tasks::Refusal::Dependencies
+                        | tasks::Refusal::Cycle
+                        | tasks::Refusal::Spec
+                        | tasks::Refusal::Contract
+                        | tasks::Refusal::Inputs
+                        | tasks::Refusal::Attempt
+                        | tasks::Refusal::LiveDelegates
+                        | tasks::Refusal::Restore
+                        | tasks::Refusal::Read
+                        | tasks::Refusal::Turn => people::Refusal::Limit,
+                    };
+                    domain.work.push(Work::People(people::Event::Decided {
+                        request: token,
+                        outcome: people::Outcome::Refused(why),
+                    }));
+                    continue;
+                }
                 if domain.moving.remove(&token).is_some() {
                     domain.work.push(Work::People(people::Event::Decided {
                         request: token,
@@ -3282,6 +3442,15 @@ fn tasks_outputs(
             }
             tasks::Request::Done { reply_to } => {
                 let task = reply_to.into_token().raw();
+                if let Some(route) = domain.person_tasks.remove(&Token::new(task)) {
+                    let outcome = match route {
+                        PersonTaskRoute::Take(task) => people::Outcome::PersonTaken { task },
+                        PersonTaskRoute::HandBack(task) => people::Outcome::PersonHandedBack { task },
+                        PersonTaskRoute::Answer(task) => people::Outcome::PersonAnswered { task },
+                    };
+                    domain.work.push(Work::People(people::Event::Decided { request: Token::new(task), outcome }));
+                    continue;
+                }
                 if let Some(moved) = domain.moving.remove(&Token::new(task)) {
                     domain.work.push(Work::People(people::Event::Decided {
                         request: Token::new(task),
@@ -4566,6 +4735,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     bytes = bytes
         .checked_add(Map::<Token, u64>::worst_case(limits.people.pending)?)?
         .checked_add(Map::<Token, u64>::worst_case(limits.people.pending)?)?
+        .checked_add(Map::<Token, PersonTaskRoute>::worst_case(limits.people.pending)?)?
         .checked_add(Map::<Token, CallKey>::worst_case(limits.fleet.calls)?)?
         .checked_add(Map::<Token, RoutedCall>::worst_case(limits.fleet.calls)?)?
         .checked_add(Map::<Token, PersonProposalRoute>::worst_case(limits.people.pending)?)?
@@ -5216,7 +5386,8 @@ fn supported_task(task: &tasks::TaskRecord, charter: u32) -> bool {
     let executor = match task.executor {
         tasks::Executor::Agent { charter: configured } => charter == configured,
         tasks::Executor::Procedure { connector, code } => connector != 0 && code != 0,
-        tasks::Executor::Person(_) => false,
+        tasks::Executor::Person(tasks::PersonAddress::Person(person)) => person != 0,
+        tasks::Executor::Person(tasks::PersonAddress::Role(role)) => role <= 3,
     };
     task.number != 0 && task.result_position == 0 && executor
 }
