@@ -11,10 +11,8 @@ use skein_lib::{ReplyTo, Token, Wall};
 /// no secret is retained. (domain/people.md, section 3).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct IdentityKey {
-    /// Configured forge number authenticating the user. (domain/people.md, section 3).
     pub forge: u32,
-    /// Stable forge user identifier; login changes do not change this key. (domain/people.md,
-    /// section 3).
+    /// Stable forge user identifier; login changes do not change this key.
     pub user: u64,
 }
 
@@ -22,13 +20,11 @@ pub struct IdentityKey {
 /// limit. (domain/people.md, section 3).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Identity {
-    /// Authenticated stable forge/user pair. (domain/people.md, section 3).
+    /// Authenticated stable forge/user pair.
     pub key: IdentityKey,
     /// Display login bytes; combined with `name`, at most `Limits::identity_bytes`.
-    /// (domain/people.md, section 3).
     pub login: Box<[u8]>,
     /// Display-name bytes; combined with `login`, at most `Limits::identity_bytes`.
-    /// (domain/people.md, section 3).
     pub name: Box<[u8]>,
 }
 
@@ -36,9 +32,9 @@ pub struct Identity {
 /// bootstrap matches are bounded. (domain/people.md, section 3).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct InitialOwner {
-    /// Project whose roles must already be initialized before first sign-in. (domain/people.md, section 3).
+    /// Project whose roles must already be initialized before first sign-in.
     pub project: u32,
-    /// Configured forge/user pair to grant `Owner` on its first person creation. (domain/people.md, section 3).
+    /// Configured forge/user pair to grant `Owner` on its first person creation.
     pub identity: IdentityKey,
 }
 
@@ -47,16 +43,12 @@ pub struct InitialOwner {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Role {
     /// `Owner` membership; may start chats here, while broader owner actions remain root policy.
-    /// (domain/people.md, section 4).
     Owner,
     /// Maintainer membership; may start chats here, with authority checked by the root.
-    /// (domain/people.md, section 4).
     Maintainer,
     /// Member membership; may start chats here within the root's policy and funding check.
-    /// (domain/people.md, section 4).
     Member,
     /// Observer membership; `StartChat` is refused and its keyed role outcome is saved.
-    /// (domain/people.md, section 4).
     Observer,
 }
 
@@ -65,9 +57,7 @@ pub enum Role {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Holding {
     /// Deployment person number, checked for restored references when restoration finishes.
-    /// (domain/people.md, section 4).
     pub person: u64,
-    /// Authoritative membership role for this project. (domain/people.md, section 4).
     pub role: Role,
 }
 
@@ -77,39 +67,32 @@ pub struct Holding {
 /// narrow role administration (domain/people.md, section 5.1).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Ask {
-    /// Authenticated Owner's complete project roster replacement; root checks
-    /// Policy permission and held-recipient preflight before applying it
-    /// (domain/people.md, section 5.1).
+    /// Authenticated Owner's complete project roster replacement; root checks Policy permission and
+    /// held-recipient preflight before applying it.
     SetRoles {
-        /// Existing configured project; unknown projects refuse without mutation
-        /// (domain/people.md, section 5.1).
+        /// Existing configured project; unknown projects refuse without mutation.
         project: u32,
-        /// At most `Limits::holdings` unique positive existing people; validated
-        /// by this child before replacement (domain/people.md, section 5.1).
+        /// At most `Limits::holdings` unique positive existing people; validated by this child
+        /// before replacement.
         holdings: Box<[Holding]>,
     },
-    /// Decide one held chat's exact semantic revision. Root verifies current
-    /// waiting recipient and authority; admission authenticates the session and
-    /// reserves keyed-answer room (domain/people.md, section 5.1).
+    /// Decide one held chat's exact semantic revision. Root verifies current waiting recipient and
+    /// authority; admission authenticates the session and reserves keyed-answer room.
     DecideEscalation {
-        /// Actual policy project, checked against the held task by root
-        /// (domain/people.md, section 5.1).
+        /// Actual policy project, checked against the held task by root.
         project: u32,
-        /// Positive held chat identity (domain/people.md, section 5.1).
+        /// Positive held chat identity.
         task: u64,
-        /// Positive task-local waiting revision, never a transport key
-        /// (domain/people.md, section 5.1).
+        /// Positive task-local waiting revision, never a transport key.
         revision: u64,
-        /// One bounded semantic choice; root authorizes before mutation
-        /// (domain/people.md, section 5.1).
+        /// One bounded semantic choice; root authorizes before mutation.
         decision: EscalationDecision,
     },
     /// Request a chat task; admitted member-or-higher asks route once per key to the root.
-    /// (domain/people.md, section 5.1).
     StartChat {
-        /** Project in which the root should create the chat task. (domain/people.md, section 5.1). */
+        /** Project in which the root should create the chat task. */
         project: u32,
-        /** Opening words, bounded by `Limits::words` before any route or saved answer. (domain/people.md, section 5.1). */
+        /** Opening words, bounded by `Limits::words` before any route or saved answer. */
         words: Box<[u8]>,
     },
 }
@@ -118,16 +101,14 @@ pub enum Ask {
 /// people words; root also checks child/journal bounds (domain/people.md, section 5.1).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum EscalationDecision {
-    /// Rejudge a retry-exhausted held chat; no widening route is implied
-    /// (domain/people.md, section 5.1).
+    /// Rejudge a retry-exhausted held chat; no widening route is implied.
     Release,
-    /// Decide once while preserving the hold (domain/people.md, section 5.1).
+    /// Decide once while preserving the hold.
     Reject {
-        /// Bounded reason saved with the ask and held task (domain/people.md, section 5.1).
+        /// Bounded reason saved with the ask and held task.
         reason: Box<[u8]>,
     },
-    /// Move from requester to final policy role; no further pass from that role
-    /// (domain/people.md, section 5.1).
+    /// Move from requester to final policy role; no further pass from that role.
     Pass,
 }
 
@@ -135,11 +116,11 @@ pub enum EscalationDecision {
 /// loser of a race; carries no second task state (domain/people.md, section 5.1).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum EscalationChoice {
-    /// Retry hold released (domain/people.md, section 5.1).
+    /// Retry hold released.
     Released,
-    /// Task remains held with rejection reason (domain/people.md, section 5.1).
+    /// Task remains held with rejection reason.
     Rejected,
-    /// Waiting moved to policy role (domain/people.md, section 5.1).
+    /// Waiting moved to policy role.
     Passed,
 }
 
@@ -147,35 +128,32 @@ pub enum EscalationChoice {
 /// completed key, while other decided refusals are retained. (domain/people.md, section 5.1).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Refusal {
-    /// Final policy role cannot pass further; no state mutation
-    /// (domain/people.md, section 5.1).
+    /// Final policy role cannot pass further; no state mutation.
     NoFurther,
-    /// Held cause needs an actual amendment route, currently absent
-    /// (domain/people.md, section 5.1).
+    /// Held cause needs an actual amendment route, currently absent.
     NeedsAmend,
-    /// Caller is not the current waiting recipient (domain/people.md, section 5.1).
+    /// Caller is not the current waiting recipient.
     Standing,
     /// Restoration is unfinished/failed, or the root reports transient admission unavailability.
-    /// (domain/people.md, section 5.1).
     NotReady,
-    /// Sign-in is missing, expired or incompatible with the supplied identity. (domain/people.md, section 5.1).
+    /// Sign-in is missing, expired or incompatible with the supplied identity.
     SignIn,
-    /// Project membership does not permit the supported request. (domain/people.md, section 5.1).
+    /// Project membership does not permit the supported request.
     Role,
-    /// Root reports authority insufficient for the action. (domain/people.md, section 5.1).
+    /// Root reports authority insufficient for the action.
     Authority,
     /// Root names an unknown target, bootstrap lacks its initialized project, or restore references
-    /// an unknown person. (domain/people.md, section 5.1).
+    /// an unknown person.
     Unknown,
-    /// Root reports the requested target has ended. (domain/people.md, section 5.1).
+    /// Root reports the requested target has ended.
     Ended,
     /// Configured capacity is unavailable or the root reports transient admission pressure; a newly
-    /// refused admission may retry. (domain/people.md, section 5.1).
+    /// refused admission may retry.
     Busy,
     /// Payload, configuration-derived arithmetic or restored record validity exceeds the supported
-    /// bound. (domain/people.md, section 5.1).
+    /// bound.
     Limit,
-    /// Same person-scoped key names a different typed request. (domain/people.md, section 5.1).
+    /// Same person-scoped key names a different typed request.
     KeyConflict,
 }
 
@@ -183,73 +161,57 @@ pub enum Refusal {
 /// nontransient outcomes with the parent's task decision. (domain/people.md, section 5.1).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Outcome {
-    /// Root accepted one roster and all affected `Waiting` recipients atomically;
-    /// saved keyed replay does not apply the roster again (domain/people.md, section 5.1).
+    /// Root accepted one roster and all affected `Waiting` recipients atomically; saved keyed
+    /// replay does not apply the roster again.
     RolesSet {
-        /// Project whose membership changed; no task authority or funding changed
-        /// (domain/people.md, section 5.1).
+        /// Project whose membership changed; no task authority or funding changed.
         project: u32,
     },
-    /// Root's committed current or historical decision for one task revision;
-    /// first commit decides a race (domain/people.md, section 5.1).
+    /// Root's committed current or historical decision for one task revision; first commit decides
+    /// a race.
     EscalationDecided {
-        /// Named held chat (domain/people.md, section 5.1).
+        /// Named held chat.
         task: u64,
-        /// Decided task-local revision (domain/people.md, section 5.1).
         revision: u64,
-        /// Authenticated winning person, including historical races
-        /// (domain/people.md, section 5.1).
+        /// Authenticated winning person, including historical races.
         by: u64,
-        /// Committed semantic choice (domain/people.md, section 5.1).
         choice: EscalationChoice,
     },
     /// Root created the chat task; save the keyed answer with the task in one decision.
-    /// (domain/people.md, section 5.1).
     Started {
-        /** Chat task number returned by the root; the parent withholds the reply until durability and people holds no task state. (domain/people.md, section 5.1). */
+        /** Chat task number returned by the root; the parent withholds the reply until durability and people holds no task state. */
         task: u64,
     },
-    /// Request ended with a reason; permanent decisions are keyed, `Busy`/`NotReady` remain retryable.
-    /// (domain/people.md, section 5.1).
-    Refused(
-        /** Root or role refusal; transient `Busy`/`NotReady` is not retained as a completed key. (domain/people.md, section 5.1). */
-         Refusal,
-    ),
+    /// Request ended with a reason; permanent decisions are keyed, `Busy`/`NotReady` remain
+    /// retryable.
+    Refused(/** Root or role refusal; transient `Busy`/`NotReady` is not retained as a completed key. */ Refusal),
 }
 
 /// Child-to-client answer routed by the parent; state-changing answers are withheld externally
 /// until their decision is durable. (domain/people.md, sections 3 and 5.1).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Reply {
-    /// Sign-in succeeded or an existing active same-person sign-in was replayed. (domain/people.md, sections 3 and 5.1).
+    /// Sign-in succeeded or an existing active same-person sign-in was replayed.
     SignedIn {
-        /** Stable deployment person number for the authenticated forge identity. (domain/people.md, sections 3 and 5.1). */
+        /** Stable deployment person number for the authenticated forge identity. */
         person: u64,
-        /** Saved wall-time expiry for this sign-in; its monotonic deadline is retained internally. (domain/people.md, sections 3 and 5.1). */
+        /** Saved wall-time expiry for this sign-in; its monotonic deadline is retained internally. */
         expires: Wall,
     },
     /// Sign-out completed; an already absent number is also successful once ready.
-    /// (domain/people.md, sections 3 and 5.1).
     SignedOut,
-    /// One terminal response for a keyed call or its duplicate waiter. (domain/people.md, sections 3 and 5.1).
-    Outcome(
-        /** Terminal keyed result, or retryable root admission pressure for the current call. (domain/people.md, sections 3 and 5.1). */
-         Outcome,
-    ),
-    /// Entrance refused before making a new answered-key record. (domain/people.md, sections 3 and 5.1).
-    Refused(
-        /** Direct entrance refusal with no newly saved answered-key record. (domain/people.md, sections 3 and 5.1). */
-        Refusal,
-    ),
+    /// One terminal response for a keyed call or its duplicate waiter.
+    Outcome(/** Terminal keyed result, or retryable root admission pressure for the current call. */ Outcome),
+    /// Entrance refused before making a new answered-key record.
+    Refused(/** Direct entrance refusal with no newly saved answered-key record. */ Refusal),
 }
 
 /// Person-scoped idempotency key shared across that person's sign-ins; a different ask under the
 /// same key is a conflict. (domain/people.md, section 5.1).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct RequestKey {
-    /// Stable authenticated person owning this key across sign-ins. (domain/people.md, section 5.1).
     pub person: u64,
-    /// Opaque web-selected 16-byte request key; the domain does not parse it. (domain/people.md, section 5.1).
+    /// Opaque web-selected 16-byte request key; the domain does not parse it.
     pub key: [u8; 16],
 }
 
@@ -257,17 +219,14 @@ pub struct RequestKey {
 /// domain. (domain/people.md, sections 3–5).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Key {
-    /// Logical person-record key. (domain/people.md, sections 3–5).
-    Person(/** Stable deployment person number. (domain/people.md, sections 3–5). */ u64),
-    /// Logical secret-free sign-in-record key. (domain/people.md, sections 3–5).
-    SignIn(
-        /** Root-issued deployment sign-in number; cookie secrets and token digests stay below the domain. (domain/people.md, section 3; domain/engine.md, sections 4 and 5.4). */
-         u64,
-    ),
-    /// Logical per-project roles-record key. (domain/people.md, sections 3–5).
-    Roles(/** Project whose authoritative holdings are stored. (domain/people.md, sections 3–5). */ u32),
-    /// Logical completed-key record. (domain/people.md, sections 3–5).
-    Answer(/** Person-scoped completed request key. (domain/people.md, sections 3–5). */ RequestKey),
+    /// Logical person-record key.
+    Person(u64),
+    /// Logical secret-free sign-in-record key.
+    SignIn(/** Root-issued deployment sign-in number; cookie secrets and token digests stay below the domain. */ u64),
+    /// Logical per-project roles-record key.
+    Roles(/** Project whose authoritative holdings are stored. */ u32),
+    /// Logical completed-key record.
+    Answer(RequestKey),
 }
 
 /// Owned typed durable record submitted to the parent or restored from it; capacities and payload
@@ -275,48 +234,45 @@ pub enum Key {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Stored {
     /// Persistent person identity; forge/user and person numbers must be unique on restore.
-    /// (domain/people.md, sections 3–5).
     Person {
-        /** Stable person number, unique among restored people. (domain/people.md, sections 3–5). */
+        /** Stable person number, unique among restored people. */
         number: u64,
-        /** Unique forge/user identity and bounded display bytes. (domain/people.md, sections 3–5). */
+        /** Unique forge/user identity and bounded display bytes. */
         identity: Identity,
     },
     /// Persistent secret-free sign-in; expired restored entries are erased when restore completes.
-    /// (domain/people.md, sections 3–5).
     SignIn {
-        /** Root-issued sign-in number; at most `Limits::sign_ins` sign-in records are retained. (domain/people.md, section 3; domain/engine.md, section 4). */
+        /** Root-issued sign-in number; at most `Limits::sign_ins` sign-in records are retained. */
         number: u64,
-        /** Existing person reference, validated after all restore rows arrive. (domain/people.md, sections 3–5). */
+        /** Existing person reference, validated after all restore rows arrive. */
         person: u64,
-        /** Persisted wall-time expiry; restoration projects it onto the supplied startup monotonic clock. (domain/people.md, sections 3–5). */
+        /** Persisted wall-time expiry; restoration projects it onto the supplied startup monotonic clock. */
         expires: Wall,
     },
-    /// Persistent complete project holdings with bounded unique people. (domain/people.md, sections
-    /// 3–5).
+    /// Persistent complete project holdings with bounded unique people.
     Roles {
-        /** Project whose live role set this record replaces or restores. (domain/people.md, sections 3–5). */
+        /** Project whose live role set this record replaces or restores. */
         project: u32,
-        /** At most `Limits::holdings` distinct people; restored references are checked at completion. (domain/people.md, sections 3–5). */
+        /** At most `Limits::holdings` distinct people; restored references are checked at completion. */
         holdings: Box<[Holding]>,
     },
     /// Persistent request and outcome; same-key same-ask replay returns it without checking current
-    /// roles anew. (domain/people.md, sections 3–5).
+    /// roles anew.
     Answer {
-        /** Person-scoped completed key; restoration validates its person reference. (domain/people.md, sections 3–5). */
+        /** Person-scoped completed key; restoration validates its person reference. */
         key: RequestKey,
-        /** Original typed request with words bounded by `Limits::words`, compared on every retry. (domain/people.md, sections 3–5). */
+        /** Original typed request with words bounded by `Limits::words`, compared on every retry. */
         ask: Ask,
-        /** Retained permanent outcome returned without remaking the decision. (domain/people.md, sections 3–5). */
+        /** Retained permanent outcome returned without remaking the decision. */
         outcome: Outcome,
-        /** Wall time the answer was made; this increment has capacity-based retention, not timed eviction. (domain/people.md, sections 3–5). */
+        /** Wall time the answer was made; this increment has capacity-based retention, not timed eviction. */
         at: Wall,
     },
 }
 
 impl Stored {
     /// Pure projection of this typed record's logical key; allocates nothing, emits no request and
-    /// changes no state. (domain/people.md, sections 3–5).
+    /// changes no state.
     #[must_use]
     pub const fn key(&self) -> Key {
         match self {
@@ -332,89 +288,78 @@ impl Stored {
 /// cross this boundary without protocol secrets. (domain/people.md, sections 3–5).
 #[derive(PartialEq, Eq, Debug)]
 pub enum Event {
-    /// Root's synchronous application after authority/revision/capacity preflight.
-    /// Reads the original admitted roster, preserves membership on refusal and
-    /// returns exactly one `RolesApplied` (domain/people.md, section 5.1).
+    /// Root's synchronous application after authority/revision/capacity preflight. Reads the
+    /// original admitted roster, preserves membership on refusal and returns exactly one
+    /// `RolesApplied`.
     ApplyRoles {
-        /// Root's stage-local reply right, consumed by `RolesApplied`
-        /// (domain/people.md, section 5.1).
+        /// Root's stage-local reply right, consumed by `RolesApplied`.
         reply_to: ReplyTo,
-        /// Live `SetRoles` flight from `Route`; no synthetic or completed token is
-        /// authorized (domain/people.md, section 5.1).
+        /// Live `SetRoles` flight from `Route`; no synthetic or completed token is authorized.
         request: Token,
     },
-    /// Root supplies a fresh person candidate and a fresh sign-in number. Only a new identity
-    /// uses the person candidate; existing identities keep their durable person number, and unused
-    /// person candidates leave gaps (domain/people.md, section 3; domain/engine.md, section 4).
-    /// Admit an authenticated sign-in after restoration; bootstrap first-owner, person and sign-in
-    /// writes share one root decision. (domain/people.md, sections 3–5).
+    /// Root supplies a fresh person candidate and a fresh sign-in number. Only a new identity uses
+    /// the person candidate; existing identities keep their durable person number, and unused
+    /// person candidates leave gaps. Admit an authenticated sign-in after restoration; bootstrap
+    /// first-owner, person and sign-in writes share one root decision.
     SignedIn {
         /// Opaque destination for the sign-in answer; the parent holds success until durability.
-        /// (domain/people.md, sections 3–5).
         reply_to: ReplyTo,
         /// Root-issued never-reused fresh candidate, used only for a new forge/user identity;
-        /// unused candidates leave gaps. (domain/people.md, sections 3–5).
+        /// unused candidates leave gaps.
         person: u64,
         /// Root-issued fresh deployment sign-in number; replaying an active same-person number
-        /// returns its existing expiry. Cookie secrets stay below the domain (domain/people.md,
-        /// section 3; domain/engine.md, sections 4 and 5.4).
+        /// returns its existing expiry. Cookie secrets stay below the domain.
         sign_in: u64,
         /// Protocol-authenticated identity with bounded display bytes and no credential.
-        /// (domain/people.md, sections 3–5).
         identity: Identity,
     },
     /// End one sign-in after restoration, emitting erase if present and one reply.
-    /// (domain/people.md, sections 3–5).
     SignOut {
-        /// Destination for the terminal `SignedOut` reply. (domain/people.md, sections 3–5).
+        /// Destination for the terminal `SignedOut` reply.
         reply_to: ReplyTo,
         /// Root-issued sign-in number to end; absence is an idempotent success once ready.
-        /// (domain/people.md, sections 3–5).
         sign_in: u64,
     },
     /// Apply an already authorized root roles replacement; invalid/full updates emit `RolesRefused`
-    /// and preserve old holdings. Failed restoration ignores this event. (domain/people.md, sections 3–5).
+    /// and preserve old holdings. Failed restoration ignores this event.
     Roles {
-        /// Project whose authoritative holdings the root replaces. (domain/people.md, sections 3–5).
         project: u32,
         /// Complete bounded holdings, with no duplicate person; root already authorized this
-        /// change. (domain/people.md, sections 3–5).
+        /// change.
         holdings: Box<[Holding]>,
     },
     /// Admit one keyed call after restoration; saved retries reply, pending duplicates join bounded
-    /// waiters, and a new eligible flight routes once. (domain/people.md, sections 3–5).
+    /// waiters, and a new eligible flight routes once.
     Ask {
         /// Destination admitted into at most `Limits::waiters` replies per flight.
-        /// (domain/people.md, sections 3–5).
         reply_to: ReplyTo,
         /// Root-issued active authenticated sign-in number; wall or monotonic expiry refuses
-        /// entrance (domain/people.md, sections 3–5).
+        /// entrance.
         sign_in: u64,
-        /// Opaque web key, scoped to the sign-in's stable person. (domain/people.md, sections 3–5).
+        /// Opaque web key, scoped to the sign-in's stable person.
         key: [u8; 16],
         /// Typed request with payload bounds checked before lookup, route or mutation.
-        /// (domain/people.md, sections 3–5).
         ask: Ask,
     },
     /// Complete a live `Route` exactly once, retire its flight and answer each waiter; permanent
-    /// answer writes join the root's action commit. (domain/people.md, sections 3–5).
+    /// answer writes join the root's action commit.
     Decided {
         /// Opaque token from `Route`; the root must return this live flight exactly once, or the
-        /// child panics. (domain/people.md, sections 3–5).
+        /// child panics.
         request: Token,
         /// Terminal root decision; persist permanent answers with task changes, but do not retain
-        /// `Busy`/`NotReady` pressure. (domain/people.md, sections 3–5).
+        /// `Busy`/`NotReady` pressure.
         outcome: Outcome,
     },
     /// Load one saved row while restoring; invalid input emits one `RestoreRefused` and permanently
-    /// fails this instance. (domain/people.md, sections 3–5).
+    /// fails this instance.
     Restore {
         /// One typed saved row, admitted once during restoring; duplicate/oversized rows fail
-        /// restoration. (domain/people.md, sections 3–5).
+        /// restoration.
         record: Stored,
     },
     /// Finish restoration, validate all person references and reproject sign-in deadlines; erase
-    /// expired entries. Repeating after ready/failed is ignored. (domain/people.md, sections 3–5).
+    /// expired entries. Repeating after ready/failed is ignored.
     Restored,
 }
 
@@ -422,64 +367,62 @@ pub enum Event {
 /// replies until required writes are durable. (domain/people.md, section 5.1).
 #[derive(PartialEq, Eq, Debug)]
 pub enum Request {
-    /// Terminal for `ApplyRoles`; success `Save` precedes this output, but the root
-    /// completes the keyed flight only after task recheck (domain/people.md, section 5.1).
+    /// Terminal for `ApplyRoles`; success `Save` precedes this output, but the root completes the
+    /// keyed flight only after task recheck.
     RolesApplied {
-        /// Echoed root stage-local right, consumed exactly once (domain/people.md, section 5.1).
+        /// Echoed root stage-local right, consumed exactly once.
         reply_to: ReplyTo,
-        /// Echoed admitted flight; root returns `Decided` after the whole decision
-        /// (domain/people.md, section 5.1).
+        /// Echoed admitted flight; root returns `Decided` after the whole decision.
         request: Token,
-        /// Success, or readiness/identity/roster/project/standing refusal before
-        /// mutation; bounds use `Limits::holdings` (domain/people.md, section 5.1).
+        /// Success, or readiness/identity/roster/project/standing refusal before mutation; bounds
+        /// use `Limits::holdings`.
         result: Result<(), Refusal>,
     },
     /// New eligible keyed flight for the root's authority/task decision; duplicate callers share
-    /// this route. (domain/people.md, section 5.1).
+    /// this route.
     Route {
-        /** Opaque live flight token; root owes exactly one matching `Decided`, including admission pressure. (domain/people.md, section 5.1). */
+        /** Opaque live flight token; root owes exactly one matching `Decided`, including admission pressure. */
         request: Token,
-        /** Authenticated stable requester number. (domain/people.md, section 5.1). */
+
         person: u64,
-        /** Project selected by the typed request. (domain/people.md, section 5.1). */
+        /** Project selected by the typed request. */
         project: u32,
-        /** Current membership at admission: Some is required for chat; an escalation decision may carry None so root can check named-person standing. Root still checks authority (domain/people.md, section 5.1). */
+        /** Current membership at admission: Some is required for chat; an escalation decision may carry None so root can check named-person standing. Root still checks authority. */
         role: Option<Role>,
-        /** Original bounded request, owned by the root for routing and atomic decision. (domain/people.md, section 5.1). */
+        /** Original bounded request, owned by the root for routing and atomic decision. */
         ask: Ask,
     },
-    /// Terminal client output; the parent enforces durability before exposure. (domain/people.md, section 5.1).
+    /// Terminal client output; the parent enforces durability before exposure.
     Reply {
-        /** Opaque client destination; each admitted call or waiter receives one terminal reply. (domain/people.md, section 5.1). */
+        /** Opaque client destination; each admitted call or waiter receives one terminal reply. */
         to: ReplyTo,
-        /** Answer to deliver only after any state-changing decision is durable. (domain/people.md, section 5.1). */
+        /** Answer to deliver only after any state-changing decision is durable. */
         reply: Reply,
     },
     /// Typed persistence output to join the parent's atomic decision, including task creation and
-    /// keyed answer together. (domain/people.md, section 5.1).
+    /// keyed answer together.
     Save {
-        /** Owned replacement row for the parent's current atomic decision, not a standalone IO submission. (domain/people.md, section 5.1). */
+        /** Owned replacement row for the parent's current atomic decision, not a standalone IO submission. */
         record: Stored,
     },
     /// Typed removal output for an ended or expired sign-in, with durability handled by the parent.
-    /// (domain/people.md, section 5.1).
     Erase {
-        /** Logical row to remove with the parent's decision; secret cleanup remains below the domain. (domain/people.md, section 5.1). */
+        /** Logical row to remove with the parent's decision; secret cleanup remains below the domain. */
         key: Key,
     },
-    /// Terminal role-update refusal with no role replacement. (domain/people.md, section 5.1).
+    /// Terminal role-update refusal with no role replacement.
     RolesRefused {
-        /** Project whose role update was refused without replacing holdings. (domain/people.md, section 5.1). */
+        /** Project whose role update was refused without replacing holdings. */
         project: u32,
-        /** Bound or capacity reason for the refused role update. (domain/people.md, section 5.1). */
+        /** Bound or capacity reason for the refused role update. */
         refusal: Refusal,
     },
     /// Terminal restoration failure; a failed instance cannot become ready through more rows or
-    /// `Restored`. (domain/people.md, section 5.1).
+    /// `Restored`.
     RestoreRefused {
-        /** Record key that made restoration fail. (domain/people.md, section 5.1). */
+        /** Record key that made restoration fail. */
         key: Key,
-        /** Restore admission/reference reason; this instance stays unready. (domain/people.md, section 5.1). */
+        /** Restore admission/reference reason; this instance stays unready. */
         refusal: Refusal,
     },
 }

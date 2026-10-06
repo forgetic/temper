@@ -78,9 +78,9 @@ impl Domain {
         }
     }
 
-    /// Root completion fence: true while a refresh, keep or cancellation awaits
-    /// its terminal. Future refresh/retry timers alone are idle; this query
-    /// neither cancels IO nor changes grants (domain/engine.md, 8; credentials.md, 5).
+    /// Root completion fence: true while a refresh, keep or cancellation awaits its terminal.
+    /// Future refresh/retry timers alone are idle; this query neither cancels IO nor changes
+    /// grants.
     #[must_use]
     pub fn waiting(&self) -> bool {
         for (_, account) in &self.accounts {

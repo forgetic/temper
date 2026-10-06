@@ -20,8 +20,7 @@ pub enum EscalationHolder {
     Role {
         /// Project of the held chat, checked by tasks.
         project: u32,
-        /// Policy role selected and checked by root, bounded by authority roles
-        /// (domain/authority.md, 9).
+        /// Policy role selected and checked by root, bounded by authority roles.
         role: u32,
     },
 }
@@ -51,9 +50,7 @@ pub enum Escalation {
     /// One completed rejection; retain reason while held without reopening or
     /// rerouting. Historical transport outcome stays root-owned.
     Rejected {
-        /// Decided semantic revision.
         revision: u64,
-        /// Authenticated person reported by root.
         by: u64,
         /// Rejection words, at most task `result_bytes`.
         reason: Box<[u8]>,
@@ -78,8 +75,7 @@ impl Escalation {
 /// widening or generic release surface is implied.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum EscalationDecision {
-    /// Lift a retry-exhaustion hold, reset tries, and rejudge readiness
-    /// (domain/tasks.md, section 5.5).
+    /// Lift a retry-exhaustion hold, reset tries, and rejudge readiness.
     Release,
     /// Decide once while leaving the task held.
     Reject {
@@ -125,7 +121,6 @@ pub struct EscalationContext {
     pub task: u64,
     /// Policy project checked by root.
     pub project: u32,
-    /// Person requester whose standing root verifies.
     pub requester: u64,
     /// Preserved semantic hold reason.
     pub why: Hold,

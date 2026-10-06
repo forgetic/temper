@@ -77,12 +77,11 @@ pub enum Op {
     /// Merge fetched `theirs` into the checked-out branch, without committing;
     /// leave conflict markers and merge state on disk. Ends Merged/Conflicted.
     Merge { at: Place, theirs: Commit },
-    /// Commit the working tree exactly as it is, on `parent`, with the message
-    /// `title` and `body`, authored as `identity`. Ends in `Committed`, or in
-    /// `Unchanged` if the tree is `parent`'s and `merging` is None. With a
-    /// second parent it always records both parents; before doing so io
-    /// refuses markers remaining in originally conflicted paths, ending
-    /// `Conflicted` with those paths (domain/worker.md, 4.1 and section 5).
+    /// Commit the working tree exactly as it is, on `parent`, with the message `title` and `body`,
+    /// authored as `identity`. Ends in `Committed`, or in `Unchanged` if the tree is `parent`'s and
+    /// `merging` is None. With a second parent it always records both parents; before doing so io
+    /// refuses markers remaining in originally conflicted paths, ending `Conflicted` with those
+    /// paths.
     Commit { at: Place, parent: Commit, merging: Option<Commit>, title: Box<[u8]>, body: Box<[u8]>, identity: u32 },
     /// Push `commit` to `branch` on the forge, as a fast-forward, never forced:
     /// a branch that does not exist is created, and one that is not an

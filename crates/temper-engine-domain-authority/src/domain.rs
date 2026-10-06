@@ -19,17 +19,15 @@ pub struct Domain {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Event {
     /// Add or replace a policy after bounded validation; refusal leaves the prior entry intact.
-    /// (domain/authority.md, sections 2 and 6).
     Policy {
-        /** Project whose live policy is added or replaced. (domain/authority.md, sections 2 and 6). */
+        /** Project whose live policy is added or replaced. */
         project: u32,
-        /** Owned candidate policy, checked against configured bounds and deployment ceilings before mutation. (domain/authority.md, sections 2 and 6). */
+        /** Owned candidate policy, checked against configured bounds and deployment ceilings before mutation. */
         policy: Policy,
     },
-    /// Remove a policy; absence still yields a terminal dropped fact. (domain/authority.md,
-    /// sections 2 and 6).
+    /// Remove a policy; absence still yields a terminal dropped fact.
     Dropped {
-        /** Project whose live policy should be removed, whether present or absent. (domain/authority.md, sections 2 and 6). */
+        /** Project whose live policy should be removed, whether present or absent. */
         project: u32,
     },
 }
@@ -39,16 +37,13 @@ pub enum Event {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum PolicyRefusal {
     /// An owned candidate collection or byte field exceeds its configured bound.
-    /// (domain/authority.md, sections 2 and 6).
     Oversized,
-    /// Project authority or period spend exceeds deployment rules. (domain/authority.md, sections 2
-    /// and 6).
+    /// Project authority or period spend exceeds deployment rules.
     AboveRules,
     /// Role authority, period spend, permission bits, uniqueness or required approval-role identity
-    /// is invalid. (domain/authority.md, sections 2 and 6).
+    /// is invalid.
     InvalidRole,
     /// A new project cannot fit in the bounded table; existing entries are retained.
-    /// (domain/authority.md, sections 2 and 6).
     Full,
 }
 
@@ -56,42 +51,39 @@ pub enum PolicyRefusal {
 /// belong to the root. (domain/authority.md, sections 2 and 6).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum PolicyFact {
-    /// A previously absent project was installed. (domain/authority.md, sections 2 and 6).
+    /// A previously absent project was installed.
     Added {
-        /** Project with a newly installed policy. (domain/authority.md, sections 2 and 6). */
+        /** Project with a newly installed policy. */
         project: u32,
     },
-    /// An existing project's policy was replaced. (domain/authority.md, sections 2 and 6).
+    /// An existing project's policy was replaced.
     Changed {
-        /** Project whose previous policy was replaced. (domain/authority.md, sections 2 and 6). */
+        /** Project whose previous policy was replaced. */
         project: u32,
     },
-    /// Drop completed, reporting whether the entry existed. (domain/authority.md, sections 2 and
-    /// 6).
+    /// Drop completed, reporting whether the entry existed.
     Dropped {
-        /** Project named by the drop event. (domain/authority.md, sections 2 and 6). */
+        /** Project named by the drop event. */
         project: u32,
-        /** Whether a live policy was actually removed. (domain/authority.md, sections 2 and 6). */
+        /** Whether a live policy was actually removed. */
         existed: bool,
     },
-    /// Update terminated without changing the policy table. (domain/authority.md, sections 2 and
-    /// 6).
+    /// Update terminated without changing the policy table.
     Refused {
-        /** Project named by the refused update. (domain/authority.md, sections 2 and 6). */
+        /** Project named by the refused update. */
         project: u32,
-        /** Admission reason; no replacement was made. (domain/authority.md, sections 2 and 6). */
+        /** Admission reason; no replacement was made. */
         reason: PolicyRefusal,
     },
 }
 
 /// Exact output-room requirement for one policy event: one terminal lifecycle fact.
-/// (domain/authority.md, sections 2 and 6).
 pub const POLICY_MAX_OUT: u32 = 1;
 
 impl Domain {
     /// Admit owned `rules` and `limits`, creating an empty bounded policy table; return `None` for
     /// unrepresentable bounds, oversized rules or inconsistent run ceilings. Allocates only
-    /// configured retained capacity. (domain/authority.md, sections 2 and 6).
+    /// configured retained capacity.
     #[must_use]
     pub fn new(rules: Rules, limits: Limits) -> Option<Domain> {
         max_out(&limits)?;
@@ -108,29 +100,26 @@ impl Domain {
         Some(Domain { rules, policies: Map::with_capacity(limits.projects), limits })
     }
 
-    /// Borrow immutable deployment rules; no output or state change. (domain/authority.md, sections
-    /// 2 and 6).
+    /// Borrow immutable deployment rules; no output or state change.
     #[must_use]
     pub const fn rules(&self) -> &Rules {
         &self.rules
     }
 
-    /// Borrow immutable admission limits; no output or state change. (domain/authority.md, sections
-    /// 2 and 6).
+    /// Borrow immutable admission limits; no output or state change.
     #[must_use]
     pub const fn limits(&self) -> &Limits {
         &self.limits
     }
 
     /// Borrow the live policy for `project`, or `None` when absent; no output or state change.
-    /// (domain/authority.md, sections 2 and 6).
     #[must_use]
     pub fn policy(&self, project: u32) -> Option<&Policy> {
         self.policies.get(&project)
     }
 
     /// Borrow role `number` within live `project`, or `None`; scans at most the admitted role limit
-    /// with no allocation or output. (domain/authority.md, sections 2 and 6).
+    /// with no allocation or output.
     #[must_use]
     #[expect(clippy::manual_find, reason = "the foundation's step subset uses bounded loops without closures")]
     pub fn role(&self, project: u32, number: u32) -> Option<&Role> {
@@ -143,11 +132,10 @@ impl Domain {
     }
 }
 
-/// Policy events emit one fact and retain the previous policy on refusal.
-/// Caller reserves `POLICY_MAX_OUT` slots before applying the event.
-/// Apply one root-issued `event` to `domain` and emit exactly one terminal policy fact. Caller must
-/// reserve `POLICY_MAX_OUT` free slots in `out`; refusal preserves the previous policy, and the
-/// root owns persistence. (domain/authority.md, sections 2 and 6).
+/// Policy events emit one fact and retain the previous policy on refusal. Caller reserves
+/// `POLICY_MAX_OUT` slots before applying the event. Apply one root-issued `event` to `domain` and
+/// emit exactly one terminal policy fact. Caller must reserve `POLICY_MAX_OUT` free slots in `out`;
+/// refusal preserves the previous policy, and the root owns persistence.
 pub fn step(domain: &mut Domain, event: Event, out: &mut Queue<PolicyFact>) {
     assert!(out.room() >= POLICY_MAX_OUT, "caller reserves policy lifecycle output");
     match event {

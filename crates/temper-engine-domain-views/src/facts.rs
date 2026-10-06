@@ -103,7 +103,6 @@ pub struct Lost {
     /// Records a trace did not keep: for want of room in the batch, or in an
     /// append that failed.
     pub records: u64,
-    /// Facts dropped for want of room.
     pub facts: u64,
 }
 

@@ -14,7 +14,6 @@ pub struct Limits {
     /// Runs hosted at once: the run slots. An assignment beyond them is
     /// refused as busy.
     pub slots: u32,
-    /// Repositories a workspace may list.
     pub repositories: u32,
     /// Distinct grants retained for a hosted attempt.
     pub accounts: u32,

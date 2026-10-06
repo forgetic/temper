@@ -58,10 +58,10 @@ pub struct Domain {
 }
 
 impl Domain {
-    /// Create restoring state with capacities from validated `limits` and at most `limits.initial_owners`
-    /// owned bootstrap entries. Panics on unrepresentable/invalid limits, oversized owners or
-    /// duplicate project/identity pairs; project roles must be initialized before sign-in.
-    /// (domain/people.md, sections 2–5).
+    /// Create restoring state with capacities from validated `limits` and at most
+    /// `limits.initial_owners` owned bootstrap entries. Panics on unrepresentable/invalid limits,
+    /// oversized owners or duplicate project/identity pairs; project roles must be initialized
+    /// before sign-in.
     #[must_use]
     pub fn new(limits: &Limits, owners: Box<[InitialOwner]>) -> Domain {
         assert!(crate::worst_case(limits).is_some(), "people limits are valid");
@@ -94,14 +94,14 @@ impl Domain {
     }
 
     /// Pure scheduler query of the earliest armed monotonic sign-in expiry, or `None`; no
-    /// expiration or output occurs here. (domain/people.md, sections 2–5).
+    /// expiration or output occurs here.
     #[must_use]
     pub fn next_deadline(&self) -> Option<Time> {
         self.alarms.next()
     }
 
     /// Pure scheduler query returning whether any armed expiry is at or before supplied `now`; no
-    /// state change or output. (domain/people.md, sections 2–5).
+    /// state change or output.
     #[must_use]
     pub fn is_due(&self, now: Time) -> bool {
         match self.alarms.next() {
@@ -111,28 +111,27 @@ impl Domain {
     }
 
     /// Reclaim retired flight slots at the parent's iteration reclaim point after their outputs
-    /// have been routed; no request or client reply is emitted. (domain/people.md, sections 2–5).
+    /// have been routed; no request or client reply is emitted.
     pub fn reclaim(&mut self) {
         self.pending.reclaim();
     }
 
     /// Remove one optional content-free observation from the bounded fact queue; keeping/dropping
-    /// facts changes no decision or persistence output. (domain/people.md, sections 2–5).
+    /// facts changes no decision or persistence output.
     pub fn pop_fact(&mut self) -> Option<Fact> {
         self.facts.pop()
     }
 
     /// Return the saturating count of observations dropped when `Limits::facts` was full;
-    /// diagnostic only, not a lifecycle acknowledgement. (domain/people.md, sections 2–5).
+    /// diagnostic only, not a lifecycle acknowledgement.
     #[must_use]
     pub const fn facts_lost(&self) -> u64 {
         self.lost
     }
 
-    /// Pure bounded membership lookup used by root escalation routing and
-    /// authenticated named reads; caller separately authenticates identities.
-    /// Available during restore, allocating/emitting/mutating nothing
-    /// (domain/people.md, sections 4 and 5.1).
+    /// Pure bounded membership lookup used by root escalation routing and authenticated named
+    /// reads; caller separately authenticates identities. Available during restore,
+    /// allocating/emitting/mutating nothing.
     #[must_use]
     pub fn role(&self, person: u64, project: u32) -> Option<Role> {
         role(self, person, project)
@@ -140,9 +139,9 @@ impl Domain {
 
     /// Pure lookup of whether the bounded role table contains `project`, including an empty
     /// holdings set. Available during restoration so the root preserves restored roles and seeds
-    /// only missing bootstrap projects; it implies neither readiness nor person membership.
-    /// The table is bounded by `Limits::projects`; this query allocates nothing, emits no output
-    /// and grants no role (domain/people.md, sections 3 and 4).
+    /// only missing bootstrap projects; it implies neither readiness nor person membership. The
+    /// table is bounded by `Limits::projects`; this query allocates nothing, emits no output and
+    /// grants no role.
     #[must_use]
     pub fn has_project(&self, project: u32) -> bool {
         self.roles.contains_key(&project)
@@ -150,11 +149,11 @@ impl Domain {
 
     /// Pure authenticated lookup for the root-issued `sign_in` at supplied `now` and `wall`.
     /// Returns `None` before readiness, for an absent sign-in, or when either its projected
-    /// monotonic deadline is at or before `now` or its saved wall expiry is at or before `wall`.
-    /// A backward wall correction cannot revive a monotonic-expired session, even before fire.
-    /// Otherwise returns the stable requester person number. The sign-in table is bounded
-    /// by `Limits::sign_ins`; this read allocates nothing, emits no output and changes no
-    /// sign-in or role state. Root uses it for named task result reads (domain/people.md, sections 3 and 6).
+    /// monotonic deadline is at or before `now` or its saved wall expiry is at or before `wall`. A
+    /// backward wall correction cannot revive a monotonic-expired session, even before fire.
+    /// Otherwise returns the stable requester person number. The sign-in table is bounded by
+    /// `Limits::sign_ins`; this read allocates nothing, emits no output and changes no sign-in or
+    /// role state. Root uses it for named task result reads.
     #[must_use]
     pub fn person(&self, sign_in: u64, now: Time, wall: Wall) -> Option<u64> {
         if !self.ready() {
@@ -168,7 +167,7 @@ impl Domain {
     }
 
     /// Pure query of completed, successful restoration; false during restoring and permanently
-    /// after restore failure. (domain/people.md, sections 2–5).
+    /// after restore failure.
     #[must_use]
     pub fn ready(&self) -> bool {
         match self.phase {
@@ -178,11 +177,11 @@ impl Domain {
     }
 }
 
-/// Bootstrap writes one roles record per configured owner match, alongside
-/// person/sign-in records and reply; completion answers every bounded waiter.
-/// Required free Request slots for one step/fire under validated `limits`: maximum of bootstrap owner
-/// matches plus three, waiters plus one and sign-ins plus one. `worst_case` validates those
-/// additions before use; caller counts output payload bytes separately. (domain/people.md, sections 2–5).
+/// Bootstrap writes one roles record per configured owner match, alongside person/sign-in records
+/// and reply; completion answers every bounded waiter. Required free Request slots for one
+/// step/fire under validated `limits`: maximum of bootstrap owner matches plus three, waiters plus
+/// one and sign-ins plus one. `worst_case` validates those additions before use; caller counts
+/// output payload bytes separately.
 #[must_use]
 pub fn max_out(limits: &Limits) -> u32 {
     limits.initial_owners.saturating_add(3).max(limits.waiters.saturating_add(1)).max(limits.sign_ins.saturating_add(1))
@@ -193,8 +192,8 @@ pub fn max_out(limits: &Limits) -> u32 {
 /// routing/persistence/replies, never IO; root completes each `Route` once and withholds replies
 /// until required atomic writes are durable. Restore admission validates role-success shape;
 /// `Restored` checks its project/person references without rechecking current membership or
-/// requiring the historical roster to equal the current one. Refused role asks retain their
-/// invalid targets for keyed replay. (domain/people.md, sections 2–5 and 5.1).
+/// requiring the historical roster to equal the current one. Refused role asks retain their invalid
+/// targets for keyed replay.
 pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     match event {
         Event::ApplyRoles { reply_to, request } => {
@@ -231,10 +230,10 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
     }
 }
 
-/// One expiration per fire; other expirations stay due for later iterations.
-/// Expire at most one due sign-in using `env.now`, emitting its `Erase`; no work before ready. Caller
-/// reserves `max_out(&env.limits)` free slots and calls again in later iterations while due; parent
-/// owns durability and secret cleanup. (domain/people.md, sections 2–5).
+/// One expiration per fire; other expirations stay due for later iterations. Expire at most one due
+/// sign-in using `env.now`, emitting its `Erase`; no work before ready. Caller reserves
+/// `max_out(&env.limits)` free slots and calls again in later iterations while due; parent owns
+/// durability and secret cleanup.
 pub fn fire(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
     if !domain.ready() {
         return;

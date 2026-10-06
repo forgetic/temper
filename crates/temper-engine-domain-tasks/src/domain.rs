@@ -43,9 +43,9 @@ pub struct Domain {
 
 impl Domain {
     /// Create restoring state from validated `limits`, deterministic `seed` and unique configured
-    /// `charters` bounded by `limits.charters`. Panics on invalid/unrepresentable limits or malformed
-    /// charter configuration; no task becomes active until `Restore`/`Restored` completes.
-    /// (domain/tasks.md, sections 2, 4–5 and 10).
+    /// `charters` bounded by `limits.charters`. Panics on invalid/unrepresentable limits or
+    /// malformed charter configuration; no task becomes active until `Restore`/`Restored`
+    /// completes.
     #[must_use]
     pub fn new(limits: &Limits, seed: u64, charters: Box<[u32]>) -> Domain {
         assert!(crate::worst_case(limits).is_some(), "task limits are valid");
@@ -71,7 +71,6 @@ impl Domain {
     /// Pure borrowed lookup of authentic period/pool accounting for root policy checks; returns
     /// `None` when absent. The table is bounded by `Limits::funders`; no readiness transition,
     /// allocation or output occurs and the root must not persist a second mutable ledger.
-    /// (domain/tasks.md, sections 2, 4–5 and 10).
     #[must_use]
     pub fn funding(&self, funder: crate::Funder) -> Option<&crate::FundingRecord> {
         self.funding.get(&funder)
@@ -83,13 +82,13 @@ impl Domain {
     }
 
     /// Reclaim retired live task slots at the parent's iteration reclaim point after outputs have
-    /// been routed; emits no persistence or lifecycle output. (domain/tasks.md, sections 2, 4–5 and 10).
+    /// been routed; emits no persistence or lifecycle output.
     pub fn reclaim(&mut self) {
         self.tasks.reclaim();
     }
 
     /// Remove one optional content-free observation from the bounded diagnostic queue; keeping or
-    /// dropping facts changes no decision, durability barrier or reply. (domain/tasks.md, sections 2, 4–5 and 10).
+    /// dropping facts changes no decision, durability barrier or reply.
     pub fn pop_fact(&mut self) -> Option<Fact> {
         self.facts.pop()
     }
@@ -104,10 +103,9 @@ pub(crate) fn output_bound(limits: &Limits) -> Option<u32> {
         .checked_add(8)
 }
 
-/// Required free `Request` slots for one `step` or `fire` under validated `limits`: checked 20 times
-/// tasks plus 2 times batch plus 3 times funders plus 8. Cascades are bounded by the live set;
-/// panics if bound arithmetic is invalid. Caller counts output payload copies separately.
-/// (domain/tasks.md, sections 2, 4–5 and 10).
+/// Required free `Request` slots for one `step` or `fire` under validated `limits`: checked 20
+/// times tasks plus 2 times batch plus 3 times funders plus 8. Cascades are bounded by the live
+/// set; panics if bound arithmetic is invalid. Caller counts output payload copies separately.
 #[must_use]
 pub fn max_out(limits: &Limits) -> u32 {
     output_bound(limits).expect("task limits admit output bound")
@@ -117,7 +115,7 @@ pub fn max_out(limits: &Limits) -> u32 {
 /// `env`, then advance bounded dependency/closing cascades when ready. Caller reserves `max_out`
 /// free slots. Reply-bearing inputs produce one terminal reply; notifications may emit no output.
 /// Root checks authority, fences exact transport replay and commits saves/erases with resulting
-/// effects before external replies. (domain/tasks.md, sections 2, 4–5 and 10).
+/// effects before external replies.
 pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     match event {
         Event::InspectEscalations { reply_to, project } => {
@@ -180,7 +178,6 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
 /// Expire at most one due retry deadline using `env.now` after successful restoration, then advance
 /// bounded closing/readiness cascades. Caller reserves `max_out` free `Request` slots and drives
 /// later iterations while due; wall correction does not reproject an already armed deadline.
-/// (domain/tasks.md, sections 2, 4–5 and 10).
 pub fn fire(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
     if !domain.ready() {
         return;

@@ -225,18 +225,16 @@ pub(crate) fn links(domain: &Domain, bound: u32) -> bool {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct FundingRecord {
     /// Durable period/pool identity; task sources use live `TaskRecord` counters instead of a
-    /// separate ledger. (domain/tasks.md, sections 2–3). (domain/authority.md, section 7).
+    /// separate ledger.
     pub funder: Funder,
-    /// Pool's original project period; a period has `None`, and no current event changes this link.
-    /// (domain/tasks.md, sections 2–3). (domain/authority.md, section 7).
+    /// Pool's original project period; a period has `None`, and no current event changes this
+    /// link.
     pub parent: Option<Funder>,
     /// Authentic finite accounting owned by tasks; external ledgers have zero direct spent and
     /// receive settled expense in `spent_below`. Root borrows these values for policy checks.
-    /// (domain/tasks.md, sections 2–3). (domain/authority.md, section 7).
     pub numbers: Numbers,
     /// False for this contracted finite source boundary; no current event retires sources and
-    /// restoration refuses any closed period or pool. (domain/tasks.md, sections 2–3).
-    /// (domain/authority.md, section 7).
+    /// restoration refuses any closed period or pool.
     pub closed: bool,
 }
 

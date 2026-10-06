@@ -130,7 +130,6 @@ pub(crate) struct Hosted {
     /// The engine's names for the run and for the attempt hosted.
     run: Token,
     attempt: Token,
-    /// How many repositories its workspace lists.
     repositories: u32,
     tags: Box<[u32]>,
     grants: Box<[Grant]>,

@@ -11,43 +11,40 @@ use skein_lib::{Deadlines, Duration, Id, List, Map, Queue, Slab};
 /// outputs; validate via `worst_case` before construction. (domain/people.md, sections 2–5).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Limits {
-    /// Maximum retained people and forge/user index entries. (domain/people.md, sections 2–5).
+    /// Maximum retained people and forge/user index entries.
     pub people: u32,
-    /// Maximum live secret-free sign-ins and expiry alarms. (domain/people.md, sections 2–5).
+    /// Maximum live secret-free sign-ins and expiry alarms.
     pub sign_ins: u32,
-    /// Maximum retained project role sets. (domain/people.md, sections 2–5).
+    /// Maximum retained project role sets.
     pub projects: u32,
-    /// Maximum unique-person holdings per project role set. (domain/people.md, sections 2–5).
+    /// Maximum unique-person holdings per project role set.
     pub holdings: u32,
     /// Maximum retained configured first-owner entries; also bounds bootstrap output matches.
-    /// (domain/people.md, sections 2–5).
     pub initial_owners: u32,
     /// Maximum completed keys plus slots reserved by pending flights; no timed eviction is
-    /// implemented here. (domain/people.md, sections 2–5).
+    /// implemented here.
     pub requests: u32,
-    /// Maximum simultaneous routed keyed flights. (domain/people.md, sections 2–5).
+    /// Maximum simultaneous routed keyed flights.
     pub pending: u32,
     /// Positive maximum reply destinations per flight, including its first caller.
-    /// (domain/people.md, sections 2–5).
     pub waiters: u32,
-    /// Maximum combined login and display-name bytes per person. (domain/people.md, sections 2–5).
+    /// Maximum combined login and display-name bytes per person.
     pub identity_bytes: u32,
-    /// Maximum opening-word or escalation rejection-reason bytes per keyed ask, including pending and completed copies.
-    /// (domain/people.md, sections 2–5).
+    /// Maximum opening-word or escalation rejection-reason bytes per keyed ask, including pending
+    /// and completed copies.
     pub words: u32,
     /// Nonzero configured lifetime projected once from admission's wall/monotonic environment.
-    /// (domain/people.md, sections 2–5).
     pub sign_in_lifetime: Duration,
     /// Capacity of optional content-free observations; overflow increments a diagnostic lost
-    /// counter. (domain/people.md, sections 2–5).
+    /// counter.
     pub facts: u32,
 }
 
-/// Containers, retained bytes, pending copies and bounded bootstrap config.
-/// Checked heap bound under `limits` for retained containers/bytes, pending copies, bootstrap owners,
-/// restoration sign-in snapshot, role-update scratch and facts. Returns `None` for arithmetic
-/// overflow, zero waiters or zero sign-in lifetime; validates `max_out` additions. Caller separately
-/// counts incoming/outgoing payloads and Request queue storage. (domain/people.md, sections 2–5).
+/// Containers, retained bytes, pending copies and bounded bootstrap config. Checked heap bound
+/// under `limits` for retained containers/bytes, pending copies, bootstrap owners, restoration
+/// sign-in snapshot, role-update scratch and facts. Returns `None` for arithmetic overflow, zero
+/// waiters or zero sign-in lifetime; validates `max_out` additions. Caller separately counts
+/// incoming/outgoing payloads and Request queue storage.
 #[must_use]
 pub fn worst_case(limits: &Limits) -> Option<u64> {
     limits.initial_owners.checked_add(3)?;

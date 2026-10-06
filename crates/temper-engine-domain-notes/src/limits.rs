@@ -22,7 +22,6 @@ pub struct Limits {
     pub name_bytes: u32,
     pub description_bytes: u32,
     pub body_bytes: u32,
-    /// The most references an entry carries.
     pub references: u32,
     /// Calls in flight at once. A call past them is refused as busy.
     pub calls: u32,

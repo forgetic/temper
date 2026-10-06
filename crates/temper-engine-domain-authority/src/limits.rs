@@ -14,55 +14,47 @@ use crate::{
 /// these bounds until admission. (domain/authority.md, sections 6–11).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Limits {
-    /// Maximum live project policies. (domain/authority.md, sections 6–11).
+    /// Maximum live project policies.
     pub projects: u32,
-    /// Maximum roles per project policy. (domain/authority.md, sections 6–11).
+    /// Maximum roles per project policy.
     pub roles: u32,
-    /// Maximum generic requirements per deployment or project policy. (domain/authority.md,
-    /// sections 6–11).
+    /// Maximum generic requirements per deployment or project policy.
     pub requirements: u32,
     /// Maximum fact kinds per requirement and maximum reports per effect question.
-    /// (domain/authority.md, sections 6–11).
     pub facts: u32,
-    /// Maximum grants per admitted authority value. (domain/authority.md, sections 6–11).
+    /// Maximum grants per admitted authority value.
     pub grants: u32,
-    /// Maximum permitted executor entries per admitted authority value. (domain/authority.md,
-    /// sections 6–11).
+    /// Maximum permitted executor entries per admitted authority value.
     pub executors: u32,
-    /// Maximum base or resource-name segment count. (domain/authority.md, sections 6–11).
+    /// Maximum base or resource-name segment count.
     pub segments: u32,
-    /// Maximum bytes per base segment or terminal value. (domain/authority.md, sections 6–11).
+    /// Maximum bytes per base segment or terminal value.
     pub segment_bytes: u32,
-    /// Maximum retained connector-kind implication pairs. (domain/authority.md, sections 6–11).
+    /// Maximum retained connector-kind implication pairs.
     pub implications: u32,
-    /// Maximum directly delegated tasks per batch question. (domain/authority.md, sections 6–11).
+    /// Maximum directly delegated tasks per batch question.
     pub batch: u32,
-    /// Maximum model-account usability reports per run question. (domain/authority.md, sections
-    /// 6–11).
+    /// Maximum model-account usability reports per run question.
     pub accounts: u32,
-    /// Maximum written resources per run question. (domain/authority.md, sections 6–11).
+    /// Maximum written resources per run question.
     pub writes: u32,
-    /// Maximum landing rules per deployment or project policy. (domain/authority.md, sections
-    /// 6–11).
+    /// Maximum landing rules per deployment or project policy.
     pub landing_rules: u32,
-    /// Maximum gates per landing rule and per landing snapshot. (domain/authority.md, sections
-    /// 6–11).
+    /// Maximum gates per landing rule and per landing snapshot.
     pub gates: u32,
-    /// Maximum approval requirements per landing rule. (domain/authority.md, sections 6–11).
+    /// Maximum approval requirements per landing rule.
     pub approvals: u32,
-    /// Maximum clean predecessor heads per landing snapshot. (domain/authority.md, sections 6–11).
+    /// Maximum clean predecessor heads per landing snapshot.
     pub heads: u32,
-    /// Maximum gate verdict reports per landing snapshot. (domain/authority.md, sections 6–11).
+    /// Maximum gate verdict reports per landing snapshot.
     pub verdicts: u32,
     /// Maximum human review reports per snapshot; also bounds each positive required-person count.
-    /// (domain/authority.md, sections 6–11).
     pub reviews: u32,
 }
 
-/// Room for the largest check, including every independent reason.
-/// Checked free-slot bound for any one `check_*` finding output; caller reserves that room before
-/// the query. Returns `None` on bound arithmetic overflow; policy lifecycle outputs use
-/// `POLICY_MAX_OUT` separately. (domain/authority.md, sections 6–11).
+/// Room for the largest check, including every independent reason. Checked free-slot bound for any
+/// one `check_*` finding output; caller reserves that room before the query. Returns `None` on
+/// bound arithmetic overflow; policy lifecycle outputs use `POLICY_MAX_OUT` separately.
 #[must_use]
 pub fn max_out(limits: &Limits) -> Option<u32> {
     let batch = limits.batch.checked_mul(6)?.checked_add(12)?;
@@ -73,11 +65,10 @@ pub fn max_out(limits: &Limits) -> Option<u32> {
     Some(batch.max(run).max(effect))
 }
 
-/// Heap held by the domain's rules and full project table. Questions and
-/// finding queues belong to the caller and are counted there.
-/// Checked retained-heap bound for deployment rules and a full live policy table under `limits`;
-/// `None` means unrepresentable arithmetic. Caller separately counts question payloads, constructed
-/// needs and output queues. (domain/authority.md, sections 6–11).
+/// Heap held by the domain's rules and full project table. Questions and finding queues belong to
+/// the caller and are counted there. Checked retained-heap bound for deployment rules and a full
+/// live policy table under `limits`; `None` means unrepresentable arithmetic. Caller separately
+/// counts question payloads, constructed needs and output queues.
 #[must_use]
 pub fn worst_case(limits: &Limits) -> Option<u64> {
     let authority = authority_heap(limits)?;

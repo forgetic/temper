@@ -9,17 +9,13 @@ use skein_lib::Wall;
 /// collection and byte limits. (domain/authority.md, sections 3–5).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Authority {
-    /// Permitted configured tool families. (domain/authority.md, sections 3–5).
     pub tools: Tools,
-    /// Resource grants, bounded by `Limits::grants` at admission. (domain/authority.md, sections
-    /// 3–5).
+    /// Resource grants, bounded by `Limits::grants` at admission.
     pub grants: Box<[Grant]>,
-    /// Executor, lifetime task-count and depth ceiling. (domain/authority.md, sections 3–5).
+    /// Executor, lifetime task-count and depth ceiling.
     pub delegation: Delegation,
-    /// Spend and wall-time ceiling, rather than current available funding. (domain/authority.md,
-    /// sections 3–5).
+    /// Spend and wall-time ceiling, rather than current available funding.
     pub budget: Budget,
-    /// Permitted note scopes. (domain/authority.md, sections 3–5).
     pub notes: Scopes,
 }
 
@@ -28,30 +24,25 @@ pub struct Authority {
 /// Configuration-selected tool-family bits; authority interprets no connector-specific family
 /// names. (domain/authority.md, sections 3–5).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct Tools(
-    /** Up to 64 configured family bits; inclusion is a bit-set subset test. (domain/authority.md, sections 3–5). */
-    pub u64,
-);
+pub struct Tools(/** Up to 64 configured family bits; inclusion is a bit-set subset test. */ pub u64);
 
 /// Note scopes relative to the task: goal, repository, project, deployment.
 /// Set of the four supported note scopes relative to the task; admission rejects other bits.
 /// (domain/authority.md, sections 3–5).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct Scopes(
-    /** Scope bits: goal 1, repository 2, project 4 and deployment 8. (domain/authority.md, sections 3–5). */ pub u8,
-);
+pub struct Scopes(/** Scope bits: goal 1, repository 2, project 4 and deployment 8. */ pub u8);
 
 impl Scopes {
-    /// Goal-relative note scope. (domain/authority.md, sections 3–5).
+    /// Goal-relative note scope.
     pub const GOAL: Scopes = Scopes(1);
 
-    /// Repository-relative note scope. (domain/authority.md, sections 3–5).
+    /// Repository-relative note scope.
     pub const REPOSITORY: Scopes = Scopes(2);
 
-    /// Project-relative note scope. (domain/authority.md, sections 3–5).
+    /// Project-relative note scope.
     pub const PROJECT: Scopes = Scopes(4);
 
-    /// Deployment-relative note scope. (domain/authority.md, sections 3–5).
+    /// Deployment-relative note scope.
     pub const DEPLOYMENT: Scopes = Scopes(8);
 }
 
@@ -60,11 +51,10 @@ impl Scopes {
 /// (domain/authority.md, sections 3–5).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Grant {
-    /// Connector whose resource naming and kind order apply. (domain/authority.md, sections 3–5).
     pub connector: u16,
-    /// Granted kind, including configured implied kinds. (domain/authority.md, sections 3–5).
+    /// Granted kind, including configured implied kinds.
     pub kind: u16,
-    /// Covered resources, bounded by segment and byte limits. (domain/authority.md, sections 3–5).
+    /// Covered resources, bounded by segment and byte limits.
     pub pattern: Pattern,
 }
 
@@ -75,7 +65,7 @@ pub struct Grant {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Name {
     /// Literal ordered segments, bounded by `Limits::segments` and `Limits::segment_bytes` when
-    /// admitted. (domain/authority.md, sections 3–5).
+    /// admitted.
     pub segments: Box<[Box<[u8]>]>,
 }
 
@@ -85,9 +75,8 @@ pub struct Name {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Pattern {
     /// Exact base segments, bounded by the configured segment and byte limits.
-    /// (domain/authority.md, sections 3–5).
     pub segments: Box<[Box<[u8]>]>,
-    /// Terminal coverage rule after the base. (domain/authority.md, sections 3–5).
+    /// Terminal coverage rule after the base.
     pub last: Last,
 }
 
@@ -96,17 +85,10 @@ pub struct Pattern {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Last {
     /// One additional segment exactly equal to this, with no descendants.
-    /// Requires this exact additional segment alone.
-    /// (domain/authority.md, sections 3–5).
-    Exact(
-        /** Literal additional segment, bounded by `Limits::segment_bytes` at admission. (domain/authority.md, sections 3–5). */
-         Box<[u8]>,
-    ),
-    /// One additional segment beginning with this, and all descendants.
-    /// Requires an additional segment beginning with this prefix and includes all its descendants.
-    /// (domain/authority.md, sections 3–5).
+    Exact(/** Literal additional segment, bounded by `Limits::segment_bytes` at admission. */ Box<[u8]>),
+    /// One additional segment beginning with this prefix, and all its descendants.
     Open(
-        /** Prefix of the additional segment, bounded by `Limits::segment_bytes`; empty covers any additional segment. (domain/authority.md, sections 3–5). */
+        /** Prefix of the additional segment, bounded by `Limits::segment_bytes`; empty covers any additional segment. */
          Box<[u8]>,
     ),
 }
@@ -116,12 +98,12 @@ pub enum Last {
 /// retained here. (domain/authority.md, sections 3–5).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Executor {
-    /// An agent running a configured charter. (domain/authority.md, sections 3–5).
-    Charter(/** Configured agent charter number. (domain/authority.md, sections 3–5). */ u32),
-    /// A configured procedure executor. (domain/authority.md, sections 3–5).
-    Procedure(/** Configured procedure number. (domain/authority.md, sections 3–5). */ u32),
-    /// A person executor addressed to a project role. (domain/authority.md, sections 3–5).
-    Role(/** Project-policy person-role number. (domain/authority.md, sections 3–5). */ u32),
+    /// An agent running a configured charter.
+    Charter(u32),
+    /// A configured procedure executor.
+    Procedure(u32),
+    /// A person executor addressed to a project role.
+    Role(u32),
 }
 
 /// Lifetime descendant capacity and executor permissions; direct creation also consumes a task slot
@@ -129,14 +111,11 @@ pub enum Executor {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Delegation {
     /// Permitted executors, bounded by `Limits::executors` at admission; duplicates do not widen
-    /// permission. (domain/authority.md, sections 3–5).
+    /// permission.
     pub kinds: Box<[Executor]>,
-    /// How many tasks the subtree may make over its life.
-    /// Lifetime number of tasks the subtree may create; current remaining capacity is supplied
-    /// separately. (domain/authority.md, sections 3–5).
+    /// Lifetime task creation ceiling; current remaining capacity is supplied separately.
     pub tasks: u32,
-    /// How deep below the task its subtree may go.
-    /// Maximum descendant depth; zero permits no delegation. (domain/authority.md, sections 3–5).
+    /// Maximum descendant depth; zero permits no delegation.
     pub depth: u32,
 }
 
@@ -144,12 +123,8 @@ pub struct Delegation {
 /// accounting inputs. (domain/authority.md, sections 3–5).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Budget {
-    /// In the deployment's unit.
     /// Maximum allotment in the deployment's unit; authority does not choose that unit.
-    /// (domain/authority.md, sections 3–5).
     pub spend: u64,
-    /// Latest wall time it may end; absence is later than every time.
-    /// Latest ending wall time; `None` is later than every finite deadline. (domain/authority.md,
-    /// sections 3–5).
+    /// Latest ending wall time; `None` is later than every finite deadline.
     pub deadline: Option<Wall>,
 }

@@ -10,23 +10,21 @@ use crate::{Authority, Grant, Last, Name, Numbers, Pattern, left};
 /// value. (domain/authority.md, sections 4–5).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Lack {
-    /// Requested tool families do not fit. (domain/authority.md, sections 4–5).
+    /// Requested tool families do not fit.
     Tools,
-    /// Requested resource grants do not fit. (domain/authority.md, sections 4–5).
+    /// Requested resource grants do not fit.
     Grants,
-    /// Requested executor kinds do not fit. (domain/authority.md, sections 4–5).
+    /// Requested executor kinds do not fit.
     Executors,
-    /// Lifetime task capacity does not fit. (domain/authority.md, sections 4–5).
+    /// Lifetime task capacity does not fit.
     Tasks,
-    /// Descendant depth does not fit, including the creation level. (domain/authority.md, sections
-    /// 4–5).
+    /// Descendant depth does not fit, including the creation level.
     Depth,
-    /// Spend does not fit authority and current available funding. (domain/authority.md, sections
-    /// 4–5).
+    /// Spend does not fit authority and current available funding.
     Spend,
-    /// Ending deadline is too late. (domain/authority.md, sections 4–5).
+    /// Ending deadline is too late.
     Deadline,
-    /// Requested note scopes do not fit. (domain/authority.md, sections 4–5).
+    /// Requested note scopes do not fit.
     Notes,
 }
 
@@ -37,28 +35,24 @@ pub enum Lack {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 #[expect(clippy::struct_excessive_bools, reason = "these are independent component deficits, not lifecycle state")]
 pub struct Lacks {
-    /// Some requested tool bit is absent. (domain/authority.md, sections 4–5).
     pub tools: bool,
-    /// Some requested grant is not covered. (domain/authority.md, sections 4–5).
+    /// Some requested grant is not covered.
     pub grants: bool,
-    /// Some requested executor is absent. (domain/authority.md, sections 4–5).
     pub executors: bool,
-    /// Requested lifetime task capacity does not fit. (domain/authority.md, sections 4–5).
+    /// Requested lifetime task capacity does not fit.
     pub tasks: bool,
-    /// Requested descendant depth does not fit. (domain/authority.md, sections 4–5).
+    /// Requested descendant depth does not fit.
     pub depth: bool,
-    /// Requested spend does not fit current available funding or authority. (domain/authority.md,
-    /// sections 4–5).
+    /// Requested spend does not fit current available funding or authority.
     pub spend: bool,
-    /// Requested deadline is later than permitted. (domain/authority.md, sections 4–5).
+    /// Requested deadline is later than permitted.
     pub deadline: bool,
-    /// Some requested note-scope bit is absent. (domain/authority.md, sections 4–5).
     pub notes: bool,
 }
 
 impl Lacks {
     /// Pure query returning whether this bounded value has no entries or deficits; emits no output
-    /// and allocates nothing. (domain/authority.md, sections 4–5).
+    /// and allocates nothing.
     #[must_use]
     pub const fn is_empty(self) -> bool {
         !(self.tools
@@ -73,7 +67,6 @@ impl Lacks {
 }
 
 /// Maximum deficits emitted by one fitting query: one for each of eight components.
-/// (domain/authority.md, sections 4–5).
 pub const FITS_MAX_OUT: u32 = 8;
 
 /// On one connector, granting `kind` also grants `implies`.
@@ -81,11 +74,9 @@ pub const FITS_MAX_OUT: u32 = 8;
 /// (domain/authority.md, sections 4–5).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Implication {
-    /// Connector to which this kind order belongs. (domain/authority.md, sections 4–5).
     pub connector: u16,
-    /// Granted kind. (domain/authority.md, sections 4–5).
     pub kind: u16,
-    /// Kind included by granting `kind` on this connector. (domain/authority.md, sections 4–5).
+    /// Kind included by granting `kind` on this connector.
     pub implies: u16,
 }
 
@@ -100,12 +91,11 @@ pub struct Implies {
 }
 
 impl Implies {
-    /// Refuses past the configured pair limit or if the table is not
-    /// transitively closed. Validation scans at most `max_pairs` cubed;
-    /// queries scan at most `max_pairs`, and neither allocates.
-    /// Admit owned `pairs` under `max_pairs` and require explicit transitive closure; return `None`
-    /// for excess or invalid configuration. Takes ownership without allocating additional storage.
-    /// (domain/authority.md, sections 4–5).
+    /// Refuses past the configured pair limit or if the table is not transitively closed.
+    /// Validation scans at most `max_pairs` cubed; queries scan at most `max_pairs`, and neither
+    /// allocates. Admit owned `pairs` under `max_pairs` and require explicit transitive closure;
+    /// return `None` for excess or invalid configuration. Takes ownership without allocating
+    /// additional storage.
     #[must_use]
     pub fn new(pairs: Box<[Implication]>, max_pairs: u32) -> Option<Implies> {
         if pairs.len() > usize::try_from(max_pairs).ok()? {
@@ -125,10 +115,9 @@ impl Implies {
         Some(table)
     }
 
-    /// Whether a grant of `given` includes `needed` on this connector.
-    /// Pure query: does granting `given` include `needed` on `connector`? Equality is implicit;
-    /// scans at most the admitted pair count with no allocation or output. (domain/authority.md,
-    /// sections 4–5).
+    /// Whether a grant of `given` includes `needed` on this connector. Pure query: does granting
+    /// `given` include `needed` on `connector`? Equality is implicit; scans at most the admitted
+    /// pair count with no allocation or output.
     #[must_use]
     pub fn allows(&self, connector: u16, needed: u16, given: u16) -> bool {
         if needed == given {
@@ -143,24 +132,23 @@ impl Implies {
     }
 
     /// Pure query of the constructor-bounded implication-pair count; duplicates count as retained
-    /// entries. (domain/authority.md, sections 4–5).
+    /// entries.
     #[must_use]
     pub fn len(&self) -> u32 {
         u32::try_from(self.pairs.len()).expect("constructor bounds pairs by a u32")
     }
 
     /// Pure query returning whether this bounded value has no entries or deficits; emits no output
-    /// and allocates nothing. (domain/authority.md, sections 4–5).
+    /// and allocates nothing.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.pairs.is_empty()
     }
 }
 
-/// Whether the pattern includes this name, compared segment by segment.
-/// Pure literal-segment coverage query over caller-admitted `pattern` and `name`; exact/open
-/// terminals require an additional segment; only open terminals include descendants. No allocation or child
-/// output. (domain/authority.md, sections 4–5).
+/// Whether the pattern includes this name, compared segment by segment. Pure literal-segment
+/// coverage query over caller-admitted `pattern` and `name`; exact/open terminals require an
+/// additional segment; only open terminals include descendants. No allocation or child output.
 #[must_use]
 pub fn pattern_covers(pattern: &Pattern, name: &Name) -> bool {
     if name.segments.get(..pattern.segments.len()) != Some(pattern.segments.as_ref()) {
@@ -178,9 +166,9 @@ pub fn pattern_covers(pattern: &Pattern, name: &Name) -> bool {
     }
 }
 
-/// Whether every name covered by `a` is covered by `b`, without enumerating names.
-/// Pure inclusion query: every name covered by `a` must be covered by `b`; scans the caller-
-/// admitted owned segments without allocation or child output. (domain/authority.md, sections 4–5).
+/// Whether every name covered by `a` is covered by `b`, without enumerating names. Pure inclusion
+/// query: every name covered by `a` must be covered by `b`; scans the caller- admitted owned
+/// segments without allocation or child output.
 #[must_use]
 pub fn pattern_at_most(a: &Pattern, b: &Pattern) -> bool {
     match &b.last {
@@ -207,39 +195,37 @@ fn terminal_at_most(a: &Pattern, b: &Pattern, last: &[u8]) -> bool {
     }
 }
 
-/// Every resource and kind of `a` must be included by this one grant `b`.
-/// Pure inclusion query of `a` within one grant `b`, using the validated kind preorder; callers
-/// bound owned inputs. No allocation or child output. (domain/authority.md, sections 4–5).
+/// Every resource and kind of `a` must be included by this one grant `b`. Pure inclusion query of
+/// `a` within one grant `b`, using the validated kind preorder; callers bound owned inputs. No
+/// allocation or child output.
 #[must_use]
 pub fn grant_at_most(a: &Grant, b: &Grant, implies: &Implies) -> bool {
     a.connector == b.connector && implies.allows(a.connector, a.kind, b.kind) && pattern_at_most(&a.pattern, &b.pattern)
 }
 
-/// Whether a grant includes one named resource of the requested connector and kind.
-/// Pure query of one `grant` covering the supplied connector, kind and literal `name`; callers
-/// bound the name and grant. No allocation or child output. (domain/authority.md, sections 4–5).
+/// Whether a grant includes one named resource of the requested connector and kind. Pure query of
+/// one `grant` covering the supplied connector, kind and literal `name`; callers bound the name and
+/// grant. No allocation or child output.
 #[must_use]
 pub fn grant_covers(grant: &Grant, connector: u16, kind: u16, name: &Name, implies: &Implies) -> bool {
     grant.connector == connector && implies.allows(connector, kind, grant.kind) && pattern_covers(&grant.pattern, name)
 }
 
-/// Whether every part of `a` is at most `b`. Duplicate or reordered grants
-/// and executors need not make equal values to make equivalent authority.
-/// Pure componentwise inclusion of `a` in `b`, using admitted owned values and the validated kind
-/// preorder; compares permissions, not current counters. No allocation or child output.
-/// (domain/authority.md, sections 4–5).
+/// Whether every part of `a` is at most `b`. Duplicate or reordered grants and executors need not
+/// make equal values to make equivalent authority. Pure componentwise inclusion of `a` in `b`,
+/// using admitted owned values and the validated kind preorder; compares permissions, not current
+/// counters. No allocation or child output.
 #[must_use]
 pub fn at_most(a: &Authority, b: &Authority, implies: &Implies) -> bool {
     differences(a, b, b.delegation.tasks, b.delegation.depth, b.budget.spend, implies).is_empty()
 }
 
-/// Whether the child's authority fits, with spend and lifetime task
-/// capacity taken from separate current inputs (domain/authority.md, 5).
-/// The caller reserves `FITS_MAX_OUT` queue slots. A batch additionally
-/// consumes one task slot for each immediate child and sums reservations.
-/// Pure fitting query over caller-admitted child and creator values, current `numbers` and separate
-/// `tasks_left`; returns a boolean and all deficits in `lacks`. Reserve `FITS_MAX_OUT` free slots;
-/// no mutation of inputs or allocation. (domain/authority.md, sections 4–5).
+/// Whether the child's authority fits, with spend and lifetime task capacity taken from separate
+/// current inputs. The caller reserves `FITS_MAX_OUT` queue slots. A batch additionally consumes
+/// one task slot for each immediate child and sums reservations. Pure fitting query over
+/// caller-admitted child and creator values, current `numbers` and separate `tasks_left`; returns a
+/// boolean and all deficits in `lacks`. Reserve `FITS_MAX_OUT` free slots; no mutation of inputs or
+/// allocation.
 #[must_use]
 pub fn fits(
     child: &Authority,

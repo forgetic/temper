@@ -25,7 +25,6 @@ use crate::facts::Fact;
 /// A relayed call the parent has yet to answer.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct Call {
-    /// The attempt that made it.
     attempt: Id<Attempt>,
     /// The worker's name for it.
     call: Token,

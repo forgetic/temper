@@ -187,7 +187,6 @@ pub(crate) struct Implied {
     held: bool,
     /// Its place in the queue for a slot.
     queued: Option<u64>,
-    /// Whether it is its run's claim.
     claim: bool,
     /// When its alarm falls due.
     deadline: Option<Time>,

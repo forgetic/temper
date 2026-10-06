@@ -6,10 +6,9 @@ use crate::{Authority, Contract, Ending, Last, Parameter, Phase, Spec, Stored, T
 use core::mem::{size_of, size_of_val};
 
 /// Pure borrowed measurement for root journal/load byte admission: counts existing boxed records,
-/// slice backing arrays and nested bytes, excluding the inline `Stored` slot. `Ledger`
-/// own no heap. Returns `None` on sum overflow; allocates/copies nothing and admits neither shape
-/// nor authority. Root separately counts inline slots and queues (domain/engine.md, sections 5.3
-/// and 5.6). (domain/tasks.md, sections 2 and 10).
+/// slice backing arrays and nested bytes, excluding the inline `Stored` slot. `Ledger` own no heap.
+/// Returns `None` on sum overflow; allocates/copies nothing and admits neither shape nor authority.
+/// Root separately counts inline slots and queues.
 #[must_use]
 pub fn stored_bytes(record: &Stored) -> Option<u64> {
     match record {

@@ -59,7 +59,6 @@ use crate::translate;
 pub(crate) struct Workspace {
     /// The hosted run it is for: the host's token for the run.
     run: Token,
-    /// How many repositories it holds.
     repositories: u32,
     roots: Box<[agent::channel::Repository]>,
     identities: Box<[u32]>,

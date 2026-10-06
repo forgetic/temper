@@ -16,29 +16,28 @@ use skein_lib::Wall;
 /// atomically with its other rows (domain/engine.md, 5.1 and 5.4).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Deployment {
-    /// Shell-supplied identity committed on the deployment's first start and
-    /// restored thereafter; exactly sixteen bytes (domain/engine.md, section 5.4).
+    /// Shell-supplied identity committed on the deployment's first start and restored thereafter;
+    /// exactly sixteen bytes.
     pub id: [u8; 16],
-    /// Last task number allocated by the root; zero before its first allocation,
-    /// never reset or reused (domain/engine.md, 5.4; domain/tasks.md, 2).
+    /// Last task number allocated by the root; zero before its first allocation, never reset or
+    /// reused.
     pub tasks: u64,
-    /// Last candidate person number allocated for sign-in; refused or existing
-    /// identities may leave gaps (domain/engine.md, 5.4; domain/people.md, 3).
+    /// Last candidate person number allocated for sign-in; refused or existing identities may leave
+    /// gaps.
     pub people: u64,
-    /// Last sign-in candidate allocated by the root; persisted gaps are allowed
-    /// and no secret session bytes are held here (domain/people.md, 3 and 11).
+    /// Last sign-in candidate allocated by the root; persisted gaps are allowed and no secret
+    /// session bytes are held here.
     pub sign_ins: u64,
-    /// Last root-allocated message number; retained for the broader inbox routes,
-    /// not allocated by the current chat story (domain/engine.md, section 5.4).
+    /// Last root-allocated message number; retained for the broader inbox routes, not allocated by
+    /// the current chat story.
     pub messages: u64,
-    /// Last activation number allocated for a claim; the candidate may leave a
-    /// gap if preparation fails (domain/engine.md, 5.4 and 7.1).
+    /// Last activation number allocated for a claim; the candidate may leave a gap if preparation
+    /// fails.
     pub runs: u64,
-    /// Last root-allocated call number; current 06a routes no tool calls
-    /// (domain/engine.md, sections 5.4 and 7.3).
+    /// Last root-allocated call number; current 06a routes no tool calls.
     pub calls: u64,
-    /// Last issued ordered commit. A restored header is already durable; a live
-    /// journal may await this number's store terminal (domain/engine.md, 5.1).
+    /// Last issued ordered commit. A restored header is already durable; a live journal may await
+    /// this number's store terminal.
     pub commits: u64,
 }
 
@@ -47,17 +46,17 @@ pub struct Deployment {
 /// Selecting a family is pure; allocating it dirties the journal header.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Family {
-    /// Task identities saved with the task row (domain/engine.md, 5.4).
+    /// Task identities saved with the task row.
     Task,
-    /// Person candidates supplied to people sign-in admission (domain/people.md, 3).
+    /// Person candidates supplied to people sign-in admission.
     Person,
-    /// Secret-free sign-in candidates supplied to people (domain/people.md, 3).
+    /// Secret-free sign-in candidates supplied to people.
     SignIn,
     /// Message identities reserved for later inbox routes.
     Message,
-    /// Fresh attempt identities saved at claims (domain/engine.md, 7.1).
+    /// Fresh attempt identities saved at claims.
     Run,
-    /// Call identities reserved for later engine tool routes (domain/engine.md, 7.3).
+    /// Call identities reserved for later engine tool routes.
     Call,
 }
 
@@ -74,38 +73,38 @@ pub enum Key {
         /// Positive semantic revision, unique within task.
         revision: u64,
     },
-    /// Singleton deployment header key (domain/engine.md, 5.4).
+    /// Singleton deployment header key.
     Deployment,
-    /// Root-accepted transcript turn under one task and attempt (domain/engine.md, 7.2).
+    /// Root-accepted transcript turn under one task and attempt.
     Turn {
-        /// Positive durable task number, validated for turn writes (domain/engine.md, 7.2).
+        /// Positive durable task number, validated for turn writes.
         task: u64,
-        /// Positive root-issued activation number (domain/engine.md, 7.2).
+        /// Positive root-issued activation number.
         attempt: u64,
-        /// Positive turn sequence number, represented by `u32` (domain/engine.md, 7.2).
+        /// Positive turn sequence number, represented by `u32`.
         turn: u32,
     },
-    /// Root-issued live claim replay key; at most one per live task, erased on end (domain/engine.md, 7.2).
+    /// Root-issued live claim replay key; at most one per live task, erased on end.
     RunProof {
-        /// Positive task number issued by root; current claim replaces this row (domain/engine.md, 5.4).
+        /// Positive task number issued by root; current claim replaces this row.
         task: u64,
     },
-    /// Root's historical typed terminal evidence; never restored into the live proof table (domain/engine.md, 7.4).
+    /// Root's historical typed terminal evidence; never restored into the live proof table.
     Terminal {
-        /// Positive root-issued task number (domain/engine.md, 5.4).
+        /// Positive root-issued task number.
         task: u64,
-        /// Positive root-issued claim number; immutable archive identity (domain/engine.md, 7.1).
+        /// Positive root-issued claim number; immutable archive identity.
         attempt: u64,
     },
-    /// Child semantic task/financial record key; transport proofs have root
-    /// keys and no child receipt family exists (domain/tasks.md, section 2).
+    /// Child semantic task/financial record key; transport proofs have root keys and no child
+    /// receipt family exists.
     Tasks(
-        /// Tasks-issued key, preserved under the root wrapper without reinterpretation (domain/tasks.md, 2).
+        /// Tasks-issued key, preserved under the root wrapper without reinterpretation.
         temper_engine_domain_tasks::Key,
     ),
-    /// Store key for people identities, sign-ins, roles and keyed replies (domain/people.md, 11).
+    /// Store key for people identities, sign-ins, roles and keyed replies.
     People(
-        /// People-issued key for its durable secret-free records (domain/people.md, 11).
+        /// People-issued key for its durable secret-free records.
         temper_engine_domain_people::Key,
     ),
 }
@@ -124,42 +123,36 @@ pub enum Range {
         /// Positive decided semantic revision.
         revision: u64,
     },
-    /// Singleton header read by the root at startup; at most one row and no
-    /// continuation (domain/engine.md, 5.3–5.4).
+    /// Singleton header read by the root at startup; at most one row and no continuation.
     Deployment,
-    /// Root startup pages only child Live/Ledger state; historical Ended
-    /// rows stay outside this range. Actual root-supported task shapes validate
-    /// before child restoration (domain/engine.md, section 6).
+    /// Root startup pages only child Live/Ledger state; historical Ended rows stay outside this
+    /// range. Actual root-supported task shapes validate before child restoration.
     Tasks,
-    /// Root pages current claims only, at most tasks `tasks` rows; every proof
-    /// must correlate with its loaded live row before tasks Restored or fleet
-    /// adoption. Historical transcripts/terminals are excluded (domain/engine.md, section 6).
+    /// Root pages current claims only, at most tasks `tasks` rows; every proof must correlate with
+    /// its loaded live row before tasks Restored or fleet adoption. Historical
+    /// transcripts/terminals are excluded.
     RunProofs,
-    /// Root startup reads every people child row before accepting people (domain/engine.md, 6).
+    /// Root startup reads every people child row before accepting people.
     People,
-    /// Root reads one historical ended task for an authenticated result page (domain/people.md, 6).
+    /// Root reads one historical ended task for an authenticated result page.
     TaskResult {
-        /// Positive root-issued ended task key; terminal page has at most one row (domain/people.md, 6).
+        /// Positive root-issued ended task key; terminal page has at most one row.
         task: u64,
     },
-    /// Historical committed transcript turns for one task/attempt; the root
-    /// load seam supports this range, though 06a does not resume transcripts
-    /// (domain/engine.md, sections 5.3 and 7.2).
+    /// Historical committed transcript turns for one task/attempt; the root load seam supports this
+    /// range, though 06a does not resume transcripts.
     Turns {
-        /// Positive durable task number; admitted ranges reject zero
-        /// (domain/engine.md, 5.3 and 7.2).
+        /// Positive durable task number; admitted ranges reject zero.
         task: u64,
-        /// Positive root-issued activation; other attempts cannot match
-        /// (domain/engine.md, 5.3 and 7.2).
+        /// Positive root-issued activation; other attempts cannot match.
         attempt: u64,
     },
 }
 
 impl Range {
-    /// Check membership before accepting a store row (domain/engine.md, 5.3).
-    /// Pure value predicate, with no allocation, effect or terminal. Turn zero
-    /// is invalid; continuation ordering is checked by the load owner. It does
-    /// not validate a child row's payload or its task links (domain/engine.md, 5.3).
+    /// Check membership before accepting a store row. Pure value predicate, with no allocation,
+    /// effect or terminal. Turn zero is invalid; continuation ordering is checked by the load
+    /// owner. It does not validate a child row's payload or its task links.
     #[must_use]
     pub const fn contains(self, key: Key) -> bool {
         match self {
@@ -242,24 +235,22 @@ impl Range {
 /// (domain/engine.md, 5.1 and 7.2). Loads return the same owned shape.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct TurnRecord {
-    /// Positive durable task number owning this transcript (domain/engine.md, 7.2).
+    /// Positive durable task number owning this transcript.
     pub task: u64,
-    /// Positive root-issued activation fence for the transcript (domain/engine.md, 7.2).
+    /// Positive root-issued activation fence for the transcript.
     pub attempt: u64,
-    /// Positive accepted turn number; sequence admission belongs to tasks
-    /// (domain/engine.md, 7.2; domain/tasks.md, 7).
+    /// Positive accepted turn number; sequence admission belongs to tasks.
     pub turn: u32,
-    /// Cumulative accepted spend for this attempt, not an additional charge;
-    /// represented by `u64` (domain/engine.md, 7.2).
+    /// Cumulative accepted spend for this attempt, not an additional charge; represented by `u64`.
     pub spent: u64,
-    /// No message fence is admitted in this current route; tasks refuses `Some`
-    /// before mutation until an actual inbox route joins (domain/engine.md, section 7.2).
+    /// No message fence is admitted in this current route; tasks refuses `Some` before mutation
+    /// until an actual inbox route joins.
     pub read: Option<u64>,
-    /// Injected wall time when the root accepted the turn; it survives restart
-    /// without depending on the process clock (domain/engine.md, 5.4 and 7.2).
+    /// Injected wall time when the root accepted the turn; it survives restart without depending on
+    /// the process clock.
     pub at: Wall,
-    /// Owned transcript bytes, bounded by journal `transcript_bytes` before
-    /// writing and by load page budgets when read (domain/engine.md, 5.3 and 7.2).
+    /// Owned transcript bytes, bounded by journal `transcript_bytes` before writing and by load
+    /// page budgets when read.
     pub transcript: Box<[u8]>,
 }
 
@@ -268,13 +259,16 @@ pub struct TurnRecord {
 /// financial writes before ACK; result bytes obey root admission (domain/engine.md, 7.4).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct TerminalRecord {
-    /// Root-issued positive durable task identity (domain/engine.md, 5.4).
+    /// Root-issued positive durable task identity.
     pub task: u64,
-    /// Root-issued positive attempt identity; unchanged on replay (domain/engine.md, 7.1).
+    /// Root-issued positive attempt identity; unchanged on replay.
     pub attempt: u64,
-    /// Accepted cumulative expense for a priced worker offer or unchanged expense for an unpriced root terminal; child counters change once (domain/engine.md, 7.4).
+    /// Accepted cumulative expense for a priced worker offer or unchanged expense for an unpriced
+    /// root terminal; child counters change once.
     pub cumulative: u64,
-    /// Exact bounded worker terminal, even when child lifecycle normalizes it; a refused answer archives root's unpriced Invalid normalization. A lost claim is `Failed(Lost)` and spends a try, whether or not a turn was kept (domain/engine.md, 7.4; domain/tasks.md, 5.5).
+    /// Exact bounded worker terminal, even when child lifecycle normalizes it; a refused answer
+    /// archives root's unpriced Invalid normalization. A lost claim is `Failed(Lost)` and spends a
+    /// try, whether or not a turn was kept.
     pub end: temper_engine_domain_tasks::End,
 }
 
@@ -282,11 +276,11 @@ pub struct TerminalRecord {
 /// the immutable turn archive. Fleet fences earlier bodies (domain/engine.md, 7.2).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct TurnProof {
-    /// Positive consecutive accepted turn, supplied by the worker (domain/engine.md, 7.2).
+    /// Positive consecutive accepted turn, supplied by the worker.
     pub turn: u32,
-    /// Accepted cumulative priced spend; tasks owns all financial counters (domain/engine.md, 7.2).
+    /// Accepted cumulative priced spend; tasks owns all financial counters.
     pub cumulative: u64,
-    /// Admitted message fence; currently none until an actual root inbox route (domain/engine.md, 7.2).
+    /// Admitted message fence; currently none until an actual root inbox route.
     pub read: Option<u64>,
 }
 
@@ -298,16 +292,15 @@ pub struct TurnProof {
 /// (domain/engine.md, sections 6 and 7.2).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct RunProof {
-    /// Positive task identity allocated by root; unique in the live proof table (domain/engine.md, 5.4).
+    /// Positive task identity allocated by root; unique in the live proof table.
     pub task: u64,
-    /// Positive current claim identity allocated by root (domain/engine.md, 7.1).
+    /// Positive current claim identity allocated by root.
     pub attempt: u64,
-    /// Latest accepted turn, or none before the first turn; no historical body is retained (domain/engine.md, 7.2).
+    /// Latest accepted turn, or none before the first turn; no historical body is retained.
     pub turn: Option<TurnProof>,
-    /// Typed accepted worker offer or actual root-translated unpriced terminal;
-    /// present iff the child answered this current attempt. At most twice task
-    /// result bytes before normalization; cleared on replacement/end
-    /// (domain/engine.md, section 7.4).
+    /// Typed accepted worker offer or actual root-translated unpriced terminal; present iff the
+    /// child answered this current attempt. At most twice task result bytes before normalization;
+    /// cleared on replacement/end.
     pub terminal: Option<TerminalRecord>,
 }
 
@@ -344,40 +337,37 @@ pub enum Record {
         /// Exact bounded accepted choice.
         EscalationDecisionRecord,
     ),
-    /// Fixed deployment counters, saved only by the journal (domain/engine.md, 5.4).
-    Deployment(/** Root-owned fixed-size header (domain/engine.md, 5.4). */ Deployment),
-    /// Accepted transcript turn owned by the root (domain/engine.md, 7.2).
-    Turn(
-        /** Owned transcript and acceptance metadata, byte-bounded at admission (domain/engine.md, 7.2). */ TurnRecord,
-    ),
-    /// Current bounded replay evidence; proof and all financial writes share one commit (domain/engine.md, 7.2).
+    /// Fixed deployment counters, saved only by the journal.
+    Deployment(Deployment),
+    /// Accepted transcript turn owned by the root.
+    Turn(/** Owned transcript and acceptance metadata, byte-bounded at admission. */ TurnRecord),
+    /// Current bounded replay evidence; proof and all financial writes share one commit.
     RunProof(
-        /// Root-owned proof, bounded by tasks.tasks, one latest turn and journal bytes (domain/engine.md, 6 and 7.2).
+        /// Root-owned proof, bounded by tasks.tasks, one latest turn and journal bytes.
         RunProof,
     ),
-    /// Immutable typed terminal archive; startup never retains the historical family (domain/engine.md, 7.4).
+    /// Immutable typed terminal archive; startup never retains the historical family.
     Terminal(
-        /// Root-owned exact bounded worker offer or canonical root-translated
-        /// topology/Invalid terminal at accepted expense, within result admission
-        /// bounds (domain/engine.md, section 7.4).
+        /// Root-owned exact bounded worker offer or canonical root-translated topology/Invalid
+        /// terminal at accepted expense, within result admission bounds.
         TerminalRecord,
     ),
-    /// Child's authentic task or funding row; root transport proofs have
-    /// their own variants. All writes share the root decision (domain/engine.md, section 5.6).
+    /// Child's authentic task or funding row; root transport proofs have their own variants. All
+    /// writes share the root decision.
     Tasks(
-        /// Owned child row, deep bytes checked before journal or load retention (domain/engine.md, 5.3 and 5.6).
+        /// Owned child row, deep bytes checked before journal or load retention.
         temper_engine_domain_tasks::Stored,
     ),
-    /// Child's durable identity/session/keyed reply; saved atomically by the root (domain/engine.md, 5.6).
+    /// Child's durable identity/session/keyed reply; saved atomically by the root.
     People(
-        /// Owned secret-free child row, deep bytes checked before retention (domain/engine.md, 5.3 and 5.6).
+        /// Owned secret-free child row, deep bytes checked before retention.
         temper_engine_domain_people::Stored,
     ),
 }
 
 impl Record {
-    /// Pure fixed-size key projection; it emits no request and neither copies
-    /// payloads nor validates their bounds (domain/engine.md, 5.3 and 5.6).
+    /// Pure fixed-size key projection; it emits no request and neither copies payloads nor
+    /// validates their bounds.
     #[must_use]
     pub const fn key(&self) -> Key {
         match self {
@@ -397,15 +387,15 @@ impl Record {
 /// (domain/engine.md, 5.1 and 5.6).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Write {
-    /// Replace the row at its own key (domain/engine.md, 5.1 and 5.6).
-    Save(/** Owned typed row, byte-bounded by journal admission (domain/engine.md, 5.6). */ Record),
-    /// Remove the named row, with no owned payload (domain/engine.md, 5.1 and 5.6).
-    Erase(/** Fixed-size row key; journal callers cannot erase the header (domain/engine.md, 5.4). */ Key),
+    /// Replace the row at its own key.
+    Save(/** Owned typed row, byte-bounded by journal admission. */ Record),
+    /// Remove the named row, with no owned payload.
+    Erase(/** Fixed-size row key; journal callers cannot erase the header. */ Key),
 }
 
 impl Write {
-    /// Pure fixed-size key projection for replacement/erase coalescing; it
-    /// emits no effect or terminal (domain/engine.md, 5.1 and 5.6).
+    /// Pure fixed-size key projection for replacement/erase coalescing; it emits no effect or
+    /// terminal.
     #[must_use]
     pub const fn key(&self) -> Key {
         match self {
@@ -415,12 +405,11 @@ impl Write {
     }
 }
 
-/// Deep owned allocation bytes retained by a store row (domain/engine.md, 5.3).
-/// Pure checked calculation: sums heap payloads and nested boxed-record/slice
-/// allocations, excluding the outer `Record` slot and allocator overhead. It
-/// returns `None` on arithmetic overflow and emits no request or terminal. The
-/// root validates the whole decoded page before restoring or cloning. Payload
-/// shape admission remains the child's responsibility (domain/engine.md, 5.3 and 5.6).
+/// Deep owned allocation bytes retained by a store row. Pure checked calculation: sums heap
+/// payloads and nested boxed-record/slice allocations, excluding the outer `Record` slot and
+/// allocator overhead. It returns `None` on arithmetic overflow and emits no request or terminal.
+/// The root validates the whole decoded page before restoring or cloning. Payload shape admission
+/// remains the child's responsibility.
 #[must_use]
 pub fn record_bytes(record: &Record) -> Option<u64> {
     match record {
@@ -452,9 +441,8 @@ pub fn record_bytes(record: &Record) -> Option<u64> {
     }
 }
 
-/// Pure checked deep-byte projection for journal admission; erases own no
-/// payload and saves use `record_bytes`. No request or terminal is emitted
-/// (domain/engine.md, 5.1, 5.3 and 5.6).
+/// Pure checked deep-byte projection for journal admission; erases own no payload and saves use
+/// `record_bytes`. No request or terminal is emitted.
 pub(crate) fn owned_bytes(write: &Write) -> Option<u64> {
     match write {
         Write::Save(record) => record_bytes(record),

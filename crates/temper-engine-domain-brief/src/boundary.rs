@@ -63,10 +63,9 @@ pub enum Kind {
 /// here, which is the order the cut relies on.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Source {
-    /// The task's spec and contract, followed by its requester lineage,
-    /// nearest first (domain/engine.md, section 9). Later ancestors go first
-    /// when cut. The parent supplies bounded concrete text; no child types
-    /// cross this boundary.
+    /// The task's spec and contract, followed by its requester lineage, nearest first. Later
+    /// ancestors go first when cut. The parent supplies bounded concrete text; no child types cross
+    /// this boundary.
     Task { task: u64 },
     /// The item and its lineage: the item first, then its parent, and so on
     /// up. The farthest ancestors are cut first, then the tail of what is

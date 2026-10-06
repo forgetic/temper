@@ -8,26 +8,19 @@ use crate::{Authority, Implies, Pattern};
 /// later check. (domain/authority.md, sections 6 and 8.4).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Rules {
-    /// Deployment authority ceiling, admitted under `Limits`. (domain/authority.md, sections 6 and
-    /// 8.4).
+    /// Deployment authority ceiling, admitted under `Limits`.
     pub ceiling: Authority,
     /// Deployment spend ceiling for a period; this value does not keep a period ledger.
-    /// (domain/authority.md, sections 6 and 8.4).
     pub period_spend: u64,
     /// Exclusive lower bound of an offered run budget, strictly below the maximum.
-    /// (domain/authority.md, sections 6 and 8.4).
     pub minimum_run_spend: u64,
-    /// Inclusive run cap, no greater than the deployment authority's spend. (domain/authority.md,
-    /// sections 6 and 8.4).
+    /// Inclusive run cap, no greater than the deployment authority's spend.
     pub maximum_run_spend: u64,
     /// Validated connector-scoped kind preorder, bounded by `Limits::implications`.
-    /// (domain/authority.md, sections 6 and 8.4).
     pub implies: Implies,
-    /// Deployment effect requirements, bounded by `Limits::requirements`. (domain/authority.md,
-    /// sections 6 and 8.4).
+    /// Deployment effect requirements, bounded by `Limits::requirements`.
     pub requirements: Box<[Requirement]>,
-    /// Deployment landing rules, bounded by `Limits::landing_rules`. (domain/authority.md, sections
-    /// 6 and 8.4).
+    /// Deployment landing rules, bounded by `Limits::landing_rules`.
     pub landing: Box<[LandingRule]>,
 }
 
@@ -35,25 +28,20 @@ pub struct Rules {
 /// current entry. (domain/authority.md, sections 6 and 8.4).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Policy {
-    /// Optional final escalation recipient role, distinct from acceptance
-    /// permissions. When present it must name a configured role allowed to
-    /// accept escalations; the current root requires it. Disabled
-    /// authority-only policies route no escalation fallback (domain/authority.md, section 9).
+    /// Optional final escalation recipient role, distinct from acceptance permissions. When present
+    /// it must name a configured role allowed to accept escalations; the current root requires it.
+    /// Disabled authority-only policies route no escalation fallback.
     pub escalation_role: Option<u32>,
-    /// Project authority ceiling, no greater than the deployment ceiling. (domain/authority.md,
-    /// sections 6 and 8.4).
+    /// Project authority ceiling, no greater than the deployment ceiling.
     pub ceiling: Authority,
-    /// Project period ceiling, no greater than deployment period spend. (domain/authority.md,
-    /// sections 6 and 8.4).
+    /// Project period ceiling, no greater than deployment period spend.
     pub period_spend: u64,
     /// Distinct numbered roles, bounded by `Limits::roles` and the project ceiling.
-    /// (domain/authority.md, sections 6 and 8.4).
     pub roles: Box<[Role]>,
     /// Project requirements added to deployment requirements, bounded by `Limits::requirements`.
-    /// (domain/authority.md, sections 6 and 8.4).
     pub requirements: Box<[Requirement]>,
     /// Project landing rules added to deployment and change gates, bounded by
-    /// `Limits::landing_rules`. (domain/authority.md, sections 6 and 8.4).
+    /// `Limits::landing_rules`.
     pub landing: Box<[LandingRule]>,
 }
 
@@ -61,17 +49,13 @@ pub struct Policy {
 /// the root. (domain/authority.md, sections 6 and 8.4).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Role {
-    /// Unique role number within this project policy. (domain/authority.md, sections 6 and 8.4).
     pub number: u32,
-    /// Authority this role may give, admitted below the project ceiling. (domain/authority.md,
-    /// sections 6 and 8.4).
+    /// Authority this role may give, admitted below the project ceiling.
     pub authority: Authority,
-    /// Role's period funding ceiling, no greater than the project's. (domain/authority.md, sections
-    /// 6 and 8.4).
+    /// Role's period funding ceiling, no greater than the project's.
     pub period_spend: u64,
-    /// Allowed person-request kinds. (domain/authority.md, sections 6 and 8.4).
     pub requests: Requests,
-    /// Proposal kinds this role may accept. (domain/authority.md, sections 6 and 8.4).
+    /// Proposal kinds this role may accept.
     pub decides: Proposals,
 }
 
@@ -82,15 +66,11 @@ pub struct Role {
 /// implications. (domain/authority.md, section 10).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Requirement {
-    /// Connector supplying the required facts. (domain/authority.md, section 10).
     pub connector: u16,
-    /// Exact effect kind to which this requirement applies. (domain/authority.md, section 10).
     pub kind: u16,
-    /// Resources to which it applies, bounded by segment and byte limits. (domain/authority.md,
-    /// section 10).
+    /// Resources to which it applies, bounded by segment and byte limits.
     pub pattern: Pattern,
     /// Required connector fact kinds, bounded by `Limits::facts` per requirement.
-    /// (domain/authority.md, section 10).
     pub facts: Box<[u16]>,
 }
 
@@ -99,10 +79,9 @@ pub struct Requirement {
 /// head. (domain/authority.md, section 10).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Freshness {
-    /// Accept only the landing head itself. (domain/authority.md, section 10).
+    /// Accept only the landing head itself.
     Exact,
     /// Also accept predecessor heads connected entirely by root-verified clean updates.
-    /// (domain/authority.md, section 10).
     Clean,
 }
 
@@ -110,12 +89,11 @@ pub enum Freshness {
 /// landing. (domain/authority.md, section 10).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Gate {
-    /// Gate identity resolved by the root for the named change. (domain/authority.md, section 10).
+    /// Gate identity resolved by the root for the named change.
     pub number: u32,
-    /// Whether missing, pending or failed valid verdicts affect admission. (domain/authority.md,
-    /// section 10).
+    /// Whether missing, pending or failed valid verdicts affect admission.
     pub blocking: bool,
-    /// Accepted verdict-head relationship to the landing head. (domain/authority.md, section 10).
+    /// Accepted verdict-head relationship to the landing head.
     pub freshness: Freshness,
 }
 
@@ -124,12 +102,10 @@ pub struct Gate {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Approval {
     /// Reviewer role verified by the root; project-policy approval roles must exist in that policy.
-    /// (domain/authority.md, section 10).
     pub role: u32,
     /// Positive distinct-person count, admitted no greater than `Limits::reviews`.
-    /// (domain/authority.md, section 10).
     pub people: u32,
-    /// Accepted review-head relationship to the landing head. (domain/authority.md, section 10).
+    /// Accepted review-head relationship to the landing head.
     pub freshness: Freshness,
 }
 
@@ -139,21 +115,17 @@ pub struct Approval {
 /// rule applies. (domain/authority.md, section 10).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct LandingRule {
-    /// Connector performing the landing. (domain/authority.md, section 10).
     pub connector: u16,
-    /// Exact landing effect kind; implications do not skip this rule. (domain/authority.md, section
-    /// 10).
+    /// Exact landing effect kind; implications do not skip this rule.
     pub kind: u16,
-    /// Landing-branch resources covered by this rule. (domain/authority.md, section 10).
+    /// Landing-branch resources covered by this rule.
     pub pattern: Pattern,
-    /// Require passed CI on the exact landing head. (domain/authority.md, section 10).
     pub ci: bool,
-    /// Require containment of the snapshot's landing-branch tip. (domain/authority.md, section 10).
+    /// Require containment of the snapshot's landing-branch tip.
     pub up_to_date: bool,
-    /// Additional gates, bounded by `Limits::gates` per rule. (domain/authority.md, section 10).
+    /// Additional gates, bounded by `Limits::gates` per rule.
     pub gates: Box<[Gate]>,
-    /// Required role approvals, bounded by `Limits::approvals` per rule. (domain/authority.md,
-    /// section 10).
+    /// Required role approvals, bounded by `Limits::approvals` per rule.
     pub approvals: Box<[Approval]>,
 }
 
@@ -161,23 +133,23 @@ pub struct LandingRule {
 /// root. (domain/authority.md, sections 6 and 8.4).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum RequestKind {
-    /// Create a task batch. (domain/authority.md, sections 6 and 8.4).
+    /// Create a task batch.
     Create,
-    /// Give a complete future allotment. (domain/authority.md, sections 6 and 8.4).
+    /// Give a complete future allotment.
     Allot,
-    /// Accept one proposed action. (domain/authority.md, sections 6 and 8.4).
+    /// Accept one proposed action.
     Accept,
-    /// Give authority newly needed by an amendment. (domain/authority.md, sections 6 and 8.4).
+    /// Give authority newly needed by an amendment.
     Amend,
-    /// Cancel a task. (domain/authority.md, sections 6 and 8.4).
+    /// Cancel a task.
     Cancel,
-    /// Release a held task. (domain/authority.md, sections 6 and 8.4).
+    /// Release a held task.
     Release,
-    /// Move a task with the authority to fund it. (domain/authority.md, sections 6 and 8.4).
+    /// Move a task with the authority to fund it.
     Move,
-    /// Watch live state. (domain/authority.md, sections 6 and 8.4).
+    /// Watch live state.
     Watch,
-    /// Change project policy. (domain/authority.md, sections 6 and 8.4).
+    /// Change project policy.
     Policy,
 }
 
@@ -185,17 +157,15 @@ pub enum RequestKind {
 /// (domain/authority.md, sections 6 and 8.4).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Requests(
-    /** Bits 1 through 256 for Create, Allot, Accept, Amend, Cancel, Release, Move, Watch and Policy respectively. (domain/authority.md, sections 6 and 8.4). */
+    /** Bits 1 through 256 for Create, Allot, Accept, Amend, Cancel, Release, Move, Watch and Policy respectively. */
     pub u16,
 );
 
 impl Requests {
     /// All defined bits of this permission set; not a grant to a particular role.
-    /// (domain/authority.md, sections 6 and 8.4).
     pub const ALL: Requests = Requests(511);
 
     /// Pure membership query for `kind`; returns one boolean and emits no child output or mutation.
-    /// (domain/authority.md, sections 6 and 8.4).
     #[must_use]
     pub fn allows(self, kind: RequestKind) -> bool {
         let bit = match kind {
@@ -217,34 +187,28 @@ impl Requests {
 /// (domain/authority.md, sections 6 and 8.4).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum ProposalKind {
-    /// A batch of delegated tasks. (domain/authority.md, sections 6 and 8.4).
+    /// A batch of delegated tasks.
     Batch,
-    /// One pinned connector effect. (domain/authority.md, sections 6 and 8.4).
+    /// One pinned connector effect.
     Effect,
-    /// Widen a task's authority. (domain/authority.md, sections 6 and 8.4).
+    /// Widen a task's authority.
     Widen,
-    /// An amendment requiring more authority. (domain/authority.md, sections 6 and 8.4).
+    /// An amendment requiring more authority.
     Amend,
-    /// Release an escalated task, with additional authority if required. (domain/authority.md,
-    /// sections 6 and 8.4).
+    /// Release an escalated task, with additional authority if required.
     Escalation,
 }
 
 /// Role's proposal-decision bit set; policy admission rejects bits outside `ALL`.
 /// (domain/authority.md, sections 6 and 8.4).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct Proposals(
-    /** Bits 1, 2, 4, 8 and 16 for Batch, Effect, Widen, Amend and Escalation respectively. (domain/authority.md, sections 6 and 8.4). */
-    pub u8,
-);
+pub struct Proposals(/** Bits 1, 2, 4, 8 and 16 for Batch, Effect, Widen, Amend and Escalation respectively. */ pub u8);
 
 impl Proposals {
     /// All defined bits of this permission set; not a grant to a particular role.
-    /// (domain/authority.md, sections 6 and 8.4).
     pub const ALL: Proposals = Proposals(31);
 
     /// Pure membership query for `kind`; returns one boolean and emits no child output or mutation.
-    /// (domain/authority.md, sections 6 and 8.4).
     #[must_use]
     pub fn allows(self, kind: ProposalKind) -> bool {
         let bit = match kind {

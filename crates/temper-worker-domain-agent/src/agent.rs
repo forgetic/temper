@@ -201,7 +201,6 @@ enum State {
 /// What an agent asked of io for its process, and what io said of it.
 #[derive(Debug)]
 struct Process {
-    /// io's name for the process.
     name: Token,
     reading: Reading,
     version: Version,
@@ -210,7 +209,6 @@ struct Process {
     spent: u64,
     /// A send is in flight.
     sending: bool,
-    /// Signals in flight.
     signals: u32,
     exited: bool,
     /// Once its tree is empty, the detail of its end.
@@ -241,7 +239,6 @@ struct Channel {
     /// inbound events that may wait, an answer per call in flight, the
     /// cancel.
     outbox: Queue<Down>,
-    /// Inbound events among them.
     events: u32,
     accounts: Set<u32>,
     /// Sent event names awaiting an acknowledgement, in delivery order.

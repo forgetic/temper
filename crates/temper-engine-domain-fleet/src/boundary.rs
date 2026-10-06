@@ -384,7 +384,6 @@ pub struct Hello {
     pub graces: Option<Duration>,
     /// How many runs it hosts at once: none once it is shutting down.
     pub slots: u32,
-    /// The workstreams it holds checkouts for.
     pub workstreams: Box<[Box<[u8]>]>,
     /// The runs it hosts, and those whose answers it holds.
     pub hosting: Box<[Hosted]>,
