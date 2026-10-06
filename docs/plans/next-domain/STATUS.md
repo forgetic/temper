@@ -113,7 +113,7 @@ remain on `checkpoint/migration/transcript-codec`, outside main.
 | 05s5 native TLS output | checkpoint merged; adoption deferred | skein 8c5455f | Combined checkpoint gate: 1,206 focused / 4.982 s; 71 fuzzy / 29.694 s; fmt/clippy and isolated TLS pass. |
 | 05s5 shared framing | checkpoint merged; adoption deferred | skein a423734, 8206468 | Combined gate: 1,206 focused / 4.982 s; 71 fuzzy / 29.694 s; fmt/clippy pass. |
 | 05s5 full transcript codec | draft moved to scratch; source absent | smith bbe922f | No codec implementation or tests; incomplete manifests remain on checkpoint branch. |
-| 05s4 activation-qualified host calls | merged locally | smith 5aa22cb | fmt/clippy pass; 591 focused / 4.218 s; 11 fuzzy / 4.576 s; serial 591 / 9.488 s, 11 / 9.102 s. |
+| 05s4 activation-qualified host calls | merged locally | smith 5aa22cb, 774f618 | Final-tip fmt/clippy pass; 591 focused / 3.954 s; 11 fuzzy / 4.432 s; serial 591 / 9.488 s, 11 / 9.102 s. |
 
 ## What remains open
 
