@@ -39,7 +39,7 @@ temper/
 │   ├── crates/           jig-* crates, carved out of temper's engine, worker and web crates
 │   ├── tests/            jig's worlds, the conformance world
 │   ├── testing/          jig's fakes and kits: scripted workers and people, the fake person
-│   └── examples/<app>    the example application: jig's reference root and test subject
+│   └── examples/ops      the example application, production management: the reference root
 ├── crates/ …             temper, depending on jig's crates by path
 ```
 
