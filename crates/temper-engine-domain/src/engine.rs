@@ -243,6 +243,16 @@ pub struct Delegate {
     pub wake: tasks::WakePolicy,
 }
 
+/// One connector-owned procedure's chosen task action. The root supplies delegate numbers and
+/// checks batch authority before the tasks child admits it.
+#[derive(PartialEq, Eq, Debug)]
+pub enum ProcedureAction {
+    Delegate(Box<[Delegate]>),
+    Result(tasks::TaskResult),
+    Hold(tasks::Hold),
+    Wait,
+}
+
 /// A run-named tool call. The root fills the task and attempt from the
 /// worker envelope before looking up its durable decision.
 #[derive(PartialEq, Eq, Debug)]
@@ -259,6 +269,8 @@ pub struct Call {
 /// be dropped by fleet. Store and refresh variants are terminals, not new calls.
 #[derive(Debug)]
 pub enum Event {
+    /// Connector to root: one fenced procedure step, after a committed step request.
+    ProcedureStep { task: u64, step: u64, connector: u16, code: u32, action: ProcedureAction },
     /// Worker host call, validated by fleet and decided once by the root.
     Call { channel: Token, task: u64, attempt: u64, call: Token, body: Call },
     /// Authenticated named held-chat read; one bounded view or refusal terminal,
@@ -877,6 +889,12 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
         return;
     }
     match event {
+        Event::ProcedureStep { task, step, connector, code, action } => {
+            if !domain.ready() || !admits(domain, &env.limits) {
+                return;
+            }
+            procedure_step(domain, env, task, step, connector, code, action);
+        }
         Event::Committed { number } => {
             crate::committed(&mut domain.journal, number);
             return;
@@ -1641,6 +1659,17 @@ fn activate(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, tas
         remember_due(domain, task);
         return;
     }
+    match task.executor {
+        tasks::Executor::Procedure { connector, code } => {
+            let Some(step) = task.previous_attempt.checked_add(1) else {
+                domain.work.push(Work::Tasks(tasks::Event::Hold { task: number, why: tasks::Hold::Effects }));
+                return;
+            };
+            emit(decision, &env.limits, Delivery::Procedure { task: number, step, connector, code });
+            return;
+        }
+        tasks::Executor::Agent { .. } => {}
+    }
     let mut findings =
         Queue::with_capacity(authority::max_out(domain.config.authority.limits()).expect("authority check bound"));
     let checked = authority::check_run(
@@ -2219,6 +2248,7 @@ fn delegate_call(
     for member in &batch {
         let executor = match member.executor {
             tasks::Executor::Agent { charter } => authority::Executor::Charter(charter),
+            tasks::Executor::Procedure { code, .. } => authority::Executor::Procedure(code),
         };
         asked
             .push(authority::Delegate { executor, authority: authority_value(&member.authority) })
@@ -2383,6 +2413,102 @@ fn delegate_call(
         creator: tasks::Party::Task(key.task),
         batch: created.into_boxed(),
     }));
+}
+
+/// Route a connector-owned step through current task authority and the tasks hub in one root
+/// decision. Invalid or stale owner inputs make no change; the owner retries from current facts.
+fn procedure_step(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    task: u64,
+    step: u64,
+    connector: u16,
+    code: u32,
+    action: ProcedureAction,
+) {
+    if domain.tasks.procedure_due(task) != Some((connector, code, step)) {
+        return;
+    }
+    let decision = match action {
+        ProcedureAction::Delegate(batch) => {
+            let Some(context) = domain.tasks.delegation(task) else { return };
+            if batch.is_empty() || batch.len() > usize::try_from(env.limits.tasks.batch).expect("bounded batch") {
+                return;
+            }
+            let mut asked = List::with_capacity(env.limits.tasks.batch);
+            for member in &batch {
+                if !member.spec.inputs.is_empty() {
+                    return;
+                }
+                let executor = match member.executor {
+                    tasks::Executor::Agent { charter } => authority::Executor::Charter(charter),
+                    tasks::Executor::Procedure { code, .. } => authority::Executor::Procedure(code),
+                };
+                asked
+                    .push(authority::Delegate { executor, authority: authority_value(&member.authority) })
+                    .expect("bounded procedure batch");
+            }
+            let mut findings = Queue::with_capacity(
+                authority::max_out(domain.config.authority.limits()).expect("authority finding bound"),
+            );
+            let checked = authority::check_batch(
+                &domain.config.authority,
+                &authority::BatchAsk {
+                    project: context.project,
+                    creator: authority_value(&context.authority),
+                    numbers: authority_numbers(context.numbers),
+                    tasks_left: context.tasks_left,
+                    tasks: asked.into_boxed(),
+                },
+                &mut findings,
+            );
+            if checked.answer != authority::Answer::Allow {
+                return;
+            }
+            let mut numbers = List::with_capacity(env.limits.tasks.batch);
+            for _ in &batch {
+                let Some(number) = crate::fresh(&mut domain.journal, Family::Task) else { return };
+                numbers.push(number).expect("bounded procedure task IDs");
+            }
+            let mut created = List::with_capacity(env.limits.tasks.batch);
+            for (index, member) in batch.into_iter().enumerate() {
+                let at = u32::try_from(index).expect("bounded batch index");
+                let mut dependencies = List::with_capacity(env.limits.tasks.dependencies);
+                for dependency in member.dependencies {
+                    let number = match dependency {
+                        Dependency::Batch(index) => match numbers.get(index) {
+                            Some(number) => *number,
+                            None => return,
+                        },
+                        Dependency::Existing(number) => number,
+                    };
+                    if dependencies.push(number).is_err() {
+                        return;
+                    }
+                }
+                let budget = member.authority.budget.spend;
+                created
+                    .push(tasks::New {
+                        number: *numbers.get(at).expect("one ID per member"),
+                        project: context.project,
+                        executor: member.executor,
+                        spec: member.spec,
+                        contract: member.contract,
+                        authority: member.authority,
+                        numbers: tasks::Numbers { budget, spent: 0, spent_below: 0, reserved: 0 },
+                        funder: tasks::Funder::Task(task),
+                        dependencies: dependencies.into_boxed(),
+                        wake: member.wake,
+                    })
+                    .expect("bounded procedure batch");
+            }
+            tasks::ProcedureDecision::Delegate(created.into_boxed())
+        }
+        ProcedureAction::Result(result) => tasks::ProcedureDecision::Result(result),
+        ProcedureAction::Hold(why) => tasks::ProcedureDecision::Hold(why),
+        ProcedureAction::Wait => tasks::ProcedureDecision::Wait,
+    };
+    domain.work.push(Work::Tasks(tasks::Event::Procedure { reply_to: internal(u64::MAX), task, step, decision }));
 }
 
 #[expect(clippy::too_many_lines, reason = "the closed child vocabulary is routed exhaustively inside one decision")]
@@ -2618,6 +2744,9 @@ fn tasks_outputs(
             tasks::Request::Erase { key } => save(decision, &env.limits, Write::Erase(Key::Tasks(key))),
             tasks::Request::Made { reply_to, tasks } => {
                 let request = reply_to.into_token();
+                if request.raw() == u64::MAX {
+                    continue;
+                }
                 let person_route =
                     if person_proposal { domain.routing_people_proposals.remove(&request) } else { None };
                 if let Some(PersonProposalRoute::Accepting { request: named, person, proposer, proposal, message }) =
@@ -4752,6 +4881,7 @@ fn discard_after_stop(domain: &mut Domain, event: Event) {
             assert!(out.is_empty(), "halted waiter emits no delivery");
         }
         Event::Start
+        | Event::ProcedureStep { .. }
         | Event::Committed { .. }
         | Event::Uncommitted { .. }
         | Event::SignedIn { .. }
@@ -4822,6 +4952,7 @@ fn valid_proof(proof: &RunProof, expected: &RestoringProof, limits: &Limits) -> 
 fn supported_task(task: &tasks::TaskRecord, charter: u32) -> bool {
     let executor = match task.executor {
         tasks::Executor::Agent { charter: configured } => charter == configured,
+        tasks::Executor::Procedure { connector, code } => connector != 0 && code != 0,
     };
     task.number != 0 && task.result_position == 0 && executor
 }

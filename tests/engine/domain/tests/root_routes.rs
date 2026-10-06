@@ -146,7 +146,8 @@ impl Driver {
                 | Delivery::Load { .. }
                 | Delivery::ResultReply { .. }
                 | Delivery::InboxPage { .. }
-                | Delivery::CallAnswer { .. } => None,
+                | Delivery::CallAnswer { .. }
+                | Delivery::Procedure { .. } => None,
             })
             .expect("durable sign-in reply")
     }
@@ -224,7 +225,8 @@ fn durable_start_turn_and_answer_callbacks_survive_full_journal_pressure() {
             | Delivery::Load { .. }
             | Delivery::ResultReply { .. }
             | Delivery::InboxPage { .. }
-            | Delivery::CallAnswer { .. } => None,
+            | Delivery::CallAnswer { .. }
+            | Delivery::Procedure { .. } => None,
         })
         .collect();
     assert_eq!(assignments.len(), 1);
@@ -424,7 +426,8 @@ fn assigned(driver: &Driver) -> engine::Assignment {
             | Delivery::Load { .. }
             | Delivery::ResultReply { .. }
             | Delivery::InboxPage { .. }
-            | Delivery::CallAnswer { .. } => None,
+            | Delivery::CallAnswer { .. }
+            | Delivery::Procedure { .. } => None,
         })
         .expect("assigned chat")
 }
@@ -791,10 +794,16 @@ fn batch_fixture_with(slots: u32, depth: u32) -> (Driver, engine::Assignment) {
 }
 
 fn batch_fixture_with_pool(slots: u32, depth: u32, pool_budget: u64) -> (Driver, engine::Assignment) {
-    batch_fixture_custom(slots, depth, pool_budget, false)
+    batch_fixture_custom(slots, depth, pool_budget, false, false)
 }
 
-fn batch_fixture_custom(slots: u32, depth: u32, pool_budget: u64, second_owner: bool) -> (Driver, engine::Assignment) {
+fn batch_fixture_custom(
+    slots: u32,
+    depth: u32,
+    pool_budget: u64,
+    second_owner: bool,
+    procedure: bool,
+) -> (Driver, engine::Assignment) {
     let mut bounds = limits();
     bounds.tasks.tasks = 4;
     bounds.tasks.project_tasks = 4;
@@ -809,6 +818,10 @@ fn batch_fixture_custom(slots: u32, depth: u32, pool_budget: u64, second_owner: 
         bounds.people.initial_owners = 2;
     }
     bounds.authority.batch = 3;
+    if procedure {
+        bounds.authority.executors = 2;
+        bounds.tasks.executor_kinds = 2;
+    }
     bounds.fleet.attempts = 5;
     bounds.fleet.slots = slots;
     bounds.call_records = 4;
@@ -825,9 +838,19 @@ fn batch_fixture_custom(slots: u32, depth: u32, pool_budget: u64, second_owner: 
         ]);
     }
     let mut rules = configuration.authority.rules().clone();
+    if procedure {
+        rules.ceiling.delegation.kinds = Box::new([
+            temper_engine_domain_authority::Executor::Charter(1),
+            temper_engine_domain_authority::Executor::Procedure(1),
+        ]);
+    }
     rules.ceiling.delegation.tasks = 4;
     rules.ceiling.delegation.depth = depth + 1;
     let mut policy = configuration.authority.policy(1).expect("fixture project").clone();
+    if procedure {
+        policy.ceiling.delegation.kinds.clone_from(&rules.ceiling.delegation.kinds);
+        policy.roles[0].authority.delegation.kinds.clone_from(&rules.ceiling.delegation.kinds);
+    }
     policy.ceiling.delegation.tasks = 4;
     policy.ceiling.delegation.depth = depth + 1;
     policy.roles[0].authority.delegation.tasks = 4;
@@ -842,7 +865,14 @@ fn batch_fixture_custom(slots: u32, depth: u32, pool_budget: u64, second_owner: 
     );
     assert_eq!(policy_out.pop(), Some(temper_engine_domain_authority::PolicyFact::Added { project: 1 }));
     configuration.authority = authority;
-    configuration.chat_authority.delegation.kinds = Box::new([temper_engine_domain_authority::Executor::Charter(1)]);
+    configuration.chat_authority.delegation.kinds = if procedure {
+        Box::new([
+            temper_engine_domain_authority::Executor::Charter(1),
+            temper_engine_domain_authority::Executor::Procedure(1),
+        ])
+    } else {
+        Box::new([temper_engine_domain_authority::Executor::Charter(1)])
+    };
     configuration.chat_authority.delegation.tasks = 3;
     configuration.chat_authority.delegation.depth = depth;
     let mut driver = Driver::configured(Store::new(), configuration, &bounds);
@@ -1080,6 +1110,98 @@ fn a_chats_goal_accepted_as_its_persons_outlives_the_chat() {
     assert!(
         driver.store.rows.contains_key(&Key::Tasks(tasks::Key::Live(goal_number))),
         "person's goal survives chat subtree cancellation"
+    );
+}
+
+#[test]
+fn a_proposal_routed_past_a_procedure_to_a_person_is_accepted() {
+    let (mut driver, root) = batch_fixture_custom(3, 3, 500, false, true);
+    let mut procedure = report_delegate(b"procedure", Box::new([]));
+    procedure.executor = tasks::Executor::Procedure { connector: 1, code: 1 };
+    procedure.authority.budget.spend = 50;
+    procedure.authority.delegation.kinds = Box::new([tasks::AuthorityExecutor::Charter(1)]);
+    procedure.authority.delegation.tasks = 1;
+    procedure.authority.delegation.depth = 1;
+    let parent = call_batch(&mut driver, &root, 601, Box::new([procedure]))[0];
+    assert!(driver.delivered.iter().any(|item| matches!(item,
+        Delivery::Procedure { task, step: 1, connector: 1, code: 1 } if *task == parent
+    )));
+    driver.send(engine::Event::ProcedureStep {
+        task: parent,
+        step: 1,
+        connector: 1,
+        code: 1,
+        action: engine::ProcedureAction::Delegate(Box::new([report_delegate(b"child", Box::new([]))])),
+    });
+    driver.settle();
+    let child = driver
+        .store
+        .rows
+        .iter()
+        .find_map(|(key, value)| match (key, value) {
+            (Key::Tasks(tasks::Key::Live(number)), Record::Tasks(tasks::Stored::Live(row)))
+                if row.requester == tasks::Party::Task(parent) =>
+            {
+                Some(*number)
+            }
+            _ => None,
+        })
+        .expect("procedure delegate committed");
+    let child_run = assigned_task(&driver, child);
+    let mut goal = report_delegate(b"larger goal", Box::new([]));
+    goal.authority.budget.spend = 150;
+    tool_call(
+        &mut driver,
+        &child_run,
+        602,
+        engine::Tool::Propose {
+            action: engine::ProposedAction::Batch(Box::new([goal])),
+            reason: b"needs person funding".as_slice().into(),
+            as_holder: false,
+        },
+    );
+    let proposal = driver
+        .delivered
+        .iter()
+        .find_map(|item| {
+            if let Delivery::CallAnswer {
+                call, answer: temper_engine_domain::CallAnswer::Proposed { proposal }, ..
+            } = item
+            {
+                (*call == Token::new(602)).then_some(*proposal)
+            } else {
+                None
+            }
+        })
+        .expect("proposal routed");
+    let person = driver.store.header().people;
+    assert!(matches!(driver.store.rows.get(&Key::Tasks(tasks::Key::Live(child))),
+        Some(Record::Tasks(tasks::Stored::Live(row))) if matches!(&row.proposal,
+            Some(p) if matches!(p.state, tasks::ProposalState::Pending {
+                holder: tasks::ProposalHolder::Person(found), ..
+            } if found == person)
+        )
+    ));
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(603)),
+        sign_in: driver.session(),
+        key: [67; 16],
+        ask: people::Ask::DecideProposal {
+            project: 1,
+            proposer: child,
+            proposal,
+            decision: people::ProposalDecision::Accept,
+        },
+    });
+    driver.settle();
+    assert!(
+        driver.delivered.iter().any(|item| matches!(item,
+            Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::ProposalDecided {
+                proposer, proposal: found, choice: people::ProposalChoice::Accepted,
+            }), .. } if *proposer == child && *found == proposal
+        )),
+        "deliveries: {:?}",
+        driver.delivered
     );
 }
 
@@ -2447,7 +2569,8 @@ fn coalesced_history_waiters_survive_simultaneous_io_completion_under_full_journ
             | Delivery::EscalationReply { .. }
             | Delivery::ReadEscalationDecision { .. }
             | Delivery::InboxPage { .. }
-            | Delivery::CallAnswer { .. } => None,
+            | Delivery::CallAnswer { .. }
+            | Delivery::Procedure { .. } => None,
         })
         .collect();
     assert_eq!(replies.len(), 16);
@@ -2896,6 +3019,7 @@ fn assigned_from_last(delivered: &[Delivery]) -> engine::Assignment {
             | Delivery::Inbound { .. }
             | Delivery::InboxPage { .. }
             | Delivery::CallAnswer { .. }
+            | Delivery::Procedure { .. }
             | Delivery::EscalationReply { .. }
             | Delivery::ReadEscalationDecision { .. }
             | Delivery::Reply { .. }
@@ -2935,6 +3059,7 @@ fn say(driver: &mut Driver, task: u64, key: u8) -> u64 {
             | Delivery::Inbound { .. }
             | Delivery::InboxPage { .. }
             | Delivery::CallAnswer { .. }
+            | Delivery::Procedure { .. }
             | Delivery::EscalationReply { .. }
             | Delivery::ReadEscalationDecision { .. }
             | Delivery::Reply { .. }
@@ -3361,7 +3486,7 @@ fn a_move_the_new_funder_cannot_cover_is_refused_whole() {
 
 #[test]
 fn a_move_carves_the_new_persons_pool_in_the_same_commit() {
-    let (mut driver, root) = batch_fixture_custom(2, 1, 500, true);
+    let (mut driver, root) = batch_fixture_custom(2, 1, 500, true, false);
     let child = call_batch(&mut driver, &root, 640, Box::new([report_delegate(b"second owner goal", Box::new([]))]))[0];
     driver.send(engine::Event::SignedIn {
         reply_to: ReplyTo::new(Token::new(641)),

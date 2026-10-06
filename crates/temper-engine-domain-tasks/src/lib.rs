@@ -38,8 +38,8 @@
 //! or rejected reason. Root authenticates its actual read/decision route, resolves
 //! eligibility and owns immutable transport history; this child accepts/rejects/
 //! passes only the authorized exact revision.
-//! Agent execution is the current executor route; nonempty historical inputs,
-//! procedure and person executor routes are added in later increments.
+//! Agent and procedure executors are routed; nonempty historical inputs and
+//! person executor routes are added in later increments.
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
 extern crate alloc;
@@ -57,6 +57,7 @@ mod inbox;
 mod limits;
 mod moving;
 mod owned;
+mod procedure;
 mod proposals;
 mod refs;
 mod run;
@@ -69,9 +70,9 @@ mod wake;
 pub use batch::{valid_authority, valid_contract, valid_spec};
 pub use boundary::{
     Accepted, Active, Cause, Closing, Contract, DelegateState, DelegationContext, End, Ending, Event, Executor, Hold,
-    Key, MessageKind, New, NewsClass, NoticeState, Parameter, Party, Phase, Problem, QuestionCredit, Refusal, Request,
-    ResultKind, ResultsWake, RunContext, Spec, Stage, Status, Stored, Subscription, SubscriptionKind, TaskRecord,
-    TaskResult, Verdict, WakePolicy, WakeRule, Was, Word,
+    Key, MessageKind, New, NewsClass, NoticeState, Parameter, Party, Phase, Problem, ProcedureDecision, QuestionCredit,
+    Refusal, Request, ResultKind, ResultsWake, RunContext, Spec, Stage, Status, Stored, Subscription, SubscriptionKind,
+    TaskRecord, TaskResult, Verdict, WakePolicy, WakeRule, Was, Word,
 };
 pub use control::{Amendment, Change, Control, History};
 pub use domain::{Domain, fire, max_out, step};

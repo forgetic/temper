@@ -654,6 +654,7 @@ impl World {
                     .expect("committed result reaches person once");
             }
             Delivery::CallAnswer { .. }
+            | Delivery::Procedure { .. }
             | Delivery::Reply { .. }
             | Delivery::InboxPage { .. }
             | Delivery::EscalationReply { .. }

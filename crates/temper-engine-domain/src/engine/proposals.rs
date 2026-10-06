@@ -44,6 +44,7 @@ fn action_for_check(action: &tasks::ProposalAction) -> authority::Action {
             for member in batch {
                 let executor = match member.executor {
                     tasks::Executor::Agent { charter } => authority::Executor::Charter(charter),
+                    tasks::Executor::Procedure { code, .. } => authority::Executor::Procedure(code),
                 };
                 members
                     .push(authority::Delegate { executor, authority: authority_value(&member.authority) })

@@ -85,6 +85,25 @@ impl Domain {
         self.funding.get(&funder)
     }
 
+    /// Current opaque executor identity for root procedure routing.
+    #[must_use]
+    pub fn executor(&self, task: u64) -> Option<crate::Executor> {
+        Some(record(self, task)?.executor)
+    }
+
+    /// Next fenced step for a due procedure, or none when it is not ready to step.
+    #[must_use]
+    pub fn procedure_due(&self, task: u64) -> Option<(u16, u32, u64)> {
+        let record = record(self, task)?;
+        if record.phase != Phase::Active(Active::Due) {
+            return None;
+        }
+        match record.executor {
+            crate::Executor::Procedure { connector, code } => Some((connector, code, record.attempt.checked_add(1)?)),
+            crate::Executor::Agent { .. } => None,
+        }
+    }
+
     /// Borrowed current creation ceiling; no mutable task ledger is copied
     /// into the root or retained after this call's decision.
     #[must_use]
@@ -96,7 +115,10 @@ impl Domain {
             project: record.project,
             requester: record.requester,
             deciding: match record.phase {
-                Phase::Waiting | Phase::Active(_) => true,
+                Phase::Waiting | Phase::Active(_) => match record.executor {
+                    crate::Executor::Agent { .. } => true,
+                    crate::Executor::Procedure { .. } => false,
+                },
                 Phase::Closing(_) | Phase::Held { .. } | Phase::Ended(_) => false,
             },
             authority: record.authority.clone(),
@@ -158,8 +180,12 @@ pub fn max_out(limits: &Limits) -> u32 {
 /// free slots. Reply-bearing inputs produce one terminal reply; notifications may emit no output.
 /// Root checks authority, fences exact transport replay and commits saves/erases with resulting
 /// effects before external replies.
+#[expect(clippy::too_many_lines, reason = "the closed task event vocabulary dispatches to focused handlers")]
 pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     match event {
+        Event::Procedure { reply_to, task, step, decision } => {
+            crate::procedure::stepped(domain, env, reply_to, task, step, decision, out);
+        }
         Event::Propose { reply_to, proposal } => {
             crate::proposals::propose(domain, env, reply_to, proposal, out);
         }
@@ -455,7 +481,7 @@ pub(crate) fn publish(domain: &mut Domain, env: &Env<Limits>, number: u64, out: 
     }
 }
 
-fn make(
+pub(crate) fn make(
     domain: &mut Domain,
     env: &Env<Limits>,
     to: ReplyTo,

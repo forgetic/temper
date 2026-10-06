@@ -737,6 +737,7 @@ impl World {
             | Delivery::Inbound { .. }
             | Delivery::Load { .. } => panic!("internal root callback leaked to world"),
             Delivery::CallAnswer { .. } => panic!("escalation world sent no calls"),
+            Delivery::Procedure { .. } => panic!("escalation world sent no procedures"),
         }
     }
 

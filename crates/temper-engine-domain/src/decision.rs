@@ -44,6 +44,9 @@ pub struct Limits {
 /// resumed by the root and never passed to the protocol as child events.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Delivery {
+    /// Committed request to the connector that owns a procedure task. The owner steps against
+    /// current facts and returns the fenced decision through the root.
+    Procedure { task: u64, step: u64, connector: u16, code: u32 },
     /// One fleet-fenced named tool answer after its decision is durable.
     CallAnswer { channel: Token, task: u64, attempt: u64, call: Token, answer: crate::CallAnswer },
     /// Committed words presented to fleet only after their task row commits.
@@ -388,6 +391,7 @@ impl Decision {
             }
             Delivery::Assigned { assignment, .. } => assignment_within(assignment, limits),
             Delivery::CallAnswer { .. }
+            | Delivery::Procedure { .. }
             | Delivery::Reply { .. }
             | Delivery::AcknowledgeTurn { .. }
             | Delivery::Acknowledge { .. }

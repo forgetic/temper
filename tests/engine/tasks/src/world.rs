@@ -313,6 +313,7 @@ impl World {
             Event::Turn { task, cumulative, .. }
             | Event::Activation { task, cause: Cause::Priced { cumulative }, .. } => Some((*task, *cumulative)),
             Event::OpenPeriod { .. }
+            | Event::Procedure { .. }
             | Event::Control { .. }
             | Event::Propose { .. }
             | Event::DecideProposal { .. }
@@ -351,6 +352,7 @@ impl World {
                 self.message = self.message.max(word.number);
             }
             Event::OpenPeriod { .. }
+            | Event::Procedure { .. }
             | Event::Control { .. }
             | Event::Move { .. }
             | Event::Propose { .. }

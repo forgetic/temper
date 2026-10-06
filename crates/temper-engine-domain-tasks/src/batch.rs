@@ -121,6 +121,11 @@ fn check_members(
                     return Err(problem(number, Refusal::Executor));
                 }
             }
+            Executor::Procedure { connector, code } => {
+                if connector == 0 || code == 0 {
+                    return Err(problem(number, Refusal::Executor));
+                }
+            }
         }
         if !valid_spec(limits, &new.spec) {
             return Err(problem(number, Refusal::Spec));

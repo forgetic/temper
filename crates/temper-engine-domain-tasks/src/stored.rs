@@ -418,6 +418,7 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
             }
             false
         }
+        Executor::Procedure { connector, code } => connector != 0 && code != 0,
     }
 }
 

@@ -161,15 +161,31 @@ pub enum Party {
     },
 }
 
-/// Implemented task executor selected by the root; the contracted boundary exposes agent charters
-/// only. (domain/tasks.md, section 2).
+/// Task executor selected by the root. The procedure's owner interprets its opaque code.
+/// (domain/tasks.md, section 2).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Executor {
-    /// Configured agent charter; procedure/person execution routes are outside the contracted API.
+    /// Configured agent charter.
     Agent {
         /** Configured agent charter number, checked against `Domain`'s admitted charter table. */
         charter: u32,
     },
+    /// Connector or core procedure stepped by its owner through the root.
+    Procedure { connector: u16, code: u32 },
+}
+
+/// One procedure decision. Each step commits its task changes with the owner's state.
+/// (domain/tasks.md, section 5.3).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum ProcedureDecision {
+    /// Make one checked batch of direct delegates and wait for their results.
+    Delegate(Box<[New]>),
+    /// Finish with a contract-checked result after live delegates have ended.
+    Result(TaskResult),
+    /// Preserve the current task and route a decision upward.
+    Hold(Hold),
+    /// The current facts need no change; wait until they change.
+    Wait,
 }
 
 /// Bounded typed semantic parameter carrier; tasks does not interpret names or resources, and the
@@ -699,6 +715,8 @@ pub enum Accepted {
 /// notifications have no reply destination and may be ignored if stale. (domain/tasks.md, sections 4–5).
 #[derive(PartialEq, Eq, Debug)]
 pub enum Event {
+    /// Fenced decision from the owner of one due procedure task.
+    Procedure { reply_to: ReplyTo, task: u64, step: u64, decision: ProcedureDecision },
     /// Root-authorized bounded proposal and resolved first holder.
     Propose { reply_to: ReplyTo, proposal: crate::Proposal },
     /// Root-checked current holder resolves a pending proposal after executing an acceptance.

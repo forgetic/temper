@@ -30,7 +30,7 @@
 //! only, with the configured charter and no delegate/dependency/input-result
 //! route. Unsupported restored shapes stop startup rather than reaching a
 //! dormant consumer.
-//! Connector, tool, procedure, notes and view routes remain later increments.
+//! Connector execution, notes and view routes remain later increments.
 //! Child facts are bounded observations drained by
 //! [`engine::Domain::drain_facts`]; dropping them changes no decision.
 //! [`engine::Domain::quiescent`] is an idle fence, not a final story result;
