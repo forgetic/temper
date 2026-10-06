@@ -391,10 +391,11 @@ When an agent task is due (tasks.md, 5.2), the root:
   conversation vocabulary, bounded, which the web's protocol layer
   renders. The domain reads only its size, its spend and what it took.
 - **Resuming.** A run that resumes is given the transcript whole, within
-  the resume limit, and, as a note after it, the calls committed after
-  its last turn, with their answers, since the turn that made them was
-  lost: so it does not ask for them again. One past the limit
-  starts fresh from a brief that carries the transcript's tail. A
+  the resume limit (the deployment's configured bound on a task's
+  transcript bytes, across its attempts), and, as a note after it, the
+  calls committed after its last turn, with their answers, since the turn
+  that made them was lost: so it does not ask for them again. One past the
+  limit starts fresh from a brief that carries the transcript's tail. A
   transcript the agent cannot use (an older shape, another provider)
   fails its run as transient, saying so, and the next run is prepared
   fresh, its brief carrying the tail.
@@ -748,8 +749,8 @@ and referee.
 - **Briefs:** whether a brief's store loads and connector reads share
   one budget; cancelling a brief while it gathers; how a missing section
   shows in what the agent reads.
-- **Transcripts' limits:** the resume limit, whether runs compact a
-  transcript (smith's `session.md`, section 8) before it is reached, and how long
+- **Transcripts' limits:** whether runs compact a transcript (smith's
+  `session.md`, section 8) before the resume limit is reached, and how long
   the store keeps them.
 - **Views:** a limit on watchers per subject; how a watch of a task's
   tree is bounded when the tree is large.
