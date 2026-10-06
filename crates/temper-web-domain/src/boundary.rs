@@ -1,5 +1,8 @@
 //! Typed shell and engine boundary (web/architecture.md, sections 3–4).
-use crate::{Action, Address, Ask, ChatLine, Key, Outcome, Person, Project, Refusal, Saved};
+use crate::{
+    Action, Address, Ask, ChatLine, Chip, Escalation, Key, ObjectKey, Outcome, Person, Project, Refusal, Saved,
+    TaskResult, Why,
+};
 use alloc::boxed::Box;
 use skein_lib::Token;
 
@@ -40,12 +43,15 @@ pub enum Request {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Query {
     Chats { project: Option<u32>, live: bool, after: Option<Cursor> },
+    Escalation { task: u64 },
+    Result { task: u64 },
 }
 
 /// One live source, whose first event is a snapshot.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Watch {
     Person,
+    Task { number: u64 },
 }
 
 /// A terminal for a keyed send.
@@ -62,6 +68,8 @@ pub enum Answer {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum ReadResult {
     Chats { rows: Box<[ChatLine]>, older: Option<Cursor> },
+    Escalation(Option<Escalation>),
+    Result(Option<TaskResult>),
     Refused(Refusal),
     SignedOut,
     Unreachable,
@@ -75,16 +83,28 @@ pub struct PersonSnapshot {
     pub inbox_count: u32,
 }
 
+/// Task watch's complete first-slice state.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct TaskSnapshot {
+    pub chip: Chip,
+    pub first_words: Box<[u8]>,
+    pub escalation: Option<Escalation>,
+    pub result: Option<TaskResult>,
+}
+
 /// The first event from a watch, and again after reopening.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Snapshot {
     Person(PersonSnapshot),
+    Task(TaskSnapshot),
 }
 
 /// An incremental update from a watch.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Change {
     Person(PersonSnapshot),
+    Task(TaskSnapshot),
+    Left { key: ObjectKey, why: Why },
 }
 
 /// An event from a watch between its open and terminal.

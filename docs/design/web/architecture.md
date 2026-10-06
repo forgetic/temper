@@ -181,8 +181,9 @@ shows, never growth.
   domain writes through the shell as it changes, and reads at start, and
   then sends what is pending again with the same keys (ux README, 5.3).
   A step that creates a keyed request emits a whole-storage `Save` before
-  its `Send`; the shell applies those outputs in order. Draft edits use a
-  short coalescing deadline, since they do not commit a decision.
+  its `Send`; the shell applies those outputs in order. Each accepted
+  draft edit also emits `Save` in that step, so a reload immediately after
+  typing restores the person's words.
   It is never the truth; the engine's store is.
 - **The frame's person watch stays open on every page.** Its first
   snapshot supplies the signed-in person, projects and inbox count. The

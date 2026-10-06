@@ -3,7 +3,7 @@ use crate::*;
 use alloc::boxed::Box;
 use skein_lib::{Duration, Env, Queue, Time, Token, Wall};
 
-fn limits() -> Limits {
+pub(super) fn limits() -> Limits {
     Limits {
         objects: 4,
         requests: 4,
@@ -76,7 +76,12 @@ fn submit(domain: &mut Domain, out: &mut Queue<Request>) -> (Token, Key) {
         Event::Act { action: Action::Edit { field: FieldRef::NewChat, text: Box::from(b"Fix login".as_slice()) } },
         out,
     );
-    assert!(out.is_empty(), "edit is saved later");
+    let Request::Save { saved } = pop(out) else { panic!("edit saves immediately") };
+    assert_eq!(
+        saved.drafts.first().expect("new chat draft exists").text.as_ref(),
+        b"Fix login",
+        "edit is durable before reload"
+    );
     step(domain, &env(0), Event::Act { action: Action::Submit { form: Form::NewChat } }, out);
     let Request::Save { saved } = pop(out) else { panic!("expected save") };
     assert_eq!(saved.pending.len(), 1, "key is stored before send");
@@ -134,7 +139,8 @@ fn start_snapshot_read_and_durable_chat() {
         Request::Address { address: Address::Task { number: 42, section: None }, push: true },
         "started chat opens its task"
     );
-    let Page::Missing { .. } = domain.page() else { panic!("W1 task has a missing page") };
+    let Page::Task(task) = domain.page() else { panic!("started chat opens task page") };
+    assert_eq!(task.number, 42, "task page names started chat");
     assert_eq!(domain.field(FieldRef::NewChat).expect("field exists").written, 1, "domain cleared the composer");
 }
 
@@ -214,7 +220,8 @@ fn navigating_abandons_a_read_and_went_does_not_push() {
         Event::Read { read, result: ReadResult::Chats { rows: Box::from([]), older: None } },
         &mut out,
     );
-    let Page::Missing { .. } = domain.page() else { panic!("late read cannot reopen old page") };
+    let Page::Task(task) = domain.page() else { panic!("late read cannot reopen old page") };
+    assert_eq!(task.number, 5, "late read leaves task page current");
 }
 
 #[test]
@@ -231,7 +238,7 @@ fn signed_out_parks_request_and_shows_sign_in() {
 }
 
 #[test]
-fn draft_save_is_coalesced_without_writing_back() {
+fn draft_edit_saves_each_value_without_writing_back() {
     let (mut domain, mut out, _, _) = started(66);
     step(
         &mut domain,
@@ -239,21 +246,22 @@ fn draft_save_is_coalesced_without_writing_back() {
         Event::Act { action: Action::Edit { field: FieldRef::NewChat, text: Box::from(b"a".as_slice()) } },
         &mut out,
     );
+    let Request::Save { saved } = pop(&mut out) else { panic!("first edit saves") };
+    assert_eq!(saved.drafts.first().expect("draft exists").text.as_ref(), b"a", "first value is saved");
     step(
         &mut domain,
         &env(10),
         Event::Act { action: Action::Edit { field: FieldRef::NewChat, text: Box::from(b"ab".as_slice()) } },
         &mut out,
     );
+    let Request::Save { saved } = pop(&mut out) else { panic!("second edit saves") };
+    assert_eq!(saved.drafts.first().expect("draft exists").text.as_ref(), b"ab", "latest draft saved");
     assert_eq!(
         domain.field(FieldRef::NewChat).expect("field exists").written,
         0,
         "person's edits do not count as domain writes"
     );
-    let at = domain.next_deadline().expect("save timer armed");
-    fire(&mut domain, &env(at.as_nanos()), &mut out);
-    let Request::Save { saved } = pop(&mut out) else { panic!("expected draft save") };
-    assert_eq!(saved.drafts.first().expect("draft exists").text.as_ref(), b"ab", "latest draft saved");
+    assert!(out.is_empty(), "each edit emitted exactly one save");
 }
 
 #[test]
@@ -315,6 +323,7 @@ fn distinct_chats_fill_request_bound_and_preserve_newer_draft() {
             Event::Act { action: Action::Edit { field: FieldRef::NewChat, text: Box::from(words) } },
             &mut out,
         );
+        let Request::Save { .. } = pop(&mut out) else { panic!("edit saves") };
         step(&mut domain, &env(0), Event::Act { action: Action::Submit { form: Form::NewChat } }, &mut out);
         let Request::Save { saved } = pop(&mut out) else { panic!("each new chat is saved") };
         assert!(saved.pending.len() <= 4, "saved pending count fits limit");
@@ -327,6 +336,7 @@ fn distinct_chats_fill_request_bound_and_preserve_newer_draft() {
         Event::Act { action: Action::Edit { field: FieldRef::NewChat, text: Box::from(b"five".as_slice()) } },
         &mut out,
     );
+    let Request::Save { .. } = pop(&mut out) else { panic!("edit saves") };
     step(&mut domain, &env(0), Event::Act { action: Action::Submit { form: Form::NewChat } }, &mut out);
     assert!(out.is_empty(), "full slab emits no untracked send");
     assert_eq!(
@@ -364,11 +374,13 @@ fn read_capacity_refuses_new_page_without_a_stuck_spinner() {
     assert!(out.is_empty(), "third chats page cannot read with two slots held");
     let Page::Chats(chats) = domain.page() else { panic!("chats page remains") };
     assert!(!chats.loading, "read refusal clears loading state");
-    assert_eq!(
-        domain.notices().iter().next().expect("read notice exists").kind,
-        NoticeKind::ReadFull,
-        "read limit is visible"
-    );
+    let mut saw_read_full = false;
+    for notice in domain.notices() {
+        if notice.kind == NoticeKind::ReadFull {
+            saw_read_full = true;
+        }
+    }
+    assert!(saw_read_full, "read limit is visible");
 }
 
 #[test]

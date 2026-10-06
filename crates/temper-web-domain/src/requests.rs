@@ -1,5 +1,5 @@
 //! Keyed requests persist through navigation, reload and link loss.
-use crate::{Ask, Key};
+use crate::{Ask, Key, ObjectKey};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Sending {
@@ -28,5 +28,6 @@ impl Sending {
 pub(crate) struct Pending {
     pub key: Key,
     pub ask: Ask,
+    pub about: Option<ObjectKey>,
     pub state: Sending,
 }

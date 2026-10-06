@@ -7,6 +7,10 @@ use skein_lib::Time;
 pub enum NoticeKind {
     RequestFull,
     ReadFull,
+    StreamFull,
+    ObjectFull,
+    StaleObject,
+    Decided,
     WordsTooLong,
     Refused(Refusal),
     WentOffline,

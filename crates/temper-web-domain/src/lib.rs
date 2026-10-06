@@ -16,6 +16,7 @@ mod frame;
 mod limits;
 mod link;
 mod notices;
+mod objects;
 mod pages;
 mod reads;
 mod requests;
@@ -23,20 +24,25 @@ mod saved;
 mod streams;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_w4;
 
-pub use action::{Action, FieldRef, Form};
+pub use action::{Action, FieldRef, Form, Intent};
 pub use address::{Address, Section};
-pub use ask::{Ask, Key, Outcome, Refusal};
+pub use ask::{Ask, Choice, Decision, Key, Lack, Outcome, Refusal, Waiting};
 pub use boundary::{
     Answer, Change, Cursor, Event, Offset, PersonSnapshot, Query, ReadResult, Request, Snapshot, StreamEnd,
-    StreamEvent, Watch,
+    StreamEvent, TaskSnapshot, Watch,
 };
 pub use domain::{Domain, fire, max_out, step};
-pub use drafts::Field;
+pub use drafts::{Confirming, Field, Problem};
 pub use facts::Fact;
 pub use frame::{Frame, Person, Project};
 pub use limits::{Backoff, Limits, worst_case};
 pub use link::LinkState;
 pub use notices::{Notice, NoticeKind};
-pub use pages::{ChatLine, Chats, Page};
+pub use objects::{
+    Body, Card, Chip, EndKind, Escalation, HoldReason, Object, ObjectKey, Offers, TaskPhase, TaskResult, Why,
+};
+pub use pages::{ChatLine, Chats, Page, TaskPage};
 pub use saved::{Saved, SavedDraft, SavedPending};

@@ -2,6 +2,12 @@
 use crate::Watch;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Owner {
+    Frame,
+    Page { generation: u32 },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Following {
     Opening,
     Waiting,
@@ -32,5 +38,6 @@ impl Following {
 #[derive(Debug)]
 pub(crate) struct Stream {
     pub watch: Watch,
+    pub owner: Owner,
     pub state: Following,
 }
