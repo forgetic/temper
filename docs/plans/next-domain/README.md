@@ -14,14 +14,20 @@ design, including the temper/smith split which extracts agent-specific
 domain code into `~/src/rust/smith/`. The goal is completed when both
 temper and smith domain logic is in place and follows the new design.
 
-Completion includes this plan's remaining increments, cutover and domain
-contractions, smith's domain contracts and world stories, and temper's
-integration with smith. Copying the existing agent into smith alone does
-not complete the goal. Both repositories follow skein's foundation
-documents, independent review and their own exact-tip gates. Features
-explicitly deferred by the designs remain deferred; the lower-layer
-follow-on plans retain their existing scope. Implementation resumed
-on 2026-10-05 at the user’s request, with this revised joint goal.
+**Scope clarified 2026-10-06.** Implement the domain layer only in both
+repositories. Completion includes the remaining domain behavior, contracts,
+contractions and world stories, with Temper and Smith meeting at typed domain
+boundaries. Copying the existing agent into Smith alone does not complete the
+goal. Domain implementation and verification require no protocol changes.
+Byte codecs, framing, IO/TLS, protocol rendering, binaries and service
+integration belong to later work. Existing protocol drafts are parked.
+
+Both repositories follow skein's foundation documents, independent review and
+their own exact-tip gates. Features explicitly deferred by the designs remain
+deferred. The legacy rules below remain in force: legacy stays frozen until
+the later single service cutover permits its deletion. Protocol-dependent
+cutover work is outside this domain implementation goal. Implementation
+resumed on 2026-10-05 at the user’s request with the joint goal.
 
 **Citations.** A bare file name names a document of the next design
 (`tasks.md`, `forge.md`), as the design's own README does: in

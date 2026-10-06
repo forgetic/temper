@@ -234,7 +234,7 @@ or an optional field, with its own tests in the crate and in
 | a pull request's files and diff at its head; a comparison's files and commits | `Read::PullFiles`, `Read::Compare` |
 | updating a pull request from its base, by merge, refused on a conflict | `Write::Update`, answering `Error::Conflict` |
 | merges with two parents, in the git it keeps | the update's commit; `Git::Push` of a merge |
-| a failed job's status description and link; unsupported REST logs refused | `Read::Checks`; `Read::Job` answers missing, following step 00's fallback |
+| a failed job's status, link and bounded log for its exact attempt | `Read::Checks`; extend the typed job read for Forgejo v16.0.5 logs, with explicit missing, forbidden and failed outcomes |
 | branch protection, repository settings (merge styles, default branch), collaborators with their permissions | `Read::Protection`, `Read::Settings`, `Read::Collaborators` |
 | creating a branch at a commit through the API | `Write::CreateBranch` |
 | a push refused unless its branch is at the head it expects | `Git::Push { expected: Option<u64> }`, `None` as today |
@@ -251,8 +251,13 @@ all files and commits within the configured limits regardless of page,
 as Forgejo 15 did in the probe; excessive data is `TooLarge`, so overlap
 remains unknown and wakes conservatively. Protection requires admin even
 when the requested protection is absent. Update creates a commit with
-both parents and starts CI at its new head. Failed CI has a status
-description and job link; no supported REST job-log route is invented.
+both parents and starts CI at its new head. The target is Forgejo v16.0.5
+(domain/forge.md, section 20.1): failed CI has a status description, job link
+and supported API log read naming the exact job attempt at the failing head.
+The domain fake returns bounded owned log bytes or an explicit missing,
+forbidden or failed outcome. Reply and repair-brief limits account for those
+bytes. The old v15 unsupported-log observations remain historical evidence;
+they do not define the new client's behavior.
 These additions are the typed fake API. Their protocol routes and rendering
 belong to the lower-layer follow-up plan in step 08; the connector world
 uses its own translation of the typed calls (section 5).
