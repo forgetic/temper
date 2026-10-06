@@ -13,7 +13,7 @@ the cutover. Overview and conventions: README.md.
   values its caller gathers, and a small state holding only the
   deployment's rules and each live project's policy, changed by events.
 - **It keeps no numbers.** The numbers against each funder (budget,
-  spent, spent by closed allotments it funded, reserved) are the tasks child
+  spent, spent by ended tasks it funded, reserved) are the tasks child
   domain's (`tasks.md`, section 3); the root passes them in, and a check's
   answer says what they become (`authority.md`, section 2).
 - **It knows no connector.** Names are paths of byte segments and kinds
@@ -34,11 +34,9 @@ crates/temper-engine-domain-authority/src/
 ├── lib.rs          its doc (what it decides, what it never keeps), re-exports
 ├── value.rs        Authority, Tools, Grant, Pattern, Name, Delegation, Budget, Scopes
 ├── order.rs        at_most, fits, covers (a pattern, a grant, a holder)
-├── numbers.rs      Numbers, Funder, Funding; left, carve, settle, charge, move_funding
+├── numbers.rs      Numbers, Funder; carve, return_unspent, charge, move_funding
 ├── rules.rs        Rules (the deployment's), Policy (a project's), Role, Requirement, LandingRule, Implies
 ├── check.rs        check_batch, check_effect, check_run, check_request, check_call, needs, covers
-├── landing.rs      concrete landing requirements: exact CI, carried gates, role approvals, tip containment
-├── boundary.rs     the owned questions, actions, holders, answers, facts and findings
 ├── domain.rs       Domain (rules and policies in force), step: policies added, changed, dropped
 ├── limits.rs       Limits, worst_case
 └── tests.rs        the laws, the sweeps, every check's cells
@@ -117,31 +115,18 @@ pub fn at_most(a: &Authority, b: &Authority, implies: &Implies) -> bool;
 /// at most it, with the creator's depth less one and its tasks and spend
 /// replaced by what is left. Each part that does not fit is written to
 /// `lacks`, so a refusal can name it and a proposal can ask for it.
-pub fn fits(
-    child: &Authority,
-    creator: &Authority,
-    numbers: &Numbers,
-    tasks_left: u32,
-    implies: &Implies,
-    lacks: &mut Queue<Lack>,
-) -> bool;
+pub fn fits(child: &Authority, creator: &Authority, left: &Numbers, implies: &Implies, lacks: &mut Queue<Lack>) -> bool;
 ```
 
 Pattern order is decided segment by segment, never by enumerating names.
 Kinds are ordered by the connector's `Implies` table (for the forge,
 `push` implies `branch` on what it covers, and `land` implies nothing).
-`tasks_left` is lifetime capacity from the tasks child, distinct from the
-four funding numbers. Fitting caps current spend and task capacity at the
-creator's authority, reduces depth by one and refuses a depth-zero creator.
-Its queue needs `FITS_MAX_OUT` slots; `Lack` names every missing component.
-Checks use the same component comparison as a `Lacks` value in a finding.
-A batch additionally consumes one direct task per child and sums its budgets.
 
 ### 2.3 Numbers
 
 ```rust
-/// What is kept against one current allotment (authority.md, section 7).
-/// What is left is the budget less the other three, never below zero.
+/// What is kept against one funder (authority.md, section 7). What is left
+/// is the budget less the other three, never below zero.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Numbers {
     pub budget: u64,
@@ -155,48 +140,14 @@ pub fn carve(funder: Numbers, budgets: &[u64]) -> Option<Numbers>;
 
 /// As a funded task ends: its funder's numbers once what it left is
 /// returned and what it and its own funded tasks spent is counted below.
-pub fn settle(funder: Numbers, ended: Numbers) -> Option<Numbers>;
+pub fn settle(funder: Numbers, ended: Numbers) -> Numbers;
 
 /// A turn's or an answer's spend charged to the task that ran it; past what
 /// it had left, the excess is counted all the same, and the answer says so.
-pub fn charge(task: Numbers, spent: u64) -> Option<Charged>;
-
-/// A snapshot names its actual task, pool plus original period, or project
-/// period. The caller gathers every snapshot from one committed state.
-pub struct Funding {
-    pub by: Funder,
-    pub numbers: Numbers,
-}
-
-/// After caller-side bottom-up normalization, close the old allotment,
-/// reserve the whole unspent amount from the new funder, and reopen its
-/// direct child reservations. Any refusal leaves the input values intact.
-pub fn move_funding(
-    old: Funding,
-    new: Funding,
-    task: Numbers,
-    replacement_budgets: &[u64],
-) -> Option<Moved>;
+pub fn charge(task: Numbers, spent: u64) -> Charged;
 ```
 
 Checked arithmetic throughout; an overflow is a refusal, never a wrap.
-`settle` also refuses an allotment with live reservations or an old funder
-without its full recorded reservation. `charge` counts overruns and
-reports their amount; a representable overrun is not a refusal.
-
-`move_funding` takes the virtually settled, zero-reserved root for a
-different actual funder. The caller preserves every live allotment's
-unspent amount, validates replacements bottom-up, checks actual incoming
-funder links across the requester subtree, and commits all closures,
-replacements and history together (authority.md, section 7). The function
-validates the direct replacement reservations; it cannot detect an omitted
-child from amounts alone. A move to the same actual funder takes the
-original numbers and an empty replacement slice and returns them unchanged;
-different snapshots for the same funder are refused. Period identities are
-never changed by a reset. Durable allotment generations and cumulative
-committed expense per run are the tasks child's, not fields of `Numbers`.
-Widening and its authority checks belong to 01c; this increment transfers
-existing unspent allotments without mixing funding sources.
 
 ### 2.4 Rules, policies and checks
 
@@ -205,7 +156,7 @@ existing unspent allotments without mixing funding sources.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Answer {
     Allow,
-    /// Facts or funding, deadline, account or writer readiness still lacking.
+    /// Facts a connector has yet to report, which nobody clears by deciding.
     Wait,
     /// Beyond the task, within what someone above it may accept.
     Propose,
@@ -232,104 +183,14 @@ pub struct Checked {
 ```
 
 `Domain` holds `Rules` and `Map<u32, Policy>`, bounded by the limits on
-projects, roles and requirements; its `step` takes `Event::Policy {
+projects, roles and landing rules; its `step` takes `Event::Policy {
 project, policy }` and `Event::Dropped { project }`, the root sending them
 at a restart and as a person changes a policy (`people.md`, 5.2). It
 emits nothing but facts.
 
-01c's concrete policy and question vocabulary:
-
-- `Rules`: deployment authority ceiling, period spend, minimum and maximum
-  run spend, validated connector implications, generic requirements.
-- `Policy`: project ceiling and period spend, numbered roles and requirements.
-  Each `Role` has authority, period spend, request rights and proposal rights.
-  `Domain::new(rules, limits)` validates configuration and memory/output bounds;
-  policy events refuse invalid replacements before changing the table. `step`
-  emits one `PolicyFact` (added, changed, dropped or refused).
-- `BatchAsk`: project, creator authority, current `Numbers`, separate
-  `tasks_left`, and executor/authority `Delegate` values. Allowed funding is
-  carved once for the sum, with no output numbers on wait, propose or refuse.
-- `EffectAsk`: project, authority and an `Effect` with connector, kind, full
-  `Name` and 32-byte opaque state pin. `Requirement` names exact connector and
-  effect kind, a resource pattern and fact kind numbers. `Fact` has connector,
-  fact kind, full name, exact state and unknown/pending/passed/failed status.
-  Every applicable deployment and project requirement must pass; conflicting
-  reports preserve failure and pending status. Its optional owned `Landing`
-  payload supplies the concrete facts for landing-specific requirements.
-- `RunAsk`: project, authority, numbers, offered budget, wall time, account
-  usability values and all workspace `Write` resources with writer holds.
-  Funds, deadlines, accounts and writer readiness wait; an authority gap
-  proposes; caps, ceilings and invalid accounting refuse.
-- `PersonAsk`: project, role, pool numbers, task capacity and a typed request
-  (create, allot, accept, amend, move, cancel, release, watch, policy). Giving
-  authority checks the role and hard ceilings and reserves available funding;
-  accepting additionally checks proposal rights. The root still checks an
-  accepted effect against pinned facts before committing it.
-- `CallAsk`: project, authority, exactly one configured family bit and a tool,
-  read, message reference or note scope. Calls stay under both hard ceilings.
-- `Action`: batch, effect, widening, amendment or escalation with optional
-  release authority. `needs` constructs the least owned value from admitted
-  data, with direct creation included in batch depth and count. `Holder` is
-  an eligible ancestor task or a person's role with actual current funding
-  and task capacity. `covers` uses the root-verified distance and proposal
-  rights, without counting creation depth twice.
-
-`Limits` bounds every owned configuration collection and question collection,
-path segment and byte count. Checks refuse oversized inputs first and allocate
-nothing. Their caller reserves `max_out(limits)` finding slots. `worst_case`
-counts held configuration boxes and the full policy map's node bound; asks,
-`needs` results and finding queues belong to the caller. Startup refuses
-overflowing memory or output bounds. Role and policy changes commit as facts;
-funding numbers, topology, references and in-flight attempts remain the root's
-and tasks child's inputs, never retained policy state.
-
-### 2.5 Landing requirements
-
-`Rules::landing` and `Policy::landing` are bounded boxes of `LandingRule`:
-connector, exact effect kind, branch pattern, `ci` and `up_to_date` flags,
-`Gate` requirements and `Approval` requirements. These are conjoined with
-generic requirements, all other matching landing rules and the change gates
-in `EffectAsk::landing`. The root configures default-main CI and tip checks;
-ordinary effects without a matching landing rule retain the generic check.
-
-`Landing` owns a 32-byte `head` and `tip`, a `contains_tip: Status`, `Ci {
-head, status }`, clean predecessor heads, change gates, gate `Verdict`s and
-human `Review`s. Authority checks `head == Effect::state`; the root gathers
-the exact head/tip snapshot for the effect's named change and branch,
-verifies clean lineage and role membership, and refreshes it on head or base
-movement. It carries the checked head into the forge's conditional merge;
-authority cannot enforce connector atomicity over a moving base.
-
-A `Gate` has a stable number resolved by the root, whether it blocks, and
-`Freshness::{Exact,Clean}`. A `Verdict` reports gate number, head and status.
-A `Review` reports authenticated person's number, verified role, head and
-status; agent reviews supply verdicts rather than count as people.
-`Approval { role, people, freshness }` needs that many distinct eligible
-people. Role equality is exact, not an implicit ordering; the root translates
-its role memberships. Configured approval counts are positive and bounded
-by `Limits::reviews`; project approval roles must exist in that policy.
-Deployment approval roles are checked against each queried project before
-inspecting landing facts; a missing payload cannot hide an unknown-role
-refusal.
-
-CI never carries. An exact requirement ignores earlier heads; a clean
-requirement also admits verified clean predecessors. Repairs and conflict
-resolution remove that provenance. Missing/unknown/pending facts wait;
-valid failures refuse, including known absence of the named tip. Advisory
-gates hold nothing. Duplicate or contradictory reports never inflate an
-approval, clear a failed verdict, or clear a pending gate. The root supplies
-the latest person's review, not a history that would resurrect an obsolete
-request for changes.
-
-`Limits` additionally bounds landing-rule tables, gates per rule/change,
-approvals per rule, clean heads, verdicts and reviews. Admission checks all
-lengths before scans. `max_out` includes every deployment/project/change
-finding, and `worst_case` counts rule tables, nested patterns and owned gate
-and approval boxes. Landing question boxes are counted by their caller.
-
 ## 3. Tests
 
-Step tests only (`authority.md`, section 11), in `src/tests*.rs`, sized
+Step tests only (`authority.md`, section 11), in `src/tests.rs`, sized
 for the default suite:
 
 - **The order against an independent statement.** A small universe of
@@ -337,9 +198,8 @@ for the default suite:
   pattern's set of covered names enumerated naively; `at_most` on patterns
   agrees with set inclusion over every pair of a generated sample.
 - **Its laws,** over generated authorities: reflexive, transitive;
-  `fits` never answers yes where `at_most` (with the creator's available
-  spend and task capacity capped at its authority, and depth less one)
-  answers no.
+  `fits` never answers yes where `at_most` (with the creator's numbers
+  as its budget) answers no.
 - **Carving and settling** over generated funding trees: every task's
   spend counted exactly once at the top, never above what funded it but
   by the overruns charged; a moved task's funding returned and reserved
@@ -359,8 +219,7 @@ for the default suite:
 2. **01b numbers:** `numbers.rs`, the funding-tree tests.
 3. **01c rules, policies and checks:** `rules.rs`, `check.rs`, `domain.rs`,
    every check's cells.
-4. **01d requirements and landing rules:** `landing.rs`, concrete pinned
-   facts, the independent generated landing sweep and full landing memory.
+4. **01d requirements and landing rules:** the landing sweep.
 
 Each is a branch through the gate; none touches another crate. 01a and
 01b are what step 02 needs first (`tasks` carries authority as its own

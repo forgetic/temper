@@ -332,39 +332,13 @@ step 07.
    after a commit is durable and before its answer reaches the engine,
    making nothing twice. This is where the design's gaps show first: each
    one found is settled in `domain/engine.md` in the same branch.
-   Its brief seam adds `Source::Task { task }`, `Kind::Task` and a separate
-   task budget; task text precedes requester lineage, losing farthest
-   ancestors first. The existing brief world's seeds retain their source
-   distribution; dedicated task worlds add replay, facts and randomized
-   bounds/terminal-race coverage. This seam alone is not the walking skeleton.
-   The root's journal is the next seam: a deployment header owns fresh
-   numbers, every writing decision saves that header in its one commit,
-   deliveries carry the last commit even when their decision wrote nothing,
-   cumulative store answers only make deliveries ready, and the ready pass
-   releases one at a time. Pressure is checked before routing a child; a
-   failed commit stops all subsequent releases. A first start commits its
-   deployment identity; a restored header is already durable. The initial
-   root world has an atomic ordered fake store, an independent commit and
-   delivery referee with negative cases, deterministic lag/replay scenarios,
-   a lost completion recovery cut and maximum held-result memory checks.
-   Its small randomized sweep varies writing/read decisions, fresh number
-   gaps, storage latency and ready draining. These journal tests cover the
-   barrier cells; child record wrappers, loads and the complete walking
-   story are still required before 06a is complete.
    Integration exposed a prerequisite missing from the original sketch:
    02a/b carry number snapshots but do not keep the external funding ledger.
    The charged story must use 02e's finite person pool/project period,
    atomic carving and charged turn/answer admission. A separate precharge
    followed by a refusing turn would commit an expense for an unaccepted
-   event. Begin brief, journal and load work beside 02c; bring the funding
-   seam forward before running the complete story. The root never keeps a
-   second copy of the child's funding ledger.
-   The next foundation adds fenced one-terminal loads for the root-owned
-   deployment and turn ranges: bounded row/order/cursor validation,
-   whole-prefix byte cuts with exact omission reports, abandonment retaining
-   IO capacity until the terminal, and key-range paging in the independent
-   fake store. Child ranges and actual startup/brief routing still join in
-   the walking story; its dispatch must wait for the commits a load reads.
+   event. Bring the funding seam forward before running the complete story.
+   The root never keeps a second copy of the child's funding ledger.
 2. **06b runs.** Parking and resuming from a transcript, or fresh past the
    resume limit with the tail in the brief; messages relayed only once
    committed; cancels; failures by class, backoff, holds; saved work;

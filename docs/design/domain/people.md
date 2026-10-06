@@ -71,30 +71,6 @@ authority and to the tasks.
   everyone else gets a role by a project's owner, or by adoption's seed
   (section 4).
 
-### 3.1 Person numbers and the initial owners
-
-The root owns deployment numbers (`engine.md`, section 4). For a sign-in
-it supplies a fresh candidate person number alongside the forge identity;
-people uses it only for a new `(forge, user id)`. An identity already known
-keeps its durable number. Unused candidates leave gaps, and numbers are
-never reused. The root issues sign-in numbers; they likewise name one sign-in
-only. Login and display name may change; neither identifies a person.
-
-Configuration names the initial owners by `(project, forge, user id)`.
-The project's roles are initialized before signing in. When an identity's
-first person record is made, people grants those configured roles and
-saves them with the person and sign-in in the same decision. It reserves
-room for every matching project first: a full project refuses the sign-in
-without making any record. Later sign-ins never regrant a role an owner
-changed. Configuration bounds the matches, and `max_out` includes every
-possible bootstrap role record.
-
-Sign-in expiry is saved as a wall time. Admission computes its monotonic
-deadline once; restoring computes it again from the saved wall time and
-the startup environment. Requests reject expiry by either the saved wall
-time or the current sign-in's monotonic deadline, so a backwards wall
-clock movement cannot extend a sign-in within one process.
-
 ## 4. Roles
 
 Each project has its roles, and its policy says what each may do
@@ -148,117 +124,6 @@ committed, and answered once durable (engine.md, 5.2):
   limit, a task since ended.
 - **Two people deciding one thing:** the first commit decides; the second
   is told it was decided, by whom, and how.
-#### 5.1.1 Keyed admission and answers
-
-Keys are scoped by person, across that person's sign-ins. A valid sign-in
-asking again with the same key and the same typed request gets its saved
-answer; current roles do not remake a decision already made. Reusing a
-key for a different request is refused as a key conflict. An in-flight
-copy joins a bounded group of reply destinations, with one route to the
-root; a full group answers busy.
-
-Admission reserves room for the eventual answered-key record before it
-routes. Completed records plus reservations cannot exceed the limit, so
-an outcome never fails halfway through for lack of key space. A request
-refused by its role saves that outcome too. Admission busy, invalid sign-in,
-oversized input and key-conflict answers make no record and change no
-state. Busy admission may be retried.
-
-The root routes and closes the decision in one step (`engine.md`, section
-4), saving the task changes and the keyed outcome in one commit. People
-emits the answer immediately; its parent holds it until that commit is
-durable (`engine.md`, 5.6). A root temporarily waiting for a load keeps
-the flight volatile and makes no external mutation until it can save the
-outcome with the decision. A crash before durability loses both task and
-key; one after durability loses neither, even if the reply had not left.
-
-Increment 03a retains completed keys up to a configured capacity; timed
-retention and paging follow in 03c. Its original `Ask` contains `StartChat`; 02d1 also adds the actual held-chat
-`DecideEscalation` route below.
-Other requests in 5.1 gain their full typed vocabulary and behavior in
-the increments that implement them.
-
-#### 5.1.2 Current held-chat decisions (02d1)
-
-DecideEscalation names project, task, exact semantic revision and Release,
-Reject(reason) or Pass. It uses the same authenticated person-scoped key and
-bounded answer reservation as StartChat. Reason is at most words; root imposes
-its own task/journal limits before mutation. People routes the authenticated
-identity and optional current role: absent membership alone does not prevent a
-named requester from rejecting/passing. Root verifies standing, read privacy
-and release authority; this child knows no task state or policy selectors.
-
-An accepted outcome names task/revision, winning person and choice. Root saves
-semantic task state, immutable decision history and the people's answered key
-in one commit. A stale new key gets the archived winner through a bounded named
-root load, not a second decision. Busy/NotReady from temporary query capacity or
-failed history IO closes the flight without saving an answer, so the same key
-may retry. Standing, NoFurther, NeedsAmend and permanent bounds refusal are
-normal saved outcomes. Direct ReadEscalation is a root-owned authenticated
-current view, not an inbox or new persistent people record.
-
-Current roles are queried through the narrow borrowed role(person,project)
-projection by actual root holder selection and decision/read checks. It does
-not authenticate and allocates nothing. Root authenticates its caller first;
-person(sign_in,now,wall) checks both expiry clocks. The current SetRoles route below rechecks live Waiting recipients when membership changes.
-
-#### 5.1.3 Current keyed role administration (partial 03c/02d)
-
-SetRoles replaces the complete holdings of one existing project. Admission
-requires a live authenticated sign-in and current Owner membership; root checks
-PersonRequest::Policy against the current authority policy again immediately
-before application. The roster is bounded by holdings. Each person must be
-positive, already known to people and unique; zero or duplicate identities
-refuse Limit, unknown people or projects refuse Unknown. Oversized entrance
-refuses before any roster clone. Removing the requesting owner is permitted
-because standing is checked against membership before the replacement.
-
-The actual root producer of ApplyRoles is engine::roles::begin. Its request
-names the original admitted SetRoles flight, rather than another roster copy
-or a child receipt. People checks readiness, that flight's typed request,
-existing project, current Owner and every holding before Save Roles. It then
-returns exactly one correlated RolesApplied terminal. Refusals make no role
-write. Root consumes that terminal, finishes semantic Waiting rerouting and
-returns Decided; RolesSet(project) saves with the membership and affected task
-rows in one atomic root commit. The external reply waits for durability.
-
-The actual boundary inventory for this addition is:
-
-| Surface | Actual producer | Actual consumer |
-| --- | --- | --- |
-| Ask::SetRoles | Authenticated engine Ask | People admission, then root people_outputs → roles::begin |
-| Event::ApplyRoles | Root roles::begin after complete preflight | People apply_roles, using the original pending flight |
-| Request::RolesApplied | People ApplyRoles terminal | Root roles::begin, then semantic recheck or refused keyed completion |
-| Outcome::RolesSet | Root roles::begin after successful recheck | People Decided/save_answer, then durable WebReply and saved-key replay |
-
-A repeated key and identical request uses the original saved outcome even if
-membership has since changed. A conflicting request refuses KeyConflict
-without changing that winner. A new request from a removed owner refuses Role;
-an eligible current owner still needs Policy permission. Saved role asks own a
-bounded roster, priced independently of the current project membership row.
-Busy/NotReady remain transient, without a completed key, as in 5.1.1.
-
-On cold restore, a successful role answer must pair SetRoles with RolesSet for
-the same project. Its bounded historical roster must contain only positive,
-unique people; incompatible success variants or an invalid roster refuse
-restoration with Limit at that answer's key. After all rows arrive, Restored
-checks that the successful answer's project and every roster person exist,
-refusing Unknown at that answer's key if any reference is missing. Arrival
-order is immaterial. The original requester still needs its person record,
-but today's membership and roster need not match the historical decision:
-replay returns its outcome without applying the old roles again.
-
-Saved Refused(Role/Unknown/Limit) answers may retain zero, duplicate or unknown
-roster people, or an unknown project: those requests explain the refusal.
-Their payload bounds and requesting person reference still apply. Focused
-people step tests cover actual ApplyRoles/Decided success and refusal records,
-restoration before identities, changed membership and malformed successful
-answers (`testing-strategy.md`, sections 2.1 and 3).
-
-This implements only the role-administration dependency for live held-chat
-rerouting. Policy edits, pool administration, timed key retention, inboxes and
-broader owner requests remain later parts of 03c; no such event is exposed here.
-
 ### 5.2 The project itself
 
 A project, its repositories and roles, and its policy are records in the
@@ -380,29 +245,6 @@ Its referee: every request is answered once, after its commit; no
 request is acted on beyond the person's role; what waits for a role
 leaves every inbox once one person acts on it; a person's words reach
 their task, or the task ends.
-
-### 12.1 What is built in increment 03a
-
-`tests/engine/people` runs identities, sign-ins and expiry, authoritative
-project-role updates, initial-owner bootstrap and keyed `StartChat`. Its
-scripted root checks the routed role and authority, makes a task, commits
-the task and people's saved answer together, and withholds replies until
-durability. Scenarios restart independently before durability and after
-durability before a reply, as well as during a transient root wait.
-
-The referee observes client replies and durable task creations: one reply
-per call, no reply before its commit, no observer routed and no key making
-two durable tasks. The world checks bounded duplicate waiters, key
-conflicts, capacity refusals, cold restoration, facts changing nothing,
-replay and memory. Its fuzzy matrix reaches every configured ending.
-Inboxes, person tasks, adoption and timed key retention remain later
-increments.
-
-Admission pressure reported by the root (`Busy` or `NotReady`) completes
-the pending call and every duplicate waiter without saving a completed
-answer. It releases the reserved answer slot, so the same key can retry
-when tasks or another child has room. A decided result or permanent
-refusal remains keyed and durable.
 
 ## 13. From today
 

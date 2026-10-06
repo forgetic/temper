@@ -244,23 +244,11 @@ Its facts follow step 00's answers about Forgejo, not guesses: where
 Forgejo answers a conflicting update in a particular way, the fake does
 the same.
 
-The bounded fake represents a diff by each changed path's complete before
-and after contents; the client can derive the patch without losing a
-deleted path. Pull files page at the observed head. Comparisons return
-all files and commits within the configured limits regardless of page,
-as Forgejo 15 did in the probe; excessive data is `TooLarge`, so overlap
-remains unknown and wakes conservatively. Protection requires admin even
-when the requested protection is absent. Update creates a commit with
-both parents and starts CI at its new head. The target is Forgejo v16.0.5
-(domain/forge.md, section 20.1): failed CI has a status description, job link
-and supported API log read naming the exact job attempt at the failing head.
-The domain fake returns bounded owned log bytes or an explicit missing,
-forbidden or failed outcome. Reply and repair-brief limits account for those
-bytes. The old v15 unsupported-log observations remain historical evidence;
-they do not define the new client's behavior.
-These additions are the typed fake API. Their protocol routes and rendering
-belong to the lower-layer follow-up plan in step 08; the connector world
-uses its own translation of the typed calls (section 5).
+The target is Forgejo v16.0.5 (domain/forge.md, section 20.1): failed CI
+has a status description, job link and supported API log read naming the
+exact job attempt at the failing head. The domain fake returns bounded
+owned log bytes or an explicit missing, forbidden or failed outcome. Reply
+and repair-brief limits account for those bytes.
 
 ## 5. The world
 
@@ -294,14 +282,7 @@ it.
 ## 6. Increments
 
 1. **04a the fake forge grows** (section 4), with its tests; nothing
-   uses the additions yet but their own tests. The first reviewable part,
-   **04a1 git foundations**, adds an optional second parent, a resolved
-   merge commit that is made even for an unchanged tree, both-parent
-   ancestry and object transfer, and conditional pushes. Existing callers
-   supply no expected head and keep their first-version behavior. The
-   remaining **04a2 API additions** implement the reads and update operation
-   in section 4 against the groundwork observations; 04a is complete only
-   when both parts pass their gates.
+   uses the additions yet but their own tests.
 2. **04b `client`:** copied from the legacy forge, trimmed, then
    adapted to live resources and outbox entries; its own step tests,
    ported from the legacy forge's where they still hold.

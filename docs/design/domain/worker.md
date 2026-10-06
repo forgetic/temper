@@ -94,10 +94,10 @@ agent    LLM work: one run per agent process, reporting to the worker
   keeps or cancels each run. Past the grace, the worker cancels them
   itself, saving their work first, and keeps their turns and answers for
   the next channel. The engine keeps a lost worker's runs for a grace
-  of its own, strictly longer than the total stop bound it declares at
-  its hello: its contact grace, then the longer of cancel's grace and a
-  push's deadline, then a save's commit and push (engine.md, section 8).
-  So no next attempt starts while this one may still push.
+  of its own, strictly longer than the stop bound the worker declares at
+  its hello: its grace, then the longer of its cancel's grace and a push's
+  deadline, then a save's commit and push (engine.md, section 8), so no
+  next attempt starts while this one may still push.
 - **Shutting down** cancels every run and admits no more. The worker is
   done once the engine has every turn and answer. It gives up what it
   keeps, counted, only once no run is left and the engine is still out of
@@ -307,22 +307,17 @@ protocol layer runs as contained processes and whose output it parses.
   with two parents, the branch's head and the base commit, even when the
   tree is unchanged from either; a file the merge left in conflict that
   still holds a conflict marker is refused at push, and the run is told
-  which. The checkout returns conflict sets by repository index, owning
-  each full relative path once. Its limits bound the number and bytes of
-  paths per repository; malformed or oversized git terminals fail without
-  retaining those paths. Facts keep only the path counts. A cancelled
-  merge releases the workspace only after its invocation has settled.
+  which.
 - **Push commits what the run checked.** When a run asks to deliver, at
   `finish` with a change or mid-run, it has run the repository's checks
-  with nothing else writing to the checkout (smith's `run.md`, 8.1); the worker commits exactly that tree and pushes the
+  with nothing else writing to the checkout (smith's `run.md`, 8.1); the
+  worker commits exactly that tree and pushes the
   commit, with the run's title and body. A push is a fast-forward and
   never forced: if the branch moved incompatibly with the run's commit,
   the push fails and the run is told. This checks freshness against
   divergent changes; it does not detect every branch movement
   (section 13). When the assignment supplies an expected head, the remote
-  must also still be at that exact head. Successful or verified pushes
-  advance that condition for the next push; a refusal leaves it intact.
-  Saving to the separate saved-work branch does not advance it.
+  must also still be at that exact head.
 - **Each repository lands on its own.** Pushing several is not atomic:
   the run is told done only if every repository with a change landed it,
   moved if a branch cannot take the commit as a fast-forward, and nothing
@@ -417,63 +412,6 @@ acknowledged (section 8).
   dies is lost with the run; the engine's transcript ends at the last turn
   it committed, and the task's next run starts from there.
 
-### 8.1 Runtime boundary during migration
-
-The worker runtime chooses v2 explicitly: `ConnectedV2` selects the link;
-`AssignV2` wraps the existing assignment with an optional opaque transcript,
-including its committed call tail. A v2 assignment refuses a snapshot.
-`StartV2` carries that transcript and each repository's owned conflict paths
-to the agent child. V1 starts keep their existing snapshot behavior; v1
-assignments cannot select a merge or an expected-head writer. A v2
-assignment reaching a disabled v2 runtime receives `Invalid::Version`
-without retaining a slot. Direct invalid-mode input on a v1 link receives
-its existing unsupported-charter refusal; 05g rejects a wire-version
-mismatch before routing it.
-
-The child forwards `Turn { turn, spent, read, body }` and
-`FinishV2 { turns, spent, finish }`. Numbers start at one and must be
-consecutive; spend is cumulative and cannot fall; a finish must declare
-exactly the observed count. The host checks these before forwarding. The
-root keeps each opaque body under `(run, attempt, turn)` until that exact
-commitment ACK; stale and duplicate ACKs change nothing. The child and host
-move the body upward in their requests and keep only its accounting. The
-root owns the original; each emission copies it into the receiver's record.
-ACK drops that original, Busy and lost contact retain it, and give-up drops
-and counts it. Count and byte
-bounds are per attempt. Read credit reserves space for a maximum-size next
-turn, so the reader pauses before its bounded store can overflow. Pausing
-also removes the progress watchdog; commitment that restores credit starts
-that watchdog from the current time. The wall and cancellation limits
-continue to apply.
-
-Every v2 hello goes first, followed by retained turns and then answers.
-A busy response arms one bounded retry deadline for that original body.
-Rehello cancels such deadlines while replaying the same names and bytes.
-The hello output reservation includes one answer per slot and up to
-`slots × turns` turn copies, in addition to routed child output and queued
-relays/bounces. Retained bodies are bounded separately by the per-attempt
-byte cap; one bounded retry entry corresponds to each retained turn.
-
-An answered attempt holds its slot until both its answer and all its turns
-are acknowledged, including when the answer ACK crosses a turn ACK. On
-shutdown past contact grace, retained turns and answers are abandoned and
-counted together. A v2 parked answer carries its count and spend and saved
-work, with no snapshot; an unfinished merge has no saved branch.
-
-A relayed call preserves the agent's stable call name separately from the
-worker's local delivery token. Responses must match run, attempt, call
-name and delivery; a withdrawn delivery settles before that name can be
-retried. The engine owns durable call idempotency.
-
-`HelloV2` declares the total stop duration and a serial push deadline.
-For each repository the push bound is local commit timeout plus two remote
-timeouts (push and ambiguous-push verification fetch). The total declaration
-is contact grace plus the maximum of agent grace plus kill wait and that
-push bound, then the same bound for saved commit/push/verification. All
-arithmetic is checked at startup. The engine requires its own grace to be
-strictly longer, refusing equality. These domain records are implemented in
-05d; mapping them to the v2 wire is 05g.
-
 ## 9. Below the domain
 
 What the protocol and io layers owe the domain. The protocol layer is
@@ -522,15 +460,7 @@ its types (testing-strategy.md, section 4):
 - **git:** a remote of refs and commits, and local working trees, with
   fast-forward rules, merges that conflict, failing fetches, refused
   pushes, another party moving a branch, and pushes that land and say
-  they timed out. The fake checkout's local merge combines nonoverlapping
-  line edits and whole-file additions/deletions, leaving markers for
-  conflicting edits. Its histories have a single merge base; both
-  parents are cloned and fetched, with converging ancestors visited once.
-  A merge commit refuses markers remaining in an originally conflicted
-  path; deletion resolves that path. Explicit merge commits always record
-  both parents, including a tree unchanged from a parent. The remote's
-  expected-head condition also rejects a stale head that would otherwise
-  allow an ordinary fast-forward.
+  they timed out.
 
 Each child domain has a world of its own, its parent and neighbours
 scripted in it. The whole worker's world has all four, the agents'
@@ -621,6 +551,6 @@ branch the worker pushes is the head the engine reads.
   movement since the run started needs an expected-head precondition,
   including a decision about branches that did not exist at prepare.
   With branches held by one task (connectors.md, 3.3), such a rewind is
-  drift the engine looks for after the push; the precondition stays
-  deferred, and pushes reject incompatible history and never force a
-  branch.
+  drift the engine looks for after the push; where an assignment names no
+  expected head, the precondition stays deferred, and pushes reject
+  incompatible history and never force a branch.

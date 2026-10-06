@@ -46,8 +46,6 @@ what 05s ports.
 |---|---|---|
 | turns, kept by the worker until acknowledged, fenced like answers | `Event::Turn { channel, run, attempt, turn, body }`; `Event::TurnKept { run, attempt, turn }`; `Request::Turned { .. }`, `Request::AcknowledgeTurn { channel, run, attempt, turn }` | an ignore arm for `Turned`: a worker could send one |
 | the worker's declared graces at its hello, refused unless strictly shorter than the engine's (`engine.md`, section 8) | `Hello { graces: Option<Duration>, .. }`; `None` checks nothing | builds `graces: None` |
-| committed turn prefix restored with adoption | `Adopt { kept: u32, .. }`, zero before the first turn | builds `kept: 0` |
-| bounded turn admission and commitment pressure | `Limits::turns`; `Event::TurnBusy { run, attempt, turn }`; `Request::TurnBusy { channel, run, attempt, turn }` | turn limit zero; ignore request arms |
 
 ```rust
 // fleet, boundary.rs: added
@@ -56,33 +54,12 @@ pub enum Event {
     /// From a worker: the `turn`th turn of the run's attempt, which it keeps
     /// until acknowledged (domain/worker.md, section 8). Passed up once from
     /// the live attempt; a copy of one the parent has kept is acknowledged
-    /// again; one from a fenced attempt is acknowledged and dropped.
+    /// again; one from a fenced attempt is dropped.
     Turn { channel: Token, run: Token, attempt: Token, turn: u32, body: Token },
     /// The parent committed the turn: acknowledge it.
     TurnKept { run: Token, attempt: Token, turn: u32 },
 }
 ```
-
-`graces` is the worker's declared **total stop bound**, not the separate
-component deadlines: its contact grace plus the longer of cancel's grace
-and a push's deadline, then a save's commit and push (engine.md, section
-8). A declaration equal to the engine's grace is refused as well: the
-engine's grace must be strictly longer. The component deadlines remain
-the worker's to configure and sum.
-
-Turns start at one. `Adopt::kept` restores the durable contiguous prefix
-atomically with the claim, before a stray's held turns are released.
-Commitments reach the fleet in order; a turn already in that prefix is
-acknowledged again. A duplicate pending commitment is dropped without
-acknowledgement. Stray turns wait, bounded by `Limits::turns`, for the
-parent to adopt them. A full admission sends `TurnBusy` and drops that
-copy's body; the worker keeps its original and retries after a backoff.
-The parent can also answer an admitted `Turned` with `TurnBusy` when its
-commitment cannot proceed, releasing the admission for that retry.
-Every body token is handed to the parent once, by `Turned` or `Drop`;
-a handed admission retains only its names. Adoption and cleanup release
-one held body per resume, so acknowledgement or busy plus drop needs
-only two output slots and the fleet's existing `max_out` bound suffices.
 
 ### 2.2 The worker
 
@@ -99,10 +76,9 @@ only two output slots and the fleet's existing `max_out` bound suffices.
 
 `temper-worker-domain-host` and `temper-worker-domain`:
 
-- `AssignmentV2 { assignment: Assignment, transcript: Option<Box<[u8]>> }`
-  carries the transcript and calls committed after its last turn, opaque,
-  to `StartV2`; its nested assignment must have no snapshot. The separate
-  v2 records retain the frozen v1 `Assignment`, `Start`, finish and answer;
+- `Assignment` gains `transcript: Option<Box<[u8]>>`, beside `snapshot`,
+  carrying the transcript and the calls committed after its last turn,
+  opaque, to the agent's start;
 - turns: from the agent child up the link, kept until acknowledged and
   sent again after every hello, on the same footing as answers; a run with
   too many unacknowledged turns waits (`worker.md`, section 8);
@@ -245,11 +221,8 @@ The byte fields inside (`effect`, `read`, `amendment`) are themselves
 typed at their ends by the connector's or the tasks' schema in the same
 module, never left for the domain to parse (programming-model.md,
 section 4); they are bytes here only because the worker passes them
-through. Their concrete fields are settled by `channel.md`, section 16 and
-`temper-channel/src/payload/v2.rs`: amendments, actions, authority and
-forge reads/effects/results are closed typed values at the endpoints.
-The byte-shaped members in the sketch above describe worker pass-through,
-not a domain parser.
+through. Their exact fields follow `tasks.md`, `engine.md`, 7.3 and the
+connectors' reads, and are settled when 05b is written.
 
 ### 2.5 The protocol layers
 
@@ -293,69 +266,12 @@ passing with the same counts.
 1. **05a the fleet's turns and graces.** Needed first, by step 06's
    skeleton.
 2. **05b the channel:** the link's new kinds; `payload/v1.rs` moved,
-   `payload/v2.rs` written, with golden frames. Settled layouts and the
-   typed inner schemas are in `channel.md`, section 16. This increment
-   adds configured 1–2 negotiation and bounded unknown-kind status/skip;
-   legacy callers retain explicit v1 imports and mechanical exhaustive
-   match arms. It does not implement runtime domain behavior or v2
-   protocol translations (05c–05g).
+   `payload/v2.rs` written, with golden frames.
 3. **05c the checkout and the fake checkout:** merges, two parents,
-   expected heads. This is split into **05c1**, the fake git foundation,
-   and **05c2**, the checkout state machine and parent boundary. 05c is
-   complete only after both. 05c1 adds fetched two-parent graphs, a local
-   three-way merge with markers, explicit resolved two-parent commits
-   (including unchanged trees), and expected-head pushes. The world's
-   existing callers keep ordinary one-parent/fast-forward defaults.
-   05c2 prepares `Start::Merge`, forwards bounded repository/path
-   conflicts, retains the second parent until committed, and carries
-   expected heads through successful and ambiguous pushes. Its referee
-   predicts whole trees, parent pairs and refs, including marker refusal,
-   saved work and a stale head that would otherwise allow a fast-forward.
-   Replay, facts independence, cancellation races and counted maximum
-   conflict sets cover the state machine; legacy worlds retain their cases.
+   expected heads.
 4. **05d the host and the worker's root:** transcripts, turns, spend,
-   merges in progress, mid-run pushes, graces. It also extends the worker's
-   agent child wrapper, without implementing the agent execution domains.
-   Explicit `ConnectedV2`, `AssignV2`, `HelloV2`, `AnswerV2`, `StartV2` and
-   `FinishV2` records choose the new lifecycle; v1 records and scripts retain
-   their behavior. Turns carry cumulative spend and an optional last-read
-   message name, are fenced by run/attempt/turn, and remain owned by the
-   root until exact commitment ACK. Busy retries use bounded deadlines;
-   count and byte credits pause the reader and watchdog. An answer ACK
-   cannot release its slot while any turn remains. Relays carry the stable
-   agent call name separately from the local delivery token. Conflicted
-   paths move from checkout preparation into the agent start and from a
-   refused merge commit into its push reply. V2 parking has no snapshot,
-   saves ordinary unfinished work, and releases the process/workspace;
-   a merge run skips the unfinished save. Protocol v2 mapping follows in
-   05g; v1 translators explicitly reject the new records.
-5. **05e the session:** explicit version-two admission and concrete,
-   versioned turn/transcript records beside version one. Settled turns keep
-   provider blocks verbatim and replace local delegated tickets with
-   provider call names/input and concrete answers. Restore checks identity,
-   structure and bounds before opening a kit, with typed transient refusals.
-   Checked per-completion prices and child-terminal spend share a unit cap
-   beside token caps; duplicate child terminals cannot charge twice. Its
-   world preserves legacy scenarios and adds independent observations of
-   replay, refusals, cancellation races, prices, facts and counted memory.
-   Restore pre-counts waking `NotRun` blocks and copied ids before allocation;
-   the maximum-tail negative allocator case reproduces the old overrun.
-   Owned read-IO cancellation checks both terminal winners, replay includes
-   complete frozen domain states, and the fuzzy sweep asserts outcome coverage.
-   The run's aggregation and the byte codec remain 05f and 05g.
-
-   Session-only serial measurement, on the idle development machine with
-   `cargo nextest run -p temper-agent-domain-session -p
-   temper-agent-session-world --profile measure -j 1`: baseline `ae897a2`
-   ran 82 retained focused tests in **2.228 s**; the repaired 05e source
-   candidate `0497442` ran those plus 15 focused tests in **2.247 s**, a **+0.019 s**
-   delta. Selecting fuzzy binaries with `--ignore-default-filter -E
-   'binary(/^fuzzy_/)'`, the retained one test took **0.643 s** and the
-   candidate's two took **0.643 s**, a **+0.000 s** delta at the reported
-   precision. The added sweep
-   covers 64 priced child-terminal/closing races. No retained scenario or
-   sweep was trimmed. These are scoped serial costs; the full workspace
-   gate still enforces the shared 15/60-second limits.
+   merges in progress, mid-run pushes, graces.
+5. **05e the session:** turns told, opening from a transcript, pricing.
 6. **05f the run and the tools:** messages, waiting and parking, the
    engine's tools, contracts, merges in progress, the budget in the unit.
    Replaced by 05s4, in smith; its parked branch is ported there.

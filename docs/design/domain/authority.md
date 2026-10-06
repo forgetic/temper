@@ -112,12 +112,8 @@ Authority
   segment that begins with it, and every name beneath. `ai/temper`
   `branch` `temper` `7` and an open empty segment covers every branch
   under `temper/7/`; an open `r42-` covers `temper/7/r42-1` and
-  `temper/7/r42-2`; an exact `c42` covers `temper/7/c42` and its
-  descendants, not `temper/7/c420`. Both terminal forms require one more
-  segment after the exact base and include descendants; a pattern with
-  no terminal covers only the exact base name. Empty segments are literal
-  bytes too, and an open empty terminal matches any additional segment.
-  One pattern is at most another when every name the
+  `temper/7/r42-2`; an exact `c42` covers `temper/7/c42` alone, not
+  `temper/7/c420`. One pattern is at most another when every name the
   first covers, the second covers too, which is decided segment by
   segment.
 - **temper's own branches are named after their tree** (forge.md,
@@ -133,9 +129,7 @@ Authority
   implies another: for the forge, a grant to land into a branch does not
   imply pushing to it, and pushing does not imply landing. A kind's
   order is a table the connector gives, and the authority child domain
-  holds as data. Equality is implicit and the connector's table includes
-  every transitive implication. Authority validates that preorder within
-  the configured maximum number of pairs before admitting the table.
+  holds as data.
 
 ## 5. Order and fitting
 
@@ -151,13 +145,7 @@ Authority
   worlds check its laws (section 11).
 - **Fitting.** A delegate's authority A fits under its creator B, given
   the numbers kept against B, when A is at most B with B's depth less
-  one and B's tasks and spend replaced by what B has left, each capped by
-  B's original ceiling. Available lifetime task capacity is a separate
-  input kept by the tasks child: the four funding numbers cannot say how
-  many tasks remain. Depth zero cannot create a delegate, even one whose
-  own depth is zero. A batch additionally counts one task for each direct
-  child, plus the future capacity it gives that child, and sums its
-  reservations. Fitting is
+  one and B's tasks and spend replaced by what B has left. Fitting is
   what a batch, an amendment and an acceptance are checked against; the
   order alone is what the laws are about.
 - **Narrowing** is giving a delegate an authority that fits. It is
@@ -210,81 +198,43 @@ deployment's rules       the most any project may have; requirements on effects
 
 ## 7. Budgets and spend
 
-- **Four numbers per current allotment:** its budget (what it was given),
-  what it has spent itself, what the closed allotments it funded spent,
-  and what it has reserved for the live allotments it funds. Normally an
-  allotment closes as its task ends; moving may close and replace an
-  allotment while its task stays live. What it has left is its budget
+- **Four numbers per funder:** its budget (what it was given), what it
+  has spent itself, what the ended tasks it funded spent, and what it has
+  reserved for the live tasks it funds. What it has left is its budget
   less the other three, and never below zero. A task is a funder; so is
   each person's pool and each project's spend, per period, whose numbers
   the tasks child domain keeps too, in the store (engine.md, 5.4).
 - **Every reservation records its funder:** the task above, a person's
   pool, or a project's period. A batch reserves each delegate's budget
   from its creator in the commit that makes it; an accepted proposal
-  reserves from its accepter. A funding link names the actual task,
-  person's pool and period, or project's period, independently of the
-  requester tree. Each task has one current allotment and one recorded
-  funder. The tasks child durably numbers allotment generations and closes
-  each exactly once; an aggregate snapshot cannot recognize a duplicate
-  closure, including a zero-budget one.
+  reserves from its accepter.
 - **When a task ends,** in the commit that ends it, its reservation is
   released: its unspent budget goes back to its funder, and what it and
-  the allotments it funded spent is added to its funder's "spent by closed
-  allotments". Each funder passes its own on when it ends, so spend climbs
+  the tasks it funded spent is added to its funder's "spent by ended
+  tasks". Each funder passes its own on when it ends, so spend climbs
   the chain one end at a time, to the pool or period at the top, and is
   never counted twice nor lost, nor more than what funded it but by the
-  overrun below. Every allotment it funds must have closed before its own
-  closes. Closed allotments' historical spend remains in immutable history
-  and on the old funding chain, even when current task counters reset.
+  overrun below.
 - **A task moved** to a new requester (tasks.md, section 6) is funded
-  anew. In one commit the root virtually closes its live funding subtree
-  from the leaves upward, retaining each live task's unspent amount. It
-  closes the old root allotment against its actual old funder, which keeps
-  all that allotment's spend and receives what remains. The new funder
-  reserves the unspent amount of the whole funding subtree. Each live
-  task's replacement allotment starts with zero spend and reserves its
-  directly funded tasks' retained amounts. Every promised amount must fit
-  at every level or the whole move is refused: an overrun is never fixed
-  by trimming a live task's budget. A top-up requires a separate authorized
-  amendment or proposal. A move to the same actual funder preserves the
-  original counters and reservations and skips this normalization.
-- **Funding across the requester tree.** An accepted proposal may have a
-  task's ancestor fund a delegate directly. Before moving a requester
-  subtree, the root checks every task's actual incoming funder link;
-  allocations still funded by an old task that must end need separate
-  transfers in the same commit, or the move is refused. They need not be
-  folded into the moved root's budget. Stable external pool or period
-  allocations retain their original funders. Funding cycles are refused,
-  and a funding node cannot close while it still funds live allocations.
-  New reservations use actual available funds; returning budget to a task
-  does not return it to that task's own funder until its allotment closes
-  or is explicitly narrowed.
-- **One funding source.** A budget widening from the same actual funder
-  updates the allotment and its reservation together. From another funder
-  it must re-fund the whole remaining allotment, with the increase, under
-  these rules and the authority checks, or be refused. It cannot mix a
-  second source into counters that record only one funder.
+  anew: its old funder is given back what the task has left and keeps
+  what it spent; the new funder reserves what the task has left from its
+  own.
 - **Overruns** are charged all the same: what a run spends past what its
   task had left is counted, and its task, left with nothing, is held for
   its budget (tasks.md, 5.5); its funder's numbers carry the excess.
 - **Periods.** A project's spend and a person's allotment are per period.
   A reservation counts in the period that funded it, and what it returns
   goes back to that period, so a reset frees nothing reserved. A
-  period's identity and counters stay live until its reservations close;
-  an explicit transfer to a different period is new funding, even for the
-  same person or project. A recurring task's budget is carved again each
-  period (tasks.md, section 9).
+  recurring task's budget is carved again each period (tasks.md,
+  section 9).
 - **Spend is priced as it is spent.** A charter carries the prices of
   its models, in the deployment's unit. A run prices each completion it
   makes, its sub-agents' included, and reports what it spent with each
   turn it commits (engine.md, 7.2), and the whole with its answer; the
   engine charges each turn as it commits, and the difference between the
-  answer's whole and the turns committed when it commits the answer. This
-  difference uses cumulative committed spend of that run, kept in history,
-  including turns charged to a closed allotment; resetting current task
-  counters during a move never charges those turns again. What a worker
-  loses with turns never committed, and no answer, is bounded by the turns
-  a worker may keep unacknowledged.
+  answer's whole and the turns committed when it commits the answer. What
+  a worker loses with turns never committed, and no answer, is bounded
+  by the turns a worker may keep unacknowledged.
 - **A run's budget** is what its task has left, capped per run by the
   deployment, in the deployment's unit. The agent enforces it (smith's
   `run.md`, section 9), stopping the next completion of each session once the run has
@@ -302,22 +252,13 @@ Every check answers one of four, each saying why:
 
 - **allow;**
 - **wait** for facts a connector has yet to report (CI on the exact
-  head, a gate's verdict), or readiness before a run (budget, accounts,
-  writer holds). A decision alone substitutes for neither a fact nor
-  the required readiness;
+  head, a gate's verdict), which nobody clears by deciding;
 - **propose:** beyond the task's authority, within what someone above
   it may accept;
 - **refuse:** beyond the project's policy or the deployment's rules, or
   against a fact (CI failed), which no acceptance changes.
 
-A check answers the strictest of what it found, in that order, and writes
-every independent finding to a bounded queue whose room its caller
-reserves. Oversized questions and absent policies are refused at admission;
-there is no default project policy. Rules and policies are immutable during
-a check. Policy events add, replace or drop one bounded table entry and
-emit a fact; an invalid or over-capacity replacement retains the old entry.
-Roles' authority and period spending fit under their project, and project
-policy fits under the deployment, before either is admitted.
+A check answers the strictest of what it found.
 
 ### 8.1 Batches
 
@@ -327,9 +268,6 @@ task's executor kind and charter, and the batch's tasks, depth, budgets
 and deadlines are within what its creator has left. Beyond any of these,
 the answer is propose; beyond the project's ceiling, refuse. Allowed, the
 answer gives the creator's numbers after the reservations.
-It reserves only when the whole batch allows; every other answer carries
-no replacement numbers. The count consumed is the sum of one plus each
-child's delegation capacity; spend is the sum of its children’s budgets.
 
 ### 8.2 Effects
 
@@ -347,13 +285,6 @@ An effect is checked when it is decided, against facts pinned to what it
 names (a head, not a branch), and the effect carries its condition to
 the system: a merge is made at exactly the head it was decided on, so
 facts read for that head stay true while it is made.
-The generic requirement names connector facts that must have passed, on
-one exact effect kind and matching resource pattern. Each report matches
-the effect's connector, full resource name and exact state pin, as well as
-the required fact kind. Missing, unknown or pending reports wait; a failed
-report refuses. Conflicting reports cannot clear a failure or pending
-status. Grant implications do not remove requirements from the requested
-effect kind. Deployment and project requirements both apply.
 
 ### 8.3 Runs
 
@@ -365,11 +296,6 @@ included, is covered by a push grant of the task and held by the task or
 by the task above it that holds it (connectors.md, 3.3). A run that
 fails this check is not started: its task waits for its budget (held, if
 nothing will free one), its account, or its writer slot.
-The root supplies the offered run budget and one usability status for each
-model account the charter uses. The budget must be above the deployment's
-minimum, no greater than its run cap, task authority or available funding;
-resource holds name this task or an ancestor. Authority deficits may be
-proposed, while a hard ceiling or accounting overflow refuses.
 
 ### 8.4 People's requests
 
@@ -377,37 +303,17 @@ Before a person's request is acted on (people.md, section 5): their
 role in the project allows the request and, for what gives authority (a
 task created, a budget allotted, a proposal accepted), what it gives
 fits under their role's authority and what their pool has left.
-An acceptance additionally needs that role's right to decide that proposal
-kind. Funding asks name the complete future allotment to reserve, respecting
-the single-funder rule in section 7. The request check does not replace an
-accepted effect's check on pinned facts; the root performs both before that
-acceptance and action commit. Non-funding requests still need their specific
-role permission.
 
 ### 8.5 Tool calls
 
 Before an agent's call is served: its family is among the task's tools,
 and a read it makes is covered by a grant. A message to a task needs a
 reference to it (tasks.md, 7.5); a note needs its scope.
-The root translates the registered tool to exactly one configured family
-bit and a note to exactly one scope. Reads, tools and notes remain within
-project and deployment ceilings too; missing message standing refuses.
 
 ## 9. Proposals
 
 What may be proposed, what it needs, and what an acceptance does; where
 proposals wait and how they move is tasks.md, section 8.
-
-The current 02d1 person-chat escalation route uses Escalate(release=None)
-needs and covers for requester eligibility, then the real Accept(Escalate(release=None)) request
-check for acceptance. A project policy may name one bounded escalation_role;
-policy admission requires that named role exists and permits Accept
-and deciding Escalation. Policies without that selector remain valid for
-other authority-only uses; the current root chat route requires it. Root owns
-current membership/standing and selects that role as the final fallback, with
-no sponsor substitution or mutable financial shadow. The route releases only
-retry-exhaustion; widening budget/deadline/grants awaits actual amendment work
-(domain/tasks.md, 15; domain/engine.md, 7.7).
 
 - **What may be proposed:** a batch beyond its creator's authority; an
   effect beyond its grants; a widening of the proposer's own authority
@@ -420,12 +326,6 @@ retry-exhaustion; widening budget/deadline/grants awaits actual amendment work
   effect, the one grant that covers it; for a widening, what it asks
   for. The holder that accepts funds all of it (below), whatever the
   proposer has.
-  A batch's needed depth is one plus its deepest child's depth, and its
-  task count includes each direct child. The least value may repeat grants
-  or executor kinds; their order is set-like. An effect needs one singleton
-  resource grant, with no spend or delegated task capacity. Constructing
-  this owned value copies bounded input data; borrowed checks allocate
-  nothing.
 - **An escalation needs** nothing more than standing above the held task,
   unless releasing it needs what the task lacks (budget, time, a grant):
   then it needs that, as a widening would.
@@ -434,11 +334,6 @@ retry-exhaustion; widening budget/deadline/grants awaits actual amendment work
   action's depth plus how far below the holder the proposer is): a task
   above the proposer, or a person whose role decides that kind of
   proposal and whose pool has the budget left.
-  The caller verifies the holder's standing and its distance to the
-  proposer. Coverage adds that distance to the action's already-counted
-  depth; it does not subtract another creation level. Available task
-  capacity and funding are separate current inputs. The person's role
-  needs both the acceptance permission and rights for the proposal kind.
 - **An acceptance funds the action** from the accepter: the budgets of a
   batch's tasks are reserved from the accepter, which is recorded as
   their funder; a widening moves budget or a grant from the accepter
@@ -469,38 +364,6 @@ authority says:
   Gates a project wants on every landing (a review with a lens, a
   person's approval) are added here; gates a plan wants on one change
   are its own (forge.md, 8.3), and add to these, never replace them.
-  A rule names the connector, exact landing kind and branch resource
-  pattern, whether CI and containment of the current branch tip are
-  required, its gates, and approvals by role and distinct-person count.
-  The root configures the default rule; authority embeds no connector
-  kinds or branch names. Every applicable deployment and project rule
-  applies, together with the change's blocking gates. Advisory gates
-  add no wait or refusal, even when they fail.
-- **Concrete landing facts** accompany the effect: its head, the branch
-  tip whose containment was checked, CI's head and status, predecessor
-  heads reachable through only temper's clean updates, gate verdicts at
-  heads, and people's reviews with their verified project roles. The
-  root supplies one coherent snapshot for the named change and branch,
-  authenticates reviewers, resolves gate identities and verifies the
-  clean-update lineage. Agent verdicts are gates, never human approvals.
-  Authority requires the landing head to equal the effect's exact state
-  pin. Missing landing facts wait when a rule applies; an ordinary effect
-  with no applicable landing rule needs none.
-- **Freshness** is explicit per gate or approval: this exact head, or a
-  predecessor joined to it entirely by those clean updates. CI always
-  requires this exact head. After a repair or conflict resolution, the
-  root drops that lineage, so old verdicts cannot carry. Missing or
-  pending valid verdicts wait; a valid failed verdict refuses. Conflicting
-  reports cannot clear a failure or pending gate. A person's duplicate
-  approvals count once; a conflicting pending report by that person
-  supplies no approval. A valid request for changes from the required
-  role refuses; stale requests do not survive a broken lineage.
-- **Containment** is a fact about the exact landing head and branch tip
-  in that snapshot, not authority's own git calculation. Unknown or
-  pending containment waits; known absence refuses that effect. The root
-  and forge refresh these facts when either head or base changes and
-  carry the checked head into the conditional merge. Authority retains
-  no live connector state and cannot prevent the base changing during I/O.
 - **Who decides what:** for each kind of proposal (a goal's budget past
   a threshold, a landing into a branch the tree was not granted), the
   role that may accept it.
@@ -522,12 +385,6 @@ generated facts, a sweep of the landing rule checked against an
 independent statement of it. The engine's world exercises it in place
 (engine.md, section 15), whose referee holds the first promise of
 core.md, section 10.
-The landing sweep also checks exact versus carried verdicts, CI that
-never carries, role eligibility and distinct people, contradictory reports,
-and additional gates that never loosen the answer. Its independent
-statement gathers valid heads and people into sets, separate from the
-check's bounded scans. Full owned landing-rule boxes are included in the
-domain's memory bound; question facts and finding queues are the root's.
 
 ## 12. From today
 

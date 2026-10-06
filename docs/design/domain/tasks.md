@@ -7,9 +7,7 @@ first of the primitives of core.md (section 3) in depth, and the hub of
 the engine's domain (engine.md, section 3). Authority, which every
 action here is checked against, is authority.md; what an agent's run
 is, engine.md, section 7; a connector's procedures, connectors.md,
-section 6. What is still open is listed in section 13. Sections 14–15 are the current
-implemented boundary; the broader routes described below join only when
-a real root caller and consumer are integrated.
+section 6. What is still open is listed in section 13.
 
 ## 1. In one page
 
@@ -100,11 +98,9 @@ it is live:
   default wake policy and waiting time, whether a run resumes its
   transcript or starts fresh (engine.md, 7.1).
 - **Its authority** (authority.md, section 3), and the numbers kept
-  against it: spent by itself, spent by the closed allotments it funded,
-  reserved for the live allotments it funds, and who funded its own current
-  allotment (authority.md, 7). The allotment has a durable generation;
-  historical spend and each run's cumulative committed expense survive
-  closing and replacing an allotment during a move.
+  against it: spent by itself, spent by the ended tasks it funded,
+  reserved for the live tasks it funds, and who funded its own budget
+  (authority.md, 7).
 - **Its wake policy** (7.3) and **its subscriptions** (7.4).
 - **Whether it is tracked,** and its priority if so: a goal
   (core.md, 5.2).
@@ -134,12 +130,11 @@ dependencies among them.
 - **Dependencies** name tasks in the same batch, or live tasks the
   creator references: its own delegates, or a task it was introduced to
   (7.5). A task's dependencies are never added to once it is made
-  (section 6). Admission checks the combined graph of existing dependencies
-  and delegation waits with the new edges: an introduced reference can
-  otherwise make a new child depend on an ancestor, or join two existing
-  subtrees into a wait cycle. References alone are visibility, not wait
-  edges. A result of a task that has ended reaches a new task as one of its
-  inputs (section 3), not as a dependency.
+  (section 6). Admission checks the new edges with the existing
+  dependencies and delegation waits: an introduced reference could
+  otherwise make a new task depend on an ancestor, or join two subtrees
+  into a wait cycle. A result of a task that has ended reaches a new task
+  as one of its inputs (section 3), not as a dependency.
 - **Checked whole,** before anything of it exists:
   - every task well formed: a known executor kind, a charter or
     procedure the deployment has, a result contract its executor can
@@ -198,10 +193,7 @@ waiting ──► active ──► closing ──► done, failed or cancelled
   (section 3); the store keeps it all.
 - **Held:** stopped for a decision, from waiting, active or closing. It
   says why (5.5). A release returns it where it was, the reason it was
-  held judged afresh. A live run stopped by the hold must first return its
-  terminal answer; release cannot overlap it with another run. A terminal
-  or a settlement received while held updates the preserved prior state,
-  including a closing result, without lifting the hold.
+  held judged afresh.
 
 ### 5.2 Agent tasks
 
@@ -228,9 +220,7 @@ idle until its next wake. A task has one run at most at a time.
 Whether a waiting run holds its worker's slot or parks is engine.md,
 7.4. A claim that no worker reports after a restart, its attempt having
 committed no turn and no call, counts as not started: no try is spent
-on it. The root issues every attempt number. Each task accepts only a
-strictly greater number for a new claim, and refuses invalid or stale
-external claims without changing its current run.
+on it.
 
 ### 5.3 Procedure tasks
 
@@ -297,18 +287,9 @@ which may amend, cancel or re-address it.
   delegates of its task are live is refused, naming them, unless its
   finish asks for them to be cancelled, so a task that depends on
   another waits for that task's whole subtree. Its result goes to its
-  requester once it has closed (5.1). The finish is a reply-bearing call
-  before the run exits: refusal leaves that attempt live so the executor
-  can correct the finish. An accepted activation terminal is acknowledged
-  after the decision is durable; replaying its accepted answer changes
-  neither the task nor its tries.
-- **Delivered after commitment.** The child emits `Ended` with its ending
-  after closing; the root commits the ended row and financial posting before
-  releasing a live notice to a person. Reconnecting people read the named
-  ended task through the root, authenticated by people (people.md, 6). There
-  is no task-owned transport receipt or persistent result credit. A future
-  requester inbox route must integrate its own real root handoff. A cancellation can retain a completed result alongside its reason,
-  recording what was done before everything settled.
+  requester once it has closed (5.1).
+- **Delivered once,** as a message to the requester, committed with the
+  task's end. A person requester sees it in the web.
 - **Kept.** A result is read by every task that depends on its task, or
   names it among its inputs, in the brief of its next run (engine.md,
   section 9), and by its requester as a message.
@@ -342,16 +323,7 @@ which may amend, cancel or re-address it.
   live task they may amend, so that it outlives the task that asked for
   it, as a goal outlives the chat it came from. Its reservation moves to
   their funding (authority.md, section 7); the task that asked for it
-  keeps a reference to it. The move and every funding replacement commit
-  together: live tasks stay live, with every promised unspent budget
-  preserved, or the move is refused. The hub follows actual funder links
-  across the whole moved requester subtree, including delegates an
-  accepted proposal funded directly from the old chat. Such allocations
-  are separately re-funded if their old task funder must end; stable
-  external pool or period funding keeps its original identity. Closed
-  allotments are recorded exactly once by generation, and replacements
-  reopen current counters without erasing history or a live run's
-  cumulative charged expense (authority.md, section 7).
+  keeps a reference to it.
 
 ## 7. Messages
 
@@ -391,24 +363,6 @@ are entries of its own (section 8), which always wake it.
   - *refused at the sender's entrance:* words and questions, past the
     bound: a person is told the inbox is full, an agent's tool call
     answers so.
-- **Named by the root.** Message, question and subscription identities and
-  transport call/replay evidence belong to the root (engine.md, 5.4 and 7.5).
-  A future inbox route must show its real sender and terminal consumer before
-  adding that machinery. The current boundary has no inbox or offered-payload
-  table; `Turn` refuses a nonempty read fence.
-- **Taken by committed turns.** Tasks admits only the next turn of the
-  current attempt. Root/fleet handles accepted duplicate transport inputs
-  before they can reach child admission; the root owns its durable proof.
-  Future inbox read-through remains a semantic admission in the same priced
-  turn, when its actual root route is integrated.
-- **Merged with a fresh ID.** A replacement hint keeps the oldest arrival
-  time and accumulated occurrence count, but receives a fresh root number.
-  Reached batch thresholds are durable and survive holds, wall corrections
-  and restoration.
-  An old offered payload stays immutable; committing its read cannot take
-  the replacement. Subscription capacity reserves its largest replacement
-  even when the current hint is smaller. An ended task's unread messages
-  become archived rows in the same decision as its end.
 - **Relayed live.** A task with a running run has what its policy lets
   through relayed to it as it arrives (engine.md, 7.4); what it does not
   take before its run ends stays.
@@ -453,13 +407,6 @@ A subscription is a task's standing interest in what changes:
   references;
 - **a timer.**
 
-The child asks the root to deliver a task notice or timer with a fresh
-message number. The root completes these callbacks, and each delegate-result
-callback, before committing or returning the decision. Startup restoration
-rejects an unfinished callback record; `Restore`/`Restored` are only the
-startup barrier. A subscription to an ended referenced task reads its
-historical result through the root in that same decision.
-
 Subscriptions end with the task. A tracked task's subscription to the
 landings in its subtree's repositories is the engine's to keep, not its
 executor's (forge.md, section 7). Their number per task is bounded.
@@ -471,10 +418,7 @@ executor's (forge.md, section 7). Their number per task is bounded.
   its requester, its delegates, and one it was introduced to. A task
   introduces two tasks it references (a coordinator two of its
   delegates) by giving each a reference to the other, within their
-  limits. A requester reserves an explicit reference for each admitted
-  delegate,
-  retaining its visibility after the delegate ends until it forgets the
-  reference. References are kept with the task, and end with it.
+  limits. References are kept with the task, and end with it.
 - **People** message the tasks their role lets them see (people.md,
   section 5).
 - **No broadcast.** Who may talk to whom stays visible and bounded.
@@ -632,200 +576,3 @@ where a holder can decide it; nothing beyond a task's limits is held.
   scarce: today's order is by when each became due.
 - **Long-lived tasks** that serve as an agent's identity across goals
   (core.md, section 11).
-
-### Incremental accounting implementation
-
-The retained slice owns finite project period and person pool ledgers. A
-pool records its original project period as its actual parent; opening a
-new period does not release old reservations. Whole-batch reservation and
-closure posting happen inside the child decision. Root authenticates the
-current role/authority and gathers all writes into one atomic commit.
-
-`Turn` combines next-turn admission with the new cumulative expense delta.
-`Activation` explicitly distinguishes a priced worker terminal from an
-unpriced loss, fleet refusal or invalid-answer normalization. Priced inputs
-preflight both semantic admission and representability of eventual actual
-funding-chain postings before mutation. Refused inputs spend nothing.
-Tasks saves only authentic task/funding state and closure financial history;
-root-owned transport proof, transcript and terminal evidence join those
-writes in the same decision (engine.md, 7.5). There is no standalone Charge
-operation or second pool ledger.
-
-Period/pool retirement, funding replacement/move and recurring procedures
-remain parked until their real root routes are integrated. The finite source
-table refuses fresh identities when full; unsupported closed sources and
-external ledgers with direct own spend are refused at restoration.
-
-## 14. Current concrete boundary after the tasks audit
-
-This inventory records actual constructors and consumers in
-`crates/temper-engine-domain/src/engine.rs`, rather than proposed future
-routes. The pre-audit source remains on
-`preserve/pre-tasks-boundary-audit-429647c` and the original implementation
-branches. Deleting dormant surface does not assert those deeper designs are
-complete. The first-turn durable/lost-completion restart and bounded final Report cut
-are covered (engine.md, 7.6). Section 15 adds the actual 02d1 held-chat route;
-broader task-tree escalation and deployment recovery remain later work.
-
-### 14.1 Events: eighteen actual root constructors
-
-| Event | Decision | Concrete caller |
-| --- | --- | --- |
-| OpenPeriod | Keep | `chat`, after current project authority validates its ceiling |
-| CarvePool | Keep | `chat`, after current person role validates its ceiling |
-| Make | Keep | `chat`, for authenticated people `StartChat` |
-| Prepare | Keep | `activate`, after real authority/account readiness |
-| Claim | Keep | `brief_outputs` Rendered, after brief and grant; root reserves proof room first |
-| Turn | Merge charged admission; remove unpriced Turn | `fleet_outputs` Turned, correlated to the root's owned worker payload |
-| Started | Keep | `fleet_outputs` Placed |
-| Activation | Merge charged and unpriced causes | `fleet_outputs` Answered uses Priced; Lost uses Unpriced and becomes Refused without a kept turn (no try, §5.2), otherwise Failed(Lost); Withdrawn/Refused use Unpriced; `tasks_outputs` rejected answer normalizes Invalid unpriced |
-| PreparationFailed | Keep | `brief_outputs` Failed/Refused or exhausted run/grant/proof room; `tasks_outputs` rejected Claim |
-| Hold | Keep | `activate`, for authority deadline, budget or other static findings |
-| Settled | Keep | `tasks_outputs` Close, after this slice's synchronous closing effects |
-| Restore | Keep | `startup_page`, actual paged Live/Ledger records |
-| Restored | Keep | `startup_page`, after all current root proof pages validate; Waiting escalation holders are rechecked before Fleet Loaded |
-| InspectEscalation | Add actual 02d1 route | `engine::escalation::read` and `begin`, after direct-read/session or keyed-decision admission |
-| RoutedEscalation | Add actual 02d1 callback | `engine::escalation::needed`, after current membership/coverage and policy fallback selection |
-| InspectEscalations | Add actual partial 03c/02d preflight | `engine::roles::inspected`, bounded read-only Waiting snapshot before membership mutation |
-| RecheckEscalations | Add actual partial 03c/02d callback | `engine::roles::recheck`, after successful people ApplyRoles in the same synchronous root decision |
-| DecideEscalation | Add actual 02d1 route | `engine::escalation::inspected`, after exact revision/standing checks and real release authority |
-
-Uncalled events are removed: ForgetAdmission, Control, Amend, Move, Charge,
-Send, Peek, DeliverResult, DeliverNotice, DeliverTimer, News, ForgetReceipt,
-Introduce, ForgetReference, Subscribe, Unsubscribe, Release, Cancel,
-RememberStub and ForgetStub. ChargedTurn merges into Turn; ChargedActivation
-merges into Activation. Standalone Cancel is uncalled; legitimate
-`Finished { cancel_delegates: true }` still closes a delegate tree.
-
-### 14.2 Requests: eighteen actual root consumers
-
-| Request | Decision | Concrete consumer |
-| --- | --- | --- |
-| Made | Keep | `tasks_outputs`, correlates pending people request and supplies Decided Started |
-| Refused | Keep | `tasks_outputs`, completes Make refusal or Claim failure, or handles owned Turn/Answer refusal |
-| Done | Keep | `tasks_outputs`, correlation releases claimed Fleet Start after commit; funding/Prepare Done has no outward effect |
-| Acknowledged | Keep | `tasks_outputs`, saves root terminal evidence and holds Fleet Acknowledge |
-| TurnAcknowledged | Keep | `tasks_outputs`, saves transcript and latest root proof, then holds Fleet TurnKept |
-| Activate | Keep bounded context | `tasks_outputs` -> `activate`; authority and real task brief consume temporary RunContext |
-| Stop | Keep | `tasks_outputs`, holds Fleet Cancel |
-| Adopt | Keep kept-turn field | `tasks_outputs`, retains claim adoption before Fleet Loaded; no raw task peek |
-| Close | Keep | `tasks_outputs`, routes actual synchronous Settled |
-| Ended | Keep | `tasks_outputs`, erases current proof and holds person result notice |
-| Save | Keep | `tasks_outputs`, wraps authentic child row into current root Decision |
-| Erase | Keep | `tasks_outputs`, wraps child erase into that same Decision |
-| RestoreRefused | Keep | `tasks_outputs`, stops startup before continuation or Fleet Loaded |
-| EscalationNeeded | Add actual 02d1 consumer | `engine::escalation::needed`, resolves a newly held chat or rechecks a restored Waiting holder |
-| EscalationInspected | Add actual 02d1 consumer | `engine::escalation::inspected`, authenticated read or keyed decision using one reserved root query slot |
-| EscalationsInspected | Add actual partial 03c/02d terminal | `engine::roles::inspected`, consumes one stage-local right and validates candidate recipient revisions |
-| EscalationsRechecked | Add actual partial 03c/02d terminal | `engine::roles::recheck`, consumes one stage-local right after collecting existing Needed callbacks |
-| EscalationDecided | Add actual 02d1 consumer | `engine::escalation::completed`, saves root archive and people keyed outcome with the semantic state |
-
-Sent, Inbox, Relay, Observe, Notify, Timer and Topic have no reachable producer
-under actual root events and are removed with their dormant mechanics.
-
-### 14.3 Stored, keys and queries
-
-| Surface | Decision | Actual root use |
-| --- | --- | --- |
-| Live | Keep | Child Save/Erase; Tasks startup page restores bounded current semantic lifecycle and dependencies |
-| Ended | Keep historical | Child Save; root's authenticated TaskResult singleton load derives person result; never live restore |
-| Ledger | Keep, merge duplicate Funding | Child Save; Tasks startup page restores actual period/pool numbers |
-| Closure | Keep historical | Child Save records actual ended allotment generation/financial posting; never live restore |
-| Admission | Move to root RunProof/Terminal | Actual current claim, next turn and worker terminal; root pages current proofs before Fleet Loaded |
-| Stub, Message, ArchivedMessage, Receipt, Offer, Question, Subscription, History | Remove | No actual root constructor; dormant restore pass-through was not a live route |
-| `funding(Funder)` | Keep narrow authentic query | `make_chat` reads whether its actual finite source already exists; escalation coverage reads the actual decision maker pool; root owns no mutable copy |
-| `live_task`, `task_stub` | Remove | Authority/brief use Activate's bounded RunContext, adoption uses kept, refusal uses owned payload task/attempt correlation |
-| `ready`, `next_deadline`, `is_due`, `facts_lost` | Private/remove | No actual root caller; restoration terminal and root-owned timers drive the boundary |
-| `fire`, `reclaim`, `pop_fact`, `max_out`, `worst_case`, `stored_bytes` | Keep | Root timer pass, iteration reclamation, neutral observation drain, bounded route/byte admission |
-
-Dependencies remain immutable history. `waiting_on` is their bounded
-unfinished subset; ending propagates removal directly to live dependents,
-without historical stub storage. Restore first checks length/unique/subset
-without cloning, then requires every still-live dependency in that subset
-once all pages arrived. Failed dependencies hold ordinary waiting work;
-already-closing cancellation continues closing. Current batch dependencies
-name same-batch tasks or the creator's live delegates; nonempty Spec.inputs
-are explicitly refused until an actual root input-result route joins.
-
-Live restore rejects unheld Closing Settled: the same child step always
-ends that transient phase before a root commit. Held closing state may
-remain inert after its actual Settled callback. Financial restore verifies
-current reservations, actual requester-ancestor task funding, original
-external source links and representability of eventual postings before
-Ready. Historical Ended/Closure rows never enter the live arena.
-
-
-## 15. Current held-chat escalation boundary (02d1)
-
-This first vertical increment handles person-requested Report chats made by
-root. When such a live task becomes Held, publish advances its checked
-per-task revision and emits EscalationNeeded. Routing is transient: root
-resolves it synchronously and the coalesced commit contains Waiting with one
-recipient. There is no child receipt table, historical archive or people
-inbox. Tasks stores only the current semantic state on its existing live row.
-
-The root chooses the requester if current membership and authority coverage
-permit Escalation with no widening; otherwise it chooses the project's
-explicit policy escalation role. Waiting identifies that person or that final
-project role. InspectEscalation supplies a bounded temporary context; root
-owns authentication, privacy, standing and current policy checks.
-
-A decision names the exact Waiting revision. Release is implemented only for
-retry-exhaustion Held(Failures) from Due: it resets tries/refusals, retains
-accepted expense and the original funder, and emits ordinary Activate.
-Deadline, budget, dependency and closing holds require a real amendment route
-and return NeedsAmend. Reject records bounded reason/by/revision and stays
-Held without automatic reopening. Pass from the requester advances revision
-and persists the final policy role. Passing from that role refuses NoFurther.
-Checked revision exhaustion refuses before a decision changes state. An
-ended/cancelled lifecycle retires current escalation state; root keeps history.
-
-On restore, unresolved Routing, zero revisions, inconsistent recipient/project
-and oversized rejection reason refuse before retaining the row. Waiting emits
-one actual root recheck after the full task/proof pages pass. Identical holder
-keeps the same revision and emits no Save. A changed holder advances revision;
-a final role never moves down to a requester. If that advance is exhausted,
-root stops startup before Ready. Rejected restores without recheck/reopening.
-
-One task owns at most one escalation reason, bounded by result_bytes. The
-retained bound includes that reason alongside a held closing reason and
-partial result. Temporary boxed contexts, root query copies, history-load
-rows and journal writes are accounted separately by root. Facts remain
-optional observations, never routing inputs.
-
-Ancestor/delegate proposal routing, generic release/amend/cancel entrances,
-live project-role administration and holder-loss rerouting are not implemented
-by 02d1. The latter requires a following actual SetRoles entrance and consumer
-in the 03b/02d integration; no dormant recheck notification is introduced here.
-
-## 16. Live membership rerouting (partial 03c/02d)
-
-Tasks owns only the current held lifecycle. Its actual InspectEscalations input
-comes from root's authenticated SetRoles route and returns one bounded owned
-array of current person-requested Waiting contexts for the named project. A
-not-ready child returns one NotReady terminal. An empty array is valid: tasks
-has no separate project registry, and people/root validate the project before
-this query. Inspection has no writes or closing/dependency progress; it cannot
-cause an unrelated semantic change during preflight.
-
-Root computes recipients using the candidate roster and the same authority
-coverage/final-role selector as normal EscalationNeeded. It checks every changed
-holder's revision and reserves the complete atomic cohort before people changes
-membership. After ApplyRoles succeeds, RecheckEscalations returns existing
-EscalationNeeded for each Waiting context and one correlated completion. Root
-sends actual RoutedEscalation under the new membership in the same decision.
-The recheck itself is read-only and bounded by live task capacity. There is no
-raw task peek, roster copy, transport receipt or historical table in tasks.
-
-Same holder causes no revision or task write. Changed holder advances the
-checked revision once; exhaustion refuses the whole administration operation
-before membership changes. A Waiting final-role recipient never regresses to
-the requester. Rejected remains rejected, including its original reason, and
-Unheld/Routing tasks are not a role-administration candidate. Task authority,
-original funder, accepted expense, retries and root execution evidence remain
-unchanged. Rerouting is not a decided escalation, so it creates no accepted
-decision archive for the obsolete revision.
-
-This is the narrow actual live-membership integration required by 02d. Broader
-policy/release/amendment, task ancestry/delegation and inbox routing are absent;
-the retained boundary is justified by the constructors and consumers in 14.
