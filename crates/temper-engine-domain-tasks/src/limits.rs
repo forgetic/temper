@@ -48,6 +48,8 @@ pub struct Limits {
     pub inbox_bytes: u32,
     /// Maximum bytes in one admitted word message.
     pub message_bytes: u32,
+    /// Time an undecided proposal waits at a nonfinal holder before passing upward.
+    pub proposal_stall: skein_lib::Duration,
     /// Maximum writable repository tags whose saved-work branch has committed work for one task.
     pub saved_repositories: u32,
     /// Maximum distinct-code choices in a nonempty verdict contract.
@@ -83,6 +85,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         || limits.inbox_bytes == 0
         || limits.message_bytes == 0
         || limits.message_bytes > limits.inbox_bytes
+        || limits.proposal_stall == skein_lib::Duration::ZERO
     {
         return None;
     }
@@ -120,14 +123,25 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_add(
             u64::from(limits.executor_kinds).checked_mul(u64::try_from(size_of::<AuthorityExecutor>()).ok()?)?,
         )?;
+    let proposed_member = u64::try_from(size_of::<crate::New>())
+        .ok()?
+        .checked_add(u64::from(limits.spec_bytes))?
+        .checked_add(u64::from(limits.authority_bytes))?
+        .checked_add(u64::from(limits.dependencies).checked_mul(8)?)?
+        .checked_add(u64::from(limits.contract_choices).checked_mul(u64::try_from(size_of::<Verdict>()).ok()?)?)?;
+    let proposal_payload = u64::try_from(size_of::<crate::Proposal>())
+        .ok()?
+        .checked_add(u64::from(limits.message_bytes).checked_mul(2)?)?
+        .checked_add(u64::from(limits.batch).checked_mul(proposed_member)?)?;
     Slab::<Task>::worst_case(limits.tasks)?
         .checked_add(Map::<crate::Funder, crate::FundingRecord>::worst_case(limits.funders)?)?
         .checked_add(Map::<u64, Id<Task>>::worst_case(limits.tasks)?)?
         .checked_add(Deadlines::<u64>::worst_case(limits.tasks)?)?
+        .checked_add(Deadlines::<u64>::worst_case(limits.tasks)?)?
         .checked_add(Deadlines::<u64>::worst_case(limits.tasks.checked_mul(limits.subscriptions)?)?)?
         .checked_add(Deadlines::<u64>::worst_case(limits.tasks)?)?
         .checked_add(Queue::<Fact>::worst_case(limits.facts)?)?
-        .checked_add(u64::from(limits.tasks).checked_mul(payload)?)?
+        .checked_add(u64::from(limits.tasks).checked_mul(payload.checked_add(proposal_payload)?)?)?
         .checked_add(u64::from(limits.charters).checked_mul(4)?)?
         // Bounded graph/admission and traversal snapshots; no recursive walk.
         .checked_add(List::<u64>::worst_case(limits.tasks.max(limits.batch))?.checked_mul(3)?)?

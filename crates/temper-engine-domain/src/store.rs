@@ -74,6 +74,12 @@ pub struct CallKey {
 /// Exact typed answer kept for replay across a lost channel or root restart.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum CallAnswer {
+    /// Proposal entered its proposer's durable pending state.
+    Proposed { proposal: u64 },
+    /// Proposal was accepted, rejected, passed, or withdrawn.
+    ProposalDecided { proposal: u64, outcome: temper_engine_domain_tasks::ProposalOutcome },
+    /// Proposal action or current standing failed before mutation.
+    ProposalRefused(temper_engine_domain_tasks::Problem),
     /// A named task control change entered the same durable decision.
     Controlled,
     /// A named task control change was refused without mutation.
@@ -522,6 +528,9 @@ pub fn record_bytes(record: &Record) -> Option<u64> {
         Record::EscalationDecision(row) => decision_bytes(&row.decision),
         Record::Call(row) => match &row.answer {
             CallAnswer::Unavailable
+            | CallAnswer::Proposed { .. }
+            | CallAnswer::ProposalDecided { .. }
+            | CallAnswer::ProposalRefused(_)
             | CallAnswer::Controlled
             | CallAnswer::ControlRefused(_)
             | CallAnswer::ControlDenied { .. }
@@ -559,6 +568,13 @@ pub fn record_bytes(record: &Record) -> Option<u64> {
                 temper_engine_domain_people::Ask::StartChat { words, .. }
                 | temper_engine_domain_people::Ask::Say { words, .. } => u64::try_from(words.len()).ok(),
                 temper_engine_domain_people::Ask::DecideEscalation { decision, .. } => decision_bytes(decision),
+                temper_engine_domain_people::Ask::DecideProposal { decision, .. } => match decision {
+                    temper_engine_domain_people::ProposalDecision::Accept
+                    | temper_engine_domain_people::ProposalDecision::Pass => Some(0),
+                    temper_engine_domain_people::ProposalDecision::Reject { reason } => {
+                        u64::try_from(reason.len()).ok()
+                    }
+                },
             },
             temper_engine_domain_people::Stored::SignIn { .. }
             | temper_engine_domain_people::Stored::ReadPosition { .. } => Some(0),

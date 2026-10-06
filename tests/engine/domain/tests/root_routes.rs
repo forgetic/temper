@@ -924,6 +924,233 @@ fn tool_call(driver: &mut Driver, source: &engine::Assignment, call: u64, tool: 
 }
 
 #[test]
+fn a_proposal_reaches_its_covering_task_and_is_accepted() {
+    let (mut driver, parent) = batch_fixture_with(3, 2);
+    let child = call_batch(&mut driver, &parent, 61, Box::new([report_delegate(b"child", Box::new([]))]))[0];
+    let child_run = assigned_task(&driver, child);
+    tool_call(
+        &mut driver,
+        &child_run,
+        62,
+        engine::Tool::Propose {
+            action: engine::ProposedAction::Batch(Box::new([report_delegate(b"grandchild", Box::new([]))])),
+            reason: b"need a helper".as_slice().into(),
+            as_holder: false,
+        },
+    );
+    let proposal = driver
+        .delivered
+        .iter()
+        .find_map(|item| {
+            if let Delivery::CallAnswer {
+                call, answer: temper_engine_domain::CallAnswer::Proposed { proposal }, ..
+            } = item
+            {
+                (*call == Token::new(62)).then_some(*proposal)
+            } else {
+                None
+            }
+        })
+        .expect("proposal accepted for routing");
+    assert!(driver.delivered.iter().any(|item| matches!(
+        item,
+        Delivery::Inbound { task, word, .. }
+            if *task == parent.task
+                && word.kind == tasks::MessageKind::Proposal {
+                    proposer: child,
+                    proposal,
+                    kind: tasks::ProposalKind::Batch,
+                }
+    )));
+    driver.send(engine::Event::Turn {
+        channel: Token::new(7),
+        task: parent.task,
+        attempt: parent.attempt,
+        turn: engine::Turn {
+            number: 1,
+            cumulative: 1,
+            read: Some(proposal),
+            transcript: b"consider proposal".as_slice().into(),
+        },
+    });
+    driver.settle();
+    assert!(driver.delivered.iter().any(|item| matches!(
+        item,
+        Delivery::AcknowledgeTurn { task, attempt, turn, .. }
+            if *task == parent.task && *attempt == parent.attempt && *turn == 1
+    )));
+    let live = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(child))).expect("live child");
+    assert!(
+        matches!(live, Record::Tasks(tasks::Stored::Live(row)) if matches!(&row.proposal, Some(p) if p.state == tasks::ProposalState::Pending { holder: tasks::ProposalHolder::Task(parent.task), since: driver.env.wall }))
+    );
+    tool_call(
+        &mut driver,
+        &parent,
+        63,
+        engine::Tool::Decide { proposer: child, proposal, decision: engine::ProposalChoice::Accept },
+    );
+    assert!(driver.delivered.iter().any(|item| matches!(item, Delivery::CallAnswer { call, answer: temper_engine_domain::CallAnswer::ProposalDecided { proposal: found, outcome: tasks::ProposalOutcome::Accepted }, .. } if *call == Token::new(63) && *found == proposal)));
+    let live = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(child))).expect("live child");
+    assert!(
+        matches!(live, Record::Tasks(tasks::Stored::Live(row)) if row.proposal.is_none() && row.delegates.len() == 1 && row.inbox.iter().any(|word| word.kind == tasks::MessageKind::ProposalDecision { proposal, accepted: true }))
+    );
+}
+
+#[test]
+fn a_chats_goal_accepted_as_its_persons_outlives_the_chat() {
+    let (mut driver, parent) = batch_fixture_with(3, 2);
+    let child = call_batch(&mut driver, &parent, 64, Box::new([report_delegate(b"chat work", Box::new([]))]))[0];
+    let child_run = assigned_task(&driver, child);
+    let mut goal = report_delegate(b"long goal", Box::new([]));
+    goal.authority.budget.spend = 150;
+    tool_call(
+        &mut driver,
+        &child_run,
+        65,
+        engine::Tool::Propose {
+            action: engine::ProposedAction::Batch(Box::new([goal])),
+            reason: b"goal outlives chat".as_slice().into(),
+            as_holder: true,
+        },
+    );
+    let proposal = driver
+        .delivered
+        .iter()
+        .find_map(|item| {
+            if let Delivery::CallAnswer {
+                call, answer: temper_engine_domain::CallAnswer::Proposed { proposal }, ..
+            } = item
+            {
+                (*call == Token::new(65)).then_some(*proposal)
+            } else {
+                None
+            }
+        })
+        .expect("goal proposal routed");
+    let person = driver.store.header().people;
+    assert!(
+        matches!(driver.store.rows.get(&Key::Tasks(tasks::Key::Live(child))), Some(Record::Tasks(tasks::Stored::Live(row))) if matches!(&row.proposal, Some(p) if matches!(p.state, tasks::ProposalState::Pending { holder: tasks::ProposalHolder::Person(found), .. } if found == person)))
+    );
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(406)),
+        sign_in: driver.session(),
+        key: [66; 16],
+        ask: people::Ask::DecideProposal {
+            project: 1,
+            proposer: child,
+            proposal,
+            decision: people::ProposalDecision::Accept,
+        },
+    });
+    driver.settle();
+    assert!(driver.delivered.iter().any(|item| matches!(item, Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::ProposalDecided { proposer, proposal: found, choice: people::ProposalChoice::Accepted }), .. } if *proposer == child && *found == proposal)));
+    let goal_number = driver
+        .store
+        .rows
+        .iter()
+        .find_map(|(key, value)| match (key, value) {
+            (Key::Tasks(tasks::Key::Live(number)), Record::Tasks(tasks::Stored::Live(row)))
+                if row.requester == tasks::Party::Person(person) && *number != parent.task =>
+            {
+                Some(*number)
+            }
+            _ => None,
+        })
+        .expect("goal owned by accepting person");
+    assert_ne!(goal_number, child);
+    tool_call(&mut driver, &parent, 67, engine::Tool::Cancel { target: child, reason: b"chat done".as_slice().into() });
+    assert!(
+        driver.store.rows.contains_key(&Key::Tasks(tasks::Key::Live(goal_number))),
+        "person's goal survives chat subtree cancellation"
+    );
+}
+
+#[test]
+fn a_stalled_proposal_passes_up() {
+    let (mut driver, root) = batch_fixture_with(3, 4);
+    let mut holder = report_delegate(b"holder", Box::new([]));
+    holder.authority.budget.spend = 50;
+    holder.authority.delegation.kinds = Box::new([tasks::AuthorityExecutor::Charter(1)]);
+    holder.authority.delegation.tasks = 2;
+    holder.authority.delegation.depth = 3;
+    let middle = call_batch(&mut driver, &root, 68, Box::new([holder]))[0];
+    let middle_run = assigned_task(&driver, middle);
+    let leaf = call_batch(&mut driver, &middle_run, 69, Box::new([report_delegate(b"leaf", Box::new([]))]))[0];
+    let leaf_run = assigned_task(&driver, leaf);
+    tool_call(
+        &mut driver,
+        &leaf_run,
+        70,
+        engine::Tool::Propose {
+            action: engine::ProposedAction::Batch(Box::new([report_delegate(b"needed", Box::new([]))])),
+            reason: b"need helper".as_slice().into(),
+            as_holder: false,
+        },
+    );
+    let first = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(leaf))).expect("leaf live");
+    assert!(
+        matches!(first, Record::Tasks(tasks::Stored::Live(row)) if matches!(&row.proposal, Some(p) if matches!(p.state, tasks::ProposalState::Pending { holder: tasks::ProposalHolder::Task(task), .. } if task == middle))),
+        "{first:?} delivered {:?}",
+        driver.delivered.last()
+    );
+    driver.env.wall = Wall::from_nanos(Duration::from_millis(11).as_nanos());
+    driver.env.now = Time::from_nanos(Duration::from_millis(11).as_nanos());
+    engine::fire(&mut driver.root, &driver.env, &mut driver.out);
+    driver.collect();
+    driver.settle();
+    let second = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(leaf))).expect("leaf live");
+    assert!(
+        matches!(second, Record::Tasks(tasks::Stored::Live(row)) if matches!(&row.proposal, Some(p) if matches!(p.state, tasks::ProposalState::Pending { holder: tasks::ProposalHolder::Task(task), .. } if task == root.task)))
+    );
+}
+
+#[test]
+fn a_proposal_rejected_tells_the_proposer_why() {
+    let (mut driver, parent) = batch_fixture_with(2, 2);
+    let child = call_batch(&mut driver, &parent, 71, Box::new([report_delegate(b"child", Box::new([]))]))[0];
+    let child_run = assigned_task(&driver, child);
+    tool_call(
+        &mut driver,
+        &child_run,
+        72,
+        engine::Tool::Propose {
+            action: engine::ProposedAction::Batch(Box::new([report_delegate(b"more", Box::new([]))])),
+            reason: b"need more".as_slice().into(),
+            as_holder: false,
+        },
+    );
+    let proposal = driver
+        .delivered
+        .iter()
+        .find_map(|item| {
+            if let Delivery::CallAnswer {
+                call, answer: temper_engine_domain::CallAnswer::Proposed { proposal }, ..
+            } = item
+            {
+                (*call == Token::new(72)).then_some(*proposal)
+            } else {
+                None
+            }
+        })
+        .expect("proposal pending");
+    tool_call(
+        &mut driver,
+        &parent,
+        73,
+        engine::Tool::Decide {
+            proposer: child,
+            proposal,
+            decision: engine::ProposalChoice::Reject { reason: b"different plan".as_slice().into() },
+        },
+    );
+    let row = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(child))).expect("proposer live");
+    assert!(
+        matches!(row, Record::Tasks(tasks::Stored::Live(task)) if task.proposal.is_none() && task.inbox.iter().any(|word| word.kind == tasks::MessageKind::ProposalDecision { proposal, accepted: false } && word.words.as_ref() == b"different plan"))
+    );
+    assert!(driver.delivered.iter().any(|item| matches!(item, Delivery::CallAnswer { call, answer: temper_engine_domain::CallAnswer::ProposalDecided { outcome: tasks::ProposalOutcome::Rejected, .. }, .. } if *call == Token::new(73))));
+}
+
+#[test]
 fn an_amendment_reaches_a_live_run() {
     let (mut driver, parent) = batch_fixture_with(2, 1);
     let member = report_delegate(b"original", Box::new([]));
@@ -2525,6 +2752,8 @@ fn read_only_role_stages_have_one_not_ready_terminal_and_empty_projects_need_no_
             tasks::Request::EscalationNeeded { .. }
             | tasks::Request::EscalationInspected { .. }
             | tasks::Request::EscalationDecided { .. }
+            | tasks::Request::ProposalDecided { .. }
+            | tasks::Request::ProposalStalled { .. }
             | tasks::Request::Made { .. }
             | tasks::Request::Refused { .. }
             | tasks::Request::Done { .. }
@@ -2561,6 +2790,8 @@ fn read_only_role_stages_have_one_not_ready_terminal_and_empty_projects_need_no_
         | tasks::Request::EscalationNeeded { .. }
         | tasks::Request::EscalationInspected { .. }
         | tasks::Request::EscalationDecided { .. }
+        | tasks::Request::ProposalDecided { .. }
+        | tasks::Request::ProposalStalled { .. }
         | tasks::Request::Made { .. }
         | tasks::Request::Refused { .. }
         | tasks::Request::Done { .. }

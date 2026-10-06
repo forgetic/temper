@@ -18,7 +18,7 @@ pub enum Control {
 }
 
 /// Whole optional task changes; root checks any widening against its holder.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Amendment {
     pub spec: Option<Spec>,
     pub wake: Option<WakePolicy>,
@@ -35,6 +35,7 @@ pub struct History {
     pub by: Party,
     pub change: Change,
     pub reason: Box<[u8]>,
+    pub proposal: Option<Box<crate::Proposal>>,
 }
 
 /// One kind of durable task-tree change.
@@ -44,6 +45,11 @@ pub enum Change {
     Released,
     Amended,
     Moved,
+    Proposed,
+    ProposalPassed,
+    ProposalAccepted,
+    ProposalRejected,
+    ProposalWithdrawn,
 }
 
 fn history(domain: &mut Domain, number: u64, by: Party, change: Change, reason: &[u8], out: &mut Queue<Request>) {
@@ -56,6 +62,7 @@ fn history(domain: &mut Domain, number: u64, by: Party, change: Change, reason: 
             by,
             change,
             reason: reason.into(),
+            proposal: None,
         }),
     });
 }
@@ -69,7 +76,7 @@ pub(crate) fn amend(
     domain: &mut Domain,
     env: &Env<Limits>,
     to: ReplyTo,
-    by: u64,
+    by: Party,
     number: u64,
     message: u64,
     stop_run: bool,
@@ -80,7 +87,7 @@ pub(crate) fn amend(
         Ok(to) => to,
         Err((to, why)) => return refused(to, Some(number), why, out),
     };
-    if by == number || !below(domain, number, by, env.limits.tasks) {
+    if !allowed(domain, number, by, env.limits.tasks) {
         return refused(to, Some(number), Refusal::Reference, out);
     }
     let old = record(domain, number).expect("entrance found task");
@@ -151,6 +158,8 @@ pub(crate) fn amend(
                 at = item.at;
             }
             MessageKind::Words
+            | MessageKind::Proposal { .. }
+            | MessageKind::ProposalDecision { .. }
             | MessageKind::Question
             | MessageKind::Answer { .. }
             | MessageKind::Notice { .. }
@@ -162,7 +171,7 @@ pub(crate) fn amend(
     let next_revision = old.revision.checked_add(1).expect("revision preflighted");
     let word = Word {
         number: message,
-        from: Party::Task(by),
+        from: by,
         kind: MessageKind::Amendment { revision: next_revision },
         words: amendment.reason.clone(),
         at,
@@ -200,7 +209,7 @@ pub(crate) fn amend(
     if attempt.is_some() {
         task.record.narrowing = true;
     }
-    history(domain, number, Party::Task(by), Change::Amended, &amendment.reason, out);
+    history(domain, number, by, Change::Amended, &amendment.reason, out);
     publish(domain, env, number, out);
     if let Some(attempt) = attempt {
         out.push(Request::Stop { task: number, attempt });
@@ -228,11 +237,19 @@ fn below(domain: &Domain, number: u64, ancestor: u64, bound: u32) -> bool {
     false
 }
 
+fn allowed(domain: &Domain, number: u64, by: Party, bound: u32) -> bool {
+    match by {
+        Party::Task(task) => task != number && below(domain, number, task, bound),
+        Party::Person(person) => person != 0,
+        Party::Deployment { .. } => false,
+    }
+}
+
 pub(crate) fn apply(
     domain: &mut Domain,
     env: &Env<Limits>,
     to: ReplyTo,
-    by: u64,
+    by: Party,
     number: u64,
     control: Control,
     out: &mut Queue<Request>,
@@ -241,7 +258,7 @@ pub(crate) fn apply(
         Ok(to) => to,
         Err((to, why)) => return refused(to, Some(number), why, out),
     };
-    if by == number || !below(domain, number, by, env.limits.tasks) {
+    if !allowed(domain, number, by, env.limits.tasks) {
         return refused(to, Some(number), Refusal::Reference, out);
     }
     match control {
@@ -263,7 +280,7 @@ pub(crate) fn apply(
                 }
             }
             for child in selected.into_boxed() {
-                history(domain, child, Party::Task(by), Change::Cancelled, &reason, out);
+                history(domain, child, by, Change::Cancelled, &reason, out);
             }
             crate::closing::cancel_tree(domain, env, number, &reason, out);
             out.push(Request::Done { reply_to: to });
@@ -294,7 +311,7 @@ pub(crate) fn apply(
             task.record.phase = next;
             task.record.tries = Tries::NONE;
             task.record.refusals = 0;
-            history(domain, number, Party::Task(by), Change::Released, &[], out);
+            history(domain, number, by, Change::Released, &[], out);
             publish(domain, env, number, out);
             if record(domain, number).expect("released task live").phase == Phase::Active(Active::Due) {
                 crate::domain::activate(domain, number, out);

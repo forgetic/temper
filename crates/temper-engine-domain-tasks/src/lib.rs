@@ -57,6 +57,7 @@ mod funders;
 mod inbox;
 mod limits;
 mod owned;
+mod proposals;
 mod refs;
 mod run;
 mod stored;
@@ -80,6 +81,9 @@ pub use failures::{Class, Retries, Retry, Tries};
 pub use funders::FundingRecord;
 pub use limits::{Limits, worst_case};
 pub use owned::stored_bytes;
+pub use proposals::{
+    Proposal, ProposalAction, ProposalDecision, ProposalHolder, ProposalKind, ProposalOutcome, ProposalState,
+};
 pub use value::{
     Authority, AuthorityExecutor, Budget, Delegation, Funder, Grant, Last, Numbers, Pattern, Scopes, Tools,
 };

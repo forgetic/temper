@@ -30,6 +30,7 @@ pub const LIMITS: Limits = Limits {
     inbox_messages: 8,
     inbox_bytes: 128,
     message_bytes: 32,
+    proposal_stall: Duration::from_millis(10),
     saved_repositories: 2,
     contract_choices: 4,
     charters: 2,
@@ -286,6 +287,8 @@ impl World {
             | Request::EscalationNeeded { .. }
             | Request::EscalationInspected { .. }
             | Request::EscalationDecided { .. }
+            | Request::ProposalDecided { .. }
+            | Request::ProposalStalled { .. }
             | Request::Made { .. }
             | Request::Refused { .. }
             | Request::Done { .. }
@@ -308,6 +311,10 @@ impl World {
             | Event::Activation { task, cause: Cause::Priced { cumulative }, .. } => Some((*task, *cumulative)),
             Event::OpenPeriod { .. }
             | Event::Control { .. }
+            | Event::Propose { .. }
+            | Event::DecideProposal { .. }
+            | Event::WithdrawProposal { .. }
+            | Event::StalledProposal { .. }
             | Event::Amend { .. }
             | Event::CarvePool { .. }
             | Event::Make { .. }
@@ -341,6 +348,10 @@ impl World {
             }
             Event::OpenPeriod { .. }
             | Event::Control { .. }
+            | Event::Propose { .. }
+            | Event::DecideProposal { .. }
+            | Event::WithdrawProposal { .. }
+            | Event::StalledProposal { .. }
             | Event::CarvePool { .. }
             | Event::Make { .. }
             | Event::Prepare { .. }
@@ -467,6 +478,8 @@ impl World {
                 | Request::EscalationsRechecked { .. }
                 | Request::EscalationInspected { .. }
                 | Request::EscalationDecided { .. }
+                | Request::ProposalDecided { .. }
+                | Request::ProposalStalled { .. }
                 | Request::Sent { .. }
                 | Request::Relay { .. }
                 | Request::Notify { .. }
@@ -523,8 +536,11 @@ impl World {
                 | Request::EscalationNeeded { .. }
                 | Request::Relay { .. }
                 | Request::Notify { .. }
-                | Request::Timer { .. } => {}
-                Request::Sent { reply_to, .. } | Request::Done { reply_to } => self.reply(reply_to, Reply::Done),
+                | Request::Timer { .. }
+                | Request::ProposalStalled { .. } => {}
+                Request::Sent { reply_to, .. }
+                | Request::Done { reply_to }
+                | Request::ProposalDecided { reply_to, .. } => self.reply(reply_to, Reply::Done),
                 Request::Made { reply_to, tasks } => self.reply(reply_to, Reply::Made(tasks.into_vec())),
                 Request::Refused { reply_to, problem } => self.reply(reply_to, Reply::Refused(problem)),
                 Request::Acknowledged { reply_to, accepted, .. } => self.reply(reply_to, Reply::Acknowledged(accepted)),
@@ -712,7 +728,9 @@ impl World {
                 | Request::EscalationsInspected { .. }
                 | Request::EscalationsRechecked { .. }
                 | Request::EscalationInspected { .. }
-                | Request::EscalationDecided { .. } => {}
+                | Request::EscalationDecided { .. }
+                | Request::ProposalDecided { .. }
+                | Request::ProposalStalled { .. } => {}
             }
             self.pending.push(request);
         }

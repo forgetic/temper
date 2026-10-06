@@ -43,7 +43,7 @@ mod limits;
 mod tests;
 pub use boundary::{
     Ask, EscalationChoice, EscalationDecision, Event, Holding, Identity, IdentityKey, InitialOwner, Key, Outcome,
-    Refusal, Reply, Request, RequestKey, ResultRef, Role, Stored,
+    ProposalChoice, ProposalDecision, Refusal, Reply, Request, RequestKey, ResultRef, Role, Stored,
 };
 pub use domain::{Domain, fire, max_out, step};
 pub use facts::Fact;

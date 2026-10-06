@@ -61,6 +61,8 @@ fn inspected(
             | tasks::Request::EscalationNeeded { .. }
             | tasks::Request::EscalationInspected { .. }
             | tasks::Request::EscalationDecided { .. }
+            | tasks::Request::ProposalDecided { .. }
+            | tasks::Request::ProposalStalled { .. }
             | tasks::Request::Made { .. }
             | tasks::Request::Refused { .. }
             | tasks::Request::Done { .. }
@@ -225,6 +227,8 @@ fn recheck(domain: &mut Domain, env: &Env<Limits>, request: Token, project: u32)
             tasks::Request::EscalationsInspected { .. }
             | tasks::Request::EscalationInspected { .. }
             | tasks::Request::EscalationDecided { .. }
+            | tasks::Request::ProposalDecided { .. }
+            | tasks::Request::ProposalStalled { .. }
             | tasks::Request::Made { .. }
             | tasks::Request::Refused { .. }
             | tasks::Request::Done { .. }

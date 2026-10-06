@@ -70,7 +70,7 @@ pub(crate) fn turn(
         },
         None => false,
     };
-    if beyond_offer || !crate::inbox::readable(old, read) {
+    if beyond_offer || !crate::inbox::readable(domain, number, read) {
         return refused(to, Some(number), Refusal::Read, out);
     }
     let spent = match check_charge(domain, number, cumulative) {

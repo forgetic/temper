@@ -37,6 +37,7 @@ pub fn limits() -> engine::Limits {
         inbox_messages: 4,
         inbox_bytes: 128,
         message_bytes: 64,
+        proposal_stall: Duration::from_millis(10),
         saved_repositories: 2,
         contract_choices: 1,
         charters: 1,

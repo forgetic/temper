@@ -2,7 +2,10 @@
 //! (domain/tasks.md, section 2; domain/engine.md, sections 5.3 and 5.6).
 //! Measures existing ownership without allocating or cloning; shape admission
 //! remains with tasks and authority decisions remain with root policy checks.
-use crate::{Authority, Contract, Ending, Last, Parameter, Phase, Spec, Stored, TaskRecord, TaskResult, Was};
+use crate::{
+    Authority, Contract, Ending, Last, Parameter, Phase, Proposal, ProposalAction, ProposalState, Spec, Stored,
+    TaskRecord, TaskResult, Was,
+};
 use core::mem::{size_of, size_of_val};
 
 /// Pure borrowed measurement for root journal/load byte admission: counts existing boxed records,
@@ -12,7 +15,13 @@ use core::mem::{size_of, size_of_val};
 #[must_use]
 pub fn stored_bytes(record: &Stored) -> Option<u64> {
     match record {
-        Stored::History(row) => bytes(row.reason.len()),
+        Stored::History(row) => {
+            let mut total = bytes(row.reason.len())?;
+            if let Some(proposal) = &row.proposal {
+                total = total.checked_add(proposal_bytes(proposal)?)?;
+            }
+            Some(total)
+        }
         Stored::Live(task) | Stored::Ended(task) => task_bytes(task),
         Stored::Ledger(_) => Some(0),
     }
@@ -92,6 +101,40 @@ fn phase_bytes(phase: &Phase) -> Option<u64> {
     }
 }
 
+fn proposal_bytes(proposal: &Proposal) -> Option<u64> {
+    let mut total = bytes(size_of::<Proposal>())?.checked_add(bytes(proposal.reason.len())?)?;
+    if let ProposalState::Rejected { reason, .. } = &proposal.state {
+        total = total.checked_add(bytes(reason.len())?)?;
+    }
+    match &proposal.action {
+        ProposalAction::Batch(batch) => {
+            total = total.checked_add(bytes(size_of_val(&**batch))?)?;
+            for member in batch {
+                total = total
+                    .checked_add(spec_bytes(&member.spec)?)?
+                    .checked_add(authority_bytes(&member.authority)?)?
+                    .checked_add(contract_bytes(&member.contract)?)?
+                    .checked_add(bytes(size_of_val(&*member.dependencies))?)?;
+            }
+        }
+        ProposalAction::Amend { amendment, .. } => {
+            total = total.checked_add(bytes(amendment.reason.len())?)?;
+            if let Some(spec) = &amendment.spec {
+                total = total.checked_add(spec_bytes(spec)?)?;
+            }
+            if let Some(authority) = &amendment.authority {
+                total = total.checked_add(authority_bytes(authority)?)?;
+            }
+            if let Some(dependencies) = &amendment.dependencies {
+                total = total.checked_add(bytes(size_of_val(&**dependencies))?)?;
+            }
+        }
+        ProposalAction::Widen { authority, .. } => total = total.checked_add(authority_bytes(authority)?)?,
+        ProposalAction::Release { .. } => {}
+    }
+    Some(total)
+}
+
 fn task_bytes(task: &TaskRecord) -> Option<u64> {
     let mut inbox_bytes = bytes(size_of_val(&*task.inbox))?;
     for word in &task.inbox {
@@ -107,6 +150,10 @@ fn task_bytes(task: &TaskRecord) -> Option<u64> {
             crate::Escalation::Unheld { .. }
             | crate::Escalation::Routing { .. }
             | crate::Escalation::Waiting { .. } => 0,
+        })?
+        .checked_add(match &task.proposal {
+            Some(proposal) => proposal_bytes(proposal)?,
+            None => 0,
         })?
         .checked_add(bytes(size_of_val(&*task.dependencies))?)?
         .checked_add(bytes(size_of_val(&*task.delegates))?)?

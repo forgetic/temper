@@ -10,6 +10,7 @@ pub(crate) fn room(domain: &Domain, limits: &Limits, task: u64, count: u32, byte
         return false;
     };
     let Some(reserved) = record.delegates.len().checked_add(record.questions.len()) else { return false };
+    let Some(reserved) = reserved.checked_add(usize::from(record.proposal.is_some())) else { return false };
     let Some((subscription_count, subscription_bytes)) = crate::subscriptions::credit(record, limits) else {
         return false;
     };
@@ -41,6 +42,9 @@ pub(crate) fn room(domain: &Domain, limits: &Limits, task: u64, count: u32, byte
     let Some(total_bytes) = total_bytes.checked_add(answer_bytes) else {
         return false;
     };
+    let proposal_bytes =
+        if record.proposal.is_some() { usize::try_from(limits.message_bytes).expect("u32 fits usize") } else { 0 };
+    let Some(total_bytes) = total_bytes.checked_add(proposal_bytes) else { return false };
     let Some(total_bytes) = total_bytes.checked_add(subscription_bytes) else { return false };
     total_count <= usize::try_from(limits.inbox_messages).expect("u32 fits usize")
         && total_bytes <= usize::try_from(limits.inbox_bytes).expect("u32 fits usize")
@@ -69,7 +73,9 @@ pub(crate) fn message(
     };
     let sendable = match word.kind {
         MessageKind::Words | MessageKind::Question | MessageKind::Answer { .. } => true,
-        MessageKind::Amendment { .. }
+        MessageKind::Proposal { .. }
+        | MessageKind::Amendment { .. }
+        | MessageKind::ProposalDecision { .. }
         | MessageKind::Result(_)
         | MessageKind::Notice { .. }
         | MessageKind::Timer { .. }
@@ -115,7 +121,9 @@ pub(crate) fn message(
             }
             Some(question)
         }
-        MessageKind::Amendment { .. }
+        MessageKind::Proposal { .. }
+        | MessageKind::Amendment { .. }
+        | MessageKind::ProposalDecision { .. }
         | MessageKind::Result(_)
         | MessageKind::Notice { .. }
         | MessageKind::Timer { .. }
@@ -190,6 +198,8 @@ pub(crate) fn delegate_result(
     match word.kind {
         MessageKind::Result(_) => {}
         MessageKind::Words
+        | MessageKind::Proposal { .. }
+        | MessageKind::ProposalDecision { .. }
         | MessageKind::Amendment { .. }
         | MessageKind::Question
         | MessageKind::Answer { .. }
@@ -220,11 +230,42 @@ pub(crate) fn delegate_result(
     crate::wake::after_message(domain, env, number, previous, word, out);
 }
 
-pub(crate) fn readable(task: &crate::TaskRecord, read: Option<u64>) -> bool {
+/// Root-authenticated proposal decision consumes the pending proposal's
+/// reserved inbox slot and wakes or relays the proposer after commitment.
+pub(crate) fn proposal_decision(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    number: u64,
+    word: Word,
+    out: &mut Queue<Request>,
+) {
+    let old = record(domain, number).expect("proposal's live proposer");
+    assert!(old.proposal.is_none() && word.number > old.last_message, "decision follows proposal and is fresh");
+    assert!(room(domain, &env.limits, number, 1, word.words.len()), "reserved proposal slot remains");
+    let previous = if old.last_message == 0 { None } else { Some(old.last_message) };
+    let mut inbox = List::with_capacity(env.limits.inbox_messages);
+    for item in &old.inbox {
+        inbox.push(item.clone()).expect("existing inbox bounded");
+    }
+    inbox.push(word.clone()).expect("proposal inbox credit");
+    let task = task_mut(domain, number).expect("proposal's live proposer");
+    task.record.last_message = word.number;
+    task.record.inbox = inbox.into_boxed();
+    publish(domain, env, number, out);
+    crate::wake::after_message(domain, env, number, previous, word, out);
+}
+
+pub(crate) fn readable(domain: &Domain, task: u64, read: Option<u64>) -> bool {
     match read {
         None => true,
         Some(number) => {
-            for word in &task.inbox {
+            let task_record = record(domain, task).expect("readable task live");
+            for word in &task_record.inbox {
+                if word.number == number {
+                    return true;
+                }
+            }
+            for word in crate::proposals::waiting_for(domain, task) {
                 if word.number == number {
                     return true;
                 }

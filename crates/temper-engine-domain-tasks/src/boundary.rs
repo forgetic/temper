@@ -81,6 +81,11 @@ pub struct Subscription {
 /// Kind of a durable task-inbox message (domain/tasks.md, sections 5.6 and 7).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum MessageKind {
+    /// Virtual inbox entry for a pending proposal; its reason is in `Word::words`.
+    /// The proposal owns its durable state and takes no inbox room.
+    Proposal { proposer: u64, proposal: u64, kind: crate::ProposalKind },
+    /// Final accepted or rejected proposal, delivered to its proposer.
+    ProposalDecision { proposal: u64, accepted: bool },
     /// Whole words from a person or referenced task.
     Words,
     /// Latest committed amendment, always waking and merging by task.
@@ -483,6 +488,8 @@ pub struct TaskRecord {
     /// One bounded semantic held-chat decision and checked revision. Root owns
     /// authentication, routing and historical receipts.
     pub escalation: crate::Escalation,
+    /// At most one pending action awaiting a holder; its terminal leaves live memory as history.
+    pub proposal: Option<Box<crate::Proposal>>,
     /// Stable never-reused deployment task identity.
     pub number: u64,
     pub project: u32,
@@ -690,10 +697,26 @@ pub enum Accepted {
 /// notifications have no reply destination and may be ignored if stale. (domain/tasks.md, sections 4–5).
 #[derive(PartialEq, Eq, Debug)]
 pub enum Event {
+    /// Root-authorized bounded proposal and resolved first holder.
+    Propose { reply_to: ReplyTo, proposal: crate::Proposal },
+    /// Root-checked current holder resolves a pending proposal after executing an acceptance.
+    DecideProposal {
+        reply_to: ReplyTo,
+        proposer: u64,
+        proposal: u64,
+        /// Fresh root-issued message for acceptance/rejection, absent for pass.
+        message: Option<u64>,
+        by: Party,
+        decision: crate::ProposalDecision,
+    },
+    /// Proposer withdraws its own pending action before it closes.
+    WithdrawProposal { reply_to: ReplyTo, proposer: u64, proposal: u64 },
+    /// Root routes one stalled pending proposal to its next covering holder.
+    StalledProposal { proposer: u64, proposal: u64, holder: crate::ProposalHolder },
     /// Root-checked live ancestor controls a delegate and its subtree.
-    Control { reply_to: ReplyTo, by: u64, task: u64, control: crate::Control },
+    Control { reply_to: ReplyTo, by: Party, task: u64, control: crate::Control },
     /// Root-checked amendment of a live delegate, with a fresh commit-order message number.
-    Amend { reply_to: ReplyTo, by: u64, task: u64, message: u64, stop_run: bool, amendment: crate::Amendment },
+    Amend { reply_to: ReplyTo, by: Party, task: u64, message: u64, stop_run: bool, amendment: crate::Amendment },
     /// Install one root-numbered standing interest for a current task.
     Subscribe { reply_to: ReplyTo, task: u64, subscription: Subscription },
     /// Remove one interest owned by a current task.
@@ -896,6 +919,10 @@ pub enum Event {
 /// saves/erases with effects and delays outward replies until durability. (domain/tasks.md, section 5).
 #[derive(PartialEq, Eq, Debug)]
 pub enum Request {
+    /// One nonfinal holder's wait bound elapsed; root chooses the next holder.
+    ProposalStalled { proposer: u64, proposal: u64, holder: crate::ProposalHolder },
+    /// Exact semantic proposal decision terminal for a named call or keyed person request.
+    ProposalDecided { reply_to: ReplyTo, proposer: u64, number: u64, outcome: crate::ProposalOutcome },
     /// Root allocates a commit-order message number for this subscribed state change.
     Notify { task: u64, subscription: u64, target: u64, state: NoticeState, words: Box<[u8]> },
     /// Root allocates a commit-order message number for this due timer.
@@ -1113,6 +1140,8 @@ pub struct DelegateState {
 pub struct DelegationContext {
     pub project: u32,
     pub requester: Party,
+    /// A held or closing ancestor cannot take a proposal decision.
+    pub deciding: bool,
     pub authority: Authority,
     pub numbers: Numbers,
     pub tasks_left: u32,

@@ -26,6 +26,7 @@
 //! Child facts are disposable observations; [`Domain::quiescent`] reports
 //! internal idleness, while an external referee establishes final story results.
 mod escalation;
+mod proposals;
 mod results;
 
 mod roles;
@@ -153,6 +154,12 @@ pub struct Turn {
 /// (domain/engine.md, section 7.3). Later routes extend this vocabulary.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Tool {
+    /// Ask a covering ancestor or person to carry one action the caller cannot take alone.
+    Propose { action: ProposedAction, reason: Box<[u8]>, as_holder: bool },
+    /// Decide one pending proposal currently addressed to this task.
+    Decide { proposer: u64, proposal: u64, decision: ProposalChoice },
+    /// Withdraw this task's still-pending proposal.
+    Withdraw { proposal: u64 },
     /// Create one authorized batch of direct task delegates.
     Delegate { batch: Box<[Delegate]> },
     /// Amend one live delegate after authority fitting and finite source checks.
@@ -175,8 +182,27 @@ pub enum Tool {
     RejectedMessage(tasks::Refusal),
     /// Root-normalized control shape refusal before retaining its payload.
     RejectedControl(tasks::Refusal),
+    /// Root-normalized proposal shape refusal before retaining its action.
+    RejectedProposal(tasks::Refusal),
     /// The engine records an unavailable answer for a route not yet installed.
     Unavailable,
+}
+
+/// Action a worker can submit for an authority holder's decision.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum ProposedAction {
+    Batch(Box<[Delegate]>),
+    Amend { task: u64, amendment: tasks::Amendment },
+    Widen { task: u64, authority: tasks::Authority },
+    Release { task: u64 },
+}
+
+/// A task holder's answer to one proposal.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum ProposalChoice {
+    Accept,
+    Reject { reason: Box<[u8]> },
+    Pass,
 }
 
 /// The sendable portion of the task inbox vocabulary.
@@ -453,6 +479,7 @@ pub enum Request {
 #[derive(Debug)]
 enum Work {
     Tasks(tasks::Event),
+    PersonProposal(tasks::Event),
     People(people::Event),
     Fleet(fleet::Event),
     Brief(brief::Event),
@@ -538,11 +565,21 @@ struct RestoringProof {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum RoutedCall {
+    Propose { key: CallKey, proposal: u64 },
+    Decide { key: CallKey, proposal: u64 },
+    Withdraw { key: CallKey, proposal: u64 },
+    Accepting { key: CallKey, proposer: u64, proposal: u64, message: u64 },
     Message(CallKey),
     Introduce(CallKey),
     Subscribe { key: CallKey, subscription: u64 },
     Unsubscribe(CallKey),
     Control(CallKey),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PersonProposalRoute {
+    Deciding { request: Token, proposer: u64, proposal: u64 },
+    Accepting { request: Token, person: u64, proposer: u64, proposal: u64, message: u64 },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -579,6 +616,7 @@ pub struct Domain {
     made: Map<Token, u64>,
     delegating: Map<Token, CallKey>,
     routing_calls: Map<Token, RoutedCall>,
+    routing_people_proposals: Map<Token, PersonProposalRoute>,
     ending_positions: Map<u64, u64>,
     saying: Map<Token, u64>,
     relaying: Option<PendingRelay>,
@@ -652,6 +690,7 @@ impl Domain {
             made: Map::with_capacity(limits.people.pending),
             delegating: Map::with_capacity(limits.fleet.calls),
             routing_calls: Map::with_capacity(limits.fleet.calls),
+            routing_people_proposals: Map::with_capacity(limits.people.pending),
             ending_positions: Map::with_capacity(limits.tasks.tasks),
             saying: Map::with_capacity(limits.people.pending),
             relaying: None,
@@ -705,6 +744,7 @@ impl Domain {
             && self.dependency_results.is_empty()
             && self.pending_calls.is_empty()
             && self.routing_calls.is_empty()
+            && self.routing_people_proposals.is_empty()
             && self.made.is_empty()
             && self.delegating.is_empty()
             && self.ending_positions.is_empty()
@@ -970,6 +1010,7 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
                 body.tool = match body.tool {
                     Tool::Message { .. } => Tool::RejectedMessage(why),
                     Tool::Amend { .. } | Tool::Cancel { .. } | Tool::Release { .. } => Tool::RejectedControl(why),
+                    Tool::Propose { .. } | Tool::Decide { .. } | Tool::Withdraw { .. } => Tool::RejectedProposal(why),
                     Tool::Delegate { .. }
                     | Tool::Introduce { .. }
                     | Tool::Subscribe { .. }
@@ -977,6 +1018,7 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
                     | Tool::Rejected(_)
                     | Tool::RejectedMessage(_)
                     | Tool::RejectedControl(_)
+                    | Tool::RejectedProposal(_)
                     | Tool::Unavailable => Tool::Rejected(why),
                 };
             }
@@ -1219,7 +1261,7 @@ pub fn fire(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
     let mut decision = Decision::new(&env.limits.journal);
     let mut tasks_out = Queue::with_capacity(tasks::max_out(&env.limits.tasks));
     tasks::fire(&mut domain.tasks, &environment_tasks(env), &mut tasks_out);
-    tasks_outputs(domain, env, &mut decision, &mut tasks_out);
+    tasks_outputs(domain, env, &mut decision, &mut tasks_out, false);
     let mut fleet_out = Queue::with_capacity(fleet::max_out(&env.limits.fleet));
     fleet::fire(&mut domain.fleet, &environment_fleet(env), &mut fleet_out);
     fleet_outputs(domain, env, &mut decision, &mut fleet_out);
@@ -1245,7 +1287,12 @@ fn route_into(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision) {
             Work::Tasks(event) => {
                 let mut out = Queue::with_capacity(tasks::max_out(&env.limits.tasks));
                 tasks::step(&mut domain.tasks, &environment_tasks(env), event, &mut out);
-                tasks_outputs(domain, env, decision, &mut out);
+                tasks_outputs(domain, env, decision, &mut out, false);
+            }
+            Work::PersonProposal(event) => {
+                let mut out = Queue::with_capacity(tasks::max_out(&env.limits.tasks));
+                tasks::step(&mut domain.tasks, &environment_tasks(env), event, &mut out);
+                tasks_outputs(domain, env, decision, &mut out, true);
             }
             Work::People(event) => {
                 let mut out = Queue::with_capacity(people::max_out(&env.limits.people));
@@ -1333,6 +1380,11 @@ fn people_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decisio
                 people::Ask::DecideEscalation { task, revision, decision, .. } => {
                     escalation::begin(domain, request, person, role, project, task, revision, decision);
                 }
+                people::Ask::DecideProposal { proposer, proposal, decision: choice, .. } => {
+                    proposals::person_decide(
+                        domain, env, decision, request, person, role, project, proposer, proposal, choice,
+                    );
+                }
             },
             people::Request::RolesApplied { .. } => {
                 unreachable!("serialized roles route consumes application terminal")
@@ -1344,6 +1396,7 @@ fn people_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decisio
     }
 }
 
+#[expect(clippy::too_many_lines, reason = "chat admission keeps the keyed person request and task creation together")]
 fn make_chat(
     domain: &mut Domain,
     env: &Env<Limits>,
@@ -1426,7 +1479,10 @@ fn make_chat(
     assert!(domain.made.insert(request, number) == Ok(None), "people route has unique pending key");
     let words = match ask {
         people::Ask::StartChat { words, .. } => words,
-        people::Ask::DecideEscalation { .. } | people::Ask::SetRoles { .. } | people::Ask::Say { .. } => {
+        people::Ask::DecideEscalation { .. }
+        | people::Ask::DecideProposal { .. }
+        | people::Ask::SetRoles { .. }
+        | people::Ask::Say { .. } => {
             unreachable!("other asks routed separately")
         }
     };
@@ -1605,13 +1661,17 @@ fn call_needs_input(tool: &Tool) -> bool {
         | Tool::Rejected(_)
         | Tool::RejectedMessage(_)
         | Tool::RejectedControl(_)
+        | Tool::RejectedProposal(_)
         | Tool::Message { .. }
         | Tool::Introduce { .. }
         | Tool::Subscribe { .. }
         | Tool::Unsubscribe { .. }
         | Tool::Cancel { .. }
         | Tool::Release { .. }
-        | Tool::Amend { .. } => false,
+        | Tool::Amend { .. }
+        | Tool::Propose { .. }
+        | Tool::Decide { .. }
+        | Tool::Withdraw { .. } => false,
         Tool::Delegate { batch } => {
             for member in batch {
                 if !member.spec.inputs.is_empty() {
@@ -1623,12 +1683,67 @@ fn call_needs_input(tool: &Tool) -> bool {
     }
 }
 
+#[expect(clippy::too_many_lines, reason = "one tool shape entrance preflights every bounded call")]
 fn call_shape(tool: &Tool, limits: &tasks::Limits) -> Option<tasks::Refusal> {
     match tool {
-        Tool::Unavailable
+        Tool::Propose { action, reason, .. } => {
+            if reason.len() > usize::try_from(limits.message_bytes).expect("u32 fits usize") {
+                return Some(tasks::Refusal::Read);
+            }
+            match action {
+                ProposedAction::Batch(batch) => {
+                    if batch.is_empty() || batch.len() > usize::try_from(limits.batch).expect("u32 fits usize") {
+                        return Some(tasks::Refusal::Batch);
+                    }
+                    for member in batch {
+                        if !tasks::valid_spec(limits, &member.spec) || !member.spec.inputs.is_empty() {
+                            return Some(tasks::Refusal::Spec);
+                        }
+                        if !tasks::valid_contract(limits, &member.contract)
+                            || !tasks::valid_authority(limits, &member.authority)
+                            || member.dependencies.len() > usize::try_from(limits.dependencies).expect("u32 fits usize")
+                        {
+                            return Some(tasks::Refusal::AuthorityShape);
+                        }
+                    }
+                    None
+                }
+                ProposedAction::Amend { amendment, .. } => {
+                    if amendment.reason.len() > usize::try_from(limits.message_bytes).expect("u32 fits usize") {
+                        Some(tasks::Refusal::Read)
+                    } else if match &amendment.authority {
+                        Some(authority) => !tasks::valid_authority(limits, authority),
+                        None => true,
+                    } {
+                        Some(tasks::Refusal::AuthorityShape)
+                    } else {
+                        None
+                    }
+                }
+                ProposedAction::Widen { authority, .. } => {
+                    if tasks::valid_authority(limits, authority) {
+                        None
+                    } else {
+                        Some(tasks::Refusal::AuthorityShape)
+                    }
+                }
+                ProposedAction::Release { .. } => None,
+            }
+        }
+        Tool::Decide { decision, .. } => match decision {
+            ProposalChoice::Reject { reason }
+                if reason.len() > usize::try_from(limits.message_bytes).expect("u32 fits usize") =>
+            {
+                Some(tasks::Refusal::Read)
+            }
+            ProposalChoice::Accept | ProposalChoice::Reject { .. } | ProposalChoice::Pass => None,
+        },
+        Tool::Withdraw { .. }
+        | Tool::Unavailable
         | Tool::Rejected(_)
         | Tool::RejectedMessage(_)
         | Tool::RejectedControl(_)
+        | Tool::RejectedProposal(_)
         | Tool::Introduce { .. }
         | Tool::Subscribe { .. }
         | Tool::Unsubscribe { .. }
@@ -1825,7 +1940,7 @@ fn control_call(domain: &mut Domain, to: ReplyTo, key: CallKey, target: u64, con
     assert!(domain.routing_calls.insert(token, RoutedCall::Control(key)) == Ok(None), "one live routed call");
     domain.work.push(Work::Tasks(tasks::Event::Control {
         reply_to: ReplyTo::new(token),
-        by: key.task,
+        by: tasks::Party::Task(key.task),
         task: target,
         control,
     }));
@@ -1914,7 +2029,7 @@ fn amend_call(
     assert!(domain.routing_calls.insert(token, RoutedCall::Control(key)) == Ok(None), "one amendment route");
     domain.work.push(Work::Tasks(tasks::Event::Amend {
         reply_to: ReplyTo::new(token),
-        by: key.task,
+        by: tasks::Party::Task(key.task),
         task: target,
         message,
         stop_run,
@@ -2139,7 +2254,13 @@ fn delegate_call(
 }
 
 #[expect(clippy::too_many_lines, reason = "the closed child vocabulary is routed exhaustively inside one decision")]
-fn tasks_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, out: &mut Queue<tasks::Request>) {
+fn tasks_outputs(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    decision: &mut Decision,
+    out: &mut Queue<tasks::Request>,
+    person_proposal: bool,
+) {
     for _ in 0..out.len() {
         match out.pop().expect("tasks output count") {
             tasks::Request::Notify { task, subscription, target, state, words } => {
@@ -2175,7 +2296,13 @@ fn tasks_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
             tasks::Request::Sent { reply_to, task, word } => {
                 let request = reply_to.into_token();
                 if let Some(context) = domain.contexts.get_mut(&task) {
-                    context.inbox = append_word(&context.inbox, &word, env.limits.tasks.inbox_messages);
+                    let capacity = env
+                        .limits
+                        .tasks
+                        .inbox_messages
+                        .checked_add(env.limits.tasks.tasks)
+                        .expect("validated virtual proposal room");
+                    context.inbox = append_word(&context.inbox, &word, capacity);
                     context.last_message = word.number;
                 }
                 match domain.routing_calls.remove(&request) {
@@ -2189,6 +2316,10 @@ fn tasks_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                     ),
                     Some(
                         RoutedCall::Introduce(_)
+                        | RoutedCall::Propose { .. }
+                        | RoutedCall::Decide { .. }
+                        | RoutedCall::Withdraw { .. }
+                        | RoutedCall::Accepting { .. }
                         | RoutedCall::Subscribe { .. }
                         | RoutedCall::Unsubscribe(_)
                         | RoutedCall::Control(_),
@@ -2205,6 +2336,21 @@ fn tasks_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                 }
             }
             tasks::Request::Relay { task, attempt, previous, word } => {
+                let previous = match word.kind {
+                    tasks::MessageKind::Proposal { .. } => match domain.proofs.get(&task) {
+                        Some(proof) => proof.offered,
+                        None => None,
+                    },
+                    tasks::MessageKind::ProposalDecision { .. }
+                    | tasks::MessageKind::Words
+                    | tasks::MessageKind::Amendment { .. }
+                    | tasks::MessageKind::Question
+                    | tasks::MessageKind::Answer { .. }
+                    | tasks::MessageKind::Notice { .. }
+                    | tasks::MessageKind::Timer { .. }
+                    | tasks::MessageKind::News { .. }
+                    | tasks::MessageKind::Result(_) => previous,
+                };
                 emit(decision, &env.limits, Delivery::Relay { task, attempt, previous, word });
             }
             tasks::Request::EscalationsInspected { .. } | tasks::Request::EscalationsRechecked { .. } => {
@@ -2216,6 +2362,69 @@ fn tasks_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
             }
             tasks::Request::EscalationDecided { reply_to, task, revision, outcome } => {
                 escalation::completed(domain, env, decision, reply_to.into_token(), task, revision, outcome);
+            }
+            tasks::Request::ProposalDecided { reply_to, proposer, number, outcome } => {
+                let token = reply_to.into_token();
+                let person_route = if person_proposal { domain.routing_people_proposals.remove(&token) } else { None };
+                if let Some(route) = person_route {
+                    let request = match route {
+                        PersonProposalRoute::Deciding { request, proposer: named, proposal }
+                            if named == proposer && proposal == number =>
+                        {
+                            request
+                        }
+                        PersonProposalRoute::Deciding { .. } | PersonProposalRoute::Accepting { .. } => {
+                            unreachable!("matching person proposal decision")
+                        }
+                    };
+                    let choice = match outcome {
+                        tasks::ProposalOutcome::Accepted => people::ProposalChoice::Accepted,
+                        tasks::ProposalOutcome::Rejected => people::ProposalChoice::Rejected,
+                        tasks::ProposalOutcome::Passed => people::ProposalChoice::Passed,
+                        tasks::ProposalOutcome::Withdrawn => people::ProposalChoice::Withdrawn,
+                        tasks::ProposalOutcome::Stale => people::ProposalChoice::Stale,
+                    };
+                    domain.work.push(Work::People(people::Event::Decided {
+                        request,
+                        outcome: people::Outcome::ProposalDecided { proposer, proposal: number, choice },
+                    }));
+                    continue;
+                }
+                let route = domain.routing_calls.remove(&token).expect("pending proposal decision route");
+                let key = match route {
+                    RoutedCall::Decide { key, proposal } | RoutedCall::Withdraw { key, proposal }
+                        if proposal == number =>
+                    {
+                        key
+                    }
+                    RoutedCall::Propose { .. }
+                    | RoutedCall::Accepting { .. }
+                    | RoutedCall::Decide { .. }
+                    | RoutedCall::Withdraw { .. }
+                    | RoutedCall::Message(_)
+                    | RoutedCall::Introduce(_)
+                    | RoutedCall::Subscribe { .. }
+                    | RoutedCall::Unsubscribe(_)
+                    | RoutedCall::Control(_) => unreachable!("matching proposal decision"),
+                };
+                assert!(key.task == proposer || outcome != tasks::ProposalOutcome::Withdrawn, "withdrawal by proposer");
+                decide_call(
+                    domain,
+                    &env.limits,
+                    decision,
+                    ReplyTo::new(token),
+                    key,
+                    CallAnswer::ProposalDecided { proposal: number, outcome },
+                );
+            }
+            tasks::Request::ProposalStalled { proposer, proposal, holder } => {
+                if let Some(pending) = domain.tasks.proposal(proposer, proposal)
+                    && let tasks::ProposalState::Pending { holder: current, .. } = pending.state
+                    && current == holder
+                    && let Some(next) = proposals::holder(domain, proposer, &pending.action, Some(holder))
+                {
+                    domain.work.push(Work::Tasks(tasks::Event::StalledProposal { proposer, proposal, holder: next }));
+                }
             }
             tasks::Request::Save { record } => {
                 let record = match record {
@@ -2243,6 +2452,43 @@ fn tasks_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
             tasks::Request::Erase { key } => save(decision, &env.limits, Write::Erase(Key::Tasks(key))),
             tasks::Request::Made { reply_to, tasks } => {
                 let request = reply_to.into_token();
+                let person_route =
+                    if person_proposal { domain.routing_people_proposals.remove(&request) } else { None };
+                if let Some(PersonProposalRoute::Accepting { request: named, person, proposer, proposal, message }) =
+                    person_route
+                {
+                    assert!(request == named, "person acceptance correlation");
+                    domain
+                        .routing_people_proposals
+                        .insert(request, PersonProposalRoute::Deciding { request, proposer, proposal })
+                        .expect("person route room");
+                    domain.work.push(Work::PersonProposal(tasks::Event::DecideProposal {
+                        reply_to: ReplyTo::new(request),
+                        proposer,
+                        proposal,
+                        message: Some(message),
+                        by: tasks::Party::Person(person),
+                        decision: tasks::ProposalDecision::Accept,
+                    }));
+                    continue;
+                }
+                if let Some(RoutedCall::Accepting { key, proposer, proposal, message }) =
+                    domain.routing_calls.remove(&request)
+                {
+                    domain
+                        .routing_calls
+                        .insert(request, RoutedCall::Decide { key, proposal })
+                        .expect("acceptance route room");
+                    domain.work.push(Work::Tasks(tasks::Event::DecideProposal {
+                        reply_to: ReplyTo::new(request),
+                        proposer,
+                        proposal,
+                        message: Some(message),
+                        by: tasks::Party::Task(key.task),
+                        decision: tasks::ProposalDecision::Accept,
+                    }));
+                    continue;
+                }
                 match domain.delegating.remove(&request) {
                     Some(key) => decide_call(
                         domain,
@@ -2264,6 +2510,44 @@ fn tasks_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
             }
             tasks::Request::Refused { reply_to, problem } => {
                 let token = reply_to.into_token();
+                let person_route = if person_proposal { domain.routing_people_proposals.remove(&token) } else { None };
+                if let Some(route) = person_route {
+                    let request = match route {
+                        PersonProposalRoute::Deciding { request, .. }
+                        | PersonProposalRoute::Accepting { request, .. } => request,
+                    };
+                    domain.work.push(Work::People(people::Event::Decided {
+                        request,
+                        outcome: people::Outcome::Refused(match problem.why {
+                            tasks::Refusal::Busy | tasks::Refusal::NotReady => people::Refusal::Busy,
+                            tasks::Refusal::Reference | tasks::Refusal::State => people::Refusal::Standing,
+                            tasks::Refusal::Unknown => people::Refusal::Ended,
+                            tasks::Refusal::Funding => people::Refusal::Authority,
+                            tasks::Refusal::Duplicate
+                            | tasks::Refusal::Empty
+                            | tasks::Refusal::Batch
+                            | tasks::Refusal::Live
+                            | tasks::Refusal::Project
+                            | tasks::Refusal::Tree
+                            | tasks::Refusal::Depth
+                            | tasks::Refusal::Delegates
+                            | tasks::Refusal::Subscription
+                            | tasks::Refusal::Dependencies
+                            | tasks::Refusal::Cycle
+                            | tasks::Refusal::Executor
+                            | tasks::Refusal::Spec
+                            | tasks::Refusal::Contract
+                            | tasks::Refusal::AuthorityShape
+                            | tasks::Refusal::Inputs
+                            | tasks::Refusal::Attempt
+                            | tasks::Refusal::LiveDelegates
+                            | tasks::Refusal::Restore
+                            | tasks::Refusal::Read
+                            | tasks::Refusal::Turn => people::Refusal::Limit,
+                        }),
+                    }));
+                    continue;
+                }
                 if let Some(route) = domain.routing_calls.remove(&token) {
                     let (key, answer) = match route {
                         RoutedCall::Message(key) | RoutedCall::Introduce(key) => {
@@ -2273,6 +2557,10 @@ fn tasks_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                             (key, CallAnswer::SubscriptionRefused(problem))
                         }
                         RoutedCall::Control(key) => (key, CallAnswer::ControlRefused(problem)),
+                        RoutedCall::Propose { key, .. }
+                        | RoutedCall::Decide { key, .. }
+                        | RoutedCall::Withdraw { key, .. }
+                        | RoutedCall::Accepting { key, .. } => (key, CallAnswer::ProposalRefused(problem)),
                     };
                     decide_call(domain, &env.limits, decision, ReplyTo::new(token), key, answer);
                 } else if let Some(key) = domain.delegating.remove(&token) {
@@ -2465,13 +2753,51 @@ fn tasks_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
             }
             tasks::Request::Done { reply_to } => {
                 let task = reply_to.into_token().raw();
+                let person_route =
+                    if person_proposal { domain.routing_people_proposals.remove(&Token::new(task)) } else { None };
+                if let Some(PersonProposalRoute::Accepting { request, person, proposer, proposal, message }) =
+                    person_route
+                {
+                    domain
+                        .routing_people_proposals
+                        .insert(request, PersonProposalRoute::Deciding { request, proposer, proposal })
+                        .expect("person acceptance route room");
+                    domain.work.push(Work::PersonProposal(tasks::Event::DecideProposal {
+                        reply_to: ReplyTo::new(request),
+                        proposer,
+                        proposal,
+                        message: Some(message),
+                        by: tasks::Party::Person(person),
+                        decision: tasks::ProposalDecision::Accept,
+                    }));
+                    continue;
+                }
                 if let Some(route) = domain.routing_calls.remove(&Token::new(task)) {
                     let (key, answer) = match route {
+                        RoutedCall::Propose { key, proposal } => (key, CallAnswer::Proposed { proposal }),
+                        RoutedCall::Accepting { key, proposer, proposal, message } => {
+                            domain
+                                .routing_calls
+                                .insert(Token::new(task), RoutedCall::Decide { key, proposal })
+                                .expect("acceptance route room");
+                            domain.work.push(Work::Tasks(tasks::Event::DecideProposal {
+                                reply_to: ReplyTo::new(Token::new(task)),
+                                proposer,
+                                proposal,
+                                message: Some(message),
+                                by: tasks::Party::Task(key.task),
+                                decision: tasks::ProposalDecision::Accept,
+                            }));
+                            continue;
+                        }
                         RoutedCall::Introduce(key) => (key, CallAnswer::Introduced),
                         RoutedCall::Subscribe { key, subscription } => (key, CallAnswer::Subscribed { subscription }),
                         RoutedCall::Unsubscribe(key) => (key, CallAnswer::Unsubscribed),
                         RoutedCall::Control(key) => (key, CallAnswer::Controlled),
                         RoutedCall::Message(_) => unreachable!("message calls produce Sent"),
+                        RoutedCall::Decide { .. } | RoutedCall::Withdraw { .. } => {
+                            unreachable!("proposal decisions produce their own terminal")
+                        }
                     };
                     decide_call(domain, &env.limits, decision, ReplyTo::new(Token::new(task)), key, answer);
                 } else if let Some(attempt) = domain.claiming.remove(&task) {
@@ -2703,7 +3029,10 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                     && proof.attempt == attempt.raw()
                     && proof.offered == relay.previous
                 {
-                    proof.offered = Some(relay.word.number);
+                    proof.offered = Some(match proof.offered {
+                        Some(previous) => previous.max(relay.word.number),
+                        None => relay.word.number,
+                    });
                     save(decision, &env.limits, Write::Save(Record::RunProof(proof.clone())));
                     emit(
                         decision,
@@ -2751,7 +3080,24 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                             key,
                             CallAnswer::ControlRefused(tasks::Problem { task: None, why }),
                         ),
+                        Tool::RejectedProposal(why) => decide_call(
+                            domain,
+                            &env.limits,
+                            decision,
+                            reply_to,
+                            key,
+                            CallAnswer::ProposalRefused(tasks::Problem { task: None, why }),
+                        ),
                         Tool::Delegate { batch } => delegate_call(domain, env, decision, reply_to, key, batch, false),
+                        Tool::Propose { action, reason, as_holder } => {
+                            proposals::propose_call(domain, env, decision, reply_to, key, action, reason, as_holder);
+                        }
+                        Tool::Decide { proposer, proposal, decision: choice } => {
+                            proposals::decide_call(domain, env, decision, reply_to, key, proposer, proposal, choice);
+                        }
+                        Tool::Withdraw { proposal } => {
+                            proposals::withdraw_call(domain, env, decision, reply_to, key, proposal);
+                        }
                         Tool::Amend { target, amendment } => {
                             amend_call(domain, env, decision, reply_to, key, target, amendment);
                         }
@@ -3622,6 +3968,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_add(Map::<Token, u64>::worst_case(limits.people.pending)?)?
         .checked_add(Map::<Token, CallKey>::worst_case(limits.fleet.calls)?)?
         .checked_add(Map::<Token, RoutedCall>::worst_case(limits.fleet.calls)?)?
+        .checked_add(Map::<Token, PersonProposalRoute>::worst_case(limits.people.pending)?)?
         .checked_add(Map::<u64, u64>::worst_case(limits.tasks.tasks)?)?
         .checked_add(Map::<CallKey, bool>::worst_case(limits.call_records)?)?
         .checked_add(Map::<u64, Box<[HistoricalResult]>>::worst_case(limits.tasks.tasks)?)?
@@ -3688,11 +4035,12 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
             u64::from(limits.brief.brief_bytes)
                 .checked_add(List::<brief::Section>::worst_case(limits.brief.sections)?)?
                 .checked_add(u64::from(limits.tasks.inbox_bytes))?
+                .checked_add(u64::from(limits.tasks.tasks).checked_mul(u64::from(limits.tasks.message_bytes))?)?
                 .checked_add(u64::from(limits.tasks.saved_repositories).checked_mul(4)?)?
                 .checked_add(u64::from(limits.journal.transcript_bytes))?
                 .checked_add(List::<Box<[u8]>>::worst_case(limits.journal.transcript_bytes)?)?
                 .checked_add(
-                    u64::from(limits.tasks.inbox_messages)
+                    u64::from(limits.tasks.inbox_messages.checked_add(limits.tasks.tasks)?)
                         .checked_mul(u64::try_from(size_of::<tasks::Word>()).ok()?)?,
                 )?,
         )?,
@@ -4264,6 +4612,40 @@ fn supported_task(task: &tasks::TaskRecord, charter: u32) -> bool {
     task.number != 0 && task.result_position == 0 && executor
 }
 
+fn supported_proposal(task: &tasks::TaskRecord, deployment: &crate::Deployment) -> bool {
+    let Some(proposal) = &task.proposal else { return true };
+    if proposal.number == 0 || proposal.number > deployment.messages || proposal.proposer != task.number {
+        return false;
+    }
+    let holder = match proposal.state {
+        tasks::ProposalState::Pending { holder, .. } => holder,
+        tasks::ProposalState::Accepted { .. }
+        | tasks::ProposalState::Rejected { .. }
+        | tasks::ProposalState::Withdrawn => return false,
+    };
+    let holder_valid = match holder {
+        tasks::ProposalHolder::Task(number) => number != 0 && number <= deployment.tasks,
+        tasks::ProposalHolder::Person(number) => number != 0 && number <= deployment.people,
+        tasks::ProposalHolder::Policy { project, .. } => project == task.project,
+    };
+    if !holder_valid {
+        return false;
+    }
+    match &proposal.action {
+        tasks::ProposalAction::Batch(batch) => {
+            for member in batch {
+                if member.number == 0 || member.number > deployment.tasks {
+                    return false;
+                }
+            }
+            true
+        }
+        tasks::ProposalAction::Amend { task, .. }
+        | tasks::ProposalAction::Widen { task, .. }
+        | tasks::ProposalAction::Release { task } => *task != 0 && *task <= deployment.tasks,
+    }
+}
+
 fn remember_unpriced_terminal(domain: &mut Domain, run: Token, attempt: Token, end: tasks::End) {
     let proof = domain.proofs.get_mut(&run.raw()).expect("current fleet terminal has pre-reserved proof");
     assert!(proof.attempt == attempt.raw(), "fleet terminal belongs to current proof");
@@ -4289,6 +4671,9 @@ fn valid_call_answer(answer: &CallAnswer, deployment: &crate::Deployment, limits
         | CallAnswer::Unsubscribed
         | CallAnswer::Controlled
         | CallAnswer::ControlDenied { .. } => true,
+        CallAnswer::Proposed { proposal } | CallAnswer::ProposalDecided { proposal, .. } => {
+            *proposal != 0 && *proposal <= deployment.messages
+        }
         CallAnswer::Sent { message } => *message != 0 && *message <= deployment.messages,
         CallAnswer::Subscribed { subscription } => *subscription != 0 && *subscription <= deployment.messages,
         CallAnswer::Delegated(numbers) => {
@@ -4314,6 +4699,7 @@ fn valid_call_answer(answer: &CallAnswer, deployment: &crate::Deployment, limits
                         .expect("u32 fits usize")
         }
         CallAnswer::MessageRefused(problem)
+        | CallAnswer::ProposalRefused(problem)
         | CallAnswer::SubscriptionRefused(problem)
         | CallAnswer::DelegationRefused(problem)
         | CallAnswer::ControlRefused(problem) => match problem.task {
@@ -4353,6 +4739,7 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
             tasks::Stored::History(_) => unreachable!("history rows excluded from startup"),
             tasks::Stored::Live(ref task) => {
                 if !supported_task(task, domain.config.charter)
+                    || !supported_proposal(task, &domain.journal.deployment())
                     || !escalation::supported(domain, task)
                     || task.number > domain.journal.deployment().tasks
                     || task.attempt > domain.journal.deployment().runs

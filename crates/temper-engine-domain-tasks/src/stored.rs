@@ -59,6 +59,114 @@ fn valid_phase(task: &TaskRecord, limits: &Limits) -> bool {
     }
 }
 
+#[expect(clippy::too_many_lines, reason = "one restored proposal validates its whole action and pending holder")]
+fn valid_proposal(task: &TaskRecord, limits: &Limits) -> bool {
+    let Some(proposal) = &task.proposal else { return true };
+    if proposal.number == 0
+        || proposal.proposer != task.number
+        || proposal.project != task.project
+        || proposal.reason.len() > usize::try_from(limits.message_bytes).expect("u32 fits usize")
+        || task.revision == 0
+    {
+        return false;
+    }
+    let holder = match proposal.state {
+        crate::ProposalState::Pending { holder, .. } => holder,
+        crate::ProposalState::Accepted { .. }
+        | crate::ProposalState::Rejected { .. }
+        | crate::ProposalState::Withdrawn => return false,
+    };
+    let holder_valid = match holder {
+        crate::ProposalHolder::Task(number) => number != 0 && number != task.number,
+        crate::ProposalHolder::Person(number) => number != 0,
+        crate::ProposalHolder::Policy { project, kind } => {
+            project == task.project
+                && kind
+                    == match proposal.action {
+                        crate::ProposalAction::Batch(_) => crate::ProposalKind::Batch,
+                        crate::ProposalAction::Amend { .. } => crate::ProposalKind::Amend,
+                        crate::ProposalAction::Widen { .. } => crate::ProposalKind::Widen,
+                        crate::ProposalAction::Release { .. } => crate::ProposalKind::Release,
+                    }
+        }
+    };
+    if !holder_valid {
+        return false;
+    }
+    let action_valid = match &proposal.action {
+        crate::ProposalAction::Batch(batch) => {
+            if batch.is_empty() || batch.len() > usize::try_from(limits.batch).expect("u32 fits usize") {
+                return false;
+            }
+            for (at, member) in batch.iter().enumerate() {
+                if member.number == 0
+                    || member.project != task.project
+                    || member.funder != crate::Funder::Task(task.number)
+                    || !crate::batch::valid_spec(limits, &member.spec)
+                    || !member.spec.inputs.is_empty()
+                    || !crate::batch::valid_contract(limits, &member.contract)
+                    || !crate::batch::valid_authority(limits, &member.authority)
+                    || !crate::wake::valid(&member.wake)
+                    || member.dependencies.len() > usize::try_from(limits.dependencies).expect("u32 fits usize")
+                {
+                    return false;
+                }
+                for earlier in batch.iter().take(at) {
+                    if earlier.number == member.number {
+                        return false;
+                    }
+                }
+            }
+            true
+        }
+        crate::ProposalAction::Amend { task: target, amendment } => {
+            *target != 0
+                && amendment.reason.len() <= usize::try_from(limits.message_bytes).expect("u32 fits usize")
+                && match &amendment.spec {
+                    Some(spec) => crate::batch::valid_spec(limits, spec) && spec.inputs.is_empty(),
+                    None => true,
+                }
+                && match &amendment.authority {
+                    Some(authority) => crate::batch::valid_authority(limits, authority),
+                    None => false,
+                }
+                && match &amendment.dependencies {
+                    Some(dependencies) => {
+                        dependencies.len() <= usize::try_from(limits.dependencies).expect("u32 fits usize")
+                    }
+                    None => true,
+                }
+                && match &amendment.wake {
+                    Some(wake) => crate::wake::valid(wake),
+                    None => true,
+                }
+        }
+        crate::ProposalAction::Widen { task: target, authority } => {
+            *target != 0 && crate::batch::valid_authority(limits, authority)
+        }
+        crate::ProposalAction::Release { task: target } => *target != 0,
+    };
+    if !action_valid {
+        return false;
+    }
+    match (&proposal.state, &task.phase) {
+        (
+            crate::ProposalState::Pending { .. },
+            Phase::Waiting | Phase::Active(_) | Phase::Held { was: Was::Waiting | Was::Active(_), .. },
+        ) => true,
+        (
+            crate::ProposalState::Pending { .. },
+            Phase::Closing(_) | Phase::Held { was: Was::Closing(_), .. } | Phase::Ended(_),
+        )
+        | (
+            crate::ProposalState::Accepted { .. }
+            | crate::ProposalState::Rejected { .. }
+            | crate::ProposalState::Withdrawn,
+            _,
+        ) => false,
+    }
+}
+
 fn valid_escalation(task: &TaskRecord, limits: &Limits) -> bool {
     let held = match task.phase {
         Phase::Held { .. } => true,
@@ -118,6 +226,7 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
         || !crate::batch::valid_authority(limits, &task.authority)
         || !valid_phase(task, limits)
         || !valid_escalation(task, limits)
+        || !valid_proposal(task, limits)
     {
         return false;
     }
@@ -147,6 +256,7 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
         .saturating_sub(amendments)
         .saturating_add(task.delegates.len())
         .saturating_add(task.questions.len())
+        .saturating_add(usize::from(task.proposal.is_some()))
         .saturating_add(subscription_count)
         > usize::try_from(limits.inbox_messages).expect("u32 fits usize")
     {
@@ -158,6 +268,7 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
         let Some(total) = bytes.checked_add(word.words.len()) else { return false };
         bytes = total;
         let requester = match word.kind {
+            crate::MessageKind::Proposal { .. } => false,
             crate::MessageKind::Words | crate::MessageKind::Question | crate::MessageKind::Answer { .. } => {
                 match word.from {
                     Party::Person(person) => task.requester == Party::Person(person),
@@ -165,9 +276,17 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
                     Party::Deployment { .. } => false,
                 }
             }
-            crate::MessageKind::Amendment { .. } | crate::MessageKind::Result(_) => match word.from {
+            crate::MessageKind::Amendment { .. } => match word.from {
+                Party::Task(_) | Party::Person(_) => true,
+                Party::Deployment { .. } => false,
+            },
+            crate::MessageKind::Result(_) => match word.from {
                 Party::Task(_) => true,
                 Party::Person(_) | Party::Deployment { .. } => false,
+            },
+            crate::MessageKind::ProposalDecision { .. } => match word.from {
+                Party::Task(_) | Party::Person(_) => true,
+                Party::Deployment { .. } => false,
             },
             crate::MessageKind::Notice { .. } | crate::MessageKind::News { .. } => match word.from {
                 Party::Task(_) => true,
@@ -177,6 +296,7 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
         };
         let bound = match &word.kind {
             crate::MessageKind::Words
+            | crate::MessageKind::ProposalDecision { .. }
             | crate::MessageKind::Amendment { .. }
             | crate::MessageKind::Question
             | crate::MessageKind::Answer { .. } => limits.message_bytes,
@@ -184,7 +304,7 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
             crate::MessageKind::Notice { .. } | crate::MessageKind::News { .. } => {
                 limits.result_bytes.max(limits.message_bytes)
             }
-            crate::MessageKind::Timer { .. } => 0,
+            crate::MessageKind::Proposal { .. } | crate::MessageKind::Timer { .. } => 0,
         };
         if word.number <= previous
             || word.number > task.last_message
@@ -192,7 +312,9 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
                 crate::MessageKind::Words | crate::MessageKind::Question | crate::MessageKind::Answer { .. } => {
                     word.words.is_empty()
                 }
-                crate::MessageKind::Result(_)
+                crate::MessageKind::Proposal { .. }
+                | crate::MessageKind::Result(_)
+                | crate::MessageKind::ProposalDecision { .. }
                 | crate::MessageKind::Amendment { .. }
                 | crate::MessageKind::Notice { .. }
                 | crate::MessageKind::News { .. }
@@ -221,6 +343,13 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
         return false;
     };
     let Some(total) = total.checked_add(answer_reserved) else { return false };
+    let Some(total) = total.checked_add(if task.proposal.is_some() {
+        usize::try_from(limits.message_bytes).expect("u32 fits usize")
+    } else {
+        0
+    }) else {
+        return false;
+    };
     let Some(total) = total.checked_add(subscription_bytes) else { return false };
     if total > usize::try_from(limits.inbox_bytes).expect("u32 fits usize") {
         return false;

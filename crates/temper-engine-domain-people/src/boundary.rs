@@ -75,6 +75,8 @@ pub struct ResultRef {
 /// narrow role administration (domain/people.md, section 5.1).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Ask {
+    /// Authenticated keyed decision for a proposal waiting at this person or a policy role.
+    DecideProposal { project: u32, proposer: u64, proposal: u64, decision: ProposalDecision },
     /// Authenticated requester's whole words to an existing chat.
     Say { project: u32, task: u64, words: Box<[u8]> },
     /// Authenticated Owner's complete project roster replacement; root checks Policy permission and
@@ -105,6 +107,24 @@ pub enum Ask {
         /** Opening words, bounded by `Limits::words` before any route or saved answer. */
         words: Box<[u8]>,
     },
+}
+
+/// Keyed person's choice for a pending proposal.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum ProposalDecision {
+    Accept,
+    Reject { reason: Box<[u8]> },
+    Pass,
+}
+
+/// Committed semantic proposal choice in a keyed person answer.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum ProposalChoice {
+    Accepted,
+    Rejected,
+    Passed,
+    Withdrawn,
+    Stale,
 }
 
 /// Authenticated person's held-chat choice. Rejection words are bounded by
@@ -169,6 +189,8 @@ pub enum Refusal {
 /// nontransient outcomes with the parent's task decision. (domain/people.md, section 5.1).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Outcome {
+    /// Keyed answer to one current or historical proposal decision.
+    ProposalDecided { proposer: u64, proposal: u64, choice: ProposalChoice },
     /// Words were durably admitted under the root-issued message number.
     Said { task: u64, message: u64 },
     /// Root accepted one roster and all affected `Waiting` recipients atomically; saved keyed
