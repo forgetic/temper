@@ -12,7 +12,7 @@ use skein_lib::{Deadlines, Id, List, Map, Queue, Slab};
 pub struct Limits {
     /// Maximum retained live task slots, name-index entries and retry alarms.
     pub tasks: u32,
-    /// Maximum retained finite period/pool identities; source pressure is refused before mutation.
+    /// Maximum retained finite period, pool and recurring allotment identities.
     pub funders: u32,
     /// Maximum live tasks per project, including every member of an admitted batch.
     pub project_tasks: u32,
@@ -65,7 +65,7 @@ pub struct Limits {
     /// Maximum total bytes across every grant's base and terminal segments in one authority
     /// carrier.
     pub authority_bytes: u32,
-    /// Maximum carried authority executor-permission entries; task execution itself is agent-only.
+    /// Maximum carried authority executor-permission entries.
     pub executor_kinds: u32,
     /// Validated per-class failure retry and pause policies.
     pub retries: Retries,
@@ -145,7 +145,14 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_add(Deadlines::<u64>::worst_case(limits.tasks.checked_mul(limits.subscriptions)?)?)?
         .checked_add(Deadlines::<u64>::worst_case(limits.tasks)?)?
         .checked_add(Queue::<Fact>::worst_case(limits.facts)?)?
-        .checked_add(u64::from(limits.tasks).checked_mul(payload.checked_add(proposal_payload)?)?)?
+        .checked_add(
+            u64::from(limits.tasks).checked_mul(
+                payload
+                    .checked_add(proposal_payload)?
+                    .checked_add(proposal_payload)?
+                    .checked_add(u64::try_from(size_of::<crate::RecurringState>()).ok()?)?,
+            )?,
+        )?
         .checked_add(u64::from(limits.charters).checked_mul(4)?)?
         // Bounded graph/admission and traversal snapshots; no recursive walk.
         .checked_add(List::<u64>::worst_case(limits.tasks.max(limits.batch))?.checked_mul(3)?)?

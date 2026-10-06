@@ -411,6 +411,9 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
     }
     match task.executor {
         Executor::Agent { charter } => {
+            if task.recurring.is_some() {
+                return false;
+            }
             for configured in &domain.charters {
                 if *configured == charter {
                     return true;
@@ -418,7 +421,24 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
             }
             false
         }
-        Executor::Procedure { connector, code } => connector != 0 && code != 0,
+        Executor::Procedure { connector: 0, code: 1 } => match &task.recurring {
+            Some(state) => {
+                state.template.key != 0
+                    && crate::recurring::valid_template(
+                        limits,
+                        task.project,
+                        task.authority.budget.spend,
+                        &state.template.batch,
+                    )
+                    && task.numbers.budget == 0
+                    && match state.pending_period {
+                        Some(period) => period == state.last_period,
+                        None => true,
+                    }
+            }
+            None => false,
+        },
+        Executor::Procedure { connector, code } => connector != 0 && code != 0 && task.recurring.is_none(),
     }
 }
 

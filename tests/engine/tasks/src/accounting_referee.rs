@@ -83,7 +83,16 @@ impl Accounting {
                 continue;
             };
             let task = current(rows, old.number).ok_or("live allocation vanished")?;
-            if old.funder != task.funder || old.numbers.budget != task.numbers.budget {
+            let recurring_reset = match old.funder {
+                Funder::Period { project: before, period: old_period } => match task.funder {
+                    Funder::Period { project: after, period: new_period } => {
+                        old.recurring.is_some() && before == after && new_period > old_period && old.numbers.budget == 0
+                    }
+                    Funder::Task(_) | Funder::Pool { .. } | Funder::Recurring { .. } => false,
+                },
+                Funder::Task(_) | Funder::Pool { .. } | Funder::Recurring { .. } => false,
+            };
+            if (old.funder != task.funder && !recurring_reset) || old.numbers.budget != task.numbers.budget {
                 return Err("allocation identity or promise changed");
             }
             let posted = self.newly_settled(rows, Funder::Task(old.number));

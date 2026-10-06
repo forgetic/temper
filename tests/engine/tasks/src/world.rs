@@ -67,6 +67,7 @@ pub fn task(number: u64, dependencies: &[u64]) -> New {
         funder: Funder::Period { project: 1, period: 0 },
         dependencies: dependencies.into(),
         wake: tasks::WakePolicy::DEFAULT,
+        recurring: None,
     }
 }
 
@@ -282,6 +283,7 @@ impl World {
                 );
             }
             Request::Sent { .. }
+            | Request::RecurringDue { .. }
             | Request::Relay { .. }
             | Request::EscalationsInspected { .. }
             | Request::EscalationsRechecked { .. }
@@ -313,6 +315,8 @@ impl World {
             Event::Turn { task, cumulative, .. }
             | Event::Activation { task, cause: Cause::Priced { cumulative }, .. } => Some((*task, *cumulative)),
             Event::OpenPeriod { .. }
+            | Event::TickRecurring { .. }
+            | Event::RecurringBatch { .. }
             | Event::Procedure { .. }
             | Event::Control { .. }
             | Event::Propose { .. }
@@ -352,6 +356,8 @@ impl World {
                 self.message = self.message.max(word.number);
             }
             Event::OpenPeriod { .. }
+            | Event::TickRecurring { .. }
+            | Event::RecurringBatch { .. }
             | Event::Procedure { .. }
             | Event::Control { .. }
             | Event::Move { .. }
@@ -472,6 +478,7 @@ impl World {
                     terminals.push((*task, *attempt));
                 }
                 Request::Made { .. }
+                | Request::RecurringDue { .. }
                 | Request::Refused { .. }
                 | Request::Done { .. }
                 | Request::Acknowledged { accepted: Accepted::Already, .. }
@@ -541,6 +548,7 @@ impl World {
         for request in std::mem::take(&mut self.pending) {
             match request {
                 Request::Save { .. }
+                | Request::RecurringDue { .. }
                 | Request::Erase { .. }
                 | Request::Ended { .. }
                 | Request::EscalationNeeded { .. }
@@ -553,7 +561,12 @@ impl World {
                 Request::Sent { reply_to, .. }
                 | Request::Done { reply_to }
                 | Request::ProposalDecided { reply_to, .. } => self.reply(reply_to, Reply::Done),
-                Request::Made { reply_to, tasks } => self.reply(reply_to, Reply::Made(tasks.into_vec())),
+                Request::Made { reply_to, tasks } => {
+                    let token = reply_to.into_token();
+                    if token.raw() != u64::MAX - 1 {
+                        self.reply(ReplyTo::new(token), Reply::Made(tasks.into_vec()));
+                    }
+                }
                 Request::Refused { reply_to, problem } => self.reply(reply_to, Reply::Refused(problem)),
                 Request::Acknowledged { reply_to, accepted, .. } => self.reply(reply_to, Reply::Acknowledged(accepted)),
                 Request::TurnAcknowledged { reply_to, accepted, .. } => self.reply(reply_to, Reply::Turn(accepted)),
@@ -721,6 +734,7 @@ impl World {
                     );
                 }
                 Request::Notify { .. }
+                | Request::RecurringDue { .. }
                 | Request::Save { .. }
                 | Request::Erase { .. }
                 | Request::Ended { .. }

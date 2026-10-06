@@ -59,6 +59,7 @@ mod moving;
 mod owned;
 mod procedure;
 mod proposals;
+mod recurring;
 mod refs;
 mod run;
 mod stored;
@@ -71,8 +72,9 @@ pub use batch::{valid_authority, valid_contract, valid_spec};
 pub use boundary::{
     Accepted, Active, Cause, Closing, Contract, DelegateState, DelegationContext, End, Ending, Event, Executor, Hold,
     Key, MessageKind, New, NewsClass, NoticeState, Parameter, Party, Phase, Problem, ProcedureDecision, QuestionCredit,
-    Refusal, Request, ResultKind, ResultsWake, RunContext, Spec, Stage, Status, Stored, Subscription, SubscriptionKind,
-    TaskRecord, TaskResult, Verdict, WakePolicy, WakeRule, Was, Word,
+    RecurringOverlap, RecurringState, RecurringTemplate, Refusal, Request, ResultKind, ResultsWake, RunContext, Spec,
+    Stage, Status, Stored, Subscription, SubscriptionKind, TaskRecord, TaskResult, Verdict, WakePolicy, WakeRule, Was,
+    Word,
 };
 pub use control::{Amendment, Change, Control, History};
 pub use domain::{Domain, fire, max_out, step};

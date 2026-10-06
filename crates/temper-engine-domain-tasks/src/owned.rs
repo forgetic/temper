@@ -141,6 +141,21 @@ fn task_bytes(task: &TaskRecord) -> Option<u64> {
         inbox_bytes = inbox_bytes.checked_add(bytes(word.words.len())?)?;
     }
     bytes(size_of::<TaskRecord>())?
+        .checked_add(match &task.recurring {
+            Some(state) => {
+                let mut total = bytes(size_of::<crate::RecurringState>())?
+                    .checked_add(bytes(size_of_val(&*state.template.batch))?)?;
+                for member in &state.template.batch {
+                    total = total
+                        .checked_add(spec_bytes(&member.spec)?)?
+                        .checked_add(authority_bytes(&member.authority)?)?
+                        .checked_add(contract_bytes(&member.contract)?)?
+                        .checked_add(bytes(size_of_val(&*member.dependencies))?)?;
+                }
+                total
+            }
+            None => 0,
+        })?
         .checked_add(spec_bytes(&task.spec)?)?
         .checked_add(authority_bytes(&task.authority)?)?
         .checked_add(contract_bytes(&task.contract)?)?

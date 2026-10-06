@@ -206,6 +206,7 @@ fn materialize(
                 funder: tasks::Funder::Task(proposer),
                 dependencies: dependencies.into_boxed(),
                 wake: member.wake,
+                recurring: None,
             })
             .expect("bounded proposed batch");
     }

@@ -122,10 +122,13 @@ fn check_members(
                 }
             }
             Executor::Procedure { connector, code } => {
-                if connector == 0 || code == 0 {
+                if (connector == 0 && code != 1) || (connector != 0 && code == 0) {
                     return Err(problem(number, Refusal::Executor));
                 }
             }
+        }
+        if !valid_recurring(limits, creator, new) {
+            return Err(problem(number, Refusal::Spec));
         }
         if !valid_spec(limits, &new.spec) {
             return Err(problem(number, Refusal::Spec));
@@ -170,6 +173,24 @@ fn check_members(
         }
     }
     Ok(())
+}
+
+fn valid_recurring(limits: &Limits, creator: Party, new: &New) -> bool {
+    match &new.recurring {
+        Some(template) => {
+            let source = match new.funder {
+                crate::Funder::Period { project, .. } => project == new.project,
+                crate::Funder::Task(_) | crate::Funder::Pool { .. } | crate::Funder::Recurring { .. } => false,
+            };
+            new.executor == (Executor::Procedure { connector: 0, code: 1 })
+                && creator == (Party::Deployment { project: new.project })
+                && source
+                && template.key != 0
+                && new.numbers == (crate::Numbers { budget: 0, spent: 0, spent_below: 0, reserved: 0 })
+                && crate::recurring::valid_template(limits, new.project, new.authority.budget.spend, &template.batch)
+        }
+        None => new.executor != (Executor::Procedure { connector: 0, code: 1 }),
+    }
 }
 
 pub(crate) fn contains(numbers: &[u64], number: u64) -> bool {

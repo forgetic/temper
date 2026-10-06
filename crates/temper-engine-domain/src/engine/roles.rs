@@ -81,7 +81,8 @@ fn inspected(
             | tasks::Request::Sent { .. }
             | tasks::Request::Relay { .. }
             | tasks::Request::Notify { .. }
-            | tasks::Request::Timer { .. } => unreachable!("inspection is read-only"),
+            | tasks::Request::Timer { .. }
+            | tasks::Request::RecurringDue { .. } => unreachable!("inspection is read-only"),
         }
     }
     match terminal.expect("inspection has a terminal") {
@@ -248,7 +249,7 @@ fn recheck(domain: &mut Domain, env: &Env<Limits>, request: Token, project: u32)
             | tasks::Request::RestoreRefused { .. }
             | tasks::Request::Sent { .. }
             | tasks::Request::Relay { .. } => unreachable!("recheck emits waiting contexts and terminal"),
-            tasks::Request::Notify { .. } | tasks::Request::Timer { .. } => {
+            tasks::Request::Notify { .. } | tasks::Request::Timer { .. } | tasks::Request::RecurringDue { .. } => {
                 unreachable!("recheck emits waiting contexts and terminal")
             }
         }

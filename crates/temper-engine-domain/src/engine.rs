@@ -269,6 +269,10 @@ pub struct Call {
 /// be dropped by fleet. Store and refresh variants are terminals, not new calls.
 #[derive(Debug)]
 pub enum Event {
+    /// Deployment configuration starts one durable core recurring procedure.
+    StartRecurring { project: u32, authority: tasks::Authority, template: tasks::RecurringTemplate },
+    /// Deployment configuration opens a newer period and wakes its recurring procedures.
+    Period { project: u32, period: u64, budget: u64 },
     /// Connector to root: one fenced procedure step, after a committed step request.
     ProcedureStep { task: u64, step: u64, connector: u16, code: u32, action: ProcedureAction },
     /// Worker host call, validated by fleet and decided once by the root.
@@ -889,6 +893,33 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
         return;
     }
     match event {
+        Event::StartRecurring { project, authority, template } => {
+            if domain.ready() && admits(domain, &env.limits) {
+                start_recurring(domain, env, project, authority, template);
+            }
+        }
+        Event::Period { project, period, budget } => {
+            let allowed = match domain.config.authority.policy(project) {
+                Some(policy) => budget <= policy.period_spend,
+                None => false,
+            };
+            if domain.ready() && admits(domain, &env.limits) && period > 0 && period >= domain.config.period && allowed
+            {
+                domain.config.period = period;
+                domain.config.period_budget = budget;
+                if domain.tasks.funding(tasks::Funder::Period { project, period }).is_none() {
+                    domain.work.push(Work::Tasks(tasks::Event::OpenPeriod {
+                        reply_to: internal(u64::MAX - 2),
+                        project,
+                        period,
+                        budget,
+                    }));
+                }
+                for task in domain.tasks.recurring_tasks(project) {
+                    domain.work.push(Work::Tasks(tasks::Event::TickRecurring { task, period }));
+                }
+            }
+        }
         Event::ProcedureStep { task, step, connector, code, action } => {
             if !domain.ready() || !admits(domain, &env.limits) {
                 return;
@@ -1646,6 +1677,7 @@ fn make_chat(
             funder: pool,
             dependencies: Box::new([]),
             wake: tasks::WakePolicy::DEFAULT,
+            recurring: None,
         }]),
     }));
 }
@@ -1660,6 +1692,7 @@ fn activate(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, tas
         return;
     }
     match task.executor {
+        tasks::Executor::Procedure { connector: 0, code: 1 } => return,
         tasks::Executor::Procedure { connector, code } => {
             let Some(step) = task.previous_attempt.checked_add(1) else {
                 domain.work.push(Work::Tasks(tasks::Event::Hold { task: number, why: tasks::Hold::Effects }));
@@ -2400,6 +2433,7 @@ fn delegate_call(
                 funder: tasks::Funder::Task(key.task),
                 dependencies: dependencies.into_boxed(),
                 wake: member.wake,
+                recurring: None,
             })
             .expect("bounded delegation batch");
     }
@@ -2499,6 +2533,7 @@ fn procedure_step(
                         funder: tasks::Funder::Task(task),
                         dependencies: dependencies.into_boxed(),
                         wake: member.wake,
+                        recurring: None,
                     })
                     .expect("bounded procedure batch");
             }
@@ -2509,6 +2544,55 @@ fn procedure_step(
         ProcedureAction::Wait => tasks::ProcedureDecision::Wait,
     };
     domain.work.push(Work::Tasks(tasks::Event::Procedure { reply_to: internal(u64::MAX), task, step, decision }));
+}
+
+/// Admit a configured core procedure through the same durable task creation route as other roots.
+fn start_recurring(
+    domain: &mut Domain,
+    _env: &Env<Limits>,
+    project: u32,
+    authority: tasks::Authority,
+    template: tasks::RecurringTemplate,
+) {
+    for task in domain.tasks.recurring_tasks(project) {
+        if domain.tasks.recurring_template(task).expect("identified recurring task").key == template.key {
+            return;
+        }
+    }
+    let Some(policy) = domain.config.authority.policy(project) else { return };
+    if !authority::at_most(&authority_value(&authority), &policy.ceiling, &domain.config.authority.rules().implies)
+        || domain.config.period_budget > policy.period_spend
+    {
+        return;
+    }
+    let period = domain.config.period;
+    if domain.tasks.funding(tasks::Funder::Period { project, period }).is_none() {
+        domain.work.push(Work::Tasks(tasks::Event::OpenPeriod {
+            reply_to: internal(u64::MAX - 2),
+            project,
+            period,
+            budget: domain.config.period_budget,
+        }));
+    }
+    let Some(number) = crate::fresh(&mut domain.journal, Family::Task) else { return };
+    domain.work.push(Work::Tasks(tasks::Event::Make {
+        reply_to: internal(u64::MAX - 2),
+        creator: tasks::Party::Deployment { project },
+        batch: Box::new([tasks::New {
+            number,
+            project,
+            executor: tasks::Executor::Procedure { connector: 0, code: 1 },
+            spec: tasks::Spec { words: b"recurring".as_slice().into(), parameters: Box::new([]), inputs: Box::new([]) },
+            contract: tasks::Contract::Report { words: 0 },
+            numbers: tasks::Numbers { budget: 0, spent: 0, spent_below: 0, reserved: 0 },
+            authority,
+            funder: tasks::Funder::Period { project, period },
+            dependencies: Box::new([]),
+            wake: tasks::WakePolicy::DEFAULT,
+            recurring: Some(Box::new(template)),
+        }]),
+    }));
+    domain.work.push(Work::Tasks(tasks::Event::TickRecurring { task: number, period }));
 }
 
 #[expect(clippy::too_many_lines, reason = "the closed child vocabulary is routed exhaustively inside one decision")]
@@ -2522,6 +2606,56 @@ fn tasks_outputs(
 ) {
     for _ in 0..out.len() {
         match out.pop().expect("tasks output count") {
+            tasks::Request::RecurringDue { task, period, members } => {
+                let Some(context) = domain.tasks.delegation(task) else { continue };
+                let Some(template) = domain.tasks.recurring_template(task) else { continue };
+                if members != u32::try_from(template.batch.len()).expect("bounded template") {
+                    continue;
+                }
+                let mut asked = List::with_capacity(env.limits.tasks.batch);
+                for member in &template.batch {
+                    let executor = match member.executor {
+                        tasks::Executor::Agent { charter } => authority::Executor::Charter(charter),
+                        tasks::Executor::Procedure { code, .. } => authority::Executor::Procedure(code),
+                    };
+                    asked
+                        .push(authority::Delegate { executor, authority: authority_value(&member.authority) })
+                        .expect("bounded template");
+                }
+                let checked = authority::check_batch(
+                    &domain.config.authority,
+                    &authority::BatchAsk {
+                        project: context.project,
+                        creator: authority_value(&context.authority),
+                        numbers: authority::Numbers {
+                            budget: context.authority.budget.spend,
+                            spent: 0,
+                            spent_below: 0,
+                            reserved: 0,
+                        },
+                        tasks_left: context.tasks_left,
+                        tasks: asked.into_boxed(),
+                    },
+                    &mut Queue::with_capacity(
+                        authority::max_out(domain.config.authority.limits()).expect("bounded authority findings"),
+                    ),
+                );
+                if checked.answer != authority::Answer::Allow {
+                    continue;
+                }
+                let mut numbers = List::with_capacity(env.limits.tasks.batch);
+                for _ in 0..members {
+                    let Some(number) = crate::fresh(&mut domain.journal, Family::Task) else { break };
+                    numbers.push(number).expect("bounded recurring batch");
+                }
+                if numbers.len() == members {
+                    domain.work.push(Work::Tasks(tasks::Event::RecurringBatch {
+                        task,
+                        period,
+                        numbers: numbers.into_boxed(),
+                    }));
+                }
+            }
             tasks::Request::EscalationStalled { task, revision, holder } => {
                 escalation::stalled(domain, task, revision, holder);
             }
@@ -2744,7 +2878,7 @@ fn tasks_outputs(
             tasks::Request::Erase { key } => save(decision, &env.limits, Write::Erase(Key::Tasks(key))),
             tasks::Request::Made { reply_to, tasks } => {
                 let request = reply_to.into_token();
-                if request.raw() == u64::MAX {
+                if request.raw() >= u64::MAX - 2 {
                     continue;
                 }
                 let person_route =
@@ -4880,7 +5014,9 @@ fn discard_after_stop(domain: &mut Domain, event: Event) {
             loads::unloaded(&mut domain.loads, owner, &mut out);
             assert!(out.is_empty(), "halted waiter emits no delivery");
         }
-        Event::Start
+        Event::StartRecurring { .. }
+        | Event::Period { .. }
+        | Event::Start
         | Event::ProcedureStep { .. }
         | Event::Committed { .. }
         | Event::Uncommitted { .. }

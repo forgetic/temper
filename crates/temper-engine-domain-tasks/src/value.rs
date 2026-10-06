@@ -153,6 +153,8 @@ pub enum Funder {
         /** Original project period of the pool, unchanged by later openings. */
         period: u64,
     },
+    /// Per-period allotment of a live core recurring procedure, from its project's period.
+    Recurring { project: u32, task: u64, period: u64 },
     /// Financial reservation directly against a retained project period.
     Period {
         project: u32,

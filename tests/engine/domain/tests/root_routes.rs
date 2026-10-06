@@ -1206,6 +1206,106 @@ fn a_proposal_routed_past_a_procedure_to_a_person_is_accepted() {
 }
 
 #[test]
+fn a_recurring_procedure_uses_the_root_period_route() {
+    let mut driver = Driver::new(Store::new());
+    hello(&mut driver);
+    driver.settle();
+    let mut member = tasks::New {
+        number: 1,
+        project: 1,
+        executor: tasks::Executor::Agent { charter: 1 },
+        spec: tasks::Spec { words: b"period work".as_slice().into(), parameters: Box::new([]), inputs: Box::new([]) },
+        contract: tasks::Contract::Report { words: 16 },
+        authority: report_delegate(b"template", Box::new([])).authority,
+        numbers: tasks::Numbers { budget: 10, spent: 0, spent_below: 0, reserved: 0 },
+        funder: tasks::Funder::Period { project: 1, period: 0 },
+        dependencies: Box::new([]),
+        wake: tasks::WakePolicy::DEFAULT,
+        recurring: None,
+    };
+    member.authority.budget.spend = 10;
+    let mut authority = report_delegate(b"template", Box::new([])).authority;
+    authority.delegation.kinds = Box::new([tasks::AuthorityExecutor::Charter(1)]);
+    authority.delegation.tasks = 2;
+    authority.delegation.depth = 1;
+    authority.budget.spend = 30;
+    driver.send(engine::Event::StartRecurring {
+        project: 1,
+        authority,
+        template: tasks::RecurringTemplate {
+            key: 1,
+            batch: Box::new([member]),
+            overlap: tasks::RecurringOverlap::Skip,
+        },
+    });
+    driver.settle();
+    let master = driver
+        .store
+        .rows
+        .iter()
+        .find_map(|(key, value)| match (key, value) {
+            (Key::Tasks(tasks::Key::Live(number)), Record::Tasks(tasks::Stored::Live(row)))
+                if row.recurring.is_some() =>
+            {
+                Some(*number)
+            }
+            _ => None,
+        })
+        .expect("recurring task committed");
+    let child = driver
+        .store
+        .rows
+        .iter()
+        .find_map(|(key, value)| match (key, value) {
+            (Key::Tasks(tasks::Key::Live(number)), Record::Tasks(tasks::Stored::Live(row)))
+                if row.requester == tasks::Party::Task(master) =>
+            {
+                Some(*number)
+            }
+            _ => None,
+        })
+        .expect("period batch committed");
+    assert!(matches!(driver.store.rows.get(&Key::Tasks(tasks::Key::Live(child))),
+        Some(Record::Tasks(tasks::Stored::Live(row))) if row.funder == tasks::Funder::Recurring {
+            project: 1, task: master, period: 1,
+        }
+    ));
+    let run = assigned_task(&driver, child);
+    driver.send(engine::Event::Answer {
+        saved: None,
+        channel: Token::new(7),
+        task: child,
+        attempt: run.attempt,
+        cumulative: 0,
+        end: tasks::End::Finished {
+            result: tasks::TaskResult::Report { words: b"done".as_slice().into() },
+            cancel_delegates: false,
+        },
+    });
+    driver.settle();
+    driver.send(engine::Event::Period { project: 1, period: 2, budget: 1_000 });
+    driver.settle();
+    let next = driver
+        .store
+        .rows
+        .iter()
+        .find_map(|(key, value)| match (key, value) {
+            (Key::Tasks(tasks::Key::Live(number)), Record::Tasks(tasks::Stored::Live(row)))
+                if row.requester == tasks::Party::Task(master) && *number != child =>
+            {
+                Some(*number)
+            }
+            _ => None,
+        })
+        .expect("new period batch committed");
+    assert!(matches!(driver.store.rows.get(&Key::Tasks(tasks::Key::Live(next))),
+        Some(Record::Tasks(tasks::Stored::Live(row))) if row.funder == tasks::Funder::Recurring {
+            project: 1, task: master, period: 2,
+        }
+    ));
+}
+
+#[test]
 fn a_stalled_proposal_passes_up() {
     let (mut driver, root) = batch_fixture_with(3, 4);
     let mut holder = report_delegate(b"holder", Box::new([]));
@@ -2940,6 +3040,7 @@ fn read_only_role_stages_have_one_not_ready_terminal_and_empty_projects_need_no_
             | tasks::Request::Relay { .. }
             | tasks::Request::Notify { .. }
             | tasks::Request::Timer { .. }
+            | tasks::Request::RecurringDue { .. }
             | tasks::Request::RestoreRefused { .. } => panic!("no mutation or lost startup terminal"),
         }
     }
@@ -2980,6 +3081,7 @@ fn read_only_role_stages_have_one_not_ready_terminal_and_empty_projects_need_no_
         | tasks::Request::Relay { .. }
         | tasks::Request::Notify { .. }
         | tasks::Request::Timer { .. }
+        | tasks::Request::RecurringDue { .. }
         | tasks::Request::RestoreRefused { .. } => panic!("one named snapshot"),
     }
 }

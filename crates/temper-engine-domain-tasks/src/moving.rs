@@ -130,7 +130,8 @@ pub(crate) fn apply(
                 Some(parent) => parent.numbers,
                 None => return refused(to, Some(number), Refusal::Funding, out),
             },
-            Funder::Pool { .. } | Funder::Period { .. } => match domain.funding.get(&source) {
+            Funder::Pool { .. } | Funder::Period { .. } | Funder::Recurring { .. } => match domain.funding.get(&source)
+            {
                 Some(ledger) => ledger.numbers,
                 None => return refused(to, Some(number), Refusal::Funding, out),
             },
@@ -174,7 +175,7 @@ pub(crate) fn apply(
                         {
                             return refused(to, Some(number), Refusal::Funding, out);
                         }
-                        Funder::Task(_) | Funder::Pool { .. } | Funder::Period { .. } => {}
+                        Funder::Task(_) | Funder::Pool { .. } | Funder::Recurring { .. } | Funder::Period { .. } => {}
                     }
                 }
                 Numbers { budget: period_budget, spent: 0, spent_below: 0, reserved: 0 }
@@ -231,7 +232,7 @@ pub(crate) fn apply(
                     row.record.numbers.spent_below.checked_add(spent).expect("source preflight");
                 publish(domain, env, parent, out);
             }
-            Funder::Pool { .. } | Funder::Period { .. } => {
+            Funder::Pool { .. } | Funder::Period { .. } | Funder::Recurring { .. } => {
                 let budget = record(domain, number).expect("target live").numbers.budget;
                 let ledger = domain.funding.get_mut(&source).expect("checked finite source");
                 ledger.numbers.reserved = ledger.numbers.reserved.checked_sub(budget).expect("source preflight");

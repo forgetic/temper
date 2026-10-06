@@ -91,6 +91,25 @@ impl Domain {
         Some(record(self, task)?.executor)
     }
 
+    /// Current deployment-owned core recurring task identities for one project.
+    #[must_use]
+    pub fn recurring_tasks(&self, project: u32) -> Box<[u64]> {
+        let mut numbers = List::with_capacity(self.names.capacity());
+        for (number, _) in &self.names {
+            let row = record(self, *number).expect("live name");
+            if row.project == project && row.recurring.is_some() {
+                numbers.push(*number).expect("one identity per task");
+            }
+        }
+        numbers.into_boxed()
+    }
+
+    /// Borrow a recurring task's durable template for root authority checks.
+    #[must_use]
+    pub fn recurring_template(&self, task: u64) -> Option<&crate::RecurringTemplate> {
+        Some(&record(self, task)?.recurring.as_ref()?.template)
+    }
+
     /// Next fenced step for a due procedure, or none when it is not ready to step.
     #[must_use]
     pub fn procedure_due(&self, task: u64) -> Option<(u16, u32, u64)> {
@@ -99,8 +118,8 @@ impl Domain {
             return None;
         }
         match record.executor {
+            crate::Executor::Procedure { connector: 0, code: 1 } | crate::Executor::Agent { .. } => None,
             crate::Executor::Procedure { connector, code } => Some((connector, code, record.attempt.checked_add(1)?)),
-            crate::Executor::Agent { .. } => None,
         }
     }
 
@@ -183,6 +202,10 @@ pub fn max_out(limits: &Limits) -> u32 {
 #[expect(clippy::too_many_lines, reason = "the closed task event vocabulary dispatches to focused handlers")]
 pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     match event {
+        Event::TickRecurring { task, period } => crate::recurring::tick(domain, env, task, period, out),
+        Event::RecurringBatch { task, period, numbers } => {
+            crate::recurring::make_batch(domain, env, task, period, &numbers, out);
+        }
         Event::Procedure { reply_to, task, step, decision } => {
             crate::procedure::stepped(domain, env, reply_to, task, step, decision, out);
         }
@@ -254,7 +277,10 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
         Event::Message { reply_to, project, task, word } => {
             crate::inbox::message(domain, env, reply_to, project, task, word, out);
         }
-        Event::DelegateResult { task, word } => crate::inbox::delegate_result(domain, env, task, word, out),
+        Event::DelegateResult { task, word } => {
+            crate::inbox::delegate_result(domain, env, task, word, out);
+            crate::recurring::after_delegate(domain, env, task, out);
+        }
         Event::Prepare { reply_to, task } => crate::run::prepare(domain, env, reply_to, task, out),
         Event::Claim { reply_to, task, attempt } => crate::run::claim(domain, env, reply_to, task, attempt, out),
         Event::Turn { reply_to, task, attempt, turn, read, offered, cumulative } => {
@@ -481,6 +507,7 @@ pub(crate) fn publish(domain: &mut Domain, env: &Env<Limits>, number: u64, out: 
     }
 }
 
+#[expect(clippy::manual_map, reason = "the subset uses a closed match instead of a closure")]
 pub(crate) fn make(
     domain: &mut Domain,
     env: &Env<Limits>,
@@ -547,6 +574,14 @@ pub(crate) fn make(
                 root: root.unwrap_or(number),
                 depth,
                 executor: new.executor,
+                recurring: match new.recurring {
+                    Some(template) => Some(Box::new(crate::RecurringState {
+                        template: *template,
+                        last_period: 0,
+                        pending_period: None,
+                    })),
+                    None => None,
+                },
                 spec: new.spec,
                 contract: new.contract,
                 authority: new.authority,

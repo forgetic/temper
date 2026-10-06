@@ -174,6 +174,33 @@ pub enum Executor {
     Procedure { connector: u16, code: u32 },
 }
 
+/// What to do when a new period arrives before the preceding batch has ended.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum RecurringOverlap {
+    /// Let the due period pass without another batch.
+    Skip,
+    /// Remember the latest due period and make its batch after the old one ends.
+    Wait,
+}
+
+/// A core procedure's durable batch template, with local member numbers starting at one.
+/// The live procedure's authority is its per-period budget ceiling.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct RecurringTemplate {
+    /// Stable deployment configuration identity within a project, used to fence restarts.
+    pub key: u32,
+    pub batch: Box<[New]>,
+    pub overlap: RecurringOverlap,
+}
+
+/// The template and period cursor retained with one live recurring task.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct RecurringState {
+    pub template: RecurringTemplate,
+    pub last_period: u64,
+    pub pending_period: Option<u64>,
+}
+
 /// One procedure decision. Each step commits its task changes with the owner's state.
 /// (domain/tasks.md, section 5.3).
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -491,6 +518,8 @@ pub struct New {
     pub dependencies: Box<[u64]>,
     /// Creator-selected policy for wakes and batching.
     pub wake: WakePolicy,
+    /// Present only for the core recurring procedure; template members cannot recur.
+    pub recurring: Option<Box<RecurringTemplate>>,
 }
 
 /// Owned durable task state emitted to root storage; root uses `RunContext` for preparation and
@@ -521,6 +550,8 @@ pub struct TaskRecord {
     /// Structural depth below that root, bounded by `Limits::depth`.
     pub depth: u32,
     pub executor: Executor,
+    /// Durable core recurring template and last considered period.
+    pub recurring: Option<Box<RecurringState>>,
     /// Owned bounded specification; live state has empty historical inputs.
     pub spec: Spec,
     pub contract: Contract,
@@ -715,6 +746,10 @@ pub enum Accepted {
 /// notifications have no reply destination and may be ignored if stale. (domain/tasks.md, sections 4–5).
 #[derive(PartialEq, Eq, Debug)]
 pub enum Event {
+    /// A newly opened project period makes the core recurring procedure due.
+    TickRecurring { task: u64, period: u64 },
+    /// Root supplies fresh identities for the template batch requested by the core procedure.
+    RecurringBatch { task: u64, period: u64, numbers: Box<[u64]> },
     /// Fenced decision from the owner of one due procedure task.
     Procedure { reply_to: ReplyTo, task: u64, step: u64, decision: ProcedureDecision },
     /// Root-authorized bounded proposal and resolved first holder.
@@ -952,6 +987,8 @@ pub enum Event {
 /// saves/erases with effects and delays outward replies until durability. (domain/tasks.md, section 5).
 #[derive(PartialEq, Eq, Debug)]
 pub enum Request {
+    /// The core procedure needs one whole root-numbered template batch in this period.
+    RecurringDue { task: u64, period: u64, members: u32 },
     /// A changed requester tree asks root to recheck the current proposal recipient from the nearest holder.
     ProposalRerouteNeeded { proposer: u64, proposal: u64 },
     /// One nonfinal held decision passed its configured wait.
