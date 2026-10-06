@@ -34,6 +34,7 @@ members = [
     "crates/temper-worker-domain-checkout",
     "crates/temper-worker-domain-host",
     "crates/temper-worker-protocol",
+    "crates/temper-web-view",
     "testing/temper-fake-forge-domain",
     "testing/temper-fake-forge-protocol",
     "testing/temper-legacy-fake-llm-domain",
@@ -92,6 +93,7 @@ base64 = { version = "=0.22.1", default-features = false, features = ["alloc"] }
 temper-legacy-agent-protocol = { path = "crates/temper-legacy-agent-protocol" }
 temper-legacy-agent-protocol-world = { path = "tests/legacy/agent/protocol" }
 temper-worker-protocol = { path = "crates/temper-worker-protocol" }
+temper-web-view = { path = "crates/temper-web-view" }
 temper-worker-protocol-world = { path = "tests/worker/protocol" }
 temper-channel = { path = "crates/temper-channel" }
 temper-legacy-llm-anthropic = { path = "crates/temper-legacy-llm-anthropic" }
