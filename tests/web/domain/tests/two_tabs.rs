@@ -1,8 +1,8 @@
 use skein_lib::{Duration, Token, Wall};
 use temper_fake_person::{Doing, Find, Next, Person, Step, TreeFace, dom_event};
 use temper_web_domain::{
-    Address, Answer, Ask, Change, Event, ObjectKey, Query, ReadResult, Request, Snapshot, StreamEnd, StreamEvent,
-    Watch, Why,
+    Address, Answer, Ask, Change, Event, ObjectKey, Outcome, Query, ReadResult, Request, Snapshot, StreamEnd,
+    StreamEvent, Watch, Why,
 };
 use temper_web_domain_world::{Scenario, Settings, World, tab::Tab};
 use temper_web_view::Role;
@@ -60,6 +60,12 @@ fn route(tab: &mut Tab, world: &mut World, requests: Vec<Request>, change: Optio
                     None
                 };
                 let answer: Answer = world.engine.commit(key, ask, Wall::from_nanos(world.now.as_nanos()));
+                if prior.is_some() {
+                    assert!(
+                        matches!(answer, Answer::Done(Outcome::DecidedBefore { .. })),
+                        "second tab is told the first decision"
+                    );
+                }
                 if let (Some((stream, true)), Some((task, why))) = (change, prior.as_ref()) {
                     queue.extend(tab.step(
                         &world.settings,
@@ -157,6 +163,15 @@ fn two_tab_story(change_before_answer: bool) {
     );
     assert_eq!(world.engine.decision_count, 1);
     assert_eq!(world.engine.durable.len(), 2);
+    world.now = world.now.saturating_add(Duration::from_millis(250));
+    let requests = second.fire(&world.settings, world.now);
+    route(&mut second, &mut world, requests, None);
+    run(
+        &mut second,
+        &mut world,
+        Box::from([Step::Gone { find: Find::named(Role::Region, b"Held task T27"), within: Duration::from_secs(1) }]),
+        None,
+    );
 }
 
 #[test]
