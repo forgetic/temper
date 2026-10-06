@@ -574,7 +574,7 @@ impl World {
             self.trace.push(format!("output {request:?}"));
             match request {
                 engine::Request::Commit { number, writes } => {
-                    if writes.iter().any(|write| matches!(write, Write::Save(Record::Terminal(terminal)) if terminal.end == tasks::End::Refused)) {
+                    if writes.iter().any(|write| matches!(write, Write::Save(Record::Terminal(terminal)) if terminal.end == tasks::End::Failed(tasks::Class::Lost))) {
                         assert!(self.unplaced_referee.is_none(), "one unassigned-claim terminal in this script");
                         self.unplaced_referee = Some(self.referee.clone());
                     }
