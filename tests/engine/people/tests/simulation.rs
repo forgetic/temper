@@ -109,7 +109,7 @@ fn pending_authorisation_can_be_lost_and_retried_without_repeating_durable_work(
 }
 
 #[test]
-fn initial_owner_and_signins_restore_and_expire_at_their_original_wall_time() {
+fn an_expired_sign_in_is_refused() {
     let owners = Box::new([InitialOwner { project: 1, identity: IdentityKey { forge: 0, user: 1 } }]);
     let mut world = World::with_owners(Settings::calm(9), owners);
     world.roles(1, Box::new([]));

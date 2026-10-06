@@ -29,6 +29,7 @@ mod amendments;
 mod escalation;
 mod goals;
 mod inbox;
+mod policy;
 mod proposals;
 mod results;
 
@@ -638,6 +639,7 @@ enum PersonProposalRoute {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum PersonTaskRoute {
+    PoolSet { project: u32, person: u64 },
     Take(u64),
     HandBack(u64),
     Answer(u64),
@@ -1847,6 +1849,12 @@ fn people_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decisio
                 people::Ask::SetRoles { holdings, .. } => {
                     roles::begin(domain, env, decision, request, person, project, holdings);
                 }
+                people::Ask::ChangePolicy { role, period_spend, .. } => {
+                    policy::change(domain, env, decision, request, person, project, role, period_spend);
+                }
+                people::Ask::SetPool { person: beneficiary, budget, .. } => {
+                    policy::pool(domain, env, decision, request, person, project, beneficiary, budget);
+                }
                 people::Ask::Move { task, reason, .. } => {
                     move_for_person(domain, env, request, person, role, project, task, reason);
                 }
@@ -1905,6 +1913,8 @@ fn route_person_task(
         | people::Ask::Prioritise { .. }
         | people::Ask::Amend { .. }
         | people::Ask::SetRoles { .. }
+        | people::Ask::ChangePolicy { .. }
+        | people::Ask::SetPool { .. }
         | people::Ask::DecideEscalation { .. }
         | people::Ask::StartChat { .. }
         | people::Ask::Stop { .. }
@@ -1933,6 +1943,8 @@ fn route_person_task(
                         | people::Ask::Prioritise { .. }
                         | people::Ask::Amend { .. }
                         | people::Ask::SetRoles { .. }
+                        | people::Ask::ChangePolicy { .. }
+                        | people::Ask::SetPool { .. }
                         | people::Ask::DecideEscalation { .. }
                         | people::Ask::StartChat { .. }
                         | people::Ask::Stop { .. }
@@ -1952,6 +1964,8 @@ fn route_person_task(
                     | people::Ask::Prioritise { .. }
                     | people::Ask::Amend { .. }
                     | people::Ask::SetRoles { .. }
+                    | people::Ask::ChangePolicy { .. }
+                    | people::Ask::SetPool { .. }
                     | people::Ask::DecideEscalation { .. }
                     | people::Ask::StartChat { .. }
                     | people::Ask::Stop { .. }
@@ -1993,6 +2007,8 @@ fn route_person_task(
         | people::Ask::Prioritise { .. }
         | people::Ask::Amend { .. }
         | people::Ask::SetRoles { .. }
+        | people::Ask::ChangePolicy { .. }
+        | people::Ask::SetPool { .. }
         | people::Ask::DecideEscalation { .. }
         | people::Ask::StartChat { .. }
         | people::Ask::Stop { .. }
@@ -2045,6 +2061,8 @@ fn route_person_control(
         | people::Ask::Prioritise { .. }
         | people::Ask::Amend { .. }
         | people::Ask::SetRoles { .. }
+        | people::Ask::ChangePolicy { .. }
+        | people::Ask::SetPool { .. }
         | people::Ask::DecideEscalation { .. }
         | people::Ask::StartChat { .. }
         | people::Ask::SetGoal { .. } => {
@@ -2082,6 +2100,8 @@ fn route_person_control(
         | people::Ask::Prioritise { .. }
         | people::Ask::Amend { .. }
         | people::Ask::SetRoles { .. }
+        | people::Ask::ChangePolicy { .. }
+        | people::Ask::SetPool { .. }
         | people::Ask::DecideEscalation { .. }
         | people::Ask::StartChat { .. }
         | people::Ask::SetGoal { .. } => {
@@ -2145,6 +2165,8 @@ fn route_person_control(
         | people::Ask::Prioritise { .. }
         | people::Ask::Amend { .. }
         | people::Ask::SetRoles { .. }
+        | people::Ask::ChangePolicy { .. }
+        | people::Ask::SetPool { .. }
         | people::Ask::DecideEscalation { .. }
         | people::Ask::StartChat { .. }
         | people::Ask::SetGoal { .. } => {
@@ -2336,6 +2358,8 @@ fn make_chat(
         people::Ask::DecideEscalation { .. }
         | people::Ask::DecideProposal { .. }
         | people::Ask::SetRoles { .. }
+        | people::Ask::ChangePolicy { .. }
+        | people::Ask::SetPool { .. }
         | people::Ask::Say { .. }
         | people::Ask::AnswerQuestion { .. }
         | people::Ask::Prioritise { .. }
@@ -4110,6 +4134,7 @@ fn tasks_outputs(
                 if let Some(route) = domain.person_tasks.remove(&Token::new(task)) {
                     let outcome = match route {
                         PersonTaskRoute::Take(task) => people::Outcome::PersonTaken { task },
+                        PersonTaskRoute::PoolSet { project, person } => people::Outcome::PoolSet { project, person },
                         PersonTaskRoute::HandBack(task) => people::Outcome::PersonHandedBack { task },
                         PersonTaskRoute::Answer(task) => people::Outcome::PersonAnswered { task },
                         PersonTaskRoute::Cancel(task) => people::Outcome::Cancelled { task },
@@ -6255,6 +6280,7 @@ fn valid_call_answer(answer: &CallAnswer, deployment: &crate::Deployment, limits
 /// Reject unsupported root shapes and identities above durable high-water marks before child
 /// restoration. Proof rows consume exact transient live-row correlations and never load archive
 /// history into the live map.
+#[expect(clippy::too_many_lines, reason = "one startup row matcher validates each stored family")]
 fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
     match row {
         Record::Call(record) => {
@@ -6274,6 +6300,9 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
             }
         }
         Record::Deployment(deployment) => domain.journal = Journal::new(deployment, &env.limits.journal),
+        Record::People(people::Stored::PolicyRole { project, role, period_spend }) => {
+            policy::restore(domain, project, role, period_spend);
+        }
         Record::People(record) => domain.work.push(Work::People(people::Event::Restore { record })),
         Record::Tasks(record) => match record {
             tasks::Stored::PersonProposal(ref row) => {

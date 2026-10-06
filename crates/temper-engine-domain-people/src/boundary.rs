@@ -145,6 +145,10 @@ pub enum Ask {
         /// before replacement.
         holdings: Box<[Holding]>,
     },
+    /// Owner changes a role's project-period spending ceiling for future decisions.
+    ChangePolicy { project: u32, role: u32, period_spend: u64 },
+    /// Owner changes one person's current-period pool, preserving already spent and reserved funds.
+    SetPool { project: u32, person: u64, budget: u64 },
     /// Decide one held chat's exact semantic revision. Root verifies current waiting recipient and
     /// authority; admission authenticates the session and reserves keyed-answer room.
     DecideEscalation {
@@ -293,6 +297,10 @@ pub enum Outcome {
         /// Project whose membership changed; no task authority or funding changed.
         project: u32,
     },
+    /// The role's policy now applies to later checks; existing task grants are retained.
+    PolicyChanged { project: u32, role: u32 },
+    /// One person's finite pool was opened or resized in its original period.
+    PoolSet { project: u32, person: u64 },
     /// Root's committed current or historical decision for one task revision; first commit decides
     /// a race.
     EscalationDecided {
@@ -353,6 +361,8 @@ pub enum Key {
     SignIn(/** Root-issued deployment sign-in number; cookie secrets and token digests stay below the domain. */ u64),
     /// Logical per-project roles-record key.
     Roles(/** Project whose authoritative holdings are stored. */ u32),
+    /// Root-owned current role spend policy override, paged with project records.
+    PolicyRole { project: u32, role: u32 },
     /// Logical completed-key record.
     Answer(RequestKey),
 }
@@ -386,6 +396,8 @@ pub enum Stored {
         /** At most `Limits::holdings` distinct people; restored references are checked at completion. */
         holdings: Box<[Holding]>,
     },
+    /// Root-owned current role spend policy override; the people page carries it to authority.
+    PolicyRole { project: u32, role: u32, period_spend: u64 },
     /// Persistent request and outcome; same-key same-ask replay returns it without checking current
     /// roles anew.
     Answer {
@@ -395,7 +407,7 @@ pub enum Stored {
         ask: Box<Ask>,
         /** Retained permanent outcome returned without remaking the decision. */
         outcome: Outcome,
-        /** Wall time the answer was made; this increment has capacity-based retention, not timed eviction. */
+        /** Wall time the answer was made; completed keys are retained for `Limits::request_retention`. */
         at: Wall,
     },
 }
@@ -410,6 +422,7 @@ impl Stored {
             Stored::ReadPosition { person, .. } => Key::ReadPosition(*person),
             Stored::SignIn { number, .. } => Key::SignIn(*number),
             Stored::Roles { project, .. } => Key::Roles(*project),
+            Stored::PolicyRole { project, role, .. } => Key::PolicyRole { project: *project, role: *role },
             Stored::Answer { key, .. } => Key::Answer(*key),
         }
     }

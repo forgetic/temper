@@ -126,6 +126,12 @@ impl Domain {
         self.funding.get(&funder)
     }
 
+    /// Pure remaining ledger slots for a root-administered period/pool pair.
+    #[must_use]
+    pub fn funding_room(&self) -> u32 {
+        self.funding.capacity().saturating_sub(self.funding.len())
+    }
+
     /// Current opaque executor identity for root procedure routing.
     #[must_use]
     pub fn executor(&self, task: u64) -> Option<crate::Executor> {
@@ -340,6 +346,9 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
         }
         Event::CarvePool { reply_to, project, person, period, budget } => {
             crate::funders::carve(domain, reply_to, project, person, period, budget, out);
+        }
+        Event::ResizePool { reply_to, project, person, period, budget } => {
+            crate::funders::resize_pool(domain, reply_to, project, person, period, budget, out);
         }
         Event::Make { reply_to, creator, batch } => make(domain, env, reply_to, creator, batch, out),
         Event::Message { reply_to, project, task, word } => {

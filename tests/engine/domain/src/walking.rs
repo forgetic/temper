@@ -71,6 +71,7 @@ pub fn limits() -> engine::Limits {
         words: 64,
         amendment_bytes: 512,
         sign_in_lifetime: Duration::from_secs(60),
+        request_retention: Duration::from_secs(120),
         facts: 2,
     };
     let fleet = fleet::Limits {

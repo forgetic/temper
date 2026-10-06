@@ -625,6 +625,8 @@ pub fn record_bytes(record: &Record) -> Option<u64> {
                 temper_engine_domain_people::Ask::Move { reason, .. }
                 | temper_engine_domain_people::Ask::Cancel { reason, .. } => u64::try_from(reason.len()).ok(),
                 temper_engine_domain_people::Ask::TakePerson { .. }
+                | temper_engine_domain_people::Ask::ChangePolicy { .. }
+                | temper_engine_domain_people::Ask::SetPool { .. }
                 | temper_engine_domain_people::Ask::HandBackPerson { .. }
                 | temper_engine_domain_people::Ask::Stop { .. }
                 | temper_engine_domain_people::Ask::Release { .. } => Some(0),
@@ -645,7 +647,8 @@ pub fn record_bytes(record: &Record) -> Option<u64> {
                 },
             },
             temper_engine_domain_people::Stored::SignIn { .. }
-            | temper_engine_domain_people::Stored::ReadPosition { .. } => Some(0),
+            | temper_engine_domain_people::Stored::ReadPosition { .. }
+            | temper_engine_domain_people::Stored::PolicyRole { .. } => Some(0),
         },
     }
 }

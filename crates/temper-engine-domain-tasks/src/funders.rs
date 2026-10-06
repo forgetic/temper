@@ -402,6 +402,52 @@ pub(crate) fn carve(
     out.push(Request::Done { reply_to: to });
 }
 
+pub(crate) fn resize_pool(
+    domain: &mut Domain,
+    to: ReplyTo,
+    project: u32,
+    person: u64,
+    period: u64,
+    budget: u64,
+    out: &mut Queue<Request>,
+) {
+    if !domain.ready() {
+        return refused(to, None, Refusal::NotReady, out);
+    }
+    let funder = Funder::Pool { project, person, period };
+    let parent = Funder::Period { project, period };
+    let Some(pool) = domain.funding.get(&funder).copied() else {
+        return refused(to, None, Refusal::Unknown, out);
+    };
+    let Some(period_record) = domain.funding.get(&parent).copied() else {
+        return refused(to, None, Refusal::Funding, out);
+    };
+    if pool.closed || period_record.closed || pool.parent != Some(parent) || newer_period(domain, project, period) {
+        return refused(to, None, Refusal::Funding, out);
+    }
+    let mut next_pool = pool.numbers;
+    next_pool.budget = budget;
+    if available(next_pool).is_none() {
+        return refused(to, None, Refusal::Funding, out);
+    }
+    let mut next_period = period_record.numbers;
+    let Some(released) = next_period.reserved.checked_sub(pool.numbers.budget) else {
+        return refused(to, None, Refusal::Funding, out);
+    };
+    let Some(reserved) = released.checked_add(budget) else {
+        return refused(to, None, Refusal::Funding, out);
+    };
+    next_period.reserved = reserved;
+    if available(next_period).is_none() {
+        return refused(to, None, Refusal::Funding, out);
+    }
+    domain.funding.get_mut(&funder).expect("pool preflighted").numbers = next_pool;
+    domain.funding.get_mut(&parent).expect("period preflighted").numbers = next_period;
+    save_funding(domain, parent, out);
+    save_funding(domain, funder, out);
+    out.push(Request::Done { reply_to: to });
+}
+
 /// Reserve a recurring task's full per-period allotment from that project's period.
 pub(crate) fn carve_recurring(
     domain: &mut Domain,

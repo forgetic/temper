@@ -3765,6 +3765,122 @@ fn administration_config(seed: u64) -> engine::Config {
 }
 
 #[test]
+fn a_policy_change_applies_to_later_decisions_only() {
+    let configuration = administration_config(9401);
+    let mut driver = Driver::configured(Store::new(), configuration, &limits());
+    driver.settle();
+    driver.sign_in();
+    driver.settle();
+    let session = driver.session();
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(9402)),
+        sign_in: session,
+        key: [41; 16],
+        ask: people::Ask::StartChat { project: 1, words: b"first".as_slice().into() },
+    });
+    for _ in 0..30 {
+        driver.advance(true);
+    }
+    let first = driver
+        .store
+        .rows
+        .values()
+        .find_map(|row| match row {
+            Record::Tasks(tasks::Stored::Live(task)) => Some((task.number, task.authority.budget.spend)),
+            Record::ProposalDecision(_)
+            | Record::Call(_)
+            | Record::EscalationDecision(_)
+            | Record::Deployment(_)
+            | Record::Turn(_)
+            | Record::RunProof(_)
+            | Record::Terminal(_)
+            | Record::Tasks(_)
+            | Record::People(_) => None,
+        })
+        .expect("first chat is durable");
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(9403)),
+        sign_in: session,
+        key: [42; 16],
+        ask: people::Ask::ChangePolicy { project: 1, role: 0, period_spend: 50 },
+    });
+    for _ in 0..30 {
+        driver.advance(true);
+    }
+    assert_eq!(
+        driver.store.rows.get(&Key::People(people::Key::PolicyRole { project: 1, role: 0 })),
+        Some(&Record::People(people::Stored::PolicyRole { project: 1, role: 0, period_spend: 50 }))
+    );
+    assert!(
+        driver.store.rows.values().any(|row| matches!(row,
+            Record::Tasks(tasks::Stored::Live(task)) if task.number == first.0 && task.authority.budget.spend == first.1
+        )),
+        "existing task keeps its grant"
+    );
+    let store = driver.store;
+    let mut restarted = Driver::configured(store, administration_config(9401), &limits());
+    for _ in 0..30 {
+        restarted.advance(true);
+    }
+    restarted.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(9404)),
+        sign_in: session,
+        key: [43; 16],
+        ask: people::Ask::StartChat { project: 1, words: b"later".as_slice().into() },
+    });
+    for _ in 0..30 {
+        restarted.advance(true);
+    }
+    assert!(
+        restarted.delivered.iter().any(|delivery| matches!(
+            delivery,
+            Delivery::WebReply {
+                reply: people::Reply::Outcome(people::Outcome::Refused(people::Refusal::Authority)),
+                ..
+            }
+        )),
+        "restored policy governs later decisions"
+    );
+}
+
+#[test]
+fn an_owner_changes_a_pool_once_with_a_key() {
+    let mut driver = Driver::configured(Store::new(), administration_config(9411), &limits());
+    driver.settle();
+    driver.sign_in();
+    driver.settle();
+    let session = driver.session();
+    let person = driver.store.header().people;
+    let ask = people::Ask::SetPool { project: 1, person, budget: 300 };
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(9412)),
+        sign_in: session,
+        key: [44; 16],
+        ask: ask.clone(),
+    });
+    driver.settle();
+    let pool = tasks::Funder::Pool { project: 1, person, period: 1 };
+    assert!(matches!(driver.store.rows.get(&Key::Tasks(tasks::Key::Ledger(pool))),
+        Some(Record::Tasks(tasks::Stored::Ledger(row))) if row.numbers.budget == 300));
+    let before = driver.transactions.len();
+    driver.send(engine::Event::Ask { reply_to: ReplyTo::new(Token::new(9413)), sign_in: session, key: [44; 16], ask });
+    driver.settle();
+    assert_eq!(driver.transactions.len(), before, "saved answer does not carve again");
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(9414)),
+        sign_in: session,
+        key: [45; 16],
+        ask: people::Ask::SetPool { project: 1, person, budget: 250 },
+    });
+    driver.settle();
+    let period = tasks::Funder::Period { project: 1, period: 1 };
+    assert!(matches!(driver.store.rows.get(&Key::Tasks(tasks::Key::Ledger(pool))),
+        Some(Record::Tasks(tasks::Stored::Ledger(row))) if row.numbers.budget == 250));
+    assert!(matches!(driver.store.rows.get(&Key::Tasks(tasks::Key::Ledger(period))),
+        Some(Record::Tasks(tasks::Stored::Ledger(row))) if row.numbers.reserved == 250));
+}
+
+#[test]
 #[expect(
     clippy::too_many_lines,
     reason = "one real-store route proves multi-task atomicity, pressure retry and whole-cohort overflow rollback"

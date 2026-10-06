@@ -2,14 +2,14 @@
 //! Candidate rosters and waiting contexts are temporary root-owned snapshots;
 //! all membership, semantic rerouting and keyed completion share one decision
 
-//! Current role administration covers only rerouting held chats.
+//! Owner permission checks also admit current policy and pool changes.
 
 use super::{Decision, Domain, Env, Limits, ReplyTo, Token, Work, authority, escalation, people, save, tasks};
 use crate::{Record, Write};
 use alloc::boxed::Box;
 use skein_lib::Queue;
 
-fn allowed(domain: &Domain, person: u64, project: u32) -> Result<(), people::Refusal> {
+pub(super) fn allowed(domain: &Domain, person: u64, project: u32) -> Result<(), people::Refusal> {
     if domain.people.role(person, project) != Some(people::Role::Owner) {
         return Err(people::Refusal::Role);
     }

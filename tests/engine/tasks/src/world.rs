@@ -335,6 +335,7 @@ impl World {
             | Event::Prioritise { .. }
             | Event::Move { .. }
             | Event::CarvePool { .. }
+            | Event::ResizePool { .. }
             | Event::Make { .. }
             | Event::Prepare { .. }
             | Event::Claim { .. }
@@ -381,6 +382,7 @@ impl World {
             | Event::WithdrawProposal { .. }
             | Event::StalledProposal { .. }
             | Event::CarvePool { .. }
+            | Event::ResizePool { .. }
             | Event::Make { .. }
             | Event::Prepare { .. }
             | Event::Claim { .. }

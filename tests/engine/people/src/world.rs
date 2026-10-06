@@ -22,6 +22,7 @@ pub const LIMITS: Limits = Limits {
     words: 64,
     amendment_bytes: 512,
     sign_in_lifetime: Duration::from_secs(60),
+    request_retention: Duration::from_secs(120),
     facts: 16,
 };
 
@@ -245,7 +246,8 @@ impl World {
                 | Stored::Person { .. }
                 | Stored::ReadPosition { .. }
                 | Stored::Roles { .. }
-                | Stored::Answer { .. } => None,
+                | Stored::Answer { .. }
+                | Stored::PolicyRole { .. } => None,
             })
             .unwrap_or(0);
         self.context = Some(RequestKey { person, key });

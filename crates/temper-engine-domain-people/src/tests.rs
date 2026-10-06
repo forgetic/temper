@@ -22,6 +22,7 @@ const LIMITS: Limits = Limits {
     words: 8,
     amendment_bytes: 256,
     sign_in_lifetime: Duration::from_secs(60),
+    request_retention: Duration::from_secs(120),
     facts: 8,
 };
 
@@ -199,9 +200,11 @@ fn saved_answer(rows: &[Request]) -> Stored {
         .find_map(|row| match row {
             Request::Save { record } => match record {
                 Stored::Answer { .. } => Some(record.clone()),
-                Stored::Person { .. } | Stored::ReadPosition { .. } | Stored::SignIn { .. } | Stored::Roles { .. } => {
-                    None
-                }
+                Stored::Person { .. }
+                | Stored::ReadPosition { .. }
+                | Stored::SignIn { .. }
+                | Stored::Roles { .. }
+                | Stored::PolicyRole { .. } => None,
             },
             Request::Reply { .. }
             | Request::Erase { .. }
@@ -269,6 +272,51 @@ fn answered_keys_follow_people_across_signins_and_role_changes() {
     test.send(Event::Roles { project: 1, holdings: Box::new([Holding { person: 1, role: Role::Observer }]) });
     assert_eq!(reply(&test.request(11, 1, ask(1))), Reply::Outcome(Outcome::Started { task: 90 }));
     assert_eq!(reply(&test.request(11, 1, ask(2))), Reply::Refused(Refusal::KeyConflict));
+}
+
+#[test]
+fn completed_key_replays_until_its_deadline_then_can_be_reused() {
+    let mut test = Test::new(LIMITS);
+    test.member();
+    let token = route(&test.request(10, 1, ask(1)));
+    test.send(Event::Decided { request: token, outcome: Outcome::Started { task: 90 } });
+    assert_eq!(reply(&test.request(10, 1, ask(1))), Reply::Outcome(Outcome::Started { task: 90 }));
+    test.env.now = Time::from_nanos(Duration::from_secs(120).as_nanos());
+    test.env.wall = Wall::from_nanos(Duration::from_secs(120).as_nanos());
+    // The old sign-in has expired too; a new sign-in still belongs to the same person.
+    test.signin(2, 11, identity(0, 1));
+    let fresh = test.request(11, 1, ask(1));
+    assert!(fresh.contains(&Request::Erase { key: Key::Answer(RequestKey { person: 1, key: [1; 16] }) }));
+    let token = route(&fresh);
+    assert_ne!(token, Token::new(0));
+}
+
+#[test]
+fn expired_completed_key_is_erased_from_a_restore_page_and_frees_its_slot() {
+    let limits = Limits { requests: 1, ..LIMITS };
+    let mut test = Test::new(limits);
+    test.d = Domain::new(&limits, Box::new([]));
+    test.env.now = Time::from_nanos(Duration::from_secs(120).as_nanos());
+    test.env.wall = Wall::from_nanos(Duration::from_secs(120).as_nanos());
+    let key = RequestKey { person: 1, key: [1; 16] };
+    let erased = test.send(Event::Restore {
+        record: Stored::Answer { key, ask: Box::new(ask(1)), outcome: Outcome::Started { task: 90 }, at: Wall::EPOCH },
+    });
+    assert_eq!(erased, [Request::Erase { key: Key::Answer(key) }]);
+    test.send(Event::Restore { record: Stored::Person { number: 1, identity: identity(0, 1) } });
+    test.send(Event::Restore {
+        record: Stored::Roles { project: 1, holdings: Box::new([Holding { person: 1, role: Role::Member }]) },
+    });
+    test.send(Event::Restore {
+        record: Stored::SignIn {
+            number: 10,
+            person: 1,
+            expires: Wall::from_nanos(Duration::from_secs(180).as_nanos()),
+        },
+    });
+    test.send(Event::Restored);
+    assert!(test.d.ready());
+    let _routed = route(&test.request(10, 1, ask(1)));
 }
 
 #[test]
@@ -571,7 +619,11 @@ fn is_answer(request: &Request) -> bool {
     match request {
         Request::Save { record } => match record {
             Stored::Answer { .. } => true,
-            Stored::Person { .. } | Stored::ReadPosition { .. } | Stored::SignIn { .. } | Stored::Roles { .. } => false,
+            Stored::Person { .. }
+            | Stored::ReadPosition { .. }
+            | Stored::SignIn { .. }
+            | Stored::Roles { .. }
+            | Stored::PolicyRole { .. } => false,
         },
         Request::Reply { .. }
         | Request::Erase { .. }
@@ -586,9 +638,11 @@ fn is_roles(request: &Request) -> bool {
     match request {
         Request::Save { record } => match record {
             Stored::Roles { .. } => true,
-            Stored::Person { .. } | Stored::ReadPosition { .. } | Stored::SignIn { .. } | Stored::Answer { .. } => {
-                false
-            }
+            Stored::Person { .. }
+            | Stored::ReadPosition { .. }
+            | Stored::SignIn { .. }
+            | Stored::Answer { .. }
+            | Stored::PolicyRole { .. } => false,
         },
         Request::Reply { .. }
         | Request::Erase { .. }

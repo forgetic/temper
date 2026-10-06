@@ -22,6 +22,7 @@ pub(crate) struct Answered {
     ask: Ask,
     outcome: Outcome,
     at: Wall,
+    due: Time,
 }
 
 #[derive(Debug)]
@@ -54,6 +55,7 @@ pub struct Domain {
     roles: Map<u32, Box<[Holding]>>,
     owners: Box<[InitialOwner]>,
     answers: Map<RequestKey, Answered>,
+    answer_alarms: Deadlines<RequestKey>,
     pending: Slab<Pending>,
     flights: Map<RequestKey, Id<Pending>>,
     facts: Queue<Fact>,
@@ -97,6 +99,7 @@ impl Domain {
             roles: Map::with_capacity(limits.projects),
             owners,
             answers: Map::with_capacity(limits.requests),
+            answer_alarms: Deadlines::with_capacity(limits.requests),
             pending: Slab::with_capacity(limits.pending),
             flights: Map::with_capacity(limits.pending),
             facts: Queue::with_capacity(limits.facts),
@@ -108,14 +111,19 @@ impl Domain {
     /// expiration or output occurs here.
     #[must_use]
     pub fn next_deadline(&self) -> Option<Time> {
-        self.alarms.next()
+        match (self.alarms.next(), self.answer_alarms.next()) {
+            (Some(left), Some(right)) => Some(left.min(right)),
+            (Some(left), None) => Some(left),
+            (None, Some(right)) => Some(right),
+            (None, None) => None,
+        }
     }
 
     /// Pure scheduler query returning whether any armed expiry is at or before supplied `now`; no
     /// state change or output.
     #[must_use]
     pub fn is_due(&self, now: Time) -> bool {
-        match self.alarms.next() {
+        match self.next_deadline() {
             Some(at) => at <= now,
             None => false,
         }
@@ -436,10 +444,17 @@ pub fn fire(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
     if !domain.ready() {
         return;
     }
-    let Some(number) = domain.alarms.expire(env.now) else {
-        return;
-    };
-    end_signin(domain, number, out);
+    if let Some(key) = domain.answer_alarms.expire(env.now) {
+        let removed = domain.answers.remove(&key);
+        assert!(removed.is_some(), "retained answer has its expiry alarm");
+        out.push(Request::Erase { key: Key::Answer(key) });
+    } else if let Some(number) = domain.alarms.expire(env.now) {
+        end_signin(domain, number, out);
+    }
+}
+
+fn answer_expiry(at: Wall, limits: &Limits) -> Wall {
+    Wall::from_nanos(at.as_nanos().saturating_add(limits.request_retention.as_nanos()))
 }
 
 fn fact(domain: &mut Domain, observation: Fact) {
@@ -471,7 +486,9 @@ fn apply_roles(
     let flight = domain.pending.get(Id::from_token(request)).ok_or(Refusal::Unknown)?;
     let project = match &flight.ask {
         Ask::SetRoles { project, .. } => *project,
-        Ask::StartChat { .. }
+        Ask::ChangePolicy { .. }
+        | Ask::SetPool { .. }
+        | Ask::StartChat { .. }
         | Ask::DecideEscalation { .. }
         | Ask::DecideProposal { .. }
         | Ask::Say { .. }
@@ -508,6 +525,7 @@ fn apply_roles(
             }
             holdings.clone()
         }
+        Ask::ChangePolicy { .. } | Ask::SetPool { .. } => unreachable!("validated roster flight"),
         Ask::StartChat { .. }
         | Ask::DecideEscalation { .. }
         | Ask::DecideProposal { .. }
@@ -670,6 +688,8 @@ fn end_signin(domain: &mut Domain, number: u64, out: &mut Queue<Request>) {
 fn project(ask: &Ask) -> u32 {
     match ask {
         Ask::SetRoles { project, .. }
+        | Ask::ChangePolicy { project, .. }
+        | Ask::SetPool { project, .. }
         | Ask::StartChat { project, .. }
         | Ask::DecideEscalation { project, .. }
         | Ask::DecideProposal { project, .. }
@@ -709,6 +729,8 @@ fn valid_ask(limits: &Limits, ask: &Ask) -> bool {
                 }
         }
         Ask::SetRoles { holdings, .. } => holdings.len() <= usize::try_from(limits.holdings).expect("u32 fits usize"),
+        Ask::ChangePolicy { .. } => true,
+        Ask::SetPool { person, .. } => *person != 0,
         Ask::SetGoal { spec, charter, .. } => {
             *charter != 0 && !spec.is_empty() && spec.len() <= usize::try_from(limits.words).expect("u32 fits usize")
         }
@@ -764,351 +786,86 @@ fn valid_ask(limits: &Limits, ask: &Ask) -> bool {
     }
 }
 
-#[expect(clippy::too_many_lines, reason = "one exhaustive keyed answer shape check")]
 fn valid_answer_shape(ask: &Ask, outcome: Outcome) -> bool {
+    #[derive(PartialEq, Eq)]
+    enum Expected {
+        Goal,
+        Stop(u64),
+        Cancel(u64),
+        Release(u64),
+        Take(u64),
+        HandBack(u64),
+        AnswerPerson(u64),
+        Move(u64),
+        Proposal(u64, u64),
+        Say(u64),
+        AnswerQuestion(u64, u64),
+        Prioritise(u32),
+        Amend(u64),
+        Roles(u32, bool),
+        Policy(u32, u32),
+        Pool(u32, u64),
+        Escalation,
+        Chat,
+    }
+
+    let expected = match ask {
+        Ask::SetGoal { .. } => Expected::Goal,
+        Ask::Stop { task, .. } => Expected::Stop(*task),
+        Ask::Cancel { task, .. } => Expected::Cancel(*task),
+        Ask::Release { task, .. } => Expected::Release(*task),
+        Ask::TakePerson { task, .. } => Expected::Take(*task),
+        Ask::HandBackPerson { task, .. } => Expected::HandBack(*task),
+        Ask::AnswerPerson { task, .. } => Expected::AnswerPerson(*task),
+        Ask::Move { task, .. } => Expected::Move(*task),
+        Ask::DecideProposal { proposer, proposal, .. } => Expected::Proposal(*proposer, *proposal),
+        Ask::Say { task, .. } => Expected::Say(*task),
+        Ask::AnswerQuestion { task, question, .. } => Expected::AnswerQuestion(*task, *question),
+        Ask::Prioritise { project, .. } => Expected::Prioritise(*project),
+        Ask::Amend { task, .. } => Expected::Amend(*task),
+        Ask::SetRoles { project, holdings } => {
+            let mut valid = true;
+            for (at, holding) in holdings.iter().enumerate() {
+                if holding.person == 0 {
+                    valid = false;
+                }
+                for earlier in holdings.get(..at).expect("enumerated holding position is in bounds") {
+                    if earlier.person == holding.person {
+                        valid = false;
+                    }
+                }
+            }
+            Expected::Roles(*project, valid)
+        }
+        Ask::ChangePolicy { project, role, .. } => Expected::Policy(*project, *role),
+        Ask::SetPool { project, person, .. } => Expected::Pool(*project, *person),
+        Ask::DecideEscalation { .. } => Expected::Escalation,
+        Ask::StartChat { .. } => Expected::Chat,
+    };
+
     match outcome {
-        Outcome::GoalStarted { task } => match ask {
-            Ask::SetGoal { .. } => task != 0,
-            Ask::Stop { .. }
-            | Ask::Cancel { .. }
-            | Ask::Release { .. }
-            | Ask::TakePerson { .. }
-            | Ask::HandBackPerson { .. }
-            | Ask::AnswerPerson { .. }
-            | Ask::SetRoles { .. }
-            | Ask::StartChat { .. }
-            | Ask::DecideEscalation { .. }
-            | Ask::DecideProposal { .. }
-            | Ask::Say { .. }
-            | Ask::AnswerQuestion { .. }
-            | Ask::Prioritise { .. }
-            | Ask::Amend { .. }
-            | Ask::Move { .. } => false,
-        },
-        Outcome::GoalProposed { proposal } => match ask {
-            Ask::SetGoal { .. } => proposal != 0,
-            Ask::Stop { .. }
-            | Ask::Cancel { .. }
-            | Ask::Release { .. }
-            | Ask::TakePerson { .. }
-            | Ask::HandBackPerson { .. }
-            | Ask::AnswerPerson { .. }
-            | Ask::SetRoles { .. }
-            | Ask::StartChat { .. }
-            | Ask::DecideEscalation { .. }
-            | Ask::DecideProposal { .. }
-            | Ask::Say { .. }
-            | Ask::AnswerQuestion { .. }
-            | Ask::Prioritise { .. }
-            | Ask::Amend { .. }
-            | Ask::Move { .. } => false,
-        },
-        Outcome::Stopped { task } => match ask {
-            Ask::Stop { task: named, .. } => *named == task,
-            Ask::Cancel { .. }
-            | Ask::Release { .. }
-            | Ask::TakePerson { .. }
-            | Ask::HandBackPerson { .. }
-            | Ask::AnswerPerson { .. }
-            | Ask::SetRoles { .. }
-            | Ask::StartChat { .. }
-            | Ask::DecideEscalation { .. }
-            | Ask::DecideProposal { .. }
-            | Ask::Say { .. }
-            | Ask::AnswerQuestion { .. }
-            | Ask::Prioritise { .. }
-            | Ask::Amend { .. }
-            | Ask::Move { .. }
-            | Ask::SetGoal { .. } => false,
-        },
-        Outcome::Cancelled { task } => match ask {
-            Ask::Cancel { task: named, .. } => *named == task,
-            Ask::Stop { .. }
-            | Ask::Release { .. }
-            | Ask::TakePerson { .. }
-            | Ask::HandBackPerson { .. }
-            | Ask::AnswerPerson { .. }
-            | Ask::SetRoles { .. }
-            | Ask::StartChat { .. }
-            | Ask::DecideEscalation { .. }
-            | Ask::DecideProposal { .. }
-            | Ask::Say { .. }
-            | Ask::AnswerQuestion { .. }
-            | Ask::Prioritise { .. }
-            | Ask::Amend { .. }
-            | Ask::Move { .. }
-            | Ask::SetGoal { .. } => false,
-        },
-        Outcome::Released { task } => match ask {
-            Ask::Release { task: named, .. } => *named == task,
-            Ask::Stop { .. }
-            | Ask::Cancel { .. }
-            | Ask::TakePerson { .. }
-            | Ask::HandBackPerson { .. }
-            | Ask::AnswerPerson { .. }
-            | Ask::SetRoles { .. }
-            | Ask::StartChat { .. }
-            | Ask::DecideEscalation { .. }
-            | Ask::DecideProposal { .. }
-            | Ask::Say { .. }
-            | Ask::AnswerQuestion { .. }
-            | Ask::Prioritise { .. }
-            | Ask::Amend { .. }
-            | Ask::Move { .. }
-            | Ask::SetGoal { .. } => false,
-        },
-        Outcome::PersonTaken { task } => match ask {
-            Ask::TakePerson { task: named, .. } => *named == task,
-            Ask::HandBackPerson { .. }
-            | Ask::AnswerPerson { .. }
-            | Ask::SetRoles { .. }
-            | Ask::StartChat { .. }
-            | Ask::DecideEscalation { .. }
-            | Ask::DecideProposal { .. }
-            | Ask::Say { .. }
-            | Ask::AnswerQuestion { .. }
-            | Ask::Prioritise { .. }
-            | Ask::Amend { .. }
-            | Ask::Move { .. }
-            | Ask::Stop { .. }
-            | Ask::Cancel { .. }
-            | Ask::Release { .. }
-            | Ask::SetGoal { .. } => false,
-        },
-        Outcome::PersonHandedBack { task } => match ask {
-            Ask::HandBackPerson { task: named, .. } => *named == task,
-            Ask::TakePerson { .. }
-            | Ask::AnswerPerson { .. }
-            | Ask::SetRoles { .. }
-            | Ask::StartChat { .. }
-            | Ask::DecideEscalation { .. }
-            | Ask::DecideProposal { .. }
-            | Ask::Say { .. }
-            | Ask::AnswerQuestion { .. }
-            | Ask::Prioritise { .. }
-            | Ask::Amend { .. }
-            | Ask::Move { .. }
-            | Ask::Stop { .. }
-            | Ask::Cancel { .. }
-            | Ask::Release { .. }
-            | Ask::SetGoal { .. } => false,
-        },
-        Outcome::PersonAnswered { task } => match ask {
-            Ask::AnswerPerson { task: named, .. } => *named == task,
-            Ask::TakePerson { .. }
-            | Ask::HandBackPerson { .. }
-            | Ask::SetRoles { .. }
-            | Ask::StartChat { .. }
-            | Ask::DecideEscalation { .. }
-            | Ask::DecideProposal { .. }
-            | Ask::Say { .. }
-            | Ask::AnswerQuestion { .. }
-            | Ask::Prioritise { .. }
-            | Ask::Amend { .. }
-            | Ask::Move { .. }
-            | Ask::Stop { .. }
-            | Ask::Cancel { .. }
-            | Ask::Release { .. }
-            | Ask::SetGoal { .. } => false,
-        },
-        Outcome::Moved { task } => match ask {
-            Ask::Move { task: named, .. } => *named == task,
-            Ask::SetRoles { .. }
-            | Ask::StartChat { .. }
-            | Ask::DecideEscalation { .. }
-            | Ask::DecideProposal { .. }
-            | Ask::Say { .. }
-            | Ask::AnswerQuestion { .. }
-            | Ask::Prioritise { .. }
-            | Ask::Amend { .. }
-            | Ask::TakePerson { .. }
-            | Ask::HandBackPerson { .. }
-            | Ask::AnswerPerson { .. }
-            | Ask::Stop { .. }
-            | Ask::Cancel { .. }
-            | Ask::Release { .. }
-            | Ask::SetGoal { .. } => false,
-        },
-        Outcome::RolesSet { project: answered } => match ask {
-            Ask::SetRoles { project, holdings } => {
-                if *project != answered {
-                    return false;
-                }
-                for (at, holding) in holdings.iter().enumerate() {
-                    if holding.person == 0 {
-                        return false;
-                    }
-                    for earlier in holdings.get(..at).expect("enumerated holding position is in bounds") {
-                        if earlier.person == holding.person {
-                            return false;
-                        }
-                    }
-                }
-                true
-            }
-            Ask::StartChat { .. }
-            | Ask::DecideEscalation { .. }
-            | Ask::DecideProposal { .. }
-            | Ask::Say { .. }
-            | Ask::AnswerQuestion { .. }
-            | Ask::Prioritise { .. }
-            | Ask::Amend { .. }
-            | Ask::Move { .. }
-            | Ask::TakePerson { .. }
-            | Ask::HandBackPerson { .. }
-            | Ask::AnswerPerson { .. }
-            | Ask::Stop { .. }
-            | Ask::Cancel { .. }
-            | Ask::Release { .. }
-            | Ask::SetGoal { .. } => false,
-        },
-        Outcome::Started { task } => match ask {
-            Ask::StartChat { .. } => task != 0,
-            Ask::SetRoles { .. }
-            | Ask::DecideEscalation { .. }
-            | Ask::DecideProposal { .. }
-            | Ask::Say { .. }
-            | Ask::AnswerQuestion { .. }
-            | Ask::Prioritise { .. }
-            | Ask::Amend { .. }
-            | Ask::Move { .. }
-            | Ask::TakePerson { .. }
-            | Ask::HandBackPerson { .. }
-            | Ask::AnswerPerson { .. }
-            | Ask::Stop { .. }
-            | Ask::Cancel { .. }
-            | Ask::Release { .. }
-            | Ask::SetGoal { .. } => false,
-        },
-        Outcome::Said { task, message } => match ask {
-            Ask::Say { task: named, .. } => *named == task && message != 0,
-            Ask::SetRoles { .. }
-            | Ask::AnswerQuestion { .. }
-            | Ask::Prioritise { .. }
-            | Ask::Amend { .. }
-            | Ask::StartChat { .. }
-            | Ask::DecideEscalation { .. }
-            | Ask::DecideProposal { .. }
-            | Ask::Move { .. }
-            | Ask::TakePerson { .. }
-            | Ask::HandBackPerson { .. }
-            | Ask::AnswerPerson { .. }
-            | Ask::Stop { .. }
-            | Ask::Cancel { .. }
-            | Ask::Release { .. }
-            | Ask::SetGoal { .. } => false,
-        },
-        Outcome::QuestionAnswered { task, question, message } => match ask {
-            Ask::AnswerQuestion { task: named, question: asked, .. } => {
-                *named == task && *asked == question && message != 0
-            }
-            Ask::SetRoles { .. }
-            | Ask::StartChat { .. }
-            | Ask::DecideEscalation { .. }
-            | Ask::DecideProposal { .. }
-            | Ask::Say { .. }
-            | Ask::Move { .. }
-            | Ask::TakePerson { .. }
-            | Ask::HandBackPerson { .. }
-            | Ask::AnswerPerson { .. }
-            | Ask::Stop { .. }
-            | Ask::Cancel { .. }
-            | Ask::Release { .. }
-            | Ask::Prioritise { .. }
-            | Ask::Amend { .. }
-            | Ask::SetGoal { .. } => false,
-        },
-        Outcome::Prioritised { project: answered } => match ask {
-            Ask::Prioritise { project, .. } => *project == answered,
-            Ask::SetRoles { .. }
-            | Ask::StartChat { .. }
-            | Ask::DecideEscalation { .. }
-            | Ask::DecideProposal { .. }
-            | Ask::Say { .. }
-            | Ask::AnswerQuestion { .. }
-            | Ask::Move { .. }
-            | Ask::TakePerson { .. }
-            | Ask::HandBackPerson { .. }
-            | Ask::AnswerPerson { .. }
-            | Ask::Stop { .. }
-            | Ask::Cancel { .. }
-            | Ask::Release { .. }
-            | Ask::Amend { .. }
-            | Ask::SetGoal { .. } => false,
-        },
-        Outcome::Amended { task } => match ask {
-            Ask::Amend { task: named, .. } => *named == task,
-            Ask::SetRoles { .. }
-            | Ask::StartChat { .. }
-            | Ask::DecideEscalation { .. }
-            | Ask::DecideProposal { .. }
-            | Ask::Say { .. }
-            | Ask::AnswerQuestion { .. }
-            | Ask::Prioritise { .. }
-            | Ask::Move { .. }
-            | Ask::TakePerson { .. }
-            | Ask::HandBackPerson { .. }
-            | Ask::AnswerPerson { .. }
-            | Ask::Stop { .. }
-            | Ask::Cancel { .. }
-            | Ask::Release { .. }
-            | Ask::SetGoal { .. } => false,
-        },
-        Outcome::AmendProposed { task, proposal } => match ask {
-            Ask::Amend { task: named, .. } => *named == task && proposal != 0,
-            Ask::SetRoles { .. }
-            | Ask::StartChat { .. }
-            | Ask::DecideEscalation { .. }
-            | Ask::DecideProposal { .. }
-            | Ask::Say { .. }
-            | Ask::AnswerQuestion { .. }
-            | Ask::Prioritise { .. }
-            | Ask::Move { .. }
-            | Ask::TakePerson { .. }
-            | Ask::HandBackPerson { .. }
-            | Ask::AnswerPerson { .. }
-            | Ask::Stop { .. }
-            | Ask::Cancel { .. }
-            | Ask::Release { .. }
-            | Ask::SetGoal { .. } => false,
-        },
-        Outcome::EscalationDecided { .. } => match ask {
-            Ask::DecideEscalation { .. } => true,
-            Ask::SetRoles { .. }
-            | Ask::StartChat { .. }
-            | Ask::DecideProposal { .. }
-            | Ask::Say { .. }
-            | Ask::AnswerQuestion { .. }
-            | Ask::Prioritise { .. }
-            | Ask::Amend { .. }
-            | Ask::Move { .. }
-            | Ask::TakePerson { .. }
-            | Ask::HandBackPerson { .. }
-            | Ask::AnswerPerson { .. }
-            | Ask::Stop { .. }
-            | Ask::Cancel { .. }
-            | Ask::Release { .. }
-            | Ask::SetGoal { .. } => false,
-        },
-        Outcome::ProposalDecided { proposer, proposal, .. } => match ask {
-            Ask::DecideProposal { proposer: named, proposal: number, .. } => *named == proposer && *number == proposal,
-            Ask::SetRoles { .. }
-            | Ask::StartChat { .. }
-            | Ask::DecideEscalation { .. }
-            | Ask::Say { .. }
-            | Ask::AnswerQuestion { .. }
-            | Ask::Prioritise { .. }
-            | Ask::Amend { .. }
-            | Ask::Move { .. }
-            | Ask::TakePerson { .. }
-            | Ask::HandBackPerson { .. }
-            | Ask::AnswerPerson { .. }
-            | Ask::Stop { .. }
-            | Ask::Cancel { .. }
-            | Ask::Release { .. }
-            | Ask::SetGoal { .. } => false,
-        },
-        // Invalid rosters and unknown targets can be legitimate saved refusals.
+        Outcome::GoalStarted { task } => expected == Expected::Goal && task != 0,
+        Outcome::GoalProposed { proposal } => expected == Expected::Goal && proposal != 0,
+        Outcome::Stopped { task } => expected == Expected::Stop(task),
+        Outcome::Cancelled { task } => expected == Expected::Cancel(task),
+        Outcome::Released { task } => expected == Expected::Release(task),
+        Outcome::PersonTaken { task } => expected == Expected::Take(task),
+        Outcome::PersonHandedBack { task } => expected == Expected::HandBack(task),
+        Outcome::PersonAnswered { task } => expected == Expected::AnswerPerson(task),
+        Outcome::Moved { task } => expected == Expected::Move(task),
+        Outcome::ProposalDecided { proposer, proposal, .. } => expected == Expected::Proposal(proposer, proposal),
+        Outcome::Said { task, message } => expected == Expected::Say(task) && message != 0,
+        Outcome::QuestionAnswered { task, question, message } => {
+            expected == Expected::AnswerQuestion(task, question) && message != 0
+        }
+        Outcome::Prioritised { project } => expected == Expected::Prioritise(project),
+        Outcome::Amended { task } => expected == Expected::Amend(task),
+        Outcome::AmendProposed { task, proposal } => expected == Expected::Amend(task) && proposal != 0,
+        Outcome::RolesSet { project } => expected == Expected::Roles(project, true),
+        Outcome::PolicyChanged { project, role } => expected == Expected::Policy(project, role),
+        Outcome::PoolSet { project, person } => expected == Expected::Pool(project, person),
+        Outcome::EscalationDecided { .. } => expected == Expected::Escalation,
+        Outcome::Started { task } => expected == Expected::Chat && task != 0,
         Outcome::Refused(_) => true,
     }
 }
@@ -1144,6 +901,14 @@ fn admit_ask(
     if !valid_ask(&env.limits, &ask) {
         return refused(to, Refusal::Limit, out);
     }
+    if let Some(answer) = domain.answers.get(&key)
+        && (answer_expiry(answer.at, &env.limits) <= env.wall || answer.due <= env.now)
+    {
+        let old = domain.answers.remove(&key);
+        assert!(old.is_some(), "expired answer was retained");
+        domain.answer_alarms.cancel(key);
+        out.push(Request::Erase { key: Key::Answer(key) });
+    }
     if let Some(answer) = domain.answers.get(&key) {
         if answer.ask != ask {
             return refused(to, Refusal::KeyConflict, out);
@@ -1168,7 +933,7 @@ fn admit_ask(
     let project = project(&ask);
     let role = role(domain, key.person, project);
     let refusal = match &ask {
-        Ask::SetRoles { .. } => {
+        Ask::SetRoles { .. } | Ask::ChangePolicy { .. } | Ask::SetPool { .. } => {
             if !domain.roles.contains_key(&project) {
                 Some(Refusal::Unknown)
             } else if role == Some(Role::Owner) {
@@ -1234,8 +999,11 @@ fn save_answer(
     out: &mut Queue<Request>,
 ) {
     out.push(Request::Save { record: Stored::Answer { key, ask: Box::new(ask.clone()), outcome, at: env.wall } });
-    let saved = domain.answers.insert(key, Answered { ask, outcome, at: env.wall });
+    let due = deadline(env, answer_expiry(env.wall, &env.limits));
+    let saved = domain.answers.insert(key, Answered { ask, outcome, at: env.wall, due });
     assert!(saved.is_ok(), "answer room reserved at request entrance");
+    let armed = domain.answer_alarms.arm(key, due);
+    assert!(armed.is_ok(), "one expiry per retained completed key");
     fact(domain, Fact::Answered { person: key.person });
 }
 
@@ -1252,6 +1020,8 @@ fn decided(domain: &mut Domain, env: &Env<Limits>, id: Id<Pending>, outcome: Out
         // pressure reported by tasks or another child through the root.
         Outcome::Refused(Refusal::Busy | Refusal::NotReady) => {}
         Outcome::RolesSet { .. }
+        | Outcome::PolicyChanged { .. }
+        | Outcome::PoolSet { .. }
         | Outcome::Started { .. }
         | Outcome::Said { .. }
         | Outcome::QuestionAnswered { .. }
@@ -1312,11 +1082,12 @@ fn restore(domain: &mut Domain, env: &Env<Limits>, record: Stored, out: &mut Que
         Stored::Roles { project, holdings } => {
             valid_roles(domain, &env.limits, *project, holdings).is_ok() && !domain.roles.contains_key(project)
         }
-        Stored::Answer { key, ask, outcome, .. } => {
+        Stored::PolicyRole { .. } => false,
+        Stored::Answer { key, ask, outcome, at } => {
             valid_ask(&env.limits, ask)
                 && valid_answer_shape(ask, *outcome)
                 && !domain.answers.contains_key(key)
-                && domain.answers.len() < env.limits.requests
+                && (answer_expiry(*at, &env.limits) <= env.wall || domain.answers.len() < env.limits.requests)
         }
     };
     if !valid {
@@ -1341,9 +1112,17 @@ fn restore(domain: &mut Domain, env: &Env<Limits>, record: Stored, out: &mut Que
             let saved = domain.roles.insert(project, holdings);
             assert!(saved.is_ok(), "restored roles admitted");
         }
+        Stored::PolicyRole { .. } => unreachable!("root restores policy into authority"),
         Stored::Answer { key, ask, outcome, at } => {
-            let saved = domain.answers.insert(key, Answered { ask: *ask, outcome, at });
-            assert!(saved.is_ok(), "restored answer admitted");
+            if answer_expiry(at, &env.limits) <= env.wall {
+                out.push(Request::Erase { key: Key::Answer(key) });
+            } else {
+                let due = deadline(env, answer_expiry(at, &env.limits));
+                let saved = domain.answers.insert(key, Answered { ask: *ask, outcome, at, due });
+                assert!(saved.is_ok(), "restored answer admitted");
+                let armed = domain.answer_alarms.arm(key, due);
+                assert!(armed.is_ok(), "one expiry per restored answer");
+            }
         }
     }
 }
@@ -1388,6 +1167,8 @@ fn restored(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
                     }
                 }
                 Ask::StartChat { .. }
+                | Ask::ChangePolicy { .. }
+                | Ask::SetPool { .. }
                 | Ask::DecideEscalation { .. }
                 | Ask::DecideProposal { .. }
                 | Ask::Say { .. }
@@ -1406,6 +1187,8 @@ fn restored(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
                 }
             },
             Outcome::Started { .. }
+            | Outcome::PolicyChanged { .. }
+            | Outcome::PoolSet { .. }
             | Outcome::Said { .. }
             | Outcome::QuestionAnswered { .. }
             | Outcome::Prioritised { .. }

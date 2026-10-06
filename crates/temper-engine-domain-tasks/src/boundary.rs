@@ -915,6 +915,8 @@ pub enum Event {
         /// Complete finite pool budget, atomically reserved from the original period.
         budget: u64,
     },
+    /// Change an existing current-period person's pool while preserving reservations and spending.
+    ResizePool { reply_to: ReplyTo, project: u32, person: u64, period: u64, budget: u64 },
     /// Admit the next contiguous turn, offered inbox read and checked expense delta atomically;
     /// stale turns/attempts and arithmetic failures refuse without debit.
     Turn {

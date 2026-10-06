@@ -25,8 +25,7 @@ pub struct Limits {
     pub goals: u32,
     /// Maximum retained configured first-owner entries; also bounds bootstrap output matches.
     pub initial_owners: u32,
-    /// Maximum completed keys plus slots reserved by pending flights; no timed eviction is
-    /// implemented here.
+    /// Maximum completed keys plus slots reserved by pending flights.
     pub requests: u32,
     /// Maximum simultaneous routed keyed flights.
     pub pending: u32,
@@ -41,6 +40,8 @@ pub struct Limits {
     pub amendment_bytes: u32,
     /// Nonzero configured lifetime projected once from admission's wall/monotonic environment.
     pub sign_in_lifetime: Duration,
+    /// Nonzero time for which completed person keys replay their durable answers.
+    pub request_retention: Duration,
     /// Capacity of optional content-free observations; overflow increments a diagnostic lost
     /// counter.
     pub facts: u32,
@@ -56,7 +57,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     limits.initial_owners.checked_add(3)?;
     limits.waiters.checked_add(1)?;
     limits.sign_ins.checked_add(1)?;
-    if limits.waiters == 0 || limits.sign_in_lifetime == Duration::ZERO {
+    if limits.waiters == 0 || limits.sign_in_lifetime == Duration::ZERO || limits.request_retention == Duration::ZERO {
         return None;
     }
     let ask_bytes = u64::from(limits.words)
@@ -90,6 +91,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_add(Map::<u64, SignIn>::worst_case(limits.sign_ins)?)?
         .checked_add(Deadlines::<u64>::worst_case(limits.sign_ins)?)?
         .checked_add(Map::<RequestKey, Answered>::worst_case(limits.requests)?)?
+        .checked_add(Deadlines::<RequestKey>::worst_case(limits.requests)?)?
         .checked_add(u64::from(limits.requests).checked_mul(ask_bytes)?)?
         .checked_add(Slab::<Pending>::worst_case(limits.pending)?)?
         .checked_add(Map::<RequestKey, Id<Pending>>::worst_case(limits.pending)?)?
