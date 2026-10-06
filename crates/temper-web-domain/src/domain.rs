@@ -357,13 +357,24 @@ impl Domain {
     }
 
     fn close_page_stream(&mut self, out: &mut Queue<Request>) {
-        if let Some(id) = self.page_stream.take()
-            && let Some(stream) = self.streams.get_mut(id)
-            && stream.state != Following::Closing
-        {
-            stream.state = Following::Closing;
+        if let Some(id) = self.page_stream.take() {
+            let state = self.streams.get(id).expect("page watch exists").state;
             self.timers.cancel(Timer::Silent(id));
-            out.push(Request::Close { stream: id.token() });
+            match state {
+                Following::Opening | Following::Waiting | Following::Live => {
+                    self.streams.get_mut(id).expect("page watch exists").state = Following::Closing;
+                    out.push(Request::Close { stream: id.token() });
+                }
+                Following::Reopening => {
+                    self.streams.get_mut(id).expect("page watch exists").state = Following::Closing;
+                }
+                Following::Backoff { .. } => {
+                    self.timers.cancel(Timer::Reopen(id));
+                    self.streams.retire(id);
+                    self.streams.reclaim();
+                }
+                Following::Closing => {}
+            }
         }
     }
 
@@ -583,12 +594,24 @@ impl Domain {
         self.objects.clear();
         self.confirming = None;
         self.clear_reason();
-        if let Some(id) = self.frame_stream
-            && let Some(stream) = self.streams.get_mut(id)
-            && stream.state != Following::Closing
-        {
-            stream.state = Following::Closing;
-            out.push(Request::Close { stream: id.token() });
+        if let Some(id) = self.frame_stream {
+            let state = self.streams.get(id).expect("frame watch exists").state;
+            match state {
+                Following::Opening | Following::Waiting | Following::Live => {
+                    self.streams.get_mut(id).expect("frame watch exists").state = Following::Closing;
+                    self.timers.cancel(Timer::Silent(id));
+                    out.push(Request::Close { stream: id.token() });
+                }
+                Following::Reopening => {
+                    self.streams.get_mut(id).expect("frame watch exists").state = Following::Closing;
+                }
+                Following::Backoff { .. } => {
+                    self.timers.cancel(Timer::Reopen(id));
+                    self.streams.retire(id);
+                    self.frame_stream = None;
+                }
+                Following::Closing => {}
+            }
         }
         for (_, id) in &self.pending {
             let pending = self.requests.get_mut(*id).expect("pending id exists");

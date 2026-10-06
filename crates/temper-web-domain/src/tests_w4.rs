@@ -350,3 +350,38 @@ fn unreachable_gone_read_retries_after_frame_reconnect() {
     };
     assert_eq!(domain.link(), LinkState::Behind, "task page has no live watch after Gone");
 }
+
+#[test]
+fn navigation_reuses_in_flight_close_and_retires_backoff_watch() {
+    let (mut domain, mut out, _, task_stream, _) = task_started(209);
+    step(
+        &mut domain,
+        &env(1),
+        Event::Streamed { stream: task_stream, event: StreamEvent::Missed { count: 1 } },
+        &mut out,
+    );
+    assert_eq!(pop(&mut out), Request::Close { stream: task_stream }, "missed asks to close once");
+    step(&mut domain, &env(2), Event::Act { action: Action::Go { address: Address::Chats } }, &mut out);
+    let Request::Read { .. } = pop(&mut out) else { panic!("chat read opens") };
+    let Request::Address { .. } = pop(&mut out) else { panic!("chat address is pushed") };
+    assert!(out.is_empty(), "navigation reuses the in flight Close");
+    step(&mut domain, &env(3), Event::Ended { stream: task_stream, end: StreamEnd::Closed }, &mut out);
+    assert!(out.is_empty(), "old page watch terminal is consumed");
+
+    step(
+        &mut domain,
+        &env(4),
+        Event::Act { action: Action::Go { address: Address::Task { number: 42, section: None } } },
+        &mut out,
+    );
+    let Request::Open { stream: again, watch: Watch::Task { number: 42 } } = pop(&mut out) else {
+        panic!("task watch reopens")
+    };
+    let Request::Address { .. } = pop(&mut out) else { panic!("task address is pushed") };
+    step(&mut domain, &env(5), Event::Ended { stream: again, end: StreamEnd::Dropped }, &mut out);
+    assert!(out.is_empty(), "dropped terminal only arms retry");
+    step(&mut domain, &env(6), Event::Act { action: Action::Go { address: Address::Chats } }, &mut out);
+    let Request::Read { .. } = pop(&mut out) else { panic!("chat read opens again") };
+    let Request::Address { .. } = pop(&mut out) else { panic!("chat address is pushed again") };
+    assert!(out.is_empty(), "retired backoff watch has no live Open to close");
+}
