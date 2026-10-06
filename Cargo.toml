@@ -38,6 +38,7 @@ members = [
     "testing/temper-fake-forge-domain",
     "testing/temper-fake-forge-protocol",
     "testing/temper-legacy-fake-llm-domain",
+    "testing/temper-fake-person",
     "testing/temper-legacy-fake-llm-protocol",
     "tests/agent/domain",
     "tests/legacy/agent/run",
@@ -68,6 +69,7 @@ members = [
     "tests/worker/host",
     "tests/worker/domain",
     "tests/worker/protocol",
+    "tests/web/domain",
     "tests/world",
 ]
 
@@ -94,6 +96,8 @@ temper-legacy-agent-protocol = { path = "crates/temper-legacy-agent-protocol" }
 temper-legacy-agent-protocol-world = { path = "tests/legacy/agent/protocol" }
 temper-worker-protocol = { path = "crates/temper-worker-protocol" }
 temper-web-view = { path = "crates/temper-web-view" }
+temper-fake-person = { path = "testing/temper-fake-person" }
+temper-web-domain-world = { path = "tests/web/domain" }
 temper-worker-protocol-world = { path = "tests/worker/protocol" }
 temper-channel = { path = "crates/temper-channel" }
 temper-legacy-llm-anthropic = { path = "crates/temper-legacy-llm-anthropic" }

@@ -450,6 +450,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-fake-person"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+ "temper-web-domain",
+ "temper-web-view",
+]
+
+[[package]]
 name = "temper-forge-forgejo"
 version = "0.0.0"
 dependencies = [
@@ -715,6 +724,17 @@ name = "temper-web-domain"
 version = "0.0.0"
 dependencies = [
  "skein-lib",
+]
+
+[[package]]
+name = "temper-web-domain-world"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+ "temper-fake-person",
+ "temper-web-domain",
+ "temper-web-view",
+ "temper-world",
 ]
 
 [[package]]

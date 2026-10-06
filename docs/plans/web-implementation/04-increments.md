@@ -73,7 +73,10 @@ tabs and stale presses, which need cards (W4).
 - **Also:** `referee.rs`, `memory.rs`, `fuzzy_web.rs` with the random
   person.
 - **Measures** the world's focused and fuzzy cost, and sets each story's
-  seeds from it (03-testing.md, section 7).
+  seeds from it (03-testing.md, section 7). The first 32-seed sweep took
+  0.47 s on 2026-10-06; the focused binaries together ran in under 0.1 s
+  (compilation excluded). Seeds 5, 13 and 16 are pinned after finding
+  watch and draft races.
 - **Updates** `docs/design/testing.md`, sections 4.4 and 7 (03-testing.md,
   section 8).
 
