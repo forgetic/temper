@@ -4,6 +4,4 @@
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Fact {
     KeyConflict,
-    StaleTerminal,
-    UnexpectedEvent,
 }

@@ -102,10 +102,12 @@ shows, never growth.
   tests find it (section 7.2). The web is accessible because its tests
   need it to be.
 - **Bindings are tokens** (programming-model.md, 4.2). A node a person
-  acts on carries a token: which action, on which object. The shell
-  reports the event with its token, and the view decodes it into a
-  domain input. A token whose object has gone is an input like any other,
-  and the domain refuses it, as a stale handle is refused.
+  acts on carries a typed binding in the view's last tree. The browser
+  holds only the node id and whether it is bound; the shell reports the
+  event with that id, and the view decodes it into a domain input. A
+  press on a node removed by the last patches is dropped as stale. A
+  binding whose object has since gone reaches the domain, which refuses
+  its stale handle as any other input.
 - **Diffed, not replaced.** The view keeps the last tree. After each step
   that changed what a page shows, the page is built again and diffed
   against it, keyed by objects' ids in lists, into patches: insert,
@@ -178,7 +180,14 @@ shows, never growth.
   lose, its pending requests with their keys and the person's drafts, the
   domain writes through the shell as it changes, and reads at start, and
   then sends what is pending again with the same keys (ux README, 5.3).
+  A step that creates a keyed request emits a whole-storage `Save` before
+  its `Send`; the shell applies those outputs in order. Draft edits use a
+  short coalescing deadline, since they do not commit a decision.
   It is never the truth; the engine's store is.
+- **The frame's person watch stays open on every page.** Its first
+  snapshot supplies the signed-in person, projects and inbox count. The
+  client uses its events and heartbeat to show whether the link is live,
+  behind or offline, and to resume parked keyed requests after reconnect.
 - **Signing in is navigation.** The engine sends the browser to the forge
   and back, and sets a cookie the client cannot read
   (`domain/people.md`, section 3). The client holds no token; an answer

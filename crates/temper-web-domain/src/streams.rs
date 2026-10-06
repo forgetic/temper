@@ -11,6 +11,24 @@ pub(crate) enum Following {
     Backoff { attempt: u32 },
 }
 
+impl Following {
+    pub(crate) const fn accepts_event(self) -> bool {
+        match self {
+            Following::Waiting | Following::Live => true,
+            Following::Opening | Following::Reopening | Following::Closing | Following::Backoff { .. } => false,
+        }
+    }
+
+    pub(crate) const fn backoff(self) -> bool {
+        match self {
+            Following::Backoff { .. } => true,
+            Following::Opening | Following::Waiting | Following::Live | Following::Reopening | Following::Closing => {
+                false
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct Stream {
     pub watch: Watch,

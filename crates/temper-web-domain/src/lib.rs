@@ -28,7 +28,8 @@ pub use action::{Action, FieldRef, Form};
 pub use address::{Address, Section};
 pub use ask::{Ask, Key, Outcome, Refusal};
 pub use boundary::{
-    Answer, Change, Cursor, Event, Offset, Query, ReadResult, Request, Snapshot, StreamEnd, StreamEvent, Watch,
+    Answer, Change, Cursor, Event, Offset, PersonSnapshot, Query, ReadResult, Request, Snapshot, StreamEnd,
+    StreamEvent, Watch,
 };
 pub use domain::{Domain, fire, max_out, step};
 pub use drafts::Field;

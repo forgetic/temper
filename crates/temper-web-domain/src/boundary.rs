@@ -12,7 +12,7 @@ pub struct Offset(pub i32);
 pub struct Cursor(pub u64);
 
 /// An input to one domain step, with a terminal for each issued operation.
-#[derive(Debug)]
+#[derive(PartialEq, Eq, Debug)]
 pub enum Event {
     Start { address: Address, saved: Option<Saved>, offset: Offset },
     Went { address: Address },

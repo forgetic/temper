@@ -9,3 +9,12 @@ pub enum LinkState {
     Behind,
     Offline { since: Wall },
 }
+
+impl LinkState {
+    pub(crate) const fn offline(self) -> bool {
+        match self {
+            LinkState::Offline { .. } => true,
+            LinkState::Starting | LinkState::Live | LinkState::Behind => false,
+        }
+    }
+}

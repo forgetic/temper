@@ -6,6 +6,7 @@ use skein_lib::Time;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum NoticeKind {
     RequestFull,
+    ReadFull,
     WordsTooLong,
     Refused(Refusal),
     WentOffline,

@@ -8,6 +8,22 @@ pub(crate) enum Sending {
     Parked,
 }
 
+impl Sending {
+    pub(crate) const fn waiting(self) -> bool {
+        match self {
+            Sending::Backoff { .. } | Sending::Parked => true,
+            Sending::InFlight { .. } => false,
+        }
+    }
+
+    pub(crate) const fn in_flight(self) -> bool {
+        match self {
+            Sending::InFlight { .. } => true,
+            Sending::Backoff { .. } | Sending::Parked => false,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct Pending {
     pub key: Key,
