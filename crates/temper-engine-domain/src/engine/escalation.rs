@@ -306,6 +306,7 @@ pub(super) fn read(
                 return;
             }
             Read::Result(_)
+            | Read::Inbox(_)
             | Read::Transcript { .. }
             | Read::Dependency(_)
             | Read::InputCheck(_)
@@ -401,7 +402,7 @@ pub(super) fn inspected(
     let Some(read) = super::take_read(domain, waiter) else { return };
     let query = match read {
         Read::Escalation(query) => query,
-        Read::Result(_) | Read::Transcript { .. } | Read::Dependency(_) | Read::InputCheck(_) => {
+        Read::Result(_) | Read::Inbox(_) | Read::Transcript { .. } | Read::Dependency(_) | Read::InputCheck(_) => {
             unreachable!("escalation query terminal")
         }
     };
@@ -547,7 +548,7 @@ pub(super) fn completed(
     let Some(read) = super::take_read(domain, waiter) else { return };
     let query = match read {
         Read::Escalation(query) => query,
-        Read::Result(_) | Read::Transcript { .. } | Read::Dependency(_) | Read::InputCheck(_) => {
+        Read::Result(_) | Read::Inbox(_) | Read::Transcript { .. } | Read::Dependency(_) | Read::InputCheck(_) => {
             unreachable!("escalation query terminal")
         }
     };
@@ -595,7 +596,7 @@ pub(super) fn loaded(domain: &mut Domain, env: &Env<Limits>, waiter: Token, rows
     let Some(read) = super::take_read(domain, waiter) else { return };
     let query = match read {
         Read::Escalation(query) => query,
-        Read::Result(_) | Read::Transcript { .. } | Read::Dependency(_) | Read::InputCheck(_) => {
+        Read::Result(_) | Read::Inbox(_) | Read::Transcript { .. } | Read::Dependency(_) | Read::InputCheck(_) => {
             unreachable!("escalation query terminal")
         }
     };
@@ -678,6 +679,7 @@ pub(super) fn failed(domain: &mut Domain, waiter: Token) {
             decided(domain, request, people::Outcome::Refused(people::Refusal::Busy));
         }
         Read::Result(_)
+        | Read::Inbox(_)
         | Read::Transcript { .. }
         | Read::Dependency(_)
         | Read::InputCheck(_)

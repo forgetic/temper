@@ -63,6 +63,7 @@ pub(super) fn begin(
         Err(
             Some(
                 RootRead::Escalation(_)
+                | RootRead::Inbox(_)
                 | RootRead::Transcript { .. }
                 | RootRead::Dependency(_)
                 | RootRead::InputCheck(_),

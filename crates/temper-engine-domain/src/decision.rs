@@ -12,7 +12,7 @@
 use crate::{Deployment, Family, Key, Record, Write};
 use alloc::boxed::Box;
 use core::mem::size_of;
-use skein_lib::{List, Queue, ReplyTo, Token};
+use skein_lib::{List, Queue, ReplyTo, Token, Wall};
 use temper_engine_domain_people as people;
 
 /// Startup capacities supplied by the root, immutable across journal calls
@@ -55,6 +55,10 @@ pub enum Delivery {
     Inbound { channel: Token, task: u64, attempt: u64, word: temper_engine_domain_tasks::Word },
     /// Bounded page of committed unread results, consumed through its last position with this reply.
     InboxPage { to: ReplyTo, person: u64, entries: Box<[ResultEntry]> },
+    /// One authenticated newest-first page derived from committed task rows.
+    InboxView { to: ReplyTo, person: u64, entries: Box<[InboxViewEntry]>, next: Option<InboxCursor> },
+    /// Root-internal start of the store-backed whole inbox scan after prior commits.
+    BeginInboxView { waiter: Token },
     /// Root-to-authenticated named reader: one current durable held-chat view,
     /// derived from tasks without a persistent people inbox.
     EscalationReply {
@@ -199,6 +203,48 @@ pub struct ResultEntry {
     pub words: Box<[u8]>,
 }
 
+/// Stable descending page cursor for a task-derived person inbox.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct InboxCursor {
+    pub at: Wall,
+    pub task: u64,
+    pub kind: u8,
+    pub number: u64,
+    /// Highest result or reply position seen on the first page, carried through the scan.
+    pub read_high: u64,
+}
+
+/// One visible task-derived item; historical result words remain bounded by the root.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum InboxViewEntry {
+    /// A current question, decision, person task or reply.
+    Waiting(people::Entry),
+    /// A historical result requested by this person and still unread.
+    Result { at: Wall, result: ResultEntry },
+}
+
+impl InboxViewEntry {
+    /// Cursor used to page this item's committed ordering without retaining history in the root.
+    #[must_use]
+    pub const fn cursor(&self) -> InboxCursor {
+        match self {
+            InboxViewEntry::Waiting(entry) => {
+                let (kind, number) = match entry.kind {
+                    people::EntryKind::Question { message } => (1, message),
+                    people::EntryKind::Proposal { number } => (2, number),
+                    people::EntryKind::Escalation { revision } => (3, revision),
+                    people::EntryKind::PersonTask => (4, 0),
+                    people::EntryKind::Reply { message } => (5, message),
+                };
+                InboxCursor { at: entry.at, task: entry.task, kind, number, read_high: 0 }
+            }
+            InboxViewEntry::Result { at, result } => {
+                InboxCursor { at: *at, task: result.task, kind: 6, number: result.position, read_high: 0 }
+            }
+        }
+    }
+}
+
 /// Journal to its root caller: at most one value per entry point; the caller
 /// translates it to store IO or an outward/internal delivery (domain/engine.md, 5).
 #[derive(PartialEq, Eq, Debug)]
@@ -332,6 +378,7 @@ impl Decision {
     /// refusal returns ownership; successful admission ends through journal release after
     /// durability.
     #[expect(clippy::result_large_err, reason = "bounded assignment ownership is returned intact on admission refusal")]
+    #[expect(clippy::too_many_lines, reason = "one exhaustive delivery bound check")]
     pub fn deliver(&mut self, limits: &Limits, delivery: Delivery) -> Result<(), Delivery> {
         assert!(*limits == self.limits, "decision uses its configured limits");
         let within = match &delivery {
@@ -359,6 +406,33 @@ impl Decision {
                     Some(bytes) => bytes <= u64::from(limits.transcript_bytes),
                     None => false,
                 }
+            }
+            Delivery::InboxView { entries, .. } => {
+                let mut bytes = 0_u64;
+                let mut valid = true;
+                for entry in entries {
+                    let extra = match entry {
+                        InboxViewEntry::Waiting(_) => 0,
+                        InboxViewEntry::Result { result, .. } => {
+                            if result.words.len() > usize::try_from(limits.result_bytes).expect("u32 fits usize") {
+                                valid = false;
+                            }
+                            u64::try_from(result.words.len()).expect("usize fits u64")
+                        }
+                    };
+                    let Some(total) =
+                        bytes.checked_add(u64::try_from(size_of::<InboxViewEntry>()).expect("usize fits u64"))
+                    else {
+                        valid = false;
+                        break;
+                    };
+                    let Some(next) = total.checked_add(extra) else {
+                        valid = false;
+                        break;
+                    };
+                    bytes = next;
+                }
+                valid && bytes <= u64::from(limits.transcript_bytes)
             }
             Delivery::EscalationReply { context, .. } => {
                 context.task != 0
@@ -400,6 +474,7 @@ impl Decision {
             | Delivery::Refuse { .. }
             | Delivery::ReadEscalationDecision { .. }
             | Delivery::ReadResult { .. }
+            | Delivery::BeginInboxView { .. }
             | Delivery::TurnBusy { .. }
             | Delivery::Load { .. } => true,
         };

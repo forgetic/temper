@@ -224,6 +224,7 @@ fn end_task(domain: &mut Domain, env: &Env<Limits>, number: u64, out: &mut Queue
     }
     crate::funders::end(domain, env, number, out);
     ended.phase = Phase::Ended(ending.clone());
+    ended.ended_at = Some(env.wall);
     let id = domain.names.remove(&number).expect("ending name exists");
     crate::refs::end(domain, env, number, out);
     domain.tasks.retire(id);

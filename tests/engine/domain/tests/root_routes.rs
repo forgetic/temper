@@ -146,6 +146,8 @@ impl Driver {
                 | Delivery::Load { .. }
                 | Delivery::ResultReply { .. }
                 | Delivery::InboxPage { .. }
+                | Delivery::InboxView { .. }
+                | Delivery::BeginInboxView { .. }
                 | Delivery::CallAnswer { .. }
                 | Delivery::Procedure { .. } => None,
             })
@@ -225,6 +227,8 @@ fn durable_start_turn_and_answer_callbacks_survive_full_journal_pressure() {
             | Delivery::Load { .. }
             | Delivery::ResultReply { .. }
             | Delivery::InboxPage { .. }
+            | Delivery::InboxView { .. }
+            | Delivery::BeginInboxView { .. }
             | Delivery::CallAnswer { .. }
             | Delivery::Procedure { .. } => None,
         })
@@ -382,6 +386,127 @@ fn unread_results_page_in_commit_order_across_restarts_with_bounded_loads() {
     assert!(matches!(second.delivered.pop(), Some(Delivery::InboxPage { entries, .. }) if entries.is_empty()));
 }
 
+#[test]
+fn a_full_inbox_pages_the_rest_from_the_store() {
+    let mut world = World::new(Settings { restart: false, ..Settings::calm(9319) });
+    world.run();
+    let mut store = world.store;
+    let original = store
+        .rows
+        .values()
+        .find_map(|row| match row {
+            Record::Tasks(tasks::Stored::Ended(task)) => Some(task.as_ref().clone()),
+            Record::Call(_)
+            | Record::EscalationDecision(_)
+            | Record::Deployment(_)
+            | Record::Turn(_)
+            | Record::RunProof(_)
+            | Record::Terminal(_)
+            | Record::Tasks(_)
+            | Record::People(_) => None,
+        })
+        .expect("one committed result for the store fixture");
+    store.rows.remove(&Key::Tasks(tasks::Key::Ended(original.number)));
+    for number in 1..=5 {
+        let mut row = original.clone();
+        row.number = number;
+        row.root = number;
+        row.result_position = number;
+        store.rows.insert(Key::Tasks(tasks::Key::Ended(number)), Record::Tasks(tasks::Stored::Ended(Box::new(row))));
+    }
+    let Some(Record::Deployment(header)) = store.rows.get_mut(&Key::Deployment) else { panic!("header") };
+    header.tasks = 5;
+    header.messages = 5;
+    let sign_in = header.sign_ins;
+    let mut driver = Driver::new(store);
+    driver.settle();
+    for (page, expected) in [[5, 4], [3, 2], [1, 0]].into_iter().enumerate() {
+        let before = if page == 0 {
+            None
+        } else {
+            let Some(Delivery::InboxView { next, .. }) = driver.delivered.pop() else { panic!("prior page") };
+            next
+        };
+        driver.send(engine::Event::ViewInbox {
+            reply_to: ReplyTo::new(Token::new(950 + page as u64)),
+            sign_in,
+            most: 2,
+            before,
+        });
+        driver.settle();
+        let Some(Delivery::InboxView { entries, next, .. }) = driver.delivered.last() else {
+            panic!("whole inbox page")
+        };
+        let tasks: Vec<_> = entries
+            .iter()
+            .map(|entry| match entry {
+                temper_engine_domain::InboxViewEntry::Result { result, .. } => result.task,
+                temper_engine_domain::InboxViewEntry::Waiting(_) => panic!("historical fixture has no waiting entry"),
+            })
+            .collect();
+        let wanted = if expected[1] == 0 { &expected[..1] } else { &expected[..] };
+        assert_eq!(tasks, wanted);
+        assert_eq!(next.is_some(), page < 2);
+    }
+    assert!(driver.result_loads.len() >= 3, "each page scans committed ended rows through bounded store loads");
+    assert!(matches!(
+        driver.store.rows.get(&Key::People(people::Key::ReadPosition(1))),
+        Some(Record::People(people::Stored::ReadPosition { position: 5, .. }))
+    ));
+}
+
+#[test]
+fn an_entry_addressed_to_a_role_leaves_every_inbox_once_one_acts() {
+    use temper_engine_domain_world::roles;
+    let prior = roles::World::new(roles::Settings::calm(9320, roles::Base::FinalRole));
+    let sessions = prior.sessions;
+    let task = prior.task;
+    let mut driver = Driver::configured(prior.store, administration_config(9320), &roles::limits());
+    driver.settle();
+    driver.delivered.clear();
+    for (at, sign_in) in sessions.into_iter().enumerate() {
+        driver.send(engine::Event::ViewInbox {
+            reply_to: ReplyTo::new(Token::new(960 + at as u64)),
+            sign_in,
+            most: 4,
+            before: None,
+        });
+        driver.settle();
+        let Some(Delivery::InboxView { entries, .. }) = driver.delivered.pop() else { panic!("role inbox") };
+        assert!(entries.iter().any(|entry| matches!(entry,
+            temper_engine_domain::InboxViewEntry::Waiting(people::Entry { task: found, kind: people::EntryKind::Escalation { .. }, .. }) if *found == task)));
+    }
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(962)),
+        sign_in: sessions[0],
+        key: [96; 16],
+        ask: people::Ask::DecideEscalation {
+            project: 1,
+            task,
+            revision: 2,
+            decision: people::EscalationDecision::Release,
+        },
+    });
+    for _ in 0..50 {
+        driver.advance(true);
+    }
+    driver.delivered.clear();
+    for (at, sign_in) in sessions.into_iter().enumerate() {
+        driver.send(engine::Event::ViewInbox {
+            reply_to: ReplyTo::new(Token::new(963 + at as u64)),
+            sign_in,
+            most: 4,
+            before: None,
+        });
+        for _ in 0..50 {
+            driver.advance(true);
+        }
+        let Some(Delivery::InboxView { entries, .. }) = driver.delivered.pop() else { panic!("updated role inbox") };
+        assert!(!entries.iter().any(|entry| matches!(entry,
+            temper_engine_domain::InboxViewEntry::Waiting(people::Entry { task: found, kind: people::EntryKind::Escalation { .. }, .. }) if *found == task)));
+    }
+}
+
 fn hello(driver: &mut Driver) {
     driver.send(engine::Event::Hello {
         channel: Token::new(7),
@@ -426,6 +551,8 @@ fn assigned(driver: &Driver) -> engine::Assignment {
             | Delivery::Load { .. }
             | Delivery::ResultReply { .. }
             | Delivery::InboxPage { .. }
+            | Delivery::InboxView { .. }
+            | Delivery::BeginInboxView { .. }
             | Delivery::CallAnswer { .. }
             | Delivery::Procedure { .. } => None,
         })
@@ -2669,6 +2796,8 @@ fn coalesced_history_waiters_survive_simultaneous_io_completion_under_full_journ
             | Delivery::EscalationReply { .. }
             | Delivery::ReadEscalationDecision { .. }
             | Delivery::InboxPage { .. }
+            | Delivery::InboxView { .. }
+            | Delivery::BeginInboxView { .. }
             | Delivery::CallAnswer { .. }
             | Delivery::Procedure { .. } => None,
         })
@@ -3120,6 +3249,8 @@ fn assigned_from_last(delivered: &[Delivery]) -> engine::Assignment {
             Delivery::Relay { .. }
             | Delivery::Inbound { .. }
             | Delivery::InboxPage { .. }
+            | Delivery::InboxView { .. }
+            | Delivery::BeginInboxView { .. }
             | Delivery::CallAnswer { .. }
             | Delivery::Procedure { .. }
             | Delivery::EscalationReply { .. }
@@ -3160,6 +3291,8 @@ fn say(driver: &mut Driver, task: u64, key: u8) -> u64 {
             Delivery::Relay { .. }
             | Delivery::Inbound { .. }
             | Delivery::InboxPage { .. }
+            | Delivery::InboxView { .. }
+            | Delivery::BeginInboxView { .. }
             | Delivery::CallAnswer { .. }
             | Delivery::Procedure { .. }
             | Delivery::EscalationReply { .. }

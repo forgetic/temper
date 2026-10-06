@@ -724,6 +724,7 @@ impl World {
                 .expect("independent exact final report and funding"),
             Delivery::WebReply { .. }
             | Delivery::InboxPage { .. }
+            | Delivery::InboxView { .. }
             | Delivery::Reply { .. }
             | Delivery::Refuse { .. }
             | Delivery::Cancel { .. }
@@ -732,6 +733,7 @@ impl World {
             | Delivery::ResultReply { .. } => panic!("unexpected escalation delivery {delivery:?}"),
             Delivery::Fleet(_)
             | Delivery::ReadResult { .. }
+            | Delivery::BeginInboxView { .. }
             | Delivery::ReadEscalationDecision { .. }
             | Delivery::Relay { .. }
             | Delivery::Inbound { .. }

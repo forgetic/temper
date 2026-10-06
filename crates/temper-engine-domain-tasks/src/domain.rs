@@ -523,6 +523,7 @@ pub(crate) fn publish(domain: &mut Domain, env: &Env<Limits>, number: u64, out: 
 }
 
 #[expect(clippy::manual_map, reason = "the subset uses a closed match instead of a closure")]
+#[expect(clippy::too_many_lines, reason = "one atomic batch constructor fills the durable task record")]
 pub(crate) fn make(
     domain: &mut Domain,
     env: &Env<Limits>,
@@ -577,6 +578,8 @@ pub(crate) fn make(
         let number = new.number;
         let task = Task {
             record: TaskRecord {
+                created_at: env.wall,
+                ended_at: None,
                 revision: 0,
                 narrowing: false,
                 result_position: 0,

@@ -232,6 +232,7 @@ fn valid_escalation(task: &TaskRecord, limits: &Limits) -> bool {
 #[expect(clippy::too_many_lines, reason = "one complete restored task shape is checked before retention")]
 fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
     if task.run_spent > task.numbers.spent
+        || task.ended_at.is_some()
         || crate::funders::total(task.numbers).is_none()
         || task.depth > limits.depth
         || task.made == 0

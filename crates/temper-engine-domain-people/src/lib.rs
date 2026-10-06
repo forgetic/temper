@@ -1,11 +1,12 @@
 //! People as parties (programming-model.md, 4.5; domain/people.md).
-//! Keeps identities, secret-free sign-ins, project roles, keyed answers and each person's result read position.
+//! Keeps identities, secret-free sign-ins, project roles, keyed answers,
+//! task-derived bounded inbox references and each person's result and reply read position.
 //! Knows tasks only by number; the parent checks authority and makes tasks.
 //! `Save`/`Erase` join the parent's decision; the parent holds replies until
-//! durable (domain/engine.md, 5.6). Other inbox entries and adoption follow later.
+//! durable (domain/engine.md, 5.6). Adoption follows later.
 //!
-//! The current boundary supports typed `StartChat`, authenticated escalation decisions, derived result references and narrow keyed `SetRoles` administration; other inbox entries, adoption,
-//! person tasks and timed key retention remain later increments
+//! The current boundary supports typed `StartChat`, authenticated escalation decisions, derived inbox references and narrow keyed `SetRoles` administration; adoption,
+//! person task requests and timed key retention remain later increments
 //! (domain/people.md, section 5.1). This child never sees forge
 //! credentials, protocol bytes, task internals or authority policy state.
 //! The root supplies authenticated identities and authoritative role changes.
@@ -42,8 +43,8 @@ mod limits;
 #[cfg(test)]
 mod tests;
 pub use boundary::{
-    Ask, EscalationChoice, EscalationDecision, Event, Holding, Identity, IdentityKey, InitialOwner, Key, Outcome,
-    ProposalChoice, ProposalDecision, Refusal, Reply, Request, RequestKey, ResultRef, Role, Stored,
+    Ask, Entry, EntryKind, EscalationChoice, EscalationDecision, Event, Holding, Identity, IdentityKey, InitialOwner,
+    Key, Outcome, ProposalChoice, ProposalDecision, Refusal, Reply, Request, RequestKey, ResultRef, Role, Stored, Whom,
 };
 pub use domain::{Domain, fire, max_out, step};
 pub use facts::Fact;

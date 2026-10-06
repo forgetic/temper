@@ -535,6 +535,10 @@ pub struct New {
 /// does not maintain a mutable copy of this ledger. (domain/tasks.md, sections 3 and 5).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct TaskRecord {
+    /// Injected creation time used to order active person tasks in derived inboxes.
+    pub created_at: Wall,
+    /// Injected time of the durable ending, used for newest-first result pages.
+    pub ended_at: Option<Wall>,
     /// Last committed semantic change to this task; history rows are keyed by this sequence.
     pub revision: u64,
     /// An admitted authority narrowing stopped the current run; its terminal starts the task anew.

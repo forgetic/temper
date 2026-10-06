@@ -6,6 +6,41 @@
 use alloc::boxed::Box;
 use skein_lib::{ReplyTo, Token, Wall};
 
+/// A task-derived recipient, retained only as a bounded inbox reference.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum Whom {
+    /// One authenticated deployment person.
+    Person(u64),
+    /// Every current holder of a project role may see the entry.
+    Role { project: u32, role: u32 },
+}
+
+/// The reason a task currently appears in a person's inbox.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum EntryKind {
+    /// A numbered question in a task requested by the person.
+    Question { message: u64 },
+    /// A pending action waiting for a decision.
+    Proposal { number: u64 },
+    /// A held task waiting for a decision at this revision.
+    Escalation { revision: u64 },
+    /// An active person-executed task.
+    PersonTask,
+    /// A reply in a task requested by the person.
+    Reply { message: u64 },
+}
+
+/// One volatile reference derived from a live task; content remains in tasks.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Entry {
+    pub task: u64,
+    pub project: u32,
+    pub whom: Whom,
+    pub kind: EntryKind,
+    /// Root-injected time of the change that made this entry visible.
+    pub at: Wall,
+}
+
 /// Forge and user together identify a person; neither display field is a key.
 /// Protocol-authenticated forge/user identity supplied by the root; display bytes are not keys and
 /// no secret is retained. (domain/people.md, section 3).
@@ -329,6 +364,8 @@ impl Stored {
 /// cross this boundary without protocol secrets. (domain/people.md, sections 3–5).
 #[derive(PartialEq, Eq, Debug)]
 pub enum Event {
+    /// Replace the volatile inbox projection of one durable task after its row changes.
+    Waiting { task: u64, entries: Box<[Entry]> },
     /// Root's synchronous application after authority/revision/capacity preflight. Reads the
     /// original admitted roster, preserves membership on refusal and returns exactly one
     /// `RolesApplied`.

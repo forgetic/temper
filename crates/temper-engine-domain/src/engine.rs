@@ -26,6 +26,7 @@
 //! Child facts are disposable observations; [`Domain::quiescent`] reports
 //! internal idleness, while an external referee establishes final story results.
 mod escalation;
+mod inbox;
 mod proposals;
 mod results;
 
@@ -409,6 +410,8 @@ pub enum Event {
         /// Positive maximum entries, capped by the configured per-person inbox limit.
         most: u32,
     },
+    /// Authenticated newest-first page of live waiting work and unread results.
+    ViewInbox { reply_to: ReplyTo, sign_in: u64, most: u32, before: Option<crate::InboxCursor> },
     /// Account protocol completes a refresh with secret-free lifetime.
     Refreshed {
         /// Configured secret-free account number; bounded by accounts account room.
@@ -528,6 +531,7 @@ enum Payload {
 #[derive(Debug)]
 enum Read {
     Result(results::Read),
+    Inbox(inbox::Read),
     Escalation(escalation::Query),
     Transcript { task: u64 },
     Dependency(DependencyRead),
@@ -1156,6 +1160,10 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
             results::begin(domain, env, reply_to, sign_in, results::Query::Inbox { most }, out);
             return;
         }
+        Event::ViewInbox { reply_to, sign_in, most, before } => {
+            inbox::begin(domain, env, reply_to, sign_in, most, before, out);
+            return;
+        }
     }
     let decision = route(domain, env);
     domain.signing_in = None;
@@ -1214,7 +1222,14 @@ pub fn resume(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) 
     }
     if !domain.result_pages.is_empty() && crate::takes(&domain.journal, &env.limits.journal) {
         let page = domain.result_pages.pop().expect("pending result page");
-        results::page(domain, env, page.waiter, page.rows, page.next, out);
+        match domain.result_reads.get(Id::from_token(page.waiter)) {
+            Some(Some(Read::Inbox(_))) => inbox::page(domain, env, page.waiter, page.rows, page.next, out),
+            Some(Some(Read::Result(_))) => results::page(domain, env, page.waiter, page.rows, page.next, out),
+            Some(
+                Some(Read::Escalation(_) | Read::Transcript { .. } | Read::Dependency(_) | Read::InputCheck(_)) | None,
+            )
+            | None => unreachable!("queued person page has its live read"),
+        }
         return;
     }
     if !domain.work.is_empty() {
@@ -1247,6 +1262,7 @@ pub fn resume(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) 
                 let (task, revision) = match read {
                     Read::Escalation(escalation::Query::Decide { task, revision, .. }) => (*task, *revision),
                     Read::Result(_)
+                    | Read::Inbox(_)
                     | Read::Transcript { .. }
                     | Read::Dependency(_)
                     | Read::InputCheck(_)
@@ -1266,10 +1282,32 @@ pub fn resume(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) 
                 };
                 match read {
                     Read::Result(_) => request_load(domain, waiter, Range::EndedResults, None, out),
-                    Read::Escalation(_) | Read::Transcript { .. } | Read::Dependency(_) | Read::InputCheck(_) => {
+                    Read::Inbox(_)
+                    | Read::Escalation(_)
+                    | Read::Transcript { .. }
+                    | Read::Dependency(_)
+                    | Read::InputCheck(_) => {
                         unreachable!("result waiter")
                     }
                 }
+                return;
+            }
+            Output::Deliver(Delivery::BeginInboxView { waiter }) => {
+                match domain.result_reads.get(Id::from_token(waiter)) {
+                    Some(Some(Read::Inbox(_))) => {}
+                    Some(
+                        Some(
+                            Read::Result(_)
+                            | Read::Escalation(_)
+                            | Read::Transcript { .. }
+                            | Read::Dependency(_)
+                            | Read::InputCheck(_),
+                        )
+                        | None,
+                    )
+                    | None => unreachable!("inbox start has its live waiter"),
+                }
+                request_load(domain, waiter, Range::Tasks, None, out);
                 return;
             }
             Output::Deliver(delivery) => {
@@ -2872,6 +2910,15 @@ fn tasks_outputs(
                 }
             }
             tasks::Request::Save { record } => {
+                match &record {
+                    tasks::Stored::Live(task) | tasks::Stored::Ended(task) => {
+                        domain.work.push(Work::People(people::Event::Waiting {
+                            task: task.number,
+                            entries: inbox::entries(domain, task),
+                        }));
+                    }
+                    tasks::Stored::Ledger(_) | tasks::Stored::History(_) => {}
+                }
                 let record = match record {
                     tasks::Stored::Ended(mut task) => {
                         let position = crate::fresh(&mut domain.journal, Family::Message)
@@ -3675,16 +3722,40 @@ fn request_load(domain: &mut Domain, waiter: Token, range: Range, after: Option<
 fn transcript_waiter(domain: &Domain, waiter: Token) -> bool {
     match domain.result_reads.get(Id::from_token(waiter)) {
         Some(Some(Read::Transcript { .. })) => true,
-        Some(Some(Read::Result(_) | Read::Escalation(_) | Read::Dependency(_) | Read::InputCheck(_)) | None) | None => {
-            false
-        }
+        Some(
+            Some(Read::Result(_) | Read::Inbox(_) | Read::Escalation(_) | Read::Dependency(_) | Read::InputCheck(_))
+            | None,
+        )
+        | None => false,
+    }
+}
+
+fn inbox_waiter(domain: &Domain, waiter: Token) -> bool {
+    match domain.result_reads.get(Id::from_token(waiter)) {
+        Some(Some(Read::Inbox(_))) => true,
+        Some(
+            Some(
+                Read::Result(_)
+                | Read::Escalation(_)
+                | Read::Transcript { .. }
+                | Read::Dependency(_)
+                | Read::InputCheck(_),
+            )
+            | None,
+        )
+        | None => false,
     }
 }
 
 fn dependency_waiter(domain: &Domain, waiter: Token) -> bool {
     match domain.result_reads.get(Id::from_token(waiter)) {
         Some(Some(Read::Dependency(_))) => true,
-        Some(Some(Read::Result(_) | Read::Escalation(_) | Read::Transcript { .. } | Read::InputCheck(_)) | None)
+        Some(
+            Some(
+                Read::Result(_) | Read::Inbox(_) | Read::Escalation(_) | Read::Transcript { .. } | Read::InputCheck(_),
+            )
+            | None,
+        )
         | None => false,
     }
 }
@@ -3692,7 +3763,12 @@ fn dependency_waiter(domain: &Domain, waiter: Token) -> bool {
 fn input_waiter(domain: &Domain, waiter: Token) -> bool {
     match domain.result_reads.get(Id::from_token(waiter)) {
         Some(Some(Read::InputCheck(_))) => true,
-        Some(Some(Read::Result(_) | Read::Escalation(_) | Read::Transcript { .. } | Read::Dependency(_)) | None)
+        Some(
+            Some(
+                Read::Result(_) | Read::Inbox(_) | Read::Escalation(_) | Read::Transcript { .. } | Read::Dependency(_),
+            )
+            | None,
+        )
         | None => false,
     }
 }
@@ -3752,6 +3828,7 @@ fn input_loaded(domain: &mut Domain, waiter: Token, rows: Box<[Record]>, next: O
     domain.work.push(Work::DelegateValidated { to: read.to, key: read.key, batch: read.batch });
 }
 
+#[expect(clippy::too_many_lines, reason = "one store terminal dispatcher covers every live read owner")]
 fn load_outputs(
     domain: &mut Domain,
     env: &Env<Limits>,
@@ -3781,11 +3858,25 @@ fn load_outputs(
                     transcript_loaded(domain, waiter, rows, next, cut, out);
                     return;
                 }
+                if inbox_waiter(domain, waiter) {
+                    if cut.is_some() {
+                        inbox::failed(domain, waiter, people::Refusal::Limit, out);
+                    } else {
+                        domain.result_pages.push(ResultPage { waiter, rows, next });
+                    }
+                    return;
+                }
                 if cut.is_some() {
                     let archive = match domain.result_reads.get(Id::from_token(waiter)) {
                         Some(Some(Read::Escalation(_))) => true,
                         Some(
-                            Some(Read::Result(_) | Read::Transcript { .. } | Read::Dependency(_) | Read::InputCheck(_))
+                            Some(
+                                Read::Result(_)
+                                | Read::Inbox(_)
+                                | Read::Transcript { .. }
+                                | Read::Dependency(_)
+                                | Read::InputCheck(_),
+                            )
                             | None,
                         )
                         | None => false,
@@ -3806,7 +3897,13 @@ fn load_outputs(
                     let archive = match domain.result_reads.get(Id::from_token(waiter)) {
                         Some(Some(Read::Escalation(_))) => true,
                         Some(
-                            Some(Read::Result(_) | Read::Transcript { .. } | Read::Dependency(_) | Read::InputCheck(_))
+                            Some(
+                                Read::Result(_)
+                                | Read::Inbox(_)
+                                | Read::Transcript { .. }
+                                | Read::Dependency(_)
+                                | Read::InputCheck(_),
+                            )
                             | None,
                         )
                         | None => false,
@@ -3831,6 +3928,10 @@ fn load_outputs(
                     transcript_failed(domain, waiter);
                     return;
                 }
+                if inbox_waiter(domain, waiter) {
+                    inbox::failed(domain, waiter, people::Refusal::Busy, out);
+                    return;
+                }
                 if waiter == Token::new(u64::MAX) {
                     domain.startup = Startup::Failed;
                     out.push(Request::Stop);
@@ -3838,7 +3939,13 @@ fn load_outputs(
                     let archive = match domain.result_reads.get(Id::from_token(waiter)) {
                         Some(Some(Read::Escalation(_))) => true,
                         Some(
-                            Some(Read::Result(_) | Read::Transcript { .. } | Read::Dependency(_) | Read::InputCheck(_))
+                            Some(
+                                Read::Result(_)
+                                | Read::Inbox(_)
+                                | Read::Transcript { .. }
+                                | Read::Dependency(_)
+                                | Read::InputCheck(_),
+                            )
                             | None,
                         )
                         | None => false,
@@ -4374,9 +4481,9 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     let load_bytes = loads::worst_case(&limits.loads)?;
     let routes = route_bound(limits)?;
     let tool_bytes = u64::from(limits.tasks.batch).checked_mul(row_bound(limits)?)?;
-    let inbox_bytes = u64::from(limits.people.inbox_entries).checked_mul(
-        u64::try_from(size_of::<crate::ResultEntry>()).ok()?.checked_add(u64::from(limits.journal.result_bytes))?,
-    )?;
+    let inbox_entry = size_of::<crate::ResultEntry>().max(size_of::<crate::InboxViewEntry>());
+    let inbox_bytes = u64::from(limits.people.inbox_entries)
+        .checked_mul(u64::try_from(inbox_entry).ok()?.checked_add(u64::from(limits.journal.result_bytes))?)?;
     if limits.journal.writes < routes
         || limits.call_records == 0
         || limits.call_records > limits.journal.writes.checked_sub(routes)?
@@ -5049,6 +5156,7 @@ fn discard_after_stop(domain: &mut Domain, event: Event) {
         | Event::ReadEscalation { .. }
         | Event::ReadResult { .. }
         | Event::ReadInbox { .. }
+        | Event::ViewInbox { .. }
         | Event::Refreshed { .. }
         | Event::RefreshFailed { .. } => {}
     }
@@ -5273,6 +5381,10 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
                 {
                     domain.startup = Startup::Failed;
                 }
+                domain.work.push(Work::People(people::Event::Waiting {
+                    task: task.number,
+                    entries: inbox::entries(domain, task),
+                }));
                 domain.work.push(Work::Tasks(tasks::Event::Restore { record }));
             }
             tasks::Stored::Ledger(_) => domain.work.push(Work::Tasks(tasks::Event::Restore { record })),

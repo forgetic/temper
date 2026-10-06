@@ -65,8 +65,16 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
             .checked_mul(u64::from(limits.holdings))?
             .checked_mul(u64::try_from(size_of::<Holding>()).ok()?)?,
     )?;
+    let waiting_recipients = limits.people.checked_add(limits.projects.checked_mul(4)?)?;
+    let waiting = Map::<crate::Whom, Box<[crate::Entry]>>::worst_case(waiting_recipients)?
+        .checked_add(
+            u64::from(waiting_recipients).checked_mul(List::<crate::Entry>::worst_case(limits.inbox_entries)?)?,
+        )?
+        .checked_add(List::<crate::Whom>::worst_case(waiting_recipients)?)?
+        .checked_add(List::<crate::Entry>::worst_case(limits.inbox_entries)?)?;
     people
         .checked_add(roles)?
+        .checked_add(waiting)?
         .checked_add(Map::<u64, u64>::worst_case(limits.people)?)?
         .checked_add(Map::<u64, Box<[crate::ResultRef]>>::worst_case(limits.people)?)?
         .checked_add(

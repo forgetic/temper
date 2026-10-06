@@ -58,6 +58,29 @@ fn result_cache_is_bounded_and_read_position_restores() {
     assert_eq!(restored.read_position(1), Some(2));
 }
 
+#[test]
+fn waiting_cache_keeps_newest_references_and_removes_one_task() {
+    let env = Env { now: Time::ZERO, wall: Wall::EPOCH, limits: LIMITS };
+    let mut out = Queue::with_capacity(max_out(&LIMITS));
+    let mut domain = Domain::new(&LIMITS, Box::new([]));
+    step(
+        &mut domain,
+        &env,
+        Event::Restore { record: Stored::Person { number: 1, identity: identity(0, 1) } },
+        &mut out,
+    );
+    step(&mut domain, &env, Event::Restored, &mut out);
+    for task in 1..=3 {
+        let entry = Entry { task, project: 1, whom: Whom::Person(1), kind: EntryKind::PersonTask, at: Wall::EPOCH };
+        step(&mut domain, &env, Event::Waiting { task, entries: Box::new([entry]) }, &mut out);
+    }
+    let cached = domain.cached_waiting(&LIMITS, 1).expect("restored person");
+    assert_eq!(cached.iter().map(|entry| entry.task).collect::<Vec<_>>(), [3, 2]);
+    step(&mut domain, &env, Event::Waiting { task: 3, entries: Box::new([]) }, &mut out);
+    let cached = domain.cached_waiting(&LIMITS, 1).expect("restored person");
+    assert_eq!(cached.iter().map(|entry| entry.task).collect::<Vec<_>>(), [2]);
+}
+
 fn identity(forge: u32, user: u64) -> Identity {
     Identity { key: IdentityKey { forge, user }, login: Box::new([b'l']), name: Box::new([b'n']) }
 }

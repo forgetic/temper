@@ -657,6 +657,7 @@ impl World {
             | Delivery::Procedure { .. }
             | Delivery::Reply { .. }
             | Delivery::InboxPage { .. }
+            | Delivery::InboxView { .. }
             | Delivery::EscalationReply { .. }
             | Delivery::WebReply { .. }
             | Delivery::Refuse { .. }
@@ -666,6 +667,7 @@ impl World {
             Delivery::Fleet(_)
             | Delivery::ReadEscalationDecision { .. }
             | Delivery::ReadResult { .. }
+            | Delivery::BeginInboxView { .. }
             | Delivery::Relay { .. }
             | Delivery::Inbound { .. }
             | Delivery::Load { .. } => {

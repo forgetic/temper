@@ -4,8 +4,8 @@
 //! and durability; this child never performs IO or retains credential secrets.
 
 use crate::{
-    Ask, Event, Fact, Holding, Identity, IdentityKey, InitialOwner, Key, Limits, Outcome, Refusal, Reply, Request,
-    RequestKey, ResultRef, Role, Stored,
+    Ask, Entry, Event, Fact, Holding, Identity, IdentityKey, InitialOwner, Key, Limits, Outcome, Refusal, Reply,
+    Request, RequestKey, ResultRef, Role, Stored, Whom,
 };
 use alloc::boxed::Box;
 use skein_lib::{Deadlines, Env, Id, List, Map, Queue, ReplyTo, Slab, Time, Token, Wall};
@@ -47,6 +47,7 @@ pub struct Domain {
     people: Map<u64, Identity>,
     read_positions: Map<u64, u64>,
     unread: Map<u64, Box<[ResultRef]>>,
+    waiting: Map<Whom, Box<[Entry]>>,
     identities: Map<IdentityKey, u64>,
     sign_ins: Map<u64, SignIn>,
     alarms: Deadlines<u64>,
@@ -84,6 +85,12 @@ impl Domain {
             people: Map::with_capacity(limits.people),
             read_positions: Map::with_capacity(limits.people),
             unread: Map::with_capacity(limits.people),
+            waiting: Map::with_capacity(
+                limits
+                    .people
+                    .checked_add(limits.projects.checked_mul(4).expect("role cache room"))
+                    .expect("inbox cache room"),
+            ),
             identities: Map::with_capacity(limits.people),
             sign_ins: Map::with_capacity(limits.sign_ins),
             alarms: Deadlines::with_capacity(limits.sign_ins),
@@ -191,6 +198,34 @@ impl Domain {
         }
     }
 
+    /// Bounded newest-first task-derived references for a current person and exact project roles.
+    /// Older references are obtained by the root from stored task rows.
+    #[must_use]
+    pub fn cached_waiting(&self, limits: &Limits, person: u64) -> Option<Box<[Entry]>> {
+        if !self.ready() || !self.people.contains_key(&person) {
+            return None;
+        }
+        let mut visible = List::with_capacity(limits.inbox_entries);
+        if let Some(entries) = self.waiting.get(&Whom::Person(person)) {
+            for &entry in entries {
+                insert_newest(&mut visible, entry);
+            }
+        }
+        for (project, holdings) in &self.roles {
+            for holding in holdings {
+                if holding.person == person
+                    && let Some(entries) =
+                        self.waiting.get(&Whom::Role { project: *project, role: role_number(holding.role) })
+                {
+                    for &entry in entries {
+                        insert_newest(&mut visible, entry);
+                    }
+                }
+            }
+        }
+        Some(visible.into_boxed())
+    }
+
     /// Advance one authenticated person's position inside the root decision that replies.
     /// The returned people row is saved with the reply's commit.
     pub fn advance_read_position(&mut self, person: u64, position: u64) -> Option<Stored> {
@@ -282,6 +317,7 @@ pub fn max_out(limits: &Limits) -> u32 {
 /// targets for keyed replay.
 pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     match event {
+        Event::Waiting { task, entries } => replace_waiting(domain, &env.limits, task, &entries),
         Event::ApplyRoles { reply_to, request } => {
             let result = apply_roles(domain, env, request, out);
             out.push(Request::RolesApplied { reply_to, request, result });
@@ -313,6 +349,82 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
         }
         Event::Ask { reply_to, sign_in, key, ask } => admit_ask(domain, env, reply_to, sign_in, key, ask, out),
         Event::Decided { request, outcome } => decided(domain, env, Id::<Pending>::from_token(request), outcome, out),
+    }
+}
+
+fn role_number(role: Role) -> u32 {
+    match role {
+        Role::Owner => 0,
+        Role::Maintainer => 1,
+        Role::Member => 2,
+        Role::Observer => 3,
+    }
+}
+
+fn newer(left: Entry, right: Entry) -> bool {
+    left.at > right.at || (left.at == right.at && (left.task, left.kind) > (right.task, right.kind))
+}
+
+fn insert_newest(entries: &mut List<Entry>, entry: Entry) {
+    if entries.capacity() == 0 {
+        return;
+    }
+    let mut next = List::with_capacity(entries.capacity());
+    let mut inserted = false;
+    for &old in &*entries {
+        if old.task == entry.task && old.kind == entry.kind {
+            return;
+        }
+        if !inserted && newer(entry, old) {
+            next.push(entry).expect("cache has room before older entry");
+            inserted = true;
+        }
+        if next.room() > 0 {
+            next.push(old).expect("cache has room for prior entry");
+        }
+    }
+    if !inserted && next.room() > 0 {
+        next.push(entry).expect("cache has room for new entry");
+    }
+    *entries = next;
+}
+
+fn replace_waiting(domain: &mut Domain, limits: &Limits, task: u64, entries: &[Entry]) {
+    if task == 0 || domain.phase == Phase::Failed {
+        return;
+    }
+    let mut recipients = List::with_capacity(domain.waiting.capacity());
+    for (whom, _) in &domain.waiting {
+        recipients.push(*whom).expect("one key per cached recipient");
+    }
+    for &whom in &recipients {
+        let Some(old) = domain.waiting.remove(&whom) else { continue };
+        let mut kept = List::with_capacity(limits.inbox_entries);
+        for entry in old {
+            if entry.task != task {
+                kept.push(entry).expect("cached subset fits");
+            }
+        }
+        if !kept.is_empty() {
+            let saved = domain.waiting.insert(whom, kept.into_boxed());
+            assert!(saved.is_ok(), "removed recipient slot remains available");
+        }
+    }
+    for &entry in entries {
+        if entry.task != task || entry.project == 0 {
+            continue;
+        }
+        let old = domain.waiting.remove(&entry.whom);
+        let mut cached = List::with_capacity(limits.inbox_entries);
+        if let Some(old) = old {
+            for prior in old {
+                cached.push(prior).expect("cached recipient bound");
+            }
+        }
+        insert_newest(&mut cached, entry);
+        if !cached.is_empty() {
+            drop(domain.waiting.insert(entry.whom, cached.into_boxed()));
+        }
     }
 }
 
