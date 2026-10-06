@@ -221,7 +221,7 @@ impl World {
                 Record::People(
                     people::Stored::SignIn { .. } | people::Stored::Roles { .. } | people::Stored::Answer { .. },
                 )
-                | Record::Tasks(tasks::Stored::Ended(_) | tasks::Stored::Ledger(_) | tasks::Stored::Closure(_))
+                | Record::Tasks(tasks::Stored::Ended(_) | tasks::Stored::Ledger(_))
                 | Record::Deployment(_)
                 | Record::Turn(_)
                 | Record::RunProof(_)

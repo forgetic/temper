@@ -7,28 +7,6 @@ use crate::domain::{Domain, publish, record, refused, task_mut};
 use crate::{Funder, Limits, Numbers, Refusal, Request, Stored};
 use skein_lib::{Env, Queue, ReplyTo};
 
-/// Tasks-to-root historical record of one closed task allotment; saved atomically with the actual
-/// funder posting and ended task, and never restored into the live arena. (domain/tasks.md,
-/// sections 2–3 and 14). (domain/authority.md, section 7).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct Closure {
-    /// Task whose current allotment closed. (domain/tasks.md, sections 2–3 and 14).
-    /// (domain/authority.md, section 7).
-    pub task: u64,
-    /// Durable allotment generation closed once with this task's settlement. (domain/tasks.md,
-    /// sections 2–3 and 14). (domain/authority.md, section 7).
-    pub generation: u64,
-    /// Actual original financial source receiving the settlement. (domain/tasks.md, sections 2–3
-    /// and 14). (domain/authority.md, section 7).
-    pub funder: Funder,
-    /// Full original reservation removed from that source. (domain/tasks.md, sections 2–3 and 14).
-    /// (domain/authority.md, section 7).
-    pub budget: u64,
-    /// Checked total of direct and already-settled funded spend posted to that source once.
-    /// (domain/tasks.md, sections 2–3 and 14). (domain/authority.md, section 7).
-    pub spent: u64,
-}
-
 pub(crate) fn total(numbers: Numbers) -> Option<u64> {
     numbers.spent.checked_add(numbers.spent_below)
 }
@@ -39,18 +17,6 @@ pub(crate) fn remaining(numbers: Numbers) -> Option<u64> {
 
 pub(crate) fn available(numbers: Numbers) -> Option<u64> {
     remaining(numbers)?.checked_sub(numbers.reserved)
-}
-
-pub(crate) fn closure(number: u64, generation: u64, funder: Funder, numbers: Numbers, out: &mut Queue<Request>) {
-    out.push(Request::Save {
-        record: Stored::Closure(Closure {
-            task: number,
-            generation,
-            funder,
-            budget: numbers.budget,
-            spent: total(numbers).expect("accounting total checked"),
-        }),
-    });
 }
 
 /// Actual task sources cannot end while any incoming allocation remains live.
@@ -143,7 +109,6 @@ pub(crate) fn end(domain: &mut Domain, env: &Env<Limits>, number: u64, out: &mut
     let funder = task.funder;
     let budget = task.numbers.budget;
     let spent = total(task.numbers).expect("total checked on charge and restore");
-    closure(number, task.allotment, funder, task.numbers, out);
     match funder {
         Funder::Task(parent) => {
             let parent_number = parent;

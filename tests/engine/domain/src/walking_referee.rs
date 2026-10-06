@@ -112,16 +112,6 @@ impl WalkingReferee {
                 if !retired || !terminal {
                     return Err("ended task and root terminal proof retirement are not one transaction");
                 }
-                let closed = writes.iter().any(|write| {
-                    matches!(write,
-                    Write::Save(Record::Tasks(tasks::Stored::Closure(closure)))
-                        if closure.task == record.number && closure.generation == record.allotment
-                            && closure.funder == record.funder && closure.budget == record.numbers.budget
-                            && closure.spent == FINAL_SPEND)
-                });
-                if !closed {
-                    return Err("terminal and exact financial closure are not one transaction");
-                }
                 if self.terminal_commits != 0 {
                     return Err("terminal committed twice");
                 }
@@ -387,23 +377,7 @@ impl WalkingReferee {
         {
             return Err("durable terminal evidence differs from worker offer");
         }
-        let record = task_record(rows, task).ok_or("terminal without ended task")?;
-        let Some(Record::Tasks(tasks::Stored::Closure(closure))) =
-            rows.get(&Key::Tasks(tasks::Key::Closure { task, generation: record.allotment }))
-        else {
-            return Err("durable financial closure missing");
-        };
-        if *closure
-            != (tasks::Closure {
-                task,
-                generation: record.allotment,
-                funder: record.funder,
-                budget: record.numbers.budget,
-                spent: FINAL_SPEND,
-            })
-        {
-            return Err("durable financial closure differs from actual allotment");
-        }
+        let _record = task_record(rows, task).ok_or("terminal without ended task")?;
         if rows.contains_key(&Key::RunProof { task }) || rows.contains_key(&Key::Tasks(tasks::Key::Live(task))) {
             return Err("ended task retained a live task or proof");
         }

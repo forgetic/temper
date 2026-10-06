@@ -413,12 +413,6 @@ pub struct TaskRecord {
     /// Original current requester topology, distinct from the actual financial funder.
     /// (domain/tasks.md, sections 3, 5 and 14).
     pub requester: Party,
-    /// Nonzero durable current allotment generation; newly made tasks begin at one and this
-    /// contracted API exposes no replacement route. (domain/tasks.md, sections 3, 5 and 14).
-    pub allotment: u64,
-    /// Prior-allotment historical expense carried in stored state; current routes do not replace
-    /// allotments or reset historical spend. (domain/tasks.md, sections 3, 5 and 14).
-    pub historical_spend: u64,
     /// Committed cumulative expense of the current attempt; a `new` `Claim` resets only this
     /// attempt baseline, not total direct spend. (domain/tasks.md, sections 3, 5 and 14).
     pub run_spent: u64,
@@ -491,13 +485,6 @@ pub enum Key {
     ),
     /// Logical finite period/pool row. (domain/tasks.md, sections 2 and 14).
     Ledger(/** Actual period/pool source identity. (domain/tasks.md, sections 2 and 14). */ Funder),
-    /// Logical historical closed-allotment generation. (domain/tasks.md, sections 2 and 14).
-    Closure {
-        /** Task whose allotment closed. (domain/tasks.md, sections 2 and 14). */
-        task: u64,
-        /** Durable allotment generation distinguishing this historical closure. (domain/tasks.md, sections 2 and 14). */
-        generation: u64,
-    },
 }
 
 /// Tasks-to-root persistence row or root-to-tasks live restore input; only `Live` and `Ledger`
@@ -522,12 +509,6 @@ pub enum Stored {
         /** Finite period/pool accounting owned by tasks and admitted at startup under `Limits::funders`. (domain/tasks.md, sections 2 and 14). */
          crate::FundingRecord,
     ),
-    /// Historical financial closure saved with its actual original-source posting; not a live
-    /// restore input. (domain/tasks.md, sections 2 and 14).
-    Closure(
-        /** Historical closed-allotment record saved with its actual posting; excluded from live startup restoration. (domain/tasks.md, sections 2 and 14). */
-         crate::Closure,
-    ),
 }
 
 impl Stored {
@@ -539,7 +520,6 @@ impl Stored {
             Stored::Live(record) => Key::Live(record.number),
             Stored::Ended(record) => Key::Ended(record.number),
             Stored::Ledger(record) => Key::Ledger(record.funder),
-            Stored::Closure(record) => Key::Closure { task: record.task, generation: record.generation },
         }
     }
 }
@@ -869,7 +849,7 @@ pub enum Event {
     /// with `RestoreRefused`. (domain/tasks.md, sections 4–5 and 14). (domain/engine.md, section
     /// 7.5).
     Restore {
-        /// One bounded `Live` or `Ledger` row while restoring; historical `Ended`/`Closure` and
+        /// One bounded `Live` or `Ledger` row while restoring; historical `Ended` and
         /// invalid/duplicate rows fail restoration. (domain/tasks.md, sections 4–5 and 14).
         /// (domain/engine.md, section 7.5).
         record: Stored,
@@ -1022,7 +1002,7 @@ pub enum Request {
         task: u64,
         /** Actual requester identifying this notification; current root consumes person result notices, and tasks retains no delivery credit or inbox. (domain/tasks.md, sections 5 and 14). (domain/engine.md, section 7.5). */
         requester: Party,
-        /** Bounded final result/reason; emitted with ended/closure/actual-funder writes in one root decision. (domain/tasks.md, sections 5 and 14). (domain/engine.md, section 7.5). */
+        /** Bounded final result/reason; emitted with ended/actual-funder writes in one root decision. (domain/tasks.md, section 5.6). (domain/engine.md, section 7.2). */
         ending: Ending,
     },
     /// Typed owned persistence output for the parent's current atomic decision. (domain/tasks.md,

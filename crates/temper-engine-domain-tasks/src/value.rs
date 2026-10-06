@@ -176,7 +176,7 @@ pub struct Numbers {
     /// Actual direct expense posted here, including representable overruns. (domain/tasks.md,
     /// sections 2–3 and 14). (domain/authority.md, sections 3–7).
     pub spent: u64,
-    /// Expense of funded allotments already settled here, posted once at closure. (domain/tasks.md,
+    /// Expense of funded allotments already settled here, posted once when each task ends. (domain/tasks.md,
     /// sections 2–3 and 14). (domain/authority.md, sections 3–7).
     pub spent_below: u64,
     /// Full budgets of directly funded allotments still open; availability is not recreated by

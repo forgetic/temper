@@ -1232,7 +1232,7 @@ fn multiple_waiting_recipients_preflight_together_and_full_journal_refuses_witho
             Record::Tasks(tasks::Stored::Live(record)) => Some(record.clone()),
             Record::Deployment(_)
             | Record::People(_)
-            | Record::Tasks(tasks::Stored::Ended(_) | tasks::Stored::Ledger(_) | tasks::Stored::Closure(_))
+            | Record::Tasks(tasks::Stored::Ended(_) | tasks::Stored::Ledger(_))
             | Record::Turn(_)
             | Record::RunProof(_)
             | Record::Terminal(_)

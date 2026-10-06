@@ -363,8 +363,6 @@ fn make(
                 number,
                 project: new.project,
                 requester: creator,
-                allotment: 1,
-                historical_spend: 0,
                 run_spent: 0,
                 root: root.unwrap_or(number),
                 depth,

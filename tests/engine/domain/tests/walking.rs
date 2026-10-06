@@ -23,7 +23,7 @@ fn ended(world: &World) -> &tasks::TaskRecord {
             | Record::RunProof(_)
             | Record::EscalationDecision(_)
             | Record::Terminal(_)
-            | Record::Tasks(tasks::Stored::Live(_) | tasks::Stored::Closure(_) | tasks::Stored::Ledger(_)) => None,
+            | Record::Tasks(tasks::Stored::Live(_) | tasks::Stored::Ledger(_)) => None,
         })
         .expect("story ended its one task")
 }
@@ -319,10 +319,6 @@ fn walking_referee_rejects_missing_or_split_current_claim_turn_and_terminal_proo
             Write::Save(ended),
             Write::Save(posted),
             Write::Save(terminal),
-            Write::Save(
-                world.store.rows[&Key::Tasks(tasks::Key::Closure { task: task.number, generation: task.allotment })]
-                    .clone(),
-            ),
             Write::Erase(Key::RunProof { task: task.number }),
         ])
         .expect("terminal evidence and retirement share final transaction");
@@ -338,10 +334,7 @@ fn final_transaction_survives_lost_completion_ack_and_result_without_another_wri
     assert!(recovered.store.pending.is_empty());
     let mut uninterrupted = World::new(Settings { restart: false, ..Settings::calm(81) });
     uninterrupted.run();
-    assert_eq!(
-        recovered.store.rows, uninterrupted.store.rows,
-        "same task, transcript, terminal, closure and financial history"
-    );
+    assert_eq!(recovered.store.rows, uninterrupted.store.rows, "same task, transcript, terminal and financial history");
     assert_eq!(
         recovered.store.applied, uninterrupted.store.applied,
         "no recovery commit, duplicate expense or fresh assignment"
@@ -395,9 +388,6 @@ fn independent_terminal_cut_referee_rejects_missing_or_altered_evidence() {
     terminal.cumulative += 1;
     assert_eq!(world.referee.terminal_cut(&rows), Err("durable terminal evidence differs from worker offer"));
     rows = world.store.rows.clone();
-    rows.remove(&Key::Tasks(tasks::Key::Closure { task: task.number, generation: task.allotment }));
-    assert_eq!(world.referee.terminal_cut(&rows), Err("durable financial closure missing"));
-    rows = world.store.rows.clone();
     rows.insert(
         Key::RunProof { task: task.number },
         Record::RunProof(temper_engine_domain::RunProof {
@@ -425,22 +415,9 @@ fn independent_referee_rejects_recommitted_terminal_and_unscripted_ack() {
         Write::Save(world.store.rows[&Key::Tasks(tasks::Key::Ended(task.number))].clone()),
         Write::Save(world.store.rows[&Key::Tasks(tasks::Key::Ledger(task.funder))].clone()),
         Write::Save(world.store.rows[&Key::Terminal { task: task.number, attempt: task.attempt }].clone()),
-        Write::Save(
-            world.store.rows[&Key::Tasks(tasks::Key::Closure { task: task.number, generation: task.allotment })]
-                .clone(),
-        ),
         Write::Erase(Key::RunProof { task: task.number }),
     ];
     let mut referee = WalkingReferee::default();
-    let without_closure: Vec<_> = writes
-        .iter()
-        .filter(|write| !matches!(write, Write::Save(Record::Tasks(tasks::Stored::Closure(_)))))
-        .cloned()
-        .collect();
-    assert_eq!(
-        WalkingReferee::default().commit(&without_closure),
-        Err("terminal and exact financial closure are not one transaction")
-    );
     referee.commit(&writes).expect("one actual final transaction");
     assert_eq!(referee.commit(&writes), Err("terminal committed twice"));
     let mut referee = world.referee.clone();

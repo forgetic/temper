@@ -346,7 +346,7 @@ impl World {
                     dependencies: record.dependencies.to_vec(),
                     depth: record.depth,
                 }),
-                Stored::Live(_) | Stored::Ended(_) | Stored::Ledger(_) | Stored::Closure(_) => None,
+                Stored::Live(_) | Stored::Ended(_) | Stored::Ledger(_) => None,
             })
             .collect::<Vec<_>>();
         for seen in made {
@@ -404,7 +404,7 @@ impl World {
             .values()
             .filter_map(|row| match row {
                 Stored::Live(record) => Some(*record.clone()),
-                Stored::Ended(_) | Stored::Ledger(_) | Stored::Closure(_) => None,
+                Stored::Ended(_) | Stored::Ledger(_) => None,
             })
             .collect();
         self.observe(Seen::Stored { live, limits: Box::new(self.env.limits) });
@@ -426,7 +426,7 @@ impl World {
     pub fn record(&self, number: u64) -> &tasks::TaskRecord {
         match &self.records[&Key::Live(number)] {
             Stored::Live(record) => record,
-            Stored::Ended(_) | Stored::Ledger(_) | Stored::Closure(_) => unreachable!("live key"),
+            Stored::Ended(_) | Stored::Ledger(_) => unreachable!("live key"),
         }
     }
 
@@ -442,7 +442,7 @@ impl World {
             .keys()
             .filter_map(|key| match key {
                 Key::Live(number) if !before.contains(key) => Some(*number),
-                Key::Live(_) | Key::Ended(_) | Key::Ledger(_) | Key::Closure { .. } => None,
+                Key::Live(_) | Key::Ended(_) | Key::Ledger(_) => None,
             })
             .collect();
         self.observe(Seen::Batch { members, accepted: matches!(reply, Reply::Made(_)), made });
@@ -486,7 +486,7 @@ impl World {
             .values()
             .filter_map(|row| match row {
                 Stored::Live(record) | Stored::Ended(record) => Some(record.attempt),
-                Stored::Ledger(_) | Stored::Closure(_) => None,
+                Stored::Ledger(_) => None,
             })
             .max()
             .unwrap_or(0)

@@ -9,7 +9,7 @@
 //! `Domain::new` starts restoring. Only `Stored::Live` and `Stored::Ledger`
 //! enter `Restore`; `Restored` validates the complete live graph and authentic
 //! financial reservations before bounded activation/adoption outputs. Historical
-//! ended rows and closures remain in root storage and cannot re-enter live state
+//! ended rows remain in root storage and cannot re-enter live state
 //! (domain/tasks.md, section 14).
 //!
 //! `step` receives root-authorized batches, finite-source inputs and actual
@@ -23,7 +23,7 @@
 //! `Request::Activate` carries a temporary bounded `RunContext`, not rendered
 //! bytes or a second mutable task ledger. Root gathers the actual brief and
 //! claims the task. `Request::Close` awaits root's actual closing obligations;
-//! `Ended`, the historical task row, allotment closure and original-source
+//! `Ended`, the historical task row, and original-source
 //! posting share one atomic decision. The current root exposes person result notices and
 //! delays outward replies/effects until durability; historical result reads
 //! remain the root's route (domain/tasks.md, sections 5.6 and 14;
@@ -70,7 +70,7 @@ pub use domain::{Domain, fire, max_out, step};
 pub use escalation::{Escalation, EscalationContext, EscalationDecision, EscalationHolder, EscalationOutcome};
 pub use facts::Fact;
 pub use failures::{Class, Retries, Retry, Tries};
-pub use funders::{Closure, FundingRecord};
+pub use funders::FundingRecord;
 pub use limits::{Limits, worst_case};
 pub use owned::stored_bytes;
 pub use value::{

@@ -22,7 +22,7 @@ fn end(world: &mut World, task: u64, attempt: u64, end: End, cumulative: u64) ->
 fn ledger(world: &World, funder: Funder) -> tasks::FundingRecord {
     match world.records[&Key::Ledger(funder)] {
         Stored::Ledger(record) => record,
-        Stored::Live(_) | Stored::Ended(_) | Stored::Closure(_) => unreachable!(),
+        Stored::Live(_) | Stored::Ended(_) => unreachable!(),
     }
 }
 
@@ -224,16 +224,6 @@ fn delegate_expense_follows_actual_task_funding_chain_once() {
     );
     w.settle(1);
     assert_eq!(ledger(&w, Funder::Period { project: 1, period: 0 }).numbers.spent_below, 17);
-    assert_eq!(
-        w.records[&Key::Closure { task: 1, generation: 1 }],
-        Stored::Closure(tasks::Closure {
-            task: 1,
-            generation: 1,
-            funder: Funder::Period { project: 1, period: 0 },
-            budget: 100,
-            spent: 17
-        })
-    );
     let before = w.records.clone();
     w.restart();
     assert_eq!(w.records, before);

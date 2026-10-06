@@ -237,7 +237,7 @@ fn stored_limits() {
 }
 
 #[test]
-fn accounting_referee_rejects_expense_reservation_and_closure_corruption() {
+fn accounting_referee_rejects_expense_reservation_and_settlement_corruption() {
     use temper_engine_domain_tasks::{Cause, End, Funder, Key, Stored};
     use temper_engine_tasks_world::{LIMITS, World, accounting_referee::Accounting, task};
     let mut w = World::new(80, LIMITS);
@@ -273,15 +273,15 @@ fn accounting_referee_rejects_expense_reservation_and_closure_corruption() {
         let mut bad = w.records.clone();
         match fault {
             0 => {
-                bad.remove(&Key::Closure { task: 1, generation: 1 });
+                bad.remove(&Key::Ended(1));
             }
             1 => {
-                if let Some(Stored::Closure(row)) = bad.get_mut(&Key::Closure { task: 1, generation: 1 }) {
-                    row.spent = 6;
+                if let Some(Stored::Ended(row)) = bad.get_mut(&Key::Ended(1)) {
+                    row.numbers.spent = 6;
                 }
             }
             2 => {
-                if let Some(Stored::Closure(row)) = bad.get_mut(&Key::Closure { task: 1, generation: 1 }) {
+                if let Some(Stored::Ended(row)) = bad.get_mut(&Key::Ended(1)) {
                     row.funder = Funder::Task(99);
                 }
             }
@@ -304,10 +304,10 @@ fn accounting_referee_rejects_expense_reservation_and_closure_corruption() {
         }
         let mut judge = Accounting::default();
         judge.reset(&before);
-        assert!(judge.committed(&bad).is_err(), "closure fault {fault}");
+        assert!(judge.committed(&bad).is_err(), "settlement fault {fault}");
     }
     let mut bad = w.records.clone();
-    bad.remove(&Key::Closure { task: 1, generation: 1 });
+    bad.remove(&Key::Ended(1));
     let mut judge = Accounting::default();
     judge.reset(&w.records);
     assert_eq!(judge.committed(&bad), Err("immutable accounting row changed"));

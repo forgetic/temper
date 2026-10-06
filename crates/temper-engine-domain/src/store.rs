@@ -127,7 +127,7 @@ pub enum Range {
     /// Singleton header read by the root at startup; at most one row and no
     /// continuation (domain/engine.md, 5.3–5.4).
     Deployment,
-    /// Root startup pages only child Live/Ledger state; historical Ended/Closure
+    /// Root startup pages only child Live/Ledger state; historical Ended
     /// rows stay outside this range. Actual root-supported task shapes validate
     /// before child restoration (domain/engine.md, 6 and 7.5).
     Tasks,
@@ -186,9 +186,7 @@ impl Range {
             Range::Tasks => match key {
                 Key::Tasks(child) => match child {
                     temper_engine_domain_tasks::Key::Live(_) | temper_engine_domain_tasks::Key::Ledger(_) => true,
-                    temper_engine_domain_tasks::Key::Ended(_) | temper_engine_domain_tasks::Key::Closure { .. } => {
-                        false
-                    }
+                    temper_engine_domain_tasks::Key::Ended(_) => false,
                 },
                 Key::EscalationDecision { .. }
                 | Key::Deployment
@@ -365,7 +363,7 @@ pub enum Record {
         /// bounds (domain/engine.md, 7.4 and 7.5).
         TerminalRecord,
     ),
-    /// Child's authentic task/funding/closure row; root transport proofs have
+    /// Child's authentic task or funding row; root transport proofs have
     /// their own variants. All writes share the root decision (domain/engine.md, 5.6 and 7.5).
     Tasks(
         /// Owned child row, deep bytes checked before journal or load retention (domain/engine.md, 5.3 and 5.6).

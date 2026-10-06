@@ -288,13 +288,6 @@ fn borrowed_stored_bytes_matches_allocator_for_every_retained_row() {
     rows.push(Stored::Live(Box::new(record.clone())));
     record.phase = tasks::Phase::Ended(ending);
     rows.push(Stored::Ended(Box::new(record)));
-    rows.push(Stored::Closure(tasks::Closure {
-        task: 1,
-        generation: 1,
-        funder: tasks::Funder::Period { project: 1, period: 0 },
-        budget: 100,
-        spent: 7,
-    }));
     for row in rows {
         let meter = Meter::new();
         let cloned = row.clone();

@@ -1860,7 +1860,7 @@ fn result_page(domain: &mut Domain, waiter: Token, rows: Box<[Record]>, out: &mu
     for row in rows {
         match row {
             Record::Tasks(tasks::Stored::Ended(task)) => record = Some(task),
-            Record::Tasks(tasks::Stored::Live(_) | tasks::Stored::Closure(_) | tasks::Stored::Ledger(_))
+            Record::Tasks(tasks::Stored::Live(_) | tasks::Stored::Ledger(_))
             | Record::Deployment(_)
             | Record::People(_)
             | Record::Turn(_)
@@ -2496,7 +2496,7 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
         Record::Deployment(deployment) => domain.journal = Journal::new(deployment, &env.limits.journal),
         Record::People(record) => domain.work.push(Work::People(people::Event::Restore { record })),
         Record::Tasks(record) => match record {
-            tasks::Stored::Ended(_) | tasks::Stored::Closure(_) => {
+            tasks::Stored::Ended(_) => {
                 unreachable!("historical child rows excluded from startup")
             }
             tasks::Stored::Live(ref task) => {

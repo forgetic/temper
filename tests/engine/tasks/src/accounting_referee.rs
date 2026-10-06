@@ -1,5 +1,5 @@
-//! Independent conservation from durable task allocations, immutable closure
-//! rows and admitted priced inputs (domain/tasks.md, 2 and 5).
+//! Independent conservation from durable task allocations, ended transitions
+//! and admitted priced inputs (domain/tasks.md, 2 and 5).
 use std::collections::BTreeMap;
 use temper_engine_domain_tasks::{Funder, Key, Stored, TaskRecord};
 
@@ -24,6 +24,20 @@ fn current(rows: &BTreeMap<Key, Stored>, task: u64) -> Option<&TaskRecord> {
 }
 
 impl Accounting {
+    fn newly_settled(&self, rows: &BTreeMap<Key, Stored>, funder: Funder) -> u64 {
+        self.before
+            .values()
+            .filter_map(|row| {
+                let Stored::Live(old) = row else { return None };
+                if old.funder != funder {
+                    return None;
+                }
+                let Some(Stored::Ended(ended)) = rows.get(&Key::Ended(old.number)) else { return None };
+                ended.numbers.spent.checked_add(ended.numbers.spent_below)
+            })
+            .sum()
+    }
+
     /// Accepted cumulative input supplied by the scripted parent, independently
     /// of production counters (domain/tasks.md, 5).
     pub fn charged(&mut self, task: u64, cumulative: u64) {
@@ -38,10 +52,9 @@ impl Accounting {
     /// # Errors
     /// Rejects changed identities, missing postings, lost reservations or
     /// invented expense at the durable boundary (domain/tasks.md, 2).
-    #[expect(clippy::too_many_lines, reason = "independent bounded conservation checks remain together")]
     pub fn committed(&mut self, rows: &BTreeMap<Key, Stored>) -> Result<(), &'static str> {
         for (key, old) in &self.before {
-            if matches!(old, Stored::Closure(_) | Stored::Ended(_)) && rows.get(key) != Some(old) {
+            if matches!(old, Stored::Ended(_)) && rows.get(key) != Some(old) {
                 return Err("immutable accounting row changed");
             }
             if matches!(old, Stored::Ledger(_)) && !rows.contains_key(key) {
@@ -53,24 +66,10 @@ impl Accounting {
                 continue;
             };
             let task = current(rows, old.number).ok_or("live allocation vanished")?;
-            if old.funder != task.funder
-                || old.allotment != task.allotment
-                || old.numbers.budget != task.numbers.budget
-                || old.historical_spend != task.historical_spend
-            {
+            if old.funder != task.funder || old.numbers.budget != task.numbers.budget {
                 return Err("allocation identity or promise changed");
             }
-            let posted: u64 = rows
-                .iter()
-                .filter_map(|(key, row)| match row {
-                    Stored::Closure(closure)
-                        if closure.funder == Funder::Task(old.number) && !self.before.contains_key(key) =>
-                    {
-                        Some(closure.spent)
-                    }
-                    Stored::Live(_) | Stored::Ended(_) | Stored::Ledger(_) | Stored::Closure(_) => None,
-                })
-                .sum();
+            let posted = self.newly_settled(rows, Funder::Task(old.number));
             if task.numbers.spent != old.numbers.spent + self.delta(old.number)
                 || task.numbers.spent_below != old.numbers.spent_below + posted
             {
@@ -79,25 +78,9 @@ impl Accounting {
             if task.attempt == old.attempt && task.run_spent != old.run_spent + self.delta(old.number) {
                 return Err("cumulative attempt expense differs");
             }
-            if matches!(task.phase, temper_engine_domain_tasks::Phase::Ended(_))
-                && !rows.contains_key(&Key::Closure { task: old.number, generation: old.allotment })
-            {
-                return Err("ending lacks allotment closure");
-            }
         }
         for (key, row) in rows {
             match row {
-                Stored::Closure(closure) if !self.before.contains_key(key) => {
-                    let old = live(&self.before, closure.task).ok_or("closure without live allotment")?;
-                    let task = current(rows, closure.task).ok_or("closure without ended task")?;
-                    if closure.generation != old.allotment
-                        || closure.funder != old.funder
-                        || closure.budget != old.numbers.budget
-                        || closure.spent != task.numbers.spent + task.numbers.spent_below
-                    {
-                        return Err("closure identity or expense differs");
-                    }
-                }
                 Stored::Live(task) => {
                     let reserved: u64 = rows
                         .values()
@@ -105,7 +88,7 @@ impl Accounting {
                             Stored::Live(child) if child.funder == Funder::Task(task.number) => {
                                 Some(child.numbers.budget)
                             }
-                            Stored::Live(_) | Stored::Ended(_) | Stored::Ledger(_) | Stored::Closure(_) => None,
+                            Stored::Live(_) | Stored::Ended(_) | Stored::Ledger(_) => None,
                         })
                         .sum();
                     if reserved != task.numbers.reserved {
@@ -125,24 +108,19 @@ impl Accounting {
                             Stored::Ledger(pool) if pool.parent == Some(ledger.funder) && !pool.closed => {
                                 Some(pool.numbers.budget)
                             }
-                            Stored::Live(_) | Stored::Ended(_) | Stored::Ledger(_) | Stored::Closure(_) => None,
+                            Stored::Live(_) | Stored::Ended(_) | Stored::Ledger(_) => None,
                         })
                         .sum();
-                    let posted: u64 = rows
-                        .values()
-                        .filter_map(|row| match row {
-                            Stored::Closure(closure) if closure.funder == ledger.funder => Some(closure.spent),
-                            Stored::Ledger(pool) if pool.parent == Some(ledger.funder) && pool.closed => {
-                                Some(pool.numbers.spent + pool.numbers.spent_below)
-                            }
-                            Stored::Live(_) | Stored::Ended(_) | Stored::Ledger(_) | Stored::Closure(_) => None,
-                        })
-                        .sum();
+                    let posted = self.newly_settled(rows, ledger.funder);
+                    let before_posted = match self.before.get(key) {
+                        Some(Stored::Ledger(old)) => old.numbers.spent_below,
+                        _ => 0,
+                    };
                     if ledger.numbers.reserved != reserved
                         || ledger.numbers.spent != 0
-                        || ledger.numbers.spent_below != posted
+                        || ledger.numbers.spent_below != before_posted + posted
                     {
-                        return Err("external reservation or actual closure posting differs");
+                        return Err("external reservation or actual settlement posting differs");
                     }
                     if let Some(Stored::Ledger(old)) = self.before.get(key)
                         && (ledger.funder != old.funder
@@ -153,7 +131,7 @@ impl Accounting {
                         return Err("original source identity changed");
                     }
                 }
-                Stored::Ended(_) | Stored::Closure(_) => {}
+                Stored::Ended(_) => {}
             }
         }
         self.before = rows.clone();

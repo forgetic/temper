@@ -397,7 +397,9 @@ impl Referee {
                         return Err("final attempt was not charged once on lifetime expense");
                     }
                     if !writes.iter().any(|write| matches!(write, Write::Save(Record::Tasks(tasks::Stored::Ledger(pool))) if pool.funder == record.funder && pool.numbers.spent_below == 5 && pool.numbers.reserved == 0)) { return Err("final expense and funding posting are not atomic"); }
-                    if !writes.iter().any(|write| matches!(write, Write::Save(Record::Tasks(tasks::Stored::Closure(closure))) if closure.task == record.number && closure.funder == record.funder && closure.generation == record.allotment && closure.spent == 5 && closure.budget == record.numbers.budget)) || !writes.contains(&Write::Erase(Key::RunProof { task: record.number })) { return Err("final closure and proof retirement are not atomic"); }
+                    if !writes.contains(&Write::Erase(Key::RunProof { task: record.number })) {
+                        return Err("final proof retirement is not atomic");
+                    }
                 }
                 if !self.terminals.insert(terminal.attempt) {
                     return Err("worker terminal committed twice");
@@ -475,9 +477,7 @@ impl Referee {
         if !writes.iter().any(|write| matches!(write, Write::Save(Record::RunProof(proof)) if proof.task == terminal.task && proof.attempt == terminal.attempt && proof.turn.is_none() && proof.terminal.as_ref() == Some(terminal))) {
             return Err("unassigned loss and canonical proof are not atomic");
         }
-        if writes.iter().any(|write| {
-            matches!(write, Write::Save(Record::Tasks(tasks::Stored::Ledger(_) | tasks::Stored::Closure(_))))
-        }) {
+        if writes.iter().any(|write| matches!(write, Write::Save(Record::Tasks(tasks::Stored::Ledger(_))))) {
             return Err("unassigned loss changed the authentic funding ledger");
         }
         if !self.unplaced_claims.insert(terminal.attempt) {
@@ -643,7 +643,7 @@ impl Referee {
     /// Check the sole successful report after total expense and final funding.
     ///
     /// # Errors
-    /// Rejects wrong words/reader, missing closure, duplicate result or bad spend
+    /// Rejects wrong words/reader, missing ending, duplicate result or bad spend
     /// (domain/engine.md, section 7.7; domain/tasks.md, section 15).
     pub fn result(
         &mut self,
@@ -717,10 +717,6 @@ impl Referee {
                 || rows.contains_key(&Key::RunProof { task: number })
             {
                 return Err("ended report retained live task or proof");
-            }
-            if !matches!(rows.get(&Key::Tasks(tasks::Key::Closure { task: number, generation: record.allotment })), Some(Record::Tasks(tasks::Stored::Closure(closure))) if closure.task == number && closure.funder == expected_funder && closure.spent == 5 && closure.budget == 100)
-            {
-                return Err("report before exact durable financial closure");
             }
         }
         Ok(())
