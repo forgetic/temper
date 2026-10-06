@@ -26,6 +26,7 @@ protocol drafts and lower-layer integration are parked for later work.
 | Completion 02: delegate batches and result briefs | merged | d9b07e55 | Root checks authority and historical inputs, makes a whole child batch with the named call answer, routes each ended child's typed result to its requester inbox, and includes live delegates and dependency results in run briefs. Gate on rebased tip: fmt, clippy, 2,485 focused / 11.423 s; 43 fuzzy / 27.932 s. |
 | Completion 02: messages and introductions | merged | 1f9e27cb | Root routes named words, questions, answers, and reciprocal introductions through live task references. Question answers use reserved inbox room; introduced sibling dependencies are admitted unless they create a cross-subtree wait cycle. Gate on rebased tip: fmt, clippy, 2,488 focused / 11.611 s; 43 fuzzy / 28.163 s. |
 | Completion 02: subscriptions and wake batching | merged | b15d36c4 | Root routes named task and timer interests, task rows retain bounded subscriptions and merge their notices, and wake policies batch a coordinator's inbox across restart. Connector topics join in session 07. Gate on rebased tip: fmt, clippy, 2,491 focused / 11.600 s; 43 fuzzy / 28.542 s. |
+| Skein OAuth consumer handoff (2.5) | merged | this commit | Markdown only; consumer adoption is recorded under 08 below. |
 | Alignment 01: grant patterns | merged | fd61587b | Two terminal forms; exact grants cover one name, open grants cover matching descendants. Gate passed: 2,366 focused / 11.760 s; 42 fuzzy / 29.817 s. |
 | Alignment 02: lost run | merged | 4e05dff2 | Root records every lost claim as `Failed(Lost)` with one lost try, including no-turn and release-recovery cuts. Gate passed: 2,366 focused / 5.896 s; 42 fuzzy / 27.617 s. |
 | Alignment 03: funding state | merged | ab12cd84 | Removed parked-move allotment generations, historical spend and closure rows; ended rows and source postings remain atomic. Gate passed: 2,366 focused / 11.181 s; 42 fuzzy / 28.374 s. |
@@ -197,7 +198,7 @@ remain on `checkpoint/migration/transcript-codec`, outside main.
 
 - Audit remaining Run, Session, Tools and Host contracts; keep Smith first and verify every domain increment.
 - Keep codecs, channel/protocol, IO/TLS and binaries parked; preserve SDK cleanup gates and frozen legacy rules.
-- Skein's OAuth client remains open: port the fake rotating issuer from Smith `d218817:testing/smith-fake-llm-protocol/src/oauth.rs` when building it.
+- Skein's OAuth client and fake issuer are complete; consumer adoption remains in credential work 08.
 
 **06 — root**
 
@@ -211,6 +212,7 @@ remain on `checkpoint/migration/transcript-codec`, outside main.
 
 **08 — after**
 
+- At credential work 08, move `temper-oauth` to `skein-oauth`. Temper's web uses it to sign people in; the future Smith binary uses it for local-host sign-in.
 - Implement notes and contractions after cutover.
 - Write separate store, web, credentials, forge protocol and iteration/shell plans.
 - Implementing those lower layers remains outside this migration.
