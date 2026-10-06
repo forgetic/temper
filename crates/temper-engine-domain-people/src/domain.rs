@@ -359,7 +359,7 @@ fn apply_roles(
     let flight = domain.pending.get(Id::from_token(request)).ok_or(Refusal::Unknown)?;
     let project = match &flight.ask {
         Ask::SetRoles { project, .. } => *project,
-        Ask::StartChat { .. } | Ask::DecideEscalation { .. } => return Err(Refusal::Unknown),
+        Ask::StartChat { .. } | Ask::DecideEscalation { .. } | Ask::Say { .. } => return Err(Refusal::Unknown),
     };
     if !domain.roles.contains_key(&project) {
         return Err(Refusal::Unknown);
@@ -380,7 +380,9 @@ fn apply_roles(
             }
             holdings.clone()
         }
-        Ask::StartChat { .. } | Ask::DecideEscalation { .. } => unreachable!("validated roster flight"),
+        Ask::StartChat { .. } | Ask::DecideEscalation { .. } | Ask::Say { .. } => {
+            unreachable!("validated roster flight")
+        }
     };
     out.push(Request::Save { record: Stored::Roles { project, holdings: holdings.clone() } });
     let saved = domain.roles.insert(project, holdings);
@@ -525,9 +527,10 @@ fn end_signin(domain: &mut Domain, number: u64, out: &mut Queue<Request>) {
 
 fn project(ask: &Ask) -> u32 {
     match ask {
-        Ask::SetRoles { project, .. } | Ask::StartChat { project, .. } | Ask::DecideEscalation { project, .. } => {
-            *project
-        }
+        Ask::SetRoles { project, .. }
+        | Ask::StartChat { project, .. }
+        | Ask::DecideEscalation { project, .. }
+        | Ask::Say { project, .. } => *project,
     }
 }
 
@@ -535,6 +538,9 @@ fn valid_ask(limits: &Limits, ask: &Ask) -> bool {
     match ask {
         Ask::SetRoles { holdings, .. } => holdings.len() <= usize::try_from(limits.holdings).expect("u32 fits usize"),
         Ask::StartChat { words, .. } => words.len() <= usize::try_from(limits.words).expect("u32 fits usize"),
+        Ask::Say { task, words, .. } => {
+            *task != 0 && !words.is_empty() && words.len() <= usize::try_from(limits.words).expect("u32 fits usize")
+        }
         Ask::DecideEscalation { task, revision, decision, .. } => {
             *task != 0
                 && *revision != 0
@@ -567,11 +573,19 @@ fn valid_answer_shape(ask: &Ask, outcome: Outcome) -> bool {
                 }
                 true
             }
-            Ask::StartChat { .. } | Ask::DecideEscalation { .. } => false,
+            Ask::StartChat { .. } | Ask::DecideEscalation { .. } | Ask::Say { .. } => false,
         },
-        Outcome::Started { .. } | Outcome::EscalationDecided { .. } => match ask {
-            Ask::SetRoles { .. } => false,
-            Ask::StartChat { .. } | Ask::DecideEscalation { .. } => true,
+        Outcome::Started { task } => match ask {
+            Ask::StartChat { .. } => task != 0,
+            Ask::SetRoles { .. } | Ask::DecideEscalation { .. } | Ask::Say { .. } => false,
+        },
+        Outcome::Said { task, message } => match ask {
+            Ask::Say { task: named, .. } => *named == task && message != 0,
+            Ask::SetRoles { .. } | Ask::StartChat { .. } | Ask::DecideEscalation { .. } => false,
+        },
+        Outcome::EscalationDecided { .. } => match ask {
+            Ask::DecideEscalation { .. } => true,
+            Ask::SetRoles { .. } | Ask::StartChat { .. } | Ask::Say { .. } => false,
         },
         // Invalid rosters and unknown targets can be legitimate saved refusals.
         Outcome::Refused(_) => true,
@@ -646,6 +660,10 @@ fn admit_ask(
             Some(Role::Owner | Role::Maintainer | Role::Member) => None,
             Some(Role::Observer) | None => Some(Refusal::Role),
         },
+        Ask::Say { .. } => match role {
+            Some(Role::Owner | Role::Maintainer | Role::Member) => None,
+            Some(Role::Observer) | None => Some(Refusal::Role),
+        },
         Ask::DecideEscalation { .. } => None,
     };
     if let Some(refusal) = refusal {
@@ -694,6 +712,7 @@ fn decided(domain: &mut Domain, env: &Env<Limits>, id: Id<Pending>, outcome: Out
         Outcome::Refused(Refusal::Busy | Refusal::NotReady) => {}
         Outcome::RolesSet { .. }
         | Outcome::Started { .. }
+        | Outcome::Said { .. }
         | Outcome::EscalationDecided { .. }
         | Outcome::Refused(
             Refusal::NoFurther
@@ -813,11 +832,14 @@ fn restored(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
                         }
                     }
                 }
-                Ask::StartChat { .. } | Ask::DecideEscalation { .. } => {
+                Ask::StartChat { .. } | Ask::DecideEscalation { .. } | Ask::Say { .. } => {
                     unreachable!("restored role success has a matching roster ask");
                 }
             },
-            Outcome::Started { .. } | Outcome::EscalationDecided { .. } | Outcome::Refused(_) => {}
+            Outcome::Started { .. }
+            | Outcome::Said { .. }
+            | Outcome::EscalationDecided { .. }
+            | Outcome::Refused(_) => {}
         }
     }
     for (person, _) in &domain.read_positions {

@@ -6,6 +6,20 @@ use crate::{Authority, Class, Funder, Numbers, Tries};
 use alloc::boxed::Box;
 use skein_lib::{ReplyTo, Wall};
 
+/// One durable whole message of a person's words in a task's bounded inbox
+/// (domain/tasks.md, section 7.2).
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct Word {
+    /// Root-issued commit-order message identity.
+    pub number: u64,
+    /// Authenticated sender, checked against this task's requester.
+    pub from: Party,
+    /// Whole bounded words, never cut while in the inbox.
+    pub words: Box<[u8]>,
+    /// Injected time of admission, for oldest-first reads.
+    pub at: Wall,
+}
+
 /// Root-verified requester/creator identity; requester topology and actual financial source are
 /// separate values. (domain/tasks.md, sections 2–3).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -194,8 +208,7 @@ pub enum End {
         /** Whether to cancel live descendant work; otherwise a valid finish with live delegates is refused and its attempt remains live. */
         cancel_delegates: bool,
     },
-    /// Successful activation park; clears retry/refusal counters and leaves the task idle, without
-    /// implementing a wake route here.
+    /// Successful activation park; clears retry/refusal counters and leaves the task idle until words wake it.
     Parked,
     /// Count one classified failure, then back off or hold beyond the configured retry allowance.
     Failed(/** Reported failure category whose counter/backoff policy applies. */ Class),
@@ -381,6 +394,10 @@ pub struct TaskRecord {
     pub delegates: Box<[u64]>,
     /// Latest newly admitted contiguous turn in the current attempt; `new` `Claim` starts at zero.
     pub turn: u32,
+    /// Newest message ever admitted, including those taken by committed turns.
+    pub last_message: u64,
+    /// Whole unread words in increasing root message order.
+    pub inbox: Box<[Word]>,
     /// Lifetime tasks made in this subtree, including itself, bounded by `Limits::tree_tasks`;
     /// ending delegates does not return capacity.
     pub made: u32,
@@ -496,7 +513,7 @@ pub enum Refusal {
     /// `Live` startup row shape, graph or actual financial links are invalid; historical rows
     /// cannot be restored live.
     Restore,
-    /// `Turn` carries a read fence although this contracted API has no inbox/read route.
+    /// A turn's read fence was not an offered unread message.
     Read,
     /// `Turn` is not the next contiguous current-attempt turn, or cumulative expense decreases.
     Turn,
@@ -530,6 +547,8 @@ pub enum Accepted {
 /// notifications have no reply destination and may be ignored if stale. (domain/tasks.md, sections 4–5).
 #[derive(PartialEq, Eq, Debug)]
 pub enum Event {
+    /// Admit authenticated person words to a live chat and wake or relay after their commit.
+    Message { reply_to: ReplyTo, project: u32, task: u64, word: Word },
     /// Root `SetRoles` preflight: inspect only current person-requested `Waiting`
     /// contexts without mutation; one typed terminal even before readiness.
     InspectEscalations {
@@ -602,8 +621,8 @@ pub enum Event {
         /// Complete finite pool budget, atomically reserved from the original period.
         budget: u64,
     },
-    /// Admit only the next contiguous turn and its checked expense delta atomically; nonempty read
-    /// fences, stale turns/attempts and arithmetic failures refuse without debit.
+    /// Admit the next contiguous turn, offered inbox read and checked expense delta atomically;
+    /// stale turns/attempts and arithmetic failures refuse without debit.
     Turn {
         /// Root-issued destination owed one `TurnAcknowledged` or `Refused` terminal.
         reply_to: ReplyTo,
@@ -614,9 +633,10 @@ pub enum Event {
         /// Exactly the next contiguous nonzero turn in this attempt; root handles exact replay
         /// before this child input.
         turn: u32,
-        /// Must be `None` in this contracted boundary; no inbox/read-fence route is implemented
-        /// here.
+        /// Highest committed inbox message read by this turn; taking is atomic with the charge.
         read: Option<u64>,
+        /// Highest message this exact run was offered by its assignment or committed relay.
+        offered: Option<u64>,
         /// Whole priced attempt expense; tasks posts only the checked delta above `run_spent`,
         /// including representable overruns.
         cumulative: u64,
@@ -715,6 +735,10 @@ pub enum Event {
 /// saves/erases with effects and delays outward replies until durability. (domain/tasks.md, section 5).
 #[derive(PartialEq, Eq, Debug)]
 pub enum Request {
+    /// Accepted person words; root answers the keyed request after the inbox write commits.
+    Sent { reply_to: ReplyTo, task: u64, word: Word },
+    /// Root relays this whole committed message through the fleet to the current run.
+    Relay { task: u64, attempt: u64, previous: Option<u64>, word: Word },
     /// Terminal read-only `SetRoles` preflight; snapshot is owned transient root
     /// context, not retained state.
     EscalationsInspected {
@@ -880,6 +904,10 @@ pub enum Cause {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct RunContext {
     pub task: u64,
+    /// Newest admitted inbox identity, including words already taken.
+    pub last_message: u64,
+    /// Whole unread words carried into a newly prepared run brief.
+    pub inbox: Box<[Word]>,
     pub project: u32,
     /// Implemented task executor, currently an agent charter selected by root.
     pub executor: Executor,

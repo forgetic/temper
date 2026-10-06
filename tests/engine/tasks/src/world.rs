@@ -25,6 +25,9 @@ pub const LIMITS: Limits = Limits {
     spec_bytes: 64,
     parameters: 4,
     result_bytes: 32,
+    inbox_messages: 8,
+    inbox_bytes: 128,
+    message_bytes: 32,
     contract_choices: 4,
     charters: 2,
     authority_grants: 4,
@@ -250,7 +253,8 @@ impl World {
             | Event::RecheckEscalations { .. }
             | Event::InspectEscalation { .. }
             | Event::RoutedEscalation { .. }
-            | Event::DecideEscalation { .. } => None,
+            | Event::DecideEscalation { .. }
+            | Event::Message { .. } => None,
         };
         self.trace.log(self.env.now, format_args!("{event:?}"));
         tasks::step(&mut self.domain, &self.env, event, &mut self.out);
@@ -317,7 +321,9 @@ impl World {
                 | Request::EscalationsInspected { .. }
                 | Request::EscalationsRechecked { .. }
                 | Request::EscalationInspected { .. }
-                | Request::EscalationDecided { .. } => {}
+                | Request::EscalationDecided { .. }
+                | Request::Sent { .. }
+                | Request::Relay { .. } => {}
             }
         }
         if self.pending.iter().any(|request| {
@@ -367,7 +373,9 @@ impl World {
                 Request::Save { .. }
                 | Request::Erase { .. }
                 | Request::Ended { .. }
-                | Request::EscalationNeeded { .. } => {}
+                | Request::EscalationNeeded { .. }
+                | Request::Sent { .. }
+                | Request::Relay { .. } => {}
                 Request::Made { reply_to, tasks } => self.reply(reply_to, Reply::Made(tasks.into_vec())),
                 Request::Refused { reply_to, problem } => self.reply(reply_to, Reply::Refused(problem)),
                 Request::Done { reply_to } => self.reply(reply_to, Reply::Done),
@@ -606,7 +614,7 @@ pub fn run_story_facts(seed: u64, consume_facts: bool) -> (Vec<String>, Frozen) 
     w.make(Party::Task(1), vec![task(2, &[]), task(3, &[2])]);
     w.claim_fresh(2);
     let reply_to = w.to();
-    w.stage(Event::Turn { reply_to, task: 1, attempt: 1, turn: 1, read: None, cumulative: 5 });
+    w.stage(Event::Turn { reply_to, task: 1, attempt: 1, turn: 1, read: None, offered: None, cumulative: 5 });
     if rng.chance(500) {
         w.durable();
     }

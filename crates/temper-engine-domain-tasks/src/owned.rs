@@ -92,6 +92,10 @@ fn phase_bytes(phase: &Phase) -> Option<u64> {
 }
 
 fn task_bytes(task: &TaskRecord) -> Option<u64> {
+    let mut inbox_bytes = bytes(size_of_val(&*task.inbox))?;
+    for word in &task.inbox {
+        inbox_bytes = inbox_bytes.checked_add(bytes(word.words.len())?)?;
+    }
     bytes(size_of::<TaskRecord>())?
         .checked_add(spec_bytes(&task.spec)?)?
         .checked_add(authority_bytes(&task.authority)?)?
@@ -105,5 +109,6 @@ fn task_bytes(task: &TaskRecord) -> Option<u64> {
         })?
         .checked_add(bytes(size_of_val(&*task.dependencies))?)?
         .checked_add(bytes(size_of_val(&*task.delegates))?)?
-        .checked_add(bytes(size_of_val(&*task.waiting_on))?)
+        .checked_add(bytes(size_of_val(&*task.waiting_on))?)?
+        .checked_add(inbox_bytes)
 }

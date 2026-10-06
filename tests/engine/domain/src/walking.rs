@@ -32,6 +32,9 @@ pub fn limits() -> engine::Limits {
         spec_bytes: 64,
         parameters: 1,
         result_bytes: 128,
+        inbox_messages: 4,
+        inbox_bytes: 128,
+        message_bytes: 64,
         contract_choices: 1,
         charters: 1,
         authority_grants: 1,
@@ -651,6 +654,8 @@ impl World {
             Delivery::Fleet(_)
             | Delivery::ReadEscalationDecision { .. }
             | Delivery::ReadResult { .. }
+            | Delivery::Relay { .. }
+            | Delivery::Inbound { .. }
             | Delivery::Load { .. } => {
                 panic!("internal handoff leaked to world")
             }

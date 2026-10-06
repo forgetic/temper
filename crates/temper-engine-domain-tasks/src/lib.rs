@@ -16,7 +16,7 @@
 //! notifications can be ignored when stale. Priced turns/terminals preflight
 //! the whole lifecycle/financial admission before posting the new cumulative
 //! expense delta. Root owns exact transport replay proof and transcript rows;
-//! tasks keeps no replay receipt, inbox, historical stub or result-delivery credit
+//! tasks keeps no replay receipt, historical stub or result-delivery credit
 
 //!
 //! `Request::Activate` carries a temporary bounded `RunContext`, not rendered
@@ -39,7 +39,7 @@
 //! eligibility and owns immutable transport history; this child accepts/rejects/
 //! passes only the authorized exact revision.
 //! Agent execution is the current executor route; nonempty historical inputs,
-//! inbox/wake/proposal, general amend/cancel/release/move and source-retirement
+//! proposals, general amend/cancel/release/move and source-retirement
 //! entrypoints are absent from this contracted API.
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -53,6 +53,7 @@ mod escalation;
 mod facts;
 mod failures;
 mod funders;
+mod inbox;
 mod limits;
 mod owned;
 mod run;
@@ -62,7 +63,7 @@ mod tests;
 mod value;
 pub use boundary::{
     Accepted, Active, Cause, Closing, Contract, End, Ending, Event, Executor, Hold, Key, New, Parameter, Party, Phase,
-    Problem, Refusal, Request, RunContext, Spec, Stage, Status, Stored, TaskRecord, TaskResult, Verdict, Was,
+    Problem, Refusal, Request, RunContext, Spec, Stage, Status, Stored, TaskRecord, TaskResult, Verdict, Was, Word,
 };
 pub use domain::{Domain, fire, max_out, step};
 pub use escalation::{Escalation, EscalationContext, EscalationDecision, EscalationHolder, EscalationOutcome};

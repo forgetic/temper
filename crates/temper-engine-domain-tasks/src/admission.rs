@@ -44,6 +44,7 @@ pub(crate) fn turn(
     attempt: u64,
     turn: u32,
     read: Option<u64>,
+    offered: Option<u64>,
     cumulative: u64,
     out: &mut Queue<Request>,
 ) {
@@ -61,14 +62,23 @@ pub(crate) fn turn(
     if crate::run::run_attempt(&old.phase) != Some(attempt) || old.turn.checked_add(1) != Some(turn) {
         return refused(to, Some(number), Refusal::Turn, out);
     }
-    if read.is_some() {
+    let beyond_offer = match read {
+        Some(number) => match offered {
+            Some(high) => number > high,
+            None => true,
+        },
+        None => false,
+    };
+    if beyond_offer || !crate::inbox::readable(old, read) {
         return refused(to, Some(number), Refusal::Read, out);
     }
     let spent = match check_charge(domain, number, cumulative) {
         Ok(spent) => spent,
         Err(why) => return refused(to, Some(number), why, out),
     };
-    task_mut(domain, number).expect("turn admitted").record.turn = turn;
+    let task = &mut task_mut(domain, number).expect("turn admitted").record;
+    task.turn = turn;
+    crate::inbox::take(task, read);
     post(domain, environment, number, cumulative, spent, out);
     out.push(Request::TurnAcknowledged { reply_to: to, task: number, attempt, turn, accepted: Accepted::New });
 }

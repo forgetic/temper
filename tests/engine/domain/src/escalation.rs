@@ -727,6 +727,8 @@ impl World {
             Delivery::Fleet(_)
             | Delivery::ReadResult { .. }
             | Delivery::ReadEscalationDecision { .. }
+            | Delivery::Relay { .. }
+            | Delivery::Inbound { .. }
             | Delivery::Load { .. } => panic!("internal root callback leaked to world"),
         }
     }

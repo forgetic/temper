@@ -1,7 +1,7 @@
 //! Live task and finite-source ownership, step dispatch and retry scheduling
 //! (domain/tasks.md, sections 2, 5 and 10). Root supplies authorized events
 //! and iteration time, routes outputs and owns durability/transport proofs.
-//! Tasks never performs IO or keeps historical stubs, inboxes or root shadows.
+//! Tasks never performs IO or keeps historical stubs or root shadows.
 use crate::{Active, Event, Fact, Limits, New, Party, Phase, Problem, Refusal, Request, Stored, TaskRecord, Tries};
 use alloc::boxed::Box;
 use skein_lib::{Deadlines, Env, Id, List, Map, Queue, ReplyTo, Rng, Slab, Time, Wall};
@@ -26,7 +26,7 @@ pub(crate) enum Startup {
 }
 
 /// Bounded live task arena, immutable dependencies, retry timers, finite period/pool ledgers,
-/// configured charters and deterministic retry randomness. Keeps no inbox, historical stub,
+/// configured charters and deterministic retry randomness. Keeps no historical stub,
 /// transport receipt, connector state or mutable root shadow ledger. (domain/tasks.md, sections 2, 4–5 and 10).
 #[derive(Debug)]
 pub struct Domain {
@@ -152,10 +152,13 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
             crate::funders::carve(domain, reply_to, project, person, period, budget, out);
         }
         Event::Make { reply_to, creator, batch } => make(domain, env, reply_to, creator, batch, out),
+        Event::Message { reply_to, project, task, word } => {
+            crate::inbox::message(domain, env, reply_to, project, task, word, out);
+        }
         Event::Prepare { reply_to, task } => crate::run::prepare(domain, env, reply_to, task, out),
         Event::Claim { reply_to, task, attempt } => crate::run::claim(domain, env, reply_to, task, attempt, out),
-        Event::Turn { reply_to, task, attempt, turn, read, cumulative } => {
-            crate::admission::turn(domain, env, reply_to, task, attempt, turn, read, cumulative, out);
+        Event::Turn { reply_to, task, attempt, turn, read, offered, cumulative } => {
+            crate::admission::turn(domain, env, reply_to, task, attempt, turn, read, offered, cumulative, out);
         }
         Event::Started { task, attempt } => crate::run::started(domain, env, task, attempt, out),
         Event::Activation { reply_to, task, attempt, end, cause } => match cause {
@@ -245,6 +248,8 @@ pub(crate) fn activate(domain: &Domain, number: u64, out: &mut Queue<Request>) {
     out.push(Request::Activate {
         context: Box::new(crate::RunContext {
             task: number,
+            last_message: task.last_message,
+            inbox: task.inbox.clone(),
             project: task.project,
             executor: task.executor,
             spec: task.spec.clone(),
@@ -371,6 +376,8 @@ fn make(
                 dependencies: new.dependencies,
                 delegates: Box::new([]),
                 turn: 0,
+                last_message: 0,
+                inbox: Box::new([]),
                 made: 1,
                 attempt: 0,
                 last_answer: None,

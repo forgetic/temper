@@ -86,6 +86,7 @@ fn walking_referee_rejects_duplicate_transaction_keys_and_transcripts() {
     let proof = Record::RunProof(temper_engine_domain::RunProof {
         task: task.number,
         attempt: task.attempt,
+        offered: None,
         turn: Some(temper_engine_domain::TurnProof { turn: 1, cumulative: 3, read: None }),
         terminal: None,
     });
@@ -176,6 +177,7 @@ fn walking_referee_rejects_wrong_task_or_uncommitted_or_duplicate_assignment() {
                 .into_boxed_slice(),
             ),
         }]),
+        inbox: Box::new([]),
         grant: Grant { account: 1, generation: 1, valid: Duration::from_secs(60) },
     };
     assignment.task = task.number + 1;
@@ -270,6 +272,7 @@ fn walking_referee_rejects_missing_or_split_current_claim_turn_and_terminal_proo
     let initial = Record::RunProof(temper_engine_domain::RunProof {
         task: task.number,
         attempt: task.attempt,
+        offered: None,
         turn: None,
         terminal: None,
     });
@@ -399,6 +402,7 @@ fn independent_terminal_cut_referee_rejects_missing_or_altered_evidence() {
         Record::RunProof(temper_engine_domain::RunProof {
             task: task.number,
             attempt: task.attempt,
+            offered: None,
             turn: None,
             terminal: None,
         }),

@@ -44,6 +44,10 @@ pub struct Limits {
 /// resumed by the root and never passed to the protocol as child events.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Delivery {
+    /// Committed words presented to fleet only after their task row commits.
+    Relay { task: u64, attempt: u64, previous: Option<u64>, word: temper_engine_domain_tasks::Word },
+    /// Fleet-selected live worker receives the whole committed word.
+    Inbound { channel: Token, task: u64, attempt: u64, word: temper_engine_domain_tasks::Word },
     /// Bounded page of committed unread results, consumed through its last position with this reply.
     InboxPage { to: ReplyTo, person: u64, entries: Box<[ResultEntry]> },
     /// Root-to-authenticated named reader: one current durable held-chat view,
@@ -261,6 +265,7 @@ impl Decision {
     /// submission, so only the final value is saved. The root supplies the write; successful
     /// admission emits no event. Bounds or capacity refusal returns it unchanged. Deployment writes
     /// are reserved for `accept`, not callers.
+    #[expect(clippy::result_large_err, reason = "journal refusal returns the caller's owned bounded row")]
     pub fn write(&mut self, limits: &Limits, write: Write) -> Result<(), Write> {
         assert!(*limits == self.limits, "decision uses its configured limits");
         let within = match &write {
@@ -368,6 +373,10 @@ impl Decision {
                     }
             }
             Delivery::Fleet(event) => fleet_delivery_within(event, limits),
+            Delivery::Relay { word, .. } | Delivery::Inbound { word, .. } => {
+                word.number != 0
+                    && word.words.len() <= usize::try_from(limits.transcript_bytes).expect("u32 fits usize")
+            }
             Delivery::Assigned { assignment, .. } => assignment_within(assignment, limits),
             Delivery::Reply { .. }
             | Delivery::AcknowledgeTurn { .. }
@@ -631,6 +640,22 @@ fn assignment_within(assignment: &crate::engine::Assignment, limits: &Limits) ->
         return false;
     }
     let mut owned = 0_u64;
+    let mut last = 0_u64;
+    for word in &assignment.inbox {
+        if word.number == 0 || word.number <= last || word.words.is_empty() {
+            return false;
+        }
+        last = word.number;
+        let Some(total) = owned.checked_add(u64::try_from(word.words.len()).expect("usize fits u64")) else {
+            return false;
+        };
+        owned = total;
+    }
+    if owned > u64::from(limits.transcript_bytes) {
+        return false;
+    }
+    let inbox_bytes = owned;
+    owned = 0;
     for section in &assignment.sections {
         let bytes = match &section.body {
             temper_engine_domain_brief::Body::Text(bytes) => u64::try_from(bytes.len()).expect("usize fits u64"),
@@ -641,5 +666,9 @@ fn assignment_within(assignment: &crate::engine::Assignment, limits: &Limits) ->
         };
         owned = total;
     }
-    owned <= u64::from(limits.result_bytes)
+    let within = match owned.checked_add(inbox_bytes) {
+        Some(all) => all <= u64::from(limits.transcript_bytes),
+        None => false,
+    };
+    owned <= u64::from(limits.result_bytes) && within
 }

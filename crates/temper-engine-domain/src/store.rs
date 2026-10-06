@@ -291,7 +291,7 @@ pub struct TurnProof {
     pub turn: u32,
     /// Accepted cumulative priced spend; tasks owns all financial counters.
     pub cumulative: u64,
-    /// Admitted message fence; currently none until an actual root inbox route.
+    /// Admitted message fence, taken with the turn and charge.
     pub read: Option<u64>,
 }
 
@@ -307,6 +307,8 @@ pub struct RunProof {
     pub task: u64,
     /// Positive current claim identity allocated by root.
     pub attempt: u64,
+    /// Highest inbox message offered to this attempt in an assignment or committed relay.
+    pub offered: Option<u64>,
     /// Latest accepted turn, or none before the first turn; no historical body is retained.
     pub turn: Option<TurnProof>,
     /// Typed accepted worker offer or actual root-translated unpriced terminal; present iff the
@@ -444,7 +446,8 @@ pub fn record_bytes(record: &Record) -> Option<u64> {
                 temper_engine_domain_people::Ask::SetRoles { holdings, .. } => u64::try_from(holdings.len())
                     .ok()?
                     .checked_mul(u64::try_from(size_of::<temper_engine_domain_people::Holding>()).ok()?),
-                temper_engine_domain_people::Ask::StartChat { words, .. } => u64::try_from(words.len()).ok(),
+                temper_engine_domain_people::Ask::StartChat { words, .. }
+                | temper_engine_domain_people::Ask::Say { words, .. } => u64::try_from(words.len()).ok(),
                 temper_engine_domain_people::Ask::DecideEscalation { decision, .. } => decision_bytes(decision),
             },
             temper_engine_domain_people::Stored::SignIn { .. }

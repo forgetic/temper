@@ -137,6 +137,8 @@ impl Driver {
                 | Delivery::ReadEscalationDecision { .. }
                 | Delivery::ReadResult { .. }
                 | Delivery::TurnBusy { .. }
+                | Delivery::Relay { .. }
+                | Delivery::Inbound { .. }
                 | Delivery::Load { .. }
                 | Delivery::ResultReply { .. }
                 | Delivery::InboxPage { .. } => None,
@@ -212,6 +214,8 @@ fn durable_start_turn_and_answer_callbacks_survive_full_journal_pressure() {
             | Delivery::ReadEscalationDecision { .. }
             | Delivery::ReadResult { .. }
             | Delivery::TurnBusy { .. }
+            | Delivery::Relay { .. }
+            | Delivery::Inbound { .. }
             | Delivery::Load { .. }
             | Delivery::ResultReply { .. }
             | Delivery::InboxPage { .. } => None,
@@ -407,6 +411,8 @@ fn assigned(driver: &Driver) -> engine::Assignment {
             | Delivery::ReadEscalationDecision { .. }
             | Delivery::ReadResult { .. }
             | Delivery::TurnBusy { .. }
+            | Delivery::Relay { .. }
+            | Delivery::Inbound { .. }
             | Delivery::Load { .. }
             | Delivery::ResultReply { .. }
             | Delivery::InboxPage { .. } => None,
@@ -1145,6 +1151,7 @@ fn rejected_restore_stays_rejected_and_current_read_checks_privacy_and_both_expi
 }
 
 #[test]
+#[expect(clippy::too_many_lines, reason = "one history replay story retains its full script")]
 fn coalesced_history_waiters_survive_simultaneous_io_completion_under_full_journal() {
     use temper_engine_domain_world::{escalation, escalation_referee::Story};
     let mut world = escalation::World::new(escalation::Settings::calm(9204, Story::Release));
@@ -1230,6 +1237,8 @@ fn coalesced_history_waiters_survive_simultaneous_io_completion_under_full_journ
             | Delivery::Refuse { .. }
             | Delivery::ReadResult { .. }
             | Delivery::TurnBusy { .. }
+            | Delivery::Relay { .. }
+            | Delivery::Inbound { .. }
             | Delivery::Load { .. }
             | Delivery::Result { .. }
             | Delivery::ResultReply { .. }
@@ -1572,6 +1581,8 @@ fn read_only_role_stages_have_one_not_ready_terminal_and_empty_projects_need_no_
             | tasks::Request::Ended { .. }
             | tasks::Request::Save { .. }
             | tasks::Request::Erase { .. }
+            | tasks::Request::Sent { .. }
+            | tasks::Request::Relay { .. }
             | tasks::Request::RestoreRefused { .. } => panic!("no mutation or lost startup terminal"),
         }
     }
@@ -1604,6 +1615,152 @@ fn read_only_role_stages_have_one_not_ready_terminal_and_empty_projects_need_no_
         | tasks::Request::Ended { .. }
         | tasks::Request::Save { .. }
         | tasks::Request::Erase { .. }
+        | tasks::Request::Sent { .. }
+        | tasks::Request::Relay { .. }
         | tasks::Request::RestoreRefused { .. } => panic!("one named snapshot"),
     }
+}
+
+fn chat_driver() -> (Driver, engine::Assignment) {
+    let mut driver = Driver::new(Store::new());
+    driver.send(engine::Event::Hello {
+        channel: Token::new(7),
+        hello: fleet::Hello {
+            graces: Some(Duration::from_secs(1)),
+            slots: 1,
+            workstreams: Box::new([]),
+            hosting: Box::new([]),
+        },
+    });
+    driver.settle();
+    driver.sign_in();
+    driver.settle();
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(1001)),
+        sign_in: driver.session(),
+        key: [31; 16],
+        ask: people::Ask::StartChat { project: 1, words: QUESTION.into() },
+    });
+    driver.settle();
+    let assignment = assigned_from_last(&driver.delivered);
+    (driver, assignment)
+}
+
+fn assigned_from_last(delivered: &[Delivery]) -> engine::Assignment {
+    delivered
+        .iter()
+        .rev()
+        .find_map(|delivery| match delivery {
+            Delivery::Assigned { assignment, .. } => Some(assignment.clone()),
+            Delivery::Relay { .. }
+            | Delivery::Inbound { .. }
+            | Delivery::InboxPage { .. }
+            | Delivery::EscalationReply { .. }
+            | Delivery::ReadEscalationDecision { .. }
+            | Delivery::Reply { .. }
+            | Delivery::AcknowledgeTurn { .. }
+            | Delivery::Acknowledge { .. }
+            | Delivery::Cancel { .. }
+            | Delivery::Fleet(_)
+            | Delivery::WebReply { .. }
+            | Delivery::Refuse { .. }
+            | Delivery::ReadResult { .. }
+            | Delivery::TurnBusy { .. }
+            | Delivery::Load { .. }
+            | Delivery::ResultReply { .. }
+            | Delivery::Result { .. } => None,
+        })
+        .expect("durable assignment")
+}
+
+fn say(driver: &mut Driver, task: u64, key: u8) -> u64 {
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(2000 + u64::from(key))),
+        sign_in: driver.session(),
+        key: [key; 16],
+        ask: people::Ask::Say { project: 1, task, words: Box::from([key]) },
+    });
+    driver.settle();
+    driver
+        .delivered
+        .iter()
+        .rev()
+        .find_map(|delivery| match delivery {
+            Delivery::WebReply {
+                reply: people::Reply::Outcome(people::Outcome::Said { task: named, message }),
+                ..
+            } if *named == task => Some(*message),
+            Delivery::Relay { .. }
+            | Delivery::Inbound { .. }
+            | Delivery::InboxPage { .. }
+            | Delivery::EscalationReply { .. }
+            | Delivery::ReadEscalationDecision { .. }
+            | Delivery::Reply { .. }
+            | Delivery::AcknowledgeTurn { .. }
+            | Delivery::Acknowledge { .. }
+            | Delivery::Cancel { .. }
+            | Delivery::Fleet(_)
+            | Delivery::Assigned { .. }
+            | Delivery::WebReply { .. }
+            | Delivery::Refuse { .. }
+            | Delivery::ReadResult { .. }
+            | Delivery::TurnBusy { .. }
+            | Delivery::Load { .. }
+            | Delivery::ResultReply { .. }
+            | Delivery::Result { .. } => None,
+        })
+        .expect("committed keyed word")
+}
+
+#[test]
+fn words_typed_while_a_run_works_reach_it_once_committed() {
+    let (mut driver, assignment) = chat_driver();
+    let before = driver.delivered.len();
+    let number = say(&mut driver, assignment.task, 41);
+    assert!(driver.delivered[before..].iter().any(|delivery| matches!(delivery,
+        Delivery::Inbound { channel, task, attempt, word }
+        if *channel == Token::new(7) && *task == assignment.task && *attempt == assignment.attempt
+            && word.number == number && word.words.as_ref() == [41])));
+    let row = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(assignment.task))).expect("live chat");
+    let Record::Tasks(tasks::Stored::Live(task)) = row else { panic!("task row") };
+    assert_eq!(task.inbox.len(), 1);
+    assert_eq!(task.inbox[0].number, number);
+}
+
+#[test]
+fn a_read_fence_takes_only_what_the_run_read() {
+    let (mut driver, assignment) = chat_driver();
+    let first = say(&mut driver, assignment.task, 42);
+    let second = say(&mut driver, assignment.task, 43);
+    driver.send(engine::Event::Turn {
+        channel: Token::new(7),
+        task: assignment.task,
+        attempt: assignment.attempt,
+        turn: engine::Turn { number: 1, cumulative: 1, read: Some(first), transcript: b"read one".as_slice().into() },
+    });
+    driver.settle();
+    let row = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(assignment.task))).expect("live chat");
+    let Record::Tasks(tasks::Stored::Live(task)) = row else { panic!("task row") };
+    assert_eq!(task.inbox.len(), 1);
+    assert_eq!(task.inbox[0].number, second);
+    assert!(driver.store.rows.contains_key(&Key::Turn { task: assignment.task, attempt: assignment.attempt, turn: 1 }));
+}
+
+#[test]
+fn words_to_a_parked_chat_wake_it() {
+    let (mut driver, assignment) = chat_driver();
+    driver.send(engine::Event::Answer {
+        channel: Token::new(7),
+        task: assignment.task,
+        attempt: assignment.attempt,
+        cumulative: 0,
+        end: tasks::End::Parked,
+    });
+    driver.settle();
+    let number = say(&mut driver, assignment.task, 44);
+    let next = assigned_from_last(&driver.delivered);
+    assert!(next.attempt > assignment.attempt);
+    assert_eq!(next.inbox.len(), 1);
+    assert_eq!(next.inbox[0].number, number);
+    assert_eq!(next.inbox[0].words.as_ref(), [44]);
 }

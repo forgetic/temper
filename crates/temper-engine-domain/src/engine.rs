@@ -115,6 +115,8 @@ pub struct Assignment {
     /// specification, report contract and the actual person requester. Task/deployment lineage
     /// awaits its actual root route.
     pub sections: Box<[brief::Section]>,
+    /// Whole unread words offered to this attempt, oldest first.
+    pub inbox: Box<[tasks::Word]>,
     /// Secret-free account grant; token bytes stay in the protocol.
     pub grant: accounts::Grant,
 }
@@ -129,8 +131,7 @@ pub struct Turn {
     /// Worker-priced cumulative spend for this attempt, not a new delta. Tasks validates
     /// monotonicity and charges the accepted delta atomically.
     pub cumulative: u64,
-    /// Must be `None` in this actual route; nonempty read fences are refused
-    /// until a real inbox route joins.
+    /// Last offered inbox message read in this turn; taking joins the transcript and charge commit.
     pub read: Option<u64>,
     /// Owned transcript, bounded by journal transcript bytes before fleet admission.
     pub transcript: Box<[u8]>,
@@ -387,6 +388,12 @@ enum Read {
 }
 
 #[derive(Debug)]
+struct PendingRelay {
+    previous: Option<u64>,
+    word: tasks::Word,
+}
+
+#[derive(Debug)]
 struct ResultPage {
     waiter: Token,
     rows: Box<[Record]>,
@@ -432,6 +439,8 @@ pub struct Domain {
     reading_results: Map<u64, Token>,
     result_pages: Queue<ResultPage>,
     made: Map<Token, u64>,
+    saying: Map<Token, u64>,
+    relaying: Option<PendingRelay>,
     claiming: Map<u64, u64>,
     contexts: Map<u64, Box<tasks::RunContext>>,
     proofs: Map<u64, RunProof>,
@@ -492,6 +501,8 @@ impl Domain {
             reading_results: Map::with_capacity(limits.loads.loads),
             result_pages: Queue::with_capacity(limits.loads.loads),
             made: Map::with_capacity(limits.people.pending),
+            saying: Map::with_capacity(limits.people.pending),
+            relaying: None,
             claiming: Map::with_capacity(limits.tasks.tasks),
             contexts: Map::with_capacity(limits.tasks.tasks),
             proofs: Map::with_capacity(limits.tasks.tasks),
@@ -537,6 +548,8 @@ impl Domain {
             && self.reading_results.is_empty()
             && self.result_pages.is_empty()
             && self.made.is_empty()
+            && self.saying.is_empty()
+            && self.relaying.is_none()
             && self.claiming.is_empty()
             && self.contexts.is_empty()
             && self.restoring_proofs.is_empty()
@@ -903,6 +916,15 @@ pub fn resume(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) 
     if let Some(output) = journal_out.pop() {
         match output {
             Output::Deliver(Delivery::Fleet(event)) => domain.work.push(Work::Fleet(event)),
+            Output::Deliver(Delivery::Relay { task, attempt, previous, word }) => {
+                let event = Token::new(word.number);
+                assert!(domain.relaying.replace(PendingRelay { previous, word }).is_none(), "one relay at a time");
+                domain.work.push(Work::Fleet(fleet::Event::Inbound {
+                    run: Token::new(task),
+                    attempt: Token::new(attempt),
+                    event,
+                }));
+            }
             Output::Deliver(Delivery::Load { waiter, range, after }) => {
                 request_load(domain, waiter, range, after, out);
                 return;
@@ -1037,6 +1059,15 @@ fn route_into(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision) {
     assert!(domain.work.is_empty(), "finite synchronous root handoffs finish within the configured route bound");
 }
 
+fn append_word(existing: &[tasks::Word], word: &tasks::Word, capacity: u32) -> Box<[tasks::Word]> {
+    let mut words = List::with_capacity(capacity);
+    for item in existing {
+        words.push(item.clone()).expect("accepted inbox count");
+    }
+    words.push(word.clone()).expect("accepted inbox count");
+    words.into_boxed()
+}
+
 fn people_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, out: &mut Queue<people::Request>) {
     for _ in 0..out.len() {
         match out.pop().expect("people output count") {
@@ -1046,6 +1077,22 @@ fn people_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decisio
                 emit(decision, &env.limits, Delivery::WebReply { to, sign_in: domain.signing_in, reply });
             }
             people::Request::Route { request, person, project, role, ask } => match ask {
+                people::Ask::Say { task, words, .. } => {
+                    let Some(message) = crate::fresh(&mut domain.journal, Family::Message) else {
+                        domain.work.push(Work::People(people::Event::Decided {
+                            request,
+                            outcome: people::Outcome::Refused(people::Refusal::Limit),
+                        }));
+                        continue;
+                    };
+                    assert!(domain.saying.insert(request, task) == Ok(None), "one pending say flight");
+                    domain.work.push(Work::Tasks(tasks::Event::Message {
+                        reply_to: ReplyTo::new(request),
+                        project,
+                        task,
+                        word: tasks::Word { number: message, from: tasks::Party::Person(person), words, at: env.wall },
+                    }));
+                }
                 people::Ask::StartChat { .. } => {
                     let Some(role) = role else { unreachable!("chat membership admitted") };
                     make_chat(domain, env, request, person, project, role, ask);
@@ -1149,7 +1196,7 @@ fn make_chat(
     assert!(domain.made.insert(request, number) == Ok(None), "people route has unique pending key");
     let words = match ask {
         people::Ask::StartChat { words, .. } => words,
-        people::Ask::DecideEscalation { .. } | people::Ask::SetRoles { .. } => {
+        people::Ask::DecideEscalation { .. } | people::Ask::SetRoles { .. } | people::Ask::Say { .. } => {
             unreachable!("other asks routed separately")
         }
     };
@@ -1266,6 +1313,21 @@ fn activate(domain: &mut Domain, env: &Env<Limits>, task: Box<tasks::RunContext>
 fn tasks_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, out: &mut Queue<tasks::Request>) {
     for _ in 0..out.len() {
         match out.pop().expect("tasks output count") {
+            tasks::Request::Sent { reply_to, task, word } => {
+                let request = reply_to.into_token();
+                assert!(domain.saying.remove(&request) == Some(task), "matching pending say flight");
+                if let Some(context) = domain.contexts.get_mut(&task) {
+                    context.inbox = append_word(&context.inbox, &word, env.limits.tasks.inbox_messages);
+                    context.last_message = word.number;
+                }
+                domain.work.push(Work::People(people::Event::Decided {
+                    request,
+                    outcome: people::Outcome::Said { task, message: word.number },
+                }));
+            }
+            tasks::Request::Relay { task, attempt, previous, word } => {
+                emit(decision, &env.limits, Delivery::Relay { task, attempt, previous, word });
+            }
             tasks::Request::EscalationsInspected { .. } | tasks::Request::EscalationsRechecked { .. } => {
                 unreachable!("serialized roles route consumes project terminals")
             }
@@ -1311,6 +1373,36 @@ fn tasks_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                     domain.work.push(Work::People(people::Event::Decided {
                         request: token,
                         outcome: people::Outcome::Refused(people::Refusal::Limit),
+                    }));
+                } else if domain.saying.remove(&token).is_some() {
+                    domain.work.push(Work::People(people::Event::Decided {
+                        request: token,
+                        outcome: people::Outcome::Refused(match problem.why {
+                            tasks::Refusal::Busy | tasks::Refusal::NotReady => people::Refusal::Busy,
+                            tasks::Refusal::Unknown => people::Refusal::Unknown,
+                            tasks::Refusal::State => people::Refusal::Standing,
+                            tasks::Refusal::Duplicate
+                            | tasks::Refusal::Empty
+                            | tasks::Refusal::Batch
+                            | tasks::Refusal::Live
+                            | tasks::Refusal::Project
+                            | tasks::Refusal::Tree
+                            | tasks::Refusal::Depth
+                            | tasks::Refusal::Delegates
+                            | tasks::Refusal::Dependencies
+                            | tasks::Refusal::Cycle
+                            | tasks::Refusal::Executor
+                            | tasks::Refusal::Spec
+                            | tasks::Refusal::Contract
+                            | tasks::Refusal::AuthorityShape
+                            | tasks::Refusal::Inputs
+                            | tasks::Refusal::Attempt
+                            | tasks::Refusal::LiveDelegates
+                            | tasks::Refusal::Restore
+                            | tasks::Refusal::Read
+                            | tasks::Refusal::Turn
+                            | tasks::Refusal::Funding => people::Refusal::Limit,
+                        }),
                     }));
                 } else if domain.claiming.remove(&token.raw()).is_some() {
                     drop(domain.assignments.remove(&token.raw()));
@@ -1478,7 +1570,7 @@ fn brief_outputs(domain: &mut Domain, env: &Env<Limits>, _decision: &mut Decisio
             }
             brief::Request::Rendered { reply_to, sections } => {
                 let task = reply_to.into_token().raw();
-                drop(domain.contexts.remove(&task));
+                let context = domain.contexts.remove(&task).expect("rendered task owns context");
                 let Some(attempt) = crate::fresh(&mut domain.journal, Family::Run) else {
                     domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
                     continue;
@@ -1491,11 +1583,13 @@ fn brief_outputs(domain: &mut Domain, env: &Env<Limits>, _decision: &mut Decisio
                     domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
                     continue;
                 }
+                let offered = if context.last_message == 0 { None } else { Some(context.last_message) };
                 assert!(
-                    domain.proofs.insert(task, RunProof { task, attempt, turn: None, terminal: None }).is_ok(),
+                    domain.proofs.insert(task, RunProof { task, attempt, offered, turn: None, terminal: None }).is_ok(),
                     "claim proof reserved before child mutation"
                 );
-                let assignment = Assignment { task, attempt, charter: domain.config.charter, sections, grant };
+                let assignment =
+                    Assignment { task, attempt, charter: domain.config.charter, sections, inbox: context.inbox, grant };
                 assert!(domain.assignments.insert(task, assignment).is_ok(), "assignment fits live task room");
                 assert!(domain.claiming.insert(task, attempt) == Ok(None), "one pending claim per task");
                 domain.work.push(Work::Tasks(tasks::Event::Claim { reply_to: internal(task), task, attempt }));
@@ -1548,6 +1642,7 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                     attempt: attempt.raw(),
                     turn,
                     read: payload.read,
+                    offered: domain.proofs.get(&run.raw()).expect("current proof").offered,
                     cumulative: payload.cumulative,
                 }));
             }
@@ -1619,14 +1714,31 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                     cause: tasks::Cause::Unpriced,
                 }));
             }
+            fleet::Request::Inbound { channel, run, attempt, event } => {
+                let relay = domain.relaying.take().expect("fleet inbound follows committed word");
+                assert!(event.raw() == relay.word.number, "relay event identifies word");
+                if let Some(proof) = domain.proofs.get_mut(&run.raw())
+                    && proof.attempt == attempt.raw()
+                    && proof.offered == relay.previous
+                {
+                    proof.offered = Some(relay.word.number);
+                    save(decision, &env.limits, Write::Save(Record::RunProof(proof.clone())));
+                    emit(
+                        decision,
+                        &env.limits,
+                        Delivery::Inbound { channel, task: run.raw(), attempt: attempt.raw(), word: relay.word },
+                    );
+                }
+            }
+            fleet::Request::Undelivered { .. } => {
+                drop(domain.relaying.take());
+            }
             fleet::Request::Grant { .. }
             | fleet::Request::Rejected { .. }
             | fleet::Request::Exhausted { .. }
-            | fleet::Request::Inbound { .. }
             | fleet::Request::Relayed { .. }
             | fleet::Request::Relay { .. }
             | fleet::Request::Bounced { .. }
-            | fleet::Request::Undelivered { .. }
             | fleet::Request::Told { .. } => unreachable!("06a does not route tool/credential worker messages"),
         }
     }
@@ -2061,6 +2173,9 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         )?
         .checked_add(Map::<Token, u64>::worst_case(limits.people.pending)?)?;
     bytes = bytes
+        .checked_add(Map::<Token, u64>::worst_case(limits.people.pending)?)?
+        .checked_add(u64::from(limits.tasks.message_bytes))?;
+    bytes = bytes
         .checked_add(Map::<u64, u64>::worst_case(limits.tasks.tasks)?)?
         .checked_add(Map::<u64, RunProof>::worst_case(limits.tasks.tasks)?)?
         .checked_add(Map::<u64, RestoringProof>::worst_case(limits.tasks.tasks)?)?
@@ -2080,12 +2195,18 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     bytes = bytes.checked_add(Map::<u64, Assignment>::worst_case(limits.tasks.tasks)?)?.checked_add(
         u64::from(limits.tasks.tasks).checked_add(u64::from(limits.journal.held))?.checked_mul(
             u64::from(limits.brief.brief_bytes)
-                .checked_add(List::<brief::Section>::worst_case(limits.brief.sections)?)?,
+                .checked_add(List::<brief::Section>::worst_case(limits.brief.sections)?)?
+                .checked_add(u64::from(limits.tasks.inbox_bytes))?
+                .checked_add(
+                    u64::from(limits.tasks.inbox_messages)
+                        .checked_mul(u64::try_from(size_of::<tasks::Word>()).ok()?)?,
+                )?,
         )?,
     )?;
     bytes
         .checked_add(Queue::<authority::Finding>::worst_case(authority::max_out(&limits.authority)?)?)?
         .checked_add(Queue::<tasks::Request>::worst_case(tasks::max_out(&limits.tasks))?)?
+        .checked_add(u64::from(limits.tasks.message_bytes).checked_mul(3)?)?
         // The outer Ask output queue stays allocated while the serialized
         // application owns its separate bounded people terminal/save queue.
         .checked_add(Queue::<people::Request>::worst_case(people::max_out(&limits.people))?.checked_mul(2)?)?
@@ -2274,6 +2395,8 @@ fn row_bound(limits: &Limits) -> Option<u64> {
     for retained in [
         u64::from(tasks.spec_bytes),
         u64::from(tasks.result_bytes).checked_mul(3)?,
+        u64::from(tasks.inbox_bytes),
+        u64::from(tasks.inbox_messages).checked_mul(u64::try_from(size_of::<tasks::Word>()).ok()?)?,
         u64::from(tasks.parameters).checked_mul(u64::try_from(size_of::<tasks::Parameter>()).ok()?)?,
         u64::from(tasks.inputs)
             .checked_add(u64::from(tasks.dependencies).checked_mul(2)?)?
@@ -2351,7 +2474,14 @@ fn valid_proof(proof: &RunProof, expected: &RestoringProof, limits: &Limits) -> 
     }
     let spent = match proof.turn {
         Some(turn) => {
-            if turn.turn == 0 || turn.read.is_some() || turn.cumulative > expected.run_spent {
+            let read_valid = match turn.read {
+                Some(number) => match proof.offered {
+                    Some(high) => number <= high,
+                    None => false,
+                },
+                None => true,
+            };
+            if turn.turn == 0 || !read_valid || turn.cumulative > expected.run_spent {
                 return false;
             }
             turn.cumulative

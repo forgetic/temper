@@ -135,7 +135,15 @@ fn saturated_payloads_graph_backoff_held_closing_retirement_and_restore_fit() {
             let reply_to = m.to();
             m.event(Event::Claim { reply_to, task: number, attempt: number + 10 });
             let reply_to = m.to();
-            m.event(Event::Turn { reply_to, task: number, attempt: number + 10, turn: 1, read: None, cumulative: 7 });
+            m.event(Event::Turn {
+                reply_to,
+                task: number,
+                attempt: number + 10,
+                turn: 1,
+                read: None,
+                offered: None,
+                cumulative: 7,
+            });
             let reply_to = m.to();
             m.event(Event::Activation {
                 reply_to,
@@ -252,7 +260,7 @@ fn saturated_finite_sources_and_oversized_refusals_fit_without_input_copies() {
     });
     assert!(m.refused);
     let reply_to = m.to();
-    m.event(Event::Turn { reply_to, task: 1, attempt: 1, turn: 1, read: Some(1), cumulative: 5 });
+    m.event(Event::Turn { reply_to, task: 1, attempt: 1, turn: 1, read: Some(1), offered: None, cumulative: 5 });
     assert!(m.refused);
 }
 

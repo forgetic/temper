@@ -120,6 +120,31 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
     if task.turn != 0 && task.attempt == 0 {
         return false;
     }
+    if task.inbox.len() > usize::try_from(limits.inbox_messages).expect("u32 fits usize") {
+        return false;
+    }
+    let mut previous = 0;
+    let mut bytes = 0_usize;
+    for word in &task.inbox {
+        let Some(total) = bytes.checked_add(word.words.len()) else { return false };
+        bytes = total;
+        let requester = match task.requester {
+            Party::Person(person) => word.from == Party::Person(person),
+            Party::Task(_) | Party::Deployment { .. } => false,
+        };
+        if word.number <= previous
+            || word.number > task.last_message
+            || word.words.is_empty()
+            || word.words.len() > usize::try_from(limits.message_bytes).expect("u32 fits usize")
+            || !requester
+        {
+            return false;
+        }
+        previous = word.number;
+    }
+    if bytes > usize::try_from(limits.inbox_bytes).expect("u32 fits usize") {
+        return false;
+    }
     if let Some(attempt) = task.last_answer
         && (attempt == 0 || attempt > task.attempt)
     {

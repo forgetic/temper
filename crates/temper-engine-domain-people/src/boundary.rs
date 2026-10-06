@@ -75,6 +75,8 @@ pub struct ResultRef {
 /// narrow role administration (domain/people.md, section 5.1).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Ask {
+    /// Authenticated requester's whole words to an existing chat.
+    Say { project: u32, task: u64, words: Box<[u8]> },
     /// Authenticated Owner's complete project roster replacement; root checks Policy permission and
     /// held-recipient preflight before applying it.
     SetRoles {
@@ -167,6 +169,8 @@ pub enum Refusal {
 /// nontransient outcomes with the parent's task decision. (domain/people.md, section 5.1).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Outcome {
+    /// Words were durably admitted under the root-issued message number.
+    Said { task: u64, message: u64 },
     /// Root accepted one roster and all affected `Waiting` recipients atomically; saved keyed
     /// replay does not apply the roster again.
     RolesSet {

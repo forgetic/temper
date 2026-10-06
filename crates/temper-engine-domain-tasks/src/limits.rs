@@ -38,6 +38,12 @@ pub struct Limits {
     /// Maximum result/reason bytes; contracts cannot allow larger results and cancellation may
     /// retain one bounded reason plus one bounded partial result.
     pub result_bytes: u32,
+    /// Maximum whole unread word messages kept by one live task.
+    pub inbox_messages: u32,
+    /// Maximum total unread word bytes kept by one live task.
+    pub inbox_bytes: u32,
+    /// Maximum bytes in one admitted word message.
+    pub message_bytes: u32,
     /// Maximum distinct-code choices in a nonempty verdict contract.
     pub contract_choices: u32,
     /// Maximum retained configured agent-charter numbers.
@@ -64,7 +70,14 @@ pub struct Limits {
 #[must_use]
 pub fn worst_case(limits: &Limits) -> Option<u64> {
     crate::domain::output_bound(limits)?;
-    if limits.tasks == 0 || limits.batch == 0 || limits.tree_tasks == 0 {
+    if limits.tasks == 0
+        || limits.batch == 0
+        || limits.tree_tasks == 0
+        || limits.inbox_messages == 0
+        || limits.inbox_bytes == 0
+        || limits.message_bytes == 0
+        || limits.message_bytes > limits.inbox_bytes
+    {
         return None;
     }
     for class in [Class::Transient, Class::Permanent, Class::Run, Class::Agent, Class::Lost, Class::Invalid] {
@@ -77,6 +90,8 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_mul(u64::from(limits.authority_segments))?
         .checked_mul(u64::try_from(size_of::<Box<[u8]>>()).ok()?)?;
     let payload = u64::from(limits.spec_bytes)
+        .checked_add(u64::from(limits.inbox_bytes))?
+        .checked_add(u64::from(limits.inbox_messages).checked_mul(u64::try_from(size_of::<crate::Word>()).ok()?)?)?
         .checked_add(u64::from(limits.result_bytes).checked_mul(3)?)?
         .checked_add(u64::from(limits.parameters).checked_mul(u64::try_from(size_of::<Parameter>()).ok()?)?)?
         .checked_add(u64::from(limits.inputs).checked_mul(8)?)?
