@@ -24,6 +24,23 @@ fn current(rows: &BTreeMap<Key, Stored>, task: u64) -> Option<&TaskRecord> {
 }
 
 impl Accounting {
+    fn newly_retired_pools(&self, rows: &BTreeMap<Key, Stored>, period: Funder) -> u64 {
+        self.before
+            .values()
+            .filter_map(|row| {
+                let Stored::Ledger(old) = row else { return None };
+                if old.parent != Some(period) || old.closed {
+                    return None;
+                }
+                let Some(Stored::Ledger(new)) = rows.get(&Key::Ledger(old.funder)) else { return None };
+                if !new.closed {
+                    return None;
+                }
+                new.numbers.spent.checked_add(new.numbers.spent_below)
+            })
+            .sum()
+    }
+
     fn newly_settled(&self, rows: &BTreeMap<Key, Stored>, funder: Funder) -> u64 {
         self.before
             .values()
@@ -116,9 +133,10 @@ impl Accounting {
                         Some(Stored::Ledger(old)) => old.numbers.spent_below,
                         _ => 0,
                     };
+                    let retired = self.newly_retired_pools(rows, ledger.funder);
                     if ledger.numbers.reserved != reserved
                         || ledger.numbers.spent != 0
-                        || ledger.numbers.spent_below != before_posted + posted
+                        || ledger.numbers.spent_below != before_posted + posted + retired
                     {
                         return Err("external reservation or actual settlement posting differs");
                     }
@@ -126,7 +144,8 @@ impl Accounting {
                         && (ledger.funder != old.funder
                             || ledger.parent != old.parent
                             || ledger.numbers.budget != old.numbers.budget
-                            || ledger.closed != old.closed)
+                            || (old.closed && !ledger.closed)
+                            || (ledger.closed && ledger.numbers.reserved != 0))
                     {
                         return Err("original source identity changed");
                     }

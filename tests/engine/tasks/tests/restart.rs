@@ -314,13 +314,15 @@ fn restore_refuses_a_missing_unfinished_live_dependency_before_activation() {
 }
 
 #[test]
-fn impossible_settled_live_and_unsupported_ledger_states_refuse_at_restore_entrance() {
+fn impossible_settled_live_and_inconsistent_ledger_states_refuse_at_restore_entrance() {
     use skein_lib::Queue;
-    use temper_engine_domain_tasks::{Domain, Request, Stage, step};
+    use temper_engine_domain_tasks::{Domain, Funder, Request, Stage, step};
     let mut source = World::new(33, LIMITS);
     source.open_period(1, 300);
     source.carve_pool(1, 200);
-    source.make(Party::Person(1), vec![task(1, &[])]);
+    let mut new = task(1, &[]);
+    new.funder = Funder::Period { project: 1, period: 1 };
+    source.make(Party::Person(1), vec![new]);
     source.claim(1, 1);
     source.finish(1);
     let mut task = source.record(1).clone();
@@ -334,6 +336,7 @@ fn impossible_settled_live_and_unsupported_ledger_states_refuse_at_restore_entra
         if let Stored::Ledger(ledger) = row {
             let mut closed = *ledger;
             closed.closed = true;
+            closed.numbers.reserved = closed.numbers.reserved.saturating_add(1);
             invalid.push(Stored::Ledger(closed));
             let mut spent = *ledger;
             spent.numbers.spent = 1;

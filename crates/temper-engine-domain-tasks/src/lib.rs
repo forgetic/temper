@@ -39,8 +39,7 @@
 //! eligibility and owns immutable transport history; this child accepts/rejects/
 //! passes only the authorized exact revision.
 //! Agent execution is the current executor route; nonempty historical inputs,
-//! proposals, general amend/cancel/release/move and source-retirement
-//! entrypoints are absent from this contracted API.
+//! procedure and person executor routes are added in later increments.
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
 extern crate alloc;

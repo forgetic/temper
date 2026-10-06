@@ -2,7 +2,7 @@
 //! (domain/tasks.md, section 2; domain/authority.md, section 7).
 //! Root authorizes new allocations; tasks reserves, charges and closes their
 //! real financial links once, emitting rows for one root decision. No move
-//! or period/pool retirement route is implemented by this contracted boundary.
+//! and retires superseded sources after their last reservations settle.
 use crate::domain::{Domain, publish, record, refused, task_mut};
 use crate::{Funder, Limits, Numbers, Refusal, Request, Stored};
 use skein_lib::{Env, Queue, ReplyTo};
@@ -190,6 +190,7 @@ pub(crate) fn end(domain: &mut Domain, env: &Env<Limits>, number: u64, out: &mut
             ledger.numbers.spent_below =
                 ledger.numbers.spent_below.checked_add(spent).expect("priced aggregate fits unit");
             save_funding(domain, funder, out);
+            retire(domain, out);
         }
     }
 }
@@ -218,6 +219,9 @@ pub(crate) fn links(domain: &Domain, bound: u32) -> bool {
             }
         }
         if reserved != ledger.numbers.reserved {
+            return false;
+        }
+        if ledger.closed && ledger.numbers.reserved != 0 {
             return false;
         }
         if let Some(parent) = ledger.parent
@@ -292,8 +296,8 @@ pub struct FundingRecord {
     /// Authentic finite accounting owned by tasks; external ledgers have zero direct spent and
     /// receive settled expense in `spent_below`. Root borrows these values for policy checks.
     pub numbers: Numbers,
-    /// False for this contracted finite source boundary; no current event retires sources and
-    /// restoration refuses any closed period or pool.
+    /// A superseded source is closed after its last reservation settles; its saved row retains
+    /// the period's history and cannot fund new work.
     pub closed: bool,
 }
 
@@ -332,6 +336,7 @@ pub(crate) fn open(domain: &mut Domain, to: ReplyTo, project: u32, period: u64, 
     };
     assert!(domain.funding.insert(funder, record) == Ok(None), "period admitted");
     save_funding(domain, funder, out);
+    retire(domain, out);
     out.push(Request::Done { reply_to: to });
 }
 
@@ -360,7 +365,7 @@ pub(crate) fn carve(
         return refused(to, None, Refusal::Funding, out);
     };
     after.reserved = reserved;
-    if old.closed || available(after).is_none() {
+    if old.closed || newer_period(domain, project, period) || available(after).is_none() {
         return refused(to, None, Refusal::Funding, out);
     }
     if domain.funding.len() == domain.funding.capacity() {
@@ -383,14 +388,14 @@ pub(crate) fn restore_funding(domain: &mut Domain, ledger: FundingRecord) -> boo
     if domain.funding.contains_key(&ledger.funder)
         || domain.funding.len() == domain.funding.capacity()
         || total(ledger.numbers).is_none()
-        || ledger.closed
+        || (ledger.closed && ledger.numbers.reserved != 0)
         || ledger.numbers.spent != 0
     {
         return false;
     }
     let valid = match ledger.funder {
         Funder::Task(_) => false,
-        Funder::Period { .. } => ledger.parent.is_none() && !ledger.closed,
+        Funder::Period { .. } => ledger.parent.is_none() && (!ledger.closed || ledger.numbers.reserved == 0),
         Funder::Pool { project, period, .. } => ledger.parent == Some(Funder::Period { project, period }),
     };
     if !valid {
@@ -398,6 +403,63 @@ pub(crate) fn restore_funding(domain: &mut Domain, ledger: FundingRecord) -> boo
     }
     assert!(domain.funding.insert(ledger.funder, ledger) == Ok(None), "restored ledger admitted");
     true
+}
+
+fn newer_period(domain: &Domain, project: u32, period: u64) -> bool {
+    for (funder, _) in &domain.funding {
+        match *funder {
+            Funder::Period { project: other, period: next } if other == project && next > period => return true,
+            Funder::Task(_) | Funder::Pool { .. } | Funder::Period { .. } => {}
+        }
+    }
+    false
+}
+
+// The closed rows remain durable history. Their counters do not move again.
+// The pool posts its expense once and returns its original allotment to its period.
+fn retire(domain: &mut Domain, out: &mut Queue<Request>) {
+    let count = domain.funding.len();
+    for _ in 0..count {
+        let mut ready = None;
+        for (funder, row) in &domain.funding {
+            if let Funder::Pool { project, period, .. } = *funder
+                && !row.closed
+                && row.numbers.reserved == 0
+                && newer_period(domain, project, period)
+            {
+                ready = Some((*funder, row.parent.expect("pool's period"), row.numbers));
+                break;
+            }
+        }
+        let Some((pool, parent, numbers)) = ready else { break };
+        let period = domain.funding.get_mut(&parent).expect("original period kept");
+        period.numbers.reserved = period.numbers.reserved.checked_sub(numbers.budget).expect("pool reserved");
+        period.numbers.spent_below = period
+            .numbers
+            .spent_below
+            .checked_add(total(numbers).expect("valid pool"))
+            .expect("pool spend representable");
+        domain.funding.get_mut(&pool).expect("pool kept").closed = true;
+        save_funding(domain, pool, out);
+        save_funding(domain, parent, out);
+    }
+    let count = domain.funding.len();
+    for _ in 0..count {
+        let mut ready = None;
+        for (funder, row) in &domain.funding {
+            if let Funder::Period { project, period } = *funder
+                && !row.closed
+                && row.numbers.reserved == 0
+                && newer_period(domain, project, period)
+            {
+                ready = Some(*funder);
+                break;
+            }
+        }
+        let Some(period) = ready else { break };
+        domain.funding.get_mut(&period).expect("period kept").closed = true;
+        save_funding(domain, period, out);
+    }
 }
 
 // The final period will eventually receive every still-open aggregate under

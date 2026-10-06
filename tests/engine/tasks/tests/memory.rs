@@ -1,7 +1,7 @@
 use skein_lib::{Env, Queue, ReplyTo, Time, Token, Wall};
 use temper_engine_domain_tasks::{
-    self as tasks, Active, AuthorityExecutor, Contract, Domain, End, Event, Grant, Hold, Last, Limits, Parameter,
-    Party, Pattern, Request, Stored, TaskResult, Verdict,
+    self as tasks, Active, AuthorityExecutor, Contract, Domain, End, Event, Funder, Grant, Hold, Last, Limits,
+    Parameter, Party, Pattern, Request, Stored, TaskResult, Verdict,
 };
 use temper_engine_tasks_world::{LIMITS, task};
 use temper_world::heap::{self, Meter};
@@ -115,7 +115,13 @@ fn saturated_payloads_graph_backoff_held_closing_retirement_and_restore_fit() {
     ] {
         let mut m = Measured::new(&l);
         m.bootstrap();
-        let batch = (1..=u64::from(l.tasks)).map(|number| filled(&l, number)).collect::<Vec<_>>();
+        let batch = (1..=u64::from(l.tasks))
+            .map(|number| {
+                let mut new = filled(&l, number);
+                new.funder = Funder::Pool { project: 1, person: 9, period: 7 };
+                new
+            })
+            .collect::<Vec<_>>();
         let reply_to = m.to();
         m.event(Event::Make { reply_to, creator: Party::Person(1), batch: batch.into_boxed_slice() });
         assert!(!m.refused);
@@ -255,7 +261,9 @@ fn saturated_finite_sources_and_oversized_refusals_fit_without_input_copies() {
     m.event(Event::OpenPeriod { reply_to, project: 1, period: 8, budget: 100 });
     assert!(m.refused);
     let reply_to = m.to();
-    m.event(Event::Make { reply_to, creator: Party::Person(1), batch: Box::new([task(1, &[])]) });
+    let mut new = task(1, &[]);
+    new.funder = Funder::Pool { project: 1, person: 9, period: 7 };
+    m.event(Event::Make { reply_to, creator: Party::Person(1), batch: Box::new([new]) });
     m.claim(1);
     let reply_to = m.to();
     m.event(Event::Activation {
