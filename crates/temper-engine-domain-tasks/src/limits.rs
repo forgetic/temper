@@ -25,6 +25,8 @@ pub struct Limits {
     pub delegates: u32,
     /// Maximum introduced peer references per live task.
     pub references: u32,
+    /// Maximum standing interests per task.
+    pub subscriptions: u32,
     /// Maximum directly created tasks in one atomic nonempty `Make` batch.
     pub batch: u32,
     /// Maximum immutable dependency identities per task; also bounds its remaining live
@@ -106,6 +108,9 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_add(u64::from(limits.dependencies).checked_mul(16)?)?
         .checked_add(u64::from(limits.delegates).checked_mul(8)?)?
         .checked_add(u64::from(limits.references).checked_mul(8)?)?
+        .checked_add(
+            u64::from(limits.subscriptions).checked_mul(u64::try_from(size_of::<crate::Subscription>()).ok()?)?,
+        )?
         .checked_add(u64::from(limits.contract_choices).checked_mul(u64::try_from(size_of::<Verdict>()).ok()?)?)?
         .checked_add(u64::from(limits.authority_grants).checked_mul(u64::try_from(size_of::<Grant>()).ok()?)?)?
         .checked_add(segments)?
@@ -116,6 +121,8 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     Slab::<Task>::worst_case(limits.tasks)?
         .checked_add(Map::<crate::Funder, crate::FundingRecord>::worst_case(limits.funders)?)?
         .checked_add(Map::<u64, Id<Task>>::worst_case(limits.tasks)?)?
+        .checked_add(Deadlines::<u64>::worst_case(limits.tasks)?)?
+        .checked_add(Deadlines::<u64>::worst_case(limits.tasks.checked_mul(limits.subscriptions)?)?)?
         .checked_add(Deadlines::<u64>::worst_case(limits.tasks)?)?
         .checked_add(Queue::<Fact>::worst_case(limits.facts)?)?
         .checked_add(u64::from(limits.tasks).checked_mul(payload)?)?

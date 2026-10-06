@@ -80,6 +80,12 @@ pub enum CallAnswer {
     Introduced,
     /// A message or introduction failed its live reference or inbox check.
     MessageRefused(temper_engine_domain_tasks::Problem),
+    /// One standing interest was installed.
+    Subscribed { subscription: u64 },
+    /// One standing interest was removed.
+    Unsubscribed,
+    /// A standing interest failed admission.
+    SubscriptionRefused(temper_engine_domain_tasks::Problem),
     /// All members of an authorized batch, in call order.
     Delegated(Box<[u64]>),
     /// A whole batch declined by authority, with its independent findings.
@@ -511,6 +517,9 @@ pub fn record_bytes(record: &Record) -> Option<u64> {
             | CallAnswer::Introduced
             | CallAnswer::Sent { .. }
             | CallAnswer::MessageRefused(_)
+            | CallAnswer::Subscribed { .. }
+            | CallAnswer::Unsubscribed
+            | CallAnswer::SubscriptionRefused(_)
             | CallAnswer::DelegationRefused(_) => Some(0),
             CallAnswer::Delegated(numbers) => u64::try_from(numbers.len()).ok()?.checked_mul(8),
             CallAnswer::DelegationDenied { findings, .. } => u64::try_from(findings.len())

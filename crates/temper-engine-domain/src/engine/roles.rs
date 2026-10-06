@@ -75,7 +75,9 @@ fn inspected(
             | tasks::Request::Erase { .. }
             | tasks::Request::RestoreRefused { .. }
             | tasks::Request::Sent { .. }
-            | tasks::Request::Relay { .. } => unreachable!("inspection is read-only"),
+            | tasks::Request::Relay { .. }
+            | tasks::Request::Notify { .. }
+            | tasks::Request::Timer { .. } => unreachable!("inspection is read-only"),
         }
     }
     match terminal.expect("inspection has a terminal") {
@@ -238,6 +240,9 @@ fn recheck(domain: &mut Domain, env: &Env<Limits>, request: Token, project: u32)
             | tasks::Request::RestoreRefused { .. }
             | tasks::Request::Sent { .. }
             | tasks::Request::Relay { .. } => unreachable!("recheck emits waiting contexts and terminal"),
+            tasks::Request::Notify { .. } | tasks::Request::Timer { .. } => {
+                unreachable!("recheck emits waiting contexts and terminal")
+            }
         }
     }
     assert!(completed, "recheck has a terminal");

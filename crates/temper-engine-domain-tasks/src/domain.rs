@@ -16,6 +16,7 @@ pub(crate) struct Alarm {
 pub(crate) struct Task {
     pub record: TaskRecord,
     pub alarm: Option<Alarm>,
+    pub observed_hold: Option<crate::Hold>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -34,6 +35,8 @@ pub struct Domain {
     pub(crate) tasks: Slab<Task>,
     pub(crate) names: Map<u64, Id<Task>>,
     pub(crate) alarms: Deadlines<u64>,
+    pub(crate) timers: Deadlines<u64>,
+    pub(crate) wakes: Deadlines<u64>,
     pub(crate) funding: Map<crate::Funder, crate::FundingRecord>,
     pub(crate) charters: Box<[u32]>,
     pub(crate) rng: Rng,
@@ -60,6 +63,8 @@ impl Domain {
             tasks: Slab::with_capacity(limits.tasks),
             names: Map::with_capacity(limits.tasks),
             alarms: Deadlines::with_capacity(limits.tasks),
+            timers: Deadlines::with_capacity(limits.tasks.checked_mul(limits.subscriptions).expect("timer room")),
+            wakes: Deadlines::with_capacity(limits.tasks),
             funding: Map::with_capacity(limits.funders),
             charters,
             rng: Rng::new(seed),
@@ -115,6 +120,7 @@ pub(crate) fn output_bound(limits: &Limits) -> Option<u32> {
         .checked_mul(20)?
         .checked_add(limits.batch.checked_mul(2)?)?
         .checked_add(limits.funders.checked_mul(3)?)?
+        .checked_add(limits.tasks.checked_mul(limits.subscriptions)?.checked_mul(2)?)?
         .checked_add(8)
 }
 
@@ -133,6 +139,13 @@ pub fn max_out(limits: &Limits) -> u32 {
 /// effects before external replies.
 pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     match event {
+        Event::Subscribe { reply_to, task, subscription } => {
+            crate::subscriptions::subscribe(domain, env, reply_to, task, subscription, out);
+        }
+        Event::Unsubscribe { reply_to, task, subscription } => {
+            crate::subscriptions::unsubscribe(domain, env, reply_to, task, subscription, out);
+        }
+        Event::Notice { task, word } => crate::subscriptions::notice(domain, env, task, word, out),
         Event::Introduce { reply_to, by, left, right } => {
             crate::refs::introduce(domain, env, reply_to, by, left, right, out);
         }
@@ -204,6 +217,8 @@ pub fn fire(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
     if !domain.ready() {
         return;
     }
+    crate::subscriptions::timer_due(domain, env, out);
+    crate::wake::fire(domain, env, out);
     if let Some(number) = domain.alarms.expire(env.now)
         && let Some(task) = task_mut(domain, number)
     {
@@ -295,6 +310,12 @@ pub(crate) fn activate(domain: &Domain, number: u64, out: &mut Queue<Request>) {
 
 pub(crate) fn publish(domain: &mut Domain, env: &Env<Limits>, number: u64, out: &mut Queue<Request>) {
     let task = task_mut(domain, number).expect("published task is live");
+    let held = match task.record.phase {
+        Phase::Held { why, .. } => Some(why),
+        Phase::Waiting | Phase::Active(_) | Phase::Closing(_) | Phase::Ended(_) => None,
+    };
+    let became_held = held.is_some() && task.observed_hold != held;
+    task.observed_hold = held;
     let escalation = crate::escalation::begin(&mut task.record);
     let until = match task.record.phase {
         Phase::Active(Active::BackingOff { until }) => Some(until),
@@ -333,6 +354,9 @@ pub(crate) fn publish(domain: &mut Domain, env: &Env<Limits>, number: u64, out: 
         None => {
             domain.alarms.cancel(number);
         }
+    }
+    if became_held {
+        crate::subscriptions::notify_state(domain, number, crate::NoticeState::Held, &[], out);
     }
 }
 
@@ -409,6 +433,8 @@ fn make(
                 delegates: Box::new([]),
                 references: Box::new([]),
                 questions: Box::new([]),
+                subscriptions: Box::new([]),
+                wake: new.wake,
                 turn: 0,
                 last_message: 0,
                 inbox: Box::new([]),
@@ -422,6 +448,7 @@ fn make(
                 phase: Phase::Waiting,
             },
             alarm: None,
+            observed_hold: None,
         };
         let id = domain.tasks.insert(task).expect("batch slab room admitted");
         let indexed = domain.names.insert(number, id);

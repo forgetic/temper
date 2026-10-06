@@ -4,7 +4,79 @@
 //! owns exact transport replay and commits related rows/effects atomically.
 use crate::{Authority, Class, Funder, Numbers, Tries};
 use alloc::boxed::Box;
-use skein_lib::{ReplyTo, Wall};
+use skein_lib::{Duration, ReplyTo, Wall};
+
+/// A closed wake rule for task words and subscription hints (domain/tasks.md, section 7.3).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum WakeRule {
+    Never,
+    Immediate,
+    Batch { count: u32, age: Duration },
+}
+
+/// How delegate result messages wake their requester.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum ResultsWake {
+    Never,
+    Each,
+    LastOrFailure,
+}
+
+/// Inert creator-selected wake policy, bounded at task admission.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct WakePolicy {
+    pub words: WakeRule,
+    pub notices: WakeRule,
+    pub news: WakeRule,
+    pub results: ResultsWake,
+    pub questions: bool,
+    pub answers: bool,
+    pub timers: bool,
+}
+
+impl WakePolicy {
+    pub const DEFAULT: Self = Self {
+        words: WakeRule::Immediate,
+        notices: WakeRule::Immediate,
+        news: WakeRule::Immediate,
+        results: ResultsWake::LastOrFailure,
+        questions: true,
+        answers: true,
+        timers: true,
+    };
+}
+
+/// Connector-classified news can be lowered by a task policy.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum NewsClass {
+    Wakes,
+    Kept,
+    Dropped,
+}
+
+/// State of a watched task, distinct from a terminal result.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum NoticeState {
+    Held,
+    Done,
+    Failed,
+    Cancelled,
+}
+
+/// One bounded standing task or timer interest; topics are joined in session 07.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum SubscriptionKind {
+    Task { target: u64, held: bool, result: bool },
+    Timer { at: Wall, period: Option<Duration> },
+    Topic { connector: u16, topic: u64 },
+}
+
+/// Root-issued subscription kept with its owner task.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Subscription {
+    pub number: u64,
+    pub kind: SubscriptionKind,
+}
 
 /// Kind of a durable task-inbox message (domain/tasks.md, sections 5.6 and 7).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -15,6 +87,12 @@ pub enum MessageKind {
     Question,
     /// Answer to a named question previously asked of this sender.
     Answer { question: u64 },
+    /// Merged task state hint for one standing interest.
+    Notice { subscription: u64, target: u64, state: NoticeState },
+    /// Merged timer fire for one standing interest.
+    Timer { subscription: u64 },
+    /// Merged connector hint; the connector route arrives in session 07.
+    News { subscription: u64, class: NewsClass },
     /// A delegate's terminal result, sent with its end.
     Result(ResultKind),
 }
@@ -43,6 +121,10 @@ pub struct Word {
     pub words: Box<[u8]>,
     /// Injected time of admission, for oldest-first reads.
     pub at: Wall,
+    /// Number of hints merged into this whole inbox entry.
+    pub hits: u32,
+    /// A batching threshold already reached, retained across restart.
+    pub eligible: bool,
 }
 
 /// An unanswered question and the task allowed to use its reserved answer room.
@@ -382,6 +464,8 @@ pub struct New {
     /// Distinct immutable dependencies, at most `Limits::dependencies`: members of this batch or
     /// the creator's current live delegates.
     pub dependencies: Box<[u64]>,
+    /// Creator-selected policy for wakes and batching.
+    pub wake: WakePolicy,
 }
 
 /// Owned durable task state emitted to root storage; root uses `RunContext` for preparation and
@@ -428,6 +512,10 @@ pub struct TaskRecord {
     pub references: Box<[u64]>,
     /// Open questions with one reserved answer slot apiece.
     pub questions: Box<[QuestionCredit]>,
+    /// Standing interests that end with the task.
+    pub subscriptions: Box<[Subscription]>,
+    /// Current wake and batching policy.
+    pub wake: WakePolicy,
     /// Latest newly admitted contiguous turn in the current attempt; `new` `Claim` starts at zero.
     pub turn: u32,
     /// Newest message ever admitted, including those taken by committed turns.
@@ -530,6 +618,8 @@ pub enum Refusal {
     Delegates,
     /// A sender lacks a live delegation or introduced reference to the target.
     Reference,
+    /// Subscription count, identity, target or timer shape was refused.
+    Subscription,
     /// `Dependency` count, uniqueness or current-live/same-batch identity is invalid.
     Dependencies,
     /// Combined live delegation waits and immutable dependencies would cycle.
@@ -589,6 +679,12 @@ pub enum Accepted {
 /// notifications have no reply destination and may be ignored if stale. (domain/tasks.md, sections 4–5).
 #[derive(PartialEq, Eq, Debug)]
 pub enum Event {
+    /// Install one root-numbered standing interest for a current task.
+    Subscribe { reply_to: ReplyTo, task: u64, subscription: Subscription },
+    /// Remove one interest owned by a current task.
+    Unsubscribe { reply_to: ReplyTo, task: u64, subscription: u64 },
+    /// Root places a merged state/timer/connector hint in a subscribed inbox.
+    Notice { task: u64, word: Word },
     /// Give two live tasks referenced by the introducer reciprocal references.
     Introduce { reply_to: ReplyTo, by: u64, left: u64, right: u64 },
     /// Admit authenticated person words to a live chat and wake or relay after their commit.
@@ -785,6 +881,10 @@ pub enum Event {
 /// saves/erases with effects and delays outward replies until durability. (domain/tasks.md, section 5).
 #[derive(PartialEq, Eq, Debug)]
 pub enum Request {
+    /// Root allocates a commit-order message number for this subscribed state change.
+    Notify { task: u64, subscription: u64, target: u64, state: NoticeState, words: Box<[u8]> },
+    /// Root allocates a commit-order message number for this due timer.
+    Timer { task: u64, subscription: u64 },
     /// Accepted person words; root answers the keyed request after the inbox write commits.
     Sent { reply_to: ReplyTo, task: u64, word: Word },
     /// Root relays this whole committed message through the fleet to the current run.

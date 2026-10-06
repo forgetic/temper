@@ -27,6 +27,7 @@ pub fn limits() -> engine::Limits {
         depth: 1,
         delegates: 1,
         references: 2,
+        subscriptions: 2,
         batch: 1,
         dependencies: 1,
         inputs: 1,

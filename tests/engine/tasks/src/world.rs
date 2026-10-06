@@ -20,6 +20,7 @@ pub const LIMITS: Limits = Limits {
     depth: 4,
     delegates: 8,
     references: 8,
+    subscriptions: 8,
     batch: 8,
     dependencies: 8,
     inputs: 4,
@@ -63,6 +64,7 @@ pub fn task(number: u64, dependencies: &[u64]) -> New {
         numbers: Numbers { budget: 100, spent: 0, spent_below: 0, reserved: 0 },
         funder: Funder::Period { project: 1, period: 0 },
         dependencies: dependencies.into(),
+        wake: tasks::WakePolicy::DEFAULT,
     }
 }
 
@@ -109,6 +111,7 @@ pub struct Frozen {
     now: Time,
     wall: Wall,
     call: u64,
+    message: u64,
     commit: u64,
 }
 
@@ -134,6 +137,7 @@ pub struct World {
     pub trace: Trace,
     seed: u64,
     call: u64,
+    message: u64,
     commit: u64,
     priced: Option<(u64, u64)>,
     restoring: bool,
@@ -163,6 +167,7 @@ impl World {
             trace: Trace::default(),
             seed,
             call: 0,
+            message: 0,
             commit: 0,
             priced: None,
             restoring: true,
@@ -200,6 +205,7 @@ impl World {
             now: self.env.now,
             wall: self.env.wall,
             call: self.call,
+            message: self.message,
             commit: self.commit,
         }
     }
@@ -231,12 +237,73 @@ impl World {
         }
     }
 
-    pub fn stage(&mut self, event: Event) {
-        assert!(self.pending.is_empty(), "one parent decision at a time");
-        if matches!(event, Event::Restored) {
-            self.restoring = false;
+    fn route_hint(&mut self, request: &Request) {
+        match request {
+            Request::Notify { task, subscription, target, state, words } => {
+                self.message = self.message.checked_add(1).expect("message number room");
+                tasks::step(
+                    &mut self.domain,
+                    &self.env,
+                    Event::Notice {
+                        task: *task,
+                        word: Word {
+                            number: self.message,
+                            from: Party::Task(*target),
+                            kind: MessageKind::Notice { subscription: *subscription, target: *target, state: *state },
+                            words: words.clone(),
+                            at: self.env.wall,
+                            hits: 1,
+                            eligible: false,
+                        },
+                    },
+                    &mut self.out,
+                );
+            }
+            Request::Timer { task, subscription } => {
+                self.message = self.message.checked_add(1).expect("message number room");
+                tasks::step(
+                    &mut self.domain,
+                    &self.env,
+                    Event::Notice {
+                        task: *task,
+                        word: Word {
+                            number: self.message,
+                            from: Party::Task(*task),
+                            kind: MessageKind::Timer { subscription: *subscription },
+                            words: Box::new([]),
+                            at: self.env.wall,
+                            hits: 1,
+                            eligible: false,
+                        },
+                    },
+                    &mut self.out,
+                );
+            }
+            Request::Sent { .. }
+            | Request::Relay { .. }
+            | Request::EscalationsInspected { .. }
+            | Request::EscalationsRechecked { .. }
+            | Request::EscalationNeeded { .. }
+            | Request::EscalationInspected { .. }
+            | Request::EscalationDecided { .. }
+            | Request::Made { .. }
+            | Request::Refused { .. }
+            | Request::Done { .. }
+            | Request::Acknowledged { .. }
+            | Request::TurnAcknowledged { .. }
+            | Request::Activate { .. }
+            | Request::Stop { .. }
+            | Request::Adopt { .. }
+            | Request::Close { .. }
+            | Request::Ended { .. }
+            | Request::Save { .. }
+            | Request::Erase { .. }
+            | Request::RestoreRefused { .. } => {}
         }
-        self.priced = match &event {
+    }
+
+    fn remember_input(&mut self, event: &Event) {
+        self.priced = match event {
             Event::Turn { task, cumulative, .. }
             | Event::Activation { task, cause: Cause::Priced { cumulative }, .. } => Some((*task, *cumulative)),
             Event::OpenPeriod { .. }
@@ -258,11 +325,49 @@ impl World {
             | Event::DecideEscalation { .. }
             | Event::Message { .. }
             | Event::Introduce { .. }
-            | Event::DelegateResult { .. } => None,
+            | Event::DelegateResult { .. }
+            | Event::Subscribe { .. }
+            | Event::Unsubscribe { .. }
+            | Event::Notice { .. } => None,
         };
+        match event {
+            Event::Message { word, .. } | Event::DelegateResult { word, .. } | Event::Notice { word, .. } => {
+                self.message = self.message.max(word.number);
+            }
+            Event::OpenPeriod { .. }
+            | Event::CarvePool { .. }
+            | Event::Make { .. }
+            | Event::Prepare { .. }
+            | Event::Claim { .. }
+            | Event::Started { .. }
+            | Event::Activation { .. }
+            | Event::PreparationFailed { .. }
+            | Event::Hold { .. }
+            | Event::Settled { .. }
+            | Event::Restore { .. }
+            | Event::Restored
+            | Event::InspectEscalations { .. }
+            | Event::RecheckEscalations { .. }
+            | Event::InspectEscalation { .. }
+            | Event::RoutedEscalation { .. }
+            | Event::DecideEscalation { .. }
+            | Event::Introduce { .. }
+            | Event::Subscribe { .. }
+            | Event::Unsubscribe { .. }
+            | Event::Turn { .. } => {}
+        }
+    }
+
+    pub fn stage(&mut self, event: Event) {
+        assert!(self.pending.is_empty(), "one parent decision at a time");
+        if matches!(event, Event::Restored) {
+            self.restoring = false;
+        }
+        self.remember_input(&event);
         self.trace.log(self.env.now, format_args!("{event:?}"));
         tasks::step(&mut self.domain, &self.env, event, &mut self.out);
         while let Some(request) = self.out.pop() {
+            self.route_hint(&request);
             if let Request::EscalationNeeded { context } = &request {
                 tasks::step(
                     &mut self.domain,
@@ -286,17 +391,20 @@ impl World {
                 });
                 let last = last.unwrap_or_else(|| self.record(*parent).last_message);
                 let (kind, words) = result_notice(ending.clone());
+                self.message = self.message.max(last).checked_add(1).expect("message number room");
                 tasks::step(
                     &mut self.domain,
                     &self.env,
                     Event::DelegateResult {
                         task: *parent,
                         word: Word {
-                            number: last.checked_add(1).expect("message number room"),
+                            number: self.message,
                             from: Party::Task(*task),
                             kind: MessageKind::Result(kind),
                             words,
                             at: self.env.wall,
+                            hits: 1,
+                            eligible: false,
                         },
                     },
                     &mut self.out,
@@ -354,7 +462,9 @@ impl World {
                 | Request::EscalationInspected { .. }
                 | Request::EscalationDecided { .. }
                 | Request::Sent { .. }
-                | Request::Relay { .. } => {}
+                | Request::Relay { .. }
+                | Request::Notify { .. }
+                | Request::Timer { .. } => {}
             }
         }
         if self.pending.iter().any(|request| {
@@ -405,7 +515,9 @@ impl World {
                 | Request::Erase { .. }
                 | Request::Ended { .. }
                 | Request::EscalationNeeded { .. }
-                | Request::Relay { .. } => {}
+                | Request::Relay { .. }
+                | Request::Notify { .. }
+                | Request::Timer { .. } => {}
                 Request::Sent { reply_to, .. } | Request::Done { reply_to } => self.reply(reply_to, Reply::Done),
                 Request::Made { reply_to, tasks } => self.reply(reply_to, Reply::Made(tasks.into_vec())),
                 Request::Refused { reply_to, problem } => self.reply(reply_to, Reply::Refused(problem)),
@@ -553,6 +665,49 @@ impl World {
         self.env.now = at;
         tasks::fire(&mut self.domain, &self.env, &mut self.out);
         while let Some(request) = self.out.pop() {
+            match &request {
+                Request::Timer { task, subscription } => {
+                    self.message = self.message.checked_add(1).expect("message number room");
+                    tasks::step(
+                        &mut self.domain,
+                        &self.env,
+                        Event::Notice {
+                            task: *task,
+                            word: Word {
+                                number: self.message,
+                                from: Party::Task(*task),
+                                kind: MessageKind::Timer { subscription: *subscription },
+                                words: Box::new([]),
+                                at: self.env.wall,
+                                hits: 1,
+                                eligible: false,
+                            },
+                        },
+                        &mut self.out,
+                    );
+                }
+                Request::Notify { .. }
+                | Request::Save { .. }
+                | Request::Erase { .. }
+                | Request::Ended { .. }
+                | Request::EscalationNeeded { .. }
+                | Request::Sent { .. }
+                | Request::Relay { .. }
+                | Request::Made { .. }
+                | Request::Refused { .. }
+                | Request::Done { .. }
+                | Request::Acknowledged { .. }
+                | Request::TurnAcknowledged { .. }
+                | Request::Activate { .. }
+                | Request::Stop { .. }
+                | Request::Adopt { .. }
+                | Request::Close { .. }
+                | Request::RestoreRefused { .. }
+                | Request::EscalationsInspected { .. }
+                | Request::EscalationsRechecked { .. }
+                | Request::EscalationInspected { .. }
+                | Request::EscalationDecided { .. } => {}
+            }
             self.pending.push(request);
         }
         self.durable();

@@ -125,6 +125,9 @@ fn check_members(
         if !valid_spec(limits, &new.spec) {
             return Err(problem(number, Refusal::Spec));
         }
+        if !crate::wake::valid(&new.wake) {
+            return Err(problem(number, Refusal::Spec));
+        }
         if !valid_contract(limits, &new.contract) {
             return Err(problem(number, Refusal::Contract));
         }

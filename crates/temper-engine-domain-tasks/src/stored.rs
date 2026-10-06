@@ -106,12 +106,14 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
         || task.made > limits.tree_tasks
         || task.delegates.len() > usize::try_from(limits.delegates).expect("u32 fits usize")
         || task.references.len() > usize::try_from(limits.references).expect("u32 fits usize")
+        || task.subscriptions.len() > usize::try_from(limits.subscriptions).expect("u32 fits usize")
         || task.waiting_on.len() > usize::try_from(limits.dependencies).expect("u32 fits usize")
         || task.dependencies.len() > usize::try_from(limits.dependencies).expect("u32 fits usize")
     {
         return false;
     }
     if !crate::batch::valid_spec(limits, &task.spec)
+        || !crate::wake::valid(&task.wake)
         || !crate::batch::valid_contract(limits, &task.contract)
         || !crate::batch::valid_authority(limits, &task.authority)
         || !valid_phase(task, limits)
@@ -122,7 +124,15 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
     if task.turn != 0 && task.attempt == 0 {
         return false;
     }
-    if task.inbox.len().saturating_add(task.delegates.len()).saturating_add(task.questions.len())
+    let Some((subscription_count, subscription_bytes)) = crate::subscriptions::credit(task, limits) else {
+        return false;
+    };
+    if task
+        .inbox
+        .len()
+        .saturating_add(task.delegates.len())
+        .saturating_add(task.questions.len())
+        .saturating_add(subscription_count)
         > usize::try_from(limits.inbox_messages).expect("u32 fits usize")
     {
         return false;
@@ -144,12 +154,21 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
                 Party::Task(_) => true,
                 Party::Person(_) | Party::Deployment { .. } => false,
             },
+            crate::MessageKind::Notice { .. } | crate::MessageKind::News { .. } => match word.from {
+                Party::Task(_) => true,
+                Party::Person(_) | Party::Deployment { .. } => false,
+            },
+            crate::MessageKind::Timer { .. } => word.from == Party::Task(task.number),
         };
         let bound = match &word.kind {
             crate::MessageKind::Words | crate::MessageKind::Question | crate::MessageKind::Answer { .. } => {
                 limits.message_bytes
             }
             crate::MessageKind::Result(_) => limits.result_bytes,
+            crate::MessageKind::Notice { .. } | crate::MessageKind::News { .. } => {
+                limits.result_bytes.max(limits.message_bytes)
+            }
+            crate::MessageKind::Timer { .. } => 0,
         };
         if word.number <= previous
             || word.number > task.last_message
@@ -157,8 +176,12 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
                 crate::MessageKind::Words | crate::MessageKind::Question | crate::MessageKind::Answer { .. } => {
                     word.words.is_empty()
                 }
-                crate::MessageKind::Result(_) => false,
+                crate::MessageKind::Result(_)
+                | crate::MessageKind::Notice { .. }
+                | crate::MessageKind::News { .. }
+                | crate::MessageKind::Timer { .. } => false,
             })
+            || word.hits == 0
             || word.words.len() > usize::try_from(bound).expect("u32 fits usize")
             || !requester
         {
@@ -180,6 +203,7 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
         return false;
     };
     let Some(total) = total.checked_add(answer_reserved) else { return false };
+    let Some(total) = total.checked_add(subscription_bytes) else { return false };
     if total > usize::try_from(limits.inbox_bytes).expect("u32 fits usize") {
         return false;
     }
@@ -217,6 +241,24 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
             }
         }
     }
+    for (at, subscription) in task.subscriptions.iter().enumerate() {
+        if subscription.number == 0 {
+            return false;
+        }
+        for earlier in task.subscriptions.iter().take(at) {
+            if earlier.number == subscription.number {
+                return false;
+            }
+        }
+        match subscription.kind {
+            crate::SubscriptionKind::Timer { period: Some(period), .. } if period == skein_lib::Duration::ZERO => {
+                return false;
+            }
+            crate::SubscriptionKind::Task { .. }
+            | crate::SubscriptionKind::Timer { .. }
+            | crate::SubscriptionKind::Topic { .. } => {}
+        }
+    }
     for number in &task.waiting_on {
         if !crate::batch::contains(&task.dependencies, *number) {
             return false;
@@ -247,7 +289,14 @@ pub(crate) fn restore(domain: &mut Domain, env: &Env<Limits>, stored: Stored, ou
             {
                 return failed(domain, Some(number), Refusal::Restore, out);
             }
-            let id = domain.tasks.insert(Task { record: *task, alarm: None }).expect("restored task admitted");
+            let observed_hold = match task.phase {
+                Phase::Held { why, .. } => Some(why),
+                Phase::Waiting | Phase::Active(_) | Phase::Closing(_) | Phase::Ended(_) => None,
+            };
+            let id = domain
+                .tasks
+                .insert(Task { record: *task, alarm: None, observed_hold })
+                .expect("restored task admitted");
             let indexed = domain.names.insert(number, id);
             assert!(indexed == Ok(None), "restored name admitted");
         }
@@ -384,6 +433,8 @@ pub(crate) fn restored(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<R
         return failed(domain, None, Refusal::Restore, out);
     }
     domain.startup = Startup::Ready;
+    crate::subscriptions::restore(domain, env);
+    crate::wake::restore(domain, env);
     let numbers = snapshot(domain, env.limits.tasks);
     for number in numbers.into_boxed() {
         let phase = record(domain, number).expect("restored name exists").phase.clone();

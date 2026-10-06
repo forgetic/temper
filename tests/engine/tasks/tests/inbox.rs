@@ -1,5 +1,7 @@
 use skein_lib::{ReplyTo, Token, Wall};
-use temper_engine_domain_tasks::{Accepted, End, Event, MessageKind, Party, Refusal, Word};
+use temper_engine_domain_tasks::{
+    Accepted, End, Event, MessageKind, NoticeState, Party, Refusal, Subscription, SubscriptionKind, WakeRule, Word,
+};
 use temper_engine_tasks_world::{LIMITS, Reply, World, task};
 
 fn say(world: &mut World, number: u64) {
@@ -14,6 +16,8 @@ fn say(world: &mut World, number: u64) {
             kind: temper_engine_domain_tasks::MessageKind::Words,
             words: Box::from([u8::try_from(number).expect("small message")]),
             at: Wall::EPOCH,
+            hits: 1,
+            eligible: false,
         },
     });
 }
@@ -71,7 +75,15 @@ fn task_words(world: &mut World, source: u64, target: u64, number: u64, kind: Me
         reply_to: ReplyTo::new(Token::new(key)),
         project: 1,
         task: target,
-        word: Word { number, from: Party::Task(source), kind, words: Box::new([1]), at: Wall::EPOCH },
+        word: Word {
+            number,
+            from: Party::Task(source),
+            kind,
+            words: Box::new([1]),
+            at: Wall::EPOCH,
+            hits: 1,
+            eligible: false,
+        },
     });
     world.replies[&key].clone()
 }
@@ -92,5 +104,67 @@ fn a_question_keeps_room_for_its_answer_while_words_fill_the_inbox() {
     assert!(matches!(task_words(&mut world, 1, 2, 4, MessageKind::Answer { question: 1 }), Reply::Done));
     assert!(world.record(2).questions.is_empty());
     assert_eq!(world.record(2).inbox.len(), 2);
+    world.restart();
+}
+
+#[test]
+fn a_coordinator_is_woken_once_by_a_burst() {
+    let mut world = World::new(84, LIMITS);
+    let mut coordinator = task(1, &[]);
+    coordinator.wake.words = WakeRule::Batch { count: 3, age: skein_lib::Duration::from_nanos(20) };
+    world.make(Party::Person(9), vec![coordinator]);
+    world.make(Party::Task(1), vec![task(2, &[])]);
+    world.claim(1, 1);
+    assert_eq!(world.terminal(1, End::Parked), Reply::Acknowledged(Accepted::New));
+    for number in 1..3 {
+        assert!(matches!(task_words(&mut world, 2, 1, number, MessageKind::Words), Reply::Done));
+        assert!(!world.activations.contains(&1));
+    }
+    world.restart();
+    assert!(matches!(task_words(&mut world, 2, 1, 3, MessageKind::Words), Reply::Done));
+    assert_eq!(world.activations.iter().filter(|number| **number == 1).count(), 1);
+    assert_eq!(world.record(1).inbox.len(), 3);
+}
+
+#[test]
+fn an_inbox_fills_news_merges_words_are_refused_and_a_result_is_still_taken() {
+    let mut limits = LIMITS;
+    limits.inbox_messages = 3;
+    let mut world = World::new(85, limits);
+    world.make(Party::Person(9), vec![task(1, &[])]);
+    world.make(Party::Task(1), vec![task(2, &[])]);
+    let call = 1000;
+    let reply_to = ReplyTo::new(Token::new(call));
+    world.send(Event::Subscribe {
+        reply_to,
+        task: 1,
+        subscription: Subscription { number: 10, kind: SubscriptionKind::Task { target: 2, held: true, result: true } },
+    });
+    assert_eq!(world.replies[&call], Reply::Done);
+    assert!(matches!(task_words(&mut world, 2, 1, 1, MessageKind::Words), Reply::Done));
+    for number in [2, 3] {
+        world.send(Event::Notice {
+            task: 1,
+            word: Word {
+                number,
+                from: Party::Task(2),
+                kind: MessageKind::Notice { subscription: 10, target: 2, state: NoticeState::Held },
+                words: Box::new([]),
+                at: Wall::EPOCH,
+                hits: 1,
+                eligible: false,
+            },
+        });
+    }
+    assert_eq!(world.record(1).inbox.len(), 2);
+    assert_eq!(world.record(1).inbox[1].hits, 2);
+    assert!(
+        matches!(task_words(&mut world, 2, 1, 4, MessageKind::Words), Reply::Refused(problem) if problem.why == Refusal::Busy)
+    );
+    world.claim(2, 2);
+    world.finish(2);
+    world.settle(2);
+    assert_eq!(world.record(1).inbox.len(), 3);
+    assert!(world.record(1).inbox.iter().any(|word| matches!(word.kind, MessageKind::Result(_))));
     world.restart();
 }

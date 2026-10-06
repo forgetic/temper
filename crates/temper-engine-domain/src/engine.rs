@@ -159,6 +159,10 @@ pub enum Tool {
     Message { target: u64, form: MessageForm, words: Box<[u8]> },
     /// Give two tasks referenced by the caller reciprocal references.
     Introduce { left: u64, right: u64 },
+    /// Add one bounded task-state or timer interest.
+    Subscribe { kind: tasks::SubscriptionKind },
+    /// Remove one current interest by its root-issued number.
+    Unsubscribe { subscription: u64 },
     /// Root-normalized whole-batch shape refusal after bounded ingress.
     Rejected(tasks::Refusal),
     /// Root-normalized message shape refusal before retaining its words.
@@ -192,6 +196,7 @@ pub struct Delegate {
     pub contract: tasks::Contract,
     pub authority: tasks::Authority,
     pub dependencies: Box<[Dependency]>,
+    pub wake: tasks::WakePolicy,
 }
 
 /// A run-named tool call. The root fills the task and attempt from the
@@ -524,6 +529,14 @@ struct RestoringProof {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum RoutedCall {
+    Message(CallKey),
+    Introduce(CallKey),
+    Subscribe { key: CallKey, subscription: u64 },
+    Unsubscribe(CallKey),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Startup {
     Cold,
     Loading(Range),
@@ -556,7 +569,7 @@ pub struct Domain {
     dependency_results: Map<u64, Box<[HistoricalResult]>>,
     made: Map<Token, u64>,
     delegating: Map<Token, CallKey>,
-    routing_calls: Map<Token, CallKey>,
+    routing_calls: Map<Token, RoutedCall>,
     ending_positions: Map<u64, u64>,
     saying: Map<Token, u64>,
     relaying: Option<PendingRelay>,
@@ -949,6 +962,8 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
                     Tool::Message { .. } => Tool::RejectedMessage(why),
                     Tool::Delegate { .. }
                     | Tool::Introduce { .. }
+                    | Tool::Subscribe { .. }
+                    | Tool::Unsubscribe { .. }
                     | Tool::Rejected(_)
                     | Tool::RejectedMessage(_)
                     | Tool::Unavailable => Tool::Rejected(why),
@@ -1292,6 +1307,8 @@ fn people_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decisio
                             kind: tasks::MessageKind::Words,
                             words,
                             at: env.wall,
+                            hits: 1,
+                            eligible: false,
                         },
                     }));
                 }
@@ -1420,6 +1437,7 @@ fn make_chat(
             },
             funder: pool,
             dependencies: Box::new([]),
+            wake: tasks::WakePolicy::DEFAULT,
         }]),
     }));
 }
@@ -1576,7 +1594,9 @@ fn call_needs_input(tool: &Tool) -> bool {
         | Tool::Rejected(_)
         | Tool::RejectedMessage(_)
         | Tool::Message { .. }
-        | Tool::Introduce { .. } => false,
+        | Tool::Introduce { .. }
+        | Tool::Subscribe { .. }
+        | Tool::Unsubscribe { .. } => false,
         Tool::Delegate { batch } => {
             for member in batch {
                 if !member.spec.inputs.is_empty() {
@@ -1590,7 +1610,12 @@ fn call_needs_input(tool: &Tool) -> bool {
 
 fn call_shape(tool: &Tool, limits: &tasks::Limits) -> Option<tasks::Refusal> {
     match tool {
-        Tool::Unavailable | Tool::Rejected(_) | Tool::RejectedMessage(_) | Tool::Introduce { .. } => None,
+        Tool::Unavailable
+        | Tool::Rejected(_)
+        | Tool::RejectedMessage(_)
+        | Tool::Introduce { .. }
+        | Tool::Subscribe { .. }
+        | Tool::Unsubscribe { .. } => None,
         Tool::Message { form, words, .. } => {
             if words.is_empty() || words.len() > usize::try_from(limits.message_bytes).expect("u32 fits usize") {
                 return Some(tasks::Refusal::Read);
@@ -1678,7 +1703,7 @@ fn message_call(
     };
     let token = to.into_token();
     assert!(domain.pending_calls.insert(key, true).is_ok(), "call record room reserved");
-    assert!(domain.routing_calls.insert(token, key) == Ok(None), "one live routed call");
+    assert!(domain.routing_calls.insert(token, RoutedCall::Message(key)) == Ok(None), "one live routed call");
     domain.work.push(Work::Tasks(tasks::Event::Message {
         reply_to: ReplyTo::new(token),
         project: context.project,
@@ -1693,6 +1718,8 @@ fn message_call(
             },
             words,
             at: env.wall,
+            hits: 1,
+            eligible: false,
         },
     }));
 }
@@ -1700,8 +1727,51 @@ fn message_call(
 fn introduce_call(domain: &mut Domain, to: ReplyTo, key: CallKey, left: u64, right: u64) {
     let token = to.into_token();
     assert!(domain.pending_calls.insert(key, true).is_ok(), "call record room reserved");
-    assert!(domain.routing_calls.insert(token, key) == Ok(None), "one live routed call");
+    assert!(domain.routing_calls.insert(token, RoutedCall::Introduce(key)) == Ok(None), "one live routed call");
     domain.work.push(Work::Tasks(tasks::Event::Introduce { reply_to: ReplyTo::new(token), by: key.task, left, right }));
+}
+
+fn subscribe_call(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    decision: &mut Decision,
+    to: ReplyTo,
+    key: CallKey,
+    kind: tasks::SubscriptionKind,
+) {
+    let Some(subscription) = crate::fresh(&mut domain.journal, Family::Message) else {
+        decide_call(
+            domain,
+            &env.limits,
+            decision,
+            to,
+            key,
+            CallAnswer::SubscriptionRefused(tasks::Problem { task: Some(key.task), why: tasks::Refusal::Busy }),
+        );
+        return;
+    };
+    let token = to.into_token();
+    assert!(domain.pending_calls.insert(key, true).is_ok(), "call record room reserved");
+    assert!(
+        domain.routing_calls.insert(token, RoutedCall::Subscribe { key, subscription }) == Ok(None),
+        "one live routed call"
+    );
+    domain.work.push(Work::Tasks(tasks::Event::Subscribe {
+        reply_to: ReplyTo::new(token),
+        task: key.task,
+        subscription: tasks::Subscription { number: subscription, kind },
+    }));
+}
+
+fn unsubscribe_call(domain: &mut Domain, to: ReplyTo, key: CallKey, subscription: u64) {
+    let token = to.into_token();
+    assert!(domain.pending_calls.insert(key, true).is_ok(), "call record room reserved");
+    assert!(domain.routing_calls.insert(token, RoutedCall::Unsubscribe(key)) == Ok(None), "one live routed call");
+    domain.work.push(Work::Tasks(tasks::Event::Unsubscribe {
+        reply_to: ReplyTo::new(token),
+        task: key.task,
+        subscription,
+    }));
 }
 
 #[expect(
@@ -1904,6 +1974,7 @@ fn delegate_call(
                 },
                 funder: tasks::Funder::Task(key.task),
                 dependencies: dependencies.into_boxed(),
+                wake: member.wake,
             })
             .expect("bounded delegation batch");
     }
@@ -1923,6 +1994,36 @@ fn delegate_call(
 fn tasks_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, out: &mut Queue<tasks::Request>) {
     for _ in 0..out.len() {
         match out.pop().expect("tasks output count") {
+            tasks::Request::Notify { task, subscription, target, state, words } => {
+                let number = crate::fresh(&mut domain.journal, Family::Message).expect("notification number admitted");
+                domain.work.push(Work::Tasks(tasks::Event::Notice {
+                    task,
+                    word: tasks::Word {
+                        number,
+                        from: tasks::Party::Task(target),
+                        kind: tasks::MessageKind::Notice { subscription, target, state },
+                        words,
+                        at: env.wall,
+                        hits: 1,
+                        eligible: false,
+                    },
+                }));
+            }
+            tasks::Request::Timer { task, subscription } => {
+                let number = crate::fresh(&mut domain.journal, Family::Message).expect("timer number admitted");
+                domain.work.push(Work::Tasks(tasks::Event::Notice {
+                    task,
+                    word: tasks::Word {
+                        number,
+                        from: tasks::Party::Task(task),
+                        kind: tasks::MessageKind::Timer { subscription },
+                        words: Box::new([]),
+                        at: env.wall,
+                        hits: 1,
+                        eligible: false,
+                    },
+                }));
+            }
             tasks::Request::Sent { reply_to, task, word } => {
                 let request = reply_to.into_token();
                 if let Some(context) = domain.contexts.get_mut(&task) {
@@ -1930,7 +2031,7 @@ fn tasks_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                     context.last_message = word.number;
                 }
                 match domain.routing_calls.remove(&request) {
-                    Some(key) => decide_call(
+                    Some(RoutedCall::Message(key)) => decide_call(
                         domain,
                         &env.limits,
                         decision,
@@ -1938,6 +2039,9 @@ fn tasks_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                         key,
                         CallAnswer::Sent { message: word.number },
                     ),
+                    Some(RoutedCall::Introduce(_) | RoutedCall::Subscribe { .. } | RoutedCall::Unsubscribe(_)) => {
+                        unreachable!("only message calls produce Sent")
+                    }
                     None => {
                         assert!(domain.saying.remove(&request) == Some(task), "matching pending say flight");
                         domain.work.push(Work::People(people::Event::Decided {
@@ -2007,15 +2111,16 @@ fn tasks_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
             }
             tasks::Request::Refused { reply_to, problem } => {
                 let token = reply_to.into_token();
-                if let Some(key) = domain.routing_calls.remove(&token) {
-                    decide_call(
-                        domain,
-                        &env.limits,
-                        decision,
-                        ReplyTo::new(token),
-                        key,
-                        CallAnswer::MessageRefused(problem),
-                    );
+                if let Some(route) = domain.routing_calls.remove(&token) {
+                    let (key, answer) = match route {
+                        RoutedCall::Message(key) | RoutedCall::Introduce(key) => {
+                            (key, CallAnswer::MessageRefused(problem))
+                        }
+                        RoutedCall::Subscribe { key, .. } | RoutedCall::Unsubscribe(key) => {
+                            (key, CallAnswer::SubscriptionRefused(problem))
+                        }
+                    };
+                    decide_call(domain, &env.limits, decision, ReplyTo::new(token), key, answer);
                 } else if let Some(key) = domain.delegating.remove(&token) {
                     decide_call(
                         domain,
@@ -2046,6 +2151,7 @@ fn tasks_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                             | tasks::Refusal::Depth
                             | tasks::Refusal::Delegates
                             | tasks::Refusal::Reference
+                            | tasks::Refusal::Subscription
                             | tasks::Refusal::Dependencies
                             | tasks::Refusal::Cycle
                             | tasks::Refusal::Executor
@@ -2195,6 +2301,8 @@ fn tasks_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                             kind: tasks::MessageKind::Result(kind),
                             words,
                             at: env.wall,
+                            hits: 1,
+                            eligible: false,
                         };
                         domain.work.push(Work::Tasks(tasks::Event::DelegateResult { task: parent, word }));
                     }
@@ -2203,15 +2311,14 @@ fn tasks_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
             }
             tasks::Request::Done { reply_to } => {
                 let task = reply_to.into_token().raw();
-                if let Some(key) = domain.routing_calls.remove(&Token::new(task)) {
-                    decide_call(
-                        domain,
-                        &env.limits,
-                        decision,
-                        ReplyTo::new(Token::new(task)),
-                        key,
-                        CallAnswer::Introduced,
-                    );
+                if let Some(route) = domain.routing_calls.remove(&Token::new(task)) {
+                    let (key, answer) = match route {
+                        RoutedCall::Introduce(key) => (key, CallAnswer::Introduced),
+                        RoutedCall::Subscribe { key, subscription } => (key, CallAnswer::Subscribed { subscription }),
+                        RoutedCall::Unsubscribe(key) => (key, CallAnswer::Unsubscribed),
+                        RoutedCall::Message(_) => unreachable!("message calls produce Sent"),
+                    };
+                    decide_call(domain, &env.limits, decision, ReplyTo::new(Token::new(task)), key, answer);
                 } else if let Some(attempt) = domain.claiming.remove(&task) {
                     let proof = domain.proofs.get(&task).expect("claim proof pre-reserved");
                     save(decision, &env.limits, Write::Save(Record::RunProof(proof.clone())));
@@ -2488,6 +2595,8 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                         Tool::Introduce { left, right } => {
                             introduce_call(domain, reply_to, key, left, right);
                         }
+                        Tool::Subscribe { kind } => subscribe_call(domain, env, decision, reply_to, key, kind),
+                        Tool::Unsubscribe { subscription } => unsubscribe_call(domain, reply_to, key, subscription),
                     },
                 }
             }
@@ -3340,7 +3449,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     bytes = bytes
         .checked_add(Map::<Token, u64>::worst_case(limits.people.pending)?)?
         .checked_add(Map::<Token, CallKey>::worst_case(limits.fleet.calls)?)?
-        .checked_add(Map::<Token, CallKey>::worst_case(limits.fleet.calls)?)?
+        .checked_add(Map::<Token, RoutedCall>::worst_case(limits.fleet.calls)?)?
         .checked_add(Map::<u64, u64>::worst_case(limits.tasks.tasks)?)?
         .checked_add(Map::<CallKey, bool>::worst_case(limits.call_records)?)?
         .checked_add(Map::<u64, Box<[HistoricalResult]>>::worst_case(limits.tasks.tasks)?)?
@@ -4003,8 +4112,9 @@ fn supported_requester(requester: tasks::Party, people: u64, tasks: u64) -> bool
 
 fn valid_call_answer(answer: &CallAnswer, deployment: &crate::Deployment, limits: &Limits) -> bool {
     match answer {
-        CallAnswer::Unavailable | CallAnswer::Introduced => true,
+        CallAnswer::Unavailable | CallAnswer::Introduced | CallAnswer::Unsubscribed => true,
         CallAnswer::Sent { message } => *message != 0 && *message <= deployment.messages,
+        CallAnswer::Subscribed { subscription } => *subscription != 0 && *subscription <= deployment.messages,
         CallAnswer::Delegated(numbers) => {
             if numbers.is_empty() || numbers.len() > usize::try_from(limits.tasks.batch).expect("u32 fits usize") {
                 return false;
@@ -4027,7 +4137,9 @@ fn valid_call_answer(answer: &CallAnswer, deployment: &crate::Deployment, limits
                     <= usize::try_from(authority::max_out(&limits.authority).expect("valid authority bound"))
                         .expect("u32 fits usize")
         }
-        CallAnswer::MessageRefused(problem) | CallAnswer::DelegationRefused(problem) => match problem.task {
+        CallAnswer::MessageRefused(problem)
+        | CallAnswer::SubscriptionRefused(problem)
+        | CallAnswer::DelegationRefused(problem) => match problem.task {
             Some(task) => task != 0 && task <= deployment.tasks,
             None => true,
         },

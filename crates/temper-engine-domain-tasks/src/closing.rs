@@ -211,7 +211,11 @@ fn end_task(domain: &mut Domain, env: &Env<Limits>, number: u64, out: &mut Queue
     let ending = ending.clone();
     let requester = task.requester;
     let status = status(&ending);
+    let subscriptions = task.subscriptions.clone();
     let mut ended = task.clone();
+    for subscription in &subscriptions {
+        domain.timers.cancel(subscription.number);
+    }
     crate::funders::end(domain, env, number, out);
     ended.phase = Phase::Ended(ending.clone());
     let id = domain.names.remove(&number).expect("ending name exists");
@@ -261,6 +265,20 @@ fn end_task(domain: &mut Domain, env: &Env<Limits>, number: u64, out: &mut Queue
         }
         Party::Person(_) | Party::Deployment { .. } => {}
     }
+    let state = match status {
+        Status::Done => crate::NoticeState::Done,
+        Status::Failed => crate::NoticeState::Failed,
+        Status::Cancelled => crate::NoticeState::Cancelled,
+    };
+    let words = match &ending {
+        Ending::Done(
+            TaskResult::Report { words } | TaskResult::Verdict { words, .. } | TaskResult::Change { words, .. },
+        ) => words.as_ref(),
+        Ending::Done(TaskResult::Failure { reason }) | Ending::Failed { reason } | Ending::Cancelled { reason, .. } => {
+            reason.as_ref()
+        }
+    };
+    crate::subscriptions::notify_state(domain, number, state, words, out);
     out.push(Request::Ended { task: number, requester, ending });
     fact(domain, Fact::Ended { task: number, status });
 }

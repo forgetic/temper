@@ -845,6 +845,7 @@ fn report_delegate(words: &[u8], dependencies: Box<[engine::Dependency]>) -> eng
             notes: tasks::Scopes(0),
         },
         dependencies,
+        wake: tasks::WakePolicy::DEFAULT,
     }
 }
 
@@ -954,6 +955,55 @@ fn introduced_siblings_can_exchange_named_words_after_the_references_commit() {
     );
 }
 
+#[test]
+#[expect(clippy::wildcard_enum_match_arm, reason = "the script selects one answer from the closed delivery vocabulary")]
+fn task_subscriptions_are_named_by_the_root_and_unsubscribe_removes_them() {
+    let (mut driver, parent) = batch_fixture();
+    let numbers = call_batch(&mut driver, &parent, 211, Box::new([report_delegate(b"watched", Box::new([]))]));
+    tool_call(
+        &mut driver,
+        &parent,
+        212,
+        engine::Tool::Subscribe {
+            kind: tasks::SubscriptionKind::Task { target: numbers[0], held: true, result: true },
+        },
+    );
+    let subscription = driver
+        .delivered
+        .iter()
+        .find_map(|delivery| match delivery {
+            Delivery::CallAnswer {
+                call,
+                answer: temper_engine_domain::CallAnswer::Subscribed { subscription },
+                ..
+            } if *call == Token::new(212) => Some(*subscription),
+            _ => None,
+        })
+        .expect("subscription answered after commit");
+    let Some(Record::Tasks(tasks::Stored::Live(row))) =
+        driver.store.rows.get(&Key::Tasks(tasks::Key::Live(parent.task)))
+    else {
+        panic!("subscriber live")
+    };
+    assert_eq!(
+        row.subscriptions.as_ref(),
+        [tasks::Subscription {
+            number: subscription,
+            kind: tasks::SubscriptionKind::Task { target: numbers[0], held: true, result: true },
+        }]
+    );
+    tool_call(&mut driver, &parent, 213, engine::Tool::Unsubscribe { subscription });
+    assert!(driver.delivered.iter().any(|delivery| matches!(delivery,
+        Delivery::CallAnswer { call, answer: temper_engine_domain::CallAnswer::Unsubscribed, .. }
+        if *call == Token::new(213))));
+    let Some(Record::Tasks(tasks::Stored::Live(row))) =
+        driver.store.rows.get(&Key::Tasks(tasks::Key::Live(parent.task)))
+    else {
+        panic!("subscriber live")
+    };
+    assert!(row.subscriptions.is_empty());
+}
+
 fn park_task(driver: &mut Driver, assignment: &engine::Assignment) {
     driver.send(engine::Event::Answer {
         saved: None,
@@ -1012,6 +1062,7 @@ fn a_delegate_batch_and_its_named_answer_commit_together() {
                     contract: tasks::Contract::Report { words: 128 },
                     authority: child_authority,
                     dependencies: Box::new([]),
+                    wake: tasks::WakePolicy::DEFAULT,
                 }]),
             },
         },
@@ -1078,6 +1129,7 @@ fn a_delegate_result_enters_its_requesters_inbox_with_the_end() {
                     contract: tasks::Contract::Report { words: 128 },
                     authority: child_authority,
                     dependencies: Box::new([]),
+                    wake: tasks::WakePolicy::DEFAULT,
                 }]),
             },
         },
@@ -2271,6 +2323,8 @@ fn read_only_role_stages_have_one_not_ready_terminal_and_empty_projects_need_no_
             | tasks::Request::Erase { .. }
             | tasks::Request::Sent { .. }
             | tasks::Request::Relay { .. }
+            | tasks::Request::Notify { .. }
+            | tasks::Request::Timer { .. }
             | tasks::Request::RestoreRefused { .. } => panic!("no mutation or lost startup terminal"),
         }
     }
@@ -2305,6 +2359,8 @@ fn read_only_role_stages_have_one_not_ready_terminal_and_empty_projects_need_no_
         | tasks::Request::Erase { .. }
         | tasks::Request::Sent { .. }
         | tasks::Request::Relay { .. }
+        | tasks::Request::Notify { .. }
+        | tasks::Request::Timer { .. }
         | tasks::Request::RestoreRefused { .. } => panic!("one named snapshot"),
     }
 }

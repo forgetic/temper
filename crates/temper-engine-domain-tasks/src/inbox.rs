@@ -1,6 +1,6 @@
 //! Bounded person-chat words and atomic turn reads (domain/tasks.md, section 7).
 use crate::domain::{Domain, publish, record, refused, task_mut};
-use crate::{Active, Limits, MessageKind, Party, Phase, QuestionCredit, Refusal, Request, Status, Word};
+use crate::{Limits, MessageKind, Party, Phase, QuestionCredit, Refusal, Request, Word};
 use skein_lib::{Env, List, Queue, ReplyTo};
 
 /// Account for messages already waiting and the result credit reserved for
@@ -10,9 +10,13 @@ pub(crate) fn room(domain: &Domain, limits: &Limits, task: u64, count: u32, byte
         return false;
     };
     let Some(reserved) = record.delegates.len().checked_add(record.questions.len()) else { return false };
+    let Some((subscription_count, subscription_bytes)) = crate::subscriptions::credit(record, limits) else {
+        return false;
+    };
     let Some(total_count) = record.inbox.len().checked_add(reserved) else {
         return false;
     };
+    let Some(total_count) = total_count.checked_add(subscription_count) else { return false };
     let Some(total_count) = total_count.checked_add(usize::try_from(count).expect("u32 fits usize")) else {
         return false;
     };
@@ -37,6 +41,7 @@ pub(crate) fn room(domain: &Domain, limits: &Limits, task: u64, count: u32, byte
     let Some(total_bytes) = total_bytes.checked_add(answer_bytes) else {
         return false;
     };
+    let Some(total_bytes) = total_bytes.checked_add(subscription_bytes) else { return false };
     total_count <= usize::try_from(limits.inbox_messages).expect("u32 fits usize")
         && total_bytes <= usize::try_from(limits.inbox_bytes).expect("u32 fits usize")
 }
@@ -64,7 +69,9 @@ pub(crate) fn message(
     };
     let sendable = match word.kind {
         MessageKind::Words | MessageKind::Question | MessageKind::Answer { .. } => true,
-        MessageKind::Result(_) => false,
+        MessageKind::Result(_) | MessageKind::Notice { .. } | MessageKind::Timer { .. } | MessageKind::News { .. } => {
+            false
+        }
     };
     if task.project != project || !requester || !sendable {
         return refused(to, Some(number), Refusal::State, out);
@@ -106,7 +113,9 @@ pub(crate) fn message(
             }
             Some(question)
         }
-        MessageKind::Result(_) => unreachable!("result has its reserved root entrance"),
+        MessageKind::Result(_) | MessageKind::Notice { .. } | MessageKind::Timer { .. } | MessageKind::News { .. } => {
+            unreachable!("root hints have reserved entrances")
+        }
     };
     if answer.is_none() && !room(domain, &env.limits, number, 1, word.words.len()) {
         return refused(to, Some(number), Refusal::Busy, out);
@@ -120,7 +129,6 @@ pub(crate) fn message(
             return refused(to, Some(source), Refusal::Busy, out);
         }
     }
-    let phase = task.phase.clone();
     let previous = match task.last_message {
         0 => None,
         number => Some(number),
@@ -142,28 +150,7 @@ pub(crate) fn message(
         }
         task.record.questions = credits.into_boxed();
     }
-    let mut wake = false;
-    let mut relay = None;
-    match phase {
-        Phase::Active(Active::Idle) => wake = true,
-        Phase::Active(Active::Claimed { attempt } | Active::Running { attempt }) => relay = Some(attempt),
-        Phase::Active(Active::Due | Active::Preparing | Active::BackingOff { .. })
-        | Phase::Waiting
-        | Phase::Held { was: crate::Was::Waiting | crate::Was::Active(_), .. } => {}
-        Phase::Closing(_) | Phase::Held { was: crate::Was::Closing(_), .. } | Phase::Ended(_) => {
-            unreachable!("message entrance excluded closing")
-        }
-    }
-    if wake {
-        task.record.phase = Phase::Active(Active::Due);
-    }
     publish(domain, env, number, out);
-    if wake {
-        super::domain::activate(domain, number, out);
-    }
-    if let Some(attempt) = relay {
-        out.push(Request::Relay { task: number, attempt, previous, word: word.clone() });
-    }
     if word.kind == MessageKind::Question {
         let source = match word.from {
             Party::Task(source) => source,
@@ -178,6 +165,7 @@ pub(crate) fn message(
         source_row.record.questions = credits.into_boxed();
         publish(domain, env, source, out);
     }
+    crate::wake::after_message(domain, env, number, previous, word.clone(), out);
     out.push(Request::Sent { reply_to: to, task: number, word });
 }
 
@@ -193,14 +181,15 @@ pub(crate) fn delegate_result(
     let Some(task) = record(domain, number) else {
         return;
     };
-    let status = match word.kind {
-        MessageKind::Result(
-            crate::ResultKind::Report | crate::ResultKind::Verdict { .. } | crate::ResultKind::Change { .. },
-        ) => Status::Done,
-        MessageKind::Result(crate::ResultKind::Failed) => Status::Failed,
-        MessageKind::Result(crate::ResultKind::Cancelled) => Status::Cancelled,
-        MessageKind::Words | MessageKind::Question | MessageKind::Answer { .. } => return,
-    };
+    match word.kind {
+        MessageKind::Result(_) => {}
+        MessageKind::Words
+        | MessageKind::Question
+        | MessageKind::Answer { .. }
+        | MessageKind::Notice { .. }
+        | MessageKind::Timer { .. }
+        | MessageKind::News { .. } => return,
+    }
     if !match word.from {
         Party::Task(_) => true,
         Party::Person(_) | Party::Deployment { .. } => false,
@@ -211,8 +200,6 @@ pub(crate) fn delegate_result(
     {
         return;
     }
-    let phase = task.phase.clone();
-    let last_delegate = task.delegates.is_empty();
     let previous = if task.last_message == 0 { None } else { Some(task.last_message) };
     let mut inbox = List::with_capacity(env.limits.inbox_messages);
     for item in &task.inbox {
@@ -222,27 +209,8 @@ pub(crate) fn delegate_result(
     let task = task_mut(domain, number).expect("requester remains live");
     task.record.last_message = word.number;
     task.record.inbox = inbox.into_boxed();
-    let mut wake = false;
-    let mut relay = None;
-    match phase {
-        Phase::Active(Active::Idle) => wake = last_delegate || status != Status::Done,
-        Phase::Active(Active::Claimed { attempt } | Active::Running { attempt }) => relay = Some(attempt),
-        Phase::Waiting
-        | Phase::Active(Active::Due | Active::Preparing | Active::BackingOff { .. })
-        | Phase::Closing(_)
-        | Phase::Held { .. }
-        | Phase::Ended(_) => {}
-    }
-    if wake {
-        task.record.phase = Phase::Active(Active::Due);
-    }
     publish(domain, env, number, out);
-    if wake {
-        super::domain::activate(domain, number, out);
-    }
-    if let Some(attempt) = relay {
-        out.push(Request::Relay { task: number, attempt, previous, word });
-    }
+    crate::wake::after_message(domain, env, number, previous, word, out);
 }
 
 pub(crate) fn readable(task: &crate::TaskRecord, read: Option<u64>) -> bool {
