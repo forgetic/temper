@@ -121,21 +121,27 @@ pub fn perform(forge: &mut impl Remote, disk: &mut Checkout, op: Op) -> Done {
             checked_out.expect("a checkout is of a commit fetched into the repository");
             Done::Succeeded
         }
-        Op::Commit { at, parent, merging, title, body: _, identity: _ } => {
+        Op::Commit { at, parent, merging, title, body, identity: _ } => {
             assert_cloned(disk, &at);
             assert!(!title.is_empty(), "a commit has a title");
+            let message =
+                if body.is_empty() { title.to_vec() } else { [title.as_ref(), b"\n\n", body.as_ref()].concat() };
             match merging {
-                None => match git::commit(forge, disk, &path(&at), fake(parent)).expect("parent is locally fetched") {
+                None => match git::commit(forge, disk, &path(&at), fake(parent), &message)
+                    .expect("parent is locally fetched")
+                {
                     Some(committed) => Done::Committed { commit: commit(committed) },
                     None => Done::Unchanged,
                 },
-                Some(second) => match git::commit_merging(forge, disk, &path(&at), fake(parent), fake(second)) {
-                    Ok(committed) => Done::Committed { commit: commit(committed) },
-                    Err(git::CommitFailure::Unresolved { files }) => {
-                        Done::Conflicted { files: files.into_iter().map(Vec::into_boxed_slice).collect() }
+                Some(second) => {
+                    match git::commit_merging(forge, disk, &path(&at), fake(parent), fake(second), &message) {
+                        Ok(committed) => Done::Committed { commit: commit(committed) },
+                        Err(git::CommitFailure::Unresolved { files }) => {
+                            Done::Conflicted { files: files.into_iter().map(Vec::into_boxed_slice).collect() }
+                        }
+                        Err(git::CommitFailure::NotFetched) => panic!("both merge parents are locally fetched"),
                     }
-                    Err(git::CommitFailure::NotFetched) => panic!("both merge parents are locally fetched"),
-                },
+                }
             }
         }
         Op::Merge { at, theirs } => {

@@ -311,7 +311,7 @@ pub(crate) fn merge(
     }
     let tree = merged(domain, limits, head, onto)?;
     let base = copy_of(&pull.base);
-    let commit = git::store(domain, Object { parent: Some(onto), merge_parent: None, tree })?;
+    let commit = git::store(domain, Object { parent: Some(onto), merge_parent: None, tree, message: Box::new([]) })?;
     let repository = domain.repositories.get_mut(id).expect("a repository of the forge");
     repository.has.insert(commit).expect("a repository has room for every commit");
     repository.branches.insert(copy_of(&base), commit).expect("the base branch is there");

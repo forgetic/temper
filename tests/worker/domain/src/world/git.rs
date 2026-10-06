@@ -465,14 +465,18 @@ impl Remote for Line<'_> {
         tree(self.forge, commit)
     }
 
-    fn store(&mut self, parent: u64, merging: Option<u64>, tree: Files) -> Option<u64> {
+    fn message(&self, commit: u64) -> Vec<u8> {
+        self.forge.object(commit).expect("a commit of the store").message.to_vec()
+    }
+
+    fn store(&mut self, parent: u64, merging: Option<u64>, tree: Files, message: &[u8]) -> Option<u64> {
         let files = tree.into_iter().map(|(path, content)| File { path: path.into(), content: content.into() });
         match merging {
             Some(second) => Some(
-                forge::merge_commit(self.forge, &self.env.limits, parent, second, files.collect())
+                forge::merge_commit(self.forge, &self.env.limits, parent, second, files.collect(), message)
                     .expect("the forge's store has room for every merge"),
             ),
-            None => forge::commit(self.forge, &self.env.limits, parent, files.collect())
+            None => forge::commit(self.forge, &self.env.limits, parent, files.collect(), message)
                 .expect("the forge's store has room for every commit"),
         }
     }

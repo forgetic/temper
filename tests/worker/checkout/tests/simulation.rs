@@ -2,6 +2,7 @@
 //! a fake forge and a fake disk, talking through a domain world.
 
 use skein_lib::{Duration, Time};
+use temper_fake_checkout::git::Remote;
 use temper_worker_checkout_world::client::{Interrupt, Pick, Plan};
 use temper_worker_checkout_world::translate;
 use temper_worker_checkout_world::{LIMITS, Settings, Span, Told, World, noisy, submit_noisily};
@@ -39,6 +40,7 @@ fn a_client_prepares_edits_pushes_and_its_change_lands_on_a_base_branch_created_
     };
     let repository = world.repository(world.workstream(0)[0]);
     assert_eq!(world.forge().branch(repository, b"base/0"), Some(translate::fake(commit)));
+    assert_eq!(world.forge().message(translate::fake(commit)), b"Change the notes\n\nWhat the run changed.");
     let stats = world.stats();
     assert!(stats.created >= 1, "the base branch was created");
     assert_eq!((stats.releases, stats.moved), (1, 0));

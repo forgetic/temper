@@ -690,7 +690,7 @@ impl World {
             .map(|(path, content)| File { path: path.clone(), content: content.clone() })
             .collect();
         files.push(File { path: branch.clone().into_boxed_slice(), content: b"a change".as_slice().into() });
-        let Ok(Some(commit)) = forge::commit(&mut self.forge, &self.settings.forge, tip, files.into_boxed_slice())
+        let Ok(Some(commit)) = forge::commit(&mut self.forge, &self.settings.forge, tip, files.into_boxed_slice(), b"")
         else {
             self.end("push refused");
             return;

@@ -57,7 +57,7 @@ fn conflicting_update_changes_neither_head_nor_objects() {
 #[test]
 fn pull_file_pages_are_distinct_and_name_the_exact_head() {
     let mut h = Harness::new(CALM);
-    let work = crate::commit(&mut h.domain, &CALM, FIRST, files(&[(b"new", b"one")])).unwrap().unwrap();
+    let work = crate::commit(&mut h.domain, &CALM, FIRST, files(&[(b"new", b"one")]), b"").unwrap().unwrap();
     h.push(ENGINE, b"work", work).unwrap();
     let number = opened(&mut h, b"work");
     let mut names = skein_lib::Set::with_capacity(3);
@@ -97,7 +97,7 @@ fn comparisons_ignore_paging_and_refuse_incomplete_data_explicitly() {
     assert_eq!((base, head), (FIRST, two));
     assert_eq!(&*commits, &[one, two]);
     assert_eq!(changed.len(), 2);
-    let excessive = crate::commit(&mut h.domain, &CALM, FIRST, files(&[(b"a", b"a"), (b"b", b"b"), (b"c", b"c")]))
+    let excessive = crate::commit(&mut h.domain, &CALM, FIRST, files(&[(b"a", b"a"), (b"b", b"b"), (b"c", b"c")]), b"")
         .unwrap()
         .unwrap();
     h.push(ENGINE, b"other", excessive).unwrap();

@@ -142,8 +142,15 @@ fn full_merge_history_and_both_parent_traversals_stay_bounded() {
     for _ in 1..LIMITS.commits {
         let files = tree(b'm');
         forge.meter.start();
-        let next = temper_fake_forge_domain::merge_commit(&mut forge.domain, &CONFIG, left, right, files)
-            .expect("one commit per free store slot");
+        let next = temper_fake_forge_domain::merge_commit(
+            &mut forge.domain,
+            &CONFIG,
+            left,
+            right,
+            files,
+            &text(LIMITS.title_bytes + LIMITS.body_bytes + 2, b'm'),
+        )
+        .expect("one commit per free store slot");
         let measured = forge.meter.end();
         forge.meter.check(measured, forge.bound, "a merge commit");
         left = right;
@@ -313,9 +320,15 @@ fn fill(forge: &mut Measured, index: u64, first: u64) {
     // Three branches, each a commit of a full tree ahead of the default.
     for branch in 0..3_u64 {
         let content = b'a' + u8::try_from(branch + 3 * index).expect("small");
-        let commit = temper_fake_forge_domain::commit(&mut forge.domain, &config, first, tree(content))
-            .expect("room")
-            .expect("a change");
+        let commit = temper_fake_forge_domain::commit(
+            &mut forge.domain,
+            &config,
+            first,
+            tree(content),
+            &text(LIMITS.title_bytes + LIMITS.body_bytes + 2, b'm'),
+        )
+        .expect("room")
+        .expect("a change");
         let push = Op::Git(Git::Push { branch: name(b'w', branch), commit, expected: None });
         forge.ok(AUTHOR, &repository, push);
     }
@@ -383,7 +396,13 @@ fn a_forge_filled_to_its_limits_stays_within_its_worst_case() {
     assert_eq!(room.statuses, 0, "every repository holds as many statuses as it may");
     // The store holds as many commits as it may.
     for content in 0..u8::MAX {
-        let made = temper_fake_forge_domain::commit(&mut forge.domain, &config, firsts[0], tree(content));
+        let made = temper_fake_forge_domain::commit(
+            &mut forge.domain,
+            &config,
+            firsts[0],
+            tree(content),
+            &text(LIMITS.title_bytes + LIMITS.body_bytes + 2, b'm'),
+        );
         if made == Err(Error::Full) {
             break;
         }

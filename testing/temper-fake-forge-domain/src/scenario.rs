@@ -36,7 +36,8 @@ pub fn repository(domain: &mut Domain, config: &Config, setup: Setup) -> u64 {
         fit_names(&protection.contexts, limits.contexts, limits).expect("contexts within the limits");
     }
     let tree = git::tree(limits, tree).expect("a first tree within the limits");
-    let first = git::store(domain, Object { parent: None, merge_parent: None, tree }).expect("room for a first commit");
+    let first = git::store(domain, Object { parent: None, merge_parent: None, tree, message: Box::new([]) })
+        .expect("room for a first commit");
     let mut repository = Repository::new(limits, copy_of(&name), default, first, checks, protection, hooked);
     for label in labels {
         repository.labels.insert(label).expect("a repository's labels are within the limits");
@@ -80,8 +81,15 @@ pub fn set_refusing(domain: &mut Domain, repository: &[u8], refusing: bool) {
 /// What a working tree's git does when it commits: names a commit of `tree`
 /// on `parent` in the forge's one store, where no repository has it until it
 /// is pushed. Returns `None` if the tree is `parent`'s, and refuses a tree
-/// past the limits, or a store that is full.
-pub fn commit(domain: &mut Domain, config: &Config, parent: u64, tree: Box<[File]>) -> Result<Option<u64>, Error> {
+/// past the limits, or a store that is full. The opaque message fits the
+/// fixture's commit message allowance.
+pub fn commit(
+    domain: &mut Domain,
+    config: &Config,
+    parent: u64,
+    tree: Box<[File]>,
+    message: &[u8],
+) -> Result<Option<u64>, Error> {
     let tree = git::tree(&config.limits, tree)?;
     let Some(object) = domain.commits.get(&parent) else {
         return Err(Error::Missing(What::Commit));
@@ -89,24 +97,37 @@ pub fn commit(domain: &mut Domain, config: &Config, parent: u64, tree: Box<[File
     if git::same(&object.tree, &tree) {
         return Ok(None);
     }
-    let commit = git::store(domain, Object { parent: Some(parent), merge_parent: None, tree })?;
+    fits(message, message_limit(&config.limits)?)?;
+    let commit =
+        git::store(domain, Object { parent: Some(parent), merge_parent: None, tree, message: copy_of(message) })?;
     Ok(Some(commit))
 }
 
 /// A worker commits a resolved merge, with both fetched parents. Unlike an
-/// ordinary commit, an unchanged tree still records the merge ancestry.
+/// ordinary commit, an unchanged tree still records the merge ancestry and
+/// the opaque message.
 pub fn merge_commit(
     domain: &mut Domain,
     config: &Config,
     parent: u64,
     merge_parent: u64,
     files: Box<[File]>,
+    message: &[u8],
 ) -> Result<u64, Error> {
     if !domain.commits.contains_key(&parent) || !domain.commits.contains_key(&merge_parent) {
         return Err(Error::Missing(What::Commit));
     }
     let tree = git::tree(&config.limits, files)?;
-    git::store(domain, Object { parent: Some(parent), merge_parent: Some(merge_parent), tree })
+    fits(message, message_limit(&config.limits)?)?;
+    git::store(
+        domain,
+        Object { parent: Some(parent), merge_parent: Some(merge_parent), tree, message: copy_of(message) },
+    )
+}
+
+fn message_limit(limits: &crate::limits::Limits) -> Result<u32, Error> {
+    let bytes = limits.title_bytes.checked_add(limits.body_bytes).ok_or(Error::TooLarge)?;
+    bytes.checked_add(2).ok_or(Error::TooLarge)
 }
 
 /// Another party commits on `branch` of `repository`, writing `path` with
@@ -132,7 +153,7 @@ pub fn advance(
         return Err(Error::TooLarge);
     }
     tree.insert(copy_of(path), copy_of(content)).expect("checked for room above");
-    let commit = git::store(domain, Object { parent: Some(tip), merge_parent: None, tree })?;
+    let commit = git::store(domain, Object { parent: Some(tip), merge_parent: None, tree, message: Box::new([]) })?;
     let repository = domain.repositories.get_mut(id).expect("a repository of the forge");
     repository.has.insert(commit).expect("a repository has room for every commit");
     repository.branches.insert(copy_of(branch), commit).expect("the branch is there");

@@ -48,7 +48,7 @@ pub const LIMITS: Limits = Limits {
     pages: 1,
     name_bytes: 256,
     title_bytes: 16,
-    body_bytes: 16,
+    body_bytes: 32,
     content_bytes: 65_536,
     page_size: 1,
     calls: 1,
@@ -307,13 +307,17 @@ impl Remote for Forge {
         object.tree.iter().map(|(path, content)| (path.to_vec(), content.to_vec())).collect()
     }
 
-    fn store(&mut self, parent: u64, merging: Option<u64>, tree: Tree) -> Option<u64> {
+    fn message(&self, commit: u64) -> Vec<u8> {
+        self.domain.object(commit).expect("a commit of the store").message.to_vec()
+    }
+
+    fn store(&mut self, parent: u64, merging: Option<u64>, tree: Tree, message: &[u8]) -> Option<u64> {
         match merging {
             Some(second) => Some(
-                temper_fake_forge_domain::merge_commit(&mut self.domain, &CONFIG, parent, second, files(tree))
+                temper_fake_forge_domain::merge_commit(&mut self.domain, &CONFIG, parent, second, files(tree), message)
                     .expect("the forge's store has room for every merge"),
             ),
-            None => temper_fake_forge_domain::commit(&mut self.domain, &CONFIG, parent, files(tree))
+            None => temper_fake_forge_domain::commit(&mut self.domain, &CONFIG, parent, files(tree), message)
                 .expect("the forge's store has room for every commit"),
         }
     }

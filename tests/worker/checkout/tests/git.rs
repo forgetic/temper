@@ -51,12 +51,14 @@ fn a_commit_snapshots_the_tree_less_the_git_directories_and_only_if_it_changed()
     let (mut forge, mut checkout, first) = cloned(&[(b"README", b"hello")]);
     checkout.write(b"w/temper/.git/index", b"binary");
     checkout.write(b"w/temper/sub/.git/index", b"binary");
-    assert_eq!(git::commit(&mut forge, &mut checkout, b"w/temper", first), Ok(None), "unchanged");
+    assert_eq!(git::commit(&mut forge, &mut checkout, b"w/temper", first, b"fixture"), Ok(None), "unchanged");
     checkout.write(b"w/temper/README", b"hello, world");
-    let second =
-        git::commit(&mut forge, &mut checkout, b"w/temper", first).expect("it has its parent").expect("changed");
+    let second = git::commit(&mut forge, &mut checkout, b"w/temper", first, b"fixture")
+        .expect("it has its parent")
+        .expect("changed");
     assert_eq!(forge.tree(second), tree(&[(b"README", b"hello, world")]));
     assert_eq!(forge.parent(second), Some(first));
+    assert_eq!(forge.message(second), b"fixture");
     assert!(forge.moves().is_empty(), "a commit moves no branch");
 }
 
@@ -65,7 +67,7 @@ fn checking_out_or_committing_on_a_commit_never_fetched_fails() {
     let (mut forge, mut checkout, first) = cloned(&[(b"README", b"hello")]);
     let theirs = forge.advance(b"forge/temper", b"main", b"README", b"theirs");
     assert_eq!(git::check_out(&forge, &mut checkout, b"w/temper", theirs), Err(NotFetched));
-    assert_eq!(git::commit(&mut forge, &mut checkout, b"w/temper", theirs), Err(NotFetched));
+    assert_eq!(git::commit(&mut forge, &mut checkout, b"w/temper", theirs, b"fixture"), Err(NotFetched));
     assert_eq!(git::fetch(&mut forge, &mut checkout, b"forge/temper", b"w/temper", Want::Branch(b"main")), Ok(theirs));
     git::check_out(&forge, &mut checkout, b"w/temper", theirs).expect("fetched");
     assert_eq!(files(&checkout), tree(&[(b"README", b"theirs")]));
@@ -101,7 +103,9 @@ fn a_clone_has_every_commit_the_branches_reach_and_a_fetch_what_its_tree_lacks()
 fn a_push_is_a_fast_forward_or_rejected() {
     let (mut forge, mut checkout, first) = cloned(&[(b"README", b"hello")]);
     checkout.write(b"w/temper/README", b"mine");
-    let mine = git::commit(&mut forge, &mut checkout, b"w/temper", first).expect("it has its parent").expect("changed");
+    let mine = git::commit(&mut forge, &mut checkout, b"w/temper", first, b"fixture")
+        .expect("it has its parent")
+        .expect("changed");
     let fetch = git::fetch(&mut forge, &mut checkout, b"forge/temper", b"w/temper", Want::Commit(mine));
     assert_eq!(fetch, Err(Fault::Missing(What::Commit)), "not pushed yet");
     let theirs = forge.advance(b"forge/temper", b"main", b"README", b"theirs");
@@ -114,7 +118,9 @@ fn a_push_is_a_fast_forward_or_rejected() {
     let fetch = git::fetch(&mut forge, &mut checkout, b"forge/temper", b"w/temper", Want::Commit(mine));
     assert_eq!(fetch, Ok(mine));
     checkout.write(b"w/temper/README", b"mine, again");
-    let next = git::commit(&mut forge, &mut checkout, b"w/temper", mine).expect("it has its parent").expect("changed");
+    let next = git::commit(&mut forge, &mut checkout, b"w/temper", mine, b"fixture")
+        .expect("it has its parent")
+        .expect("changed");
     assert_eq!(push(&mut forge, &checkout, next, b"feature"), Ok(Pushed::Pushed), "a fast-forward");
     assert_eq!(push(&mut forge, &checkout, next, b"feature"), Ok(Pushed::Pushed), "up to date");
     assert_eq!(
@@ -160,15 +166,18 @@ fn the_forge_fails_as_scripted() {
 fn a_clean_merge_combines_independent_lines_and_records_two_parents() {
     let (mut forge, mut checkout, first) = cloned(&[(b"code", b"one\ntwo\nthree\n")]);
     checkout.write(b"w/temper/code", b"ONE\ntwo\nthree\n");
-    let ours = git::commit(&mut forge, &mut checkout, b"w/temper", first).expect("local parent").expect("changed");
+    let ours =
+        git::commit(&mut forge, &mut checkout, b"w/temper", first, b"fixture").expect("local parent").expect("changed");
     let theirs = forge.advance(b"forge/temper", b"main", b"code", b"one\ntwo\nTHREE\n");
     git::fetch(&mut forge, &mut checkout, b"forge/temper", b"w/temper", Want::Commit(theirs)).expect("remote parent");
     let merged = git::merge(&forge, &mut checkout, b"w/temper", theirs).expect("fetched");
     assert!(merged.conflicts.is_empty());
     assert_eq!(files(&checkout), tree(&[(b"code", b"ONE\ntwo\nTHREE\n")]));
-    let commit = git::commit_merging(&mut forge, &mut checkout, b"w/temper", ours, theirs).expect("clean merge");
+    let commit =
+        git::commit_merging(&mut forge, &mut checkout, b"w/temper", ours, theirs, b"fixture").expect("clean merge");
     assert_eq!(forge.parent(commit), Some(ours));
     assert_eq!(forge.merge_parent(commit), Some(theirs));
+    assert_eq!(forge.message(commit), b"fixture");
     assert_eq!(
         git::push_expected(&mut forge, &checkout, b"forge/temper", b"w/temper", commit, b"main", theirs),
         Ok(Pushed::Pushed)
@@ -192,19 +201,20 @@ fn a_clean_merge_combines_independent_lines_and_records_two_parents() {
 fn conflicts_preserve_markers_and_refuse_commit_until_resolved_or_deleted() {
     let (mut forge, mut checkout, first) = cloned(&[(b"code", b"old\n")]);
     checkout.write(b"w/temper/code", b"ours\n");
-    let ours = git::commit(&mut forge, &mut checkout, b"w/temper", first).expect("parent").expect("changed");
+    let ours =
+        git::commit(&mut forge, &mut checkout, b"w/temper", first, b"fixture").expect("parent").expect("changed");
     let theirs = forge.advance(b"forge/temper", b"main", b"code", b"theirs\n");
     git::fetch(&mut forge, &mut checkout, b"forge/temper", b"w/temper", Want::Commit(theirs)).expect("fetch");
     assert_eq!(git::merge(&forge, &mut checkout, b"w/temper", theirs).expect("merge").conflicts, [b"code".to_vec()]);
     assert_eq!(checkout.content(b"w/temper/code"), Some(&b"<<<<<<< ours\nours\n=======\ntheirs\n>>>>>>> theirs\n"[..]));
     assert_eq!(
-        git::commit_merging(&mut forge, &mut checkout, b"w/temper", ours, theirs),
+        git::commit_merging(&mut forge, &mut checkout, b"w/temper", ours, theirs, b"fixture"),
         Err(git::CommitFailure::Unresolved { files: vec![b"code".to_vec()] })
     );
     assert_eq!(forge.branch(b"forge/temper", b"main"), Some(theirs));
     checkout.remove(b"w/temper/code");
-    let resolved =
-        git::commit_merging(&mut forge, &mut checkout, b"w/temper", ours, theirs).expect("deletion resolves");
+    let resolved = git::commit_merging(&mut forge, &mut checkout, b"w/temper", ours, theirs, b"fixture")
+        .expect("deletion resolves");
     assert!(forge.tree(resolved).is_empty());
     assert_eq!(resolved, theirs + 1, "refused commit made no object");
 }
@@ -215,8 +225,8 @@ fn even_an_unchanged_merge_tree_is_committed_and_a_stale_expected_head_refuses()
     let theirs = forge.advance(b"forge/temper", b"main", b"code", b"new");
     git::fetch(&mut forge, &mut checkout, b"forge/temper", b"w/temper", Want::Commit(theirs)).expect("fetch");
     assert!(git::merge(&forge, &mut checkout, b"w/temper", theirs).expect("merge").conflicts.is_empty());
-    let merged =
-        git::commit_merging(&mut forge, &mut checkout, b"w/temper", first, theirs).expect("unchanged records merge");
+    let merged = git::commit_merging(&mut forge, &mut checkout, b"w/temper", first, theirs, b"fixture")
+        .expect("unchanged records merge");
     assert_eq!(forge.tree(merged), forge.tree(theirs));
     assert_eq!(forge.parent(merged), Some(first));
     assert_eq!(forge.merge_parent(merged), Some(theirs));
@@ -237,7 +247,7 @@ fn an_unfetched_merge_parent_refuses_without_touching_the_tree() {
     let theirs = forge.advance(b"forge/temper", b"main", b"code", b"new");
     assert_eq!(git::merge(&forge, &mut checkout, b"w/temper", theirs), Err(NotFetched));
     assert_eq!(
-        git::commit_merging(&mut forge, &mut checkout, b"w/temper", first, theirs),
+        git::commit_merging(&mut forge, &mut checkout, b"w/temper", first, theirs, b"fixture"),
         Err(git::CommitFailure::NotFetched)
     );
     assert_eq!(files(&checkout), tree(&[(b"code", b"old")]));
@@ -249,8 +259,9 @@ fn merges_preserve_additions_deletions_and_modify_delete_conflicts() {
     let (mut forge, mut checkout, first) = cloned(&[(b"clean", b"old"), (b"conflict", b"old")]);
     checkout.write(b"w/temper/conflict", b"modified");
     checkout.write(b"w/temper/ours", b"added");
-    let ours = git::commit(&mut forge, &mut checkout, b"w/temper", first).expect("parent").expect("changed");
-    let theirs = forge.store(first, None, tree(&[(b"theirs", b"added too")])).expect("deletions change tree");
+    let ours =
+        git::commit(&mut forge, &mut checkout, b"w/temper", first, b"fixture").expect("parent").expect("changed");
+    let theirs = forge.store(first, None, tree(&[(b"theirs", b"added too")]), b"side").expect("deletions change tree");
     assert_eq!(forge.push(b"forge/temper", b"main", theirs, None), Ok(Pushed::Pushed));
     git::fetch(&mut forge, &mut checkout, b"forge/temper", b"w/temper", Want::Commit(theirs)).expect("fetch");
     let merged = git::merge(&forge, &mut checkout, b"w/temper", theirs).expect("merge");
@@ -263,7 +274,8 @@ fn merges_preserve_additions_deletions_and_modify_delete_conflicts() {
         Some(&b"<<<<<<< ours\nmodified\n=======\n\n>>>>>>> theirs\n"[..])
     );
     checkout.write(b"w/temper/conflict", b"resolved");
-    let committed = git::commit_merging(&mut forge, &mut checkout, b"w/temper", ours, theirs).expect("resolved");
+    let committed =
+        git::commit_merging(&mut forge, &mut checkout, b"w/temper", ours, theirs, b"fixture").expect("resolved");
     assert_eq!(
         forge.tree(committed),
         tree(&[(b"conflict", b"resolved"), (b"ours", b"added"), (b"theirs", b"added too")])

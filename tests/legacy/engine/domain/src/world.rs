@@ -945,7 +945,7 @@ impl World {
         let path = format!("change-{}", item.number).into_bytes().into_boxed_slice();
         files.retain(|file| file.path != path);
         files.push(File { path, content: format!("attempt {attempt}").into_bytes().into_boxed_slice() });
-        let commit = match forge::commit(&mut self.forge, &self.settings.forge, tip, files.into_boxed_slice()) {
+        let commit = match forge::commit(&mut self.forge, &self.settings.forge, tip, files.into_boxed_slice(), b"") {
             Ok(Some(commit)) => commit,
             Ok(None) => tip,
             Err(_) => {

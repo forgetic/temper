@@ -89,10 +89,11 @@ fn a_resolved_merge_keeps_both_parents_even_with_an_unchanged_tree() {
     h.push(ENGINE, b"work", ours).unwrap();
     let tree = h.domain.inspect(&CALM, REPOSITORY, &Read::Tree { commit: ours }).unwrap();
     let Answer::Tree(tree) = tree else { unreachable!("the fetched tree") };
-    let merged = crate::merge_commit(&mut h.domain, &CALM, ours, theirs, tree).unwrap();
+    let merged = crate::merge_commit(&mut h.domain, &CALM, ours, theirs, tree, b"merge message").unwrap();
     let object = h.domain.object(merged).unwrap();
     assert_eq!(object.parent, Some(ours));
     assert_eq!(object.merge_parent, Some(theirs));
+    assert_eq!(&*object.message, b"merge message");
     assert!(h.domain.is_ancestor(ours, merged));
     assert!(h.domain.is_ancestor(theirs, merged));
     assert_eq!(crate::git::merge_base(&h.domain, merged, theirs), Some(theirs));
@@ -128,7 +129,7 @@ fn a_converging_merge_dag_visits_each_commit_once() {
     let mut left = FIRST;
     let mut right = FIRST;
     for _ in 1..LIMITS.commits {
-        let next = crate::merge_commit(&mut h.domain, &CALM, left, right, files(&[])).unwrap();
+        let next = crate::merge_commit(&mut h.domain, &CALM, left, right, files(&[]), b"").unwrap();
         left = right;
         right = next;
     }
@@ -441,7 +442,9 @@ impl Harness {
         for (path, content) in &tree {
             list.push(File { path: copy_of(path), content: copy_of(content) }).expect("room");
         }
-        crate::commit(&mut self.domain, &self.env.limits, parent, list.into_boxed()).expect("room").expect("a change")
+        crate::commit(&mut self.domain, &self.env.limits, parent, list.into_boxed(), b"")
+            .expect("room")
+            .expect("a change")
     }
 
     fn push(&mut self, user: u64, branch: &[u8], commit: u64) -> Result<Answer, Error> {
@@ -955,15 +958,18 @@ fn unreachable_and_refusing_repositories_fail_as_git_would() {
 fn a_working_tree_commits_into_the_one_store() {
     let mut h = Harness::new(CALM);
     let same = files(&[(b"README", b"hello"), (b"ci", b"green")]);
-    assert_eq!(crate::commit(&mut h.domain, &h.env.limits, FIRST, same), Ok(None), "nothing changed");
-    let next = crate::commit(&mut h.domain, &h.env.limits, FIRST, files(&[(b"README", b"bye")])).expect("room");
+    assert_eq!(crate::commit(&mut h.domain, &h.env.limits, FIRST, same, b"discarded"), Ok(None), "nothing changed");
+    assert!(h.domain.object(2).is_none(), "unchanged tree stores no message or object");
+    let next = crate::commit(&mut h.domain, &h.env.limits, FIRST, files(&[(b"README", b"bye")]), b"ordinary\0message")
+        .expect("room");
     assert_eq!(next, Some(2), "named by a count");
     let object = h.domain.object(2).expect("stored");
     assert_eq!(object.parent, Some(FIRST));
+    assert_eq!(&*object.message, b"ordinary\0message");
     assert_eq!(object.tree.len(), 1, "a tree is the whole tree");
-    assert_eq!(crate::commit(&mut h.domain, &h.env.limits, 99, files(&[])), Err(Error::Missing(What::Commit)));
+    assert_eq!(crate::commit(&mut h.domain, &h.env.limits, 99, files(&[]), b""), Err(Error::Missing(What::Commit)));
     let wide = files(&[(b"a", b""), (b"b", b""), (b"c", b""), (b"d", b""), (b"e", b"")]);
-    assert_eq!(crate::commit(&mut h.domain, &h.env.limits, FIRST, wide), Err(Error::TooLarge));
+    assert_eq!(crate::commit(&mut h.domain, &h.env.limits, FIRST, wide, b""), Err(Error::TooLarge));
 }
 
 #[test]
@@ -1078,7 +1084,7 @@ fn opening_a_pull_request_refuses_what_forgejo_refuses() {
 fn a_merge_squashes_the_head_onto_the_base() {
     let mut h = Harness::new(CALM);
     let tree = files(&[(b"README", b"hello"), (b"src", b"one")]);
-    let work = crate::commit(&mut h.domain, &h.env.limits, FIRST, tree).expect("room").expect("a change");
+    let work = crate::commit(&mut h.domain, &h.env.limits, FIRST, tree, b"").expect("room").expect("a change");
     let more = h.commit(work, &[(b"src", b"two")]);
     h.push(ENGINE, b"work", more).expect("pushed");
     h.open(b"work").expect("opened");
@@ -1981,7 +1987,7 @@ fn a_full_store_refuses_counted_and_says_it_has_no_room() {
     let work = h.commit(FIRST, &[(b"src", b"one")]);
     crate::advance(&mut h.domain, &h.env, REPOSITORY, MAIN, b"other", b"x", MAINTAINER).expect("the last room");
     assert_eq!(h.domain.room().commits, 0);
-    assert_eq!(crate::commit(&mut h.domain, &h.env.limits, FIRST, files(&[])), Err(Error::Full));
+    assert_eq!(crate::commit(&mut h.domain, &h.env.limits, FIRST, files(&[]), b""), Err(Error::Full));
     h.push(ENGINE, b"work", work).expect("pushed");
     h.open(b"work").expect("opened");
     assert_eq!(h.call(ENGINE, merge(1, work)), Err(Error::Full));
@@ -2090,7 +2096,7 @@ fn every_call_is_answered_once_under_every_fault() {
 fn modify_and_delete_or_two_adds_conflict_unless_they_agree() {
     let mut h = Harness::new(CALM);
     // The head deletes the readme, which the base changed.
-    let deleted = crate::commit(&mut h.domain, &h.env.limits, FIRST, files(&[(b"ci", b"green")]))
+    let deleted = crate::commit(&mut h.domain, &h.env.limits, FIRST, files(&[(b"ci", b"green")]), b"")
         .expect("room")
         .expect("a change");
     h.push(ENGINE, b"delete", deleted).expect("pushed");
@@ -2113,7 +2119,7 @@ fn modify_and_delete_or_two_adds_conflict_unless_they_agree() {
     let edited = h.commit(FIRST, &[(b"README", b"edited")]);
     h.push(ENGINE, b"edit", edited).expect("pushed");
     h.open(b"edit").expect("opened");
-    let gone = crate::commit(&mut h.domain, &h.env.limits, FIRST, files(&[(b"ci", b"green")]))
+    let gone = crate::commit(&mut h.domain, &h.env.limits, FIRST, files(&[(b"ci", b"green")]), b"")
         .expect("room")
         .expect("a change");
     h.push(MAINTAINER, MAIN, gone).expect("the base moves");

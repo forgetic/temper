@@ -37,6 +37,8 @@ pub struct Object {
     /// The second parent of a merge, preserved even when its tree is unchanged.
     pub merge_parent: Option<u64>,
     pub tree: Tree,
+    /// Opaque commit message bytes, bounded by the fixture.
+    pub message: Box<[u8]>,
 }
 
 /// Names `object` in the store, or refuses it when the store is full.
