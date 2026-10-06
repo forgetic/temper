@@ -184,27 +184,26 @@ pub fn pattern_covers(pattern: &Pattern, name: &Name) -> bool {
 #[must_use]
 pub fn pattern_at_most(a: &Pattern, b: &Pattern) -> bool {
     match &b.last {
-        Last::Exact(last) => a.segments == b.segments && a.last == Last::Exact(last.clone()),
-        Last::Open(last) => terminal_at_most(a, b, last, true),
+        Last::Exact(last) => {
+            if let Last::Exact(candidate) = &a.last {
+                a.segments == b.segments && candidate == last
+            } else {
+                false
+            }
+        }
+        Last::Open(last) => terminal_at_most(a, b, last),
     }
 }
 
-fn terminal_at_most(a: &Pattern, b: &Pattern, last: &[u8], open: bool) -> bool {
+fn terminal_at_most(a: &Pattern, b: &Pattern, last: &[u8]) -> bool {
     if a.segments.get(..b.segments.len()) != Some(b.segments.as_ref()) {
         return false;
     }
     if let Some(segment) = a.segments.get(b.segments.len()) {
-        return if open { segment.starts_with(last) } else { segment.as_ref() == last };
+        return segment.starts_with(last);
     }
     match &a.last {
-        Last::Exact(segment) => {
-            if open {
-                segment.starts_with(last)
-            } else {
-                segment.as_ref() == last
-            }
-        }
-        Last::Open(segment) => open && segment.starts_with(last),
+        Last::Exact(segment) | Last::Open(segment) => segment.starts_with(last),
     }
 }
 
