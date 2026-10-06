@@ -166,6 +166,100 @@ fn leaving_held_requires_reason_and_edit_saves_it() {
 }
 
 #[test]
+fn restored_reason_reopens_only_for_its_task() {
+    let (mut domain, mut out, _, _, object) = task_started(210);
+    step(&mut domain, &env(1), Event::Act { action: Action::Intend { intent: Intent::LeaveHeld, object } }, &mut out);
+    step(
+        &mut domain,
+        &env(2),
+        Event::Act {
+            action: Action::Edit { field: FieldRef::Reason, text: Box::from(b"Need a second review".as_slice()) },
+        },
+        &mut out,
+    );
+    let Request::Save { saved } = pop(&mut out) else { panic!("reason edit saves immediately") };
+    assert_eq!(saved.drafts[1].target, Some(42), "reason names its task");
+
+    let mut reload = Domain::new(&limits(), 211);
+    let mut resumed = Queue::with_capacity(max_out(&limits()));
+    step(
+        &mut reload,
+        &env(3),
+        Event::Start {
+            address: Address::Task { number: 42, section: None },
+            saved: Some(saved.clone()),
+            offset: Offset(0),
+        },
+        &mut resumed,
+    );
+    let Request::Open { stream: person_stream, watch: Watch::Person } = pop(&mut resumed) else {
+        panic!("person watch opens")
+    };
+    let Request::Open { stream: task_stream, watch: Watch::Task { number: 42 } } = pop(&mut resumed) else {
+        panic!("task watch opens")
+    };
+    step(&mut reload, &env(3), Event::Opened { stream: person_stream }, &mut resumed);
+    step(
+        &mut reload,
+        &env(3),
+        Event::Streamed { stream: person_stream, event: StreamEvent::Snapshot(Snapshot::Person(person())) },
+        &mut resumed,
+    );
+    step(&mut reload, &env(3), Event::Opened { stream: task_stream }, &mut resumed);
+    step(
+        &mut reload,
+        &env(3),
+        Event::Streamed { stream: task_stream, event: StreamEvent::Snapshot(Snapshot::Task(snapshot(1))) },
+        &mut resumed,
+    );
+    let Page::Task(page) = reload.page() else { panic!("task page restored") };
+    let object = page.escalation.expect("held card restored");
+    step(
+        &mut reload,
+        &env(4),
+        Event::Act { action: Action::Intend { intent: Intent::LeaveHeld, object } },
+        &mut resumed,
+    );
+    assert_eq!(reload.field(FieldRef::Reason).expect("reason").text.as_ref(), b"Need a second review");
+    assert!(resumed.is_empty(), "same-task confirmation preserves the saved reason");
+
+    let mut other = Domain::new(&limits(), 212);
+    let mut changed = Queue::with_capacity(max_out(&limits()));
+    let mut unrelated = saved;
+    unrelated.drafts[1].target = Some(43);
+    step(
+        &mut other,
+        &env(3),
+        Event::Start {
+            address: Address::Task { number: 42, section: None },
+            saved: Some(unrelated),
+            offset: Offset(0),
+        },
+        &mut changed,
+    );
+    let Request::Open { .. } = pop(&mut changed) else { panic!("person watch opens") };
+    let Request::Open { stream, .. } = pop(&mut changed) else { panic!("task watch opens") };
+    step(&mut other, &env(3), Event::Opened { stream }, &mut changed);
+    step(
+        &mut other,
+        &env(3),
+        Event::Streamed { stream, event: StreamEvent::Snapshot(Snapshot::Task(snapshot(1))) },
+        &mut changed,
+    );
+    let Page::Task(page) = other.page() else { panic!("task page restored") };
+    let object = page.escalation.expect("held card restored");
+    step(
+        &mut other,
+        &env(4),
+        Event::Act { action: Action::Intend { intent: Intent::LeaveHeld, object } },
+        &mut changed,
+    );
+    assert!(other.field(FieldRef::Reason).expect("reason").text.is_empty(), "another task's reason is cleared");
+    let Request::Save { saved } = pop(&mut changed) else { panic!("cleared unrelated reason saved") };
+    assert_eq!(saved.drafts[1].target, None, "unrelated association is removed");
+}
+
+#[test]
 fn revision_change_refuses_confirmation_without_sending() {
     let (mut domain, mut out, _, task_stream, object) = task_started(203);
     step(&mut domain, &env(0), Event::Act { action: Action::Intend { intent: Intent::Release, object } }, &mut out);

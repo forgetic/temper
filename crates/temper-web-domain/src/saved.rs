@@ -7,6 +7,8 @@ use alloc::boxed::Box;
 pub struct SavedDraft {
     pub field: FieldRef,
     pub text: Box<[u8]>,
+    /// Task number for an unsent held-task reason; absent for other drafts.
+    pub target: Option<u64>,
 }
 
 /// A keyed ask that must be resent until its durable answer.

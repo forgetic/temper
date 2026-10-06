@@ -181,7 +181,11 @@ fn busy_retries_same_key_and_reload_restores_it() {
     assert_eq!(same, key, "retry uses same key");
     let saved = Saved {
         project: Some(7),
-        drafts: Box::from([SavedDraft { field: FieldRef::NewChat, text: Box::from(b"Fix login".as_slice()) }]),
+        drafts: Box::from([SavedDraft {
+            field: FieldRef::NewChat,
+            text: Box::from(b"Fix login".as_slice()),
+            target: None,
+        }]),
         pending: Box::from([SavedPending {
             key,
             ask: Ask::StartChat { project: 7, words: Box::from(b"Fix login".as_slice()) },

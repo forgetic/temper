@@ -52,6 +52,7 @@ pub struct Domain {
     new_chat: Field,
     new_chat_edit_version: u64,
     reason: Field,
+    reason_target: Option<u64>,
     notices: Queue<Notice>,
     facts: Queue<Fact>,
     lost: u64,
@@ -89,6 +90,7 @@ impl Domain {
             new_chat: Field::empty(),
             new_chat_edit_version: 0,
             reason: Field::empty(),
+            reason_target: None,
             notices: Queue::with_capacity(limits.notices),
             facts: Queue::with_capacity(limits.facts),
             lost: 0,
@@ -224,8 +226,8 @@ impl Domain {
             saved: Saved {
                 project: self.frame.project,
                 drafts: Box::from([
-                    SavedDraft { field: FieldRef::NewChat, text: self.new_chat.text.clone() },
-                    SavedDraft { field: FieldRef::Reason, text: self.reason.text.clone() },
+                    SavedDraft { field: FieldRef::NewChat, text: self.new_chat.text.clone(), target: None },
+                    SavedDraft { field: FieldRef::Reason, text: self.reason.text.clone(), target: self.reason_target },
                 ]),
                 pending: pending.into_boxed(),
             },
@@ -401,6 +403,7 @@ impl Domain {
     }
 
     fn clear_reason(&mut self) {
+        self.reason_target = None;
         if !self.reason.text.is_empty() {
             self.reason.text = Box::from([]);
             self.reason.written = self.reason.written.wrapping_add(1);
@@ -699,6 +702,7 @@ fn start(
                         "saved reason fits words bound"
                     );
                     domain.reason.text.clone_from(&draft.text);
+                    domain.reason_target = draft.target;
                     domain.reason.written = domain.reason.written.wrapping_add(1);
                 }
             }
@@ -759,6 +763,16 @@ fn act(domain: &mut Domain, env: &Env<Limits>, action: Action, out: &mut Queue<R
                 domain.notice(env, NoticeKind::WordsTooLong);
             } else {
                 domain.reason.text = text;
+                domain.reason_target = match domain.confirming.as_ref() {
+                    Some(open) => match domain.objects.get(open.object) {
+                        Some(object) => match object.key {
+                            ObjectKey::Escalation { task } => Some(task),
+                            ObjectKey::Task(_) | ObjectKey::Result { .. } => None,
+                        },
+                        None => None,
+                    },
+                    None => None,
+                };
                 domain.save(out);
             }
         }
@@ -799,11 +813,18 @@ fn intend(domain: &mut Domain, env: &Env<Limits>, intent: Intent, id: Id<Object>
         Card::Open | Card::Refused { .. } => {}
         Card::Deciding { .. } | Card::Leaving { .. } => return,
     }
+    let task = match object.key {
+        ObjectKey::Escalation { task } => task,
+        ObjectKey::Task(_) | ObjectKey::Result { .. } => unreachable!("only escalation offers decisions"),
+    };
     domain.confirming =
         Some(Confirming { intent, object: id, revision: object.revision, changed: false, problem: None });
     let had_reason = !domain.reason.text.is_empty();
-    domain.clear_reason();
-    if had_reason {
+    let keep_reason = intent == Intent::LeaveHeld && domain.reason_target == Some(task);
+    if !keep_reason {
+        domain.clear_reason();
+    }
+    if had_reason && !keep_reason {
         domain.save(out);
     }
     domain.changed();
