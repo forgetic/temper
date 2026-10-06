@@ -147,6 +147,9 @@ remain on `checkpoint/migration/transcript-codec`, outside main.
 | 05s8 local host 2.3: transcripts and resume | merged locally | smith 361dd90 | fmt/clippy pass; 553 focused / 3.797 s; 11 fuzzy / 5.818 s. |
 | 05s8 local host 2.4: credentials, cancel and pressure | merged locally | smith 1276f7b | fmt/clippy pass; 557 focused / 3.526 s; 11 fuzzy / 4.548 s; local serial 10 / 0.044 s. |
 | 05s8 local host 2.5: referee, replay and randomness | merged locally | smith 7d98378 | fmt/clippy pass; 568 focused / 7.830 s; 12 fuzzy / 9.597 s; local serial 21 / 0.087 s focused and 1 / 0.033 s fuzzy. |
+| 05s8 local host 3.1: workspace in place | merged locally | smith 01e870e | fmt/clippy pass; 569 focused / 7.397 s; 12 fuzzy / 7.272 s; local serial 22 / 0.179 s. |
+| 05s8 local host 3.2: delivery in place | merged locally | smith 1cf1d29 | fmt/clippy pass; 583 focused / 12.521 s; 12 fuzzy / 10.007 s; local serial 34 / 0.288 s. |
+| 05s8 local host 3.3: configured push | merged locally | smith 844d4c3 | fmt/clippy pass; 585 focused / 3.738 s; 12 fuzzy / 4.550 s; local serial 36 / 0.166 s. |
 
 ## Alignment slice limits
 
