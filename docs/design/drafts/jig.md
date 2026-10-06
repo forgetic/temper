@@ -52,7 +52,8 @@ test budgets include them.
 1. **Final names.** jig's crates are named `jig-*` from their first
    commit, so the move renames nothing.
 2. **One-way dependencies.** jig's crates depend on skein, smith and each
-   other only. A check in the gate enforces this from jig's first crate.
+   other only, and the core and its children on skein alone. A check in
+   the gate enforces this from jig's first crate.
 3. **Citations in their final form.** temper cites jig's documents as
    jig's `<file>.md`, the way it cites skein's and smith's, never by a
    path inside this repository. jig's documents and code never cite
@@ -106,8 +107,8 @@ The legacy crates go at the cutover, as planned, and none goes to jig.
 | `connectors.md` | `connectors.md` | |
 | `engine.md` | `engine.md` | temper's root: its connectors and their routes |
 | `people.md` | `people.md` | signing in through the forge; people on the forge |
-| `worker.md` | `worker.md` | checkouts; temper's worker root |
-| `agent.md` | `worker.md`, the host's part | temper's charters |
+| `worker.md` | `hosts.md`, the worker host | checkouts; temper's worker root |
+| `agent.md` | `hosts.md`, what the core takes from smith | temper's charters |
 | `forge.md` | | all of it |
 | `docs/design/store/` | `store.md` | the forge's records |
 | `docs/design/web/` | `client.md` | temper's kinds of object, `ux/` for them |
