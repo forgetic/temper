@@ -218,7 +218,7 @@ fn stored_limits() {
                         kind: 0,
                         pattern: temper_engine_domain_tasks::Pattern {
                             segments: Box::new([]),
-                            last: temper_engine_domain_tasks::Last::None
+                            last: temper_engine_domain_tasks::Last::Exact(Box::from(b"branch".as_slice()))
                         }
                     };
                     5

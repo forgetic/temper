@@ -1974,7 +1974,6 @@ fn task_authority(value: &authority::Authority) -> tasks::Authority {
     let mut grants = List::with_capacity(u32::try_from(value.grants.len()).expect("validated authority grants"));
     for grant in &value.grants {
         let last = match &grant.pattern.last {
-            authority::Last::None => tasks::Last::None,
             authority::Last::Exact(bytes) => tasks::Last::Exact(bytes.clone()),
             authority::Last::Open(bytes) => tasks::Last::Open(bytes.clone()),
         };
@@ -2013,7 +2012,6 @@ fn authority_value(value: &tasks::Authority) -> authority::Authority {
     let mut grants = List::with_capacity(u32::try_from(value.grants.len()).expect("validated task grants"));
     for grant in &value.grants {
         let last = match &grant.pattern.last {
-            tasks::Last::None => authority::Last::None,
             tasks::Last::Exact(bytes) => authority::Last::Exact(bytes.clone()),
             tasks::Last::Open(bytes) => authority::Last::Open(bytes.clone()),
         };
@@ -2224,7 +2222,6 @@ fn authority_within(value: &authority::Authority, limits: &Limits) -> bool {
             bytes = total;
         }
         let terminal = match &grant.pattern.last {
-            authority::Last::None => 0,
             authority::Last::Exact(bytes) | authority::Last::Open(bytes) => bytes.len(),
         };
         if terminal > usize::try_from(limits.authority.segment_bytes).expect("u32 fits usize") {

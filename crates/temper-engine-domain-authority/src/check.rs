@@ -594,7 +594,10 @@ pub fn needs(action: &Action) -> Option<Authority> {
             authority.grants = Box::new([Grant {
                 connector: effect.connector,
                 kind: effect.kind,
-                pattern: crate::Pattern { segments: effect.name.segments.clone(), last: Last::None },
+                pattern: crate::Pattern {
+                    segments: effect.name.segments.get(..effect.name.segments.len().checked_sub(1)?)?.into(),
+                    last: Last::Exact(effect.name.segments.last()?.clone()),
+                },
             }]);
             Some(authority)
         }

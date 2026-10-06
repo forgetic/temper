@@ -44,7 +44,6 @@ fn authority_bytes(authority: &Authority) -> Option<u64> {
             total = total.checked_add(bytes(segment.len())?)?;
         }
         match &grant.pattern.last {
-            Last::None => {}
             Last::Exact(word) | Last::Open(word) => total = total.checked_add(bytes(word.len())?)?,
         }
     }

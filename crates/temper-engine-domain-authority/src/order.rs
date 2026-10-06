@@ -159,7 +159,7 @@ impl Implies {
 
 /// Whether the pattern includes this name, compared segment by segment.
 /// Pure literal-segment coverage query over caller-admitted `pattern` and `name`; exact/open
-/// terminals require an additional segment and include its descendants. No allocation or child
+/// terminals require an additional segment; only open terminals include descendants. No allocation or child
 /// output. (domain/authority.md, sections 4–5).
 #[must_use]
 pub fn pattern_covers(pattern: &Pattern, name: &Name) -> bool {
@@ -167,11 +167,10 @@ pub fn pattern_covers(pattern: &Pattern, name: &Name) -> bool {
         return false;
     }
     match &pattern.last {
-        Last::None => name.segments.len() == pattern.segments.len(),
-        Last::Exact(last) => match name.segments.get(pattern.segments.len()) {
-            Some(segment) => segment == last,
-            None => false,
-        },
+        Last::Exact(last) => {
+            name.segments.len().checked_sub(1) == Some(pattern.segments.len())
+                && name.segments.get(pattern.segments.len()) == Some(last)
+        }
         Last::Open(last) => match name.segments.get(pattern.segments.len()) {
             Some(segment) => segment.starts_with(last),
             None => false,
@@ -185,11 +184,7 @@ pub fn pattern_covers(pattern: &Pattern, name: &Name) -> bool {
 #[must_use]
 pub fn pattern_at_most(a: &Pattern, b: &Pattern) -> bool {
     match &b.last {
-        Last::None => match &a.last {
-            Last::None => a.segments == b.segments,
-            Last::Exact(_) | Last::Open(_) => false,
-        },
-        Last::Exact(last) => terminal_at_most(a, b, last, false),
+        Last::Exact(last) => a.segments == b.segments && a.last == Last::Exact(last.clone()),
         Last::Open(last) => terminal_at_most(a, b, last, true),
     }
 }
@@ -202,7 +197,6 @@ fn terminal_at_most(a: &Pattern, b: &Pattern, last: &[u8], open: bool) -> bool {
         return if open { segment.starts_with(last) } else { segment.as_ref() == last };
     }
     match &a.last {
-        Last::None => false,
         Last::Exact(segment) => {
             if open {
                 segment.starts_with(last)

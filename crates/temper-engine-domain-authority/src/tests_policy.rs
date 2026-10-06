@@ -626,7 +626,11 @@ fn fitting_laws_needs_and_holder_depth_use_separate_current_inputs() {
         Holder::Person { project: 1, role: 99, proposal: ProposalKind::Batch, pool: numbers(100), tasks_left: 10 };
     assert!(!covers(&domain, &needed, &holder, 0), "an absent role cannot cover a proposal");
     let effect_need = needs(&Action::Effect(effect())).unwrap();
-    assert_eq!(effect_need.grants[0].pattern.last, Last::None, "a proposed effect needs only its exact name");
+    assert_eq!(
+        effect_need.grants[0].pattern.last,
+        Last::Exact(copy_of(b"repo")),
+        "a proposed effect needs only its exact name"
+    );
     assert_eq!(effect_need.budget.spend, 0);
     assert_eq!(needs(&Action::Escalate { release: None }).unwrap().grants.len(), 0);
     let mut overflowing = child(u64::MAX);
@@ -648,7 +652,6 @@ fn pattern_heap(pattern: &Pattern) -> u64 {
         bytes = add(bytes, sized(segment.len()));
     }
     match &pattern.last {
-        Last::None => {}
         Last::Exact(last) | Last::Open(last) => bytes = add(bytes, sized(last.len())),
     }
     bytes

@@ -235,7 +235,6 @@ pub(crate) fn valid_authority(limits: &Limits, value: &Authority) -> bool {
             bytes = total;
         }
         match &grant.pattern.last {
-            Last::None => {}
             Last::Exact(last) | Last::Open(last) => {
                 let Some(total) = bytes.checked_add(last.len()) else {
                     return false;

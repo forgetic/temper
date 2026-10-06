@@ -276,7 +276,6 @@ fn within(task: &TaskRecord, limits: &Limits) -> bool {
         .map(|grant| {
             grant.pattern.segments.iter().map(|segment| segment.len()).sum::<usize>()
                 + match &grant.pattern.last {
-                    Last::None => 0,
                     Last::Exact(bytes) | Last::Open(bytes) => bytes.len(),
                 }
         })

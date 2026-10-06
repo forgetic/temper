@@ -164,7 +164,6 @@ pub(crate) fn pattern_within(pattern: &Pattern, limits: &Limits) -> bool {
         return false;
     }
     match &pattern.last {
-        crate::Last::None => true,
         crate::Last::Exact(bytes) | crate::Last::Open(bytes) => within(bytes.len(), limits.segment_bytes),
     }
 }

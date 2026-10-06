@@ -98,10 +98,7 @@ pub struct Pattern {
 /// (domain/tasks.md, sections 2–3 and 14). (domain/authority.md, sections 3–7).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Last {
-    /// Covers exactly the base name without descendants, as interpreted by authority.
-    /// (domain/tasks.md, sections 2–3 and 14). (domain/authority.md, sections 3–7).
-    None,
-    /// Requires one exact additional segment and covers its descendants, as interpreted by
+    /// Requires one exact additional segment alone, as interpreted by
     /// authority. (domain/tasks.md, sections 2–3 and 14). (domain/authority.md, sections 3–7).
     Exact(
         /** Literal additional segment; its bytes count toward `Limits::authority_bytes`. (domain/tasks.md, sections 2–3 and 14). (domain/authority.md, sections 3–7). */

@@ -45,7 +45,7 @@ fn pattern() -> Pattern {
 }
 
 fn branch() -> Pattern {
-    Pattern { segments: Box::new([copy_of(b"repo"), copy_of(b"main")]), last: Last::None }
+    Pattern { segments: Box::new([copy_of(b"repo")]), last: Last::Exact(copy_of(b"main")) }
 }
 
 fn authority() -> Authority {
@@ -575,7 +575,6 @@ fn check_landing_memory() {
             bytes = bytes.checked_add(u64::try_from(segment.len()).unwrap()).unwrap();
         }
         match &rule.pattern.last {
-            Last::None => {}
             Last::Exact(bytes_) | Last::Open(bytes_) => {
                 bytes = bytes.checked_add(u64::try_from(bytes_.len()).unwrap()).unwrap();
             }

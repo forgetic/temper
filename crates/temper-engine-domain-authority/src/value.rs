@@ -91,16 +91,12 @@ pub struct Pattern {
     pub last: Last,
 }
 
-/// Terminal coverage after the exact base; empty terminal bytes are literal and do not remove the
-/// required extra segment. (domain/authority.md, sections 3–5).
+/// Terminal coverage after the exact base; even an empty terminal is one literal segment.
+/// (domain/authority.md, sections 3–5).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Last {
-    /// Only the name the base segments spell, with no descendants.
-    /// Covers exactly the base name, with no additional segments. (domain/authority.md, sections
-    /// 3–5).
-    None,
-    /// One additional segment exactly equal to this, and all descendants.
-    /// Requires this exact additional segment and includes all its descendants.
+    /// One additional segment exactly equal to this, with no descendants.
+    /// Requires this exact additional segment alone.
     /// (domain/authority.md, sections 3–5).
     Exact(
         /** Literal additional segment, bounded by `Limits::segment_bytes` at admission. (domain/authority.md, sections 3–5). */

@@ -52,11 +52,10 @@ fn names() -> Box<[Name]> {
 }
 
 fn patterns() -> Box<[Pattern]> {
-    let mut patterns = List::with_capacity(117);
+    let mut patterns = List::with_capacity(104);
     for depth in 0..=2 {
         for code in 0..3_u32.pow(depth) {
             let base = path(code, depth, &LETTERS);
-            patterns.push(Pattern { segments: base.clone(), last: Last::None }).unwrap();
             for terminal in TERMINALS {
                 patterns.push(Pattern { segments: base.clone(), last: Last::Exact(copy_of(terminal)) }).unwrap();
                 patterns.push(Pattern { segments: base.clone(), last: Last::Open(copy_of(terminal)) }).unwrap();
@@ -78,9 +77,9 @@ fn naive_covers(pattern: &Pattern, name: &Name) -> bool {
         }
     }
     match &pattern.last {
-        Last::None => name.segments.len() == pattern.segments.len(),
         Last::Exact(wanted) => {
-            name.segments.len() > pattern.segments.len() && name.segments[pattern.segments.len()] == *wanted
+            name.segments.len().checked_sub(1) == Some(pattern.segments.len())
+                && name.segments.get(pattern.segments.len()) == Some(wanted)
         }
         Last::Open(wanted) => {
             if name.segments.len() <= pattern.segments.len() {
@@ -131,10 +130,10 @@ fn subset(a: &[u64; WORDS], b: &[u64; WORDS]) -> bool {
 fn patterns_agree_with_finite_name_sets_and_obey_preorder_laws() {
     let patterns = patterns();
     let names = names();
-    assert_eq!(patterns.len(), 117, "the fixed sample has every planned pattern");
+    assert_eq!(patterns.len(), 104, "the fixed sample has both terminal forms");
     assert_eq!(names.len(), 2_801, "the universe has paths through four segments");
     let sets = covered_names(&patterns, &names);
-    let mut relation = [[false; 117]; 117];
+    let mut relation = [[false; 104]; 104];
     for (i, a) in patterns.iter().enumerate() {
         for (j, b) in patterns.iter().enumerate() {
             let actual = pattern_at_most(a, b);
@@ -211,15 +210,15 @@ fn implication_tables_are_bounded_closed_and_connector_scoped() {
 fn terminals_are_literal_and_grants_cover_only_their_connector_and_kinds() {
     let table = implications();
     let grant = Grant { connector: 1, kind: 3, pattern: pattern(&[b"repo"], Last::Exact(copy_of(b"c42"))) };
-    let name = Name { segments: segments(&[b"repo", b"c42", b"child"]) };
-    assert!(grant_covers(&grant, 1, 1, &name, &table), "exact terminal includes descendants and implied kinds");
+    let name = Name { segments: segments(&[b"repo", b"c42"]) };
+    assert!(grant_covers(&grant, 1, 1, &name, &table), "exact terminal and implied kind");
+    let descendant = Name { segments: segments(&[b"repo", b"c42", b"child"]) };
+    assert!(!grant_covers(&grant, 1, 1, &descendant, &table), "exact terminal excludes descendants");
     assert!(!grant_covers(&grant, 2, 1, &name, &table), "connector must agree");
     assert!(!grant_covers(&grant, 1, 4, &name, &table), "unrelated kinds do not follow");
     let sibling = Name { segments: segments(&[b"repo", b"c420"]) };
     assert!(!grant_covers(&grant, 1, 3, &sibling, &table), "exact bytes exclude continuations");
-    let singleton = pattern(&[b"repo", b"c42"], Last::None);
-    assert!(!pattern_covers(&singleton, &name), "no terminal excludes descendants");
-    assert!(pattern_at_most(&singleton, &grant.pattern), "one exact name fits its terminal subtree");
+    assert!(pattern_at_most(&grant.pattern, &grant.pattern), "one exact name fits itself");
     let open = pattern(&[b"repo"], Last::Open(copy_of(b"r42-")));
     let run = Name { segments: segments(&[b"repo", b"r42-1", b"saved"]) };
     assert!(pattern_covers(&open, &run), "open terminals include byte continuations and descendants");
@@ -232,7 +231,7 @@ fn terminals_are_literal_and_grants_cover_only_their_connector_and_kinds() {
         pattern(&[b"repo"], Last::Open(copy_of(b"a"))),
         pattern(&[b"repo"], Last::Open(copy_of(b"aa"))),
         pattern(&[b"repo"], Last::Exact(copy_of(b"aa"))),
-        pattern(&[b"repo", b"aa"], Last::None),
+        pattern(&[b"repo", b"aa"], Last::Exact(copy_of(b"child"))),
     ];
     let witnesses = [
         Name { segments: segments(&[b"repo", b"a"]) },
@@ -437,7 +436,7 @@ fn each_component_can_independently_prevent_the_order() {
     child.budget.deadline = Some(Wall::from_nanos(u64::MAX));
     assert!(at_most(&child, &unlimited, &table), "the latest finite deadline precedes no deadline");
     child = ceiling.clone();
-    child.grants = Box::new([Grant { connector: 1, kind: 1, pattern: pattern(&[], Last::None) }]);
+    child.grants = Box::new([Grant { connector: 1, kind: 1, pattern: pattern(&[], Last::Exact(copy_of(b"a"))) }]);
     assert!(!at_most(&child, &ceiling, &table), "every grant needs a containing grant");
 }
 
@@ -446,8 +445,8 @@ fn reordered_duplicate_values_are_equivalent_but_grant_unions_do_not_cover() {
     let table = implications();
     let mut a = empty();
     a.delegation.kinds = Box::new([Executor::Charter(1), Executor::Role(1)]);
-    let first = Grant { connector: 1, kind: 1, pattern: pattern(&[b"a"], Last::None) };
-    let second = Grant { connector: 1, kind: 2, pattern: pattern(&[b"b"], Last::None) };
+    let first = Grant { connector: 1, kind: 1, pattern: pattern(&[], Last::Exact(copy_of(b"a"))) };
+    let second = Grant { connector: 1, kind: 2, pattern: pattern(&[], Last::Exact(copy_of(b"b"))) };
     a.grants = Box::new([first.clone(), second.clone()]);
     let mut b = a.clone();
     b.delegation.kinds = Box::new([Executor::Role(1), Executor::Charter(1), Executor::Charter(1)]);

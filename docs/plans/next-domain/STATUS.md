@@ -14,6 +14,7 @@ protocol drafts and lower-layer integration are parked for later work.
 
 | Increment | State | Commit | Evidence |
 |---|---|---|---|
+| Alignment 01: grant patterns | merged | see alignment branch commit | Two terminal forms; exact grants cover one name, open grants cover matching descendants. Gate passed: 2,366 focused / 11.760 s; 42 fuzzy / 29.817 s. |
 | 00a Forgejo facts | merged | fa97784 | Gate passed; 1,772 focused / 7.440 s; 26 fuzzy / 22.148 s. |
 | 00b dead drafts | merged | 9acb981 | Gate passed; 1,772 focused and 26 fuzzy; baseline counts unchanged. |
 | 00c legacy rename | merged | d8385dc | Gate passed; 1,772 focused / 7.495 s; 26 fuzzy / 22.159 s. |
