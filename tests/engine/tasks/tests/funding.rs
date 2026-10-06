@@ -16,7 +16,14 @@ fn turn(world: &mut World, task: u64, attempt: u64, turn: u32, read: Option<u64>
 }
 
 fn end(world: &mut World, task: u64, attempt: u64, end: End, cumulative: u64) -> Reply {
-    send(world, |reply_to| Event::Activation { reply_to, task, attempt, end, cause: Cause::Priced { cumulative } })
+    send(world, |reply_to| Event::Activation {
+        reply_to,
+        task,
+        attempt,
+        end,
+        saved: None,
+        cause: Cause::Priced { cumulative },
+    })
 }
 
 fn ledger(world: &World, funder: Funder) -> tasks::FundingRecord {

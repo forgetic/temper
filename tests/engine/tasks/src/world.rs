@@ -28,6 +28,7 @@ pub const LIMITS: Limits = Limits {
     inbox_messages: 8,
     inbox_bytes: 128,
     message_bytes: 32,
+    saved_repositories: 2,
     contract_choices: 4,
     charters: 2,
     authority_grants: 4,
@@ -484,7 +485,7 @@ impl World {
         let attempt = self.runs[&task];
         let reply_to = self.to();
         let call = self.call;
-        self.send(Event::Activation { reply_to, task, attempt, end, cause });
+        self.send(Event::Activation { reply_to, task, attempt, end, saved: None, cause });
         self.replies[&call].clone()
     }
 

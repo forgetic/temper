@@ -35,6 +35,7 @@ pub fn limits() -> engine::Limits {
         inbox_messages: 4,
         inbox_bytes: 128,
         message_bytes: 64,
+        saved_repositories: 2,
         contract_choices: 1,
         charters: 1,
         authority_grants: 1,
@@ -499,6 +500,7 @@ impl World {
         self.pending_answer = true;
         self.queue(
             engine::Event::Answer {
+                saved: None,
                 channel: Token::new(7),
                 task: assignment.task,
                 attempt: assignment.attempt,
@@ -553,6 +555,7 @@ impl World {
                 engine::Request::TurnBusy { turn, .. } => self.turn(turn),
                 engine::Request::AnswerBusy { channel, task, attempt } => self.queue(
                     engine::Event::Answer {
+                        saved: None,
                         channel,
                         task,
                         attempt,

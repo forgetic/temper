@@ -110,5 +110,6 @@ fn task_bytes(task: &TaskRecord) -> Option<u64> {
         .checked_add(bytes(size_of_val(&*task.dependencies))?)?
         .checked_add(bytes(size_of_val(&*task.delegates))?)?
         .checked_add(bytes(size_of_val(&*task.waiting_on))?)?
-        .checked_add(inbox_bytes)
+        .checked_add(inbox_bytes)?
+        .checked_add(bytes(size_of_val(&*task.saved))?)
 }

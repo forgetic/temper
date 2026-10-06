@@ -123,6 +123,7 @@ fn saturated_payloads_graph_backoff_held_closing_retirement_and_restore_fit() {
             m.claim(number);
             let reply_to = m.to();
             m.event(Event::Activation {
+                saved: None,
                 reply_to,
                 task: number,
                 attempt: number,
@@ -146,6 +147,7 @@ fn saturated_payloads_graph_backoff_held_closing_retirement_and_restore_fit() {
             });
             let reply_to = m.to();
             m.event(Event::Activation {
+                saved: None,
                 reply_to,
                 task: number,
                 attempt: number + 10,
@@ -176,6 +178,7 @@ fn full_delegate_tree_dependency_edges_and_cold_restored_claims_fit() {
     m.event(Event::Restored);
     let reply_to = m.to();
     m.event(Event::Activation {
+        saved: None,
         reply_to,
         task: 1,
         attempt: 1,
@@ -183,7 +186,14 @@ fn full_delegate_tree_dependency_edges_and_cold_restored_claims_fit() {
         cause: tasks::Cause::Unpriced,
     });
     let reply_to = m.to();
-    m.event(Event::Activation { reply_to, task: 2, attempt: 2, end: End::Parked, cause: tasks::Cause::Unpriced });
+    m.event(Event::Activation {
+        reply_to,
+        task: 2,
+        attempt: 2,
+        end: End::Parked,
+        saved: None,
+        cause: tasks::Cause::Unpriced,
+    });
     for task in [3, 4, 2, 1] {
         m.event(Event::Settled { task });
     }
@@ -249,6 +259,7 @@ fn saturated_finite_sources_and_oversized_refusals_fit_without_input_copies() {
     m.claim(1);
     let reply_to = m.to();
     m.event(Event::Activation {
+        saved: None,
         reply_to,
         task: 1,
         attempt: 1,

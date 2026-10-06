@@ -4,6 +4,7 @@
 //! Keeps no receipt table; root owns exact transport payload replay proofs.
 use crate::domain::{Domain, entrance, publish, record, refused, task_mut};
 use crate::{Accepted, End, Hold, Limits, Refusal, Request};
+use alloc::boxed::Box;
 use skein_lib::{Env, Queue, ReplyTo};
 
 fn check_charge(domain: &Domain, number: u64, cumulative: u64) -> Result<u64, Refusal> {
@@ -92,6 +93,7 @@ pub(crate) fn activation(
     number: u64,
     attempt: u64,
     end: End,
+    saved: Option<Box<[u32]>>,
     cumulative: u64,
     out: &mut Queue<Request>,
 ) {
@@ -105,6 +107,9 @@ pub(crate) fn activation(
     let old = record(domain, number).expect("entrance checked");
     if attempt == 0 || crate::run::run_attempt(&old.phase) != Some(attempt) || old.last_answer == Some(attempt) {
         return refused(to, Some(number), Refusal::Attempt, out);
+    }
+    if !crate::run::saved_within(saved.as_deref(), &environment.limits) {
+        return refused(to, Some(number), Refusal::Contract, out);
     }
     match &end {
         End::Finished { result, cancel_delegates } => {
@@ -134,6 +139,6 @@ pub(crate) fn activation(
         Ok(spent) => spent,
         Err(why) => return refused(to, Some(number), why, out),
     };
-    crate::run::activation(domain, environment, to, number, attempt, end, out);
+    crate::run::activation(domain, environment, to, number, attempt, end, saved, out);
     post(domain, environment, number, cumulative, spent, out);
 }

@@ -178,6 +178,7 @@ fn walking_referee_rejects_wrong_task_or_uncommitted_or_duplicate_assignment() {
             ),
         }]),
         inbox: Box::new([]),
+        saved: Box::new([]),
         transcript: Box::new([]),
         grant: Grant { account: 1, generation: 1, valid: Duration::from_secs(60) },
     };

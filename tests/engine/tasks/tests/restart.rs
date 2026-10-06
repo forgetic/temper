@@ -51,6 +51,7 @@ fn stale_claims_and_replayed_terminal_are_typed_and_do_not_mutate() {
     let record = w.record(1).clone();
     let reply_to = w.to();
     w.send(Event::Activation {
+        saved: None,
         reply_to,
         task: 1,
         attempt: 4,
@@ -71,6 +72,7 @@ fn a_crash_before_finished_decision_resumes_current_attempt() {
     w.claim(1, 1);
     let reply_to = w.to();
     w.stage(Event::Activation {
+        saved: None,
         reply_to,
         task: 1,
         attempt: 1,
@@ -136,6 +138,7 @@ fn terminal_and_settlement_each_have_a_durable_cut_before_delivery() {
     w.claim(1, 1);
     let reply_to = w.to();
     w.stage(Event::Activation {
+        saved: None,
         reply_to,
         task: 1,
         attempt: 1,
@@ -188,6 +191,7 @@ fn delegate_cancel_cut_after_durability_stops_adopted_runs_then_closes_deepest()
     w.observe(temper_engine_tasks_world::referee::Seen::Cancelled { task: 2 });
     let reply_to = w.to();
     w.stage(Event::Activation {
+        saved: None,
         reply_to,
         task: 1,
         attempt: 1,

@@ -119,6 +119,8 @@ pub struct Assignment {
     pub sections: Box<[brief::Section]>,
     /// Whole unread words offered to this attempt, oldest first.
     pub inbox: Box<[tasks::Word]>,
+    /// Writable repository tags whose workspace starts at the task's saved-work branch.
+    pub saved: Box<[u32]>,
     /// Ordered opaque committed turn bodies of this task, empty for a fresh run.
     pub transcript: Box<[Box<[u8]>]>,
     /// Secret-free account grant; token bytes stay in the protocol.
@@ -256,6 +258,9 @@ pub enum Event {
         /// Owned task terminal; root retained payload bytes are at most twice tasks `result_bytes`,
         /// then tasks checks result/contract admission against its stricter result bound.
         end: tasks::End,
+        /// Full set of repository tags with saved work after this terminal, when the worker made
+        /// a save; absent preserves the previous set.
+        saved: Option<Box<[u32]>>,
     },
     /// Web to root: read a named historical result. People validates the session; the loaded ended
     /// task must name its person as requester. Ends once with `ResultReply` or a refused
@@ -382,7 +387,7 @@ enum Work {
 #[derive(Debug)]
 enum Payload {
     Turn { task: u64, attempt: u64, body: Turn },
-    Answer { task: u64, attempt: u64, cumulative: u64, end: tasks::End },
+    Answer { task: u64, attempt: u64, cumulative: u64, end: tasks::End, saved: Option<Box<[u32]>> },
 }
 
 #[derive(Debug)]
@@ -832,17 +837,18 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
                 body: id.token(),
             }));
         }
-        Event::Answer { channel, task, attempt, cumulative, end } => {
+        Event::Answer { channel, task, attempt, cumulative, end, saved } => {
             if !domain.ready() || !admits(domain, &env.limits) {
                 out.push(Request::AnswerBusy { channel, task, attempt });
                 return;
             }
             if end_bytes(&end) > u64::from(env.limits.tasks.result_bytes).checked_mul(2).expect("bounded result bytes")
+                || !tasks_saved_within(saved.as_deref(), env.limits.tasks.saved_repositories)
             {
                 out.push(Request::AnswerBusy { channel, task, attempt });
                 return;
             }
-            let Ok(id) = domain.payloads.insert(Some(Payload::Answer { task, attempt, cumulative, end })) else {
+            let Ok(id) = domain.payloads.insert(Some(Payload::Answer { task, attempt, cumulative, end, saved })) else {
                 out.push(Request::AnswerBusy { channel, task, attempt });
                 return;
             };
@@ -1491,6 +1497,7 @@ fn tasks_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                                     task,
                                     attempt,
                                     end: tasks::End::Failed(tasks::Class::Invalid),
+                                    saved: None,
                                     cause: tasks::Cause::Unpriced,
                                 }));
                             }
@@ -1654,6 +1661,7 @@ fn brief_outputs(domain: &mut Domain, env: &Env<Limits>, _decision: &mut Decisio
                     charter: domain.config.charter,
                     sections,
                     inbox: context.inbox,
+                    saved: context.saved,
                     transcript: turns.into_boxed(),
                     grant,
                 };
@@ -1721,8 +1729,8 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                 );
                 let _answered = to.into_token();
                 let body = domain.payloads.get_mut(Id::from_token(payload)).expect("fleet returns owned token");
-                let (cumulative, end) = match body.as_mut().expect("fleet returns owned payload") {
-                    Payload::Answer { cumulative, end, .. } => (*cumulative, end.clone()),
+                let (cumulative, end, saved) = match body.as_mut().expect("fleet returns owned payload") {
+                    Payload::Answer { cumulative, end, saved, .. } => (*cumulative, end.clone(), saved.clone()),
                     Payload::Turn { .. } => unreachable!("fleet returns answer family"),
                 };
                 let proof = domain.proofs.get_mut(&run.raw()).expect("terminal proof pre-reserved");
@@ -1735,6 +1743,7 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                     attempt: attempt.raw(),
                     cause: tasks::Cause::Priced { cumulative },
                     end,
+                    saved,
                 }));
             }
             fleet::Request::Acknowledge { channel, run, attempt } => {
@@ -1767,6 +1776,7 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                     task: run.raw(),
                     attempt: attempt.raw(),
                     end,
+                    saved: None,
                     cause: tasks::Cause::Unpriced,
                 }));
             }
@@ -1779,6 +1789,7 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                     task: run.raw(),
                     attempt: attempt.raw(),
                     end: tasks::End::Refused,
+                    saved: None,
                     cause: tasks::Cause::Unpriced,
                 }));
             }
@@ -2167,6 +2178,21 @@ fn ending_words(ending: tasks::Ending) -> Box<[u8]> {
     }
 }
 
+fn tasks_saved_within(saved: Option<&[u32]>, most: u32) -> bool {
+    let Some(tags) = saved else { return true };
+    if tags.len() > usize::try_from(most).expect("u32 fits usize") {
+        return false;
+    }
+    let mut previous = 0;
+    for tag in tags {
+        if *tag <= previous {
+            return false;
+        }
+        previous = *tag;
+    }
+    true
+}
+
 fn end_bytes(end: &tasks::End) -> u64 {
     match end {
         tasks::End::Finished { result, .. } => match result {
@@ -2316,6 +2342,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         || limits.loads.rows.checked_add(limits.fleet.workers)? > routes
         || limits.journal.result_bytes < limits.brief.brief_bytes
         || limits.journal.deliveries < limits.brief.sections
+        || limits.journal.deliveries < limits.tasks.saved_repositories
         || limits.journal.result_bytes < limits.tasks.result_bytes
         || limits.journal.result_bytes < limits.people.words
         || limits.fleet.workstream_bytes < 8
@@ -2348,10 +2375,16 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_add(Queue::<Work>::worst_case(routes)?)?
         .checked_add(Queue::<fleet::Event>::worst_case(limits.tasks.tasks.checked_mul(2)?)?)?
         .checked_add(Queue::<Box<tasks::RunContext>>::worst_case(limits.tasks.tasks)?)?;
+    bytes = bytes.checked_add(
+        u64::from(limits.tasks.tasks).checked_mul(u64::from(limits.tasks.saved_repositories).checked_mul(4)?)?,
+    )?;
     bytes = bytes.checked_add(Slab::<Option<Payload>>::worst_case(payload_slots(limits)?)?)?.checked_add(
         u64::from(payload_slots(limits)?).checked_mul(
             u64::from(limits.journal.transcript_bytes).max(u64::from(limits.tasks.result_bytes).checked_mul(2)?),
         )?,
+    )?;
+    bytes = bytes.checked_add(
+        u64::from(payload_slots(limits)?).checked_mul(u64::from(limits.tasks.saved_repositories).checked_mul(4)?)?,
     )?;
     bytes = bytes
         .checked_add(Slab::<Option<Read>>::worst_case(limits.loads.loads)?)?
@@ -2377,6 +2410,9 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_add(Map::<u64, RunProof>::worst_case(limits.tasks.tasks)?)?
         .checked_add(Map::<u64, RestoringProof>::worst_case(limits.tasks.tasks)?)?
         .checked_add(Map::<u64, Box<tasks::RunContext>>::worst_case(limits.tasks.tasks)?)?
+        .checked_add(
+            u64::from(limits.tasks.tasks).checked_mul(u64::from(limits.tasks.saved_repositories).checked_mul(4)?)?,
+        )?
         .checked_add(u64::from(limits.tasks.tasks).checked_mul(u64::from(limits.tasks.result_bytes).checked_mul(2)?)?)?
         .checked_add(Map::<u64, Transcript>::worst_case(limits.tasks.tasks)?)?
         .checked_add(
@@ -2401,6 +2437,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
             u64::from(limits.brief.brief_bytes)
                 .checked_add(List::<brief::Section>::worst_case(limits.brief.sections)?)?
                 .checked_add(u64::from(limits.tasks.inbox_bytes))?
+                .checked_add(u64::from(limits.tasks.saved_repositories).checked_mul(4)?)?
                 .checked_add(u64::from(limits.journal.transcript_bytes))?
                 .checked_add(List::<Box<[u8]>>::worst_case(limits.journal.transcript_bytes)?)?
                 .checked_add(
@@ -2681,6 +2718,7 @@ fn row_bound(limits: &Limits) -> Option<u64> {
         u64::from(tasks.result_bytes).checked_mul(3)?,
         u64::from(tasks.inbox_bytes),
         u64::from(tasks.inbox_messages).checked_mul(u64::try_from(size_of::<tasks::Word>()).ok()?)?,
+        u64::from(tasks.saved_repositories).checked_mul(4)?,
         u64::from(tasks.parameters).checked_mul(u64::try_from(size_of::<tasks::Parameter>()).ok()?)?,
         u64::from(tasks.inputs)
             .checked_add(u64::from(tasks.dependencies).checked_mul(2)?)?

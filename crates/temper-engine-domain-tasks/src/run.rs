@@ -7,7 +7,23 @@ use crate::{
     Accepted, Active, Class, Closing, Contract, End, Ending, Fact, Hold, Limits, Phase, Refusal, Request, Stage,
     TaskResult, Tries, Was,
 };
+use alloc::boxed::Box;
 use skein_lib::{Env, Queue, ReplyTo};
+
+pub(crate) fn saved_within(saved: Option<&[u32]>, limits: &Limits) -> bool {
+    let Some(tags) = saved else { return true };
+    if tags.len() > usize::try_from(limits.saved_repositories).expect("u32 fits usize") {
+        return false;
+    }
+    let mut previous = 0;
+    for tag in tags {
+        if *tag <= previous {
+            return false;
+        }
+        previous = *tag;
+    }
+    true
+}
 
 pub(crate) fn prepare(domain: &mut Domain, env: &Env<Limits>, to: ReplyTo, number: u64, out: &mut Queue<Request>) {
     let to = match entrance(domain, to, number) {
@@ -136,6 +152,7 @@ fn ending(result: TaskResult) -> Ending {
     }
 }
 
+#[expect(clippy::too_many_arguments, reason = "one fenced activation terminal")]
 pub(crate) fn activation(
     domain: &mut Domain,
     env: &Env<Limits>,
@@ -143,6 +160,7 @@ pub(crate) fn activation(
     number: u64,
     attempt: u64,
     end: End,
+    saved: Option<Box<[u32]>>,
     out: &mut Queue<Request>,
 ) {
     if !domain.ready() {
@@ -156,6 +174,9 @@ pub(crate) fn activation(
     }
     if run_attempt(&old.phase) != Some(attempt) {
         return refused(to, Some(number), Refusal::Attempt, out);
+    }
+    if !saved_within(saved.as_deref(), &env.limits) {
+        return refused(to, Some(number), Refusal::Contract, out);
     }
     let held = match old.phase {
         Phase::Held { why, .. } => Some(why),
@@ -215,6 +236,9 @@ pub(crate) fn activation(
     };
     let task = task_mut(domain, number).expect("terminal names live task");
     task.record.last_answer = Some(attempt);
+    if let Some(tags) = saved {
+        task.record.saved = tags;
+    }
     task.record.phase = match held {
         Some(why) => Phase::Held { was: was(next), why },
         None => next,

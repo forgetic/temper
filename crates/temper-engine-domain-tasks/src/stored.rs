@@ -145,6 +145,16 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
     if bytes > usize::try_from(limits.inbox_bytes).expect("u32 fits usize") {
         return false;
     }
+    if task.saved.len() > usize::try_from(limits.saved_repositories).expect("u32 fits usize") {
+        return false;
+    }
+    let mut previous_saved = 0;
+    for tag in &task.saved {
+        if *tag <= previous_saved {
+            return false;
+        }
+        previous_saved = *tag;
+    }
     if let Some(attempt) = task.last_answer
         && (attempt == 0 || attempt > task.attempt)
     {

@@ -398,6 +398,8 @@ pub struct TaskRecord {
     pub last_message: u64,
     /// Whole unread words in increasing root message order.
     pub inbox: Box<[Word]>,
+    /// Repository tags with work committed to this task's saved-work branch, ascending and unique.
+    pub saved: Box<[u32]>,
     /// Some attempt of this task committed a turn, so its next preparation must read its transcript.
     pub ever_turned: bool,
     /// Lifetime tasks made in this subtree, including itself, bounded by `Limits::tree_tasks`;
@@ -694,6 +696,9 @@ pub enum Event {
         /// Bounded root-supplied activation outcome; tasks normalizes invalid outcomes. A
         /// park/retry need not end the task.
         end: End,
+        /// Full set of repository tags with saved work after this terminal; absent preserves the
+        /// previous set. Root obtains it from the worker's save outcome.
+        saved: Option<Box<[u32]>>,
         /// `Priced` worker cumulative expense or unpriced topology/readiness cause; root owns exact
         /// replay fencing.
         cause: Cause,
@@ -910,6 +915,8 @@ pub struct RunContext {
     pub last_message: u64,
     /// Whole unread words carried into a newly prepared run brief.
     pub inbox: Box<[Word]>,
+    /// Repository tags whose next workspace starts from this task's saved-work branch.
+    pub saved: Box<[u32]>,
     /// Last claimed attempt; a task-wide transcript load must not use turns from a later claim.
     pub previous_attempt: u64,
     /// Whether a committed conversation exists across this task's attempts.

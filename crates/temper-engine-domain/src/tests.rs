@@ -308,6 +308,7 @@ fn held_assignment_checks_owned_bytes_and_section_backing_before_acceptance() {
             body: brief::Body::Text(b"12345".as_slice().into()),
         }]),
         inbox: Box::new([]),
+        saved: Box::new([]),
         transcript: Box::new([]),
         grant: accounts::Grant { account: 1, generation: 1, valid: skein_lib::Duration::from_secs(1) },
     };

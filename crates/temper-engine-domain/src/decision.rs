@@ -636,8 +636,16 @@ fn assignment_within(assignment: &crate::engine::Assignment, limits: &Limits) ->
     if assignment.task == 0
         || assignment.attempt == 0
         || assignment.sections.len() > usize::try_from(limits.deliveries).expect("u32 fits usize")
+        || assignment.saved.len() > usize::try_from(limits.deliveries).expect("u32 fits usize")
     {
         return false;
+    }
+    let mut previous_saved = 0;
+    for tag in &assignment.saved {
+        if *tag <= previous_saved {
+            return false;
+        }
+        previous_saved = *tag;
     }
     let mut owned = 0_u64;
     let mut last = 0_u64;

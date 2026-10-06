@@ -235,6 +235,7 @@ fn durable_start_turn_and_answer_callbacks_survive_full_journal_pressure() {
         2
     );
     driver.send(engine::Event::Answer {
+        saved: None,
         channel: Token::new(7),
         task: assignment.task,
         attempt: assignment.attempt,
@@ -487,6 +488,7 @@ fn refused_terminal_clears_fleet_handoff_without_charging_rejected_spend() {
     driver.settle();
     let assignment = assigned(&driver);
     driver.send(engine::Event::Answer {
+        saved: None,
         channel: Token::new(7),
         task: assignment.task,
         attempt: assignment.attempt,
@@ -510,7 +512,7 @@ fn refused_terminal_clears_fleet_handoff_without_charging_rejected_spend() {
 }
 
 #[test]
-fn fleet_capacity_refusal_releases_the_unplaced_durable_claim() {
+fn a_refused_assignment_spends_no_try() {
     let mut limits = limits();
     limits.fleet.attempts = 1;
     let mut driver = Driver::configured(Store::new(), config(94), &limits);
@@ -531,6 +533,7 @@ fn fleet_capacity_refusal_releases_the_unplaced_durable_claim() {
     assert!(matches!(task.phase, tasks::Phase::Active(tasks::Active::BackingOff { .. })));
     assert_eq!(task.run_spent, 0);
     assert_eq!(task.numbers.spent, 0);
+    assert_eq!(task.tries, tasks::Tries::NONE);
 }
 
 #[test]
@@ -837,6 +840,7 @@ fn bounded_invalid_typed_terminal_preserves_original_root_evidence_and_charges_o
         cancel_delegates: false,
     };
     driver.send(engine::Event::Answer {
+        saved: None,
         channel: Token::new(7),
         task: assignment.task,
         attempt: assignment.attempt,
@@ -864,6 +868,7 @@ fn bounded_invalid_typed_terminal_preserves_original_root_evidence_and_charges_o
     assert_eq!(task.tries.invalid, 1);
     let rows = driver.store.rows.clone();
     driver.send(engine::Event::Answer {
+        saved: None,
         channel: Token::new(7),
         task: assignment.task,
         attempt: assignment.attempt,
@@ -1384,6 +1389,7 @@ fn multiple_waiting_recipients_preflight_together_and_full_journal_refuses_witho
     driver.settle();
     let assignment = assigned(&driver);
     driver.send(engine::Event::Answer {
+        saved: None,
         channel: Token::new(7),
         task: assignment.task,
         attempt: assignment.attempt,
@@ -1751,6 +1757,7 @@ fn a_read_fence_takes_only_what_the_run_read() {
 fn words_to_a_parked_chat_wake_it() {
     let (mut driver, assignment) = chat_driver();
     driver.send(engine::Event::Answer {
+        saved: None,
         channel: Token::new(7),
         task: assignment.task,
         attempt: assignment.attempt,
@@ -1777,6 +1784,7 @@ fn a_chat_parks_and_resumes_from_its_transcript() {
     });
     driver.settle();
     driver.send(engine::Event::Answer {
+        saved: None,
         channel: Token::new(7),
         task: first.task,
         attempt: first.attempt,
@@ -1796,6 +1804,7 @@ fn a_chat_parks_and_resumes_from_its_transcript() {
     });
     driver.settle();
     driver.send(engine::Event::Answer {
+        saved: None,
         channel: Token::new(7),
         task: second.task,
         attempt: second.attempt,
@@ -1824,6 +1833,7 @@ fn a_chat_past_the_resume_limit_starts_fresh_with_the_tail_in_its_brief() {
     });
     driver.settle();
     driver.send(engine::Event::Answer {
+        saved: None,
         channel: Token::new(7),
         task: first.task,
         attempt: first.attempt,
@@ -1844,4 +1854,72 @@ fn a_chat_past_the_resume_limit_starts_fresh_with_the_tail_in_its_brief() {
         .expect("bounded transcript tail section");
     assert!(tail.ends_with(b"yz"), "the newest conversation bytes survive the cut");
     assert!(tail.len() <= 128, "tail fits its section budget");
+}
+
+#[test]
+fn a_run_failing_transiently_is_retried_then_held_past_its_tries() {
+    let (mut driver, first) = chat_driver();
+    driver.send(engine::Event::Answer {
+        channel: Token::new(7),
+        task: first.task,
+        attempt: first.attempt,
+        cumulative: 0,
+        end: tasks::End::Failed(tasks::Class::Transient),
+        saved: None,
+    });
+    driver.settle();
+    let Some(Record::Tasks(tasks::Stored::Live(task))) =
+        driver.store.rows.get(&Key::Tasks(tasks::Key::Live(first.task)))
+    else {
+        panic!("retryable task")
+    };
+    assert_eq!(task.tries.transient, 1);
+    assert!(matches!(task.phase, tasks::Phase::Active(tasks::Active::BackingOff { .. })));
+    driver.env.now = Time::from_nanos(Duration::from_secs(2).as_nanos());
+    driver.env.wall = Wall::from_nanos(Duration::from_secs(2).as_nanos());
+    engine::fire(&mut driver.root, &driver.env, &mut driver.out);
+    driver.collect();
+    driver.settle();
+    let second = assigned_from_last(&driver.delivered);
+    assert!(second.attempt > first.attempt);
+    driver.send(engine::Event::Answer {
+        channel: Token::new(7),
+        task: second.task,
+        attempt: second.attempt,
+        cumulative: 0,
+        end: tasks::End::Failed(tasks::Class::Transient),
+        saved: None,
+    });
+    driver.settle();
+    let Some(Record::Tasks(tasks::Stored::Live(task))) =
+        driver.store.rows.get(&Key::Tasks(tasks::Key::Live(first.task)))
+    else {
+        panic!("held task")
+    };
+    assert_eq!(task.tries.transient, 2);
+    assert!(matches!(task.phase, tasks::Phase::Held { why: tasks::Hold::Failures(tasks::Class::Transient), .. }));
+}
+
+#[test]
+fn saved_work_reaches_the_next_attempt() {
+    let (mut driver, first) = chat_driver();
+    driver.send(engine::Event::Answer {
+        channel: Token::new(7),
+        task: first.task,
+        attempt: first.attempt,
+        cumulative: 0,
+        end: tasks::End::Parked,
+        saved: Some(Box::new([3])),
+    });
+    driver.settle();
+    let Some(Record::Tasks(tasks::Stored::Live(task))) =
+        driver.store.rows.get(&Key::Tasks(tasks::Key::Live(first.task)))
+    else {
+        panic!("parked task")
+    };
+    assert_eq!(task.saved.as_ref(), [3]);
+    say(&mut driver, first.task, 49);
+    let second = assigned_from_last(&driver.delivered);
+    assert_eq!(second.saved.as_ref(), [3]);
+    assert!(second.attempt > first.attempt);
 }

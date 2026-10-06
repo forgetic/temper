@@ -356,6 +356,7 @@ impl World {
         self.worker_answer = WorkerAnswer::Retained;
         self.queue(
             engine::Event::Answer {
+                saved: None,
                 channel: Token::new(7),
                 task: assignment.task,
                 attempt: assignment.attempt,

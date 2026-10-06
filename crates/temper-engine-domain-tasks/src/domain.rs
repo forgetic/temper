@@ -161,11 +161,11 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
             crate::admission::turn(domain, env, reply_to, task, attempt, turn, read, offered, cumulative, out);
         }
         Event::Started { task, attempt } => crate::run::started(domain, env, task, attempt, out),
-        Event::Activation { reply_to, task, attempt, end, cause } => match cause {
+        Event::Activation { reply_to, task, attempt, end, saved, cause } => match cause {
             crate::Cause::Priced { cumulative } => {
-                crate::admission::activation(domain, env, reply_to, task, attempt, end, cumulative, out);
+                crate::admission::activation(domain, env, reply_to, task, attempt, end, saved, cumulative, out);
             }
-            crate::Cause::Unpriced => crate::run::activation(domain, env, reply_to, task, attempt, end, out),
+            crate::Cause::Unpriced => crate::run::activation(domain, env, reply_to, task, attempt, end, saved, out),
         },
         Event::PreparationFailed { task } => crate::run::preparation_failed(domain, env, task, out),
         Event::Hold { task, why } => crate::run::hold(domain, env, task, why, out),
@@ -250,6 +250,7 @@ pub(crate) fn activate(domain: &Domain, number: u64, out: &mut Queue<Request>) {
             task: number,
             last_message: task.last_message,
             inbox: task.inbox.clone(),
+            saved: task.saved.clone(),
             previous_attempt: task.attempt,
             ever_turned: task.ever_turned,
             tries: task.tries,
@@ -381,6 +382,7 @@ fn make(
                 turn: 0,
                 last_message: 0,
                 inbox: Box::new([]),
+                saved: Box::new([]),
                 ever_turned: false,
                 made: 1,
                 attempt: 0,
