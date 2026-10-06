@@ -125,6 +125,16 @@ remain on `checkpoint/migration/transcript-codec`, outside main.
 | 05s5 shared framing | checkpoint merged; adoption deferred | skein a423734, 8206468 | Combined gate: 1,206 focused / 4.982 s; 71 fuzzy / 29.694 s; fmt/clippy pass. |
 | 05s5 full transcript codec | draft moved to scratch; source absent | smith bbe922f | No codec implementation or tests; incomplete manifests remain on checkpoint branch. |
 | 05s4 activation-qualified host calls | merged locally | smith 5aa22cb, 774f618 | Final-tip fmt/clippy pass; 591 focused / 3.954 s; 11 fuzzy / 4.432 s; serial 591 / 9.488 s, 11 / 9.102 s. |
+| 05s conformance 8: reserved names | merged locally | smith 180629e | fmt/clippy pass; 539 focused / 8.033 s; 11 fuzzy / 7.642 s. |
+| 05s conformance 4: check discovery | merged locally | smith a81a9de | fmt/clippy pass; 541 focused / 6.053 s; 11 fuzzy / 5.602 s. |
+| 05s conformance 3: failed directory | merged locally | smith e11f2af | fmt/clippy pass; 543 focused / 3.550 s; 11 fuzzy / 4.630 s. |
+| 05s conformance 1: configured endpoints | merged locally | smith 5cf93de | fmt/clippy pass; 544 focused / 3.668 s; 11 fuzzy / 4.434 s. |
+| 05s conformance 2: typed host refusal | merged locally | smith 81d1050 | fmt/clippy pass; 544 focused / 3.787 s; 11 fuzzy / 4.605 s. |
+| 05s conformance 9: failure kinds | merged locally | smith e85b945 | fmt/clippy pass; 544 focused / 3.510 s; 11 fuzzy / 4.489 s. |
+| 05s conformance 6: host retry | merged locally | smith 78cce42 | fmt/clippy pass; 544 focused / 3.797 s; 11 fuzzy / 4.334 s. |
+| 05s conformance 7: oversized host answer | merged locally | smith 5ad9630 | fmt/clippy pass; 546 focused / 4.664 s; 11 fuzzy / 5.946 s. |
+| 05s conformance 10: session ready list | merged locally | smith 9d4b91a | fmt/clippy pass; 546 focused / 3.300 s; 11 fuzzy / 4.466 s. |
+| 05s conformance 5: child workspace tools | merged locally | smith 51fe873 | fmt/clippy pass; 544 focused / 3.368 s; 11 fuzzy / 4.408 s. |
 
 ## Alignment slice limits
 
