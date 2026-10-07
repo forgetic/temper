@@ -106,6 +106,8 @@ fn adopted() -> Repository {
         name: Box::from(&b"repo"[..]),
         prefix: Box::from(&b"temper/"[..]),
         role: Role::Owned,
+        ci: true,
+        checks: Box::new([]),
         kinds: Kinds {
             read: true,
             push: true,
@@ -207,6 +209,8 @@ fn adoption_reads_permission_before_committing_its_role() {
         prefix: Box::from(&b"temper/"[..]),
         role: Role::Owned,
         landing: Box::from(&b"main"[..]),
+        ci: true,
+        checks: Box::new([]),
     };
     outputs(&mut d, Event::Adopt { reply_to: Token::new(4), adoption: request });
     let sent = ready(&mut d);
@@ -290,4 +294,27 @@ fn adoption_reads_permission_before_committing_its_role() {
         | Request::ChangeDecision { .. }
         | Request::Read { .. } => panic!("settings follows collision read"),
     }
+}
+
+#[test]
+fn adoption_without_ci_refuses_an_empty_check_policy() {
+    let mut d = domain();
+    let request = Adoption {
+        project: 5,
+        home: true,
+        provider: REPO,
+        host: Box::from(&b"forge.example"[..]),
+        owner: Box::from(&b"org"[..]),
+        name: Box::from(&b"repo"[..]),
+        prefix: Box::from(&b"temper/"[..]),
+        role: Role::Owned,
+        landing: Box::from(&b"main"[..]),
+        ci: false,
+        checks: Box::new([]),
+    };
+    assert_eq!(
+        outputs(&mut d, Event::Adopt { reply_to: Token::new(5), adoption: request }).as_ref(),
+        &[Request::Adopted { reply_to: Token::new(5), result: Err(client::api::Error::Refused) }]
+    );
+    assert!(ready(&mut d).is_empty());
 }

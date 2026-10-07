@@ -60,6 +60,11 @@ pub fn worst_case(l: &Limits) -> Option<u64> {
         .checked_mul(u64::from(l.name_bytes))?;
     client::worst_case(&l.client)?
         .checked_add(Map::<client::api::Repository, Repository>::worst_case(l.repositories)?)?
+        .checked_add(
+            u64::from(l.repositories)
+                .checked_mul(u64::from(l.change_policy.gates))?
+                .checked_mul(u64::try_from(size_of::<u32>()).ok()?)?,
+        )?
         .checked_add(Map::<u64, Box<[Name]>>::worst_case(l.tasks)?)?
         .checked_add(Map::<Name, Hold>::worst_case(l.holds)?)?
         .checked_add(Map::<(u64, Topic), Subscriber>::worst_case(l.subscriptions)?)?

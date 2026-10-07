@@ -489,6 +489,10 @@ impl World {
     }
 
     fn adopt(&mut self) {
+        self.adopt_with_checks(true, Box::new([]));
+    }
+
+    fn adopt_with_checks(&mut self, ci: bool, checks: Box<[u32]>) {
         self.until(Until::Ready);
         self.send(engine::Event::SignedIn {
             reply_to: ReplyTo::new(Token::new(90)),
@@ -512,6 +516,8 @@ impl World {
                 prefix: Box::from(&b"temper/"[..]),
                 role: forge_top::Role::Owned,
                 landing: Box::from(&b"main"[..]),
+                ci,
+                checks,
             },
         });
         self.until(Until::Adopted);
@@ -533,8 +539,22 @@ fn change_world_with_gate(
     approval: Option<authority::Freshness>,
     agent_gate: bool,
 ) -> (World, engine::Assignment, engine::Assignment, Box<[u8]>) {
+    change_world_with_policy(silent_ci, passes, approval, agent_gate, false)
+}
+
+fn change_world_with_policy(
+    silent_ci: bool,
+    passes: u32,
+    approval: Option<authority::Freshness>,
+    agent_gate: bool,
+    no_ci: bool,
+) -> (World, engine::Assignment, engine::Assignment, Box<[u8]>) {
     let mut world = World::configured_policy(true, true, silent_ci, passes, approval, agent_gate);
-    world.adopt();
+    if no_ci {
+        world.adopt_with_checks(false, Box::new([1]));
+    } else {
+        world.adopt();
+    }
     world.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {
@@ -845,7 +865,16 @@ fn a_change_whose_ci_never_reports_is_stalled_and_held() {
 
 #[test]
 fn an_agent_review_gate_runs_at_the_head_and_its_approval_lands_the_change() {
-    let (mut world, _chat, producer, branch) = change_world_with_gate(false, 1000, None, true);
+    check_gate_landing(false);
+}
+
+#[test]
+fn a_change_to_a_repository_without_ci_lands_on_its_checks() {
+    check_gate_landing(true);
+}
+
+fn check_gate_landing(no_ci: bool) {
+    let (mut world, _chat, producer, branch) = change_world_with_policy(no_ci, 1000, None, true, no_ci);
     assert!(matches!(
         world.external(2, raw::Op::Git(raw::Git::Create { branch: branch.clone(), commit: 1 })),
         raw::Answer::Branch(raw::Created::Created)
@@ -914,9 +943,18 @@ fn an_agent_review_gate_runs_at_the_head_and_its_approval_lands_the_change() {
 }
 
 #[test]
-#[expect(clippy::too_many_lines, reason = "the review repair story spans both gate heads and their worker reports")]
 fn a_review_asking_for_changes_is_repaired_with_its_remarks_and_reviewed_again() {
-    let (mut world, _chat, producer, branch) = change_world_with_gate(false, 1000, None, true);
+    check_gate_repair(false);
+}
+
+#[test]
+fn a_failing_check_is_repaired_and_checked_again() {
+    check_gate_repair(true);
+}
+
+#[expect(clippy::too_many_lines, reason = "the check repair story spans both gate heads and their worker reports")]
+fn check_gate_repair(no_ci: bool) {
+    let (mut world, _chat, producer, branch) = change_world_with_policy(no_ci, 1000, None, true, no_ci);
     assert!(matches!(
         world.external(2, raw::Op::Git(raw::Git::Create { branch: branch.clone(), commit: 1 })),
         raw::Answer::Branch(raw::Created::Created)
@@ -1811,6 +1849,8 @@ fn a_saved_repository_tag_becomes_a_concrete_checkout_in_the_next_attempt() {
             prefix: Box::from(&b"temper/"[..]),
             role: forge_top::Role::Owned,
             landing: Box::from(&b"main"[..]),
+            ci: true,
+            checks: Box::new([]),
         },
     });
     for _ in 0..100 {

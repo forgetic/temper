@@ -262,6 +262,10 @@ pub struct Landing {
     pub contains_tip: Status,
     /// CI head and status from the same named change snapshot.
     pub ci: Ci,
+    /// CI availability is configured at repository adoption, never inferred from statuses.
+    pub has_ci: bool,
+    /// Configured checks required in place of CI; each must pass at this head.
+    pub checks: Box<[Gate]>,
     /// Root-verified clean predecessor heads, bounded by `Limits::heads`; repair or conflict
     /// resolution breaks this lineage.
     pub clean: Box<[Head]>,

@@ -128,6 +128,8 @@ fn landing() -> Landing {
         tip: OLD,
         contains_tip: Status::Passed,
         ci: Ci { head: HEAD, status: Status::Passed },
+        has_ci: true,
+        checks: Box::new([]),
         clean: Box::new([OLD]),
         gates: Box::new([]),
         verdicts: Box::new([Verdict { gate: 10, head: OLD, status: Status::Passed }]),
@@ -153,6 +155,28 @@ fn check(domain: &Domain, ask: &EffectAsk) -> (Answer, Queue<Finding>) {
     let mut out = Queue::with_capacity(max_out(domain.limits()).unwrap());
     let answer = check_effect(domain, ask, &[], &mut out);
     (answer, out)
+}
+
+#[test]
+fn a_repository_without_ci_requires_its_configured_check_at_the_landing_head() {
+    let domain = domain(policy());
+    let mut ask = ask();
+    let landing = ask.landing.as_mut().expect("landing facts");
+    landing.has_ci = false;
+    landing.ci.status = Status::Unknown;
+    landing.checks = Box::new([Gate { number: 11, blocking: true, freshness: Freshness::Exact }]);
+    landing.verdicts = Box::new([landing.verdicts[0], Verdict { gate: 11, head: HEAD, status: Status::Passed }]);
+    assert_eq!(check(&domain, &ask).0, Answer::Allow);
+    ask.landing.as_mut().expect("landing facts").verdicts[1].head = OLD;
+    assert_eq!(check(&domain, &ask).0, Answer::Wait);
+    ask.landing.as_mut().expect("landing facts").checks[0] =
+        Gate { number: 11, blocking: false, freshness: Freshness::Clean };
+    assert_eq!(check(&domain, &ask).0, Answer::Wait, "a supplied advisory or clean gate cannot weaken a check");
+    ask.landing.as_mut().expect("landing facts").verdicts[1].head = HEAD;
+    ask.landing.as_mut().expect("landing facts").verdicts[1].status = Status::Failed;
+    assert_eq!(check(&domain, &ask).0, Answer::Refuse);
+    ask.landing.as_mut().expect("landing facts").checks = Box::new([]);
+    assert_eq!(check(&domain, &ask).0, Answer::Refuse);
 }
 
 fn status(rng: &mut Rng) -> Status {

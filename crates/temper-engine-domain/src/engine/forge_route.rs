@@ -1472,15 +1472,41 @@ fn configured_gates(
                 if present {
                     continue;
                 }
+                let is_check = !repository.ci && repository.checks.contains(&gate.number);
                 gates
                     .push(forge_change::Gate {
                         number: u64::from(gate.number),
-                        kind: forge_change::GateKind::Agent,
-                        blocking: gate.blocking,
-                        freshness: match gate.freshness {
-                            authority::Freshness::Exact => forge_change::Freshness::Exact,
-                            authority::Freshness::Clean => forge_change::Freshness::Clean,
+                        kind: if is_check { forge_change::GateKind::Check } else { forge_change::GateKind::Agent },
+                        blocking: is_check || gate.blocking,
+                        freshness: if is_check {
+                            forge_change::Freshness::Exact
+                        } else {
+                            match gate.freshness {
+                                authority::Freshness::Exact => forge_change::Freshness::Exact,
+                                authority::Freshness::Clean => forge_change::Freshness::Clean,
+                            }
                         },
+                        eager: false,
+                    })
+                    .ok()?;
+            }
+        }
+    }
+    if !repository.ci {
+        for number in &repository.checks {
+            let mut present = false;
+            for prior in gates.as_slice() {
+                if prior.number == u64::from(*number) {
+                    present = true;
+                }
+            }
+            if !present {
+                gates
+                    .push(forge_change::Gate {
+                        number: u64::from(*number),
+                        kind: forge_change::GateKind::Check,
+                        blocking: true,
+                        freshness: forge_change::Freshness::Exact,
                         eager: false,
                     })
                     .ok()?;
@@ -1516,6 +1542,15 @@ fn landing_snapshot(
         return None;
     }
     let head = evidence.head?;
+    let repository = domain.forge.repository(row.repository)?;
+    let mut checks = List::with_capacity(env.limits.authority.gates);
+    if !repository.ci {
+        for number in &repository.checks {
+            checks
+                .push(authority::Gate { number: *number, blocking: true, freshness: authority::Freshness::Exact })
+                .ok()?;
+        }
+    }
     let mut gates = List::with_capacity(env.limits.authority.gates);
     for gate in &row.change.gates {
         gates
@@ -1569,6 +1604,8 @@ fn landing_snapshot(
         tip: evidence.base_tip,
         contains_tip: landing_status(evidence.contains_base),
         ci: authority::Ci { head, status: landing_status(evidence.ci) },
+        has_ci: repository.ci,
+        checks: checks.into_boxed(),
         clean: row.change.clean.clone(),
         gates: gates.into_boxed(),
         verdicts: verdicts.into_boxed(),

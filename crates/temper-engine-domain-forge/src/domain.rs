@@ -572,6 +572,22 @@ fn adopt(d: &mut Domain, env: &Env<Limits>, reply_to: Token, request: Adoption, 
         emit(out, Request::Adopted { reply_to, result: Err(client::api::Error::Refused) });
         return;
     }
+    if !request.ci && request.checks.is_empty() {
+        emit(out, Request::Adopted { reply_to, result: Err(client::api::Error::Refused) });
+        return;
+    }
+    if request.checks.len() > usize::try_from(env.limits.change_policy.gates).expect("u32 fits usize")
+        || request.checks.contains(&0)
+    {
+        emit(out, Request::Adopted { reply_to, result: Err(client::api::Error::TooLarge) });
+        return;
+    }
+    for (index, check) in request.checks.iter().enumerate() {
+        if request.checks.get(..index).expect("index in checks").contains(check) {
+            emit(out, Request::Adopted { reply_to, result: Err(client::api::Error::Refused) });
+            return;
+        }
+    }
     if request.home {
         for (_, existing) in &d.repositories {
             if existing.project == request.project && existing.home && existing.provider != request.provider {
@@ -762,6 +778,8 @@ fn finish_adoption(d: &mut Domain, owner: Token, pending: PendingAdoption, out: 
         name: request.name,
         prefix: request.prefix,
         role: request.role,
+        ci: request.ci,
+        checks: request.checks,
         kinds,
         protection: pending.protection,
         settings,
@@ -1565,14 +1583,21 @@ fn change_facts(
         Some(repository) => repository.kinds.land,
         None => false,
     };
+    let has_ci = match d.repositories.get(&row.repository) {
+        Some(repository) => repository.ci,
+        None => true,
+    };
     change::Facts {
         branch: pending.branch,
         expected_base: base_tip,
         pull,
-        ci: change::Ci { head: pending.branch.unwrap_or([0; 32]), status: pending.ci },
+        ci: change::Ci {
+            head: pending.branch.unwrap_or([0; 32]),
+            status: if has_ci { pending.ci } else { change::Status::Passed },
+        },
         base_ci: change::Ci {
             head: base_tip,
-            status: if row.base_repair { change::Status::Passed } else { pending.base_ci },
+            status: if !has_ci || row.base_repair { change::Status::Passed } else { pending.base_ci },
         },
         base_tip,
         contains_base: pending.contains_base,
@@ -1649,7 +1674,14 @@ fn emit_change_effect(
                 head: pending.branch,
                 base_tip: pending.base_tip.expect("step read base tip"),
                 contains_base: pending.contains_base,
-                ci: pending.ci,
+                ci: if match d.repositories.get(&row.repository) {
+                    Some(repository) => repository.ci,
+                    None => true,
+                } {
+                    pending.ci
+                } else {
+                    change::Status::Passed
+                },
                 gates: pending.gates.clone(),
                 reviews: pending.reviews.clone(),
                 reviews_complete: pending.reviews_complete,

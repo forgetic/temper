@@ -420,6 +420,8 @@ impl World {
                 prefix: Box::from(&b"temper/"[..]),
                 role: forge_top::Role::Owned,
                 landing: Box::from(&b"main"[..]),
+                ci: true,
+                checks: Box::new([]),
             },
         });
         self.until(Until::Adopted);

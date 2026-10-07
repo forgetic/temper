@@ -47,8 +47,21 @@ pub(crate) fn check(domain: &Domain, policy: &Policy, ask: &EffectAsk, answer: &
                 continue;
             }
             if rule.ci {
-                let status = if landing.ci.head == landing.head { landing.ci.status } else { Status::Unknown };
-                status_check(status, Finding::Ci { status }, answer, why);
+                if landing.has_ci {
+                    let status = if landing.ci.head == landing.head { landing.ci.status } else { Status::Unknown };
+                    status_check(status, Finding::Ci { status }, answer, why);
+                } else if landing.checks.is_empty() {
+                    find(answer, why, Answer::Refuse, Finding::LandingMissing);
+                } else {
+                    for check in &landing.checks {
+                        gate_check(
+                            Gate { blocking: true, freshness: Freshness::Exact, ..*check },
+                            landing,
+                            answer,
+                            why,
+                        );
+                    }
+                }
             }
             if rule.up_to_date {
                 status_check(landing.contains_tip, Finding::Behind { status: landing.contains_tip }, answer, why);

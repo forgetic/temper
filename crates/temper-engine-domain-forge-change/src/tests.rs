@@ -379,6 +379,8 @@ fn generated_landing_cells_agree_with_authoritys_gate_rule() {
                         tip: BASE,
                         contains_tip: authority::Status::Passed,
                         ci: authority::Ci { head: HEAD, status: authority::Status::Passed },
+                        has_ci: true,
+                        checks: Box::new([]),
                         clean: Box::new([NEW]),
                         gates: Box::new([authority::Gate { number: 9, blocking, freshness: auth_freshness }]),
                         verdicts: Box::new([authority::Verdict { gate: 9, head: report_head, status: auth_status }]),

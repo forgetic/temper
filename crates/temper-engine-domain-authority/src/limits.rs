@@ -138,6 +138,7 @@ pub(crate) fn landing_rules_within(rules: &[LandingRule], limits: &Limits) -> bo
 
 pub(crate) fn landing_within(landing: &Landing, limits: &Limits) -> bool {
     within(landing.clean.len(), limits.heads)
+        && within(landing.checks.len(), limits.gates)
         && within(landing.gates.len(), limits.gates)
         && within(landing.verdicts.len(), limits.verdicts)
         && within(landing.reviews.len(), limits.reviews)

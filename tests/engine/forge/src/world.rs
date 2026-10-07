@@ -181,6 +181,8 @@ impl World {
                 prefix: Box::from(&b"temper/"[..]),
                 role,
                 landing: Box::from(&b"main"[..]),
+                ci: true,
+                checks: Box::new([]),
             },
         });
         self.run_for(1);

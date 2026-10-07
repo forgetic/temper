@@ -64,6 +64,10 @@ pub struct Repository {
     pub name: Box<[u8]>,
     pub prefix: Box<[u8]>,
     pub role: Role,
+    /// Whether this repository runs CI; absence of a status never selects this policy.
+    pub ci: bool,
+    /// Blocking project check gates used when CI is absent.
+    pub checks: Box<[u32]>,
     pub kinds: Kinds,
     pub protection: Protection,
     pub settings: client::api::Settings,
@@ -91,6 +95,8 @@ pub struct Adoption {
     pub prefix: Box<[u8]>,
     pub role: Role,
     pub landing: Box<[u8]>,
+    pub ci: bool,
+    pub checks: Box<[u32]>,
 }
 /// The admitted repository and its observed collaborators.
 #[derive(Clone, PartialEq, Eq, Debug)]
