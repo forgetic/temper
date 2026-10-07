@@ -161,9 +161,9 @@ fn walking_referee_rejects_duplicate_sign_in_and_chat_replies() {
 
 #[test]
 fn walking_referee_rejects_wrong_task_or_uncommitted_or_duplicate_assignment() {
+    use jig_core_accounts::Grant;
     use skein_lib::Duration;
     use temper_engine_domain::engine::Assignment;
-    use temper_engine_domain_accounts::Grant;
     use temper_engine_domain_brief::{Body, Kind, Section};
     let world = settled();
     let task = ended(&world);

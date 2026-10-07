@@ -1,7 +1,7 @@
 //! A tiny domain world: the parent scripts token and write completions and
 //! checks that retries never spend a rotated refresh token a second time.
+use jig_core_accounts::{self as accounts, Domain, Event, Limits, Request};
 use skein_lib::{Duration, Env, Queue, Time, Wall};
-use temper_engine_domain_accounts::{self as accounts, Domain, Event, Limits, Request};
 
 pub const LIMITS: Limits = Limits {
     accounts: 2,

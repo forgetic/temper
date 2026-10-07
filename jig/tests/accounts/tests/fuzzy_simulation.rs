@@ -1,6 +1,6 @@
+use jig_accounts_world::World;
+use jig_core_accounts::{Event, Failure, Request};
 use skein_lib::{Duration, Rng};
-use temper_engine_accounts_world::World;
-use temper_engine_domain_accounts::{Event, Failure, Request};
 
 fn respond(world: &mut World, rng: &mut Rng, requests: Vec<Request>, trace: &mut Vec<Request>) {
     for request in &requests {

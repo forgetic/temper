@@ -311,7 +311,7 @@ fn deep_child_rows_and_arbitrary_internal_payloads_are_refused_before_retention(
 
 #[test]
 fn held_assignment_checks_owned_bytes_and_section_backing_before_acceptance() {
-    use temper_engine_domain_accounts as accounts;
+    use jig_core_accounts as accounts;
     use temper_engine_domain_brief as brief;
     let limits = crate::JournalLimits {
         commits: 1,

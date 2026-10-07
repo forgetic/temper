@@ -1,5 +1,5 @@
 [package]
-name = "temper-engine-domain-accounts"
+name = "jig-core-accounts"
 description = "The engine's secret-free account refresh and availability policy"
 version.workspace = true
 edition.workspace = true

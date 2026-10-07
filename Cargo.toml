@@ -6,7 +6,7 @@ members = [
     "crates/temper-web-domain",
     "crates/temper-engine-domain",
     "crates/temper-engine-smith",
-    "crates/temper-engine-domain-accounts",
+    "jig/crates/jig-core-accounts",
     "crates/temper-engine-domain-authority",
     "crates/temper-engine-domain-brief",
     "crates/temper-engine-domain-fleet",
@@ -26,7 +26,7 @@ members = [
     "testing/temper-fake-forge-domain",
     "testing/temper-fake-person",
     "tests/fake-checkout",
-    "tests/engine/accounts",
+    "jig/tests/accounts",
     "tests/engine/brief",
     "tests/engine/domain",
     "tests/system",
@@ -68,7 +68,7 @@ smith-domain-tools = { git = "https://git.ekanayaka.io/ai/smith.git" }
 sha2 = { version = "=0.10.9", default-features = false }
 temper-web-view = { path = "crates/temper-web-view" }
 temper-fake-person = { path = "testing/temper-fake-person" }
-temper-engine-domain-accounts = { path = "crates/temper-engine-domain-accounts" }
+jig-core-accounts = { path = "jig/crates/jig-core-accounts" }
 temper-engine-domain = { path = "crates/temper-engine-domain" }
 temper-engine-smith = { path = "crates/temper-engine-smith" }
 temper-engine-domain-authority = { path = "crates/temper-engine-domain-authority" }

@@ -1,7 +1,7 @@
+use jig_core_accounts as accounts;
 use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
 use std::collections::VecDeque;
 use temper_engine_domain::{Delivery, Key, Record, Write, engine};
-use temper_engine_domain_accounts as accounts;
 use temper_engine_domain_authority as authority;
 use temper_engine_domain_brief as brief;
 use temper_engine_domain_fleet as fleet;

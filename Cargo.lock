@@ -74,8 +74,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "jig-accounts-world"
+version = "0.0.0"
+dependencies = [
+ "jig-core-accounts",
+ "skein-lib",
+ "skein-world",
+]
+
+[[package]]
 name = "jig-boundary"
 version = "0.0.0"
+
+[[package]]
+name = "jig-core-accounts"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+]
 
 [[package]]
 name = "libc"
@@ -262,15 +278,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "temper-engine-accounts-world"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-engine-domain-accounts",
- "temper-world",
-]
-
-[[package]]
 name = "temper-engine-brief-world"
 version = "0.0.0"
 dependencies = [
@@ -283,8 +290,8 @@ dependencies = [
 name = "temper-engine-domain"
 version = "0.0.0"
 dependencies = [
+ "jig-core-accounts",
  "skein-lib",
- "temper-engine-domain-accounts",
  "temper-engine-domain-authority",
  "temper-engine-domain-brief",
  "temper-engine-domain-fleet",
@@ -295,13 +302,6 @@ dependencies = [
  "temper-engine-domain-people",
  "temper-engine-domain-tasks",
  "temper-engine-domain-views",
-]
-
-[[package]]
-name = "temper-engine-domain-accounts"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
 ]
 
 [[package]]
@@ -390,13 +390,13 @@ dependencies = [
 name = "temper-engine-domain-world"
 version = "0.0.0"
 dependencies = [
+ "jig-core-accounts",
  "skein-lib",
  "smith-domain",
  "smith-domain-run",
  "smith-domain-session",
  "smith-domain-tools",
  "temper-engine-domain",
- "temper-engine-domain-accounts",
  "temper-engine-domain-authority",
  "temper-engine-domain-brief",
  "temper-engine-domain-fleet",
@@ -467,13 +467,13 @@ dependencies = [
 name = "temper-engine-smith"
 version = "0.0.0"
 dependencies = [
+ "jig-core-accounts",
  "skein-json",
  "skein-lib",
  "smith-domain",
  "smith-domain-run",
  "smith-domain-session",
  "temper-engine-domain",
- "temper-engine-domain-accounts",
  "temper-engine-domain-authority",
  "temper-engine-domain-brief",
  "temper-engine-domain-forge",
