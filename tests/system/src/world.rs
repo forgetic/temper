@@ -187,7 +187,6 @@ impl World {
             endpoint: first.endpoint,
             dialect: first.dialect,
             turns: self.agent.turns().into(),
-            after: Box::new([]),
         };
         self.root.send(engine::Event::Ask {
             reply_to: ReplyTo::new(Token::new(2000 + u64::from(key))),

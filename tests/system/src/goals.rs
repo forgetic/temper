@@ -245,7 +245,6 @@ fn a_smith_goal_is_proposed_accepted_planned_and_done() {
         endpoint: first.endpoint,
         dialect: first.dialect,
         turns: planner.turns().into(),
-        after: Box::new([]),
     };
     assert_eq!(resumed.transcript.len(), transcript.turns.len());
     let mut planner = world::scripted_waiting_agent_for(&resumed, Some(transcript), plan_script());
@@ -444,7 +443,6 @@ fn a_smith_coordinator_is_woken_once_by_a_burst() {
         endpoint: first_turn.endpoint,
         dialect: first_turn.dialect,
         turns: planner.turns().into(),
-        after: Box::new([]),
     };
     let mut planner = world::scripted_waiting_agent_for(&amended, Some(transcript), burst_parent_script());
     world::run_assignment(&mut driver, &amended, &mut planner);

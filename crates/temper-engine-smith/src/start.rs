@@ -104,6 +104,9 @@ pub fn start(
         },
         workspace,
         transcript,
+        // The host will supply recovered answers when it keeps their durable
+        // records; this typed system route has none to pass yet.
+        answered: Box::new([]),
         grants: Box::new([smith::Grant {
             name: smith::GrantName { account: assignment.grant.account, generation: assignment.grant.generation },
             valid: assignment.grant.valid,
