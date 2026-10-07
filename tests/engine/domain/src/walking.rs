@@ -80,6 +80,7 @@ pub fn limits() -> engine::Limits {
         workstreams: 1,
         attempts: 2,
         calls: 1,
+        call_name_bytes: 64,
         turns: 2,
         grace: Duration::from_secs(5),
         facts: 2,

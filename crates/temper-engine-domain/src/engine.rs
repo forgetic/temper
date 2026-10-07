@@ -5499,7 +5499,13 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                     Delivery::CallAnswer { channel, task: run.raw(), attempt: attempt.raw(), call, answer },
                 );
             }
-            fleet::Request::Grant { .. }
+            fleet::Request::AssignTyped { .. }
+            | fleet::Request::InboundTyped { .. }
+            | fleet::Request::RelayTyped { .. }
+            | fleet::Request::RelayedTyped { .. }
+            | fleet::Request::DropTyped { .. }
+            | fleet::Request::UndeliveredTyped { .. }
+            | fleet::Request::Grant { .. }
             | fleet::Request::Rejected { .. }
             | fleet::Request::Exhausted { .. }
             | fleet::Request::Bounced { .. }
