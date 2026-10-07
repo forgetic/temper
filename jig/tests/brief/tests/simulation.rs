@@ -1,6 +1,6 @@
+use jig_brief_world::{LIMITS, World, referee};
+use jig_core_brief::{Core, GatherEvent, GatherMissing, GatherPlaced, GatherRequest, Planned};
 use skein_lib::{Duration, Time, Token};
-use temper_engine_brief_world::{LIMITS, World, referee};
-use temper_engine_domain_brief::{Core, GatherEvent, GatherMissing, GatherPlaced, GatherRequest, Planned};
 
 fn connector(token: u64, required: bool, priority: u16) -> Planned {
     Planned::Connector { connector: 3, kind: 7, token: Token::new(token), size: 0, limit: 128, priority, required }

@@ -1,9 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use skein_lib::{Env, Queue, Time, Token, Wall};
-use temper_engine_domain_brief::{
+use jig_core_brief::{
     GatherDomain, GatherEvent, GatherPlaced, GatherRequest, Limits, gather_fire, gather_max_out, gather_step,
 };
+use skein_lib::{Env, Queue, Time, Token, Wall};
 
 pub const LIMITS: Limits = Limits { briefs: 3, sections: 5, read_bytes: 128, brief_bytes: 192 };
 

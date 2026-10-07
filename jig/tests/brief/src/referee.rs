@@ -1,6 +1,6 @@
 //! Observations of the brief's requests, never its private state.
 
-use temper_engine_domain_brief::{GatherPlaced, GatherRequest};
+use jig_core_brief::{GatherPlaced, GatherRequest};
 
 /// Every completed brief stays inside the admitted byte budget.
 #[must_use]

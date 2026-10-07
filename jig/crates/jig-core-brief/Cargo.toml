@@ -1,5 +1,5 @@
 [package]
-name = "temper-engine-domain-brief"
+name = "jig-core-brief"
 description = "A run's brief from typed sections within byte budgets: the engine domain's brief child domain, sans-io"
 version.workspace = true
 edition.workspace = true

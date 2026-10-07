@@ -2,11 +2,11 @@
 //! Reads only submitted boundaries and atomic store evidence, never root/child
 //! private state.
 
+use jig_core_brief as brief;
 use skein_lib::Token;
 use std::collections::{BTreeMap, BTreeSet};
 use temper_engine_domain::engine::{BriefBody as Body, BriefKind as Kind};
 use temper_engine_domain::{EscalationDecisionRecord, Key, Record, TerminalRecord, Write, engine::Assignment};
-use temper_engine_domain_brief as brief;
 use temper_engine_domain_people as people;
 use temper_engine_domain_tasks as tasks;
 

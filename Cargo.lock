@@ -87,7 +87,23 @@ name = "jig-boundary"
 version = "0.0.0"
 
 [[package]]
+name = "jig-brief-world"
+version = "0.0.0"
+dependencies = [
+ "jig-core-brief",
+ "skein-lib",
+ "skein-world",
+]
+
+[[package]]
 name = "jig-core-accounts"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+]
+
+[[package]]
+name = "jig-core-brief"
 version = "0.0.0"
 dependencies = [
  "skein-lib",
@@ -378,24 +394,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "temper-engine-brief-world"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "skein-world",
- "temper-engine-domain-brief",
-]
-
-[[package]]
 name = "temper-engine-domain"
 version = "0.0.0"
 dependencies = [
  "jig-core-accounts",
+ "jig-core-brief",
  "jig-core-fleet",
  "jig-core-views",
  "skein-lib",
  "temper-engine-domain-authority",
- "temper-engine-domain-brief",
  "temper-engine-domain-forge",
  "temper-engine-domain-forge-change",
  "temper-engine-domain-forge-client",
@@ -406,13 +413,6 @@ dependencies = [
 
 [[package]]
 name = "temper-engine-domain-authority"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
-]
-
-[[package]]
-name = "temper-engine-domain-brief"
 version = "0.0.0"
 dependencies = [
  "skein-lib",
@@ -470,6 +470,7 @@ name = "temper-engine-domain-world"
 version = "0.0.0"
 dependencies = [
  "jig-core-accounts",
+ "jig-core-brief",
  "jig-core-fleet",
  "jig-core-views",
  "skein-lib",
@@ -479,7 +480,6 @@ dependencies = [
  "smith-domain-tools",
  "temper-engine-domain",
  "temper-engine-domain-authority",
- "temper-engine-domain-brief",
  "temper-engine-domain-forge",
  "temper-engine-domain-forge-change",
  "temper-engine-domain-forge-client",
@@ -529,6 +529,7 @@ name = "temper-engine-smith"
 version = "0.0.0"
 dependencies = [
  "jig-core-accounts",
+ "jig-core-brief",
  "skein-json",
  "skein-lib",
  "smith-domain",
@@ -536,7 +537,6 @@ dependencies = [
  "smith-domain-session",
  "temper-engine-domain",
  "temper-engine-domain-authority",
- "temper-engine-domain-brief",
  "temper-engine-domain-forge",
  "temper-engine-domain-forge-client",
  "temper-engine-domain-tasks",
@@ -587,6 +587,7 @@ dependencies = [
 name = "temper-system-world"
 version = "0.0.0"
 dependencies = [
+ "jig-core-brief",
  "jig-core-fleet",
  "skein-fake-checkout",
  "skein-fake-llm-domain",
@@ -596,7 +597,6 @@ dependencies = [
  "smith-domain-run",
  "temper-engine-domain",
  "temper-engine-domain-authority",
- "temper-engine-domain-brief",
  "temper-engine-domain-forge",
  "temper-engine-domain-forge-change",
  "temper-engine-domain-forge-client",
