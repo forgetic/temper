@@ -76,13 +76,37 @@ pub struct Limits {
     /// Maximum named decisions awaiting a turn or task end across live tasks.
     pub call_records: u32,
     /// Required task section gathering and cuts.
-    pub brief: brief::Limits,
+    pub brief: BriefLimits,
     /// Secret-free credential policy.
     pub accounts: accounts::Limits,
     /// Live watches, backlogs and expendable trace room.
     pub views: views::Limits,
     /// Forge connector subtree and its bounded outbox.
     pub forge: forge::Limits,
+}
+
+/// Root brief configuration, including temper's source and forge budgets.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct BriefLimits {
+    pub briefs: u32,
+    pub sections: u32,
+    pub parts: u32,
+    pub read_bytes: u32,
+    pub budgets: BriefBudgets,
+    pub brief_bytes: u32,
+    pub gather: skein_lib::Duration,
+}
+
+/// Byte ceilings for the root's core sections and its forge connector.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct BriefBudgets {
+    pub task: u32,
+    pub dependencies: u32,
+    pub ci: u32,
+    pub reviews: u32,
+    pub pull: u32,
+    pub attempts: u32,
+    pub plan: u32,
 }
 
 /// Startup configuration owned by the root, bounded by the corresponding
@@ -943,7 +967,7 @@ impl Domain {
             tasks,
             people,
             fleet: fleet::Domain::new(&limits.fleet),
-            brief: brief::GatherDomain::new(&limits.brief),
+            brief: brief::GatherDomain::new(&brief_limits(&limits.brief)),
             brief_connectors: Slab::with_capacity(
                 limits
                     .brief
@@ -1272,8 +1296,17 @@ fn environment_fleet(env: &Env<Limits>) -> Env<fleet::Limits> {
     Env { now: env.now, wall: env.wall, limits: env.limits.fleet }
 }
 
+fn brief_limits(limits: &BriefLimits) -> brief::Limits {
+    brief::Limits {
+        briefs: limits.briefs,
+        sections: limits.sections,
+        read_bytes: limits.read_bytes,
+        brief_bytes: limits.brief_bytes,
+    }
+}
+
 fn environment_brief(env: &Env<Limits>) -> Env<brief::Limits> {
-    Env { now: env.now, wall: env.wall, limits: env.limits.brief }
+    Env { now: env.now, wall: env.wall, limits: brief_limits(&env.limits.brief) }
 }
 
 fn environment_accounts(env: &Env<Limits>) -> Env<accounts::Limits> {
@@ -1923,7 +1956,7 @@ pub fn fire(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
     let mut fleet_out = Queue::with_capacity(fleet::max_out(&env.limits.fleet));
     fleet::fire(&mut domain.fleet, &environment_fleet(env), &mut fleet_out);
     fleet_outputs(domain, env, &mut decision, &mut fleet_out);
-    let mut brief_out = Queue::with_capacity(brief::gather_max_out(&env.limits.brief));
+    let mut brief_out = Queue::with_capacity(brief::gather_max_out(&brief_limits(&env.limits.brief)));
     brief::gather_fire(&mut domain.brief, &environment_brief(env), &mut brief_out);
     brief_outputs(domain, env, &mut decision, &mut brief_out);
     route_into(domain, env, &mut decision);
@@ -1968,7 +2001,7 @@ fn route_into(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision) {
                 fleet_outputs(domain, env, decision, &mut out);
             }
             Work::Brief(event) => {
-                let mut out = Queue::with_capacity(brief::gather_max_out(&env.limits.brief));
+                let mut out = Queue::with_capacity(brief::gather_max_out(&brief_limits(&env.limits.brief)));
                 brief::gather_step(&mut domain.brief, &environment_brief(env), event, &mut out);
                 brief_outputs(domain, env, decision, &mut out);
             }
@@ -5847,7 +5880,7 @@ fn forge_kind_number(kind: ForgeBriefKind) -> u16 {
     }
 }
 
-fn forge_brief_budget(kind: ForgeBriefKind, budgets: &brief::Budgets) -> u32 {
+fn forge_brief_budget(kind: ForgeBriefKind, budgets: &BriefBudgets) -> u32 {
     match kind {
         ForgeBriefKind::Ci => budgets.ci,
         ForgeBriefKind::Reviews => budgets.reviews,
@@ -6210,13 +6243,16 @@ fn route_bound(limits: &Limits) -> Option<u32> {
 #[must_use]
 #[expect(clippy::too_many_lines, reason = "one checked sum of the root's bounded participating state")]
 pub fn worst_case(limits: &Limits) -> Option<u64> {
+    if limits.brief.parts == 0 || limits.brief.gather == skein_lib::Duration::ZERO {
+        return None;
+    }
     let task_bytes = tasks::worst_case(&limits.tasks)?;
     let fleet_bytes = fleet::worst_case(&limits.fleet)?;
     let people_bytes = people::worst_case(&limits.people)?;
     let authority_bytes = authority::worst_case(&limits.authority)?;
-    let brief_bytes = brief::gather_worst_case(&limits.brief)?.checked_add(Slab::<BriefConnector>::worst_case(
-        limits.brief.briefs.checked_mul(limits.brief.sections)?.checked_mul(2)?,
-    )?)?;
+    let brief_bytes = brief::gather_worst_case(&brief_limits(&limits.brief))?.checked_add(
+        Slab::<BriefConnector>::worst_case(limits.brief.briefs.checked_mul(limits.brief.sections)?.checked_mul(2)?)?,
+    )?;
     let brief_fetches = limits.brief.briefs.checked_mul(limits.brief.sections)?.checked_mul(2)?;
     if limits.forge.brief_sections < brief_fetches || limits.forge.brief_bytes < limits.brief.read_bytes {
         return None;
@@ -6433,7 +6469,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         // application owns its separate bounded people terminal/save queue.
         .checked_add(Queue::<people::Request>::worst_case(people::max_out(&limits.people))?.checked_mul(2)?)?
         .checked_add(Queue::<fleet::Request>::worst_case(fleet::max_out(&limits.fleet))?)?
-        .checked_add(Queue::<brief::GatherRequest>::worst_case(brief::gather_max_out(&limits.brief))?)?
+        .checked_add(Queue::<brief::GatherRequest>::worst_case(brief::gather_max_out(&brief_limits(&limits.brief)))?)?
         .checked_add(Queue::<Request>::worst_case(max_out(limits))?)?
         .checked_add(Queue::<Output>::worst_case(1)?)?
         .checked_add(Queue::<loads::Request>::worst_case(1)?)?

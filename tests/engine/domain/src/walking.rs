@@ -10,7 +10,6 @@ use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
 use std::collections::{BTreeMap, VecDeque};
 use temper_engine_domain::{Delivery, JournalLimits, Record, engine, loads};
 use temper_engine_domain_authority as authority;
-use temper_engine_domain_brief as brief;
 use temper_engine_domain_people as people;
 use temper_engine_domain_tasks as tasks;
 
@@ -108,28 +107,22 @@ pub fn limits() -> engine::Limits {
         people,
         fleet,
         call_records: 2,
-        brief: brief::Limits {
+        brief: engine::BriefLimits {
             briefs: 2,
             sections: 3,
-            items: 1,
             parts: 2,
             read_bytes: 256,
-            budgets: brief::Budgets {
+            budgets: engine::BriefBudgets {
                 task: 128,
-                item: 128,
-                comments: 128,
                 dependencies: 128,
                 ci: 128,
                 reviews: 128,
                 pull: 128,
                 attempts: 128,
                 plan: 128,
-                notes: 128,
-                template: 128,
             },
             brief_bytes: 384,
             gather: Duration::from_secs(1),
-            facts: 2,
         },
         accounts: accounts::Limits {
             accounts: 1,

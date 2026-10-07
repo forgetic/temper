@@ -124,6 +124,9 @@ pub fn max_out(limits: &Limits) -> u32 {
 /// inventory temporarily held during admission.
 #[must_use]
 pub fn worst_case(limits: &Limits) -> Option<u64> {
+    if limits.briefs == 0 || limits.sections == 0 || limits.read_bytes == 0 || limits.brief_bytes == 0 {
+        return None;
+    }
     let rows = Map::<Token, Active>::worst_case(limits.briefs)?;
     let sections = List::<Planned>::worst_case(limits.sections)?;
     let status = List::<Status>::worst_case(limits.sections)?;
@@ -610,9 +613,7 @@ mod tests {
     use skein_lib::{Duration, Wall};
 
     fn env() -> Env<Limits> {
-        let mut limits = crate::tests::LIMITS;
-        limits.briefs = 2;
-        limits.sections = 3;
+        let limits = Limits { briefs: 2, sections: 3, read_bytes: 256, brief_bytes: 400 };
         Env { now: Time::ZERO, wall: Wall::EPOCH, limits }
     }
 

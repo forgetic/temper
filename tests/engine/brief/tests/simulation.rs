@@ -1,133 +1,105 @@
-//! The brief in its world: scenarios, replay, and a sweep of random worlds.
+use skein_lib::{Duration, Time, Token};
+use temper_engine_brief_world::{LIMITS, World, referee};
+use temper_engine_domain_brief::{Core, GatherEvent, GatherMissing, GatherPlaced, GatherRequest, Planned};
 
-use temper_engine_brief_world::{LIMITS, Settings, Span, Stats, World};
-use temper_engine_domain_brief::Limits;
-use temper_world::assert_replays;
-
-const ITERATIONS: u32 = 200_000;
-
-fn run(settings: Settings) -> World {
-    let mut world = World::new(settings);
-    world.run(ITERATIONS);
-    world
+fn connector(token: u64, required: bool, priority: u16) -> Planned {
+    Planned::Connector { connector: 3, kind: 7, token: Token::new(token), size: 0, limit: 128, priority, required }
 }
 
-fn count(stats: &Stats, ending: &str) -> u32 {
-    stats.endings.get(ending).copied().unwrap_or(0)
+fn begin(world: &mut World, sections: Box<[Planned]>, budget: u32) -> Vec<GatherRequest> {
+    world.step(GatherEvent::Plan {
+        brief: Token::new(1),
+        budget,
+        deadline: Time::ZERO.saturating_add(Duration::from_secs(10)),
+        sections,
+    })
 }
 
 #[test]
-fn a_calm_world_renders_every_brief_and_settles() {
-    let world = run(Settings::calm(1));
-    let stats = world.stats();
-    assert_eq!(count(&stats, "rendered"), stats.briefs, "every brief rendered: {stats:?}");
-    assert!(count(&stats, "cut") > 0, "some sections are cut to their budgets: {stats:?}");
-    for ending in ["missing", "failed by read", "failed by deadline", "expired", "busy", "oversized", "late"] {
-        assert_eq!(count(&stats, ending), 0, "{ending}: {stats:?}");
+fn a_connector_section_stays_with_its_owner_until_the_root_takes_it() {
+    let mut world = World::new(LIMITS);
+    let token = Token::new(2);
+    world.put(token, b"connector words");
+    let requests = begin(
+        &mut world,
+        Box::new([
+            Planned::Core { kind: Core::Task, text: b"task".as_slice().into(), limit: 40, priority: 0, required: true },
+            connector(2, true, 1),
+        ]),
+        40,
+    );
+    assert!(world.held(token), "brief has only the token");
+    assert!(matches!(requests.as_slice(), [GatherRequest::Gather { connector: 3, section, .. }] if *section == token));
+    let done = world.settle(requests);
+    assert!(referee::within_budget(&done, 40));
+    assert!(matches!(done.as_slice(), [GatherRequest::Complete { order, .. }]
+        if matches!(order.as_ref(), [GatherPlaced::Core { kind: Core::Task, .. }, GatherPlaced::Connector { token: kept, .. }] if *kept == token)));
+    assert!(world.closed(token));
+    assert!(!world.held(token));
+}
+
+#[test]
+fn required_sections_claim_room_before_optional_sections_and_cuts_go_to_the_owner() {
+    let mut world = World::new(LIMITS);
+    let token = Token::new(2);
+    world.put(token, &[b'x'; 90]);
+    let requests = begin(
+        &mut world,
+        Box::new([
+            connector(2, false, 8),
+            Planned::Core {
+                kind: Core::Task,
+                text: b"required task words".as_slice().into(),
+                limit: 80,
+                priority: 0,
+                required: true,
+            },
+        ]),
+        45,
+    );
+    let done = world.settle(requests);
+    assert!(referee::within_budget(&done, 45));
+    assert!(matches!(done.as_slice(), [GatherRequest::Complete { order, .. }]
+        if matches!(order.as_ref(), [GatherPlaced::Connector { size, .. }, GatherPlaced::Core { kind: Core::Task, .. }] if *size < 90)));
+    assert!(world.closed(token));
+}
+
+#[test]
+fn a_required_section_missing_fails_the_brief_and_drops_its_token() {
+    let mut world = World::new(LIMITS);
+    let asked = begin(&mut world, Box::new([connector(2, true, 0)]), 40);
+    let done = world.settle(asked);
+    assert_eq!(done, [GatherRequest::Failed { brief: Token::new(1), why: GatherMissing::Failed }]);
+    assert!(world.closed(Token::new(2)));
+}
+
+#[test]
+fn a_late_optional_section_is_marked_missing_and_dropped() {
+    let mut world = World::new(LIMITS);
+    let token = Token::new(2);
+    world.put(token, b"late words");
+    world.pause(token);
+    let asked = begin(&mut world, Box::new([connector(2, false, 0)]), 40);
+    assert!(matches!(asked.as_slice(), [GatherRequest::Gather { .. }]));
+    let expired = world.fire(Time::ZERO.saturating_add(Duration::from_secs(10)));
+    let done = world.settle(expired);
+    assert!(matches!(done.as_slice(), [GatherRequest::Complete { order, .. }]
+        if matches!(order.as_ref(), [GatherPlaced::Missing { why: GatherMissing::Late, .. }])));
+    assert!(world.closed(token));
+}
+
+#[test]
+fn an_amendment_while_gathering_drops_every_section_gathered() {
+    let mut world = World::new(LIMITS);
+    for number in [2, 3] {
+        let token = Token::new(number);
+        world.put(token, b"held");
+        world.pause(token);
     }
-    let (sections, cuts) = world.judged();
-    assert!(sections > 50 && cuts > 0, "the referee judged sections and cuts: {sections}, {cuts}");
-}
-
-#[test]
-fn content_past_what_a_read_brings_is_cut_by_its_source_and_told() {
-    let settings = Settings { parts: 12, part_chars: 300, ..Settings::calm(2) };
-    let stats = run(settings).stats();
-    for ending in ["source cut", "cut", "over total"] {
-        assert!(count(&stats, ending) > 0, "{ending}: {stats:?}");
-    }
-    assert_eq!(count(&stats, "rendered"), stats.briefs, "{stats:?}");
-}
-
-#[test]
-fn lists_longer_than_a_source_may_name_are_cut_and_told() {
-    let settings = Settings { long: 500, ..Settings::calm(5) };
-    let stats = run(settings).stats();
-    assert!(count(&stats, "items cut") > 0, "{stats:?}");
-    assert_eq!(count(&stats, "oversized"), 0, "{stats:?}");
-}
-
-#[test]
-fn reads_that_fail_or_come_late_leave_sections_missing_or_fail_the_brief() {
-    let settings = Settings {
-        failures: 200,
-        late: 300,
-        lateness: Span::millis(0, 40_000),
-        required: 400,
-        ties: 100,
-        ..Settings::calm(3)
-    };
-    let stats = run(settings).stats();
-    for ending in ["missing", "failed by read", "failed by deadline", "expired", "late", "read failed", "tie"] {
-        assert!(count(&stats, ending) > 0, "{ending}: {stats:?}");
-    }
-    let answered = count(&stats, "rendered") + count(&stats, "failed by read") + count(&stats, "failed by deadline");
-    assert_eq!(answered + count(&stats, "busy"), stats.briefs, "every brief answered once: {stats:?}");
-}
-
-#[test]
-fn briefs_past_the_limits_or_asked_too_fast_are_refused_and_told_of_room() {
-    let settings = Settings {
-        limits: Limits { briefs: 1, ..LIMITS },
-        brief_gap: Span::millis(0, 50),
-        oversized: 300,
-        ..Settings::calm(4)
-    };
-    let stats = run(settings).stats();
-    for ending in ["busy", "room", "oversized"] {
-        assert!(count(&stats, ending) > 0, "{ending}: {stats:?}");
-    }
-}
-
-#[test]
-fn reads_that_outlive_their_briefs_hold_room_until_they_end() {
-    // One brief at a time, whose reads mostly come back long after its time
-    // has run out: their room is held until they do.
-    let settings = Settings {
-        limits: Limits { briefs: 1, sections: 3, ..LIMITS },
-        briefs: 80,
-        brief_gap: Span::millis(3000, 6000),
-        late: 900,
-        lateness: Span::millis(30_000, 60_000),
-        ..Settings::calm(6)
-    };
-    let stats = run(settings).stats();
-    for ending in ["expired", "late", "busy", "room"] {
-        assert!(count(&stats, ending) > 0, "{ending}: {stats:?}");
-    }
-}
-
-#[test]
-fn a_seed_replays_to_the_same_run() {
-    let run = |seed: u64| {
-        let world = run(Settings::random(seed));
-        (world.trace().to_vec(), (world.stats(), world.now()))
-    };
-    let trace = assert_replays(7, 8, run);
-    assert!(trace.len() > 100, "the world did something");
-}
-
-#[test]
-fn facts_change_nothing() {
-    for seed in 0..5 {
-        let settings = Settings::random(seed);
-        let none = run(Settings { limits: Limits { facts: 0, ..settings.limits }, ..settings });
-        let many = run(Settings { limits: Limits { facts: 4096, ..settings.limits }, ..settings });
-        assert!(none.trace() == many.trace(), "seed {seed}: the same run whatever facts are kept");
-    }
-}
-
-#[test]
-fn task_sections_are_judged_replay_and_ignore_facts_at_their_limits() {
-    for seed in [17, 81] {
-        let settings = Settings { task_sections: true, parts: 12, part_chars: 300, ..Settings::calm(seed) };
-        let first = run(settings);
-        let replay = run(settings);
-        let none = run(Settings { limits: Limits { facts: 0, ..settings.limits }, ..settings });
-        assert_eq!(first.trace(), replay.trace(), "seed {seed}");
-        assert_eq!(first.trace(), none.trace(), "facts do not change task sections, seed {seed}");
-        let stats = first.stats();
-        assert_eq!(count(&stats, "rendered"), stats.briefs);
-        assert!(count(&stats, "cut") > 0 && first.judged().0 > 0, "task content was independently judged");
-    }
+    let asked = begin(&mut world, Box::new([connector(2, false, 0), connector(3, false, 1)]), 40);
+    assert_eq!(asked.len(), 2);
+    let abandoned = world.step(GatherEvent::Abandon { brief: Token::new(1) });
+    let done = world.settle(abandoned);
+    assert!(done.is_empty());
+    assert!(world.closed(Token::new(2)) && world.closed(Token::new(3)));
 }
