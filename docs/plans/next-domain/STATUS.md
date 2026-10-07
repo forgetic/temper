@@ -338,6 +338,27 @@ simulation; no legacy fuzzy seed trim is needed for the suite caps.
 | 02.2 admission and answer | merged locally | smith 2b7e1e8 | fmt/clippy pass; 1,238 focused / 4.376 s; 14 fuzzy / 5.091 s; channel world 13 / 0.055 s serial. |
 | 02.2 Start context | merged locally | smith 204697f | fmt/clippy pass; 1,239 focused / 4.395 s; 14 fuzzy / 4.905 s; channel world 14 / 0.086 s serial. |
 | 02.2 saved answer contract | merged locally | smith 9c9e8ef | fmt/clippy pass; 1,248 focused / 6.884 s; 14 fuzzy / 6.861 s. |
+| 02.2 transcript invalid result shape | merged locally | smith 95fd3ad | fmt/clippy pass; 1,247 focused / 4.595 s; 14 fuzzy / 5.733 s. |
+| 02.2 transcript decoding | merged locally | smith 5ea7fcc | fmt/clippy pass; 1,249 focused / 5.132 s; 14 fuzzy / 5.677 s. |
+| 02.2 saved turns before admission | merged locally | smith 176997e | fmt/clippy pass; 1,251 focused / 5.046 s; 14 fuzzy / 5.913 s. |
+| 02.2 settled saved answers | merged locally | smith c5eb30b | fmt/clippy pass; 1,251 focused / 5.358 s; 14 fuzzy / 6.816 s. |
+| 02.2 resumed Start story | merged locally | smith c7f0b78 | fmt/clippy pass; 1,252 focused / 7.083 s; 14 fuzzy / 6.845 s. |
+| 02.3 messages and waiting | merged locally | smith c2dc68b | fmt/clippy pass; 1,253 focused / 4.764 s; 14 fuzzy / 5.744 s. |
+| 02.3 named calls and delivery | merged locally | smith 0de6b51 | Historical gate counts/times unavailable after reboot; final session tip passed all four checks. |
+| 02.3 long operations | merged locally | smith 7e1b3bf | Historical gate counts/times unavailable after reboot; final session tip passed all four checks. |
+| 02.4 concrete turns and acknowledgements | merged locally | smith a003c23 | Historical gate counts/times unavailable after reboot; final session tip passed all four checks. |
+| 02.4 turn window credit | merged locally | smith 8a2ea8a | Historical gate counts/times unavailable after reboot; final session tip passed all four checks. |
+| 02.4 reserved facts | merged locally | smith cb0fd67 | Historical gate counts/times unavailable after reboot; final session tip passed all four checks. |
+| 02.5 grant generations | merged locally | smith 66f4ae2 | Historical gate counts/times unavailable after reboot; final session tip passed all four checks. |
+| 02.5 notices and cancellation | merged locally | smith 3d24bce | Historical gate counts/times unavailable after reboot; final session tip passed all four checks. |
+| 02.5 EOF and write failure | merged locally | smith a3de6a3 | Historical gate counts/times unavailable after reboot; final session tip passed all four checks. |
+| 02.6 channel referee | merged locally | smith 8937840 | fmt/clippy pass; 1,267 focused / 6.828 s; 14 fuzzy / 10.219 s. |
+| 02.6 seeded stream cuts | merged locally | smith 3482d40 | fmt/clippy pass; 1,267 focused / 4.342 s; 15 fuzzy / 5.765 s. |
+| 02.6 combined memory bound | merged locally | smith f869dd2 | fmt/clippy pass; 1,268 focused / 4.694 s; 15 fuzzy / 5.800 s. |
+| 02.6 optional peer kinds | merged locally | smith a54fe55 | fmt/clippy pass; 1,269 focused / 6.788 s; 15 fuzzy / 6.740 s. |
+| 02.6 host typed answer | merged locally | smith 1679312 | fmt/clippy pass; 1,270 focused / 5.517 s; 15 fuzzy / 5.349 s. |
+| 02.6 domain-composed channel story | merged locally | smith fdd6f8b | fmt/clippy pass; 1,271 focused / 5.830 s; 15 fuzzy / 9.527 s; channel world 36 / 0.155 s focused and 1 / 0.205 s fuzzy serial. |
+| 02.6 restart and lost-reply stories | merged locally | smith 27f3416 | fmt/clippy pass; 1,273 focused / 7.424 s; 15 fuzzy / 7.100 s; channel world 38 / 0.160 s focused serial. |
 
 ## jig extraction
 
