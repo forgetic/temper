@@ -15,9 +15,7 @@ pub(super) fn saved_resources(connector: u16, tags: &[u32]) -> Option<Box<[tasks
     for tag in tags {
         resources.push(tasks::SavedResource { connector, path: Box::new([Box::from(tag.to_be_bytes())]) }).ok()?;
     }
-    let mut sorted = resources.into_boxed().into_vec();
-    sorted.sort();
-    Some(sorted.into_boxed_slice())
+    Some(resources.into_boxed())
 }
 
 /// Return the forge's resource tags from task-owned generic saved names.
@@ -28,10 +26,8 @@ pub(super) fn saved_tags(resources: &[tasks::SavedResource], connector: u16) -> 
             continue;
         }
         let [repository] = resource.path.as_ref() else { return None };
-        if repository.len() != 4 {
-            return None;
-        }
-        tags.push(u32::from_be_bytes([repository[0], repository[1], repository[2], repository[3]])).ok()?;
+        let [one, two, three, four] = repository.as_ref() else { return None };
+        tags.push(u32::from_be_bytes([*one, *two, *three, *four])).ok()?;
     }
     Some(tags.into_boxed())
 }
