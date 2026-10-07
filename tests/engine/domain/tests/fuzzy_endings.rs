@@ -1,10 +1,10 @@
 //! Bounded root sweep across durable task endings and the held route.
 
+use jig_core_authority as authority;
 use jig_core_fleet as fleet;
 use skein_lib::{Duration, Queue, ReplyTo, Rng, Token};
 use std::collections::BTreeSet;
 use temper_engine_domain::{Delivery, Key, Record, engine};
-use temper_engine_domain_authority as authority;
 use temper_engine_domain_people as people;
 use temper_engine_domain_tasks as tasks;
 use temper_engine_domain_world::commits::Store;

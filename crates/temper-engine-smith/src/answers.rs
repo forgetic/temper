@@ -259,17 +259,17 @@ fn made_text(text: &mut Text, made: temper_engine_domain_forge_client::Made) -> 
     }
 }
 
-fn authority(text: &mut Text, answer: temper_engine_domain_authority::Answer) -> Result<(), Problem> {
+fn authority(text: &mut Text, answer: jig_core_authority::Answer) -> Result<(), Problem> {
     match answer {
-        temper_engine_domain_authority::Answer::Allow => text.add(b"allowed"),
-        temper_engine_domain_authority::Answer::Wait => text.add(b"waiting"),
-        temper_engine_domain_authority::Answer::Propose => text.add(b"needs proposal"),
-        temper_engine_domain_authority::Answer::Refuse => text.add(b"refused"),
+        jig_core_authority::Answer::Allow => text.add(b"allowed"),
+        jig_core_authority::Answer::Wait => text.add(b"waiting"),
+        jig_core_authority::Answer::Propose => text.add(b"needs proposal"),
+        jig_core_authority::Answer::Refuse => text.add(b"refused"),
     }
 }
 
-fn finding_text(text: &mut Text, finding: temper_engine_domain_authority::Finding) -> Result<(), Problem> {
-    use temper_engine_domain_authority::Finding;
+fn finding_text(text: &mut Text, finding: jig_core_authority::Finding) -> Result<(), Problem> {
+    use jig_core_authority::Finding;
     match finding {
         Finding::Oversized => text.add(b"too large"),
         Finding::UnknownProject => text.add(b"unknown project"),

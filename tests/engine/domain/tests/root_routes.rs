@@ -1,11 +1,11 @@
 use jig_core_accounts as accounts;
+use jig_core_authority as authority;
 use jig_core_brief as brief;
 use jig_core_fleet as fleet;
 use jig_core_views as views;
 use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
 use std::collections::VecDeque;
 use temper_engine_domain::{Delivery, Key, Record, Write, engine};
-use temper_engine_domain_authority as authority;
 use temper_engine_domain_people as people;
 use temper_engine_domain_tasks as tasks;
 use temper_engine_domain_world::commits::Store;
@@ -1569,17 +1569,13 @@ fn delegate_fixture() -> (Driver, engine::Assignment) {
     let mut policy = configuration.authority.policy(1).expect("fixture project").clone();
     policy.ceiling.delegation.depth = 2;
     policy.roles[0].authority.delegation.depth = 2;
-    let mut authority = temper_engine_domain_authority::Domain::new(rules, *configuration.authority.limits())
-        .expect("expanded fixture authority");
-    let mut policy_out = Queue::with_capacity(temper_engine_domain_authority::POLICY_MAX_OUT);
-    temper_engine_domain_authority::step(
-        &mut authority,
-        temper_engine_domain_authority::Event::Policy { project: 1, policy },
-        &mut policy_out,
-    );
-    assert_eq!(policy_out.pop(), Some(temper_engine_domain_authority::PolicyFact::Added { project: 1 }));
+    let mut authority =
+        jig_core_authority::Domain::new(rules, *configuration.authority.limits()).expect("expanded fixture authority");
+    let mut policy_out = Queue::with_capacity(jig_core_authority::POLICY_MAX_OUT);
+    jig_core_authority::step(&mut authority, jig_core_authority::Event::Policy { project: 1, policy }, &mut policy_out);
+    assert_eq!(policy_out.pop(), Some(jig_core_authority::PolicyFact::Added { project: 1 }));
     configuration.authority = authority;
-    configuration.chat_authority.delegation.kinds = Box::new([temper_engine_domain_authority::Executor::Charter(1)]);
+    configuration.chat_authority.delegation.kinds = Box::new([jig_core_authority::Executor::Charter(1)]);
     configuration.chat_authority.delegation.tasks = 1;
     configuration.chat_authority.delegation.depth = 1;
     let mut driver = Driver::configured(Store::new(), configuration, &limits());
@@ -1610,7 +1606,6 @@ fn batch_fixture_with_pool(slots: u32, depth: u32, pool_budget: u64) -> (Driver,
     batch_fixture_custom(slots, depth, pool_budget, false, false, false)
 }
 
-#[expect(clippy::too_many_lines, reason = "one fixture configures the bounds and policy for batch stories")]
 fn batch_fixture_custom(
     slots: u32,
     depth: u32,
@@ -1661,12 +1656,8 @@ fn batch_fixture_custom(
     rules.maximum_run_spend = 5;
     if procedure || person {
         rules.ceiling.delegation.kinds = Box::new([
-            temper_engine_domain_authority::Executor::Charter(1),
-            if procedure {
-                temper_engine_domain_authority::Executor::Procedure(1)
-            } else {
-                temper_engine_domain_authority::Executor::Role(0)
-            },
+            jig_core_authority::Executor::Charter(1),
+            if procedure { jig_core_authority::Executor::Procedure(1) } else { jig_core_authority::Executor::Role(0) },
         ]);
     }
     rules.ceiling.delegation.tasks = 4;
@@ -1680,27 +1671,18 @@ fn batch_fixture_custom(
     policy.ceiling.delegation.depth = depth + 1;
     policy.roles[0].authority.delegation.tasks = 4;
     policy.roles[0].authority.delegation.depth = depth + 1;
-    let mut authority =
-        temper_engine_domain_authority::Domain::new(rules, bounds.authority).expect("larger fixture authority");
-    let mut policy_out = Queue::with_capacity(temper_engine_domain_authority::POLICY_MAX_OUT);
-    temper_engine_domain_authority::step(
-        &mut authority,
-        temper_engine_domain_authority::Event::Policy { project: 1, policy },
-        &mut policy_out,
-    );
-    assert_eq!(policy_out.pop(), Some(temper_engine_domain_authority::PolicyFact::Added { project: 1 }));
+    let mut authority = jig_core_authority::Domain::new(rules, bounds.authority).expect("larger fixture authority");
+    let mut policy_out = Queue::with_capacity(jig_core_authority::POLICY_MAX_OUT);
+    jig_core_authority::step(&mut authority, jig_core_authority::Event::Policy { project: 1, policy }, &mut policy_out);
+    assert_eq!(policy_out.pop(), Some(jig_core_authority::PolicyFact::Added { project: 1 }));
     configuration.authority = authority;
     configuration.chat_authority.delegation.kinds = if procedure || person {
         Box::new([
-            temper_engine_domain_authority::Executor::Charter(1),
-            if procedure {
-                temper_engine_domain_authority::Executor::Procedure(1)
-            } else {
-                temper_engine_domain_authority::Executor::Role(0)
-            },
+            jig_core_authority::Executor::Charter(1),
+            if procedure { jig_core_authority::Executor::Procedure(1) } else { jig_core_authority::Executor::Role(0) },
         ])
     } else {
-        Box::new([temper_engine_domain_authority::Executor::Charter(1)])
+        Box::new([jig_core_authority::Executor::Charter(1)])
     };
     configuration.chat_authority.delegation.tasks = 3;
     configuration.chat_authority.delegation.depth = depth;
@@ -3616,7 +3598,7 @@ fn restored_loss_spends_a_try_with_or_without_a_durable_turn() {
 }
 
 fn administration_config(seed: u64) -> engine::Config {
-    use temper_engine_domain_authority as authority;
+    use jig_core_authority as authority;
     let mut config = config(seed);
     let mut policy = config.authority.policy(1).expect("actual project").clone();
     policy.roles[0].requests = authority::Requests(1 | 4 | 256);

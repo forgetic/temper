@@ -1,10 +1,10 @@
 //! Root forge stories with its durable store and the independent fake Forgejo.
 #![expect(clippy::wildcard_enum_match_arm, reason = "the fixture selects only the forge rows relevant to each story")]
+use jig_core_authority as authority;
 use jig_core_fleet as fleet;
 use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
 use std::collections::{BTreeMap, VecDeque};
 use temper_engine_domain::{Delivery, Key, Record, engine};
-use temper_engine_domain_authority as authority;
 use temper_engine_domain_forge as forge_top;
 use temper_engine_domain_forge_client as client;
 use temper_engine_domain_people as people;

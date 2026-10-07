@@ -14,7 +14,7 @@ members = [
     "jig/examples/ops/domain-infrastructure",
     "jig/tests/ops",
     "jig/tests/test-connector",
-    "crates/temper-engine-domain-authority",
+    "jig/crates/jig-core-authority",
     "jig/crates/jig-core-brief",
     "jig/crates/jig-core-fleet",
     "crates/temper-engine-domain-forge-client",
@@ -85,7 +85,7 @@ jig-ops-domain-observability = { path = "jig/examples/ops/domain-observability" 
 jig-ops-domain-infrastructure = { path = "jig/examples/ops/domain-infrastructure" }
 temper-engine-domain = { path = "crates/temper-engine-domain" }
 temper-engine-smith = { path = "crates/temper-engine-smith" }
-temper-engine-domain-authority = { path = "crates/temper-engine-domain-authority" }
+jig-core-authority = { path = "jig/crates/jig-core-authority" }
 jig-core-notes = { path = "jig/crates/jig-core-notes" }
 temper-engine-domain-people = { path = "crates/temper-engine-domain-people" }
 temper-engine-domain-tasks = { path = "crates/temper-engine-domain-tasks" }
