@@ -13,3 +13,6 @@ pub mod escalation_referee;
 pub mod roles;
 /// Independent role-cohort and recipient evidence.
 pub mod roles_referee;
+
+/// Shared direct root route driver for focused and randomized scenarios.
+pub mod direct;
