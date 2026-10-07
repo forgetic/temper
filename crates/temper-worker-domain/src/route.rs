@@ -212,53 +212,50 @@ fn from_host(domain: &mut Domain, env: &Env<Limits>, request: host::Request, out
             let preparation = workspace::preparation(domain, run);
             let work = workspace::finish(domain, run);
             let answer = translate::answer_v2(answer, work, preparation);
-            return domain.link.answer_v2(run, attempt, answer, out);
+            domain.link.answer_v2(run, attempt, answer, out);
         }
         host::Request::RelayV2 { run, attempt, call, delivery, body } => {
-            return domain.link.relay(
-                Relay { run, attempt, call: delivery, stable: Some(call), body },
-                &domain.host,
-                out,
-            );
+            domain.link.relay(Relay { run, attempt, call: delivery, stable: Some(call), body }, &domain.host, out);
         }
         host::Request::Turn { agent, run, attempt, turn } => {
             let read = domain.link.turn(agent, run, attempt, turn, &env.limits, out);
-            return agent_step(domain, env, agent::Event::TurnCredit { agent, read });
+            agent_step(domain, env, agent::Event::TurnCredit { agent, read });
         }
         host::Request::DeliverV2 { owner, workspace, title, body } => {
-            return workspace::write(domain, env, owner, workspace, Write::PushV2 { title, body });
+            workspace::write(domain, env, owner, workspace, Write::PushV2 { title, body });
         }
         host::Request::Answer { to, run, attempt, answer } => {
             assert!(to.into_token() == run, "an answer is its assignment's");
             let preparation = workspace::preparation(domain, run);
             let work = workspace::finish(domain, run);
             let answer = translate::answer(answer, work, preparation);
-            return domain.link.answer(run, attempt, answer, out);
+            domain.link.answer(run, attempt, answer, out);
         }
         host::Request::Relay { run, attempt, call, body } => {
-            return domain.link.relay(Relay { run, attempt, call, stable: None, body }, &domain.host, out);
+            domain.link.relay(Relay { run, attempt, call, stable: None, body }, &domain.host, out);
         }
         host::Request::CancelRelay { call } => {
             if domain.link.cancel_relay(call) {
-                return host_step(domain, env, host::Event::RelayCancelled { call });
+                host_step(domain, env, host::Event::RelayCancelled { call });
+            } else {
+                out.push(Request::CancelRelay { call });
             }
-            return out.push(Request::CancelRelay { call });
         }
         host::Request::Bounced { run, attempt, name, bounce } => {
-            return domain.link.bounce(Bounced { run, attempt, name, bounce }, out);
+            domain.link.bounce(Bounced { run, attempt, name, bounce }, out);
         }
         host::Request::Hosting { runs } => {
-            return domain.link.hello(&runs, &domain.host, &domain.checkout, &env.limits, out);
+            domain.link.hello(&runs, &domain.host, &domain.checkout, &env.limits, out);
         }
-        host::Request::Prepare { owner, workspace } => return workspace::prepare(domain, env, owner, workspace),
-        host::Request::Abort { owner } => return workspace::abort(domain, env, owner),
+        host::Request::Prepare { owner, workspace } => workspace::prepare(domain, env, owner, workspace),
+        host::Request::Abort { owner } => workspace::abort(domain, env, owner),
         host::Request::DeliverWorkspace { owner, workspace, message } => {
-            return workspace::write(domain, env, owner, workspace, Write::Push { message });
+            workspace::write(domain, env, owner, workspace, Write::Push { message });
         }
         host::Request::Save { owner, workspace } => {
-            return workspace::save(domain, env, owner, workspace);
+            workspace::save(domain, env, owner, workspace);
         }
-        host::Request::Release { workspace } => return workspace::release(domain, env, workspace),
+        host::Request::Release { workspace } => workspace::release(domain, env, workspace),
         host::Request::StartV2 { .. }
         | host::Request::Start { .. }
         | host::Request::Deliver { .. }
