@@ -172,13 +172,10 @@ pub fn pattern_covers(pattern: &Pattern, name: &Name) -> bool {
 #[must_use]
 pub fn pattern_at_most(a: &Pattern, b: &Pattern) -> bool {
     match &b.last {
-        Last::Exact(last) => {
-            if let Last::Exact(candidate) = &a.last {
-                a.segments == b.segments && candidate == last
-            } else {
-                false
-            }
-        }
+        Last::Exact(last) => match &a.last {
+            Last::Exact(candidate) => a.segments == b.segments && candidate == last,
+            Last::Open(_) => false,
+        },
         Last::Open(last) => terminal_at_most(a, b, last),
     }
 }
