@@ -100,7 +100,7 @@ pub fn limits() -> engine::Limits {
             deliveries: 20,
             transcript_bytes: 8192,
             result_bytes: 384,
-            run_bytes: 2048,
+            run_bytes: 4096,
         },
         loads: loads::Limits { loads: 2, rows: 1, bytes: 16384, reply_bytes: 16384, transcript_bytes: 8192 },
         tasks,
@@ -169,6 +169,7 @@ fn authority_value(spend: u64, kinds: Box<[authority::Executor]>) -> authority::
         delegation: authority::Delegation { kinds, tasks: 2, depth: 1 },
         budget: authority::Budget { spend, deadline: None },
         notes: authority::Scopes(0),
+        note_resources: Box::new([]),
     }
 }
 
@@ -210,6 +211,8 @@ pub fn config(seed: u64) -> engine::Config {
         owners: Box::new([people::InitialOwner { project: 1, identity: people::IdentityKey { forge: 1, user: 7 } }]),
         authority: domain,
         landing: engine::LandingPolicy { deployment: Box::new([]), projects: skein_lib::Map::with_capacity(1) },
+        forge_connector: 0,
+        recurring_connector: 1,
         charter: 1,
         run: engine::RunPolicy {
             instructions: b"Complete the task within its authority.".as_slice().into(),

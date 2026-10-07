@@ -138,7 +138,9 @@ fn drawn_root_stories_reach_every_durable_ending_and_held_route() {
                         delegation: tasks::Delegation { kinds: Box::new([]), tasks: 0, depth: 0 },
                         budget: tasks::Budget { spend: 10, deadline: None },
                         notes: tasks::Scopes(0),
+                        note_resources: Box::new([]),
                     },
+                    symbolic_grants: Box::new([]),
                     dependencies: Box::new([]),
                     wake: tasks::WakePolicy::DEFAULT,
                 };

@@ -68,6 +68,14 @@ pub struct Authority {
     pub spend: u64,
     pub deadline: Option<Wall>,
     pub notes: u8,
+    pub note_resources: Box<[ResourceScope]>,
+}
+
+/// One connector resource pattern in a person's requested note authority.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct ResourceScope {
+    pub connector: u16,
+    pub pattern: Pattern,
 }
 
 /// One connector resource grant in a person's requested authority.
@@ -139,6 +147,11 @@ pub fn amendment_bytes(amendment: &Amendment) -> Option<u64> {
 pub fn authority_bytes(authority: &Authority) -> Option<u64> {
     let mut total = u64::try_from(authority.grants.len()).ok()?.checked_mul(u64::try_from(size_of::<Grant>()).ok()?)?;
     total = total.checked_add(
+        u64::try_from(authority.note_resources.len())
+            .ok()?
+            .checked_mul(u64::try_from(size_of::<ResourceScope>()).ok()?)?,
+    )?;
+    total = total.checked_add(
         u64::try_from(authority.delegation.kinds.len())
             .ok()?
             .checked_mul(u64::try_from(size_of::<Executor>()).ok()?)?,
@@ -153,6 +166,19 @@ pub fn authority_bytes(authority: &Authority) -> Option<u64> {
             total = total.checked_add(u64::try_from(segment.len()).ok()?)?;
         }
         total = total.checked_add(match &grant.pattern.last {
+            Last::Exact(word) | Last::Open(word) => u64::try_from(word.len()).ok()?,
+        })?;
+    }
+    for scope in &authority.note_resources {
+        total = total.checked_add(
+            u64::try_from(scope.pattern.segments.len())
+                .ok()?
+                .checked_mul(u64::try_from(size_of::<Box<[u8]>>()).ok()?)?,
+        )?;
+        for segment in &scope.pattern.segments {
+            total = total.checked_add(u64::try_from(segment.len()).ok()?)?;
+        }
+        total = total.checked_add(match &scope.pattern.last {
             Last::Exact(word) | Last::Open(word) => u64::try_from(word.len()).ok()?,
         })?;
     }

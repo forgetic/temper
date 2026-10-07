@@ -45,8 +45,8 @@ mod policy_value;
 #[cfg(test)]
 mod tests;
 pub use amendment::{
-    Amendment, Authority, Delegation, Executor, Grant, Last, Parameter, Pattern, ResultsWake, Spec, WakePolicy,
-    WakeRule, amendment_bytes, authority_bytes,
+    Amendment, Authority, Delegation, Executor, Grant, Last, Parameter, Pattern, ResourceScope, ResultsWake, Spec,
+    WakePolicy, WakeRule, amendment_bytes, authority_bytes,
 };
 pub use boundary::{
     Adoption, Ask, Entry, EntryKind, EscalationChoice, EscalationDecision, Event, Holding, Identity, IdentityKey,

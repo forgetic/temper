@@ -176,10 +176,11 @@ impl Domain {
         if record.phase != Phase::Active(Active::Due) {
             return None;
         }
+        if record.recurring.is_some() {
+            return None;
+        }
         match record.executor {
-            crate::Executor::Procedure { connector: 0, code: 1 }
-            | crate::Executor::Agent { .. }
-            | crate::Executor::Person(_) => None,
+            crate::Executor::Agent { .. } | crate::Executor::Person(_) => None,
             crate::Executor::Procedure { connector, code } => Some((connector, code, record.attempt.checked_add(1)?)),
         }
     }

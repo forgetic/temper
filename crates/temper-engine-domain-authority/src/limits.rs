@@ -5,7 +5,7 @@ use core::mem::size_of;
 
 use skein_lib::Map;
 
-use crate::{Authority, Executor, Grant, Implication, Name, Pattern, Policy, Requirement, Role};
+use crate::{Authority, Executor, Grant, Implication, Name, Pattern, Policy, Requirement, ResourceScope, Role};
 
 /// Root-configured capacities for policy state and admitted questions; owned values do not enforce
 /// these bounds until admission. (domain/authority.md, sections 6–11).
@@ -42,7 +42,7 @@ pub struct Limits {
 /// bound arithmetic overflow; policy lifecycle outputs use `POLICY_MAX_OUT` separately.
 #[must_use]
 pub fn max_out(limits: &Limits) -> Option<u32> {
-    let batch = limits.batch.checked_mul(6)?.checked_add(12)?;
+    let batch = limits.batch.checked_mul(9)?.checked_add(12)?;
     let run = limits.writes.checked_mul(4)?.checked_add(limits.accounts)?.checked_add(10)?;
     let effect = limits.requirements.checked_mul(4)?.checked_add(8)?;
     Some(batch.max(run).max(effect))
@@ -79,7 +79,9 @@ fn pattern_heap(limits: &Limits) -> Option<u64> {
 fn authority_heap(limits: &Limits) -> Option<u64> {
     let grants = u64::from(limits.grants)
         .checked_mul(u64::try_from(size_of::<Grant>()).ok()?.checked_add(pattern_heap(limits)?)?)?;
-    grants.checked_add(bytes(u64::from(limits.executors), size_of::<Executor>())?)
+    let notes = u64::from(limits.grants)
+        .checked_mul(u64::try_from(size_of::<ResourceScope>()).ok()?.checked_add(pattern_heap(limits)?)?)?;
+    grants.checked_add(notes)?.checked_add(bytes(u64::from(limits.executors), size_of::<Executor>())?)
 }
 
 fn requirement_heap(limits: &Limits) -> Option<u64> {
@@ -122,12 +124,18 @@ fn name_within_segments(segments: &[Box<[u8]>], limits: &Limits) -> bool {
 pub(crate) fn authority_within(authority: &Authority, limits: &Limits) -> bool {
     if !within(authority.grants.len(), limits.grants)
         || !within(authority.delegation.kinds.len(), limits.executors)
-        || authority.notes.0 & !15 != 0
+        || !within(authority.note_resources.len(), limits.grants)
+        || authority.notes.0 & !7 != 0
     {
         return false;
     }
     for grant in &authority.grants {
         if !pattern_within(&grant.pattern, limits) {
+            return false;
+        }
+    }
+    for scope in &authority.note_resources {
+        if !pattern_within(&scope.pattern, limits) {
             return false;
         }
     }

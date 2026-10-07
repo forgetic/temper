@@ -519,6 +519,7 @@ fn a_members_wider_amendment_waits_for_a_maintainer_to_accept() {
                     spend: 150,
                     deadline: None,
                     notes: 0,
+                    note_resources: Box::new([]),
                 }),
                 reason: b"more scope".as_slice().into(),
             },
@@ -1725,7 +1726,9 @@ fn report_delegate(words: &[u8], dependencies: Box<[engine::Dependency]>) -> eng
             delegation: tasks::Delegation { kinds: Box::new([]), tasks: 0, depth: 0 },
             budget: tasks::Budget { spend: 10, deadline: None },
             notes: tasks::Scopes(0),
+            note_resources: Box::new([]),
         },
+        symbolic_grants: Box::new([]),
         dependencies,
         wake: tasks::WakePolicy::DEFAULT,
     }
@@ -2548,6 +2551,7 @@ fn a_delegate_batch_and_its_named_answer_commit_together() {
         delegation: tasks::Delegation { kinds: Box::new([]), tasks: 0, depth: 0 },
         budget: tasks::Budget { spend: 10, deadline: None },
         notes: tasks::Scopes(0),
+        note_resources: Box::new([]),
     };
     driver.send(engine::Event::Call {
         channel: Token::new(7),
@@ -2567,6 +2571,7 @@ fn a_delegate_batch_and_its_named_answer_commit_together() {
                     },
                     contract: tasks::Contract::Report { words: 128 },
                     authority: child_authority,
+                    symbolic_grants: Box::new([]),
                     dependencies: Box::new([]),
                     wake: tasks::WakePolicy::DEFAULT,
                 }]),
@@ -2615,6 +2620,7 @@ fn a_delegate_result_enters_its_requesters_inbox_with_the_end() {
         delegation: tasks::Delegation { kinds: Box::new([]), tasks: 0, depth: 0 },
         budget: tasks::Budget { spend: 10, deadline: None },
         notes: tasks::Scopes(0),
+        note_resources: Box::new([]),
     };
     driver.send(engine::Event::Call {
         channel: Token::new(7),
@@ -2634,6 +2640,7 @@ fn a_delegate_result_enters_its_requesters_inbox_with_the_end() {
                     },
                     contract: tasks::Contract::Report { words: 128 },
                     authority: child_authority,
+                    symbolic_grants: Box::new([]),
                     dependencies: Box::new([]),
                     wake: tasks::WakePolicy::DEFAULT,
                 }]),
@@ -3664,6 +3671,7 @@ fn a_policy_change_applies_to_later_decisions_only() {
                     spend: 500,
                     deadline: None,
                     notes: 0,
+                    note_resources: Box::new([]),
                 },
                 period_spend: 50,
                 requests: 1 | 4 | 256,

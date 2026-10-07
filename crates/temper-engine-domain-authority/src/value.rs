@@ -17,6 +17,8 @@ pub struct Authority {
     /// Spend and wall-time ceiling, rather than current available funding.
     pub budget: Budget,
     pub notes: Scopes,
+    /// Connector resource patterns on which this task may write notes.
+    pub note_resources: Box<[ResourceScope]>,
 }
 
 /// Up to 64 tool families, one bit each. Configuration assigns the bits,
@@ -26,24 +28,28 @@ pub struct Authority {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Tools(/** Up to 64 configured family bits; inclusion is a bit-set subset test. */ pub u64);
 
-/// Note scopes relative to the task: goal, repository, project, deployment.
-/// Set of the four supported note scopes relative to the task; admission rejects other bits.
+/// Note scopes relative to the task: goal, project and deployment.
+/// Connector resource patterns are carried in `Authority::note_resources`.
 /// (domain/authority.md, sections 3–5).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct Scopes(/** Scope bits: goal 1, repository 2, project 4 and deployment 8. */ pub u8);
+pub struct Scopes(/** Scope bits: goal 1, project 2 and deployment 4. */ pub u8);
 
 impl Scopes {
     /// Goal-relative note scope.
     pub const GOAL: Scopes = Scopes(1);
 
-    /// Repository-relative note scope.
-    pub const REPOSITORY: Scopes = Scopes(2);
-
     /// Project-relative note scope.
-    pub const PROJECT: Scopes = Scopes(4);
+    pub const PROJECT: Scopes = Scopes(2);
 
     /// Deployment-relative note scope.
-    pub const DEPLOYMENT: Scopes = Scopes(8);
+    pub const DEPLOYMENT: Scopes = Scopes(4);
+}
+
+/// One connector resource pattern permitted as a note scope.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct ResourceScope {
+    pub connector: u16,
+    pub pattern: Pattern,
 }
 
 /// An effect or read of one connector's kind on the resources a pattern covers.

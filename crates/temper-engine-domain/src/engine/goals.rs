@@ -88,6 +88,7 @@ pub(super) fn start(
             request: authority::PersonRequest::Create(Box::new([authority::Delegate {
                 executor: authority::Executor::Charter(charter),
                 authority: given.clone(),
+                symbolic: Box::new([]),
             }])),
         },
         &mut findings,
@@ -197,6 +198,7 @@ pub(super) fn decide(
                                 }
                             }),
                             authority: super::authority_value(&proposal.goal.authority),
+                            symbolic: Box::new([]),
                         },
                     ]))),
                 },

@@ -462,7 +462,7 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
             }
             false
         }
-        Executor::Procedure { connector: 0, code: 1 } => match &task.recurring {
+        Executor::Procedure { code, .. } if code != 0 && task.recurring.is_some() => match &task.recurring {
             Some(state) => {
                 task.taken_by.is_none()
                     && state.template.key != 0
@@ -480,9 +480,7 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
             }
             None => false,
         },
-        Executor::Procedure { connector, code } => {
-            connector != 0 && code != 0 && task.recurring.is_none() && task.taken_by.is_none()
-        }
+        Executor::Procedure { code, .. } => code != 0 && task.recurring.is_none() && task.taken_by.is_none(),
         Executor::Person(crate::PersonAddress::Person(person)) => {
             person != 0 && task.taken_by.is_none() && task.recurring.is_none() && person_counters(task)
         }

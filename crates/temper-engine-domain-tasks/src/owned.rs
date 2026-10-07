@@ -59,14 +59,24 @@ fn spec_bytes(spec: &Spec) -> Option<u64> {
 }
 
 fn authority_bytes(authority: &Authority) -> Option<u64> {
-    let mut total =
-        bytes(size_of_val(&*authority.grants))?.checked_add(bytes(size_of_val(&*authority.delegation.kinds))?)?;
+    let mut total = bytes(size_of_val(&*authority.grants))?
+        .checked_add(bytes(size_of_val(&*authority.note_resources))?)?
+        .checked_add(bytes(size_of_val(&*authority.delegation.kinds))?)?;
     for grant in &authority.grants {
         total = total.checked_add(bytes(size_of_val(&*grant.pattern.segments))?)?;
         for segment in &grant.pattern.segments {
             total = total.checked_add(bytes(segment.len())?)?;
         }
         match &grant.pattern.last {
+            Last::Exact(word) | Last::Open(word) => total = total.checked_add(bytes(word.len())?)?,
+        }
+    }
+    for scope in &authority.note_resources {
+        total = total.checked_add(bytes(size_of_val(&*scope.pattern.segments))?)?;
+        for segment in &scope.pattern.segments {
+            total = total.checked_add(bytes(segment.len())?)?;
+        }
+        match &scope.pattern.last {
             Last::Exact(word) | Last::Open(word) => total = total.checked_add(bytes(word.len())?)?,
         }
     }

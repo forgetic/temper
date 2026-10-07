@@ -52,6 +52,7 @@ fn assignment() -> engine::Assignment {
                 delegation: tasks::Delegation { kinds: Box::new([]), tasks: 0, depth: 0 },
                 budget: tasks::Budget { spend: 40, deadline: None },
                 notes: tasks::Scopes(0),
+                note_resources: Box::new([]),
             },
             budget: 40,
         }),

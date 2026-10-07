@@ -11,7 +11,8 @@ use crate::{
     FITS_MAX_OUT, Finding, Given, Grant, Guard, Holder, Implication, Implies, Judge, Lack, Last, Limits, Name, Numbers,
     POLICY_MAX_OUT, Pattern, PersonAsk, PersonRequest, Policy, PolicyFact, PolicyRefusal, ProposalKind, Proposals,
     Requests, Requirement, Role, Rules, RunAsk, Scopes, Source, Tools, Verdict, Write, Writer, at_most, check_batch,
-    check_call, check_effect, check_request, check_run, covers, fits, max_out, needs, step, worst_case,
+    check_call, check_effect, check_request, check_run, covers, fits, max_out, needs, resolve_task_grants, step,
+    worst_case,
 };
 
 const LIMITS: Limits = Limits {
@@ -47,7 +48,8 @@ fn authority() -> Authority {
             depth: 5,
         },
         budget: Budget { spend: 100, deadline: None },
-        notes: Scopes(15),
+        notes: Scopes(7),
+        note_resources: Box::new([crate::ResourceScope { connector: 1, pattern: pattern() }]),
     }
 }
 
@@ -142,7 +144,7 @@ fn child(spend: u64) -> Delegate {
     child.budget.spend = spend;
     child.delegation.tasks = 0;
     child.delegation.depth = 0;
-    Delegate { executor: crate::Executor::Charter(1), authority: child }
+    Delegate { executor: crate::Executor::Charter(1), authority: child, symbolic: Box::new([]) }
 }
 
 fn saw(why: &Queue<Finding>, finding: Finding) -> bool {
@@ -372,6 +374,59 @@ fn batch_cells_count_direct_creation_and_reserve_only_after_every_check_allows()
 }
 
 #[test]
+fn symbolic_grants_are_checked_as_prefixes_then_narrowed_by_task_number() {
+    let domain = domain();
+    let mut child = child(10);
+    child.authority.grants = Box::new([]);
+    let prefix =
+        Grant { connector: 1, kind: 3, pattern: Pattern { segments: Box::new([]), last: Last::Open(copy_of(b"b")) } };
+    child.symbolic = Box::new([prefix.clone()]);
+    let ask = BatchAsk {
+        project: 1,
+        creator: authority(),
+        numbers: numbers(100),
+        tasks_left: 10,
+        tasks: Box::new([child.clone()]),
+    };
+    let mut why = findings(&domain);
+    assert_eq!(check_batch(&domain, &ask, &mut why).answer, Answer::Allow);
+    let resolved = resolve_task_grants(&child.symbolic, 42, &LIMITS).expect("bounded task number");
+    assert_eq!(resolved[0].pattern.last, Last::Exact(copy_of(b"b42")));
+    assert!(crate::grant_at_most(&resolved[0], &prefix, &domain.rules().implies));
+    assert!(crate::grant_covers(
+        &resolved[0],
+        1,
+        3,
+        &Name { segments: Box::new([copy_of(b"b42")]) },
+        &domain.rules().implies
+    ));
+    assert!(!crate::grant_covers(
+        &resolved[0],
+        1,
+        3,
+        &Name { segments: Box::new([copy_of(b"b43")]) },
+        &domain.rules().implies
+    ));
+    assert!(!crate::grant_covers(
+        &resolved[0],
+        1,
+        3,
+        &Name { segments: Box::new([copy_of(b"b420")]) },
+        &domain.rules().implies
+    ));
+    let mut missing = ask;
+    missing.creator.grants = Box::new([]);
+    let mut why = findings(&domain);
+    assert_eq!(check_batch(&domain, &missing, &mut why).answer, Answer::Propose);
+    child.symbolic[0].pattern.last = Last::Exact(copy_of(b"b"));
+    let mut why = findings(&domain);
+    assert_eq!(
+        check_batch(&domain, &BatchAsk { tasks: Box::new([child]), ..missing }, &mut why).answer,
+        Answer::Refuse
+    );
+}
+
+#[test]
 fn run_cells_hold_for_readiness_propose_grants_and_refuse_hard_caps() {
     let domain = domain();
     let base = RunAsk {
@@ -457,7 +512,9 @@ fn run_cells_hold_for_readiness_propose_grants_and_refuse_hard_caps() {
 fn call_cells_check_family_reads_references_scopes_and_ceiling_precedence() {
     let domain = domain();
     let base = CallAsk { project: 1, authority: authority(), family: Tools(1), call: Call::Tool };
-    for call in [Call::Tool, Call::Read(effect()), Call::Message { referenced: true }, Call::Note(Scopes::GOAL)] {
+    for call in
+        [Call::Tool, Call::Read(effect()), Call::Message { referenced: true }, Call::Note(crate::NoteScope::Goal)]
+    {
         let mut ask = base.clone();
         ask.call = call;
         let mut why = findings(&domain);
@@ -474,10 +531,28 @@ fn call_cells_check_family_reads_references_scopes_and_ceiling_precedence() {
     let mut why = findings(&domain);
     assert_eq!(check_call(&domain, &ask, &mut why), Answer::Propose);
     let mut ask = base.clone();
-    ask.call = Call::Note(Scopes::PROJECT);
+    ask.call = Call::Note(crate::NoteScope::Project);
     ask.authority.notes = Scopes(0);
     let mut why = findings(&domain);
     assert_eq!(check_call(&domain, &ask, &mut why), Answer::Propose);
+    let mut ask = base.clone();
+    ask.call = Call::Note(crate::NoteScope::Resources(crate::ResourceScope {
+        connector: 1,
+        pattern: Pattern { segments: Box::new([]), last: Last::Exact(copy_of(b"report")) },
+    }));
+    let mut why = findings(&domain);
+    assert_eq!(check_call(&domain, &ask, &mut why), Answer::Allow);
+    ask.authority.note_resources = Box::new([]);
+    let mut why = findings(&domain);
+    assert_eq!(check_call(&domain, &ask, &mut why), Answer::Propose);
+    assert!(saw(&why, Finding::Scope { source: Source::Task }));
+    let mut ask = base.clone();
+    ask.call = Call::Note(crate::NoteScope::Resources(crate::ResourceScope {
+        connector: 2,
+        pattern: Pattern { segments: Box::new([]), last: Last::Exact(copy_of(b"report")) },
+    }));
+    let mut why = findings(&domain);
+    assert_eq!(check_call(&domain, &ask, &mut why), Answer::Refuse);
     let mut ask = base.clone();
     ask.authority.tools = Tools(0);
     ask.call = Call::Message { referenced: false };
@@ -489,7 +564,7 @@ fn call_cells_check_family_reads_references_scopes_and_ceiling_precedence() {
     limited.notes = Scopes(0);
     limited.grants = Box::new([]);
     let restricted = domain_with(limited.clone(), limited);
-    for call in [Call::Tool, Call::Read(effect()), Call::Note(Scopes::DEPLOYMENT)] {
+    for call in [Call::Tool, Call::Read(effect()), Call::Note(crate::NoteScope::Deployment)] {
         let mut ask = base.clone();
         ask.call = call;
         let mut why = findings(&restricted);
@@ -500,9 +575,15 @@ fn call_cells_check_family_reads_references_scopes_and_ceiling_precedence() {
     let mut why = findings(&domain);
     assert_eq!(check_call(&domain, &ask, &mut why), Answer::Refuse, "one call names exactly one configured family");
     let mut ask = base.clone();
-    ask.call = Call::Note(Scopes(3));
+    ask.call = Call::Note(crate::NoteScope::Resources(crate::ResourceScope {
+        connector: 1,
+        pattern: Pattern {
+            segments: Box::new([copy_of(b"a"), copy_of(b"b"), copy_of(b"c"), copy_of(b"d"), copy_of(b"e")]),
+            last: Last::Open(copy_of(b"")),
+        },
+    }));
     let mut why = findings(&domain);
-    assert_eq!(check_call(&domain, &ask, &mut why), Answer::Refuse, "a note names one scope");
+    assert_eq!(check_call(&domain, &ask, &mut why), Answer::Refuse, "a resource note pattern obeys the segment limit");
     let mut ask = base;
     ask.project = 99;
     let mut why = findings(&domain);
@@ -648,7 +729,7 @@ fn fitting_laws_needs_and_holder_depth_use_separate_current_inputs() {
     second.authority.delegation.depth = 2;
     second.executor = crate::Executor::Procedure(2);
     second.authority.tools = Tools(2);
-    second.authority.notes = Scopes::REPOSITORY;
+    second.authority.notes = Scopes::PROJECT;
     second.authority.budget.deadline = Some(Wall::from_nanos(8));
     let needed = needs(&Action::Batch(Box::new([first, second]))).unwrap();
     assert_eq!(needed.delegation.tasks, 5, "one task plus each child's future capacity");
@@ -709,10 +790,15 @@ fn pattern_heap(pattern: &Pattern) -> u64 {
 }
 
 fn authority_heap(authority: &Authority) -> u64 {
-    let mut bytes =
-        add(sized(size_of_val(authority.grants.as_ref())), sized(size_of_val(authority.delegation.kinds.as_ref())));
+    let mut bytes = add(
+        add(sized(size_of_val(authority.grants.as_ref())), sized(size_of_val(authority.note_resources.as_ref()))),
+        sized(size_of_val(authority.delegation.kinds.as_ref())),
+    );
     for grant in &authority.grants {
         bytes = add(bytes, pattern_heap(&grant.pattern));
+    }
+    for scope in &authority.note_resources {
+        bytes = add(bytes, pattern_heap(&scope.pattern));
     }
     bytes
 }
@@ -736,6 +822,8 @@ fn full_authority() -> Authority {
     let mut authority = authority();
     let grant = Grant { connector: 1, kind: 3, pattern: full_pattern() };
     authority.grants = Box::new([grant.clone(), grant.clone(), grant]);
+    let scope = crate::ResourceScope { connector: 1, pattern: full_pattern() };
+    authority.note_resources = Box::new([scope.clone(), scope.clone(), scope]);
     authority
 }
 

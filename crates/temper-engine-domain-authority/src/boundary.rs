@@ -4,7 +4,7 @@ use alloc::boxed::Box;
 
 use skein_lib::Wall;
 
-use crate::{Authority, Executor, Judge, Name, Numbers, ProposalKind, Scopes, Tools};
+use crate::{Authority, Executor, Judge, Name, Numbers, ProposalKind, ResourceScope, Tools};
 
 /// Ordered from least to most strict: deciding never clears a fact failure.
 /// Terminal result of one pure check, ordered by severity; it neither executes the action nor
@@ -127,6 +127,8 @@ pub struct Delegate {
     pub executor: Executor,
     /// Complete child authority, bounded by the configured authority limits.
     pub authority: Authority,
+    /// Open-prefix grants narrowed with this delegate's number after the batch is admitted.
+    pub symbolic: Box<[crate::Grant]>,
 }
 
 /// Root-gathered creation question over one coherent creator and funding snapshot; no tasks or
@@ -301,7 +303,20 @@ pub enum Call {
         referenced: bool,
     },
     /// Family permission and one supported scope are checked.
-    Note(/** Exactly one supported note scope; other scope shapes refuse. */ Scopes),
+    Note(/** Exactly one note scope, including a connector resource pattern. */ NoteScope),
+}
+
+/// Where one note write applies, relative to the acting task and project.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum NoteScope {
+    /// The acting task's goal.
+    Goal,
+    /// The task's project.
+    Project,
+    /// The deployment.
+    Deployment,
+    /// One connector's resource pattern.
+    Resources(ResourceScope),
 }
 
 /// Root-gathered call permission question over one configured family and admitted

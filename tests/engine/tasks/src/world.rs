@@ -51,6 +51,7 @@ pub fn authority() -> Authority {
         delegation: Delegation { kinds: Box::new([]), tasks: 16, depth: 4 },
         budget: Budget { spend: 100, deadline: None },
         notes: Scopes(0),
+        note_resources: Box::new([]),
     }
 }
 

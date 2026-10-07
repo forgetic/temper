@@ -37,10 +37,23 @@ pub(super) fn change(
         Some(rules) => rules.clone(),
         None => Box::new([]),
     };
-    if policy_translate::apply(&mut policy, &mut landing, change, env.limits.authority.requirements).is_none() {
+    if policy_translate::apply(
+        &mut policy,
+        &mut landing,
+        change,
+        env.limits.authority.requirements,
+        domain.config.forge_connector,
+    )
+    .is_none()
+    {
         return refused(domain, request, people::Refusal::Unknown);
     }
-    let Some(built) = policy_translate::build_landing(&landing, true, env.limits.authority.requirements) else {
+    let Some(built) = policy_translate::build_landing(
+        &landing,
+        true,
+        env.limits.authority.requirements,
+        domain.config.forge_connector,
+    ) else {
         return refused(domain, request, people::Refusal::Limit);
     };
     let Some(snapshot) = policy_translate::snapshot(&policy, &landing) else {
@@ -87,11 +100,24 @@ pub(super) fn restore(domain: &mut Domain, project: u32, value: people::PolicyVa
         Some(rules) => rules.clone(),
         None => Box::new([]),
     };
-    if policy_translate::restore(&mut policy, &mut landing, value, domain.limits.authority.requirements).is_none() {
+    if policy_translate::restore(
+        &mut policy,
+        &mut landing,
+        value,
+        domain.limits.authority.requirements,
+        domain.config.forge_connector,
+    )
+    .is_none()
+    {
         domain.startup = super::Startup::Failed;
         return;
     }
-    let Some(built) = policy_translate::build_landing(&landing, true, domain.limits.authority.requirements) else {
+    let Some(built) = policy_translate::build_landing(
+        &landing,
+        true,
+        domain.limits.authority.requirements,
+        domain.config.forge_connector,
+    ) else {
         domain.startup = super::Startup::Failed;
         return;
     };

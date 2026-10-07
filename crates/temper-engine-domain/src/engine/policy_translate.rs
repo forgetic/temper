@@ -28,14 +28,19 @@ pub(super) fn combine_requirements(
 
 /// Translate a connector's landing policy into authority's opaque judges and
 /// the forge's own parameters. Both arrays use the same stable index.
-pub(super) fn build_landing(rules: &[people::LandingRule], project: bool, limit: u32) -> Option<LandingBuilt> {
+pub(super) fn build_landing(
+    rules: &[people::LandingRule],
+    project: bool,
+    limit: u32,
+    connector: u16,
+) -> Option<LandingBuilt> {
     if u32::try_from(rules.len()).ok()? > limit {
         return None;
     }
     let mut requirements = List::with_capacity(limit);
     let mut criteria = List::with_capacity(limit);
     for rule in rules {
-        if rule.connector != 1 || rule.kind != 4 {
+        if rule.connector != connector || rule.kind != 4 {
             return None;
         }
         if rule.ci {
@@ -166,6 +171,12 @@ fn authority_to_authority(value: people::Authority) -> Option<authority::Authori
             })
             .ok()?;
     }
+    let mut note_resources = List::with_capacity(u32::try_from(value.note_resources.len()).ok()?);
+    for scope in value.note_resources {
+        note_resources
+            .push(authority::ResourceScope { connector: scope.connector, pattern: pattern_to_authority(scope.pattern) })
+            .ok()?;
+    }
     let mut kinds = List::with_capacity(u32::try_from(value.delegation.kinds.len()).ok()?);
     for kind in value.delegation.kinds {
         kinds
@@ -186,6 +197,7 @@ fn authority_to_authority(value: people::Authority) -> Option<authority::Authori
         },
         budget: authority::Budget { spend: value.spend, deadline: value.deadline },
         notes: authority::Scopes(value.notes),
+        note_resources: note_resources.into_boxed(),
     })
 }
 
@@ -198,6 +210,12 @@ fn authority_to_people(value: &authority::Authority) -> Option<people::Authority
                 kind: grant.kind,
                 pattern: pattern_to_people(&grant.pattern),
             })
+            .ok()?;
+    }
+    let mut note_resources = List::with_capacity(u32::try_from(value.note_resources.len()).ok()?);
+    for scope in &value.note_resources {
+        note_resources
+            .push(people::ResourceScope { connector: scope.connector, pattern: pattern_to_people(&scope.pattern) })
             .ok()?;
     }
     let mut kinds = List::with_capacity(u32::try_from(value.delegation.kinds.len()).ok()?);
@@ -221,6 +239,7 @@ fn authority_to_people(value: &authority::Authority) -> Option<people::Authority
         spend: value.budget.spend,
         deadline: value.budget.deadline,
         notes: value.notes.0,
+        note_resources: note_resources.into_boxed(),
     })
 }
 
@@ -229,9 +248,10 @@ fn replace_landing(
     previous: &[people::LandingRule],
     next: &[people::LandingRule],
     limit: u32,
+    connector: u16,
 ) -> Option<()> {
-    let old = build_landing(previous, true, limit)?;
-    let new = build_landing(next, true, limit)?;
+    let old = build_landing(previous, true, limit, connector)?;
+    let new = build_landing(next, true, limit, connector)?;
     let mut requirements = List::with_capacity(limit);
     for requirement in &policy.requirements {
         if !old.requirements.contains(requirement) {
@@ -251,6 +271,7 @@ pub(super) fn apply(
     landing: &mut Box<[people::LandingRule]>,
     change: people::PolicyChange,
     limit: u32,
+    connector: u16,
 ) -> Option<()> {
     match change {
         people::PolicyChange::ProjectSpend { period_spend } => policy.period_spend = period_spend,
@@ -274,7 +295,7 @@ pub(super) fn apply(
             if !landing_roles(policy, &rules) {
                 return None;
             }
-            replace_landing(policy, landing, &rules, limit)?;
+            replace_landing(policy, landing, &rules, limit, connector)?;
             *landing = rules;
         }
     }
@@ -308,6 +329,7 @@ pub(super) fn restore(
     landing: &mut Box<[people::LandingRule]>,
     value: people::PolicyValue,
     limit: u32,
+    connector: u16,
 ) -> Option<()> {
     policy.period_spend = value.period_spend;
     let mut roles = List::with_capacity(u32::try_from(value.roles.len()).ok()?);
@@ -326,7 +348,7 @@ pub(super) fn restore(
     if !landing_roles(policy, &value.landing) {
         return None;
     }
-    replace_landing(policy, landing, &value.landing, limit)?;
+    replace_landing(policy, landing, &value.landing, limit, connector)?;
     *landing = value.landing;
     Some(())
 }

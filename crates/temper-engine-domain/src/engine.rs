@@ -124,6 +124,10 @@ pub struct Config {
     pub authority: authority::Domain,
     /// Forge landing requirements and their connector-owned judge parameters.
     pub landing: LandingPolicy,
+    /// Connector number assigned to this application's forge adapter.
+    pub forge_connector: u16,
+    /// Procedure namespace assigned to the root's recurring goal executor.
+    pub recurring_connector: u16,
     /// Charter selected for chats; admitted by tasks as the configured executor.
     pub charter: u32,
     /// Smith-neutral run policy selected for this charter. The root owns the
@@ -429,6 +433,8 @@ pub struct Delegate {
     pub spec: tasks::Spec,
     pub contract: tasks::Contract,
     pub authority: tasks::Authority,
+    /// Connector grants whose open terminal is narrowed with the new task number.
+    pub symbolic_grants: Box<[tasks::Grant]>,
     pub dependencies: Box<[Dependency]>,
     pub wake: tasks::WakePolicy,
 }
@@ -742,6 +748,7 @@ struct BriefConnector {
 }
 
 #[derive(Debug)]
+#[expect(clippy::large_enum_variant, reason = "the bounded whole call remains with its durable decision payload")]
 enum Payload {
     Call { key: CallKey, body: Call },
     CallAnswer(CallAnswer),
@@ -1000,16 +1007,22 @@ impl Domain {
             ),
         )
         .expect("valid forge configuration");
-        let built = policy_translate::build_landing(&config.landing.deployment, false, limits.authority.requirements)
-            .expect("deployment landing requirements bounded");
+        let built = policy_translate::build_landing(
+            &config.landing.deployment,
+            false,
+            limits.authority.requirements,
+            config.forge_connector,
+        )
+        .expect("deployment landing requirements bounded");
         assert!(
             config.authority.add_configured_requirements(&built.requirements),
             "deployment landing requirements fit authority configuration"
         );
         assert!(forge.deployment_judges(built.criteria), "deployment judge table bounded");
         for (&project, rules) in &config.landing.projects {
-            let built = policy_translate::build_landing(rules, true, limits.authority.requirements)
-                .expect("project landing requirements bounded");
+            let built =
+                policy_translate::build_landing(rules, true, limits.authority.requirements, config.forge_connector)
+                    .expect("project landing requirements bounded");
             let mut policy = config.authority.policy(project).expect("landing project has a policy").clone();
             assert!(
                 policy_translate::landing_roles(&policy, &config.landing.deployment),
@@ -2882,6 +2895,7 @@ fn make_chat(
             request: authority::PersonRequest::Create(Box::new([authority::Delegate {
                 executor: authority::Executor::Charter(domain.config.charter),
                 authority: domain.config.chat_authority.clone(),
+                symbolic: Box::new([]),
             }])),
         },
         &mut findings,
@@ -2992,9 +3006,12 @@ fn activate(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, tas
         remember_due(domain, task);
         return;
     }
+    if domain.tasks.recurring_template(number).is_some() {
+        return;
+    }
     match task.executor {
-        tasks::Executor::Procedure { connector: 0, code: 1 } | tasks::Executor::Person(_) => return,
-        tasks::Executor::Procedure { connector: 1, code: 2 } => {
+        tasks::Executor::Person(_) => return,
+        tasks::Executor::Procedure { connector, code: 2 } if connector == domain.config.forge_connector => {
             if !forge_route::start_change(domain, env, &task) {
                 domain.work.push(Work::Tasks(tasks::Event::Hold { task: number, why: tasks::Hold::Effects }));
             }
@@ -3618,8 +3635,19 @@ fn delegate_call(
             );
             return;
         };
+        let Some(symbolic) = symbolic_grants(&member.symbolic_grants, env.limits.authority.grants) else {
+            decide_call(
+                domain,
+                &env.limits,
+                decision,
+                to,
+                key,
+                CallAnswer::DelegationRefused(tasks::Problem { task: None, why: tasks::Refusal::AuthorityShape }),
+            );
+            return;
+        };
         asked
-            .push(authority::Delegate { executor, authority: authority_value(&member.authority) })
+            .push(authority::Delegate { executor, authority: authority_value(&member.authority), symbolic })
             .expect("bounded delegation request");
     }
     let mut findings =
@@ -3751,14 +3779,31 @@ fn delegate_call(
                 return;
             }
         }
+        let number = *numbers.get(index).expect("one ID per member");
+        let Some(authority) =
+            resolved_delegate_authority(&member.authority, &member.symbolic_grants, number, &env.limits)
+        else {
+            decide_call(
+                domain,
+                &env.limits,
+                decision,
+                to,
+                key,
+                CallAnswer::DelegationRefused(tasks::Problem {
+                    task: Some(number),
+                    why: tasks::Refusal::AuthorityShape,
+                }),
+            );
+            return;
+        };
         created
             .push(tasks::New {
-                number: *numbers.get(index).expect("one ID per member"),
+                number,
                 project: context.project,
                 executor: member.executor,
                 spec: member.spec,
                 contract: member.contract,
-                authority: member.authority.clone(),
+                authority,
                 numbers: tasks::Numbers {
                     budget: member.authority.budget.spend,
                     spent: 0,
@@ -3812,8 +3857,9 @@ fn procedure_step(
                     return None;
                 }
                 let executor = delegation_executor(domain, context.project, member.executor)?;
+                let symbolic = symbolic_grants(&member.symbolic_grants, env.limits.authority.grants)?;
                 asked
-                    .push(authority::Delegate { executor, authority: authority_value(&member.authority) })
+                    .push(authority::Delegate { executor, authority: authority_value(&member.authority), symbolic })
                     .expect("bounded procedure batch");
             }
             let mut findings = Queue::with_capacity(
@@ -3855,14 +3901,17 @@ fn procedure_step(
                     }
                 }
                 let budget = member.authority.budget.spend;
+                let number = *numbers.get(at).expect("one ID per member");
+                let authority =
+                    resolved_delegate_authority(&member.authority, &member.symbolic_grants, number, &env.limits)?;
                 created
                     .push(tasks::New {
-                        number: *numbers.get(at).expect("one ID per member"),
+                        number,
                         project: context.project,
                         executor: member.executor,
                         spec: member.spec,
                         contract: member.contract,
-                        authority: member.authority,
+                        authority,
                         numbers: tasks::Numbers { budget, spent: 0, spent_below: 0, reserved: 0 },
                         funder: tasks::Funder::Task(task),
                         dependencies: dependencies.into_boxed(),
@@ -3924,7 +3973,7 @@ fn start_recurring(
         batch: Box::new([tasks::New {
             number,
             project,
-            executor: tasks::Executor::Procedure { connector: 0, code: 1 },
+            executor: tasks::Executor::Procedure { connector: domain.config.recurring_connector, code: 1 },
             spec: tasks::Spec { words: b"recurring".as_slice().into(), parameters: Box::new([]), inputs: Box::new([]) },
             contract: tasks::Contract::Report { words: 0 },
             numbers: tasks::Numbers { budget: 0, spent: 0, spent_below: 0, reserved: 0 },
@@ -3995,7 +4044,11 @@ fn tasks_outputs(
                         tasks::Executor::Person(_) => unreachable!("person template refused at root admission"),
                     };
                     asked
-                        .push(authority::Delegate { executor, authority: authority_value(&member.authority) })
+                        .push(authority::Delegate {
+                            executor,
+                            authority: authority_value(&member.authority),
+                            symbolic: Box::new([]),
+                        })
                         .expect("bounded template");
                 }
                 let checked = authority::check_batch(
@@ -6381,6 +6434,44 @@ fn authority_numbers(numbers: tasks::Numbers) -> authority::Numbers {
     }
 }
 
+fn symbolic_grants(grants: &[tasks::Grant], limit: u32) -> Option<Box<[authority::Grant]>> {
+    let mut result = List::with_capacity(limit);
+    for grant in grants {
+        let last = match &grant.pattern.last {
+            tasks::Last::Open(prefix) => authority::Last::Open(prefix.clone()),
+            tasks::Last::Exact(_) => return None,
+        };
+        result
+            .push(authority::Grant {
+                connector: grant.connector,
+                kind: grant.kind,
+                pattern: authority::Pattern { segments: grant.pattern.segments.clone(), last },
+            })
+            .ok()?;
+    }
+    Some(result.into_boxed())
+}
+
+fn resolved_delegate_authority(
+    base: &tasks::Authority,
+    symbolic: &[tasks::Grant],
+    task: u64,
+    limits: &Limits,
+) -> Option<tasks::Authority> {
+    let symbols = symbolic_grants(symbolic, limits.authority.grants)?;
+    let resolved = authority::resolve_task_grants(&symbols, task, &limits.authority)?;
+    let mut authority = authority_value(base);
+    let mut grants = List::with_capacity(limits.authority.grants);
+    for grant in &authority.grants {
+        grants.push(grant.clone()).ok()?;
+    }
+    for grant in resolved {
+        grants.push(grant).ok()?;
+    }
+    authority.grants = grants.into_boxed();
+    Some(task_authority(&authority))
+}
+
 fn task_authority(value: &authority::Authority) -> tasks::Authority {
     let mut grants = List::with_capacity(u32::try_from(value.grants.len()).expect("validated authority grants"));
     for grant in &value.grants {
@@ -6395,6 +6486,22 @@ fn task_authority(value: &authority::Authority) -> tasks::Authority {
                 pattern: tasks::Pattern { segments: grant.pattern.segments.clone(), last },
             })
             .expect("grant capacity");
+    }
+    let mut note_resources =
+        List::with_capacity(u32::try_from(value.note_resources.len()).expect("validated note scopes"));
+    for scope in &value.note_resources {
+        note_resources
+            .push(tasks::ResourceScope {
+                connector: scope.connector,
+                pattern: tasks::Pattern {
+                    segments: scope.pattern.segments.clone(),
+                    last: match &scope.pattern.last {
+                        authority::Last::Exact(bytes) => tasks::Last::Exact(bytes.clone()),
+                        authority::Last::Open(bytes) => tasks::Last::Open(bytes.clone()),
+                    },
+                },
+            })
+            .expect("note scope capacity");
     }
     let mut kinds = List::with_capacity(u32::try_from(value.delegation.kinds.len()).expect("validated executors"));
     for kind in &value.delegation.kinds {
@@ -6416,6 +6523,7 @@ fn task_authority(value: &authority::Authority) -> tasks::Authority {
         },
         budget: tasks::Budget { spend: value.budget.spend, deadline: value.budget.deadline },
         notes: tasks::Scopes(value.notes.0),
+        note_resources: note_resources.into_boxed(),
     }
 }
 
@@ -6433,6 +6541,22 @@ fn authority_value(value: &tasks::Authority) -> authority::Authority {
                 pattern: authority::Pattern { segments: grant.pattern.segments.clone(), last },
             })
             .expect("grant capacity");
+    }
+    let mut note_resources =
+        List::with_capacity(u32::try_from(value.note_resources.len()).expect("validated task note scopes"));
+    for scope in &value.note_resources {
+        note_resources
+            .push(authority::ResourceScope {
+                connector: scope.connector,
+                pattern: authority::Pattern {
+                    segments: scope.pattern.segments.clone(),
+                    last: match &scope.pattern.last {
+                        tasks::Last::Exact(bytes) => authority::Last::Exact(bytes.clone()),
+                        tasks::Last::Open(bytes) => authority::Last::Open(bytes.clone()),
+                    },
+                },
+            })
+            .expect("note scope capacity");
     }
     let mut kinds = List::with_capacity(u32::try_from(value.delegation.kinds.len()).expect("validated task executors"));
     for kind in &value.delegation.kinds {
@@ -6454,6 +6578,7 @@ fn authority_value(value: &tasks::Authority) -> authority::Authority {
         },
         budget: authority::Budget { spend: value.budget.spend, deadline: value.budget.deadline },
         notes: authority::Scopes(value.notes.0),
+        note_resources: note_resources.into_boxed(),
     }
 }
 
@@ -6775,8 +6900,11 @@ fn take_read(domain: &mut Domain, waiter: Token) -> Option<Read> {
 fn authority_within(value: &authority::Authority, limits: &Limits) -> bool {
     if value.grants.len()
         > usize::try_from(limits.authority.grants.min(limits.tasks.authority_grants)).expect("u32 fits usize")
+        || value.note_resources.len()
+            > usize::try_from(limits.authority.grants.min(limits.tasks.authority_grants)).expect("u32 fits usize")
         || value.delegation.kinds.len()
             > usize::try_from(limits.authority.executors.min(limits.tasks.executor_kinds)).expect("u32 fits usize")
+        || value.notes.0 & !7 != 0
     {
         return false;
     }
@@ -6805,6 +6933,28 @@ fn authority_within(value: &authority::Authority, limits: &Limits) -> bool {
         let Some(total) = bytes.checked_add(terminal) else {
             return false;
         };
+        bytes = total;
+    }
+    for scope in &value.note_resources {
+        if scope.pattern.segments.len()
+            > usize::try_from(limits.authority.segments.min(limits.tasks.authority_segments)).expect("u32 fits usize")
+        {
+            return false;
+        }
+        for segment in &scope.pattern.segments {
+            if segment.len() > usize::try_from(limits.authority.segment_bytes).expect("u32 fits usize") {
+                return false;
+            }
+            let Some(total) = bytes.checked_add(segment.len()) else { return false };
+            bytes = total;
+        }
+        let terminal = match &scope.pattern.last {
+            authority::Last::Exact(bytes) | authority::Last::Open(bytes) => bytes.len(),
+        };
+        if terminal > usize::try_from(limits.authority.segment_bytes).expect("u32 fits usize") {
+            return false;
+        }
+        let Some(total) = bytes.checked_add(terminal) else { return false };
         bytes = total;
     }
     bytes <= usize::try_from(limits.tasks.authority_bytes).expect("u32 fits usize")
@@ -6845,6 +6995,11 @@ fn run_carriers_bound(limits: &Limits) -> Option<u64> {
         )?
         .checked_add(
             u64::from(limits.tasks.authority_grants)
+                .checked_mul(u64::try_from(size_of::<tasks::ResourceScope>()).ok()?)?,
+        )?
+        .checked_add(
+            u64::from(limits.tasks.authority_grants)
+                .checked_mul(2)?
                 .checked_mul(u64::from(limits.tasks.authority_segments))?
                 .checked_mul(u64::try_from(size_of::<Box<[u8]>>()).ok()?)?,
         )?
@@ -6876,6 +7031,11 @@ pub(crate) fn run_charter_bytes(charter: &RunCharter) -> Option<u64> {
                 .checked_mul(u64::try_from(size_of::<tasks::Grant>()).ok()?)?,
         )?
         .checked_add(
+            u64::try_from(charter.authority.note_resources.len())
+                .ok()?
+                .checked_mul(u64::try_from(size_of::<tasks::ResourceScope>()).ok()?)?,
+        )?
+        .checked_add(
             u64::try_from(charter.authority.delegation.kinds.len())
                 .ok()?
                 .checked_mul(u64::try_from(size_of::<tasks::AuthorityExecutor>()).ok()?)?,
@@ -6890,6 +7050,20 @@ pub(crate) fn run_charter_bytes(charter: &RunCharter) -> Option<u64> {
             bytes = bytes.checked_add(u64::try_from(segment.len()).ok()?)?;
         }
         let terminal = match &grant.pattern.last {
+            tasks::Last::Exact(bytes) | tasks::Last::Open(bytes) => bytes.len(),
+        };
+        bytes = bytes.checked_add(u64::try_from(terminal).ok()?)?;
+    }
+    for scope in &charter.authority.note_resources {
+        bytes = bytes.checked_add(
+            u64::try_from(scope.pattern.segments.len())
+                .ok()?
+                .checked_mul(u64::try_from(size_of::<Box<[u8]>>()).ok()?)?,
+        )?;
+        for segment in &scope.pattern.segments {
+            bytes = bytes.checked_add(u64::try_from(segment.len()).ok()?)?;
+        }
+        let terminal = match &scope.pattern.last {
             tasks::Last::Exact(bytes) | tasks::Last::Open(bytes) => bytes.len(),
         };
         bytes = bytes.checked_add(u64::try_from(terminal).ok()?)?;
@@ -7297,6 +7471,11 @@ fn row_bound(limits: &Limits) -> Option<u64> {
         u64::from(tasks.authority_grants).checked_mul(u64::try_from(size_of::<tasks::Grant>()).ok()?.checked_add(
             u64::from(tasks.authority_segments).checked_mul(u64::try_from(size_of::<Box<[u8]>>()).ok()?)?,
         )?)?,
+        u64::from(tasks.authority_grants).checked_mul(
+            u64::try_from(size_of::<tasks::ResourceScope>()).ok()?.checked_add(
+                u64::from(tasks.authority_segments).checked_mul(u64::try_from(size_of::<Box<[u8]>>()).ok()?)?,
+            )?,
+        )?,
         u64::from(tasks.authority_bytes),
         u64::from(tasks.executor_kinds).checked_mul(u64::try_from(size_of::<tasks::AuthorityExecutor>()).ok()?)?,
     ] {
@@ -7406,7 +7585,7 @@ fn valid_proof(proof: &RunProof, expected: &RestoringProof, limits: &Limits) -> 
 fn supported_task(task: &tasks::TaskRecord, charter: u32) -> bool {
     let executor = match task.executor {
         tasks::Executor::Agent { charter: configured } => charter == configured,
-        tasks::Executor::Procedure { connector, code } => connector != 0 && code != 0,
+        tasks::Executor::Procedure { code, .. } => code != 0,
         tasks::Executor::Person(tasks::PersonAddress::Person(person)) => person != 0,
         tasks::Executor::Person(tasks::PersonAddress::Role(role)) => role <= 3,
     };

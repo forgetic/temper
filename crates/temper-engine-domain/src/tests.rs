@@ -432,6 +432,7 @@ fn held_assignment_checks_owned_bytes_and_section_backing_before_acceptance() {
                 delegation: temper_engine_domain_tasks::Delegation { kinds: Box::new([]), tasks: 0, depth: 0 },
                 budget: temper_engine_domain_tasks::Budget { spend: 1, deadline: None },
                 notes: temper_engine_domain_tasks::Scopes(0),
+                note_resources: Box::new([]),
             },
             budget: 1,
         }),

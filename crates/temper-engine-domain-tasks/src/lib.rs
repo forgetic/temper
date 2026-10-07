@@ -90,5 +90,6 @@ pub use proposals::{
     ProposalOutcome, ProposalState,
 };
 pub use value::{
-    Authority, AuthorityExecutor, Budget, Delegation, Funder, Grant, Last, Numbers, Pattern, Scopes, Tools,
+    Authority, AuthorityExecutor, Budget, Delegation, Funder, Grant, Last, Numbers, Pattern, ResourceScope, Scopes,
+    Tools,
 };

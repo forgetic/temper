@@ -46,14 +46,16 @@ mod tests_policy;
 mod value;
 
 pub use boundary::{
-    Action, Answer, BatchAsk, Call, CallAsk, Checked, Delegate, Effect, EffectAsk, Finding, Given, Holder, PersonAsk,
-    PersonRequest, RunAsk, Source, Verdict, Write, Writer,
+    Action, Answer, BatchAsk, Call, CallAsk, Checked, Delegate, Effect, EffectAsk, Finding, Given, Holder, NoteScope,
+    PersonAsk, PersonRequest, RunAsk, Source, Verdict, Write, Writer,
 };
 pub use check::{check_batch, check_call, check_effect, check_request, check_run, covers, needed_judges, needs};
 pub use domain::{Domain, Event, POLICY_MAX_OUT, PolicyFact, PolicyRefusal, step};
 pub use limits::{Limits, max_out, worst_case};
 pub use numbers::{Charged, Numbers, carve, charge, left, settle};
 pub use order::{FITS_MAX_OUT, Lack, Lacks, fits};
-pub use order::{Implication, Implies, at_most, grant_at_most, grant_covers, pattern_at_most, pattern_covers};
+pub use order::{
+    Implication, Implies, at_most, grant_at_most, grant_covers, pattern_at_most, pattern_covers, resolve_task_grants,
+};
 pub use rules::{Guard, Judge, Policy, ProposalKind, Proposals, RequestKind, Requests, Requirement, Role, Rules};
-pub use value::{Authority, Budget, Delegation, Executor, Grant, Last, Name, Pattern, Scopes, Tools};
+pub use value::{Authority, Budget, Delegation, Executor, Grant, Last, Name, Pattern, ResourceScope, Scopes, Tools};

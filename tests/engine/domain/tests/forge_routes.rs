@@ -137,7 +137,7 @@ impl World {
                 limits.tasks.authority_bytes = 64;
             }
             let grant = authority::Grant {
-                connector: 1,
+                connector: 0,
                 kind: 1,
                 pattern: authority::Pattern {
                     segments: Box::new([
@@ -165,7 +165,7 @@ impl World {
             rules.ceiling.grants.clone_from(&grants);
             if approval.is_some() || agent_gate {
                 let landing: Box<[people::LandingRule]> = Box::new([people::LandingRule {
-                    connector: 1,
+                    connector: 0,
                     kind: 4,
                     pattern: people::Pattern {
                         segments: Box::new([
@@ -588,7 +588,7 @@ fn change_world_with_policy(
                 project: 1,
                 change: people::PolicyChange::Landing {
                     rules: Box::new([people::LandingRule {
-                        connector: 1,
+                        connector: 0,
                         kind: 4,
                         pattern: people::Pattern {
                             segments: Box::new([
@@ -635,7 +635,7 @@ fn change_world_with_policy(
     world.until(Until::Assigned);
     let chat = world.assigned[0].clone();
     let grant = tasks::Grant {
-        connector: 1,
+        connector: 0,
         kind: 2,
         pattern: tasks::Pattern {
             segments: Box::new([Box::from(&b"forge"[..]), Box::from(&b"forge.example"[..]), Box::from(&b"org"[..])]),
@@ -644,10 +644,11 @@ fn change_world_with_policy(
     };
     let child_authority = tasks::Authority {
         tools: tasks::Tools(1),
-        grants: Box::new([grant.clone(), tasks::Grant { kind: 3, ..grant.clone() }, tasks::Grant { kind: 4, ..grant }]),
+        grants: Box::new([tasks::Grant { kind: 3, ..grant.clone() }, tasks::Grant { kind: 4, ..grant }]),
         delegation: tasks::Delegation { kinds: Box::new([tasks::AuthorityExecutor::Charter(1)]), tasks: 4, depth: 1 },
         budget: tasks::Budget { spend: 20, deadline: None },
         notes: tasks::Scopes(0),
+        note_resources: Box::new([]),
     };
     world.send(engine::Event::Call {
         channel: Token::new(7),
@@ -659,21 +660,37 @@ fn change_world_with_policy(
             position: 1,
             tool: engine::Tool::Delegate {
                 batch: Box::new([engine::Delegate {
-                    executor: tasks::Executor::Procedure { connector: 1, code: 2 },
+                    executor: tasks::Executor::Procedure { connector: 0, code: 2 },
                     spec: tasks::Spec {
                         words: Box::from(&b"Small fix"[..]),
                         parameters: Box::new([
                             tasks::Parameter::Resource {
                                 name: 1,
-                                connector: 1,
+                                connector: 0,
                                 resource: u64::from(forge_world::REPO.repository),
                             },
                             tasks::Parameter::Bytes { name: 2, value: Box::from(&b"main"[..]) },
                         ]),
                         inputs: Box::new([]),
                     },
-                    contract: tasks::Contract::Change { connector: 1, kind: 1, words: 32 },
+                    contract: tasks::Contract::Change { connector: 0, kind: 1, words: 32 },
                     authority: child_authority,
+                    symbolic_grants: Box::new([tasks::Grant {
+                        connector: 0,
+                        kind: 2,
+                        pattern: tasks::Pattern {
+                            segments: Box::new([
+                                Box::from(&b"forge"[..]),
+                                Box::from(&b"forge.example"[..]),
+                                Box::from(&b"org"[..]),
+                                Box::from(&b"repo"[..]),
+                                Box::from(&b"branch"[..]),
+                                Box::from(&b"temper"[..]),
+                                chat.task.to_string().into_bytes().into_boxed_slice(),
+                            ]),
+                            last: tasks::Last::Open(Box::from(&b"c"[..])),
+                        },
+                    }]),
                     dependencies: Box::new([]),
                     wake: tasks::WakePolicy::DEFAULT,
                 }]),
@@ -683,6 +700,26 @@ fn change_world_with_policy(
     world.until(Until::Delegated);
     world.until(Until::SecondAssignment);
     let producer = world.assigned[1].clone();
+    let change = world
+        .answers
+        .iter()
+        .find_map(|answer| match answer {
+            temper_engine_domain::CallAnswer::Delegated(numbers) => numbers.first().copied(),
+            _ => None,
+        })
+        .expect("change task number");
+    assert!(
+        world.store.rows.values().any(|stored| matches!(stored,
+            Record::Tasks(tasks::Stored::Live(task))
+                if task.number == producer.task && task.authority.grants.iter().any(|grant|
+                    grant.connector == 0 && grant.kind == 2
+                        && grant.pattern.segments.last().map(AsRef::as_ref)
+                            == Some(chat.task.to_string().as_bytes())
+                        && matches!(&grant.pattern.last, tasks::Last::Exact(prefix)
+                            if prefix.as_ref() == format!("c{change}").as_bytes()))
+        )),
+        "producer inherits the change task's numbered branch grant"
+    );
     let branch = producer.workspace.repositories[0].push.clone().expect("writable change branch");
     (world, chat, producer, branch)
 }
@@ -713,7 +750,7 @@ fn a_small_fix_made_in_a_chat_lands() {
     world.until(Until::Assigned);
     let chat = world.assigned[0].clone();
     let grant = tasks::Grant {
-        connector: 1,
+        connector: 0,
         kind: 2,
         pattern: tasks::Pattern {
             segments: Box::new([Box::from(&b"forge"[..]), Box::from(&b"forge.example"[..]), Box::from(&b"org"[..])]),
@@ -726,6 +763,7 @@ fn a_small_fix_made_in_a_chat_lands() {
         delegation: tasks::Delegation { kinds: Box::new([tasks::AuthorityExecutor::Charter(1)]), tasks: 2, depth: 1 },
         budget: tasks::Budget { spend: 20, deadline: None },
         notes: tasks::Scopes(0),
+        note_resources: Box::new([]),
     };
     world.send(engine::Event::Call {
         channel: Token::new(7),
@@ -737,21 +775,22 @@ fn a_small_fix_made_in_a_chat_lands() {
             position: 1,
             tool: engine::Tool::Delegate {
                 batch: Box::new([engine::Delegate {
-                    executor: tasks::Executor::Procedure { connector: 1, code: 2 },
+                    executor: tasks::Executor::Procedure { connector: 0, code: 2 },
                     spec: tasks::Spec {
                         words: Box::from(&b"Small fix"[..]),
                         parameters: Box::new([
                             tasks::Parameter::Resource {
                                 name: 1,
-                                connector: 1,
+                                connector: 0,
                                 resource: u64::from(forge_world::REPO.repository),
                             },
                             tasks::Parameter::Bytes { name: 2, value: Box::from(&b"main"[..]) },
                         ]),
                         inputs: Box::new([]),
                     },
-                    contract: tasks::Contract::Change { connector: 1, kind: 1, words: 32 },
+                    contract: tasks::Contract::Change { connector: 0, kind: 1, words: 32 },
                     authority: child_authority,
+                    symbolic_grants: Box::new([]),
                     dependencies: Box::new([]),
                     wake: tasks::WakePolicy::DEFAULT,
                 }]),
@@ -783,7 +822,7 @@ fn a_small_fix_made_in_a_chat_lands() {
         cumulative: 5,
         end: tasks::End::Finished {
             result: tasks::TaskResult::Change {
-                connector: 1,
+                connector: 0,
                 kind: 2,
                 resource: u64::from(forge_world::REPO.repository),
                 words: Box::from(&b"pushed"[..]),
@@ -840,7 +879,7 @@ fn a_pushed_change_is_recovered_before_its_worker_reports_the_head() {
         cumulative: 5,
         end: tasks::End::Finished {
             result: tasks::TaskResult::Change {
-                connector: 1,
+                connector: 0,
                 kind: 2,
                 resource: u64::from(forge_world::REPO.repository),
                 words: Box::from(&b"pushed"[..]),
@@ -896,7 +935,7 @@ fn a_change_whose_ci_never_reports_is_stalled_and_held() {
         cumulative: 5,
         end: tasks::End::Finished {
             result: tasks::TaskResult::Change {
-                connector: 1,
+                connector: 0,
                 kind: 2,
                 resource: u64::from(forge_world::REPO.repository),
                 words: Box::from(&b"pushed"[..]),
@@ -956,7 +995,7 @@ fn check_gate_landing(no_ci: bool, owner_gate: bool) {
         cumulative: 5,
         end: tasks::End::Finished {
             result: tasks::TaskResult::Change {
-                connector: 1,
+                connector: 0,
                 kind: 2,
                 resource: u64::from(forge_world::REPO.repository),
                 words: Box::from(&b"pushed"[..]),
@@ -1045,7 +1084,7 @@ fn check_gate_repair(no_ci: bool) {
         cumulative: 5,
         end: tasks::End::Finished {
             result: tasks::TaskResult::Change {
-                connector: 1,
+                connector: 0,
                 kind: 2,
                 resource: u64::from(forge_world::REPO.repository),
                 words: Box::from(&b"pushed"[..]),
@@ -1095,7 +1134,7 @@ fn check_gate_repair(no_ci: bool) {
         cumulative: 5,
         end: tasks::End::Finished {
             result: tasks::TaskResult::Change {
-                connector: 1,
+                connector: 0,
                 kind: 2,
                 resource: u64::from(forge_world::REPO.repository),
                 words: Box::from(&b"repaired"[..]),
@@ -1168,7 +1207,7 @@ fn a_change_failing_ci_is_repaired_reviewed_at_its_head_and_lands() {
         cumulative: 5,
         end: tasks::End::Finished {
             result: tasks::TaskResult::Change {
-                connector: 1,
+                connector: 0,
                 kind: 2,
                 resource: u64::from(forge_world::REPO.repository),
                 words: Box::from(&b"pushed"[..]),
@@ -1246,7 +1285,7 @@ fn a_change_failing_ci_is_repaired_reviewed_at_its_head_and_lands() {
         cumulative: 5,
         end: tasks::End::Finished {
             result: tasks::TaskResult::Change {
-                connector: 1,
+                connector: 0,
                 kind: 2,
                 resource: u64::from(forge_world::REPO.repository),
                 words: Box::from(&b"repaired"[..]),
@@ -1304,7 +1343,7 @@ fn an_unreadable_failed_job_log_is_named_and_repair_still_runs() {
         cumulative: 5,
         end: tasks::End::Finished {
             result: tasks::TaskResult::Change {
-                connector: 1,
+                connector: 0,
                 kind: 2,
                 resource: u64::from(forge_world::REPO.repository),
                 words: Box::from(&b"pushed"[..]),
@@ -1355,7 +1394,7 @@ fn failed_ci_with_delayed_brief() -> (World, u64, u64) {
         cumulative: 5,
         end: tasks::End::Finished {
             result: tasks::TaskResult::Change {
-                connector: 1,
+                connector: 0,
                 kind: 2,
                 resource: u64::from(forge_world::REPO.repository),
                 words: Box::from(&b"pushed"[..]),
@@ -1505,7 +1544,7 @@ fn a_conflicting_update_is_resolved_from_a_merge_in_progress() {
         cumulative: 5,
         end: tasks::End::Finished {
             result: tasks::TaskResult::Change {
-                connector: 1,
+                connector: 0,
                 kind: 2,
                 resource: u64::from(forge_world::REPO.repository),
                 words: Box::from(&b"pushed"[..]),
@@ -1559,7 +1598,7 @@ fn a_conflicting_update_is_resolved_from_a_merge_in_progress() {
         cumulative: 5,
         end: tasks::End::Finished {
             result: tasks::TaskResult::Change {
-                connector: 1,
+                connector: 0,
                 kind: 2,
                 resource: u64::from(forge_world::REPO.repository),
                 words: Box::from(&b"resolved"[..]),
@@ -1606,7 +1645,7 @@ fn an_approval_carries_over_a_clean_update_and_is_asked_again_after_a_repair() {
         cumulative: 5,
         end: tasks::End::Finished {
             result: tasks::TaskResult::Change {
-                connector: 1,
+                connector: 0,
                 kind: 2,
                 resource: u64::from(forge_world::REPO.repository),
                 words: Box::from(&b"pushed"[..]),
@@ -1707,7 +1746,7 @@ fn an_approval_carries_over_a_clean_update_and_is_asked_again_after_a_repair() {
         cumulative: 5,
         end: tasks::End::Finished {
             result: tasks::TaskResult::Change {
-                connector: 1,
+                connector: 0,
                 kind: 2,
                 resource: u64::from(forge_world::REPO.repository),
                 words: Box::from(&b"pushed"[..]),
@@ -1766,7 +1805,7 @@ fn an_approval_carries_over_a_clean_update_and_is_asked_again_after_a_repair() {
         cumulative: 5,
         end: tasks::End::Finished {
             result: tasks::TaskResult::Change {
-                connector: 1,
+                connector: 0,
                 kind: 2,
                 resource: u64::from(forge_world::REPO.repository),
                 words: Box::from(&b"repaired"[..]),
@@ -1863,7 +1902,7 @@ fn a_worker_frozen_past_its_grace_resumes_with_a_push_in_hand_and_lands_nothing_
         cumulative: 5,
         end: tasks::End::Finished {
             result: tasks::TaskResult::Change {
-                connector: 1,
+                connector: 0,
                 kind: 2,
                 resource: u64::from(forge_world::REPO.repository),
                 words: Box::from(&b"pushed"[..]),
@@ -1930,7 +1969,7 @@ fn a_broken_landing_branch_gets_one_deployment_repair_before_waiting_changes_lan
         cumulative: 5,
         end: tasks::End::Finished {
             result: tasks::TaskResult::Change {
-                connector: 1,
+                connector: 0,
                 kind: 2,
                 resource: u64::from(forge_world::REPO.repository),
                 words: Box::from(&b"pushed"[..]),
@@ -1976,7 +2015,7 @@ fn a_broken_landing_branch_gets_one_deployment_repair_before_waiting_changes_lan
         cumulative: 5,
         end: tasks::End::Finished {
             result: tasks::TaskResult::Change {
-                connector: 1,
+                connector: 0,
                 kind: 2,
                 resource: u64::from(forge_world::REPO.repository),
                 words: Box::from(&b"repaired"[..]),
