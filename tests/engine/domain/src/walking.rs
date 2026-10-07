@@ -76,6 +76,7 @@ pub fn limits() -> engine::Limits {
     };
     let fleet = fleet::Limits {
         workers: 1,
+        engine_slots: 0,
         slots: 1,
         workstreams: 1,
         attempts: 2,

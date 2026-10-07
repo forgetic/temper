@@ -4440,6 +4440,8 @@ fn tasks_outputs(
                 );
                 assert!(view_out.is_empty(), "restored run following has no external effect");
                 domain.adopted.push(fleet::Event::Adopt {
+                    kind: fleet::HostKind::Worker,
+                    worked: kept > 0,
                     reply_to: internal(task),
                     run: Token::new(task),
                     attempt: Token::new(attempt),
@@ -4586,6 +4588,7 @@ fn tasks_outputs(
                         decision,
                         &env.limits,
                         Delivery::Fleet(fleet::Event::Start {
+                            kinds: fleet::Kinds::Workers,
                             reply_to: internal(task),
                             run: Token::new(task),
                             attempt: Token::new(attempt),
@@ -4762,7 +4765,7 @@ fn take_payload(domain: &mut Domain, token: Token) -> Option<Payload> {
 fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, out: &mut Queue<fleet::Request>) {
     for _ in 0..out.len() {
         match out.pop().expect("fleet output count") {
-            fleet::Request::Assign { channel, run, attempt } => {
+            fleet::Request::Assign { channel, kind: _, run, attempt } => {
                 let assignment = domain.assignments.remove(&run.raw()).expect("durable claim has prepared assignment");
                 assert!(assignment.attempt == attempt.raw(), "assignment names current attempt");
                 emit(decision, &env.limits, Delivery::View(Box::new(views::Event::Started { task: run, attempt })));
@@ -4854,7 +4857,9 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                 }));
                 domain.work.push(Work::Forge(forge::Event::Lost { task: run.raw(), attempt: attempt.raw() }));
             }
-            fleet::Request::Withdrawn { to, run, attempt, .. } | fleet::Request::Refused { to, run, attempt, .. } => {
+            fleet::Request::NotStarted { to, run, attempt }
+            | fleet::Request::Withdrawn { to, run, attempt, .. }
+            | fleet::Request::Refused { to, run, attempt, .. } => {
                 let _answered = to.into_token();
                 drop(domain.assignments.remove(&run.raw()));
                 remember_unpriced_terminal(domain, run, attempt, tasks::End::Refused);
