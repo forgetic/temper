@@ -180,7 +180,7 @@ dependencies = [
 [[package]]
 name = "smith-domain"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/smith.git#bf3609f640f05e47e886192b9ff85183a3d12ba1"
+source = "git+https://git.ekanayaka.io/ai/smith.git#520ccaeaf304ad35421964179823eade4f717308"
 dependencies = [
  "skein-lib",
  "smith-domain-run",
@@ -191,7 +191,7 @@ dependencies = [
 [[package]]
 name = "smith-domain-run"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/smith.git#bf3609f640f05e47e886192b9ff85183a3d12ba1"
+source = "git+https://git.ekanayaka.io/ai/smith.git#520ccaeaf304ad35421964179823eade4f717308"
 dependencies = [
  "skein-lib",
 ]
@@ -199,7 +199,7 @@ dependencies = [
 [[package]]
 name = "smith-domain-session"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/smith.git#bf3609f640f05e47e886192b9ff85183a3d12ba1"
+source = "git+https://git.ekanayaka.io/ai/smith.git#520ccaeaf304ad35421964179823eade4f717308"
 dependencies = [
  "skein-lib",
  "smith-domain-tools",
@@ -208,7 +208,7 @@ dependencies = [
 [[package]]
 name = "smith-domain-tools"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/smith.git#bf3609f640f05e47e886192b9ff85183a3d12ba1"
+source = "git+https://git.ekanayaka.io/ai/smith.git#520ccaeaf304ad35421964179823eade4f717308"
 dependencies = [
  "skein-lib",
 ]
