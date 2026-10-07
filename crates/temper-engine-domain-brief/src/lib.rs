@@ -79,6 +79,7 @@ mod cut;
 mod domain;
 mod facts;
 mod limits;
+mod orchestrated;
 mod planned;
 #[cfg(test)]
 mod tests;
@@ -89,4 +90,9 @@ pub use boundary::{
 pub use domain::{Domain, fire, max_out, step};
 pub use facts::{Fact, Gathered};
 pub use limits::{Budgets, Limits, worst_case};
+pub use orchestrated::{
+    Domain as GatherDomain, Event as GatherEvent, Missing as GatherMissing, Placed as GatherPlaced,
+    Request as GatherRequest, fire as gather_fire, max_out as gather_max_out, step as gather_step,
+    worst_case as gather_worst_case,
+};
 pub use planned::{ConnectorAction, Core, Placement, Plan, Planned, plan};

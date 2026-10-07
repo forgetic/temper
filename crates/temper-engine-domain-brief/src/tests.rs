@@ -33,7 +33,7 @@ const BUDGETS: Budgets = Budgets {
     template: 64,
 };
 
-const LIMITS: Limits = Limits {
+pub(super) const LIMITS: Limits = Limits {
     briefs: 2,
     sections: 4,
     items: 3,
