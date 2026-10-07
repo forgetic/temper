@@ -364,6 +364,7 @@ simulation; no legacy fuzzy seed trim is needed for the suite caps.
 | 03.3 contract-derived finish and deliver | merged locally | smith 7cf6304 | fmt/clippy pass; 1,285 focused / 5.513 s; 15 fuzzy / 6.671 s. |
 | 03.4 endpoints and grant generations | merged locally | smith 0d15fc9 | fmt/clippy pass; 1,288 focused / 7.073 s; 15 fuzzy / 7.022 s. |
 | 03.5 LLM connection component | merged locally | smith 5055d65 | fmt/clippy pass; 1,300 focused / 4.126 s; 15 fuzzy / 5.118 s; protocol LLM world 57 / 2.271 s serial, 12 new stories / 0.060 s. |
+| 05.0 inherited-pipe and signal skein repin | merged locally | smith d43cbc1 | fmt/clippy pass; 1,300 focused / 7.062 s; 15 fuzzy / 6.635 s. |
 
 ## jig extraction
 
