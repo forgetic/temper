@@ -8,7 +8,7 @@ use skein_lib::{List, Reader, Writer};
 use smith_channel as wire;
 use smith_host_domain as smith;
 
-use jig_worker_host::{AnsweredCall, DeliveryOutcome, SettledAnswer};
+use jig_host::{AnsweredCall, DeliveryOutcome, SettledAnswer};
 
 /// Every resumed delivery has valid evidence for the outcome jig recorded.
 pub(crate) fn valid_answered(calls: &[AnsweredCall], evidence_bytes: u64) -> bool {
@@ -165,7 +165,7 @@ fn decode_reason(reason: wire::DeliveryReason) -> smith::DeliveryReason {
 #[cfg(test)]
 mod tests {
     use super::{decode, encode, valid_answered};
-    use jig_worker_host::{AnsweredCall, DeliveryOutcome, SettledAnswer};
+    use jig_host::{AnsweredCall, DeliveryOutcome, SettledAnswer};
     use smith_host_domain::{Delivered, Delivery, DeliveryFailure, DeliveryReason, Diagnostic, Receipt};
 
     #[test]

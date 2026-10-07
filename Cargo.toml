@@ -28,7 +28,7 @@ members = [
     "crates/temper-worker-domain",
     "crates/temper-worker-domain-agent",
     "crates/temper-worker-domain-checkout",
-    "jig/crates/jig-worker-host",
+    "jig/crates/jig-host",
     "jig/crates/jig-local-host",
     "jig/tests/local-host",
     "crates/temper-web-view",
@@ -49,7 +49,7 @@ members = [
     "tests/fake-forge",
     "tests/worker/agent",
     "tests/worker/checkout",
-    "jig/tests/worker-host",
+    "jig/tests/host",
     "tests/worker/domain",
     "tests/web/domain",
     "tests/world",
@@ -101,7 +101,7 @@ jig-core-views = { path = "jig/crates/jig-core-views" }
 temper-worker-domain = { path = "crates/temper-worker-domain" }
 temper-worker-domain-agent = { path = "crates/temper-worker-domain-agent" }
 temper-worker-domain-checkout = { path = "crates/temper-worker-domain-checkout" }
-jig-worker-host = { path = "jig/crates/jig-worker-host" }
+jig-host = { path = "jig/crates/jig-host" }
 jig-local-host = { path = "jig/crates/jig-local-host" }
 jig-local-host-world = { path = "jig/tests/local-host" }
 temper-fake-forge-domain = { path = "testing/temper-fake-forge-domain" }

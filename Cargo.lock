@@ -161,6 +161,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "jig-host"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+]
+
+[[package]]
+name = "jig-host-world"
+version = "0.0.0"
+dependencies = [
+ "jig-host",
+ "skein-lib",
+ "skein-world",
+]
+
+[[package]]
 name = "jig-local-host"
 version = "0.0.0"
 dependencies = [
@@ -265,22 +281,6 @@ name = "jig-views-world"
 version = "0.0.0"
 dependencies = [
  "jig-core-views",
- "skein-lib",
- "skein-world",
-]
-
-[[package]]
-name = "jig-worker-host"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
-]
-
-[[package]]
-name = "jig-worker-host-world"
-version = "0.0.0"
-dependencies = [
- "jig-worker-host",
  "skein-lib",
  "skein-world",
 ]
@@ -720,7 +720,7 @@ dependencies = [
 name = "temper-worker-domain"
 version = "0.0.0"
 dependencies = [
- "jig-worker-host",
+ "jig-host",
  "skein-lib",
  "smith-channel",
  "smith-host-domain",

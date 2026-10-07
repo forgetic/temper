@@ -10,7 +10,7 @@ publish.workspace = true
 skein-lib.workspace = true
 temper-worker-domain-agent.workspace = true
 temper-worker-domain-checkout.workspace = true
-jig-worker-host.workspace = true
+jig-host.workspace = true
 smith-channel.workspace = true
 smith-host-domain.workspace = true
 

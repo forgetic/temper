@@ -2,7 +2,7 @@
 
 pub use crate::push::{PushDiagnostic, PushFailure, PushReason};
 use alloc::boxed::Box;
-pub use jig_worker_host::{
+pub use jig_host::{
     AgentFailure, AnsweredCall, Bounce, Finish, FinishV2, Grant, Hosting, Phase, Reason, RunFailure, Turn,
 };
 use skein_lib::Token;

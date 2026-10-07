@@ -14,7 +14,7 @@
 //! on a ready list: an entry point completes them all, and [`max_out`]
 //! follows from the child domains' along that chain (the `limits` module).
 
-use jig_worker_host as host;
+use jig_host as host;
 use skein_lib::{Env, Id, Map, Queue, Slab, Time, Token};
 use temper_worker_domain_agent as agent;
 use temper_worker_domain_checkout as checkout;

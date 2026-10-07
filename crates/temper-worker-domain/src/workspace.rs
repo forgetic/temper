@@ -45,7 +45,7 @@ use alloc::boxed::Box;
 use core::mem;
 
 use crate::wire;
-use jig_worker_host as host;
+use jig_host as host;
 use skein_lib::bytes::copy_of;
 use skein_lib::{Env, Id, List, Map, Token};
 use temper_worker_domain_agent as agent;

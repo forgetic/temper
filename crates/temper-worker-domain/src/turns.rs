@@ -5,7 +5,7 @@
 use crate::boundary::{Hosted, Phase, Request};
 use crate::limits::Limits;
 use crate::wire;
-use jig_worker_host as host;
+use jig_host as host;
 use skein_lib::bytes::copy_of;
 use skein_lib::{Deadlines, Env, Map, Queue, Time, Token};
 

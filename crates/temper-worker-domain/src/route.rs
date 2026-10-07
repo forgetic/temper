@@ -8,7 +8,7 @@
 use alloc::boxed::Box;
 
 use crate::wire;
-use jig_worker_host as host;
+use jig_host as host;
 use skein_lib::{Env, Queue, ReplyTo};
 use temper_worker_domain_agent as agent;
 use temper_worker_domain_checkout as checkout;

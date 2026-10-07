@@ -58,7 +58,7 @@
 use alloc::boxed::Box;
 
 use crate::wire;
-use jig_worker_host as host;
+use jig_host as host;
 use skein_lib::bytes::copy_of;
 use skein_lib::{Deadlines, Duration, Env, List, Map, Queue, Rng, Time, Token};
 use temper_worker_domain_checkout as checkout;
