@@ -6,12 +6,12 @@ use temper_engine_domain_forge_change as change;
 use temper_engine_domain_forge_client as client;
 use temper_engine_domain_forge_issues as issues;
 
-use crate::brief;
 use crate::{
     Adopted, Adoption, BranchHead, ChangeRow, CiState, Class, Event, Hold, IssueRow, Key, Kinds, Limits, Name, News,
     Protection, PullState, ReleaseEnding, ReleaseRow, Repository, Request, Role, Stored, Subscriber, Topic, What,
     Writer,
 };
+use crate::{brief, held};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum AdoptionStage {
@@ -116,6 +116,8 @@ pub struct Domain {
     client: client::Domain,
     client_out: Queue<client::Request>,
     pub(crate) brief_fetches: Map<Token, brief::BriefFetch>,
+    pub(crate) brief_pending: Map<Token, held::Pending>,
+    pub(crate) brief_held: Map<Token, held::Held>,
 }
 
 impl Domain {
@@ -155,6 +157,8 @@ impl Domain {
             client: client::Domain::configured(&l.client, seed, config)?,
             client_out: Queue::with_capacity(client::max_out(&l.client)),
             brief_fetches: Map::with_capacity(l.brief_sections),
+            brief_pending: Map::with_capacity(l.brief_sections),
+            brief_held: Map::with_capacity(l.brief_sections),
         })
     }
 
@@ -173,7 +177,7 @@ impl Domain {
     /// Whether no brief section is being gathered by the connector.
     #[must_use]
     pub fn briefs_idle(&self) -> bool {
-        self.brief_fetches.is_empty()
+        self.brief_fetches.is_empty() && self.brief_pending.is_empty() && self.brief_held.is_empty()
     }
 
     /// Reclaim transient child buffers after the current decision.
@@ -371,6 +375,12 @@ pub fn step(d: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Req
         Event::GatherBrief { owner, source, parts, bytes, max_job_bytes } => {
             brief::gather(d, owner, source, parts, bytes, max_job_bytes, env.limits.brief_bytes, out);
         }
+        Event::GatherBriefHeld { section, source, parts, bytes, max_job_bytes } => {
+            held::gather(d, section, source, parts, bytes, max_job_bytes, env.limits.brief_bytes, out);
+        }
+        Event::CutBrief { section, bytes } => held::cut(d, section, bytes, out),
+        Event::TakeBrief { section } => held::take(d, section, out),
+        Event::DropBrief { section } => held::drop_section(d, section),
         Event::Adopt { reply_to, adoption } => adopt(d, env, reply_to, adoption, out),
         Event::ForgetAdoption { repository, restore } => match restore {
             Some(previous) => {

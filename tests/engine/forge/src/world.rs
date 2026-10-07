@@ -417,6 +417,8 @@ impl World {
                 | top::Request::News { .. }
                 | top::Request::Read { .. }
                 | top::Request::BriefReady { .. }
+                | top::Request::BriefSized { .. }
+                | top::Request::BriefTaken { .. }
                 | top::Request::Drift { .. }) => {
                     self.seen.push(other).expect("world output capacity");
                 }

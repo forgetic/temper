@@ -111,9 +111,12 @@ pub fn worst_case(l: &Limits) -> Option<u64> {
         )?
         .checked_add(Map::<skein_lib::Token, crate::domain::PendingAdoption>::worst_case(l.adoptions)?)?
         .checked_add(Map::<skein_lib::Token, crate::brief::BriefFetch>::worst_case(l.brief_sections)?)?
+        .checked_add(Map::<skein_lib::Token, crate::held::Pending>::worst_case(l.brief_sections)?)?
+        .checked_add(Map::<skein_lib::Token, crate::held::Held>::worst_case(l.brief_sections)?)?
+        .checked_add(u64::from(l.brief_sections).checked_mul(u64::from(l.brief_bytes))?)?
         .checked_add(u64::from(l.brief_sections).checked_mul(u64::from(l.brief_bytes))?)?
         .checked_add(u64::from(l.brief_sections).checked_mul(u64::from(l.client.answer_bytes))?)?
-        .checked_add(u64::from(l.brief_bytes))?
+        .checked_add(u64::from(l.brief_bytes).checked_mul(2)?)?
         .checked_add(Queue::<Stored>::worst_case(l.output)?)?
         .checked_add(Queue::<Key>::worst_case(l.output)?)?
         .checked_add(Queue::<client::Fact>::worst_case(l.facts)?)?

@@ -1693,6 +1693,9 @@ pub(super) fn outputs(
                 };
                 domain.work.push(Work::Brief(brief::Event::Read { owner, read }));
             }
+            forge::Request::BriefSized { .. } | forge::Request::BriefTaken { .. } => {
+                unreachable!("held brief routing begins with the typed root cutover");
+            }
             forge::Request::Save { record } => {
                 let key = forge::stored_key(&record);
                 let first = !domain.forge_keys.contains_key(&key);

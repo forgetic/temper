@@ -354,6 +354,14 @@ pub enum Key {
 pub enum Event {
     /// Gather one pinned, connector-owned section for a run brief.
     GatherBrief { owner: Token, source: BriefSource, parts: u32, bytes: u32, max_job_bytes: u32 },
+    /// Gather a section and retain its rendered bytes until the root takes or drops its token.
+    GatherBriefHeld { section: Token, source: BriefSource, parts: u32, bytes: u32, max_job_bytes: u32 },
+    /// Cut retained words to the brief's allotment, preserving this source's end.
+    CutBrief { section: Token, bytes: u32 },
+    /// Transfer retained words to the root for a completed assignment.
+    TakeBrief { section: Token },
+    /// Release a section, including one still gathering.
+    DropBrief { section: Token },
     /// Read current permissions, settings, protection and collaborators.
     Adopt { reply_to: Token, adoption: Adoption },
     /// Withdraw a just-adopted repository when its parent cannot commit the role seed.
@@ -428,6 +436,10 @@ pub enum Request {
     BriefClient { event: client::Event },
     /// One connector-owned section is ready for the root to route to the brief.
     BriefReady { owner: Token, read: BriefRead },
+    /// A held section has this rendered size, or its gather/cut failed.
+    BriefSized { section: Token, size: Option<u32> },
+    /// A held section transferred its rendered bytes to the root.
+    BriefTaken { section: Token, bytes: Option<Box<[u8]>> },
     /// Terminal result of a repository adoption, for the root's person route.
     Adopted { reply_to: Token, result: Result<Adopted, client::api::Error> },
     /// Save one record atomically with the current decision.

@@ -23,7 +23,19 @@ pub(crate) struct BriefFetch {
     checks: Box<[client::api::Status]>,
     next_check: u32,
     max_job_bytes: u32,
-    words: List<u8>,
+    words: BriefWords,
+}
+
+#[derive(Debug)]
+struct BriefWords {
+    bytes: List<u8>,
+    left: u64,
+}
+
+impl BriefWords {
+    fn with_capacity(capacity: u32) -> BriefWords {
+        BriefWords { bytes: List::with_capacity(capacity), left: 0 }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -46,15 +58,17 @@ enum PullMode {
     Other,
 }
 
-fn append(out: &mut List<u8>, bytes: &[u8]) {
+fn append(out: &mut BriefWords, bytes: &[u8]) {
     for byte in bytes {
-        if out.room() > 0 {
-            out.push(*byte).expect("checked message room");
+        if out.bytes.room() > 0 {
+            out.bytes.push(*byte).expect("checked message room");
+        } else {
+            out.left = out.left.saturating_add(1);
         }
     }
 }
 
-fn append_hex(out: &mut List<u8>, bytes: &[u8]) {
+fn append_hex(out: &mut BriefWords, bytes: &[u8]) {
     for byte in bytes {
         let high = *b"0123456789abcdef".get(usize::from(byte >> 4_u8)).expect("high nibble is hexadecimal");
         let low = *b"0123456789abcdef".get(usize::from(byte & 15_u8)).expect("low nibble is hexadecimal");
@@ -62,14 +76,17 @@ fn append_hex(out: &mut List<u8>, bytes: &[u8]) {
     }
 }
 
-fn brief_part(words: &[u8], parts: u32, bytes: u32) -> BriefRead {
+fn brief_part(words: &BriefWords, parts: u32, bytes: u32) -> BriefRead {
     if parts == 0 {
         return BriefRead::Failed;
     }
-    let kept = words.len().min(usize::try_from(bytes).expect("u32 fits usize"));
+    let kept = words.bytes.as_slice().len().min(usize::try_from(bytes).expect("u32 fits usize"));
     BriefRead::Got {
-        bytes: Box::from(words.get(..kept).expect("kept is within source")),
-        left: u64::try_from(words.len().checked_sub(kept).expect("kept is within source")).expect("bounded section"),
+        bytes: Box::from(words.bytes.as_slice().get(..kept).expect("kept is within source")),
+        left: words.left.saturating_add(
+            u64::try_from(words.bytes.as_slice().len().checked_sub(kept).expect("kept is within source"))
+                .expect("bounded section"),
+        ),
     }
 }
 
@@ -111,7 +128,7 @@ pub(super) fn brief_pull(
         | change::State::Landed { .. }
         | change::State::Held { .. } => PullMode::Other,
     };
-    let words = List::with_capacity(bytes);
+    let words = BriefWords::with_capacity(bytes);
     let call = Token::new(owner.raw() | (1_u64 << 61_u32) | (1_u64 << 59_u32));
     let fetch = BriefFetch {
         owner,
@@ -305,7 +322,7 @@ pub(crate) fn brief_answer(
             next
         }
         Ok(_) | Err(_) => {
-            out.push(Request::BriefReady { owner: fetch.owner, read: BriefRead::Failed });
+            crate::held::ready(domain, fetch.owner, BriefRead::Failed, out);
             return true;
         }
     };
@@ -314,8 +331,8 @@ pub(crate) fn brief_answer(
         domain.brief_fetches.insert(owner, fetch).expect("same brief read room");
         out.push(Request::BriefClient { event: client::Event::Read { owner, repository, read } });
     } else {
-        let read = brief_part(fetch.words.as_slice(), fetch.parts, fetch.bytes);
-        out.push(Request::BriefReady { owner: fetch.owner, read });
+        let read = brief_part(&fetch.words, fetch.parts, fetch.bytes);
+        crate::held::ready(domain, fetch.owner, read, out);
     }
     true
 }
@@ -334,7 +351,7 @@ pub(crate) fn gather(
     out: &mut Queue<Request>,
 ) {
     if bytes > limit {
-        out.push(Request::BriefReady { owner, read: BriefRead::Failed });
+        crate::held::ready(domain, owner, BriefRead::Failed, out);
         return;
     }
     let read = match source {
@@ -343,7 +360,7 @@ pub(crate) fn gather(
         BriefSource::Pull { item, head } => brief_pull(domain, owner, item, head, parts, bytes, out),
     };
     if let Some(read) = read {
-        out.push(Request::BriefReady { owner, read });
+        crate::held::ready(domain, owner, read, out);
     }
 }
 
@@ -408,7 +425,7 @@ pub(super) fn brief_reviews(
         return Some(BriefRead::Failed);
     }
     let repository = row.repository;
-    let mut words = List::with_capacity(bytes);
+    let mut words = BriefWords::with_capacity(bytes);
     for remark in &row.gate_remarks {
         if remark.head == head.0 {
             append(&mut words, b"Gate remarks: ");
@@ -485,7 +502,7 @@ pub(super) fn brief_ci(
         return Some(BriefRead::Failed);
     }
     let repository = row.repository;
-    let mut words = List::with_capacity(bytes);
+    let mut words = BriefWords::with_capacity(bytes);
     append(&mut words, b"Repair the failed check at change head ");
     append_hex(&mut words, &head.0[..8]);
     append(&mut words, b". Push a new head and wait for checks there.\n");
