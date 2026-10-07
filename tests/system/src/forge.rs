@@ -435,6 +435,7 @@ mod system_stories {
     use smith_agent_world::{Job, World as Agent};
     use smith_domain as smith;
     use smith_domain_run as run;
+    use temper_engine_domain_brief as brief;
     use temper_engine_smith::ChangeResource;
 
     const DELEGATE: &[u8] = br#"{"batch":[{"executor":{"kind":"procedure","connector":1,"code":2},"spec":{"words":"@coding Small fix","parameters":[{"name":1,"kind":"resource","connector":1,"resource":2},{"name":2,"kind":"bytes","value":"main"}]},"contract":{"kind":"change","connector":1,"change_kind":1,"words":32},"authority":{"tools":1,"grants":[{"connector":1,"kind":2,"segments":["forge","forge.example","org"],"terminal":"open","last":"repo"},{"connector":1,"kind":3,"segments":["forge","forge.example","org"],"terminal":"open","last":"repo"},{"connector":1,"kind":4,"segments":["forge","forge.example","org"],"terminal":"open","last":"repo"}],"delegation":{"kinds":[{"kind":"agent","number":1}],"tasks":2,"depth":1},"budget":{"spend":20},"notes":0}}]}"#;
@@ -534,6 +535,10 @@ mod system_stories {
         });
         world.until(Until::Delegated);
         world.until(Until::SecondAssignment);
+        let producer = world.assigned[1].clone();
+        let mut agent = smith_world::agent_for(&producer, None, Job::Coding);
+        agent.run(1000);
+        assert!(matches!(agent.answer(), run::Answer::Accepted { outcome: run::outcome::Declared::Change(_), .. }), "{:?}", agent.answer());
     }
 
     #[test]
@@ -556,6 +561,68 @@ mod system_stories {
         assert!(world.store.rows.values().any(|stored| matches!(stored,
             Record::Forge { row, .. } if matches!(row.as_ref(), forge_top::Stored::Change(change)
                 if matches!(change.change.state, temper_engine_domain_forge_change::State::Landed { .. }))
+        )));
+    }
+
+    #[test]
+    fn a_smith_change_with_failed_ci_is_repaired_reviewed_and_landed() {
+        let (mut world, chat) = start_change_world(0);
+        let agent = smith_world::scripted_agent_for(&chat, chat_script());
+        let parent = run_smith(&mut world, &chat, agent, None);
+        assert!(matches!(parent.answer(), run::Answer::Parked { .. }));
+        world.until(Until::SecondAssignment);
+        let producer = world.assigned[1].clone();
+        let branch = producer.workspace.repositories[0].push.clone().expect("writable change branch");
+        world.external(1, raw::Op::Write(raw::Write::Status {
+            commit: 1, context: b"build".as_slice().into(), state: raw::Check::Passed,
+        }));
+        assert!(matches!(world.external(2, raw::Op::Git(raw::Git::Create { branch: branch.clone(), commit: 1 })),
+            raw::Answer::Branch(raw::Created::Created)));
+        let failed_head = fake::advance(&mut world.fake, &world.fake_env, b"org/repo", &branch, b"file", b"first", 1)
+            .expect("producer pushed first head");
+        world.external(1, raw::Op::Write(raw::Write::Status {
+            commit: failed_head, context: b"build".as_slice().into(), state: raw::Check::Failed,
+        }));
+        let producer_agent = run_smith(&mut world, &producer, smith_world::agent_for(&producer, None, Job::Coding),
+            Some(ChangeResource { connector: 1, kind: 2, resource: 2 }));
+        assert!(matches!(producer_agent.answer(), run::Answer::Accepted { outcome: run::outcome::Declared::Change(_), .. }));
+        for _ in 0..200 {
+            world.tick();
+            if world.assigned.len() >= 3 { break; }
+        }
+        let repair = world.assigned.get(2).expect("failed CI assigned a repair").clone();
+        assert!(repair.sections.iter().any(|section| section.kind == brief::Kind::Ci
+            && matches!(&section.body, brief::Body::Text(words) if words.starts_with(b"Repair the failed check"))));
+        let repaired_head = fake::advance(&mut world.fake, &world.fake_env, b"org/repo", &branch, b"file", b"repaired", 1)
+            .expect("repair pushed a new head");
+        for _ in 0..5 { world.tick(); }
+        world.external(1, raw::Op::Write(raw::Write::Status {
+            commit: repaired_head, context: b"build".as_slice().into(), state: raw::Check::Passed,
+        }));
+        let pull = world.store.rows.values().find_map(|stored| match stored {
+            Record::Forge { row, .. } => match row.as_ref() {
+                forge_top::Stored::Change(change) => change.pull,
+                _ => None,
+            },
+            _ => None,
+        }).expect("opened pull request");
+        assert!(matches!(world.external(2, raw::Op::Write(raw::Write::Review {
+            number: pull, verdict: Some(raw::Verdict::Approve), body: b"Reviewed repaired head".as_slice().into(),
+        })), raw::Answer::Reviewed(_)));
+        let repair_agent = run_smith(&mut world, &repair, smith_world::agent_for(&repair, None, Job::Coding),
+            Some(ChangeResource { connector: 1, kind: 2, resource: 2 }));
+        assert!(matches!(repair_agent.answer(), run::Answer::Accepted { outcome: run::outcome::Declared::Change(_), .. }));
+        for _ in 0..200 {
+            world.tick();
+            if world.store.rows.values().any(|stored| matches!(stored,
+                Record::Forge { row, .. } if matches!(row.as_ref(), forge_top::Stored::Change(change)
+                    if matches!(change.change.state, temper_engine_domain_forge_change::State::Landed { .. }))
+            )) { break; }
+        }
+        assert!(world.store.rows.values().any(|stored| matches!(stored,
+            Record::Forge { row, .. } if matches!(row.as_ref(), forge_top::Stored::Change(change)
+                if matches!(change.change.state, temper_engine_domain_forge_change::State::Landed { .. })
+                    && change.change.repairs == 1)
         )));
     }
 }

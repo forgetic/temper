@@ -89,6 +89,12 @@ pub fn scripted_agent_for(assignment: &engine::Assignment, script: Script) -> Ag
     agent_for_with_options(assignment, None, Job::Reporting, None, Some(script))
 }
 
+/// Resume a caller script with the actual prior Smith turns.
+#[must_use]
+pub fn scripted_agent_for_resume(assignment: &engine::Assignment, transcript: smith::Transcript, script: Script) -> Agent {
+    agent_for_with_options(assignment, Some(transcript), Job::Reporting, None, Some(script))
+}
+
 fn agent_for_with_options(
     assignment: &engine::Assignment,
     transcript: Option<smith::Transcript>,
