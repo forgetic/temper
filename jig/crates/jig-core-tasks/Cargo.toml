@@ -1,5 +1,5 @@
 [package]
-name = "temper-engine-domain-tasks"
+name = "jig-core-tasks"
 description = "Tasks, atomic batches and their durable lifecycle"
 version.workspace = true
 edition.workspace = true

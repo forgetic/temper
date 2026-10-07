@@ -5,11 +5,11 @@ use jig_core_people::Role;
 use jig_people_world::referee::{People, RouteKind, Seen as PersonSeen};
 use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
 use temper_engine_domain::{Key, Record};
-use temper_engine_domain_tasks::Party;
+use jig_core_tasks::Party;
 use temper_engine_domain_world::walking::{Settings, World};
 use temper_engine_domain_world::walking_referee::REPORT;
 use temper_engine_forge_world::fake_config;
-use temper_engine_tasks_world::referee::{Seen as TaskSeen, Tasks};
+use jig_tasks_world::referee::{Seen as TaskSeen, Tasks};
 use temper_fake_forge_domain::{self as fake, Observation, api as raw};
 use temper_world::{Referee, Verdict};
 
@@ -47,7 +47,7 @@ fn once_referee_rejects_a_second_result_from_the_same_durable_task() {
         .rows
         .values()
         .find_map(|row| {
-            let Record::Tasks(temper_engine_domain_tasks::Stored::Ended(record)) = row else { return None };
+            let Record::Tasks(jig_core_tasks::Stored::Ended(record)) = row else { return None };
             let Party::Person(person) = record.requester else { return None };
             Some((person, record.number))
         })
@@ -63,7 +63,7 @@ fn commit_referee_rejects_an_ack_if_its_transcript_was_lost() {
     let task = rows
         .values()
         .find_map(|row| {
-            let Record::Tasks(temper_engine_domain_tasks::Stored::Ended(record)) = row else { return None };
+            let Record::Tasks(jig_core_tasks::Stored::Ended(record)) = row else { return None };
             Some((record.number, record.attempt))
         })
         .expect("ended task");

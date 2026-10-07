@@ -6,7 +6,7 @@ use jig_core_people as people;
 use skein_lib::{Duration, Queue, ReplyTo, Rng, Token};
 use std::collections::BTreeSet;
 use temper_engine_domain::{Delivery, Key, Record, engine};
-use temper_engine_domain_tasks as tasks;
+use jig_core_tasks as tasks;
 use temper_engine_domain_world::commits::Store;
 use temper_engine_domain_world::direct::Driver;
 use temper_engine_domain_world::walking::{config, limits};

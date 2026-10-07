@@ -11,7 +11,7 @@ use jig_core_people as people;
 use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
 use std::collections::{BTreeMap, VecDeque};
 use temper_engine_domain::{Delivery, JournalLimits, Record, engine, loads};
-use temper_engine_domain_tasks as tasks;
+use jig_core_tasks as tasks;
 
 /// Tiny counted child limits plus the root's declared synchronous-route room.
 #[must_use]

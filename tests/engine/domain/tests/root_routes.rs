@@ -7,7 +7,7 @@ use jig_core_views as views;
 use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
 use std::collections::VecDeque;
 use temper_engine_domain::{Delivery, Key, Record, Write, engine};
-use temper_engine_domain_tasks as tasks;
+use jig_core_tasks as tasks;
 use temper_engine_domain_world::commits::Store;
 use temper_engine_domain_world::walking::{Settings, World, config, limits};
 use temper_engine_domain_world::walking_referee::{FINAL_SPEND, QUESTION, REPORT};

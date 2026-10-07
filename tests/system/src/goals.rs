@@ -10,7 +10,7 @@ use smith_agent_world::Job;
 use smith_domain as smith;
 use smith_domain_run as run;
 use temper_engine_domain::{Delivery, Key, Record, engine};
-use temper_engine_domain_tasks as tasks;
+use jig_core_tasks as tasks;
 use temper_engine_domain_world::{commits::Store, direct::Driver, walking};
 
 const PLAN: &[u8] = br#"{"batch":[{"executor":{"kind":"agent","charter":1},"spec":{"words":"@report Complete the goal's first task"},"contract":{"kind":"report","words":128},"authority":{"tools":0,"grants":[],"delegation":{"kinds":[],"tasks":0,"depth":0},"budget":{"spend":10},"notes":0}}]}"#;

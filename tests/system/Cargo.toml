@@ -22,7 +22,7 @@ jig-core-fleet.workspace = true
 temper-engine-domain-forge.workspace = true
 temper-engine-domain-forge-change.workspace = true
 temper-engine-domain-forge-client.workspace = true
-temper-engine-domain-tasks.workspace = true
+jig-core-tasks.workspace = true
 temper-engine-smith.workspace = true
 temper-engine-forge-world = { path = "../engine/forge" }
 temper-fake-forge-domain.workspace = true

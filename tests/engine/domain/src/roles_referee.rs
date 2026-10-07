@@ -6,7 +6,7 @@ use jig_core_people as people;
 use skein_lib::Token;
 use std::collections::{BTreeMap, BTreeSet};
 use temper_engine_domain::{Key, Record, Write};
-use temper_engine_domain_tasks as tasks;
+use jig_core_tasks as tasks;
 
 /// One independently expected successful roster replacement, including the
 /// exact task rows permitted to change (domain/engine.md, section 5.1).

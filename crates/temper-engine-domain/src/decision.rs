@@ -65,9 +65,9 @@ pub enum Delivery {
     /// One fleet-fenced named tool answer after its decision is durable.
     CallAnswer { channel: Token, task: u64, attempt: u64, call: Token, answer: crate::CallAnswer },
     /// Committed words presented to fleet only after their task row commits.
-    Relay { task: u64, attempt: u64, previous: Option<u64>, word: temper_engine_domain_tasks::Word },
+    Relay { task: u64, attempt: u64, previous: Option<u64>, word: jig_core_tasks::Word },
     /// Fleet-selected live worker receives the whole committed word.
-    Inbound { channel: Token, task: u64, attempt: u64, word: temper_engine_domain_tasks::Word },
+    Inbound { channel: Token, task: u64, attempt: u64, word: jig_core_tasks::Word },
     /// Bounded page of committed unread results, consumed through its last position with this reply.
     InboxPage { to: ReplyTo, person: u64, entries: Box<[ResultEntry]> },
     /// One authenticated newest-first page derived from committed task rows.
@@ -81,7 +81,7 @@ pub enum Delivery {
         to: ReplyTo,
         person: u64,
         /// Bounded semantic view; rejection owns at most `result_bytes`
-        context: Box<temper_engine_domain_tasks::EscalationContext>,
+        context: Box<jig_core_tasks::EscalationContext>,
     },
     /// Root internal historical read, released after preceding commit; consumed
     /// once by root and never exposed to the shell.
@@ -492,25 +492,25 @@ impl Decision {
             Delivery::EscalationReply { context, .. } => {
                 context.task != 0
                     && match &context.escalation {
-                        temper_engine_domain_tasks::Escalation::Rejected { revision, by, reason } => {
+                        jig_core_tasks::Escalation::Rejected { revision, by, reason } => {
                             *revision != 0
                                 && *by != 0
                                 && reason.len() <= usize::try_from(limits.result_bytes).expect("u32 fits usize")
                         }
-                        temper_engine_domain_tasks::Escalation::Waiting { revision, holder, .. } => {
+                        jig_core_tasks::Escalation::Waiting { revision, holder, .. } => {
                             *revision != 0
                                 && match holder {
-                                    temper_engine_domain_tasks::EscalationHolder::Task(task) => *task != 0,
-                                    temper_engine_domain_tasks::EscalationHolder::Person(person) => {
+                                    jig_core_tasks::EscalationHolder::Task(task) => *task != 0,
+                                    jig_core_tasks::EscalationHolder::Person(person) => {
                                         *person != 0 && *person == context.requester
                                     }
-                                    temper_engine_domain_tasks::EscalationHolder::Role { project, .. } => {
+                                    jig_core_tasks::EscalationHolder::Role { project, .. } => {
                                         *project == context.project
                                     }
                                 }
                         }
-                        temper_engine_domain_tasks::Escalation::Unheld { .. }
-                        | temper_engine_domain_tasks::Escalation::Routing { .. } => false,
+                        jig_core_tasks::Escalation::Unheld { .. }
+                        | jig_core_tasks::Escalation::Routing { .. } => false,
                     }
             }
             Delivery::Fleet(event) => fleet_delivery_within(event),
@@ -776,7 +776,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
                     .checked_add(u64::from(limits.run_bytes))?
                     .checked_add(
                         List::<crate::engine::BriefSection>::worst_case(limits.deliveries)?
-                            .max(u64::try_from(size_of::<temper_engine_domain_tasks::EscalationContext>()).ok()?),
+                            .max(u64::try_from(size_of::<jig_core_tasks::EscalationContext>()).ok()?),
                     )?,
             )?,
         )

@@ -1,8 +1,8 @@
 use skein_lib::ReplyTo;
-use temper_engine_domain_tasks::{
+use jig_core_tasks::{
     self as tasks, Accepted, Cause, End, Event, Funder, Key, Numbers, Party, Refusal, Stored, TaskResult,
 };
-use temper_engine_tasks_world::{LIMITS, Reply, World, task};
+use jig_tasks_world::{LIMITS, Reply, World, task};
 
 fn send(world: &mut World, build: impl FnOnce(ReplyTo) -> Event) -> Reply {
     let reply_to = world.to();
@@ -249,7 +249,7 @@ fn oversized_terminal_does_not_charge_or_copy_and_sources_refuse_at_capacity() {
 
 #[test]
 fn independent_referee_detects_omitted_ledger_save_and_actual_posting() {
-    use temper_engine_tasks_world::accounting_referee::Accounting;
+    use jig_tasks_world::accounting_referee::Accounting;
     let mut w = World::new(79, LIMITS);
     let before = w.records.clone();
     w.make(Party::Person(9), vec![task(1, &[])]);

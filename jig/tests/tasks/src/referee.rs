@@ -1,6 +1,6 @@
 use skein_lib::Duration;
 use std::collections::{BTreeMap, BTreeSet};
-use temper_engine_domain_tasks::{
+use jig_core_tasks::{
     Contract, Ending, Last, Limits, Parameter, Party, Phase, Status, TaskRecord, TaskResult, Was,
 };
 use skein_world::domain::{Expectations, Judge};

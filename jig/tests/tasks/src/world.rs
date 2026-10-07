@@ -3,7 +3,7 @@
 use crate::referee::{Seen, Stimulus, Tasks};
 use skein_lib::{Duration, Env, Queue, ReplyTo, Rng, Time, Token, Wall};
 use std::collections::{BTreeMap, BTreeSet};
-use temper_engine_domain_tasks::{
+use jig_core_tasks::{
     self as tasks, Accepted, Authority, Budget, Cause, Contract, Delegation, Domain, End, Ending, Event, Executor,
     Fact, Funder, Key, Limits, MessageKind, New, Numbers, Party, Problem, Request, ResultKind, Retries, Retry,
     RunContext, Scopes, Spec, Stored, TaskResult, Tools, Word,

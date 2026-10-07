@@ -299,8 +299,8 @@ fn finding_text(text: &mut Text, finding: jig_core_authority::Finding) -> Result
     }
 }
 
-fn task_problem(text: &mut Text, problem: temper_engine_domain_tasks::Problem) -> Result<(), Problem> {
-    use temper_engine_domain_tasks::Refusal;
+fn task_problem(text: &mut Text, problem: jig_core_tasks::Problem) -> Result<(), Problem> {
+    use jig_core_tasks::Refusal;
     if let Some(task) = problem.task {
         text.add(b"task ")?;
         text.number(task)?;

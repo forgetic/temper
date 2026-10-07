@@ -89,19 +89,19 @@ pub enum CallAnswer {
         Box<Result<temper_engine_domain_forge_client::api::Answer, temper_engine_domain_forge_client::api::Error>>,
     ),
     /// One held descendant decision reached its semantic terminal.
-    EscalationDecided { task: u64, revision: u64, outcome: temper_engine_domain_tasks::EscalationOutcome },
+    EscalationDecided { task: u64, revision: u64, outcome: jig_core_tasks::EscalationOutcome },
     /// A task holder's held-decision call was refused before mutation.
-    EscalationRefused(temper_engine_domain_tasks::Problem),
+    EscalationRefused(jig_core_tasks::Problem),
     /// Proposal entered its proposer's durable pending state.
     Proposed { proposal: u64 },
     /// Proposal was accepted, rejected, passed, or withdrawn.
-    ProposalDecided { proposal: u64, outcome: temper_engine_domain_tasks::ProposalOutcome },
+    ProposalDecided { proposal: u64, outcome: jig_core_tasks::ProposalOutcome },
     /// Proposal action or current standing failed before mutation.
-    ProposalRefused(temper_engine_domain_tasks::Problem),
+    ProposalRefused(jig_core_tasks::Problem),
     /// A named task control change entered the same durable decision.
     Controlled,
     /// A named task control change was refused without mutation.
-    ControlRefused(temper_engine_domain_tasks::Problem),
+    ControlRefused(jig_core_tasks::Problem),
     /// A requested widening needs a holder or violates a hard ceiling.
     ControlDenied { answer: jig_core_authority::Answer },
     /// Message entered its target's inbox at this commit position.
@@ -109,19 +109,19 @@ pub enum CallAnswer {
     /// Reciprocal task references were installed.
     Introduced,
     /// A message or introduction failed its live reference or inbox check.
-    MessageRefused(temper_engine_domain_tasks::Problem),
+    MessageRefused(jig_core_tasks::Problem),
     /// One standing interest was installed.
     Subscribed { subscription: u64 },
     /// One standing interest was removed.
     Unsubscribed,
     /// A standing interest failed admission.
-    SubscriptionRefused(temper_engine_domain_tasks::Problem),
+    SubscriptionRefused(jig_core_tasks::Problem),
     /// All members of an authorized batch, in call order.
     Delegated(Box<[u64]>),
     /// A whole batch declined by authority, with its independent findings.
     DelegationDenied { answer: jig_core_authority::Answer, findings: Box<[jig_core_authority::Finding]> },
     /// A whole batch refused by structural or finite-funding admission.
-    DelegationRefused(temper_engine_domain_tasks::Problem),
+    DelegationRefused(jig_core_tasks::Problem),
     /// The named tool is deferred to a later engine route.
     Unavailable,
 }
@@ -178,7 +178,7 @@ pub enum Key {
     /// receipt family exists.
     Tasks(
         /// Tasks-issued key, preserved under the root wrapper without reinterpretation.
-        temper_engine_domain_tasks::Key,
+        jig_core_tasks::Key,
     ),
     /// Store key for people identities, sign-ins, roles and keyed replies.
     People(
@@ -310,10 +310,10 @@ impl Range {
             },
             Range::Tasks => match key {
                 Key::Tasks(child) => match child {
-                    temper_engine_domain_tasks::Key::Live(_)
-                    | temper_engine_domain_tasks::Key::Ledger(_)
-                    | temper_engine_domain_tasks::Key::PersonProposal(_) => true,
-                    temper_engine_domain_tasks::Key::Ended(_) | temper_engine_domain_tasks::Key::History { .. } => {
+                    jig_core_tasks::Key::Live(_)
+                    | jig_core_tasks::Key::Ledger(_)
+                    | jig_core_tasks::Key::PersonProposal(_) => true,
+                    jig_core_tasks::Key::Ended(_) | jig_core_tasks::Key::History { .. } => {
                         false
                     }
                 },
@@ -328,7 +328,7 @@ impl Range {
                 | Key::Forge(_) => false,
             },
             Range::EndedResults => match key {
-                Key::Tasks(temper_engine_domain_tasks::Key::Ended(number)) => number != 0,
+                Key::Tasks(jig_core_tasks::Key::Ended(number)) => number != 0,
                 Key::Call(_)
                 | Key::EscalationDecision { .. }
                 | Key::ProposalDecision(_)
@@ -365,7 +365,7 @@ impl Range {
                 | Key::Forge(_) => false,
             },
             Range::TaskResult { task } => match key {
-                Key::Tasks(temper_engine_domain_tasks::Key::Ended(number)) => task == number,
+                Key::Tasks(jig_core_tasks::Key::Ended(number)) => task == number,
                 Key::Call(_)
                 | Key::EscalationDecision { .. }
                 | Key::ProposalDecision(_)
@@ -445,7 +445,7 @@ pub struct TerminalRecord {
     /// Exact bounded worker terminal, even when child lifecycle normalizes it; a refused answer
     /// archives root's unpriced Invalid normalization. A lost claim is `Failed(Lost)` and spends a
     /// try, whether or not a turn was kept.
-    pub end: temper_engine_domain_tasks::End,
+    pub end: jig_core_tasks::End,
 }
 
 /// Root's latest accepted turn metadata; the full transcript stays only in
@@ -508,9 +508,9 @@ pub struct EscalationDecisionRecord {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct ProposalDecisionRecord {
     pub project: u32,
-    pub proposer: temper_engine_domain_tasks::Party,
+    pub proposer: jig_core_tasks::Party,
     pub proposal: u64,
-    pub kind: temper_engine_domain_tasks::ProposalKind,
+    pub kind: jig_core_tasks::ProposalKind,
     pub by: u64,
     pub choice: jig_core_people::ProposalChoice,
 }
@@ -549,7 +549,7 @@ pub enum Record {
     /// writes share the root decision.
     Tasks(
         /// Owned child row, deep bytes checked before journal or load retention.
-        temper_engine_domain_tasks::Stored,
+        jig_core_tasks::Stored,
     ),
     /// Child's durable identity/session/keyed reply; saved atomically by the root.
     People(
@@ -650,7 +650,7 @@ pub fn record_bytes(record: &Record) -> Option<u64> {
             None => Some(0),
         },
         Record::Terminal(row) => terminal_bytes(row),
-        Record::Tasks(row) => temper_engine_domain_tasks::stored_bytes(row),
+        Record::Tasks(row) => jig_core_tasks::stored_bytes(row),
         Record::Forge { row, .. } => temper_engine_domain_forge::stored_bytes(row),
         Record::People(row) => match row {
             jig_core_people::Stored::Person { identity, .. } => u64::try_from(identity.key.subject.len())
@@ -752,15 +752,15 @@ pub(crate) fn owned_bytes(write: &Write) -> Option<u64> {
 
 fn terminal_bytes(row: &TerminalRecord) -> Option<u64> {
     match &row.end {
-        temper_engine_domain_tasks::End::Finished { result, .. } => match result {
-            temper_engine_domain_tasks::TaskResult::Report { words }
-            | temper_engine_domain_tasks::TaskResult::Verdict { words, .. }
-            | temper_engine_domain_tasks::TaskResult::Change { words, .. } => u64::try_from(words.len()).ok(),
-            temper_engine_domain_tasks::TaskResult::Failure { reason } => u64::try_from(reason.len()).ok(),
+        jig_core_tasks::End::Finished { result, .. } => match result {
+            jig_core_tasks::TaskResult::Report { words }
+            | jig_core_tasks::TaskResult::Verdict { words, .. }
+            | jig_core_tasks::TaskResult::Change { words, .. } => u64::try_from(words.len()).ok(),
+            jig_core_tasks::TaskResult::Failure { reason } => u64::try_from(reason.len()).ok(),
         },
-        temper_engine_domain_tasks::End::Parked
-        | temper_engine_domain_tasks::End::Failed(_)
-        | temper_engine_domain_tasks::End::Refused => Some(0),
+        jig_core_tasks::End::Parked
+        | jig_core_tasks::End::Failed(_)
+        | jig_core_tasks::End::Refused => Some(0),
     }
 }
 

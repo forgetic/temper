@@ -11,7 +11,7 @@ skein-lib.workspace = true
 temper-world.workspace = true
 temper-engine-domain.workspace = true
 jig-core-people.workspace = true
-temper-engine-domain-tasks.workspace = true
+jig-core-tasks.workspace = true
 jig-core-fleet.workspace = true
 jig-core-brief.workspace = true
 jig-core-accounts.workspace = true
@@ -28,7 +28,7 @@ smith-domain-session.workspace = true
 smith-domain-tools.workspace = true
 
 [dev-dependencies]
-temper-engine-tasks-world = { path = "../tasks" }
+jig-tasks-world = { path = "../../../jig/tests/tasks" }
 jig-people-world = { path = "../../../jig/tests/people" }
 
 [lints.rust]

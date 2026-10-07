@@ -1,7 +1,7 @@
-use temper_engine_domain_tasks::{
+use jig_core_tasks::{
     self as tasks, Contract, Event, Executor, Party, PersonAddress, Phase, TaskResult, Verdict,
 };
-use temper_engine_tasks_world::{LIMITS, Reply, World, task};
+use jig_tasks_world::{LIMITS, Reply, World, task};
 
 fn response(world: &mut World, event: impl FnOnce(skein_lib::ReplyTo) -> Event) -> Reply {
     let reply_to = world.to();

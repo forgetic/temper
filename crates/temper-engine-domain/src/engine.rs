@@ -54,7 +54,7 @@ use temper_engine_domain_forge as forge;
 use temper_engine_domain_forge_change as forge_change;
 use temper_engine_domain_forge_client as forge_client;
 use temper_engine_domain_forge_issues as forge_issues;
-use temper_engine_domain_tasks as tasks;
+use jig_core_tasks as tasks;
 
 pub use forge_route::adopt_repository_ask;
 pub use landing::{Approval, Freshness, Gate, LandingRule};

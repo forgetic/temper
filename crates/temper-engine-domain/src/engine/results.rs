@@ -6,7 +6,7 @@ use crate::{Decision, Delivery, Key, Range, Record, ResultEntry, Write};
 use alloc::boxed::Box;
 use jig_core_people as people;
 use skein_lib::{Env, Id, List, Queue, ReplyTo, Token};
-use temper_engine_domain_tasks as tasks;
+use jig_core_tasks as tasks;
 
 #[derive(Debug)]
 pub(super) enum Query {

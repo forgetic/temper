@@ -1,5 +1,5 @@
 [package]
-name = "temper-engine-tasks-world"
+name = "jig-tasks-world"
 description = "Tasks with scripted agents, authority and a durable parent"
 version.workspace = true
 edition.workspace = true
@@ -9,7 +9,7 @@ publish.workspace = true
 [dependencies]
 skein-lib.workspace = true
 skein-world.workspace = true
-temper-engine-domain-tasks.workspace = true
+jig-core-tasks.workspace = true
 
 [lints.rust]
 unsafe_code = "forbid"

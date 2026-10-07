@@ -1,7 +1,7 @@
-use temper_engine_domain_tasks::{
+use jig_core_tasks::{
     self as tasks, Contract, Event, Executor, Funder, New, Numbers, Party, RecurringOverlap, RecurringTemplate,
 };
-use temper_engine_tasks_world::{LIMITS, Reply, World, task};
+use jig_tasks_world::{LIMITS, Reply, World, task};
 
 fn recurring(number: u64, overlap: RecurringOverlap) -> New {
     let mut member = task(1, &[]);

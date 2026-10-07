@@ -1,7 +1,7 @@
-use temper_engine_domain_tasks::{
+use jig_core_tasks::{
     Active, Class, Contract, End, Ending, Event, Hold, Key, Party, Phase, Refusal, Stage, TaskResult, Was,
 };
-use temper_engine_tasks_world::{LIMITS, Reply, World, task};
+use jig_tasks_world::{LIMITS, Reply, World, task};
 
 fn refused(reply: &Reply, why: Refusal) {
     assert!(matches!(reply, Reply::Refused(problem) if problem.why == why), "expected {why:?}, got {reply:?}");
@@ -10,9 +10,9 @@ fn refused(reply: &Reply, why: Refusal) {
 #[test]
 fn batch_is_atomic_and_cycles_and_limits_refuse_at_entrance() {
     for (limits, why) in [
-        (temper_engine_domain_tasks::Limits { batch: 1, ..LIMITS }, Refusal::Batch),
-        (temper_engine_domain_tasks::Limits { tasks: 1, ..LIMITS }, Refusal::Live),
-        (temper_engine_domain_tasks::Limits { project_tasks: 1, ..LIMITS }, Refusal::Project),
+        (jig_core_tasks::Limits { batch: 1, ..LIMITS }, Refusal::Batch),
+        (jig_core_tasks::Limits { tasks: 1, ..LIMITS }, Refusal::Live),
+        (jig_core_tasks::Limits { project_tasks: 1, ..LIMITS }, Refusal::Project),
     ] {
         let mut w = World::new(1, limits);
         let before = w.records.clone();
@@ -43,7 +43,7 @@ fn batch_is_atomic_and_cycles_and_limits_refuse_at_entrance() {
         (
             {
                 let mut n = task(2, &[]);
-                n.executor = temper_engine_domain_tasks::Executor::Agent { charter: 99 };
+                n.executor = jig_core_tasks::Executor::Agent { charter: 99 };
                 n
             },
             Refusal::Executor,
@@ -53,7 +53,7 @@ fn batch_is_atomic_and_cycles_and_limits_refuse_at_entrance() {
             {
                 let mut n = task(2, &[]);
                 n.authority.delegation.kinds =
-                    vec![temper_engine_domain_tasks::AuthorityExecutor::Role(1); 4].into_boxed_slice();
+                    vec![jig_core_tasks::AuthorityExecutor::Role(1); 4].into_boxed_slice();
                 n
             },
             Refusal::AuthorityShape,
@@ -105,9 +105,9 @@ fn a_dependency_on_an_introduced_sibling_is_accepted_and_a_cross_subtree_wait_cy
 #[test]
 fn tree_depth_and_delegate_limits_are_atomic() {
     for (limits, why) in [
-        (temper_engine_domain_tasks::Limits { tree_tasks: 1, ..LIMITS }, Refusal::Tree),
-        (temper_engine_domain_tasks::Limits { depth: 0, ..LIMITS }, Refusal::Depth),
-        (temper_engine_domain_tasks::Limits { delegates: 0, ..LIMITS }, Refusal::Delegates),
+        (jig_core_tasks::Limits { tree_tasks: 1, ..LIMITS }, Refusal::Tree),
+        (jig_core_tasks::Limits { depth: 0, ..LIMITS }, Refusal::Depth),
+        (jig_core_tasks::Limits { delegates: 0, ..LIMITS }, Refusal::Delegates),
     ] {
         let mut w = World::new(2, limits);
         w.make(Party::Person(1), vec![task(1, &[])]);
@@ -123,7 +123,7 @@ fn dependency_order_negative_verdict_starts_but_failure_holds() {
         let mut w = World::new(3, LIMITS);
         let mut first = task(1, &[]);
         first.contract =
-            Contract::Verdict { choices: Box::new([temper_engine_domain_tasks::Verdict { code: 0, words: 32 }]) };
+            Contract::Verdict { choices: Box::new([jig_core_tasks::Verdict { code: 0, words: 32 }]) };
         w.make(Party::Person(1), vec![first, task(2, &[1])]);
         assert!(!w.activations.contains(&2));
         w.claim(1, 1);
@@ -182,7 +182,7 @@ fn refusals_and_preparation_failure_do_not_spend_tries() {
         w.claim(1, attempt);
         w.terminal(1, End::Refused);
         w.advance();
-        assert_eq!(w.record(1).tries, temper_engine_domain_tasks::Tries::NONE);
+        assert_eq!(w.record(1).tries, jig_core_tasks::Tries::NONE);
     }
     w.claim(1, 6);
     w.finish(1);
@@ -207,7 +207,7 @@ fn held_running_task_waits_for_terminal_and_retains_its_hold() {
     assert!(matches!(
         w.record(1).phase,
         Phase::Held {
-            was: Was::Closing(temper_engine_domain_tasks::Closing { stage: Stage::Delegates, .. }),
+            was: Was::Closing(jig_core_tasks::Closing { stage: Stage::Delegates, .. }),
             why: Hold::Stopped
         }
     ));
@@ -226,7 +226,7 @@ fn corrected_finish_cancels_delegates_and_closes_deepest_first() {
     let before = w.records.clone();
     refused(&w.terminal(1, finish), Refusal::LiveDelegates);
     assert_eq!(w.records, before);
-    w.observe(temper_engine_tasks_world::referee::Seen::Cancelled { task: 2 });
+    w.observe(jig_tasks_world::referee::Seen::Cancelled { task: 2 });
     w.terminal(1, End::Finished { result: TaskResult::Report { words: Box::new([1]) }, cancel_delegates: true });
     assert!(w.closing.is_empty());
     w.terminal(3, End::Finished { result: TaskResult::Report { words: Box::new([9]) }, cancel_delegates: false });
@@ -246,7 +246,7 @@ fn corrected_finish_cancels_delegates_and_closes_deepest_first() {
 
 #[test]
 fn lifetime_tree_limit_survives_delegate_ending() {
-    let mut w = World::new(8, temper_engine_domain_tasks::Limits { tree_tasks: 2, ..LIMITS });
+    let mut w = World::new(8, jig_core_tasks::Limits { tree_tasks: 2, ..LIMITS });
     w.make(Party::Person(1), vec![task(1, &[])]);
     w.make(Party::Task(1), vec![task(2, &[])]);
     w.claim(2, 1);
@@ -290,8 +290,8 @@ fn cancelling_unfinished_dependency_siblings_finishes_in_either_settlement_order
         w.claim(1, 1);
         w.make(Party::Task(1), vec![task(2, &[]), task(3, &[2])]);
         w.claim(2, 2);
-        w.observe(temper_engine_tasks_world::referee::Seen::Cancelled { task: 2 });
-        w.observe(temper_engine_tasks_world::referee::Seen::Cancelled { task: 3 });
+        w.observe(jig_tasks_world::referee::Seen::Cancelled { task: 2 });
+        w.observe(jig_tasks_world::referee::Seen::Cancelled { task: 3 });
         w.terminal(1, End::Finished { result: TaskResult::Report { words: Box::new([1]) }, cancel_delegates: true });
         w.terminal(2, End::Parked);
         assert!(w.closing.contains(&2) && w.closing.contains(&3));

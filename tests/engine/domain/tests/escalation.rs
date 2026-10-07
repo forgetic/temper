@@ -3,7 +3,7 @@
 use jig_core_people as people;
 use skein_lib::Token;
 use temper_engine_domain::{EscalationDecisionRecord, Key, Record, Write};
-use temper_engine_domain_tasks as tasks;
+use jig_core_tasks as tasks;
 use temper_engine_domain_world::escalation::{Cut, Settings, World, run_replayed};
 use temper_engine_domain_world::escalation_referee::{REASON, Referee, Story};
 

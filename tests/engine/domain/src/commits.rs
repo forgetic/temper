@@ -90,15 +90,15 @@ impl Store {
                 Range::EscalationDecision { task, revision } => matches!(key, Key::EscalationDecision { task: found, revision: current } if *found == task && *current == revision),
                 Range::Deployment => **key == Key::Deployment,
                 Range::Tasks => match key {
-                    Key::Tasks(temper_engine_domain_tasks::Key::Live(_) | temper_engine_domain_tasks::Key::Ledger(_) | temper_engine_domain_tasks::Key::PersonProposal(_)) => true,
-                    Key::Tasks(temper_engine_domain_tasks::Key::Ended(_) | temper_engine_domain_tasks::Key::History { .. })
+                    Key::Tasks(jig_core_tasks::Key::Live(_) | jig_core_tasks::Key::Ledger(_) | jig_core_tasks::Key::PersonProposal(_)) => true,
+                    Key::Tasks(jig_core_tasks::Key::Ended(_) | jig_core_tasks::Key::History { .. })
                         | Key::Call(_) | Key::EscalationDecision { .. } | Key::ProposalDecision(_) | Key::Deployment | Key::Turn { .. } | Key::RunProof { .. } | Key::Terminal { .. } | Key::People(_) | Key::Forge(_) => false,
                 },
-                Range::EndedResults => matches!(key, Key::Tasks(temper_engine_domain_tasks::Key::Ended(number)) if *number != 0),
+                Range::EndedResults => matches!(key, Key::Tasks(jig_core_tasks::Key::Ended(number)) if *number != 0),
                 Range::RunProofs => matches!(key, Key::RunProof { task } if *task != 0),
                 Range::People => matches!(key, Key::People(_)),
                 Range::Forge => matches!(key, Key::Forge(_)),
-                Range::TaskResult { task } => matches!(key, Key::Tasks(temper_engine_domain_tasks::Key::Ended(number)) if *number == task),
+                Range::TaskResult { task } => matches!(key, Key::Tasks(jig_core_tasks::Key::Ended(number)) if *number == task),
                 Range::Turns { task, attempt } => matches!(key, Key::Turn { task: found, attempt: run, turn } if *found == task && *run == attempt && *turn != 0),
                 Range::TaskTranscript { task } => matches!(key, Key::Turn { task: found, attempt, turn } if *found == task && *attempt != 0 && *turn != 0),
             };

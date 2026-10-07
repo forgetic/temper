@@ -4,7 +4,7 @@
 use alloc::boxed::Box;
 use skein_lib::{Duration, List, Wall};
 use temper_engine_domain::engine;
-use temper_engine_domain_tasks as tasks;
+use jig_core_tasks as tasks;
 
 use crate::{Problem, json::Value};
 

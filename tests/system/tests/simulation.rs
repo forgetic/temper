@@ -5,7 +5,7 @@ use smith_agent_world::Job;
 use smith_domain_run as run;
 use temper_engine_domain::{Delivery, engine};
 use temper_engine_domain::{Key, Record};
-use temper_engine_domain_tasks as tasks;
+use jig_core_tasks as tasks;
 use temper_system_world::world;
 
 #[test]

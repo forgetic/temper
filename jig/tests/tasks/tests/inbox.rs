@@ -1,8 +1,8 @@
 use skein_lib::{ReplyTo, Token, Wall};
-use temper_engine_domain_tasks::{
+use jig_core_tasks::{
     Accepted, End, Event, MessageKind, NoticeState, Party, Refusal, Subscription, SubscriptionKind, WakeRule, Word,
 };
-use temper_engine_tasks_world::{LIMITS, Reply, World, task};
+use jig_tasks_world::{LIMITS, Reply, World, task};
 
 fn say(world: &mut World, number: u64) {
     let reply_to = world.to();
@@ -13,7 +13,7 @@ fn say(world: &mut World, number: u64) {
         word: Word {
             number,
             from: Party::Person(9),
-            kind: temper_engine_domain_tasks::MessageKind::Words,
+            kind: jig_core_tasks::MessageKind::Words,
             words: Box::from([u8::try_from(number).expect("small message")]),
             at: Wall::EPOCH,
             hits: 1,

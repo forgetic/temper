@@ -1,9 +1,9 @@
 use skein_lib::{Env, Queue, ReplyTo, Time, Token, Wall};
-use temper_engine_domain_tasks::{
+use jig_core_tasks::{
     self as tasks, Active, AuthorityExecutor, Contract, Domain, End, Event, Funder, Grant, Hold, Last, Limits,
     Parameter, Party, Pattern, Request, Stored, TaskResult, Verdict,
 };
-use temper_engine_tasks_world::{LIMITS, task};
+use jig_tasks_world::{LIMITS, task};
 use skein_world::domain::heap::{self, Meter};
 
 #[global_allocator]
@@ -172,7 +172,7 @@ fn saturated_payloads_graph_backoff_held_closing_retirement_and_restore_fit() {
 #[test]
 fn full_delegate_tree_dependency_edges_and_cold_restored_claims_fit() {
     let l = Limits { tasks: 4, tree_tasks: 4, delegates: 3, batch: 3, dependencies: 3, inputs: 0, ..LIMITS };
-    let mut source = temper_engine_tasks_world::World::new(2, l);
+    let mut source = jig_tasks_world::World::new(2, l);
     source.make(Party::Person(1), vec![task(1, &[])]);
     source.claim(1, 1);
     source.make(Party::Task(1), vec![task(2, &[]), task(3, &[2]), task(4, &[2, 3])]);
@@ -204,7 +204,7 @@ fn full_delegate_tree_dependency_edges_and_cold_restored_claims_fit() {
         m.event(Event::Settled { task });
     }
     assert!(tasks::worst_case(&Limits { tasks: u32::MAX, ..l }).is_none());
-    let mut w = temper_engine_tasks_world::World::new(3, l);
+    let mut w = jig_tasks_world::World::new(3, l);
     w.make(Party::Person(1), vec![task(10, &[])]);
     w.claim(10, 10);
     w.finish(10);
@@ -214,7 +214,7 @@ fn full_delegate_tree_dependency_edges_and_cold_restored_claims_fit() {
     );
 }
 
-fn filled(limits: &Limits, number: u64) -> temper_engine_domain_tasks::New {
+fn filled(limits: &Limits, number: u64) -> jig_core_tasks::New {
     let limits = *limits;
     let mut new = task(number, &[]);
     new.spec.words = vec![1; usize::try_from(limits.spec_bytes).expect("small bound")].into_boxed_slice();
@@ -285,7 +285,7 @@ fn saturated_finite_sources_and_oversized_refusals_fit_without_input_copies() {
 
 #[test]
 fn borrowed_stored_bytes_matches_allocator_for_every_retained_row() {
-    let mut world = temper_engine_tasks_world::World::new(80, LIMITS);
+    let mut world = jig_tasks_world::World::new(80, LIMITS);
     world.make(Party::Person(1), vec![task(1, &[])]);
     let mut record = world.record(1).clone();
     let new = filled(&LIMITS, 1);
