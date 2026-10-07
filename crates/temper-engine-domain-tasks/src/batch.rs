@@ -122,8 +122,8 @@ fn check_members(
                     return Err(problem(number, Refusal::Executor));
                 }
             }
-            Executor::Procedure { connector, code } => {
-                if (connector == 0 && code != 1) || (connector != 0 && code == 0) {
+            Executor::Procedure { code, .. } => {
+                if code == 0 {
                     return Err(problem(number, Refusal::Executor));
                 }
             }
@@ -187,14 +187,18 @@ fn valid_recurring(limits: &Limits, creator: Party, new: &New) -> bool {
                 crate::Funder::Period { project, .. } => project == new.project,
                 crate::Funder::Task(_) | crate::Funder::Pool { .. } | crate::Funder::Recurring { .. } => false,
             };
-            new.executor == (Executor::Procedure { connector: 0, code: 1 })
+            let procedure = match new.executor {
+                Executor::Procedure { code, .. } => code != 0,
+                Executor::Agent { .. } | Executor::Person(_) => false,
+            };
+            procedure
                 && creator == (Party::Deployment { project: new.project })
                 && source
                 && template.key != 0
                 && new.numbers == (crate::Numbers { budget: 0, spent: 0, spent_below: 0, reserved: 0 })
                 && crate::recurring::valid_template(limits, new.project, new.authority.budget.spend, &template.batch)
         }
-        None => new.executor != (Executor::Procedure { connector: 0, code: 1 }),
+        None => true,
     }
 }
 
@@ -265,7 +269,9 @@ pub fn valid_contract(limits: &Limits, contract: &Contract) -> bool {
 #[must_use]
 pub fn valid_authority(limits: &Limits, value: &Authority) -> bool {
     if value.grants.len() > usize::try_from(limits.authority_grants).expect("u32 fits usize")
+        || value.note_resources.len() > usize::try_from(limits.authority_grants).expect("u32 fits usize")
         || value.delegation.kinds.len() > usize::try_from(limits.executor_kinds).expect("u32 fits usize")
+        || value.notes.0 & !7 != 0
     {
         return false;
     }
@@ -285,6 +291,21 @@ pub fn valid_authority(limits: &Limits, value: &Authority) -> bool {
                 let Some(total) = bytes.checked_add(last.len()) else {
                     return false;
                 };
+                bytes = total;
+            }
+        }
+    }
+    for scope in &value.note_resources {
+        if scope.pattern.segments.len() > usize::try_from(limits.authority_segments).expect("u32 fits usize") {
+            return false;
+        }
+        for segment in &scope.pattern.segments {
+            let Some(total) = bytes.checked_add(segment.len()) else { return false };
+            bytes = total;
+        }
+        match &scope.pattern.last {
+            Last::Exact(last) | Last::Open(last) => {
+                let Some(total) = bytes.checked_add(last.len()) else { return false };
                 bytes = total;
             }
         }

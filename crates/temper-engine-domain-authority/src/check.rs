@@ -4,13 +4,13 @@ use alloc::boxed::Box;
 
 use skein_lib::{List, Queue, Wall};
 
-use crate::limits::{authority_within, name_within, within};
+use crate::limits::{authority_within, name_within, pattern_within, within};
 use crate::order::{differences, fit_lacks};
 use crate::{
     Action, Answer, Authority, BatchAsk, Budget, Call, CallAsk, Checked, Delegate, Delegation, Domain, Effect,
-    EffectAsk, Fact, Finding, Grant, Holder, Last, Limits, PersonAsk, PersonRequest, Policy, ProposalKind, RequestKind,
-    Requirement, Role, RunAsk, Scopes, Source, Status, Tools, Writer, at_most, carve, grant_covers, left, max_out,
-    pattern_covers,
+    EffectAsk, Finding, Given, Grant, Guard, Holder, Judge, Last, Limits, NoteScope, PersonAsk, PersonRequest, Policy,
+    ProposalKind, RequestKind, Requirement, Role, RunAsk, Scopes, Source, Tools, Verdict, Writer, at_most, carve,
+    grant_at_most, grant_covers, left, max_out, pattern_at_most, pattern_covers,
 };
 
 fn room(domain: &Domain, why: &Queue<Finding>) {
@@ -60,6 +60,19 @@ fn delegates_within(tasks: &[Delegate], limits: &Limits) -> bool {
     for task in tasks {
         if !authority_within(&task.authority, limits) {
             return false;
+        }
+        match task.authority.grants.len().checked_add(task.symbolic.len()) {
+            Some(count) if count <= usize::try_from(limits.grants).expect("u32 fits usize") => {}
+            Some(_) | None => return false,
+        }
+        for grant in &task.symbolic {
+            if !pattern_within(&grant.pattern, limits) {
+                return false;
+            }
+            match &grant.pattern.last {
+                Last::Open(_) => {}
+                Last::Exact(_) => return false,
+            }
         }
     }
     true
@@ -111,6 +124,29 @@ fn batch(
         let lacks = fit_lacks(&task.authority, creator, &numbers, tasks_left, &domain.rules().implies);
         if !lacks.is_empty() {
             find(&mut answer, why, task_answer, Finding::Authority { source, lacks });
+        }
+        for source in [source, Source::Project, Source::Deployment] {
+            let holder = match source {
+                Source::Task | Source::Role => creator,
+                Source::Project => &policy.ceiling,
+                Source::Deployment => &domain.rules().ceiling,
+            };
+            let mut covered = true;
+            for symbolic in &task.symbolic {
+                let mut one = false;
+                for grant in &holder.grants {
+                    if grant_at_most(symbolic, grant, &domain.rules().implies) {
+                        one = true;
+                    }
+                }
+                if !one {
+                    covered = false;
+                }
+            }
+            if !covered {
+                let strict = if source == Source::Task { task_answer } else { Answer::Refuse };
+                find(&mut answer, why, strict, Finding::Grant { source });
+            }
         }
         ceilings(domain, policy, &task.authority, &mut answer, why);
         for origin in [source, Source::Project, Source::Deployment] {
@@ -209,7 +245,8 @@ fn grants(
 fn requirements(
     requirements: &[Requirement],
     effect: &Effect,
-    facts: &[Fact],
+    given: &[Given],
+    now: Wall,
     answer: &mut Answer,
     why: &mut Queue<Finding>,
 ) {
@@ -220,63 +257,88 @@ fn requirements(
         {
             continue;
         }
-        for kind in &requirement.facts {
-            let mut passed = false;
-            let mut pending = false;
-            let mut failed = false;
-            for fact in facts {
-                if fact.connector == effect.connector
-                    && fact.kind == *kind
-                    && fact.name == effect.name
-                    && fact.state == effect.state
-                {
-                    match fact.status {
-                        Status::Unknown | Status::Pending => pending = true,
-                        Status::Passed => passed = true,
-                        Status::Failed => failed = true,
-                    }
+        let guarded = effect.guards.contains(&requirement.judge);
+        if (requirement.must_be_guarded || requirement.guard == Guard::Guarded) && !guarded {
+            find(answer, why, Answer::Refuse, Finding::Unguarded { judge: requirement.judge });
+        }
+        if requirement.must_be_guarded && requirement.guard != Guard::Guarded {
+            find(answer, why, Answer::Refuse, Finding::Unguarded { judge: requirement.judge });
+        }
+        let mut met = false;
+        let mut waiting = false;
+        let mut refused = false;
+        for result in given {
+            if result.judge != requirement.judge || result.state != effect.state {
+                continue;
+            }
+            match result.verdict {
+                Verdict::Met => {
+                    let fresh = match requirement.guard {
+                        Guard::Guarded => true,
+                        Guard::Observed { freshness } => match now.as_nanos().checked_sub(result.at.as_nanos()) {
+                            Some(age) => age <= freshness.as_nanos(),
+                            None => false,
+                        },
+                    };
+                    if fresh { met = true } else { waiting = true }
                 }
+                Verdict::Wait => waiting = true,
+                Verdict::Refuse => refused = true,
             }
-            if failed {
-                find(answer, why, Answer::Refuse, Finding::Failed { connector: effect.connector, fact: *kind });
-            } else if pending || !passed {
-                find(answer, why, Answer::Wait, Finding::Required { connector: effect.connector, fact: *kind });
-            }
+        }
+        if refused {
+            find(answer, why, Answer::Refuse, Finding::Failed { judge: requirement.judge });
+        } else if waiting || !met {
+            find(answer, why, Answer::Wait, Finding::Required { judge: requirement.judge });
         }
     }
 }
 
-/// Root's pure effect check over one coherent snapshot of authentic pinned `facts` and optional
-/// landing facts. Returns the strictest answer and findings, refusing oversized inputs; reserve
+/// Judges an effect needs under the deployment and live project policy.
+/// The caller asks each judge through its connector for the effect's exact state.
+#[must_use]
+pub fn needed_judges(domain: &Domain, project: u32, effect: &Effect) -> Option<List<Judge>> {
+    let policy = domain.policy(project)?;
+    if !effect_within(effect, domain.limits()) {
+        return None;
+    }
+    let capacity = domain.limits().requirements.checked_mul(2)?;
+    let mut judges = List::with_capacity(capacity);
+    for requirements in [&domain.rules().requirements, &policy.requirements] {
+        for requirement in requirements {
+            if requirement.connector == effect.connector
+                && requirement.kind == effect.kind
+                && pattern_covers(&requirement.pattern, &effect.name)
+                && !judges.as_slice().contains(&requirement.judge)
+            {
+                judges.push(requirement.judge).ok()?;
+            }
+        }
+    }
+    Some(judges)
+}
+
+/// Root's pure effect check over one coherent snapshot of connector verdicts.
+/// Returns the strictest answer and findings, refusing oversized inputs; reserve
 /// `max_out(domain.limits())` free slots. No connector call or retained state; carry the checked
 /// pin into execution.
 #[must_use]
-pub fn check_effect(domain: &Domain, ask: &EffectAsk, facts: &[Fact], why: &mut Queue<Finding>) -> Answer {
+pub fn check_effect(domain: &Domain, ask: &EffectAsk, given: &[Given], why: &mut Queue<Finding>) -> Answer {
     room(domain, why);
     if !authority_within(&ask.authority, domain.limits())
         || !effect_within(&ask.effect, domain.limits())
-        || !within(facts.len(), domain.limits().facts)
+        || !within(given.len(), domain.limits().facts)
+        || !within(ask.effect.guards.len(), domain.limits().facts)
     {
         return refuse(why, Finding::Oversized);
-    }
-    if let Some(landing) = &ask.landing
-        && !crate::limits::landing_within(landing, domain.limits())
-    {
-        return refuse(why, Finding::Oversized);
-    }
-    for fact in facts {
-        if !name_within(&fact.name, domain.limits()) {
-            return refuse(why, Finding::Oversized);
-        }
     }
     let Some(policy) = domain.policy(ask.project) else {
         return refuse(why, Finding::UnknownProject);
     };
     let mut answer = Answer::Allow;
     grants(domain, policy, &ask.authority, &ask.effect, &mut answer, why);
-    requirements(&domain.rules().requirements, &ask.effect, facts, &mut answer, why);
-    requirements(&policy.requirements, &ask.effect, facts, &mut answer, why);
-    crate::landing::check(domain, policy, ask, &mut answer, why);
+    requirements(&domain.rules().requirements, &ask.effect, given, ask.now, &mut answer, why);
+    requirements(&policy.requirements, &ask.effect, given, ask.now, &mut answer, why);
     answer
 }
 
@@ -346,11 +408,14 @@ pub fn check_call(domain: &Domain, ask: &CallAsk, why: &mut Queue<Finding>) -> A
                 return refuse(why, Finding::Oversized);
             }
         }
-        Call::Note(scopes) => {
-            if scopes.0.count_ones() != 1 || scopes.0 & !15 != 0 {
-                return refuse(why, Finding::Oversized);
+        Call::Note(scope) => match scope {
+            NoteScope::Goal | NoteScope::Project | NoteScope::Deployment => {}
+            NoteScope::Resources(resource) => {
+                if !pattern_within(&resource.pattern, domain.limits()) {
+                    return refuse(why, Finding::Oversized);
+                }
             }
-        }
+        },
         Call::Tool | Call::Message { .. } => {}
     }
     let Some(policy) = domain.policy(ask.project) else {
@@ -377,7 +442,7 @@ pub fn check_call(domain: &Domain, ask: &CallAsk, why: &mut Queue<Finding>) -> A
                 find(&mut answer, why, Answer::Refuse, Finding::Reference);
             }
         }
-        Call::Note(scopes) => {
+        Call::Note(scope) => {
             for source in [Source::Task, Source::Project, Source::Deployment] {
                 let holder = match source {
                     Source::Task => &ask.authority,
@@ -385,7 +450,7 @@ pub fn check_call(domain: &Domain, ask: &CallAsk, why: &mut Queue<Finding>) -> A
                     Source::Deployment => &domain.rules().ceiling,
                     Source::Role => unreachable!("only task and ceiling sources are iterated"),
                 };
-                if scopes.0 & !holder.notes.0 != 0 {
+                if !scope_covered(scope, holder) {
                     let strict = if source == Source::Task { Answer::Propose } else { Answer::Refuse };
                     find(&mut answer, why, strict, Finding::Scope { source });
                 }
@@ -393,6 +458,22 @@ pub fn check_call(domain: &Domain, ask: &CallAsk, why: &mut Queue<Finding>) -> A
         }
     }
     answer
+}
+
+fn scope_covered(scope: &NoteScope, holder: &Authority) -> bool {
+    match scope {
+        NoteScope::Goal => holder.notes.0 & Scopes::GOAL.0 != 0,
+        NoteScope::Project => holder.notes.0 & Scopes::PROJECT.0 != 0,
+        NoteScope::Deployment => holder.notes.0 & Scopes::DEPLOYMENT.0 != 0,
+        NoteScope::Resources(resource) => {
+            for ceiling in &holder.note_resources {
+                if resource.connector == ceiling.connector && pattern_at_most(&resource.pattern, &ceiling.pattern) {
+                    return true;
+                }
+            }
+            false
+        }
+    }
 }
 
 fn action_within(action: &Action, limits: &Limits) -> bool {
@@ -575,6 +656,7 @@ fn empty() -> Authority {
         delegation: Delegation { kinds: Box::new([]), tasks: 0, depth: 0 },
         budget: Budget { spend: 0, deadline: Some(Wall::EPOCH) },
         notes: Scopes(0),
+        note_resources: Box::new([]),
     }
 }
 
@@ -611,12 +693,17 @@ pub fn needs(action: &Action) -> Option<Authority> {
 fn batch_needs(tasks: &[Delegate]) -> Option<Authority> {
     let mut grant_count = 0_u32;
     let mut kind_count = 0_u32;
+    let mut scope_count = 0_u32;
     for task in tasks {
-        grant_count = grant_count.checked_add(u32::try_from(task.authority.grants.len()).ok()?)?;
+        grant_count = grant_count
+            .checked_add(u32::try_from(task.authority.grants.len()).ok()?)?
+            .checked_add(u32::try_from(task.symbolic.len()).ok()?)?;
+        scope_count = scope_count.checked_add(u32::try_from(task.authority.note_resources.len()).ok()?)?;
         kind_count =
             kind_count.checked_add(u32::try_from(task.authority.delegation.kinds.len()).ok()?.checked_add(1)?)?;
     }
     let mut grants = List::with_capacity(grant_count);
+    let mut scopes = List::with_capacity(scope_count);
     let mut kinds = List::with_capacity(kind_count);
     let mut authority = empty();
     for task in tasks {
@@ -636,12 +723,19 @@ fn batch_needs(tasks: &[Delegate]) -> Option<Authority> {
         for grant in &child.grants {
             grants.push(grant.clone()).expect("all child grants were counted");
         }
+        for grant in &task.symbolic {
+            grants.push(grant.clone()).expect("all symbolic grants were counted");
+        }
+        for scope in &child.note_resources {
+            scopes.push(scope.clone()).expect("all note resource scopes were counted");
+        }
         kinds.push(task.executor).expect("every child executor was counted");
         for kind in &child.delegation.kinds {
             kinds.push(*kind).expect("all delegated executors were counted");
         }
     }
     authority.grants = grants.into_boxed();
+    authority.note_resources = scopes.into_boxed();
     authority.delegation.kinds = kinds.into_boxed();
     Some(authority)
 }

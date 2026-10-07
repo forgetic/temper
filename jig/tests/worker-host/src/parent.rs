@@ -1,17 +1,17 @@
-//! The host's parent's capabilities, scripted: what the checkout child domain
+//! The host's parent's capabilities, scripted: what the workspace child domain
 //! does with workspaces and the agent child domain with agents and their runs,
 //! played from a seed. It speaks the host's vocabulary, as the top level will
 //! once it translates the two siblings', and plays their contracts:
 //!
 //! - A prepare is answered once, after its latency: prepared, as a workspace
-//!   of its own, or not, transiently or for good. A push or a save is
-//!   answered once, after its latency, with an outcome for each repository:
+//!   of its own, or not, transiently or for good. A delivery or a save is
+//!   answered once, after its latency, with an outcome for each item:
 //!   a read-only one is unchanged, a writable one drawn (a change landed, no
-//!   change, its branch moved, or the push failed). A release is a notice.
+//!   change, its workspace changed, or the delivery failed). A release is a notice.
 //! - A start is answered after its latency: `Started` with an agent of its
 //!   own, or `Gone` at once if the agent could not be started. A started
 //!   agent's run follows its script: a number of steps, each a relayed call,
-//!   a push, a yield (then waiting for an inbound event, and parking past its
+//!   a delivery, a yield (then waiting for an inbound event, and parking past its
 //!   idle time) or some work, then its fate: it ends, parks or fails as it
 //!   says, exits without a word, hangs or overruns until the watchdog faults
 //!   it, breaks the rules, or says more than the limits allow (an outcome or a
@@ -26,15 +26,15 @@
 //!
 //! It checks what it is asked as it goes: a start only in a prepared
 //! workspace with no agent yet, and nothing saved or released while the
-//! workspace's agent may still be running or a push or save is in flight.
+//! workspace's agent may still be running or a delivery or save is in flight.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use skein_lib::{Duration, Rng, Token};
-use temper_worker_domain_host::{
-    Access, AgentFailure, Ask, Event, Finish, Landing, Limits, Missing, Preparation, Request, RunFailure, Workspace,
+use jig_worker_host::{
+    AgentFailure, Ask, Delivery, DeliveryOutcome, Event, Finish, Limits, Preparation, Request, RunFailure, Workspace,
 };
-use temper_world::Span;
+use skein_lib::{Duration, Rng, Token};
+use skein_world::domain::Span;
 
 /// How the parent's capabilities behave.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -51,10 +51,10 @@ pub struct Script {
     /// The most steps a run takes before its fate, and the time between them.
     pub steps: u32,
     pub step: Span,
-    /// The chance, per mille, that a step is a relayed call, a push or a
+    /// The chance, per mille, that a step is a relayed call, a delivery or a
     /// yield; otherwise it is work.
     pub relays: u32,
-    pub pushes: u32,
+    pub deliveries: u32,
     pub yields: u32,
     /// How long a yielded run waits for an inbound event before it parks.
     pub idle: Span,
@@ -71,10 +71,10 @@ pub struct Script {
     /// that its run says how it finishes as it winds down.
     pub late: u32,
     pub words: u32,
-    /// How long a push or a save takes, and the chance, per mille, for each
-    /// writable repository, that it has a change, that its branch moved, and
-    /// that the push fails.
-    pub push: Span,
+    /// How long a delivery or a save takes, and the chance, per mille, for each
+    /// writable item, that it has a change, that its workspace changed, and
+    /// that the delivery fails.
+    pub delivery: Span,
     pub changes: u32,
     pub moved: u32,
     pub failed: u32,
@@ -110,17 +110,17 @@ pub struct Tally {
     pub starts: u32,
     pub unstarted: u32,
     pub relays: u32,
-    pub pushes: u32,
+    pub deliveries: u32,
     pub saves: u32,
     pub releases: u32,
     pub yields: u32,
-    pub deliveries: u32,
+    pub messages: u32,
     pub stops: u32,
     pub late_calls: u32,
     /// Runs that said how they finish as they wound down after a stop.
     pub words: u32,
-    /// Saves that came back with a branch moved, or a push failed.
-    pub saves_moved: u32,
+    /// Saves that came back with a workspace changed, or a delivery failed.
+    pub saves_stale: u32,
     pub saves_failed: u32,
     /// Deliveries, replies and stops that found their agent gone.
     pub dropped: u32,
@@ -179,10 +179,8 @@ struct Agent {
 #[derive(Debug)]
 struct Space {
     owner: Token,
-    /// Each repository's writability, in the assignment's order.
-    writable: Vec<bool>,
     agent: Option<Token>,
-    pushes: u32,
+    deliveries: u32,
     saving: bool,
     released: bool,
 }
@@ -194,14 +192,14 @@ pub struct Parent {
     rng: Rng,
     names: u64,
     /// Workspaces asked for, by the hosted run's token, until prepared.
-    preparing: BTreeMap<Token, Vec<bool>>,
+    preparing: BTreeSet<Token>,
     /// Workspaces, by their tokens.
     spaces: BTreeMap<Token, Space>,
     /// Agents, by their tokens.
     agents: BTreeMap<Token, Agent>,
     /// Pushes in flight, by the host's token for their call: their
     /// workspaces.
-    pushing: BTreeMap<Token, Token>,
+    delivering: BTreeMap<Token, Token>,
     tally: Tally,
 }
 
@@ -213,10 +211,10 @@ impl Parent {
             limits,
             rng: Rng::new(seed),
             names: 0,
-            preparing: BTreeMap::new(),
+            preparing: BTreeSet::new(),
             spaces: BTreeMap::new(),
             agents: BTreeMap::new(),
-            pushing: BTreeMap::new(),
+            delivering: BTreeMap::new(),
             tally: Tally::default(),
         }
     }
@@ -231,7 +229,7 @@ impl Parent {
     /// gone, with nothing in flight.
     #[must_use]
     pub fn settled(&self, owner: Token) -> bool {
-        if self.preparing.contains_key(&owner) {
+        if self.preparing.contains(&owner) {
             return false;
         }
         for space in self.spaces.values() {
@@ -251,7 +249,7 @@ impl Parent {
     /// gone, nothing in flight.
     pub fn assert_settled(&self) {
         assert!(self.preparing.is_empty(), "every prepare has ended");
-        assert!(self.pushing.is_empty(), "every push has ended");
+        assert!(self.delivering.is_empty(), "every delivery has ended");
         for (token, space) in &self.spaces {
             assert!(space.released, "workspace {token:?} is released");
         }
@@ -261,13 +259,15 @@ impl Parent {
     }
 
     /// Takes the host's request `request`, which is for the parent.
+    #[expect(clippy::needless_pass_by_value, reason = "the world takes ownership of emitted requests")]
     pub fn take(&mut self, request: Request) -> Vec<Out> {
         match request {
-            temper_worker_domain_host::Request::Turn { .. }
-            | temper_worker_domain_host::Request::PushV2 { .. }
-            | temper_worker_domain_host::Request::RelayV2 { .. }
-            | temper_worker_domain_host::Request::AnswerV2 { .. }
-            | temper_worker_domain_host::Request::StartV2 { .. } => unreachable!("this script runs version one"),
+            jig_worker_host::Request::Turn { .. }
+            | jig_worker_host::Request::DeliverV2 { .. }
+            | jig_worker_host::Request::RelayV2 { .. }
+            | jig_worker_host::Request::AnswerV2 { .. }
+            | jig_worker_host::Request::StartV2 { .. }
+            | Request::TurnCredit { .. } => unreachable!("this script runs version one"),
 
             Request::Prepare { owner, workspace } => self.prepare(owner, &workspace),
             // A notice: the prepare still ends as it was going to, which the
@@ -276,12 +276,14 @@ impl Parent {
                 self.tally.aborts += 1;
                 Vec::new()
             }
-            Request::Start { owner, workspace, charter: _, snapshot: _, grants: _ } => self.start(owner, workspace),
+            Request::Start { owner, workspace, charter: _, snapshot: _, grants: _ } => {
+                self.start(owner, workspace.expect("the scripted assignments have workspace items"))
+            }
             Request::Deliver { agent, name: _, event: _ } => self.deliver(agent),
             Request::Reply { agent, call: _, reply: _ } => self.reply(agent),
             Request::Stop { agent } => self.stop(agent),
-            Request::Push { owner, workspace, message: _ } => self.push(owner, workspace),
-            Request::Save { owner, workspace, branch: _ } => self.save(owner, workspace),
+            Request::DeliverWorkspace { owner, workspace, message: _ } => self.delivery(owner, workspace),
+            Request::Save { owner, workspace } => self.save(owner, workspace),
             Request::Release { workspace } => self.release(workspace),
             Request::Grant { .. } => Vec::new(),
             Request::Answer { .. }
@@ -333,32 +335,15 @@ impl Parent {
 
     fn prepare(&mut self, owner: Token, workspace: &Workspace) -> Vec<Out> {
         self.tally.prepares += 1;
-        let mut writable = Vec::new();
-        for repository in &workspace.repositories {
-            writable.push(match repository.access {
-                temper_worker_domain_host::Access::WritableV2 { .. } => unreachable!("this script runs version one"),
-
-                Access::ReadOnly => false,
-                Access::Writable { .. } => true,
-            });
-        }
-        assert!(self.preparing.insert(owner, writable).is_none(), "a run's workspace is prepared once");
+        assert!(self.preparing.insert(owner), "a run's workspace is prepared once");
         let after = self.script.prepare.draw(&mut self.rng);
         let event = if self.rng.chance(self.script.transient) {
             self.unprepared(owner, Preparation::Transient)
         } else if self.rng.chance(self.script.permanent) {
-            let count = u64::try_from(workspace.repositories.len()).expect("fits");
-            let repository = u32::try_from(self.rng.below(count)).expect("fits");
-            let permanent = if self.rng.chance(500) {
-                Preparation::Missing { repository, missing: Missing::Branch }
-            } else {
-                Preparation::Refused { repository }
-            };
-            self.unprepared(owner, permanent)
+            self.unprepared(owner, Preparation::Permanent { resource: Some(workspace.items) })
         } else {
-            let writable = self.preparing.get(&owner).expect("inserted above").clone();
             let workspace = self.name();
-            let space = Space { owner, writable, agent: None, pushes: 0, saving: false, released: false };
+            let space = Space { owner, agent: None, deliveries: 0, saving: false, released: false };
             self.spaces.insert(workspace, space);
             Event::Prepared { owner, workspace }
         };
@@ -367,7 +352,7 @@ impl Parent {
 
     fn unprepared(&mut self, owner: Token, failure: Preparation) -> Event {
         self.tally.unprepared += 1;
-        Event::Unprepared { owner, failure, detail: Box::from(&b"fatal: could not read from remote repository"[..]) }
+        Event::Unprepared { owner, failure, detail: Box::from(&b"fatal: could not read from workspace resource"[..]) }
     }
 
     fn start(&mut self, owner: Token, workspace: Token) -> Vec<Out> {
@@ -398,12 +383,12 @@ impl Parent {
     fn act(&mut self, agent: Token, steps: u32) -> Vec<Out> {
         let mut out = Vec::new();
         let roll = u32::try_from(self.rng.below(1000)).expect("fits");
-        let (relays, pushes, yields) = (self.script.relays, self.script.pushes, self.script.yields);
+        let (relays, deliveries, yields) = (self.script.relays, self.script.deliveries, self.script.yields);
         if roll < relays {
-            out.push(self.call(agent, Ask::Relay { body: Box::from(&b"read issue"[..]) }));
-        } else if roll < relays + pushes {
-            out.push(self.call(agent, Ask::Push { message: Box::from(&b"fix: the thing"[..]) }));
-        } else if roll < relays + pushes + yields {
+            out.push(self.call(agent, Ask::Relay { body: Box::from(&b"read record"[..]) }));
+        } else if roll < relays + deliveries {
+            out.push(self.call(agent, Ask::Deliver { message: Box::from(&b"fix: the thing"[..]) }));
+        } else if roll < relays + deliveries + yields {
             self.tally.yields += 1;
             self.set(agent, Phase::Waiting { steps });
             out.push(host(Duration::ZERO, Event::Yielded { owner: self.owner(agent) }));
@@ -474,10 +459,10 @@ impl Parent {
 
     fn call(&mut self, agent: Token, ask: Ask) -> Out {
         match ask {
-            temper_worker_domain_host::Ask::PushV2 { .. } => unreachable!("this script runs version one"),
+            jig_worker_host::Ask::DeliverV2 { .. } => unreachable!("this script runs version one"),
 
             Ask::Relay { .. } => self.tally.relays += 1,
-            Ask::Push { .. } => self.tally.pushes += 1,
+            Ask::Deliver { .. } => self.tally.deliveries += 1,
         }
         let entry = self.agents.get_mut(&agent).expect("an agent is kept once made");
         entry.calls += 1;
@@ -489,13 +474,13 @@ impl Parent {
         let phase = self.agents.get(&agent).expect("a delivery is for an agent that started").phase;
         match phase {
             Phase::Waiting { steps } => {
-                self.tally.deliveries += 1;
+                self.tally.messages += 1;
                 self.set(agent, Phase::Working { steps });
                 let step = self.script.step.draw(&mut self.rng);
                 vec![self.rearm(agent, step)]
             }
             Phase::Working { .. } | Phase::Stuck { .. } | Phase::Stopping { .. } | Phase::Exiting => {
-                self.tally.deliveries += 1;
+                self.tally.messages += 1;
                 Vec::new()
             }
             Phase::Gone => {
@@ -537,31 +522,43 @@ impl Parent {
         }
     }
 
-    fn push(&mut self, call: Token, workspace: Token) -> Vec<Out> {
-        let space = self.spaces.get_mut(&workspace).expect("a push is in a prepared workspace");
-        assert!(!space.released, "a push is before its workspace's release");
-        space.pushes += 1;
-        assert!(self.pushing.insert(call, workspace).is_none(), "a call pushes once");
-        let push = self.landings(workspace);
-        let after = self.script.push.draw(&mut self.rng);
-        vec![host(after, Event::Pushed { owner: call, push })]
+    fn delivery(&mut self, call: Token, workspace: Token) -> Vec<Out> {
+        let space = self.spaces.get_mut(&workspace).expect("a delivery is in a prepared workspace");
+        assert!(!space.released, "a delivery is before release");
+        space.deliveries += 1;
+        assert!(self.delivering.insert(call, workspace).is_none(), "a call delivers once");
+        let changed = self.rng.chance(self.script.changes);
+        let outcome = if !changed {
+            DeliveryOutcome::Nothing
+        } else if self.rng.chance(self.script.moved) {
+            DeliveryOutcome::Stale
+        } else if self.rng.chance(self.script.failed) {
+            if self.rng.chance(500) { DeliveryOutcome::Failed } else { DeliveryOutcome::Refused }
+        } else {
+            DeliveryOutcome::Delivered
+        };
+        let delivery = Delivery { outcome, left: workspace, changed: changed && outcome == DeliveryOutcome::Delivered };
+        let after = self.script.delivery.draw(&mut self.rng);
+        vec![host(after, Event::Delivered { owner: call, delivery })]
     }
 
     fn save(&mut self, owner: Token, workspace: Token) -> Vec<Out> {
         self.tally.saves += 1;
         self.check_quiet(workspace, "saved");
         let space = self.spaces.get_mut(&workspace).expect("checked above");
-        assert!(space.owner == owner && !space.saving, "a run saves once, in its own workspace");
+        assert!(space.owner == owner && !space.saving, "a run saves once, in its workspace");
         space.saving = true;
-        let save = self.landings(workspace);
-        if save.contains(&Landing::Moved) {
-            self.tally.saves_moved += 1;
-        }
-        if save.contains(&Landing::Failed) || save.contains(&Landing::Refused) {
+        let at = if self.rng.chance(self.script.moved) {
+            self.tally.saves_stale += 1;
+            None
+        } else if self.rng.chance(self.script.failed) {
             self.tally.saves_failed += 1;
-        }
-        let after = self.script.push.draw(&mut self.rng);
-        vec![host(after, Event::Saved { owner, save })]
+            None
+        } else {
+            Some(workspace)
+        };
+        let after = self.script.delivery.draw(&mut self.rng);
+        vec![host(after, Event::Saved { owner, at })]
     }
 
     fn release(&mut self, workspace: Token) -> Vec<Out> {
@@ -577,7 +574,7 @@ impl Parent {
     fn check_quiet(&self, workspace: Token, what: &str) {
         let space = self.spaces.get(&workspace).expect("a prepared workspace");
         assert!(!space.released, "nothing is {what} after its release");
-        assert_eq!(space.pushes, 0, "nothing is {what} while a push is in flight");
+        assert_eq!(space.deliveries, 0, "nothing is {what} while a delivery is in flight");
         assert!(!space.saving, "nothing is {what} while a save is in flight");
         if let Some(agent) = space.agent {
             let phase = self.agents.get(&agent).expect("an agent is kept once made").phase;
@@ -585,35 +582,16 @@ impl Parent {
         }
     }
 
-    /// A push's or a save's outcome, drawn for each repository.
-    fn landings(&mut self, workspace: Token) -> Box<[Landing]> {
-        let count = self.spaces.get(&workspace).expect("a prepared workspace").writable.len();
-        let mut landings = Vec::new();
-        for index in 0..count {
-            let writable = self.spaces.get(&workspace).expect("looked up above").writable[index];
-            landings.push(if !writable || !self.rng.chance(self.script.changes) {
-                Landing::Unchanged
-            } else if self.rng.chance(self.script.moved) {
-                Landing::Moved
-            } else if self.rng.chance(self.script.failed) {
-                if self.rng.chance(500) { Landing::Failed } else { Landing::Refused }
-            } else {
-                Landing::Landed { commit: [u8::try_from(self.rng.below(256)).expect("a byte"); 32] }
-            });
-        }
-        landings.into_boxed_slice()
-    }
-
     /// The prepare of `owner` has ended, as the host takes its terminal.
     pub fn prepared(&mut self, owner: Token) {
-        assert!(self.preparing.remove(&owner).is_some(), "a prepare ends once");
+        assert!(self.preparing.remove(&owner), "a prepare ends once");
     }
 
-    /// The push `call` has ended, as the world delivers its `Pushed`.
-    pub fn pushed(&mut self, call: Token) {
-        let workspace = self.pushing.remove(&call).expect("a push ends once");
-        let space = self.spaces.get_mut(&workspace).expect("a pushed workspace");
-        space.pushes -= 1;
+    /// The delivery `call` has ended, as the world delivers its `Delivered`.
+    pub fn delivered(&mut self, call: Token) {
+        let workspace = self.delivering.remove(&call).expect("a delivery ends once");
+        let space = self.spaces.get_mut(&workspace).expect("a delivered workspace");
+        space.deliveries -= 1;
     }
 
     /// The save of `owner` has ended, as the world delivers its `Saved`.
@@ -655,8 +633,9 @@ impl Parent {
                     RunFailure::Policy,
                     RunFailure::Cancelled,
                     RunFailure::Stale,
+                    RunFailure::Exhausted,
                 ];
-                Fate::Failed(kinds[usize::try_from(self.rng.below(5)).expect("fits")])
+                Fate::Failed(kinds[usize::try_from(self.rng.below(6)).expect("fits")])
             }
             3 => Fate::Exited,
             4 => Fate::Hung,

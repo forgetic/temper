@@ -16,11 +16,13 @@ pub mod boundary;
 mod brief;
 mod domain;
 mod held;
+mod judge;
 mod limits;
 #[cfg(test)]
 mod tests;
 pub use boundary::*;
 pub use domain::{Domain, fire, max_out, resume, step};
+pub use judge::{Criterion, Freshness as JudgeFreshness, Judges, Reviewer, Verdict as JudgeVerdict};
 pub use limits::{Limits, worst_case};
 /// Stable key of one durable connector row.
 #[must_use]

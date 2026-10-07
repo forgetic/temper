@@ -45,8 +45,8 @@ mod policy_value;
 #[cfg(test)]
 mod tests;
 pub use amendment::{
-    Amendment, Authority, Delegation, Executor, Grant, Last, Parameter, Pattern, ResultsWake, Spec, WakePolicy,
-    WakeRule, amendment_bytes, authority_bytes,
+    Amendment, Authority, Delegation, Executor, Grant, Last, Parameter, Pattern, ResourceScope, ResultsWake, Spec,
+    WakePolicy, WakeRule, amendment_bytes, authority_bytes,
 };
 pub use boundary::{
     Adoption, Ask, Entry, EntryKind, EscalationChoice, EscalationDecision, Event, Holding, Identity, IdentityKey,
@@ -57,5 +57,6 @@ pub use domain::{Domain, fire, max_out, step};
 pub use facts::Fact;
 pub use limits::{Limits, worst_case};
 pub use policy_value::{
-    Approval, Freshness, Gate, LandingRule, PolicyChange, PolicyRole, PolicyValue, policy_bytes, policy_change_bytes,
+    Approval, Freshness, Gate, LandingRule, PolicyChange, PolicyRole, PolicyValue, landing_rules_bytes, policy_bytes,
+    policy_change_bytes,
 };

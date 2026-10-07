@@ -464,6 +464,7 @@ impl Stored {
 /// Root-to-child inputs; authenticated identity, authoritative roles and typed restored records
 /// cross this boundary without protocol secrets. (domain/people.md, sections 3–5).
 #[derive(PartialEq, Eq, Debug)]
+#[expect(clippy::large_enum_variant, reason = "the bounded ask is carried whole through the step boundary")]
 pub enum Event {
     /// Add previously unknown collaborators and their first project role in one decision.
     Seed { project: u32, collaborators: Box<[Seed]> },

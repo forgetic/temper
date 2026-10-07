@@ -4,7 +4,7 @@ use alloc::boxed::Box;
 
 use skein_lib::Wall;
 
-use crate::{Authority, Executor, Gate, Name, Numbers, ProposalKind, Scopes, Tools};
+use crate::{Authority, Executor, Judge, Name, Numbers, ProposalKind, ResourceScope, Tools};
 
 /// Ordered from least to most strict: deciding never clears a fact failure.
 /// Terminal result of one pure check, ordered by severity; it neither executes the action nor
@@ -95,50 +95,17 @@ pub enum Finding {
         source: Source,
     },
     /// A pinned required fact is missing, unknown or pending.
-    Required {
-        /** Connector whose required pinned fact was checked. */
-        connector: u16,
-
-        fact: u16,
-    },
+    Required { judge: Judge },
     /// A matching pinned required fact failed.
-    Failed {
-        /** Connector whose required pinned fact was checked. */
-        connector: u16,
-
-        fact: u16,
-    },
+    Failed { judge: Judge },
+    /// The effect kind cannot guard a requirement marked as requiring a guard.
+    Unguarded { judge: Judge },
     /// The person's role does not allow this request kind.
     Unpermitted,
     /// The person's role may not accept this proposal kind.
     Undecidable,
     /// A funding request's pool budget exceeds the role's period ceiling.
     PeriodSpend,
-    /// An applicable rule needs a landing snapshot that was not supplied.
-    LandingMissing,
-    /// Landing head differs from the effect's exact state pin.
-    LandingPin,
-    /// Required exact-head CI is not passed.
-    Ci { status: Status },
-    /// Required exact-head containment of the branch tip is not passed.
-    Behind { status: Status },
-    /// A blocking gate lacks a passed valid-head verdict.
-    Gate {
-        /** Blocking gate number resolved by the root. */
-        number: u32,
-
-        status: Status,
-    },
-    /// Distinct valid approvals of the required role are fewer than requested.
-    Approval {
-        role: u32,
-        /** Distinct eligible passed reviewers at valid heads. */
-        have: u32,
-        /** Required distinct-person count. */
-        want: u32,
-    },
-    /// A valid reviewer of the required role requested changes.
-    ReviewFailed { role: u32 },
 }
 
 /// Pure check result and optional replacement funding snapshot; the root commits allowed numbers
@@ -160,6 +127,8 @@ pub struct Delegate {
     pub executor: Executor,
     /// Complete child authority, bounded by the configured authority limits.
     pub authority: Authority,
+    /// Open-prefix grants narrowed with this delegate's number after the batch is admitted.
+    pub symbolic: Box<[crate::Grant]>,
 }
 
 /// Root-gathered creation question over one coherent creator and funding snapshot; no tasks or
@@ -190,6 +159,8 @@ pub struct Effect {
     /// Full literal resource name, bounded by segment and byte limits.
     pub name: Name,
     pub state: [u8; 32],
+    /// Judges this effect kind's condition checks when it is applied.
+    pub guards: Box<[Judge]>,
 }
 
 /// Root-gathered permission and authentic-fact question for one pinned effect; this value makes no
@@ -201,109 +172,29 @@ pub struct EffectAsk {
     pub authority: Authority,
     /// Single pinned connector operation being checked.
     pub effect: Effect,
-    /// Coherent landing snapshot when available; absence waits if applicable landing rules require
-    /// it.
-    pub landing: Option<Landing>,
+    /// Wall time of this decision, used for observed verdict freshness.
+    pub now: Wall,
 }
 
-/// Opaque fixed-width head/state identity supplied by the root; authority neither parses nor
-/// resolves it. (domain/authority.md, section 10).
-pub type Head = [u8; 32];
-
-/// CI report supplied by the root for the exact landing head; CI never carries over clean
-/// predecessors. (domain/authority.md, section 10).
+/// A connector's judgement for the exact state of the checked effect.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct Ci {
-    pub head: Head,
-    /// CI outcome; missing or pending waits and failed refuses when CI is required.
-    pub status: Status,
+pub enum Verdict {
+    /// The requirement held when judged.
+    Met,
+    /// The judge cannot yet say whether it holds.
+    Wait,
+    /// The requirement failed.
+    Refuse,
 }
 
-/// Root-resolved gate report for the named change, with head freshness checked against the landing
-/// snapshot. (domain/authority.md, section 10).
+/// One named judgement and the wall time at which its facts were observed.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct Verdict {
-    pub gate: u32,
-    pub head: Head,
-    /// Verdict outcome, interpreted only at an accepted head.
-    pub status: Status,
-}
-
-/// Only authenticated people's latest reviews, with root-verified roles.
-/// Agent reviews use gate verdicts and cannot count as human approvals.
-/// Authenticated latest human review with root-verified project role; duplicate people count once
-/// and agent gates never count as people. (domain/authority.md, section 10).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct Review {
-    /// Authenticated person number, used to count distinct reviewers.
-    pub person: u64,
-    pub role: u32,
-    /// Head reviewed, checked against required freshness.
-    pub head: Head,
-    /// Passed approval or failed request for changes; pending provides no approval.
-    pub status: Status,
-}
-
-/// Facts read together for this exact head and landing branch's tip.
-/// All verdicts and authenticated latest reviews belong to the effect's
-/// named change and branch; the root resolves gate identities and roles.
-/// `clean` contains only predecessor heads linked to `head` entirely by
-/// temper's clean updates since the last repair or conflict resolution.
-/// One coherent root-supplied snapshot for the named change and branch; boxed collections are
-/// bounded by `Limits` on admission. (domain/authority.md, section 10).
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct Landing {
-    /// Proposed landing head, which must equal the effect's exact state pin.
-    pub head: Head,
-    /// Landing-branch tip whose containment was checked in this snapshot.
-    pub tip: Head,
-    /// Containment result for this exact head and tip; unknown/pending waits and absence refuses
-    /// when required.
-    pub contains_tip: Status,
-    /// CI head and status from the same named change snapshot.
-    pub ci: Ci,
-    /// CI availability is configured at repository adoption, never inferred from statuses.
-    pub has_ci: bool,
-    /// Configured checks required in place of CI; each must pass at this head.
-    pub checks: Box<[Gate]>,
-    /// Root-verified clean predecessor heads, bounded by `Limits::heads`; repair or conflict
-    /// resolution breaks this lineage.
-    pub clean: Box<[Head]>,
-    /// Change gates added to policy gates, bounded by `Limits::gates`.
-    pub gates: Box<[Gate]>,
-    /// Gate reports for the change, bounded by `Limits::verdicts`.
-    pub verdicts: Box<[Verdict]>,
-    /// Authenticated latest human reviews, bounded by `Limits::reviews`.
-    pub reviews: Box<[Review]>,
-}
-
-/// Reported fact state; unknown and pending wait, passed satisfies, and a relevant failure refuses.
-/// (domain/authority.md, sections 8.2 and 10).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum Status {
-    /// No known outcome; required conditions wait.
-    Unknown,
-    /// Outcome remains in flight; required conditions wait.
-    Pending,
-    /// Reported condition is satisfied at its pin.
-    Passed,
-    /// Reported condition failed at its pin.
-    Failed,
-}
-
-/// Authentic root-supplied connector report; matching requires the full resource name, exact state
-/// pin and required fact kind. (domain/authority.md, section 8.2).
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct Fact {
-    pub connector: u16,
-    /// Reported connector fact kind, not the effect kind.
-    pub kind: u16,
-    /// Full resource name the report concerns, bounded by segment and byte limits.
-    pub name: Name,
+pub struct Given {
+    pub judge: Judge,
+    pub verdict: Verdict,
+    pub at: Wall,
+    /// The exact effect state the connector was asked to judge.
     pub state: [u8; 32],
-    /// Reported outcome; contradictory pending/failure reports cannot be cleared by a passed
-    /// report.
-    pub status: Status,
 }
 
 /// Root-verified writer-hold relationship for a run's written resource; authority performs no
@@ -412,7 +303,20 @@ pub enum Call {
         referenced: bool,
     },
     /// Family permission and one supported scope are checked.
-    Note(/** Exactly one supported note scope; other scope shapes refuse. */ Scopes),
+    Note(/** Exactly one note scope, including a connector resource pattern. */ NoteScope),
+}
+
+/// Where one note write applies, relative to the acting task and project.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum NoteScope {
+    /// The acting task's goal.
+    Goal,
+    /// The task's project.
+    Project,
+    /// The deployment.
+    Deployment,
+    /// One connector's resource pattern.
+    Resources(ResourceScope),
 }
 
 /// Root-gathered call permission question over one configured family and admitted

@@ -3,7 +3,7 @@
 //! the task row; root supplies fresh task numbers, while this child owns the period allotment and
 //! admits the whole batch with its cursor in one decision. It knows no wall clock or connector.
 use crate::domain::{Domain, make, publish, record, task_mut};
-use crate::{Active, Executor, Funder, Limits, New, Numbers, Party, Phase, RecurringOverlap, Request};
+use crate::{Active, Funder, Limits, New, Numbers, Party, Phase, RecurringOverlap, Request};
 use alloc::boxed::Box;
 use skein_lib::{Env, List, Queue, ReplyTo, Token};
 
@@ -19,9 +19,6 @@ pub(crate) fn tick(domain: &mut Domain, env: &Env<Limits>, task: u64, period: u6
         return;
     }
     let Some(row) = record(domain, task) else { return };
-    if row.executor != (Executor::Procedure { connector: 0, code: 1 }) {
-        return;
-    }
     let Some(state) = &row.recurring else { return };
     if state.last_period >= period || !active(&row.phase) {
         return;
@@ -86,8 +83,7 @@ pub(crate) fn make_batch(
     }
     let Some(row) = record(domain, task) else { return };
     let Some(state) = &row.recurring else { return };
-    if row.executor != (Executor::Procedure { connector: 0, code: 1 })
-        || !active(&row.phase)
+    if !active(&row.phase)
         || !row.delegates.is_empty()
         || period < state.last_period
         || (period == state.last_period && state.pending_period != Some(period))
@@ -144,10 +140,6 @@ pub(crate) fn valid_template(limits: &Limits, project: u32, budget: u64, batch: 
     let mut spend = 0_u64;
     for (index, member) in batch.iter().enumerate() {
         let Some(local) = index.checked_add(1) else { return false };
-        let core_member = match member.executor {
-            Executor::Procedure { connector: 0, .. } => true,
-            Executor::Agent { .. } | Executor::Procedure { .. } | Executor::Person(_) => false,
-        };
         if member.number != u64::try_from(local).expect("bounded batch")
             || member.project != project
             || member.recurring.is_some()
@@ -157,7 +149,6 @@ pub(crate) fn valid_template(limits: &Limits, project: u32, budget: u64, batch: 
             || !crate::batch::valid_contract(limits, &member.contract)
             || !crate::batch::valid_authority(limits, &member.authority)
             || !crate::wake::valid(&member.wake)
-            || core_member
         {
             return false;
         }

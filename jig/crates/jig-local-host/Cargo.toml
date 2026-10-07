@@ -1,6 +1,6 @@
 [package]
-name = "temper-worker-domain-host"
-description = "Hosted runs: the worker domain's host child domain, sans-io"
+name = "jig-local-host"
+description = "Smith runs on the engine's own slots"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,6 +8,10 @@ publish.workspace = true
 
 [dependencies]
 skein-lib.workspace = true
+smith-domain.workspace = true
+
+[dev-dependencies]
+smith-agent-world.workspace = true
 
 [lints]
 workspace = true

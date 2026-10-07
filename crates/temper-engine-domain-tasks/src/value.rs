@@ -24,6 +24,8 @@ pub struct Authority {
     pub budget: Budget,
     /// Permitted note-scope bits carried without judging them here.
     pub notes: Scopes,
+    /// Connector resource patterns where this task may write notes.
+    pub note_resources: Box<[ResourceScope]>,
 }
 
 /// Root-configured tool-family bit set carried with a task, independent of authority's vocabulary.
@@ -35,20 +37,24 @@ pub struct Tools(/** Up to 64 configured family bits; tasks assigns no family me
 /// permission through the root. (domain/tasks.md, sections 2–3). (domain/authority.md,
 /// sections 3–7).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct Scopes(/** Goal 1, repository 2, project 4 and deployment 8 scope bits. */ pub u8);
+pub struct Scopes(/** Goal 1, project 2 and deployment 4 scope bits. */ pub u8);
 
 impl Scopes {
     /// Goal-relative note-scope bit carried with authority.
     pub const GOAL: Scopes = Scopes(1);
 
-    /// Repository-relative note-scope bit carried with authority.
-    pub const REPOSITORY: Scopes = Scopes(2);
-
     /// Project-relative note-scope bit carried with authority.
-    pub const PROJECT: Scopes = Scopes(4);
+    pub const PROJECT: Scopes = Scopes(2);
 
     /// Deployment-relative note-scope bit carried with authority.
-    pub const DEPLOYMENT: Scopes = Scopes(8);
+    pub const DEPLOYMENT: Scopes = Scopes(4);
+}
+
+/// One connector resource pattern carried with a task's note permissions.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct ResourceScope {
+    pub connector: u16,
+    pub pattern: Pattern,
 }
 
 /// Owned connector permission carried by tasks; connector interpretation and authority decisions

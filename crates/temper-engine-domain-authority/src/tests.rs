@@ -6,8 +6,8 @@ use alloc::boxed::Box;
 use skein_lib::{List, Wall, bytes::copy_of};
 
 use crate::{
-    Authority, Budget, Delegation, Executor, Grant, Implication, Implies, Last, Name, Pattern, Scopes, Tools, at_most,
-    grant_at_most, grant_covers, pattern_at_most, pattern_covers,
+    Authority, Budget, Delegation, Executor, Grant, Implication, Implies, Last, Name, Pattern, ResourceScope, Scopes,
+    Tools, at_most, grant_at_most, grant_covers, pattern_at_most, pattern_covers,
 };
 
 const LETTERS: [&[u8]; 3] = [b"a", b"b", b"c"];
@@ -172,6 +172,7 @@ fn empty() -> Authority {
         delegation: Delegation { kinds: Box::new([]), tasks: 0, depth: 0 },
         budget: Budget { spend: 0, deadline: Some(Wall::EPOCH) },
         notes: Scopes(0),
+        note_resources: Box::new([]),
     }
 }
 
@@ -322,6 +323,29 @@ fn naive_authority(a: &Authority, b: &Authority, patterns: &[Pattern], sets: &[[
             return false;
         }
     }
+    for scope in &a.note_resources {
+        let mut included = false;
+        for ceiling in &b.note_resources {
+            if scope.connector == ceiling.connector {
+                let mut left = None;
+                let mut right = None;
+                for (position, pattern) in patterns.iter().enumerate() {
+                    if *pattern == scope.pattern {
+                        left = Some(position);
+                    }
+                    if *pattern == ceiling.pattern {
+                        right = Some(position);
+                    }
+                }
+                if subset(&sets[left.unwrap()], &sets[right.unwrap()]) {
+                    included = true;
+                }
+            }
+        }
+        if !included {
+            return false;
+        }
+    }
     true
 }
 
@@ -358,6 +382,11 @@ fn authorities(patterns: &[Pattern]) -> Box<[Authority]> {
                 .unwrap();
         }
         authority.grants = grants.into_boxed();
+        let scope = usize::try_from(index.checked_div(4).unwrap()).unwrap();
+        authority.note_resources = Box::new([ResourceScope {
+            connector: u16::try_from(index.checked_rem(2).unwrap().checked_add(1).unwrap()).unwrap(),
+            pattern: patterns[scope].clone(),
+        }]);
         sample.push(authority).unwrap();
     }
     sample.into_boxed()

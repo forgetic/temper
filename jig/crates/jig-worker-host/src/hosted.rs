@@ -1,113 +1,7 @@
-//! Hosted runs: one run on the worker, from its assignment to its one answer
-//! (worker-domain.md, 4.2).
-//!
-//! An `Assign` admits a run to a slot, or refuses it at the entrance. An
-//! admitted run has its workspace prepared, then its agent started on the
-//! charter, resumed from the snapshot if there is one. While it is live,
-//! inbound events go down to it as they arrive, and its host calls come up: a
-//! push is served through the workspace, a forge read or an outlet is relayed
-//! to the engine and its answer routed back. It parks or ends as it decides,
-//! or fails; then the tail: its agent is stopped, its unfinished work saved if
-//! the assignment asks and the run did not end with a landed change, its
-//! workspace released, and the engine answered, which frees the slot. A cancel
-//! (from the engine, or from the top level for every run: lost contact,
-//! shutdown) or a fault of the agent takes the same tail.
-//!
-//! The first ending decided wins, but for the run's own: a run the worker
-//! cancelled (the engine, lost contact, shutdown) may still say how it
-//! finishes as it winds down, and what it says before its agent has gone is
-//! the answer. A push that lands as it winds down is its outcome
-//! (agent-domain.md, 4.4). A cancel it reports is then the worker's, for the
-//! cancel's reason. A run whose agent was faulted is not heard after the fault
-//! (the agent child domain tells at most one of the two), but for its wall
-//! time, which is told only once the grace is up: until then the run may still
-//! say how it finishes, and a cancel it reports is told as the wall time's
-//! fault. Only a run that says nothing before its agent has gone is answered as
-//! the worker stopped it.
-//!
-//! A run's transition table:
-//!
-//! ```text
-//! state       event                         next        emits
-//! -           assign, of the attempt hosted -           (dropped)
-//!             assign, beyond the limits     -           answer: invalid
-//!             assign, no slot (answers not
-//!               acknowledged take theirs),
-//!               hosted under another
-//!               attempt, or shut            -           answer: busy
-//!             assign                        Preparing   prepare
-//! Preparing   prepared                      Starting    start
-//!             unprepared                    Closed      answer: unprepared
-//!             inbound                       Preparing   (held), or bounced: full
-//!             cancel                        Cancelling  abort
-//! Cancelling  prepared                      Closed      release, answer: cancelled
-//!             unprepared                    Closed      answer: cancelled
-//!             inbound                       Cancelling  bounced: ending
-//!             cancel                        Cancelling
-//! Starting    started                       Active      deliver what is held
-//!             gone                          Closed      release, answer: unstarted
-//!             inbound                       Starting    (held), or bounced: full
-//!             cancel                        Unwanted
-//! Unwanted    started                       Stopping    stop (stopped)
-//!             gone                          Closed      release, answer: cancelled
-//!             inbound                       Unwanted    bounced: ending
-//!             cancel                        Unwanted
-//! Active      inbound                       Active      deliver
-//!             called                        Active      push, relay, or reply: busy
-//!             withdrawn: a relay            Active      reply: withdrawn
-//!             withdrawn: a push, or none    Active
-//!             bounced                       Active      bounced
-//!             yielded                       Waiting
-//!             finished                      Stopping    relays: unavailable, stop
-//!             faulted, cancel               Stopping    relays: unavailable, stop (stopped)
-//!             gone                          Stopping    relays: unavailable (exited)
-//! Waiting     inbound                       Active      deliver
-//!             called                        Active      push, relay, or reply: busy
-//!             withdrawn, bounced            Waiting     as Active
-//!             yielded                       Waiting
-//!             finished, faulted, cancel     Stopping    as Active
-//!             gone                          Stopping    as Active
-//! Stopping    called                        Stopping    reply: unavailable
-//!             withdrawn                     Stopping    (answered already, or a push)
-//!             bounced                       Stopping    bounced
-//!             finished, stopped             Stopping    (the run's own ending)
-//!             finished, said, or exited     Stopping
-//!             yielded, faulted              Stopping
-//!             gone                          Stopping
-//!             inbound                       Stopping    bounced: ending
-//!             cancel                        Stopping
-//!             settled, saving               Saving      save
-//!             settled                       Closed      release, answer
-//! Saving      saved                         Closed      release, answer
-//!             inbound                       Saving      bounced: ending
-//!             cancel                        Saving
-//! ```
-//!
-//! A pushed or relayed event moves its call (the `call` module), and leaves
-//! the run where it is; so does a withdrawn one. A withdrawn relay is
-//! answered at once, and what the engine sends for it after is dropped; a
-//! withdrawn push goes on, and is answered with how it went once it settles:
-//! a push cannot be abandoned half way. A stopping run has settled once its agent has gone
-//! and its push in flight, if it has one, has settled; it then saves if the
-//! assignment asks, unless it ended with a landed change, and otherwise
-//! releases its workspace and answers. That follows from the state, in one
-//! place ([`conclude`]), which also retires a run once it is Closed.
-//!
-//! A stop is sent whenever a run leaves live with its agent there, also after
-//! the run has said how it finishes or its agent was faulted: the agent
-//! child domain is winding it down then anyway, and a stop changes nothing.
-//!
-//! Every other cell is unreachable by the contracts: the workspace's (one
-//! terminal per request) and the agent's (`Started` first unless the agent
-//! could not be started, then what its run does, then one `Gone`). Nothing
-//! the engine sends reaches a run whose attempt it does not name, nor a
-//! Closed run, which leaves the names as it closes.
-//!
-//! Inbound events that come while the run is not live yet are held, in the
-//! order they came, up to the limit, and delivered as its agent starts; past
-//! the limit they are bounced, and the engine keeps them. One its agent could
-//! not take is bounced to the engine the same way. A run that never
-//! goes live drops what it held: its answer says it took nothing.
+//! Hosted run lifecycle (hosts.md, section 6). An accepted run prepares a
+//! workspace, starts its agent, then serves calls and turns until it stops.
+//! The host waits for agent exit and each in-flight delivery before saving,
+//! releasing, and answering. The same tail follows cancellation or a fault.
 
 use alloc::boxed::Box;
 use core::mem;
@@ -117,12 +11,12 @@ use skein_lib::{Env, Id, List, Map, Queue, ReplyTo, Set, Slab, Token};
 
 use crate::assignment::{self, len};
 use crate::boundary::{
-    AgentFailure, Answer, Ask, Assignment, Bounce, Failure, Finish, Grant, Hosting, Landed, Landing, Phase,
-    Preparation, Push, Reason, Refusal, Reply, Request, RunFailure, Work,
+    AgentFailure, Answer, Ask, Assignment, Bounce, Delivery, Failure, Finish, Grant, Hosting, Phase, Preparation,
+    Reason, Refusal, Reply, Request, RunFailure, Work,
 };
 use crate::call::{self, Call};
 use crate::domain::Domain;
-use crate::facts::{Fact, Facts};
+use crate::facts::{Fact, Facts, Told};
 use crate::limits::Limits;
 
 #[derive(Debug)]
@@ -130,21 +24,17 @@ pub(crate) struct Hosted {
     /// The engine's names for the run and for the attempt hosted.
     run: Token,
     attempt: Token,
-    repositories: u32,
-    tags: Box<[u32]>,
     grants: Box<[Grant]>,
     refreshed: bool,
-    /// The saved-work branch, if its unfinished work is saved; taken as it is.
-    save: Option<Box<[u8]>>,
-    /// The repositories its pushes landed in, by their place in the workspace,
-    /// each with the last commit landed there.
-    landed: Map<u32, [u8; 32]>,
+    /// Whether the workspace saves unfinished work before release.
+    save: bool,
+    /// The application's token for the last delivery that changed the workspace.
+    left: Option<Token>,
     /// Its relayed calls in flight, while it is live.
     relays: Set<Id<Call>>,
-    /// Its push in flight, if it has one: a write, so one at a time, and
+    /// Its delivery in flight, if it has one: a write, so one at a time, and
     /// waited for through the stop.
-    push: Option<Id<Call>>,
-    merging: bool,
+    delivery: Option<Id<Call>>,
     runtime: Runtime,
     state: State,
 }
@@ -169,18 +59,18 @@ enum State {
     /// Cancelled for `reason` as it was prepared: it answers once the prepare
     /// has settled.
     Cancelling { reply_to: ReplyTo, reason: Reason },
-    /// Its agent is starting in `workspace`.
-    Starting { reply_to: ReplyTo, workspace: Token, held: Queue<NamedEvent> },
+    /// Its agent is starting, with a workspace when it has items.
+    Starting { reply_to: ReplyTo, workspace: Option<Token>, held: Queue<NamedEvent> },
     /// Cancelled for `reason` as its agent started: the agent is stopped once
     /// it has started.
-    Unwanted { reply_to: ReplyTo, workspace: Token, reason: Reason },
-    /// Its agent `agent` is at work.
-    Active { reply_to: ReplyTo, workspace: Token, agent: Token },
+    Unwanted { reply_to: ReplyTo, workspace: Option<Token>, reason: Reason },
+    /// Its agent `agent` is at work, with a workspace when it has items.
+    Active { reply_to: ReplyTo, workspace: Option<Token>, agent: Token },
     /// It yielded, and waits for its next inbound event.
-    Waiting { reply_to: ReplyTo, workspace: Token, agent: Token },
-    /// It ends with `ending` once its agent has gone (`gone`) and its push in
+    Waiting { reply_to: ReplyTo, workspace: Option<Token>, agent: Token },
+    /// It ends with `ending` once its agent has gone (`gone`) and its delivery in
     /// flight has settled.
-    Stopping { reply_to: ReplyTo, workspace: Token, agent: Token, ending: Ending, gone: bool },
+    Stopping { reply_to: ReplyTo, workspace: Option<Token>, agent: Token, ending: Ending, gone: bool },
     /// Its unfinished work is being saved; it ends with `ending` once it is.
     Saving { reply_to: ReplyTo, workspace: Token, ending: Ending },
     /// Terminal: holds nothing.
@@ -257,11 +147,7 @@ fn assign_runtime(
     let Domain { hosted, names, facts, shut, unacknowledged, .. } = domain;
     // An assignment that can never fit is invalid, room or not: busy invites a
     // retry.
-    let next = match runtime {
-        Runtime::Legacy => false,
-        Runtime::V2 { .. } => true,
-    };
-    if let Err(invalid) = assignment::check(&assignment, &env.limits, next) {
+    if let Err(invalid) = assignment::check(&assignment, &env.limits) {
         refused(reply_to, &assignment, Refusal::Invalid(invalid), &runtime, out);
         return;
     }
@@ -273,34 +159,16 @@ fn assign_runtime(
         return;
     }
     let Assignment { run, attempt, workspace, save, charter, snapshot, grants } = assignment;
-    let repositories = u32::try_from(workspace.repositories.len()).expect("checked against the limits");
-    let mut tags = List::with_capacity(repositories);
-    for repository in &workspace.repositories {
-        tags.push(repository.tag).expect("room for every repository tag");
-    }
-    let mut merging = false;
-    for repository in &workspace.repositories {
-        match repository.start {
-            crate::Start::Merge { .. } => merging = true,
-            crate::Start::Base { .. }
-            | crate::Start::Branch { .. }
-            | crate::Start::Commit { .. }
-            | crate::Start::Saved { .. } => {}
-        }
-    }
     let held = Queue::with_capacity(env.limits.held);
     let entry = Hosted {
         run,
         attempt,
-        repositories,
-        tags: tags.into_boxed(),
         grants,
         refreshed: false,
-        save,
-        landed: Map::with_capacity(repositories),
+        save: save && workspace.is_some(),
+        left: None,
         relays: Set::with_capacity(env.limits.run_calls),
-        push: None,
-        merging,
+        delivery: None,
         runtime,
         state: State::Preparing { reply_to, charter, snapshot, held },
     };
@@ -308,7 +176,10 @@ fn assign_runtime(
     let named = names.insert(run, id).expect("a name for every slot");
     assert!(named.is_none(), "checked the run is not hosted above");
     facts.push(Fact::Admitted { run, attempt });
-    out.push(Request::Prepare { owner: id.token(), workspace });
+    match workspace {
+        Some(workspace) => out.push(Request::Prepare { owner: id.token(), workspace }),
+        None => start_prepared(domain, id.token(), None, out),
+    }
 }
 
 pub(crate) fn inbound(
@@ -374,7 +245,7 @@ pub(crate) fn is_relayed_for(domain: &Domain, run: Token, attempt: Token, call: 
     }
     match entry.state {
         call::State::Relayed { .. } | call::State::Settling { .. } => true,
-        call::State::Pushing { .. } | call::State::Closed => false,
+        call::State::Delivering { .. } | call::State::Closed => false,
     }
 }
 
@@ -399,7 +270,7 @@ pub(crate) fn relayed(
             out.push(Request::Reply { agent, call, reply: Reply::Relayed { answer } });
         }
         call::State::Settling { .. } => {}
-        call::State::Pushing { .. } | call::State::Closed => unreachable!("only a live relay receives an answer"),
+        call::State::Delivering { .. } | call::State::Closed => unreachable!("only a live relay receives an answer"),
     }
     relay_ended(domain, call_id, out);
 }
@@ -409,7 +280,7 @@ pub(crate) fn relay_cancelled(domain: &mut Domain, call: Token, out: &mut Queue<
     let entry = domain.calls.get(call_id).expect("a cancelled relay lives until its terminal");
     match entry.state {
         call::State::Settling { .. } => {}
-        call::State::Relayed { .. } | call::State::Pushing { .. } | call::State::Closed => {
+        call::State::Relayed { .. } | call::State::Delivering { .. } | call::State::Closed => {
             unreachable!("a relay is cancelled only after its cancel request")
         }
     }
@@ -463,10 +334,16 @@ pub(crate) fn report(domain: &Domain, out: &mut Queue<Request>) {
 }
 
 pub(crate) fn prepared(domain: &mut Domain, owner: Token, workspace: Token, out: &mut Queue<Request>) {
+    start_prepared(domain, owner, Some(workspace), out);
+}
+
+fn start_prepared(domain: &mut Domain, owner: Token, workspace: Option<Token>, out: &mut Queue<Request>) {
     let Domain { hosted, facts, .. } = domain;
     let id = Id::<Hosted>::from_token(owner);
     let entry = hosted.get_mut(id).expect("a run lives until its prepare has settled");
-    facts.push(Fact::Prepared { run: entry.run, attempt: entry.attempt });
+    if workspace.is_some() {
+        facts.push(Fact::Prepared { run: entry.run, attempt: entry.attempt });
+    }
     let state = mem::replace(&mut entry.state, State::Closed);
     entry.state = match state {
         State::Preparing { reply_to, charter, snapshot, held } => {
@@ -518,7 +395,8 @@ pub(crate) fn unprepared(
     let state = mem::replace(&mut entry.state, State::Closed);
     entry.state = match state {
         // Nothing of the workspace is held: nothing to release.
-        State::Preparing { reply_to, .. } => {
+        State::Preparing { reply_to, held, .. } => {
+            bounce_held(held, entry.run, entry.attempt, out);
             let detail = tail(detail, &env.limits);
             let ending = Ending::Failed { failure: Failure::Unprepared(failure), detail };
             answer(entry, facts, reply_to, ending, None, out)
@@ -617,7 +495,7 @@ pub(crate) fn withdrawn(domain: &mut Domain, owner: Token, call: Token, out: &mu
     let entry = hosted.get_mut(id).expect("a run lives until its agent has gone");
     match &entry.state {
         State::Active { .. } | State::Waiting { .. } => withdraw(entry, calls, call, out),
-        // Its relays were answered as it left live, and its push goes on.
+        // Its relays were answered as it left live, and its delivery goes on.
         State::Stopping { .. } => {}
         State::Preparing { .. }
         | State::Cancelling { .. }
@@ -735,7 +613,8 @@ pub(crate) fn gone(domain: &mut Domain, env: &Env<Limits>, owner: Token, detail:
     let state = mem::replace(&mut entry.state, State::Closed);
     entry.state = match state {
         // Nothing ran: nothing to save.
-        State::Starting { reply_to, workspace, held: _ } => {
+        State::Starting { reply_to, workspace, held } => {
+            bounce_held(held, entry.run, entry.attempt, out);
             let ending = Ending::Failed { failure: Failure::Agent(AgentFailure::Unstarted), detail };
             release(entry, facts, reply_to, workspace, ending, None, out)
         }
@@ -761,63 +640,38 @@ pub(crate) fn gone(domain: &mut Domain, env: &Env<Limits>, owner: Token, detail:
     conclude(domain, id, out);
 }
 
-pub(crate) fn pushed(domain: &mut Domain, owner: Token, push: Box<[Landing]>, out: &mut Queue<Request>) {
+pub(crate) fn delivered(domain: &mut Domain, owner: Token, delivery: Delivery, out: &mut Queue<Request>) {
     let Domain { hosted, calls, .. } = domain;
     let call_id = Id::<Call>::from_token(owner);
-    let call = calls.get_mut(call_id).expect("a push's call lives until the push has settled");
+    let call = calls.get_mut(call_id).expect("a delivery call lives until it settles");
     let id = call.hosted;
     let state = mem::replace(&mut call.state, call::State::Closed);
     calls.retire(call_id);
-    let entry = hosted.get_mut(id).expect("a run lives until its push has settled");
-    assert!(entry.push == Some(call_id), "a run's push is its one push in flight");
-    entry.push = None;
-    let repositories = u32::try_from(push.len()).expect("as many as the workspace lists");
-    assert!(repositories == entry.repositories, "a push says what became of each repository");
-    for (landing, index) in push.iter().zip(0..repositories) {
-        match landing {
-            Landing::Landed { commit } => {
-                entry
-                    .landed
-                    .insert(
-                        *entry
-                            .tags
-                            .get(usize::try_from(index).expect("a repository index fits"))
-                            .expect("every repository has a tag"),
-                        *commit,
-                    )
-                    .expect("room for every repository");
-            }
-            Landing::Conflicted { .. }
-            | Landing::Moved
-            | Landing::Failed
-            | Landing::Refused
-            | Landing::Explained { .. }
-            | Landing::Unchanged => {}
-        }
+    let entry = hosted.get_mut(id).expect("a run lives until its delivery settles");
+    assert!(entry.delivery == Some(call_id), "one delivery is in flight");
+    entry.delivery = None;
+    if delivery.changed {
+        entry.left = Some(delivery.left);
     }
-    // Live or stopping, the run is told how it went; an agent that has gone
-    // drops it.
     match state {
-        call::State::Pushing { agent, call } => {
-            out.push(Request::Reply { agent, call, reply: Reply::Pushed(told(push)) });
+        call::State::Delivering { agent, call } => {
+            out.push(Request::Reply { agent, call, reply: Reply::Delivered(delivery) });
         }
         call::State::Relayed { .. } | call::State::Settling { .. } | call::State::Closed => {
-            unreachable!("a push ends once, and only a push's call")
+            unreachable!("only a delivery ends a delivery call")
         }
     }
     conclude(domain, id, out);
 }
 
-pub(crate) fn saved(domain: &mut Domain, owner: Token, save: Box<[Landing]>, out: &mut Queue<Request>) {
+pub(crate) fn saved(domain: &mut Domain, owner: Token, at: Option<Token>, out: &mut Queue<Request>) {
     let Domain { hosted, facts, .. } = domain;
     let id = Id::<Hosted>::from_token(owner);
-    let entry = hosted.get_mut(id).expect("a run lives until its save has settled");
-    let repositories = u32::try_from(save.len()).expect("as many as the workspace lists");
-    assert!(repositories == entry.repositories, "a save says what became of each repository");
+    let entry = hosted.get_mut(id).expect("a run lives until its save settles");
     let state = mem::replace(&mut entry.state, State::Closed);
     entry.state = match state {
         State::Saving { reply_to, workspace, ending } => {
-            release(entry, facts, reply_to, workspace, ending, Some(save), out)
+            release(entry, facts, reply_to, Some(workspace), ending, at, out)
         }
         State::Preparing { .. }
         | State::Cancelling { .. }
@@ -862,11 +716,15 @@ fn stop(domain: &mut Domain, _env: &Env<Limits>, id: Id<Hosted>, reason: Reason,
     let state = mem::replace(&mut entry.state, State::Closed);
     entry.state = match state {
         // A prepare in flight is abandoned, and its end waited for.
-        State::Preparing { reply_to, .. } => {
+        State::Preparing { reply_to, held, .. } => {
+            bounce_held(held, entry.run, entry.attempt, out);
             out.push(Request::Abort { owner: id.token() });
             State::Cancelling { reply_to, reason }
         }
-        State::Starting { reply_to, workspace, held: _ } => State::Unwanted { reply_to, workspace, reason },
+        State::Starting { reply_to, workspace, held } => {
+            bounce_held(held, entry.run, entry.attempt, out);
+            State::Unwanted { reply_to, workspace, reason }
+        }
         State::Active { reply_to, workspace, agent } | State::Waiting { reply_to, workspace, agent } => {
             let ending = Ending::Stopped { failure: Failure::Cancelled(reason), detail: Box::new([]) };
             leave(&entry.relays, calls, out);
@@ -889,7 +747,7 @@ fn conclude(domain: &mut Domain, id: Id<Hosted>, out: &mut Queue<Request>) {
     let Domain { hosted, names, ready, facts, .. } = domain;
     let entry = hosted.get_mut(id).expect("a run lives until it is retired");
     let settled = match &entry.state {
-        State::Stopping { gone, .. } => *gone && entry.push.is_none() && entry.relays.is_empty(),
+        State::Stopping { gone, .. } => *gone && entry.delivery.is_none() && entry.relays.is_empty(),
         State::Preparing { .. }
         | State::Cancelling { .. }
         | State::Starting { .. }
@@ -946,25 +804,20 @@ fn settle(
     facts: &mut Facts,
     id: Id<Hosted>,
     reply_to: ReplyTo,
-    workspace: Token,
+    workspace: Option<Token>,
     ending: Ending,
     out: &mut Queue<Request>,
 ) -> State {
-    let landed = match &ending {
-        Ending::Ended { .. } => !entry.landed.is_empty(),
+    let delivered_end = match &ending {
+        Ending::Ended { .. } => entry.left.is_some(),
         Ending::Parked { .. } | Ending::Failed { .. } | Ending::Stopped { .. } => false,
     };
-    let merging = match entry.runtime {
-        Runtime::Legacy => false,
-        Runtime::V2 { .. } => entry.merging,
-    };
-    let save = if landed || merging { None } else { entry.save.take() };
-    match save {
-        Some(branch) => {
-            out.push(Request::Save { owner: id.token(), workspace, branch });
+    match workspace {
+        Some(workspace) if entry.save && !delivered_end => {
+            out.push(Request::Save { owner: id.token(), workspace });
             State::Saving { reply_to, workspace, ending }
         }
-        None => release(entry, facts, reply_to, workspace, ending, None, out),
+        Some(_) | None => release(entry, facts, reply_to, workspace, ending, None, out),
     }
 }
 
@@ -973,12 +826,14 @@ fn release(
     entry: &Hosted,
     facts: &mut Facts,
     reply_to: ReplyTo,
-    workspace: Token,
+    workspace: Option<Token>,
     ending: Ending,
-    saved: Option<Box<[Landing]>>,
+    saved: Option<Token>,
     out: &mut Queue<Request>,
 ) -> State {
-    out.push(Request::Release { workspace });
+    if let Some(workspace) = workspace {
+        out.push(Request::Release { workspace });
+    }
     answer(entry, facts, reply_to, ending, saved, out)
 }
 
@@ -988,16 +843,11 @@ fn answer(
     facts: &mut Facts,
     reply_to: ReplyTo,
     ending: Ending,
-    saved: Option<Box<[Landing]>>,
+    saved: Option<Token>,
     out: &mut Queue<Request>,
 ) -> State {
     let (run, attempt) = (entry.run, entry.attempt);
-    let mut landed = List::with_capacity(entry.landed.len());
-    for (repository, commit) in &entry.landed {
-        let last = Landed { tag: *repository, commit: *commit };
-        landed.push(last).expect("room for every repository landed in");
-    }
-    let work = Work { landed: landed.into_boxed(), saved };
+    let work = Work { left: entry.left, saved };
     let answer = match ending {
         Ending::Ended { outcome } => {
             facts.push(Fact::Ended { run, attempt });
@@ -1034,6 +884,14 @@ fn hold(held: &mut Queue<NamedEvent>, event: NamedEvent, run: Token, attempt: To
     }
 }
 
+/// Return messages accepted during preparation when the run cannot start.
+fn bounce_held(mut held: Queue<NamedEvent>, run: Token, attempt: Token, out: &mut Queue<Request>) {
+    for _ in 0..held.len() {
+        let event = held.pop().expect("the queue held this many messages");
+        out.push(Request::Bounced { run, attempt, name: event.name, bounce: Bounce::Ending });
+    }
+}
+
 /// Serves the host call `call` of the live run `id`, through its workspace
 /// or the engine, or answers it as busy.
 #[expect(clippy::too_many_arguments, reason = "a cell handler takes the fields it touches")]
@@ -1041,7 +899,7 @@ fn serve(
     entry: &mut Hosted,
     calls: &mut Slab<Call>,
     id: Id<Hosted>,
-    workspace: Token,
+    workspace: Option<Token>,
     agent: Token,
     call: Token,
     ask: Ask,
@@ -1052,6 +910,14 @@ fn serve(
         out.push(Request::Reply { agent, call, reply: Reply::Unavailable });
         return;
     }
+    let delivery = match &ask {
+        Ask::Deliver { .. } | Ask::DeliverV2 { .. } => true,
+        Ask::Relay { .. } => false,
+    };
+    if delivery && workspace.is_none() {
+        out.push(Request::Reply { agent, call, reply: Reply::Unavailable });
+        return;
+    }
     match entry.runtime {
         Runtime::Legacy => {}
         Runtime::V2 { .. } => {
@@ -1059,7 +925,9 @@ fn serve(
                 let pending = calls.get(*pending).expect("the run owns every relay");
                 let name = match pending.state {
                     call::State::Relayed { call, .. } | call::State::Settling { call } => call,
-                    call::State::Pushing { .. } | call::State::Closed => unreachable!("the run keeps relay waits only"),
+                    call::State::Delivering { .. } | call::State::Closed => {
+                        unreachable!("the run keeps relay waits only")
+                    }
                 };
                 if name == call {
                     out.push(Request::Reply { agent, call, reply: Reply::Busy });
@@ -1068,17 +936,13 @@ fn serve(
             }
         }
     }
-    let in_flight = entry.relays.len().saturating_add(u32::from(entry.push.is_some()));
-    let push = match &ask {
-        Ask::Push { .. } | Ask::PushV2 { .. } => true,
-        Ask::Relay { .. } => false,
-    };
-    // A push is a write: one at a time.
-    if in_flight >= limits.run_calls || (push && entry.push.is_some()) {
+    let in_flight = entry.relays.len().saturating_add(u32::from(entry.delivery.is_some()));
+    // A delivery changes a workspace: one at a time.
+    if in_flight >= limits.run_calls || (delivery && entry.delivery.is_some()) {
         out.push(Request::Reply { agent, call, reply: Reply::Busy });
         return;
     }
-    let state = if push { call::State::Pushing { agent, call } } else { call::State::Relayed { agent, call } };
+    let state = if delivery { call::State::Delivering { agent, call } } else { call::State::Relayed { agent, call } };
     // Calls answered in this iteration keep their slots until the reclaim
     // point: a call may find none free even within its run's limit.
     let Ok(call_id) = calls.insert(Call { hosted: id, state }) else {
@@ -1086,13 +950,22 @@ fn serve(
         return;
     };
     match ask {
-        Ask::Push { message } => {
-            entry.push = Some(call_id);
-            out.push(Request::Push { owner: call_id.token(), workspace, message });
+        Ask::Deliver { message } => {
+            entry.delivery = Some(call_id);
+            out.push(Request::DeliverWorkspace {
+                owner: call_id.token(),
+                workspace: workspace.expect("a delivery has a workspace"),
+                message,
+            });
         }
-        Ask::PushV2 { title, body } => {
-            entry.push = Some(call_id);
-            out.push(Request::PushV2 { owner: call_id.token(), workspace, title, body });
+        Ask::DeliverV2 { title, body } => {
+            entry.delivery = Some(call_id);
+            out.push(Request::DeliverV2 {
+                owner: call_id.token(),
+                workspace: workspace.expect("a delivery has a workspace"),
+                title,
+                body,
+            });
         }
         Ask::Relay { body } => {
             let added = entry.relays.insert(call_id).expect("checked the run's calls for room above");
@@ -1114,7 +987,7 @@ fn serve(
 }
 
 /// The live run withdrew the call its agent names `call`: a relay in flight is
-/// answered as withdrawn, and closes. A push goes on, and is answered once it
+/// answered as withdrawn, and closes. A delivery goes on, and is answered once it
 /// settles; a call answered already is not found, and nothing happens.
 fn withdraw(entry: &mut Hosted, calls: &mut Slab<Call>, call: Token, out: &mut Queue<Request>) {
     let mut found = None;
@@ -1123,7 +996,7 @@ fn withdraw(entry: &mut Hosted, calls: &mut Slab<Call>, call: Token, out: &mut Q
         let named = match relayed.state {
             call::State::Relayed { agent: _, call: named } => named,
             call::State::Settling { .. } => continue,
-            call::State::Pushing { .. } | call::State::Closed => unreachable!("a run's relays are relayed calls"),
+            call::State::Delivering { .. } | call::State::Closed => unreachable!("a run's relays are relayed calls"),
         };
         if named == call {
             found = Some(*call_id);
@@ -1139,7 +1012,7 @@ fn withdraw(entry: &mut Hosted, calls: &mut Slab<Call>, call: Token, out: &mut Q
             relayed.state = call::State::Settling { call };
             out.push(Request::CancelRelay { call: call_id.token() });
         }
-        call::State::Settling { .. } | call::State::Pushing { .. } | call::State::Closed => {
+        call::State::Settling { .. } | call::State::Delivering { .. } | call::State::Closed => {
             unreachable!("found among the active relays")
         }
     }
@@ -1157,7 +1030,9 @@ fn leave(relays: &Set<Id<Call>>, calls: &mut Slab<Call>, out: &mut Queue<Request
                 out.push(Request::CancelRelay { call: call_id.token() });
             }
             call::State::Settling { .. } => {}
-            call::State::Pushing { .. } | call::State::Closed => unreachable!("the run holds only its pending relays"),
+            call::State::Delivering { .. } | call::State::Closed => {
+                unreachable!("the run holds only its pending relays")
+            }
         }
     }
 }
@@ -1165,12 +1040,12 @@ fn leave(relays: &Set<Id<Call>>, calls: &mut Slab<Call>, out: &mut Queue<Request
 fn ask_mode(runtime: &Runtime, ask: &Ask) -> bool {
     match runtime {
         Runtime::Legacy => match ask {
-            Ask::PushV2 { .. } => false,
-            Ask::Push { .. } | Ask::Relay { .. } => true,
+            Ask::DeliverV2 { .. } => false,
+            Ask::Deliver { .. } | Ask::Relay { .. } => true,
         },
         Runtime::V2 { .. } => match ask {
-            Ask::Push { .. } => false,
-            Ask::PushV2 { .. } | Ask::Relay { .. } => true,
+            Ask::Deliver { .. } => false,
+            Ask::DeliverV2 { .. } | Ask::Relay { .. } => true,
         },
     }
 }
@@ -1197,61 +1072,6 @@ fn explained(ending: Ending, detail: Box<[u8]>) -> Ending {
         Ending::Failed { failure, detail: _ } => Ending::Failed { failure, detail },
         Ending::Stopped { failure, detail: _ } => Ending::Stopped { failure, detail },
         ending @ (Ending::Ended { .. } | Ending::Parked { .. }) => ending,
-    }
-}
-
-/// What the run is told of a push: done only if every repository with a
-/// change landed it; moved if any branch moved; failed if the forge refused
-/// one, or one failed.
-fn told(push: Box<[Landing]>) -> Push {
-    let mut landed = false;
-    let mut moved = false;
-    let mut first = None;
-    let mut index = 0_u32;
-    for landing in push {
-        let failed = match landing {
-            Landing::Conflicted { files } => Some(Push::Conflicted { repository: index, files }),
-            Landing::Landed { .. } => {
-                landed = true;
-                None
-            }
-            Landing::Moved => {
-                moved = true;
-                None
-            }
-            Landing::Failed => Some(Push::Failed {
-                failure: crate::PushFailure {
-                    repository: Some(index),
-                    reason: crate::PushReason::Unknown,
-                    diagnostic: crate::PushDiagnostic::empty(),
-                },
-            }),
-            Landing::Refused => Some(Push::Failed {
-                failure: crate::PushFailure {
-                    repository: Some(index),
-                    reason: crate::PushReason::Refused,
-                    diagnostic: crate::PushDiagnostic::empty(),
-                },
-            }),
-            Landing::Explained { mut failure } => {
-                failure.repository = Some(index);
-                Some(Push::Failed { failure })
-            }
-            Landing::Unchanged => None,
-        };
-        if first.is_none() {
-            first = failed;
-        }
-        index = index.checked_add(1).expect("bounded repository count");
-    }
-    if moved {
-        Push::Moved
-    } else if let Some(failed) = first {
-        failed
-    } else if landed {
-        Push::Done
-    } else {
-        Push::Nothing
     }
 }
 
@@ -1355,24 +1175,50 @@ pub(crate) fn turned(
         | State::Saving { .. }
         | State::Closed => return,
     };
+    let can_hold = domain.turns.credit(entry.run, entry.attempt, &env.limits);
     let valid = match &mut entry.runtime {
         Runtime::Legacy => false,
-        Runtime::V2 { turns, spent, .. } => {
-            if turns.checked_add(1) != Some(turn.turn) || turn.spent < *spent || len(&turn.body) > env.limits.turn_bytes
-            {
+        Runtime::V2 { turns, .. } => {
+            if !can_hold || turns.checked_add(1) != Some(turn.turn) || len(&turn.body) > env.limits.turn_bytes {
                 false
             } else {
                 *turns = turn.turn;
-                *spent = turn.spent;
                 true
             }
         }
     };
     if valid {
-        out.push(Request::Turn { agent, run: entry.run, attempt: entry.attempt, turn });
+        let (run, attempt) = (entry.run, entry.attempt);
+        let sent = crate::Turn { turn: turn.turn, spent: turn.spent, read: turn.read, body: copy_of(&turn.body) };
+        let read = domain.turns.retain(agent, run, attempt, turn, &env.limits);
+        out.push(Request::Turn { agent, run, attempt, turn: sent });
+        out.push(Request::TurnCredit { agent, read });
     } else {
         faulted(domain, env, owner, AgentFailure::Rules, out);
     }
+}
+
+/// Release a committed turn and resume the agent reader when room returns.
+pub(crate) fn acknowledge_turn(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    run: Token,
+    attempt: Token,
+    turn: u32,
+    out: &mut Queue<Request>,
+) {
+    if let Some(agent) = domain.turns.acknowledge(run, attempt, turn) {
+        let read = domain.turns.credit(run, attempt, &env.limits);
+        out.push(Request::TurnCredit { agent, read });
+    }
+}
+
+/// Keep a live agent fact for the engine, dropping it when bounded room is full.
+pub(crate) fn told(domain: &mut Domain, env: &Env<Limits>, owner: Token, fact: Box<[u8]>) {
+    let Some(hosting) = domain.hosting(owner) else {
+        return;
+    };
+    domain.told.push(Told { run: hosting.run, attempt: hosting.attempt, fact }, env.limits.fact_bytes);
 }
 
 pub(crate) fn finished_v2(
@@ -1390,11 +1236,11 @@ pub(crate) fn finished_v2(
     let valid = match &mut entry.runtime {
         Runtime::Legacy => false,
         Runtime::V2 { turns: taken, spent: total, .. } => {
-            if turns != *taken || spent < *total {
-                false
-            } else {
+            if turns == *taken {
                 *total = spent;
                 true
+            } else {
+                false
             }
         }
     };

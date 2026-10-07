@@ -287,6 +287,7 @@ pub enum Output {
 #[derive(Debug)]
 pub struct Decision {
     limits: Limits,
+    reserved: JournalRoom,
     writes: List<Write>,
     deliveries: Queue<Delivery>,
     overrun: bool,
@@ -307,7 +308,8 @@ impl Decision {
     /// Root-only preflight of unused write/delivery slots before a synchronous
     /// role replacement; no reservation can interleave with another mutation
     pub(crate) fn room_for(&self, writes: u32, deliveries: u32) -> bool {
-        self.writes.room() >= writes && self.deliveries.room() >= deliveries
+        self.reserved.writes.saturating_sub(self.writes.len().saturating_add(1)) >= writes
+            && self.reserved.held.saturating_sub(self.deliveries.len()) >= deliveries
     }
 
     /// Allocate one transient decision from validated startup limits; no effect is issued until
@@ -317,6 +319,7 @@ impl Decision {
         assert!(worst_case(limits).is_some(), "valid root journal limits");
         Decision {
             limits: *limits,
+            reserved: room(limits),
             writes: List::with_capacity(limits.writes.checked_sub(1).expect("header slot reserved")),
             deliveries: Queue::with_capacity(limits.deliveries),
             overrun: false,
@@ -326,8 +329,17 @@ impl Decision {
 
     /// Reserve the generic journal's worst-case room before routing a child.
     pub fn reserve(journal: &mut Journal, limits: &Limits) -> Option<Decision> {
-        let batch = journal.decision(&room(limits))?;
+        Self::reserve_room(journal, limits, room(limits))
+    }
+
+    /// Reserve a route's checked write and held-output counts before any child changes.
+    pub(crate) fn reserve_room(journal: &mut Journal, limits: &Limits, reserved: JournalRoom) -> Option<Decision> {
+        if reserved.writes == 0 || reserved.writes > limits.writes || reserved.held > limits.deliveries {
+            return None;
+        }
+        let batch = journal.decision(&reserved)?;
         let mut decision = Decision::new(limits);
+        decision.reserved = reserved;
         decision.batch = Some(batch);
         Some(decision)
     }
@@ -391,6 +403,10 @@ impl Decision {
                 *previous = write;
                 return Ok(());
             }
+        }
+        if self.writes.len() >= self.reserved.writes.checked_sub(1).expect("header slot reserved") {
+            self.overrun = true;
+            return Err(write);
         }
         let result = self.writes.push(write);
         if result.is_err() {
@@ -519,6 +535,10 @@ impl Decision {
             | Delivery::Load { .. } => true,
         };
         if !within {
+            return Err(delivery);
+        }
+        if self.deliveries.len() >= self.reserved.held {
+            self.overrun = true;
             return Err(delivery);
         }
         let result = self.deliveries.try_push(delivery);

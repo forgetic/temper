@@ -65,6 +65,23 @@ fn granted(value: people::Authority, limits: &tasks::Limits) -> Option<tasks::Au
             })
             .ok()?;
     }
+    let mut note_resources = List::with_capacity(limits.authority_grants);
+    for scope in value.note_resources {
+        let mut segments = List::with_capacity(limits.authority_segments);
+        for segment in scope.pattern.segments {
+            segments.push(segment).ok()?;
+        }
+        let last = match scope.pattern.last {
+            people::Last::Exact(word) => tasks::Last::Exact(word),
+            people::Last::Open(word) => tasks::Last::Open(word),
+        };
+        note_resources
+            .push(tasks::ResourceScope {
+                connector: scope.connector,
+                pattern: tasks::Pattern { segments: segments.into_boxed(), last },
+            })
+            .ok()?;
+    }
     let mut kinds = List::with_capacity(limits.executor_kinds);
     for kind in value.delegation.kinds {
         kinds
@@ -85,6 +102,7 @@ fn granted(value: people::Authority, limits: &tasks::Limits) -> Option<tasks::Au
         },
         budget: tasks::Budget { spend: value.spend, deadline: value.deadline },
         notes: tasks::Scopes(value.notes),
+        note_resources: note_resources.into_boxed(),
     })
 }
 

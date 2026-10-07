@@ -1,5 +1,5 @@
 [package]
-name = "temper-worker-host-world"
+name = "jig-worker-host-world"
 description = "The host child domain's world: a simulation with a scripted engine, workspaces and agents"
 version.workspace = true
 edition.workspace = true
@@ -8,8 +8,8 @@ publish.workspace = true
 
 [dependencies]
 skein-lib.workspace = true
-temper-worker-domain-host.workspace = true
-temper-world.workspace = true
+jig-worker-host.workspace = true
+skein-world.workspace = true
 
 # Ordinary Rust (programming-model.md, 10.2), so not the step crates' lints.
 # tests/clippy.toml bans what would make a run unrepeatable.

@@ -2,9 +2,51 @@
 
 use alloc::boxed::Box;
 
-use skein_lib::Queue;
+use skein_lib::{List, Queue};
 
-use crate::{Authority, Grant, Last, Name, Numbers, Pattern, left};
+use crate::{Authority, Grant, Last, Limits, Name, Numbers, Pattern, left};
+
+/// Resolve open-prefix symbolic grants after the root assigns a task number.
+/// Each terminal gains that number in decimal, so its resulting pattern is a
+/// subset of the prefix checked with the creator's batch. Returns `None` when
+/// the result exceeds admission bounds; callers then refuse the whole batch.
+#[must_use]
+pub fn resolve_task_grants(symbolic: &[Grant], task: u64, limits: &Limits) -> Option<Box<[Grant]>> {
+    if u32::try_from(symbolic.len()).ok()? > limits.grants {
+        return None;
+    }
+    let mut decimal = [0_u8; 20];
+    let mut at = decimal.len();
+    let mut remaining = task;
+    for _ in 0..decimal.len() {
+        at = at.checked_sub(1)?;
+        *decimal.get_mut(at)? = b'0'.checked_add(u8::try_from(remaining % 10).ok()?)?;
+        remaining /= 10;
+        if remaining == 0 {
+            break;
+        }
+    }
+    if remaining != 0 {
+        return None;
+    }
+    let mut resolved = List::with_capacity(limits.grants);
+    for grant in symbolic {
+        let Last::Open(prefix) = &grant.pattern.last else { return None };
+        let mut terminal = List::with_capacity(limits.segment_bytes);
+        for byte in prefix {
+            terminal.push(*byte).ok()?;
+        }
+        for byte in decimal.get(at..)? {
+            terminal.push(*byte).ok()?;
+        }
+        let pattern = Pattern { segments: grant.pattern.segments.clone(), last: Last::Exact(terminal.into_boxed()) };
+        if !crate::limits::pattern_within(&pattern, limits) {
+            return None;
+        }
+        resolved.push(Grant { connector: grant.connector, kind: grant.kind, pattern }).ok()?;
+    }
+    Some(resolved.into_boxed())
+}
 
 /// One component deficit emitted by the pure `fits` query, without modifying either authority
 /// value. (domain/authority.md, sections 4–5).
@@ -325,6 +367,18 @@ pub(crate) fn differences(
         }
         if !covered {
             lacks.grants = true;
+        }
+    }
+    for scope in &a.note_resources {
+        let mut covered = false;
+        for ceiling in &b.note_resources {
+            if scope.connector == ceiling.connector && pattern_at_most(&scope.pattern, &ceiling.pattern) {
+                covered = true;
+                break;
+            }
+        }
+        if !covered {
+            lacks.notes = true;
         }
     }
     lacks

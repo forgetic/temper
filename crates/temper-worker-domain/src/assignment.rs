@@ -4,23 +4,23 @@
 //! workspace. It holds the charter and the snapshot until the agent starts,
 //! and its parent relies on the workspace fitting the limits.
 
-use crate::boundary::{Access, Assignment, Invalid, Repository, Start};
-use crate::limits::Limits;
+use crate::Limits;
+use crate::wire::{Access, Assignment, Invalid, Repository, Start};
 
 /// Whether `assignment` fits `limits`, and what about it does not.
 pub(crate) fn check(assignment: &Assignment, limits: &Limits, next: bool) -> Result<(), Invalid> {
-    if len(&assignment.charter) > limits.charter_bytes {
+    if len(&assignment.charter) > limits.host.charter_bytes {
         return Err(Invalid::Charter);
     }
     if let Some(snapshot) = &assignment.snapshot
-        && len(snapshot) > limits.snapshot_bytes
+        && len(snapshot) > limits.host.snapshot_bytes
     {
         return Err(Invalid::Snapshot);
     }
     if let Some(branch) = &assignment.save {
         name(branch, limits)?;
     }
-    if u64::try_from(assignment.grants.len()).expect("a length fits") > u64::from(limits.accounts) {
+    if u64::try_from(assignment.grants.len()).expect("a length fits") > u64::from(limits.host.accounts) {
         return Err(Invalid::Grants);
     }
     for (index, grant) in assignment.grants.iter().enumerate() {
@@ -33,7 +33,7 @@ pub(crate) fn check(assignment: &Assignment, limits: &Limits, next: bool) -> Res
     let workspace = &assignment.workspace;
     name(&workspace.key, limits)?;
     let count = u64::try_from(workspace.repositories.len()).expect("a length fits in a u64");
-    if count == 0 || count > u64::from(limits.repositories) {
+    if count == 0 || count > u64::from(limits.checkout.repositories) {
         return Err(Invalid::Repositories);
     }
     for repository in &workspace.repositories {
@@ -60,7 +60,7 @@ fn repository(repository: &Repository, limits: &Limits, next: bool) -> Result<()
         }
         Start::Commit { .. } => {}
         Start::Merge { branch, .. } => {
-            if !next || limits.conflicts == 0 {
+            if !next || limits.checkout.conflicts == 0 {
                 return Err(Invalid::Version);
             }
             name(branch, limits)?;
@@ -80,7 +80,7 @@ fn repository(repository: &Repository, limits: &Limits, next: bool) -> Result<()
 
 /// A name is at least a byte, and at most the limit.
 fn name(bytes: &[u8], limits: &Limits) -> Result<(), Invalid> {
-    if bytes.is_empty() || len(bytes) > u64::from(limits.name_bytes) {
+    if bytes.is_empty() || len(bytes) > u64::from(limits.checkout.name_bytes) {
         return Err(Invalid::Name);
     }
     Ok(())

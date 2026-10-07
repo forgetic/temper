@@ -14,7 +14,7 @@
 
 //!
 //! Entry contracts: `check_*` borrow admitted snapshots, return one answer
-//! and write bounded findings; the root supplies authentic facts and commits
+//! and write bounded findings; the root supplies connector verdicts and commits
 //! allowed numbers with actions exactly once (domain/authority.md, sections
 //! 7–9). `at_most`, coverage and accounting functions are pure value queries,
 //! not child event protocols. Callers bound owned inputs before these queries;
@@ -33,7 +33,6 @@ extern crate alloc;
 mod boundary;
 mod check;
 mod domain;
-mod landing;
 mod limits;
 mod numbers;
 mod order;
@@ -41,25 +40,22 @@ mod rules;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
-mod tests_landing;
-#[cfg(test)]
 mod tests_numbers;
 #[cfg(test)]
 mod tests_policy;
 mod value;
 
 pub use boundary::{
-    Action, Answer, BatchAsk, Call, CallAsk, Checked, Ci, Delegate, Effect, EffectAsk, Fact, Finding, Head, Holder,
-    Landing, PersonAsk, PersonRequest, Review, RunAsk, Source, Status, Verdict, Write, Writer,
+    Action, Answer, BatchAsk, Call, CallAsk, Checked, Delegate, Effect, EffectAsk, Finding, Given, Holder, NoteScope,
+    PersonAsk, PersonRequest, RunAsk, Source, Verdict, Write, Writer,
 };
-pub use check::{check_batch, check_call, check_effect, check_request, check_run, covers, needs};
+pub use check::{check_batch, check_call, check_effect, check_request, check_run, covers, needed_judges, needs};
 pub use domain::{Domain, Event, POLICY_MAX_OUT, PolicyFact, PolicyRefusal, step};
 pub use limits::{Limits, max_out, worst_case};
 pub use numbers::{Charged, Numbers, carve, charge, left, settle};
 pub use order::{FITS_MAX_OUT, Lack, Lacks, fits};
-pub use order::{Implication, Implies, at_most, grant_at_most, grant_covers, pattern_at_most, pattern_covers};
-pub use rules::{
-    Approval, Freshness, Gate, LandingRule, Policy, ProposalKind, Proposals, RequestKind, Requests, Requirement, Role,
-    Rules,
+pub use order::{
+    Implication, Implies, at_most, grant_at_most, grant_covers, pattern_at_most, pattern_covers, resolve_task_grants,
 };
-pub use value::{Authority, Budget, Delegation, Executor, Grant, Last, Name, Pattern, Scopes, Tools};
+pub use rules::{Guard, Judge, Policy, ProposalKind, Proposals, RequestKind, Requests, Requirement, Role, Rules};
+pub use value::{Authority, Budget, Delegation, Executor, Grant, Last, Name, Pattern, ResourceScope, Scopes, Tools};

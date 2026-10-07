@@ -57,10 +57,11 @@
 
 use alloc::boxed::Box;
 
+use crate::wire;
+use jig_worker_host as host;
 use skein_lib::bytes::copy_of;
 use skein_lib::{Deadlines, Duration, Env, List, Map, Queue, Rng, Time, Token};
 use temper_worker_domain_checkout as checkout;
-use temper_worker_domain_host as host;
 
 use crate::boundary::{Hello, Hosted, Phase, Request};
 use crate::limits::{self, Limits};
@@ -83,7 +84,7 @@ pub(crate) struct Link {
     shut: bool,
     /// The answers the engine has yet to acknowledge, by the names of their
     /// runs and attempts: sent, or waiting for a channel.
-    answers: Map<Named, host::Answer>,
+    answers: Map<Named, wire::Answer>,
     /// Relays and bounces made while the channel was down, oldest first.
     relays: Queue<Relay>,
     bounces: Queue<Bounced>,
@@ -134,7 +135,7 @@ pub(crate) struct Bounced {
     pub(crate) run: Token,
     pub(crate) attempt: Token,
     pub(crate) name: Token,
-    pub(crate) bounce: host::Bounce,
+    pub(crate) bounce: wire::Bounce,
 }
 
 /// What the link's alarm, fired, asks of its parent.
@@ -210,7 +211,7 @@ impl Link {
     }
 
     /// Fires the link's alarm due at `env.now`, if there is one.
-    pub(crate) fn fire(&mut self, env: &Env<Limits>, out: &mut Queue<Request>) -> Option<Fired> {
+    pub(crate) fn fire(&mut self, env: &Env<Limits>, host: &host::Domain, out: &mut Queue<Request>) -> Option<Fired> {
         let turn_due = match self.turns.next_deadline() {
             Some(at) => {
                 at <= env.now
@@ -222,7 +223,7 @@ impl Link {
             None => false,
         };
         if turn_due {
-            self.turns.fire(env.now, self.v2 && self.is_up(), out);
+            self.turns.fire(env.now, self.v2 && self.is_up(), host, out);
             return Some(Fired::Turn);
         }
         let alarm = self.alarms.expire(env.now)?;
@@ -244,13 +245,31 @@ impl Link {
     pub(crate) fn refuse_version(&self, run: Token, attempt: Token, out: &mut Queue<Request>) {
         assert!(self.is_up(), "an assignment arrives on an open channel");
         if self.v2 {
-            let ending = host::EndingV2::Refused(host::Refusal::Invalid(host::Invalid::Version));
-            out.push(Request::AnswerV2 { run, attempt, answer: host::AnswerV2 { turns: 0, spent: 0, ending } });
+            let ending = wire::EndingV2::Refused(wire::Refusal::Invalid(wire::Invalid::Version));
+            out.push(Request::AnswerV2 { run, attempt, answer: wire::AnswerV2 { turns: 0, spent: 0, ending } });
         } else {
             // Charter is the v1 unsupported-lifecycle refusal; its frozen
             // schema has no version-specific invalid code.
-            let answer = host::Answer::Refused(host::Refusal::Invalid(host::Invalid::Charter));
+            let answer = wire::Answer::Refused(wire::Refusal::Invalid(wire::Invalid::Charter));
             out.push(Request::Answer { run, attempt, answer });
+        }
+    }
+
+    /// Refuse an assignment whose application workspace cannot be admitted.
+    pub(crate) fn refuse(
+        &self,
+        run: Token,
+        attempt: Token,
+        refusal: wire::Refusal,
+        next: bool,
+        out: &mut Queue<Request>,
+    ) {
+        assert!(self.is_up(), "an assignment arrives on an open channel");
+        if next {
+            let ending = wire::EndingV2::Refused(refusal);
+            out.push(Request::AnswerV2 { run, attempt, answer: wire::AnswerV2 { turns: 0, spent: 0, ending } });
+        } else {
+            out.push(Request::Answer { run, attempt, answer: wire::Answer::Refused(refusal) });
         }
     }
 
@@ -303,10 +322,10 @@ impl Link {
     /// The answer for the run `run`'s attempt `attempt`: kept until the engine
     /// acknowledges it, or the worker gives it up, and sent now if there is a
     /// channel. A refusal goes once, now.
-    pub(crate) fn answer(&mut self, run: Token, attempt: Token, answer: host::Answer, out: &mut Queue<Request>) {
+    pub(crate) fn answer(&mut self, run: Token, attempt: Token, answer: wire::Answer, out: &mut Queue<Request>) {
         let refused = match answer {
-            host::Answer::Refused(_) => true,
-            host::Answer::Ended { .. } | host::Answer::Parked { .. } | host::Answer::Failed { .. } => false,
+            wire::Answer::Refused(_) => true,
+            wire::Answer::Ended { .. } | wire::Answer::Parked { .. } | wire::Answer::Failed { .. } => false,
         };
         if refused {
             // An assignment comes on an open channel, and is refused in the
@@ -326,9 +345,9 @@ impl Link {
 
     /// The engine has the answer for the run `run`'s attempt `attempt`. One
     /// the link does not keep was acknowledged already, or was a refusal.
-    pub(crate) fn acknowledged(&mut self, run: Token, attempt: Token) {
+    pub(crate) fn acknowledged(&mut self, run: Token, attempt: Token, host: &host::Domain) {
         self.answers.remove(&Named { run, attempt });
-        self.turns.answer_acknowledged(run, attempt);
+        self.turns.answer_acknowledged(run, attempt, host);
     }
 
     /// A relay for the engine: now if the channel is open, kept until it is
@@ -386,7 +405,7 @@ impl Link {
     /// relays their calls still wait for and the bounces after them.
     pub(crate) fn hello(
         &mut self,
-        runs: &[host::Hosting],
+        runs: &[wire::Hosting],
         host: &host::Domain,
         checkout: &checkout::Domain,
         limits: &Limits,
@@ -420,7 +439,7 @@ impl Link {
                 graces: limits::declared_graces(limits).expect("startup checked the stop bound"),
                 push_deadline: limits::push_deadline(limits).expect("startup checked push bound"),
             });
-            self.turns.hello(out);
+            self.turns.hello(host, out);
         } else {
             out.push(Request::Hello { hello });
         }
@@ -451,11 +470,11 @@ impl Link {
     /// A worker shutting down, out of reach past the grace, gives up the
     /// answers it keeps. Its parent calls this once no run is left: no answer
     /// is to come that a channel opening could deliver with the rest.
-    pub(crate) fn give_up(&mut self) {
+    pub(crate) fn give_up(&mut self, host: &host::Domain) -> bool {
         if !(self.shut && self.past) {
-            return;
+            return false;
         }
-        self.turns.give_up();
+        self.turns.give_up(host);
         for _ in 0..self.answers.capacity() {
             let Some((named, _)) = self.answers.first() else {
                 break;
@@ -464,6 +483,7 @@ impl Link {
             self.answers.remove(&named);
             self.abandoned = self.abandoned.saturating_add(1);
         }
+        true
     }
 
     pub(crate) fn connected_v2(&mut self) {
@@ -473,35 +493,19 @@ impl Link {
     pub(crate) fn is_v2(&self) -> bool {
         self.v2
     }
-    pub(crate) fn retained_turns(&self) -> u32 {
-        self.turns.pending()
-    }
-    pub(crate) fn answer_v2(&mut self, run: Token, attempt: Token, answer: host::AnswerV2, out: &mut Queue<Request>) {
+    pub(crate) fn answer_v2(&mut self, run: Token, attempt: Token, answer: wire::AnswerV2, out: &mut Queue<Request>) {
         self.turns.answer(run, attempt, answer, self.v2 && self.is_up(), out);
     }
-    pub(crate) fn turn(
-        &mut self,
-        agent: Token,
-        run: Token,
-        attempt: Token,
-        turn: host::Turn,
-        limits: &Limits,
-        out: &mut Queue<Request>,
-    ) -> bool {
-        self.turns.retain(agent, run, attempt, turn, limits, self.v2 && self.is_up(), out)
+    pub(crate) fn turn(&mut self, run: Token, attempt: Token, turn: wire::Turn, out: &mut Queue<Request>) {
+        if self.v2 && self.is_up() {
+            out.push(Request::Turn { run, attempt, turn });
+        }
     }
-    pub(crate) fn turn_acknowledged(
-        &mut self,
-        run: Token,
-        attempt: Token,
-        turn: u32,
-        limits: &Limits,
-    ) -> Option<Token> {
-        let agent = self.turns.acknowledge(run, attempt, turn)?;
-        if self.turns.credit(run, attempt, limits) { Some(agent) } else { None }
+    pub(crate) fn turn_acknowledged(&mut self, run: Token, attempt: Token, turn: u32, host: &host::Domain) {
+        self.turns.acknowledge_turn(run, attempt, turn, host);
     }
-    pub(crate) fn turn_busy(&mut self, run: Token, attempt: Token, turn: u32, env: &Env<Limits>) {
-        self.turns.busy(run, attempt, turn, env);
+    pub(crate) fn turn_busy(&mut self, run: Token, attempt: Token, turn: u32, env: &Env<Limits>, host: &host::Domain) {
+        self.turns.busy(run, attempt, turn, env, host);
     }
 
     /// How long to wait before the next dial: the backoff for the dials failed
@@ -525,21 +529,21 @@ fn request(relay: Relay) -> Request {
 }
 
 /// A copy of `answer`, to send while the link keeps it.
-fn copy(answer: &host::Answer) -> host::Answer {
+fn copy(answer: &wire::Answer) -> wire::Answer {
     match answer {
-        host::Answer::Refused(refusal) => host::Answer::Refused(*refusal),
-        host::Answer::Ended { outcome, work } => {
-            host::Answer::Ended { outcome: copy_of(outcome), work: copy_work(work) }
+        wire::Answer::Refused(refusal) => wire::Answer::Refused(*refusal),
+        wire::Answer::Ended { outcome, work } => {
+            wire::Answer::Ended { outcome: copy_of(outcome), work: copy_work(work) }
         }
-        host::Answer::Parked { snapshot, work } => {
-            host::Answer::Parked { snapshot: snapshot.clone(), work: copy_work(work) }
+        wire::Answer::Parked { snapshot, work } => {
+            wire::Answer::Parked { snapshot: snapshot.clone(), work: copy_work(work) }
         }
-        host::Answer::Failed { failure, detail, work } => {
-            host::Answer::Failed { failure: *failure, detail: copy_of(detail), work: copy_work(work) }
+        wire::Answer::Failed { failure, detail, work } => {
+            wire::Answer::Failed { failure: *failure, detail: copy_of(detail), work: copy_work(work) }
         }
     }
 }
 
-fn copy_work(work: &host::Work) -> host::Work {
-    host::Work { landed: work.landed.clone(), saved: work.saved.clone() }
+fn copy_work(work: &wire::Work) -> wire::Work {
+    wire::Work { landed: work.landed.clone(), saved: work.saved.clone() }
 }

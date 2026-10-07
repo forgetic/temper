@@ -4,14 +4,15 @@
 use alloc::boxed::Box;
 use core::mem::{size_of, size_of_val};
 
-use skein_lib::{Map, Queue, Wall, bytes::copy_of};
+use skein_lib::{Duration, Map, Queue, Wall, bytes::copy_of};
 
 use crate::{
     Action, Answer, Authority, BatchAsk, Budget, Call, CallAsk, Delegate, Delegation, Domain, Effect, EffectAsk, Event,
-    FITS_MAX_OUT, Fact, Finding, Grant, Holder, Implication, Implies, Lack, Last, Limits, Name, Numbers,
+    FITS_MAX_OUT, Finding, Given, Grant, Guard, Holder, Implication, Implies, Judge, Lack, Last, Limits, Name, Numbers,
     POLICY_MAX_OUT, Pattern, PersonAsk, PersonRequest, Policy, PolicyFact, PolicyRefusal, ProposalKind, Proposals,
-    Requests, Requirement, Role, Rules, RunAsk, Scopes, Source, Status, Tools, Write, Writer, at_most, check_batch,
-    check_call, check_effect, check_request, check_run, covers, fits, max_out, needs, step, worst_case,
+    Requests, Requirement, Role, Rules, RunAsk, Scopes, Source, Tools, Verdict, Write, Writer, at_most, check_batch,
+    check_call, check_effect, check_request, check_run, covers, fits, max_out, needs, resolve_task_grants, step,
+    worst_case,
 };
 
 const LIMITS: Limits = Limits {
@@ -27,12 +28,6 @@ const LIMITS: Limits = Limits {
     batch: 3,
     accounts: 2,
     writes: 2,
-    landing_rules: 0,
-    gates: 0,
-    approvals: 0,
-    heads: 0,
-    verdicts: 0,
-    reviews: 0,
 };
 
 fn numbers(budget: u64) -> Numbers {
@@ -53,12 +48,20 @@ fn authority() -> Authority {
             depth: 5,
         },
         budget: Budget { spend: 100, deadline: None },
-        notes: Scopes(15),
+        notes: Scopes(7),
+        note_resources: Box::new([crate::ResourceScope { connector: 1, pattern: pattern() }]),
     }
 }
 
 fn requirement(fact: u16) -> Requirement {
-    Requirement { connector: 1, kind: 1, pattern: pattern(), facts: Box::new([fact]) }
+    Requirement {
+        connector: 1,
+        kind: 1,
+        pattern: pattern(),
+        judge: Judge { connector: 1, requirement: fact, parameters: 0 },
+        guard: Guard::Observed { freshness: Duration::from_secs(1) },
+        must_be_guarded: false,
+    }
 }
 
 fn rules(ceiling: Authority) -> Rules {
@@ -77,7 +80,6 @@ fn rules(ceiling: Authority) -> Rules {
         )
         .unwrap(),
         requirements: Box::new([requirement(7)]),
-        landing: Box::new([]),
     }
 }
 
@@ -92,7 +94,6 @@ fn policy(ceiling: Authority) -> Policy {
         ceiling,
         period_spend: 500,
         requirements: Box::new([requirement(8)]),
-        landing: Box::new([]),
     }
 }
 
@@ -120,12 +121,22 @@ fn findings(domain: &Domain) -> Queue<Finding> {
 }
 
 fn effect() -> Effect {
-    Effect { connector: 1, kind: 1, name: Name { segments: Box::new([copy_of(b"repo")]) }, state: [1; 32] }
+    Effect {
+        connector: 1,
+        kind: 1,
+        name: Name { segments: Box::new([copy_of(b"repo")]) },
+        state: [1; 32],
+        guards: Box::new([]),
+    }
 }
 
-fn fact(kind: u16, status: Status) -> Fact {
-    let effect = effect();
-    Fact { connector: effect.connector, kind, name: effect.name, state: effect.state, status }
+fn fact(kind: u16, status: Verdict) -> Given {
+    Given {
+        judge: Judge { connector: 1, requirement: kind, parameters: 0 },
+        verdict: status,
+        at: Wall::from_nanos(0),
+        state: effect().state,
+    }
 }
 
 fn child(spend: u64) -> Delegate {
@@ -133,7 +144,7 @@ fn child(spend: u64) -> Delegate {
     child.budget.spend = spend;
     child.delegation.tasks = 0;
     child.delegation.depth = 0;
-    Delegate { executor: crate::Executor::Charter(1), authority: child }
+    Delegate { executor: crate::Executor::Charter(1), authority: child, symbolic: Box::new([]) }
 }
 
 fn saw(why: &Queue<Finding>, finding: Finding) -> bool {
@@ -149,7 +160,7 @@ fn saw(why: &Queue<Finding>, finding: Finding) -> bool {
 fn effect_cells_use_pinned_facts_and_the_independent_strictest_statement() {
     for task_granted in [false, true] {
         for project_granted in [false, true] {
-            for status in [Status::Unknown, Status::Pending, Status::Passed, Status::Failed] {
+            for status in [Verdict::Wait, Verdict::Met, Verdict::Refuse] {
                 for pinned in [false, true] {
                     let mut ceiling = authority();
                     if !project_granted {
@@ -160,18 +171,18 @@ fn effect_cells_use_pinned_facts_and_the_independent_strictest_statement() {
                     if !task_granted {
                         task.grants = Box::new([]);
                     }
-                    let ask = EffectAsk { project: 1, authority: task, effect: effect(), landing: None };
+                    let ask = EffectAsk { project: 1, authority: task, effect: effect(), now: Wall::from_nanos(0) };
                     let mut reported = fact(7, status);
                     if !pinned {
                         reported.state = [2; 32];
                     }
                     let mut why = findings(&domain);
-                    let actual = check_effect(&domain, &ask, &[reported, fact(8, Status::Passed)], &mut why);
-                    let expected = if !project_granted || (pinned && status == Status::Failed) {
+                    let actual = check_effect(&domain, &ask, &[reported, fact(8, Verdict::Met)], &mut why);
+                    let expected = if !project_granted || (pinned && status == Verdict::Refuse) {
                         Answer::Refuse
                     } else if !task_granted {
                         Answer::Propose
-                    } else if !pinned || status != Status::Passed {
+                    } else if !pinned || status != Verdict::Met {
                         Answer::Wait
                     } else {
                         Answer::Allow
@@ -186,35 +197,30 @@ fn effect_cells_use_pinned_facts_and_the_independent_strictest_statement() {
         }
     }
     let domain = domain();
-    let ask = EffectAsk { project: 1, authority: authority(), effect: effect(), landing: None };
+    let ask = EffectAsk { project: 1, authority: authority(), effect: effect(), now: Wall::from_nanos(0) };
     for wrong in 0_u8..3 {
-        let mut reported = fact(7, Status::Passed);
+        let mut reported = fact(7, Verdict::Met);
         match wrong {
-            0 => reported.connector = 2,
-            1 => reported.kind = 9,
-            _ => reported.name.segments = Box::new([copy_of(b"other")]),
+            0 => reported.judge.connector = 2,
+            1 => reported.judge.requirement = 9,
+            _ => reported.judge.parameters = 9,
         }
         let mut why = findings(&domain);
-        assert_eq!(check_effect(&domain, &ask, &[reported, fact(8, Status::Passed)], &mut why), Answer::Wait);
+        assert_eq!(check_effect(&domain, &ask, &[reported, fact(8, Verdict::Met)], &mut why), Answer::Wait);
     }
     let mut why = findings(&domain);
     assert_eq!(
         check_effect(
             &domain,
             &ask,
-            &[fact(7, Status::Passed), fact(7, Status::Failed), fact(8, Status::Passed)],
+            &[fact(7, Verdict::Met), fact(7, Verdict::Refuse), fact(8, Verdict::Met)],
             &mut why
         ),
         Answer::Refuse
     );
     let mut why = findings(&domain);
     assert_eq!(
-        check_effect(
-            &domain,
-            &ask,
-            &[fact(7, Status::Passed), fact(7, Status::Pending), fact(8, Status::Passed)],
-            &mut why
-        ),
+        check_effect(&domain, &ask, &[fact(7, Verdict::Met), fact(7, Verdict::Wait), fact(8, Verdict::Met)], &mut why),
         Answer::Wait
     );
     let mut why = findings(&domain);
@@ -242,6 +248,53 @@ fn effect_cells_use_pinned_facts_and_the_independent_strictest_statement() {
     let mut why = findings(&domain);
     assert_eq!(check_effect(&domain, &huge, &[], &mut why), Answer::Refuse);
     assert!(saw(&why, Finding::Oversized), "names are refused at admission");
+}
+
+#[test]
+fn generic_judges_obey_guard_and_observation_cells() {
+    for guarded in [false, true] {
+        for effect_guards in [false, true] {
+            for verdict in [Verdict::Met, Verdict::Wait, Verdict::Refuse] {
+                for age in [0, 1_000_000_000, 1_000_000_001] {
+                    let mut configured = rules(authority());
+                    configured.requirements[0].judge.connector = 2;
+                    configured.requirements[0].guard =
+                        if guarded { Guard::Guarded } else { Guard::Observed { freshness: Duration::from_secs(1) } };
+                    configured.requirements[0].must_be_guarded = guarded;
+                    let mut domain = Domain::new(configured, LIMITS).unwrap();
+                    assert_eq!(
+                        apply(&mut domain, Event::Policy { project: 1, policy: policy(authority()) }),
+                        PolicyFact::Added { project: 1 }
+                    );
+                    let judge = domain.rules().requirements[0].judge;
+                    let mut effect = effect();
+                    if effect_guards {
+                        effect.guards = Box::new([judge]);
+                    }
+                    let ask =
+                        EffectAsk { project: 1, authority: authority(), effect, now: Wall::from_nanos(2_000_000_000) };
+                    let given =
+                        Given { judge, verdict, at: Wall::from_nanos(2_000_000_000 - age), state: ask.effect.state };
+                    let mut project_given = fact(8, Verdict::Met);
+                    project_given.at = ask.now;
+                    let mut why = findings(&domain);
+                    let actual = check_effect(&domain, &ask, &[given, project_given], &mut why);
+                    let expected = if guarded && !effect_guards || verdict == Verdict::Refuse {
+                        Answer::Refuse
+                    } else if verdict == Verdict::Wait || !guarded && age > 1_000_000_000 {
+                        Answer::Wait
+                    } else {
+                        Answer::Allow
+                    };
+                    assert_eq!(
+                        actual, expected,
+                        "guarded={guarded}, effect_guards={effect_guards}, verdict={verdict:?}, age={age}"
+                    );
+                    assert!(why.len() <= max_out(&LIMITS).unwrap());
+                }
+            }
+        }
+    }
 }
 
 #[test]
@@ -318,6 +371,59 @@ fn batch_cells_count_direct_creation_and_reserve_only_after_every_check_allows()
     ask.project = 99;
     let mut why = findings(&domain);
     assert_eq!(check_batch(&domain, &ask, &mut why).answer, Answer::Refuse);
+}
+
+#[test]
+fn symbolic_grants_are_checked_as_prefixes_then_narrowed_by_task_number() {
+    let domain = domain();
+    let mut child = child(10);
+    child.authority.grants = Box::new([]);
+    let prefix =
+        Grant { connector: 1, kind: 3, pattern: Pattern { segments: Box::new([]), last: Last::Open(copy_of(b"b")) } };
+    child.symbolic = Box::new([prefix.clone()]);
+    let ask = BatchAsk {
+        project: 1,
+        creator: authority(),
+        numbers: numbers(100),
+        tasks_left: 10,
+        tasks: Box::new([child.clone()]),
+    };
+    let mut why = findings(&domain);
+    assert_eq!(check_batch(&domain, &ask, &mut why).answer, Answer::Allow);
+    let resolved = resolve_task_grants(&child.symbolic, 42, &LIMITS).expect("bounded task number");
+    assert_eq!(resolved[0].pattern.last, Last::Exact(copy_of(b"b42")));
+    assert!(crate::grant_at_most(&resolved[0], &prefix, &domain.rules().implies));
+    assert!(crate::grant_covers(
+        &resolved[0],
+        1,
+        3,
+        &Name { segments: Box::new([copy_of(b"b42")]) },
+        &domain.rules().implies
+    ));
+    assert!(!crate::grant_covers(
+        &resolved[0],
+        1,
+        3,
+        &Name { segments: Box::new([copy_of(b"b43")]) },
+        &domain.rules().implies
+    ));
+    assert!(!crate::grant_covers(
+        &resolved[0],
+        1,
+        3,
+        &Name { segments: Box::new([copy_of(b"b420")]) },
+        &domain.rules().implies
+    ));
+    let mut missing = ask;
+    missing.creator.grants = Box::new([]);
+    let mut why = findings(&domain);
+    assert_eq!(check_batch(&domain, &missing, &mut why).answer, Answer::Propose);
+    child.symbolic[0].pattern.last = Last::Exact(copy_of(b"b"));
+    let mut why = findings(&domain);
+    assert_eq!(
+        check_batch(&domain, &BatchAsk { tasks: Box::new([child]), ..missing }, &mut why).answer,
+        Answer::Refuse
+    );
 }
 
 #[test]
@@ -406,7 +512,9 @@ fn run_cells_hold_for_readiness_propose_grants_and_refuse_hard_caps() {
 fn call_cells_check_family_reads_references_scopes_and_ceiling_precedence() {
     let domain = domain();
     let base = CallAsk { project: 1, authority: authority(), family: Tools(1), call: Call::Tool };
-    for call in [Call::Tool, Call::Read(effect()), Call::Message { referenced: true }, Call::Note(Scopes::GOAL)] {
+    for call in
+        [Call::Tool, Call::Read(effect()), Call::Message { referenced: true }, Call::Note(crate::NoteScope::Goal)]
+    {
         let mut ask = base.clone();
         ask.call = call;
         let mut why = findings(&domain);
@@ -423,10 +531,28 @@ fn call_cells_check_family_reads_references_scopes_and_ceiling_precedence() {
     let mut why = findings(&domain);
     assert_eq!(check_call(&domain, &ask, &mut why), Answer::Propose);
     let mut ask = base.clone();
-    ask.call = Call::Note(Scopes::PROJECT);
+    ask.call = Call::Note(crate::NoteScope::Project);
     ask.authority.notes = Scopes(0);
     let mut why = findings(&domain);
     assert_eq!(check_call(&domain, &ask, &mut why), Answer::Propose);
+    let mut ask = base.clone();
+    ask.call = Call::Note(crate::NoteScope::Resources(crate::ResourceScope {
+        connector: 1,
+        pattern: Pattern { segments: Box::new([]), last: Last::Exact(copy_of(b"report")) },
+    }));
+    let mut why = findings(&domain);
+    assert_eq!(check_call(&domain, &ask, &mut why), Answer::Allow);
+    ask.authority.note_resources = Box::new([]);
+    let mut why = findings(&domain);
+    assert_eq!(check_call(&domain, &ask, &mut why), Answer::Propose);
+    assert!(saw(&why, Finding::Scope { source: Source::Task }));
+    let mut ask = base.clone();
+    ask.call = Call::Note(crate::NoteScope::Resources(crate::ResourceScope {
+        connector: 2,
+        pattern: Pattern { segments: Box::new([]), last: Last::Exact(copy_of(b"report")) },
+    }));
+    let mut why = findings(&domain);
+    assert_eq!(check_call(&domain, &ask, &mut why), Answer::Refuse);
     let mut ask = base.clone();
     ask.authority.tools = Tools(0);
     ask.call = Call::Message { referenced: false };
@@ -438,7 +564,7 @@ fn call_cells_check_family_reads_references_scopes_and_ceiling_precedence() {
     limited.notes = Scopes(0);
     limited.grants = Box::new([]);
     let restricted = domain_with(limited.clone(), limited);
-    for call in [Call::Tool, Call::Read(effect()), Call::Note(Scopes::DEPLOYMENT)] {
+    for call in [Call::Tool, Call::Read(effect()), Call::Note(crate::NoteScope::Deployment)] {
         let mut ask = base.clone();
         ask.call = call;
         let mut why = findings(&restricted);
@@ -449,9 +575,15 @@ fn call_cells_check_family_reads_references_scopes_and_ceiling_precedence() {
     let mut why = findings(&domain);
     assert_eq!(check_call(&domain, &ask, &mut why), Answer::Refuse, "one call names exactly one configured family");
     let mut ask = base.clone();
-    ask.call = Call::Note(Scopes(3));
+    ask.call = Call::Note(crate::NoteScope::Resources(crate::ResourceScope {
+        connector: 1,
+        pattern: Pattern {
+            segments: Box::new([copy_of(b"a"), copy_of(b"b"), copy_of(b"c"), copy_of(b"d"), copy_of(b"e")]),
+            last: Last::Open(copy_of(b"")),
+        },
+    }));
     let mut why = findings(&domain);
-    assert_eq!(check_call(&domain, &ask, &mut why), Answer::Refuse, "a note names one scope");
+    assert_eq!(check_call(&domain, &ask, &mut why), Answer::Refuse, "a resource note pattern obeys the segment limit");
     let mut ask = base;
     ask.project = 99;
     let mut why = findings(&domain);
@@ -597,7 +729,7 @@ fn fitting_laws_needs_and_holder_depth_use_separate_current_inputs() {
     second.authority.delegation.depth = 2;
     second.executor = crate::Executor::Procedure(2);
     second.authority.tools = Tools(2);
-    second.authority.notes = Scopes::REPOSITORY;
+    second.authority.notes = Scopes::PROJECT;
     second.authority.budget.deadline = Some(Wall::from_nanos(8));
     let needed = needs(&Action::Batch(Box::new([first, second]))).unwrap();
     assert_eq!(needed.delegation.tasks, 5, "one task plus each child's future capacity");
@@ -658,10 +790,15 @@ fn pattern_heap(pattern: &Pattern) -> u64 {
 }
 
 fn authority_heap(authority: &Authority) -> u64 {
-    let mut bytes =
-        add(sized(size_of_val(authority.grants.as_ref())), sized(size_of_val(authority.delegation.kinds.as_ref())));
+    let mut bytes = add(
+        add(sized(size_of_val(authority.grants.as_ref())), sized(size_of_val(authority.note_resources.as_ref()))),
+        sized(size_of_val(authority.delegation.kinds.as_ref())),
+    );
     for grant in &authority.grants {
         bytes = add(bytes, pattern_heap(&grant.pattern));
+    }
+    for scope in &authority.note_resources {
+        bytes = add(bytes, pattern_heap(&scope.pattern));
     }
     bytes
 }
@@ -669,7 +806,7 @@ fn authority_heap(authority: &Authority) -> u64 {
 fn requirements_heap(requirements: &[Requirement]) -> u64 {
     let mut bytes = sized(size_of_val(requirements));
     for requirement in requirements {
-        bytes = add(add(bytes, pattern_heap(&requirement.pattern)), sized(size_of_val(requirement.facts.as_ref())));
+        bytes = add(bytes, pattern_heap(&requirement.pattern));
     }
     bytes
 }
@@ -685,11 +822,13 @@ fn full_authority() -> Authority {
     let mut authority = authority();
     let grant = Grant { connector: 1, kind: 3, pattern: full_pattern() };
     authority.grants = Box::new([grant.clone(), grant.clone(), grant]);
+    let scope = crate::ResourceScope { connector: 1, pattern: full_pattern() };
+    authority.note_resources = Box::new([scope.clone(), scope.clone(), scope]);
     authority
 }
 
 fn full_requirements() -> Box<[Requirement]> {
-    let requirement = Requirement { connector: 1, kind: 1, pattern: full_pattern(), facts: Box::new([7, 7, 7, 7]) };
+    let requirement = Requirement { pattern: full_pattern(), ..requirement(7) };
     Box::new([requirement.clone(), requirement])
 }
 
@@ -817,12 +956,6 @@ fn check_full_policy_memory() {
         batch: u32::MAX,
         accounts: u32::MAX,
         writes: u32::MAX,
-        landing_rules: u32::MAX,
-        gates: u32::MAX,
-        approvals: u32::MAX,
-        heads: u32::MAX,
-        verdicts: u32::MAX,
-        reviews: u32::MAX,
     };
     assert_eq!(worst_case(&enormous), None, "overflowing memory is never wrapped");
     assert_eq!(max_out(&enormous), None, "overflowing queue bounds are never wrapped");

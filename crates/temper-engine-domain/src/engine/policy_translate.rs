@@ -1,10 +1,146 @@
 //! Total bounded translations between a person's typed policy request and the
 //! authority child's policy value. Siblings share no types (programming-model.md).
 
-use super::{authority, people};
+use alloc::boxed::Box;
+
+use super::{authority, forge, people};
 use skein_lib::List;
 
-fn pattern_to_authority(value: people::Pattern) -> authority::Pattern {
+pub(super) struct LandingBuilt {
+    pub requirements: Box<[authority::Requirement]>,
+    pub criteria: Box<[forge::Criterion]>,
+}
+
+pub(super) fn combine_requirements(
+    base: &[authority::Requirement],
+    added: &[authority::Requirement],
+    limit: u32,
+) -> Option<Box<[authority::Requirement]>> {
+    let mut result = List::with_capacity(limit);
+    for requirement in base {
+        result.push(requirement.clone()).ok()?;
+    }
+    for requirement in added {
+        result.push(requirement.clone()).ok()?;
+    }
+    Some(result.into_boxed())
+}
+
+/// Translate a connector's landing policy into authority's opaque judges and
+/// the forge's own parameters. Both arrays use the same stable index.
+pub(super) fn build_landing(
+    rules: &[people::LandingRule],
+    project: bool,
+    limit: u32,
+    connector: u16,
+) -> Option<LandingBuilt> {
+    if u32::try_from(rules.len()).ok()? > limit {
+        return None;
+    }
+    let mut requirements = List::with_capacity(limit);
+    let mut criteria = List::with_capacity(limit);
+    for rule in rules {
+        if rule.connector != connector || rule.kind != 4 {
+            return None;
+        }
+        if rule.ci {
+            landing_item(rule, project, 1, forge::Criterion::Ci, &mut requirements, &mut criteria)?;
+        }
+        if rule.up_to_date {
+            landing_item(rule, project, 2, forge::Criterion::UpToDate, &mut requirements, &mut criteria)?;
+        }
+        for gate in &rule.gates {
+            if gate.blocking {
+                landing_item(
+                    rule,
+                    project,
+                    3,
+                    forge::Criterion::Gate {
+                        number: gate.number,
+                        freshness: match gate.freshness {
+                            people::Freshness::Exact => forge::JudgeFreshness::Exact,
+                            people::Freshness::Clean => forge::JudgeFreshness::Clean,
+                        },
+                    },
+                    &mut requirements,
+                    &mut criteria,
+                )?;
+            }
+        }
+        for approval in &rule.approvals {
+            landing_item(
+                rule,
+                project,
+                4,
+                forge::Criterion::Approval {
+                    role: approval.role,
+                    people: approval.people,
+                    freshness: match approval.freshness {
+                        people::Freshness::Exact => forge::JudgeFreshness::Exact,
+                        people::Freshness::Clean => forge::JudgeFreshness::Clean,
+                    },
+                },
+                &mut requirements,
+                &mut criteria,
+            )?;
+        }
+    }
+    Some(LandingBuilt { requirements: requirements.into_boxed(), criteria: criteria.into_boxed() })
+}
+
+pub(super) fn landing_roles(policy: &authority::Policy, rules: &[people::LandingRule]) -> bool {
+    for rule in rules {
+        for approval in &rule.approvals {
+            let mut found = false;
+            for role in &policy.roles {
+                if role.number == approval.role {
+                    found = true;
+                }
+            }
+            if !found {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn landing_item(
+    rule: &people::LandingRule,
+    project: bool,
+    kind: u16,
+    criterion: forge::Criterion,
+    requirements: &mut List<authority::Requirement>,
+    criteria: &mut List<forge::Criterion>,
+) -> Option<()> {
+    let index = criteria.len();
+    if index >= 0x8000_0000 {
+        return None;
+    }
+    let parameters = if project { index | 0x8000_0000 } else { index };
+    let guarded = match criterion {
+        forge::Criterion::UpToDate => false,
+        forge::Criterion::Ci | forge::Criterion::Gate { .. } | forge::Criterion::Approval { .. } => true,
+    };
+    criteria.push(criterion).ok()?;
+    requirements
+        .push(authority::Requirement {
+            connector: rule.connector,
+            kind: rule.kind,
+            pattern: pattern_to_authority(rule.pattern.clone()),
+            judge: authority::Judge { connector: rule.connector, requirement: kind, parameters },
+            guard: if guarded {
+                authority::Guard::Guarded
+            } else {
+                authority::Guard::Observed { freshness: skein_lib::Duration::ZERO }
+            },
+            must_be_guarded: guarded,
+        })
+        .ok()?;
+    Some(())
+}
+
+pub(super) fn pattern_to_authority(value: people::Pattern) -> authority::Pattern {
     authority::Pattern {
         segments: value.segments,
         last: match value.last {
@@ -35,6 +171,12 @@ fn authority_to_authority(value: people::Authority) -> Option<authority::Authori
             })
             .ok()?;
     }
+    let mut note_resources = List::with_capacity(u32::try_from(value.note_resources.len()).ok()?);
+    for scope in value.note_resources {
+        note_resources
+            .push(authority::ResourceScope { connector: scope.connector, pattern: pattern_to_authority(scope.pattern) })
+            .ok()?;
+    }
     let mut kinds = List::with_capacity(u32::try_from(value.delegation.kinds.len()).ok()?);
     for kind in value.delegation.kinds {
         kinds
@@ -55,6 +197,7 @@ fn authority_to_authority(value: people::Authority) -> Option<authority::Authori
         },
         budget: authority::Budget { spend: value.spend, deadline: value.deadline },
         notes: authority::Scopes(value.notes),
+        note_resources: note_resources.into_boxed(),
     })
 }
 
@@ -67,6 +210,12 @@ fn authority_to_people(value: &authority::Authority) -> Option<people::Authority
                 kind: grant.kind,
                 pattern: pattern_to_people(&grant.pattern),
             })
+            .ok()?;
+    }
+    let mut note_resources = List::with_capacity(u32::try_from(value.note_resources.len()).ok()?);
+    for scope in &value.note_resources {
+        note_resources
+            .push(people::ResourceScope { connector: scope.connector, pattern: pattern_to_people(&scope.pattern) })
             .ok()?;
     }
     let mut kinds = List::with_capacity(u32::try_from(value.delegation.kinds.len()).ok()?);
@@ -90,89 +239,40 @@ fn authority_to_people(value: &authority::Authority) -> Option<people::Authority
         spend: value.budget.spend,
         deadline: value.budget.deadline,
         notes: value.notes.0,
+        note_resources: note_resources.into_boxed(),
     })
 }
 
-fn freshness_to_authority(value: people::Freshness) -> authority::Freshness {
-    match value {
-        people::Freshness::Exact => authority::Freshness::Exact,
-        people::Freshness::Clean => authority::Freshness::Clean,
+fn replace_landing(
+    policy: &mut authority::Policy,
+    previous: &[people::LandingRule],
+    next: &[people::LandingRule],
+    limit: u32,
+    connector: u16,
+) -> Option<()> {
+    let old = build_landing(previous, true, limit, connector)?;
+    let new = build_landing(next, true, limit, connector)?;
+    let mut requirements = List::with_capacity(limit);
+    for requirement in &policy.requirements {
+        if !old.requirements.contains(requirement) {
+            requirements.push(requirement.clone()).ok()?;
+        }
     }
-}
-
-fn freshness_to_people(value: authority::Freshness) -> people::Freshness {
-    match value {
-        authority::Freshness::Exact => people::Freshness::Exact,
-        authority::Freshness::Clean => people::Freshness::Clean,
+    for requirement in new.requirements {
+        requirements.push(requirement).ok()?;
     }
-}
-
-fn landing_to_authority(value: people::LandingRule) -> Option<authority::LandingRule> {
-    let mut gates = List::with_capacity(u32::try_from(value.gates.len()).ok()?);
-    for gate in value.gates {
-        gates
-            .push(authority::Gate {
-                number: gate.number,
-                blocking: gate.blocking,
-                freshness: freshness_to_authority(gate.freshness),
-            })
-            .ok()?;
-    }
-    let mut approvals = List::with_capacity(u32::try_from(value.approvals.len()).ok()?);
-    for approval in value.approvals {
-        approvals
-            .push(authority::Approval {
-                role: approval.role,
-                people: approval.people,
-                freshness: freshness_to_authority(approval.freshness),
-            })
-            .ok()?;
-    }
-    Some(authority::LandingRule {
-        connector: value.connector,
-        kind: value.kind,
-        pattern: pattern_to_authority(value.pattern),
-        ci: value.ci,
-        up_to_date: value.up_to_date,
-        gates: gates.into_boxed(),
-        approvals: approvals.into_boxed(),
-    })
-}
-
-fn landing_to_people(value: &authority::LandingRule) -> Option<people::LandingRule> {
-    let mut gates = List::with_capacity(u32::try_from(value.gates.len()).ok()?);
-    for gate in &value.gates {
-        gates
-            .push(people::Gate {
-                number: gate.number,
-                blocking: gate.blocking,
-                freshness: freshness_to_people(gate.freshness),
-            })
-            .ok()?;
-    }
-    let mut approvals = List::with_capacity(u32::try_from(value.approvals.len()).ok()?);
-    for approval in &value.approvals {
-        approvals
-            .push(people::Approval {
-                role: approval.role,
-                people: approval.people,
-                freshness: freshness_to_people(approval.freshness),
-            })
-            .ok()?;
-    }
-    Some(people::LandingRule {
-        connector: value.connector,
-        kind: value.kind,
-        pattern: pattern_to_people(&value.pattern),
-        ci: value.ci,
-        up_to_date: value.up_to_date,
-        gates: gates.into_boxed(),
-        approvals: approvals.into_boxed(),
-    })
+    policy.requirements = requirements.into_boxed();
+    Some(())
 }
 
 /// Apply one typed mutable edit, keeping the ceiling and deployment rules.
-pub(super) fn apply(policy: &mut authority::Policy, change: people::PolicyChange) -> Option<()> {
+pub(super) fn apply(
+    policy: &mut authority::Policy,
+    landing: &mut Box<[people::LandingRule]>,
+    change: people::PolicyChange,
+    limit: u32,
+    connector: u16,
+) -> Option<()> {
     match change {
         people::PolicyChange::ProjectSpend { period_spend } => policy.period_spend = period_spend,
         people::PolicyChange::Role(edit) => {
@@ -192,18 +292,18 @@ pub(super) fn apply(policy: &mut authority::Policy, change: people::PolicyChange
             }
         }
         people::PolicyChange::Landing { rules } => {
-            let mut translated = List::with_capacity(u32::try_from(rules.len()).ok()?);
-            for rule in rules {
-                translated.push(landing_to_authority(rule)?).ok()?;
+            if !landing_roles(policy, &rules) {
+                return None;
             }
-            policy.landing = translated.into_boxed();
+            replace_landing(policy, landing, &rules, limit, connector)?;
+            *landing = rules;
         }
     }
     Some(())
 }
 
 /// Capture the entire mutable value after a validated policy event.
-pub(super) fn snapshot(policy: &authority::Policy) -> Option<people::PolicyValue> {
+pub(super) fn snapshot(policy: &authority::Policy, landing: &[people::LandingRule]) -> Option<people::PolicyValue> {
     let mut roles = List::with_capacity(u32::try_from(policy.roles.len()).ok()?);
     for role in &policy.roles {
         roles
@@ -216,19 +316,21 @@ pub(super) fn snapshot(policy: &authority::Policy) -> Option<people::PolicyValue
             })
             .ok()?;
     }
-    let mut landing = List::with_capacity(u32::try_from(policy.landing.len()).ok()?);
-    for rule in &policy.landing {
-        landing.push(landing_to_people(rule)?).ok()?;
-    }
     Some(people::PolicyValue {
         period_spend: policy.period_spend,
         roles: roles.into_boxed(),
-        landing: landing.into_boxed(),
+        landing: Box::from(landing),
     })
 }
 
 /// Restore a complete committed mutable value over the configured ceiling.
-pub(super) fn restore(policy: &mut authority::Policy, value: people::PolicyValue) -> Option<()> {
+pub(super) fn restore(
+    policy: &mut authority::Policy,
+    landing: &mut Box<[people::LandingRule]>,
+    value: people::PolicyValue,
+    limit: u32,
+    connector: u16,
+) -> Option<()> {
     policy.period_spend = value.period_spend;
     let mut roles = List::with_capacity(u32::try_from(value.roles.len()).ok()?);
     for role in value.roles {
@@ -243,10 +345,10 @@ pub(super) fn restore(policy: &mut authority::Policy, value: people::PolicyValue
             .ok()?;
     }
     policy.roles = roles.into_boxed();
-    let mut landing = List::with_capacity(u32::try_from(value.landing.len()).ok()?);
-    for rule in value.landing {
-        landing.push(landing_to_authority(rule)?).ok()?;
+    if !landing_roles(policy, &value.landing) {
+        return None;
     }
-    policy.landing = landing.into_boxed();
+    replace_landing(policy, landing, &value.landing, limit, connector)?;
+    *landing = value.landing;
     Some(())
 }

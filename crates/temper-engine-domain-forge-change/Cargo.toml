@@ -9,8 +9,5 @@ publish.workspace = true
 [dependencies]
 skein-lib.workspace = true
 
-[dev-dependencies]
-temper-engine-domain-authority = { path = "../temper-engine-domain-authority" }
-
 [lints]
 workspace = true

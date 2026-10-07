@@ -2,12 +2,12 @@
 //! a counting allocator: the host with every slot holding an assignment of
 //! exactly its limits, then every run ending with as much as it may hold.
 
-use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
-use temper_worker_domain_host::{
-    Access, AgentFailure, Answer, Ask, Assignment, Bounce, Domain, Event, Finish, Grant, Invalid, Landing, Limits,
-    Preparation, Reason, Refusal, Repository, Request, Start, Workspace, max_out, resume, step, worst_case,
+use jig_worker_host::{
+    AgentFailure, Answer, Ask, Assignment, Bounce, Delivery, DeliveryOutcome, Domain, Event, Finish, Grant, Invalid,
+    Limits, Preparation, Reason, Refusal, Request, Workspace, max_out, resume, step, worst_case,
 };
-use temper_world::heap::{self, Meter};
+use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
+use skein_world::domain::heap::{self, Meter};
 
 #[global_allocator]
 static HEAP: heap::Counting = heap::Counting;
@@ -15,20 +15,20 @@ static HEAP: heap::Counting = heap::Counting;
 const LIMITS: Limits = Limits {
     accounts: 4,
     slots: 2,
-    repositories: 2,
-    name_bytes: 32,
     charter_bytes: 1024,
     snapshot_bytes: 512,
     transcript_bytes: 0,
     turn_bytes: 0,
-    conflicts: 0,
-    path_bytes: 0,
     outcome_bytes: 768,
     detail_bytes: 128,
     held: 2,
     event_bytes: 256,
     run_calls: 2,
     facts: 16,
+    told: 2,
+    fact_bytes: 256,
+    turns: 0,
+    turn_queue_bytes: 0,
 };
 
 fn bytes(len: u64) -> Box<[u8]> {
@@ -40,11 +40,11 @@ fn bytes(len: u64) -> Box<[u8]> {
 enum Asked {
     Prepare { owner: Token },
     Start,
-    Push { owner: Token },
+    Delivery { owner: Token },
     Relay { call: Token },
     Save { owner: Token },
     Answer { answer: Answer },
-    AnswerV2 { answer: temper_worker_domain_host::AnswerV2 },
+    AnswerV2 { answer: jig_worker_host::AnswerV2 },
     Turn,
     Bounced { bounce: Bounce },
     Hosting { runs: usize },
@@ -91,7 +91,7 @@ impl Measured {
         while let Some(request) = self.out.pop() {
             asked.push(match request {
                 Request::Turn { .. } => Asked::Turn,
-                Request::PushV2 { owner, .. } | Request::Push { owner, .. } => Asked::Push { owner },
+                Request::DeliverV2 { owner, .. } | Request::DeliverWorkspace { owner, .. } => Asked::Delivery { owner },
                 Request::RelayV2 { delivery, .. } => Asked::Relay { call: delivery },
                 Request::AnswerV2 { answer, .. } => Asked::AnswerV2 { answer },
                 Request::StartV2 { .. } | Request::Start { .. } => Asked::Start,
@@ -111,10 +111,11 @@ impl Measured {
                 | Request::Reply { .. }
                 | Request::Stop { .. }
                 | Request::Release { .. }
-                | Request::Grant { .. } => Asked::Other,
+                | Request::Grant { .. }
+                | Request::TurnCredit { .. } => Asked::Other,
             });
         }
-        self.meter.check(measured, self.bound, self.env.limits);
+        self.meter.check(measured, self.bound, &self.env.limits);
         // The iteration ends: the reclaim point.
         self.domain.reclaim();
         for call in cancelled {
@@ -125,29 +126,16 @@ impl Measured {
 }
 
 /// An assignment for `run` of exactly the limits: a charter, a snapshot and
-/// names of their limits, as many repositories as a workspace may list.
+/// names of their limits, as many items as a workspace may list.
 fn assignment(run: u64, limits: &Limits) -> Assignment {
-    let name = |byte: u8| vec![byte; usize::try_from(limits.name_bytes).expect("fits")].into_boxed_slice();
-    let mut repositories = Vec::new();
-    for index in 0..limits.repositories {
-        let letter = b'a' + u8::try_from(index).expect("few repositories");
-        repositories.push(Repository {
-            tag: index,
-            name: name(letter),
-            remote: name(b'r'),
-            start: Start::Branch { branch: name(b'b') },
-            access: Access::Writable { push: name(b'p') },
-            identity: 0,
-        });
-    }
     Assignment {
         grants: (0..limits.accounts)
             .map(|account| Grant { account, generation: 7, valid: Duration::from_secs(300) })
             .collect(),
         run: Token::new(run),
         attempt: Token::new(run + 1000),
-        workspace: Workspace { key: name(b'k'), repositories: repositories.into_boxed_slice() },
-        save: Some(name(b's')),
+        workspace: Some(Workspace { workstream: run, items: Token::new(run + 2000) }),
+        save: true,
         charter: bytes(limits.charter_bytes),
         snapshot: Some(bytes(limits.snapshot_bytes)),
     }
@@ -155,16 +143,12 @@ fn assignment(run: u64, limits: &Limits) -> Assignment {
 
 /// Fills every slot with an assignment of exactly the limits and a full hold
 /// of inbound events of exactly their limit; starts each run, has it land a
-/// change in every repository and make as many calls as it may, the last a
-/// push still in flight as it ends with an outcome of exactly the limit; and
+/// change in every item and make as many calls as it may, the last a
+/// delivery still in flight as it ends with an outcome of exactly the limit; and
 /// takes each through its tail. Every step's peak is checked against the
 /// worst case.
 fn fill(limits: Limits) {
-    // The reusable landing fixture belongs to the checkout peer, not to the
-    // host. Allocate it before the meter; each event still owns its measured
-    // copy, so the host's transient handling remains covered.
-    let landing = Landing::Landed { commit: [7; 32] };
-    let landed = vec![landing; usize::try_from(limits.repositories).expect("fits")].into_boxed_slice();
+    let delivered = Delivery { outcome: DeliveryOutcome::Delivered, left: Token::new(5000), changed: true };
     let mut host = Measured::new(limits);
     let mut owners = Vec::new();
     for run in 0..u64::from(limits.slots) {
@@ -199,12 +183,18 @@ fn fill(limits: Limits) {
             usize::try_from(limits.held).expect("fits")
         );
         assert!(host.step(Event::Yielded { owner: *owner }).is_empty(), "waiting");
-        let [Asked::Push { owner: push }] =
-            host.step(Event::Called { owner: *owner, call: Token::new(1), ask: Ask::Push { message: bytes(64) } })[..]
-        else {
-            panic!("pushed");
+        let [Asked::Delivery { owner: delivery }] = host.step(Event::Called {
+            owner: *owner,
+            call: Token::new(1),
+            ask: Ask::Deliver { message: bytes(64) },
+        })[..] else {
+            panic!("delivered");
         };
-        assert_eq!(host.step(Event::Pushed { owner: push, push: landed.clone() }), [Asked::Other], "landed everywhere");
+        assert_eq!(
+            host.step(Event::Delivered { owner: delivery, delivery: delivered }),
+            [Asked::Other],
+            "landed everywhere"
+        );
         let mut calls = Vec::new();
         for call in 2..=u64::from(limits.run_calls) {
             let ask = Ask::Relay { body: bytes(64) };
@@ -214,7 +204,7 @@ fn fill(limits: Limits) {
             };
             calls.push(call);
         }
-        // The first relayed call is answered, and a push takes its place.
+        // The first relayed call is answered, and a delivery takes its place.
         if let Some(call) = calls.first() {
             let relayed = Event::Relayed {
                 run: Token::new(index),
@@ -224,14 +214,14 @@ fn fill(limits: Limits) {
             };
             assert_eq!(host.step(relayed), [Asked::Other]);
         }
-        let push = if limits.run_calls > 1 {
-            let ask = Ask::Push { message: bytes(64) };
-            let [Asked::Push { owner: push }] =
+        let delivery = if limits.run_calls > 1 {
+            let ask = Ask::Deliver { message: bytes(64) };
+            let [Asked::Delivery { owner: delivery }] =
                 host.step(Event::Called { owner: *owner, call: Token::new(99), ask })[..]
             else {
-                panic!("pushed again");
+                panic!("delivered again");
             };
-            Some(push)
+            Some(delivery)
         } else {
             None
         };
@@ -240,17 +230,17 @@ fn fill(limits: Limits) {
         assert!(host.step(Event::Faulted { owner: *owner, fault: AgentFailure::WallTime }).is_empty(), "decided");
         let detail = bytes(u64::from(limits.detail_bytes) + 1);
         let gone = host.step(Event::Gone { owner: *owner, detail });
-        if let Some(push) = push {
-            assert!(gone.is_empty(), "the push in flight is waited for");
-            pending.push(push);
+        if let Some(delivery) = delivery {
+            assert!(gone.is_empty(), "the delivery in flight is waited for");
+            pending.push(delivery);
         }
     }
     if limits.run_calls > 1 {
         let held = host.meter.held();
         assert!(held >= u64::from(limits.slots) * limits.outcome_bytes, "{limits:?}: every run holds its outcome");
     }
-    for push in pending {
-        owners_push(&mut host, push, &landed);
+    for delivery in pending {
+        owners_push(&mut host, delivery, delivered);
     }
     assert_eq!(host.domain.hosted(), 0, "every slot came back");
 
@@ -278,9 +268,9 @@ fn beyond(host: &mut Measured, limits: &Limits) {
     assert_eq!(host.step(large), [Asked::Bounced { bounce: Bounce::TooLarge }]);
 }
 
-/// A push still in flight as its run ended settles, and the run answers.
-fn owners_push(host: &mut Measured, push: Token, landed: &[Landing]) {
-    let settled = host.step(Event::Pushed { owner: push, push: landed.into() });
+/// A delivery still in flight as its run ended settles, and the run answers.
+fn owners_push(host: &mut Measured, call: Token, delivery: Delivery) {
+    let settled = host.step(Event::Delivered { owner: call, delivery });
     let [Asked::Other, Asked::Other, Asked::Answer { answer: Answer::Ended { .. } }] = &settled[..] else {
         panic!("told how it went, released and answered: {settled:?}");
     };
@@ -304,7 +294,7 @@ fn paths(limits: Limits) {
     let first = owners[0];
     let unprepared = Event::Unprepared {
         owner: first,
-        failure: Preparation::Refused { repository: 0 },
+        failure: Preparation::Permanent { resource: Some(Token::new(7)) },
         detail: bytes(u64::from(limits.detail_bytes) + 1),
     };
     assert_eq!(host.step(unprepared).len(), 1, "answered");
@@ -323,8 +313,7 @@ fn paths(limits: Limits) {
         let [Asked::Save { owner: saving }] = host.step(Event::Gone { owner: *owner, detail: bytes(10) })[..] else {
             panic!("saved");
         };
-        let save = vec![Landing::Unchanged; usize::try_from(limits.repositories).expect("fits")].into_boxed_slice();
-        let saved = host.step(Event::Saved { owner: saving, save });
+        let saved = host.step(Event::Saved { owner: saving, at: Some(Token::new(7)) });
         assert_eq!(saved.len(), 2, "released and answered");
     }
     // A fault, from a run that had started.
@@ -342,7 +331,7 @@ fn paths(limits: Limits) {
 #[test]
 fn a_host_with_every_slot_full_stays_within_its_worst_case() {
     fill(LIMITS);
-    fill(Limits { slots: 16, repositories: 8, held: 8, run_calls: 4, ..LIMITS });
+    fill(Limits { slots: 16, held: 8, run_calls: 4, ..LIMITS });
     fill(Limits { slots: 200, charter_bytes: 65_536, snapshot_bytes: 16_384, event_bytes: 4096, ..LIMITS });
     fill(Limits { run_calls: 1, held: 0, ..LIMITS });
     // The outcome dominates what a run holds: the ending's side of the max.
@@ -352,13 +341,13 @@ fn a_host_with_every_slot_full_stays_within_its_worst_case() {
 #[test]
 fn every_entry_point_stays_within_the_worst_case() {
     paths(LIMITS);
-    paths(Limits { slots: 8, repositories: 4, ..LIMITS });
+    paths(Limits { slots: 8, ..LIMITS });
 }
 
 #[test]
-fn v2_full_transcripts_and_owned_conflict_feedback_fit_the_hosts_bound() {
-    use temper_worker_domain_host::{AssignmentV2, EndingV2, FinishV2, Turn};
-    let limits = Limits { transcript_bytes: 2048, turn_bytes: 128, conflicts: 3, path_bytes: 64, ..LIMITS };
+fn v2_full_transcripts_and_delivery_feedback_fit_the_hosts_bound() {
+    use jig_worker_host::{AssignmentV2, EndingV2, FinishV2, Turn};
+    let limits = Limits { transcript_bytes: 2048, turn_bytes: 128, turns: 1, turn_queue_bytes: 128, ..LIMITS };
     let mut owners = Vec::with_capacity(usize::try_from(limits.slots).expect("bounded"));
     let mut host = Measured::new(limits);
     for run in 0..u64::from(limits.slots) {
@@ -376,25 +365,21 @@ fn v2_full_transcripts_and_owned_conflict_feedback_fit_the_hosts_bound() {
     for owner in owners {
         assert_eq!(host.step(Event::Prepared { owner, workspace: owner }), [Asked::Start]);
         assert!(host.step(Event::Started { owner, agent: owner }).is_empty());
-        let [Asked::Push { owner: push }] = host.step(Event::Called {
+        let [Asked::Delivery { owner: call }] = host.step(Event::Called {
             owner,
             call: Token::new(51),
-            ask: Ask::PushV2 { title: bytes(9), body: bytes(23) },
+            ask: Ask::DeliverV2 { title: bytes(9), body: bytes(23) },
         })[..] else {
-            panic!("v2 push")
+            panic!("v2 delivery")
         };
-        let pushed = (0..limits.repositories)
-            .map(|_| Landing::Conflicted {
-                files: (0..limits.conflicts).map(|_| bytes(u64::from(limits.path_bytes))).collect(),
-            })
-            .collect();
-        assert_eq!(host.step(Event::Pushed { owner: push, push: pushed }), [Asked::Other]);
+        let delivery = Delivery { outcome: DeliveryOutcome::Refused, left: Token::new(7), changed: false };
+        assert_eq!(host.step(Event::Delivered { owner: call, delivery }), [Asked::Other]);
         assert_eq!(
             host.step(Event::Turn {
                 owner,
                 turn: Turn { turn: 1, spent: 23, read: None, body: bytes(limits.turn_bytes) }
             }),
-            [Asked::Turn]
+            [Asked::Turn, Asked::Other]
         );
         host.step(Event::FinishedV2 { owner, turns: 1, spent: 29, finish: FinishV2::Parked });
         let [Asked::Save { owner: saving }] =
@@ -402,8 +387,7 @@ fn v2_full_transcripts_and_owned_conflict_feedback_fit_the_hosts_bound() {
         else {
             panic!("save ordinary unfinished work")
         };
-        let saved = vec![Landing::Unchanged; usize::try_from(limits.repositories).expect("bounded")].into_boxed_slice();
-        let asked = host.step(Event::Saved { owner: saving, save: saved });
+        let asked = host.step(Event::Saved { owner: saving, at: Some(Token::new(7)) });
         let [Asked::Other, Asked::AnswerV2 { answer }] = &*asked else { panic!("snapshot-free answer: {asked:?}") };
         assert_eq!((answer.turns, answer.spent), (1, 29));
         let EndingV2::Parked { work } = &answer.ending else { panic!("parked") };

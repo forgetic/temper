@@ -52,6 +52,7 @@ fn assignment() -> engine::Assignment {
                 delegation: tasks::Delegation { kinds: Box::new([]), tasks: 0, depth: 0 },
                 budget: tasks::Budget { spend: 40, deadline: None },
                 notes: tasks::Scopes(0),
+                note_resources: Box::new([]),
             },
             budget: 40,
         }),
@@ -70,12 +71,14 @@ fn assignment() -> engine::Assignment {
 
 #[test]
 fn root_charter_becomes_a_smith_start_with_ordered_brief_and_exact_budget() {
-    let smith::Event::Start { activation, charter, grants, transcript, .. } =
-        start(&assignment(), None, None, ReplyTo::new(Token::new(50)), Token::new(23))
+    let window = smith::Window { turns: 1, bytes: 100_000 };
+    let smith::Event::Start { activation, charter, grants, transcript, window: started_window, .. } =
+        start(&assignment(), None, None, ReplyTo::new(Token::new(50)), Token::new(23), window)
     else {
         panic!("start conversion produces Smith Start")
     };
     assert_eq!(activation, 7);
+    assert_eq!(started_window, window);
     assert_eq!(charter.instructions.as_ref(), b"Do the task");
     assert_eq!(charter.brief.sections[0].title.as_ref(), b"Task");
     assert_eq!(charter.brief.sections[0].text.as_ref(), b"Say hello");

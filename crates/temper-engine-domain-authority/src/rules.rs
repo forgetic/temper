@@ -2,6 +2,8 @@
 
 use alloc::boxed::Box;
 
+use skein_lib::Duration;
+
 use crate::{Authority, Implies, Pattern};
 
 /// Root-owned deployment configuration admitted by `Domain::new`; hard ceilings apply to every
@@ -20,8 +22,6 @@ pub struct Rules {
     pub implies: Implies,
     /// Deployment effect requirements, bounded by `Limits::requirements`.
     pub requirements: Box<[Requirement]>,
-    /// Deployment landing rules, bounded by `Limits::landing_rules`.
-    pub landing: Box<[LandingRule]>,
 }
 
 /// Root-submitted project policy; policy events validate its bounded values before replacing the
@@ -40,9 +40,6 @@ pub struct Policy {
     pub roles: Box<[Role]>,
     /// Project requirements added to deployment requirements, bounded by `Limits::requirements`.
     pub requirements: Box<[Requirement]>,
-    /// Project landing rules added to deployment and change gates, bounded by
-    /// `Limits::landing_rules`.
-    pub landing: Box<[LandingRule]>,
 }
 
 /// Numbered project permission and funding ceiling; role membership is supplied by people through
@@ -59,74 +56,35 @@ pub struct Role {
     pub decides: Proposals,
 }
 
-/// An effect of this exact kind, on a matching resource, needs each named
-/// connector fact to have passed at its pinned state. Kinds of effect are
-/// matched exactly: granting an implied kind never removes its requirements.
-/// Facts required for the exact effect kind and matching resources, independent of grant
-/// implications. (domain/authority.md, section 10).
+/// A judge selected by policy. Its parameters name configuration held by that connector.
+/// (domain/authority.md, section 10).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Judge {
+    pub connector: u16,
+    pub requirement: u16,
+    pub parameters: u32,
+}
+
+/// Whether a verdict holds at application or was observed before the decision.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Guard {
+    /// The effect's system checks this state as it applies the effect.
+    Guarded,
+    /// The verdict must have been observed within this interval.
+    Observed { freshness: Duration },
+}
+
+/// One requirement on an exact effect kind and a resource pattern.
+/// The requirement's meaning belongs to its judging connector (domain/authority.md, section 10).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Requirement {
     pub connector: u16,
     pub kind: u16,
     /// Resources to which it applies, bounded by segment and byte limits.
     pub pattern: Pattern,
-    /// Required connector fact kinds, bounded by `Limits::facts` per requirement.
-    pub facts: Box<[u16]>,
-}
-
-/// A verdict may carry only over the clean updates verified by the root.
-/// Which root-verified heads a gate verdict or human approval may cover; CI always pins the exact
-/// head. (domain/authority.md, section 10).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum Freshness {
-    /// Accept only the landing head itself.
-    Exact,
-    /// Also accept predecessor heads connected entirely by root-verified clean updates.
-    Clean,
-}
-
-/// Numbered landing gate supplied by configuration or the change; advisory gates do not block
-/// landing. (domain/authority.md, section 10).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct Gate {
-    /// Gate identity resolved by the root for the named change.
-    pub number: u32,
-    /// Whether missing, pending or failed valid verdicts affect admission.
-    pub blocking: bool,
-    /// Accepted verdict-head relationship to the landing head.
-    pub freshness: Freshness,
-}
-
-/// Required distinct authenticated reviewers of a root-verified project role. (domain/authority.md,
-/// section 10).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct Approval {
-    /// Reviewer role verified by the root; project-policy approval roles must exist in that policy.
-    pub role: u32,
-    /// Positive distinct-person count, admitted no greater than `Limits::reviews`.
-    pub people: u32,
-    /// Accepted review-head relationship to the landing head.
-    pub freshness: Freshness,
-}
-
-/// Requirements on one connector's exact landing kind and branch pattern
-/// (domain/authority.md, 10; domain/forge.md, 8.3). These add to change gates.
-/// Additional conditions on one exact connector landing kind and branch pattern; every applicable
-/// rule applies. (domain/authority.md, section 10).
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct LandingRule {
-    pub connector: u16,
-    /// Exact landing effect kind; implications do not skip this rule.
-    pub kind: u16,
-    /// Landing-branch resources covered by this rule.
-    pub pattern: Pattern,
-    pub ci: bool,
-    /// Require containment of the snapshot's landing-branch tip.
-    pub up_to_date: bool,
-    /// Additional gates, bounded by `Limits::gates` per rule.
-    pub gates: Box<[Gate]>,
-    /// Required role approvals, bounded by `Limits::approvals` per rule.
-    pub approvals: Box<[Approval]>,
+    pub judge: Judge,
+    pub guard: Guard,
+    pub must_be_guarded: bool,
 }
 
 /// Kinds of person request checked against a role's request bit set; execution remains with the

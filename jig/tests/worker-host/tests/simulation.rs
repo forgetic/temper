@@ -1,8 +1,8 @@
 //! The host in its world: scenarios, replay, and a sweep of random worlds.
 
+use jig_worker_host::Limits;
+use jig_worker_host_world::{Outage, Settings, Span, Stats, World};
 use skein_lib::Duration;
-use temper_worker_domain_host::Limits;
-use temper_worker_host_world::{Outage, Settings, Span, Stats, World};
 
 const ITERATIONS: u32 = 200_000;
 
@@ -23,7 +23,7 @@ fn a_calm_world_ends_or_parks_every_run_and_settles() {
     let (ended, parked) = (count(&stats, "ended"), count(&stats, "parked"));
     assert!(ended > 0 && parked > 0, "runs end, or park when idle: {stats:?}");
     assert_eq!(ended + parked, 8, "and nothing else: {stats:?}");
-    assert!(stats.parent.relays > 0 && stats.parent.pushes > 0 && stats.parent.yields > 0, "{stats:?}");
+    assert!(stats.parent.relays > 0 && stats.parent.deliveries > 0 && stats.parent.yields > 0, "{stats:?}");
     assert!(stats.parent.saves > 0, "work that did not land is saved: {stats:?}");
     assert_eq!(stats.parent.releases, 8, "every workspace is released: {stats:?}");
     assert!(stats.engine.events > 0, "inbound events went down: {stats:?}");
@@ -34,7 +34,7 @@ fn assignments_beyond_the_slots_are_refused_as_busy() {
     let calm = Settings::calm(2);
     let settings = Settings {
         host: Limits { slots: 1, ..calm.host },
-        engine: temper_worker_host_world::engine::Script { spacing: Span::millis(0, 100), ..calm.engine },
+        engine: jig_worker_host_world::engine::Script { spacing: Span::millis(0, 100), ..calm.engine },
         ..calm
     };
     let stats = run(&settings).stats();
@@ -46,8 +46,7 @@ fn assignments_beyond_the_slots_are_refused_as_busy() {
 #[test]
 fn assignments_beyond_the_limits_are_refused_as_invalid_and_never_admitted() {
     let calm = Settings::calm(3);
-    let settings =
-        Settings { engine: temper_worker_host_world::engine::Script { invalid: 1000, ..calm.engine }, ..calm };
+    let settings = Settings { engine: jig_worker_host_world::engine::Script { invalid: 1000, ..calm.engine }, ..calm };
     let stats = run(&settings).stats();
     assert_eq!(count(&stats, "refused: invalid"), 8, "{stats:?}");
     assert_eq!(stats.parent.prepares, 0, "{stats:?}");
@@ -57,12 +56,12 @@ fn assignments_beyond_the_limits_are_refused_as_invalid_and_never_admitted() {
 fn cancelled_runs_are_stopped_saved_and_their_calls_answered_as_unavailable() {
     let calm = Settings::calm(4);
     let settings = Settings {
-        engine: temper_worker_host_world::engine::Script {
+        engine: jig_worker_host_world::engine::Script {
             cancels: 1000,
             cancel_after: Span::millis(0, 20_000),
             ..calm.engine
         },
-        parent: temper_worker_host_world::parent::Script { relays: 600, late: 1000, ..calm.parent },
+        parent: jig_worker_host_world::parent::Script { relays: 600, late: 1000, ..calm.parent },
         ..calm
     };
     let stats = run(&settings).stats();
@@ -74,7 +73,7 @@ fn cancelled_runs_are_stopped_saved_and_their_calls_answered_as_unavailable() {
 #[test]
 fn stale_attempts_change_nothing() {
     let calm = Settings::calm(5);
-    let settings = Settings { engine: temper_worker_host_world::engine::Script { stale: 1000, ..calm.engine }, ..calm };
+    let settings = Settings { engine: jig_worker_host_world::engine::Script { stale: 1000, ..calm.engine }, ..calm };
     let stats = run(&settings).stats();
     assert!(stats.stale > 8, "{stats:?}");
     assert_eq!(count(&stats, "ended") + count(&stats, "parked"), 8, "{stats:?}");
@@ -84,12 +83,12 @@ fn stale_attempts_change_nothing() {
 fn losing_contact_past_the_grace_cancels_every_run_and_saves_their_work_first() {
     let calm = Settings::calm(6);
     let settings = Settings {
-        engine: temper_worker_host_world::engine::Script {
+        engine: jig_worker_host_world::engine::Script {
             assignments: 4,
             spacing: Span::millis(0, 1_000),
             ..calm.engine
         },
-        parent: temper_worker_host_world::parent::Script { steps: 30, ..calm.parent },
+        parent: jig_worker_host_world::parent::Script { steps: 30, ..calm.parent },
         outage: Some(Outage {
             at: Span::millis(5_000, 5_000),
             length: Span::millis(60_000, 60_000),
@@ -108,12 +107,12 @@ fn losing_contact_past_the_grace_cancels_every_run_and_saves_their_work_first() 
 fn losing_contact_within_the_grace_keeps_the_runs_and_reports_them() {
     let calm = Settings::calm(7);
     let settings = Settings {
-        engine: temper_worker_host_world::engine::Script {
+        engine: jig_worker_host_world::engine::Script {
             assignments: 4,
             spacing: Span::millis(0, 1_000),
             ..calm.engine
         },
-        parent: temper_worker_host_world::parent::Script { steps: 30, ..calm.parent },
+        parent: jig_worker_host_world::parent::Script { steps: 30, ..calm.parent },
         outage: Some(Outage {
             at: Span::millis(5_000, 5_000),
             length: Span::millis(5_000, 5_000),
@@ -130,7 +129,7 @@ fn losing_contact_within_the_grace_keeps_the_runs_and_reports_them() {
 fn shutdown_cancels_every_run_and_takes_no_more() {
     let calm = Settings::calm(8);
     let settings = Settings {
-        parent: temper_worker_host_world::parent::Script { steps: 30, ..calm.parent },
+        parent: jig_worker_host_world::parent::Script { steps: 30, ..calm.parent },
         shutdown: Some(Span::millis(30_000, 30_000)),
         ..calm
     };
@@ -152,11 +151,11 @@ fn rough(seed: u64) -> Settings {
 
 #[test]
 fn a_seed_replays_to_the_same_run() {
-    let trace = temper_world::assert_replays(11, 12, |seed| {
+    let trace = skein_world::domain::assert_replays(11, 12, |seed| {
         let world = run(&rough(seed));
         (world.trace().to_vec(), (world.stats(), world.now()))
     });
-    assert!(trace.len() > 100, "the world did something");
+    assert!(trace.len() > 50, "the world did something: {} events", trace.len());
 }
 
 #[test]

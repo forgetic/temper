@@ -4,7 +4,7 @@ use super::{
     CallAnswer, CallKey, Decision, Delivery, Domain, Env, Family, ForgeRepository, ForgeStart, ForgeWorkspace, Id, Key,
     Limits, List, ProcedureAction, Queue, Record, ReplyTo, RoutedCall, Token, Work, Write, authority,
     authority_numbers, authority_value, decide_call, emit, escalation, forge, forge_change, forge_client, forge_issues,
-    people, procedure_step, save, tasks,
+    people, policy_translate, procedure_step, save, tasks,
 };
 use alloc::boxed::Box;
 use jig_core_brief as brief;
@@ -346,8 +346,14 @@ pub(super) fn effect_call(
         &authority::EffectAsk {
             project: context.project,
             authority: authority_value(&context.authority),
-            effect: authority::Effect { connector: 1, kind, name, state },
-            landing: None,
+            effect: authority::Effect {
+                connector: domain.config.forge_connector,
+                kind,
+                name,
+                state,
+                guards: Box::new([]),
+            },
+            now: env.wall,
         },
         &[],
         &mut findings,
@@ -445,7 +451,13 @@ pub(super) fn read_call(
                     project: context.project,
                     authority: authority_value(&context.authority),
                     family: authority::Tools(1),
-                    call: authority::Call::Read(authority::Effect { connector: 1, kind: 1, name, state: [0; 32] }),
+                    call: authority::Call::Read(authority::Effect {
+                        connector: domain.config.forge_connector,
+                        kind: 1,
+                        name,
+                        state: [0; 32],
+                        guards: Box::new([]),
+                    }),
                 },
                 &mut findings,
             ) == authority::Answer::Allow
@@ -536,7 +548,7 @@ pub(super) fn subscribe_call(
         task: key.task,
         subscription: tasks::Subscription {
             number,
-            kind: tasks::SubscriptionKind::Topic { connector: 1, topic: number },
+            kind: tasks::SubscriptionKind::Topic { connector: domain.config.forge_connector, topic: number },
         },
     }));
 }
@@ -630,8 +642,14 @@ pub(super) fn project_goal(domain: &mut Domain, env: &Env<Limits>, goal: &tasks:
         &authority::EffectAsk {
             project: goal.project,
             authority: authority_value(&goal.authority),
-            effect: authority::Effect { connector: 1, kind: 8, name, state: [0; 32] },
-            landing: None,
+            effect: authority::Effect {
+                connector: domain.config.forge_connector,
+                kind: 8,
+                name,
+                state: [0; 32],
+                guards: Box::new([]),
+            },
+            now: env.wall,
         },
         &[],
         &mut findings,
@@ -726,7 +744,7 @@ pub(super) fn subscribe_goal(domain: &mut Domain, env: &Env<Limits>, goal: u64, 
         task: goal,
         subscription: tasks::Subscription {
             number,
-            kind: tasks::SubscriptionKind::Topic { connector: 1, topic: number },
+            kind: tasks::SubscriptionKind::Topic { connector: domain.config.forge_connector, topic: number },
         },
     }));
     domain.work.push(Work::GoalSubscribe(subscriber));
@@ -770,7 +788,13 @@ fn may_push(
             wall: env.wall,
             accounts: Box::new([domain.accounts.usable(domain.config.account)]),
             writes: Box::new([authority::Write {
-                effect: authority::Effect { connector: 1, kind: 2, name, state: [0; 32] },
+                effect: authority::Effect {
+                    connector: domain.config.forge_connector,
+                    kind: 2,
+                    name,
+                    state: [0; 32],
+                    guards: Box::new([]),
+                },
                 held: authority::Writer::Task,
             }]),
         },
@@ -839,10 +863,10 @@ pub(super) fn run_workspace(
     if inherited.is_none() {
         for parameter in &context.spec.parameters {
             match parameter {
-                tasks::Parameter::Resource { connector: 1, resource, .. } => {
-                    let provider =
-                        forge_client::api::Repository { forge: 1, repository: u32::try_from(*resource).ok()? };
-                    let repository = domain.forge.repository(provider)?;
+                tasks::Parameter::Resource { connector, resource, .. }
+                    if *connector == domain.config.forge_connector =>
+                {
+                    let repository = domain.forge.repository_tag(context.project, u32::try_from(*resource).ok()?)?;
                     if repository.project != context.project {
                         return None;
                     }
@@ -941,10 +965,11 @@ pub(super) fn run_workspace(
             writes
                 .push(authority::Write {
                     effect: authority::Effect {
-                        connector: 1,
+                        connector: domain.config.forge_connector,
                         kind: 2,
                         name: resource_name(repository, &name.what, env.limits.authority.segments)?,
                         state: [0; 32],
+                        guards: Box::new([]),
                     },
                     held,
                 })
@@ -992,12 +1017,17 @@ fn configured_gates(
     let what = branch_what(base, env.limits.forge.name_bytes)?;
     let name = resource_name(repository, &what, env.limits.authority.segments)?;
     let mut gates: List<forge_change::Gate> = List::with_capacity(env.limits.forge.change_policy.gates);
-    let policy = domain.config.authority.policy(repository.project)?;
-    for rules in [&domain.config.authority.rules().landing, &policy.landing] {
-        for rule in rules.as_ref() {
-            if rule.connector != repository.provider.forge
+    let project = domain.config.landing.projects.get(&repository.project);
+    let empty: &[people::LandingRule] = &[];
+    let project_rules = match project {
+        Some(rules) => rules.as_ref(),
+        None => empty,
+    };
+    for rules in [&domain.config.landing.deployment[..], project_rules] {
+        for rule in rules {
+            if rule.connector != domain.config.forge_connector
                 || rule.kind != 4
-                || !authority::pattern_covers(&rule.pattern, &name)
+                || !authority::pattern_covers(&policy_translate::pattern_to_authority(rule.pattern.clone()), &name)
             {
                 continue;
             }
@@ -1021,8 +1051,8 @@ fn configured_gates(
                             forge_change::Freshness::Exact
                         } else {
                             match gate.freshness {
-                                authority::Freshness::Exact => forge_change::Freshness::Exact,
-                                authority::Freshness::Clean => forge_change::Freshness::Clean,
+                                people::Freshness::Exact => forge_change::Freshness::Exact,
+                                people::Freshness::Clean => forge_change::Freshness::Clean,
                             }
                         },
                         eager: false,
@@ -1055,62 +1085,13 @@ fn configured_gates(
     Some(gates.into_boxed())
 }
 
-fn landing_status(value: forge_change::Status) -> authority::Status {
-    match value {
-        forge_change::Status::Unknown => authority::Status::Unknown,
-        forge_change::Status::Pending => authority::Status::Pending,
-        forge_change::Status::Passed => authority::Status::Passed,
-        forge_change::Status::Failed => authority::Status::Failed,
-    }
-}
-
-fn landing_freshness(value: forge_change::Freshness) -> authority::Freshness {
-    match value {
-        forge_change::Freshness::Exact => authority::Freshness::Exact,
-        forge_change::Freshness::Clean => authority::Freshness::Clean,
-    }
-}
-
-fn landing_snapshot(
+fn landing_reviewers(
     domain: &Domain,
     env: &Env<Limits>,
     row: &forge::ChangeRow,
     evidence: &forge::ChangeEvidence,
-) -> Option<authority::Landing> {
-    if !evidence.reviews_complete {
-        return None;
-    }
-    let head = evidence.head?;
-    let repository = domain.forge.repository(row.repository)?;
-    let mut checks = List::with_capacity(env.limits.authority.gates);
-    if !repository.ci {
-        for number in &repository.checks {
-            checks
-                .push(authority::Gate { number: *number, blocking: true, freshness: authority::Freshness::Exact })
-                .ok()?;
-        }
-    }
-    let mut gates = List::with_capacity(env.limits.authority.gates);
-    for gate in &row.change.gates {
-        gates
-            .push(authority::Gate {
-                number: u32::try_from(gate.number).ok()?,
-                blocking: gate.blocking,
-                freshness: landing_freshness(gate.freshness),
-            })
-            .ok()?;
-    }
-    let mut verdicts = List::with_capacity(env.limits.authority.verdicts);
-    for report in &evidence.gates {
-        verdicts
-            .push(authority::Verdict {
-                gate: u32::try_from(report.number).ok()?,
-                head: report.head,
-                status: landing_status(report.status),
-            })
-            .ok()?;
-    }
-    let mut reviews = List::with_capacity(env.limits.authority.reviews);
+) -> Option<Box<[forge::Reviewer]>> {
+    let mut reviews = List::with_capacity(env.limits.forge.client.inbox);
     for review in &evidence.reviews {
         let mut superseded = false;
         for other in &evidence.reviews {
@@ -1129,27 +1110,16 @@ fn landing_snapshot(
         ) else {
             continue;
         };
-        let status = match review.verdict {
-            forge_client::api::Verdict::Approve => authority::Status::Passed,
-            forge_client::api::Verdict::RequestChanges => authority::Status::Failed,
-            forge_client::api::Verdict::Comment => authority::Status::Unknown,
-        };
         reviews
-            .push(authority::Review { person, role: escalation::role_number(role), head: review.commit, status })
+            .push(forge::Reviewer {
+                person,
+                role: escalation::role_number(role),
+                head: review.commit,
+                verdict: review.verdict,
+            })
             .ok()?;
     }
-    Some(authority::Landing {
-        head,
-        tip: evidence.base_tip,
-        contains_tip: landing_status(evidence.contains_base),
-        ci: authority::Ci { head, status: landing_status(evidence.ci) },
-        has_ci: repository.ci,
-        checks: checks.into_boxed(),
-        clean: row.change.clean.clone(),
-        gates: gates.into_boxed(),
-        verdicts: verdicts.into_boxed(),
-        reviews: reviews.into_boxed(),
-    })
+    Some(reviews.into_boxed())
 }
 
 fn check_change_effect(
@@ -1166,29 +1136,65 @@ fn check_change_effect(
         return authority::Answer::Refuse;
     }
     let pull_what = pull_what(row.pull);
-    let (kind, what, state, landing) = match effect {
+    let (kind, what, state) = match effect {
         forge_change::Effect::Open => {
-            (3, branch_what(&row.branch, env.limits.forge.name_bytes), evidence.head.unwrap_or([0; 32]), None)
+            (3, branch_what(&row.branch, env.limits.forge.name_bytes), evidence.head.unwrap_or([0; 32]))
         }
-        forge_change::Effect::CreateBranch { head } => {
-            (9, branch_what(&row.branch, env.limits.forge.name_bytes), head, None)
-        }
+        forge_change::Effect::CreateBranch { head } => (9, branch_what(&row.branch, env.limits.forge.name_bytes), head),
         forge_change::Effect::Reopen | forge_change::Effect::Retarget => {
-            (3, pull_what, evidence.head.unwrap_or([0; 32]), None)
+            (3, pull_what, evidence.head.unwrap_or([0; 32]))
         }
-        forge_change::Effect::Update { head, .. } => {
-            (2, branch_what(&row.branch, env.limits.forge.name_bytes), head, None)
-        }
-        forge_change::Effect::Merge { head, .. } => {
-            (4, branch_what(&row.base, env.limits.forge.name_bytes), head, landing_snapshot(domain, env, row, evidence))
-        }
+        forge_change::Effect::Update { head, .. } => (2, branch_what(&row.branch, env.limits.forge.name_bytes), head),
+        forge_change::Effect::Merge { head, .. } => (4, branch_what(&row.base, env.limits.forge.name_bytes), head),
     };
     let Some(what) = what else { return authority::Answer::Refuse };
     let Some(name) = resource_name(repository, &what, env.limits.authority.segments) else {
         return authority::Answer::Refuse;
     };
-    if kind == 4 && landing.is_none() {
-        return authority::Answer::Wait;
+    let mut effect =
+        authority::Effect { connector: domain.config.forge_connector, kind, name, state, guards: Box::new([]) };
+    let Some(judges) = authority::needed_judges(&domain.config.authority, context.project, &effect) else {
+        return authority::Answer::Refuse;
+    };
+    let mut guards = List::with_capacity(env.limits.authority.facts);
+    if kind == 4 {
+        for judge in &judges {
+            if judge.connector == domain.config.forge_connector
+                && domain.forge.guards_landing(context.project, judge.requirement, judge.parameters)
+                && guards.push(*judge).is_err()
+            {
+                return authority::Answer::Refuse;
+            }
+        }
+    }
+    effect.guards = guards.into_boxed();
+    let Some(reviewers) = landing_reviewers(domain, env, row, evidence) else {
+        return authority::Answer::Refuse;
+    };
+    let mut given = List::with_capacity(env.limits.authority.facts);
+    for judge in &judges {
+        if judge.connector != domain.config.forge_connector {
+            continue;
+        }
+        let Some(verdict) = domain.forge.judge_landing(
+            context.project,
+            judge.requirement,
+            judge.parameters,
+            task,
+            state,
+            evidence,
+            &reviewers,
+        ) else {
+            continue;
+        };
+        let verdict = match verdict {
+            forge::JudgeVerdict::Met => authority::Verdict::Met,
+            forge::JudgeVerdict::Wait => authority::Verdict::Wait,
+            forge::JudgeVerdict::Refuse => authority::Verdict::Refuse,
+        };
+        if given.push(authority::Given { judge: *judge, verdict, at: env.wall, state }).is_err() {
+            return authority::Answer::Refuse;
+        }
     }
     let mut findings =
         Queue::with_capacity(authority::max_out(domain.config.authority.limits()).expect("authority findings"));
@@ -1197,16 +1203,16 @@ fn check_change_effect(
         &authority::EffectAsk {
             project: context.project,
             authority: authority_value(&context.authority),
-            effect: authority::Effect { connector: 1, kind, name, state },
-            landing,
+            effect,
+            now: env.wall,
         },
-        &[],
+        given.as_slice(),
         &mut findings,
     )
 }
 
 /// Register the connector's procedure beside the task's first due step.
-/// Parameter 1 names a repository (its forge in `connector`), 2 the base,
+/// Parameter 1 names a project-unique repository tag, 2 the base,
 /// 3 an optional already-pushed branch, 4 the pull body, and 5 priority.
 #[expect(clippy::too_many_lines, reason = "one procedure registration and fresh-step route")]
 pub(super) fn start_change(domain: &mut Domain, env: &Env<Limits>, context: &tasks::RunContext) -> bool {
@@ -1220,8 +1226,12 @@ pub(super) fn start_change(domain: &mut Domain, env: &Env<Limits>, context: &tas
     for parameter in &context.spec.parameters {
         match parameter {
             tasks::Parameter::Resource { name: 1, connector, resource } => {
-                let Ok(repository) = u32::try_from(*resource) else { return false };
-                provider = Some(forge_client::api::Repository { forge: *connector, repository });
+                if *connector != domain.config.forge_connector {
+                    return false;
+                }
+                let Ok(tag) = u32::try_from(*resource) else { return false };
+                let Some(repository) = domain.forge.repository_tag(context.project, tag) else { return false };
+                provider = Some(repository.provider);
             }
             tasks::Parameter::Bytes { name: 2, value } => base = Some(value.clone()),
             tasks::Parameter::Bytes { name: 3, value } => branch = Some(value.clone()),
@@ -1416,7 +1426,7 @@ fn change_delegate(
     parameters
         .push(tasks::Parameter::Resource {
             name: 1,
-            connector: row.repository.forge,
+            connector: domain.config.forge_connector,
             resource: u64::from(row.repository.repository),
         })
         .ok()?;
@@ -1426,7 +1436,11 @@ fn change_delegate(
         forge_change::Delegate::Produce => (
             tasks::Executor::Agent { charter: domain.config.charter },
             row.title.clone(),
-            tasks::Contract::Change { connector: 1, kind: 2, words: env.limits.tasks.result_bytes },
+            tasks::Contract::Change {
+                connector: domain.config.forge_connector,
+                kind: 2,
+                words: env.limits.tasks.result_bytes,
+            },
         ),
         forge_change::Delegate::Repair(why) => {
             let words: &[u8] = match why {
@@ -1437,7 +1451,11 @@ fn change_delegate(
             (
                 tasks::Executor::Agent { charter: domain.config.charter },
                 Box::from(words),
-                tasks::Contract::Change { connector: 1, kind: 2, words: env.limits.tasks.result_bytes },
+                tasks::Contract::Change {
+                    connector: domain.config.forge_connector,
+                    kind: 2,
+                    words: env.limits.tasks.result_bytes,
+                },
             )
         }
         forge_change::Delegate::Resolve { base } => {
@@ -1445,7 +1463,11 @@ fn change_delegate(
             (
                 tasks::Executor::Agent { charter: domain.config.charter },
                 Box::from(&b"Resolve the merge conflict and push the merge commit"[..]),
-                tasks::Contract::Change { connector: 1, kind: 2, words: env.limits.tasks.result_bytes },
+                tasks::Contract::Change {
+                    connector: domain.config.forge_connector,
+                    kind: 2,
+                    words: env.limits.tasks.result_bytes,
+                },
             )
         }
         forge_change::Delegate::Gate { number, head } => {
@@ -1481,6 +1503,7 @@ fn change_delegate(
         spec: tasks::Spec { words, parameters: parameters.into_boxed(), inputs: Box::new([]) },
         contract,
         authority,
+        symbolic_grants: Box::new([]),
         dependencies: Box::new([]),
         wake: tasks::WakePolicy::DEFAULT,
     })
@@ -1535,13 +1558,13 @@ fn start_queue_repair(domain: &mut Domain, env: &Env<Limits>, task: u64) -> bool
         batch: Box::new([tasks::New {
             number: repair,
             project,
-            executor: tasks::Executor::Procedure { connector: 1, code: 2 },
+            executor: tasks::Executor::Procedure { connector: domain.config.forge_connector, code: 2 },
             spec: tasks::Spec {
                 words: Box::from(&b"Repair landing branch CI"[..]),
                 parameters: Box::new([
                     tasks::Parameter::Resource {
                         name: 1,
-                        connector: provider.forge,
+                        connector: domain.config.forge_connector,
                         resource: u64::from(provider.repository),
                     },
                     tasks::Parameter::Bytes { name: 2, value: base },
@@ -1550,7 +1573,11 @@ fn start_queue_repair(domain: &mut Domain, env: &Env<Limits>, task: u64) -> bool
                 ]),
                 inputs: Box::new([]),
             },
-            contract: tasks::Contract::Change { connector: 1, kind: 1, words: env.limits.tasks.result_bytes },
+            contract: tasks::Contract::Change {
+                connector: domain.config.forge_connector,
+                kind: 1,
+                words: env.limits.tasks.result_bytes,
+            },
             numbers: tasks::Numbers { budget: authority.budget.spend, spent: 0, spent_below: 0, reserved: 0 },
             authority: super::task_authority(&authority),
             funder: tasks::Funder::Period { project, period },
@@ -1566,7 +1593,7 @@ fn start_queue_repair(domain: &mut Domain, env: &Env<Limits>, task: u64) -> bool
 #[expect(clippy::too_many_lines, reason = "one procedure decision translates the complete change vocabulary")]
 fn change_decision(domain: &mut Domain, env: &Env<Limits>, task: u64, choice: forge_change::Decision) {
     let Some((connector, code, step)) = domain.tasks.procedure_due(task) else { return };
-    if connector != 1 || code != 2 {
+    if connector != domain.config.forge_connector || code != 2 {
         return;
     }
     domain.forge_change_due.remove(&task);
@@ -1590,7 +1617,7 @@ fn change_decision(domain: &mut Domain, env: &Env<Limits>, task: u64, choice: fo
                 return;
             };
             ProcedureAction::Result(tasks::TaskResult::Change {
-                connector: 1,
+                connector: domain.config.forge_connector,
                 kind: 1,
                 resource: pull,
                 words: Box::from(&merge[..]),

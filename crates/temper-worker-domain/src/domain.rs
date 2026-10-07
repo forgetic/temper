@@ -14,19 +14,17 @@
 //! on a ready list: an entry point completes them all, and [`max_out`]
 //! follows from the child domains' along that chain (the `limits` module).
 
-use alloc::boxed::Box;
-
+use jig_worker_host as host;
 use skein_lib::{Env, Id, Map, Queue, Slab, Time, Token};
 use temper_worker_domain_agent as agent;
 use temper_worker_domain_checkout as checkout;
-use temper_worker_domain_host as host;
 
 use crate::boundary::{Event, Request, Told};
 use crate::facts::Fact;
 use crate::limits::{self, Limits};
 use crate::link::{Fired, Link};
 use crate::route;
-use crate::workspace::Workspace;
+use crate::workspace::{Items, Workspace};
 
 /// The most requests an entry point emits per call under `limits`: what the
 /// child domains emit in the most steps it takes of each (see the module), as
@@ -41,7 +39,7 @@ pub const fn max_out(limits: &Limits) -> u32 {
         .saturating_add(limits.host.slots)
         .saturating_add(limits.stalled)
         .saturating_add(bounces)
-        .saturating_add(limits.host.slots.saturating_mul(limits.turns))
+        .saturating_add(limits.host.slots.saturating_mul(limits.host.turns))
 }
 
 /// The worker domain's state: its child domains', the engine link, what it
@@ -56,6 +54,9 @@ pub struct Domain {
     /// The workspaces the host asked for, until the checkout has released
     /// them.
     pub(crate) workspaces: Slab<Workspace>,
+    /// Application workspace items retained while the host owns each run.
+    pub(crate) items: Slab<Items>,
+    pub(crate) items_by_run: Map<Token, Id<Items>>,
     /// Workspaces being prepared, by the host's token for their run.
     pub(crate) preparing: Map<Token, Id<Workspace>>,
     /// What each child domain emits in a step, until it is routed. Empty
@@ -64,8 +65,6 @@ pub struct Domain {
     pub(crate) checkout_out: Queue<checkout::Request>,
     pub(crate) agent_out: Queue<agent::Request>,
     /// The run's facts for the engine, and how many did not fit.
-    told: Queue<Told>,
-    told_lost: u64,
     facts: Queue<Fact>,
     lost: u64,
 }
@@ -84,12 +83,12 @@ impl Domain {
             agent: agent::Domain::new(&limits.agent),
             link: Link::new(limits, seed),
             workspaces: Slab::with_capacity(slots),
+            items: Slab::with_capacity(slots.saturating_add(1)),
+            items_by_run: Map::with_capacity(slots.saturating_add(1)),
             preparing: Map::with_capacity(slots),
             host_out: Queue::with_capacity(limits::host_out(limits)),
             checkout_out: Queue::with_capacity(limits::checkout_out(limits)),
             agent_out: Queue::with_capacity(limits::agent_out(limits)),
-            told: Queue::with_capacity(limits.told),
-            told_lost: 0,
             facts: Queue::with_capacity(facts),
             lost: 0,
         }
@@ -136,7 +135,7 @@ impl Domain {
     /// Turns retained until commitment acknowledgement.
     #[must_use]
     pub fn retained_turns(&self) -> u32 {
-        self.link.retained_turns()
+        self.host.retained_turns()
     }
 
     /// Relays and bounces waiting for a channel to the engine.
@@ -149,7 +148,7 @@ impl Domain {
     /// out of reach past the grace, since the domain was made.
     #[must_use]
     pub const fn abandoned(&self) -> u64 {
-        self.link.abandoned()
+        self.link.abandoned().saturating_add(self.host.turns_abandoned())
     }
 
     /// Whether the worker has shut down: told to, every run has answered, and
@@ -213,13 +212,16 @@ impl Domain {
         if !self.link.is_up() {
             return None;
         }
-        self.told.pop()
+        match self.host.pop_told() {
+            Some(told) => Some(Told { run: told.run, attempt: told.attempt, fact: told.fact }),
+            None => None,
+        }
     }
 
     /// How many of the run's facts were dropped for want of room.
     #[must_use]
-    pub const fn told_lost(&self) -> u64 {
-        self.told_lost
+    pub fn told_lost(&self) -> u64 {
+        self.host.told_lost()
     }
 
     /// The reclaim point: frees what closed in this iteration.
@@ -228,6 +230,7 @@ impl Domain {
         self.checkout.reclaim();
         self.agent.reclaim();
         self.workspaces.reclaim();
+        self.items.reclaim();
     }
 }
 
@@ -235,16 +238,6 @@ impl Domain {
 pub(crate) fn keep(domain: &mut Domain, fact: Fact) {
     if domain.facts.try_push(fact).is_err() {
         domain.lost = domain.lost.saturating_add(1);
-    }
-}
-
-/// A fact the agent of the hosted run `client` told, for the engine under the
-/// run's names: kept while there is room, dropped and counted otherwise.
-pub(crate) fn tell(domain: &mut Domain, client: Token, fact: Box<[u8]>) {
-    let Some(hosting) = domain.host.hosting(client) else { unreachable!("a run is hosted until its agent has gone") };
-    let told = Told { run: hosting.run, attempt: hosting.attempt, fact };
-    if domain.told.try_push(told).is_err() {
-        domain.told_lost = domain.told_lost.saturating_add(1);
     }
 }
 
@@ -266,7 +259,7 @@ pub fn fire(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
     };
     let agent_due = domain.agent.is_due(env.now);
     if link_due && (!agent_due || domain.link.next_deadline() <= domain.agent.next_deadline()) {
-        match domain.link.fire(env, out) {
+        match domain.link.fire(env, &domain.host, out) {
             Some(Fired::Dialled | Fired::Turn) | None => {}
             Some(Fired::Grace) => {
                 keep(domain, Fact::Grace);
@@ -297,8 +290,8 @@ pub fn resume(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) 
 /// out of reach past the grace.
 fn settle(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
     route::hand_off(domain, env, out);
-    if domain.host.unanswered() == 0 {
-        domain.link.give_up();
+    if domain.host.unanswered() == 0 && domain.link.give_up(&domain.host) {
+        domain.host.give_up_turns();
     }
     gather(domain, &env.limits);
 }

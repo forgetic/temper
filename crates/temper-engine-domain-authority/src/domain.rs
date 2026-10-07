@@ -1,9 +1,9 @@
 //! Policies in force, changed only by bounded events (domain/authority.md, 6).
 
-use skein_lib::{Map, Queue};
+use skein_lib::{List, Map, Queue};
 
-use crate::limits::{authority_within, landing_rules_within, requirements_within, within};
-use crate::{Limits, Policy, Role, Rules, at_most, max_out, worst_case};
+use crate::limits::{authority_within, requirements_within, within};
+use crate::{Limits, Policy, Requirement, Role, Rules, at_most, max_out, worst_case};
 
 /// Bounded live project-policy table and immutable deployment rules; contains no task ledger,
 /// connector state or authentication. (domain/authority.md, sections 2 and 6).
@@ -40,8 +40,7 @@ pub enum PolicyRefusal {
     Oversized,
     /// Project authority or period spend exceeds deployment rules.
     AboveRules,
-    /// Role authority, period spend, permission bits, uniqueness or required approval-role identity
-    /// is invalid.
+    /// Role authority, period spend, permission bits, uniqueness or escalation identity is invalid.
     InvalidRole,
     /// A new project cannot fit in the bounded table; existing entries are retained.
     Full,
@@ -90,7 +89,6 @@ impl Domain {
         worst_case(&limits)?;
         if !authority_within(&rules.ceiling, &limits)
             || !requirements_within(&rules.requirements, &limits)
-            || !landing_rules_within(&rules.landing, &limits)
             || rules.implies.len() > limits.implications
             || rules.minimum_run_spend >= rules.maximum_run_spend
             || rules.maximum_run_spend > rules.ceiling.budget.spend
@@ -98,6 +96,30 @@ impl Domain {
             return None;
         }
         Some(Domain { rules, policies: Map::with_capacity(limits.projects), limits })
+    }
+
+    /// Add bounded deployment requirements while assembling startup configuration.
+    /// The application's root calls this before the first event it admits.
+    pub fn add_configured_requirements(&mut self, additions: &[Requirement]) -> bool {
+        let Some(count) = u32::try_from(self.rules.requirements.len().saturating_add(additions.len())).ok() else {
+            return false;
+        };
+        if count > self.limits.requirements || !requirements_within(additions, &self.limits) {
+            return false;
+        }
+        let mut combined = List::with_capacity(count);
+        for requirement in &self.rules.requirements {
+            if combined.push(requirement.clone()).is_err() {
+                return false;
+            }
+        }
+        for requirement in additions {
+            if combined.push(requirement.clone()).is_err() {
+                return false;
+            }
+        }
+        self.rules.requirements = combined.into_boxed();
+        true
     }
 
     /// Borrow immutable deployment rules; no output or state change.
@@ -171,7 +193,6 @@ fn invalid(domain: &Domain, policy: &Policy) -> Option<PolicyRefusal> {
     if !authority_within(&policy.ceiling, &domain.limits)
         || !within(policy.roles.len(), domain.limits.roles)
         || !requirements_within(&policy.requirements, &domain.limits)
-        || !landing_rules_within(&policy.landing, &domain.limits)
     {
         return Some(PolicyRefusal::Oversized);
     }
@@ -207,17 +228,6 @@ fn invalid(domain: &Domain, policy: &Policy) -> Option<PolicyRefusal> {
         }
         if !valid {
             return Some(PolicyRefusal::InvalidRole);
-        }
-    }
-    for rule in &policy.landing {
-        for approval in &rule.approvals {
-            let mut exists = false;
-            for role in &policy.roles {
-                exists |= role.number == approval.role;
-            }
-            if !exists {
-                return Some(PolicyRefusal::InvalidRole);
-            }
         }
     }
     None

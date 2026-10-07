@@ -13,6 +13,10 @@ pub(crate) fn delegate(value: &Value) -> Result<engine::Delegate, Problem> {
     let spec = spec(value.required(b"spec")?)?;
     let contract = contract(value.required(b"contract")?)?;
     let authority = authority(value.required(b"authority")?)?;
+    let symbolic_grants = match value.field(b"symbolic_grants")? {
+        Some(grants) => grants_list(grants)?,
+        None => Box::new([]),
+    };
     let dependencies = match value.field(b"dependencies")? {
         Some(items) => {
             let items = items.array()?;
@@ -35,7 +39,7 @@ pub(crate) fn delegate(value: &Value) -> Result<engine::Delegate, Problem> {
         Some(wake) => wake_policy(wake)?,
         None => tasks::WakePolicy::DEFAULT,
     };
-    Ok(engine::Delegate { executor, spec, contract, authority, dependencies, wake })
+    Ok(engine::Delegate { executor, spec, contract, authority, symbolic_grants, dependencies, wake })
 }
 
 pub(crate) fn delegates(value: &Value) -> Result<Box<[engine::Delegate]>, Problem> {
@@ -144,26 +148,7 @@ fn contract(value: &Value) -> Result<tasks::Contract, Problem> {
 
 pub(crate) fn authority(value: &Value) -> Result<tasks::Authority, Problem> {
     let tools = tasks::Tools(value.required(b"tools")?.number()?);
-    let grants = value.required(b"grants")?.array()?;
-    let Ok(capacity) = u32::try_from(grants.len()) else { return Err(Problem::TooLarge) };
-    let mut out = List::with_capacity(capacity);
-    for grant in grants {
-        let segments = texts(grant.required(b"segments")?)?;
-        let terminal = grant.required(b"terminal")?.text()?;
-        let bytes = grant.required(b"last")?.text()?;
-        let last = match terminal.as_ref() {
-            b"exact" => tasks::Last::Exact(bytes),
-            b"open" => tasks::Last::Open(bytes),
-            _ => return Err(Problem::Range),
-        };
-        let Ok(()) = out.push(tasks::Grant {
-            connector: grant.required(b"connector")?.narrow()?,
-            kind: grant.required(b"kind")?.narrow()?,
-            pattern: tasks::Pattern { segments, last },
-        }) else {
-            return Err(Problem::TooLarge);
-        };
-    }
+    let grants = grants_list(value.required(b"grants")?)?;
     let delegation = value.required(b"delegation")?;
     let kinds = delegation.required(b"kinds")?.array()?;
     let Ok(capacity) = u32::try_from(kinds.len()) else { return Err(Problem::TooLarge) };
@@ -184,9 +169,13 @@ pub(crate) fn authority(value: &Value) -> Result<tasks::Authority, Problem> {
         None => None,
     };
     let Ok(notes) = u8::try_from(value.required(b"notes")?.narrow()?) else { return Err(Problem::Range) };
+    let note_resources = match value.field(b"note_resources")? {
+        Some(scopes) => note_resources_list(scopes)?,
+        None => Box::new([]),
+    };
     Ok(tasks::Authority {
         tools,
-        grants: out.into_boxed(),
+        grants,
         delegation: tasks::Delegation {
             kinds: permitted.into_boxed(),
             tasks: delegation.required(b"tasks")?.small()?,
@@ -194,7 +183,55 @@ pub(crate) fn authority(value: &Value) -> Result<tasks::Authority, Problem> {
         },
         budget: tasks::Budget { spend: budget.required(b"spend")?.number()?, deadline },
         notes: tasks::Scopes(notes),
+        note_resources,
     })
+}
+
+fn note_resources_list(value: &Value) -> Result<Box<[tasks::ResourceScope]>, Problem> {
+    let scopes = value.array()?;
+    let Ok(capacity) = u32::try_from(scopes.len()) else { return Err(Problem::TooLarge) };
+    let mut out = List::with_capacity(capacity);
+    for scope in scopes {
+        let pattern = scope.required(b"pattern")?;
+        let terminal = pattern.required(b"terminal")?.text()?;
+        let bytes = pattern.required(b"last")?.text()?;
+        let last = match terminal.as_ref() {
+            b"exact" => tasks::Last::Exact(bytes),
+            b"open" => tasks::Last::Open(bytes),
+            _ => return Err(Problem::Range),
+        };
+        let Ok(()) = out.push(tasks::ResourceScope {
+            connector: scope.required(b"connector")?.narrow()?,
+            pattern: tasks::Pattern { segments: texts(pattern.required(b"segments")?)?, last },
+        }) else {
+            return Err(Problem::TooLarge);
+        };
+    }
+    Ok(out.into_boxed())
+}
+
+fn grants_list(value: &Value) -> Result<Box<[tasks::Grant]>, Problem> {
+    let grants = value.array()?;
+    let Ok(capacity) = u32::try_from(grants.len()) else { return Err(Problem::TooLarge) };
+    let mut out = List::with_capacity(capacity);
+    for grant in grants {
+        let segments = texts(grant.required(b"segments")?)?;
+        let terminal = grant.required(b"terminal")?.text()?;
+        let bytes = grant.required(b"last")?.text()?;
+        let last = match terminal.as_ref() {
+            b"exact" => tasks::Last::Exact(bytes),
+            b"open" => tasks::Last::Open(bytes),
+            _ => return Err(Problem::Range),
+        };
+        let Ok(()) = out.push(tasks::Grant {
+            connector: grant.required(b"connector")?.narrow()?,
+            kind: grant.required(b"kind")?.narrow()?,
+            pattern: tasks::Pattern { segments, last },
+        }) else {
+            return Err(Problem::TooLarge);
+        };
+    }
+    Ok(out.into_boxed())
 }
 
 fn wake_policy(value: &Value) -> Result<tasks::WakePolicy, Problem> {

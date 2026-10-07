@@ -10,27 +10,27 @@ use temper_worker_domain_checkout::git::{self, Commit, Op};
 
 use crate::{
     Domain, Event, Fact, Hello, Hosted, Limits, Phase, Request, Told, agent, checkout, fire, host, max_out, resume,
-    step, worst_case,
+    step, wire, worst_case,
 };
 
 const LIMITS: Limits = Limits {
     host: host::Limits {
         accounts: 4,
         slots: 2,
-        repositories: 2,
-        name_bytes: 16,
         charter_bytes: 64,
         snapshot_bytes: 32,
         transcript_bytes: 0,
         turn_bytes: 0,
-        conflicts: 0,
-        path_bytes: 0,
         outcome_bytes: 32,
         detail_bytes: 8,
         held: 2,
         event_bytes: 16,
         run_calls: 2,
         facts: 64,
+        told: 2,
+        fact_bytes: 16,
+        turns: 0,
+        turn_queue_bytes: 0,
     },
     checkout: checkout::Limits {
         workspaces: 2,
@@ -73,10 +73,7 @@ const LIMITS: Limits = Limits {
     grace: Duration::from_secs(30),
     redial: Duration::from_secs(1),
     redial_max: Duration::from_secs(8),
-    told: 2,
     stalled: 4,
-    turns: 0,
-    turn_queue_bytes: 0,
     turn_backoff: Duration::from_secs(1),
 };
 
@@ -296,20 +293,20 @@ fn attempt(run: u64) -> Token {
 
 /// The test assignment for `run`: one writable repository, its unfinished
 /// work saved, no snapshot.
-fn assignment(run: u64) -> host::Assignment {
-    let repository = host::Repository {
+fn assignment(run: u64) -> wire::Assignment {
+    let repository = wire::Repository {
         tag: 0,
         name: bytes(b"app"),
         remote: bytes(b"org/app"),
-        start: host::Start::Base { branch: bytes(b"main") },
-        access: host::Access::Writable { push: bytes(b"fix") },
+        start: wire::Start::Base { branch: bytes(b"main") },
+        access: wire::Access::Writable { push: bytes(b"fix") },
         identity: 0,
     };
-    host::Assignment {
+    wire::Assignment {
         grants: Box::new([]),
         run: Token::new(run),
         attempt: attempt(run),
-        workspace: host::Workspace { key: key(run), repositories: Box::new([repository]) },
+        workspace: wire::Workspace { key: key(run), repositories: Box::new([repository]) },
         save: Some(bytes(b"saved")),
         charter: bytes(b"charter"),
         snapshot: None,
@@ -333,16 +330,16 @@ fn send(r: Names, message: Down) -> Request {
     Request::Send { owner: r.agent, process: r.process, message }
 }
 
-fn answer(r: Names, answer: host::Answer) -> Request {
+fn answer(r: Names, answer: wire::Answer) -> Request {
     Request::Answer { run: r.run, attempt: r.attempt, answer }
 }
 
-fn work(landed: &[host::Landed], saved: Option<Box<[host::Landing]>>) -> host::Work {
-    host::Work { landed: Box::from(landed), saved }
+fn work(landed: &[wire::Landed], saved: Option<Box<[wire::Landing]>>) -> wire::Work {
+    wire::Work { landed: Box::from(landed), saved }
 }
 
-fn cancelled(reason: host::Reason, work: host::Work) -> host::Answer {
-    host::Answer::Failed { failure: host::Failure::Cancelled(reason), detail: bytes(b""), work }
+fn cancelled(reason: wire::Reason, work: wire::Work) -> wire::Answer {
+    wire::Answer::Failed { failure: wire::Failure::Cancelled(reason), detail: bytes(b""), work }
 }
 
 // A run, across the three child domains.
@@ -360,9 +357,9 @@ fn a_run_goes_from_its_assignment_to_its_answer_through_all_three_child_domains(
     let emitted = h.say(r, Up::Finish { finish });
     assert_eq!(&*emitted, [read(r)], "the stop changes nothing: it exits next");
     let emitted = h.goes(r);
-    let ended = host::Answer::Ended {
+    let ended = wire::Answer::Ended {
         outcome: bytes(b"done"),
-        work: work(&[host::Landed { tag: 0, commit: COMMITTED }], None),
+        work: work(&[wire::Landed { tag: 0, commit: COMMITTED }], None),
     };
     assert_eq!(&*emitted, [answer(r, ended)], "it ended with its change landed: nothing to save; released");
     h.domain.reclaim();
@@ -397,7 +394,7 @@ fn a_run_cancelled_as_its_workspace_is_prepared_aborts_the_prepare() {
     let done = git::Done::Failed { fault: git::Fault::Cancelled };
     let emitted = h.step(Event::Done { owner, done });
     let r = Names { run: Token::new(1), attempt: attempt(1), agent: owner, process: owner };
-    assert_eq!(&*emitted, [answer(r, cancelled(host::Reason::Engine, work(&[], None)))]);
+    assert_eq!(&*emitted, [answer(r, cancelled(wire::Reason::Engine, work(&[], None)))]);
     h.domain.reclaim();
     assert_eq!(h.domain.workspaces(), 0, "the hold went with the prepare");
     assert_eq!(h.domain.checkout().holds(), 0);
@@ -427,9 +424,9 @@ fn a_run_cancelled_as_its_agent_starts_is_stopped_once_started_and_its_work_save
     assert_eq!(&*h.say(r, Up::Finish { finish }), [read(r)]);
     let emitted = h.goes(r);
     let emitted = h.git(emitted, false);
-    let saved = work(&[], Some(Box::new([host::Landing::Unchanged])));
-    let answered = host::Answer::Failed {
-        failure: host::Failure::Cancelled(host::Reason::Engine),
+    let saved = work(&[], Some(Box::new([wire::Landing::Unchanged])));
+    let answered = wire::Answer::Failed {
+        failure: wire::Failure::Cancelled(wire::Reason::Engine),
         detail: bytes(b"bye"),
         work: saved,
     };
@@ -448,9 +445,9 @@ fn a_live_run_cancelled_winds_down_and_its_own_ending_is_the_answer() {
     assert_eq!(&*h.say(r, Up::Finish { finish }), [read(r)]);
     let emitted = h.goes(r);
     let emitted = h.git(emitted, true);
-    let parked = host::Answer::Parked {
+    let parked = wire::Answer::Parked {
         snapshot: Some(bytes(b"snap")),
-        work: work(&[], Some(Box::new([host::Landing::Landed { commit: COMMITTED }]))),
+        work: work(&[], Some(Box::new([wire::Landing::Landed { commit: COMMITTED }]))),
     };
     assert_eq!(&*emitted, [answer(r, parked)], "its unfinished work saved");
 }
@@ -470,10 +467,10 @@ fn an_agent_that_exits_without_a_word_is_faulted_and_gone_in_one_step() {
         panic!("expected the save's commit, got {emitted:?}");
     };
     let emitted = h.git(emitted, false);
-    let failed = host::Answer::Failed {
-        failure: host::Failure::Agent(host::AgentFailure::Exited),
+    let failed = wire::Answer::Failed {
+        failure: wire::Failure::Agent(wire::AgentFailure::Exited),
         detail: bytes(b"bye"),
-        work: work(&[], Some(Box::new([host::Landing::Unchanged]))),
+        work: work(&[], Some(Box::new([wire::Landing::Unchanged]))),
     };
     assert_eq!(&*emitted, [answer(r, failed)]);
 }
@@ -494,9 +491,9 @@ fn a_workspace_that_cannot_be_prepared_is_released_and_the_run_fails() {
     let missing = git::Fault::Missing { missing: git::Missing::Repository };
     let emitted = h.step(Event::Done { owner, done: git::Done::Failed { fault: missing } });
     let r = Names { run: Token::new(1), attempt: attempt(1), agent: owner, process: owner };
-    let missing = host::Preparation::Missing { repository: 0, missing: host::Missing::Repository };
-    let failure = host::Failure::Unprepared(missing);
-    let failed = host::Answer::Failed { failure, detail: bytes(b""), work: work(&[], None) };
+    let missing = wire::Preparation::Missing { repository: 0, missing: wire::Missing::Repository };
+    let failure = wire::Failure::Unprepared(missing);
+    let failed = wire::Answer::Failed { failure, detail: bytes(b""), work: work(&[], None) };
     assert_eq!(&*emitted, [answer(r, failed)]);
     h.domain.reclaim();
     assert_eq!(h.domain.workspaces(), 0, "released by the top level");
@@ -512,8 +509,8 @@ fn a_workstream_held_by_another_run_fails_the_prepare_for_now() {
     second.workspace.key = key(1);
     let emitted = h.step(Event::Assign { assignment: second });
     let r = Names { run: Token::new(2), attempt: attempt(2), agent: Token::new(0), process: Token::new(0) };
-    let failure = host::Failure::Unprepared(host::Preparation::Transient);
-    let failed = host::Answer::Failed { failure, detail: bytes(b""), work: work(&[], None) };
+    let failure = wire::Failure::Unprepared(wire::Preparation::Transient);
+    let failed = wire::Answer::Failed { failure, detail: bytes(b""), work: work(&[], None) };
     assert_eq!(&*emitted, [answer(r, failed)], "a retry may find it free");
     h.domain.reclaim();
     assert_eq!(h.domain.workspaces(), 1);
@@ -620,7 +617,7 @@ fn an_inbound_event_the_agent_cannot_take_is_bounced_to_the_engine() {
     let r = h.live(1);
     assert_eq!(&*h.step(inbound(r, b"one")), [send(r, Down::Event { name: Token::new(1), event: bytes(b"one") })]);
     assert!(h.step(inbound(r, b"two")).is_empty(), "waits behind the first");
-    let bounced = Request::Bounced { name: Token::new(1), run: r.run, attempt: r.attempt, bounce: host::Bounce::Full };
+    let bounced = Request::Bounced { name: Token::new(1), run: r.run, attempt: r.attempt, bounce: wire::Bounce::Full };
     assert_eq!(&*h.step(inbound(r, b"three")), [bounced], "the engine keeps it");
 }
 
@@ -697,9 +694,9 @@ fn an_answer_made_while_the_channel_is_down_follows_the_next_hello() {
         Hosted { run: first.run, attempt: first.attempt, phase: Phase::Answered },
     ];
     let hello = Hello { slots: 2, workstreams: Box::new([key(1), key(2)]), hosting: Box::new(hosting) };
-    let failure = host::Failure::Run(host::RunFailure::Model);
-    let saved = work(&[], Some(Box::new([host::Landing::Unchanged])));
-    let failed = host::Answer::Failed { failure, detail: bytes(b"bye"), work: saved };
+    let failure = wire::Failure::Run(wire::RunFailure::Model);
+    let saved = work(&[], Some(Box::new([wire::Landing::Unchanged])));
+    let failed = wire::Answer::Failed { failure, detail: bytes(b"bye"), work: saved };
     assert_eq!(&*emitted, [Request::Hello { hello }, answer(first, failed)], "the answer follows the hello");
     assert_eq!(h.domain.held(), 1, "until the engine acknowledges it");
 }
@@ -726,9 +723,9 @@ fn past_the_grace_every_run_is_cancelled_and_the_answer_held_until_the_engine_is
     let emitted = h.connect();
     let hosting = [Hosted { run: r.run, attempt: r.attempt, phase: Phase::Answered }];
     let hello = Hello { slots: 2, workstreams: Box::new([key(1)]), hosting: Box::new(hosting) };
-    let saved = work(&[], Some(Box::new([host::Landing::Unchanged])));
-    let contact = host::Answer::Failed {
-        failure: host::Failure::Cancelled(host::Reason::Contact),
+    let saved = work(&[], Some(Box::new([wire::Landing::Unchanged])));
+    let contact = wire::Answer::Failed {
+        failure: wire::Failure::Cancelled(wire::Reason::Contact),
         detail: bytes(b"bye"),
         work: saved,
     };
@@ -780,8 +777,8 @@ fn an_answer_is_kept_and_sent_after_every_hello_until_the_engine_acknowledges_it
     h.say(r, Up::Finish { finish });
     let emitted = h.goes(r);
     let emitted = h.git(emitted, false);
-    let saved = work(&[], Some(Box::new([host::Landing::Unchanged])));
-    let ended = host::Answer::Ended { outcome: bytes(b"done"), work: saved };
+    let saved = work(&[], Some(Box::new([wire::Landing::Unchanged])));
+    let ended = wire::Answer::Ended { outcome: bytes(b"done"), work: saved };
     let [Request::Answer { .. }] = &*emitted else {
         panic!("expected the answer, got {emitted:?}");
     };
@@ -816,7 +813,7 @@ fn an_answer_the_engine_has_yet_to_acknowledge_keeps_its_slot() {
     h.domain.reclaim();
     assert_eq!(h.domain.host().hosted(), 1, "its host slot is back");
     let third = Names { run: Token::new(3), attempt: attempt(3), ..first };
-    let busy = host::Answer::Refused(host::Refusal::Busy);
+    let busy = wire::Answer::Refused(wire::Refusal::Busy);
     assert_eq!(&*h.step(Event::Assign { assignment: assignment(3) }), [answer(third, busy)], "not yet free");
     assert_eq!(h.domain.held(), 1, "a refusal is not kept");
     assert!(h.step(Event::Acknowledged { run: first.run, attempt: first.attempt }).is_empty());
@@ -854,7 +851,7 @@ fn a_worker_shutting_down_cancels_every_run_and_is_done_once_every_answer_has_go
     assert!(!h.domain.is_done());
     assert_eq!(&*h.resume(), [send(r, Down::Cancel)]);
     let late = Names { run: Token::new(2), attempt: attempt(2), ..r };
-    let busy = host::Answer::Refused(host::Refusal::Busy);
+    let busy = wire::Answer::Refused(wire::Refusal::Busy);
     assert_eq!(&*h.step(Event::Assign { assignment: assignment(2) }), [answer(late, busy)], "no more runs");
     assert!(h.step(Event::Sent { owner: r.agent }).is_empty());
     let emitted = h.goes(r);
@@ -1013,8 +1010,8 @@ fn a_worker_shutting_down_out_of_reach_gives_up_its_answers_once_no_run_is_left(
 fn the_worst_case_is_bounded_or_refused() {
     assert!(worst_case(&LIMITS).is_some());
     let disagree = [
-        Limits { host: host::Limits { repositories: 3, ..LIMITS.host }, ..LIMITS },
-        Limits { host: host::Limits { name_bytes: 17, ..LIMITS.host }, ..LIMITS },
+        Limits { checkout: checkout::Limits { repositories: 9, ..LIMITS.checkout }, ..LIMITS },
+        Limits { checkout: checkout::Limits { name_bytes: 257, ..LIMITS.checkout }, ..LIMITS },
         Limits {
             host: host::Limits { slots: 3, ..LIMITS.host },
             agent: agent::Limits { agents: 3, ..LIMITS.agent },
@@ -1040,7 +1037,11 @@ fn the_worst_case_is_bounded_or_refused() {
         Limits { redial: Duration::ZERO, ..LIMITS },
         Limits { redial: Duration::from_secs(9), ..LIMITS },
         Limits { checkout: checkout::Limits { workspaces: 0, ..LIMITS.checkout }, ..LIMITS },
-        Limits { told: u32::MAX, agent: agent::Limits { fact_bytes: u64::MAX, ..LIMITS.agent }, ..LIMITS },
+        Limits {
+            host: host::Limits { told: u32::MAX, fact_bytes: u64::MAX, ..LIMITS.host },
+            agent: agent::Limits { fact_bytes: u64::MAX, ..LIMITS.agent },
+            ..LIMITS
+        },
     ];
     for limits in disagree {
         assert_eq!(worst_case(&limits), None, "{limits:?}");
@@ -1088,9 +1089,9 @@ fn wire_assignment_retries_create_no_second_child_call() {
 fn initial_git_grant_names_stay_on_the_worker() {
     let mut h = Harness::new(&LIMITS);
     h.connect();
-    let git = host::Grant { account: 0, generation: 0, valid: Duration::from_secs(60) };
-    let llm = host::Grant { account: 7, generation: 1, valid: Duration::from_secs(60) };
-    let assigned = host::Assignment { grants: Box::new([git, llm]), ..assignment(1) };
+    let git = wire::Grant { account: 0, generation: 0, valid: Duration::from_secs(60) };
+    let llm = wire::Grant { account: 7, generation: 1, valid: Duration::from_secs(60) };
+    let assigned = wire::Assignment { grants: Box::new([git, llm]), ..assignment(1) };
     let emitted = h.step(Event::Assign { assignment: assigned });
     let emitted = h.git(emitted, true);
     let [Request::Spawn { owner, .. }] = &*emitted else {
@@ -1128,8 +1129,8 @@ fn next_limits() -> Limits {
     limits.host.turn_bytes = 16;
     limits.agent.transcript_bytes = 64;
     limits.agent.turn_bytes = 16;
-    limits.turns = 2;
-    limits.turn_queue_bytes = 32;
+    limits.host.turns = 2;
+    limits.host.turn_queue_bytes = 32;
     limits
 }
 
@@ -1141,7 +1142,7 @@ fn next_live(h: &mut Harness, run: u64) -> Names {
     assert_eq!(*push_deadline, Duration::from_secs(260));
     assert_eq!(*graces, Duration::from_secs(550));
     let assignment =
-        host::AssignmentV2 { assignment: assignment(run), transcript: Some(bytes(b"turns; committed-call-tail")) };
+        wire::AssignmentV2 { assignment: assignment(run), transcript: Some(bytes(b"turns; committed-call-tail")) };
     let emitted = h.step(Event::AssignV2 { assignment });
     let emitted = h.git(emitted, true);
     let [Request::Spawn { owner, .. }] = &*emitted else { panic!("v2 spawn: {emitted:?}") };
@@ -1182,8 +1183,8 @@ fn next_turn(h: &mut Harness, r: Names, turn: u32, spent: u64) -> Box<[Request]>
 #[test]
 fn v2_turn_capacity_busy_retry_and_exact_commit_ack_resume_the_reader() {
     let mut limits = next_limits();
-    limits.turns = 1;
-    limits.turn_queue_bytes = 16;
+    limits.host.turns = 1;
+    limits.host.turn_queue_bytes = 16;
     let mut h = Harness::new(&limits);
     let r = next_live(&mut h, 31);
     let emitted = next_turn(&mut h, r, 1, 17);
@@ -1217,7 +1218,7 @@ fn v2_rehello_replays_turns_before_answers_and_crossed_acks_keep_the_slot() {
     let emitted = h.git(emitted, false);
     let [Request::AnswerV2 { run, attempt, answer }] = &*emitted else { panic!("v2 answer: {emitted:?}") };
     assert_eq!((*run, *attempt, answer.turns, answer.spent), (r.run, r.attempt, 1, 21));
-    assert_eq!(answer.ending, host::EndingV2::Parked { work: work(&[], Some(Box::new([host::Landing::Unchanged]))) });
+    assert_eq!(answer.ending, wire::EndingV2::Parked { work: work(&[], Some(Box::new([wire::Landing::Unchanged]))) });
     h.domain.reclaim();
     assert_eq!(h.domain.workspaces(), 0);
     assert_eq!(h.domain.agent().agents(), 0);
@@ -1237,7 +1238,7 @@ fn v2_rehello_replays_turns_before_answers_and_crossed_acks_keep_the_slot() {
     assert!(h.step(Event::Acknowledged { run: r.run, attempt: r.attempt }).is_empty());
     assert_eq!(h.domain.held(), 1, "answer ACK alone cannot free retained turns");
     assert!(
-        h.step(Event::AssignV2 { assignment: host::AssignmentV2 { assignment: assignment(32), transcript: None } })
+        h.step(Event::AssignV2 { assignment: wire::AssignmentV2 { assignment: assignment(32), transcript: None } })
             .is_empty(),
         "retry does not restart an answered attempt"
     );
@@ -1257,7 +1258,7 @@ fn v2_deadlines_and_cross_child_limits_are_checked_before_startup() {
     bad.checkout.remote_timeout = Duration::from_nanos(u64::MAX);
     assert!(worst_case(&bad).is_none(), "deadline arithmetic cannot wrap");
     let mut bad = limits;
-    bad.turn_queue_bytes = 15;
+    bad.host.turn_queue_bytes = 15;
     assert!(worst_case(&bad).is_none(), "a credit needs space for a maximum turn");
     let mut bad = limits;
     bad.checkout.conflicts = 1;
@@ -1318,26 +1319,26 @@ fn direct_v2_assignment_gets_a_supported_refusal_when_the_runtime_mode_is_disabl
     let mut h = Harness::new(&LIMITS);
     assert_eq!(&*h.fire(), [Request::Dial]);
     h.step(Event::ConnectedV2);
-    let next = host::AssignmentV2 { assignment: assignment(1), transcript: None };
+    let next = wire::AssignmentV2 { assignment: assignment(1), transcript: None };
     let emitted = h.step(Event::AssignV2 { assignment: next });
-    let answer = host::AnswerV2 {
+    let answer = wire::AnswerV2 {
         turns: 0,
         spent: 0,
-        ending: host::EndingV2::Refused(host::Refusal::Invalid(host::Invalid::Version)),
+        ending: wire::EndingV2::Refused(wire::Refusal::Invalid(wire::Invalid::Version)),
     };
     assert_eq!(&*emitted, [Request::AnswerV2 { run: Token::new(1), attempt: attempt(1), answer }]);
     assert_eq!(h.domain.held(), 0);
     assert_eq!(h.domain.host().hosted(), 0);
     let mut h = Harness::new(&next_limits());
     h.connect();
-    let next = host::AssignmentV2 { assignment: assignment(2), transcript: None };
+    let next = wire::AssignmentV2 { assignment: assignment(2), transcript: None };
     let emitted = h.step(Event::AssignV2 { assignment: next });
     assert_eq!(
         &*emitted,
         [Request::Answer {
             run: Token::new(2),
             attempt: attempt(2),
-            answer: host::Answer::Refused(host::Refusal::Invalid(host::Invalid::Charter))
+            answer: wire::Answer::Refused(wire::Refusal::Invalid(wire::Invalid::Charter))
         }]
     );
     assert_eq!(h.domain.held(), 0);

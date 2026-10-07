@@ -99,6 +99,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         }
     }
     let segments = u64::from(limits.authority_grants)
+        .checked_mul(2)?
         .checked_mul(u64::from(limits.authority_segments))?
         .checked_mul(u64::try_from(size_of::<Box<[u8]>>()).ok()?)?;
     let payload = u64::from(limits.spec_bytes)
@@ -121,6 +122,9 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         )?
         .checked_add(u64::from(limits.contract_choices).checked_mul(u64::try_from(size_of::<Verdict>()).ok()?)?)?
         .checked_add(u64::from(limits.authority_grants).checked_mul(u64::try_from(size_of::<Grant>()).ok()?)?)?
+        .checked_add(
+            u64::from(limits.authority_grants).checked_mul(u64::try_from(size_of::<crate::ResourceScope>()).ok()?)?,
+        )?
         .checked_add(segments)?
         .checked_add(u64::from(limits.authority_bytes))?
         .checked_add(

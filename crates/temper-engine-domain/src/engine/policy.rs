@@ -2,6 +2,8 @@
 //! The root validates one edit under deployment rules and persists the whole
 //! mutable policy value. Existing task grants keep their prior authority.
 
+use alloc::boxed::Box;
+
 use super::{
     Decision, Domain, Env, Limits, PersonTaskRoute, Token, Work, authority, people, policy_translate, roles, save,
     tasks,
@@ -31,10 +33,30 @@ pub(super) fn change(
     let Some(mut policy) = domain.config.authority.policy(project).cloned() else {
         return refused(domain, request, people::Refusal::Unknown);
     };
-    if policy_translate::apply(&mut policy, change).is_none() {
+    let mut landing = match domain.config.landing.projects.get(&project) {
+        Some(rules) => rules.clone(),
+        None => Box::new([]),
+    };
+    if policy_translate::apply(
+        &mut policy,
+        &mut landing,
+        change,
+        env.limits.authority.requirements,
+        domain.config.forge_connector,
+    )
+    .is_none()
+    {
         return refused(domain, request, people::Refusal::Unknown);
     }
-    let Some(snapshot) = policy_translate::snapshot(&policy) else {
+    let Some(built) = policy_translate::build_landing(
+        &landing,
+        true,
+        env.limits.authority.requirements,
+        domain.config.forge_connector,
+    ) else {
+        return refused(domain, request, people::Refusal::Limit);
+    };
+    let Some(snapshot) = policy_translate::snapshot(&policy, &landing) else {
         return refused(domain, request, people::Refusal::Limit);
     };
     if match people::policy_bytes(&snapshot) {
@@ -50,6 +72,8 @@ pub(super) fn change(
     authority::step(&mut domain.config.authority, authority::Event::Policy { project, policy }, &mut facts);
     match facts.pop().expect("policy update terminal") {
         authority::PolicyFact::Changed { .. } => {
+            assert!(domain.config.landing.projects.insert(project, landing).is_ok(), "admitted project landing policy");
+            assert!(domain.forge.project_judges(project, built.criteria), "admitted forge judges");
             save(
                 decision,
                 &env.limits,
@@ -72,13 +96,37 @@ pub(super) fn restore(domain: &mut Domain, project: u32, value: people::PolicyVa
         domain.startup = super::Startup::Failed;
         return;
     };
-    if policy_translate::restore(&mut policy, value).is_none() {
+    let mut landing = match domain.config.landing.projects.get(&project) {
+        Some(rules) => rules.clone(),
+        None => Box::new([]),
+    };
+    if policy_translate::restore(
+        &mut policy,
+        &mut landing,
+        value,
+        domain.limits.authority.requirements,
+        domain.config.forge_connector,
+    )
+    .is_none()
+    {
         domain.startup = super::Startup::Failed;
         return;
     }
+    let Some(built) = policy_translate::build_landing(
+        &landing,
+        true,
+        domain.limits.authority.requirements,
+        domain.config.forge_connector,
+    ) else {
+        domain.startup = super::Startup::Failed;
+        return;
+    };
     let mut facts = Queue::with_capacity(authority::POLICY_MAX_OUT);
     authority::step(&mut domain.config.authority, authority::Event::Policy { project, policy }, &mut facts);
-    if facts.pop() != Some(authority::PolicyFact::Changed { project }) {
+    if facts.pop() != Some(authority::PolicyFact::Changed { project })
+        || domain.config.landing.projects.insert(project, landing).is_err()
+        || !domain.forge.project_judges(project, built.criteria)
+    {
         domain.startup = super::Startup::Failed;
     }
 }

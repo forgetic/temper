@@ -44,6 +44,8 @@ const LIMITS: Limits = Limits {
     adoptions: 2,
     collaborators: 8,
     landings: 8,
+    judge_projects: 2,
+    judge_criteria: 8,
     brief_sections: 32,
     brief_bytes: 4096,
     issue_policy: temper_engine_domain_forge_issues::Limits {

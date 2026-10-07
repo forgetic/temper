@@ -18,6 +18,77 @@ fn a_cumulative_completion_releases_decisions_in_order_one_at_a_time() {
 }
 
 #[test]
+fn held_outputs_wait_behind_each_unanswered_commit() {
+    let mut world = World::new();
+    world.decision(1, b"first", true, false);
+    world.decision(2, b"second", true, false);
+
+    world.ready();
+    assert_eq!(world.referee.judged, 2, "only the two commits reached the store");
+    world.apply(true);
+    world.ready();
+    assert_eq!(world.referee.judged, 3, "only the first held output was released");
+    world.ready();
+    assert_eq!(world.referee.judged, 3, "the second commit is still unanswered");
+
+    world.apply(true);
+    world.ready();
+    assert_eq!(world.referee.judged, 4);
+    assert!(world.referee.done());
+}
+
+#[test]
+fn a_route_past_its_reserved_room_stops_with_earlier_outputs_held() {
+    let mut journal = Journal::from_durable(&root::journal_limits(&LIMITS), HEADER.commits);
+    let mut counters = Counters::new(HEADER);
+    let mut out = Queue::with_capacity(1);
+    let mut first = Decision::reserve(&mut journal, &LIMITS).expect("first route admitted");
+    first
+        .deliver(&LIMITS, Delivery::AcknowledgeTurn { channel: Token::new(7), task: 1, attempt: 1, turn: 1 })
+        .expect("held output fits");
+    root::accept(&mut journal, &mut counters, &LIMITS, first, &mut out).expect("first route accepted");
+    assert!(out.is_empty());
+
+    let mut overrun = Decision::reserve(&mut journal, &LIMITS).expect("second route admitted");
+    for turn in 1..LIMITS.writes {
+        overrun
+            .write(
+                &LIMITS,
+                Write::Save(Record::Turn(root::TurnRecord {
+                    task: 1,
+                    attempt: 1,
+                    turn,
+                    spent: u64::from(turn),
+                    read: None,
+                    at: skein_lib::Wall::from_nanos(u64::from(turn)),
+                    transcript: Box::new([]),
+                })),
+            )
+            .expect("reserved write room");
+    }
+    assert!(
+        overrun
+            .write(
+                &LIMITS,
+                Write::Save(Record::Turn(root::TurnRecord {
+                    task: 1,
+                    attempt: 1,
+                    turn: LIMITS.writes,
+                    spent: u64::from(LIMITS.writes),
+                    read: None,
+                    at: skein_lib::Wall::from_nanos(u64::from(LIMITS.writes)),
+                    transcript: Box::new([]),
+                })),
+            )
+            .is_err()
+    );
+    root::accept(&mut journal, &mut counters, &LIMITS, overrun, &mut out).expect("overrun reports stop");
+    assert!(journal.stopped());
+    root::resume(&mut journal, &mut out);
+    assert!(out.is_empty(), "no held output leaves a stopped journal");
+}
+
+#[test]
 fn a_lost_completion_recovers_the_whole_header_and_transcript_without_reapplying() {
     let mut world = World::new();
     world.decision(1, b"durable transcript", true, true);

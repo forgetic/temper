@@ -5,10 +5,11 @@
 //! Every match is exhaustive, so a variant added to either side's vocabulary
 //! breaks the build here.
 
+use crate::wire;
+use jig_worker_host as host;
 use skein_lib::{Env, Queue, ReplyTo};
 use temper_worker_domain_agent as agent;
 use temper_worker_domain_checkout as checkout;
-use temper_worker_domain_host as host;
 
 use crate::boundary::{Event, Request};
 use crate::domain::{self, Domain};
@@ -57,23 +58,28 @@ pub(crate) fn event(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &
             if domain.link.holds(run, attempt) || domain.host.is_hosting(run, attempt) {
                 return;
             }
-            if !domain.link.is_v2() || env.limits.turns == 0 {
+            if !domain.link.is_v2() || env.limits.host.turns == 0 {
                 return domain.link.refuse_version(run, attempt, out);
             }
             let answers = domain.link.held();
             host_step(domain, env, host::Event::Unacknowledged { answers });
+            let wire::AssignmentV2 { assignment, transcript } = assignment;
+            let assignment = match workspace::stage(domain, env, assignment, true) {
+                Ok(assignment) => assignment,
+                Err(refusal) => return domain.link.refuse(run, attempt, refusal, true, out),
+            };
+            let assignment = host::AssignmentV2 { assignment, transcript };
             return host_step(domain, env, host::Event::AssignV2 { reply_to: ReplyTo::new(run), assignment });
         }
         Event::AcknowledgeTurn { run, attempt, turn } => {
             domain.link.heard();
-            if let Some(agent) = domain.link.turn_acknowledged(run, attempt, turn, &env.limits) {
-                agent_step(domain, env, agent::Event::TurnCredit { agent, read: true });
-            }
+            host_step(domain, env, host::Event::AcknowledgeTurn { run, attempt, turn });
+            domain.link.turn_acknowledged(run, attempt, turn, &domain.host);
             return;
         }
         Event::TurnBusy { run, attempt, turn } => {
             domain.link.heard();
-            return domain.link.turn_busy(run, attempt, turn, env);
+            return domain.link.turn_busy(run, attempt, turn, env, &domain.host);
         }
         Event::Connected => {
             domain.link.connected();
@@ -91,7 +97,7 @@ pub(crate) fn event(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &
         }
         Event::Shutdown => {
             domain.link.shut();
-            return host_step(domain, env, host::Event::CancelAll { reason: host::Reason::Shutdown });
+            return host_step(domain, env, host::Event::CancelAll { reason: wire::Reason::Shutdown });
         }
         Event::Assign { assignment } => {
             domain.link.heard();
@@ -105,11 +111,16 @@ pub(crate) fn event(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &
             let answers = domain.link.held();
             host_step(domain, env, host::Event::Unacknowledged { answers });
             let reply_to = ReplyTo::new(assignment.run);
+            let attempt = assignment.attempt;
+            let assignment = match workspace::stage(domain, env, assignment, false) {
+                Ok(assignment) => assignment,
+                Err(refusal) => return domain.link.refuse(reply_to.into_token(), attempt, refusal, false, out),
+            };
             return host_step(domain, env, host::Event::Assign { reply_to, assignment });
         }
         Event::Acknowledged { run, attempt } => {
             domain.link.heard();
-            return domain.link.acknowledged(run, attempt);
+            return domain.link.acknowledged(run, attempt, &domain.host);
         }
         Event::Inbound { run, attempt, name, event } => {
             domain.link.heard();
@@ -190,65 +201,100 @@ pub(crate) fn agent_step(domain: &mut Domain, env: &Env<Limits>, event: agent::E
 
 /// One of the host's requests: to the engine, or to a capability.
 fn from_host(domain: &mut Domain, env: &Env<Limits>, request: host::Request, out: &mut Queue<Request>) {
-    let event = match request {
+    let request = match request.to_agent() {
+        Ok(request) => return from_host_agent(domain, env, request),
+        Err(request) => request,
+    };
+    match request {
         host::Request::AnswerV2 { to, run, attempt, answer } => {
             assert!(to.into_token() == run, "an answer is its assignment's");
-            return domain.link.answer_v2(run, attempt, answer, out);
+            let preparation = workspace::preparation(domain, run);
+            let work = workspace::finish(domain, run);
+            let answer = translate::answer_v2(answer, work, preparation);
+            domain.link.answer_v2(run, attempt, answer, out);
         }
         host::Request::RelayV2 { run, attempt, call, delivery, body } => {
-            return domain.link.relay(
-                Relay { run, attempt, call: delivery, stable: Some(call), body },
-                &domain.host,
-                out,
-            );
+            domain.link.relay(Relay { run, attempt, call: delivery, stable: Some(call), body }, &domain.host, out);
         }
-        host::Request::Turn { agent, run, attempt, turn } => {
-            let read = domain.link.turn(agent, run, attempt, turn, &env.limits, out);
-            return agent_step(domain, env, agent::Event::TurnCredit { agent, read });
+        host::Request::Turn { agent: _, run, attempt, turn } => {
+            domain.link.turn(run, attempt, turn, out);
         }
-        host::Request::StartV2 { owner, workspace, charter, transcript, grants } => {
-            return workspace::start_v2(domain, env, owner, workspace, charter, transcript, grants);
-        }
-        host::Request::PushV2 { owner, workspace, title, body } => {
-            return workspace::write(domain, env, owner, workspace, Write::PushV2 { title, body });
+        host::Request::DeliverV2 { owner, workspace, title, body } => {
+            workspace::write(domain, env, owner, workspace, Write::PushV2 { title, body });
         }
         host::Request::Answer { to, run, attempt, answer } => {
             assert!(to.into_token() == run, "an answer is its assignment's");
-            return domain.link.answer(run, attempt, answer, out);
+            let preparation = workspace::preparation(domain, run);
+            let work = workspace::finish(domain, run);
+            let answer = translate::answer(answer, work, preparation);
+            domain.link.answer(run, attempt, answer, out);
         }
         host::Request::Relay { run, attempt, call, body } => {
-            return domain.link.relay(Relay { run, attempt, call, stable: None, body }, &domain.host, out);
+            domain.link.relay(Relay { run, attempt, call, stable: None, body }, &domain.host, out);
         }
         host::Request::CancelRelay { call } => {
             if domain.link.cancel_relay(call) {
-                return host_step(domain, env, host::Event::RelayCancelled { call });
+                host_step(domain, env, host::Event::RelayCancelled { call });
+            } else {
+                out.push(Request::CancelRelay { call });
             }
-            return out.push(Request::CancelRelay { call });
         }
         host::Request::Bounced { run, attempt, name, bounce } => {
-            return domain.link.bounce(Bounced { run, attempt, name, bounce }, out);
+            domain.link.bounce(Bounced { run, attempt, name, bounce }, out);
         }
         host::Request::Hosting { runs } => {
-            return domain.link.hello(&runs, &domain.host, &domain.checkout, &env.limits, out);
+            domain.link.hello(&runs, &domain.host, &domain.checkout, &env.limits, out);
         }
-        host::Request::Prepare { owner, workspace } => return workspace::prepare(domain, env, owner, workspace),
-        host::Request::Abort { owner } => return workspace::abort(domain, env, owner),
-        host::Request::Start { owner, workspace, charter, snapshot, grants } => {
-            return workspace::start(domain, env, owner, workspace, charter, snapshot, grants);
+        host::Request::Prepare { owner, workspace } => workspace::prepare(domain, env, owner, workspace),
+        host::Request::Abort { owner } => workspace::abort(domain, env, owner),
+        host::Request::DeliverWorkspace { owner, workspace, message } => {
+            workspace::write(domain, env, owner, workspace, Write::Push { message });
         }
-        host::Request::Push { owner, workspace, message } => {
-            return workspace::write(domain, env, owner, workspace, Write::Push { message });
+        host::Request::Save { owner, workspace } => {
+            workspace::save(domain, env, owner, workspace);
         }
-        host::Request::Save { owner, workspace, branch } => {
-            return workspace::write(domain, env, owner, workspace, Write::Save { branch });
+        host::Request::Release { workspace } => workspace::release(domain, env, workspace),
+        host::Request::StartV2 { .. }
+        | host::Request::Start { .. }
+        | host::Request::Deliver { .. }
+        | host::Request::Reply { .. }
+        | host::Request::Grant { .. }
+        | host::Request::TurnCredit { .. }
+        | host::Request::Stop { .. } => unreachable!("agent capability was taken above"),
+    }
+}
+
+fn from_host_agent(domain: &mut Domain, env: &Env<Limits>, request: host::ToAgent) {
+    let event = match request {
+        host::ToAgent::StartV2 { owner, workspace, charter, transcript, grants } => {
+            return workspace::start_v2(
+                domain,
+                env,
+                owner,
+                workspace.expect("temper assignments always have workspace items"),
+                charter,
+                transcript,
+                grants,
+            );
         }
-        host::Request::Release { workspace } => return workspace::release(domain, env, workspace),
-        host::Request::Deliver { agent, name, event } => agent::Event::Deliver { agent, name, event },
-        host::Request::Reply { agent, call, reply } => {
-            agent::Event::Answer { agent, call, reply: translate::reply(reply) }
+        host::ToAgent::Start { owner, workspace, charter, snapshot, grants } => {
+            return workspace::start(
+                domain,
+                env,
+                owner,
+                workspace.expect("temper assignments always have workspace items"),
+                charter,
+                snapshot,
+                grants,
+            );
         }
-        host::Request::Grant { agent, grant } => agent::Event::Grant { agent, grant: channel_grant(grant) },
-        host::Request::Stop { agent } => agent::Event::Stop { agent },
+        host::ToAgent::Message { agent, name, event } => agent::Event::Deliver { agent, name, event },
+        host::ToAgent::Answer { agent, call, reply } => {
+            agent::Event::Answer { agent, call, reply: translate::reply(domain, reply) }
+        }
+        host::ToAgent::Grant { agent, grant } => agent::Event::Grant { agent, grant: channel_grant(grant) },
+        host::ToAgent::Cancel { agent } => agent::Event::Stop { agent },
+        host::ToAgent::ReadCredit { agent, read } => agent::Event::TurnCredit { agent, read },
     };
     agent_step(domain, env, event);
 }
@@ -270,12 +316,12 @@ fn from_checkout(domain: &mut Domain, env: &Env<Limits>, request: checkout::Requ
 /// of a run for the engine.
 fn from_agent(domain: &mut Domain, env: &Env<Limits>, request: agent::Request, out: &mut Queue<Request>) {
     let event = match request {
-        agent::Request::Turn { client, turn } => host::Event::Turn {
+        agent::Request::Turn { client, turn } => host::FromAgent::Turn {
             owner: client,
-            turn: host::Turn { turn: turn.turn, spent: turn.spent, read: turn.read, body: turn.body },
+            turn: wire::Turn { turn: turn.turn, spent: turn.spent, read: turn.read, body: turn.body },
         },
         agent::Request::FinishedV2 { client, turns, spent, finish } => {
-            host::Event::FinishedV2 { owner: client, turns, spent, finish: translate::finish_v2(finish) }
+            host::FromAgent::FinishedV2 { owner: client, turns, spent, finish: translate::finish_v2(finish) }
         }
         agent::Request::Spawn { owner, workspace, deadline } => {
             return out.push(Request::Spawn { owner, workspace, deadline });
@@ -299,29 +345,29 @@ fn from_agent(domain: &mut Domain, env: &Env<Limits>, request: agent::Request, o
             }
             return;
         }
-        agent::Request::Told { client, fact } => return domain::tell(domain, client, fact),
-        agent::Request::Started { client, agent } => host::Event::Started { owner: client, agent },
+        agent::Request::Told { client, fact } => host::FromAgent::Facts { owner: client, fact },
+        agent::Request::Started { client, agent } => host::FromAgent::Started { owner: client, agent },
         agent::Request::Called { client, call, ask } => {
-            host::Event::Called { owner: client, call, ask: translate::ask(ask) }
+            host::FromAgent::Called { owner: client, call, ask: translate::ask(ask) }
         }
-        agent::Request::Withdrawn { client, call } => host::Event::Withdrawn { owner: client, call },
-        agent::Request::Waiting { client } => host::Event::Yielded { owner: client },
+        agent::Request::Withdrawn { client, call } => host::FromAgent::Withdrawn { owner: client, call },
+        agent::Request::Waiting { client } => host::FromAgent::Yielded { owner: client },
         agent::Request::Finished { client, finish } => {
-            host::Event::Finished { owner: client, finish: translate::finish(finish) }
+            host::FromAgent::Finished { owner: client, finish: translate::finish(finish) }
         }
         agent::Request::Faulted { client, fault } => {
-            host::Event::Faulted { owner: client, fault: translate::fault(fault) }
+            host::FromAgent::Faulted { owner: client, fault: translate::fault(fault) }
         }
         agent::Request::Bounced { client, name, bounce } => {
-            host::Event::Bounced { owner: client, name, bounce: translate::bounce(bounce) }
+            host::FromAgent::Bounced { owner: client, name, bounce: translate::bounce(bounce) }
         }
         // However it went (refused at the entrance, which the limits rule
         // out, unspawned, or stopped), the agent has gone.
-        agent::Request::Gone { client, end: _, detail } => host::Event::Gone { owner: client, detail },
+        agent::Request::Gone { client, end: _, detail } => host::FromAgent::Gone { owner: client, detail },
     };
-    host_step(domain, env, event);
+    host_step(domain, env, host::Event::from_agent(event));
 }
 
-pub(crate) const fn channel_grant(grant: host::Grant) -> agent::channel::Grant {
+pub(crate) const fn channel_grant(grant: wire::Grant) -> agent::channel::Grant {
     agent::channel::Grant { account: grant.account, generation: grant.generation, valid: grant.valid }
 }

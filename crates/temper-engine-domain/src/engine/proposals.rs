@@ -205,7 +205,11 @@ fn action_for_check(action: &tasks::ProposalAction) -> Option<authority::Action>
                     tasks::Executor::Person(_) => return None,
                 };
                 members
-                    .push(authority::Delegate { executor, authority: authority_value(&member.authority) })
+                    .push(authority::Delegate {
+                        executor,
+                        authority: authority_value(&member.authority),
+                        symbolic: Box::new([]),
+                    })
                     .expect("bounded proposed batch");
             }
             Some(authority::Action::Batch(members.into_boxed()))

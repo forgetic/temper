@@ -8,7 +8,7 @@ use std::fmt::{self, Write};
 use skein_lib::{Duration, Env, Queue, Rng, Time, Token, Wall};
 use temper_worker_domain::agent::channel::{self, Ask, Down, FinishV2, Up};
 use temper_worker_domain::checkout::git::{Commit, Done, Op, Want};
-use temper_worker_domain::host::{self, Access, Assignment, AssignmentV2, Repository, Start, Workspace};
+use temper_worker_domain::wire::{self as host, Access, Assignment, AssignmentV2, Repository, Start, Workspace};
 use temper_worker_domain::{Domain, Event, Limits, Request, fire, max_out, step, worst_case};
 use temper_world::heap::Meter;
 
@@ -113,25 +113,23 @@ impl World {
         assert!(settings.turns > 0 && settings.byte_slots > 0);
         let mut limits = crate::LIMITS;
         limits.host.slots = 1;
-        limits.host.repositories = 1;
+        limits.checkout.repositories = 1;
         limits.host.transcript_bytes = u64::try_from(TRANSCRIPT.len()).expect("bounded");
         limits.host.turn_bytes = TURN_BYTES;
-        limits.host.conflicts = 1;
-        limits.host.path_bytes = u32::try_from(PATH.len()).expect("bounded");
+        limits.checkout.conflicts = 1;
+        limits.checkout.path_bytes = u32::try_from(PATH.len()).expect("bounded");
         limits.agent.transcript_bytes = limits.host.transcript_bytes;
         limits.agent.turn_bytes = TURN_BYTES;
-        limits.agent.conflicts = limits.host.conflicts;
-        limits.agent.path_bytes = limits.host.path_bytes;
-        limits.checkout.conflicts = limits.host.conflicts;
-        limits.checkout.path_bytes = limits.host.path_bytes;
-        limits.turns = settings.turns;
-        limits.turn_queue_bytes = u64::from(settings.byte_slots) * TURN_BYTES;
+        limits.agent.conflicts = limits.checkout.conflicts;
+        limits.agent.path_bytes = limits.checkout.path_bytes;
+        limits.host.turns = settings.turns;
+        limits.host.turn_queue_bytes = u64::from(settings.byte_slots) * TURN_BYTES;
         limits.turn_backoff = Duration::from_millis(10);
         if !keep {
             limits.host.facts = 0;
             limits.checkout.facts = 0;
             limits.agent.facts = 0;
-            limits.told = 0;
+            limits.host.told = 0;
         }
         let bound = worst_case(&limits).expect("world limits fit");
         let out = Queue::with_capacity(max_out(&limits));

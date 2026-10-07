@@ -66,6 +66,7 @@ pub fn start(
     transcript: Option<smith::Transcript>,
     reply_to: ReplyTo,
     host_run: Token,
+    window: smith::Window,
 ) -> smith::Event {
     let mut sections = List::with_capacity(assignment.sections.len().try_into().expect("bounded brief sections"));
     for item in &assignment.sections {
@@ -88,6 +89,7 @@ pub fn start(
         reply_to,
         host_run,
         activation: assignment.attempt,
+        window,
         charter: run::Charter {
             resume: policy.resume && transcript.is_some(),
             waiting: policy.waiting,

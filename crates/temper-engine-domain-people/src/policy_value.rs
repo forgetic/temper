@@ -82,7 +82,9 @@ pub fn policy_bytes(policy: &PolicyValue) -> Option<u64> {
     total.checked_add(landing_rules_bytes(&policy.landing)?)
 }
 
-fn landing_rules_bytes(rules: &[LandingRule]) -> Option<u64> {
+/// Checked deep-byte size of typed landing rules retained by the application.
+#[must_use]
+pub fn landing_rules_bytes(rules: &[LandingRule]) -> Option<u64> {
     let mut total = u64::try_from(rules.len()).ok()?.checked_mul(u64::try_from(size_of::<LandingRule>()).ok()?)?;
     for rule in rules {
         total = total.checked_add(pattern_bytes(&rule.pattern)?)?;

@@ -49,7 +49,7 @@ impl World {
         with_change: bool,
         silent_ci: bool,
         passes: u32,
-        approval: Option<authority::Freshness>,
+        approval: Option<people::Freshness>,
     ) -> Self {
         let mut limits = walking::limits();
         limits.people.people = 4;
@@ -69,8 +69,8 @@ impl World {
         config.resume_bytes = 8192;
         if approval.is_some() {
             limits.authority.roles = 3;
-            limits.authority.reviews = 4;
-            limits.authority.heads = 4;
+            limits.authority.requirements = 8;
+            limits.authority.facts = 8;
         }
         if with_change {
             limits.tasks.tasks = 12;
@@ -116,7 +116,7 @@ impl World {
                 limits.tasks.authority_bytes = 64;
             }
             let grant = authority::Grant {
-                connector: 1,
+                connector: 0,
                 kind: 1,
                 pattern: authority::Pattern {
                     segments: Box::new([
@@ -143,10 +143,10 @@ impl World {
             };
             rules.ceiling.grants.clone_from(&grants);
             if let Some(freshness) = approval {
-                rules.landing = Box::new([authority::LandingRule {
-                    connector: 1,
+                let landing = Box::new([people::LandingRule {
+                    connector: 0,
                     kind: 4,
-                    pattern: authority::Pattern {
+                    pattern: people::Pattern {
                         segments: Box::new([
                             Box::from(&b"forge"[..]),
                             Box::from(&b"forge.example"[..]),
@@ -154,13 +154,15 @@ impl World {
                             Box::from(&b"repo"[..]),
                             Box::from(&b"branch"[..]),
                         ]),
-                        last: authority::Last::Exact(Box::from(&b"main"[..])),
+                        last: people::Last::Exact(Box::from(&b"main"[..])),
                     },
                     ci: true,
                     up_to_date: true,
                     gates: Box::new([]),
-                    approvals: Box::new([authority::Approval { role: 2, people: 1, freshness }]),
+                    approvals: Box::new([people::Approval { role: 2, people: 1, freshness }]),
                 }]);
+                config.landing.deployment = landing.clone();
+                assert!(config.landing.projects.insert(1, landing).is_ok());
             }
             if with_change {
                 rules.ceiling.delegation.kinds =
@@ -177,7 +179,6 @@ impl World {
                 let mut member = maintainer.clone();
                 member.number = 2;
                 policy.roles = Box::new([policy.roles[0].clone(), maintainer, member]);
-                policy.landing.clone_from(&rules.landing);
             }
             policy.roles[0].authority.tools = authority::Tools(1);
             policy.roles[0].authority.grants.clone_from(&grants);
@@ -449,7 +450,7 @@ mod system_stories {
     use smith_domain_run as run;
     use temper_engine_smith::ChangeResource;
 
-    const DELEGATE: &[u8] = br#"{"batch":[{"executor":{"kind":"procedure","connector":1,"code":2},"spec":{"words":"@coding Small fix","parameters":[{"name":1,"kind":"resource","connector":1,"resource":2},{"name":2,"kind":"bytes","value":"main"}]},"contract":{"kind":"change","connector":1,"change_kind":1,"words":32},"authority":{"tools":1,"grants":[{"connector":1,"kind":2,"segments":["forge","forge.example","org"],"terminal":"open","last":"repo"},{"connector":1,"kind":3,"segments":["forge","forge.example","org"],"terminal":"open","last":"repo"},{"connector":1,"kind":4,"segments":["forge","forge.example","org"],"terminal":"open","last":"repo"}],"delegation":{"kinds":[{"kind":"agent","number":1}],"tasks":2,"depth":1},"budget":{"spend":20},"notes":0}}]}"#;
+    const DELEGATE: &[u8] = br#"{"batch":[{"executor":{"kind":"procedure","connector":0,"code":2},"spec":{"words":"@coding Small fix","parameters":[{"name":1,"kind":"resource","connector":0,"resource":2},{"name":2,"kind":"bytes","value":"main"}]},"contract":{"kind":"change","connector":0,"change_kind":1,"words":32},"authority":{"tools":1,"grants":[{"connector":0,"kind":2,"segments":["forge","forge.example","org"],"terminal":"open","last":"repo"},{"connector":0,"kind":3,"segments":["forge","forge.example","org"],"terminal":"open","last":"repo"},{"connector":0,"kind":4,"segments":["forge","forge.example","org"],"terminal":"open","last":"repo"}],"delegation":{"kinds":[{"kind":"agent","number":1}],"tasks":2,"depth":1},"budget":{"spend":20},"notes":0}}]}"#;
 
     fn chat_script() -> Script {
         let call = |name: &[u8], arguments: &[u8]| Turn {
@@ -571,6 +572,7 @@ mod system_stories {
             let request = smith::Request::Turn {
                 host_run: Token::new(assignment.task),
                 number: *number,
+                position: record.sequence,
                 read: *read,
                 spent: *spent,
                 turn: record.clone(),
@@ -650,7 +652,7 @@ mod system_stories {
             .expect("worker pushed its branch");
         assert!(pushed > 1);
         let producer_agent =
-            run_smith(&mut world, &producer, agent, Some(ChangeResource { connector: 1, kind: 2, resource: 2 }));
+            run_smith(&mut world, &producer, agent, Some(ChangeResource { connector: 0, kind: 2, resource: 2 }));
         assert!(matches!(
             producer_agent.answer(),
             run::Answer::Accepted { outcome: run::outcome::Declared::Change(_), .. }
@@ -700,7 +702,7 @@ mod system_stories {
             &mut world,
             &producer,
             smith_world::agent_for(&producer, None, Job::Coding),
-            Some(ChangeResource { connector: 1, kind: 2, resource: 2 }),
+            Some(ChangeResource { connector: 0, kind: 2, resource: 2 }),
         );
         assert!(matches!(
             producer_agent.answer(),
@@ -761,7 +763,7 @@ mod system_stories {
             &mut world,
             &repair,
             smith_world::scripted_coding_agent_for(&repair, repair_script()),
-            Some(ChangeResource { connector: 1, kind: 2, resource: 2 }),
+            Some(ChangeResource { connector: 0, kind: 2, resource: 2 }),
         );
         assert!(
             matches!(repair_agent.answer(), run::Answer::Accepted { outcome: run::outcome::Declared::Change(_), .. }),
