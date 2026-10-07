@@ -5,7 +5,7 @@ use crate::decision::{
 };
 use crate::{Deployment, Family, Key, Record, TurnRecord, Write};
 use alloc::boxed::Box;
-use skein_lib::{List, Queue, Token, Wall};
+use skein_lib::{JournalRoom, List, Queue, Token, Wall};
 
 const LIMITS: Limits =
     Limits { commits: 2, held: 8, writes: 4, deliveries: 4, transcript_bytes: 64, result_bytes: 32, run_bytes: 1 };
@@ -307,11 +307,11 @@ fn rejected_payloads_are_returned_without_replacing_admitted_ownership() {
 fn a_decision_past_its_reserved_write_room_stops_the_root_journal() {
     let mut journal = Journal::new(DEPLOYMENT, &LIMITS);
     let mut out = Queue::with_capacity(1);
-    let mut decision = Decision::new(&LIMITS);
-    for number in 1..LIMITS.writes {
-        decision.write(&LIMITS, turn(number, 1)).expect("reserved write room");
-    }
-    assert!(decision.write(&LIMITS, turn(LIMITS.writes, 1)).is_err());
+    let mut decision = Decision::reserve_room(&mut journal.inner, &LIMITS, JournalRoom { writes: 2, held: 1 })
+        .expect("smaller route room admitted");
+    decision.write(&LIMITS, turn(1, 1)).expect("reserved write room");
+    assert!(!decision.room_for(1, 0), "the deployment header owns the other slot");
+    assert!(decision.write(&LIMITS, turn(2, 1)).is_err());
     accept(&mut journal, &LIMITS, decision, &mut out).expect("overrun is accepted to stop");
     assert!(journal.stopped());
     assert!(out.is_empty());

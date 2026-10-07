@@ -1712,7 +1712,7 @@ fn step_routed(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Q
     }
     // Connector terminals already belong to the root's bounded work queue.
     // Keep them there until the journal can admit the entire child route.
-    if !crate::takes(&domain.journal, &env.limits.journal) {
+    if !route_takes(domain, &env.limits) {
         return;
     }
     let decision = route(domain, env);
@@ -1721,7 +1721,7 @@ fn step_routed(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Q
 }
 
 fn admits(domain: &Domain, limits: &Limits) -> bool {
-    crate::takes(&domain.journal, &limits.journal)
+    route_takes(domain, limits)
         && domain.counters.deployment().messages
             <= u64::MAX.checked_sub(u64::from(limits.tasks.tasks)).expect("task count fits u64")
         && domain.work.is_empty()
@@ -1887,7 +1887,7 @@ fn resume_routed(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request
     if domain.journal.stopped() || domain.startup == Startup::Failed {
         return;
     }
-    if !domain.result_pages.is_empty() && crate::takes(&domain.journal, &env.limits.journal) {
+    if !domain.result_pages.is_empty() && route_takes(domain, &env.limits) {
         let page = domain.result_pages.pop().expect("pending result page");
         match domain.result_reads.get(Id::from_token(page.waiter)) {
             Some(Some(Read::Inbox(_))) => inbox::page(domain, env, page.waiter, page.rows, page.next, out),
@@ -1907,7 +1907,7 @@ fn resume_routed(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request
         return;
     }
     if !domain.work.is_empty() {
-        if crate::takes(&domain.journal, &env.limits.journal) {
+        if route_takes(domain, &env.limits) {
             let decision = route(domain, env);
             close(domain, env, decision, out);
         }
@@ -2016,7 +2016,7 @@ fn resume_routed(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request
             }
         }
     }
-    if !crate::takes(&domain.journal, &env.limits.journal) {
+    if !route_takes(domain, &env.limits) {
         return;
     }
     if !domain.work.is_empty() {
@@ -2026,8 +2026,8 @@ fn resume_routed(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request
     }
     if domain.ready() {
         if domain.forge.is_ready() {
-            let mut decision = Decision::reserve(&mut domain.journal, &env.limits.journal)
-                .expect("journal room checked before connector continuation");
+            let mut decision =
+                route_decision(domain, &env.limits).expect("journal room checked before connector continuation");
             let mut child = Queue::with_capacity(forge::max_out(&env.limits.forge));
             forge::resume(&mut domain.forge, &environment_forge(env), &mut child);
             forge_route::outputs(domain, env, &mut decision, &mut child);
@@ -2043,8 +2043,7 @@ fn resume_routed(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request
             close(domain, env, decision, out);
             return;
         }
-        let mut decision = Decision::reserve(&mut domain.journal, &env.limits.journal)
-            .expect("journal room checked before fleet continuation");
+        let mut decision = route_decision(domain, &env.limits).expect("journal room checked before fleet continuation");
         let mut fleet_out = Queue::with_capacity(fleet::max_out(&env.limits.fleet));
         fleet::resume(&mut domain.fleet, &environment_fleet(env), &mut fleet_out);
         fleet_outputs(domain, env, &mut decision, &mut fleet_out);
@@ -2076,8 +2075,7 @@ fn fire_routed(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>)
     if !domain.ready() || !admits(domain, &env.limits) {
         return;
     }
-    let mut decision = Decision::reserve(&mut domain.journal, &env.limits.journal)
-        .expect("journal room checked before firing children");
+    let mut decision = route_decision(domain, &env.limits).expect("journal room checked before firing children");
     let mut due = List::with_capacity(env.limits.forge.issues);
     for (goal, when) in &domain.forge_projection_due {
         if *when <= env.wall {
@@ -2119,8 +2117,7 @@ fn fire_routed(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>)
 }
 
 fn route(domain: &mut Domain, env: &Env<Limits>) -> Decision {
-    let mut decision = Decision::reserve(&mut domain.journal, &env.limits.journal)
-        .expect("journal room checked before routing children");
+    let mut decision = route_decision(domain, &env.limits).expect("journal room checked before routing children");
     route_into(domain, env, &mut decision);
     decision
 }
@@ -6431,6 +6428,28 @@ fn route_bound(limits: &Limits) -> Option<u32> {
         .checked_add(forge::max_out(&limits.forge))?
         // One serialized role cohort revisits each Waiting task, then answers.
         .checked_add(limits.tasks.tasks.checked_add(4)?)
+}
+
+// The walking root drains its pending callbacks in the same decision as a newly
+// admitted event. Thus any event may reach the full child route. The bound sums
+// each child's maximum output cohort, the retained callbacks, call records and
+// the deployment header; the configured journal may have more per-commit room.
+fn route_room(limits: &Limits) -> skein_lib::JournalRoom {
+    skein_lib::JournalRoom {
+        writes: route_bound(limits)
+            .expect("validated route bound")
+            .checked_add(limits.call_records)
+            .expect("validated call record bound"),
+        held: limits.journal.deliveries,
+    }
+}
+
+fn route_takes(domain: &Domain, limits: &Limits) -> bool {
+    domain.journal.takes(&route_room(limits))
+}
+
+fn route_decision(domain: &mut Domain, limits: &Limits) -> Option<Decision> {
+    Decision::reserve_room(&mut domain.journal, &limits.journal, route_room(limits))
 }
 
 /// Count participating child state, fixed handoffs, decoded input and all simultaneously retained
