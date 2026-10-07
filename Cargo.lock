@@ -149,6 +149,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "jig-local-host-world"
+version = "0.0.0"
+dependencies = [
+ "jig-local-host",
+ "skein-fake-llm-domain",
+ "skein-lib",
+ "skein-world",
+ "smith-agent-world",
+ "smith-domain",
+]
+
+[[package]]
 name = "jig-notes-world"
 version = "0.0.0"
 dependencies = [
