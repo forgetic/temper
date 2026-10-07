@@ -571,6 +571,7 @@ mod system_stories {
             let request = smith::Request::Turn {
                 host_run: Token::new(assignment.task),
                 number: *number,
+                position: record.sequence,
                 read: *read,
                 spent: *spent,
                 turn: record.clone(),

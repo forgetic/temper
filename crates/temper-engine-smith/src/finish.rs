@@ -47,6 +47,7 @@ pub fn turn(request: smith::Request, transcript: Box<[u8]>) -> Result<engine::Tu
         | smith::Request::Admitted { .. }
         | smith::Request::Answer { .. }
         | smith::Request::Checking { .. }
+        | smith::Request::ChecksEnded { .. }
         | smith::Request::Deliver { .. }
         | smith::Request::Complete { .. }
         | smith::Request::Rejected { .. }

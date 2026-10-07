@@ -147,15 +147,23 @@ fn agent_for_with_options(
         }]),
     });
     let resume = transcript.is_some();
+    let mut settings = Settings::calm(901);
+    let largest = smith::max_turn_bytes(&settings.limits).expect("bounded Smith turn");
+    // This composed story commits the run's turns after its answer, so its
+    // window covers the charter's entire bounded activation.
+    let window = smith::Window {
+        turns: assignment.run.policy.turns,
+        bytes: largest.checked_mul(u64::from(assignment.run.policy.turns)).expect("bounded activation"),
+    };
     let start = temper_engine_smith::start(
         assignment,
         workspace,
         transcript,
         ReplyTo::new(Token::new(402)),
         Token::new(assignment.task),
+        window,
     );
     let smith::Event::Start { ref charter, .. } = start else { panic!("typed Smith start") };
-    let mut settings = Settings::calm(901);
     settings.job = job;
     settings.resume = resume;
     settings.cancel_at = cancel_at;
@@ -258,6 +266,7 @@ pub fn run_assignment(root: &mut Driver, assignment: &engine::Assignment, agent:
         let request = smith::Request::Turn {
             host_run: Token::new(assignment.task),
             number: *number,
+            position: record.sequence,
             read: *read,
             spent: *spent,
             turn: record.clone(),
