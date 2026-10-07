@@ -7,7 +7,7 @@
 //! [`engine::step`] admits authenticated sign-ins and keyed chats, worker
 //! hellos/losses, numbered turns, priced answers, historical result reads and
 //! store/account terminals. Actual held chats also route authenticated escalation
-//! reads and keyed Release/Reject/Pass acceptance decisions . [`engine::resume`] releases one durable delivery
+//! reads and keyed Release/Reject/Pass acceptance decisions. [`engine::release`] releases one durable delivery
 //! or routes pending work; [`engine::fire`] drives child timers through the
 //! same decision barrier. A writing decision is one ordered atomic commit;
 //! claims, accepted turns, answers and people's replies leave only after the
@@ -48,8 +48,8 @@ mod store;
 #[cfg(test)]
 mod tests;
 pub use decision::{
-    Decision, Delivery, InboxCursor, InboxViewEntry, Journal, Limits as JournalLimits, Output, ResultEntry, accept,
-    committed, fresh, resume, takes, uncommitted, worst_case,
+    Counters, Decision, Delivery, InboxCursor, InboxViewEntry, Journal, Limits as JournalLimits, Output, ResultEntry,
+    accept, accept_pending, commit, committed, fresh, journal_limits, resume, room, takes, uncommitted, worst_case,
 };
 pub use store::{
     CallAnswer, CallKey, CallRecord, Deployment, EscalationDecisionRecord, Family, Key, ProposalDecisionRecord, Range,

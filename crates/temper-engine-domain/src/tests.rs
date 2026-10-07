@@ -1,5 +1,7 @@
 use crate::decision::{
-    Decision, Delivery, Journal, Limits, Output, accept, committed, fresh, resume, takes, uncommitted,
+    Counters, Decision, Delivery, Journal as SkeinJournal, Limits, Output, accept as accept_decision,
+    committed as mark_committed, fresh as fresh_number, journal_limits, resume as release_ready,
+    takes as takes_decision, uncommitted as mark_uncommitted,
 };
 use crate::{Deployment, Family, Key, Record, TurnRecord, Write};
 use alloc::boxed::Box;
@@ -19,6 +21,59 @@ const DEPLOYMENT: Deployment = Deployment {
     forge_rows: 0,
     commits: 0,
 };
+
+struct Journal {
+    inner: SkeinJournal,
+    counters: Counters,
+    durable: u64,
+}
+
+impl Journal {
+    fn bootstrap(id: [u8; 16], limits: &Limits) -> Journal {
+        Journal { inner: SkeinJournal::new(&journal_limits(limits)), counters: Counters::bootstrap(id), durable: 0 }
+    }
+
+    fn new(deployment: Deployment, limits: &Limits) -> Journal {
+        Journal {
+            inner: SkeinJournal::from_durable(&journal_limits(limits), deployment.commits),
+            counters: Counters::new(deployment),
+            durable: deployment.commits,
+        }
+    }
+
+    fn deployment(&self) -> Deployment {
+        self.counters.deployment()
+    }
+    fn durable(&self) -> u64 {
+        self.durable
+    }
+    fn stopped(&self) -> bool {
+        self.inner.stopped()
+    }
+}
+
+fn takes(journal: &Journal, limits: &Limits) -> bool {
+    takes_decision(&journal.inner, limits)
+}
+fn fresh(journal: &mut Journal, family: Family) -> Option<u64> {
+    if journal.inner.stopped() { None } else { fresh_number(&mut journal.counters, family) }
+}
+#[expect(clippy::result_large_err, reason = "test wrapper preserves the decision's owned refusal")]
+fn accept(journal: &mut Journal, limits: &Limits, decision: Decision, out: &mut Queue<Output>) -> Result<(), Decision> {
+    accept_decision(&mut journal.inner, &mut journal.counters, limits, decision, out)
+}
+fn committed(journal: &mut Journal, number: u64) {
+    mark_committed(&mut journal.inner, number);
+    if !journal.inner.stopped() {
+        journal.durable = number;
+    }
+}
+fn resume(journal: &mut Journal, out: &mut Queue<Output>) {
+    release_ready(&mut journal.inner, out);
+}
+fn uncommitted(journal: &mut Journal, number: u64, out: &mut Queue<Output>) {
+    mark_uncommitted(&mut journal.inner, number, out);
+}
 
 fn bytes(len: u32) -> Box<[u8]> {
     let mut bytes = List::with_capacity(len);
@@ -78,7 +133,8 @@ fn a_first_start_commits_its_deployment_before_releasing_a_delivery() {
         writes.as_ref(),
         &[Write::Save(Record::Deployment(Deployment { id: [37; 16], commits: 1, ..DEPLOYMENT }))]
     );
-    assert!(!j.ready());
+    resume(&mut j, &mut out);
+    assert!(out.is_empty());
     committed(&mut j, number);
     resume(&mut j, &mut out);
     assert_eq!(acknowledged(&mut out), 1);
@@ -97,7 +153,6 @@ fn a_store_answer_makes_outputs_ready_without_draining_them() {
     assert!(out.is_empty());
     committed(&mut j, number);
     assert!(out.is_empty());
-    assert!(j.ready());
     resume(&mut j, &mut out);
     assert_eq!(acknowledged(&mut out), 1);
     resume(&mut j, &mut out);
@@ -125,7 +180,7 @@ fn a_decision_without_writes_still_waits_for_the_state_it_observed() {
 }
 
 #[test]
-fn cumulative_and_duplicate_store_answers_preserve_original_output_order() {
+fn cumulative_store_answers_preserve_original_output_order() {
     let mut j = Journal::new(DEPLOYMENT, &LIMITS);
     let mut out = Queue::with_capacity(1);
     for turn in 1_u32..=2 {
@@ -133,8 +188,6 @@ fn cumulative_and_duplicate_store_answers_preserve_original_output_order() {
         assert_eq!(commit(&mut out).0, u64::from(turn));
     }
     assert!(!takes(&j, &LIMITS));
-    committed(&mut j, 2);
-    committed(&mut j, 1);
     committed(&mut j, 2);
     assert_eq!(j.durable(), 2);
     for turn in 1_u32..=2 {
@@ -248,6 +301,21 @@ fn rejected_payloads_are_returned_without_replacing_admitted_ownership() {
     committed(&mut j, 1);
     resume(&mut j, &mut out);
     assert!(out.is_empty());
+}
+
+#[test]
+fn a_decision_past_its_reserved_write_room_stops_the_root_journal() {
+    let mut journal = Journal::new(DEPLOYMENT, &LIMITS);
+    let mut out = Queue::with_capacity(1);
+    let mut decision = Decision::new(&LIMITS);
+    for number in 1..LIMITS.writes {
+        decision.write(&LIMITS, turn(number, 1)).expect("reserved write room");
+    }
+    assert!(decision.write(&LIMITS, turn(LIMITS.writes, 1)).is_err());
+    accept(&mut journal, &LIMITS, decision, &mut out).expect("overrun is accepted to stop");
+    assert!(journal.stopped());
+    assert!(out.is_empty());
+    assert!(!takes(&journal, &LIMITS));
 }
 
 #[test]

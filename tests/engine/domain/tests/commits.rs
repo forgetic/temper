@@ -1,5 +1,5 @@
 use skein_lib::{Queue, Token};
-use temper_engine_domain::{self as root, Decision, Delivery, Family, Journal, Output, Record, Write};
+use temper_engine_domain::{self as root, Counters, Decision, Delivery, Family, Journal, Output, Record, Write};
 use temper_engine_domain_world::commits::{HEADER, LIMITS, Referee, Store, World, random};
 
 #[test]
@@ -22,16 +22,19 @@ fn a_lost_completion_recovers_the_whole_header_and_transcript_without_reapplying
     let mut world = World::new();
     world.decision(1, b"durable transcript", true, true);
     world.apply(false);
-    assert!(!world.journal.ready());
+    let mut before = Queue::with_capacity(1);
+    root::resume(&mut world.journal, &mut before);
+    assert!(before.is_empty());
     let rows = world.store.rows.clone();
-    let mut recovered = Journal::new(world.store.header(), &LIMITS);
-    assert_eq!(recovered.durable(), 1);
+    let header = world.store.header();
+    let mut recovered = Journal::from_durable(&root::journal_limits(&LIMITS), header.commits);
+    let mut counters = Counters::new(header);
     let mut out = Queue::with_capacity(1);
     let mut replay = Decision::new(&LIMITS);
     replay
         .deliver(&LIMITS, Delivery::AcknowledgeTurn { channel: Token::new(7), task: 1, attempt: 1, turn: 1 })
         .expect("bounded replay acknowledgement");
-    root::accept(&mut recovered, &LIMITS, replay, &mut out).expect("recovered decision room");
+    root::accept(&mut recovered, &mut counters, &LIMITS, replay, &mut out).expect("recovered decision room");
     assert!(out.is_empty());
     root::resume(&mut recovered, &mut out);
     assert_eq!(
@@ -39,7 +42,7 @@ fn a_lost_completion_recovers_the_whole_header_and_transcript_without_reapplying
         Some(Output::Deliver(Delivery::AcknowledgeTurn { channel: Token::new(7), task: 1, attempt: 1, turn: 1 }))
     );
     assert_eq!(world.store.rows, rows);
-    assert_eq!(root::fresh(&mut recovered, Family::Task), Some(2));
+    assert_eq!(root::fresh(&mut counters, Family::Task), Some(2));
 }
 
 #[test]
@@ -89,7 +92,7 @@ fn a_failed_fake_store_transaction_changes_no_rows_and_stops_waiting_releases() 
     root::resume(&mut world.journal, &mut out);
     assert!(out.is_empty());
     assert_eq!(world.store.rows, rows);
-    let recovered = Journal::new(world.store.header(), &LIMITS);
+    let recovered = Counters::new(world.store.header());
     assert_eq!(recovered.deployment().commits, 1);
     assert_eq!(recovered.deployment().tasks, 1);
 }

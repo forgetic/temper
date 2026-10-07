@@ -7,7 +7,7 @@
 //! unfinished handoffs between children.
 //!
 //! The shell/protocol supplies [`Event`]s to [`step`], drains durable effects
-//! through [`resume`], fires child timers through [`fire`] and reclaims at the
+//! through [`release`], fires child timers through [`fire`] and reclaims at the
 //! iteration boundary. Every writing route closes into one atomic commit;
 //! store terminals are accepted under pressure and a failed commit stops
 //! release. Startup reads the header first, pages child state and current root
@@ -38,8 +38,8 @@ mod results;
 mod roles;
 
 use crate::{
-    CallAnswer, CallKey, Decision, Delivery, Family, Journal, JournalLimits, Key, Output, Range, Record, RunProof,
-    TerminalRecord, TurnProof, TurnRecord, Write, loads,
+    CallAnswer, CallKey, Counters, Decision, Delivery, Family, Journal, JournalLimits, Key, Output, Range, Record,
+    RunProof, TerminalRecord, TurnProof, TurnRecord, Write, loads,
 };
 use alloc::boxed::Box;
 use jig_core_accounts as accounts;
@@ -865,6 +865,10 @@ pub struct Domain {
     limits: Limits,
     config: Config,
     journal: Journal,
+    counters: Counters,
+    stop_pending: bool,
+    door_pass: bool,
+    door_count: u32,
     startup: Startup,
     tasks: tasks::Domain,
     people: people::Domain,
@@ -962,7 +966,11 @@ impl Domain {
         let tasks = tasks::Domain::new(&limits.tasks, config.seed, Box::new([config.charter]));
         let people = people::Domain::new(&limits.people, owners);
         Domain {
-            journal: Journal::bootstrap(config.deployment, &limits.journal),
+            journal: Journal::new(&root_journal_limits(limits)),
+            counters: Counters::bootstrap(config.deployment),
+            stop_pending: false,
+            door_pass: false,
+            door_count: 0,
             startup: Startup::Cold,
             tasks,
             people,
@@ -1050,7 +1058,7 @@ impl Domain {
     #[must_use]
     pub fn quiescent(&self) -> bool {
         self.ready()
-            && self.journal.quiescent()
+            && self.counters.quiescent(&self.journal)
             && self.loads.quiescent()
             && self.work.is_empty()
             && self.before_header.is_empty()
@@ -1099,7 +1107,7 @@ impl Domain {
     /// store durability. Exposes neither children nor owned handoff bodies and emits no effect.
     #[must_use]
     pub fn deployment(&self) -> crate::Deployment {
-        self.journal.deployment()
+        self.counters.deployment()
     }
 
     /// Retired IO/body/child slots are reclaimed at iteration end, after every event and ready
@@ -1145,6 +1153,12 @@ impl Domain {
 pub const fn max_out(limits: &Limits) -> u32 {
     let viewed = views::max_out(&limits.views).saturating_add(4);
     if viewed > 4 { viewed } else { 4 }
+}
+
+fn root_journal_limits(limits: &Limits) -> skein_lib::JournalLimits {
+    let mut journal = crate::journal_limits(&limits.journal);
+    journal.now = max_out(limits);
+    journal
 }
 
 fn environment_views(env: &Env<Limits>) -> Env<views::Limits> {
@@ -1330,15 +1344,21 @@ fn save(decision: &mut Decision, limits: &Limits, write: Write) {
 }
 
 /// Route one admitted input and all synchronous child callbacks in one decision; store terminals
-/// are accepted even under pressure. The shell reserves `max_out` output slots and supplies
+/// are accepted even under pressure. The shell supplies
 /// unchanged configured limits with injected time. Refused web/worker calls get terminal/busy
 /// notices before child mutation; admitted effects may wait in the journal until store durability.
 /// Account operations keep their own secret-free terminal contract.
+pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event) {
+    let mut out = Queue::with_capacity(max_out(&env.limits));
+    step_routed(domain, env, event, &mut out);
+    stage_now(domain, &mut out);
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "one exhaustive admission match keeps every input before a single decision close"
 )]
-pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
+fn step_routed(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     assert!(domain.limits == env.limits, "root uses configured limits");
     assert!(out.room() >= max_out(&env.limits), "root output room reserved");
     if domain.journal.stopped() || domain.startup == Startup::Failed {
@@ -1359,7 +1379,7 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
             }
         }
         Event::Watch { watcher, sign_in, subject } => {
-            if !domain.ready() || !domain.journal.quiescent() || !domain.work.is_empty() {
+            if !domain.ready() || !domain.counters.quiescent(&domain.journal) || !domain.work.is_empty() {
                 out.push(Request::View(views::Request::Refused { watcher, refusal: views::Refusal::Busy }));
                 return;
             }
@@ -1556,7 +1576,7 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
                 }));
                 return;
             }
-            if domain.journal.deployment().people == u64::MAX || domain.journal.deployment().sign_ins == u64::MAX {
+            if domain.counters.deployment().people == u64::MAX || domain.counters.deployment().sign_ins == u64::MAX {
                 out.push(Request::Deliver(Delivery::WebReply {
                     to: reply_to,
                     sign_in: None,
@@ -1564,8 +1584,8 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
                 }));
                 return;
             }
-            let person = crate::fresh(&mut domain.journal, Family::Person).expect("person counter available");
-            let sign_in = crate::fresh(&mut domain.journal, Family::SignIn).expect("sign-in counter available");
+            let person = crate::fresh(&mut domain.counters, Family::Person).expect("person counter available");
+            let sign_in = crate::fresh(&mut domain.counters, Family::SignIn).expect("sign-in counter available");
             domain.signing_in = Some(sign_in);
             domain.work.push(Work::People(people::Event::SignedIn { reply_to, person, sign_in, identity }));
         }
@@ -1690,6 +1710,11 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
             return;
         }
     }
+    // Connector terminals already belong to the root's bounded work queue.
+    // Keep them there until the journal can admit the entire child route.
+    if !crate::takes(&domain.journal, &env.limits.journal) {
+        return;
+    }
     let decision = route(domain, env);
     domain.signing_in = None;
     close(domain, env, decision, out);
@@ -1697,10 +1722,13 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
 
 fn admits(domain: &Domain, limits: &Limits) -> bool {
     crate::takes(&domain.journal, &limits.journal)
-        && domain.journal.deployment().messages
+        && domain.counters.deployment().messages
             <= u64::MAX.checked_sub(u64::from(limits.tasks.tasks)).expect("task count fits u64")
         && domain.work.is_empty()
-        && domain.journal.held_room() >= limits.journal.deliveries.checked_mul(3).expect("root held reserve bounded")
+        && domain.journal.takes(&skein_lib::JournalRoom {
+            writes: 0,
+            held: limits.journal.deliveries.checked_mul(3).expect("root held reserve bounded"),
+        })
 }
 
 fn remember_due(domain: &mut Domain, context: Box<tasks::RunContext>) {
@@ -1719,18 +1747,89 @@ fn lose_channel(domain: &mut Domain, env: &Env<Limits>, channel: Token) {
 }
 
 fn close(domain: &mut Domain, env: &Env<Limits>, decision: Decision, out: &mut Queue<Request>) {
-    let mut journal_out = Queue::with_capacity(1);
-    crate::accept(&mut domain.journal, &env.limits.journal, decision, &mut journal_out)
+    crate::accept_pending(&mut domain.journal, &mut domain.counters, &env.limits.journal, decision)
         .expect("root pressure reserved before child mutation");
-    journal_outputs(&mut journal_out, out);
+    if domain.journal.stopped() {
+        out.push(Request::Stop);
+    }
 }
 
 fn journal_outputs(journal_out: &mut Queue<Output>, out: &mut Queue<Request>) {
     for _ in 0..journal_out.len() {
         match journal_out.pop().expect("journal output count") {
+            Output::Now(request) => out.push(request),
             Output::Commit { number, writes } => out.push(Request::Commit { number, writes }),
             Output::Stop => out.push(Request::Stop),
             Output::Deliver(delivery) => out.push(Request::Deliver(delivery)),
+        }
+    }
+}
+
+/// The only admission call for outputs that have no durability dependency.
+fn now(domain: &mut Domain, request: Request) -> bool {
+    match domain.journal.now(Output::Now(request)) {
+        Ok(()) => true,
+        Err(Output::Now(_)) => false,
+        Err(Output::Commit { .. } | Output::Deliver(_) | Output::Stop) => unreachable!("the door returns its input"),
+    }
+}
+
+/// Pass every immediate root request through the journal's door before it
+/// reaches the caller. The stopped notice translates the journal's terminal
+/// state, since a stopped journal admits no new output.
+fn publish_now(domain: &mut Domain, out: &mut Queue<Request>) {
+    let count = out.len();
+    let mut released = Queue::with_capacity(1);
+    for _ in 0..count {
+        let request = out.pop().expect("original output count");
+        match request {
+            Request::Stop => out.push(Request::Stop),
+            Request::Commit { number, writes } => out.push(Request::Commit { number, writes }),
+            request @ (Request::Forge { .. }
+            | Request::View(_)
+            | Request::WatchRefused { .. }
+            | Request::CallBusy { .. }
+            | Request::Load { .. }
+            | Request::Deliver(_)
+            | Request::Account(_)
+            | Request::TurnBusy { .. }
+            | Request::AnswerBusy { .. }) => {
+                if !now(domain, request) {
+                    out.push(Request::Stop);
+                    return;
+                }
+                let _released: skein_lib::Released = domain.journal.release(&mut released);
+                match released.pop().expect("journal releases an admitted door output") {
+                    Output::Now(request) => out.push(request),
+                    Output::Commit { .. } | Output::Deliver(_) | Output::Stop => {
+                        unreachable!("door output leaves before held output")
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Admit immediate requests through the journal's door. The caller takes
+/// them on a later release pass; no step returns an outbound queue.
+fn stage_now(domain: &mut Domain, out: &mut Queue<Request>) {
+    domain.door_pass = true;
+    while let Some(request) = out.pop() {
+        match request {
+            Request::Stop => domain.stop_pending = true,
+            request @ (Request::Forge { .. }
+            | Request::View(_)
+            | Request::WatchRefused { .. }
+            | Request::CallBusy { .. }
+            | Request::Load { .. }
+            | Request::Deliver(_)
+            | Request::Account(_)
+            | Request::TurnBusy { .. }
+            | Request::AnswerBusy { .. }) => {
+                assert!(now(domain, request), "root door reserves one route's immediate outputs");
+                domain.door_count = domain.door_count.checked_add(1).expect("root door count bounded by max_out");
+            }
+            Request::Commit { .. } => unreachable!("release takes commits from the journal"),
         }
     }
 }
@@ -1739,8 +1838,51 @@ fn journal_outputs(journal_out: &mut Queue<Output>, out: &mut Queue<Request>) {
 /// is full. The shell reserves `max_out` output slots. Deferred callbacks run before another held
 /// callback is consumed; other ready work may produce one commit. This pass never waits for IO or
 /// drops a retained callback on pressure
+fn resume(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
+    resume_routed(domain, env, out);
+    publish_now(domain, out);
+}
+
+/// Release one bounded journal output or route one ready child continuation.
+/// The engine's iteration calls this after accepting store terminals.
+pub fn release(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
+    if domain.stop_pending {
+        domain.stop_pending = false;
+        domain.door_pass = false;
+        domain.door_count = 0;
+        out.push(Request::Stop);
+        return;
+    }
+    if domain.door_pass {
+        domain.door_pass = false;
+        send_commit(domain, out);
+        let mut released = Queue::with_capacity(1);
+        while domain.door_count > 0 {
+            let _status: skein_lib::Released = domain.journal.release(&mut released);
+            match released.pop().expect("one staged door output") {
+                Output::Now(request) => out.push(request),
+                Output::Commit { .. } | Output::Deliver(_) | Output::Stop => {
+                    unreachable!("door output precedes held outputs")
+                }
+            }
+            domain.door_count = domain.door_count.checked_sub(1).expect("staged output released");
+        }
+        return;
+    }
+    resume(domain, env, out);
+    send_commit(domain, out);
+}
+
+fn send_commit(domain: &mut Domain, out: &mut Queue<Request>) {
+    match crate::commit(&mut domain.journal, &domain.limits.journal) {
+        Some(Output::Commit { number, writes }) => out.push(Request::Commit { number, writes }),
+        Some(Output::Now(_) | Output::Deliver(_) | Output::Stop) => unreachable!("journal commit has writes only"),
+        None => {}
+    }
+}
+
 #[expect(clippy::too_many_lines, reason = "root release path routes each held delivery exhaustively")]
-pub fn resume(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
+fn resume_routed(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
     assert!(out.room() >= max_out(&env.limits), "root ready output room");
     if domain.journal.stopped() || domain.startup == Startup::Failed {
         return;
@@ -1775,6 +1917,10 @@ pub fn resume(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) 
     crate::resume(&mut domain.journal, &mut journal_out);
     if let Some(output) = journal_out.pop() {
         match output {
+            Output::Now(request) => {
+                out.push(request);
+                return;
+            }
             Output::Deliver(Delivery::ForgeCommitted { entry }) => {
                 domain.work.push(Work::Forge(forge::Event::Committed { entry }));
             }
@@ -1880,9 +2026,10 @@ pub fn resume(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) 
     }
     if domain.ready() {
         if domain.forge.is_ready() {
+            let mut decision = Decision::reserve(&mut domain.journal, &env.limits.journal)
+                .expect("journal room checked before connector continuation");
             let mut child = Queue::with_capacity(forge::max_out(&env.limits.forge));
             forge::resume(&mut domain.forge, &environment_forge(env), &mut child);
-            let mut decision = Decision::new(&env.limits.journal);
             forge_route::outputs(domain, env, &mut decision, &mut child);
             route_into(domain, env, &mut decision);
             close(domain, env, decision, out);
@@ -1896,9 +2043,10 @@ pub fn resume(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) 
             close(domain, env, decision, out);
             return;
         }
+        let mut decision = Decision::reserve(&mut domain.journal, &env.limits.journal)
+            .expect("journal room checked before fleet continuation");
         let mut fleet_out = Queue::with_capacity(fleet::max_out(&env.limits.fleet));
         fleet::resume(&mut domain.fleet, &environment_fleet(env), &mut fleet_out);
-        let mut decision = Decision::new(&env.limits.journal);
         fleet_outputs(domain, env, &mut decision, &mut fleet_out);
         route_into(domain, env, &mut decision);
         close(domain, env, decision, out);
@@ -1906,10 +2054,16 @@ pub fn resume(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) 
 }
 
 /// Fire participating child timers through the same barrier; store durability and inputs run before
-/// this pass. The shell reserves `max_out` slots and supplies injected monotonic/wall time. Account
+/// this pass. The shell supplies injected monotonic/wall time. Account
 /// timers may emit bounded protocol actions independently; root routes that mutate tasks/fleet wait
 /// for whole-decision admission. Their store and account outcomes enter later through `step`.
-pub fn fire(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
+pub fn fire(domain: &mut Domain, env: &Env<Limits>) {
+    let mut out = Queue::with_capacity(max_out(&env.limits));
+    fire_routed(domain, env, &mut out);
+    stage_now(domain, &mut out);
+}
+
+fn fire_routed(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
     if domain.journal.stopped() || domain.startup == Startup::Failed {
         return;
     }
@@ -1922,7 +2076,8 @@ pub fn fire(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
     if !domain.ready() || !admits(domain, &env.limits) {
         return;
     }
-    let mut decision = Decision::new(&env.limits.journal);
+    let mut decision = Decision::reserve(&mut domain.journal, &env.limits.journal)
+        .expect("journal room checked before firing children");
     let mut due = List::with_capacity(env.limits.forge.issues);
     for (goal, when) in &domain.forge_projection_due {
         if *when <= env.wall {
@@ -1932,7 +2087,7 @@ pub fn fire(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
     for goal in &due {
         domain.forge_projection_due.remove(goal);
         if domain.forge.issue(*goal).is_some()
-            && let Some(entry) = crate::fresh(&mut domain.journal, Family::ForgeRow)
+            && let Some(entry) = crate::fresh(&mut domain.counters, Family::ForgeRow)
         {
             domain.work.push(Work::Forge(forge::Event::ProjectDesired { entry, goal: *goal }));
         }
@@ -1964,7 +2119,8 @@ pub fn fire(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
 }
 
 fn route(domain: &mut Domain, env: &Env<Limits>) -> Decision {
-    let mut decision = Decision::new(&env.limits.journal);
+    let mut decision = Decision::reserve(&mut domain.journal, &env.limits.journal)
+        .expect("journal room checked before routing children");
     route_into(domain, env, &mut decision);
     decision
 }
@@ -2065,7 +2221,7 @@ fn route_person_message(
     question: Option<u64>,
     words: Box<[u8]>,
 ) {
-    let Some(message) = crate::fresh(&mut domain.journal, Family::Message) else {
+    let Some(message) = crate::fresh(&mut domain.counters, Family::Message) else {
         domain.work.push(Work::People(people::Event::Decided {
             request,
             outcome: people::Outcome::Refused(people::Refusal::Limit),
@@ -2719,7 +2875,7 @@ fn make_chat(
             budget: domain.config.person_budget,
         }));
     }
-    let Some(number) = crate::fresh(&mut domain.journal, Family::Task) else {
+    let Some(number) = crate::fresh(&mut domain.counters, Family::Task) else {
         domain.work.push(Work::People(people::Event::Decided {
             request,
             outcome: people::Outcome::Refused(people::Refusal::Limit),
@@ -3121,7 +3277,7 @@ fn decide_call(
         relay_call(domain, limits, decision, to, answer);
         return;
     }
-    let _number = crate::fresh(&mut domain.journal, Family::Call).expect("admitted call counter");
+    let _number = crate::fresh(&mut domain.counters, Family::Call).expect("admitted call counter");
     assert!(domain.calls.insert(key, answer.clone()) == Ok(None), "call record room reserved");
     save(decision, limits, Write::Save(Record::Call(crate::CallRecord { key, answer: answer.clone() })));
     relay_call(domain, limits, decision, to, answer);
@@ -3149,7 +3305,7 @@ fn message_call(
         );
         return;
     };
-    let Some(number) = crate::fresh(&mut domain.journal, Family::Message) else {
+    let Some(number) = crate::fresh(&mut domain.counters, Family::Message) else {
         decide_call(
             domain,
             &env.limits,
@@ -3198,7 +3354,7 @@ fn subscribe_call(
     key: CallKey,
     kind: tasks::SubscriptionKind,
 ) {
-    let Some(subscription) = crate::fresh(&mut domain.journal, Family::Message) else {
+    let Some(subscription) = crate::fresh(&mut domain.counters, Family::Message) else {
         decide_call(
             domain,
             &env.limits,
@@ -3316,7 +3472,7 @@ fn amend_call(
             }
         }
     }
-    let Some(message) = crate::fresh(&mut domain.journal, Family::Message) else {
+    let Some(message) = crate::fresh(&mut domain.counters, Family::Message) else {
         return decide_call(
             domain,
             &env.limits,
@@ -3496,7 +3652,7 @@ fn delegate_call(
     }
     let mut numbers = List::with_capacity(env.limits.tasks.batch);
     for _ in &batch {
-        let Some(number) = crate::fresh(&mut domain.journal, Family::Task) else {
+        let Some(number) = crate::fresh(&mut domain.counters, Family::Task) else {
             decide_call(
                 domain,
                 &env.limits,
@@ -3633,7 +3789,7 @@ fn procedure_step(
             }
             let mut numbers = List::with_capacity(env.limits.tasks.batch);
             for _ in &batch {
-                let number = crate::fresh(&mut domain.journal, Family::Task)?;
+                let number = crate::fresh(&mut domain.counters, Family::Task)?;
                 numbers.push(number).expect("bounded procedure task IDs");
             }
             let mut created = List::with_capacity(env.limits.tasks.batch);
@@ -3715,7 +3871,7 @@ fn start_recurring(
             budget: domain.config.period_budget,
         }));
     }
-    let Some(number) = crate::fresh(&mut domain.journal, Family::Task) else { return };
+    let Some(number) = crate::fresh(&mut domain.counters, Family::Task) else { return };
     domain.work.push(Work::Tasks(tasks::Event::Make {
         reply_to: internal(u64::MAX - 2),
         creator: tasks::Party::Deployment { project },
@@ -3819,7 +3975,7 @@ fn tasks_outputs(
                 }
                 let mut numbers = List::with_capacity(env.limits.tasks.batch);
                 for _ in 0..members {
-                    let Some(number) = crate::fresh(&mut domain.journal, Family::Task) else { break };
+                    let Some(number) = crate::fresh(&mut domain.counters, Family::Task) else { break };
                     numbers.push(number).expect("bounded recurring batch");
                 }
                 if numbers.len() == members {
@@ -3834,7 +3990,7 @@ fn tasks_outputs(
                 escalation::stalled(domain, task, revision, holder);
             }
             tasks::Request::Notify { task, subscription, target, state, words } => {
-                let number = crate::fresh(&mut domain.journal, Family::Message).expect("notification number admitted");
+                let number = crate::fresh(&mut domain.counters, Family::Message).expect("notification number admitted");
                 domain.work.push(Work::Tasks(tasks::Event::Notice {
                     task,
                     word: tasks::Word {
@@ -3849,7 +4005,7 @@ fn tasks_outputs(
                 }));
             }
             tasks::Request::Timer { task, subscription } => {
-                let number = crate::fresh(&mut domain.journal, Family::Message).expect("timer number admitted");
+                let number = crate::fresh(&mut domain.counters, Family::Message).expect("timer number admitted");
                 domain.work.push(Work::Tasks(tasks::Event::Notice {
                     task,
                     word: tasks::Word {
@@ -4068,6 +4224,24 @@ fn tasks_outputs(
                 }
                 match &record {
                     tasks::Stored::Live(task) | tasks::Stored::Ended(task) => {
+                        let stale = match domain.contexts.get(&task.number) {
+                            Some(context) => {
+                                task.phase != tasks::Phase::Active(tasks::Active::Preparing)
+                                    || task.last_message != context.last_message
+                            }
+                            None => false,
+                        };
+                        if stale {
+                            drop(domain.contexts.remove(&task.number));
+                            drop(domain.dependency_results.remove(&task.number));
+                            drop(domain.transcripts.remove(&task.number));
+                            domain
+                                .work
+                                .push(Work::Brief(brief::GatherEvent::Abandon { brief: Token::new(task.number) }));
+                            if task.phase == tasks::Phase::Active(tasks::Active::Preparing) {
+                                domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task: task.number }));
+                            }
+                        }
                         view_task_saved(domain, &env.limits, decision, task);
                         if task.tracked.is_some() && domain.forge.home(task.project).is_some() {
                             domain.work.push(Work::ProjectGoal(task.clone()));
@@ -4087,7 +4261,7 @@ fn tasks_outputs(
                 }
                 let record = match record {
                     tasks::Stored::Ended(mut task) => {
-                        let position = crate::fresh(&mut domain.journal, Family::Message)
+                        let position = crate::fresh(&mut domain.counters, Family::Message)
                             .expect("ending position preflighted before mutation");
                         task.result_position = position;
                         assert!(
@@ -4558,7 +4732,7 @@ fn tasks_outputs(
                     tasks::Ending::Failed { .. } => forge::ReleaseEnding::Failed,
                     tasks::Ending::Cancelled { .. } => forge::ReleaseEnding::Cancelled,
                 };
-                if let Some(entry) = crate::fresh(&mut domain.journal, Family::ForgeRow) {
+                if let Some(entry) = crate::fresh(&mut domain.counters, Family::ForgeRow) {
                     domain.work.push(Work::Forge(forge::Event::Release { task, root, ending, entry }));
                 } else {
                     domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::Effects }));
@@ -4743,6 +4917,28 @@ fn brief_outputs(
             | brief::GatherRequest::Drop { .. } => unreachable!("temper's sole connector is numbered zero"),
             brief::GatherRequest::Complete { brief, order } => {
                 let task = brief.raw();
+                let current = match domain.contexts.get(&task) {
+                    Some(context) => match domain.tasks.task(task) {
+                        Some(row) => {
+                            row.phase == tasks::Phase::Active(tasks::Active::Preparing)
+                                && row.last_message == context.last_message
+                        }
+                        None => false,
+                    },
+                    None => false,
+                };
+                if !current {
+                    for placed in order {
+                        if let brief::GatherPlaced::Connector { token, .. } = placed {
+                            let id = Id::from_token(token);
+                            if domain.brief_connectors.get(id).is_some() {
+                                domain.brief_connectors.retire(id);
+                                domain.work.push(Work::Forge(forge::Event::DropBrief { section: token }));
+                            }
+                        }
+                    }
+                    continue;
+                }
                 let mut sections = List::with_capacity(u32::try_from(order.len()).expect("bounded section count"));
                 let mut missing_owner = false;
                 for placed in order {
@@ -4790,7 +4986,7 @@ fn brief_outputs(
                 let context = domain.contexts.remove(&task).expect("rendered task owns context");
                 drop(domain.dependency_results.remove(&task));
                 let transcript = domain.transcripts.remove(&task).expect("rendered task owns loaded transcript");
-                let Some(attempt) = crate::fresh(&mut domain.journal, Family::Run) else {
+                let Some(attempt) = crate::fresh(&mut domain.counters, Family::Run) else {
                     domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
                     continue;
                 };
@@ -5707,7 +5903,11 @@ fn transcript_loaded(
 
 #[expect(clippy::too_many_lines, reason = "one preparation gathers typed core sections and pinned forge sources")]
 fn start_brief(domain: &mut Domain, env: &Env<Limits>, task: u64) {
-    let context = domain.contexts.get(&task).expect("loaded task context");
+    let Some(context) = domain.contexts.get(&task) else { return };
+    let Some(current) = domain.tasks.task(task) else { return };
+    if current.phase != tasks::Phase::Active(tasks::Active::Preparing) || current.last_message != context.last_message {
+        return;
+    }
     let transcript = domain.transcripts.get(&task).expect("prepared transcript state");
     let oversized = transcript.bytes > u64::from(domain.config.resume_bytes);
     let mut wanted = List::with_capacity(domain.limits.brief.sections);
@@ -6294,6 +6494,13 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         return None;
     }
     let mut bytes = crate::worst_case(&limits.journal)?;
+    if max_out(limits) > limits.journal.deliveries {
+        bytes = bytes.checked_add(
+            Queue::<Output>::worst_case(max_out(limits))?
+                .checked_sub(Queue::<Output>::worst_case(limits.journal.deliveries)?)?,
+        )?;
+    }
+    bytes = bytes.checked_add(Queue::<Request>::worst_case(max_out(limits))?)?;
     bytes = bytes.checked_add(role_scratch_bytes(limits)?)?;
     let cold = limits.fleet.workers;
     let hello = u64::from(limits.fleet.slots)
@@ -7258,9 +7465,9 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
             let valid = key.task != 0
                 && key.attempt != 0
                 && key.completion != 0
-                && key.task <= domain.journal.deployment().tasks
-                && key.attempt <= domain.journal.deployment().runs
-                && valid_call_answer(&record.answer, &domain.journal.deployment(), &env.limits)
+                && key.task <= domain.counters.deployment().tasks
+                && key.attempt <= domain.counters.deployment().runs
+                && valid_call_answer(&record.answer, &domain.counters.deployment(), &env.limits)
                 && match domain.proofs.get(&key.task) {
                     Some(proof) => proof.attempt >= key.attempt,
                     None => false,
@@ -7269,14 +7476,18 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
                 domain.startup = Startup::Failed;
             }
         }
-        Record::Deployment(deployment) => domain.journal = Journal::new(deployment, &env.limits.journal),
+        Record::Deployment(deployment) => {
+            domain.journal = Journal::from_durable(&root_journal_limits(&env.limits), deployment.commits);
+            domain.counters = Counters::new(deployment);
+        }
         Record::People(people::Stored::Policy { project, value }) => {
             policy::restore(domain, project, value);
         }
         Record::People(record) => domain.work.push(Work::People(people::Event::Restore { record })),
         Record::Forge { id, row } => {
             let key = forge::stored_key(&row);
-            if id == 0 || id > domain.journal.deployment().forge_rows || domain.forge_keys.insert(key, id) != Ok(None) {
+            if id == 0 || id > domain.counters.deployment().forge_rows || domain.forge_keys.insert(key, id) != Ok(None)
+            {
                 domain.startup = Startup::Failed;
                 return;
             }
@@ -7284,9 +7495,9 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
         }
         Record::Tasks(record) => match record {
             tasks::Stored::PersonProposal(ref row) => {
-                if row.number > domain.journal.deployment().messages
-                    || row.proposer > domain.journal.deployment().people
-                    || row.goal.number > domain.journal.deployment().tasks
+                if row.number > domain.counters.deployment().messages
+                    || row.proposer > domain.counters.deployment().people
+                    || row.goal.number > domain.counters.deployment().tasks
                     || domain.config.authority.policy(row.project).is_none()
                 {
                     domain.startup = Startup::Failed;
@@ -7308,14 +7519,14 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
                     tasks::Executor::Procedure { .. } | tasks::Executor::Person(_) => false,
                 };
                 if !supported_task(task, domain.config.charter)
-                    || !supported_proposal(task, &domain.journal.deployment())
+                    || !supported_proposal(task, &domain.counters.deployment())
                     || !escalation::supported(domain, task)
-                    || task.number > domain.journal.deployment().tasks
-                    || (agent_attempt && task.attempt > domain.journal.deployment().runs)
+                    || task.number > domain.counters.deployment().tasks
+                    || (agent_attempt && task.attempt > domain.counters.deployment().runs)
                     || !supported_requester(
                         task.requester,
-                        domain.journal.deployment().people,
-                        domain.journal.deployment().tasks,
+                        domain.counters.deployment().people,
+                        domain.counters.deployment().tasks,
                     )
                 {
                     domain.startup = Startup::Failed;

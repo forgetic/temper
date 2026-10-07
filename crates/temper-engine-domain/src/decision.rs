@@ -1,18 +1,21 @@
 //! The root's ordered commit seam (domain/engine.md, sections 5.1–5.2).
 //! [`Decision`] keeps a bounded unique-key write set and owned deliveries;
-//! [`Journal`] keeps deployment counters, cumulative durability and deliveries
-//! held behind their prerequisite commits. It never knows child policy, worker
+//! skein-lib's [`Journal`] keeps cumulative durability and deliveries held behind
+//! their prerequisite commits; [`Counters`] keeps deployment numbers until jig
+//! owns them. Neither knows child policy, worker
 //! placement, store encoding or IO; the walking root routes internal deliveries.
 //!
-//! Call [`takes`] before child mutation, then [`accept`] once synchronous routes
-//! finish. The store answers issued commits through [`committed`] or
+//! Reserve a decision before child mutation, then call [`accept_pending`] once
+//! synchronous routes finish. The store answers issued commits through [`committed`] or
 //! [`uncommitted`]; [`resume`] releases at most one ready delivery. Refused
 //! admission returns ownership, successful admission may emit one commit, and
 //! failed storage emits one stop notice. No helper waits for its own effect.
 use crate::{Deployment, Family, Key, Record, Write};
 use alloc::boxed::Box;
 use core::mem::size_of;
-use skein_lib::{List, Queue, ReplyTo, Token, Wall};
+use skein_lib::{
+    Decision as SkeinDecision, Journal as SkeinJournal, JournalLimits, JournalRoom, List, Queue, ReplyTo, Token, Wall,
+};
 use temper_engine_domain_people as people;
 
 /// Startup capacities supplied by the root, immutable across journal calls
@@ -261,6 +264,8 @@ impl InboxViewEntry {
 /// translates it to store IO or an outward/internal delivery (domain/engine.md, 5).
 #[derive(PartialEq, Eq, Debug)]
 pub enum Output {
+    /// Output that decides nothing, admitted through the journal's door.
+    Now(crate::engine::Request),
     /// Ordered atomic store transaction, ended by `committed` or `uncommitted` using the issued
     /// number.
     Commit {
@@ -284,25 +289,18 @@ pub struct Decision {
     limits: Limits,
     writes: List<Write>,
     deliveries: Queue<Delivery>,
+    overrun: bool,
+    batch: Option<SkeinDecision<Write, Output>>,
 }
 
-#[derive(Debug)]
-struct Held {
-    after: u64,
-    delivery: Delivery,
-}
+/// skein-lib's bounded commit barrier, over the root's wrapped writes and outputs.
+pub type Journal = SkeinJournal<Write, Output>;
 
-/// Root-owned deployment counters and ordered durability barrier
-/// (domain/engine.md, 5.1–5.4). It retains bounded delivery ownership, never
-/// store IO handles or a second copy of child state.
+/// Deployment numbers retained by the root until the core owns them.
 #[derive(Debug)]
-pub struct Journal {
-    limits: Limits,
+pub struct Counters {
     deployment: Deployment,
-    durable: u64,
     dirty: bool,
-    stopped: bool,
-    held: Queue<Held>,
 }
 
 impl Decision {
@@ -321,7 +319,17 @@ impl Decision {
             limits: *limits,
             writes: List::with_capacity(limits.writes.checked_sub(1).expect("header slot reserved")),
             deliveries: Queue::with_capacity(limits.deliveries),
+            overrun: false,
+            batch: None,
         }
+    }
+
+    /// Reserve the generic journal's worst-case room before routing a child.
+    pub fn reserve(journal: &mut Journal, limits: &Limits) -> Option<Decision> {
+        let batch = journal.decision(&room(limits))?;
+        let mut decision = Decision::new(limits);
+        decision.batch = Some(batch);
+        Some(decision)
     }
 
     /// A replacement at the same key keeps its original position. All child callbacks finish before
@@ -384,7 +392,11 @@ impl Decision {
                 return Ok(());
             }
         }
-        self.writes.push(write)
+        let result = self.writes.push(write);
+        if result.is_err() {
+            self.overrun = true;
+        }
+        result
     }
 
     /// Retain one root effect for the decision, without releasing or issuing it. Bounds or capacity
@@ -509,16 +521,20 @@ impl Decision {
         if !within {
             return Err(delivery);
         }
-        self.deliveries.try_push(delivery)
+        let result = self.deliveries.try_push(delivery);
+        if result.is_err() {
+            self.overrun = true;
+        }
+        result
     }
 }
 
-impl Journal {
+impl Counters {
     /// An empty store needs the deployment identity committed even before its first task. The id is
     /// a root input, drawn once by the shell at startup. Validated limits size the fixed held
     /// queue; the next accepted decision emits the dirty header's commit.
     #[must_use]
-    pub fn bootstrap(id: [u8; 16], limits: &Limits) -> Journal {
+    pub fn bootstrap(id: [u8; 16]) -> Counters {
         let deployment = Deployment {
             id,
             tasks: 0,
@@ -530,25 +546,15 @@ impl Journal {
             forge_rows: 0,
             commits: 0,
         };
-        let mut journal = Journal::new(deployment, limits);
-        journal.dirty = true;
-        journal
+        Counters { deployment, dirty: true }
     }
 
     /// A loaded header names the last fully applied commit. It is durable; outstanding answers from
     /// a previous process need not be reconstructed. The root supplies the decoded store header and
     /// validated startup bounds; construction emits no effect.
     #[must_use]
-    pub fn new(deployment: Deployment, limits: &Limits) -> Journal {
-        assert!(worst_case(limits).is_some(), "valid root journal limits");
-        Journal {
-            limits: *limits,
-            durable: deployment.commits,
-            deployment,
-            dirty: false,
-            stopped: false,
-            held: Queue::with_capacity(limits.held),
-        }
+    pub const fn new(deployment: Deployment) -> Counters {
+        Counters { deployment, dirty: false }
     }
 
     /// Pure snapshot of allocated counters, which may run ahead of the durable store until its
@@ -558,44 +564,30 @@ impl Journal {
         self.deployment
     }
 
-    /// Pure query for the last cumulatively answered commit; bounded by the allocated commit
-    /// counter.
-    #[must_use]
-    pub const fn durable(&self) -> u64 {
-        self.durable
-    }
-
-    /// Pure query for the storage-failure fence; true prevents subsequent admission and release.
-    #[must_use]
-    pub const fn stopped(&self) -> bool {
-        self.stopped
-    }
-
     /// Pure shell idle query: no dirty header, held delivery or unanswered issued commit remains. A
     /// stopped journal is not complete.
     #[must_use]
-    pub fn quiescent(&self) -> bool {
-        !self.stopped && !self.dirty && self.held.is_empty() && self.durable == self.deployment.commits
+    pub fn quiescent(&self, journal: &Journal) -> bool {
+        !self.dirty && journal.idle()
     }
+}
 
-    /// Pure root query for unused held-delivery slots; callback admission uses this in addition to
-    /// `takes`.
-    pub(crate) fn held_room(&self) -> u32 {
-        self.held.room()
+/// Translate temper's limits to skein-lib's generic journal capacities.
+#[must_use]
+pub const fn journal_limits(limits: &Limits) -> JournalLimits {
+    JournalLimits {
+        commits: limits.commits,
+        writes: limits.writes,
+        held: limits.held,
+        now: limits.deliveries,
+        release: 1,
     }
+}
 
-    /// Pure query: whether the front held effect can be released by `resume`. It reports no child
-    /// or IO readiness.
-    #[must_use]
-    pub fn ready(&self) -> bool {
-        if self.stopped {
-            return false;
-        }
-        match self.held.iter().next() {
-            Some(held) => held.after <= self.durable,
-            None => false,
-        }
-    }
+/// Reserve the worst-case write and held room for one root route.
+#[must_use]
+pub const fn room(limits: &Limits) -> JournalRoom {
+    JournalRoom { writes: limits.writes, held: limits.deliveries }
 }
 
 /// Called before routing anything that may mutate a child. Reserving the whole decision avoids
@@ -603,76 +595,112 @@ impl Journal {
 /// mutation or emitted terminal; the walking root additionally reserves callback room.
 #[must_use]
 pub fn takes(journal: &Journal, limits: &Limits) -> bool {
-    assert!(*limits == journal.limits, "journal uses its configured limits");
-    !journal.stopped
-        && journal.deployment.commits != u64::MAX
-        && journal.deployment.commits.checked_sub(journal.durable).expect("durable never exceeds made")
-            < u64::from(limits.commits)
-        && journal.held.room() >= limits.deliveries
+    journal.takes(&room(limits))
 }
 
 /// Root numbers are never reused. Allocation is part of the admitted decision, even if its
 /// candidate is unused; the next commit saves the gap. The root chooses the counter family after
 /// admission. Returns its next positive `u64`, or `None` when stopped/exhausted, with no effect on
 /// refusal; emits no request itself.
-pub fn fresh(journal: &mut Journal, family: Family) -> Option<u64> {
-    if journal.stopped {
-        return None;
-    }
+pub fn fresh(counters: &mut Counters, family: Family) -> Option<u64> {
     let counter = match family {
-        Family::Task => &mut journal.deployment.tasks,
-        Family::Person => &mut journal.deployment.people,
-        Family::SignIn => &mut journal.deployment.sign_ins,
-        Family::Message => &mut journal.deployment.messages,
-        Family::Run => &mut journal.deployment.runs,
-        Family::Call => &mut journal.deployment.calls,
-        Family::ForgeRow => &mut journal.deployment.forge_rows,
+        Family::Task => &mut counters.deployment.tasks,
+        Family::Person => &mut counters.deployment.people,
+        Family::SignIn => &mut counters.deployment.sign_ins,
+        Family::Message => &mut counters.deployment.messages,
+        Family::Run => &mut counters.deployment.runs,
+        Family::Call => &mut counters.deployment.calls,
+        Family::ForgeRow => &mut counters.deployment.forge_rows,
     };
     let next = counter.checked_add(1)?;
     *counter = next;
-    journal.dirty = true;
+    counters.dirty = true;
     Some(next)
 }
 
 /// Return ownership on refusal. The root must call `takes` before making the decision; this
-/// defensive check does not undo already-routed children. Reserve one output. A dirty header or
+/// defensive check does not undo already-routed children. A dirty header or
 /// nonempty write set produces one atomic commit, ended by the store; a read-only decision issues
 /// none. Every retained delivery follows the latest allocated commit.
-pub fn accept(
+#[expect(clippy::result_large_err, reason = "refused root decisions return all owned writes and outputs")]
+pub fn accept_pending(
     journal: &mut Journal,
+    counters: &mut Counters,
     limits: &Limits,
     mut decision: Decision,
-    out: &mut Queue<Output>,
 ) -> Result<(), Decision> {
-    assert!(out.room() >= 1, "one root journal output reserved");
-    if !takes(journal, limits)
+    if decision.overrun {
+        let mut batch = match decision.batch.take() {
+            Some(batch) => batch,
+            None => journal
+                .decision(&JournalRoom { writes: 0, held: 0 })
+                .expect("overrun follows an admitted root decision"),
+        };
+        for _ in 0..=limits.writes {
+            if batch.write(Write::Erase(Key::Deployment)).is_err() {
+                break;
+            }
+        }
+        journal.accept(batch);
+        return Ok(());
+    }
+    if (decision.batch.is_none() && !takes(journal, limits))
         || decision.limits != *limits
         || decision.writes.len() >= limits.writes
         || decision.deliveries.len() > limits.deliveries
-        || decision.deliveries.len() > journal.held.room()
     {
         return Err(decision);
     }
-    let writing = journal.dirty || !decision.writes.is_empty();
+    let writing = counters.dirty || !decision.writes.is_empty();
+    let mut batch = match decision.batch.take() {
+        Some(batch) => batch,
+        None => journal.decision(&room(limits)).expect("preflight reserved the whole decision"),
+    };
     if writing {
-        journal.deployment.commits = journal.deployment.commits.checked_add(1).expect("admitted commit number");
-        let mut writes = List::with_capacity(decision.writes.len().checked_add(1).expect("reserved header slot"));
-        writes.push(Write::Save(Record::Deployment(journal.deployment))).expect("header slot reserved");
+        counters.deployment.commits = counters.deployment.commits.checked_add(1).expect("admitted commit number");
+        batch.write(Write::Save(Record::Deployment(counters.deployment))).expect("header slot reserved");
         for at in 0..decision.writes.len() {
             let source = decision.writes.get_mut(at).expect("admitted write index");
             let key = source.key();
             // The source list is consumed in this step. An erase is a
             // payload-free terminal placeholder, never submitted again.
             let write = core::mem::replace(source, Write::Erase(key));
-            writes.push(write).expect("admitted decision writes");
+            batch.write(write).expect("admitted decision writes");
         }
-        out.push(Output::Commit { number: journal.deployment.commits, writes: writes.into_boxed() });
-        journal.dirty = false;
+        counters.dirty = false;
     }
-    drop(decision.writes);
     for _ in 0..decision.deliveries.len() {
         let delivery = decision.deliveries.pop().expect("admitted delivery count");
-        journal.held.push(Held { after: journal.deployment.commits, delivery });
+        batch.hold(Output::Deliver(delivery)).expect("admitted held output");
+    }
+    journal.accept(batch);
+    Ok(())
+}
+
+/// Take the next numbered journal commit for the store.
+pub fn commit(journal: &mut Journal, limits: &Limits) -> Option<Output> {
+    let commit = journal.commit()?;
+    let mut writes = List::with_capacity(limits.writes);
+    let mut rows = commit.writes;
+    while let Some(write) = rows.pop() {
+        writes.push(write).expect("commit writes bounded by journal limits");
+    }
+    Some(Output::Commit { number: commit.number, writes: writes.into_boxed() })
+}
+
+/// Compatibility seam for the journal's focused world: accept and take its commit.
+#[expect(clippy::result_large_err, reason = "refused root decisions return all owned writes and outputs")]
+pub fn accept(
+    journal: &mut Journal,
+    counters: &mut Counters,
+    limits: &Limits,
+    decision: Decision,
+    out: &mut Queue<Output>,
+) -> Result<(), Decision> {
+    assert!(out.room() >= 1, "one root journal output reserved");
+    accept_pending(journal, counters, limits, decision)?;
+    if let Some(output) = commit(journal, limits) {
+        out.push(output);
     }
     Ok(())
 }
@@ -681,11 +709,7 @@ pub fn accept(
 /// never drains all of them inside the store step. The store echoes an issued `u64` commit number.
 /// Duplicate/older terminals are inert; a number beyond issued commits is a caller error.
 pub fn committed(journal: &mut Journal, number: u64) {
-    if journal.stopped || number <= journal.durable {
-        return;
-    }
-    assert!(number <= journal.deployment.commits, "store answers only issued commits");
-    journal.durable = number;
+    journal.committed(number);
 }
 
 /// Root ready pass: reserve one output and release at most one durable held effect in FIFO order;
@@ -693,22 +717,17 @@ pub fn committed(journal: &mut Journal, number: u64) {
 /// to this seam.
 pub fn resume(journal: &mut Journal, out: &mut Queue<Output>) {
     assert!(out.room() >= 1, "one root ready output reserved");
-    if journal.ready() {
-        let held = journal.held.pop().expect("ready front exists");
-        out.push(Output::Deliver(held.delivery));
-    }
+    let _released: skein_lib::Released = journal.release(out);
 }
 
 /// Store to journal: an issued commit failed. Reserve one output; the first failure beyond durable
 /// progress emits `Stop` and retains all held effects. Older or repeated failure notices are inert.
 pub fn uncommitted(journal: &mut Journal, number: u64, out: &mut Queue<Output>) {
     assert!(out.room() >= 1, "one root stop output reserved");
-    if journal.stopped || number <= journal.durable {
+    if journal.stopped() {
         return;
     }
-    assert!(number <= journal.deployment.commits, "failure names an issued commit");
-    journal.stopped = true;
-    // Nothing is released, including outputs tagged with a later commit.
+    journal.failed(number);
     out.push(Output::Stop);
 }
 
@@ -725,7 +744,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     {
         return None;
     }
-    Queue::<Held>::worst_case(limits.held)?
+    Journal::worst_case(&journal_limits(limits))?
         .checked_add(List::<Write>::worst_case(limits.writes)?.checked_mul(2)?)?
         .checked_add(Queue::<Delivery>::worst_case(limits.deliveries)?)?
         .checked_add(u64::from(limits.writes).checked_mul(2)?.checked_mul(u64::from(limits.transcript_bytes))?)?

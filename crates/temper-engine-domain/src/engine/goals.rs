@@ -100,7 +100,7 @@ pub(super) fn start(
     if checked.answer != authority::Answer::Allow && !beyond {
         return refuse(domain, request, people::Refusal::Authority);
     }
-    let Some(task) = crate::fresh(&mut domain.journal, Family::Task) else {
+    let Some(task) = crate::fresh(&mut domain.counters, Family::Task) else {
         return refuse(domain, request, people::Refusal::Limit);
     };
     let new = tasks::New {
@@ -129,7 +129,7 @@ pub(super) fn start(
             batch: Box::new([new]),
         }));
     } else {
-        let Some(proposal) = crate::fresh(&mut domain.journal, Family::Message) else {
+        let Some(proposal) = crate::fresh(&mut domain.counters, Family::Message) else {
             return refuse(domain, request, people::Refusal::Limit);
         };
         assert!(
@@ -222,7 +222,7 @@ pub(super) fn decide(
             }
         }
         people::ProposalDecision::Reject { reason } => {
-            let Some(message) = crate::fresh(&mut domain.journal, Family::Message) else {
+            let Some(message) = crate::fresh(&mut domain.counters, Family::Message) else {
                 return refuse(domain, request, people::Refusal::Limit);
             };
             assert!(

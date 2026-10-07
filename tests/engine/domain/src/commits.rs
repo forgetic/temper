@@ -1,7 +1,7 @@
 use skein_lib::{Queue, Rng, Token, Wall};
 use std::collections::{BTreeMap, VecDeque};
 use temper_engine_domain::{
-    self as root, Decision, Delivery, Deployment, Family, Journal, JournalLimits, Key, Output, Range, Record,
+    self as root, Counters, Decision, Delivery, Deployment, Family, Journal, JournalLimits, Key, Output, Range, Record,
     TurnRecord, Write,
 };
 
@@ -192,6 +192,7 @@ impl Referee {
                 self.deliveries.pop_front();
             }
             Output::Stop => return Err("unexpected stop"),
+            Output::Now(_) => return Err("unexpected immediate output"),
         }
         self.judged += 1;
         Ok(())
@@ -212,6 +213,7 @@ impl Default for Referee {
 #[derive(Debug)]
 pub struct World {
     pub journal: Journal,
+    counters: Counters,
     pub store: Store,
     pub referee: Referee,
     out: Queue<Output>,
@@ -222,7 +224,8 @@ impl World {
     #[must_use]
     pub fn new() -> World {
         World {
-            journal: Journal::new(HEADER, &LIMITS),
+            journal: Journal::from_durable(&root::journal_limits(&LIMITS), HEADER.commits),
+            counters: Counters::new(HEADER),
             store: Store::new(),
             referee: Referee::new(),
             out: Queue::with_capacity(1),
@@ -235,7 +238,7 @@ impl World {
         self.referee.decision(turn, payload, writing, fresh);
         let mut decision = Decision::new(&LIMITS);
         if fresh {
-            root::fresh(&mut self.journal, Family::Task).expect("fresh task number");
+            root::fresh(&mut self.counters, Family::Task).expect("fresh task number");
         }
         if writing {
             decision
@@ -256,7 +259,8 @@ impl World {
         decision
             .deliver(&LIMITS, Delivery::AcknowledgeTurn { channel: Token::new(7), task: 1, attempt: 1, turn })
             .expect("delivery room");
-        root::accept(&mut self.journal, &LIMITS, decision, &mut self.out).expect("reserved whole decision");
+        root::accept(&mut self.journal, &mut self.counters, &LIMITS, decision, &mut self.out)
+            .expect("reserved whole decision");
         self.observe();
     }
 
@@ -285,7 +289,7 @@ impl World {
         while !self.store.pending.is_empty() {
             self.apply(true);
         }
-        while self.journal.ready() {
+        while !self.journal.idle() {
             self.ready();
         }
         assert!(self.referee.done(), "all submitted obligations settled");
@@ -304,7 +308,7 @@ pub fn random(seed: u64) -> World {
     let mut rng = Rng::new(seed);
     for turn in 1_u32..=24 {
         while !root::takes(&world.journal, &LIMITS) {
-            if world.journal.ready() {
+            if world.store.pending.is_empty() {
                 world.ready();
             } else {
                 world.apply(true);

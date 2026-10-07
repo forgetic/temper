@@ -73,16 +73,16 @@ pub(super) fn supported(domain: &Domain, task: &tasks::TaskRecord) -> bool {
     match &task.escalation {
         tasks::Escalation::Waiting { holder: tasks::EscalationHolder::Role { .. }, entry, .. } => {
             // An old selector can be rechecked, but its project must remain the chat's.
-            *entry <= domain.journal.deployment().messages
+            *entry <= domain.counters.deployment().messages
                 && match fallback {
                     tasks::EscalationHolder::Role { project, .. } => project == task.project,
                     tasks::EscalationHolder::Task(_) | tasks::EscalationHolder::Person(_) => false,
                 }
         }
         tasks::Escalation::Rejected { by, .. } => {
-            *by <= domain.journal.deployment().people.max(domain.journal.deployment().tasks)
+            *by <= domain.counters.deployment().people.max(domain.counters.deployment().tasks)
         }
-        tasks::Escalation::Waiting { entry, .. } => *entry <= domain.journal.deployment().messages,
+        tasks::Escalation::Waiting { entry, .. } => *entry <= domain.counters.deployment().messages,
         tasks::Escalation::Unheld { .. } | tasks::Escalation::Routing { .. } => true,
     }
 }
@@ -174,7 +174,7 @@ pub(super) fn needed(domain: &mut Domain, context: Box<tasks::EscalationContext>
         task: context.task,
         revision: context.escalation.revision(),
         holder,
-        entry: match crate::fresh(&mut domain.journal, Family::Message) {
+        entry: match crate::fresh(&mut domain.counters, Family::Message) {
             Some(entry) => entry,
             None => {
                 domain.startup = super::Startup::Failed;
@@ -197,7 +197,7 @@ pub(super) fn stalled(domain: &mut Domain, task: u64, revision: u64, old: tasks:
     }
     let role = domain.people.role(context.requester, context.project);
     if let Some(next) = recipient_after(domain, &context, role, Some(old)) {
-        let Some(entry) = crate::fresh(&mut domain.journal, Family::Message) else {
+        let Some(entry) = crate::fresh(&mut domain.counters, Family::Message) else {
             domain.startup = super::Startup::Failed;
             return;
         };
@@ -251,7 +251,7 @@ pub(super) fn task_decide(
         }
     };
     let entry = match semantic {
-        tasks::EscalationDecision::Pass { .. } => match crate::fresh(&mut domain.journal, Family::Message) {
+        tasks::EscalationDecision::Pass { .. } => match crate::fresh(&mut domain.counters, Family::Message) {
             Some(entry) => Some(entry),
             None => return refuse_task(domain, env, barrier, to, key, task, tasks::Refusal::Busy),
         },
@@ -493,7 +493,7 @@ pub(super) fn inspected(
                         Some(Read::Escalation(query));
                     let entry = match semantic {
                         tasks::EscalationDecision::Pass { .. } => {
-                            match crate::fresh(&mut domain.journal, Family::Message) {
+                            match crate::fresh(&mut domain.counters, Family::Message) {
                                 Some(entry) => Some(entry),
                                 None => {
                                     finish_refused(domain, waiter, request, people::Refusal::Limit);
@@ -640,9 +640,9 @@ pub(super) fn loaded(domain: &mut Domain, env: &Env<Limits>, waiter: Token, rows
                 Record::EscalationDecision(row)
                     if row.task == task
                         && row.revision == revision
-                        && row.task <= domain.journal.deployment().tasks
+                        && row.task <= domain.counters.deployment().tasks
                         && row.by != 0
-                        && row.by <= domain.journal.deployment().people =>
+                        && row.by <= domain.counters.deployment().people =>
                 {
                     let bounded = match &row.decision {
                         people::EscalationDecision::Release | people::EscalationDecision::Pass => true,
@@ -661,7 +661,7 @@ pub(super) fn loaded(domain: &mut Domain, env: &Env<Limits>, waiter: Token, rows
                     };
                     let private = row.project == project
                         && row.requester != 0
-                        && row.requester <= domain.journal.deployment().people
+                        && row.requester <= domain.counters.deployment().people
                         && (row.requester == person
                             || match fallback(domain, project) {
                                 Some(tasks::EscalationHolder::Role { role: selected, .. }) => {

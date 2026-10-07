@@ -227,7 +227,7 @@ fn resource_name(repository: &forge::Repository, what: &forge::What, limit: u32)
 
 fn effect_key(domain: &Domain, key: CallKey) -> Box<[u8]> {
     let mut result = List::with_capacity(80);
-    append_hex(&mut result, &domain.journal.deployment().id);
+    append_hex(&mut result, &domain.counters.deployment().id);
     append_hex(&mut result, &key.task.to_be_bytes());
     append_hex(&mut result, &key.attempt.to_be_bytes());
     append_hex(&mut result, &key.completion.to_be_bytes());
@@ -368,7 +368,7 @@ pub(super) fn effect_call(
         );
         return;
     }
-    let Some(entry) = crate::fresh(&mut domain.journal, Family::ForgeRow) else {
+    let Some(entry) = crate::fresh(&mut domain.counters, Family::ForgeRow) else {
         decide_call(
             domain,
             &env.limits,
@@ -462,7 +462,7 @@ pub(super) fn read_call(
             CallAnswer::ForgeRead(Box::new(Err(forge_client::api::Error::Forbidden))),
         );
     }
-    let Some(serial) = crate::fresh(&mut domain.journal, Family::Call) else {
+    let Some(serial) = crate::fresh(&mut domain.counters, Family::Call) else {
         return decide_call(
             domain,
             &env.limits,
@@ -499,7 +499,7 @@ pub(super) fn subscribe_call(
     own_change: Option<u64>,
     paths: Box<[Box<[u8]>]>,
 ) {
-    let Some(number) = crate::fresh(&mut domain.journal, Family::Message) else {
+    let Some(number) = crate::fresh(&mut domain.counters, Family::Message) else {
         decide_call(
             domain,
             &env.limits,
@@ -691,7 +691,7 @@ pub(super) fn project_goal(domain: &mut Domain, env: &Env<Limits>, goal: &tasks:
             }
         }
     }
-    let Some(entry) = crate::fresh(&mut domain.journal, Family::ForgeRow) else { return };
+    let Some(entry) = crate::fresh(&mut domain.counters, Family::ForgeRow) else { return };
     domain.work.push(Work::Forge(forge::Event::Project {
         entry,
         repository: provider,
@@ -714,7 +714,7 @@ pub(super) fn subscribe_goal(domain: &mut Domain, env: &Env<Limits>, goal: u64, 
     if domain.tasks.task(goal).is_none() {
         return;
     }
-    let Some(number) = crate::fresh(&mut domain.journal, Family::Message) else { return };
+    let Some(number) = crate::fresh(&mut domain.counters, Family::Message) else { return };
     let subscriber = forge::Subscriber { task: goal, number, topic, own_change: None, paths: Box::new([]) };
     if !domain.forge.can_subscribe(&env.limits.forge, &subscriber)
         || watch_names(domain, &env.limits, &subscriber).is_none()
@@ -1366,7 +1366,7 @@ pub(super) fn start_change(domain: &mut Domain, env: &Env<Limits>, context: &tas
             }
         }
     }
-    let Some(entry) = crate::fresh(&mut domain.journal, Family::ForgeRow) else { return false };
+    let Some(entry) = crate::fresh(&mut domain.counters, Family::ForgeRow) else { return false };
     domain.work.push(Work::Forge(forge::Event::StepChange {
         task,
         entry,
@@ -1519,7 +1519,7 @@ fn start_queue_repair(domain: &mut Domain, env: &Env<Limits>, task: u64) -> bool
     }
     let provider = row.repository;
     let base = row.base.clone();
-    let Some(repair) = crate::fresh(&mut domain.journal, Family::Task) else { return false };
+    let Some(repair) = crate::fresh(&mut domain.counters, Family::Task) else { return false };
     if domain.tasks.funding(tasks::Funder::Period { project, period }).is_none() {
         domain.work.push(Work::Tasks(tasks::Event::OpenPeriod {
             reply_to: super::internal(u64::MAX - 2),
@@ -1704,7 +1704,7 @@ pub(super) fn outputs(
                 let number = match domain.forge_keys.get(&key) {
                     Some(number) => *number,
                     None => {
-                        let number = crate::fresh(&mut domain.journal, Family::ForgeRow).expect("admitted forge row");
+                        let number = crate::fresh(&mut domain.counters, Family::ForgeRow).expect("admitted forge row");
                         domain.forge_keys.insert(key, number).expect("bounded connector rows");
                         number
                     }
@@ -1772,7 +1772,7 @@ pub(super) fn outputs(
                                 forge_client::api::Permission::None => None,
                             };
                             if let Some(role) = role {
-                                match crate::fresh(&mut domain.journal, Family::Person) {
+                                match crate::fresh(&mut domain.counters, Family::Person) {
                                     Some(candidate) => {
                                         seeds
                                             .push(people::Seed {
@@ -1850,7 +1850,7 @@ pub(super) fn outputs(
                     forge::Class::Kept => tasks::NewsClass::Kept,
                     forge::Class::Dropped => continue,
                 };
-                let number = crate::fresh(&mut domain.journal, Family::Message).expect("news number admitted");
+                let number = crate::fresh(&mut domain.counters, Family::Message).expect("news number admitted");
                 domain.work.push(Work::Tasks(tasks::Event::Notice {
                     task,
                     word: tasks::Word {
@@ -1949,7 +1949,7 @@ pub(super) fn outputs(
                 }
             }
             forge::Request::ContinueRelease { task } => {
-                if let Some(entry) = crate::fresh(&mut domain.journal, Family::ForgeRow) {
+                if let Some(entry) = crate::fresh(&mut domain.counters, Family::ForgeRow) {
                     domain.work.push(Work::Forge(forge::Event::ContinueRelease { task, entry }));
                 } else {
                     domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::Effects }));
@@ -2027,7 +2027,7 @@ pub(super) fn outputs(
                 } else if match domain.forge.issue(goal) {
                     Some(row) => row.pending.is_none(),
                     None => false,
-                } && let Some(entry) = crate::fresh(&mut domain.journal, Family::ForgeRow)
+                } && let Some(entry) = crate::fresh(&mut domain.counters, Family::ForgeRow)
                 {
                     domain.work.push(Work::Forge(forge::Event::ProjectDesired { entry, goal }));
                 }

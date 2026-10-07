@@ -374,16 +374,18 @@ impl World {
         self.environment.now = Time::from_nanos(nanos);
         self.environment.wall = Wall::from_nanos(nanos);
         if !self.frozen_cut {
-            engine::resume(&mut self.domain, &self.environment, &mut self.out);
+            engine::release(&mut self.domain, &self.environment, &mut self.out);
             self.observe();
             if !self.frozen_cut && self.events.front().is_some_and(|(due, _)| *due <= self.iteration) {
                 let (_, event) = self.events.pop_front().expect("one due outside event");
                 self.trace.push(format!("input {event:?}"));
-                engine::step(&mut self.domain, &self.environment, event, &mut self.out);
+                engine::step(&mut self.domain, &self.environment, event);
+                engine::release(&mut self.domain, &self.environment, &mut self.out);
                 self.observe();
             }
             if !self.frozen_cut {
-                engine::fire(&mut self.domain, &self.environment, &mut self.out);
+                engine::fire(&mut self.domain, &self.environment);
+                engine::release(&mut self.domain, &self.environment, &mut self.out);
                 self.observe();
                 if self.settings.facts {
                     self.domain.drain_facts();

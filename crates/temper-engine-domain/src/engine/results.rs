@@ -128,7 +128,7 @@ pub(super) fn page(
         if task.requester != tasks::Party::Person(read.person) {
             continue;
         }
-        if task.result_position == 0 || task.result_position > domain.journal.deployment().messages {
+        if task.result_position == 0 || task.result_position > domain.counters.deployment().messages {
             return failed(domain, waiter, people::Refusal::Limit, out);
         }
         if task.result_position <= read.position {
