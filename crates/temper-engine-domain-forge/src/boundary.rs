@@ -228,6 +228,8 @@ pub struct ChangeRow {
     pub delegate_status: change::Status,
     /// Bounded current verdict per gate, retained through clean updates.
     pub verdicts: Box<[change::GateReport]>,
+    /// Bounded explanations of gate verdicts at their named heads.
+    pub gate_remarks: Box<[GateRemark]>,
     pub drift: Option<change::Hold>,
     /// A deployment-owned repair of a landing branch, exempt from that branch's broken CI.
     pub base_repair: bool,
@@ -235,6 +237,13 @@ pub struct ChangeRow {
     pub queue_repair: Option<u64>,
     /// Repairs attempted for this landing queue while this change owned it.
     pub queue_repairs: u32,
+}
+/// One gate's explanation, retained with its verdict for a repair brief.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct GateRemark {
+    pub number: u64,
+    pub head: client::api::Commit,
+    pub words: Box<[u8]>,
 }
 /// Coherent provider facts used by the root to check a change effect before
 /// releasing its durable outbox entry.
@@ -335,7 +344,7 @@ pub enum Event {
     /// A proposed child was refused by tasks before creation; keep a releasable state.
     DelegateRefused { task: u64, child: u64 },
     /// Resolve the named child's terminal result before stepping again.
-    DelegateResult { task: u64, child: u64, status: change::Status },
+    DelegateResult { task: u64, child: u64, status: change::Status, words: Box<[u8]> },
     /// Gather fresh forge facts and step one registered change.
     StepChange {
         task: u64,

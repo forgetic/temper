@@ -79,6 +79,9 @@ pub fn worst_case(l: &Limits) -> Option<u64> {
                 .checked_mul(u64::from(l.change_policy.gates))?
                 .checked_mul(u64::try_from(size_of::<temper_engine_domain_forge_change::GateReport>()).ok()?)?,
         )?
+        .checked_add(u64::from(l.changes).checked_mul(u64::from(l.change_policy.gates))?.checked_mul(
+            u64::try_from(size_of::<crate::GateRemark>()).ok()?.checked_add(u64::from(l.client.answer_bytes))?,
+        )?)?
         .checked_add(Map::<skein_lib::Token, crate::domain::PendingStep>::worst_case(l.changes)?)?
         .checked_add(Map::<u64, crate::IssueRow>::worst_case(l.issues)?)?
         .checked_add(Map::<u64, crate::ReleaseRow>::worst_case(l.tasks)?)?

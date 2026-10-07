@@ -54,6 +54,13 @@ pub fn stored_bytes(record: &Stored) -> Option<u64> {
     fn bytes(value: &[u8]) -> Option<u64> {
         u64::try_from(value.len()).ok()
     }
+    fn remark_bytes(remarks: &[GateRemark]) -> Option<u64> {
+        let mut total = 0_u64;
+        for remark in remarks {
+            total = total.checked_add(bytes(&remark.words)?)?;
+        }
+        Some(total)
+    }
     fn name(value: &Name) -> Option<u64> {
         match &value.what {
             What::Branch(parts) => {
@@ -157,6 +164,12 @@ pub fn stored_bytes(record: &Stored) -> Option<u64> {
                     .ok()?
                     .checked_mul(u64::try_from(size_of::<change::GateReport>()).ok()?)?,
             )?
+            .checked_add(
+                u64::try_from(row.gate_remarks.len())
+                    .ok()?
+                    .checked_mul(u64::try_from(size_of::<GateRemark>()).ok()?)?,
+            )?
+            .checked_add(remark_bytes(&row.gate_remarks)?)?
             .checked_add(state(&row.change.state, 0)?),
         Stored::Issue(row) => {
             let before = match &row.before {

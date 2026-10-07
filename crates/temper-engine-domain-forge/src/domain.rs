@@ -398,7 +398,9 @@ pub fn step(d: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Req
         }
         Event::Delegated { task, child, kind } => delegated(d, task, child, kind, out),
         Event::DelegateRefused { task, child } => delegate_refused(d, task, child, out),
-        Event::DelegateResult { task, child, status } => delegate_result(d, env, task, child, status, out),
+        Event::DelegateResult { task, child, status, words } => {
+            delegate_result(d, env, task, child, status, &words, out);
+        }
         Event::StepChange { task, entry, heard, gates, queue_repair_active } => {
             step_change(d, env, StepInput { task, entry, heard, gates, queue_repair_active }, out);
         }
@@ -1183,6 +1185,7 @@ fn delegate_result(
     task: u64,
     child: u64,
     status: change::Status,
+    words: &[u8],
     out: &mut Queue<Request>,
 ) {
     let Some(row) = d.changes.get_mut(&task) else { return };
@@ -1205,6 +1208,17 @@ fn delegate_result(
             return;
         }
         row.verdicts = verdicts.into_boxed();
+        let mut remarks = List::with_capacity(env.limits.change_policy.gates);
+        for old in &row.gate_remarks {
+            if old.number != number {
+                remarks.push(old.clone()).expect("bounded prior gate remarks");
+            }
+        }
+        let kept = words.len().min(usize::try_from(env.limits.client.answer_bytes).expect("u32 fits usize"));
+        remarks
+            .push(crate::GateRemark { number, head, words: Box::from(words.get(..kept).expect("kept is in bounds")) })
+            .expect("gate room checked");
+        row.gate_remarks = remarks.into_boxed();
     }
     emit(out, Request::Save { record: Stored::Change(row.clone()) });
 }

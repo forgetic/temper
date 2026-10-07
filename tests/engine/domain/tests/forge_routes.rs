@@ -58,31 +58,37 @@ impl World {
     }
 
     fn configured_checks(with_read: bool, with_change: bool, silent_ci: bool, passes: u32) -> Self {
-        Self::configured_policy(with_read, with_change, silent_ci, passes, None)
+        Self::configured_policy(with_read, with_change, silent_ci, passes, None, false)
     }
 
     #[expect(
         clippy::too_many_lines,
         reason = "one fixture configures the policy, fake, and bounds for root forge stories"
     )]
+    #[expect(clippy::fn_params_excessive_bools, reason = "the fixture varies independent forge and gate conditions")]
     fn configured_policy(
         with_read: bool,
         with_change: bool,
         silent_ci: bool,
         passes: u32,
         approval: Option<authority::Freshness>,
+        agent_gate: bool,
     ) -> Self {
         let mut limits = walking::limits();
         limits.people.people = 4;
         limits.people.holdings = 4;
         limits.journal.writes += (people::max_out(&limits.people) - people::max_out(&walking::limits().people)) * 4;
         let mut config = walking::config(71);
-        if approval.is_some() {
+        if approval.is_some() || agent_gate {
             limits.authority.roles = 3;
             limits.authority.reviews = 4;
             limits.authority.heads = 4;
         }
         if with_change {
+            limits.brief.gather = Duration::from_secs(5);
+            limits.brief.read_bytes = 512;
+            limits.brief.budgets.pull = 384;
+            limits.brief.brief_bytes = 768;
             limits.tasks.tasks = 12;
             limits.tasks.project_tasks = 12;
             limits.tasks.delegates = 4;
@@ -152,7 +158,7 @@ impl World {
                 Box::new([grant.clone(), effect_grant.clone()])
             };
             rules.ceiling.grants.clone_from(&grants);
-            if let Some(freshness) = approval {
+            if approval.is_some() || agent_gate {
                 rules.landing = Box::new([authority::LandingRule {
                     connector: 1,
                     kind: 4,
@@ -168,20 +174,31 @@ impl World {
                     },
                     ci: true,
                     up_to_date: true,
-                    gates: Box::new([]),
-                    approvals: Box::new([authority::Approval { role: 2, people: 1, freshness }]),
+                    gates: if agent_gate {
+                        Box::new([authority::Gate {
+                            number: 1,
+                            blocking: true,
+                            freshness: authority::Freshness::Exact,
+                        }])
+                    } else {
+                        Box::new([])
+                    },
+                    approvals: match approval {
+                        Some(freshness) => Box::new([authority::Approval { role: 2, people: 1, freshness }]),
+                        None => Box::new([]),
+                    },
                 }]);
             }
             if with_change {
                 rules.ceiling.delegation.kinds =
                     Box::new([authority::Executor::Charter(1), authority::Executor::Procedure(2)]);
-                rules.ceiling.delegation.tasks = 8;
+                rules.ceiling.delegation.tasks = 12;
                 rules.ceiling.delegation.depth = 3;
             }
             let mut policy = config.authority.policy(1).expect("walk policy").clone();
             policy.ceiling.tools = authority::Tools(1);
             policy.ceiling.grants.clone_from(&grants);
-            if approval.is_some() {
+            if approval.is_some() || agent_gate {
                 let mut maintainer = policy.roles[0].clone();
                 maintainer.number = 1;
                 let mut member = maintainer.clone();
@@ -205,7 +222,7 @@ impl World {
             if with_change {
                 config.chat_authority.delegation.kinds =
                     Box::new([authority::Executor::Charter(1), authority::Executor::Procedure(2)]);
-                config.chat_authority.delegation.tasks = 4;
+                config.chat_authority.delegation.tasks = 8;
                 config.chat_authority.delegation.depth = 2;
             }
         }
@@ -496,7 +513,16 @@ fn change_world(
     passes: u32,
     approval: Option<authority::Freshness>,
 ) -> (World, engine::Assignment, engine::Assignment, Box<[u8]>) {
-    let mut world = World::configured_policy(true, true, silent_ci, passes, approval);
+    change_world_with_gate(silent_ci, passes, approval, false)
+}
+
+fn change_world_with_gate(
+    silent_ci: bool,
+    passes: u32,
+    approval: Option<authority::Freshness>,
+    agent_gate: bool,
+) -> (World, engine::Assignment, engine::Assignment, Box<[u8]>) {
+    let mut world = World::configured_policy(true, true, silent_ci, passes, approval, agent_gate);
     world.adopt();
     world.send(engine::Event::Hello {
         channel: Token::new(7),
@@ -526,7 +552,7 @@ fn change_world(
     let child_authority = tasks::Authority {
         tools: tasks::Tools(1),
         grants: Box::new([grant.clone(), tasks::Grant { kind: 3, ..grant.clone() }, tasks::Grant { kind: 4, ..grant }]),
-        delegation: tasks::Delegation { kinds: Box::new([tasks::AuthorityExecutor::Charter(1)]), tasks: 2, depth: 1 },
+        delegation: tasks::Delegation { kinds: Box::new([tasks::AuthorityExecutor::Charter(1)]), tasks: 4, depth: 1 },
         budget: tasks::Budget { spend: 20, deadline: None },
         notes: tasks::Scopes(0),
     };
@@ -807,6 +833,187 @@ fn a_change_whose_ci_never_reports_is_stalled_and_held() {
 }
 
 #[test]
+fn an_agent_review_gate_runs_at_the_head_and_its_approval_lands_the_change() {
+    let (mut world, _chat, producer, branch) = change_world_with_gate(false, 1000, None, true);
+    assert!(matches!(
+        world.external(2, raw::Op::Git(raw::Git::Create { branch: branch.clone(), commit: 1 })),
+        raw::Answer::Branch(raw::Created::Created)
+    ));
+    fake::advance(&mut world.fake, &world.fake_env, b"org/repo", &branch, b"file", b"review this diff", 1)
+        .expect("producer pushed review head");
+    world.send(engine::Event::Answer {
+        channel: Token::new(7),
+        task: producer.task,
+        attempt: producer.attempt,
+        cumulative: 5,
+        end: tasks::End::Finished {
+            result: tasks::TaskResult::Change {
+                connector: 1,
+                kind: 2,
+                resource: u64::from(forge_world::REPO.repository),
+                words: Box::from(&b"pushed"[..]),
+            },
+            cancel_delegates: false,
+        },
+        saved: None,
+    });
+    for _ in 0..200 {
+        world.tick();
+        if world.assigned.len() >= 3 {
+            break;
+        }
+    }
+    let gate = world.assigned.get(2).expect("agent gate assigned").clone();
+    assert!(
+        gate.sections.iter().any(|section| section.kind == brief::Kind::Pull
+            && matches!(&section.body, brief::Body::Text(words)
+            if words.windows(b"review this diff".len()).any(|part| part == b"review this diff"))),
+        "sections={:?}",
+        gate.sections
+    );
+    assert_eq!(gate.workspace.repositories[0].start, engine::ForgeStart::Branch(branch));
+    world.send(engine::Event::Answer {
+        channel: Token::new(7),
+        task: gate.task,
+        attempt: gate.attempt,
+        cumulative: 5,
+        end: tasks::End::Finished {
+            result: tasks::TaskResult::Verdict { code: 1, words: Box::from(&b"approved"[..]) },
+            cancel_delegates: false,
+        },
+        saved: None,
+    });
+    for _ in 0..200 {
+        world.tick();
+        if world.store.rows.values().any(|stored| {
+            matches!(stored,
+                Record::Forge { row, .. } if matches!(row.as_ref(), forge_top::Stored::Change(change)
+                    if matches!(change.change.state, temper_engine_domain_forge_change::State::Landed { .. }))
+            )
+        }) {
+            break;
+        }
+    }
+    assert!(world.store.rows.values().any(|stored| matches!(stored,
+        Record::Forge { row, .. } if matches!(row.as_ref(), forge_top::Stored::Change(change)
+            if matches!(change.change.state, temper_engine_domain_forge_change::State::Landed { .. })
+                && change.verdicts.iter().any(|report| Some(report.head) == change.change.last_head
+                    && report.status == temper_engine_domain_forge_change::Status::Passed))
+    )));
+}
+
+#[test]
+#[expect(clippy::too_many_lines, reason = "the review repair story spans both gate heads and their worker reports")]
+fn a_review_asking_for_changes_is_repaired_with_its_remarks_and_reviewed_again() {
+    let (mut world, _chat, producer, branch) = change_world_with_gate(false, 1000, None, true);
+    assert!(matches!(
+        world.external(2, raw::Op::Git(raw::Git::Create { branch: branch.clone(), commit: 1 })),
+        raw::Answer::Branch(raw::Created::Created)
+    ));
+    fake::advance(&mut world.fake, &world.fake_env, b"org/repo", &branch, b"file", b"first version", 1)
+        .expect("first head pushed");
+    world.send(engine::Event::Answer {
+        channel: Token::new(7),
+        task: producer.task,
+        attempt: producer.attempt,
+        cumulative: 5,
+        end: tasks::End::Finished {
+            result: tasks::TaskResult::Change {
+                connector: 1,
+                kind: 2,
+                resource: u64::from(forge_world::REPO.repository),
+                words: Box::from(&b"pushed"[..]),
+            },
+            cancel_delegates: false,
+        },
+        saved: None,
+    });
+    for _ in 0..200 {
+        world.tick();
+        if world.assigned.len() >= 3 {
+            break;
+        }
+    }
+    let first = world.assigned.get(2).expect("first review assigned").clone();
+    world.send(engine::Event::Answer {
+        channel: Token::new(7),
+        task: first.task,
+        attempt: first.attempt,
+        cumulative: 5,
+        end: tasks::End::Finished {
+            result: tasks::TaskResult::Verdict { code: 2, words: Box::from(&b"Please fix the unsafe edge"[..]) },
+            cancel_delegates: false,
+        },
+        saved: None,
+    });
+    for _ in 0..200 {
+        world.tick();
+        if world.assigned.len() >= 4 {
+            break;
+        }
+    }
+    let repair = world.assigned.get(3).expect("review repair assigned").clone();
+    assert!(
+        repair.sections.iter().any(|section| section.kind == brief::Kind::Reviews
+            && matches!(&section.body, brief::Body::Text(words)
+            if words.windows(b"Please fix the unsafe edge".len()).any(|part| part == b"Please fix the unsafe edge"))),
+        "review remarks in repair brief: {:?}",
+        repair.sections
+    );
+    fake::advance(&mut world.fake, &world.fake_env, b"org/repo", &branch, b"file", b"safe revision", 1)
+        .expect("repair pushed second head");
+    world.send(engine::Event::Answer {
+        channel: Token::new(7),
+        task: repair.task,
+        attempt: repair.attempt,
+        cumulative: 5,
+        end: tasks::End::Finished {
+            result: tasks::TaskResult::Change {
+                connector: 1,
+                kind: 2,
+                resource: u64::from(forge_world::REPO.repository),
+                words: Box::from(&b"repaired"[..]),
+            },
+            cancel_delegates: false,
+        },
+        saved: None,
+    });
+    for _ in 0..200 {
+        world.tick();
+        if world.assigned.len() >= 5 {
+            break;
+        }
+    }
+    let second = world.assigned.get(4).expect("second review assigned").clone();
+    assert_ne!(first.task, second.task);
+    world.send(engine::Event::Answer {
+        channel: Token::new(7),
+        task: second.task,
+        attempt: second.attempt,
+        cumulative: 5,
+        end: tasks::End::Finished {
+            result: tasks::TaskResult::Verdict { code: 1, words: Box::from(&b"Approved revision"[..]) },
+            cancel_delegates: false,
+        },
+        saved: None,
+    });
+    for _ in 0..200 {
+        world.tick();
+        if world.store.rows.values().any(|stored| {
+            matches!(stored,
+            Record::Forge { row, .. } if matches!(row.as_ref(), forge_top::Stored::Change(change)
+                if matches!(change.change.state, temper_engine_domain_forge_change::State::Landed { .. })))
+        }) {
+            break;
+        }
+    }
+    assert!(world.store.rows.values().any(|stored| matches!(stored,
+        Record::Forge { row, .. } if matches!(row.as_ref(), forge_top::Stored::Change(change)
+            if matches!(change.change.state, temper_engine_domain_forge_change::State::Landed { .. })
+                && change.change.repairs == 1))));
+}
+
+#[test]
 #[expect(clippy::too_many_lines, reason = "the failed-CI story includes repair, review, and landing")]
 fn a_change_failing_ci_is_repaired_reviewed_at_its_head_and_lands() {
     let (mut world, _chat, producer, branch) = change_world(false, 0, None);
@@ -984,7 +1191,7 @@ fn a_conflicting_update_is_resolved_from_a_merge_in_progress() {
         engine::ForgeStart::Merge { branch: ref source, base: expected }
             if source.as_ref() == branch.as_ref() && expected == translate::commit(base)));
     assert!(resolver.sections.iter().any(|section| section.kind == brief::Kind::Pull
-        && matches!(&section.body, brief::Body::Text(words) if words.starts_with(b"Resolve the conflict"))));
+        && matches!(&section.body, brief::Body::Text(words) if words.starts_with(b"Pull request"))));
     let old = world.fake.branch(b"org/repo", &branch).expect("existing branch head");
     let merge = fake::merge_commit(
         &mut world.fake,

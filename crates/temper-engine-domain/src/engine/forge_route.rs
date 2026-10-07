@@ -9,6 +9,29 @@ use super::{
 use alloc::boxed::Box;
 use temper_engine_domain_brief as brief;
 
+/// A bounded forge read in progress for a run brief (domain/engine.md, section 9).
+#[derive(Debug)]
+pub(super) struct BriefFetch {
+    owner: Token,
+    item: brief::Item,
+    head: brief::Commit,
+    repository: forge_client::api::Repository,
+    parts: u32,
+    bytes: u32,
+    stage: BriefStage,
+    base: Option<forge_client::api::Commit>,
+    words: List<u8>,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum BriefStage {
+    Item,
+    Pull,
+    Files,
+    Compare,
+    Reviews,
+}
+
 fn append(out: &mut List<u8>, bytes: &[u8]) {
     for byte in bytes {
         if out.room() > 0 {
@@ -37,21 +60,157 @@ fn brief_part(words: &[u8], parts: u32, bytes: u32) -> brief::Read {
 }
 
 pub(super) fn brief_pull(
-    domain: &Domain,
+    domain: &mut Domain,
+    owner: Token,
     item: brief::Item,
     head: brief::Commit,
     parts: u32,
     bytes: u32,
-) -> brief::Read {
-    let Some(row) = domain.forge.change_for_pull(item.repository, item.number) else { return brief::Read::Failed };
-    let forge_change::State::Resolving { base, .. } = row.change.state else { return brief::Read::Failed };
+) -> Option<brief::Read> {
+    let Some(row) = domain.forge.change_for_pull(item.repository, item.number) else {
+        return Some(brief::Read::Failed);
+    };
+    if row.change.last_head != Some(head.0)
+        || parts == 0
+        || domain.brief_fetches.len() == domain.brief_fetches.capacity()
+    {
+        return Some(brief::Read::Failed);
+    }
+    let repository = row.repository;
+    let words = List::with_capacity(bytes);
+    let call = Token::new(owner.raw() | (1_u64 << 61_u32) | (1_u64 << 59_u32));
+    let fetch = BriefFetch { owner, item, head, repository, parts, bytes, stage: BriefStage::Item, base: None, words };
+    domain.brief_fetches.insert(call, fetch).expect("brief read room checked");
+    domain.work.push(Work::Forge(forge::Event::Client(forge_client::Event::Read {
+        owner: call,
+        repository,
+        read: forge_client::api::Read::Item { number: item.number, after: 0 },
+    })));
+    // The brief child waits for the connector's bounded answer.
+    None
+}
+
+pub(super) fn brief_answer(
+    domain: &mut Domain,
+    owner: Token,
+    result: Result<forge_client::api::Answer, forge_client::api::Error>,
+) -> bool {
+    let Some(mut fetch) = domain.brief_fetches.remove(&owner) else { return false };
+    let next = match (fetch.stage, result) {
+        (BriefStage::Item, Ok(forge_client::api::Answer::Item { item, .. })) if item.number == fetch.item.number => {
+            append(&mut fetch.words, b"Pull request at head ");
+            append_hex(&mut fetch.words, &fetch.head.0);
+            append(&mut fetch.words, b"\nTitle: ");
+            append(&mut fetch.words, &item.title);
+            append(&mut fetch.words, b"\nBody: ");
+            append(&mut fetch.words, &item.body);
+            append(&mut fetch.words, b"\n");
+            fetch.stage = BriefStage::Pull;
+            Some(forge_client::api::Read::Pull { number: fetch.item.number })
+        }
+        (BriefStage::Pull, Ok(forge_client::api::Answer::Pull(pull))) if pull.commit == fetch.head.0 => {
+            fetch.base = pull.base_commit;
+            fetch.stage = BriefStage::Files;
+            Some(forge_client::api::Read::PullFiles { number: fetch.item.number, head: fetch.head.0, page: 1 })
+        }
+        (BriefStage::Files, Ok(forge_client::api::Answer::PullFiles { head, files, .. })) if head == fetch.head.0 => {
+            append(&mut fetch.words, b"Files and diff:\n");
+            for file in files {
+                append(&mut fetch.words, b"File: ");
+                append(&mut fetch.words, &file.path);
+                append(&mut fetch.words, b"\nBefore:\n");
+                if let Some(before) = file.before {
+                    append(&mut fetch.words, &before);
+                }
+                append(&mut fetch.words, b"\nAfter:\n");
+                if let Some(after) = file.after {
+                    append(&mut fetch.words, &after);
+                }
+                append(&mut fetch.words, b"\n");
+            }
+            match fetch.base {
+                Some(base) => {
+                    fetch.stage = BriefStage::Compare;
+                    Some(forge_client::api::Read::Compare { before: base, after: fetch.head.0 })
+                }
+                None => None,
+            }
+        }
+        (BriefStage::Compare, Ok(forge_client::api::Answer::Compare { before, after, files, .. }))
+            if Some(before) == fetch.base && after == fetch.head.0 =>
+        {
+            append(&mut fetch.words, b"Against base:\n");
+            for file in files {
+                append(&mut fetch.words, &file.path);
+                append(&mut fetch.words, b"\n");
+            }
+            None
+        }
+        (BriefStage::Reviews, Ok(forge_client::api::Answer::Reviews { reviews, .. })) => {
+            for review in reviews {
+                if review.commit == fetch.head.0 {
+                    append(&mut fetch.words, b"Review: ");
+                    append(&mut fetch.words, &review.body);
+                    append(&mut fetch.words, b"\n");
+                }
+            }
+            None
+        }
+        (
+            BriefStage::Item | BriefStage::Pull | BriefStage::Files | BriefStage::Compare | BriefStage::Reviews,
+            Ok(_) | Err(_),
+        ) => {
+            domain.work.push(Work::Brief(brief::Event::Read { owner: fetch.owner, read: brief::Read::Failed }));
+            return true;
+        }
+    };
+    if let Some(read) = next {
+        let repository = fetch.repository;
+        domain.brief_fetches.insert(owner, fetch).expect("same brief read room");
+        domain.work.push(Work::Forge(forge::Event::Client(forge_client::Event::Read { owner, repository, read })));
+    } else {
+        let read = brief_part(fetch.words.as_slice(), fetch.parts, fetch.bytes);
+        domain.work.push(Work::Brief(brief::Event::Read { owner: fetch.owner, read }));
+    }
+    true
+}
+
+pub(super) fn brief_reviews(
+    domain: &mut Domain,
+    owner: Token,
+    item: brief::Item,
+    head: brief::Commit,
+    parts: u32,
+    bytes: u32,
+) -> Option<brief::Read> {
+    let Some(row) = domain.forge.change_for_pull(item.repository, item.number) else {
+        return Some(brief::Read::Failed);
+    };
+    if row.change.last_head != Some(head.0)
+        || parts == 0
+        || domain.brief_fetches.len() == domain.brief_fetches.capacity()
+    {
+        return Some(brief::Read::Failed);
+    }
+    let repository = row.repository;
     let mut words = List::with_capacity(bytes);
-    append(&mut words, b"Resolve the conflict from change head ");
-    append_hex(&mut words, &head.0[..8]);
-    append(&mut words, b" against the base tip ");
-    append_hex(&mut words, &base[..8]);
-    append(&mut words, b". Keep both intended changes in a merge commit.\n");
-    brief_part(words.as_slice(), parts, bytes)
+    for remark in &row.gate_remarks {
+        if remark.head == head.0 {
+            append(&mut words, b"Gate remarks: ");
+            append(&mut words, &remark.words);
+            append(&mut words, b"\n");
+        }
+    }
+    let call = Token::new(owner.raw() | (1_u64 << 61_u32) | (1_u64 << 59_u32));
+    let fetch =
+        BriefFetch { owner, item, head, repository, parts, bytes, stage: BriefStage::Reviews, base: None, words };
+    domain.brief_fetches.insert(call, fetch).expect("brief read room checked");
+    domain.work.push(Work::Forge(forge::Event::Client(forge_client::Event::Read {
+        owner: call,
+        repository,
+        read: forge_client::api::Read::Reviews { number: item.number, page: 1 },
+    })));
+    None
 }
 
 pub(super) fn brief_ci(domain: &Domain, item: brief::Item, head: brief::Commit, parts: u32, bytes: u32) -> brief::Read {
@@ -1014,6 +1173,53 @@ fn pull_what(number: Option<u64>) -> Option<forge::What> {
     }
 }
 
+/// Project landing gates are procedure gates before they become effect requirements.
+fn configured_gates(
+    domain: &Domain,
+    env: &Env<Limits>,
+    repository: &forge::Repository,
+    base: &[u8],
+) -> Option<Box<[forge_change::Gate]>> {
+    let what = branch_what(base, env.limits.forge.name_bytes)?;
+    let name = resource_name(repository, &what, env.limits.authority.segments)?;
+    let mut gates: List<forge_change::Gate> = List::with_capacity(env.limits.forge.change_policy.gates);
+    let policy = domain.config.authority.policy(repository.project)?;
+    for rules in [&domain.config.authority.rules().landing, &policy.landing] {
+        for rule in rules.as_ref() {
+            if rule.connector != repository.provider.forge
+                || rule.kind != 4
+                || !authority::pattern_covers(&rule.pattern, &name)
+            {
+                continue;
+            }
+            for gate in &rule.gates {
+                let mut present = false;
+                for prior in gates.as_slice() {
+                    if prior.number == u64::from(gate.number) {
+                        present = true;
+                    }
+                }
+                if present {
+                    continue;
+                }
+                gates
+                    .push(forge_change::Gate {
+                        number: u64::from(gate.number),
+                        kind: forge_change::GateKind::Agent,
+                        blocking: gate.blocking,
+                        freshness: match gate.freshness {
+                            authority::Freshness::Exact => forge_change::Freshness::Exact,
+                            authority::Freshness::Clean => forge_change::Freshness::Clean,
+                        },
+                        eager: false,
+                    })
+                    .ok()?;
+            }
+        }
+    }
+    Some(gates.into_boxed())
+}
+
 fn landing_status(value: forge_change::Status) -> authority::Status {
     match value {
         forge_change::Status::Unknown => authority::Status::Unknown,
@@ -1221,6 +1427,7 @@ pub(super) fn start_change(domain: &mut Domain, env: &Env<Limits>, context: &tas
         return false;
     }
     let Some(base_parts) = branch_parts(&base, env.limits.forge.name_bytes) else { return false };
+    let Some(gates) = configured_gates(domain, env, adopted, &base) else { return false };
     if domain.forge.change(task).is_none() {
         domain.work.push(Work::Forge(forge::Event::Change {
             row: forge::ChangeRow {
@@ -1237,7 +1444,7 @@ pub(super) fn start_change(domain: &mut Domain, env: &Env<Limits>, context: &tas
                 change: forge_change::Change {
                     task,
                     state: forge_change::State::Producing { requested: false },
-                    gates: Box::new([]),
+                    gates,
                     clean: Box::new([]),
                     repairs: 0,
                     resolutions: 0,
@@ -1253,6 +1460,7 @@ pub(super) fn start_change(domain: &mut Domain, env: &Env<Limits>, context: &tas
                 delegate: None,
                 delegate_status: forge_change::Status::Unknown,
                 verdicts: Box::new([]),
+                gate_remarks: Box::new([]),
                 drift: None,
                 base_repair,
                 queue_repair: None,
@@ -1299,7 +1507,12 @@ pub(super) fn start_change(domain: &mut Domain, env: &Env<Limits>, context: &tas
                 | tasks::MessageKind::News { .. } => None,
             };
             if let Some(status) = status {
-                domain.work.push(Work::Forge(forge::Event::DelegateResult { task, child, status }));
+                domain.work.push(Work::Forge(forge::Event::DelegateResult {
+                    task,
+                    child,
+                    status,
+                    words: word.words.clone(),
+                }));
                 break;
             }
         }
@@ -1679,6 +1892,9 @@ pub(super) fn outputs(
                 emit(decision, &env.limits, Delivery::ForgeCall { call, repository, op });
             }
             forge::Request::Read { owner, result } => {
+                if brief_answer(domain, owner, result.clone()) {
+                    continue;
+                }
                 if let Some((to, key)) = domain.forge_reading.remove(&owner) {
                     decide_call(domain, &env.limits, decision, to, key, CallAnswer::ForgeRead(Box::new(result)));
                 }

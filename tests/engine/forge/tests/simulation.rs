@@ -93,6 +93,7 @@ fn change_row() -> top::ChangeRow {
         delegate: None,
         delegate_status: change::Status::Unknown,
         verdicts: Box::new([]),
+        gate_remarks: Box::new([]),
         drift: None,
         base_repair: false,
         queue_repair: None,

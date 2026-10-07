@@ -14,6 +14,7 @@ protocol drafts and lower-layer integration are parked for later work.
 
 | Increment | State | Commit | Evidence |
 |---|---|---|---|
+| Completion 11.1: gate runs and review repair | merged | this commit | Project landing gates run at the named head; their bounded pull brief reads the forge item, files and comparison, and a failed gate's remarks reach its repair. Root stories cover approval landing and repair followed by a second review. Gate: fmt, clippy, 2,612 focused / 12.797 s, 45 fuzzy / 31.666 s. Root serial: 162 / 1.705 s (baseline 1.382 s). |
 | Completion 09.3: typed system world | merged | 05097532 | Seven required stories pass across the real Temper root, Smith fake agent and fake Forgejo; the world also covers the host bridge and a delegated producer. Gate on rebased tip: fmt, clippy, 2,610 focused / 11.625 s, 45 fuzzy / 26.186 s. Nine system tests take 0.130 s serial. |
 | Completion 09: corrected Smith host-feedback repin | merged | c9ec5060 | Smith `1697a6d1fe289e5862747a5fdd21f45f2c109794` includes the named `message` bridge test in its agent world. Gate: fmt, clippy, 2,601 focused / 12.222 s, 45 fuzzy / 26.652 s. |
 | Completion 09: Smith host-feedback repin | merged | 7e544c09 | Smith `80c9e205058dff56d92cbc0fcc76d2b319ac1ea2` includes the first host-feedback correction. Gate: fmt, clippy, 2,601 focused / 12.397 s, 45 fuzzy / 26.302 s. |
