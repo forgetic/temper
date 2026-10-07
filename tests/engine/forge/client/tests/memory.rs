@@ -137,9 +137,13 @@ impl Measured {
             Asked::Comment => api::Answer::Commented(7),
             Asked::Review => api::Answer::Reviewed(7),
             Asked::Merge => api::Answer::Merged([3; 32]),
-            Asked::Compare(before, after) => {
-                api::Answer::Compare { before, after, files: Box::new([]), commits: Box::new([]) }
-            }
+            Asked::Compare(before, after) => api::Answer::Compare {
+                before,
+                after,
+                contains_before: false,
+                files: Box::new([]),
+                commits: Box::new([]),
+            },
             Asked::Done => api::Answer::Done,
         };
         self.event(Event::Answered { call: call.token, cost: 1, result: Ok(result) });
@@ -166,6 +170,7 @@ fn asked(op: &api::Op) -> Asked {
             api::Read::Branch { .. } => Asked::Branch,
             api::Read::Compare { before, after } => Asked::Compare(*before, *after),
             api::Read::PullFor { .. }
+            | api::Read::Branches
             | api::Read::Statuses { .. }
             | api::Read::Remarks { .. }
             | api::Read::PullFiles { .. }

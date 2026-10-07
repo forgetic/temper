@@ -68,6 +68,8 @@ pub enum Read {
     Remarks { number: u64, review: u64, page: u32 },
     /// Read branch.
     Branch { branch: Box<[u8]> },
+    /// Names of the repository's branches, bounded by the adapter's answer limit.
+    Branches,
     /// Read pull files.
     PullFiles { number: u64, head: Commit, page: u32 },
     /// Whole bounded comparison; `TooLarge` means unknown overlap.
@@ -133,10 +135,12 @@ pub enum Answer {
     Remarks { remarks: Box<[Remark]>, more: bool },
     /// Return commit.
     Commit(Commit),
+    /// Return branch names for adoption's deployment-prefix check.
+    Branches(Box<[Box<[u8]>]>),
     /// The observed head must equal the request's head.
     PullFiles { head: Commit, files: Box<[File]>, more: bool },
     /// Return compare.
-    Compare { before: Commit, after: Commit, files: Box<[File]>, commits: Box<[Commit]> },
+    Compare { before: Commit, after: Commit, contains_before: bool, files: Box<[File]>, commits: Box<[Commit]> },
     /// Return checks.
     Checks(Box<[Status]>),
     /// Bytes from one pinned job attempt, cut to the requested byte budget.
@@ -404,6 +408,7 @@ enum Shape {
     Statuses,
     Remarks,
     Commit,
+    Branches,
     PullFiles,
     Compare,
     Checks,
@@ -428,6 +433,7 @@ fn shape(answer: &Answer) -> Shape {
         Answer::Statuses { .. } => Shape::Statuses,
         Answer::Remarks { .. } => Shape::Remarks,
         Answer::Commit(_) => Shape::Commit,
+        Answer::Branches(_) => Shape::Branches,
         Answer::PullFiles { .. } => Shape::PullFiles,
         Answer::Compare { .. } => Shape::Compare,
         Answer::Checks(_) => Shape::Checks,
@@ -454,6 +460,7 @@ pub(crate) fn accepts(op: &Op, answer: &Answer) -> bool {
             Read::Statuses { .. } => Shape::Statuses,
             Read::Remarks { .. } => Shape::Remarks,
             Read::Branch { .. } => Shape::Commit,
+            Read::Branches => Shape::Branches,
             Read::PullFiles { .. } => Shape::PullFiles,
             Read::Compare { .. } => Shape::Compare,
             Read::Checks { .. } => Shape::Checks,
@@ -495,6 +502,7 @@ pub(crate) fn accepts(op: &Op, answer: &Answer) -> bool {
                 | Answer::Statuses { .. }
                 | Answer::Remarks { .. }
                 | Answer::Commit(_)
+                | Answer::Branches(_)
                 | Answer::PullFiles { .. }
                 | Answer::Compare { .. }
                 | Answer::Checks(_)
@@ -525,6 +533,7 @@ pub(crate) fn accepts(op: &Op, answer: &Answer) -> bool {
             Read::Statuses { .. }
             | Read::Remarks { .. }
             | Read::Branch { .. }
+            | Read::Branches
             | Read::Protection { .. }
             | Read::Settings
             | Read::Collaborators { .. }
@@ -551,6 +560,7 @@ fn checks_at_head(answer: &Answer, head: Commit) -> bool {
         | Answer::Statuses { .. }
         | Answer::Remarks { .. }
         | Answer::Commit(_)
+        | Answer::Branches(_)
         | Answer::PullFiles { .. }
         | Answer::Compare { .. }
         | Answer::Job { .. }
@@ -595,6 +605,7 @@ fn items_ordered(answer: &Answer, kind: Option<Kind>) -> bool {
         | Answer::Statuses { .. }
         | Answer::Remarks { .. }
         | Answer::Commit(_)
+        | Answer::Branches(_)
         | Answer::PullFiles { .. }
         | Answer::Compare { .. }
         | Answer::Checks(_)
@@ -629,6 +640,7 @@ fn reviews_ordered(answer: &Answer) -> bool {
         | Answer::Statuses { .. }
         | Answer::Remarks { .. }
         | Answer::Commit(_)
+        | Answer::Branches(_)
         | Answer::PullFiles { .. }
         | Answer::Compare { .. }
         | Answer::Checks(_)
@@ -666,6 +678,7 @@ fn item_matches(answer: &Answer, number: u64, after: u64) -> bool {
         | Answer::Statuses { .. }
         | Answer::Remarks { .. }
         | Answer::Commit(_)
+        | Answer::Branches(_)
         | Answer::PullFiles { .. }
         | Answer::Compare { .. }
         | Answer::Checks(_)
@@ -691,6 +704,7 @@ fn pull_answer(answer: &Answer) -> Option<&Pull> {
         | Answer::Statuses { .. }
         | Answer::Remarks { .. }
         | Answer::Commit(_)
+        | Answer::Branches(_)
         | Answer::PullFiles { .. }
         | Answer::Compare { .. }
         | Answer::Checks(_)
@@ -717,6 +731,7 @@ fn observed_head(answer: &Answer) -> Option<Commit> {
         | Answer::Statuses { .. }
         | Answer::Remarks { .. }
         | Answer::Commit(_)
+        | Answer::Branches(_)
         | Answer::Compare { .. }
         | Answer::Checks(_)
         | Answer::Job { .. }
@@ -744,6 +759,7 @@ fn compared(answer: &Answer, before: Commit, after: Commit) -> bool {
         | Answer::Statuses { .. }
         | Answer::Remarks { .. }
         | Answer::Commit(_)
+        | Answer::Branches(_)
         | Answer::PullFiles { .. }
         | Answer::Checks(_)
         | Answer::Job { .. }

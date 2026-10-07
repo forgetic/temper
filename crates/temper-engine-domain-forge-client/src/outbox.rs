@@ -444,6 +444,7 @@ pub(crate) fn answered(
         Answer::Branch(created) => branch_created(d, number, created, out),
         Answer::Done => done(d, number, out),
         Answer::Statuses { .. }
+        | Answer::Branches(_)
         | Answer::Remarks { .. }
         | Answer::PullFiles { .. }
         | Answer::Checks(_)

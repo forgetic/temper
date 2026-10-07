@@ -62,6 +62,7 @@ pub(crate) fn read(value: &Read) -> Option<u64> {
         | Read::Pull { .. }
         | Read::Compare { .. }
         | Read::Checks { .. }
+        | Read::Branches
         | Read::Settings
         | Read::Permission { .. } => Some(0),
     }
@@ -165,6 +166,13 @@ fn answer_heap(value: &Answer, l: &Limits) -> Option<u64> {
         Answer::Settings(value) => bytes(&value.default_branch),
         Answer::Collaborators { collaborators, .. } => {
             rows(collaborators.len(), size_of::<crate::api::Collaborator>(), l)
+        }
+        Answer::Branches(branches) => {
+            let mut held = rows(branches.len(), size_of::<Box<[u8]>>(), l)?;
+            for branch in branches {
+                held = held.checked_add(bytes(branch)?)?;
+            }
+            Some(held)
         }
         Answer::Permission(_)
         | Answer::Commit(_)

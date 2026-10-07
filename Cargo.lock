@@ -283,6 +283,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-engine-domain-forge"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+ "temper-engine-domain-forge-change",
+ "temper-engine-domain-forge-client",
+ "temper-engine-domain-forge-issues",
+]
+
+[[package]]
 name = "temper-engine-domain-forge-change"
 version = "0.0.0"
 dependencies = [
@@ -366,6 +376,18 @@ dependencies = [
  "temper-engine-domain-forge-client",
  "temper-fake-forge-domain",
  "temper-world",
+]
+
+[[package]]
+name = "temper-engine-forge-world"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+ "temper-engine-domain-forge",
+ "temper-engine-domain-forge-change",
+ "temper-engine-domain-forge-client",
+ "temper-engine-domain-forge-issues",
+ "temper-fake-forge-domain",
 ]
 
 [[package]]

@@ -1,0 +1,16 @@
+[package]
+name = "temper-engine-domain-forge"
+description = "Forge connector top: resources, topics, outbox and child routing"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+skein-lib.workspace = true
+temper-engine-domain-forge-client.workspace = true
+temper-engine-domain-forge-change = { path = "../temper-engine-domain-forge-change" }
+temper-engine-domain-forge-issues = { path = "../temper-engine-domain-forge-issues" }
+
+[lints]
+workspace = true

@@ -354,6 +354,8 @@ pub enum Answer {
     Comparison {
         base: u64,
         head: u64,
+        /// Whether the requested base is an ancestor of the head.
+        contains_base: bool,
         files: Box<[ChangedFile]>,
         commits: Box<[u64]>,
     },

@@ -93,7 +93,9 @@ fn comparisons_ignore_paging_and_refuse_incomplete_data_explicitly() {
     h.push(ENGINE, b"work", two).unwrap();
     let first = h.ok(PERSON, read(Read::Compare { base: FIRST, head: two, page: 1, limit: 1 }));
     assert_eq!(first, h.ok(PERSON, read(Read::Compare { base: FIRST, head: two, page: 4, limit: 1 })));
-    let Answer::Comparison { base, head, files: changed, commits } = first else { unreachable!("a comparison") };
+    let Answer::Comparison { base, head, contains_base: _, files: changed, commits } = first else {
+        unreachable!("a comparison")
+    };
     assert_eq!((base, head), (FIRST, two));
     assert_eq!(&*commits, &[one, two]);
     assert_eq!(changed.len(), 2);

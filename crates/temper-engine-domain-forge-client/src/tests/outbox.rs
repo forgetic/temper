@@ -279,7 +279,13 @@ fn update_recovery_proves_the_requested_base_is_an_ancestor() {
     assert_eq!(compare.op, Op::Read(Read::Compare { before: [3; 32], after: [2; 32] }));
     h.answer(
         compare,
-        Ok(Answer::Compare { before: [3; 32], after: [2; 32], files: Box::new([]), commits: Box::new([]) }),
+        Ok(Answer::Compare {
+            before: [3; 32],
+            after: [2; 32],
+            contains_before: false,
+            files: Box::new([]),
+            commits: Box::new([]),
+        }),
     );
     assert_eq!(h.writes, 1);
     assert_eq!(h.outcomes.as_slice().last(), Some(&(1, Outcome::Made { made: Made::Updated([3; 32]), found: true })));

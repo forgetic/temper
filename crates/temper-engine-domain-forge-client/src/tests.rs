@@ -328,8 +328,13 @@ fn input_rows_are_checked_before_scanning_or_forwarding_them() {
         .is_empty()
     );
     let sent = h.one();
-    let answer =
-        Answer::Compare { before: [1; 32], after: [2; 32], files: Box::new([]), commits: Box::new([[0; 32]; 5]) };
+    let answer = Answer::Compare {
+        before: [1; 32],
+        after: [2; 32],
+        contains_before: false,
+        files: Box::new([]),
+        commits: Box::new([[0; 32]; 5]),
+    };
     terminal(&h.answer(&sent, 1, Ok(answer)), 1, Error::TooLarge);
 }
 #[test]
@@ -511,7 +516,13 @@ fn comparisons_must_return_the_requested_endpoints() {
         &h.answer(
             &sent,
             1,
-            Ok(Answer::Compare { before: [0; 32], after: [2; 32], files: Box::new([]), commits: Box::new([]) }),
+            Ok(Answer::Compare {
+                before: [0; 32],
+                after: [2; 32],
+                contains_before: false,
+                files: Box::new([]),
+                commits: Box::new([]),
+            }),
         ),
         1,
         Error::InvalidAnswer,

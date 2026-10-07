@@ -741,6 +741,7 @@ pub(crate) fn answered_repository(
         | Answer::Statuses { .. }
         | Answer::Remarks { .. }
         | Answer::Commit(_)
+        | Answer::Branches(_)
         | Answer::PullFiles { .. }
         | Answer::Compare { .. }
         | Answer::Checks(_)
@@ -831,6 +832,7 @@ pub(crate) fn answered_resource(
         Answer::Reviews { reviews, more } => reviews_answered(d, env, key, phase, reviews, more, out),
         Answer::Commit(commit) => branch_answered(d, env, key, commit, out),
         Answer::Items { .. }
+        | Answer::Branches(_)
         | Answer::Statuses { .. }
         | Answer::Remarks { .. }
         | Answer::PullFiles { .. }

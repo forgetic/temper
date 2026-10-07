@@ -664,6 +664,7 @@ fn inbox_count(answer: &api::Answer) -> u32 {
         | api::Answer::Statuses { .. }
         | api::Answer::Remarks { .. }
         | api::Answer::Commit(_)
+        | api::Answer::Branches(_)
         | api::Answer::PullFiles { .. }
         | api::Answer::Compare { .. }
         | api::Answer::Checks(_)

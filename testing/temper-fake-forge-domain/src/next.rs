@@ -109,7 +109,13 @@ pub(crate) fn compare(
             commits.push(commit).expect("one visit per commit");
         }
     }
-    Ok(Answer::Comparison { base, head, files, commits: commits.into_boxed() })
+    Ok(Answer::Comparison {
+        base,
+        head,
+        contains_base: git::is_ancestor(domain, base, head),
+        files,
+        commits: commits.into_boxed(),
+    })
 }
 
 pub(crate) fn checks(repository: &Repository, limits: &Limits, commit: u64) -> Result<Answer, Error> {
