@@ -244,8 +244,8 @@ pub fn answer(asked: &client::Op, answer: forge::Answer, l: &Limits) -> client::
             };
             let cap = usize::try_from(max_bytes).expect("world maximum fits usize");
             let truncated = log.len() > cap;
-            let end = log.len().min(cap);
-            client::Answer::Job { attempt, log: Box::from(log.get(..end).expect("bounded log")), truncated }
+            let start = log.len().saturating_sub(cap);
+            client::Answer::Job { attempt, log: Box::from(log.get(start..).expect("bounded log")), truncated }
         }
         forge::Answer::Protection(protection) => client::Answer::Protection(match protection {
             Some(p) => Some(client::Protection {

@@ -155,7 +155,7 @@ fn bounded_job_bytes_translate_to_a_truncated_attempt_log() {
         temper_fake_forge_domain::api::Answer::File(Box::from(&b"error"[..])),
         &temper_engine_forge_client_world::LIMITS,
     );
-    assert_eq!(result, api::Answer::Job { attempt, log: Box::from(&b"erro"[..]), truncated: true });
+    assert_eq!(result, api::Answer::Job { attempt, log: Box::from(&b"rror"[..]), truncated: true });
 }
 #[test]
 fn adoption_reads_history_and_preserves_foreign_or_copied_marker_news() {

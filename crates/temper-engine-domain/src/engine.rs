@@ -4563,7 +4563,15 @@ fn brief_outputs(domain: &mut Domain, env: &Env<Limits>, _decision: &mut Decisio
                     brief::Source::Pull { item, head } => {
                         forge_route::brief_pull(domain, owner, item, head, parts, bytes)
                     }
-                    brief::Source::Ci { item, head } => Some(forge_route::brief_ci(domain, item, head, parts, bytes)),
+                    brief::Source::Ci { item, head } => forge_route::brief_ci(
+                        domain,
+                        owner,
+                        item,
+                        head,
+                        parts,
+                        bytes,
+                        env.limits.forge.client.answer_bytes.min(env.limits.brief.budgets.ci / 5).max(1),
+                    ),
                     brief::Source::Reviews { item, head } => {
                         forge_route::brief_reviews(domain, owner, item, head, parts, bytes)
                     }
@@ -5527,6 +5535,22 @@ fn start_brief(domain: &mut Domain, task: u64) {
             }
         };
         wanted.push(brief::Wanted { source, required: true }).expect("connector section room");
+        let semantic = match row.delegate {
+            Some((_, forge_change::Delegate::Repair(forge_change::Repair::Semantic))) => true,
+            Some((
+                _,
+                forge_change::Delegate::Repair(forge_change::Repair::Ci | forge_change::Repair::Gate(_))
+                | forge_change::Delegate::Resolve { .. }
+                | forge_change::Delegate::Gate { .. }
+                | forge_change::Delegate::Produce,
+            ))
+            | None => false,
+        };
+        if semantic && wanted.room() > 0 {
+            wanted
+                .push(brief::Wanted { source: brief::Source::Pull { item, head: brief::Commit(head) }, required: true })
+                .expect("semantic update section room");
+        }
     }
     domain.work.push(Work::Brief(brief::Event::Render { reply_to: internal(task), sections: wanted.into_boxed() }));
 }
@@ -6048,6 +6072,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     bytes
         .checked_add(Map::<Token, forge_route::BriefFetch>::worst_case(brief_fetches)?)?
         .checked_add(u64::from(brief_fetches).checked_mul(u64::from(limits.brief.read_bytes))?)?
+        .checked_add(u64::from(brief_fetches).checked_mul(u64::from(limits.forge.client.answer_bytes))?)?
         .checked_add(Queue::<authority::Finding>::worst_case(authority::max_out(&limits.authority)?)?)?
         .checked_add(Queue::<tasks::Request>::worst_case(tasks::max_out(&limits.tasks))?)?
         .checked_add(u64::from(limits.tasks.message_bytes).checked_mul(3)?)?

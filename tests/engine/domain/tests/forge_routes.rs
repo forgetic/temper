@@ -28,6 +28,7 @@ struct World {
     signed_in: Option<u64>,
     assigned: Vec<engine::Assignment>,
     answers: Vec<temper_engine_domain::CallAnswer>,
+    fail_job_reads: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -88,6 +89,7 @@ impl World {
             limits.brief.gather = Duration::from_secs(5);
             limits.brief.read_bytes = 512;
             limits.brief.budgets.pull = 384;
+            limits.brief.budgets.ci = 384;
             limits.brief.brief_bytes = 768;
             limits.tasks.tasks = 12;
             limits.tasks.project_tasks = 12;
@@ -268,6 +270,7 @@ impl World {
             signed_in: None,
             assigned: Vec::new(),
             answers: Vec::new(),
+            fail_job_reads: false,
         }
     }
 
@@ -350,6 +353,14 @@ impl World {
                     self.events.push_back(engine::Event::Loaded { owner, rows, next });
                 }
                 engine::Request::Forge { call, repository, op } => {
+                    if self.fail_job_reads && matches!(op, client::api::Op::Read(client::api::Read::Job { .. })) {
+                        self.events.push_back(engine::Event::ForgeAnswered {
+                            call,
+                            cost: 1,
+                            result: Err(client::api::Error::MissingJob),
+                        });
+                        continue;
+                    }
                     let name: &[u8] = if repository == forge_world::REPO {
                         b"org/repo"
                     } else if repository == (client::api::Repository { forge: 1, repository: 3 }) {
@@ -1069,8 +1080,14 @@ fn a_change_failing_ci_is_repaired_reviewed_at_its_head_and_lands() {
     assert!(
         matches!(repair.workspace.repositories[0].start, engine::ForgeStart::Branch(ref name) if name.as_ref() == branch.as_ref())
     );
-    assert!(repair.sections.iter().any(|section| section.kind == brief::Kind::Ci
-        && matches!(&section.body, brief::Body::Text(words) if words.starts_with(b"Repair the failed check"))));
+    assert!(
+        repair.sections.iter().any(|section| section.kind == brief::Kind::Ci
+            && matches!(&section.body, brief::Body::Text(words)
+            if words.windows(b"failing check build 3".len()).any(|part| part == b"failing check build 3")
+                && words.windows(b"[job log truncated]".len()).any(|part| part == b"[job log truncated]"))),
+        "CI sections: {:?}",
+        repair.sections
+    );
     let repaired = fake::advance(&mut world.fake, &world.fake_env, b"org/repo", &branch, b"file", b"repaired", 1)
         .expect("repair pushed a new head");
     for _ in 0..5 {
@@ -1148,6 +1165,58 @@ fn a_change_failing_ci_is_repaired_reviewed_at_its_head_and_lands() {
 }
 
 #[test]
+fn an_unreadable_failed_job_log_is_named_and_repair_still_runs() {
+    let (mut world, _chat, producer, branch) = change_world(false, 0, None);
+    world.fail_job_reads = true;
+    assert!(matches!(
+        world.external(2, raw::Op::Git(raw::Git::Create { branch: branch.clone(), commit: 1 })),
+        raw::Answer::Branch(raw::Created::Created)
+    ));
+    let head = fake::advance(&mut world.fake, &world.fake_env, b"org/repo", &branch, b"file", b"first", 1)
+        .expect("producer pushed its branch");
+    world.external(
+        1,
+        raw::Op::Write(raw::Write::Status {
+            commit: head,
+            context: Box::from(&b"build"[..]),
+            state: raw::Check::Failed,
+        }),
+    );
+    world.send(engine::Event::Answer {
+        channel: Token::new(7),
+        task: producer.task,
+        attempt: producer.attempt,
+        cumulative: 5,
+        end: tasks::End::Finished {
+            result: tasks::TaskResult::Change {
+                connector: 1,
+                kind: 2,
+                resource: u64::from(forge_world::REPO.repository),
+                words: Box::from(&b"pushed"[..]),
+            },
+            cancel_delegates: false,
+        },
+        saved: None,
+    });
+    for _ in 0..200 {
+        world.tick();
+        if world.assigned.len() >= 3 {
+            break;
+        }
+    }
+    let repair = world.assigned.get(2).expect("repair assigned despite missing job log");
+    assert!(
+        repair.sections.iter().any(|section| section.kind == brief::Kind::Ci
+            && matches!(&section.body, brief::Body::Text(words)
+            if words.windows(b"[job log could not be read]".len()).any(|part| part == b"[job log could not be read]")
+                && words.windows(b"Description:".len()).any(|part| part == b"Description:")
+                && words.windows(b"Link:".len()).any(|part| part == b"Link:"))),
+        "CI sections: {:?}",
+        repair.sections
+    );
+}
+
+#[test]
 fn a_conflicting_update_is_resolved_from_a_merge_in_progress() {
     let (mut world, _chat, producer, branch) = change_world(false, 1000, None);
     assert!(matches!(
@@ -1190,8 +1259,14 @@ fn a_conflicting_update_is_resolved_from_a_merge_in_progress() {
     assert!(matches!(resolver.workspace.repositories[0].start,
         engine::ForgeStart::Merge { branch: ref source, base: expected }
             if source.as_ref() == branch.as_ref() && expected == translate::commit(base)));
-    assert!(resolver.sections.iter().any(|section| section.kind == brief::Kind::Pull
-        && matches!(&section.body, brief::Body::Text(words) if words.starts_with(b"Pull request"))));
+    assert!(
+        resolver.sections.iter().any(|section| section.kind == brief::Kind::Pull
+            && matches!(&section.body, brief::Body::Text(words)
+            if words.windows(b"What landed in the base".len()).any(|part| part == b"What landed in the base")
+                && words.windows(b"Conflicting file".len()).any(|part| part == b"Conflicting file"))),
+        "resolution sections: {:?}",
+        resolver.sections
+    );
     let old = world.fake.branch(b"org/repo", &branch).expect("existing branch head");
     let merge = fake::merge_commit(
         &mut world.fake,

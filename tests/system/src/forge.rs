@@ -702,8 +702,13 @@ mod system_stories {
             }
         }
         let repair = world.assigned.get(2).expect("failed CI assigned a repair").clone();
-        assert!(repair.sections.iter().any(|section| section.kind == brief::Kind::Ci
-            && matches!(&section.body, brief::Body::Text(words) if words.starts_with(b"Repair the failed check"))));
+        assert!(
+            repair.sections.iter().any(|section| section.kind == brief::Kind::Ci
+                && matches!(&section.body, brief::Body::Text(words)
+                if words.windows(b"failing check build 3".len()).any(|part| part == b"failing check build 3"))),
+            "CI sections: {:?}",
+            repair.sections
+        );
         let repaired_head =
             fake::advance(&mut world.fake, &world.fake_env, b"org/repo", &branch, b"file", b"repaired", 1)
                 .expect("repair pushed a new head");

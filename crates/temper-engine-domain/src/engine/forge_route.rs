@@ -19,7 +19,15 @@ pub(super) struct BriefFetch {
     parts: u32,
     bytes: u32,
     stage: BriefStage,
+    mode: PullMode,
     base: Option<forge_client::api::Commit>,
+    comparison: Option<(forge_client::api::Commit, forge_client::api::Commit)>,
+    changed: Box<[Box<[u8]>]>,
+    review_ids: Box<[u64]>,
+    next_review: u32,
+    checks: Box<[forge_client::api::Status]>,
+    next_check: u32,
+    max_job_bytes: u32,
     words: List<u8>,
 }
 
@@ -30,6 +38,17 @@ enum BriefStage {
     Files,
     Compare,
     Reviews,
+    Remarks,
+    Checks,
+    Job,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum PullMode {
+    Review,
+    Conflict(forge_client::api::Commit),
+    Semantic(Option<forge_client::api::Commit>),
+    Other,
 }
 
 fn append(out: &mut List<u8>, bytes: &[u8]) {
@@ -77,9 +96,46 @@ pub(super) fn brief_pull(
         return Some(brief::Read::Failed);
     }
     let repository = row.repository;
+    let mode = match &row.change.state {
+        forge_change::State::Resolving { base, .. } => PullMode::Conflict(*base),
+        forge_change::State::Repairing { why: forge_change::Repair::Semantic, .. } => {
+            PullMode::Semantic(row.change.clean.last().copied())
+        }
+        forge_change::State::Gating { .. } => PullMode::Review,
+        forge_change::State::Producing { .. }
+        | forge_change::State::Opening { .. }
+        | forge_change::State::Recreating { .. }
+        | forge_change::State::Reopening { .. }
+        | forge_change::State::Checking { .. }
+        | forge_change::State::Queued { .. }
+        | forge_change::State::First { .. }
+        | forge_change::State::Updating { .. }
+        | forge_change::State::Repairing { .. }
+        | forge_change::State::Landing { .. }
+        | forge_change::State::Landed { .. }
+        | forge_change::State::Held { .. } => PullMode::Other,
+    };
     let words = List::with_capacity(bytes);
     let call = Token::new(owner.raw() | (1_u64 << 61_u32) | (1_u64 << 59_u32));
-    let fetch = BriefFetch { owner, item, head, repository, parts, bytes, stage: BriefStage::Item, base: None, words };
+    let fetch = BriefFetch {
+        owner,
+        item,
+        head,
+        repository,
+        parts,
+        bytes,
+        stage: BriefStage::Item,
+        mode,
+        base: None,
+        comparison: None,
+        changed: Box::new([]),
+        review_ids: Box::new([]),
+        next_review: 0,
+        checks: Box::new([]),
+        next_check: 0,
+        max_job_bytes: 0,
+        words,
+    };
     domain.brief_fetches.insert(call, fetch).expect("brief read room checked");
     domain.work.push(Work::Forge(forge::Event::Client(forge_client::Event::Read {
         owner: call,
@@ -90,6 +146,7 @@ pub(super) fn brief_pull(
     None
 }
 
+#[expect(clippy::too_many_lines, reason = "the bounded forge brief fetch handles each connector reply in order")]
 pub(super) fn brief_answer(
     domain: &mut Domain,
     owner: Token,
@@ -98,7 +155,11 @@ pub(super) fn brief_answer(
     let Some(mut fetch) = domain.brief_fetches.remove(&owner) else { return false };
     let next = match (fetch.stage, result) {
         (BriefStage::Item, Ok(forge_client::api::Answer::Item { item, .. })) if item.number == fetch.item.number => {
-            append(&mut fetch.words, b"Pull request at head ");
+            match fetch.mode {
+                PullMode::Review | PullMode::Other => append(&mut fetch.words, b"Pull request at head "),
+                PullMode::Conflict(_) => append(&mut fetch.words, b"Resolve the conflict from change head "),
+                PullMode::Semantic(_) => append(&mut fetch.words, b"Repair after the base merged into change head "),
+            }
             append_hex(&mut fetch.words, &fetch.head.0);
             append(&mut fetch.words, b"\nTitle: ");
             append(&mut fetch.words, &item.title);
@@ -115,7 +176,9 @@ pub(super) fn brief_answer(
         }
         (BriefStage::Files, Ok(forge_client::api::Answer::PullFiles { head, files, .. })) if head == fetch.head.0 => {
             append(&mut fetch.words, b"Files and diff:\n");
+            let mut changed = List::with_capacity(u32::try_from(files.len()).expect("bounded file list"));
             for file in files {
+                changed.push(file.path.clone()).expect("sized from bounded file list");
                 append(&mut fetch.words, b"File: ");
                 append(&mut fetch.words, &file.path);
                 append(&mut fetch.words, b"\nBefore:\n");
@@ -128,36 +191,124 @@ pub(super) fn brief_answer(
                 }
                 append(&mut fetch.words, b"\n");
             }
-            match fetch.base {
-                Some(base) => {
+            fetch.changed = changed.into_boxed();
+            let comparison = match fetch.mode {
+                PullMode::Review | PullMode::Other => match fetch.base {
+                    Some(base) => Some((base, fetch.head.0)),
+                    None => None,
+                },
+                PullMode::Conflict(base) => Some((fetch.head.0, base)),
+                PullMode::Semantic(before) => match before {
+                    Some(before) => Some((before, fetch.head.0)),
+                    None => None,
+                },
+            };
+            fetch.comparison = comparison;
+            match comparison {
+                Some((before, after)) => {
                     fetch.stage = BriefStage::Compare;
-                    Some(forge_client::api::Read::Compare { before: base, after: fetch.head.0 })
+                    Some(forge_client::api::Read::Compare { before, after })
                 }
                 None => None,
             }
         }
-        (BriefStage::Compare, Ok(forge_client::api::Answer::Compare { before, after, files, .. }))
-            if Some(before) == fetch.base && after == fetch.head.0 =>
+        (BriefStage::Compare, Ok(forge_client::api::Answer::Compare { before, after, files, commits, .. }))
+            if Some((before, after)) == fetch.comparison =>
         {
-            append(&mut fetch.words, b"Against base:\n");
-            for file in files {
-                append(&mut fetch.words, &file.path);
-                append(&mut fetch.words, b"\n");
+            match fetch.mode {
+                PullMode::Conflict(_) | PullMode::Semantic(_) => {
+                    append(&mut fetch.words, b"What landed in the base:\n");
+                    for commit in commits {
+                        append_hex(&mut fetch.words, &commit);
+                        append(&mut fetch.words, b"\n");
+                    }
+                    for file in files {
+                        append(&mut fetch.words, b"Base file: ");
+                        append(&mut fetch.words, &file.path);
+                        append(&mut fetch.words, b"\n");
+                        if match fetch.mode {
+                            PullMode::Conflict(_) => true,
+                            PullMode::Review | PullMode::Semantic(_) | PullMode::Other => false,
+                        } {
+                            for changed in &fetch.changed {
+                                if changed == &file.path {
+                                    append(&mut fetch.words, b"Conflicting file: ");
+                                    append(&mut fetch.words, &file.path);
+                                    append(&mut fetch.words, b"\n");
+                                }
+                            }
+                        }
+                    }
+                }
+                PullMode::Review | PullMode::Other => {
+                    append(&mut fetch.words, b"Against base:\n");
+                    for file in files {
+                        append(&mut fetch.words, &file.path);
+                        append(&mut fetch.words, b"\n");
+                    }
+                }
             }
             None
         }
         (BriefStage::Reviews, Ok(forge_client::api::Answer::Reviews { reviews, .. })) => {
+            let mut ids = List::with_capacity(u32::try_from(reviews.len()).expect("bounded review list"));
             for review in reviews {
                 if review.commit == fetch.head.0 {
                     append(&mut fetch.words, b"Review: ");
                     append(&mut fetch.words, &review.body);
                     append(&mut fetch.words, b"\n");
+                    ids.push(review.id).expect("sized from bounded review list");
                 }
             }
-            None
+            fetch.review_ids = ids.into_boxed();
+            next_remarks(&mut fetch)
+        }
+        (BriefStage::Remarks, Ok(forge_client::api::Answer::Remarks { remarks, .. })) => {
+            for remark in remarks {
+                append(&mut fetch.words, b"Remark at ");
+                append(&mut fetch.words, &remark.path);
+                append(&mut fetch.words, b":");
+                append(&mut fetch.words, &decimal(u64::from(remark.line)));
+                append(&mut fetch.words, b" ");
+                append(&mut fetch.words, &remark.body);
+                append(&mut fetch.words, b"\n");
+            }
+            next_remarks(&mut fetch)
+        }
+        (BriefStage::Checks, Ok(forge_client::api::Answer::Checks(checks))) => {
+            fetch.checks = checks;
+            let next = next_failed_job(&mut fetch);
+            if next.is_none() {
+                append(&mut fetch.words, b"Repair the failed check.\n");
+            }
+            next
+        }
+        (BriefStage::Job, answer) => {
+            match answer {
+                Ok(forge_client::api::Answer::Job { attempt, log, truncated }) if attempt.head == fetch.head.0 => {
+                    append(&mut fetch.words, b"Job log tail:\n");
+                    append(&mut fetch.words, &log);
+                    append(&mut fetch.words, b"\n");
+                    if truncated {
+                        append(&mut fetch.words, b"[job log truncated]\n");
+                    }
+                }
+                Ok(_) | Err(_) => append(&mut fetch.words, b"[job log could not be read]\n"),
+            }
+            let next = next_failed_job(&mut fetch);
+            if next.is_none() {
+                append(&mut fetch.words, b"Repair the failed check.\n");
+            }
+            next
         }
         (
-            BriefStage::Item | BriefStage::Pull | BriefStage::Files | BriefStage::Compare | BriefStage::Reviews,
+            BriefStage::Item
+            | BriefStage::Pull
+            | BriefStage::Files
+            | BriefStage::Compare
+            | BriefStage::Reviews
+            | BriefStage::Remarks
+            | BriefStage::Checks,
             Ok(_) | Err(_),
         ) => {
             domain.work.push(Work::Brief(brief::Event::Read { owner: fetch.owner, read: brief::Read::Failed }));
@@ -173,6 +324,51 @@ pub(super) fn brief_answer(
         domain.work.push(Work::Brief(brief::Event::Read { owner: fetch.owner, read }));
     }
     true
+}
+
+fn next_remarks(fetch: &mut BriefFetch) -> Option<forge_client::api::Read> {
+    let index = usize::try_from(fetch.next_review).expect("u32 fits usize");
+    let review = *fetch.review_ids.get(index)?;
+    fetch.next_review = fetch.next_review.checked_add(1).expect("bounded review count");
+    fetch.stage = BriefStage::Remarks;
+    Some(forge_client::api::Read::Remarks { number: fetch.item.number, review, page: 1 })
+}
+
+/// Append each failed status before asking for its pinned attempt's log.
+fn next_failed_job(fetch: &mut BriefFetch) -> Option<forge_client::api::Read> {
+    let total = u32::try_from(fetch.checks.len()).expect("bounded check list");
+    for index in fetch.next_check..total {
+        let status = fetch.checks.get(usize::try_from(index).expect("u32 fits usize")).expect("index in check list");
+        fetch.next_check = index.checked_add(1).expect("bounded check count");
+        if status.check != forge_client::api::Check::Failed {
+            continue;
+        }
+        append(&mut fetch.words, b"Failed check: ");
+        append(&mut fetch.words, &status.context);
+        append(&mut fetch.words, b"\nDescription: ");
+        append(&mut fetch.words, &status.description);
+        append(&mut fetch.words, b"\nLink: ");
+        append(&mut fetch.words, &status.url);
+        append(&mut fetch.words, b"\n");
+        match status.job {
+            Some(attempt) if attempt.head == fetch.head.0 => {
+                fetch.stage = BriefStage::Job;
+                let count = total.max(1);
+                let share = fetch
+                    .bytes
+                    .checked_div(count)
+                    .expect("positive check count")
+                    .checked_div(2)
+                    .expect("positive divisor");
+                return Some(forge_client::api::Read::Job {
+                    attempt,
+                    max_bytes: share.max(1).min(fetch.max_job_bytes),
+                });
+            }
+            Some(_) | None => append(&mut fetch.words, b"[no pinned job log for this head]\n"),
+        }
+    }
+    None
 }
 
 pub(super) fn brief_reviews(
@@ -202,8 +398,25 @@ pub(super) fn brief_reviews(
         }
     }
     let call = Token::new(owner.raw() | (1_u64 << 61_u32) | (1_u64 << 59_u32));
-    let fetch =
-        BriefFetch { owner, item, head, repository, parts, bytes, stage: BriefStage::Reviews, base: None, words };
+    let fetch = BriefFetch {
+        owner,
+        item,
+        head,
+        repository,
+        parts,
+        bytes,
+        stage: BriefStage::Reviews,
+        mode: PullMode::Other,
+        base: None,
+        comparison: None,
+        changed: Box::new([]),
+        review_ids: Box::new([]),
+        next_review: 0,
+        checks: Box::new([]),
+        next_check: 0,
+        max_job_bytes: 0,
+        words,
+    };
     domain.brief_fetches.insert(call, fetch).expect("brief read room checked");
     domain.work.push(Work::Forge(forge::Event::Client(forge_client::Event::Read {
         owner: call,
@@ -213,16 +426,73 @@ pub(super) fn brief_reviews(
     None
 }
 
-pub(super) fn brief_ci(domain: &Domain, item: brief::Item, head: brief::Commit, parts: u32, bytes: u32) -> brief::Read {
-    let Some(row) = domain.forge.change_for_pull(item.repository, item.number) else { return brief::Read::Failed };
-    let forge_change::State::Repairing { .. } = row.change.state else {
-        return brief::Read::Failed;
+pub(super) fn brief_ci(
+    domain: &mut Domain,
+    owner: Token,
+    item: brief::Item,
+    head: brief::Commit,
+    parts: u32,
+    bytes: u32,
+    max_job_bytes: u32,
+) -> Option<brief::Read> {
+    let Some(row) = domain.forge.change_for_pull(item.repository, item.number) else {
+        return Some(brief::Read::Failed);
     };
+    let repairing = match row.change.state {
+        forge_change::State::Repairing { .. } => true,
+        forge_change::State::Producing { .. }
+        | forge_change::State::Opening { .. }
+        | forge_change::State::Recreating { .. }
+        | forge_change::State::Reopening { .. }
+        | forge_change::State::Checking { .. }
+        | forge_change::State::Queued { .. }
+        | forge_change::State::First { .. }
+        | forge_change::State::Updating { .. }
+        | forge_change::State::Gating { .. }
+        | forge_change::State::Resolving { .. }
+        | forge_change::State::Landing { .. }
+        | forge_change::State::Landed { .. }
+        | forge_change::State::Held { .. } => false,
+    };
+    if !repairing
+        || row.change.last_head != Some(head.0)
+        || parts == 0
+        || domain.brief_fetches.len() == domain.brief_fetches.capacity()
+    {
+        return Some(brief::Read::Failed);
+    }
+    let repository = row.repository;
     let mut words = List::with_capacity(bytes);
     append(&mut words, b"Repair the failed check at change head ");
     append_hex(&mut words, &head.0[..8]);
     append(&mut words, b". Push a new head and wait for checks there.\n");
-    brief_part(words.as_slice(), parts, bytes)
+    let call = Token::new(owner.raw() | (1_u64 << 61_u32) | (1_u64 << 59_u32));
+    let fetch = BriefFetch {
+        owner,
+        item,
+        head,
+        repository,
+        parts,
+        bytes,
+        stage: BriefStage::Checks,
+        mode: PullMode::Other,
+        base: None,
+        comparison: None,
+        changed: Box::new([]),
+        review_ids: Box::new([]),
+        next_review: 0,
+        checks: Box::new([]),
+        next_check: 0,
+        max_job_bytes,
+        words,
+    };
+    domain.brief_fetches.insert(call, fetch).expect("brief read room checked");
+    domain.work.push(Work::Forge(forge::Event::Client(forge_client::Event::Read {
+        owner: call,
+        repository,
+        read: forge_client::api::Read::Checks { commit: head.0 },
+    })));
+    None
 }
 
 fn news_words(news: &forge::News, limit: u32) -> Box<[u8]> {

@@ -186,7 +186,7 @@ fn a_failed_ci_job_has_a_bounded_log_for_its_current_attempt() {
         h.ok(PERSON, read(Read::Job { commit: work, run: job.run, job: job.job, attempt: job.attempt, max_bytes: 8 }));
     let Answer::File(bounded) = bounded else { unreachable!("bounded log") };
     assert_eq!(bounded.len(), 9, "one extra byte signals truncation to the adapter");
-    assert_eq!(&*bounded, log.get(..9).unwrap());
+    assert_eq!(&*bounded, log.get(log.len() - 9..).unwrap());
     assert_eq!(
         h.call(PERSON, read(Read::Job { commit: work, run: job.run, job: job.job, attempt: 2, max_bytes: 8 })),
         Err(Error::Missing(What::Job))

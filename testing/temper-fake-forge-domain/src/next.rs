@@ -221,7 +221,8 @@ pub(crate) fn job(
         log.push(b'\n').expect("fixed fake log capacity");
     }
     let length = usize::try_from(max_bytes).expect("u32 fits usize").saturating_add(1).min(log.as_slice().len());
-    Ok(Answer::File(Box::from(log.as_slice().get(..length).expect("length capped at log"))))
+    let start = log.as_slice().len().checked_sub(length).expect("length capped at log");
+    Ok(Answer::File(Box::from(log.as_slice().get(start..).expect("start in log"))))
 }
 
 pub(crate) fn settings(repository: &Repository) -> Answer {
