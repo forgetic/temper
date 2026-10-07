@@ -96,6 +96,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "jig-charter"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+ "smith-charter",
+ "smith-domain-run",
+]
+
+[[package]]
 name = "jig-core-accounts"
 version = "0.0.0"
 dependencies = [
@@ -177,9 +186,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "jig-inline-agent"
+version = "0.0.0"
+dependencies = [
+ "jig-charter",
+ "skein-lib",
+ "smith-agent-world",
+ "smith-charter",
+ "smith-domain",
+ "smith-domain-run",
+ "smith-host-domain",
+ "smith-protocol-channel",
+ "smith-transcript",
+]
+
+[[package]]
 name = "jig-local-host"
 version = "0.0.0"
 dependencies = [
+ "jig-charter",
  "skein-lib",
  "smith-agent-world",
  "smith-domain",
@@ -417,6 +442,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "smith-charter"
+version = "0.0.0"
+source = "git+https://git.ekanayaka.io/ai/smith.git#a54fe558421ed07ce376ac1ebf2ce09345c8d496"
+dependencies = [
+ "skein-codec",
+ "skein-lib",
+]
+
+[[package]]
 name = "smith-domain"
 version = "0.0.0"
 source = "git+https://git.ekanayaka.io/ai/smith.git#a54fe558421ed07ce376ac1ebf2ce09345c8d496"
@@ -471,6 +505,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "smith-protocol-channel"
+version = "0.0.0"
+source = "git+https://git.ekanayaka.io/ai/smith.git#a54fe558421ed07ce376ac1ebf2ce09345c8d496"
+dependencies = [
+ "skein-channel",
+ "skein-lib",
+ "smith-channel",
+ "smith-charter",
+ "smith-domain",
+ "smith-domain-session",
+ "smith-domain-tools",
+ "smith-transcript",
+]
+
+[[package]]
 name = "smith-session-world"
 version = "0.0.0"
 source = "git+https://git.ekanayaka.io/ai/smith.git#a54fe558421ed07ce376ac1ebf2ce09345c8d496"
@@ -493,6 +542,15 @@ dependencies = [
  "skein-lib",
  "skein-world",
  "smith-domain-tools",
+]
+
+[[package]]
+name = "smith-transcript"
+version = "0.0.0"
+source = "git+https://git.ekanayaka.io/ai/smith.git#a54fe558421ed07ce376ac1ebf2ce09345c8d496"
+dependencies = [
+ "skein-codec",
+ "skein-lib",
 ]
 
 [[package]]
@@ -599,6 +657,7 @@ dependencies = [
 name = "temper-engine-smith"
 version = "0.0.0"
 dependencies = [
+ "jig-charter",
  "jig-core-accounts",
  "jig-core-authority",
  "jig-core-brief",

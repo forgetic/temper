@@ -2,6 +2,7 @@
 //! already decoded history and mounts; no encoding or file access occurs here.
 
 use alloc::boxed::Box;
+use jig_charter as shared;
 use jig_core_brief as brief;
 use jig_core_tasks as tasks;
 use skein_lib::{Decimal, List, ReplyTo, Token, bytes};
@@ -23,6 +24,22 @@ pub fn model(model: &engine::Model) -> run::charter::Llm {
         account: model.account,
         endpoint: run::charter::Endpoint(model.endpoint),
         model: model.name.clone(),
+        max_tokens: model.max_tokens,
+    }
+}
+
+fn shared_model(model: &engine::Model) -> shared::Model {
+    shared::Model {
+        prices: shared::Prices {
+            input: model.input_price,
+            cached: model.cached_price,
+            output: model.output_price,
+            unit: model.price_unit,
+        },
+        dialect: model.dialect,
+        account: model.account,
+        endpoint: model.endpoint,
+        name: model.name.clone(),
         max_tokens: model.max_tokens,
     }
 }
@@ -70,41 +87,58 @@ pub fn start(
 ) -> smith::Event {
     let mut sections = List::with_capacity(assignment.sections.len().try_into().expect("bounded brief sections"));
     for item in &assignment.sections {
-        sections.push(section(item)).expect("bounded brief sections");
+        let item = section(item);
+        sections.push(shared::Section { title: item.title, text: item.text }).expect("bounded brief sections");
     }
-    let outcome = outcome(&assignment.run.contract);
     let policy = &assignment.run.policy;
-    let grants = run::charter::Grants {
-        wait: true,
-        deliver: outcome.change.clone(),
-        tools: run::charter::Tools { inspect: policy.inspect, modify: policy.modify, shell: policy.shell },
-        agents: policy.agents,
-        host_tools: crate::tools(policy.call_timeout),
-    };
+    let host_tools = crate::tools(policy.call_timeout);
+    let mut tools = List::with_capacity(host_tools.len().try_into().expect("bounded host tools"));
+    for tool in host_tools {
+        tools
+            .push(shared::Tool {
+                name: tool.name,
+                description: tool.description,
+                schema: tool.schema,
+                effect: match tool.effect {
+                    run::HostEffect::Read => shared::ToolEffect::Read,
+                    run::HostEffect::Write => shared::ToolEffect::Write,
+                },
+                timeout: tool.timeout,
+            })
+            .expect("bounded host tools");
+    }
     let mut models = List::with_capacity(policy.alternatives.len().try_into().expect("bounded model list"));
     for candidate in &policy.alternatives {
-        models.push(model(candidate)).expect("bounded model list");
+        models.push(shared_model(candidate)).expect("bounded model list");
     }
+    let charter = shared::charter(
+        shared::Charter {
+            instructions: policy.instructions.clone(),
+            tools: tools.into_boxed(),
+            wait: true,
+            agents: policy.agents,
+            workspace: shared::WorkspaceTools { inspect: policy.inspect, modify: policy.modify, shell: policy.shell },
+            conventions: Some(shared::Conventions {
+                guide: bytes::copy_of(b"AGENTS.md"),
+                checks: bytes::copy_of(b".temper/pre-pr"),
+            }),
+            contract: contract(&assignment.run.contract),
+            budget: shared::Budget { turns: policy.turns, spend: assignment.run.budget, time: policy.time },
+            model: shared_model(&policy.model),
+            models: models.into_boxed(),
+            waiting: policy.waiting,
+            resumes: policy.resume,
+        },
+        sections.into_boxed(),
+        transcript.is_some(),
+    )
+    .expect("bounded engine charter translates");
     smith::Event::Start {
         reply_to,
         host_run,
         activation: assignment.attempt,
         window,
-        charter: run::Charter {
-            resume: policy.resume && transcript.is_some(),
-            waiting: policy.waiting,
-            instructions: policy.instructions.clone(),
-            brief: run::Brief { sections: sections.into_boxed() },
-            conventions: Some(run::Conventions {
-                guide: bytes::copy_of(b"AGENTS.md"),
-                checks: bytes::copy_of(b".temper/pre-pr"),
-            }),
-            grants,
-            outcome,
-            budget: run::Budget { turns: policy.turns, spend: assignment.run.budget, time: policy.time },
-            llm: model(&policy.model),
-            models: models.into_boxed(),
-        },
+        charter,
         workspace,
         transcript,
         // The host will supply recovered answers when it keeps their durable
@@ -117,46 +151,46 @@ pub fn start(
     }
 }
 
-fn outcome(contract: &tasks::Contract) -> run::outcome::OutcomeSpec {
+fn contract(contract: &tasks::Contract) -> shared::Contract {
     match contract {
-        tasks::Contract::Report { words } => run::outcome::OutcomeSpec {
+        tasks::Contract::Report { words } => shared::Contract {
             change: None,
             verdicts: Box::new([]),
-            report: Some(run::outcome::TextSpec { max: *words, fields: Box::new([]) }),
-            failure: Some(run::outcome::TextSpec { max: *words, fields: Box::new([]) }),
+            report: Some(shared::TextRule { max: *words, fields: Box::new([]) }),
+            failure: Some(shared::TextRule { max: *words, fields: Box::new([]) }),
         },
         tasks::Contract::Verdict { choices } => {
             let mut verdicts = List::with_capacity(choices.len().try_into().expect("bounded verdict list"));
             for choice in choices {
                 verdicts
-                    .push(run::outcome::VerdictRule {
+                    .push(shared::VerdictRule {
                         name: bytes::copy_of(Decimal::of(u64::from(choice.code)).as_bytes()),
                         text_max: choice.words,
                         fields: Box::new([]),
-                        items: run::outcome::ItemSpec { min: 0, max: 0, kinds: Box::new([]) },
+                        items: shared::Items { min: 0, max: 0, kinds: Box::new([]) },
                     })
                     .expect("bounded verdict list");
             }
-            run::outcome::OutcomeSpec {
+            shared::Contract {
                 change: None,
                 verdicts: verdicts.into_boxed(),
                 report: None,
-                failure: Some(run::outcome::TextSpec { max: 1024, fields: Box::new([]) }),
+                failure: Some(shared::TextRule { max: 1024, fields: Box::new([]) }),
             }
         }
         tasks::Contract::Change { words, .. } => {
-            let change = run::outcome::ChangeSpec {
+            let change = shared::ChangeRule {
                 checks_must_pass: true,
                 fields: Box::new([
-                    run::outcome::FieldRule { name: bytes::copy_of(b"title"), max: *words },
-                    run::outcome::FieldRule { name: bytes::copy_of(b"body"), max: *words },
+                    shared::FieldRule { name: bytes::copy_of(b"title"), max: *words },
+                    shared::FieldRule { name: bytes::copy_of(b"body"), max: *words },
                 ]),
             };
-            run::outcome::OutcomeSpec {
+            shared::Contract {
                 change: Some(change),
                 verdicts: Box::new([]),
                 report: None,
-                failure: Some(run::outcome::TextSpec { max: *words, fields: Box::new([]) }),
+                failure: Some(shared::TextRule { max: *words, fields: Box::new([]) }),
             }
         }
     }

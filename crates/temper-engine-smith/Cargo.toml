@@ -16,6 +16,7 @@ temper-engine-domain-forge-client.workspace = true
 temper-engine-domain-forge.workspace = true
 jig-core-authority.workspace = true
 jig-core-accounts.workspace = true
+jig-charter.workspace = true
 smith-domain.workspace = true
 smith-domain-run.workspace = true
 smith-domain-session.workspace = true

@@ -29,6 +29,8 @@ members = [
     "crates/temper-worker-domain-agent",
     "crates/temper-worker-domain-checkout",
     "jig/crates/jig-host",
+    "jig/crates/jig-charter",
+    "jig/crates/jig-inline-agent",
     "jig/crates/jig-local-host",
     "jig/tests/local-host",
     "crates/temper-web-view",
@@ -76,6 +78,9 @@ smith-domain-session = { git = "https://git.ekanayaka.io/ai/smith.git" }
 smith-domain-tools = { git = "https://git.ekanayaka.io/ai/smith.git" }
 smith-channel = { git = "https://git.ekanayaka.io/ai/smith.git" }
 smith-host-domain = { git = "https://git.ekanayaka.io/ai/smith.git" }
+smith-charter = { git = "https://git.ekanayaka.io/ai/smith.git" }
+smith-protocol-channel = { git = "https://git.ekanayaka.io/ai/smith.git" }
+smith-transcript = { git = "https://git.ekanayaka.io/ai/smith.git" }
 sha2 = { version = "=0.10.9", default-features = false }
 temper-web-view = { path = "crates/temper-web-view" }
 temper-fake-person = { path = "testing/temper-fake-person" }
@@ -102,6 +107,8 @@ temper-worker-domain = { path = "crates/temper-worker-domain" }
 temper-worker-domain-agent = { path = "crates/temper-worker-domain-agent" }
 temper-worker-domain-checkout = { path = "crates/temper-worker-domain-checkout" }
 jig-host = { path = "jig/crates/jig-host" }
+jig-charter = { path = "jig/crates/jig-charter" }
+jig-inline-agent = { path = "jig/crates/jig-inline-agent" }
 jig-local-host = { path = "jig/crates/jig-local-host" }
 jig-local-host-world = { path = "jig/tests/local-host" }
 temper-fake-forge-domain = { path = "testing/temper-fake-forge-domain" }
