@@ -332,6 +332,7 @@ simulation; no legacy fuzzy seed trim is needed for the suite caps.
 | 02.1 both halves open | merged locally | smith c0b6a2e | fmt/clippy pass; 1,225 focused / 4.031 s; 14 fuzzy / 4.752 s; channel world 3 / 0.012 s serial. |
 | 02.2 host Start domain shape | merged locally | smith 91059cd | fmt/clippy pass; 1,225 focused / 7.570 s; 14 fuzzy / 6.157 s. |
 | 02.2 host Start encoding | merged locally | smith bb31060 | fmt/clippy pass; 1,226 focused / 4.194 s; 14 fuzzy / 4.941 s. |
+| 02.2 malformed charter reason | merged locally | smith e7668e8 | fmt/clippy pass; 1,228 focused / 5.814 s; 14 fuzzy / 5.896 s. |
 
 ## jig extraction
 
