@@ -43,6 +43,7 @@ use crate::{
 };
 use alloc::boxed::Box;
 use jig_core_accounts as accounts;
+use jig_core_views as views;
 use skein_lib::{Decimal, Env, Id, List, Map, Queue, ReplyTo, Slab, Token, Writer};
 use temper_engine_domain_authority as authority;
 use temper_engine_domain_brief as brief;
@@ -53,7 +54,6 @@ use temper_engine_domain_forge_client as forge_client;
 use temper_engine_domain_forge_issues as forge_issues;
 use temper_engine_domain_people as people;
 use temper_engine_domain_tasks as tasks;
-use temper_engine_domain_views as views;
 
 /// Root startup bounds, supplied by configuration and immutable at every step
 /// (domain/engine.md, 4–5). `worst_case` checks the cross-child route, page,

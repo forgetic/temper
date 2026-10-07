@@ -1,7 +1,7 @@
+use jig_core_views::{self as views, Domain, Event, Subject};
+use jig_views_world::LIMITS;
 use skein_lib::{Env, Queue, Time, Token, Wall};
 use skein_world::domain::heap::{self, Meter};
-use temper_engine_domain_views::{self as views, Domain, Event, Subject};
-use temper_engine_views_world::LIMITS;
 
 #[global_allocator]
 static HEAP: heap::Counting = heap::Counting;

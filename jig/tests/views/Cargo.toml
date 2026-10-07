@@ -1,5 +1,5 @@
 [package]
-name = "temper-engine-views-world"
+name = "jig-views-world"
 description = "The views child domain's world: a parent and scripted watchers"
 version.workspace = true
 edition.workspace = true
@@ -8,7 +8,7 @@ publish.workspace = true
 
 [dependencies]
 skein-lib.workspace = true
-temper-engine-domain-views.workspace = true
+jig-core-views.workspace = true
 skein-world.workspace = true
 
 # Ordinary Rust (programming-model.md, 10.2), so not the step crates' lints.

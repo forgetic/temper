@@ -1,7 +1,7 @@
 //! The views child driven through its public steps by a parent and watchers.
 
+use jig_core_views::{self as views, Domain, Event, Limits, Request, Subject};
 use skein_lib::{Env, Queue, Time, Token, Wall};
-use temper_engine_domain_views::{self as views, Domain, Event, Limits, Request, Subject};
 
 use crate::referee::Referee;
 

@@ -1,5 +1,5 @@
 [package]
-name = "temper-engine-domain-views"
+name = "jig-core-views"
 description = "Live streams of runs, task trees, goals and inboxes"
 version.workspace = true
 edition.workspace = true

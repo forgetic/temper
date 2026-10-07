@@ -308,7 +308,7 @@ dependencies = [
  "temper-engine-domain-forge-issues",
  "temper-engine-domain-people",
  "temper-engine-domain-tasks",
- "temper-engine-domain-views",
+ "jig-core-views",
 ]
 
 [[package]]
@@ -387,7 +387,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "temper-engine-domain-views"
+name = "jig-core-views"
 version = "0.0.0"
 dependencies = [
  "skein-lib",
@@ -412,7 +412,7 @@ dependencies = [
  "temper-engine-domain-forge-client",
  "temper-engine-domain-people",
  "temper-engine-domain-tasks",
- "temper-engine-domain-views",
+ "jig-core-views",
  "temper-engine-forge-world",
  "temper-engine-people-world",
  "temper-engine-tasks-world",
@@ -498,12 +498,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "temper-engine-views-world"
+name = "jig-views-world"
 version = "0.0.0"
 dependencies = [
  "skein-lib",
  "skein-world",
- "temper-engine-domain-views",
+ "jig-core-views",
 ]
 
 [[package]]

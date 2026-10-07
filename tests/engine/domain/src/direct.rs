@@ -1,11 +1,11 @@
 //! Direct root fixture shared by focused routes and the ending sweep.
 
 use jig_core_accounts as accounts;
+use jig_core_views as views;
 use skein_lib::{Env, Queue, ReplyTo, Time, Token, Wall};
 use std::collections::VecDeque;
 use temper_engine_domain::{Delivery, Write, engine};
 use temper_engine_domain_people as people;
-use temper_engine_domain_views as views;
 
 use crate::commits::Store;
 use crate::walking::{config, limits};

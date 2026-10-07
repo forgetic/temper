@@ -1,6 +1,6 @@
+use jig_core_views::{Chunk, End, Event, Kind, Refusal, Request, Subject};
+use jig_views_world::World;
 use skein_lib::Token;
-use temper_engine_domain_views::{Chunk, End, Event, Kind, Refusal, Request, Subject};
-use temper_engine_views_world::World;
 
 #[test]
 fn a_watch_begins_with_its_snapshot_and_streams_a_committed_turn() {

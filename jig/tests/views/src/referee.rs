@@ -1,8 +1,8 @@
 //! An outside check of watch admission, initial snapshots, and flow control.
 
+use jig_core_views::{Chunk, Event, Request};
 use skein_lib::Token;
 use std::collections::BTreeMap;
-use temper_engine_domain_views::{Chunk, Event, Request};
 
 /// What the scripted parent can observe without inspecting domain state.
 #[derive(Debug, Default)]

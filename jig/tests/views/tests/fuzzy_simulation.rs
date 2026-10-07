@@ -1,6 +1,6 @@
+use jig_core_views::{Event, Request, Subject};
+use jig_views_world::World;
 use skein_lib::Token;
-use temper_engine_domain_views::{Event, Request, Subject};
-use temper_engine_views_world::World;
 
 #[test]
 fn random_live_streams_keep_one_delivery_per_watcher() {

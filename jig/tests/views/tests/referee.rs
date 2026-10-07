@@ -1,6 +1,6 @@
+use jig_core_views::{Chunk, End, Event, Request};
+use jig_views_world::Referee;
 use skein_lib::{Time, Token};
-use temper_engine_domain_views::{Chunk, End, Event, Request};
-use temper_engine_views_world::Referee;
 
 fn admitted(referee: &mut Referee) {
     referee.saw(&[

@@ -140,7 +140,7 @@ pub fn limits() -> engine::Limits {
             spent_attention: Duration::from_secs(1),
             facts: 2,
         },
-        views: temper_engine_domain_views::Limits {
+        views: jig_core_views::Limits {
             runs: 2,
             watchers: 4,
             backlog: 2,

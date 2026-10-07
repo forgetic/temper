@@ -55,7 +55,7 @@ pub enum Delivery {
         op: temper_engine_domain_forge_client::api::Op,
     },
     /// Internal committed notice to the expendable live views child.
-    View(Box<temper_engine_domain_views::Event>),
+    View(Box<jig_core_views::Event>),
     /// Committed request to the connector that owns a procedure task. The owner steps against
     /// current facts and returns the fenced decision through the root.
     Procedure { task: u64, step: u64, connector: u16, code: u32 },
@@ -396,17 +396,17 @@ impl Decision {
         assert!(*limits == self.limits, "decision uses its configured limits");
         let within = match &delivery {
             Delivery::View(event) => match event.as_ref() {
-                temper_engine_domain_views::Event::TaskPhase { trees, .. } => {
+                jig_core_views::Event::TaskPhase { trees, .. } => {
                     trees.len() <= usize::try_from(limits.deliveries).expect("u32 fits usize")
                 }
-                temper_engine_domain_views::Event::Started { .. }
-                | temper_engine_domain_views::Event::Turn { .. }
-                | temper_engine_domain_views::Event::Finished { .. }
-                | temper_engine_domain_views::Event::Inbox { .. } => true,
-                temper_engine_domain_views::Event::Reported { .. }
-                | temper_engine_domain_views::Event::Watch { .. }
-                | temper_engine_domain_views::Event::Unwatch { .. }
-                | temper_engine_domain_views::Event::Delivered { .. } => false,
+                jig_core_views::Event::Started { .. }
+                | jig_core_views::Event::Turn { .. }
+                | jig_core_views::Event::Finished { .. }
+                | jig_core_views::Event::Inbox { .. } => true,
+                jig_core_views::Event::Reported { .. }
+                | jig_core_views::Event::Watch { .. }
+                | jig_core_views::Event::Unwatch { .. }
+                | jig_core_views::Event::Delivered { .. } => false,
             },
             Delivery::Result { words, .. } | Delivery::ResultReply { words, .. } => {
                 words.len() <= usize::try_from(limits.result_bytes).expect("u32 fits usize")
