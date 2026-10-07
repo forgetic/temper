@@ -4,8 +4,8 @@
 //! workspace. It holds the charter and the snapshot until the agent starts,
 //! and its parent relies on the workspace fitting the limits.
 
-use crate::wire::{Access, Assignment, Invalid, Repository, Start};
 use crate::Limits;
+use crate::wire::{Access, Assignment, Invalid, Repository, Start};
 
 /// Whether `assignment` fits `limits`, and what about it does not.
 pub(crate) fn check(assignment: &Assignment, limits: &Limits, next: bool) -> Result<(), Invalid> {

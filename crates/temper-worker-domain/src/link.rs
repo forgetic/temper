@@ -57,11 +57,11 @@
 
 use alloc::boxed::Box;
 
+use crate::wire;
+use jig_worker_host as host;
 use skein_lib::bytes::copy_of;
 use skein_lib::{Deadlines, Duration, Env, List, Map, Queue, Rng, Time, Token};
 use temper_worker_domain_checkout as checkout;
-use jig_worker_host as host;
-use crate::wire;
 
 use crate::boundary::{Hello, Hosted, Phase, Request};
 use crate::limits::{self, Limits};
@@ -256,7 +256,14 @@ impl Link {
     }
 
     /// Refuse an assignment whose application workspace cannot be admitted.
-    pub(crate) fn refuse(&self, run: Token, attempt: Token, refusal: wire::Refusal, next: bool, out: &mut Queue<Request>) {
+    pub(crate) fn refuse(
+        &self,
+        run: Token,
+        attempt: Token,
+        refusal: wire::Refusal,
+        next: bool,
+        out: &mut Queue<Request>,
+    ) {
         assert!(self.is_up(), "an assignment arrives on an open channel");
         if next {
             let ending = wire::EndingV2::Refused(refusal);

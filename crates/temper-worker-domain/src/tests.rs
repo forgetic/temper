@@ -10,7 +10,7 @@ use temper_worker_domain_checkout::git::{self, Commit, Op};
 
 use crate::{
     Domain, Event, Fact, Hello, Hosted, Limits, Phase, Request, Told, agent, checkout, fire, host, max_out, resume,
-    step, worst_case, wire,
+    step, wire, worst_case,
 };
 
 const LIMITS: Limits = Limits {

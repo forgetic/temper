@@ -55,8 +55,8 @@
 
 extern crate alloc;
 
-mod boundary;
 mod assignment;
+mod boundary;
 mod domain;
 mod facts;
 mod limits;
@@ -67,14 +67,14 @@ mod route;
 mod tests;
 mod translate;
 mod turns;
-mod workspace;
 pub mod wire;
+mod workspace;
 
 pub use boundary::{Event, Hello, Hosted, Phase, Request, Told};
 pub use domain::{Domain, fire, max_out, resume, step};
 pub use facts::Fact;
 pub use limits::{Limits, declared_graces, push_deadline, worst_case};
 // The payloads are the children's: a parent may use its children's types.
+pub use jig_worker_host as host;
 pub use temper_worker_domain_agent as agent;
 pub use temper_worker_domain_checkout as checkout;
-pub use jig_worker_host as host;

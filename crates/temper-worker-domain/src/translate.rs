@@ -6,12 +6,12 @@
 
 use alloc::boxed::Box;
 
-use skein_lib::{List, Token};
+use crate::wire;
+use jig_worker_host as host;
 use skein_lib::bytes::copy_of;
+use skein_lib::{List, Token};
 use temper_worker_domain_agent::{self as agent, channel};
 use temper_worker_domain_checkout::{self as checkout, git};
-use jig_worker_host as host;
-use crate::wire;
 
 use crate::boundary::Phase;
 use crate::domain::Domain;
@@ -169,7 +169,9 @@ pub(crate) const fn delivery_outcome(result: &wire::Push) -> host::DeliveryOutco
 pub(crate) fn reply(domain: &Domain, reply: host::Reply) -> channel::Reply {
     match reply {
         host::Reply::Relayed { answer } => channel::Reply::Relayed { answer },
-        host::Reply::Delivered(delivery) => channel::Reply::Pushed(push(workspace::delivery_reply(domain, delivery.left))),
+        host::Reply::Delivered(delivery) => {
+            channel::Reply::Pushed(push(workspace::delivery_reply(domain, delivery.left)))
+        }
         host::Reply::Unavailable => channel::Reply::Unavailable,
         host::Reply::Withdrawn => channel::Reply::Withdrawn,
         host::Reply::Busy => channel::Reply::Busy,

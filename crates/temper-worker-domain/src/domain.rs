@@ -16,10 +16,10 @@
 
 use alloc::boxed::Box;
 
+use jig_worker_host as host;
 use skein_lib::{Env, Id, Map, Queue, Slab, Time, Token};
 use temper_worker_domain_agent as agent;
 use temper_worker_domain_checkout as checkout;
-use jig_worker_host as host;
 
 use crate::boundary::{Event, Request, Told};
 use crate::facts::Fact;

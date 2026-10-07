@@ -1,9 +1,9 @@
 //! Temper worker wire and checkout vocabulary.
 
-use alloc::boxed::Box;
-use skein_lib::Token;
-pub use jig_worker_host::{AgentFailure, Bounce, Finish, FinishV2, Grant, Hosting, Phase, Reason, RunFailure, Turn};
 pub use crate::push::{PushDiagnostic, PushFailure, PushReason};
+use alloc::boxed::Box;
+pub use jig_worker_host::{AgentFailure, Bounce, Finish, FinishV2, Grant, Hosting, Phase, Reason, RunFailure, Turn};
+use skein_lib::Token;
 
 /// What the engine gives the worker for one run (worker-domain.md, 4.1).
 #[derive(PartialEq, Eq, Hash, Debug)]
@@ -302,4 +302,3 @@ pub enum Missing {
     Branch,
     Commit,
 }
-

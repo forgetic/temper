@@ -47,10 +47,10 @@
 
 use alloc::boxed::Box;
 
+use crate::wire;
 use skein_lib::{Time, Token};
 use temper_worker_domain_agent::{self as agent, channel};
 use temper_worker_domain_checkout::git;
-use crate::wire;
 
 /// protocol -> domain
 #[derive(PartialEq, Eq, Debug)]

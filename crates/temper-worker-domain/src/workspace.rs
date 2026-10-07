@@ -44,12 +44,12 @@
 use alloc::boxed::Box;
 use core::mem;
 
+use crate::wire;
+use jig_worker_host as host;
 use skein_lib::bytes::copy_of;
 use skein_lib::{Env, Id, List, Map, Token};
 use temper_worker_domain_agent as agent;
 use temper_worker_domain_checkout as checkout;
-use jig_worker_host as host;
-use crate::wire;
 
 use crate::domain::Domain;
 use crate::limits::Limits;
@@ -75,7 +75,10 @@ pub(crate) fn stage(
     assignment: wire::Assignment,
     next: bool,
 ) -> Result<host::Assignment, wire::Refusal> {
-    crate::assignment::check(&assignment, &env.limits, next).map_err(wire::Refusal::Invalid)?;
+    match crate::assignment::check(&assignment, &env.limits, next) {
+        Ok(()) => {}
+        Err(invalid) => return Err(wire::Refusal::Invalid(invalid)),
+    }
     let wire::Assignment { run, attempt, workspace, save, charter, snapshot, grants } = assignment;
     let mut merging = false;
     for repository in &workspace.repositories {
@@ -189,7 +192,8 @@ impl Then {
 /// The host asks for `workspace` to be prepared for its run `owner`.
 pub(crate) fn prepare(domain: &mut Domain, env: &Env<Limits>, owner: Token, workspace: host::Workspace) {
     let items = Id::<Items>::from_token(workspace.items);
-    let spec = domain.items.get_mut(items).expect("the root staged the workspace items").spec.take().expect("prepared once");
+    let spec =
+        domain.items.get_mut(items).expect("the root staged the workspace items").spec.take().expect("prepared once");
     let repositories = u32::try_from(spec.repositories.len()).expect("the root checked the repositories");
     let mut roots = List::with_capacity(repositories);
     let mut identities = List::with_capacity(repositories);
@@ -408,7 +412,10 @@ pub(crate) fn wrote(domain: &mut Domain, env: &Env<Limits>, client: Token, outco
         let result = translate::summarize(landings);
         let outcome = translate::delivery_outcome(&result);
         next.last = Some(result);
-        host::Event::Delivered { owner: Token::new(0), delivery: host::Delivery { outcome, left: items.token(), changed } }
+        host::Event::Delivered {
+            owner: Token::new(0),
+            delivery: host::Delivery { outcome, left: items.token(), changed },
+        }
     } else {
         next.saved = Some(landings);
         host::Event::Saved { owner: Token::new(0), at: Some(items.token()) }
@@ -416,9 +423,7 @@ pub(crate) fn wrote(domain: &mut Domain, env: &Env<Limits>, client: Token, outco
     let mut then = Then::NOTHING;
     let state = mem::replace(&mut record.state, State::Closed);
     record.state = match state {
-        State::Ready { hold, directory, asked: Some(owner) } => {
-            written(hold, directory, owner, event, &mut then)
-        }
+        State::Ready { hold, directory, asked: Some(owner) } => written(hold, directory, owner, event, &mut then),
         State::Ready { asked: None, .. } | State::Preparing { .. } | State::Releasing | State::Closed => {
             unreachable!("a push or a save ends once, as the workspace stays held")
         }
@@ -481,13 +486,7 @@ fn asked(hold: Token, directory: Token, owner: Token, write: Write, then: &mut T
 
 /// Ready, pushed or saved: the host's `owner` is told what became of each
 /// repository.
-fn written(
-    hold: Token,
-    directory: Token,
-    owner: Token,
-    event: host::Event,
-    then: &mut Then,
-) -> State {
+fn written(hold: Token, directory: Token, owner: Token, event: host::Event, then: &mut Then) -> State {
     then.host = Some(match event {
         host::Event::Delivered { owner: _, delivery } => host::Event::Delivered { owner, delivery },
         host::Event::Saved { owner: _, at } => host::Event::Saved { owner, at },

@@ -3,9 +3,9 @@
 
 use crate::boundary::{Hosted, Phase, Request};
 use crate::limits::Limits;
+use crate::wire;
 use skein_lib::bytes::copy_of;
 use skein_lib::{Deadlines, Env, Map, Queue, Time, Token};
-use crate::wire;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub(crate) struct Name {
