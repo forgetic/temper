@@ -113,7 +113,7 @@ pub(crate) fn stage(
     Ok(host::Assignment {
         run,
         attempt,
-        workspace: host::Workspace { workstream: run.raw(), items: id.token() },
+        workspace: Some(host::Workspace { workstream: run.raw(), items: id.token() }),
         save: domain.items.get(id).expect("inserted above").save.is_some(),
         charter,
         snapshot,

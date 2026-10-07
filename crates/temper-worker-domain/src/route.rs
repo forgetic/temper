@@ -268,10 +268,26 @@ fn from_host(domain: &mut Domain, env: &Env<Limits>, request: host::Request, out
 fn from_host_agent(domain: &mut Domain, env: &Env<Limits>, request: host::ToAgent) {
     let event = match request {
         host::ToAgent::StartV2 { owner, workspace, charter, transcript, grants } => {
-            return workspace::start_v2(domain, env, owner, workspace, charter, transcript, grants);
+            return workspace::start_v2(
+                domain,
+                env,
+                owner,
+                workspace.expect("temper assignments always have workspace items"),
+                charter,
+                transcript,
+                grants,
+            );
         }
         host::ToAgent::Start { owner, workspace, charter, snapshot, grants } => {
-            return workspace::start(domain, env, owner, workspace, charter, snapshot, grants);
+            return workspace::start(
+                domain,
+                env,
+                owner,
+                workspace.expect("temper assignments always have workspace items"),
+                charter,
+                snapshot,
+                grants,
+            );
         }
         host::ToAgent::Message { agent, name, event } => agent::Event::Deliver { agent, name, event },
         host::ToAgent::Answer { agent, call, reply } => {
