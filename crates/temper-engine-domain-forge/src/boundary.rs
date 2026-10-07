@@ -153,6 +153,10 @@ pub struct ReleaseRow {
     pub close_pull: Option<u64>,
     pub pending: Option<(u64, Option<Name>)>,
     pub failed: bool,
+    /// All effects issued before cleanup have settled.
+    pub effects_settled: bool,
+    /// The task child has authorized cleanup after effect settlement.
+    pub releasing: bool,
 }
 /// Terminal task class that determines forge cleanup.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -404,7 +408,9 @@ pub enum Event {
     },
     /// A person released a drift-held change after inspecting the new head.
     ReleaseChange { task: u64 },
-    /// Finish a closing task's prior effects, then release its holds.
+    /// Wait for a closing task's prior effects before cleanup begins.
+    SettleEffects { task: u64, root: u64, ending: ReleaseEnding },
+    /// Release a closing task's holds after prior effects settled.
     Release { task: u64, root: u64, ending: ReleaseEnding, entry: u64 },
     /// Continue a release after one of its outbox effects settles.
     ContinueRelease { task: u64, entry: u64 },
@@ -454,6 +460,8 @@ pub enum Request {
     Outcome { entry: u64, task: u64, outcome: client::Outcome },
     /// A prior effect or release write settled; advance the closing task.
     ContinueRelease { task: u64 },
+    /// All effects issued before resource cleanup have settled.
+    EffectsSettled { task: u64 },
     /// All connector resources of a closing task are released.
     Released { task: u64 },
     /// A cleanup effect failed and the closing task needs a person's decision.

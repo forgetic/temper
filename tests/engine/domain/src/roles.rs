@@ -222,6 +222,7 @@ impl World {
                 )
                 | Record::Tasks(
                     tasks::Stored::Ended(_)
+                    | tasks::Stored::Stub(_)
                     | tasks::Stored::Ledger(_)
                     | tasks::Stored::History(_)
                     | tasks::Stored::PersonProposal(_),

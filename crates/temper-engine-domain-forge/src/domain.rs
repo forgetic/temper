@@ -503,6 +503,7 @@ pub fn step(d: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Req
             step_change(d, env, StepInput { task, entry, heard, gates, queue_repair_active }, out);
         }
         Event::ReleaseChange { task } => release_change(d, task, out),
+        Event::SettleEffects { task, root, ending } => settle_effects(d, env, task, root, ending, out),
         Event::Release { task, root, ending, entry } => release(d, env, task, root, ending, entry, out),
         Event::ContinueRelease { task, entry } => continue_release(d, env, task, entry, out),
         Event::ReleaseProjection { goal } => release_projection(d, goal, out),
@@ -1902,23 +1903,30 @@ fn release_change(d: &mut Domain, task: u64, out: &mut Queue<Request>) {
     emit(out, Request::Save { record: Stored::Change(saved) });
 }
 
-fn release(
+fn settle_effects(
     d: &mut Domain,
     env: &Env<Limits>,
     task: u64,
     root: u64,
     ending: ReleaseEnding,
-    entry: u64,
     out: &mut Queue<Request>,
 ) {
     if let Some(row) = d.releases.get_mut(&task) {
-        if row.root != root || row.ending != ending {
+        if row.root != root || (row.ending != ending && ending != ReleaseEnding::Cancelled) {
             emit(out, Request::ReleaseFailed { task });
             return;
         }
-        if row.failed {
-            row.failed = false;
+        if row.ending != ending {
+            row.ending = ending;
+            row.close_pull = match d.changes.get(&task) {
+                Some(change) => change.pull,
+                None => None,
+            };
             emit(out, Request::Save { record: Stored::Release(row.clone()) });
+        }
+        if row.effects_settled {
+            emit(out, Request::EffectsSettled { task });
+            return;
         }
     } else {
         if d.releases.len() == env.limits.tasks {
@@ -1939,6 +1947,94 @@ fn release(
             },
             pending: None,
             failed: false,
+            effects_settled: false,
+            releasing: false,
+        };
+        d.releases.insert(task, row.clone()).expect("release capacity checked");
+        emit(out, Request::Save { record: Stored::Release(row) });
+    }
+    if ending == ReleaseEnding::Cancelled {
+        let mut unsent = List::with_capacity(env.limits.entries);
+        for (number, entry) in &d.entries {
+            if entry.task == task && entry.attempt.is_none() {
+                unsent.push(*number).expect("entry table bounded");
+            }
+        }
+        for number in unsent.into_boxed() {
+            withdraw(d, env, number, out);
+            if let Some(entry) = d.entries.get(&number)
+                && entry.start.is_none()
+            {
+                d.entries.remove(&number);
+                emit(out, Request::Erase { key: Key::Entry(number) });
+                emit(out, Request::Outcome { entry: number, task, outcome: client::Outcome::Withdrawn });
+            }
+        }
+    }
+    settle_prior_effects(d, task, out);
+}
+
+fn settle_prior_effects(d: &mut Domain, task: u64, out: &mut Queue<Request>) {
+    for (_, pending) in &d.entries {
+        if pending.task == task {
+            return;
+        }
+    }
+    let row = d.releases.get_mut(&task).expect("effect settlement row");
+    if !row.effects_settled {
+        row.effects_settled = true;
+        emit(out, Request::Save { record: Stored::Release(row.clone()) });
+    }
+    emit(out, Request::EffectsSettled { task });
+}
+
+fn release(
+    d: &mut Domain,
+    env: &Env<Limits>,
+    task: u64,
+    root: u64,
+    ending: ReleaseEnding,
+    entry: u64,
+    out: &mut Queue<Request>,
+) {
+    if let Some(row) = d.releases.get_mut(&task) {
+        if row.root != root || (row.ending != ending && ending != ReleaseEnding::Cancelled) {
+            emit(out, Request::ReleaseFailed { task });
+            return;
+        }
+        if row.ending != ending {
+            row.ending = ending;
+            row.close_pull = match d.changes.get(&task) {
+                Some(change) => change.pull,
+                None => None,
+            };
+        }
+        if row.failed {
+            row.failed = false;
+        }
+        row.releasing = true;
+        emit(out, Request::Save { record: Stored::Release(row.clone()) });
+    } else {
+        if d.releases.len() == env.limits.tasks {
+            emit(out, Request::ReleaseFailed { task });
+            return;
+        }
+        let row = ReleaseRow {
+            task,
+            root,
+            ending,
+            close_pull: if ending == ReleaseEnding::Cancelled {
+                match d.changes.get(&task) {
+                    Some(change) => change.pull,
+                    None => None,
+                }
+            } else {
+                None
+            },
+            pending: None,
+            failed: false,
+            effects_settled: true,
+            releasing: true,
         };
         d.releases.insert(task, row.clone()).expect("release capacity checked");
         emit(out, Request::Save { record: Stored::Release(row) });
@@ -1950,6 +2046,13 @@ fn continue_release(d: &mut Domain, env: &Env<Limits>, task: u64, entry: u64, ou
     for _ in 0..=env.limits.holds {
         let Some(mut row) = d.releases.get(&task).cloned() else { return };
         if row.failed || row.pending.is_some() {
+            return;
+        }
+        if !row.effects_settled {
+            settle_prior_effects(d, task, out);
+            return;
+        }
+        if !row.releasing {
             return;
         }
         for (_, pending) in &d.entries {

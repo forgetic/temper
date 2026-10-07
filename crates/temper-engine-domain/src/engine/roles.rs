@@ -74,6 +74,7 @@ fn inspected(
             | tasks::Request::Stop { .. }
             | tasks::Request::Adopt { .. }
             | tasks::Request::Close { .. }
+            | tasks::Request::Release { .. }
             | tasks::Request::Ended { .. }
             | tasks::Request::Save { .. }
             | tasks::Request::Erase { .. }
@@ -257,6 +258,7 @@ fn recheck(domain: &mut Domain, env: &Env<Limits>, request: Token, project: u32)
             | tasks::Request::Stop { .. }
             | tasks::Request::Adopt { .. }
             | tasks::Request::Close { .. }
+            | tasks::Request::Release { .. }
             | tasks::Request::Ended { .. }
             | tasks::Request::Save { .. }
             | tasks::Request::Erase { .. }

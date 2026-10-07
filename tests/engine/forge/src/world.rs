@@ -411,6 +411,7 @@ impl World {
                 | top::Request::Refused { .. }
                 | top::Request::Outcome { .. }
                 | top::Request::ContinueRelease { .. }
+                | top::Request::EffectsSettled { .. }
                 | top::Request::Released { .. }
                 | top::Request::ReleaseFailed { .. }
                 | top::Request::ProjectAfter { .. }

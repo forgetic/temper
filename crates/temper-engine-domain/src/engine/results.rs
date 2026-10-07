@@ -113,7 +113,8 @@ pub(super) fn page(
                 tasks::Stored::PersonProposal(_)
                 | tasks::Stored::History(_)
                 | tasks::Stored::Live(_)
-                | tasks::Stored::Ledger(_),
+                | tasks::Stored::Ledger(_)
+                | tasks::Stored::Stub(_),
             )
             | Record::ProposalDecision(_)
             | Record::Call(_)

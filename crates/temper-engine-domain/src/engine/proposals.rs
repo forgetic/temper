@@ -163,7 +163,7 @@ pub(super) fn decision_record(row: &tasks::Stored) -> Option<ProposalDecisionRec
                 choice,
             })
         }
-        tasks::Stored::Live(_) | tasks::Stored::Ended(_) | tasks::Stored::Ledger(_) => None,
+        tasks::Stored::Live(_) | tasks::Stored::Ended(_) | tasks::Stored::Ledger(_) | tasks::Stored::Stub(_) => None,
     }
 }
 

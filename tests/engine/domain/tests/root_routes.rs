@@ -408,6 +408,7 @@ fn a_maintainer_prioritises_project_goals_and_a_member_cannot() {
             Record::Tasks(
                 tasks::Stored::Live(_)
                 | tasks::Stored::Ended(_)
+                | tasks::Stored::Stub(_)
                 | tasks::Stored::History(_)
                 | tasks::Stored::Ledger(_)
                 | tasks::Stored::PersonProposal(_),
@@ -2842,6 +2843,10 @@ fn an_ended_delegate_can_be_named_as_a_later_tasks_input() {
     let mut second = report_delegate(b"use result", Box::new([]));
     second.spec.inputs = Box::new([first[0]]);
     let second = call_batch(&mut driver, &parent_again, 114, Box::new([second]));
+    assert!(matches!(
+        driver.store.rows.get(&Key::Tasks(tasks::Key::Stub(first[0]))),
+        Some(Record::Tasks(tasks::Stored::Stub(stub))) if stub.task == first[0] && stub.result.raw() == first[0]
+    ));
     park_task(&mut driver, &parent_again);
     let assigned = assigned_task(&driver, second[0]);
     assert!(assigned.sections.iter().any(|section| section.kind == engine::BriefKind::Core(brief::Core::Results)
@@ -3968,6 +3973,7 @@ fn multiple_waiting_recipients_preflight_together_and_full_journal_refuses_witho
             | Record::People(_)
             | Record::Tasks(
                 tasks::Stored::Ended(_)
+                | tasks::Stored::Stub(_)
                 | tasks::Stored::Ledger(_)
                 | tasks::Stored::History(_)
                 | tasks::Stored::PersonProposal(_),
@@ -4186,6 +4192,7 @@ fn read_only_role_stages_have_one_not_ready_terminal_and_empty_projects_need_no_
             | tasks::Request::Stop { .. }
             | tasks::Request::Adopt { .. }
             | tasks::Request::Close { .. }
+            | tasks::Request::Release { .. }
             | tasks::Request::Ended { .. }
             | tasks::Request::Save { .. }
             | tasks::Request::Erase { .. }
@@ -4229,6 +4236,7 @@ fn read_only_role_stages_have_one_not_ready_terminal_and_empty_projects_need_no_
         | tasks::Request::Stop { .. }
         | tasks::Request::Adopt { .. }
         | tasks::Request::Close { .. }
+        | tasks::Request::Release { .. }
         | tasks::Request::Ended { .. }
         | tasks::Request::Save { .. }
         | tasks::Request::Erase { .. }

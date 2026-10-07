@@ -239,6 +239,7 @@ fn adoption_reads_permission_before_committing_its_role() {
         | Request::BriefClient { .. }
         | Request::BriefReady { .. }
         | Request::BriefSized { .. }
+        | Request::EffectsSettled { .. }
         | Request::BriefTaken { .. } => panic!("permission call"),
     };
     assert_eq!(op, client::api::Op::Read(client::api::Read::Permission { user: 7 }));
@@ -274,6 +275,7 @@ fn adoption_reads_permission_before_committing_its_role() {
         | Request::BriefClient { .. }
         | Request::BriefReady { .. }
         | Request::BriefSized { .. }
+        | Request::EffectsSettled { .. }
         | Request::BriefTaken { .. } => panic!("branches call"),
     };
     assert!(
@@ -309,6 +311,7 @@ fn adoption_reads_permission_before_committing_its_role() {
         | Request::BriefClient { .. }
         | Request::BriefReady { .. }
         | Request::BriefSized { .. }
+        | Request::EffectsSettled { .. }
         | Request::BriefTaken { .. } => panic!("settings follows collision read"),
     }
 }

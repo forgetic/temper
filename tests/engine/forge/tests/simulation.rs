@@ -709,6 +709,7 @@ fn a_change_produced_opened_checked_queued_and_landed() {
                 | top::Request::Refused { .. }
                 | top::Request::Outcome { .. }
                 | top::Request::ContinueRelease { .. }
+                | top::Request::EffectsSettled { .. }
                 | top::Request::Released { .. }
                 | top::Request::ReleaseFailed { .. }
                 | top::Request::ProjectAfter { .. }
@@ -952,6 +953,113 @@ fn closing_a_landed_change_deletes_its_branch_before_releasing_the_task() {
     assert!(!world.stored().contains_key(&top::Key::Hold(name)));
     assert!(!world.stored().contains_key(&top::Key::Release(51)));
     assert_eq!(world.writes(), 1);
+}
+
+#[test]
+fn prior_effects_settle_before_cleanup_can_delete_a_held_resource() {
+    let mut world = World::new(121);
+    world.adopt();
+    world.produce(b"temper/51");
+    let name = top::Name {
+        forge: REPO.forge,
+        repository: REPO.repository,
+        what: top::What::Branch(Box::new([Box::from(&b"temper"[..]), Box::from(&b"51"[..])])),
+    };
+    world.event(top::Event::Hold { task: 51, resource: name.clone(), from: None });
+    world.event(top::Event::Enqueue {
+        entry: client::Entry {
+            number: 9,
+            task: 51,
+            repository: REPO,
+            effect: client::Effect {
+                write: client::api::Write::CreateIssue {
+                    key: Box::from(&b"prior"[..]),
+                    title: Box::from(&b"Prior effect"[..]),
+                    body: Box::from(&b"settles first"[..]),
+                },
+                condition: client::Condition::None,
+            },
+            start: None,
+            attempt: None,
+            failures: 0,
+        },
+    });
+    world.take_seen();
+    world.event(top::Event::SettleEffects { task: 51, root: 51, ending: top::ReleaseEnding::Done });
+    assert!(!world.seen().iter().any(|request| matches!(request, top::Request::EffectsSettled { task: 51 })));
+    assert!(world.stored().contains_key(&top::Key::Hold(name.clone())));
+    world.event(top::Event::Committed { entry: 9 });
+    world.run_for(5);
+    world.event(top::Event::ContinueRelease { task: 51, entry: 10 });
+    assert!(world.seen().iter().any(|request| matches!(request, top::Request::EffectsSettled { task: 51 })));
+    assert!(world.stored().contains_key(&top::Key::Hold(name.clone())));
+    assert!(!world.stored().contains_key(&top::Key::Entry(10)));
+    world.event(top::Event::Release { task: 51, root: 51, ending: top::ReleaseEnding::Done, entry: 11 });
+    assert!(matches!(
+        world.stored().get(&top::Key::Entry(11)),
+        Some(top::Stored::Entry(client::Entry {
+            effect: client::Effect { write: client::api::Write::DeleteBranch { .. }, .. },
+            ..
+        }))
+    ));
+}
+
+#[test]
+fn cancelling_withdraws_a_prior_effect_that_never_went_out() {
+    let mut world = World::new(122);
+    world.adopt();
+    world.event(top::Event::Enqueue {
+        entry: client::Entry {
+            number: 9,
+            task: 51,
+            repository: REPO,
+            effect: client::Effect {
+                write: client::api::Write::CreateIssue {
+                    key: Box::from(&b"unsent"[..]),
+                    title: Box::from(&b"Unsent"[..]),
+                    body: Box::from(&b"no effect"[..]),
+                },
+                condition: client::Condition::None,
+            },
+            start: None,
+            attempt: None,
+            failures: 0,
+        },
+    });
+    world.take_seen();
+    world.event(top::Event::SettleEffects { task: 51, root: 51, ending: top::ReleaseEnding::Cancelled });
+    assert!(!world.stored().contains_key(&top::Key::Entry(9)));
+    assert!(
+        world.seen().iter().any(|request| matches!(
+            request,
+            top::Request::Outcome { entry: 9, outcome: client::Outcome::Withdrawn, .. }
+        ))
+    );
+    assert!(world.seen().iter().any(|request| matches!(request, top::Request::EffectsSettled { task: 51 })));
+    assert_eq!(world.writes(), 0);
+}
+
+#[test]
+fn cancellation_during_release_retargets_the_durable_cleanup() {
+    let mut world = World::new(123);
+    world.adopt();
+    world.produce(b"temper/51");
+    let name = top::Name {
+        forge: REPO.forge,
+        repository: REPO.repository,
+        what: top::What::Branch(Box::new([Box::from(&b"temper"[..]), Box::from(&b"51"[..])])),
+    };
+    world.event(top::Event::Hold { task: 51, resource: name, from: None });
+    world.event(top::Event::SettleEffects { task: 51, root: 51, ending: top::ReleaseEnding::Done });
+    world.event(top::Event::Release { task: 51, root: 51, ending: top::ReleaseEnding::Done, entry: 11 });
+    assert!(world.stored().contains_key(&top::Key::Entry(11)));
+    world.take_seen();
+    world.event(top::Event::SettleEffects { task: 51, root: 51, ending: top::ReleaseEnding::Cancelled });
+    world.event(top::Event::Release { task: 51, root: 51, ending: top::ReleaseEnding::Cancelled, entry: 12 });
+    assert!(
+        matches!(world.stored().get(&top::Key::Release(51)), Some(top::Stored::Release(row)) if row.ending == top::ReleaseEnding::Cancelled)
+    );
+    assert!(!world.seen().iter().any(|request| matches!(request, top::Request::ReleaseFailed { task: 51 })));
 }
 
 #[test]

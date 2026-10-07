@@ -743,7 +743,7 @@ enum Work {
     EscalationFailed { waiter: Token },
     ProposalLoaded { waiter: Token, rows: Box<[Record]> },
     ProposalFailed { waiter: Token },
-    DelegateValidated { to: Token, key: CallKey, batch: Box<[Delegate]> },
+    DelegateValidated { to: Token, key: CallKey, batch: Box<[Delegate]>, stubs: Box<[tasks::Stub]> },
     DelegateInputRefused { to: Token, key: CallKey },
 }
 
@@ -783,6 +783,7 @@ struct InputCheck {
     ids: Box<[u64]>,
     at: u32,
     project: u32,
+    stubs: List<tasks::Stub>,
 }
 
 #[derive(Debug)]
@@ -921,7 +922,7 @@ pub struct Domain {
     dependency_results: Map<u64, Box<[HistoricalResult]>>,
     made: Map<Token, (u64, bool)>,
     goal_routes: Map<Token, GoalRoute>,
-    delegating: Map<Token, CallKey>,
+    delegating: Map<Token, (CallKey, Box<[tasks::Stub]>)>,
     routing_calls: Map<Token, RoutedCall>,
     routing_people_proposals: Map<Token, PersonProposalRoute>,
     ending_positions: Map<u64, u64>,
@@ -2448,8 +2449,8 @@ fn route_into(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision) {
             Work::EscalationFailed { waiter } => escalation::failed(domain, waiter),
             Work::ProposalLoaded { waiter, rows } => proposals::historical_loaded(domain, waiter, rows),
             Work::ProposalFailed { waiter } => proposals::historical_failed(domain, waiter),
-            Work::DelegateValidated { to, key, batch } => {
-                delegate_call(domain, env, decision, ReplyTo::new(to), key, batch, true);
+            Work::DelegateValidated { to, key, batch, stubs } => {
+                delegate_call(domain, env, decision, ReplyTo::new(to), key, batch, true, stubs);
             }
             Work::DelegateInputRefused { to, key } => decide_call(
                 domain,
@@ -3842,6 +3843,7 @@ fn delegation_executor(domain: &Domain, project: u32, executor: tasks::Executor)
     clippy::too_many_lines,
     reason = "one delegated call checks authority, inputs and the atomic batch before routing"
 )]
+#[expect(clippy::too_many_arguments, reason = "validated historical input pointers travel with the delegated call")]
 fn delegate_call(
     domain: &mut Domain,
     env: &Env<Limits>,
@@ -3850,6 +3852,7 @@ fn delegate_call(
     key: CallKey,
     batch: Box<[Delegate]>,
     validated: bool,
+    stubs: Box<[tasks::Stub]>,
 ) {
     if !current_proof(domain, key.task, key.attempt) {
         decide_call(
@@ -3974,7 +3977,15 @@ fn delegate_call(
         if !ids.is_empty() {
             let first = *ids.get(0).expect("nonempty input IDs");
             let to = to.into_token();
-            let read = InputCheck { to, key, batch, ids: ids.into_boxed(), at: 0, project: context.project };
+            let read = InputCheck {
+                to,
+                key,
+                batch,
+                ids: ids.into_boxed(),
+                at: 0,
+                project: context.project,
+                stubs: List::with_capacity(u32::try_from(capacity).expect("bounded input IDs")),
+            };
             let waiter =
                 domain.result_reads.insert(Some(Read::InputCheck(read))).expect("preflighted input read slot").token();
             assert!(domain.pending_calls.insert(key, true).is_ok(), "reserved call record room");
@@ -4084,7 +4095,7 @@ fn delegate_call(
     if !validated {
         assert!(domain.pending_calls.insert(key, true).is_ok(), "reserved call record room");
     }
-    assert!(domain.delegating.insert(token, key) == Ok(None), "one pending delegated call");
+    assert!(domain.delegating.insert(token, (key, stubs)) == Ok(None), "one pending delegated call");
     domain.work.push(Work::Tasks(tasks::Event::Make {
         reply_to: ReplyTo::new(token),
         creator: tasks::Party::Task(key.task),
@@ -4618,7 +4629,7 @@ fn tasks_outputs(
                             entries: inbox::person_proposal_entries(domain, row),
                         }));
                     }
-                    tasks::Stored::Ledger(_) | tasks::Stored::History(_) => {}
+                    tasks::Stored::Ledger(_) | tasks::Stored::History(_) | tasks::Stored::Stub(_) => {}
                 }
                 let record = match record {
                     tasks::Stored::Ended(mut task) => {
@@ -4644,6 +4655,7 @@ fn tasks_outputs(
                     tasks::Stored::Live(_)
                     | tasks::Stored::Ledger(_)
                     | tasks::Stored::History(_)
+                    | tasks::Stored::Stub(_)
                     | tasks::Stored::PersonProposal(_) => record,
                 };
                 save(decision, &env.limits, Write::Save(Record::Tasks(record)));
@@ -4708,14 +4720,19 @@ fn tasks_outputs(
                     continue;
                 }
                 match domain.delegating.remove(&request) {
-                    Some(key) => decide_call(
-                        domain,
-                        &env.limits,
-                        decision,
-                        ReplyTo::new(request),
-                        key,
-                        CallAnswer::Delegated(tasks),
-                    ),
+                    Some((key, stubs)) => {
+                        for stub in stubs {
+                            domain.work.push(Work::Tasks(tasks::Event::RememberStub { stub }));
+                        }
+                        decide_call(
+                            domain,
+                            &env.limits,
+                            decision,
+                            ReplyTo::new(request),
+                            key,
+                            CallAnswer::Delegated(tasks),
+                        );
+                    }
                     None => {
                         let (expected, goal) = domain.made.remove(&request).expect("pending make route");
                         assert!(tasks.as_ref() == [expected], "one exact person task created");
@@ -4904,7 +4921,7 @@ fn tasks_outputs(
                         | RoutedCall::Accepting { key, .. } => (key, CallAnswer::ProposalRefused(problem)),
                     };
                     decide_call(domain, &env.limits, decision, ReplyTo::new(token), key, answer);
-                } else if let Some(key) = domain.delegating.remove(&token) {
+                } else if let Some((key, _)) = domain.delegating.remove(&token) {
                     decide_call(
                         domain,
                         &env.limits,
@@ -5087,6 +5104,15 @@ fn tasks_outputs(
                 Delivery::Fleet(fleet::Event::Cancel { run: Token::new(task), attempt: Token::new(attempt) }),
             ),
             tasks::Request::Close { task, ending } => {
+                let root = domain.tasks.root(task).unwrap_or(task);
+                let ending = match ending {
+                    tasks::Ending::Done(_) => forge::ReleaseEnding::Done,
+                    tasks::Ending::Failed { .. } => forge::ReleaseEnding::Failed,
+                    tasks::Ending::Cancelled { .. } => forge::ReleaseEnding::Cancelled,
+                };
+                domain.work.push(Work::Forge(forge::Event::SettleEffects { task, root, ending }));
+            }
+            tasks::Request::Release { task, ending } => {
                 let root = domain.tasks.root(task).unwrap_or(task);
                 let ending = match ending {
                     tasks::Ending::Done(_) => forge::ReleaseEnding::Done,
@@ -5661,7 +5687,9 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                             key,
                             CallAnswer::ProposalRefused(tasks::Problem { task: None, why }),
                         ),
-                        Tool::Delegate { batch } => delegate_call(domain, env, decision, reply_to, key, batch, false),
+                        Tool::Delegate { batch } => {
+                            delegate_call(domain, env, decision, reply_to, key, batch, false, Box::new([]));
+                        }
                         Tool::Propose { action, reason, as_holder } => {
                             proposals::propose_call(domain, env, decision, reply_to, key, action, reason, as_holder);
                         }
@@ -5919,7 +5947,7 @@ fn input_loaded(domain: &mut Domain, waiter: Token, rows: Box<[Record]>, next: O
     if row.number != wanted
         || row.project != project
         || row.requester != tasks::Party::Task(creator)
-        || !match row.phase {
+        || !match &row.phase {
             tasks::Phase::Ended(_) => true,
             tasks::Phase::Waiting | tasks::Phase::Active(_) | tasks::Phase::Closing(_) | tasks::Phase::Held { .. } => {
                 false
@@ -5932,6 +5960,17 @@ fn input_loaded(domain: &mut Domain, waiter: Token, rows: Box<[Record]>, next: O
     let Some(Some(Read::InputCheck(read))) = domain.result_reads.get_mut(Id::from_token(waiter)) else {
         unreachable!("input read survives validation")
     };
+    let phase = match &row.phase {
+        tasks::Phase::Ended(tasks::Ending::Done(_)) => tasks::Status::Done,
+        tasks::Phase::Ended(tasks::Ending::Failed { .. }) => tasks::Status::Failed,
+        tasks::Phase::Ended(tasks::Ending::Cancelled { .. }) => tasks::Status::Cancelled,
+        tasks::Phase::Waiting | tasks::Phase::Active(_) | tasks::Phase::Closing(_) | tasks::Phase::Held { .. } => {
+            unreachable!("validated historical input")
+        }
+    };
+    read.stubs
+        .push(tasks::Stub { task: wanted, phase, result: Token::new(wanted) })
+        .expect("bounded historical input count");
     read.at = read.at.checked_add(1).expect("bounded input index");
     if let Some(&next) = read.ids.get(usize::try_from(read.at).expect("bounded input index")) {
         request_load(domain, waiter, Range::TaskResult { task: next }, None, out);
@@ -5939,7 +5978,12 @@ fn input_loaded(domain: &mut Domain, waiter: Token, rows: Box<[Record]>, next: O
     }
     let Some(Read::InputCheck(read)) = take_read(domain, waiter) else { unreachable!("completed input read") };
     domain.result_reads.retire(Id::from_token(waiter));
-    domain.work.push(Work::DelegateValidated { to: read.to, key: read.key, batch: read.batch });
+    domain.work.push(Work::DelegateValidated {
+        to: read.to,
+        key: read.key,
+        batch: read.batch,
+        stubs: read.stubs.into_boxed(),
+    });
 }
 
 #[expect(clippy::too_many_lines, reason = "one store terminal dispatcher covers every live read owner")]
@@ -7062,7 +7106,14 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_add(Map::<Token, u64>::worst_case(limits.people.pending)?)?
         .checked_add(Map::<Token, u64>::worst_case(limits.people.pending)?)?
         .checked_add(Map::<Token, PersonTaskRoute>::worst_case(limits.people.pending)?)?
-        .checked_add(Map::<Token, CallKey>::worst_case(limits.fleet.calls)?)?
+        .checked_add(Map::<Token, (CallKey, Box<[tasks::Stub]>)>::worst_case(limits.fleet.calls)?)?
+        .checked_add(
+            u64::from(limits.fleet.calls)
+                .checked_add(u64::from(limits.loads.loads))?
+                .checked_mul(u64::from(limits.tasks.batch))?
+                .checked_mul(u64::from(limits.tasks.inputs))?
+                .checked_mul(u64::try_from(size_of::<tasks::Stub>()).ok()?)?,
+        )?
         .checked_add(Map::<Token, RoutedCall>::worst_case(limits.fleet.calls)?)?
         .checked_add(Map::<Token, PersonProposalRoute>::worst_case(limits.people.pending)?)?
         .checked_add(Map::<u64, u64>::worst_case(limits.tasks.tasks)?)?
@@ -8042,6 +8093,13 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
             }
             tasks::Stored::Ended(_) => {
                 unreachable!("historical child rows excluded from startup")
+            }
+            tasks::Stored::Stub(stub) => {
+                if stub.task > domain.counters.deployment().tasks {
+                    domain.startup = Startup::Failed;
+                    return;
+                }
+                domain.work.push(Work::Tasks(tasks::Event::Restore { record }));
             }
             tasks::Stored::History(_) => unreachable!("history rows excluded from startup"),
             tasks::Stored::Live(ref task) => {

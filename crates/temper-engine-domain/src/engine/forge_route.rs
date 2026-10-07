@@ -2180,12 +2180,27 @@ pub(super) fn outputs(
                         save(decision, &env.limits, Write::Save(Record::Call(crate::CallRecord { key, answer })));
                     }
                 }
+                let cancelling = match domain.tasks.task(task) {
+                    Some(row) => match &row.phase {
+                        tasks::Phase::Closing(closing)
+                        | tasks::Phase::Held { was: tasks::Was::Closing(closing), .. } => match &closing.ending {
+                            tasks::Ending::Cancelled { .. } => true,
+                            tasks::Ending::Done(_) | tasks::Ending::Failed { .. } => false,
+                        },
+                        tasks::Phase::Waiting
+                        | tasks::Phase::Active(_)
+                        | tasks::Phase::Held { .. }
+                        | tasks::Phase::Ended(_) => false,
+                    },
+                    None => false,
+                };
                 match outcome {
-                    forge_client::Outcome::Failed(_)
-                    | forge_client::Outcome::Raced { .. }
-                    | forge_client::Outcome::Withdrawn
+                    forge_client::Outcome::Failed(_) | forge_client::Outcome::Raced { .. }
                         if domain.forge.change(task).is_none() =>
                     {
+                        domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::Effects }));
+                    }
+                    forge_client::Outcome::Withdrawn if !cancelling && domain.forge.change(task).is_none() => {
                         domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::Effects }));
                     }
                     forge_client::Outcome::Failed(_)
@@ -2207,6 +2222,9 @@ pub(super) fn outputs(
             }
             forge::Request::Released { task } => {
                 domain.work.push(Work::Tasks(tasks::Event::Settled { task }));
+            }
+            forge::Request::EffectsSettled { task } => {
+                domain.work.push(Work::Tasks(tasks::Event::EffectsSettled { task }));
             }
             forge::Request::ReleaseFailed { task } => {
                 domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::Effects }));

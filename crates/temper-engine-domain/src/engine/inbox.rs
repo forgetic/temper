@@ -272,7 +272,7 @@ pub(super) fn page(
                         }
                     }
                 }
-                Record::Tasks(tasks::Stored::Ledger(_)) => {}
+                Record::Tasks(tasks::Stored::Ledger(_) | tasks::Stored::Stub(_)) => {}
                 Record::Tasks(tasks::Stored::Ended(_) | tasks::Stored::History(_))
                 | Record::People(_)
                 | Record::Forge { .. }
@@ -319,7 +319,12 @@ pub(super) fn page(
                         );
                     }
                 }
-                Record::Tasks(tasks::Stored::Live(_) | tasks::Stored::Ledger(_) | tasks::Stored::History(_))
+                Record::Tasks(
+                    tasks::Stored::Live(_)
+                    | tasks::Stored::Ledger(_)
+                    | tasks::Stored::History(_)
+                    | tasks::Stored::Stub(_),
+                )
                 | Record::People(_)
                 | Record::Forge { .. }
                 | Record::Deployment(_)
