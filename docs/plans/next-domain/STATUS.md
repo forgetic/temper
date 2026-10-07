@@ -359,6 +359,11 @@ simulation; no legacy fuzzy seed trim is needed for the suite caps.
 | 02.6 host typed answer | merged locally | smith 1679312 | fmt/clippy pass; 1,270 focused / 5.517 s; 15 fuzzy / 5.349 s. |
 | 02.6 domain-composed channel story | merged locally | smith fdd6f8b | fmt/clippy pass; 1,271 focused / 5.830 s; 15 fuzzy / 9.527 s; channel world 36 / 0.155 s focused and 1 / 0.205 s fuzzy serial. |
 | 02.6 restart and lost-reply stories | merged locally | smith 27f3416 | fmt/clippy pass; 1,273 focused / 7.424 s; 15 fuzzy / 7.100 s; channel world 38 / 0.160 s focused serial. |
+| 03.1 production tool schemas and decoding | merged locally | smith 781236e | fmt/clippy pass; 1,277 focused / 4.290 s; 15 fuzzy / 5.404 s. |
+| 03.2 bounded tool-result rendering | merged locally | smith 9e03764 | fmt/clippy pass; 1,281 focused / 6.461 s; 15 fuzzy / 6.804 s. |
+| 03.3 contract-derived finish and deliver | merged locally | smith 7cf6304 | fmt/clippy pass; 1,285 focused / 5.513 s; 15 fuzzy / 6.671 s. |
+| 03.4 endpoints and grant generations | merged locally | smith 0d15fc9 | fmt/clippy pass; 1,288 focused / 7.073 s; 15 fuzzy / 7.022 s. |
+| 03.5 LLM connection component | merged locally | smith 5055d65 | fmt/clippy pass; 1,300 focused / 4.126 s; 15 fuzzy / 5.118 s; protocol LLM world 57 / 2.271 s serial, 12 new stories / 0.060 s. |
 
 ## jig extraction
 
