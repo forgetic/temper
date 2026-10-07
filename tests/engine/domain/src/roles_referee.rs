@@ -2,10 +2,10 @@
 //! durable replies. The observer owns the outside roster/holder expectations;
 //! it never reads root or child state (domain/people.md, section 5.1).
 
+use jig_core_people as people;
 use skein_lib::Token;
 use std::collections::{BTreeMap, BTreeSet};
 use temper_engine_domain::{Key, Record, Write};
-use temper_engine_domain_people as people;
 use temper_engine_domain_tasks as tasks;
 
 /// One independently expected successful roster replacement, including the

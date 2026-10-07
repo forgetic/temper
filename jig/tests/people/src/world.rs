@@ -1,11 +1,11 @@
 use crate::referee::{People, Seen, Stimulus};
-use skein_lib::{Duration, Env, Queue, ReplyTo, Rng, Time, Token, Wall};
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use temper_engine_domain_people::{
+use jig_core_people::{
     self as people, Ask, Domain, Event, Holding, Identity, IdentityKey, InitialOwner, Key, Limits, Outcome, Refusal,
     Reply, Request, RequestKey, Role, Stored,
 };
-use temper_world::{Referee, Trace};
+use skein_lib::{Duration, Env, Queue, ReplyTo, Rng, Time, Token, Wall};
+use skein_world::domain::{Referee, Trace};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 pub const LIMITS: Limits = Limits {
     people: 8,

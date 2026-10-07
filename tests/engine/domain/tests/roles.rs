@@ -2,8 +2,8 @@
 //! races and specific independent-evidence negatives
 //! (domain/people.md, section 5.1).
 
+use jig_core_people as people;
 use temper_engine_domain::{Key, Record, Write, engine};
-use temper_engine_domain_people as people;
 use temper_engine_domain_tasks as tasks;
 use temper_engine_domain_world::roles::{Base, Settings, World, limits, reroute_replayed};
 

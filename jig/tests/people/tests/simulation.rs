@@ -1,7 +1,7 @@
+use jig_core_people::{Holding, IdentityKey, InitialOwner, Outcome, Refusal, Reply, Role};
+use jig_people_world::{Settings, World};
 use skein_lib::Duration;
-use temper_engine_domain_people::{Holding, IdentityKey, InitialOwner, Outcome, Refusal, Reply, Role};
-use temper_engine_people_world::{Settings, World};
-use temper_world::assert_replays;
+use skein_world::domain::assert_replays;
 
 fn member(world: &mut World) -> u64 {
     let call = world.signin(10, 1);
@@ -142,7 +142,7 @@ fn facts_change_nothing_and_a_seed_replays() {
     };
     assert_replays(3, 4, run);
     let mut none = World::new(Settings {
-        limits: temper_engine_domain_people::Limits { facts: 0, ..temper_engine_people_world::LIMITS },
+        limits: jig_core_people::Limits { facts: 0, ..jig_people_world::LIMITS },
         ..Settings::calm(3)
     });
     none.run();

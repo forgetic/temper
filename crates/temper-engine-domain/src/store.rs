@@ -183,7 +183,7 @@ pub enum Key {
     /// Store key for people identities, sign-ins, roles and keyed replies.
     People(
         /// People-issued key for its durable secret-free records.
-        temper_engine_domain_people::Key,
+        jig_core_people::Key,
     ),
     /// Stable root store address for a connector row.
     Forge(u64),
@@ -501,7 +501,7 @@ pub struct EscalationDecisionRecord {
     pub by: u64,
     /// Exact accepted bounded choice; rejection reason fits journal `result_bytes`/`transcript_bytes`
     /// and both child bounds before mutation.
-    pub decision: temper_engine_domain_people::EscalationDecision,
+    pub decision: jig_core_people::EscalationDecision,
 }
 
 /// Immutable decision evidence for a person-facing proposal race.
@@ -512,7 +512,7 @@ pub struct ProposalDecisionRecord {
     pub proposal: u64,
     pub kind: temper_engine_domain_tasks::ProposalKind,
     pub by: u64,
-    pub choice: temper_engine_domain_people::ProposalChoice,
+    pub choice: jig_core_people::ProposalChoice,
 }
 
 /// Owned typed row sent root to store in a commit or returned store to root in
@@ -554,7 +554,7 @@ pub enum Record {
     /// Child's durable identity/session/keyed reply; saved atomically by the root.
     People(
         /// Owned secret-free child row, deep bytes checked before retention.
-        temper_engine_domain_people::Stored,
+        jig_core_people::Stored,
     ),
     /// One connector row with its root allocated store identity.
     Forge { id: u64, row: Box<temper_engine_domain_forge::Stored> },
@@ -653,20 +653,20 @@ pub fn record_bytes(record: &Record) -> Option<u64> {
         Record::Tasks(row) => temper_engine_domain_tasks::stored_bytes(row),
         Record::Forge { row, .. } => temper_engine_domain_forge::stored_bytes(row),
         Record::People(row) => match row {
-            temper_engine_domain_people::Stored::Person { identity, .. } => u64::try_from(identity.key.subject.len())
+            jig_core_people::Stored::Person { identity, .. } => u64::try_from(identity.key.subject.len())
                 .ok()?
                 .checked_add(u64::try_from(identity.login.len()).ok()?)?
                 .checked_add(u64::try_from(identity.name.len()).ok()?),
-            temper_engine_domain_people::Stored::Roles { holdings, .. } => u64::try_from(holdings.len())
+            jig_core_people::Stored::Roles { holdings, .. } => u64::try_from(holdings.len())
                 .ok()?
-                .checked_mul(u64::try_from(size_of::<temper_engine_domain_people::Holding>()).ok()?),
-            temper_engine_domain_people::Stored::Answer { ask, .. } => match ask.as_ref() {
-                temper_engine_domain_people::Ask::EditNote { scope, change, .. } => {
+                .checked_mul(u64::try_from(size_of::<jig_core_people::Holding>()).ok()?),
+            jig_core_people::Stored::Answer { ask, .. } => match ask.as_ref() {
+                jig_core_people::Ask::EditNote { scope, change, .. } => {
                     let scope_bytes = match scope.as_ref() {
-                        temper_engine_domain_people::NoteScope::Deployment
-                        | temper_engine_domain_people::NoteScope::Project
-                        | temper_engine_domain_people::NoteScope::Goal { .. } => 0,
-                        temper_engine_domain_people::NoteScope::Resources { pattern, .. } => {
+                        jig_core_people::NoteScope::Deployment
+                        | jig_core_people::NoteScope::Project
+                        | jig_core_people::NoteScope::Goal { .. } => 0,
+                        jig_core_people::NoteScope::Resources { pattern, .. } => {
                             let mut bytes = u64::try_from(pattern.segments.len())
                                 .ok()?
                                 .checked_mul(u64::try_from(size_of::<Box<[u8]>>()).ok()?)?;
@@ -674,25 +674,24 @@ pub fn record_bytes(record: &Record) -> Option<u64> {
                                 bytes = bytes.checked_add(u64::try_from(segment.len()).ok()?)?;
                             }
                             let last = match &pattern.last {
-                                temper_engine_domain_people::Last::Exact(bytes)
-                                | temper_engine_domain_people::Last::Open(bytes) => bytes.len(),
+                                jig_core_people::Last::Exact(bytes) | jig_core_people::Last::Open(bytes) => bytes.len(),
                             };
                             bytes.checked_add(u64::try_from(last).ok()?)?
                         }
                     };
                     let change_bytes = match change.as_ref() {
-                        temper_engine_domain_people::NoteChange::Correct { description, body, references, .. } => {
+                        jig_core_people::NoteChange::Correct { description, body, references, .. } => {
                             u64::try_from(description.len())
                                 .ok()?
                                 .checked_add(u64::try_from(body.len()).ok()?)?
                                 .checked_add(u64::try_from(references.len()).ok()?.checked_mul(8)?)?
                         }
-                        temper_engine_domain_people::NoteChange::Delete { .. } => 0,
+                        jig_core_people::NoteChange::Delete { .. } => 0,
                     };
                     scope_bytes.checked_add(change_bytes)
                 }
-                temper_engine_domain_people::Ask::MakeService { name, .. } => u64::try_from(name.len()).ok(),
-                temper_engine_domain_people::Ask::Adopt { adoption, .. } => {
+                jig_core_people::Ask::MakeService { name, .. } => u64::try_from(name.len()).ok(),
+                jig_core_people::Ask::Adopt { adoption, .. } => {
                     let mut bytes = u64::try_from(adoption.resource.path.len().checked_add(adoption.options.len())?)
                         .ok()?
                         .checked_mul(u64::try_from(size_of::<Box<[u8]>>()).ok()?)?;
@@ -704,51 +703,40 @@ pub fn record_bytes(record: &Record) -> Option<u64> {
                     }
                     Some(bytes)
                 }
-                temper_engine_domain_people::Ask::SetGoal { spec, .. } => u64::try_from(spec.len()).ok(),
-                temper_engine_domain_people::Ask::SetRoles { holdings, .. } => u64::try_from(holdings.len())
+                jig_core_people::Ask::SetGoal { spec, .. } => u64::try_from(spec.len()).ok(),
+                jig_core_people::Ask::SetRoles { holdings, .. } => u64::try_from(holdings.len())
                     .ok()?
-                    .checked_mul(u64::try_from(size_of::<temper_engine_domain_people::Holding>()).ok()?),
-                temper_engine_domain_people::Ask::Prioritise { goals, .. } => {
+                    .checked_mul(u64::try_from(size_of::<jig_core_people::Holding>()).ok()?),
+                jig_core_people::Ask::Prioritise { goals, .. } => {
                     u64::try_from(goals.len()).ok()?.checked_mul(u64::try_from(size_of::<(u64, u32)>()).ok()?)
                 }
-                temper_engine_domain_people::Ask::Amend { amendment, .. } => {
-                    temper_engine_domain_people::amendment_bytes(amendment)
+                jig_core_people::Ask::Amend { amendment, .. } => jig_core_people::amendment_bytes(amendment),
+                jig_core_people::Ask::ChangePolicy { change, .. } => jig_core_people::policy_change_bytes(change),
+                jig_core_people::Ask::StartChat { words, .. }
+                | jig_core_people::Ask::Say { words, .. }
+                | jig_core_people::Ask::AnswerQuestion { words, .. } => u64::try_from(words.len()).ok(),
+                jig_core_people::Ask::Move { reason, .. } | jig_core_people::Ask::Cancel { reason, .. } => {
+                    u64::try_from(reason.len()).ok()
                 }
-                temper_engine_domain_people::Ask::ChangePolicy { change, .. } => {
-                    temper_engine_domain_people::policy_change_bytes(change)
-                }
-                temper_engine_domain_people::Ask::StartChat { words, .. }
-                | temper_engine_domain_people::Ask::Say { words, .. }
-                | temper_engine_domain_people::Ask::AnswerQuestion { words, .. } => u64::try_from(words.len()).ok(),
-                temper_engine_domain_people::Ask::Move { reason, .. }
-                | temper_engine_domain_people::Ask::Cancel { reason, .. } => u64::try_from(reason.len()).ok(),
-                temper_engine_domain_people::Ask::Watch { .. }
-                | temper_engine_domain_people::Ask::TakePerson { .. }
-                | temper_engine_domain_people::Ask::SetPool { .. }
-                | temper_engine_domain_people::Ask::HandBackPerson { .. }
-                | temper_engine_domain_people::Ask::Stop { .. }
-                | temper_engine_domain_people::Ask::Release { .. } => Some(0),
-                temper_engine_domain_people::Ask::AnswerPerson { result, .. } => match result {
-                    temper_engine_domain_people::PersonResult::Report { words }
-                    | temper_engine_domain_people::PersonResult::Verdict { words, .. } => {
-                        u64::try_from(words.len()).ok()
-                    }
-                    temper_engine_domain_people::PersonResult::Failure { reason } => u64::try_from(reason.len()).ok(),
+                jig_core_people::Ask::Watch { .. }
+                | jig_core_people::Ask::TakePerson { .. }
+                | jig_core_people::Ask::SetPool { .. }
+                | jig_core_people::Ask::HandBackPerson { .. }
+                | jig_core_people::Ask::Stop { .. }
+                | jig_core_people::Ask::Release { .. } => Some(0),
+                jig_core_people::Ask::AnswerPerson { result, .. } => match result {
+                    jig_core_people::PersonResult::Report { words }
+                    | jig_core_people::PersonResult::Verdict { words, .. } => u64::try_from(words.len()).ok(),
+                    jig_core_people::PersonResult::Failure { reason } => u64::try_from(reason.len()).ok(),
                 },
-                temper_engine_domain_people::Ask::DecideEscalation { decision, .. } => decision_bytes(decision),
-                temper_engine_domain_people::Ask::DecideProposal { decision, .. } => match decision {
-                    temper_engine_domain_people::ProposalDecision::Accept
-                    | temper_engine_domain_people::ProposalDecision::Pass => Some(0),
-                    temper_engine_domain_people::ProposalDecision::Reject { reason } => {
-                        u64::try_from(reason.len()).ok()
-                    }
+                jig_core_people::Ask::DecideEscalation { decision, .. } => decision_bytes(decision),
+                jig_core_people::Ask::DecideProposal { decision, .. } => match decision {
+                    jig_core_people::ProposalDecision::Accept | jig_core_people::ProposalDecision::Pass => Some(0),
+                    jig_core_people::ProposalDecision::Reject { reason } => u64::try_from(reason.len()).ok(),
                 },
             },
-            temper_engine_domain_people::Stored::SignIn { .. }
-            | temper_engine_domain_people::Stored::ReadPosition { .. } => Some(0),
-            temper_engine_domain_people::Stored::Policy { value, .. } => {
-                temper_engine_domain_people::policy_bytes(value)
-            }
+            jig_core_people::Stored::SignIn { .. } | jig_core_people::Stored::ReadPosition { .. } => Some(0),
+            jig_core_people::Stored::Policy { value, .. } => jig_core_people::policy_bytes(value),
         },
     }
 }
@@ -776,10 +764,9 @@ fn terminal_bytes(row: &TerminalRecord) -> Option<u64> {
     }
 }
 
-fn decision_bytes(decision: &temper_engine_domain_people::EscalationDecision) -> Option<u64> {
+fn decision_bytes(decision: &jig_core_people::EscalationDecision) -> Option<u64> {
     match decision {
-        temper_engine_domain_people::EscalationDecision::Release
-        | temper_engine_domain_people::EscalationDecision::Pass => Some(0),
-        temper_engine_domain_people::EscalationDecision::Reject { reason } => u64::try_from(reason.len()).ok(),
+        jig_core_people::EscalationDecision::Release | jig_core_people::EscalationDecision::Pass => Some(0),
+        jig_core_people::EscalationDecision::Reject { reason } => u64::try_from(reason.len()).ok(),
     }
 }

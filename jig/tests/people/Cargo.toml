@@ -1,5 +1,5 @@
 [package]
-name = "temper-engine-people-world"
+name = "jig-people-world"
 description = "People with a scripted parent and durable store"
 version.workspace = true
 edition.workspace = true
@@ -8,8 +8,8 @@ publish.workspace = true
 
 [dependencies]
 skein-lib.workspace = true
-temper-world.workspace = true
-temper-engine-domain-people.workspace = true
+skein-world.workspace = true
+jig-core-people.workspace = true
 
 [lints.rust]
 unsafe_code = "forbid"

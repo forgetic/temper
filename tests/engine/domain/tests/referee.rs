@@ -1,14 +1,14 @@
 //! Faults injected into independent boundary referees for each promise in
 //! domain/core.md, section 10. The same referees observe the passing worlds.
 
+use jig_core_people::Role;
+use jig_people_world::referee::{People, Seen as PersonSeen};
 use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
 use temper_engine_domain::{Key, Record};
-use temper_engine_domain_people::Role;
 use temper_engine_domain_tasks::Party;
 use temper_engine_domain_world::walking::{Settings, World};
 use temper_engine_domain_world::walking_referee::REPORT;
 use temper_engine_forge_world::fake_config;
-use temper_engine_people_world::referee::{People, Seen as PersonSeen};
 use temper_engine_tasks_world::referee::{Seen as TaskSeen, Tasks};
 use temper_fake_forge_domain::{self as fake, Observation, api as raw};
 use temper_world::{Referee, Verdict};

@@ -10,7 +10,7 @@ publish.workspace = true
 skein-lib.workspace = true
 temper-world.workspace = true
 temper-engine-domain.workspace = true
-temper-engine-domain-people.workspace = true
+jig-core-people.workspace = true
 temper-engine-domain-tasks.workspace = true
 jig-core-fleet.workspace = true
 jig-core-brief.workspace = true
@@ -29,7 +29,7 @@ smith-domain-tools.workspace = true
 
 [dev-dependencies]
 temper-engine-tasks-world = { path = "../tasks" }
-temper-engine-people-world = { path = "../people" }
+jig-people-world = { path = "../../../jig/tests/people" }
 
 [lints.rust]
 unsafe_code = "forbid"

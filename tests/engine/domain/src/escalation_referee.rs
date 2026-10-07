@@ -3,11 +3,11 @@
 //! private state.
 
 use jig_core_brief as brief;
+use jig_core_people as people;
 use skein_lib::Token;
 use std::collections::{BTreeMap, BTreeSet};
 use temper_engine_domain::engine::{BriefBody as Body, BriefKind as Kind};
 use temper_engine_domain::{EscalationDecisionRecord, Key, Record, TerminalRecord, Write, engine::Assignment};
-use temper_engine_domain_people as people;
 use temper_engine_domain_tasks as tasks;
 
 /// Independently supplied opening words.

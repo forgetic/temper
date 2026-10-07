@@ -1,5 +1,5 @@
 [package]
-name = "temper-engine-domain-people"
+name = "jig-core-people"
 description = "People, sign-ins, project roles and keyed requests"
 version.workspace = true
 edition.workspace = true

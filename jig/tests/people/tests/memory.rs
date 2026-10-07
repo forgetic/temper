@@ -1,9 +1,9 @@
-use skein_lib::{Env, Queue, ReplyTo, Time, Token, Wall};
-use temper_engine_domain_people::{
+use jig_core_people::{
     Ask, Domain, Event, Holding, Identity, IdentityKey, Limits, Outcome, Request, Role, fire, max_out, step, worst_case,
 };
-use temper_engine_people_world::LIMITS;
-use temper_world::heap::{self, Meter};
+use jig_people_world::LIMITS;
+use skein_lib::{Env, Queue, ReplyTo, Time, Token, Wall};
+use skein_world::domain::heap::{self, Meter};
 
 #[global_allocator]
 static HEAP: heap::Counting = heap::Counting;
@@ -51,7 +51,7 @@ impl Measured {
                 routed = Some(request);
             }
         }
-        self.meter.check(measured, self.bound, self.env.limits);
+        self.meter.check(measured, self.bound, &self.env.limits);
         self.domain.reclaim();
         routed
     }
@@ -99,7 +99,7 @@ fn full_people_roles_signins_pending_waiters_answers_and_expiry_fit() {
                 person: number,
                 sign_in: number,
                 identity,
-                kind: temper_engine_domain_people::Kind::Person,
+                kind: jig_core_people::Kind::Person,
             });
         }
         for project in 1..=limits.projects {

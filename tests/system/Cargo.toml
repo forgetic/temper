@@ -15,7 +15,7 @@ smith-domain-run.workspace = true
 smith-agent-world.workspace = true
 temper-engine-domain.workspace = true
 temper-engine-domain-world = { path = "../engine/domain" }
-temper-engine-domain-people.workspace = true
+jig-core-people.workspace = true
 jig-core-authority.workspace = true
 jig-core-brief.workspace = true
 jig-core-fleet.workspace = true

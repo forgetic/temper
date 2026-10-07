@@ -1,5 +1,5 @@
+use jig_people_world::{ENDINGS, Settings, World};
 use std::collections::BTreeSet;
-use temper_engine_people_world::{ENDINGS, Settings, World};
 
 #[test]
 fn random_people_settle_and_reach_every_ending() {

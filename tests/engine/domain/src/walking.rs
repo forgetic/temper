@@ -7,10 +7,10 @@ use crate::walking_referee::{FINAL_SPEND, QUESTION, REPORT, TURNS, WalkingRefere
 use jig_core_accounts as accounts;
 use jig_core_authority as authority;
 use jig_core_fleet as fleet;
+use jig_core_people as people;
 use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
 use std::collections::{BTreeMap, VecDeque};
 use temper_engine_domain::{Delivery, JournalLimits, Record, engine, loads};
-use temper_engine_domain_people as people;
 use temper_engine_domain_tasks as tasks;
 
 /// Tiny counted child limits plus the root's declared synchronous-route room.

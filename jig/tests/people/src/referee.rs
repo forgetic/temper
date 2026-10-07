@@ -1,8 +1,8 @@
 //! Expectations over client replies and durable task creations, never state.
+use jig_core_people::{RequestKey, Role};
 use skein_lib::Duration;
+use skein_world::domain::{Expectations, Judge};
 use std::collections::BTreeSet;
-use temper_engine_domain_people::{RequestKey, Role};
-use temper_world::{Expectations, Judge};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Seen {

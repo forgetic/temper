@@ -1,7 +1,7 @@
+use jig_core_people::{RequestKey, Role};
+use jig_people_world::referee::{People, Seen};
 use skein_lib::Time;
-use temper_engine_domain_people::{RequestKey, Role};
-use temper_engine_people_world::referee::{People, Seen};
-use temper_world::{Referee, Verdict};
+use skein_world::domain::{Referee, Verdict};
 
 fn fails(observations: &[Seen]) {
     let mut referee = Referee::new(People::default());

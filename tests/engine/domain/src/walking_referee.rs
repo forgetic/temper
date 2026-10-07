@@ -3,10 +3,10 @@
 //! (domain/engine.md, section 15).
 
 use jig_core_brief as brief;
+use jig_core_people as people;
 use std::collections::{BTreeMap, BTreeSet};
 use temper_engine_domain::engine::{BriefBody as Body, BriefKind as Kind};
 use temper_engine_domain::{Key, Record, Write, engine::Assignment};
-use temper_engine_domain_people as people;
 use temper_engine_domain_tasks as tasks;
 
 /// The person's question, supplied independently of the root's brief route.

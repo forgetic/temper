@@ -8,7 +8,7 @@ publish.workspace = true
 
 [dependencies]
 skein-lib.workspace = true
-temper-engine-domain-people.workspace = true
+jig-core-people.workspace = true
 temper-engine-domain-tasks.workspace = true
 jig-core-fleet.workspace = true
 jig-core-brief.workspace = true

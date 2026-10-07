@@ -2,12 +2,12 @@
 #![expect(clippy::wildcard_enum_match_arm, reason = "the fixture selects only the forge rows relevant to each story")]
 use jig_core_authority as authority;
 use jig_core_fleet as fleet;
+use jig_core_people as people;
 use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
 use std::collections::{BTreeMap, VecDeque};
 use temper_engine_domain::{Delivery, Key, Record, engine};
 use temper_engine_domain_forge as forge_top;
 use temper_engine_domain_forge_client as client;
-use temper_engine_domain_people as people;
 use temper_engine_domain_tasks as tasks;
 use temper_engine_domain_world::{commits::Store, walking};
 use temper_engine_forge_world::{self as forge_world, translate};
@@ -2103,12 +2103,12 @@ fn a_repository_adopted_seeds_its_collaborators_into_roles() {
     let mut people = BTreeMap::new();
     for row in world.store.rows.values() {
         match row {
-            Record::People(temper_engine_domain_people::Stored::Person { number, identity }) => {
+            Record::People(jig_core_people::Stored::Person { number, identity }) => {
                 let subject: [u8; 8] =
                     identity.key.subject.as_ref().try_into().expect("forge subject is a user number");
                 people.insert(u64::from_be_bytes(subject), *number);
             }
-            Record::People(temper_engine_domain_people::Stored::Roles { project: 1, holdings }) => {
+            Record::People(jig_core_people::Stored::Roles { project: 1, holdings }) => {
                 roles = Some(holdings.clone());
             }
             _ => {}

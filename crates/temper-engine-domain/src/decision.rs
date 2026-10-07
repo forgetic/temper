@@ -13,10 +13,10 @@
 use crate::{Deployment, Family, Key, Record, Write};
 use alloc::boxed::Box;
 use core::mem::size_of;
+use jig_core_people as people;
 use skein_lib::{
     Decision as SkeinDecision, Journal as SkeinJournal, JournalLimits, JournalRoom, List, Queue, ReplyTo, Token, Wall,
 };
-use temper_engine_domain_people as people;
 
 /// Startup capacities supplied by the root, immutable across journal calls
 /// (domain/engine.md, 5.1–5.2). Positive commit/write/delivery room and a held
@@ -376,9 +376,10 @@ impl Decision {
                     && row.by != 0
                     && row.requester != 0
                     && match &row.decision {
-                        temper_engine_domain_people::EscalationDecision::Release
-                        | temper_engine_domain_people::EscalationDecision::Pass => true,
-                        temper_engine_domain_people::EscalationDecision::Reject { reason } => {
+                        jig_core_people::EscalationDecision::Release | jig_core_people::EscalationDecision::Pass => {
+                            true
+                        }
+                        jig_core_people::EscalationDecision::Reject { reason } => {
                             reason.len()
                                 <= usize::try_from(limits.result_bytes.min(limits.transcript_bytes))
                                     .expect("u32 fits usize")
