@@ -4,53 +4,26 @@
 resolver = "3"
 members = [
     "crates/temper-web-domain",
-    "crates/temper-legacy-agent-domain",
-    "crates/temper-legacy-agent-domain-run",
-    "crates/temper-legacy-agent-domain-session",
-    "crates/temper-legacy-agent-domain-tools",
-    "crates/temper-legacy-agent-protocol",
-    "crates/temper-channel",
     "crates/temper-engine-domain",
     "crates/temper-engine-smith",
-    "crates/temper-legacy-engine-domain",
     "crates/temper-engine-domain-accounts",
     "crates/temper-engine-domain-authority",
     "crates/temper-engine-domain-brief",
     "crates/temper-engine-domain-fleet",
-    "crates/temper-legacy-engine-domain-forge",
     "crates/temper-engine-domain-forge-client",
     "crates/temper-engine-domain-forge-change",
     "crates/temper-engine-domain-forge-issues",
     "crates/temper-engine-domain-forge",
-    "crates/temper-engine-domain-notes",
     "crates/temper-engine-domain-people",
     "crates/temper-engine-domain-tasks",
-    "crates/temper-legacy-engine-domain-plan",
-    "crates/temper-legacy-engine-domain-rules",
     "crates/temper-engine-domain-views",
-    "crates/temper-legacy-engine-domain-work",
-    "crates/temper-engine-protocol",
-    "crates/temper-forge-forgejo",
-    "crates/temper-legacy-llm-anthropic",
-    "crates/temper-legacy-llm-openai",
-    "crates/temper-oauth",
     "crates/temper-worker-domain",
     "crates/temper-worker-domain-agent",
     "crates/temper-worker-domain-checkout",
     "crates/temper-worker-domain-host",
-    "crates/temper-worker-protocol",
     "crates/temper-web-view",
     "testing/temper-fake-forge-domain",
-    "testing/temper-fake-forge-protocol",
-    "testing/temper-legacy-fake-llm-domain",
     "testing/temper-fake-person",
-    "testing/temper-legacy-fake-llm-protocol",
-    "tests/agent/domain",
-    "tests/legacy/agent/run",
-    "tests/legacy/agent/session",
-    "tests/legacy/agent/tools",
-    "tests/legacy/agent/protocol",
-    "tests/channel",
     "tests/fake-checkout",
     "tests/engine/accounts",
     "tests/engine/brief",
@@ -59,24 +32,14 @@ members = [
     "tests/engine/fleet",
     "tests/engine/forge/client",
     "tests/engine/forge",
-    "tests/legacy/engine/forge",
-    "tests/legacy/engine/domain",
-    "tests/engine/notes",
     "tests/engine/people",
     "tests/engine/tasks",
-    "tests/legacy/engine/plan",
-    "tests/engine/protocol",
     "tests/engine/views",
-    "tests/legacy/engine/work",
     "tests/fake-forge",
-    "tests/fake-forge/protocol",
-    "tests/forge/forgejo",
-    "tests/legacy/fake-llm",
     "tests/worker/agent",
     "tests/worker/checkout",
     "tests/worker/host",
     "tests/worker/domain",
-    "tests/worker/protocol",
     "tests/web/domain",
     "tests/world",
 ]
@@ -90,10 +53,7 @@ publish = false
 [workspace.dependencies]
 temper-web-domain = { path = "crates/temper-web-domain" }
 skein-lib = { git = "https://git.ekanayaka.io/ai/skein.git" }
-skein-io = { git = "https://git.ekanayaka.io/ai/skein.git" }
-skein-http = { git = "https://git.ekanayaka.io/ai/skein.git" }
 skein-json = { git = "https://git.ekanayaka.io/ai/skein.git" }
-skein-sim = { git = "https://git.ekanayaka.io/ai/skein.git" }
 skein-world = { git = "https://git.ekanayaka.io/ai/skein.git" }
 skein-fake-checkout = { git = "https://git.ekanayaka.io/ai/skein.git" }
 skein-fake-llm-domain = { git = "https://git.ekanayaka.io/ai/skein.git" }
@@ -102,78 +62,28 @@ smith-domain = { git = "https://git.ekanayaka.io/ai/smith.git" }
 smith-domain-run = { git = "https://git.ekanayaka.io/ai/smith.git" }
 smith-domain-session = { git = "https://git.ekanayaka.io/ai/smith.git" }
 smith-domain-tools = { git = "https://git.ekanayaka.io/ai/smith.git" }
-subtle = { version = "=2.6.1", default-features = false, features = ["core_hint_black_box"] }
 sha2 = { version = "=0.10.9", default-features = false }
-hmac = { version = "=0.12.1", default-features = false }
-base64 = { version = "=0.22.1", default-features = false, features = ["alloc"] }
-temper-legacy-agent-protocol = { path = "crates/temper-legacy-agent-protocol" }
-temper-legacy-agent-protocol-world = { path = "tests/legacy/agent/protocol" }
-temper-worker-protocol = { path = "crates/temper-worker-protocol" }
 temper-web-view = { path = "crates/temper-web-view" }
 temper-fake-person = { path = "testing/temper-fake-person" }
-temper-web-domain-world = { path = "tests/web/domain" }
-temper-worker-protocol-world = { path = "tests/worker/protocol" }
-temper-channel = { path = "crates/temper-channel" }
-temper-legacy-llm-anthropic = { path = "crates/temper-legacy-llm-anthropic" }
-temper-legacy-llm-openai = { path = "crates/temper-legacy-llm-openai" }
-temper-oauth = { path = "crates/temper-oauth" }
-temper-forge-forgejo = { path = "crates/temper-forge-forgejo" }
-temper-forge-forgejo-world = { path = "tests/forge/forgejo" }
 temper-engine-domain-accounts = { path = "crates/temper-engine-domain-accounts" }
 temper-engine-domain = { path = "crates/temper-engine-domain" }
 temper-engine-smith = { path = "crates/temper-engine-smith" }
-temper-engine-domain-world = { path = "tests/engine/domain" }
 temper-engine-domain-authority = { path = "crates/temper-engine-domain-authority" }
 temper-engine-domain-people = { path = "crates/temper-engine-domain-people" }
 temper-engine-domain-tasks = { path = "crates/temper-engine-domain-tasks" }
-temper-engine-protocol = { path = "crates/temper-engine-protocol" }
-temper-engine-protocol-world = { path = "tests/engine/protocol" }
-temper-channel-world = { path = "tests/channel" }
-temper-engine-accounts-world = { path = "tests/engine/accounts" }
-temper-legacy-agent-domain = { path = "crates/temper-legacy-agent-domain" }
-temper-legacy-agent-domain-run = { path = "crates/temper-legacy-agent-domain-run" }
-temper-legacy-agent-domain-session = { path = "crates/temper-legacy-agent-domain-session" }
-temper-legacy-agent-domain-tools = { path = "crates/temper-legacy-agent-domain-tools" }
-temper-legacy-engine-domain = { path = "crates/temper-legacy-engine-domain" }
 temper-engine-domain-brief = { path = "crates/temper-engine-domain-brief" }
 temper-engine-domain-fleet = { path = "crates/temper-engine-domain-fleet" }
-temper-legacy-engine-domain-forge = { path = "crates/temper-legacy-engine-domain-forge" }
 temper-engine-domain-forge-client = { path = "crates/temper-engine-domain-forge-client" }
 temper-engine-domain-forge-change = { path = "crates/temper-engine-domain-forge-change" }
 temper-engine-domain-forge-issues = { path = "crates/temper-engine-domain-forge-issues" }
 temper-engine-domain-forge = { path = "crates/temper-engine-domain-forge" }
-temper-engine-forge-client-world = { path = "tests/engine/forge/client" }
-temper-engine-domain-notes = { path = "crates/temper-engine-domain-notes" }
-temper-legacy-engine-domain-plan = { path = "crates/temper-legacy-engine-domain-plan" }
-temper-legacy-engine-domain-rules = { path = "crates/temper-legacy-engine-domain-rules" }
 temper-engine-domain-views = { path = "crates/temper-engine-domain-views" }
-temper-legacy-engine-domain-work = { path = "crates/temper-legacy-engine-domain-work" }
 temper-worker-domain = { path = "crates/temper-worker-domain" }
 temper-worker-domain-agent = { path = "crates/temper-worker-domain-agent" }
 temper-worker-domain-checkout = { path = "crates/temper-worker-domain-checkout" }
 temper-worker-domain-host = { path = "crates/temper-worker-domain-host" }
 temper-fake-forge-domain = { path = "testing/temper-fake-forge-domain" }
-temper-fake-forge-protocol = { path = "testing/temper-fake-forge-protocol" }
-temper-fake-forge-protocol-world = { path = "tests/fake-forge/protocol" }
-temper-legacy-fake-llm-domain = { path = "testing/temper-legacy-fake-llm-domain" }
-temper-legacy-fake-llm-protocol = { path = "testing/temper-legacy-fake-llm-protocol" }
 temper-fake-checkout = { path = "tests/fake-checkout" }
-temper-legacy-engine-forge-world = { path = "tests/legacy/engine/forge" }
-temper-legacy-engine-domain-world = { path = "tests/legacy/engine/domain" }
-temper-legacy-agent-tools-world = { path = "tests/legacy/agent/tools" }
-temper-worker-agent-world = { path = "tests/worker/agent" }
-temper-worker-checkout-world = { path = "tests/worker/checkout" }
-temper-worker-domain-world = { path = "tests/worker/domain" }
-temper-agent-domain-world = { path = "tests/agent/domain" }
-temper-legacy-agent-run-world = { path = "tests/legacy/agent/run" }
-temper-legacy-agent-session-world = { path = "tests/legacy/agent/session" }
-temper-engine-brief-world = { path = "tests/engine/brief" }
-temper-engine-fleet-world = { path = "tests/engine/fleet" }
-temper-engine-notes-world = { path = "tests/engine/notes" }
-temper-legacy-engine-plan-world = { path = "tests/legacy/engine/plan" }
-temper-engine-views-world = { path = "tests/engine/views" }
-temper-legacy-engine-work-world = { path = "tests/legacy/engine/work" }
-temper-worker-host-world = { path = "tests/worker/host" }
 temper-world = { path = "tests/world" }
 
 # Panics are fail-stop and overflow traps, in every profile. (The test harness

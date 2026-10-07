@@ -1,6 +1,6 @@
 [package]
 name = "temper-worker-domain-world"
-description = "The whole worker's world: a simulation of the worker against the real engine, a lossy network, scripted agents and people, and the fake forge"
+description = "The worker root version-two runtime world at a typed domain boundary"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,17 +8,7 @@ publish.workspace = true
 
 [dependencies]
 skein-lib.workspace = true
-temper-channel.workspace = true
-temper-worker-protocol.workspace = true
 temper-worker-domain.workspace = true
-temper-legacy-engine-domain.workspace = true
-temper-engine-protocol.workspace = true
-temper-legacy-engine-domain-world.workspace = true
-temper-legacy-engine-forge-world.workspace = true
-temper-fake-forge-domain.workspace = true
-temper-fake-checkout.workspace = true
-temper-worker-agent-world.workspace = true
-temper-worker-checkout-world.workspace = true
 temper-world.workspace = true
 
 # Ordinary Rust (programming-model.md, 10.2), so not the step crates' lints.

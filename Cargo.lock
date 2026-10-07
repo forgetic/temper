@@ -3,12 +3,6 @@
 version = 4
 
 [[package]]
-name = "base64"
-version = "0.22.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
-
-[[package]]
 name = "bitflags"
 version = "2.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -56,7 +50,6 @@ checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
 dependencies = [
  "block-buffer",
  "crypto-common",
- "subtle",
 ]
 
 [[package]]
@@ -67,15 +60,6 @@ checksum = "85649ca51fd72272d7821adaf274ad91c288277713d9c18820d8499a7ff69e9a"
 dependencies = [
  "typenum",
  "version_check",
-]
-
-[[package]]
-name = "hmac"
-version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
-dependencies = [
- "digest",
 ]
 
 [[package]]
@@ -123,14 +107,6 @@ dependencies = [
 name = "skein-heap"
 version = "0.0.0"
 source = "git+https://git.ekanayaka.io/ai/skein.git#4e78d26fc247bf5e7c18300ff8ffc4bd3b06819c"
-
-[[package]]
-name = "skein-http"
-version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/skein.git#4e78d26fc247bf5e7c18300ff8ffc4bd3b06819c"
-dependencies = [
- "skein-lib",
-]
 
 [[package]]
 name = "skein-io"
@@ -282,51 +258,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "subtle"
-version = "2.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
-
-[[package]]
-name = "temper-agent-domain-world"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-channel",
- "temper-engine-protocol",
- "temper-fake-checkout",
- "temper-fake-forge-domain",
- "temper-legacy-agent-domain",
- "temper-legacy-agent-protocol",
- "temper-legacy-agent-tools-world",
- "temper-legacy-engine-domain",
- "temper-legacy-engine-domain-world",
- "temper-legacy-engine-forge-world",
- "temper-legacy-fake-llm-domain",
- "temper-legacy-llm-openai",
- "temper-worker-checkout-world",
- "temper-worker-domain",
- "temper-worker-domain-agent",
- "temper-world",
-]
-
-[[package]]
-name = "temper-channel"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
-]
-
-[[package]]
-name = "temper-channel-world"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-channel",
- "temper-world",
-]
-
-[[package]]
 name = "temper-engine-accounts-world"
 version = "0.0.0"
 dependencies = [
@@ -424,13 +355,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "temper-engine-domain-notes"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
-]
-
-[[package]]
 name = "temper-engine-domain-people"
 version = "0.0.0"
 dependencies = [
@@ -511,50 +435,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "temper-engine-notes-world"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-engine-domain-notes",
- "temper-world",
-]
-
-[[package]]
 name = "temper-engine-people-world"
 version = "0.0.0"
 dependencies = [
  "skein-lib",
  "temper-engine-domain-people",
- "temper-world",
-]
-
-[[package]]
-name = "temper-engine-protocol"
-version = "0.0.0"
-dependencies = [
- "skein-http",
- "skein-io",
- "skein-json",
- "skein-lib",
- "subtle",
- "temper-channel",
- "temper-legacy-engine-domain",
- "temper-oauth",
-]
-
-[[package]]
-name = "temper-engine-protocol-world"
-version = "0.0.0"
-dependencies = [
- "skein-http",
- "skein-io",
- "skein-lib",
- "skein-sim",
- "temper-channel",
- "temper-engine-protocol",
- "temper-legacy-engine-domain",
- "temper-legacy-fake-llm-protocol",
- "temper-oauth",
  "temper-world",
 ]
 
@@ -609,33 +494,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "temper-fake-forge-protocol"
-version = "0.0.0"
-dependencies = [
- "skein-http",
- "skein-io",
- "skein-json",
- "skein-lib",
- "temper-fake-forge-domain",
- "temper-forge-forgejo",
-]
-
-[[package]]
-name = "temper-fake-forge-protocol-world"
-version = "0.0.0"
-dependencies = [
- "skein-http",
- "skein-io",
- "skein-json",
- "skein-lib",
- "skein-sim",
- "temper-fake-forge-domain",
- "temper-fake-forge-protocol",
- "temper-forge-forgejo",
- "temper-world",
-]
-
-[[package]]
 name = "temper-fake-forge-tests"
 version = "0.0.0"
 dependencies = [
@@ -651,267 +509,6 @@ dependencies = [
  "skein-lib",
  "temper-web-domain",
  "temper-web-view",
-]
-
-[[package]]
-name = "temper-forge-forgejo"
-version = "0.0.0"
-dependencies = [
- "base64",
- "hmac",
- "sha2",
- "skein-json",
- "skein-lib",
- "subtle",
-]
-
-[[package]]
-name = "temper-forge-forgejo-world"
-version = "0.0.0"
-dependencies = [
- "skein-json",
- "skein-lib",
- "temper-forge-forgejo",
- "temper-world",
-]
-
-[[package]]
-name = "temper-legacy-agent-domain"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-legacy-agent-domain-run",
- "temper-legacy-agent-domain-session",
- "temper-legacy-agent-domain-tools",
-]
-
-[[package]]
-name = "temper-legacy-agent-domain-run"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
-]
-
-[[package]]
-name = "temper-legacy-agent-domain-session"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-legacy-agent-domain-tools",
-]
-
-[[package]]
-name = "temper-legacy-agent-domain-tools"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
-]
-
-[[package]]
-name = "temper-legacy-agent-protocol"
-version = "0.0.0"
-dependencies = [
- "skein-http",
- "skein-io",
- "skein-json",
- "skein-lib",
- "temper-channel",
- "temper-legacy-agent-domain",
- "temper-legacy-agent-domain-run",
- "temper-legacy-agent-domain-session",
- "temper-legacy-agent-domain-tools",
- "temper-legacy-llm-anthropic",
- "temper-legacy-llm-openai",
-]
-
-[[package]]
-name = "temper-legacy-agent-protocol-world"
-version = "0.0.0"
-dependencies = [
- "skein-http",
- "skein-io",
- "skein-lib",
- "skein-sim",
- "temper-channel",
- "temper-legacy-agent-domain",
- "temper-legacy-agent-protocol",
- "temper-legacy-fake-llm-domain",
- "temper-legacy-fake-llm-protocol",
- "temper-legacy-llm-anthropic",
- "temper-legacy-llm-openai",
- "temper-oauth",
- "temper-world",
-]
-
-[[package]]
-name = "temper-legacy-agent-run-world"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-legacy-agent-domain-run",
- "temper-world",
-]
-
-[[package]]
-name = "temper-legacy-agent-session-world"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-fake-checkout",
- "temper-legacy-agent-domain-session",
- "temper-legacy-agent-domain-tools",
- "temper-legacy-agent-tools-world",
- "temper-legacy-fake-llm-domain",
- "temper-world",
-]
-
-[[package]]
-name = "temper-legacy-agent-tools-world"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-fake-checkout",
- "temper-legacy-agent-domain-tools",
- "temper-world",
-]
-
-[[package]]
-name = "temper-legacy-engine-domain"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-engine-domain-accounts",
- "temper-engine-domain-brief",
- "temper-engine-domain-fleet",
- "temper-engine-domain-notes",
- "temper-engine-domain-views",
- "temper-legacy-engine-domain-forge",
- "temper-legacy-engine-domain-plan",
- "temper-legacy-engine-domain-rules",
- "temper-legacy-engine-domain-work",
-]
-
-[[package]]
-name = "temper-legacy-engine-domain-forge"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
-]
-
-[[package]]
-name = "temper-legacy-engine-domain-plan"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
-]
-
-[[package]]
-name = "temper-legacy-engine-domain-rules"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
-]
-
-[[package]]
-name = "temper-legacy-engine-domain-work"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
-]
-
-[[package]]
-name = "temper-legacy-engine-domain-world"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-channel",
- "temper-engine-protocol",
- "temper-fake-forge-domain",
- "temper-legacy-engine-domain",
- "temper-legacy-engine-forge-world",
- "temper-world",
-]
-
-[[package]]
-name = "temper-legacy-engine-forge-world"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-fake-forge-domain",
- "temper-legacy-engine-domain-forge",
- "temper-world",
-]
-
-[[package]]
-name = "temper-legacy-engine-plan-world"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-legacy-engine-domain-plan",
- "temper-world",
-]
-
-[[package]]
-name = "temper-legacy-engine-work-world"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-legacy-engine-domain-work",
- "temper-world",
-]
-
-[[package]]
-name = "temper-legacy-fake-llm-domain"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
-]
-
-[[package]]
-name = "temper-legacy-fake-llm-protocol"
-version = "0.0.0"
-dependencies = [
- "skein-http",
- "skein-io",
- "skein-json",
- "skein-lib",
- "temper-legacy-fake-llm-domain",
- "temper-legacy-llm-anthropic",
- "temper-legacy-llm-openai",
- "temper-oauth",
-]
-
-[[package]]
-name = "temper-legacy-fake-llm-tests"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-legacy-fake-llm-domain",
- "temper-world",
-]
-
-[[package]]
-name = "temper-legacy-llm-anthropic"
-version = "0.0.0"
-dependencies = [
- "skein-json",
- "skein-lib",
-]
-
-[[package]]
-name = "temper-legacy-llm-openai"
-version = "0.0.0"
-dependencies = [
- "skein-json",
- "skein-lib",
-]
-
-[[package]]
-name = "temper-oauth"
-version = "0.0.0"
-dependencies = [
- "skein-json",
- "skein-lib",
 ]
 
 [[package]]
@@ -1021,17 +618,7 @@ name = "temper-worker-domain-world"
 version = "0.0.0"
 dependencies = [
  "skein-lib",
- "temper-channel",
- "temper-engine-protocol",
- "temper-fake-checkout",
- "temper-fake-forge-domain",
- "temper-legacy-engine-domain",
- "temper-legacy-engine-domain-world",
- "temper-legacy-engine-forge-world",
- "temper-worker-agent-world",
- "temper-worker-checkout-world",
  "temper-worker-domain",
- "temper-worker-protocol",
  "temper-world",
 ]
 
@@ -1041,32 +628,6 @@ version = "0.0.0"
 dependencies = [
  "skein-lib",
  "temper-worker-domain-host",
- "temper-world",
-]
-
-[[package]]
-name = "temper-worker-protocol"
-version = "0.0.0"
-dependencies = [
- "skein-io",
- "skein-lib",
- "temper-channel",
- "temper-worker-domain",
-]
-
-[[package]]
-name = "temper-worker-protocol-world"
-version = "0.0.0"
-dependencies = [
- "skein-io",
- "skein-lib",
- "skein-sim",
- "temper-channel",
- "temper-engine-protocol",
- "temper-engine-protocol-world",
- "temper-legacy-engine-domain",
- "temper-worker-domain",
- "temper-worker-protocol",
  "temper-world",
 ]
 
