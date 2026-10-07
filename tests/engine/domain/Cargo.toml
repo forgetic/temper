@@ -23,6 +23,10 @@ temper-engine-domain-forge-client.workspace = true
 temper-engine-forge-world = { path = "../forge" }
 temper-fake-forge-domain.workspace = true
 
+[dev-dependencies]
+temper-engine-tasks-world = { path = "../tasks" }
+temper-engine-people-world = { path = "../people" }
+
 [lints.rust]
 unsafe_code = "forbid"
 elided_lifetimes_in_paths = "deny"
