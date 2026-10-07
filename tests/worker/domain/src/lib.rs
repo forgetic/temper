@@ -19,6 +19,7 @@ pub const LIMITS: Limits = Limits {
         charter_bytes: 8_192,
         snapshot_bytes: 64,
         transcript_bytes: 0,
+        delivery_evidence_bytes: 0,
         turn_bytes: 0,
         outcome_bytes: 4_096,
         detail_bytes: 32,

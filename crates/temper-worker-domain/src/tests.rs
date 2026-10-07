@@ -20,6 +20,7 @@ const LIMITS: Limits = Limits {
         charter_bytes: 64,
         snapshot_bytes: 32,
         transcript_bytes: 0,
+        delivery_evidence_bytes: 0,
         turn_bytes: 0,
         outcome_bytes: 32,
         detail_bytes: 8,

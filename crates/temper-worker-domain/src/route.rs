@@ -61,6 +61,15 @@ pub(crate) fn event(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &
             let answers = domain.link.held();
             host_step(domain, env, host::Event::Unacknowledged { answers });
             let wire::AssignmentTyped { assignment, turns, answered } = assignment;
+            if !crate::delivery_evidence::valid_answered(&answered, env.limits.host.delivery_evidence_bytes) {
+                return domain.link.refuse(
+                    run,
+                    attempt,
+                    wire::Refusal::Invalid(wire::Invalid::DeliveryEvidence),
+                    true,
+                    out,
+                );
+            }
             let assignment = match workspace::stage(domain, env, assignment, true) {
                 Ok(assignment) => assignment,
                 Err(refusal) => return domain.link.refuse(run, attempt, refusal, true, out),

@@ -271,6 +271,8 @@ pub enum Invalid {
     /// The snapshot holds more bytes than a run may.
     Snapshot,
     Transcript,
+    /// A resumed delivery's Smith channel evidence is malformed or disagrees with its outcome.
+    DeliveryEvidence,
     Version,
     Grants,
 }

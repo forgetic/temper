@@ -287,6 +287,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "skein-channel"
+version = "0.0.0"
+source = "git+https://git.ekanayaka.io/ai/skein.git#17b221b8423352d5c1d30128837ccbf5cd8025c2"
+dependencies = [
+ "skein-lib",
+]
+
+[[package]]
+name = "skein-codec"
+version = "0.0.0"
+source = "git+https://git.ekanayaka.io/ai/skein.git#17b221b8423352d5c1d30128837ccbf5cd8025c2"
+dependencies = [
+ "skein-lib",
+]
+
+[[package]]
 name = "skein-fake-checkout"
 version = "0.0.0"
 source = "git+https://git.ekanayaka.io/ai/skein.git#17b221b8423352d5c1d30128837ccbf5cd8025c2"
@@ -360,7 +376,7 @@ dependencies = [
 [[package]]
 name = "smith-agent-world"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/smith.git#fd71864c995fb0793980608782462d35ea042270"
+source = "git+https://git.ekanayaka.io/ai/smith.git#a54fe558421ed07ce376ac1ebf2ce09345c8d496"
 dependencies = [
  "skein-fake-checkout",
  "skein-fake-llm-domain",
@@ -375,9 +391,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "smith-channel"
+version = "0.0.0"
+source = "git+https://git.ekanayaka.io/ai/smith.git#a54fe558421ed07ce376ac1ebf2ce09345c8d496"
+dependencies = [
+ "skein-channel",
+ "skein-codec",
+ "skein-lib",
+]
+
+[[package]]
 name = "smith-domain"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/smith.git#fd71864c995fb0793980608782462d35ea042270"
+source = "git+https://git.ekanayaka.io/ai/smith.git#a54fe558421ed07ce376ac1ebf2ce09345c8d496"
 dependencies = [
  "skein-lib",
  "smith-domain-run",
@@ -388,7 +414,7 @@ dependencies = [
 [[package]]
 name = "smith-domain-run"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/smith.git#fd71864c995fb0793980608782462d35ea042270"
+source = "git+https://git.ekanayaka.io/ai/smith.git#a54fe558421ed07ce376ac1ebf2ce09345c8d496"
 dependencies = [
  "skein-lib",
 ]
@@ -396,7 +422,7 @@ dependencies = [
 [[package]]
 name = "smith-domain-session"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/smith.git#fd71864c995fb0793980608782462d35ea042270"
+source = "git+https://git.ekanayaka.io/ai/smith.git#a54fe558421ed07ce376ac1ebf2ce09345c8d496"
 dependencies = [
  "skein-lib",
  "smith-domain-tools",
@@ -405,7 +431,7 @@ dependencies = [
 [[package]]
 name = "smith-domain-tools"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/smith.git#fd71864c995fb0793980608782462d35ea042270"
+source = "git+https://git.ekanayaka.io/ai/smith.git#a54fe558421ed07ce376ac1ebf2ce09345c8d496"
 dependencies = [
  "skein-lib",
 ]
@@ -413,7 +439,7 @@ dependencies = [
 [[package]]
 name = "smith-host-domain"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/smith.git#fd71864c995fb0793980608782462d35ea042270"
+source = "git+https://git.ekanayaka.io/ai/smith.git#a54fe558421ed07ce376ac1ebf2ce09345c8d496"
 dependencies = [
  "skein-lib",
 ]
@@ -421,7 +447,7 @@ dependencies = [
 [[package]]
 name = "smith-host-world"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/smith.git#fd71864c995fb0793980608782462d35ea042270"
+source = "git+https://git.ekanayaka.io/ai/smith.git#a54fe558421ed07ce376ac1ebf2ce09345c8d496"
 dependencies = [
  "skein-lib",
  "skein-world",
@@ -431,7 +457,7 @@ dependencies = [
 [[package]]
 name = "smith-session-world"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/smith.git#fd71864c995fb0793980608782462d35ea042270"
+source = "git+https://git.ekanayaka.io/ai/smith.git#a54fe558421ed07ce376ac1ebf2ce09345c8d496"
 dependencies = [
  "skein-fake-checkout",
  "skein-fake-llm-domain",
@@ -445,7 +471,7 @@ dependencies = [
 [[package]]
 name = "smith-tools-world"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/smith.git#fd71864c995fb0793980608782462d35ea042270"
+source = "git+https://git.ekanayaka.io/ai/smith.git#a54fe558421ed07ce376ac1ebf2ce09345c8d496"
 dependencies = [
  "skein-fake-checkout",
  "skein-lib",
@@ -696,6 +722,8 @@ version = "0.0.0"
 dependencies = [
  "jig-worker-host",
  "skein-lib",
+ "smith-channel",
+ "smith-host-domain",
  "temper-worker-domain-agent",
  "temper-worker-domain-checkout",
 ]

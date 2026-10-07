@@ -74,6 +74,8 @@ smith-domain = { git = "https://git.ekanayaka.io/ai/smith.git" }
 smith-domain-run = { git = "https://git.ekanayaka.io/ai/smith.git" }
 smith-domain-session = { git = "https://git.ekanayaka.io/ai/smith.git" }
 smith-domain-tools = { git = "https://git.ekanayaka.io/ai/smith.git" }
+smith-channel = { git = "https://git.ekanayaka.io/ai/smith.git" }
+smith-host-domain = { git = "https://git.ekanayaka.io/ai/smith.git" }
 sha2 = { version = "=0.10.9", default-features = false }
 temper-web-view = { path = "crates/temper-web-view" }
 temper-fake-person = { path = "testing/temper-fake-person" }
