@@ -81,7 +81,15 @@ pub(super) fn begin(
 
 pub(super) fn failed(domain: &mut Domain, waiter: Token, why: people::Refusal, out: &mut Queue<Request>) {
     let Some(read) = take_read(domain, waiter) else { return };
-    let RootRead::Result(read) = read else { unreachable!("result load owns result read") };
+    let read = match read {
+        RootRead::Result(read) => read,
+        RootRead::Inbox(_)
+        | RootRead::Escalation(_)
+        | RootRead::Proposal(_)
+        | RootRead::Transcript { .. }
+        | RootRead::Dependency(_)
+        | RootRead::InputCheck(_) => unreachable!("result load owns result read"),
+    };
     let removed = domain.reading_results.remove(&read.person);
     assert!(removed == Some(waiter), "result reader index names its waiter");
     domain.result_reads.retire(Id::from_token(waiter));
@@ -99,8 +107,23 @@ pub(super) fn page(
 ) {
     let Some(Some(RootRead::Result(read))) = domain.result_reads.get_mut(Id::from_token(waiter)) else { return };
     for row in rows {
-        let Record::Tasks(tasks::Stored::Ended(task)) = row else {
-            unreachable!("ended-result range contains only ended tasks")
+        let task = match row {
+            Record::Tasks(tasks::Stored::Ended(task)) => task,
+            Record::Tasks(
+                tasks::Stored::PersonProposal(_)
+                | tasks::Stored::History(_)
+                | tasks::Stored::Live(_)
+                | tasks::Stored::Ledger(_),
+            )
+            | Record::ProposalDecision(_)
+            | Record::Call(_)
+            | Record::EscalationDecision(_)
+            | Record::Deployment(_)
+            | Record::Turn(_)
+            | Record::RunProof(_)
+            | Record::Terminal(_)
+            | Record::People(_)
+            | Record::Forge { .. } => unreachable!("ended-result range contains only ended tasks"),
         };
         if task.requester != tasks::Party::Person(read.person) {
             continue;
@@ -134,7 +157,12 @@ pub(super) fn page(
         if !keep {
             continue;
         }
-        let tasks::Phase::Ended(ending) = task.phase else { unreachable!("ended row has ended phase") };
+        let ending = match task.phase {
+            tasks::Phase::Ended(ending) => ending,
+            tasks::Phase::Waiting | tasks::Phase::Active(_) | tasks::Phase::Closing(_) | tasks::Phase::Held { .. } => {
+                unreachable!("ended row has ended phase")
+            }
+        };
         let entry = ResultEntry { task: task.number, position: task.result_position, words: ending_words(ending) };
         if entry.words.len() > usize::try_from(env.limits.journal.result_bytes).expect("u32 fits usize") {
             return failed(domain, waiter, people::Refusal::Limit, out);

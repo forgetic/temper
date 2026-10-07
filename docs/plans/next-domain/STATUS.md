@@ -14,6 +14,7 @@ protocol drafts and lower-layer integration are parked for later work.
 
 | Increment | State | Commit | Evidence |
 |---|---|---|---|
+| Completion 13: root strict subset | merged | this commit | Replaced 23 own-enum or tuple conditional forms with exhaustive matches, including the added proposal and forge routes; root 23→0. Gate: fmt, clippy, 2,621 focused / 13.867 s, 45 fuzzy / 38.339 s. |
 | Completion 13: forge let-chain follow-up | merged | this commit | Replaced the overlooked branch-resource `let` chain with an exhaustive match; forge 1→0 remaining forms. Gate: fmt, clippy, 2,621 focused / 12.529 s, 45 fuzzy / 40.396 s. |
 | Completion 13: tasks strict subset | merged | this commit | Replaced 18 own-enum conditional forms with exhaustive matches and bounded requester ancestry by the task depth; tasks 18→0 forms and one loop→0. Gate: fmt, clippy, 2,621 focused / 15.631 s, 45 fuzzy / 46.118 s. |
 | Completion 13: forge strict subset | merged | this commit | Replaced six own-enum `if let` forms with exhaustive matches; a separate `let` chain remained. Gate: fmt, clippy, 2,621 focused / 13.634 s, 45 fuzzy / 36.775 s. |

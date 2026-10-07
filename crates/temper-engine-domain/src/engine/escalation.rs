@@ -116,7 +116,10 @@ fn recipient_after(
             let mut distance = 1_u32;
             let mut passed = after.is_none();
             for _ in 0..domain.limits.tasks.depth.saturating_add(1) {
-                let tasks::Party::Task(parent) = above else { break };
+                let parent = match above {
+                    tasks::Party::Task(parent) => parent,
+                    tasks::Party::Person(_) | tasks::Party::Deployment { .. } => break,
+                };
                 let Some(holder) = domain.tasks.delegation(parent) else { return fallback(domain, context.project) };
                 if passed
                     && holder.deciding
@@ -183,7 +186,12 @@ pub(super) fn needed(domain: &mut Domain, context: Box<tasks::EscalationContext>
 
 pub(super) fn stalled(domain: &mut Domain, task: u64, revision: u64, old: tasks::EscalationHolder) {
     let Some(context) = domain.tasks.escalation(task) else { return };
-    let tasks::Escalation::Waiting { revision: current, holder, .. } = context.escalation else { return };
+    let (current, holder) = match context.escalation {
+        tasks::Escalation::Waiting { revision, holder, .. } => (revision, holder),
+        tasks::Escalation::Unheld { .. } | tasks::Escalation::Routing { .. } | tasks::Escalation::Rejected { .. } => {
+            return;
+        }
+    };
     if current != revision || holder != old {
         return;
     }
@@ -217,8 +225,11 @@ pub(super) fn task_decide(
     let Some(context) = domain.tasks.escalation(task) else {
         return refuse_task(domain, env, barrier, to, key, task, tasks::Refusal::Unknown);
     };
-    let tasks::Escalation::Waiting { revision: current, holder, .. } = context.escalation else {
-        return refuse_task(domain, env, barrier, to, key, task, tasks::Refusal::State);
+    let (current, holder) = match context.escalation {
+        tasks::Escalation::Waiting { revision, holder, .. } => (revision, holder),
+        tasks::Escalation::Unheld { .. } | tasks::Escalation::Routing { .. } | tasks::Escalation::Rejected { .. } => {
+            return refuse_task(domain, env, barrier, to, key, task, tasks::Refusal::State);
+        }
     };
     if current != revision || holder != tasks::EscalationHolder::Task(key.task) {
         return refuse_task(domain, env, barrier, to, key, task, tasks::Refusal::Reference);

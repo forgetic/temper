@@ -3666,8 +3666,11 @@ fn tasks_outputs(
             tasks::Request::PersonProposalDecided { reply_to, proposer, number, outcome } => {
                 let request = reply_to.into_token();
                 let route = domain.goal_routes.remove(&request).expect("goal decision route");
-                let GoalRoute::Deciding { proposer: named, proposal, by } = route else {
-                    unreachable!("goal decision terminal stage")
+                let (named, proposal, by) = match route {
+                    GoalRoute::Deciding { proposer, proposal, by } => (proposer, proposal, by),
+                    GoalRoute::Proposing { .. } | GoalRoute::Accepting { .. } => {
+                        unreachable!("goal decision terminal stage")
+                    }
                 };
                 assert!(named == proposer && proposal == number, "exact goal decision");
                 let choice = match outcome {
@@ -3846,8 +3849,17 @@ fn tasks_outputs(
                 if task_escalation {
                     let token = reply_to.into_token();
                     let route = domain.routing_calls.remove(&token).expect("task escalation decision route");
-                    let RoutedCall::Escalation { key, task: named, revision: current } = route else {
-                        unreachable!("task escalation route kind")
+                    let (key, named, current) = match route {
+                        RoutedCall::Escalation { key, task, revision } => (key, task, revision),
+                        RoutedCall::Propose { .. }
+                        | RoutedCall::Decide { .. }
+                        | RoutedCall::Withdraw { .. }
+                        | RoutedCall::Accepting { .. }
+                        | RoutedCall::Message(_)
+                        | RoutedCall::Introduce(_)
+                        | RoutedCall::Subscribe { .. }
+                        | RoutedCall::Unsubscribe(_)
+                        | RoutedCall::Control(_) => unreachable!("task escalation route kind"),
                     };
                     assert!(task == named && revision == current, "exact task escalation terminal");
                     decide_call(
@@ -3918,21 +3930,42 @@ fn tasks_outputs(
                 );
             }
             tasks::Request::ProposalStalled { proposer, proposal, holder } => {
-                if let Some(pending) = domain.tasks.proposal(proposer, proposal)
-                    && let tasks::ProposalState::Pending { holder: current, .. } = pending.state
-                    && current == holder
-                    && let Some(next) = proposals::holder(domain, proposer, &pending.action, Some(holder))
-                {
-                    domain.work.push(Work::Tasks(tasks::Event::StalledProposal { proposer, proposal, holder: next }));
+                if let Some(pending) = domain.tasks.proposal(proposer, proposal) {
+                    match pending.state {
+                        tasks::ProposalState::Pending { holder: current, .. } if current == holder => {
+                            if let Some(next) = proposals::holder(domain, proposer, &pending.action, Some(holder)) {
+                                domain.work.push(Work::Tasks(tasks::Event::StalledProposal {
+                                    proposer,
+                                    proposal,
+                                    holder: next,
+                                }));
+                            }
+                        }
+                        tasks::ProposalState::Pending { .. }
+                        | tasks::ProposalState::Accepted { .. }
+                        | tasks::ProposalState::Rejected { .. }
+                        | tasks::ProposalState::Withdrawn => {}
+                    }
                 }
             }
             tasks::Request::ProposalRerouteNeeded { proposer, proposal } => {
-                if let Some(pending) = domain.tasks.proposal(proposer, proposal)
-                    && let tasks::ProposalState::Pending { holder: current, .. } = pending.state
-                    && let Some(next) = proposals::holder(domain, proposer, &pending.action, None)
-                    && current != next
-                {
-                    domain.work.push(Work::Tasks(tasks::Event::StalledProposal { proposer, proposal, holder: next }));
+                if let Some(pending) = domain.tasks.proposal(proposer, proposal) {
+                    match pending.state {
+                        tasks::ProposalState::Pending { holder: current, .. } => {
+                            if let Some(next) = proposals::holder(domain, proposer, &pending.action, None)
+                                && current != next
+                            {
+                                domain.work.push(Work::Tasks(tasks::Event::StalledProposal {
+                                    proposer,
+                                    proposal,
+                                    holder: next,
+                                }));
+                            }
+                        }
+                        tasks::ProposalState::Accepted { .. }
+                        | tasks::ProposalState::Rejected { .. }
+                        | tasks::ProposalState::Withdrawn => {}
+                    }
                 }
             }
             tasks::Request::Save { record } => {
@@ -3967,12 +4000,15 @@ fn tasks_outputs(
                             domain.ending_positions.insert(task.number, position) == Ok(None),
                             "one ending position per ended task"
                         );
-                        if let tasks::Party::Person(person) = task.requester {
-                            domain.people.remember_result(
-                                &env.limits.people,
-                                person,
-                                people::ResultRef { task: task.number, position },
-                            );
+                        match task.requester {
+                            tasks::Party::Person(person) => {
+                                domain.people.remember_result(
+                                    &env.limits.people,
+                                    person,
+                                    people::ResultRef { task: task.number, position },
+                                );
+                            }
+                            tasks::Party::Task(_) | tasks::Party::Deployment { .. } => {}
                         }
                         tasks::Stored::Ended(task)
                     }
@@ -4985,9 +5021,22 @@ fn request_load(domain: &mut Domain, waiter: Token, range: Range, after: Option<
         | Range::TaskTranscript { .. } => domain.limits.loads.rows,
     };
     if loads::begin(&mut domain.loads, waiter, range, after, most, &mut load_out).is_none() {
-        if let Range::TaskTranscript { .. } = range {
-            transcript_failed(domain, waiter);
-            return;
+        match range {
+            Range::TaskTranscript { .. } => {
+                transcript_failed(domain, waiter);
+                return;
+            }
+            Range::ProposalDecision { .. }
+            | Range::EscalationDecision { .. }
+            | Range::Calls
+            | Range::Deployment
+            | Range::Tasks
+            | Range::EndedResults
+            | Range::RunProofs
+            | Range::People
+            | Range::Forge
+            | Range::TaskResult { .. }
+            | Range::Turns { .. } => {}
         }
         match range {
             Range::ProposalDecision { .. } => {
@@ -5396,9 +5445,12 @@ fn dependency_loaded(
         dependency_failed(domain, waiter);
         return;
     }
-    let tasks::Phase::Ended(ending) = row.phase else {
-        dependency_failed(domain, waiter);
-        return;
+    let ending = match row.phase {
+        tasks::Phase::Ended(ending) => ending,
+        tasks::Phase::Waiting | tasks::Phase::Active(_) | tasks::Phase::Closing(_) | tasks::Phase::Held { .. } => {
+            dependency_failed(domain, waiter);
+            return;
+        }
     };
     let (kind, words) = result_notice(ending);
     let Some(Some(Read::Dependency(read))) = domain.result_reads.get_mut(Id::from_token(waiter)) else {
@@ -5436,9 +5488,20 @@ fn transcript_loaded(
     let transcript = domain.transcripts.get_mut(&task).expect("load belongs to prepared task");
     let bound = u64::from(domain.config.resume_bytes);
     for row in rows {
-        let Record::Turn(turn) = row else {
-            transcript_failed(domain, waiter);
-            return;
+        let turn = match row {
+            Record::Turn(turn) => turn,
+            Record::ProposalDecision(_)
+            | Record::Call(_)
+            | Record::EscalationDecision(_)
+            | Record::Deployment(_)
+            | Record::RunProof(_)
+            | Record::Terminal(_)
+            | Record::Tasks(_)
+            | Record::People(_)
+            | Record::Forge { .. } => {
+                transcript_failed(domain, waiter);
+                return;
+            }
         };
         if turn.task != task || turn.attempt > transcript.previous_attempt || turn.attempt == 0 || turn.turn == 0 {
             transcript_failed(domain, waiter);
@@ -5528,11 +5591,16 @@ fn start_brief(domain: &mut Domain, task: u64) {
             })
             .expect("attempt brief room");
     }
-    if let tasks::Party::Task(parent) = context.requester
+    let parent = match context.requester {
+        tasks::Party::Task(parent) => Some(parent),
+        tasks::Party::Person(_) | tasks::Party::Deployment { .. } => None,
+    };
+    if let Some(parent) = parent
         && let Some(row) = domain.forge.change(parent)
         && let Some((child, _)) = row.delegate
         && child == task
-        && let (Some(number), Some(head)) = (row.pull, row.change.last_head)
+        && let Some(number) = row.pull
+        && let Some(head) = row.change.last_head
         && wanted.room() > 0
     {
         let item = brief::Item { repository: row.repository.repository, number };
@@ -6424,12 +6492,18 @@ fn dependency_read(results: &[HistoricalResult], bytes: u32) -> brief::Read {
             .expect("bounded result words")
             .checked_add(3)
             .expect("result separators");
-        if let tasks::ResultKind::Verdict { code } = result.kind {
-            total = total
-                .checked_add(Decimal::of(u64::from(code)).as_bytes().len())
-                .expect("bounded verdict code")
-                .checked_add(1)
-                .expect("verdict space");
+        match result.kind {
+            tasks::ResultKind::Verdict { code } => {
+                total = total
+                    .checked_add(Decimal::of(u64::from(code)).as_bytes().len())
+                    .expect("bounded verdict code")
+                    .checked_add(1)
+                    .expect("verdict space");
+            }
+            tasks::ResultKind::Report
+            | tasks::ResultKind::Change { .. }
+            | tasks::ResultKind::Failed
+            | tasks::ResultKind::Cancelled => {}
         }
     }
     let mut writer = Writer::new(total);
@@ -6438,9 +6512,15 @@ fn dependency_read(results: &[HistoricalResult], bytes: u32) -> brief::Read {
         writer.put(Decimal::of(result.task).as_bytes()).expect("measured result ID");
         writer.put(b": ").expect("measured result text");
         writer.put(result_label(result.kind)).expect("measured result kind");
-        if let tasks::ResultKind::Verdict { code } = result.kind {
-            writer.put(b" ").expect("measured verdict space");
-            writer.put(Decimal::of(u64::from(code)).as_bytes()).expect("measured verdict code");
+        match result.kind {
+            tasks::ResultKind::Verdict { code } => {
+                writer.put(b" ").expect("measured verdict space");
+                writer.put(Decimal::of(u64::from(code)).as_bytes()).expect("measured verdict code");
+            }
+            tasks::ResultKind::Report
+            | tasks::ResultKind::Change { .. }
+            | tasks::ResultKind::Failed
+            | tasks::ResultKind::Cancelled => {}
         }
         writer.put(b"\n").expect("measured result newline");
         writer.put(&result.words).expect("measured result words");

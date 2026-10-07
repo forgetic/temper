@@ -1251,7 +1251,10 @@ fn may_push(
 fn tracked_ancestor(domain: &Domain, requester: tasks::Party) -> Option<u64> {
     let mut next = requester;
     for _ in 0..=domain.limits.tasks.depth {
-        let tasks::Party::Task(task) = next else { return None };
+        let task = match next {
+            tasks::Party::Task(task) => task,
+            tasks::Party::Person(_) | tasks::Party::Deployment { .. } => return None,
+        };
         let row = domain.tasks.task(task)?;
         if row.tracked.is_some() {
             return Some(task);
@@ -1305,13 +1308,19 @@ pub(super) fn run_workspace(
     }
     if inherited.is_none() {
         for parameter in &context.spec.parameters {
-            if let tasks::Parameter::Resource { connector: 1, resource, .. } = parameter {
-                let provider = forge_client::api::Repository { forge: 1, repository: u32::try_from(*resource).ok()? };
-                let repository = domain.forge.repository(provider)?;
-                if repository.project != context.project {
-                    return None;
+            match parameter {
+                tasks::Parameter::Resource { connector: 1, resource, .. } => {
+                    let provider =
+                        forge_client::api::Repository { forge: 1, repository: u32::try_from(*resource).ok()? };
+                    let repository = domain.forge.repository(provider)?;
+                    if repository.project != context.project {
+                        return None;
+                    }
+                    include_repository(&mut selected, repository)?;
                 }
-                include_repository(&mut selected, repository)?;
+                tasks::Parameter::Resource { .. }
+                | tasks::Parameter::Number { .. }
+                | tasks::Parameter::Bytes { .. } => {}
             }
         }
         for tag in &context.saved {
@@ -1699,7 +1708,10 @@ pub(super) fn start_change(domain: &mut Domain, env: &Env<Limits>, context: &tas
     }
     let Some(provider) = provider else { return false };
     if base_repair {
-        let tasks::Party::Deployment { .. } = context.requester else { return false };
+        match context.requester {
+            tasks::Party::Deployment { .. } => {}
+            tasks::Party::Task(_) | tasks::Party::Person(_) => return false,
+        }
     }
     let Some(adopted) = domain.forge.repository(provider) else { return false };
     if adopted.project != context.project || adopted.role == forge::Role::Context || !adopted.kinds.open {
@@ -2343,11 +2355,33 @@ pub(super) fn outputs(
                 if outcome != forge_client::Outcome::Uncertain {
                     let mut named = None;
                     for (&key, answer) in &domain.calls {
-                        if let CallAnswer::ForgeEffect { entry: number, .. } = answer
-                            && *number == entry
-                        {
-                            named = Some(key);
-                            break;
+                        match answer {
+                            CallAnswer::ForgeEffect { entry: number, .. } if *number == entry => {
+                                named = Some(key);
+                                break;
+                            }
+                            CallAnswer::ForgeEffect { .. }
+                            | CallAnswer::ForgeEffectRefused(_)
+                            | CallAnswer::ForgeEffectDenied { .. }
+                            | CallAnswer::ForgeRead(_)
+                            | CallAnswer::EscalationDecided { .. }
+                            | CallAnswer::EscalationRefused(_)
+                            | CallAnswer::Proposed { .. }
+                            | CallAnswer::ProposalDecided { .. }
+                            | CallAnswer::ProposalRefused(_)
+                            | CallAnswer::Controlled
+                            | CallAnswer::ControlRefused(_)
+                            | CallAnswer::ControlDenied { .. }
+                            | CallAnswer::Sent { .. }
+                            | CallAnswer::Introduced
+                            | CallAnswer::MessageRefused(_)
+                            | CallAnswer::Subscribed { .. }
+                            | CallAnswer::Unsubscribed
+                            | CallAnswer::SubscriptionRefused(_)
+                            | CallAnswer::Delegated(_)
+                            | CallAnswer::DelegationDenied { .. }
+                            | CallAnswer::DelegationRefused(_)
+                            | CallAnswer::Unavailable => {}
                         }
                     }
                     if let Some(key) = named {
@@ -2395,27 +2429,46 @@ pub(super) fn outputs(
             }
             forge::Request::ChangeDecision { task, decision: choice, entry, evidence } => {
                 change_decision(domain, env, task, choice);
-                if let (forge_change::Decision::Effect(effect), Some(entry), Some(evidence)) = (choice, entry, evidence)
-                {
-                    let answer = check_change_effect(domain, env, task, effect, &evidence);
-                    match answer {
-                        authority::Answer::Allow => emit(decision, &env.limits, Delivery::ForgeCommitted { entry }),
-                        authority::Answer::Wait | authority::Answer::Propose | authority::Answer::Refuse => {
-                            domain.work.push(Work::Forge(forge::Event::VetoChange {
-                                task,
-                                entry,
-                                prior: evidence.prior,
-                            }));
-                            if answer == authority::Answer::Wait {
-                                let when = skein_lib::Wall::from_nanos(
-                                    env.wall.as_nanos().saturating_add(env.limits.forge.queue_window.as_nanos()),
-                                );
-                                domain.forge_change_due.insert(task, when).expect("one timer per change");
-                            } else {
-                                domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::Effects }));
+                match choice {
+                    forge_change::Decision::Effect(effect) => {
+                        if let Some(entry) = entry
+                            && let Some(evidence) = evidence
+                        {
+                            let answer = check_change_effect(domain, env, task, effect, &evidence);
+                            match answer {
+                                authority::Answer::Allow => {
+                                    emit(decision, &env.limits, Delivery::ForgeCommitted { entry });
+                                }
+                                authority::Answer::Wait | authority::Answer::Propose | authority::Answer::Refuse => {
+                                    domain.work.push(Work::Forge(forge::Event::VetoChange {
+                                        task,
+                                        entry,
+                                        prior: evidence.prior,
+                                    }));
+                                    if answer == authority::Answer::Wait {
+                                        let when = skein_lib::Wall::from_nanos(
+                                            env.wall
+                                                .as_nanos()
+                                                .saturating_add(env.limits.forge.queue_window.as_nanos()),
+                                        );
+                                        domain.forge_change_due.insert(task, when).expect("one timer per change");
+                                    } else {
+                                        domain
+                                            .work
+                                            .push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::Effects }));
+                                    }
+                                }
                             }
                         }
                     }
+                    forge_change::Decision::None
+                    | forge_change::Decision::Wait { .. }
+                    | forge_change::Decision::Delegate(_)
+                    | forge_change::Decision::Ready
+                    | forge_change::Decision::QueueRepair
+                    | forge_change::Decision::Finish { .. }
+                    | forge_change::Decision::Cancel
+                    | forge_change::Decision::Hold(_) => {}
                 }
             }
             forge::Request::ProjectAfter { goal, when } => {
