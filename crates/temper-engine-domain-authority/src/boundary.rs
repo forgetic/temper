@@ -87,6 +87,10 @@ pub enum Finding {
         /** Authority layer against which this condition failed. */
         source: Source,
     },
+    /// The effect's maximum price exceeds funding available at this source.
+    Price { source: Source },
+    /// The adopted resource is context only or current access forbids a write.
+    ResourceAccess,
     /// The caller has no verified standing to message the task.
     Reference,
     /// The note scope is absent from this source.
@@ -159,8 +163,30 @@ pub struct Effect {
     /// Full literal resource name, bounded by segment and byte limits.
     pub name: Name,
     pub state: [u8; 32],
+    /// Maximum deployment-unit charge, settled after the connector reports actual cost.
+    pub price: Option<u64>,
+    /// Connector-verified current access to the resource and object being written.
+    pub access: EffectAccess,
+    /// Other resources touched by this same effect, each with its own current access.
+    pub additional: Box<[EffectResource]>,
     /// Judges this effect kind's condition checks when it is applied.
     pub guards: Box<[Judge]>,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct EffectResource {
+    pub name: Name,
+    pub access: EffectAccess,
+}
+
+/// A connector's current write relationship for this exact effect. Participating writes are
+/// permitted as a participant, subject to the same grant and requirement checks.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum EffectAccess {
+    Owned,
+    Participant,
+    Context,
+    Unavailable,
 }
 
 /// Root-gathered permission and authentic-fact question for one pinned effect; this value makes no
@@ -170,6 +196,8 @@ pub struct EffectAsk {
     pub project: u32,
     /// Acting task or accepter authority, admitted under `Limits`.
     pub authority: Authority,
+    /// Acting task or accepter's current four funding numbers.
+    pub numbers: Numbers,
     /// Single pinned connector operation being checked.
     pub effect: Effect,
     /// Wall time of this decision, used for observed verdict freshness.

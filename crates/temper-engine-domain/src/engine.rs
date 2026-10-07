@@ -3054,7 +3054,8 @@ fn activate(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, tas
                     authority::Finding::RunBudget
                     | authority::Finding::RunCap
                     | authority::Finding::Arithmetic
-                    | authority::Finding::Spend { .. } => {
+                    | authority::Finding::Spend { .. }
+                    | authority::Finding::Price { .. } => {
                         if hold != Some(tasks::Hold::Deadline) {
                             hold = Some(tasks::Hold::Budget);
                         }
@@ -3068,6 +3069,7 @@ fn activate(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, tas
                     | authority::Finding::Writer
                     | authority::Finding::Tool
                     | authority::Finding::Grant { .. }
+                    | authority::Finding::ResourceAccess
                     | authority::Finding::Reference
                     | authority::Finding::Scope { .. }
                     | authority::Finding::Required { .. }

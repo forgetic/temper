@@ -46,8 +46,8 @@ mod tests_policy;
 mod value;
 
 pub use boundary::{
-    Action, Answer, BatchAsk, Call, CallAsk, Checked, Delegate, Effect, EffectAsk, Finding, Given, Holder, NoteScope,
-    PersonAsk, PersonRequest, RunAsk, Source, Verdict, Write, Writer,
+    Action, Answer, BatchAsk, Call, CallAsk, Checked, Delegate, Effect, EffectAccess, EffectAsk, EffectResource,
+    Finding, Given, Holder, NoteScope, PersonAsk, PersonRequest, RunAsk, Source, Verdict, Write, Writer,
 };
 pub use check::{check_batch, check_call, check_effect, check_request, check_run, covers, needed_judges, needs};
 pub use domain::{Domain, Event, POLICY_MAX_OUT, PolicyFact, PolicyRefusal, step};
