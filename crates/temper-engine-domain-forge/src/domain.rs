@@ -1885,20 +1885,23 @@ fn continue_release(d: &mut Domain, env: &Env<Limits>, task: u64, entry: u64, ou
                 emit(out, Request::Save { record: Stored::Hold(hold.clone()) });
                 continue;
             }
-            if let Some(resource) = to_client(&name, &env.limits)
-                && let client::What::Branch(branch) = resource.what
-            {
-                enqueue_release(
-                    d,
-                    env,
-                    &mut row,
-                    entry,
-                    resource.repository,
-                    client::api::Write::DeleteBranch { branch },
-                    Some(name),
-                    out,
-                );
-                return;
+            if let Some(resource) = to_client(&name, &env.limits) {
+                match resource.what {
+                    client::What::Branch(branch) => {
+                        enqueue_release(
+                            d,
+                            env,
+                            &mut row,
+                            entry,
+                            resource.repository,
+                            client::api::Write::DeleteBranch { branch },
+                            Some(name),
+                            out,
+                        );
+                        return;
+                    }
+                    client::What::Repository | client::What::Pull(_) | client::What::Issue(_) => {}
+                }
             }
             d.holds.remove(&name);
             emit(out, Request::Erase { key: Key::Hold(name) });
