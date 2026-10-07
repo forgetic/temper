@@ -94,6 +94,10 @@ skein-json = { git = "https://git.ekanayaka.io/ai/skein.git" }
 skein-sim = { git = "https://git.ekanayaka.io/ai/skein.git" }
 skein-world = { git = "https://git.ekanayaka.io/ai/skein.git" }
 skein-fake-checkout = { git = "https://git.ekanayaka.io/ai/skein.git" }
+smith-domain = { git = "https://git.ekanayaka.io/ai/smith.git" }
+smith-domain-run = { git = "https://git.ekanayaka.io/ai/smith.git" }
+smith-domain-session = { git = "https://git.ekanayaka.io/ai/smith.git" }
+smith-domain-tools = { git = "https://git.ekanayaka.io/ai/smith.git" }
 subtle = { version = "=2.6.1", default-features = false, features = ["core_hint_black_box"] }
 sha2 = { version = "=0.10.9", default-features = false }
 hmac = { version = "=0.12.1", default-features = false }

@@ -14,6 +14,7 @@ protocol drafts and lower-layer integration are parked for later work.
 
 | Increment | State | Commit | Evidence |
 |---|---|---|---|
+| Completion 09.1: Smith domain dependencies | merged | this commit | All four Smith domain packages resolve from Smith main `bf3609f640f05e47e886192b9ff85183a3d12ba1` through the local redirect, with forge URLs retained; both repositories use Skein `4e78d26fc247bf5e7c18300ff8ffc4bd3b06819c`. Gate: fmt, clippy, 2,596 focused / 11.877 s, 45 fuzzy / 27.526 s. |
 | Completion 08.4: budgets and legacy map | merged | this commit | `docs/development/legacy-domain-map.md` maps every step 07 section 2 story and rule. The root fake store moves committed writes without full history copies. Gate: fmt, clippy, 2,596 focused / 12.057 s, 45 fuzzy / 27.577 s. Serial shares are below. |
 | Completion 08.3: ending sweep and memory | merged | this commit | Root fuzzy sweep covers durable done, failed and cancelled endings plus a held route; the tasks sweep already injects drawn restarts, and root, tasks, people and forge have counted worst-case memory tests. Gate: fmt, clippy, 2,596 focused / 11.730 s, 45 fuzzy / 27.448 s. |
 | Completion 08.2: referee test lockfile | merged | this commit | Lock the two new world test dependencies from 08.2. Gate: fmt, clippy, 2,596 focused / 11.913 s, 44 fuzzy / 26.674 s. |

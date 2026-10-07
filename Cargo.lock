@@ -178,6 +178,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "smith-domain"
+version = "0.0.0"
+source = "git+https://git.ekanayaka.io/ai/smith.git#bf3609f640f05e47e886192b9ff85183a3d12ba1"
+dependencies = [
+ "skein-lib",
+ "smith-domain-run",
+ "smith-domain-session",
+ "smith-domain-tools",
+]
+
+[[package]]
+name = "smith-domain-run"
+version = "0.0.0"
+source = "git+https://git.ekanayaka.io/ai/smith.git#bf3609f640f05e47e886192b9ff85183a3d12ba1"
+dependencies = [
+ "skein-lib",
+]
+
+[[package]]
+name = "smith-domain-session"
+version = "0.0.0"
+source = "git+https://git.ekanayaka.io/ai/smith.git#bf3609f640f05e47e886192b9ff85183a3d12ba1"
+dependencies = [
+ "skein-lib",
+ "smith-domain-tools",
+]
+
+[[package]]
+name = "smith-domain-tools"
+version = "0.0.0"
+source = "git+https://git.ekanayaka.io/ai/smith.git#bf3609f640f05e47e886192b9ff85183a3d12ba1"
+dependencies = [
+ "skein-lib",
+]
+
+[[package]]
 name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -352,6 +388,10 @@ name = "temper-engine-domain-world"
 version = "0.0.0"
 dependencies = [
  "skein-lib",
+ "smith-domain",
+ "smith-domain-run",
+ "smith-domain-session",
+ "smith-domain-tools",
  "temper-engine-domain",
  "temper-engine-domain-accounts",
  "temper-engine-domain-authority",
