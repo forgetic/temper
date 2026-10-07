@@ -4,8 +4,9 @@
 
 use skein_lib::Token;
 use std::collections::{BTreeMap, BTreeSet};
+use temper_engine_domain::engine::{BriefBody as Body, BriefKind as Kind};
 use temper_engine_domain::{EscalationDecisionRecord, Key, Record, TerminalRecord, Write, engine::Assignment};
-use temper_engine_domain_brief::{Body, Kind};
+use temper_engine_domain_brief as brief;
 use temper_engine_domain_people as people;
 use temper_engine_domain_tasks as tasks;
 
@@ -294,7 +295,7 @@ impl Referee {
         let Body::Text(bytes) = &section.body else {
             return Err("brief task section unread");
         };
-        if section.kind != Kind::Task
+        if section.kind != Kind::Core(brief::Core::Task)
             || !bytes.windows(QUESTION.len()).any(|part| part == QUESTION)
             || !bytes.windows(b"Report: at most 128 bytes".len()).any(|part| part == b"Report: at most 128 bytes")
         {

@@ -1,11 +1,11 @@
 //! Direct root fixture shared by focused routes and the ending sweep.
 
+use jig_core_accounts as accounts;
+use jig_core_views as views;
 use skein_lib::{Env, Queue, ReplyTo, Time, Token, Wall};
 use std::collections::VecDeque;
 use temper_engine_domain::{Delivery, Write, engine};
-use temper_engine_domain_accounts as accounts;
 use temper_engine_domain_people as people;
-use temper_engine_domain_views as views;
 
 use crate::commits::Store;
 use crate::walking::{config, limits};
@@ -83,12 +83,6 @@ impl Driver {
                 }
                 engine::Request::Deliver(delivery) => self.delivered.push(delivery),
                 engine::Request::View(request) => match request {
-                    views::Request::Append { owner, .. } => {
-                        self.events.push_back(engine::Event::ViewAppended { owner, done: true });
-                    }
-                    views::Request::Expire { owner, .. } => {
-                        self.events.push_back(engine::Event::ViewExpired { owner, done: true });
-                    }
                     views::Request::Watching { .. }
                     | views::Request::Refused { .. }
                     | views::Request::Deliver { .. }

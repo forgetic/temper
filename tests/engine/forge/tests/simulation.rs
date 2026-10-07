@@ -1,9 +1,9 @@
-use skein_lib::Wall;
+use skein_lib::{Token, Wall};
 use temper_engine_domain_forge as top;
 use temper_engine_domain_forge_change as change;
 use temper_engine_domain_forge_client as client;
 use temper_engine_domain_forge_issues as issues;
-use temper_engine_forge_world::{REPO, World};
+use temper_engine_forge_world::{REPO, World, translate};
 
 #[test]
 fn an_existing_repository_is_adopted_after_its_permission_and_collaborators_are_read() {
@@ -99,6 +99,145 @@ fn change_row() -> top::ChangeRow {
         queue_repair: None,
         queue_repairs: 0,
     }
+}
+
+#[test]
+fn a_brief_section_refuses_a_head_that_moved_before_its_gather() {
+    let mut world = World::new(84);
+    world.adopt();
+    let mut row = change_row();
+    row.pull = Some(17);
+    row.change.last_head = Some([1; 32]);
+    world.event(top::Event::Change { row });
+    world.take_seen();
+    let before = world.calls();
+    let owner = Token::new(93);
+    world.event(top::Event::GatherBrief {
+        owner,
+        source: top::BriefSource::Reviews {
+            item: top::BriefItem { repository: REPO.repository, number: 17 },
+            head: top::BriefCommit([2; 32]),
+        },
+        parts: 1,
+        bytes: 128,
+        max_job_bytes: 0,
+    });
+    assert!(world.seen().contains(&top::Request::BriefReady { owner, read: top::BriefRead::Failed }));
+    assert_eq!(world.calls(), before, "a stale pinned section does not read the provider");
+    let section = Token::new(94);
+    world.event(top::Event::GatherBriefHeld {
+        section,
+        source: top::BriefSource::Reviews {
+            item: top::BriefItem { repository: REPO.repository, number: 17 },
+            head: top::BriefCommit([2; 32]),
+        },
+        parts: 1,
+        bytes: 128,
+        max_job_bytes: 0,
+    });
+    assert!(world.seen().contains(&top::Request::BriefSized { section, size: None }));
+    assert_eq!(world.calls(), before, "a stale held section does not read the provider");
+}
+
+#[test]
+fn a_forge_brief_section_stays_with_its_connector_until_taken() {
+    let mut world = World::new(85);
+    world.adopt();
+    world.produce(b"temper/51");
+    let pull = world.open_pull(b"temper/51", b"main");
+    let head = translate::commit(world.branch(b"temper/51"));
+    let mut row = change_row();
+    row.pull = Some(pull);
+    row.change.last_head = Some(head);
+    world.event(top::Event::Change { row });
+    assert!(world.stored().get(&top::Key::Change(51)).is_some(), "change registered: {:?}", world.seen());
+    world.take_seen();
+    let section = Token::new(94);
+    world.event(top::Event::GatherBriefHeld {
+        section,
+        source: top::BriefSource::Pull {
+            item: top::BriefItem { repository: REPO.repository, number: pull },
+            head: top::BriefCommit(head),
+        },
+        parts: 1,
+        bytes: 512,
+        max_job_bytes: 0,
+    });
+    assert!(world.seen().is_empty(), "gather startup: {:?}", world.seen());
+    world.run_for(5);
+    let size = world
+        .seen()
+        .iter()
+        .find_map(|request| {
+            if let top::Request::BriefSized { section: found, size } = request {
+                if *found == section { *size } else { None }
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| panic!("connector kept the gathered words: {:?}", world.seen()));
+    assert!(size > 40);
+    world.take_seen();
+    world.event(top::Event::CutBrief { section, bytes: 40 });
+    let cut = world
+        .seen()
+        .iter()
+        .find_map(|request| {
+            if let top::Request::BriefSized { section: found, size } = request {
+                if *found == section { *size } else { None }
+            } else {
+                None
+            }
+        })
+        .expect("connector cut its retained words");
+    assert!(cut <= 40);
+    world.take_seen();
+    world.event(top::Event::TakeBrief { section });
+    assert!(world.seen().iter().any(|request| matches!(request,
+        top::Request::BriefTaken { section: found, bytes: Some(words) }
+            if *found == section
+                && words.len() == usize::try_from(cut).expect("bounded cut")
+                && words.windows(b" bytes cut]".len()).any(|window| window == b" bytes cut]")
+    )));
+    world.take_seen();
+    world.event(top::Event::TakeBrief { section });
+    assert_eq!(world.seen(), [top::Request::BriefTaken { section, bytes: None }]);
+}
+
+#[test]
+fn dropping_a_forge_section_while_it_gathers_releases_its_token() {
+    let mut world = World::new(86);
+    world.adopt();
+    world.produce(b"temper/51");
+    let pull = world.open_pull(b"temper/51", b"main");
+    let head = translate::commit(world.branch(b"temper/51"));
+    let mut row = change_row();
+    row.pull = Some(pull);
+    row.change.last_head = Some(head);
+    world.event(top::Event::Change { row });
+    world.take_seen();
+    let section = Token::new(95);
+    world.event(top::Event::GatherBriefHeld {
+        section,
+        source: top::BriefSource::Pull {
+            item: top::BriefItem { repository: REPO.repository, number: pull },
+            head: top::BriefCommit(head),
+        },
+        parts: 1,
+        bytes: 512,
+        max_job_bytes: 0,
+    });
+    world.event(top::Event::DropBrief { section });
+    world.run_for(5);
+    assert!(
+        !world
+            .seen()
+            .iter()
+            .any(|request| matches!(request, top::Request::BriefSized { section: found, .. } if *found == section))
+    );
+    world.take_seen();
+    world.event(top::Event::TakeBrief { section });
+    assert_eq!(world.seen(), [top::Request::BriefTaken { section, bytes: None }]);
 }
 
 fn change_step(
@@ -484,6 +623,7 @@ fn a_failed_ci_head_is_repaired_then_checked_again() {
 }
 
 #[test]
+#[expect(clippy::too_many_lines, reason = "the full change story names each connector output explicitly")]
 fn a_change_produced_opened_checked_queued_and_landed() {
     let mut world = World::new(11);
     world.adopt();
@@ -576,6 +716,10 @@ fn a_change_produced_opened_checked_queued_and_landed() {
                 | top::Request::News { .. }
                 | top::Request::Drift { .. }
                 | top::Request::Read { .. }
+                | top::Request::BriefClient { .. }
+                | top::Request::BriefReady { .. }
+                | top::Request::BriefSized { .. }
+                | top::Request::BriefTaken { .. }
                 | top::Request::Call { .. } => {}
             }
         }

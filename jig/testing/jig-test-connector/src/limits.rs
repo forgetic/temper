@@ -1,0 +1,110 @@
+use skein_lib::{Duration, List, Map, Token};
+
+use crate::{Named, Path, Record, RecordKey, ResourceRole};
+
+/// Bounds for the connector's live records and one step's output.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Limits {
+    /// Maximum live tasks.
+    pub tasks: u32,
+    /// Maximum adopted project-resource pairs.
+    pub adoptions: u32,
+    /// Maximum task-topic subscriptions.
+    pub subscriptions: u32,
+    /// Maximum pools.
+    pub pools: u32,
+    /// Maximum configured resources.
+    pub resources: u32,
+    /// Maximum configured topics.
+    pub topics: u32,
+    /// Maximum configured effect kinds.
+    pub kinds: u32,
+    /// Configured requirement judges.
+    pub requirements: u32,
+    /// Configured procedure programs and live states.
+    pub procedures: u32,
+    /// Maximum actions in one procedure program.
+    pub actions_per_procedure: u32,
+    /// Working-set facts read from the system.
+    pub facts: u32,
+    /// Outstanding verdicts awaiting a fact change (at most four).
+    pub judges: u32,
+    /// Staged sections or workspace item sets.
+    pub values: u32,
+    /// Maximum bytes in one read answer or staged section.
+    pub value_bytes: u32,
+    /// Maximum effects awaiting an authority decision.
+    pub staged: u32,
+    /// Maximum unsettled outbox entries.
+    pub entries: u32,
+    /// Maximum live objects this deployment made by key.
+    pub made: u32,
+    /// Maximum resources in one effect.
+    pub resources_per_effect: u32,
+    /// Maximum attempts before an entry is held.
+    pub max_attempts: u32,
+    /// Lifetime of a system write before retry is allowed.
+    pub write_lifetime: Duration,
+    /// Margin for a wall clock that moved forward.
+    pub clock_margin: Duration,
+    /// Maximum resources named by one task.
+    pub resources_per_task: u32,
+    /// Maximum subscribers delivered by one news event.
+    pub subscribers_per_topic: u32,
+    /// Maximum lost allocations reported in one pool event.
+    pub lost_per_pool: u32,
+    /// Maximum segments in a path.
+    pub path_segments: u32,
+    /// Maximum bytes in one segment.
+    pub segment_bytes: u32,
+}
+
+/// The maximum heap used by the connector's tables and their owned paths.
+#[must_use]
+pub fn worst_case(limits: &Limits) -> Option<u64> {
+    if limits.path_segments == 0 || limits.segment_bytes == 0 || limits.max_attempts == 0 || limits.judges > 4 {
+        return None;
+    }
+    let path_bytes = u64::from(limits.path_segments).checked_mul(u64::from(limits.segment_bytes).checked_add(16)?)?;
+    let task_paths =
+        u64::from(limits.tasks).checked_mul(u64::from(limits.resources_per_task))?.checked_mul(path_bytes)?;
+    Map::<u64, Record>::worst_case(limits.tasks)?
+        .checked_add(Map::<(u32, Path), ResourceRole>::worst_case(limits.adoptions)?)?
+        .checked_add(Map::<(u16, u64), (u16, u16)>::worst_case(limits.subscriptions)?)?
+        .checked_add(Map::<Path, u32>::worst_case(limits.pools)?)?
+        .checked_add(List::<Named>::worst_case(limits.resources_per_task)?)?
+        .checked_add(List::<RecordKey>::worst_case(limits.subscriptions)?)?
+        .checked_add(List::<crate::ResourceSpec>::worst_case(limits.resources)?)?
+        .checked_add(List::<crate::PoolSpec>::worst_case(limits.pools)?)?
+        .checked_add(task_paths)?
+        .checked_add(u64::from(limits.adoptions).checked_mul(path_bytes)?)?
+        .checked_add(u64::from(limits.pools).checked_mul(path_bytes)?)?
+        .checked_add(u64::from(limits.resources).checked_mul(path_bytes)?)?
+        .checked_add(List::<crate::TopicSpec>::worst_case(limits.topics)?)?
+        .checked_add(List::<crate::KindSpec>::worst_case(limits.kinds)?)?
+        .checked_add(List::<crate::RequirementSpec>::worst_case(limits.requirements)?)?
+        .checked_add(List::<crate::ProcedureSpec>::worst_case(limits.procedures)?)?
+        .checked_add(
+            u64::from(limits.procedures).checked_mul(u64::from(limits.actions_per_procedure))?.checked_mul(64)?,
+        )?
+        .checked_add(Map::<Path, crate::Fact>::worst_case(limits.facts)?)?
+        .checked_add(Map::<Token, crate::requirements::Question>::worst_case(limits.judges)?)?
+        .checked_add(Map::<u64, crate::ProcedureState>::worst_case(limits.procedures)?)?
+        .checked_add(Map::<u64, u16>::worst_case(limits.procedures)?)?
+        .checked_add(Map::<Token, crate::values::Payload>::worst_case(limits.values)?)?
+        .checked_add(u64::from(limits.values).checked_mul(u64::from(limits.value_bytes))?)?
+        .checked_add(Map::<Token, crate::Effect>::worst_case(limits.staged)?)?
+        .checked_add(Map::<u64, crate::OutboxEntry>::worst_case(limits.entries)?)?
+        .checked_add(Map::<u64, crate::outbox::Runtime>::worst_case(limits.entries)?)?
+        .checked_add(Map::<crate::Key, crate::outbox::Made>::worst_case(limits.made)?)?
+        .checked_add(
+            u64::from(limits.staged).checked_mul(u64::from(limits.resources_per_effect))?.checked_mul(path_bytes)?,
+        )?
+        .checked_add(
+            u64::from(limits.entries).checked_mul(u64::from(limits.resources_per_effect))?.checked_mul(path_bytes)?,
+        )?
+        .checked_add(
+            u64::from(limits.made).checked_mul(u64::from(limits.resources_per_effect))?.checked_mul(path_bytes)?,
+        )?
+        .checked_add(path_bytes)
+}

@@ -7,6 +7,39 @@ use temper_engine_domain_forge_change as change;
 use temper_engine_domain_forge_client as client;
 use temper_engine_domain_forge_issues as issues;
 
+/// A pull request whose context the connector gathers for a run brief.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct BriefItem {
+    /// Its repository in the deployment's adopted set.
+    pub repository: u32,
+    /// Its provider number.
+    pub number: u64,
+}
+
+/// A pinned head for one brief read.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct BriefCommit(pub [u8; 32]);
+
+/// Which forge context the connector owns for a brief.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BriefSource {
+    /// Failed checks and their logs on a pinned head.
+    Ci { item: BriefItem, head: BriefCommit },
+    /// Reviews and remarks on a pinned head.
+    Reviews { item: BriefItem, head: BriefCommit },
+    /// A pull request against its base at a pinned head.
+    Pull { item: BriefItem, head: BriefCommit },
+}
+
+/// The connector's bounded section, or a failed gather.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum BriefRead {
+    /// The bytes the connector rendered, and bytes left out at its read bound.
+    Got { bytes: Box<[u8]>, left: u64 },
+    /// The pinned section could not be read.
+    Failed,
+}
+
 /// A resource of one configured forge repository (domain/forge.md, section 2).
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct Name {
@@ -319,6 +352,16 @@ pub enum Key {
 /// A parent or child input to the connector top.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Event {
+    /// Gather one pinned, connector-owned section for a run brief.
+    GatherBrief { owner: Token, source: BriefSource, parts: u32, bytes: u32, max_job_bytes: u32 },
+    /// Gather a section and retain its rendered bytes until the root takes or drops its token.
+    GatherBriefHeld { section: Token, source: BriefSource, parts: u32, bytes: u32, max_job_bytes: u32 },
+    /// Cut retained words to the brief's allotment, preserving this source's end.
+    CutBrief { section: Token, bytes: u32 },
+    /// Transfer retained words to the root for a completed assignment.
+    TakeBrief { section: Token },
+    /// Release a section, including one still gathering.
+    DropBrief { section: Token },
     /// Read current permissions, settings, protection and collaborators.
     Adopt { reply_to: Token, adoption: Adoption },
     /// Withdraw a just-adopted repository when its parent cannot commit the role seed.
@@ -389,6 +432,14 @@ pub enum Event {
 /// The connector's output to the root, including child API calls.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Request {
+    /// Feed the next bounded read of a forge section to this connector's client.
+    BriefClient { event: client::Event },
+    /// One connector-owned section is ready for the root to route to the brief.
+    BriefReady { owner: Token, read: BriefRead },
+    /// A held section has this rendered size, or its gather/cut failed.
+    BriefSized { section: Token, size: Option<u32> },
+    /// A held section transferred its rendered bytes to the root.
+    BriefTaken { section: Token, bytes: Option<Box<[u8]>> },
     /// Terminal result of a repository adoption, for the root's person route.
     Adopted { reply_to: Token, result: Result<Adopted, client::api::Error> },
     /// Save one record atomically with the current decision.

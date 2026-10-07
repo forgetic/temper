@@ -6,18 +6,24 @@ members = [
     "crates/temper-web-domain",
     "crates/temper-engine-domain",
     "crates/temper-engine-smith",
-    "crates/temper-engine-domain-accounts",
+    "jig/crates/jig-core-accounts",
+    "jig/testing/jig-test-connector",
+    "jig/testing/jig-test-system",
+    "jig/testing/jig-ops-fake-production",
+    "jig/examples/ops/domain-observability",
+    "jig/tests/ops",
+    "jig/tests/test-connector",
     "crates/temper-engine-domain-authority",
     "crates/temper-engine-domain-brief",
-    "crates/temper-engine-domain-fleet",
+    "jig/crates/jig-core-fleet",
     "crates/temper-engine-domain-forge-client",
     "crates/temper-engine-domain-forge-change",
     "crates/temper-engine-domain-forge-issues",
     "crates/temper-engine-domain-forge",
-    "crates/temper-engine-domain-notes",
+    "jig/crates/jig-core-notes",
     "crates/temper-engine-domain-people",
     "crates/temper-engine-domain-tasks",
-    "crates/temper-engine-domain-views",
+    "jig/crates/jig-core-views",
     "crates/temper-worker-domain",
     "crates/temper-worker-domain-agent",
     "crates/temper-worker-domain-checkout",
@@ -26,17 +32,17 @@ members = [
     "testing/temper-fake-forge-domain",
     "testing/temper-fake-person",
     "tests/fake-checkout",
-    "tests/engine/accounts",
+    "jig/tests/accounts",
     "tests/engine/brief",
     "tests/engine/domain",
     "tests/system",
-    "tests/engine/fleet",
+    "jig/tests/fleet",
     "tests/engine/forge/client",
     "tests/engine/forge",
-    "tests/engine/notes",
+    "jig/tests/notes",
     "tests/engine/people",
     "tests/engine/tasks",
-    "tests/engine/views",
+    "jig/tests/views",
     "tests/fake-forge",
     "tests/worker/agent",
     "tests/worker/checkout",
@@ -44,6 +50,7 @@ members = [
     "tests/worker/domain",
     "tests/web/domain",
     "tests/world",
+    "jig/tests/boundary",
 ]
 
 [workspace.package]
@@ -67,20 +74,24 @@ smith-domain-tools = { git = "https://git.ekanayaka.io/ai/smith.git" }
 sha2 = { version = "=0.10.9", default-features = false }
 temper-web-view = { path = "crates/temper-web-view" }
 temper-fake-person = { path = "testing/temper-fake-person" }
-temper-engine-domain-accounts = { path = "crates/temper-engine-domain-accounts" }
+jig-core-accounts = { path = "jig/crates/jig-core-accounts" }
+jig-test-connector = { path = "jig/testing/jig-test-connector" }
+jig-test-system = { path = "jig/testing/jig-test-system" }
+jig-ops-fake-production = { path = "jig/testing/jig-ops-fake-production" }
+jig-ops-domain-observability = { path = "jig/examples/ops/domain-observability" }
 temper-engine-domain = { path = "crates/temper-engine-domain" }
 temper-engine-smith = { path = "crates/temper-engine-smith" }
 temper-engine-domain-authority = { path = "crates/temper-engine-domain-authority" }
-temper-engine-domain-notes = { path = "crates/temper-engine-domain-notes" }
+jig-core-notes = { path = "jig/crates/jig-core-notes" }
 temper-engine-domain-people = { path = "crates/temper-engine-domain-people" }
 temper-engine-domain-tasks = { path = "crates/temper-engine-domain-tasks" }
 temper-engine-domain-brief = { path = "crates/temper-engine-domain-brief" }
-temper-engine-domain-fleet = { path = "crates/temper-engine-domain-fleet" }
+jig-core-fleet = { path = "jig/crates/jig-core-fleet" }
 temper-engine-domain-forge-client = { path = "crates/temper-engine-domain-forge-client" }
 temper-engine-domain-forge-change = { path = "crates/temper-engine-domain-forge-change" }
 temper-engine-domain-forge-issues = { path = "crates/temper-engine-domain-forge-issues" }
 temper-engine-domain-forge = { path = "crates/temper-engine-domain-forge" }
-temper-engine-domain-views = { path = "crates/temper-engine-domain-views" }
+jig-core-views = { path = "jig/crates/jig-core-views" }
 temper-worker-domain = { path = "crates/temper-worker-domain" }
 temper-worker-domain-agent = { path = "crates/temper-worker-domain-agent" }
 temper-worker-domain-checkout = { path = "crates/temper-worker-domain-checkout" }

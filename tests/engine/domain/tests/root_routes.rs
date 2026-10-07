@@ -1,13 +1,13 @@
+use jig_core_accounts as accounts;
+use jig_core_fleet as fleet;
+use jig_core_views as views;
 use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
 use std::collections::VecDeque;
 use temper_engine_domain::{Delivery, Key, Record, Write, engine};
-use temper_engine_domain_accounts as accounts;
 use temper_engine_domain_authority as authority;
 use temper_engine_domain_brief as brief;
-use temper_engine_domain_fleet as fleet;
 use temper_engine_domain_people as people;
 use temper_engine_domain_tasks as tasks;
-use temper_engine_domain_views as views;
 use temper_engine_domain_world::commits::Store;
 use temper_engine_domain_world::walking::{Settings, World, config, limits};
 use temper_engine_domain_world::walking_referee::{FINAL_SPEND, QUESTION, REPORT};
@@ -29,7 +29,7 @@ fn a_watched_run_shows_each_turn_as_it_commits() {
     driver.send(engine::Event::Watch {
         watcher: Token::new(770),
         sign_in: driver.session(),
-        subject: views::Subject::Run(Token::new(assignment.task)),
+        subject: views::Subject::Run { task: Token::new(assignment.task), attempt: Token::new(assignment.attempt) },
     });
     assert!(driver.viewed.iter().any(|request| matches!(request,
         views::Request::Watching { watcher } if *watcher == Token::new(770)
@@ -50,8 +50,8 @@ fn a_watched_run_shows_each_turn_as_it_commits() {
     assert!(driver.viewed.iter().any(|request| matches!(request,
         views::Request::Deliver { watcher, chunks, missed: 0 }
             if *watcher == Token::new(770) && matches!(&**chunks,
-                [views::Chunk::Report { run, attempt, kind: views::Kind::Progress, content, .. }]
-                    if *run == Token::new(assignment.task)
+                [views::Chunk::Report { task, attempt, kind: views::Kind::Progress, content, .. }]
+                    if *task == Token::new(assignment.task)
                         && *attempt == Token::new(assignment.attempt)
                         && content.as_ref() == 1_u32.to_be_bytes())
     )));
@@ -74,7 +74,7 @@ fn a_task_tree_watch_carries_a_child_phase_after_its_commit() {
     driver.send(engine::Event::Watch {
         watcher: Token::new(771),
         sign_in: driver.session(),
-        subject: views::Subject::Item(Token::new(assignment.task)),
+        subject: views::Subject::Tree { task: Token::new(assignment.task) },
     });
     let snapshot = driver
         .viewed
@@ -94,7 +94,7 @@ fn a_task_tree_watch_carries_a_child_phase_after_its_commit() {
     assert!(driver.viewed.iter().any(|request| matches!(request,
         views::Request::Deliver { watcher, chunks, .. } if *watcher == Token::new(771)
             && chunks.iter().any(|chunk| matches!(chunk,
-                views::Chunk::Phase { item, .. } if *item == Token::new(child)
+                views::Chunk::Phase { task, .. } if *task == Token::new(child)
             ))
     )));
 }
@@ -106,7 +106,7 @@ fn a_project_goals_watch_shows_a_later_priority_change() {
     driver.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 2,
             workstreams: Box::new([]),
             hosting: Box::new([]),
@@ -133,7 +133,7 @@ fn a_project_goals_watch_shows_a_later_priority_change() {
     driver.send(engine::Event::Watch {
         watcher: Token::new(774),
         sign_in: maintainer_session,
-        subject: views::Subject::Board(1),
+        subject: views::Subject::Goals { project: 1 },
     });
     let snapshot = driver
         .viewed
@@ -159,8 +159,8 @@ fn a_project_goals_watch_shows_a_later_priority_change() {
     assert!(driver.viewed.iter().any(|request| matches!(request,
         views::Request::Deliver { watcher, chunks, .. } if *watcher == Token::new(774)
             && chunks.iter().any(|chunk| matches!(chunk,
-                views::Chunk::Report { run, kind: views::Kind::Progress, content, .. }
-                    if *run == Token::new(task) && content[4..] == 7_u32.to_be_bytes()
+                views::Chunk::Report { task: report_task, kind: views::Kind::Progress, content, .. }
+                    if *report_task == Token::new(task) && content[4..] == 7_u32.to_be_bytes()
             ))
     )));
 }
@@ -349,7 +349,7 @@ fn a_maintainer_prioritises_project_goals_and_a_member_cannot() {
     driver.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 2,
             workstreams: Box::new([]),
             hosting: Box::new([]),
@@ -477,7 +477,7 @@ fn a_members_wider_amendment_waits_for_a_maintainer_to_accept() {
     driver.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 2,
             workstreams: Box::new([]),
             hosting: Box::new([]),
@@ -708,7 +708,7 @@ fn durable_start_turn_and_answer_callbacks_survive_full_journal_pressure() {
     driver.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 1,
             workstreams: Box::new([]),
             hosting: Box::new([]),
@@ -1179,7 +1179,7 @@ fn hello(driver: &mut Driver) {
     driver.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 1,
             workstreams: Box::new([]),
             hosting: Box::new([]),
@@ -1455,7 +1455,7 @@ fn maximum_cold_hello_batch_and_duplicate_losses_fit_one_startup_decision() {
         driver.send(engine::Event::Hello {
             channel: Token::new(channel),
             hello: fleet::Hello {
-                graces: Some(Duration::from_secs(5)),
+                stop_bound: Duration::from_secs(5),
                 slots: 1,
                 workstreams: Box::new([]),
                 hosting: Box::new([]),
@@ -1466,7 +1466,12 @@ fn maximum_cold_hello_batch_and_duplicate_losses_fit_one_startup_decision() {
     }
     driver.send(engine::Event::Hello {
         channel: Token::new(1),
-        hello: fleet::Hello { graces: None, slots: 1, workstreams: Box::new([]), hosting: Box::new([]) },
+        hello: fleet::Hello {
+            stop_bound: limits.fleet.grace,
+            slots: 1,
+            workstreams: Box::new([]),
+            hosting: Box::new([]),
+        },
     });
     driver.settle();
     assert_eq!(driver.delivered.iter().filter(|delivery| matches!(delivery, Delivery::Refuse { .. })).count(), 5);
@@ -1694,7 +1699,7 @@ fn batch_fixture_custom(
     driver.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots,
             workstreams: Box::new([]),
             hosting: Box::new([]),
@@ -2711,14 +2716,14 @@ fn a_plan_of_spikes_a_choice_and_changes_runs_in_dependency_order() {
         if assignment.task == numbers[1] || assignment.task == numbers[2])));
     finish_task(&mut driver, &first, tasks::TaskResult::Report { words: b"spike says yes".as_slice().into() });
     let second = assigned_task(&driver, numbers[1]);
-    assert!(second.sections.iter().any(|section| section.kind == brief::Kind::Dependencies
-        && matches!(&section.body, brief::Body::Text(text) if text.windows(b"spike says yes".len()).any(|part| part == b"spike says yes"))));
+    assert!(second.sections.iter().any(|section| section.kind == engine::BriefKind::Core(brief::Core::Results)
+        && matches!(&section.body, engine::BriefBody::Text(text) if text.windows(b"spike says yes".len()).any(|part| part == b"spike says yes"))));
     assert!(!driver.delivered.iter().any(|item| matches!(item, Delivery::Assigned { assignment, .. }
         if assignment.task == numbers[2])));
     finish_task(&mut driver, &second, tasks::TaskResult::Verdict { code: 7, words: b"choose path".as_slice().into() });
     let third = assigned_task(&driver, numbers[2]);
-    assert!(third.sections.iter().any(|section| section.kind == brief::Kind::Dependencies
-        && matches!(&section.body, brief::Body::Text(text) if text.windows(b"verdict 7".len()).any(|part| part == b"verdict 7"))));
+    assert!(third.sections.iter().any(|section| section.kind == engine::BriefKind::Core(brief::Core::Results)
+        && matches!(&section.body, engine::BriefBody::Text(text) if text.windows(b"verdict 7".len()).any(|part| part == b"verdict 7"))));
     finish_task(
         &mut driver,
         &third,
@@ -2769,8 +2774,8 @@ fn a_negative_verdict_starts_dependents_and_a_failure_holds_them() {
     let first = assigned_task(&driver, numbers[0]);
     finish_task(&mut driver, &first, tasks::TaskResult::Verdict { code: 0, words: b"no".as_slice().into() });
     let second = assigned_task(&driver, numbers[1]);
-    assert!(second.sections.iter().any(|section| section.kind == brief::Kind::Dependencies
-        && matches!(&section.body, brief::Body::Text(text) if text.windows(b"verdict 0".len()).any(|part| part == b"verdict 0"))));
+    assert!(second.sections.iter().any(|section| section.kind == engine::BriefKind::Core(brief::Core::Results)
+        && matches!(&section.body, engine::BriefBody::Text(text) if text.windows(b"verdict 0".len()).any(|part| part == b"verdict 0"))));
     finish_task(&mut driver, &second, tasks::TaskResult::Failure { reason: b"blocked".as_slice().into() });
     let row = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(numbers[2]))).expect("dependent held live");
     let Record::Tasks(tasks::Stored::Live(task)) = row else { panic!("dependent row") };
@@ -2805,8 +2810,8 @@ fn an_ended_delegate_can_be_named_as_a_later_tasks_input() {
     let second = call_batch(&mut driver, &parent_again, 114, Box::new([second]));
     park_task(&mut driver, &parent_again);
     let assigned = assigned_task(&driver, second[0]);
-    assert!(assigned.sections.iter().any(|section| section.kind == brief::Kind::Dependencies
-        && matches!(&section.body, brief::Body::Text(text) if text.windows(b"found it".len()).any(|part| part == b"found it"))));
+    assert!(assigned.sections.iter().any(|section| section.kind == engine::BriefKind::Core(brief::Core::Results)
+        && matches!(&section.body, engine::BriefBody::Text(text) if text.windows(b"found it".len()).any(|part| part == b"found it"))));
 }
 
 #[test]
@@ -2866,7 +2871,7 @@ fn a_call_asked_twice_across_a_restart_is_decided_once() {
     restarted.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 1,
             workstreams: Box::new([]),
             hosting: Box::new([fleet::Hosted {
@@ -2905,7 +2910,7 @@ fn a_lost_attempt_is_told_of_the_calls_committed_after_its_last_turn() {
     driver.send(engine::Event::Hello {
         channel: Token::new(8),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 1,
             workstreams: Box::new([]),
             hosting: Box::new([]),
@@ -3512,7 +3517,7 @@ fn restored_loss_spends_a_try_with_or_without_a_durable_turn() {
         original.send(engine::Event::Hello {
             channel: Token::new(7),
             hello: fleet::Hello {
-                graces: Some(Duration::from_secs(1)),
+                stop_bound: Duration::from_secs(1),
                 slots: 1,
                 workstreams: Box::new([]),
                 hosting: Box::new([]),
@@ -4119,7 +4124,7 @@ fn chat_driver() -> (Driver, engine::Assignment) {
     driver.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 1,
             workstreams: Box::new([]),
             hosting: Box::new([]),
@@ -4348,8 +4353,10 @@ fn a_chat_past_the_resume_limit_starts_fresh_with_the_tail_in_its_brief() {
         .sections
         .iter()
         .find_map(|section| match &section.body {
-            brief::Body::Text(bytes) if section.kind == brief::Kind::Transcript => Some(bytes),
-            brief::Body::Text(_) | brief::Body::Missing(_) => None,
+            engine::BriefBody::Text(bytes) if section.kind == engine::BriefKind::Core(brief::Core::TranscriptTail) => {
+                Some(bytes)
+            }
+            engine::BriefBody::Text(_) | engine::BriefBody::Missing(_) => None,
         })
         .expect("bounded transcript tail section");
     assert!(tail.ends_with(b"yz"), "the newest conversation bytes survive the cut");
@@ -4787,7 +4794,7 @@ fn a_worker_lost_mid_run_resumes_at_the_last_committed_turn() {
     driver.send(engine::Event::Hello {
         channel: Token::new(8),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 1,
             workstreams: Box::new([]),
             hosting: Box::new([]),
@@ -4806,7 +4813,7 @@ fn a_worker_frozen_past_its_grace_gets_no_next_attempt_until_its_sum_has_passed(
     driver.send(engine::Event::Hello {
         channel: Token::new(8),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(5)),
+            stop_bound: Duration::from_secs(5),
             slots: 1,
             workstreams: Box::new([]),
             hosting: Box::new([]),

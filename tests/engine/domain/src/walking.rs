@@ -4,13 +4,12 @@
 
 use crate::commits::Store;
 use crate::walking_referee::{FINAL_SPEND, QUESTION, REPORT, TURNS, WalkingReferee};
+use jig_core_accounts as accounts;
+use jig_core_fleet as fleet;
 use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
 use std::collections::{BTreeMap, VecDeque};
 use temper_engine_domain::{Delivery, JournalLimits, Record, engine, loads};
-use temper_engine_domain_accounts as accounts;
 use temper_engine_domain_authority as authority;
-use temper_engine_domain_brief as brief;
-use temper_engine_domain_fleet as fleet;
 use temper_engine_domain_people as people;
 use temper_engine_domain_tasks as tasks;
 
@@ -76,9 +75,9 @@ pub fn limits() -> engine::Limits {
     };
     let fleet = fleet::Limits {
         workers: 1,
+        engine_slots: 0,
         slots: 1,
         workstreams: 1,
-        workstream_bytes: 32,
         attempts: 2,
         calls: 1,
         turns: 2,
@@ -108,28 +107,22 @@ pub fn limits() -> engine::Limits {
         people,
         fleet,
         call_records: 2,
-        brief: brief::Limits {
+        brief: engine::BriefLimits {
             briefs: 2,
             sections: 3,
-            items: 1,
             parts: 2,
             read_bytes: 256,
-            budgets: brief::Budgets {
+            budgets: engine::BriefBudgets {
                 task: 128,
-                item: 128,
-                comments: 128,
                 dependencies: 128,
                 ci: 128,
                 reviews: 128,
                 pull: 128,
                 attempts: 128,
                 plan: 128,
-                notes: 128,
-                template: 128,
             },
             brief_bytes: 384,
             gather: Duration::from_secs(1),
-            facts: 2,
         },
         accounts: accounts::Limits {
             accounts: 1,
@@ -140,18 +133,12 @@ pub fn limits() -> engine::Limits {
             spent_attention: Duration::from_secs(1),
             facts: 2,
         },
-        views: temper_engine_domain_views::Limits {
+        views: jig_core_views::Limits {
             runs: 2,
             watchers: 4,
             backlog: 2,
             report_bytes: 64,
             snapshot_bytes: 128,
-            records: 2,
-            batch_bytes: 128,
-            appends: 1,
-            flush: Duration::from_secs(1),
-            retention: Duration::from_secs(60),
-            sweep: Duration::from_secs(10),
             facts: 8,
         },
         forge: temper_engine_forge_world::LIMITS,
@@ -401,7 +388,7 @@ impl World {
             engine::Event::Hello {
                 channel: Token::new(7),
                 hello: fleet::Hello {
-                    graces: Some(Duration::from_millis(100)),
+                    stop_bound: Duration::from_millis(100),
                     slots: 1,
                     workstreams: Box::new([]),
                     hosting,

@@ -55,7 +55,7 @@ pub enum Delivery {
         op: temper_engine_domain_forge_client::api::Op,
     },
     /// Internal committed notice to the expendable live views child.
-    View(Box<temper_engine_domain_views::Event>),
+    View(Box<jig_core_views::Event>),
     /// Committed request to the connector that owns a procedure task. The owner steps against
     /// current facts and returns the fenced decision through the root.
     Procedure { task: u64, step: u64, connector: u16, code: u32 },
@@ -129,7 +129,7 @@ pub enum Delivery {
         /// Root-issued `Start`, `TurnKept`, `Acknowledge` or `Cancel` callback. `Start` workstream
         /// bytes are at most journal `transcript_bytes`; other payloads are fixed-size. Fleet
         /// start/cancel consequences route back inside the root.
-        temper_engine_domain_fleet::Event,
+        jig_core_fleet::Event,
     ),
     /// Root to worker: complete bounded assignment after its claim commit.
     Assigned {
@@ -396,19 +396,17 @@ impl Decision {
         assert!(*limits == self.limits, "decision uses its configured limits");
         let within = match &delivery {
             Delivery::View(event) => match event.as_ref() {
-                temper_engine_domain_views::Event::TaskPhase { trees, .. } => {
+                jig_core_views::Event::TaskPhase { trees, .. } => {
                     trees.len() <= usize::try_from(limits.deliveries).expect("u32 fits usize")
                 }
-                temper_engine_domain_views::Event::Started { .. }
-                | temper_engine_domain_views::Event::Turn { .. }
-                | temper_engine_domain_views::Event::Finished { .. }
-                | temper_engine_domain_views::Event::Phase { .. } => true,
-                temper_engine_domain_views::Event::Reported { .. }
-                | temper_engine_domain_views::Event::Watch { .. }
-                | temper_engine_domain_views::Event::Unwatch { .. }
-                | temper_engine_domain_views::Event::Delivered { .. }
-                | temper_engine_domain_views::Event::Appended { .. }
-                | temper_engine_domain_views::Event::Expired { .. } => false,
+                jig_core_views::Event::Started { .. }
+                | jig_core_views::Event::Turn { .. }
+                | jig_core_views::Event::Finished { .. }
+                | jig_core_views::Event::Inbox { .. } => true,
+                jig_core_views::Event::Reported { .. }
+                | jig_core_views::Event::Watch { .. }
+                | jig_core_views::Event::Unwatch { .. }
+                | jig_core_views::Event::Delivered { .. } => false,
             },
             Delivery::Result { words, .. } | Delivery::ResultReply { words, .. } => {
                 words.len() <= usize::try_from(limits.result_bytes).expect("u32 fits usize")
@@ -486,7 +484,7 @@ impl Decision {
                         | temper_engine_domain_tasks::Escalation::Routing { .. } => false,
                     }
             }
-            Delivery::Fleet(event) => fleet_delivery_within(event, limits),
+            Delivery::Fleet(event) => fleet_delivery_within(event),
             Delivery::Relay { word, .. } | Delivery::Inbound { word, .. } => {
                 word.number != 0
                     && word.words.len() <= usize::try_from(limits.transcript_bytes).expect("u32 fits usize")
@@ -737,20 +735,21 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
                     .max(u64::from(limits.transcript_bytes))
                     .checked_add(u64::from(limits.run_bytes))?
                     .checked_add(
-                        List::<temper_engine_domain_brief::Section>::worst_case(limits.deliveries)?
+                        List::<crate::engine::BriefSection>::worst_case(limits.deliveries)?
                             .max(u64::try_from(size_of::<temper_engine_domain_tasks::EscalationContext>()).ok()?),
                     )?,
             )?,
         )
 }
 
-fn fleet_delivery_within(event: &temper_engine_domain_fleet::Event, limits: &Limits) -> bool {
-    use temper_engine_domain_fleet::Event;
+fn fleet_delivery_within(event: &jig_core_fleet::Event) -> bool {
+    use jig_core_fleet::Event;
     match event {
-        Event::Start { workstream, .. } => {
-            workstream.len() <= usize::try_from(limits.transcript_bytes).expect("u32 fits usize")
-        }
-        Event::TurnKept { .. } | Event::Acknowledge { .. } | Event::Cancel { .. } | Event::Relayed { .. } => true,
+        Event::Start { .. }
+        | Event::TurnKept { .. }
+        | Event::Acknowledge { .. }
+        | Event::Cancel { .. }
+        | Event::Relayed { .. } => true,
         Event::Adopt { .. }
         | Event::Inbound { .. }
         | Event::Loaded
@@ -809,8 +808,8 @@ fn assignment_within(assignment: &crate::engine::Assignment, limits: &Limits) ->
     owned = 0;
     for section in &assignment.sections {
         let bytes = match &section.body {
-            temper_engine_domain_brief::Body::Text(bytes) => u64::try_from(bytes.len()).expect("usize fits u64"),
-            temper_engine_domain_brief::Body::Missing(_) => 0,
+            crate::engine::BriefBody::Text(bytes) => u64::try_from(bytes.len()).expect("usize fits u64"),
+            crate::engine::BriefBody::Missing(_) => 0,
         };
         let Some(total) = owned.checked_add(bytes) else {
             return false;

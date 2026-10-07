@@ -45,6 +45,8 @@ pub const LIMITS: top::Limits = top::Limits {
     adoptions: 2,
     collaborators: 8,
     landings: 8,
+    brief_sections: 32,
+    brief_bytes: 4096,
     client: CLIENT,
     issue_policy: temper_engine_domain_forge_issues::Limits {
         plan_items: 8,
@@ -389,6 +391,9 @@ impl World {
         for _ in 0..self.top_out.len() {
             let request = self.top_out.pop().expect("counted top output");
             match request {
+                top::Request::BriefClient { event } => {
+                    top::step(&mut self.top, &self.env, top::Event::Client(event), &mut self.top_out);
+                }
                 top::Request::Save { record } => {
                     let key = key(&record);
                     self.stored.insert(key, record).expect("world store capacity");
@@ -411,6 +416,9 @@ impl World {
                 | top::Request::ChangeDecision { .. }
                 | top::Request::News { .. }
                 | top::Request::Read { .. }
+                | top::Request::BriefReady { .. }
+                | top::Request::BriefSized { .. }
+                | top::Request::BriefTaken { .. }
                 | top::Request::Drift { .. }) => {
                     self.seen.push(other).expect("world output capacity");
                 }

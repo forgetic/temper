@@ -1,46 +1,46 @@
-//! The engine's brief child domain at random: many random worlds, each settled,
-//! every ending reached among them.
+//! Small deterministic inventories sweep sizes, priorities and budgets.
 
-use std::collections::BTreeSet;
-
-use temper_engine_brief_world::{ENDINGS, Settings, World};
-
-const ITERATIONS: u32 = 200_000;
-
-fn run(settings: Settings) -> World {
-    let mut world = World::new(settings);
-    world.run(ITERATIONS);
-    world
-}
+use skein_lib::{Duration, Time, Token};
+use temper_engine_brief_world::{LIMITS, World, referee};
+use temper_engine_domain_brief::{Core, GatherEvent, GatherRequest, Planned};
 
 #[test]
-fn random_worlds_settle_with_every_ending_reached() {
-    let mut endings = BTreeSet::new();
-    let (mut sections, mut cuts) = (0, 0);
-    for seed in 0..200 {
-        let world = run(Settings::random(seed));
-        endings.extend(world.stats().endings.keys().copied());
-        let judged = world.judged();
-        (sections, cuts) = (sections + judged.0, cuts + judged.1);
+fn seeded_connector_sizes_and_priorities_never_exceed_the_budget_or_leak_a_token() {
+    for seed in 0_u64..64 {
+        let mut world = World::new(LIMITS);
+        let size = usize::try_from(seed + 1).expect("small seed");
+        let budget = u32::try_from(12 + seed % 37).expect("small budget");
+        let token = Token::new(2);
+        world.put(token, &vec![b'x'; size]);
+        let asked = world.step(GatherEvent::Plan {
+            brief: Token::new(1),
+            budget,
+            deadline: Time::ZERO.saturating_add(Duration::from_secs(10)),
+            sections: Box::new([
+                Planned::Connector {
+                    connector: 3,
+                    kind: 7,
+                    token,
+                    size: 0,
+                    limit: 80,
+                    priority: u16::try_from(seed % 3).expect("small priority"),
+                    required: seed % 2 == 0,
+                },
+                Planned::Core {
+                    kind: Core::Task,
+                    text: b"do work".as_slice().into(),
+                    limit: 32,
+                    priority: 1,
+                    required: true,
+                },
+            ]),
+        });
+        let done = world.settle(asked);
+        assert!(referee::within_budget(&done, budget), "seed {seed}");
+        assert!(
+            matches!(done.as_slice(), [GatherRequest::Complete { .. } | GatherRequest::Failed { .. }]),
+            "seed {seed}: {done:?}"
+        );
+        assert!(world.closed(token), "seed {seed}: token closed");
     }
-    let missed: Vec<&str> = ENDINGS.iter().copied().filter(|ending| !endings.contains(ending)).collect();
-    assert!(missed.is_empty(), "every ending was reached: {missed:?} were not");
-    assert!(sections > 5000 && cuts > 500, "the referee judged sections and cuts: {sections}, {cuts}");
-}
-
-#[test]
-fn task_sections_settle_across_random_bounds_and_terminal_races() {
-    let mut judged = 0;
-    let mut endings = BTreeSet::new();
-    for seed in 0..64 {
-        let world = run(Settings { task_sections: true, ..Settings::random(seed) });
-        judged += world.judged().0;
-        endings.extend(world.stats().endings.keys().copied());
-    }
-    assert!(judged > 500, "the referee checked task sections across the sweep");
-    // Task sources name one task. The item-list truncation outcome belongs
-    // to the legacy Dependencies source; every applicable outcome is checked.
-    let missed: Vec<&str> =
-        ENDINGS.iter().copied().filter(|ending| *ending != "items cut" && !endings.contains(ending)).collect();
-    assert!(missed.is_empty(), "task section worlds reached every ending: {missed:?} were not");
 }

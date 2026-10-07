@@ -22,6 +22,10 @@ pub struct Limits {
     pub adoptions: u32,
     pub collaborators: u32,
     pub landings: u32,
+    /// Connector brief sections gathering concurrently.
+    pub brief_sections: u32,
+    /// Maximum bytes retained for one gathered brief section.
+    pub brief_bytes: u32,
     pub issue_policy: temper_engine_domain_forge_issues::Limits,
     pub change_policy: temper_engine_domain_forge_change::Limits,
     pub queue_window: skein_lib::Duration,
@@ -44,6 +48,8 @@ pub fn worst_case(l: &Limits) -> Option<u64> {
         || l.adoptions == 0
         || l.collaborators == 0
         || l.landings == 0
+        || l.brief_sections == 0
+        || l.brief_bytes == 0
         || l.repositories > l.client.repositories
         || l.entries > l.client.entries
         || l.holds > l.client.resources
@@ -104,6 +110,13 @@ pub fn worst_case(l: &Limits) -> Option<u64> {
             )?,
         )?
         .checked_add(Map::<skein_lib::Token, crate::domain::PendingAdoption>::worst_case(l.adoptions)?)?
+        .checked_add(Map::<skein_lib::Token, crate::brief::BriefFetch>::worst_case(l.brief_sections)?)?
+        .checked_add(Map::<skein_lib::Token, crate::held::Pending>::worst_case(l.brief_sections)?)?
+        .checked_add(Map::<skein_lib::Token, crate::held::Held>::worst_case(l.brief_sections)?)?
+        .checked_add(u64::from(l.brief_sections).checked_mul(u64::from(l.brief_bytes))?)?
+        .checked_add(u64::from(l.brief_sections).checked_mul(u64::from(l.brief_bytes))?)?
+        .checked_add(u64::from(l.brief_sections).checked_mul(u64::from(l.client.answer_bytes))?)?
+        .checked_add(u64::from(l.brief_bytes).checked_mul(2)?)?
         .checked_add(Queue::<Stored>::worst_case(l.output)?)?
         .checked_add(Queue::<Key>::worst_case(l.output)?)?
         .checked_add(Queue::<client::Fact>::worst_case(l.facts)?)?

@@ -74,6 +74,118 @@ dependencies = [
 ]
 
 [[package]]
+name = "jig-accounts-world"
+version = "0.0.0"
+dependencies = [
+ "jig-core-accounts",
+ "skein-lib",
+ "skein-world",
+]
+
+[[package]]
+name = "jig-boundary"
+version = "0.0.0"
+
+[[package]]
+name = "jig-core-accounts"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+]
+
+[[package]]
+name = "jig-core-fleet"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+]
+
+[[package]]
+name = "jig-core-notes"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+]
+
+[[package]]
+name = "jig-core-views"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+]
+
+[[package]]
+name = "jig-fleet-world"
+version = "0.0.0"
+dependencies = [
+ "jig-core-fleet",
+ "skein-lib",
+ "skein-world",
+]
+
+[[package]]
+name = "jig-notes-world"
+version = "0.0.0"
+dependencies = [
+ "jig-core-notes",
+ "skein-lib",
+ "skein-world",
+]
+
+[[package]]
+name = "jig-ops-domain-observability"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+]
+
+[[package]]
+name = "jig-ops-fake-production"
+version = "0.0.0"
+
+[[package]]
+name = "jig-ops-world"
+version = "0.0.0"
+dependencies = [
+ "jig-ops-domain-observability",
+ "jig-ops-fake-production",
+ "skein-lib",
+]
+
+[[package]]
+name = "jig-test-connector"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+]
+
+[[package]]
+name = "jig-test-connector-world"
+version = "0.0.0"
+dependencies = [
+ "jig-test-connector",
+ "jig-test-system",
+ "skein-lib",
+]
+
+[[package]]
+name = "jig-test-system"
+version = "0.0.0"
+dependencies = [
+ "jig-test-connector",
+ "skein-lib",
+]
+
+[[package]]
+name = "jig-views-world"
+version = "0.0.0"
+dependencies = [
+ "jig-core-views",
+ "skein-lib",
+ "skein-world",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.190"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -93,12 +205,12 @@ dependencies = [
 [[package]]
 name = "skein-fake-checkout"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/skein.git#4e78d26fc247bf5e7c18300ff8ffc4bd3b06819c"
+source = "git+https://git.ekanayaka.io/ai/skein.git#3e3c57e98ffee54f7ab0ee402d445fa61c08f5b3"
 
 [[package]]
 name = "skein-fake-llm-domain"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/skein.git#4e78d26fc247bf5e7c18300ff8ffc4bd3b06819c"
+source = "git+https://git.ekanayaka.io/ai/skein.git#3e3c57e98ffee54f7ab0ee402d445fa61c08f5b3"
 dependencies = [
  "skein-lib",
 ]
@@ -106,12 +218,12 @@ dependencies = [
 [[package]]
 name = "skein-heap"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/skein.git#4e78d26fc247bf5e7c18300ff8ffc4bd3b06819c"
+source = "git+https://git.ekanayaka.io/ai/skein.git#3e3c57e98ffee54f7ab0ee402d445fa61c08f5b3"
 
 [[package]]
 name = "skein-io"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/skein.git#4e78d26fc247bf5e7c18300ff8ffc4bd3b06819c"
+source = "git+https://git.ekanayaka.io/ai/skein.git#3e3c57e98ffee54f7ab0ee402d445fa61c08f5b3"
 dependencies = [
  "skein-lib",
 ]
@@ -119,7 +231,7 @@ dependencies = [
 [[package]]
 name = "skein-json"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/skein.git#4e78d26fc247bf5e7c18300ff8ffc4bd3b06819c"
+source = "git+https://git.ekanayaka.io/ai/skein.git#3e3c57e98ffee54f7ab0ee402d445fa61c08f5b3"
 dependencies = [
  "skein-lib",
 ]
@@ -127,12 +239,12 @@ dependencies = [
 [[package]]
 name = "skein-lib"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/skein.git#4e78d26fc247bf5e7c18300ff8ffc4bd3b06819c"
+source = "git+https://git.ekanayaka.io/ai/skein.git#3e3c57e98ffee54f7ab0ee402d445fa61c08f5b3"
 
 [[package]]
 name = "skein-shell"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/skein.git#4e78d26fc247bf5e7c18300ff8ffc4bd3b06819c"
+source = "git+https://git.ekanayaka.io/ai/skein.git#3e3c57e98ffee54f7ab0ee402d445fa61c08f5b3"
 dependencies = [
  "io-uring",
  "libc",
@@ -143,7 +255,7 @@ dependencies = [
 [[package]]
 name = "skein-sim"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/skein.git#4e78d26fc247bf5e7c18300ff8ffc4bd3b06819c"
+source = "git+https://git.ekanayaka.io/ai/skein.git#3e3c57e98ffee54f7ab0ee402d445fa61c08f5b3"
 dependencies = [
  "skein-io",
  "skein-lib",
@@ -152,7 +264,7 @@ dependencies = [
 [[package]]
 name = "skein-world"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/skein.git#4e78d26fc247bf5e7c18300ff8ffc4bd3b06819c"
+source = "git+https://git.ekanayaka.io/ai/skein.git#3e3c57e98ffee54f7ab0ee402d445fa61c08f5b3"
 dependencies = [
  "skein-heap",
  "skein-io",
@@ -258,46 +370,30 @@ dependencies = [
 ]
 
 [[package]]
-name = "temper-engine-accounts-world"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-engine-domain-accounts",
- "temper-world",
-]
-
-[[package]]
 name = "temper-engine-brief-world"
 version = "0.0.0"
 dependencies = [
  "skein-lib",
+ "skein-world",
  "temper-engine-domain-brief",
- "temper-world",
 ]
 
 [[package]]
 name = "temper-engine-domain"
 version = "0.0.0"
 dependencies = [
+ "jig-core-accounts",
+ "jig-core-fleet",
+ "jig-core-views",
  "skein-lib",
- "temper-engine-domain-accounts",
  "temper-engine-domain-authority",
  "temper-engine-domain-brief",
- "temper-engine-domain-fleet",
  "temper-engine-domain-forge",
  "temper-engine-domain-forge-change",
  "temper-engine-domain-forge-client",
  "temper-engine-domain-forge-issues",
  "temper-engine-domain-people",
  "temper-engine-domain-tasks",
- "temper-engine-domain-views",
-]
-
-[[package]]
-name = "temper-engine-domain-accounts"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
 ]
 
 [[package]]
@@ -309,13 +405,6 @@ dependencies = [
 
 [[package]]
 name = "temper-engine-domain-brief"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
-]
-
-[[package]]
-name = "temper-engine-domain-fleet"
 version = "0.0.0"
 dependencies = [
  "skein-lib",
@@ -355,13 +444,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "temper-engine-domain-notes"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
-]
-
-[[package]]
 name = "temper-engine-domain-people"
 version = "0.0.0"
 dependencies = [
@@ -376,45 +458,29 @@ dependencies = [
 ]
 
 [[package]]
-name = "temper-engine-domain-views"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
-]
-
-[[package]]
 name = "temper-engine-domain-world"
 version = "0.0.0"
 dependencies = [
+ "jig-core-accounts",
+ "jig-core-fleet",
+ "jig-core-views",
  "skein-lib",
  "smith-domain",
  "smith-domain-run",
  "smith-domain-session",
  "smith-domain-tools",
  "temper-engine-domain",
- "temper-engine-domain-accounts",
  "temper-engine-domain-authority",
  "temper-engine-domain-brief",
- "temper-engine-domain-fleet",
  "temper-engine-domain-forge",
  "temper-engine-domain-forge-change",
  "temper-engine-domain-forge-client",
  "temper-engine-domain-people",
  "temper-engine-domain-tasks",
- "temper-engine-domain-views",
  "temper-engine-forge-world",
  "temper-engine-people-world",
  "temper-engine-tasks-world",
  "temper-fake-forge-domain",
- "temper-world",
-]
-
-[[package]]
-name = "temper-engine-fleet-world"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-engine-domain-fleet",
  "temper-world",
 ]
 
@@ -442,15 +508,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "temper-engine-notes-world"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-engine-domain-notes",
- "temper-world",
-]
-
-[[package]]
 name = "temper-engine-people-world"
 version = "0.0.0"
 dependencies = [
@@ -463,13 +520,13 @@ dependencies = [
 name = "temper-engine-smith"
 version = "0.0.0"
 dependencies = [
+ "jig-core-accounts",
  "skein-json",
  "skein-lib",
  "smith-domain",
  "smith-domain-run",
  "smith-domain-session",
  "temper-engine-domain",
- "temper-engine-domain-accounts",
  "temper-engine-domain-authority",
  "temper-engine-domain-brief",
  "temper-engine-domain-forge",
@@ -483,15 +540,6 @@ version = "0.0.0"
 dependencies = [
  "skein-lib",
  "temper-engine-domain-tasks",
- "temper-world",
-]
-
-[[package]]
-name = "temper-engine-views-world"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-engine-domain-views",
  "temper-world",
 ]
 
@@ -531,6 +579,7 @@ dependencies = [
 name = "temper-system-world"
 version = "0.0.0"
 dependencies = [
+ "jig-core-fleet",
  "skein-fake-checkout",
  "skein-fake-llm-domain",
  "skein-lib",
@@ -540,7 +589,6 @@ dependencies = [
  "temper-engine-domain",
  "temper-engine-domain-authority",
  "temper-engine-domain-brief",
- "temper-engine-domain-fleet",
  "temper-engine-domain-forge",
  "temper-engine-domain-forge-change",
  "temper-engine-domain-forge-client",

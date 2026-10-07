@@ -1,10 +1,10 @@
 //! Root forge stories with its durable store and the independent fake Forgejo.
 #![expect(clippy::wildcard_enum_match_arm, reason = "the fixture selects only the forge rows relevant to each story")]
+use jig_core_fleet as fleet;
 use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
 use std::collections::{BTreeMap, VecDeque};
 use temper_engine_domain::{Delivery, Key, Record, engine};
 use temper_engine_domain_authority as authority;
-use temper_engine_domain_fleet as fleet;
 use temper_engine_domain_forge as forge_top;
 use temper_engine_domain_forge_client as client;
 use temper_engine_domain_people as people;
@@ -445,7 +445,6 @@ mod system_stories {
     use smith_agent_world::{Job, World as Agent};
     use smith_domain as smith;
     use smith_domain_run as run;
-    use temper_engine_domain_brief as brief;
     use temper_engine_smith::ChangeResource;
 
     const DELEGATE: &[u8] = br#"{"batch":[{"executor":{"kind":"procedure","connector":1,"code":2},"spec":{"words":"@coding Small fix","parameters":[{"name":1,"kind":"resource","connector":1,"resource":2},{"name":2,"kind":"bytes","value":"main"}]},"contract":{"kind":"change","connector":1,"change_kind":1,"words":32},"authority":{"tools":1,"grants":[{"connector":1,"kind":2,"segments":["forge","forge.example","org"],"terminal":"open","last":"repo"},{"connector":1,"kind":3,"segments":["forge","forge.example","org"],"terminal":"open","last":"repo"},{"connector":1,"kind":4,"segments":["forge","forge.example","org"],"terminal":"open","last":"repo"}],"delegation":{"kinds":[{"kind":"agent","number":1}],"tasks":2,"depth":1},"budget":{"spend":20},"notes":0}}]}"#;
@@ -506,7 +505,7 @@ mod system_stories {
         world.send(engine::Event::Hello {
             channel: Token::new(7),
             hello: fleet::Hello {
-                graces: Some(Duration::from_secs(1)),
+                stop_bound: Duration::from_secs(1),
                 slots: 2,
                 workstreams: Box::new([]),
                 hosting: Box::new([]),
@@ -713,8 +712,8 @@ mod system_stories {
         }
         let repair = world.assigned.get(2).expect("failed CI assigned a repair").clone();
         assert!(
-            repair.sections.iter().any(|section| section.kind == brief::Kind::Ci
-                && matches!(&section.body, brief::Body::Text(words)
+            repair.sections.iter().any(|section| section.kind == engine::BriefKind::Forge(engine::ForgeBriefKind::Ci)
+                && matches!(&section.body, engine::BriefBody::Text(words)
                 if words.windows(b"failing check build 3".len()).any(|part| part == b"failing check build 3"))),
             "CI sections: {:?}",
             repair.sections

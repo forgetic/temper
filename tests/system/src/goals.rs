@@ -1,6 +1,7 @@
 //! A proposed person goal crosses its approval, task, and Smith planning cuts.
 
 use crate::world;
+use jig_core_fleet as fleet;
 use skein_fake_llm_domain::api::{Finish, Line, Script, Turn};
 use skein_lib::{Duration, Queue, ReplyTo, Token};
 use smith_agent_world::Job;
@@ -8,7 +9,6 @@ use smith_domain as smith;
 use smith_domain_run as run;
 use temper_engine_domain::{Delivery, Key, Record, engine};
 use temper_engine_domain_authority as authority;
-use temper_engine_domain_fleet as fleet;
 use temper_engine_domain_people as people;
 use temper_engine_domain_tasks as tasks;
 use temper_engine_domain_world::{commits::Store, direct::Driver, walking};
@@ -61,6 +61,7 @@ fn configured() -> Driver {
     limits.call_records = 4;
     limits.brief.briefs = 5;
     limits.brief.sections = 8;
+    limits.forge.brief_sections = 80;
     limits.brief.brief_bytes = 1024;
     limits.journal.writes = 3000;
     limits.journal.deliveries = 512;
@@ -133,7 +134,7 @@ fn a_smith_goal_is_proposed_accepted_planned_and_done() {
     driver.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 5,
             workstreams: Box::new([]),
             hosting: Box::new([]),
@@ -349,7 +350,7 @@ fn a_smith_coordinator_is_woken_once_by_a_burst() {
     driver.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 5,
             workstreams: Box::new([]),
             hosting: Box::new([]),

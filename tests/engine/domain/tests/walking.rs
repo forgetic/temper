@@ -161,10 +161,11 @@ fn walking_referee_rejects_duplicate_sign_in_and_chat_replies() {
 
 #[test]
 fn walking_referee_rejects_wrong_task_or_uncommitted_or_duplicate_assignment() {
+    use jig_core_accounts::Grant;
     use skein_lib::Duration;
     use temper_engine_domain::engine::Assignment;
-    use temper_engine_domain_accounts::Grant;
-    use temper_engine_domain_brief::{Body, Kind, Section};
+    use temper_engine_domain::engine::{BriefBody as Body, BriefKind as Kind, BriefSection as Section};
+    use temper_engine_domain_brief as brief;
     let world = settled();
     let task = ended(&world);
     let mut assignment = Assignment {
@@ -178,7 +179,7 @@ fn walking_referee_rejects_wrong_task_or_uncommitted_or_duplicate_assignment() {
             budget: 100,
         }),
         sections: Box::new([Section {
-            kind: Kind::Task,
+            kind: Kind::Core(brief::Core::Task),
             body: Body::Text(
                 format!(
                     "say hello\n[Report: at most 128 bytes]\n[Requested by person {}]\n",

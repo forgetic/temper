@@ -1,10 +1,10 @@
 //! Typed boundary tests through the public conversions.
 
+use jig_core_accounts as accounts;
 use skein_lib::{Duration, ReplyTo, Token};
 use smith_domain as smith;
 use smith_domain_run as run;
 use temper_engine_domain::engine;
-use temper_engine_domain_accounts as accounts;
 use temper_engine_domain_brief as brief;
 use temper_engine_domain_tasks as tasks;
 
@@ -55,9 +55,9 @@ fn assignment() -> engine::Assignment {
             },
             budget: 40,
         }),
-        sections: Box::new([brief::Section {
-            kind: brief::Kind::Task,
-            body: brief::Body::Text(b"Say hello".as_slice().into()),
+        sections: Box::new([engine::BriefSection {
+            kind: engine::BriefKind::Core(brief::Core::Task),
+            body: engine::BriefBody::Text(b"Say hello".as_slice().into()),
         }]),
         inbox: Box::new([]),
         saved: Box::new([]),

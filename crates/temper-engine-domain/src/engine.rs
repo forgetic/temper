@@ -42,18 +42,18 @@ use crate::{
     TerminalRecord, TurnProof, TurnRecord, Write, loads,
 };
 use alloc::boxed::Box;
+use jig_core_accounts as accounts;
+use jig_core_fleet as fleet;
+use jig_core_views as views;
 use skein_lib::{Decimal, Env, Id, List, Map, Queue, ReplyTo, Slab, Token, Writer};
-use temper_engine_domain_accounts as accounts;
 use temper_engine_domain_authority as authority;
 use temper_engine_domain_brief as brief;
-use temper_engine_domain_fleet as fleet;
 use temper_engine_domain_forge as forge;
 use temper_engine_domain_forge_change as forge_change;
 use temper_engine_domain_forge_client as forge_client;
 use temper_engine_domain_forge_issues as forge_issues;
 use temper_engine_domain_people as people;
 use temper_engine_domain_tasks as tasks;
-use temper_engine_domain_views as views;
 
 /// Root startup bounds, supplied by configuration and immutable at every step
 /// (domain/engine.md, 4–5). `worst_case` checks the cross-child route, page,
@@ -76,13 +76,37 @@ pub struct Limits {
     /// Maximum named decisions awaiting a turn or task end across live tasks.
     pub call_records: u32,
     /// Required task section gathering and cuts.
-    pub brief: brief::Limits,
+    pub brief: BriefLimits,
     /// Secret-free credential policy.
     pub accounts: accounts::Limits,
     /// Live watches, backlogs and expendable trace room.
     pub views: views::Limits,
     /// Forge connector subtree and its bounded outbox.
     pub forge: forge::Limits,
+}
+
+/// Root brief configuration, including temper's source and forge budgets.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct BriefLimits {
+    pub briefs: u32,
+    pub sections: u32,
+    pub parts: u32,
+    pub read_bytes: u32,
+    pub budgets: BriefBudgets,
+    pub brief_bytes: u32,
+    pub gather: skein_lib::Duration,
+}
+
+/// Byte ceilings for the root's core sections and its forge connector.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct BriefBudgets {
+    pub task: u32,
+    pub dependencies: u32,
+    pub ci: u32,
+    pub reviews: u32,
+    pub pull: u32,
+    pub attempts: u32,
+    pub plan: u32,
 }
 
 /// Startup configuration owned by the root, bounded by the corresponding
@@ -184,7 +208,7 @@ pub struct Assignment {
     pub run: Box<RunCharter>,
     /// Owned task, attempt and transcript-tail sections, at most brief `sections` and
     /// `brief_bytes`. Task/deployment lineage awaits its root route.
-    pub sections: Box<[brief::Section]>,
+    pub sections: Box<[BriefSection]>,
     /// Whole unread words offered to this attempt, oldest first.
     pub inbox: Box<[tasks::Word]>,
     /// Writable repository tags whose workspace starts at the task's saved-work branch.
@@ -198,6 +222,58 @@ pub struct Assignment {
     pub answered: Box<[crate::CallRecord]>,
     /// Secret-free account grant; token bytes stay in the protocol.
     pub grant: accounts::Grant,
+}
+
+/// One root-owned section in a worker assignment (jig's domain/engine.md, section 9).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct BriefSection {
+    pub kind: BriefKind,
+    pub body: BriefBody,
+}
+
+/// The core's typed section or a section owned by temper's forge connector.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BriefKind {
+    Core(brief::Core),
+    Forge(ForgeBriefKind),
+}
+
+/// The forge connector's three brief section kinds.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ForgeBriefKind {
+    Ci,
+    Reviews,
+    Pull,
+}
+
+/// Bytes handed to the worker, or why a section was unavailable.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum BriefBody {
+    Text(Box<[u8]>),
+    Missing(brief::GatherMissing),
+}
+
+/// A root-owned part of the task context rendered for a brief.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum TaskBriefPart {
+    Spec,
+    Dependencies,
+    Delegates,
+    Attempts,
+    TranscriptTail,
+}
+
+/// A bounded fragment and the amount its root renderer omitted.
+#[derive(Debug)]
+struct TaskBriefFragment {
+    bytes: Box<[u8]>,
+    left: u64,
+}
+
+/// The result of reading a root-owned part of a task.
+enum TaskBriefRead {
+    Got(Box<[TaskBriefFragment]>),
+    Failed,
 }
 
 /// A checkout's authoritative forge start, prepared afresh by the worker.
@@ -384,10 +460,6 @@ pub enum Event {
     Unwatch { watcher: Token },
     /// One watcher delivery was consumed or dropped by its stream.
     ViewDelivered { watcher: Token, done: bool },
-    /// Expendable trace append terminal.
-    ViewAppended { owner: Token, done: bool },
-    /// Expendable trace expiry terminal.
-    ViewExpired { owner: Token, done: bool },
     /// Deployment configuration starts one durable core recurring procedure.
     StartRecurring { project: u32, authority: tasks::Authority, template: tasks::RecurringTemplate },
     /// Deployment configuration opens a newer period and wakes its recurring procedures.
@@ -557,7 +629,7 @@ pub enum Event {
 pub enum Request {
     /// One bounded forge API call after the decision it follows.
     Forge { call: Token, repository: forge_client::api::Repository, op: forge_client::api::Op },
-    /// Live view/watch or expendable trace request routed to the shell.
+    /// Live view/watch request routed to the shell.
     View(views::Request),
     /// A watch failed authentication or project standing before views admission.
     WatchRefused { watcher: Token, refusal: people::Refusal },
@@ -636,7 +708,8 @@ enum Work {
     TaskEscalation(tasks::Event),
     People(people::Event),
     Fleet(fleet::Event),
-    Brief(brief::Event),
+    Brief(brief::GatherEvent),
+    StartBrief { task: u64 },
     Forge(forge::Event),
     ForgeClaim { task: u64, attempt: u64, writes: Box<[forge::Name]>, holders: Box<[u64]> },
     TasksClaim { task: u64, attempt: u64 },
@@ -649,6 +722,14 @@ enum Work {
     ProposalFailed { waiter: Token },
     DelegateValidated { to: Token, key: CallKey, batch: Box<[Delegate]> },
     DelegateInputRefused { to: Token, key: CallKey },
+}
+
+#[derive(Debug)]
+struct BriefConnector {
+    task: u64,
+    source: forge::BriefSource,
+    kind: ForgeBriefKind,
+    cutting: bool,
 }
 
 #[derive(Debug)]
@@ -788,7 +869,8 @@ pub struct Domain {
     tasks: tasks::Domain,
     people: people::Domain,
     fleet: fleet::Domain,
-    brief: brief::Domain,
+    brief: brief::GatherDomain,
+    brief_connectors: Slab<BriefConnector>,
     accounts: accounts::Domain,
     views: views::Domain,
     forge: forge::Domain,
@@ -797,7 +879,6 @@ pub struct Domain {
     forge_subscribing: Map<Token, forge::Subscriber>,
     forge_unsubscribing: Map<Token, (u64, forge::Topic)>,
     forge_reading: Map<Token, (ReplyTo, CallKey)>,
-    brief_fetches: Map<Token, forge_route::BriefFetch>,
     forge_effecting: Map<u64, (ReplyTo, CallKey)>,
     forge_projection_due: Map<u64, skein_lib::Wall>,
     forge_change_due: Map<u64, skein_lib::Wall>,
@@ -841,7 +922,7 @@ impl Domain {
     /// cross-child limits. Checks bounded authority/bootstrap configuration; issues no request.
     /// Startup pages/account setup begin only on `Event::Start`.
     #[must_use]
-    #[expect(clippy::too_many_lines, reason = "one root initialization keeps each child and bounded route visible")]
+    #[expect(clippy::too_many_lines, reason = "the root allocates every child and bounded handoff table together")]
     pub fn new(mut config: Config, limits: &Limits) -> Domain {
         assert!(worst_case(limits).is_some(), "root limits are valid");
         assert!(
@@ -886,9 +967,18 @@ impl Domain {
             tasks,
             people,
             fleet: fleet::Domain::new(&limits.fleet),
-            brief: brief::Domain::new(&limits.brief),
+            brief: brief::GatherDomain::new(&brief_limits(&limits.brief)),
+            brief_connectors: Slab::with_capacity(
+                limits
+                    .brief
+                    .briefs
+                    .checked_mul(limits.brief.sections)
+                    .expect("validated brief count")
+                    .checked_mul(2)
+                    .expect("validated brief connector room"),
+            ),
             accounts: accounts::Domain::new(&limits.accounts),
-            views: views::Domain::new(&limits.views, skein_lib::Time::ZERO),
+            views: views::Domain::new(&limits.views),
             forge: forge::Domain::new(
                 &limits.forge,
                 config.seed,
@@ -903,9 +993,6 @@ impl Domain {
             forge_subscribing: Map::with_capacity(limits.fleet.calls),
             forge_unsubscribing: Map::with_capacity(limits.fleet.calls),
             forge_reading: Map::with_capacity(limits.fleet.calls),
-            brief_fetches: Map::with_capacity(
-                limits.brief.briefs.saturating_mul(limits.brief.sections).saturating_mul(2),
-            ),
             forge_effecting: Map::with_capacity(limits.fleet.calls),
             forge_projection_due: Map::with_capacity(limits.forge.issues),
             forge_change_due: Map::with_capacity(limits.forge.changes),
@@ -981,7 +1068,7 @@ impl Domain {
             && self.forge_subscribing.is_empty()
             && self.forge_unsubscribing.is_empty()
             && self.forge_reading.is_empty()
-            && self.brief_fetches.is_empty()
+            && self.forge.briefs_idle()
             && self.forge_effecting.is_empty()
             && self.routing_calls.is_empty()
             && self.routing_people_proposals.is_empty()
@@ -998,8 +1085,8 @@ impl Domain {
             && self.transcripts.is_empty()
             && self.restoring_proofs.is_empty()
             && self.signing_in.is_none()
-            && self.brief.briefs() == 0
-            && self.brief.reads() == 0
+            && self.brief.is_idle()
+            && self.brief_connectors.is_empty()
             && !self.fleet.is_ready()
             && !self.forge.is_ready()
             && self.fleet.turns() == 0
@@ -1022,7 +1109,7 @@ impl Domain {
         self.tasks.reclaim();
         self.people.reclaim();
         self.fleet.reclaim();
-        self.brief.reclaim();
+        self.brief_connectors.reclaim();
         self.views.reclaim();
         self.forge.reclaim();
         self.payloads.reclaim();
@@ -1041,9 +1128,6 @@ impl Domain {
         }
         for _ in 0..self.limits.fleet.facts {
             let _fact = self.fleet.pop_fact();
-        }
-        for _ in 0..self.limits.brief.facts {
-            let _fact = self.brief.pop_fact();
         }
         for _ in 0..self.limits.accounts.facts {
             let _fact = self.accounts.pop_fact();
@@ -1067,16 +1151,6 @@ fn environment_views(env: &Env<Limits>) -> Env<views::Limits> {
     Env { now: env.now, wall: env.wall, limits: env.limits.views }
 }
 
-fn view_policy() -> views::Policy {
-    views::Policy {
-        text: views::Capture::Nothing,
-        progress: views::Capture::Nothing,
-        calls: views::Capture::Nothing,
-        tools: views::Capture::Nothing,
-        usage: views::Capture::Nothing,
-    }
-}
-
 fn view_outputs(domain: &mut Domain, output: &mut Queue<views::Request>, out: &mut Queue<Request>) {
     for _ in 0..output.len() {
         let request = output.pop().expect("view output count");
@@ -1084,10 +1158,7 @@ fn view_outputs(domain: &mut Domain, output: &mut Queue<views::Request>, out: &m
             views::Request::Ended { watcher, .. } | views::Request::Refused { watcher, .. } => {
                 domain.watching.remove(&watcher);
             }
-            views::Request::Watching { .. }
-            | views::Request::Deliver { .. }
-            | views::Request::Append { .. }
-            | views::Request::Expire { .. } => {}
+            views::Request::Watching { .. } | views::Request::Deliver { .. } => {}
         }
         out.push(Request::View(request));
     }
@@ -1133,8 +1204,11 @@ fn in_tree(rows: &[tasks::ViewTask], number: u64, ancestor: u64, depth: u32) -> 
 fn view_snapshot(domain: &Domain, subject: views::Subject, bound: u32) -> Option<Box<[u8]>> {
     let mut bytes = List::with_capacity(bound);
     match subject {
-        views::Subject::Run(run) => {
-            let proof = domain.proofs.get(&run.raw())?;
+        views::Subject::Run { task, attempt } => {
+            let proof = domain.proofs.get(&task.raw())?;
+            if proof.attempt != attempt.raw() {
+                return None;
+            }
             view_byte(&mut bytes, &proof.attempt.to_be_bytes())?;
             let turn = match proof.turn {
                 Some(turn) => turn.turn,
@@ -1142,7 +1216,7 @@ fn view_snapshot(domain: &Domain, subject: views::Subject, bound: u32) -> Option
             };
             view_byte(&mut bytes, &turn.to_be_bytes())?;
         }
-        views::Subject::Item(ancestor) => {
+        views::Subject::Tree { task: ancestor } => {
             let rows = domain.tasks.view_tasks();
             for row in &rows {
                 if in_tree(&rows, row.number, ancestor.raw(), domain.limits.tasks.depth) {
@@ -1152,7 +1226,7 @@ fn view_snapshot(domain: &Domain, subject: views::Subject, bound: u32) -> Option
                 }
             }
         }
-        views::Subject::Board(project) => {
+        views::Subject::Goals { project } => {
             let rows = domain.tasks.view_tasks();
             for row in &rows {
                 if row.project == project && row.tracked.is_some() {
@@ -1162,6 +1236,7 @@ fn view_snapshot(domain: &Domain, subject: views::Subject, bound: u32) -> Option
                 }
             }
         }
+        views::Subject::Inbox { .. } => {}
     }
     Some(bytes.into_boxed())
 }
@@ -1200,7 +1275,7 @@ fn view_task_saved(domain: &mut Domain, limits: &Limits, decision: &mut Decision
         decision,
         limits,
         Delivery::View(Box::new(views::Event::TaskPhase {
-            item: Token::new(task.number),
+            task: Token::new(task.number),
             trees: trees.into_boxed(),
             project: task.project,
             phase,
@@ -1221,8 +1296,17 @@ fn environment_fleet(env: &Env<Limits>) -> Env<fleet::Limits> {
     Env { now: env.now, wall: env.wall, limits: env.limits.fleet }
 }
 
+fn brief_limits(limits: &BriefLimits) -> brief::Limits {
+    brief::Limits {
+        briefs: limits.briefs,
+        sections: limits.sections,
+        read_bytes: limits.read_bytes,
+        brief_bytes: limits.brief_bytes,
+    }
+}
+
 fn environment_brief(env: &Env<Limits>) -> Env<brief::Limits> {
-    Env { now: env.now, wall: env.wall, limits: env.limits.brief }
+    Env { now: env.now, wall: env.wall, limits: brief_limits(&env.limits.brief) }
 }
 
 fn environment_accounts(env: &Env<Limits>) -> Env<accounts::Limits> {
@@ -1281,19 +1365,36 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
             }
             let person = domain.people.person(sign_in, env.now, env.wall);
             let project = match subject {
-                views::Subject::Run(task) | views::Subject::Item(task) => match domain.tasks.delegation(task.raw()) {
-                    Some(context) => Some(context.project),
-                    None => None,
-                },
-                views::Subject::Board(project) => Some(project),
+                views::Subject::Run { task, .. } | views::Subject::Tree { task } => {
+                    match domain.tasks.delegation(task.raw()) {
+                        Some(context) => Some(context.project),
+                        None => None,
+                    }
+                }
+                views::Subject::Goals { project } => Some(project),
+                views::Subject::Inbox { .. } => None,
             };
-            let (Some(person), Some(project)) = (person, project) else {
+            let Some(person) = person else {
                 out.push(Request::WatchRefused { watcher, refusal: people::Refusal::Unknown });
                 return;
             };
-            if domain.people.role(person, project).is_none() {
-                out.push(Request::WatchRefused { watcher, refusal: people::Refusal::Standing });
-                return;
+            match subject {
+                views::Subject::Inbox { party } => {
+                    if party != person {
+                        out.push(Request::WatchRefused { watcher, refusal: people::Refusal::Standing });
+                        return;
+                    }
+                }
+                views::Subject::Run { .. } | views::Subject::Tree { .. } | views::Subject::Goals { .. } => {
+                    let Some(project) = project else {
+                        out.push(Request::WatchRefused { watcher, refusal: people::Refusal::Unknown });
+                        return;
+                    };
+                    if domain.people.role(person, project).is_none() {
+                        out.push(Request::WatchRefused { watcher, refusal: people::Refusal::Standing });
+                        return;
+                    }
+                }
             }
             if domain.watching.contains_key(&watcher) || domain.watching.len() >= env.limits.views.watchers {
                 out.push(Request::View(views::Request::Refused { watcher, refusal: views::Refusal::Busy }));
@@ -1316,14 +1417,6 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
         }
         Event::ViewDelivered { watcher, done } => {
             view_step(domain, env, views::Event::Delivered { watcher, done }, out);
-            return;
-        }
-        Event::ViewAppended { owner, done } => {
-            view_step(domain, env, views::Event::Appended { owner, done }, out);
-            return;
-        }
-        Event::ViewExpired { owner, done } => {
-            view_step(domain, env, views::Event::Expired { owner, done }, out);
             return;
         }
         Event::StartRecurring { project, authority, template } => {
@@ -1863,8 +1956,8 @@ pub fn fire(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
     let mut fleet_out = Queue::with_capacity(fleet::max_out(&env.limits.fleet));
     fleet::fire(&mut domain.fleet, &environment_fleet(env), &mut fleet_out);
     fleet_outputs(domain, env, &mut decision, &mut fleet_out);
-    let mut brief_out = Queue::with_capacity(brief::max_out(&env.limits.brief));
-    brief::fire(&mut domain.brief, &environment_brief(env), &mut brief_out);
+    let mut brief_out = Queue::with_capacity(brief::gather_max_out(&brief_limits(&env.limits.brief)));
+    brief::gather_fire(&mut domain.brief, &environment_brief(env), &mut brief_out);
     brief_outputs(domain, env, &mut decision, &mut brief_out);
     route_into(domain, env, &mut decision);
     close(domain, env, decision, out);
@@ -1908,10 +2001,11 @@ fn route_into(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision) {
                 fleet_outputs(domain, env, decision, &mut out);
             }
             Work::Brief(event) => {
-                let mut out = Queue::with_capacity(brief::max_out(&env.limits.brief));
-                brief::step(&mut domain.brief, &environment_brief(env), event, &mut out);
+                let mut out = Queue::with_capacity(brief::gather_max_out(&brief_limits(&env.limits.brief)));
+                brief::gather_step(&mut domain.brief, &environment_brief(env), event, &mut out);
                 brief_outputs(domain, env, decision, &mut out);
             }
+            Work::StartBrief { task } => start_brief(domain, env, task),
             Work::Forge(event) => {
                 let mut out = Queue::with_capacity(forge::max_out(&env.limits.forge));
                 forge::step(&mut domain.forge, &environment_forge(env), event, &mut out);
@@ -4399,7 +4493,7 @@ fn tasks_outputs(
                         decision,
                         &env.limits,
                         Delivery::View(Box::new(views::Event::Turn {
-                            run: Token::new(task),
+                            task: Token::new(task),
                             attempt: Token::new(attempt),
                             number: turn,
                         })),
@@ -4439,16 +4533,13 @@ fn tasks_outputs(
                 views::step(
                     &mut domain.views,
                     &environment_views(env),
-                    views::Event::Started {
-                        run: Token::new(task),
-                        attempt: Token::new(attempt),
-                        item: Token::new(task),
-                        policy: view_policy(),
-                    },
+                    views::Event::Started { task: Token::new(task), attempt: Token::new(attempt) },
                     &mut view_out,
                 );
                 assert!(view_out.is_empty(), "restored run following has no external effect");
                 domain.adopted.push(fleet::Event::Adopt {
+                    kind: fleet::HostKind::Worker,
+                    worked: kept > 0,
                     reply_to: internal(task),
                     run: Token::new(task),
                     attempt: Token::new(attempt),
@@ -4475,7 +4566,11 @@ fn tasks_outputs(
             }
             tasks::Request::Ended { task, requester, ending } => {
                 let position = domain.ending_positions.remove(&task).expect("ended row assigned its result position");
-                emit(decision, &env.limits, Delivery::View(Box::new(views::Event::Finished { run: Token::new(task) })));
+                emit(
+                    decision,
+                    &env.limits,
+                    Delivery::View(Box::new(views::Event::Finished { task: Token::new(task) })),
+                );
                 retire_calls(domain, &env.limits, decision, task, u64::MAX, u32::MAX);
                 drop(domain.proofs.remove(&task));
                 save(decision, &env.limits, Write::Erase(Key::RunProof { task }));
@@ -4585,11 +4680,13 @@ fn tasks_outputs(
                 } else if let Some(attempt) = domain.claiming.remove(&task) {
                     let proof = domain.proofs.get(&task).expect("claim proof pre-reserved");
                     save(decision, &env.limits, Write::Save(Record::RunProof(proof.clone())));
-                    let workstream = domain.assignments.get(&task).expect("claimed assignment").workspace.key.clone();
+                    let key = &domain.assignments.get(&task).expect("claimed assignment").workspace.key;
+                    let workstream = u64::from_be_bytes(key.as_ref().try_into().expect("task-number workstream"));
                     emit(
                         decision,
                         &env.limits,
                         Delivery::Fleet(fleet::Event::Start {
+                            kinds: fleet::Kinds::Workers,
                             reply_to: internal(task),
                             run: Token::new(task),
                             attempt: Token::new(attempt),
@@ -4604,41 +4701,92 @@ fn tasks_outputs(
 }
 
 #[expect(clippy::too_many_lines, reason = "the brief route consumes every child request and prepares the claimed run")]
-fn brief_outputs(domain: &mut Domain, env: &Env<Limits>, _decision: &mut Decision, out: &mut Queue<brief::Request>) {
+fn brief_outputs(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    _decision: &mut Decision,
+    out: &mut Queue<brief::GatherRequest>,
+) {
     for _ in 0..out.len() {
         match out.pop().expect("brief output count") {
-            brief::Request::Read { owner, source, parts, bytes, .. } => {
-                let read = match source {
-                    brief::Source::Task { task, part } => Some(task_section(domain, task, part, parts, bytes)),
-                    brief::Source::Pull { item, head } => {
-                        forge_route::brief_pull(domain, owner, item, head, parts, bytes)
+            brief::GatherRequest::Gather { connector: 0, section, budget } => {
+                let Some(row) = domain.brief_connectors.get(Id::from_token(section)) else { continue };
+                let max_job_bytes = match row.source {
+                    forge::BriefSource::Ci { .. } => {
+                        env.limits.forge.client.answer_bytes.min(env.limits.brief.budgets.ci / 5).max(1)
                     }
-                    brief::Source::Ci { item, head } => forge_route::brief_ci(
-                        domain,
-                        owner,
-                        item,
-                        head,
-                        parts,
-                        bytes,
-                        env.limits.forge.client.answer_bytes.min(env.limits.brief.budgets.ci / 5).max(1),
-                    ),
-                    brief::Source::Reviews { item, head } => {
-                        forge_route::brief_reviews(domain, owner, item, head, parts, bytes)
-                    }
-                    brief::Source::Item(_)
-                    | brief::Source::Comments { .. }
-                    | brief::Source::Dependencies(_)
-                    | brief::Source::Attempts(_)
-                    | brief::Source::Plan { .. }
-                    | brief::Source::Notes { .. }
-                    | brief::Source::Template(_) => unreachable!("06a only asks the task section"),
+                    forge::BriefSource::Reviews { .. } | forge::BriefSource::Pull { .. } => 0,
                 };
-                if let Some(read) = read {
-                    domain.work.push(Work::Brief(brief::Event::Read { owner, read }));
+                domain.work.push(Work::Forge(forge::Event::GatherBriefHeld {
+                    section,
+                    source: row.source,
+                    parts: env.limits.brief.parts,
+                    bytes: budget,
+                    max_job_bytes,
+                }));
+            }
+            brief::GatherRequest::CutTo { connector: 0, section, size } => {
+                if let Some(row) = domain.brief_connectors.get_mut(Id::from_token(section)) {
+                    row.cutting = true;
+                    domain.work.push(Work::Forge(forge::Event::CutBrief { section, bytes: size }));
                 }
             }
-            brief::Request::Rendered { reply_to, sections } => {
-                let task = reply_to.into_token().raw();
+            brief::GatherRequest::Drop { connector: 0, section } => {
+                let id = Id::from_token(section);
+                if domain.brief_connectors.get(id).is_some() {
+                    domain.brief_connectors.retire(id);
+                    domain.work.push(Work::Forge(forge::Event::DropBrief { section }));
+                }
+            }
+            brief::GatherRequest::Gather { .. }
+            | brief::GatherRequest::CutTo { .. }
+            | brief::GatherRequest::Drop { .. } => unreachable!("temper's sole connector is numbered zero"),
+            brief::GatherRequest::Complete { brief, order } => {
+                let task = brief.raw();
+                let mut sections = List::with_capacity(u32::try_from(order.len()).expect("bounded section count"));
+                let mut missing_owner = false;
+                for placed in order {
+                    let section = match placed {
+                        brief::GatherPlaced::Core { kind, text } => {
+                            BriefSection { kind: BriefKind::Core(kind), body: BriefBody::Text(text) }
+                        }
+                        brief::GatherPlaced::CoreMissing { kind, why } => {
+                            BriefSection { kind: BriefKind::Core(kind), body: BriefBody::Missing(why) }
+                        }
+                        brief::GatherPlaced::Connector { token, size, .. } => {
+                            let id = Id::from_token(token);
+                            let Some(row) = domain.brief_connectors.get(id) else {
+                                missing_owner = true;
+                                continue;
+                            };
+                            let kind = row.kind;
+                            domain.brief_connectors.retire(id);
+                            let bytes = domain.forge.take_brief(token);
+                            match bytes {
+                                Some(bytes) if bytes.len() == usize::try_from(size).expect("bounded section") => {
+                                    BriefSection { kind: BriefKind::Forge(kind), body: BriefBody::Text(bytes) }
+                                }
+                                Some(_) | None => {
+                                    missing_owner = true;
+                                    continue;
+                                }
+                            }
+                        }
+                        brief::GatherPlaced::Missing { kind, why, .. } => BriefSection {
+                            kind: BriefKind::Forge(numbered_brief_kind(kind)),
+                            body: BriefBody::Missing(why),
+                        },
+                    };
+                    sections.push(section).expect("bounded brief sections");
+                }
+                if missing_owner {
+                    drop(domain.contexts.remove(&task));
+                    drop(domain.dependency_results.remove(&task));
+                    drop(domain.transcripts.remove(&task));
+                    domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
+                    continue;
+                }
+                let sections = sections.into_boxed();
                 let context = domain.contexts.remove(&task).expect("rendered task owns context");
                 drop(domain.dependency_results.remove(&task));
                 let transcript = domain.transcripts.remove(&task).expect("rendered task owns loaded transcript");
@@ -4740,15 +4888,23 @@ fn brief_outputs(domain: &mut Domain, env: &Env<Limits>, _decision: &mut Decisio
                     });
                 }
             }
-            brief::Request::Failed { reply_to, .. } | brief::Request::Refused { reply_to, .. } => {
-                let task = reply_to.into_token().raw();
+            brief::GatherRequest::Failed { brief, .. } | brief::GatherRequest::Refused { brief } => {
+                let task = brief.raw();
                 drop(domain.contexts.remove(&task));
                 drop(domain.dependency_results.remove(&task));
                 drop(domain.transcripts.remove(&task));
                 domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
             }
-            brief::Request::Room => {}
         }
+    }
+}
+
+fn numbered_brief_kind(kind: u16) -> ForgeBriefKind {
+    match kind {
+        1 => ForgeBriefKind::Ci,
+        2 => ForgeBriefKind::Reviews,
+        3 => ForgeBriefKind::Pull,
+        _ => unreachable!("temper's forge connector uses three section kinds"),
     }
 }
 
@@ -4766,14 +4922,10 @@ fn take_payload(domain: &mut Domain, token: Token) -> Option<Payload> {
 fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, out: &mut Queue<fleet::Request>) {
     for _ in 0..out.len() {
         match out.pop().expect("fleet output count") {
-            fleet::Request::Assign { channel, run, attempt } => {
+            fleet::Request::Assign { channel, kind: _, run, attempt } => {
                 let assignment = domain.assignments.remove(&run.raw()).expect("durable claim has prepared assignment");
                 assert!(assignment.attempt == attempt.raw(), "assignment names current attempt");
-                emit(
-                    decision,
-                    &env.limits,
-                    Delivery::View(Box::new(views::Event::Started { run, attempt, item: run, policy: view_policy() })),
-                );
+                emit(decision, &env.limits, Delivery::View(Box::new(views::Event::Started { task: run, attempt })));
                 emit(decision, &env.limits, Delivery::Assigned { channel, assignment });
             }
             fleet::Request::Placed { run, attempt } => {
@@ -4862,7 +5014,9 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                 }));
                 domain.work.push(Work::Forge(forge::Event::Lost { task: run.raw(), attempt: attempt.raw() }));
             }
-            fleet::Request::Withdrawn { to, run, attempt, .. } | fleet::Request::Refused { to, run, attempt, .. } => {
+            fleet::Request::NotStarted { to, run, attempt }
+            | fleet::Request::Withdrawn { to, run, attempt, .. }
+            | fleet::Request::Refused { to, run, attempt, .. } => {
                 let _answered = to.into_token();
                 drop(domain.assignments.remove(&run.raw()));
                 remember_unpriced_terminal(domain, run, attempt, tasks::End::Refused);
@@ -5377,7 +5531,7 @@ fn begin_dependency_read(domain: &mut Domain, task: u64) -> Option<(Token, u64)>
     let context = domain.contexts.get(&task).expect("preparing task context");
     let count = context.dependencies.len().checked_add(context.spec.inputs.len()).expect("bounded input count");
     if count == 0 {
-        start_brief(domain, task);
+        domain.work.push(Work::StartBrief { task });
         return None;
     }
     let mut ids = List::with_capacity(u32::try_from(count).expect("bounded dependency count"));
@@ -5468,7 +5622,7 @@ fn dependency_loaded(
         domain.dependency_results.insert(read.task, read.results.into_boxed()).is_ok(),
         "one preparation result set"
     );
-    start_brief(domain, read.task);
+    domain.work.push(Work::StartBrief { task: read.task });
 }
 
 fn transcript_loaded(
@@ -5551,42 +5705,79 @@ fn transcript_loaded(
     }
 }
 
-fn start_brief(domain: &mut Domain, task: u64) {
+#[expect(clippy::too_many_lines, reason = "one preparation gathers typed core sections and pinned forge sources")]
+fn start_brief(domain: &mut Domain, env: &Env<Limits>, task: u64) {
     let context = domain.contexts.get(&task).expect("loaded task context");
     let transcript = domain.transcripts.get(&task).expect("prepared transcript state");
     let oversized = transcript.bytes > u64::from(domain.config.resume_bytes);
     let mut wanted = List::with_capacity(domain.limits.brief.sections);
+    let Some(task_text) = read_core(domain, task, TaskBriefPart::Spec) else {
+        domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
+        return;
+    };
     wanted
-        .push(brief::Wanted { source: brief::Source::Task { task, part: brief::TaskPart::Spec }, required: true })
+        .push(brief::Planned::Core {
+            kind: brief::Core::Task,
+            text: task_text,
+            limit: domain.limits.brief.budgets.task,
+            priority: 0,
+            required: true,
+        })
         .expect("task brief room");
     if !context.dependencies.is_empty() || !context.spec.inputs.is_empty() {
+        let Some(text) = read_core(domain, task, TaskBriefPart::Dependencies) else {
+            domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
+            return;
+        };
         wanted
-            .push(brief::Wanted {
-                source: brief::Source::Task { task, part: brief::TaskPart::Dependencies },
+            .push(brief::Planned::Core {
+                kind: brief::Core::Results,
+                text,
+                limit: domain.limits.brief.budgets.dependencies,
+                priority: 1,
                 required: true,
             })
             .expect("dependency result section room");
     }
     if oversized {
+        let Some(text) = read_core(domain, task, TaskBriefPart::TranscriptTail) else {
+            domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
+            return;
+        };
         wanted
-            .push(brief::Wanted {
-                source: brief::Source::Task { task, part: brief::TaskPart::TranscriptTail },
+            .push(brief::Planned::Core {
+                kind: brief::Core::TranscriptTail,
+                text,
+                limit: domain.limits.brief.budgets.task,
+                priority: 2,
                 required: true,
             })
             .expect("tail brief room");
     }
-    if !context.delegates.is_empty() && wanted.room() > 0 {
+    if !context.delegates.is_empty()
+        && wanted.room() > 0
+        && let Some(text) = read_core(domain, task, TaskBriefPart::Delegates)
+    {
         wanted
-            .push(brief::Wanted {
-                source: brief::Source::Task { task, part: brief::TaskPart::Delegates },
+            .push(brief::Planned::Core {
+                kind: brief::Core::Plan,
+                text,
+                limit: domain.limits.brief.budgets.plan,
+                priority: 3,
                 required: false,
             })
             .expect("delegate section room");
     }
-    if context.tries != tasks::Tries::NONE && wanted.room() > 0 {
+    if context.tries != tasks::Tries::NONE
+        && wanted.room() > 0
+        && let Some(text) = read_core(domain, task, TaskBriefPart::Attempts)
+    {
         wanted
-            .push(brief::Wanted {
-                source: brief::Source::Task { task, part: brief::TaskPart::Attempts },
+            .push(brief::Planned::Core {
+                kind: brief::Core::Attempts,
+                text,
+                limit: domain.limits.brief.budgets.attempts,
+                priority: 4,
                 required: false,
             })
             .expect("attempt brief room");
@@ -5603,20 +5794,36 @@ fn start_brief(domain: &mut Domain, task: u64) {
         && let Some(head) = row.change.last_head
         && wanted.room() > 0
     {
-        let item = brief::Item { repository: row.repository.repository, number };
+        let item = forge::BriefItem { repository: row.repository.repository, number };
         let source = match row.delegate.expect("matched delegate").1 {
             forge_change::Delegate::Repair(forge_change::Repair::Gate(_)) => {
-                brief::Source::Reviews { item, head: brief::Commit(head) }
+                forge::BriefSource::Reviews { item, head: forge::BriefCommit(head) }
             }
             forge_change::Delegate::Repair(forge_change::Repair::Ci | forge_change::Repair::Semantic) => {
-                brief::Source::Ci { item, head: brief::Commit(head) }
+                forge::BriefSource::Ci { item, head: forge::BriefCommit(head) }
             }
-            forge_change::Delegate::Resolve { .. } => brief::Source::Pull { item, head: brief::Commit(head) },
+            forge_change::Delegate::Resolve { .. } => forge::BriefSource::Pull { item, head: forge::BriefCommit(head) },
             forge_change::Delegate::Produce | forge_change::Delegate::Gate { .. } => {
-                brief::Source::Pull { item, head: brief::Commit(head) }
+                forge::BriefSource::Pull { item, head: forge::BriefCommit(head) }
             }
         };
-        wanted.push(brief::Wanted { source, required: true }).expect("connector section room");
+        let kind = forge_brief_kind(source);
+        let token = domain
+            .brief_connectors
+            .insert(BriefConnector { task, source, kind, cutting: false })
+            .expect("reserved connector section room")
+            .token();
+        wanted
+            .push(brief::Planned::Connector {
+                connector: 0,
+                kind: forge_kind_number(kind),
+                token,
+                size: 0,
+                limit: forge_brief_budget(kind, &domain.limits.brief.budgets),
+                priority: 5,
+                required: true,
+            })
+            .expect("connector section room");
         let semantic = match row.delegate {
             Some((_, forge_change::Delegate::Repair(forge_change::Repair::Semantic))) => true,
             Some((
@@ -5629,12 +5836,110 @@ fn start_brief(domain: &mut Domain, task: u64) {
             | None => false,
         };
         if semantic && wanted.room() > 0 {
+            let source = forge::BriefSource::Pull { item, head: forge::BriefCommit(head) };
+            let kind = forge_brief_kind(source);
+            let token = domain
+                .brief_connectors
+                .insert(BriefConnector { task, source, kind, cutting: false })
+                .expect("reserved connector section room")
+                .token();
             wanted
-                .push(brief::Wanted { source: brief::Source::Pull { item, head: brief::Commit(head) }, required: true })
+                .push(brief::Planned::Connector {
+                    connector: 0,
+                    kind: forge_kind_number(kind),
+                    token,
+                    size: 0,
+                    limit: forge_brief_budget(kind, &domain.limits.brief.budgets),
+                    priority: 6,
+                    required: true,
+                })
                 .expect("semantic update section room");
         }
     }
-    domain.work.push(Work::Brief(brief::Event::Render { reply_to: internal(task), sections: wanted.into_boxed() }));
+    domain.work.push(Work::Brief(brief::GatherEvent::Plan {
+        brief: Token::new(task),
+        budget: domain.limits.brief.brief_bytes,
+        deadline: env.now.saturating_add(domain.limits.brief.gather),
+        sections: wanted.into_boxed(),
+    }));
+}
+
+fn forge_brief_kind(source: forge::BriefSource) -> ForgeBriefKind {
+    match source {
+        forge::BriefSource::Ci { .. } => ForgeBriefKind::Ci,
+        forge::BriefSource::Reviews { .. } => ForgeBriefKind::Reviews,
+        forge::BriefSource::Pull { .. } => ForgeBriefKind::Pull,
+    }
+}
+
+fn forge_kind_number(kind: ForgeBriefKind) -> u16 {
+    match kind {
+        ForgeBriefKind::Ci => 1,
+        ForgeBriefKind::Reviews => 2,
+        ForgeBriefKind::Pull => 3,
+    }
+}
+
+fn forge_brief_budget(kind: ForgeBriefKind, budgets: &BriefBudgets) -> u32 {
+    match kind {
+        ForgeBriefKind::Ci => budgets.ci,
+        ForgeBriefKind::Reviews => budgets.reviews,
+        ForgeBriefKind::Pull => budgets.pull,
+    }
+}
+
+fn read_core(domain: &Domain, task: u64, part: TaskBriefPart) -> Option<Box<[u8]>> {
+    let tail = match part {
+        TaskBriefPart::TranscriptTail => true,
+        TaskBriefPart::Spec | TaskBriefPart::Dependencies | TaskBriefPart::Delegates | TaskBriefPart::Attempts => false,
+    };
+    let read = task_section(domain, task, part, domain.limits.brief.parts, domain.limits.brief.read_bytes);
+    let parts = match read {
+        TaskBriefRead::Got(parts) => parts,
+        TaskBriefRead::Failed => return None,
+    };
+    let mut length = 0_usize;
+    let mut ended_line = true;
+    for part in &parts {
+        length = length.checked_add(part.bytes.len())?;
+        if let Some(last) = part.bytes.last() {
+            ended_line = *last == b'\n';
+        }
+        if part.left > 0 {
+            length = length
+                .checked_add(usize::from(!tail && !ended_line))?
+                .checked_add(1)?
+                .checked_add(Decimal::of(part.left).as_bytes().len())?
+                .checked_add(b" bytes cut]\n".len())?;
+            ended_line = true;
+        }
+    }
+    if length > usize::try_from(domain.limits.brief.brief_bytes).ok()? {
+        return None;
+    }
+    let mut writer = Writer::new(length);
+    let mut ended_line = true;
+    for part in parts {
+        if tail && part.left > 0 {
+            writer.put(b"[").expect("measured cut marker");
+            writer.put(Decimal::of(part.left).as_bytes()).expect("measured lost count");
+            writer.put(b" bytes cut]\n").expect("measured cut marker");
+        }
+        writer.put(&part.bytes).expect("measured part");
+        if let Some(last) = part.bytes.last() {
+            ended_line = *last == b'\n';
+        }
+        if !tail && part.left > 0 {
+            if !ended_line {
+                writer.put(b"\n").expect("measured break");
+            }
+            writer.put(b"[").expect("measured cut marker");
+            writer.put(Decimal::of(part.left).as_bytes()).expect("measured lost count");
+            writer.put(b" bytes cut]\n").expect("measured cut marker");
+            ended_line = true;
+        }
+    }
+    Some(writer.finish())
 }
 
 fn startup_page(
@@ -5938,12 +6243,20 @@ fn route_bound(limits: &Limits) -> Option<u32> {
 #[must_use]
 #[expect(clippy::too_many_lines, reason = "one checked sum of the root's bounded participating state")]
 pub fn worst_case(limits: &Limits) -> Option<u64> {
+    if limits.brief.parts == 0 || limits.brief.gather == skein_lib::Duration::ZERO {
+        return None;
+    }
     let task_bytes = tasks::worst_case(&limits.tasks)?;
     let fleet_bytes = fleet::worst_case(&limits.fleet)?;
     let people_bytes = people::worst_case(&limits.people)?;
     let authority_bytes = authority::worst_case(&limits.authority)?;
-    let brief_bytes = brief::worst_case(&limits.brief)?;
+    let brief_bytes = brief::gather_worst_case(&brief_limits(&limits.brief))?.checked_add(
+        Slab::<BriefConnector>::worst_case(limits.brief.briefs.checked_mul(limits.brief.sections)?.checked_mul(2)?)?,
+    )?;
     let brief_fetches = limits.brief.briefs.checked_mul(limits.brief.sections)?.checked_mul(2)?;
+    if limits.forge.brief_sections < brief_fetches || limits.forge.brief_bytes < limits.brief.read_bytes {
+        return None;
+    }
     let account_bytes = accounts::worst_case(&limits.accounts)?;
     let view_bytes = views::worst_case(&limits.views)?;
     let forge_bytes = forge::worst_case(&limits.forge)?;
@@ -5974,7 +6287,6 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         || limits.journal.deliveries < limits.tasks.saved_repositories
         || limits.journal.result_bytes < limits.tasks.result_bytes
         || limits.journal.result_bytes < limits.people.words
-        || limits.fleet.workstream_bytes < 8
         || limits.people.inbox_entries == 0
         || inbox_bytes > u64::from(limits.journal.transcript_bytes)
         || u64::from(limits.journal.transcript_bytes) < row_bound(limits)?
@@ -5986,9 +6298,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     let cold = limits.fleet.workers;
     let hello = u64::from(limits.fleet.slots)
         .checked_mul(u64::try_from(size_of::<fleet::Hosted>()).ok()?)?
-        .checked_add(u64::from(limits.fleet.workstreams).checked_mul(
-            u64::try_from(size_of::<Box<[u8]>>()).ok()?.checked_add(u64::from(limits.fleet.workstream_bytes))?,
-        )?)?;
+        .checked_add(u64::from(limits.fleet.workstreams).checked_mul(u64::try_from(size_of::<u64>()).ok()?)?)?;
     bytes = bytes
         .checked_add(Queue::<Work>::worst_case(cold)?)?
         .checked_add(Map::<Token, bool>::worst_case(cold)?)?
@@ -6135,7 +6445,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     bytes = bytes.checked_add(Map::<u64, Assignment>::worst_case(limits.tasks.tasks)?)?.checked_add(
         u64::from(limits.tasks.tasks).checked_add(u64::from(limits.journal.held))?.checked_mul(
             u64::from(limits.brief.brief_bytes)
-                .checked_add(List::<brief::Section>::worst_case(limits.brief.sections)?)?
+                .checked_add(List::<BriefSection>::worst_case(limits.brief.sections)?)?
                 .checked_add(u64::from(limits.tasks.inbox_bytes))?
                 .checked_add(
                     u64::from(limits.tasks.tasks)
@@ -6152,9 +6462,6 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         )?,
     )?;
     bytes
-        .checked_add(Map::<Token, forge_route::BriefFetch>::worst_case(brief_fetches)?)?
-        .checked_add(u64::from(brief_fetches).checked_mul(u64::from(limits.brief.read_bytes))?)?
-        .checked_add(u64::from(brief_fetches).checked_mul(u64::from(limits.forge.client.answer_bytes))?)?
         .checked_add(Queue::<authority::Finding>::worst_case(authority::max_out(&limits.authority)?)?)?
         .checked_add(Queue::<tasks::Request>::worst_case(tasks::max_out(&limits.tasks))?)?
         .checked_add(u64::from(limits.tasks.message_bytes).checked_mul(3)?)?
@@ -6162,7 +6469,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         // application owns its separate bounded people terminal/save queue.
         .checked_add(Queue::<people::Request>::worst_case(people::max_out(&limits.people))?.checked_mul(2)?)?
         .checked_add(Queue::<fleet::Request>::worst_case(fleet::max_out(&limits.fleet))?)?
-        .checked_add(Queue::<brief::Request>::worst_case(brief::max_out(&limits.brief))?)?
+        .checked_add(Queue::<brief::GatherRequest>::worst_case(brief::gather_max_out(&brief_limits(&limits.brief)))?)?
         .checked_add(Queue::<Request>::worst_case(max_out(limits))?)?
         .checked_add(Queue::<Output>::worst_case(1)?)?
         .checked_add(Queue::<loads::Request>::worst_case(1)?)?
@@ -6311,7 +6618,7 @@ pub(crate) fn run_charter_bytes(charter: &RunCharter) -> Option<u64> {
     Some(bytes)
 }
 
-fn text_part(first: &[u8], second: &[u8], third: &[u8], fourth: &[u8], available: u32) -> brief::Part {
+fn text_part(first: &[u8], second: &[u8], third: &[u8], fourth: &[u8], available: u32) -> TaskBriefFragment {
     let total = first
         .len()
         .checked_add(second.len())
@@ -6338,7 +6645,7 @@ fn text_part(first: &[u8], second: &[u8], third: &[u8], fourth: &[u8], available
             break;
         }
     }
-    brief::Part {
+    TaskBriefFragment {
         bytes: text.finish(),
         left: u64::try_from(total.checked_sub(keep).expect("prefix in part")).expect("usize fits u64"),
     }
@@ -6359,35 +6666,35 @@ fn prefix(bytes: &[u8], most: usize) -> &[u8] {
     bytes.get(..end).expect("UTF-8 prefix within source")
 }
 
-fn task_section(domain: &Domain, task: u64, part: brief::TaskPart, parts: u32, bytes: u32) -> brief::Read {
+fn task_section(domain: &Domain, task: u64, part: TaskBriefPart, parts: u32, bytes: u32) -> TaskBriefRead {
     if parts == 0 {
-        return brief::Read::Failed;
+        return TaskBriefRead::Failed;
     }
     match part {
-        brief::TaskPart::Spec => match domain.contexts.get(&task) {
+        TaskBriefPart::Spec => match domain.contexts.get(&task) {
             Some(context) => task_read(context, parts, bytes),
-            None => brief::Read::Failed,
+            None => TaskBriefRead::Failed,
         },
-        brief::TaskPart::Delegates => match domain.contexts.get(&task) {
+        TaskBriefPart::Delegates => match domain.contexts.get(&task) {
             Some(context) => delegates_read(&context.delegates, bytes),
-            None => brief::Read::Failed,
+            None => TaskBriefRead::Failed,
         },
-        brief::TaskPart::Dependencies => match domain.dependency_results.get(&task) {
+        TaskBriefPart::Dependencies => match domain.dependency_results.get(&task) {
             Some(results) => dependency_read(results, bytes),
-            None => brief::Read::Failed,
+            None => TaskBriefRead::Failed,
         },
-        brief::TaskPart::Attempts => match domain.contexts.get(&task) {
+        TaskBriefPart::Attempts => match domain.contexts.get(&task) {
             Some(context) => attempt_read(context.tries, bytes),
-            None => brief::Read::Failed,
+            None => TaskBriefRead::Failed,
         },
-        brief::TaskPart::TranscriptTail => match domain.transcripts.get(&task) {
+        TaskBriefPart::TranscriptTail => match domain.transcripts.get(&task) {
             Some(transcript) => tail_read(transcript, bytes),
-            None => brief::Read::Failed,
+            None => TaskBriefRead::Failed,
         },
     }
 }
 
-fn attempt_read(tries: tasks::Tries, bytes: u32) -> brief::Read {
+fn attempt_read(tries: tasks::Tries, bytes: u32) -> TaskBriefRead {
     let classes: [(&[u8], u32); 6] = [
         (b"transient: ", tries.transient),
         (b"permanent: ", tries.permanent),
@@ -6418,7 +6725,7 @@ fn attempt_read(tries: tasks::Tries, bytes: u32) -> brief::Read {
         }
     }
     let text = writer.finish();
-    brief::Read::Got(Box::new([brief::Part {
+    TaskBriefRead::Got(Box::new([TaskBriefFragment {
         left: u64::try_from(total.checked_sub(text.len()).expect("written prefix")).expect("usize fits u64"),
         bytes: text,
     }]))
@@ -6439,7 +6746,7 @@ fn delegate_phase(phase: &tasks::Phase) -> &'static [u8] {
     }
 }
 
-fn delegates_read(delegates: &[tasks::DelegateState], bytes: u32) -> brief::Read {
+fn delegates_read(delegates: &[tasks::DelegateState], bytes: u32) -> TaskBriefRead {
     let mut total = 0_usize;
     for delegate in delegates {
         total = total
@@ -6463,7 +6770,7 @@ fn delegates_read(delegates: &[tasks::DelegateState], bytes: u32) -> brief::Read
         writer.put(b"\n").expect("measured delegate newline");
     }
     let text = writer.finish();
-    brief::Read::Got(Box::new([text_part(&text, b"", b"", b"", bytes)]))
+    TaskBriefRead::Got(Box::new([text_part(&text, b"", b"", b"", bytes)]))
 }
 
 fn result_label(kind: tasks::ResultKind) -> &'static [u8] {
@@ -6476,7 +6783,7 @@ fn result_label(kind: tasks::ResultKind) -> &'static [u8] {
     }
 }
 
-fn dependency_read(results: &[HistoricalResult], bytes: u32) -> brief::Read {
+fn dependency_read(results: &[HistoricalResult], bytes: u32) -> TaskBriefRead {
     let mut total = 0_usize;
     for result in results {
         total = total
@@ -6527,10 +6834,10 @@ fn dependency_read(results: &[HistoricalResult], bytes: u32) -> brief::Read {
         writer.put(b"\n\n").expect("measured result separator");
     }
     let text = writer.finish();
-    brief::Read::Got(Box::new([text_part(&text, b"", b"", b"", bytes)]))
+    TaskBriefRead::Got(Box::new([text_part(&text, b"", b"", b"", bytes)]))
 }
 
-fn tail_read(transcript: &Transcript, bytes: u32) -> brief::Read {
+fn tail_read(transcript: &Transcript, bytes: u32) -> TaskBriefRead {
     let kept = u64::from(bytes).min(transcript.kept);
     let skip = transcript.kept.checked_sub(kept).expect("tail within kept bytes");
     let mut writer = Writer::new(usize::try_from(kept).expect("u32 bound fits usize"));
@@ -6544,7 +6851,7 @@ fn tail_read(transcript: &Transcript, bytes: u32) -> brief::Read {
         passed = end;
     }
     let text = writer.finish();
-    brief::Read::Got(Box::new([brief::Part {
+    TaskBriefRead::Got(Box::new([TaskBriefFragment {
         left: transcript.bytes.saturating_sub(u64::try_from(text.len()).expect("bounded tail")),
         bytes: text,
     }]))
@@ -6623,9 +6930,9 @@ fn contract_text(contract: &tasks::Contract) -> Box<[u8]> {
 }
 
 /// Render an agent task's spec and typed contract from its activation snapshot.
-fn task_read(record: &tasks::RunContext, parts: u32, bytes: u32) -> brief::Read {
+fn task_read(record: &tasks::RunContext, parts: u32, bytes: u32) -> TaskBriefRead {
     if parts == 0 {
-        return brief::Read::Failed;
+        return TaskBriefRead::Failed;
     }
     let contract = contract_text(&record.contract);
     let first = text_part(&record.spec.words, b"\n", &contract, b"", bytes);
@@ -6658,7 +6965,7 @@ fn task_read(record: &tasks::RunContext, parts: u32, bytes: u32) -> brief::Read 
             .checked_add(part.left)
             .expect("bounded omitted bytes");
     }
-    brief::Read::Got(gathered.into_boxed())
+    TaskBriefRead::Got(gathered.into_boxed())
 }
 
 fn header_loaded(startup: Startup) -> bool {
@@ -6683,20 +6990,12 @@ fn header_loaded(startup: Startup) -> bool {
 }
 
 fn hello_within(hello: &fleet::Hello, limits: &fleet::Limits) -> bool {
-    let stop_before_grace = match hello.graces {
-        Some(duration) => duration < limits.grace,
-        None => false,
-    };
+    let stop_before_grace = hello.stop_bound < limits.grace;
     if hello.hosting.len() > usize::try_from(limits.slots).expect("u32 fits usize")
         || hello.workstreams.len() > usize::try_from(limits.workstreams).expect("u32 fits usize")
         || !stop_before_grace
     {
         return false;
-    }
-    for key in &hello.workstreams {
-        if key.len() > usize::try_from(limits.workstream_bytes).expect("u32 fits usize") {
-            return false;
-        }
     }
     true
 }
@@ -6770,8 +7069,6 @@ fn discard_after_stop(domain: &mut Domain, event: Event) {
         | Event::Watch { .. }
         | Event::Unwatch { .. }
         | Event::ViewDelivered { .. }
-        | Event::ViewAppended { .. }
-        | Event::ViewExpired { .. }
         | Event::Refreshed { .. }
         | Event::RefreshFailed { .. } => {}
     }

@@ -1,11 +1,10 @@
 //! Root forge stories with its durable store and the independent fake Forgejo.
 #![expect(clippy::wildcard_enum_match_arm, reason = "the fixture selects only the forge rows relevant to each story")]
+use jig_core_fleet as fleet;
 use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
 use std::collections::{BTreeMap, VecDeque};
 use temper_engine_domain::{Delivery, Key, Record, engine};
 use temper_engine_domain_authority as authority;
-use temper_engine_domain_brief as brief;
-use temper_engine_domain_fleet as fleet;
 use temper_engine_domain_forge as forge_top;
 use temper_engine_domain_forge_client as client;
 use temper_engine_domain_people as people;
@@ -299,7 +298,7 @@ impl World {
             self.events.push_back(engine::Event::Hello {
                 channel: Token::new(7),
                 hello: fleet::Hello {
-                    graces: Some(Duration::from_secs(1)),
+                    stop_bound: Duration::from_secs(1),
                     slots: if with_change { 2 } else { 1 },
                     workstreams: Box::new([]),
                     hosting: self
@@ -610,7 +609,7 @@ fn change_world_with_policy(
     world.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 2,
             workstreams: Box::new([]),
             hosting: Box::new([]),
@@ -688,7 +687,7 @@ fn a_small_fix_made_in_a_chat_lands() {
     world.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 2,
             workstreams: Box::new([]),
             hosting: Box::new([]),
@@ -972,8 +971,8 @@ fn check_gate_landing(no_ci: bool, owner_gate: bool) {
         );
     }
     assert!(
-        gate.sections.iter().any(|section| section.kind == brief::Kind::Pull
-            && matches!(&section.body, brief::Body::Text(words)
+        gate.sections.iter().any(|section| section.kind == engine::BriefKind::Forge(engine::ForgeBriefKind::Pull)
+            && matches!(&section.body, engine::BriefBody::Text(words)
             if words.windows(b"review this diff".len()).any(|part| part == b"review this diff"))),
         "sections={:?}",
         gate.sections
@@ -1070,8 +1069,8 @@ fn check_gate_repair(no_ci: bool) {
     }
     let repair = world.assigned.get(3).expect("review repair assigned").clone();
     assert!(
-        repair.sections.iter().any(|section| section.kind == brief::Kind::Reviews
-            && matches!(&section.body, brief::Body::Text(words)
+        repair.sections.iter().any(|section| section.kind == engine::BriefKind::Forge(engine::ForgeBriefKind::Reviews)
+            && matches!(&section.body, engine::BriefBody::Text(words)
             if words.windows(b"Please fix the unsafe edge".len()).any(|part| part == b"Please fix the unsafe edge"))),
         "review remarks in repair brief: {:?}",
         repair.sections
@@ -1186,8 +1185,8 @@ fn a_change_failing_ci_is_repaired_reviewed_at_its_head_and_lands() {
         matches!(repair.workspace.repositories[0].start, engine::ForgeStart::Branch(ref name) if name.as_ref() == branch.as_ref())
     );
     assert!(
-        repair.sections.iter().any(|section| section.kind == brief::Kind::Ci
-            && matches!(&section.body, brief::Body::Text(words)
+        repair.sections.iter().any(|section| section.kind == engine::BriefKind::Forge(engine::ForgeBriefKind::Ci)
+            && matches!(&section.body, engine::BriefBody::Text(words)
             if words.windows(b"failing check build 3".len()).any(|part| part == b"failing check build 3")
                 && words.windows(b"[job log truncated]".len()).any(|part| part == b"[job log truncated]"))),
         "CI sections: {:?}",
@@ -1311,8 +1310,8 @@ fn an_unreadable_failed_job_log_is_named_and_repair_still_runs() {
     }
     let repair = world.assigned.get(2).expect("repair assigned despite missing job log");
     assert!(
-        repair.sections.iter().any(|section| section.kind == brief::Kind::Ci
-            && matches!(&section.body, brief::Body::Text(words)
+        repair.sections.iter().any(|section| section.kind == engine::BriefKind::Forge(engine::ForgeBriefKind::Ci)
+            && matches!(&section.body, engine::BriefBody::Text(words)
             if words.windows(b"[job log could not be read]".len()).any(|part| part == b"[job log could not be read]")
                 && words.windows(b"Description:".len()).any(|part| part == b"Description:")
                 && words.windows(b"Link:".len()).any(|part| part == b"Link:"))),
@@ -1365,8 +1364,8 @@ fn a_conflicting_update_is_resolved_from_a_merge_in_progress() {
         engine::ForgeStart::Merge { branch: ref source, base: expected }
             if source.as_ref() == branch.as_ref() && expected == translate::commit(base)));
     assert!(
-        resolver.sections.iter().any(|section| section.kind == brief::Kind::Pull
-            && matches!(&section.body, brief::Body::Text(words)
+        resolver.sections.iter().any(|section| section.kind == engine::BriefKind::Forge(engine::ForgeBriefKind::Pull)
+            && matches!(&section.body, engine::BriefBody::Text(words)
             if words.windows(b"What landed in the base".len()).any(|part| part == b"What landed in the base")
                 && words.windows(b"Conflicting file".len()).any(|part| part == b"Conflicting file"))),
         "resolution sections: {:?}",
@@ -1668,7 +1667,7 @@ fn a_worker_frozen_past_its_grace_resumes_with_a_push_in_hand_and_lands_nothing_
     world.send(engine::Event::Hello {
         channel: Token::new(8),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 2,
             workstreams: Box::new([]),
             hosting: Box::new([]),
@@ -1983,7 +1982,7 @@ fn a_saved_repository_tag_becomes_a_concrete_checkout_in_the_next_attempt() {
     world.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 2,
             workstreams: Box::new([]),
             hosting: Box::new([]),
@@ -2108,7 +2107,7 @@ fn a_goal_ending_while_its_issue_is_opening_eventually_closes_that_issue() {
     world.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 2,
             workstreams: Box::new([]),
             hosting: Box::new([]),
@@ -2160,7 +2159,7 @@ fn a_goal_subscription_receives_the_connectors_landing_news() {
     world.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 1,
             workstreams: Box::new([]),
             hosting: Box::new([]),
@@ -2219,7 +2218,7 @@ fn subscribe_chat(world: &mut World, topic: forge_top::Topic, key: u8) -> u64 {
     world.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 1,
             workstreams: Box::new([]),
             hosting: Box::new([]),
@@ -2414,7 +2413,7 @@ fn an_authorized_forge_read_returns_a_bounded_typed_answer() {
     world.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 1,
             workstreams: Box::new([]),
             hosting: Box::new([]),
@@ -2453,7 +2452,7 @@ fn a_named_forge_effect_is_committed_before_its_write_and_made_once() {
     world.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 1,
             workstreams: Box::new([]),
             hosting: Box::new([]),
@@ -2558,7 +2557,7 @@ fn pending_issue_effect() -> (World, engine::Assignment) {
     world.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 1,
             workstreams: Box::new([]),
             hosting: Box::new([]),

@@ -2,6 +2,7 @@
 //! scripted Smith agent; its concrete turns and terminal return to the root.
 //! The fake store and person remain outside both domains.
 
+use jig_core_fleet as fleet;
 use skein_fake_checkout::{Checkout, Exit, Program};
 use skein_fake_llm_domain::api::Script;
 use skein_lib::{Duration, ReplyTo, Time, Token};
@@ -9,7 +10,6 @@ use smith_agent_world::{Job, Settings, World as Agent};
 use smith_domain as smith;
 use smith_domain_run as run;
 use temper_engine_domain::{Delivery, engine};
-use temper_engine_domain_fleet as fleet;
 use temper_engine_domain_people as people;
 use temper_engine_domain_world::{commits::Store, direct::Driver, walking};
 
@@ -42,7 +42,7 @@ pub fn chat(words: &[u8], job: Job) -> World {
     root.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 1,
             workstreams: Box::new([]),
             hosting: Box::new([]),

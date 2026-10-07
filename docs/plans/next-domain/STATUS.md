@@ -321,3 +321,23 @@ simulation; no legacy fuzzy seed trim is needed for the suite caps.
 | 01.2 transcript codec | merged locally | smith 8cd34ba | fmt/clippy pass; 883 focused / 6.399 s; 12 fuzzy / 6.701 s. |
 | 01.3 channel codec | merged locally | smith 9798fbf | fmt/clippy pass; 1,191 focused / 8.954 s; 12 fuzzy / 9.765 s. |
 | 01.4 codec fuzz and memory | merged locally | smith 9501f31 | fmt/clippy pass; 1,193 focused / 3.822 s; 13 fuzzy / 5.209 s; codec world serial 11 focused / 0.112 s and one fuzzy / 0.061 s. |
+
+## jig extraction
+
+| Increment | State | Commit | Evidence |
+|---|---|---|---|
+| jig 00.1 boundary check | merged and pushed | fcad6a05 | Checks future jig manifests and source vocabulary, with breach fixtures. Gate: fmt/clippy; 1,138 focused / 2.343 s; 25 fuzzy / 2.750 s. |
+| jig 00.2 world helpers | already satisfied | — | `temper-world` reexports the generic schedule, stage, ledger, trace, referee and heap machinery from `skein-world`; jig's worlds can use it directly. |
+| jig 00.3 accounts | merged and pushed | c4999d26, 6dca842e, b2a4da03 | Carved the accounts child and its world, with history; the world uses `skein-world` for heap measurement. Gate: fmt/clippy; 1,138 focused / 3.170 s; 25 fuzzy / 4.001 s. |
+| jig 01.1 views | merged and pushed | f2383608, 5bcdad36, b7b610aa | Carved live views and their world into jig, with temper's root translating watch routes. Gate: fmt/clippy; 1,105 focused / 2.098 s; 25 fuzzy / 2.705 s. |
+| jig 01.2 fleet | merged and pushed | 4c408b13, 4058510b, d451395e, abfb5ddb | Replaced forge workspaces with task numbers, carved the fleet and its world, and kept bounded admissions. Gate: fmt/clippy; 1,105 focused / 2.218 s; 25 fuzzy / 2.881 s. |
+| jig 01.3 host kinds | merged and pushed | d2611936, bf8aab45 | Added worker and engine host slots, charter host selection and engine adoption rules. Gate: fmt/clippy; 1,115 focused / 2.258 s; 25 fuzzy / 3.884 s. |
+| jig 01.4 fencing | merged and pushed | 17b250e6 | Ordered mandatory worker stop bounds against engine grace; the fleet referee checks adoption endings and one live attempt across hosts. Gate: fmt/clippy; 1,117 focused / 2.253 s; 25 fuzzy / 3.639 s. |
+| jig 10.1 resources, holds, pools, topics | merged and pushed | e4917df9 | Added the seed-configured test connector's names, roles, adoption, holds, pools, subscriptions and durable records. Gate: fmt/clippy; 1,143 focused / 2.314 s; 25 fuzzy / 2.793 s. |
+| jig 10.2 effects and recovery | merged and pushed | 41d5ac89 | Added effect forms and recovery classes, durable outbox attempts and the fake system with keyed writes, conditions and late copies. Gate: fmt/clippy; 1,111 focused / 2.212 s; 25 fuzzy / 3.065 s. |
+| jig 10.3 judges, procedures and values | merged and pushed | 5d36802a | Added fresh guarded and observed verdicts, durable procedure decisions, reads, sections, workspace items, drift and restart steps. Gate: fmt/clippy; 1,122 focused / 8.002 s; 25 fuzzy / 5.690 s. |
+| jig 10.4 test connector world | merged and pushed | 6298b87d | Scripted a journaled root and cold restarts over the connector and fake system; checked seeded faults, load and replay. Gate: fmt/clippy; 1,129 focused / 3.724 s; 26 fuzzy / 4.720 s. World measure: 7 focused / 0.028 s; 1 fuzzy / 0.017 s. |
+| jig 03.1 entries in the store | merged and pushed | fdc2a960 | Replaced wiki operations with store records and revision-checked entry writes; entry and index line save or erase in one decision. Gate: fmt/clippy; 1,096 focused / 2.161 s; 25 fuzzy / 2.851 s. |
+| jig 03.2 indexes and recall | merged and pushed | aca15eb3 | Loaded bounded scope indexes in pages, evicted the least recently used, and recalled entries by name or description search in pages. Gate: fmt/clippy; 1,102 focused / 2.170 s; 25 fuzzy / 4.280 s. |
+| jig 03.3 carved notes | merged and pushed | a3928c37, 6bd6b18a | Changed the world to skein's harness before moving the notes child and world with history to jig. Gate: fmt/clippy; 1,102 focused / 2.231 s; 25 fuzzy / 2.634 s. |
+| jig 03.4 notes world | merged and pushed | c1946dd6 | Scripted committed writes, bounded store pages and restart; checked the four required stories, referee faults, full indexes and seeded replay. Gate: fmt/clippy; 1,117 focused / 2.194 s; 26 fuzzy / 2.724 s. World: 9 focused / 0.010 s; 1 fuzzy / 0.030 s. |

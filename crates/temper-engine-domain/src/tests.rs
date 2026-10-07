@@ -260,7 +260,7 @@ fn counter_and_commit_overflow_cannot_reuse_names() {
 
 #[test]
 fn deep_child_rows_and_arbitrary_internal_payloads_are_refused_before_retention() {
-    use temper_engine_domain_fleet as fleet;
+    use jig_core_fleet as fleet;
     use temper_engine_domain_people as people;
     let limits = crate::JournalLimits {
         commits: 1,
@@ -301,7 +301,12 @@ fn deep_child_rows_and_arbitrary_internal_payloads_are_refused_before_retention(
     );
     let callback = Delivery::Fleet(fleet::Event::Hello {
         channel: Token::new(1),
-        hello: fleet::Hello { graces: None, slots: 1, workstreams: Box::new([]), hosting: Box::new([]) },
+        hello: fleet::Hello {
+            stop_bound: skein_lib::Duration::from_secs(0),
+            slots: 1,
+            workstreams: Box::new([]),
+            hosting: Box::new([]),
+        },
     });
     assert!(
         decision.deliver(&limits, callback).is_err(),
@@ -311,7 +316,7 @@ fn deep_child_rows_and_arbitrary_internal_payloads_are_refused_before_retention(
 
 #[test]
 fn held_assignment_checks_owned_bytes_and_section_backing_before_acceptance() {
-    use temper_engine_domain_accounts as accounts;
+    use jig_core_accounts as accounts;
     use temper_engine_domain_brief as brief;
     let limits = crate::JournalLimits {
         commits: 1,
@@ -362,9 +367,9 @@ fn held_assignment_checks_owned_bytes_and_section_backing_before_acceptance() {
             },
             budget: 1,
         }),
-        sections: Box::new([brief::Section {
-            kind: brief::Kind::Task,
-            body: brief::Body::Text(b"12345".as_slice().into()),
+        sections: Box::new([crate::engine::BriefSection {
+            kind: crate::engine::BriefKind::Core(brief::Core::Task),
+            body: crate::engine::BriefBody::Text(b"12345".as_slice().into()),
         }]),
         inbox: Box::new([]),
         saved: Box::new([]),

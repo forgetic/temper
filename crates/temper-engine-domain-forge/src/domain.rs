@@ -11,6 +11,7 @@ use crate::{
     Protection, PullState, ReleaseEnding, ReleaseRow, Repository, Request, Role, Stored, Subscriber, Topic, What,
     Writer,
 };
+use crate::{brief, held};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum AdoptionStage {
@@ -114,6 +115,9 @@ pub struct Domain {
     writers: Map<u16, u64>,
     client: client::Domain,
     client_out: Queue<client::Request>,
+    pub(crate) brief_fetches: Map<Token, brief::BriefFetch>,
+    pub(crate) brief_pending: Map<Token, held::Pending>,
+    pub(crate) brief_held: Map<Token, held::Held>,
 }
 
 impl Domain {
@@ -152,6 +156,9 @@ impl Domain {
             writers,
             client: client::Domain::configured(&l.client, seed, config)?,
             client_out: Queue::with_capacity(client::max_out(&l.client)),
+            brief_fetches: Map::with_capacity(l.brief_sections),
+            brief_pending: Map::with_capacity(l.brief_sections),
+            brief_held: Map::with_capacity(l.brief_sections),
         })
     }
 
@@ -165,6 +172,20 @@ impl Domain {
     #[must_use]
     pub fn is_ready(&self) -> bool {
         self.client.is_ready()
+    }
+
+    /// Whether no brief section is being gathered by the connector.
+    #[must_use]
+    pub fn briefs_idle(&self) -> bool {
+        self.brief_fetches.is_empty() && self.brief_pending.is_empty() && self.brief_held.is_empty()
+    }
+
+    /// Transfer one completed section to the parent assembling an assignment.
+    pub fn take_brief(&mut self, section: Token) -> Option<Box<[u8]>> {
+        match self.brief_held.remove(&section) {
+            Some(held) => Some(held.words),
+            None => None,
+        }
     }
 
     /// Reclaim transient child buffers after the current decision.
@@ -359,6 +380,15 @@ pub const fn max_out(l: &Limits) -> u32 {
 /// Decide one parent event and collect its durable records and outputs.
 pub fn step(d: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     match event {
+        Event::GatherBrief { owner, source, parts, bytes, max_job_bytes } => {
+            brief::gather(d, owner, source, parts, bytes, max_job_bytes, env.limits.brief_bytes, out);
+        }
+        Event::GatherBriefHeld { section, source, parts, bytes, max_job_bytes } => {
+            held::gather(d, section, source, parts, bytes, max_job_bytes, env.limits.brief_bytes, out);
+        }
+        Event::CutBrief { section, bytes } => held::cut(d, section, bytes, out),
+        Event::TakeBrief { section } => held::take(d, section, out),
+        Event::DropBrief { section } => held::drop_section(d, section),
         Event::Adopt { reply_to, adoption } => adopt(d, env, reply_to, adoption, out),
         Event::ForgetAdoption { repository, restore } => match restore {
             Some(previous) => {
@@ -511,7 +541,9 @@ fn drain(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
                 }
             }
             client::Request::Read { owner, result } => {
-                if d.adoptions.contains_key(&owner) {
+                if d.brief_fetches.contains_key(&owner) {
+                    brief::brief_answer(d, owner, result, out);
+                } else if d.adoptions.contains_key(&owner) {
                     adoption_read(d, env, owner, result, out);
                 } else if d.landings.contains_key(&owner) {
                     landing_read(d, owner, result, out);

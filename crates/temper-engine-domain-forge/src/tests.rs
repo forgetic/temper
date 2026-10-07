@@ -44,6 +44,8 @@ const LIMITS: Limits = Limits {
     adoptions: 2,
     collaborators: 8,
     landings: 8,
+    brief_sections: 32,
+    brief_bytes: 4096,
     issue_policy: temper_engine_domain_forge_issues::Limits {
         plan_items: 8,
         milestones: 8,
@@ -197,6 +199,7 @@ fn an_outbox_entry_waits_for_its_commit() {
 }
 
 #[test]
+#[expect(clippy::too_many_lines, reason = "one adoption test names every connector output explicitly")]
 fn adoption_reads_permission_before_committing_its_role() {
     let mut d = domain();
     let request = Adoption {
@@ -230,7 +233,11 @@ fn adoption_reads_permission_before_committing_its_role() {
         | Request::ProjectAfter { .. }
         | Request::ProjectionFailed { .. }
         | Request::ChangeDecision { .. }
-        | Request::Read { .. } => panic!("permission call"),
+        | Request::Read { .. }
+        | Request::BriefClient { .. }
+        | Request::BriefReady { .. }
+        | Request::BriefSized { .. }
+        | Request::BriefTaken { .. } => panic!("permission call"),
     };
     assert_eq!(op, client::api::Op::Read(client::api::Read::Permission { user: 7 }));
     let result = outputs(
@@ -261,7 +268,11 @@ fn adoption_reads_permission_before_committing_its_role() {
         | Request::ProjectAfter { .. }
         | Request::ProjectionFailed { .. }
         | Request::ChangeDecision { .. }
-        | Request::Read { .. } => panic!("branches call"),
+        | Request::Read { .. }
+        | Request::BriefClient { .. }
+        | Request::BriefReady { .. }
+        | Request::BriefSized { .. }
+        | Request::BriefTaken { .. } => panic!("branches call"),
     };
     assert!(
         outputs(
@@ -292,7 +303,11 @@ fn adoption_reads_permission_before_committing_its_role() {
         | Request::ProjectAfter { .. }
         | Request::ProjectionFailed { .. }
         | Request::ChangeDecision { .. }
-        | Request::Read { .. } => panic!("settings follows collision read"),
+        | Request::Read { .. }
+        | Request::BriefClient { .. }
+        | Request::BriefReady { .. }
+        | Request::BriefSized { .. }
+        | Request::BriefTaken { .. } => panic!("settings follows collision read"),
     }
 }
 
