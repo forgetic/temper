@@ -32,7 +32,7 @@ pub const LIMITS: Limits = Limits {
     message_bytes: 32,
     proposal_stall: Duration::from_millis(10),
     escalation_stall: Duration::from_secs(3600),
-    saved_repositories: 2,
+    saved_resources: 2,
     contract_choices: 4,
     charters: 2,
     authority_grants: 4,

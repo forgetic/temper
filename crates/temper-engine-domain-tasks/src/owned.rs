@@ -204,5 +204,12 @@ fn task_bytes(task: &TaskRecord) -> Option<u64> {
         .checked_add(bytes(size_of_val(&*task.subscriptions))?)?
         .checked_add(bytes(size_of_val(&*task.waiting_on))?)?
         .checked_add(inbox_bytes)?
-        .checked_add(bytes(size_of_val(&*task.saved))?)
+        .checked_add(bytes(size_of_val(&*task.saved))?)?
+        .checked_add(task.saved.iter().try_fold(0u64, |total, resource| {
+            let mut held = total.checked_add(bytes(size_of_val(&*resource.path))?)?;
+            for segment in &resource.path {
+                held = held.checked_add(bytes(segment.len())?)?;
+            }
+            Some(held)
+        })?)
 }

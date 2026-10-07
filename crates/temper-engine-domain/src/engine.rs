@@ -1936,7 +1936,7 @@ fn step_routed(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Q
                 return;
             }
             if end_bytes(&end) > u64::from(env.limits.tasks.result_bytes).checked_mul(2).expect("bounded result bytes")
-                || !tasks_saved_within(saved.as_deref(), env.limits.tasks.saved_repositories)
+                || !tasks_saved_within(saved.as_deref(), env.limits.tasks.saved_resources)
             {
                 out.push(Request::AnswerBusy { channel, task, attempt });
                 return;
@@ -5413,7 +5413,8 @@ fn brief_outputs(
                     }),
                     sections,
                     inbox: context.inbox,
-                    saved: context.saved,
+                    saved: forge_route::saved_tags(&context.saved, domain.config.forge_connector)
+                        .expect("task saved names were admitted by the root"),
                     workspace: workspace.workspace.clone(),
                     transcript: turns.into_boxed(),
                     answered: {
@@ -5523,6 +5524,13 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                     Payload::Turn { .. } | Payload::Call { .. } | Payload::CallAnswer(_) => {
                         unreachable!("fleet returns answer family")
                     }
+                };
+                let (end, saved) = match saved {
+                    Some(tags) => match forge_route::saved_resources(domain.config.forge_connector, &tags) {
+                        Some(resources) => (end, Some(resources)),
+                        None => (tasks::End::Failed(tasks::Class::Invalid), None),
+                    },
+                    None => (end, None),
                 };
                 let proof = domain.proofs.get_mut(&run.raw()).expect("terminal proof pre-reserved");
                 assert!(proof.attempt == attempt.raw(), "terminal callback belongs to current proof");
@@ -6951,7 +6959,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         || limits.loads.rows.checked_add(limits.fleet.workers)? > routes
         || limits.journal.result_bytes < limits.brief.brief_bytes
         || limits.journal.deliveries < limits.brief.sections
-        || limits.journal.deliveries < limits.tasks.saved_repositories
+        || limits.journal.deliveries < limits.tasks.saved_resources
         || limits.journal.result_bytes < limits.tasks.result_bytes
         || limits.journal.result_bytes < limits.people.words
         || limits.people.inbox_entries == 0
@@ -7022,7 +7030,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_add(Queue::<fleet::Event>::worst_case(limits.tasks.tasks.checked_mul(2)?)?)?
         .checked_add(Queue::<Box<tasks::RunContext>>::worst_case(limits.tasks.tasks)?)?;
     bytes = bytes.checked_add(
-        u64::from(limits.tasks.tasks).checked_mul(u64::from(limits.tasks.saved_repositories).checked_mul(4)?)?,
+        u64::from(limits.tasks.tasks).checked_mul(u64::from(limits.tasks.saved_resources).checked_mul(4)?)?,
     )?;
     bytes = bytes.checked_add(Slab::<Option<Payload>>::worst_case(payload_slots(limits)?)?)?.checked_add(
         u64::from(payload_slots(limits)?).checked_mul(
@@ -7032,7 +7040,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         )?,
     )?;
     bytes = bytes.checked_add(
-        u64::from(payload_slots(limits)?).checked_mul(u64::from(limits.tasks.saved_repositories).checked_mul(4)?)?,
+        u64::from(payload_slots(limits)?).checked_mul(u64::from(limits.tasks.saved_resources).checked_mul(4)?)?,
     )?;
     bytes = bytes
         .checked_add(Slab::<Option<Read>>::worst_case(limits.loads.loads)?)?
@@ -7097,7 +7105,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_add(Map::<u64, RestoringProof>::worst_case(limits.tasks.tasks)?)?
         .checked_add(Map::<u64, Box<tasks::RunContext>>::worst_case(limits.tasks.tasks)?)?
         .checked_add(
-            u64::from(limits.tasks.tasks).checked_mul(u64::from(limits.tasks.saved_repositories).checked_mul(4)?)?,
+            u64::from(limits.tasks.tasks).checked_mul(u64::from(limits.tasks.saved_resources).checked_mul(4)?)?,
         )?
         .checked_add(u64::from(limits.tasks.tasks).checked_mul(u64::from(limits.tasks.result_bytes).checked_mul(2)?)?)?
         .checked_add(Map::<u64, Transcript>::worst_case(limits.tasks.tasks)?)?
@@ -7127,7 +7135,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
                     u64::from(limits.tasks.tasks)
                         .checked_mul(u64::from(limits.tasks.message_bytes).checked_add(32)?)?,
                 )?
-                .checked_add(u64::from(limits.tasks.saved_repositories).checked_mul(4)?)?
+                .checked_add(u64::from(limits.tasks.saved_resources).checked_mul(4)?)?
                 .checked_add(u64::from(limits.journal.run_bytes))?
                 .checked_add(u64::from(limits.journal.transcript_bytes))?
                 .checked_add(List::<Box<[u8]>>::worst_case(limits.journal.transcript_bytes)?)?
@@ -7733,7 +7741,7 @@ fn row_bound(limits: &Limits) -> Option<u64> {
         u64::from(tasks.result_bytes).checked_mul(3)?,
         u64::from(tasks.inbox_bytes),
         u64::from(tasks.inbox_messages).checked_mul(u64::try_from(size_of::<tasks::Word>()).ok()?)?,
-        u64::from(tasks.saved_repositories).checked_mul(4)?,
+        u64::from(tasks.saved_resources).checked_mul(4)?,
         u64::from(tasks.parameters).checked_mul(u64::try_from(size_of::<tasks::Parameter>()).ok()?)?,
         u64::from(tasks.inputs)
             .checked_add(u64::from(tasks.dependencies).checked_mul(2)?)?

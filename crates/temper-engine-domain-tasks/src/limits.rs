@@ -52,8 +52,8 @@ pub struct Limits {
     pub proposal_stall: skein_lib::Duration,
     /// Time an undecided escalation waits at a nonfinal holder before passing upward.
     pub escalation_stall: skein_lib::Duration,
-    /// Maximum writable repository tags whose saved-work branch has committed work for one task.
-    pub saved_repositories: u32,
+    /// Maximum connector resources on which a task has saved state.
+    pub saved_resources: u32,
     /// Maximum distinct-code choices in a nonempty verdict contract.
     pub contract_choices: u32,
     /// Maximum retained configured agent-charter numbers.
@@ -110,7 +110,13 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_add(
             u64::from(limits.inbox_messages).checked_mul(u64::try_from(size_of::<crate::QuestionCredit>()).ok()?)?,
         )?
-        .checked_add(u64::from(limits.saved_repositories).checked_mul(4)?)?
+        .checked_add(u64::from(limits.saved_resources).checked_mul(
+            u64::try_from(size_of::<crate::SavedResource>()).ok()?
+                .checked_add(u64::from(limits.authority_segments).checked_mul(
+                    u64::try_from(size_of::<Box<[u8]>>()).ok()?,
+                )?)?
+                .checked_add(u64::from(limits.authority_bytes))?,
+        )?)?
         .checked_add(u64::from(limits.result_bytes).checked_mul(3)?)?
         .checked_add(u64::from(limits.parameters).checked_mul(u64::try_from(size_of::<Parameter>()).ok()?)?)?
         .checked_add(u64::from(limits.inputs).checked_mul(8)?)?

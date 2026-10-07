@@ -95,7 +95,7 @@ pub(crate) fn activation(
     number: u64,
     attempt: u64,
     end: End,
-    saved: Option<Box<[u32]>>,
+    saved: Option<Box<[crate::SavedResource]>>,
     cumulative: u64,
     out: &mut Queue<Request>,
 ) {

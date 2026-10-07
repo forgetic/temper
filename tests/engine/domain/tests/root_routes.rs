@@ -4887,7 +4887,10 @@ fn saved_work_reaches_the_next_attempt() {
     else {
         panic!("parked task")
     };
-    assert_eq!(task.saved.as_ref(), [3]);
+    assert_eq!(task.saved.as_ref(), [tasks::SavedResource {
+        connector: 0,
+        path: Box::new([Box::from(3u32.to_be_bytes())]),
+    }]);
     say(&mut driver, first.task, 49);
     let second = assigned_from_last(&driver.delivered);
     assert_eq!(second.saved.as_ref(), [3]);

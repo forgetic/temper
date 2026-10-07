@@ -9,6 +9,36 @@ use super::{
 use alloc::boxed::Box;
 use jig_core_brief as brief;
 
+/// Translate the worker's connector-specific saved tags at the root boundary.
+pub(super) fn saved_resources(connector: u16, tags: &[u32]) -> Option<Box<[tasks::SavedResource]>> {
+    let mut resources = List::with_capacity(u32::try_from(tags.len()).ok()?);
+    for tag in tags {
+        resources.push(tasks::SavedResource {
+            connector,
+            path: Box::new([Box::from(tag.to_be_bytes())]),
+        }).ok()?;
+    }
+    let mut sorted = resources.into_boxed().into_vec();
+    sorted.sort();
+    Some(sorted.into_boxed_slice())
+}
+
+/// Return the forge's resource tags from task-owned generic saved names.
+pub(super) fn saved_tags(resources: &[tasks::SavedResource], connector: u16) -> Option<Box<[u32]>> {
+    let mut tags = List::with_capacity(u32::try_from(resources.len()).ok()?);
+    for resource in resources {
+        if resource.connector != connector {
+            continue;
+        }
+        let [repository] = resource.path.as_ref() else { return None };
+        if repository.len() != 4 {
+            return None;
+        }
+        tags.push(u32::from_be_bytes([repository[0], repository[1], repository[2], repository[3]])).ok()?;
+    }
+    Some(tags.into_boxed())
+}
+
 /// Build a generic people request from temper's forge repository options.
 /// The people child retains only the resource name, role and opaque options.
 #[must_use]
@@ -1031,7 +1061,8 @@ pub(super) fn run_workspace(
                 | tasks::Parameter::Bytes { .. } => {}
             }
         }
-        for tag in &context.saved {
+        let saved = saved_tags(&context.saved, domain.config.forge_connector)?;
+        for tag in &saved {
             let Some(repository) = domain.forge.repository_tag(context.project, *tag) else {
                 if adopted.is_some() {
                     return None;
@@ -1048,7 +1079,10 @@ pub(super) fn run_workspace(
     let mut holders = List::with_capacity(env.limits.forge.resources_per_task);
     let mut key = context.task;
     for repository in &selected {
-        let saved = context.saved.contains(&repository.provider.repository);
+        let saved = context.saved.contains(&tasks::SavedResource {
+            connector: domain.config.forge_connector,
+            path: Box::new([Box::from(repository.provider.repository.to_be_bytes())]),
+        });
         let (start, mut push, holder) = if let Some((row, kind)) = inherited {
             key = row.task;
             match kind {

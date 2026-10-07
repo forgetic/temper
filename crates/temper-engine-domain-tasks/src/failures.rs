@@ -9,7 +9,7 @@ use skein_lib::{Duration, Rng};
 pub enum Class {
     /// Temporary peer/read/transcript failure reported by the root.
     Transient,
-    /// Failure requiring an external correction, such as an unavailable repository or invalid
+    /// Failure requiring an external correction, such as an unavailable resource or invalid
     /// assignment.
     Permanent,
     /// `Run` itself reported execution failure.

@@ -136,6 +136,14 @@ pub struct Word {
     pub eligible: bool,
 }
 
+/// A connector resource on which a run left state for its next activation.
+/// The path is opaque to tasks and ordered by literal segment bytes.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct SavedResource {
+    pub connector: u16,
+    pub path: Box<[Box<[u8]>]>,
+}
+
 /// An unanswered question and the task allowed to use its reserved answer room.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct QuestionCredit {
@@ -607,8 +615,8 @@ pub struct TaskRecord {
     pub last_message: u64,
     /// Whole unread words in increasing root message order.
     pub inbox: Box<[Word]>,
-    /// Repository tags with work committed to this task's saved-work branch, ascending and unique.
-    pub saved: Box<[u32]>,
+    /// Resource names with saved state, ordered and unique.
+    pub saved: Box<[SavedResource]>,
     /// Some attempt of this task committed a turn, so its next preparation must read its transcript.
     pub ever_turned: bool,
     /// Lifetime tasks made in this subtree, including itself, bounded by `Limits::tree_tasks`;
@@ -996,9 +1004,8 @@ pub enum Event {
         /// Bounded root-supplied activation outcome; tasks normalizes invalid outcomes. A
         /// park/retry need not end the task.
         end: End,
-        /// Full set of repository tags with saved work after this terminal; absent preserves the
-        /// previous set. Root obtains it from the worker's save outcome.
-        saved: Option<Box<[u32]>>,
+        /// Full set of resource names with saved state; absent preserves the previous set.
+        saved: Option<Box<[SavedResource]>>,
         /// `Priced` worker cumulative expense or unpriced topology/readiness cause; root owns exact
         /// replay fencing.
         cause: Cause,
@@ -1237,8 +1244,8 @@ pub struct RunContext {
     pub delegates: Box<[DelegateState]>,
     /// Immutable dependency identities whose ended results the root loads.
     pub dependencies: Box<[u64]>,
-    /// Repository tags whose next workspace starts from this task's saved-work branch.
-    pub saved: Box<[u32]>,
+    /// Resources whose next activation resumes saved state.
+    pub saved: Box<[SavedResource]>,
     /// Last claimed attempt; a task-wide transcript load must not use turns from a later claim.
     pub previous_attempt: u64,
     /// Whether a committed conversation exists across this task's attempts.

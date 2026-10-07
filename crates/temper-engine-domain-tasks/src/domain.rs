@@ -138,7 +138,7 @@ impl Domain {
         Some(record(self, task)?.executor)
     }
 
-    /// Stable tree root for connector branch naming.
+    /// Stable tree root for a connector's task-scoped names.
     #[must_use]
     pub fn root(&self, task: u64) -> Option<u64> {
         Some(record(self, task)?.root)

@@ -5,22 +5,35 @@
 use crate::domain::{Domain, entrance, fact, publish, record, refused, task_mut};
 use crate::{
     Accepted, Active, Class, Closing, Contract, End, Ending, Fact, Hold, Limits, Phase, Refusal, Request, Stage,
-    TaskResult, Tries, Was,
+    SavedResource, TaskResult, Tries, Was,
 };
 use alloc::boxed::Box;
 use skein_lib::{Env, Queue, ReplyTo};
 
-pub(crate) fn saved_within(saved: Option<&[u32]>, limits: &Limits) -> bool {
-    let Some(tags) = saved else { return true };
-    if tags.len() > usize::try_from(limits.saved_repositories).expect("u32 fits usize") {
+pub(crate) fn saved_within(saved: Option<&[SavedResource]>, limits: &Limits) -> bool {
+    let Some(resources) = saved else { return true };
+    if resources.len() > usize::try_from(limits.saved_resources).expect("u32 fits usize") {
         return false;
     }
-    let mut previous = 0;
-    for tag in tags {
-        if *tag <= previous {
+    let mut previous = None;
+    for resource in resources {
+        if resource.path.is_empty()
+            || resource.path.len() > usize::try_from(limits.authority_segments).expect("u32 fits usize")
+        {
             return false;
         }
-        previous = *tag;
+        let mut bytes = 0usize;
+        for segment in &resource.path {
+            let Some(sum) = bytes.checked_add(segment.len()) else { return false };
+            bytes = sum;
+        }
+        if bytes > usize::try_from(limits.authority_bytes).expect("u32 fits usize") {
+            return false;
+        }
+        if let Some(before) = previous && before >= resource {
+            return false;
+        }
+        previous = Some(resource);
     }
     true
 }
@@ -176,7 +189,7 @@ pub(crate) fn activation(
     number: u64,
     attempt: u64,
     end: End,
-    saved: Option<Box<[u32]>>,
+    saved: Option<Box<[SavedResource]>>,
     out: &mut Queue<Request>,
 ) {
     if !domain.ready() {
