@@ -209,7 +209,7 @@ impl World {
                     people::Stored::SignIn { .. }
                     | people::Stored::ReadPosition { .. }
                     | people::Stored::Roles { .. }
-                    | people::Stored::PolicyRole { .. }
+                    | people::Stored::Policy { .. }
                     | people::Stored::Answer { .. },
                 )
                 | Record::Tasks(

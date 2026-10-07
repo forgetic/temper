@@ -96,7 +96,7 @@ impl Referee {
                         people::Stored::Person { .. }
                         | people::Stored::ReadPosition { .. }
                         | people::Stored::SignIn { .. }
-                        | people::Stored::PolicyRole { .. }
+                        | people::Stored::Policy { .. }
                         | people::Stored::Answer { .. },
                     )
                     | Record::Tasks(_)
@@ -128,7 +128,7 @@ impl Referee {
                         | people::Stored::ReadPosition { .. }
                         | people::Stored::SignIn { .. }
                         | people::Stored::Roles { .. }
-                        | people::Stored::PolicyRole { .. },
+                        | people::Stored::Policy { .. },
                     )
                     | Record::Tasks(_)
                     | Record::Call(_)

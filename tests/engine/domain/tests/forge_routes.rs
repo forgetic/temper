@@ -550,21 +550,62 @@ fn change_world_with_gate(
     approval: Option<authority::Freshness>,
     agent_gate: bool,
 ) -> (World, engine::Assignment, engine::Assignment, Box<[u8]>) {
-    change_world_with_policy(silent_ci, passes, approval, agent_gate, false)
+    change_world_with_policy(silent_ci, passes, approval, agent_gate, false, false)
 }
 
+#[expect(clippy::too_many_lines, reason = "the root change fixture builds both producer and review routes")]
+#[expect(clippy::fn_params_excessive_bools, reason = "independent CI, gate and policy settings select test worlds")]
 fn change_world_with_policy(
     silent_ci: bool,
     passes: u32,
     approval: Option<authority::Freshness>,
     agent_gate: bool,
     no_ci: bool,
+    owner_gate: bool,
 ) -> (World, engine::Assignment, engine::Assignment, Box<[u8]>) {
     let mut world = World::configured_policy(true, true, silent_ci, passes, approval, agent_gate);
     if no_ci {
         world.adopt_with_checks(false, Box::new([1]));
     } else {
         world.adopt();
+    }
+    if owner_gate {
+        world.send(engine::Event::Ask {
+            reply_to: ReplyTo::new(Token::new(900)),
+            sign_in: world.signed_in.expect("owner session"),
+            key: [90; 16],
+            ask: people::Ask::ChangePolicy {
+                project: 1,
+                change: people::PolicyChange::Landing {
+                    rules: Box::new([people::LandingRule {
+                        connector: 1,
+                        kind: 4,
+                        pattern: people::Pattern {
+                            segments: Box::new([
+                                Box::from(&b"forge"[..]),
+                                Box::from(&b"forge.example"[..]),
+                                Box::from(&b"org"[..]),
+                                Box::from(&b"repo"[..]),
+                                Box::from(&b"branch"[..]),
+                            ]),
+                            last: people::Last::Exact(Box::from(&b"main"[..])),
+                        },
+                        ci: true,
+                        up_to_date: true,
+                        gates: Box::new([people::Gate {
+                            number: 1,
+                            blocking: true,
+                            freshness: people::Freshness::Exact,
+                        }]),
+                        approvals: Box::new([]),
+                    }]),
+                },
+            },
+        });
+        world.until(Until::Ready);
+        assert!(world.store.rows.contains_key(&Key::People(people::Key::Policy(1))), "owner policy committed");
+        world.restart(true, true);
+        world.until(Until::Ready);
     }
     world.send(engine::Event::Hello {
         channel: Token::new(7),
@@ -876,16 +917,22 @@ fn a_change_whose_ci_never_reports_is_stalled_and_held() {
 
 #[test]
 fn an_agent_review_gate_runs_at_the_head_and_its_approval_lands_the_change() {
-    check_gate_landing(false);
+    check_gate_landing(false, false);
 }
 
 #[test]
 fn a_change_to_a_repository_without_ci_lands_on_its_checks() {
-    check_gate_landing(true);
+    check_gate_landing(true, false);
 }
 
-fn check_gate_landing(no_ci: bool) {
-    let (mut world, _chat, producer, branch) = change_world_with_policy(no_ci, 1000, None, true, no_ci);
+#[test]
+fn an_owner_adds_a_review_to_a_branchs_landing_rule_and_later_changes_wait_for_it() {
+    check_gate_landing(false, true);
+}
+
+fn check_gate_landing(no_ci: bool, owner_gate: bool) {
+    let (mut world, _chat, producer, branch) =
+        change_world_with_policy(no_ci, 1000, None, !owner_gate, no_ci, owner_gate);
     assert!(matches!(
         world.external(2, raw::Op::Git(raw::Git::Create { branch: branch.clone(), commit: 1 })),
         raw::Answer::Branch(raw::Created::Created)
@@ -915,6 +962,15 @@ fn check_gate_landing(no_ci: bool) {
         }
     }
     let gate = world.assigned.get(2).expect("agent gate assigned").clone();
+    if owner_gate {
+        assert!(
+            world.store.rows.values().all(|stored| !matches!(stored,
+                Record::Forge { row, .. } if matches!(row.as_ref(), forge_top::Stored::Change(change)
+                    if matches!(change.change.state, temper_engine_domain_forge_change::State::Landed { .. }))
+            )),
+            "the owner-added review holds landing until its verdict"
+        );
+    }
     assert!(
         gate.sections.iter().any(|section| section.kind == brief::Kind::Pull
             && matches!(&section.body, brief::Body::Text(words)
@@ -965,7 +1021,7 @@ fn a_failing_check_is_repaired_and_checked_again() {
 
 #[expect(clippy::too_many_lines, reason = "the check repair story spans both gate heads and their worker reports")]
 fn check_gate_repair(no_ci: bool) {
-    let (mut world, _chat, producer, branch) = change_world_with_policy(no_ci, 1000, None, true, no_ci);
+    let (mut world, _chat, producer, branch) = change_world_with_policy(no_ci, 1000, None, true, no_ci, false);
     assert!(matches!(
         world.external(2, raw::Op::Git(raw::Git::Create { branch: branch.clone(), commit: 1 })),
         raw::Answer::Branch(raw::Created::Created)

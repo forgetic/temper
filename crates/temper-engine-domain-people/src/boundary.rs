@@ -176,8 +176,8 @@ pub enum Ask {
         /// before replacement.
         holdings: Box<[Holding]>,
     },
-    /// Owner changes a role's project-period spending ceiling for future decisions.
-    ChangePolicy { project: u32, role: u32, period_spend: u64 },
+    /// Owner changes one mutable part of the project policy for future decisions.
+    ChangePolicy { project: u32, change: crate::PolicyChange },
     /// Owner changes one person's current-period pool, preserving already spent and reserved funds.
     SetPool { project: u32, person: u64, budget: u64 },
     /// Decide one held chat's exact semantic revision. Root verifies current waiting recipient and
@@ -330,8 +330,8 @@ pub enum Outcome {
         /// Project whose membership changed; no task authority or funding changed.
         project: u32,
     },
-    /// The role's policy now applies to later checks; existing task grants are retained.
-    PolicyChanged { project: u32, role: u32 },
+    /// The full committed policy now applies to later checks; existing grants remain.
+    PolicyChanged { project: u32 },
     /// One person's finite pool was opened or resized in its original period.
     PoolSet { project: u32, person: u64 },
     /// Root's committed current or historical decision for one task revision; first commit decides
@@ -394,8 +394,8 @@ pub enum Key {
     SignIn(/** Root-issued deployment sign-in number; cookie secrets and token digests stay below the domain. */ u64),
     /// Logical per-project roles-record key.
     Roles(/** Project whose authoritative holdings are stored. */ u32),
-    /// Root-owned current role spend policy override, paged with project records.
-    PolicyRole { project: u32, role: u32 },
+    /// Root-owned current project policy, paged with people records.
+    Policy(u32),
     /// Logical completed-key record.
     Answer(RequestKey),
 }
@@ -429,8 +429,8 @@ pub enum Stored {
         /** At most `Limits::holdings` distinct people; restored references are checked at completion. */
         holdings: Box<[Holding]>,
     },
-    /// Root-owned current role spend policy override; the people page carries it to authority.
-    PolicyRole { project: u32, role: u32, period_spend: u64 },
+    /// Root-owned full mutable project policy; the people page carries it to authority.
+    Policy { project: u32, value: crate::PolicyValue },
     /// Persistent request and outcome; same-key same-ask replay returns it without checking current
     /// roles anew.
     Answer {
@@ -455,7 +455,7 @@ impl Stored {
             Stored::ReadPosition { person, .. } => Key::ReadPosition(*person),
             Stored::SignIn { number, .. } => Key::SignIn(*number),
             Stored::Roles { project, .. } => Key::Roles(*project),
-            Stored::PolicyRole { project, role, .. } => Key::PolicyRole { project: *project, role: *role },
+            Stored::Policy { project, .. } => Key::Policy(*project),
             Stored::Answer { key, .. } => Key::Answer(*key),
         }
     }

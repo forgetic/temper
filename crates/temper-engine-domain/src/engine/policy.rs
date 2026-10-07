@@ -1,8 +1,11 @@
 //! Owner changes to current policy and finite person pools (domain/people.md, 4–5).
-//! Current policy route changes one role's period ceiling, preserving authority
-//! already granted to live tasks. The root persists the override beside people.
+//! The root validates one edit under deployment rules and persists the whole
+//! mutable policy value. Existing task grants keep their prior authority.
 
-use super::{Decision, Domain, Env, Limits, PersonTaskRoute, Token, Work, authority, people, roles, save, tasks};
+use super::{
+    Decision, Domain, Env, Limits, PersonTaskRoute, Token, Work, authority, people, policy_translate, roles, save,
+    tasks,
+};
 use crate::{Record, Write};
 use skein_lib::Queue;
 
@@ -10,17 +13,6 @@ fn refused(domain: &mut Domain, request: Token, why: people::Refusal) {
     domain.work.push(Work::People(people::Event::Decided { request, outcome: people::Outcome::Refused(why) }));
 }
 
-fn set_role_spend(policy: &mut authority::Policy, number: u32, spend: u64) -> bool {
-    for role in &mut policy.roles {
-        if role.number == number {
-            role.period_spend = spend;
-            return true;
-        }
-    }
-    false
-}
-
-#[expect(clippy::too_many_arguments, reason = "one authenticated policy route carries its exact edit")]
 pub(super) fn change(
     domain: &mut Domain,
     env: &Env<Limits>,
@@ -28,8 +20,7 @@ pub(super) fn change(
     request: Token,
     person: u64,
     project: u32,
-    number: u32,
-    spend: u64,
+    change: people::PolicyChange,
 ) {
     if let Err(why) = roles::allowed(domain, person, project) {
         return refused(domain, request, why);
@@ -40,8 +31,20 @@ pub(super) fn change(
     let Some(mut policy) = domain.config.authority.policy(project).cloned() else {
         return refused(domain, request, people::Refusal::Unknown);
     };
-    if !set_role_spend(&mut policy, number, spend) {
+    if policy_translate::apply(&mut policy, change).is_none() {
         return refused(domain, request, people::Refusal::Unknown);
+    }
+    let Some(snapshot) = policy_translate::snapshot(&policy) else {
+        return refused(domain, request, people::Refusal::Limit);
+    };
+    if match people::policy_bytes(&snapshot) {
+        Some(bytes) => {
+            bytes > u64::from(env.limits.journal.transcript_bytes)
+                || bytes > super::row_bound(&env.limits).expect("validated row bound")
+        }
+        None => true,
+    } {
+        return refused(domain, request, people::Refusal::Limit);
     }
     let mut facts = Queue::with_capacity(authority::POLICY_MAX_OUT);
     authority::step(&mut domain.config.authority, authority::Event::Policy { project, policy }, &mut facts);
@@ -50,11 +53,11 @@ pub(super) fn change(
             save(
                 decision,
                 &env.limits,
-                Write::Save(Record::People(people::Stored::PolicyRole { project, role: number, period_spend: spend })),
+                Write::Save(Record::People(people::Stored::Policy { project, value: snapshot })),
             );
             domain.work.push(Work::People(people::Event::Decided {
                 request,
-                outcome: people::Outcome::PolicyChanged { project, role: number },
+                outcome: people::Outcome::PolicyChanged { project },
             }));
         }
         authority::PolicyFact::Refused { .. } => refused(domain, request, people::Refusal::Authority),
@@ -64,12 +67,12 @@ pub(super) fn change(
     }
 }
 
-pub(super) fn restore(domain: &mut Domain, project: u32, number: u32, spend: u64) {
+pub(super) fn restore(domain: &mut Domain, project: u32, value: people::PolicyValue) {
     let Some(mut policy) = domain.config.authority.policy(project).cloned() else {
         domain.startup = super::Startup::Failed;
         return;
     };
-    if !set_role_spend(&mut policy, number, spend) {
+    if policy_translate::restore(&mut policy, value).is_none() {
         domain.startup = super::Startup::Failed;
         return;
     }

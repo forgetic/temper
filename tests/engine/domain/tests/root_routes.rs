@@ -3639,15 +3639,35 @@ fn a_policy_change_applies_to_later_decisions_only() {
         reply_to: ReplyTo::new(Token::new(9403)),
         sign_in: session,
         key: [42; 16],
-        ask: people::Ask::ChangePolicy { project: 1, role: 0, period_spend: 50 },
+        ask: people::Ask::ChangePolicy {
+            project: 1,
+            change: people::PolicyChange::Role(people::PolicyRole {
+                number: 0,
+                authority: people::Authority {
+                    tools: 0,
+                    grants: Box::new([]),
+                    delegation: people::Delegation {
+                        kinds: Box::new([people::Executor::Charter(1)]),
+                        tasks: 2,
+                        depth: 1,
+                    },
+                    spend: 500,
+                    deadline: None,
+                    notes: 0,
+                },
+                period_spend: 50,
+                requests: 1 | 4 | 256,
+                decides: authority::Proposals::ALL.0,
+            }),
+        },
     });
     for _ in 0..30 {
         driver.advance(true);
     }
-    assert_eq!(
-        driver.store.rows.get(&Key::People(people::Key::PolicyRole { project: 1, role: 0 })),
-        Some(&Record::People(people::Stored::PolicyRole { project: 1, role: 0, period_spend: 50 }))
-    );
+    assert!(matches!(
+        driver.store.rows.get(&Key::People(people::Key::Policy(1))),
+        Some(Record::People(people::Stored::Policy { project: 1, value })) if value.roles[0].period_spend == 50
+    ));
     assert!(
         driver.store.rows.values().any(|row| matches!(row,
             Record::Tasks(tasks::Stored::Live(task)) if task.number == first.0 && task.authority.budget.spend == first.1
@@ -3678,6 +3698,60 @@ fn a_policy_change_applies_to_later_decisions_only() {
         )),
         "restored policy governs later decisions"
     );
+}
+
+#[test]
+fn a_policy_change_beyond_the_deployments_rules_is_refused() {
+    let mut driver = Driver::configured(Store::new(), administration_config(9411), &limits());
+    driver.settle();
+    driver.sign_in();
+    driver.settle();
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(9412)),
+        sign_in: driver.session(),
+        key: [44; 16],
+        ask: people::Ask::ChangePolicy {
+            project: 1,
+            change: people::PolicyChange::ProjectSpend { period_spend: 1001 },
+        },
+    });
+    driver.settle();
+    assert!(driver.delivered.iter().any(|delivery| matches!(
+        delivery,
+        Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::Refused(people::Refusal::Authority)), .. }
+    )));
+    assert!(!driver.store.rows.contains_key(&Key::People(people::Key::Policy(1))));
+}
+
+#[test]
+fn a_policy_change_survives_a_restart() {
+    let mut driver = Driver::configured(Store::new(), administration_config(9413), &limits());
+    driver.settle();
+    driver.sign_in();
+    driver.settle();
+    let session = driver.session();
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(9414)),
+        sign_in: session,
+        key: [45; 16],
+        ask: people::Ask::ChangePolicy { project: 1, change: people::PolicyChange::ProjectSpend { period_spend: 800 } },
+    });
+    driver.settle();
+    assert!(matches!(driver.store.rows.get(&Key::People(people::Key::Policy(1))),
+        Some(Record::People(people::Stored::Policy { value, .. })) if value.period_spend == 800));
+    let mut restarted = Driver::configured(driver.store, administration_config(9413), &limits());
+    restarted.settle();
+    restarted.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(9415)),
+        sign_in: session,
+        key: [46; 16],
+        ask: people::Ask::StartChat { project: 1, words: b"later".as_slice().into() },
+    });
+    restarted.settle();
+    assert!(restarted.delivered.iter().any(|delivery| matches!(
+        delivery,
+        Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::Refused(people::Refusal::Authority)), .. }
+    )));
 }
 
 #[test]

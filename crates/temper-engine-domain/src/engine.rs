@@ -31,6 +31,7 @@ mod forge_route;
 mod goals;
 mod inbox;
 mod policy;
+mod policy_translate;
 mod proposals;
 mod results;
 
@@ -2121,8 +2122,8 @@ fn people_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decisio
                 people::Ask::SetRoles { holdings, .. } => {
                     roles::begin(domain, env, decision, request, person, project, holdings);
                 }
-                people::Ask::ChangePolicy { role, period_spend, .. } => {
-                    policy::change(domain, env, decision, request, person, project, role, period_spend);
+                people::Ask::ChangePolicy { change, .. } => {
+                    policy::change(domain, env, decision, request, person, project, change);
                 }
                 people::Ask::SetPool { person: beneficiary, budget, .. } => {
                     policy::pool(domain, env, decision, request, person, project, beneficiary, budget);
@@ -6892,8 +6893,8 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
             }
         }
         Record::Deployment(deployment) => domain.journal = Journal::new(deployment, &env.limits.journal),
-        Record::People(people::Stored::PolicyRole { project, role, period_spend }) => {
-            policy::restore(domain, project, role, period_spend);
+        Record::People(people::Stored::Policy { project, value }) => {
+            policy::restore(domain, project, value);
         }
         Record::People(record) => domain.work.push(Work::People(people::Event::Restore { record })),
         Record::Forge { id, row } => {

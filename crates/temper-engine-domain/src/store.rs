@@ -690,13 +690,15 @@ pub fn record_bytes(record: &Record) -> Option<u64> {
                 temper_engine_domain_people::Ask::Amend { amendment, .. } => {
                     temper_engine_domain_people::amendment_bytes(amendment)
                 }
+                temper_engine_domain_people::Ask::ChangePolicy { change, .. } => {
+                    temper_engine_domain_people::policy_change_bytes(change)
+                }
                 temper_engine_domain_people::Ask::StartChat { words, .. }
                 | temper_engine_domain_people::Ask::Say { words, .. }
                 | temper_engine_domain_people::Ask::AnswerQuestion { words, .. } => u64::try_from(words.len()).ok(),
                 temper_engine_domain_people::Ask::Move { reason, .. }
                 | temper_engine_domain_people::Ask::Cancel { reason, .. } => u64::try_from(reason.len()).ok(),
                 temper_engine_domain_people::Ask::TakePerson { .. }
-                | temper_engine_domain_people::Ask::ChangePolicy { .. }
                 | temper_engine_domain_people::Ask::SetPool { .. }
                 | temper_engine_domain_people::Ask::HandBackPerson { .. }
                 | temper_engine_domain_people::Ask::Stop { .. }
@@ -718,8 +720,10 @@ pub fn record_bytes(record: &Record) -> Option<u64> {
                 },
             },
             temper_engine_domain_people::Stored::SignIn { .. }
-            | temper_engine_domain_people::Stored::ReadPosition { .. }
-            | temper_engine_domain_people::Stored::PolicyRole { .. } => Some(0),
+            | temper_engine_domain_people::Stored::ReadPosition { .. } => Some(0),
+            temper_engine_domain_people::Stored::Policy { value, .. } => {
+                temper_engine_domain_people::policy_bytes(value)
+            }
         },
     }
 }

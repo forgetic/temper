@@ -832,7 +832,10 @@ fn valid_ask(limits: &Limits, ask: &Ask) -> bool {
                     <= usize::try_from(limits.words).expect("u32 fits usize")
         }
         Ask::SetRoles { holdings, .. } => holdings.len() <= usize::try_from(limits.holdings).expect("u32 fits usize"),
-        Ask::ChangePolicy { .. } => true,
+        Ask::ChangePolicy { change, .. } => match crate::policy_change_bytes(change) {
+            Some(bytes) => bytes <= u64::from(limits.amendment_bytes),
+            None => false,
+        },
         Ask::SetPool { person, .. } => *person != 0,
         Ask::SetGoal { spec, charter, .. } => {
             *charter != 0 && !spec.is_empty() && spec.len() <= usize::try_from(limits.words).expect("u32 fits usize")
@@ -906,7 +909,7 @@ fn valid_answer_shape(ask: &Ask, outcome: Outcome) -> bool {
         Prioritise(u32),
         Amend(u64),
         Roles(u32, bool),
-        Policy(u32, u32),
+        Policy(u32),
         Pool(u32, u64),
         Adoption(u32, u16, u32),
         Escalation,
@@ -942,7 +945,7 @@ fn valid_answer_shape(ask: &Ask, outcome: Outcome) -> bool {
             }
             Expected::Roles(*project, valid)
         }
-        Ask::ChangePolicy { project, role, .. } => Expected::Policy(*project, *role),
+        Ask::ChangePolicy { project, .. } => Expected::Policy(*project),
         Ask::SetPool { project, person, .. } => Expected::Pool(*project, *person),
         Ask::DecideEscalation { .. } => Expected::Escalation,
         Ask::StartChat { .. } => Expected::Chat,
@@ -970,7 +973,7 @@ fn valid_answer_shape(ask: &Ask, outcome: Outcome) -> bool {
         Outcome::Amended { task } => expected == Expected::Amend(task),
         Outcome::AmendProposed { task, proposal } => expected == Expected::Amend(task) && proposal != 0,
         Outcome::RolesSet { project } => expected == Expected::Roles(project, true),
-        Outcome::PolicyChanged { project, role } => expected == Expected::Policy(project, role),
+        Outcome::PolicyChanged { project } => expected == Expected::Policy(project),
         Outcome::PoolSet { project, person } => expected == Expected::Pool(project, person),
         Outcome::EscalationDecided { .. } => expected == Expected::Escalation,
         Outcome::Started { task } => expected == Expected::Chat && task != 0,
@@ -1191,7 +1194,7 @@ fn restore(domain: &mut Domain, env: &Env<Limits>, record: Stored, out: &mut Que
         Stored::Roles { project, holdings } => {
             valid_roles(domain, &env.limits, *project, holdings).is_ok() && !domain.roles.contains_key(project)
         }
-        Stored::PolicyRole { .. } => false,
+        Stored::Policy { .. } => false,
         Stored::Answer { key, ask, outcome, at } => {
             valid_ask(&env.limits, ask)
                 && valid_answer_shape(ask, *outcome)
@@ -1221,7 +1224,7 @@ fn restore(domain: &mut Domain, env: &Env<Limits>, record: Stored, out: &mut Que
             let saved = domain.roles.insert(project, holdings);
             assert!(saved.is_ok(), "restored roles admitted");
         }
-        Stored::PolicyRole { .. } => unreachable!("root restores policy into authority"),
+        Stored::Policy { .. } => unreachable!("root restores policy into authority"),
         Stored::Answer { key, ask, outcome, at } => {
             if answer_expiry(at, &env.limits) <= env.wall {
                 out.push(Request::Erase { key: Key::Answer(key) });

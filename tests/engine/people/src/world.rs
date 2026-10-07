@@ -247,7 +247,7 @@ impl World {
                 | Stored::ReadPosition { .. }
                 | Stored::Roles { .. }
                 | Stored::Answer { .. }
-                | Stored::PolicyRole { .. } => None,
+                | Stored::Policy { .. } => None,
             })
             .unwrap_or(0);
         self.context = Some(RequestKey { person, key });

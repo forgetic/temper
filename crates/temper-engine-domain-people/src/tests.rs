@@ -204,7 +204,7 @@ fn saved_answer(rows: &[Request]) -> Stored {
                 | Stored::ReadPosition { .. }
                 | Stored::SignIn { .. }
                 | Stored::Roles { .. }
-                | Stored::PolicyRole { .. } => None,
+                | Stored::Policy { .. } => None,
             },
             Request::Reply { .. }
             | Request::Erase { .. }
@@ -623,7 +623,7 @@ fn is_answer(request: &Request) -> bool {
             | Stored::ReadPosition { .. }
             | Stored::SignIn { .. }
             | Stored::Roles { .. }
-            | Stored::PolicyRole { .. } => false,
+            | Stored::Policy { .. } => false,
         },
         Request::Reply { .. }
         | Request::Erase { .. }
@@ -642,7 +642,7 @@ fn is_roles(request: &Request) -> bool {
             | Stored::ReadPosition { .. }
             | Stored::SignIn { .. }
             | Stored::Answer { .. }
-            | Stored::PolicyRole { .. } => false,
+            | Stored::Policy { .. } => false,
         },
         Request::Reply { .. }
         | Request::Erase { .. }

@@ -129,27 +129,32 @@ pub fn amendment_bytes(amendment: &Amendment) -> Option<u64> {
         total = total.checked_add(u64::try_from(dependencies.len()).ok()?.checked_mul(8)?)?;
     }
     if let Some(authority) = &amendment.authority {
+        total = total.checked_add(authority_bytes(authority)?)?;
+    }
+    Some(total)
+}
+
+/// Checked deep-byte size of a person's authority value.
+#[must_use]
+pub fn authority_bytes(authority: &Authority) -> Option<u64> {
+    let mut total = u64::try_from(authority.grants.len()).ok()?.checked_mul(u64::try_from(size_of::<Grant>()).ok()?)?;
+    total = total.checked_add(
+        u64::try_from(authority.delegation.kinds.len())
+            .ok()?
+            .checked_mul(u64::try_from(size_of::<Executor>()).ok()?)?,
+    )?;
+    for grant in &authority.grants {
         total = total.checked_add(
-            u64::try_from(authority.grants.len()).ok()?.checked_mul(u64::try_from(size_of::<Grant>()).ok()?)?,
-        )?;
-        total = total.checked_add(
-            u64::try_from(authority.delegation.kinds.len())
+            u64::try_from(grant.pattern.segments.len())
                 .ok()?
-                .checked_mul(u64::try_from(size_of::<Executor>()).ok()?)?,
+                .checked_mul(u64::try_from(size_of::<Box<[u8]>>()).ok()?)?,
         )?;
-        for grant in &authority.grants {
-            total = total.checked_add(
-                u64::try_from(grant.pattern.segments.len())
-                    .ok()?
-                    .checked_mul(u64::try_from(size_of::<Box<[u8]>>()).ok()?)?,
-            )?;
-            for segment in &grant.pattern.segments {
-                total = total.checked_add(u64::try_from(segment.len()).ok()?)?;
-            }
-            total = total.checked_add(match &grant.pattern.last {
-                Last::Exact(word) | Last::Open(word) => u64::try_from(word.len()).ok()?,
-            })?;
+        for segment in &grant.pattern.segments {
+            total = total.checked_add(u64::try_from(segment.len()).ok()?)?;
         }
+        total = total.checked_add(match &grant.pattern.last {
+            Last::Exact(word) | Last::Open(word) => u64::try_from(word.len()).ok()?,
+        })?;
     }
     Some(total)
 }
