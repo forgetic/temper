@@ -217,7 +217,10 @@ impl Referee {
         if index >= 2 || self.people[index].is_some() {
             return Err("duplicate or unscripted sign-in");
         }
-        let expected = people::IdentityKey { forge: 1, user: 7 + u64::try_from(index).expect("two identities") };
+        let expected = people::IdentityKey {
+            provider: 0,
+            subject: (7 + u64::try_from(index).expect("two identities")).to_be_bytes().into(),
+        };
         if !matches!(rows.get(&Key::People(people::Key::Person(person))), Some(Record::People(people::Stored::Person { number, identity })) if *number == person && identity.key == expected)
         {
             return Err("sign-in before exact durable identity");

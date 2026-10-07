@@ -11,7 +11,7 @@ use skein_lib::{Deadlines, Duration, Id, List, Map, Queue, Slab};
 /// outputs; validate via `worst_case` before construction. (domain/people.md, sections 2–5).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Limits {
-    /// Maximum retained people and forge/user index entries.
+    /// Maximum retained parties and provider/subject index entries.
     pub people: u32,
     /// Maximum cached unread result references per person; older entries are paged from tasks.
     pub inbox_entries: u32,
@@ -31,7 +31,7 @@ pub struct Limits {
     pub pending: u32,
     /// Positive maximum reply destinations per flight, including its first caller.
     pub waiters: u32,
-    /// Maximum combined login and display-name bytes per person.
+    /// Maximum combined subject, login and display-name bytes per party.
     pub identity_bytes: u32,
     /// Maximum opening-word or escalation rejection-reason bytes per keyed ask, including pending
     /// and completed copies.
@@ -54,7 +54,7 @@ pub struct Limits {
 /// incoming/outgoing payloads and Request queue storage.
 #[must_use]
 pub fn worst_case(limits: &Limits) -> Option<u64> {
-    limits.initial_owners.checked_add(3)?;
+    limits.initial_owners.checked_add(4)?;
     limits.waiters.checked_add(1)?;
     limits.sign_ins.checked_add(1)?;
     limits.holdings.checked_add(1)?;
@@ -67,7 +67,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .max(u64::from(limits.goals).checked_mul(u64::try_from(size_of::<(u64, u32)>()).ok()?)?);
     let people = Map::<u64, Identity>::worst_case(limits.people)?
         .checked_add(Map::<IdentityKey, u64>::worst_case(limits.people)?)?
-        .checked_add(u64::from(limits.people).checked_mul(u64::from(limits.identity_bytes))?)?;
+        .checked_add(u64::from(limits.people).checked_mul(u64::from(limits.identity_bytes).checked_mul(2)?)?)?;
     let roles = Map::<u32, Box<[Holding]>>::worst_case(limits.projects)?.checked_add(
         u64::from(limits.projects)
             .checked_mul(u64::from(limits.holdings))?
@@ -98,7 +98,9 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_add(Map::<RequestKey, Id<Pending>>::worst_case(limits.pending)?)?
         .checked_add(u64::from(limits.pending).checked_mul(List::<skein_lib::ReplyTo>::worst_case(limits.waiters)?)?)?
         .checked_add(u64::from(limits.pending).checked_mul(ask_bytes)?)?
-        .checked_add(u64::from(limits.initial_owners).checked_mul(u64::try_from(size_of::<InitialOwner>()).ok()?)?)?
+        .checked_add(u64::from(limits.initial_owners).checked_mul(
+            u64::try_from(size_of::<InitialOwner>()).ok()?.checked_add(u64::from(limits.identity_bytes))?,
+        )?)?
         .checked_add(List::<(u64, SignIn)>::worst_case(limits.sign_ins)?)?
         .checked_add(List::<Holding>::worst_case(limits.holdings)?)?
         .checked_add(Queue::<Fact>::worst_case(limits.facts)?)

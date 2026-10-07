@@ -7,7 +7,7 @@
 //!
 //! The boundary admits adoption and other owner requests by key, checks their
 //! project role and retains committed answers for replay after a restart
-//! (domain/people.md, section 5.1). This child never sees forge
+//! (domain/people.md, section 5.1). This child never sees provider
 //! credentials, protocol bytes, task internals or authority policy state.
 //! The root supplies authenticated identities and authoritative role changes.
 //! It mints fresh deployment person candidates and sign-in numbers; the protocol
@@ -50,7 +50,7 @@ pub use amendment::{
 };
 pub use boundary::{
     Adoption, Ask, Entry, EntryKind, EscalationChoice, EscalationDecision, Event, Holding, Identity, IdentityKey,
-    InitialOwner, Key, Outcome, PersonResult, ProposalChoice, ProposalDecision, Refusal, Reply, RepositoryRole,
+    InitialOwner, Key, Kind, Outcome, PersonResult, ProposalChoice, ProposalDecision, Refusal, Reply, RepositoryRole,
     Request, RequestKey, ResultRef, Role, Seed, Stored, Whom,
 };
 pub use domain::{Domain, fire, max_out, step};

@@ -653,13 +653,15 @@ pub fn record_bytes(record: &Record) -> Option<u64> {
         Record::Tasks(row) => temper_engine_domain_tasks::stored_bytes(row),
         Record::Forge { row, .. } => temper_engine_domain_forge::stored_bytes(row),
         Record::People(row) => match row {
-            temper_engine_domain_people::Stored::Person { identity, .. } => {
-                u64::try_from(identity.login.len()).ok()?.checked_add(u64::try_from(identity.name.len()).ok()?)
-            }
+            temper_engine_domain_people::Stored::Person { identity, .. } => u64::try_from(identity.key.subject.len())
+                .ok()?
+                .checked_add(u64::try_from(identity.login.len()).ok()?)?
+                .checked_add(u64::try_from(identity.name.len()).ok()?),
             temper_engine_domain_people::Stored::Roles { holdings, .. } => u64::try_from(holdings.len())
                 .ok()?
                 .checked_mul(u64::try_from(size_of::<temper_engine_domain_people::Holding>()).ok()?),
             temper_engine_domain_people::Stored::Answer { ask, .. } => match ask.as_ref() {
+                temper_engine_domain_people::Ask::MakeService { name, .. } => u64::try_from(name.len()).ok(),
                 temper_engine_domain_people::Ask::AdoptRepository { adoption, .. } => {
                     let names = adoption
                         .host

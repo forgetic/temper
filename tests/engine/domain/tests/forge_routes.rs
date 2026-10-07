@@ -519,7 +519,7 @@ impl World {
         self.send(engine::Event::SignedIn {
             reply_to: ReplyTo::new(Token::new(90)),
             identity: people::Identity {
-                key: people::IdentityKey { forge: 1, user: 7 },
+                key: people::IdentityKey { provider: 0, subject: 7_u64.to_be_bytes().into() },
                 login: Box::from(&b"owner"[..]),
                 name: Box::from(&b"Owner"[..]),
             },
@@ -2073,7 +2073,9 @@ fn a_repository_adopted_seeds_its_collaborators_into_roles() {
     for row in world.store.rows.values() {
         match row {
             Record::People(temper_engine_domain_people::Stored::Person { number, identity }) => {
-                people.insert(identity.key.user, *number);
+                let subject: [u8; 8] =
+                    identity.key.subject.as_ref().try_into().expect("forge subject is a user number");
+                people.insert(u64::from_be_bytes(subject), *number);
             }
             Record::People(temper_engine_domain_people::Stored::Roles { project: 1, holdings }) => {
                 roles = Some(holdings.clone());
@@ -2099,7 +2101,7 @@ fn an_adoption_sent_twice_across_a_restart_is_made_once() {
     world.send(engine::Event::SignedIn {
         reply_to: ReplyTo::new(Token::new(92)),
         identity: people::Identity {
-            key: people::IdentityKey { forge: 1, user: 7 },
+            key: people::IdentityKey { provider: 0, subject: 7_u64.to_be_bytes().into() },
             login: Box::from(&b"owner"[..]),
             name: Box::from(&b"Owner"[..]),
         },

@@ -132,7 +132,9 @@ impl WalkingReferee {
         else {
             return Err("sign-in reply before durable identity");
         };
-        if *number != person || identity.key != (people::IdentityKey { forge: 1, user: 7 }) {
+        if *number != person
+            || identity.key != (people::IdentityKey { provider: 0, subject: 7_u64.to_be_bytes().into() })
+        {
             return Err("wrong authenticated person");
         }
         let Some(Record::People(people::Stored::SignIn { person: authenticated, .. })) =

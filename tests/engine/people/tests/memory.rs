@@ -21,7 +21,7 @@ impl Measured {
     fn new(limits: Limits) -> Measured {
         let out = Queue::with_capacity(max_out(&limits));
         let meter = Meter::new();
-        let domain = Domain::new(&limits, Box::new([]));
+        let domain = Domain::new(&limits, Box::new([]), 1);
         Measured {
             domain,
             env: Env { now: Time::ZERO, wall: Wall::EPOCH, limits },
@@ -85,12 +85,22 @@ fn full_people_roles_signins_pending_waiters_answers_and_expiry_fit() {
         for number in 1..=u64::from(limits.people) {
             let reply_to = test.to();
             let identity = Identity {
-                key: IdentityKey { forge: 0, user: number },
-                login: vec![1; usize::try_from(limits.identity_bytes).expect("test values are admitted and fit")]
-                    .into_boxed_slice(),
+                key: IdentityKey { provider: 0, subject: (number).to_be_bytes().into() },
+                login: vec![
+                    1;
+                    usize::try_from(limits.identity_bytes).expect("test values are admitted and fit")
+                        - size_of::<u64>()
+                ]
+                .into_boxed_slice(),
                 name: Box::new([]),
             };
-            test.event(Event::SignedIn { reply_to, person: number, sign_in: number, identity });
+            test.event(Event::SignedIn {
+                reply_to,
+                person: number,
+                sign_in: number,
+                identity,
+                kind: temper_engine_domain_people::Kind::Person,
+            });
         }
         for project in 1..=limits.projects {
             let holdings = (1..=u64::from(limits.holdings.min(limits.people)))

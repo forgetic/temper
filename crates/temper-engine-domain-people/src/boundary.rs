@@ -41,35 +41,43 @@ pub struct Entry {
     pub at: Wall,
 }
 
-/// Forge and user together identify a person; neither display field is a key.
-/// Protocol-authenticated forge/user identity supplied by the root; display bytes are not keys and
-/// no secret is retained. (domain/people.md, section 3).
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+/// A provider and its stable subject identify one party. Display fields are not keys.
+/// The application numbers providers; no credential is retained (domain/people.md, section 3).
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct IdentityKey {
-    pub forge: u32,
-    /// Stable forge user identifier; login changes do not change this key.
-    pub user: u64,
+    /// The application's configured sign-in provider number.
+    pub provider: u16,
+    /// The provider's bounded stable identifier, independent of its display login.
+    pub subject: Box<[u8]>,
 }
 
-/// Authenticated forge identity and owned display data, admitted under the combined identity-byte
-/// limit. (domain/people.md, section 3).
+/// Authenticated identity and display data, admitted under one identity-byte limit.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Identity {
-    /// Authenticated stable forge/user pair.
+    /// Authenticated stable provider/subject pair.
     pub key: IdentityKey,
-    /// Display login bytes; combined with `name`, at most `Limits::identity_bytes`.
+    /// Display login bytes; combined with the subject and name, at most `Limits::identity_bytes`.
     pub login: Box<[u8]>,
-    /// Display-name bytes; combined with `login`, at most `Limits::identity_bytes`.
+    /// Display-name bytes; combined with the subject and login, at most `Limits::identity_bytes`.
     pub name: Box<[u8]>,
 }
 
-/// Root-configured first-owner grant used only when this identity's person record is first made;
-/// bootstrap matches are bounded. (domain/people.md, section 3).
+/// Whether the authenticated party is a person or a deployment service.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Kind {
+    /// A person authenticated by an application provider.
+    Person,
+    /// A service made by a project owner and authenticated by the deployment.
+    Service,
+}
+
+/// Root-configured first-owner grant used only when this identity's party record is first made;
+/// bootstrap matches are bounded. (domain/people.md, section 3).
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct InitialOwner {
     /// Project whose roles must already be initialized before first sign-in.
     pub project: u32,
-    /// Configured forge/user pair to grant `Owner` on its first person creation.
+    /// Configured provider/subject pair to grant `Owner` on its first person creation.
     pub identity: IdentityKey,
 }
 
@@ -95,8 +103,8 @@ pub struct Holding {
     pub person: u64,
     pub role: Role,
 }
-/// One forge collaborator mapped to a project role at adoption.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// One connector-known party mapped to a project role at adoption.
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Seed {
     pub identity: IdentityKey,
     pub candidate: u64,
@@ -139,6 +147,8 @@ pub enum RepositoryRole {
 /// the root after role checks (domain/people.md, section 5.1).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Ask {
+    /// Make a deployment service in a project with a role and display name.
+    MakeService { project: u32, name: Box<[u8]>, role: Role },
     /// Adopt a repository as a durable keyed owner request.
     AdoptRepository { project: u32, adoption: Adoption },
     /// Start a tracked goal at the requested charter, budget and priority.
@@ -292,6 +302,8 @@ pub enum Refusal {
 /// nontransient outcomes with the parent's task decision. (domain/people.md, section 5.1).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Outcome {
+    /// A service party and its project role were committed together.
+    ServiceMade { person: u64 },
     /// Repository adoption and its collaborator seed committed together.
     RepositoryAdopted { project: u32, forge: u16, repository: u32 },
     /// One tracked goal was durably created within the caller's allotment.
@@ -360,7 +372,7 @@ pub enum Outcome {
 pub enum Reply {
     /// Sign-in succeeded or an existing active same-person sign-in was replayed.
     SignedIn {
-        /** Stable deployment person number for the authenticated forge identity. */
+        /** Stable deployment party number for the authenticated identity. */
         person: u64,
         /** Saved wall-time expiry for this sign-in; its monotonic deadline is retained internally. */
         expires: Wall,
@@ -404,11 +416,11 @@ pub enum Key {
 /// bytes are checked when admitted. (domain/people.md, sections 3–5).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Stored {
-    /// Persistent person identity; forge/user and person numbers must be unique on restore.
+    /// Persistent party identity; provider/subject and party numbers must be unique on restore.
     Person {
         /** Stable person number, unique among restored people. */
         number: u64,
-        /** Unique forge/user identity and bounded display bytes. */
+        /** Unique provider/subject identity and bounded display bytes. */
         identity: Identity,
     },
     /// Monotonic read position for the named person; no result is copied here.
@@ -464,8 +476,9 @@ impl Stored {
 /// Root-to-child inputs; authenticated identity, authoritative roles and typed restored records
 /// cross this boundary without protocol secrets. (domain/people.md, sections 3–5).
 #[derive(PartialEq, Eq, Debug)]
-#[expect(clippy::large_enum_variant, reason = "the bounded ask is carried whole through the step boundary")]
 pub enum Event {
+    /// Apply an authorized owner request to make a service with a fresh party number.
+    MakeService { request: Token, person: u64 },
     /// Add previously unknown collaborators and their first project role in one decision.
     Seed { project: u32, collaborators: Box<[Seed]> },
     /// Replace the volatile inbox projection of one durable task after its row changes.
@@ -486,7 +499,7 @@ pub enum Event {
     SignedIn {
         /// Opaque destination for the sign-in answer; the parent holds success until durability.
         reply_to: ReplyTo,
-        /// Root-issued never-reused fresh candidate, used only for a new forge/user identity;
+        /// Root-issued never-reused fresh candidate, used only for a new provider/subject identity;
         /// unused candidates leave gaps.
         person: u64,
         /// Root-issued fresh deployment sign-in number; replaying an active same-person number
@@ -494,6 +507,8 @@ pub enum Event {
         sign_in: u64,
         /// Protocol-authenticated identity with bounded display bytes and no credential.
         identity: Identity,
+        /// The protocol-authenticated party kind; a service must already exist.
+        kind: Kind,
     },
     /// End one sign-in after restoration, emitting erase if present and one reply.
     SignOut {
@@ -549,6 +564,8 @@ pub enum Event {
 /// replies until required writes are durable. (domain/people.md, section 5.1).
 #[derive(PartialEq, Eq, Debug)]
 pub enum Request {
+    /// Terminal for one service creation after its person and role saves.
+    ServiceMade { request: Token, outcome: Outcome },
     /// Terminal for `ApplyRoles`; success `Save` precedes this output, but the root completes the
     /// keyed flight only after task recheck.
     RolesApplied {

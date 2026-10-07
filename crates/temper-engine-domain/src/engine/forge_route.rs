@@ -1151,7 +1151,7 @@ fn landing_reviewers(
             continue;
         }
         let Some((person, role)) = domain.people.role_for_identity(
-            people::IdentityKey { forge: u32::from(row.repository.forge), user: review.author },
+            people::IdentityKey { provider: 0, subject: review.author.to_be_bytes().into() },
             domain.forge.repository(row.repository)?.project,
         ) else {
             continue;
@@ -1859,8 +1859,8 @@ pub(super) fn outputs(
                                         seeds
                                             .push(people::Seed {
                                                 identity: people::IdentityKey {
-                                                    forge: u32::from(adopted.repository.provider.forge),
-                                                    user: collaborator.user,
+                                                    provider: 0,
+                                                    subject: collaborator.user.to_be_bytes().into(),
                                                 },
                                                 candidate,
                                                 role,

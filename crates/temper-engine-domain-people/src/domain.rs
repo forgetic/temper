@@ -4,7 +4,7 @@
 //! and durability; this child never performs IO or retains credential secrets.
 
 use crate::{
-    Ask, Entry, Event, Fact, Holding, Identity, IdentityKey, InitialOwner, Key, Limits, Outcome, Refusal, Reply,
+    Ask, Entry, Event, Fact, Holding, Identity, IdentityKey, InitialOwner, Key, Kind, Limits, Outcome, Refusal, Reply,
     Request, RequestKey, ResultRef, Role, Seed, Stored, Whom,
 };
 use alloc::boxed::Box;
@@ -45,6 +45,7 @@ enum Phase {
 #[derive(Debug)]
 pub struct Domain {
     phase: Phase,
+    deployment_provider: u16,
     people: Map<u64, Identity>,
     read_positions: Map<u64, u64>,
     unread: Map<u64, Box<[ResultRef]>>,
@@ -68,13 +69,19 @@ impl Domain {
     /// oversized owners or duplicate project/identity pairs; project roles must be initialized
     /// before sign-in.
     #[must_use]
-    pub fn new(limits: &Limits, owners: Box<[InitialOwner]>) -> Domain {
+    pub fn new(limits: &Limits, owners: Box<[InitialOwner]>, deployment_provider: u16) -> Domain {
         assert!(crate::worst_case(limits).is_some(), "people limits are valid");
         assert!(
             owners.len() <= usize::try_from(limits.initial_owners).expect("u32 fits usize"),
             "configured owners fit"
         );
         for (at, owner) in owners.iter().enumerate() {
+            assert!(
+                !owner.identity.subject.is_empty()
+                    && owner.identity.subject.len() <= usize::try_from(limits.identity_bytes).expect("u32 fits usize")
+                    && owner.identity.provider != deployment_provider,
+                "configured first owners are bounded people"
+            );
             for earlier in owners.iter().take(at) {
                 assert!(
                     owner.project != earlier.project || owner.identity != earlier.identity,
@@ -84,6 +91,7 @@ impl Domain {
         }
         Domain {
             phase: Phase::Restoring,
+            deployment_provider,
             people: Map::with_capacity(limits.people),
             read_positions: Map::with_capacity(limits.people),
             unread: Map::with_capacity(limits.people),
@@ -173,7 +181,12 @@ impl Domain {
         let mut new_people = 0_usize;
         let mut new_roles = 0_usize;
         for (at, seed) in collaborators.iter().enumerate() {
-            if seed.identity.user == 0 || seed.candidate == 0 || self.people.contains_key(&seed.candidate) {
+            if seed.identity.subject.is_empty()
+                || seed.identity.subject.len() > usize::try_from(limits.identity_bytes).expect("u32 fits usize")
+                || seed.identity.provider == self.deployment_provider
+                || seed.candidate == 0
+                || self.people.contains_key(&seed.candidate)
+            {
                 return false;
             }
             for earlier in collaborators.iter().take(at) {
@@ -363,7 +376,7 @@ impl Domain {
 pub fn max_out(limits: &Limits) -> u32 {
     limits
         .initial_owners
-        .saturating_add(3)
+        .saturating_add(4)
         .max(limits.waiters.saturating_add(1))
         .max(limits.sign_ins.saturating_add(1))
         .max(limits.holdings.saturating_add(1))
@@ -378,6 +391,7 @@ pub fn max_out(limits: &Limits) -> u32 {
 /// targets for keyed replay.
 pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     match event {
+        Event::MakeService { request, person } => make_service(domain, env, request, person, out),
         Event::Seed { project, collaborators } => seed(domain, &env.limits, project, &collaborators, out),
         Event::Waiting { task, entries } => replace_waiting(domain, &env.limits, task, &entries),
         Event::ApplyRoles { reply_to, request } => {
@@ -386,8 +400,8 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
         }
         Event::Restore { record } => restore(domain, env, record, out),
         Event::Restored => restored(domain, env, out),
-        Event::SignedIn { reply_to, person, sign_in, identity } => {
-            signin(domain, env, reply_to, person, sign_in, identity, out);
+        Event::SignedIn { reply_to, person, sign_in, identity, kind } => {
+            signin(domain, env, reply_to, person, sign_in, identity, kind, out);
         }
         Event::SignOut { reply_to, sign_in } => {
             if !domain.ready() {
@@ -522,8 +536,13 @@ fn refused(to: ReplyTo, refusal: Refusal, out: &mut Queue<Request>) {
 }
 
 fn valid_identity(limits: &Limits, identity: &Identity) -> bool {
-    match identity.login.len().checked_add(identity.name.len()) {
-        Some(bytes) => bytes <= usize::try_from(limits.identity_bytes).expect("u32 fits usize"),
+    let Some(first) = identity.key.subject.len().checked_add(identity.login.len()) else {
+        return false;
+    };
+    match first.checked_add(identity.name.len()) {
+        Some(bytes) => {
+            !identity.key.subject.is_empty() && bytes <= usize::try_from(limits.identity_bytes).expect("u32 fits usize")
+        }
         None => false,
     }
 }
@@ -540,7 +559,8 @@ fn apply_roles(
     let flight = domain.pending.get(Id::from_token(request)).ok_or(Refusal::Unknown)?;
     let project = match &flight.ask {
         Ask::SetRoles { project, .. } => *project,
-        Ask::AdoptRepository { .. }
+        Ask::MakeService { .. }
+        | Ask::AdoptRepository { .. }
         | Ask::ChangePolicy { .. }
         | Ask::SetPool { .. }
         | Ask::StartChat { .. }
@@ -580,7 +600,8 @@ fn apply_roles(
             }
             holdings.clone()
         }
-        Ask::AdoptRepository { .. }
+        Ask::MakeService { .. }
+        | Ask::AdoptRepository { .. }
         | Ask::ChangePolicy { .. }
         | Ask::SetPool { .. }
         | Ask::StartChat { .. }
@@ -637,8 +658,8 @@ fn seed(domain: &mut Domain, limits: &Limits, project: u32, collaborators: &[See
             Some(person) => *person,
             None => {
                 let person = collaborator.candidate;
-                let identity = Identity { key: collaborator.identity, login: Box::new([]), name: Box::new([]) };
-                domain.identities.insert(collaborator.identity, person).expect("preflighted identity room");
+                let identity = Identity { key: collaborator.identity.clone(), login: Box::new([]), name: Box::new([]) };
+                domain.identities.insert(collaborator.identity.clone(), person).expect("preflighted identity room");
                 domain.people.insert(person, identity.clone()).expect("preflighted person room");
                 out.push(Request::Save { record: Stored::Person { number: person, identity } });
                 person
@@ -665,6 +686,78 @@ fn has_person(holdings: &[Holding], person: u64) -> bool {
     false
 }
 
+fn make_service(domain: &mut Domain, env: &Env<Limits>, request: Token, person: u64, out: &mut Queue<Request>) {
+    if !domain.ready() {
+        out.push(Request::ServiceMade { request, outcome: Outcome::Refused(Refusal::NotReady) });
+        return;
+    }
+    let flight = domain.pending.get(Id::from_token(request)).expect("service creation names a live keyed flight");
+    let (project, name, service_role) = match &flight.ask {
+        Ask::MakeService { project, name, role } => (*project, name.clone(), *role),
+        Ask::AdoptRepository { .. }
+        | Ask::SetGoal { .. }
+        | Ask::Stop { .. }
+        | Ask::Cancel { .. }
+        | Ask::Release { .. }
+        | Ask::TakePerson { .. }
+        | Ask::HandBackPerson { .. }
+        | Ask::AnswerPerson { .. }
+        | Ask::Move { .. }
+        | Ask::DecideProposal { .. }
+        | Ask::Say { .. }
+        | Ask::AnswerQuestion { .. }
+        | Ask::Prioritise { .. }
+        | Ask::Amend { .. }
+        | Ask::SetRoles { .. }
+        | Ask::ChangePolicy { .. }
+        | Ask::SetPool { .. }
+        | Ask::DecideEscalation { .. }
+        | Ask::StartChat { .. } => unreachable!("service creation is routed only from its ask"),
+    };
+    let identity = Identity {
+        key: IdentityKey { provider: domain.deployment_provider, subject: person.to_be_bytes().into() },
+        login: Box::new([]),
+        name,
+    };
+    let holdings = domain.roles.get(&project);
+    let outcome = if role(domain, flight.key.person, project) != Some(Role::Owner) {
+        Outcome::Refused(Refusal::Role)
+    } else if person == 0 || domain.people.contains_key(&person) || domain.identities.contains_key(&identity.key) {
+        Outcome::Refused(Refusal::Unknown)
+    } else if !valid_identity(&env.limits, &identity) {
+        Outcome::Refused(Refusal::Limit)
+    } else if domain.people.len() >= env.limits.people
+        || match holdings {
+            Some(rows) => rows.len() >= usize::try_from(env.limits.holdings).expect("u32 fits usize"),
+            None => true,
+        }
+    {
+        Outcome::Refused(Refusal::Busy)
+    } else {
+        let old = holdings.expect("project room checked");
+        let mut next = List::with_capacity(env.limits.holdings);
+        for holding in &**old {
+            next.push(*holding).expect("preflighted role room");
+        }
+        next.push(Holding { person, role: service_role }).expect("preflighted role room");
+        let next = next.into_boxed();
+        let indexed = domain.identities.insert(identity.key.clone(), person);
+        assert!(indexed == Ok(None), "service identity preflighted");
+        let saved = domain.people.insert(person, identity.clone());
+        assert!(saved == Ok(None), "service person preflighted");
+        let saved = domain.roles.insert(project, next.clone());
+        assert!(saved.is_ok(), "service project preflighted");
+        out.push(Request::Save { record: Stored::Person { number: person, identity } });
+        out.push(Request::Save { record: Stored::Roles { project, holdings: next } });
+        Outcome::ServiceMade { person }
+    };
+    out.push(Request::ServiceMade { request, outcome });
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the authenticated sign-in has its identity, kind and root-issued numbers"
+)]
 fn signin(
     domain: &mut Domain,
     env: &Env<Limits>,
@@ -672,6 +765,7 @@ fn signin(
     candidate: u64,
     number: u64,
     identity: Identity,
+    kind: Kind,
     out: &mut Queue<Request>,
 ) {
     if !domain.ready() {
@@ -680,7 +774,19 @@ fn signin(
     if !valid_identity(&env.limits, &identity) {
         return refused(to, Refusal::Limit, out);
     }
+    match kind {
+        Kind::Person if identity.key.provider == domain.deployment_provider => {
+            return refused(to, Refusal::SignIn, out);
+        }
+        Kind::Service if identity.key.provider != domain.deployment_provider => {
+            return refused(to, Refusal::SignIn, out);
+        }
+        Kind::Person | Kind::Service => {}
+    }
     let known = domain.identities.get(&identity.key).copied();
+    if kind == Kind::Service && known.is_none() {
+        return refused(to, Refusal::SignIn, out);
+    }
     let person = known.unwrap_or(candidate);
     if let Some(old) = domain.sign_ins.get(&number) {
         if old.person != person {
@@ -718,7 +824,7 @@ fn signin(
     };
     let expires = Wall::from_nanos(expires_nanos);
     if known.is_none() {
-        let indexed = domain.identities.insert(identity.key, person);
+        let indexed = domain.identities.insert(identity.key.clone(), person);
         assert!(indexed == Ok(None), "new identity has room");
         // Each project occurs at most once for this identity in configuration.
         for owner in &domain.owners {
@@ -739,10 +845,11 @@ fn signin(
             assert!(saved.is_ok(), "existing bootstrap project");
         }
     }
-    let changed = match domain.people.get(&person) {
-        Some(old) => old != &identity,
-        None => true,
-    };
+    let changed = kind == Kind::Person
+        && match domain.people.get(&person) {
+            Some(old) => old != &identity,
+            None => true,
+        };
     if changed {
         out.push(Request::Save { record: Stored::Person { number: person, identity: identity.clone() } });
         let saved = domain.people.insert(person, identity);
@@ -776,7 +883,8 @@ fn end_signin(domain: &mut Domain, number: u64, out: &mut Queue<Request>) {
 
 fn project(ask: &Ask) -> u32 {
     match ask {
-        Ask::AdoptRepository { project, .. }
+        Ask::MakeService { project, .. }
+        | Ask::AdoptRepository { project, .. }
         | Ask::SetRoles { project, .. }
         | Ask::ChangePolicy { project, .. }
         | Ask::SetPool { project, .. }
@@ -800,6 +908,14 @@ fn project(ask: &Ask) -> u32 {
 
 fn valid_ask(limits: &Limits, ask: &Ask) -> bool {
     match ask {
+        Ask::MakeService { name, .. } => {
+            let Some(bytes) = name.len().checked_add(size_of::<u64>()) else {
+                return false;
+            };
+            !name.is_empty()
+                && name.len() <= usize::try_from(limits.words).expect("u32 fits usize")
+                && bytes <= usize::try_from(limits.identity_bytes).expect("u32 fits usize")
+        }
         Ask::Move { task, reason, .. } | Ask::Cancel { task, reason, .. } => {
             *task != 0 && reason.len() <= usize::try_from(limits.words).expect("u32 fits usize")
         }
@@ -895,6 +1011,7 @@ fn valid_ask(limits: &Limits, ask: &Ask) -> bool {
 fn valid_answer_shape(ask: &Ask, outcome: Outcome) -> bool {
     #[derive(PartialEq, Eq)]
     enum Expected {
+        Service,
         Goal,
         Stop(u64),
         Cancel(u64),
@@ -917,6 +1034,7 @@ fn valid_answer_shape(ask: &Ask, outcome: Outcome) -> bool {
     }
 
     let expected = match ask {
+        Ask::MakeService { .. } => Expected::Service,
         Ask::AdoptRepository { project, adoption } => Expected::Adoption(*project, adoption.forge, adoption.repository),
         Ask::SetGoal { .. } => Expected::Goal,
         Ask::Stop { task, .. } => Expected::Stop(*task),
@@ -952,6 +1070,7 @@ fn valid_answer_shape(ask: &Ask, outcome: Outcome) -> bool {
     };
 
     match outcome {
+        Outcome::ServiceMade { person } => expected == Expected::Service && person != 0,
         Outcome::RepositoryAdopted { project, forge, repository } => {
             expected == Expected::Adoption(project, forge, repository)
         }
@@ -990,6 +1109,7 @@ fn role(domain: &Domain, person: u64, project: u32) -> Option<Role> {
     None
 }
 
+#[expect(clippy::too_many_lines, reason = "each keyed request is admitted with its role and replay check")]
 fn admit_ask(
     domain: &mut Domain,
     env: &Env<Limits>,
@@ -1044,7 +1164,11 @@ fn admit_ask(
     let project = project(&ask);
     let role = role(domain, key.person, project);
     let refusal = match &ask {
-        Ask::AdoptRepository { .. } | Ask::SetRoles { .. } | Ask::ChangePolicy { .. } | Ask::SetPool { .. } => {
+        Ask::MakeService { .. }
+        | Ask::AdoptRepository { .. }
+        | Ask::SetRoles { .. }
+        | Ask::ChangePolicy { .. }
+        | Ask::SetPool { .. } => {
             if !domain.roles.contains_key(&project) {
                 Some(Refusal::Unknown)
             } else if role == Some(Role::Owner) {
@@ -1053,10 +1177,20 @@ fn admit_ask(
                 Some(Refusal::Role)
             }
         }
-        Ask::StartChat { .. } => match role {
-            Some(Role::Owner | Role::Maintainer | Role::Member) => None,
-            Some(Role::Observer) | None => Some(Refusal::Role),
-        },
+        Ask::StartChat { .. } => {
+            let service = match domain.people.get(&key.person) {
+                Some(party) => party.key.provider == domain.deployment_provider,
+                None => false,
+            };
+            if service {
+                Some(Refusal::Role)
+            } else {
+                match role {
+                    Some(Role::Owner | Role::Maintainer | Role::Member) => None,
+                    Some(Role::Observer) | None => Some(Refusal::Role),
+                }
+            }
+        }
         Ask::SetGoal { .. } => match role {
             Some(Role::Owner | Role::Maintainer | Role::Member) => None,
             Some(Role::Observer) | None => Some(Refusal::Role),
@@ -1130,7 +1264,8 @@ fn decided(domain: &mut Domain, env: &Env<Limits>, id: Id<Pending>, outcome: Out
         // A refused admission is retryable with the same key, including
         // pressure reported by tasks or another child through the root.
         Outcome::Refused(Refusal::Busy | Refusal::NotReady) => {}
-        Outcome::RepositoryAdopted { .. }
+        Outcome::ServiceMade { .. }
+        | Outcome::RepositoryAdopted { .. }
         | Outcome::RolesSet { .. }
         | Outcome::PolicyChanged { .. }
         | Outcome::PoolSet { .. }
@@ -1207,7 +1342,7 @@ fn restore(domain: &mut Domain, env: &Env<Limits>, record: Stored, out: &mut Que
     }
     match record {
         Stored::Person { number, identity } => {
-            let indexed = domain.identities.insert(identity.key, number);
+            let indexed = domain.identities.insert(identity.key.clone(), number);
             assert!(indexed == Ok(None), "restored identity admitted");
             let saved = domain.people.insert(number, identity);
             assert!(saved.is_ok(), "restored person admitted");
@@ -1244,6 +1379,7 @@ fn restore_failed(domain: &mut Domain, key: Key, refusal: Refusal, out: &mut Que
     out.push(Request::RestoreRefused { key, refusal });
 }
 
+#[expect(clippy::too_many_lines, reason = "all restored references are validated before requests open")]
 fn restored(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
     match domain.phase {
         Phase::Ready | Phase::Failed => return,
@@ -1267,6 +1403,14 @@ fn restored(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
             return restore_failed(domain, Key::Answer(*key), Refusal::Unknown, out);
         }
         match answer.outcome {
+            Outcome::ServiceMade { person } => {
+                let Some(identity) = domain.people.get(&person) else {
+                    return restore_failed(domain, Key::Answer(*key), Refusal::Unknown, out);
+                };
+                if identity.key.provider != domain.deployment_provider {
+                    return restore_failed(domain, Key::Answer(*key), Refusal::Unknown, out);
+                }
+            }
             Outcome::RolesSet { .. } => match &answer.ask {
                 Ask::SetRoles { project, holdings } => {
                     if !domain.roles.contains_key(project) {
@@ -1278,7 +1422,8 @@ fn restored(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
                         }
                     }
                 }
-                Ask::StartChat { .. }
+                Ask::MakeService { .. }
+                | Ask::StartChat { .. }
                 | Ask::AdoptRepository { .. }
                 | Ask::ChangePolicy { .. }
                 | Ask::SetPool { .. }

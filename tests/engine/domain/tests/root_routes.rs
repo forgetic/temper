@@ -205,7 +205,7 @@ fn sign_in_person(driver: &mut Driver, user: u64, reply: u64) -> (u64, u64) {
     driver.send(engine::Event::SignedIn {
         reply_to: ReplyTo::new(Token::new(reply)),
         identity: people::Identity {
-            key: people::IdentityKey { forge: 1, user },
+            key: people::IdentityKey { provider: 0, subject: (user).to_be_bytes().into() },
             login: b"person".as_slice().into(),
             name: b"Person".as_slice().into(),
         },
@@ -1047,7 +1047,7 @@ fn a_person_task_addressed_to_a_role_taken_by_one_handed_back_answered_by_anothe
     driver.send(engine::Event::SignedIn {
         reply_to: ReplyTo::new(Token::new(970)),
         identity: people::Identity {
-            key: people::IdentityKey { forge: 1, user: 8 },
+            key: people::IdentityKey { provider: 0, subject: 8_u64.to_be_bytes().into() },
             login: b"second".as_slice().into(),
             name: b"Second".as_slice().into(),
         },
@@ -1391,7 +1391,7 @@ fn invalid_nonfinal_people_restore_page_stops_before_issuing_its_continuation() 
         let record = Record::People(people::Stored::Person {
             number,
             identity: people::Identity {
-                key: people::IdentityKey { forge: 1, user: 7 },
+                key: people::IdentityKey { provider: 0, subject: 7_u64.to_be_bytes().into() },
                 login: b"same".as_slice().into(),
                 name: b"Same".as_slice().into(),
             },
@@ -1647,8 +1647,14 @@ fn batch_fixture_custom(
     configuration.person_budget = pool_budget;
     if second_owner {
         configuration.owners = Box::new([
-            people::InitialOwner { project: 1, identity: people::IdentityKey { forge: 1, user: 7 } },
-            people::InitialOwner { project: 1, identity: people::IdentityKey { forge: 1, user: 8 } },
+            people::InitialOwner {
+                project: 1,
+                identity: people::IdentityKey { provider: 0, subject: 7_u64.to_be_bytes().into() },
+            },
+            people::InitialOwner {
+                project: 1,
+                identity: people::IdentityKey { provider: 0, subject: 8_u64.to_be_bytes().into() },
+            },
         ]);
     }
     let mut rules = configuration.authority.rules().clone();
@@ -3366,7 +3372,7 @@ fn rejected_restore_stays_rejected_and_current_read_checks_privacy_and_both_expi
     driver.send(engine::Event::SignedIn {
         reply_to: ReplyTo::new(Token::new(911)),
         identity: people::Identity {
-            key: people::IdentityKey { forge: 1, user: 9 },
+            key: people::IdentityKey { provider: 0, subject: 9_u64.to_be_bytes().into() },
             login: b"outsider".as_slice().into(),
             name: b"Outsider".as_slice().into(),
         },
@@ -3606,6 +3612,90 @@ fn administration_config(seed: u64) -> engine::Config {
     authority::step(&mut config.authority, authority::Event::Policy { project: 1, policy }, &mut findings);
     assert_eq!(findings.pop(), Some(authority::PolicyFact::Changed { project: 1 }));
     config
+}
+
+#[test]
+fn an_owner_makes_a_service_once_and_the_service_cannot_start_a_chat() {
+    let mut driver = Driver::configured(Store::new(), administration_config(9501), &limits());
+    driver.settle();
+    driver.sign_in();
+    driver.settle();
+    let owner_session = driver.session();
+    let ask = people::Ask::MakeService { project: 1, name: b"builder".as_slice().into(), role: people::Role::Owner };
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(9502)),
+        sign_in: owner_session,
+        key: [95; 16],
+        ask: ask.clone(),
+    });
+    driver.settle();
+    let service = driver
+        .delivered
+        .iter()
+        .find_map(|delivery| {
+            if let Delivery::WebReply {
+                reply: people::Reply::Outcome(people::Outcome::ServiceMade { person }), ..
+            } = delivery
+            {
+                Some(*person)
+            } else {
+                None
+            }
+        })
+        .expect("service creation answered after commit");
+    assert!(driver.store.rows.values().any(|row| matches!(row,
+        Record::People(people::Stored::Person { number, identity })
+            if *number == service && identity.key.provider == 1 && identity.key.subject.as_ref() == service.to_be_bytes()
+    )));
+    let created = driver.store.header().people;
+    let mut restarted = Driver::configured(driver.store, administration_config(9501), &limits());
+    restarted.settle();
+    restarted.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(9503)),
+        sign_in: owner_session,
+        key: [95; 16],
+        ask,
+    });
+    restarted.settle();
+    assert_eq!(restarted.store.header().people, created);
+    assert!(restarted.delivered.iter().any(|delivery| matches!(delivery,
+        Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::ServiceMade { person }), .. }
+            if *person == service
+    )));
+    restarted.send(engine::Event::SignedIn {
+        reply_to: ReplyTo::new(Token::new(9504)),
+        identity: people::Identity {
+            key: people::IdentityKey { provider: 1, subject: service.to_be_bytes().into() },
+            login: Box::new([]),
+            name: b"builder".as_slice().into(),
+        },
+    });
+    restarted.settle();
+    let service_session = restarted
+        .delivered
+        .iter()
+        .find_map(|delivery| {
+            if let Delivery::WebReply { sign_in: Some(session), reply: people::Reply::SignedIn { person, .. }, .. } =
+                delivery
+                && *person == service
+            {
+                Some(*session)
+            } else {
+                None
+            }
+        })
+        .expect("service sign-in uses its existing party");
+    restarted.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(9505)),
+        sign_in: service_session,
+        key: [96; 16],
+        ask: people::Ask::StartChat { project: 1, words: Box::new([]) },
+    });
+    restarted.settle();
+    assert!(restarted.delivered.iter().any(|delivery| matches!(
+        delivery,
+        Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::Refused(people::Refusal::Role)), .. }
+    )));
 }
 
 #[test]
@@ -4644,7 +4734,7 @@ fn a_move_carves_the_new_persons_pool_in_the_same_commit() {
     driver.send(engine::Event::SignedIn {
         reply_to: ReplyTo::new(Token::new(641)),
         identity: people::Identity {
-            key: people::IdentityKey { forge: 1, user: 8 },
+            key: people::IdentityKey { provider: 0, subject: 8_u64.to_be_bytes().into() },
             login: b"second".as_slice().into(),
             name: b"Second".as_slice().into(),
         },
