@@ -8,7 +8,7 @@ use temper_engine_domain_tasks::{
     Fact, Funder, Key, Limits, MessageKind, New, Numbers, Party, Problem, Request, ResultKind, Retries, Retry,
     RunContext, Scopes, Spec, Stored, TaskResult, Tools, Word,
 };
-use temper_world::{Referee, Trace};
+use skein_world::domain::{Referee, Trace};
 
 pub const RETRY: Retry = Retry { retries: 2, base: Duration::from_millis(10), max: Duration::from_secs(1) };
 

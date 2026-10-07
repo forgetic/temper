@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use temper_engine_domain_tasks::{
     Contract, Ending, Last, Limits, Parameter, Party, Phase, Status, TaskRecord, TaskResult, Was,
 };
-use temper_world::{Expectations, Judge};
+use skein_world::domain::{Expectations, Judge};
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Seen {

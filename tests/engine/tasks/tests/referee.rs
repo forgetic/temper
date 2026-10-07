@@ -1,7 +1,7 @@
 use skein_lib::Time;
 use temper_engine_domain_tasks::{Party, Status};
 use temper_engine_tasks_world::referee::{Seen, Tasks};
-use temper_world::{Referee, Verdict};
+use skein_world::domain::{Referee, Verdict};
 
 fn rejects(seen: Vec<Seen>) {
     let mut referee = Referee::new(Tasks::default());

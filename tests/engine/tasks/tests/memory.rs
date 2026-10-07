@@ -4,7 +4,7 @@ use temper_engine_domain_tasks::{
     Parameter, Party, Pattern, Request, Stored, TaskResult, Verdict,
 };
 use temper_engine_tasks_world::{LIMITS, task};
-use temper_world::heap::{self, Meter};
+use skein_world::domain::heap::{self, Meter};
 
 #[global_allocator]
 static HEAP: heap::Counting = heap::Counting;
@@ -50,7 +50,7 @@ impl Measured {
             self.refused |= matches!(request, Request::Refused { .. });
             drop(request);
         }
-        self.meter.check(measured, self.bound, self.env.limits);
+        self.meter.check(measured, self.bound, &self.env.limits);
         self.d.reclaim();
     }
 
@@ -73,7 +73,7 @@ impl Measured {
         while let Some(request) = self.out.pop() {
             drop(request);
         }
-        self.meter.check(measured, self.bound, self.env.limits);
+        self.meter.check(measured, self.bound, &self.env.limits);
         self.d.reclaim();
     }
 
