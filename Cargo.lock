@@ -483,8 +483,8 @@ name = "temper-engine-notes-world"
 version = "0.0.0"
 dependencies = [
  "skein-lib",
+ "skein-world",
  "temper-engine-domain-notes",
- "temper-world",
 ]
 
 [[package]]

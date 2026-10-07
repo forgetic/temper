@@ -1,2 +1,2 @@
-//! The notes child world. The store harness and its stories arrive with the
-//! completed read boundary in session 03's fourth increment.
+//! The notes child world on skein's harness. Its parent and store are played
+//! by a scripted neighbour, and its referee observes committed writes.
