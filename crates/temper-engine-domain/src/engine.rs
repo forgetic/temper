@@ -4068,6 +4068,24 @@ fn tasks_outputs(
                 }
                 match &record {
                     tasks::Stored::Live(task) | tasks::Stored::Ended(task) => {
+                        let stale = match domain.contexts.get(&task.number) {
+                            Some(context) => {
+                                task.phase != tasks::Phase::Active(tasks::Active::Preparing)
+                                    || task.last_message != context.last_message
+                            }
+                            None => false,
+                        };
+                        if stale {
+                            drop(domain.contexts.remove(&task.number));
+                            drop(domain.dependency_results.remove(&task.number));
+                            drop(domain.transcripts.remove(&task.number));
+                            domain
+                                .work
+                                .push(Work::Brief(brief::GatherEvent::Abandon { brief: Token::new(task.number) }));
+                            if task.phase == tasks::Phase::Active(tasks::Active::Preparing) {
+                                domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task: task.number }));
+                            }
+                        }
                         view_task_saved(domain, &env.limits, decision, task);
                         if task.tracked.is_some() && domain.forge.home(task.project).is_some() {
                             domain.work.push(Work::ProjectGoal(task.clone()));
@@ -4743,6 +4761,28 @@ fn brief_outputs(
             | brief::GatherRequest::Drop { .. } => unreachable!("temper's sole connector is numbered zero"),
             brief::GatherRequest::Complete { brief, order } => {
                 let task = brief.raw();
+                let current = match domain.contexts.get(&task) {
+                    Some(context) => match domain.tasks.task(task) {
+                        Some(row) => {
+                            row.phase == tasks::Phase::Active(tasks::Active::Preparing)
+                                && row.last_message == context.last_message
+                        }
+                        None => false,
+                    },
+                    None => false,
+                };
+                if !current {
+                    for placed in order {
+                        if let brief::GatherPlaced::Connector { token, .. } = placed {
+                            let id = Id::from_token(token);
+                            if domain.brief_connectors.get(id).is_some() {
+                                domain.brief_connectors.retire(id);
+                                domain.work.push(Work::Forge(forge::Event::DropBrief { section: token }));
+                            }
+                        }
+                    }
+                    continue;
+                }
                 let mut sections = List::with_capacity(u32::try_from(order.len()).expect("bounded section count"));
                 let mut missing_owner = false;
                 for placed in order {
@@ -5707,7 +5747,11 @@ fn transcript_loaded(
 
 #[expect(clippy::too_many_lines, reason = "one preparation gathers typed core sections and pinned forge sources")]
 fn start_brief(domain: &mut Domain, env: &Env<Limits>, task: u64) {
-    let context = domain.contexts.get(&task).expect("loaded task context");
+    let Some(context) = domain.contexts.get(&task) else { return };
+    let Some(current) = domain.tasks.task(task) else { return };
+    if current.phase != tasks::Phase::Active(tasks::Active::Preparing) || current.last_message != context.last_message {
+        return;
+    }
     let transcript = domain.transcripts.get(&task).expect("prepared transcript state");
     let oversized = transcript.bytes > u64::from(domain.config.resume_bytes);
     let mut wanted = List::with_capacity(domain.limits.brief.sections);

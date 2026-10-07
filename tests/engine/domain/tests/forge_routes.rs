@@ -29,6 +29,7 @@ struct World {
     assigned: Vec<engine::Assignment>,
     answers: Vec<temper_engine_domain::CallAnswer>,
     fail_job_reads: bool,
+    slow_brief_reads: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -272,6 +273,7 @@ impl World {
             assigned: Vec::new(),
             answers: Vec::new(),
             fail_job_reads: false,
+            slow_brief_reads: false,
         }
     }
 
@@ -370,11 +372,19 @@ impl World {
                     } else {
                         panic!("unknown test repository {repository:?}");
                     };
+                    let slow =
+                        self.slow_brief_reads && matches!(op, client::api::Op::Read(client::api::Read::Job { .. }));
                     let raw = translate::op(&op, &self.env.limits.forge.client);
                     self.pending.insert(call, op);
+                    let mut limits = self.fake_env.limits;
+                    if slow {
+                        limits.latency_min = Duration::from_secs(20);
+                        limits.latency_max = Duration::from_secs(20);
+                    }
+                    let fake_env = Env { now: self.fake_env.now, wall: self.fake_env.wall, limits };
                     fake::step(
                         &mut self.fake,
-                        &self.fake_env,
+                        &fake_env,
                         fake::Event::Call {
                             reply_to: ReplyTo::new(call),
                             user: 1,
@@ -1317,6 +1327,162 @@ fn an_unreadable_failed_job_log_is_named_and_repair_still_runs() {
                 && words.windows(b"Link:".len()).any(|part| part == b"Link:"))),
         "CI sections: {:?}",
         repair.sections
+    );
+}
+
+fn failed_ci_with_delayed_brief() -> (World, u64, u64) {
+    let (mut world, chat, producer, branch) = change_world(false, 0, None);
+    assert!(matches!(
+        world.external(2, raw::Op::Git(raw::Git::Create { branch: branch.clone(), commit: 1 })),
+        raw::Answer::Branch(raw::Created::Created)
+    ));
+    let head = fake::advance(&mut world.fake, &world.fake_env, b"org/repo", &branch, b"file", b"first", 1)
+        .expect("producer pushed its branch");
+    world.external(
+        1,
+        raw::Op::Write(raw::Write::Status {
+            commit: head,
+            context: Box::from(&b"build"[..]),
+            state: raw::Check::Failed,
+        }),
+    );
+    world.slow_brief_reads = true;
+    world.send(engine::Event::Answer {
+        channel: Token::new(7),
+        task: producer.task,
+        attempt: producer.attempt,
+        cumulative: 5,
+        end: tasks::End::Finished {
+            result: tasks::TaskResult::Change {
+                connector: 1,
+                kind: 2,
+                resource: u64::from(forge_world::REPO.repository),
+                words: Box::from(&b"pushed"[..]),
+            },
+            cancel_delegates: false,
+        },
+        saved: None,
+    });
+    (world, chat.task, producer.task)
+}
+
+#[test]
+fn a_required_section_missing_sends_the_task_back_to_due_without_spending_a_try() {
+    let (mut world, chat, producer) = failed_ci_with_delayed_brief();
+    let mut repair = None;
+    for _ in 0..150 {
+        world.tick();
+        for stored in world.store.rows.values() {
+            let Record::Tasks(tasks::Stored::Live(row)) = stored else { continue };
+            if row.number != chat
+                && row.number != producer
+                && matches!(row.executor, tasks::Executor::Agent { .. })
+                && row.refusals > 0
+            {
+                repair = Some(row.clone());
+                break;
+            }
+        }
+        if repair.is_some() {
+            break;
+        }
+    }
+    let repair = repair.unwrap_or_else(|| {
+        panic!(
+            "required forge section timed out while preparing: tasks={:?}; pending={:?}; assigned={:?}",
+            world
+                .store
+                .rows
+                .values()
+                .filter(|row| matches!(row, Record::Tasks(tasks::Stored::Live(_))))
+                .collect::<Vec<_>>(),
+            world.pending,
+            world.assigned,
+        )
+    });
+    assert_eq!(repair.attempt, 0, "no claim was made");
+    assert_eq!(repair.tries, tasks::Tries::NONE, "preparation consumed no try");
+    assert_eq!(world.assigned.len(), 2, "repair was never assigned");
+}
+
+#[test]
+fn an_amendment_while_gathering_discards_the_old_brief_without_claiming() {
+    let (mut world, chat, producer) = failed_ci_with_delayed_brief();
+    let mut repair = None;
+    for _ in 0..150 {
+        world.tick();
+        for stored in world.store.rows.values() {
+            let Record::Tasks(tasks::Stored::Live(row)) = stored else { continue };
+            if row.number != chat
+                && row.number != producer
+                && matches!(row.executor, tasks::Executor::Agent { .. })
+                && row.phase == tasks::Phase::Active(tasks::Active::Preparing)
+                && world.pending.values().any(|op| matches!(op, client::api::Op::Read(client::api::Read::Job { .. })))
+            {
+                repair = Some(row.number);
+                break;
+            }
+        }
+        if repair.is_some() {
+            break;
+        }
+    }
+    let repair = repair.unwrap_or_else(|| {
+        panic!(
+            "repair gathering its required section: phases={:?}; pending={:?}",
+            world
+                .store
+                .rows
+                .values()
+                .filter_map(|stored| match stored {
+                    Record::Tasks(tasks::Stored::Live(row)) => Some((row.number, row.phase.clone())),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            world.pending
+        )
+    });
+    world.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(790)),
+        sign_in: world.signed_in.expect("owner signed in"),
+        key: [79; 16],
+        ask: people::Ask::Amend {
+            project: 1,
+            task: repair,
+            amendment: people::Amendment {
+                spec: Some(people::Spec {
+                    words: b"revised repair".as_slice().into(),
+                    parameters: Box::new([]),
+                    inputs: Box::new([]),
+                }),
+                wake: None,
+                dependencies: None,
+                authority: None,
+                reason: b"new failure detail".as_slice().into(),
+            },
+        },
+    });
+    for _ in 0..40 {
+        world.tick();
+        let Some(Record::Tasks(tasks::Stored::Live(row))) = world.store.rows.get(&Key::Tasks(tasks::Key::Live(repair)))
+        else {
+            continue;
+        };
+        if row.refusals > 0 && row.last_message == 2 {
+            assert_eq!(row.spec.words.as_ref(), b"revised repair");
+            assert_eq!(row.attempt, 0, "old preparation was not claimed");
+            assert_eq!(row.tries, tasks::Tries::NONE);
+            assert_eq!(world.assigned.len(), 2);
+            for _ in 0..250 {
+                world.tick();
+            }
+            assert_eq!(world.assigned.len(), 2, "an abandoned brief cannot assign after its delayed read");
+            return;
+        }
+    }
+    panic!(
+        "amended repair did not abandon its pending brief: {:?}",
+        world.store.rows.get(&Key::Tasks(tasks::Key::Live(repair)))
     );
 }
 
