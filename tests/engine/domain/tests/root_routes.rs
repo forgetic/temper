@@ -411,6 +411,7 @@ fn a_maintainer_prioritises_project_goals_and_a_member_cannot() {
                 | tasks::Stored::Stub(_)
                 | tasks::Stored::History(_)
                 | tasks::Stored::Ledger(_)
+                | tasks::Stored::Writer(_)
                 | tasks::Stored::PersonProposal(_),
             )
             | Record::People(_)
@@ -3981,6 +3982,7 @@ fn multiple_waiting_recipients_preflight_together_and_full_journal_refuses_witho
                 tasks::Stored::Ended(_)
                 | tasks::Stored::Stub(_)
                 | tasks::Stored::Ledger(_)
+                | tasks::Stored::Writer(_)
                 | tasks::Stored::History(_)
                 | tasks::Stored::PersonProposal(_),
             )
@@ -4209,7 +4211,8 @@ fn read_only_role_stages_have_one_not_ready_terminal_and_empty_projects_need_no_
             | tasks::Request::RecurringDue { .. }
             | tasks::Request::RestoreRefused { .. }
             | tasks::Request::Taken { .. }
-            | tasks::Request::Waiting { .. } => panic!("no mutation or lost startup terminal"),
+            | tasks::Request::Waiting { .. }
+            | tasks::Request::WriterWaiting { .. } => panic!("no mutation or lost startup terminal"),
         }
     }
     tasks::step(&mut child, &environment, tasks::Event::Restored, &mut out);
@@ -4255,7 +4258,8 @@ fn read_only_role_stages_have_one_not_ready_terminal_and_empty_projects_need_no_
         | tasks::Request::RecurringDue { .. }
         | tasks::Request::RestoreRefused { .. }
         | tasks::Request::Taken { .. }
-        | tasks::Request::Waiting { .. } => panic!("one named snapshot"),
+        | tasks::Request::Waiting { .. }
+        | tasks::Request::WriterWaiting { .. } => panic!("one named snapshot"),
     }
 }
 

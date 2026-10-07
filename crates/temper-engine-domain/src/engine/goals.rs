@@ -2,7 +2,8 @@
 //! domain/tasks.md, 8). Tasks owns the durable pending proposal and goal;
 //! root checks role authority and authentic funding before either mutation.
 use super::{
-    Domain, Env, Family, GoalRoute, Limits, ReplyTo, Token, Work, authority, authority_numbers, people, tasks,
+    Domain, Env, Family, GoalRoute, Limits, ReplyTo, Token, Work, authority, authority_numbers, forge_route, people,
+    tasks,
 };
 use alloc::boxed::Box;
 use skein_lib::Queue;
@@ -104,17 +105,23 @@ pub(super) fn start(
     let Some(task) = crate::fresh(&mut domain.counters, Family::Task) else {
         return refuse(domain, request, people::Refusal::Limit);
     };
+    let spec = tasks::Spec { words: spec, parameters: Box::new([]), inputs: Box::new([]) };
+    let Some(holdings) =
+        forge_route::task_holdings(domain, env, project, task, task, tasks::Executor::Agent { charter }, &spec, None)
+    else {
+        return refuse(domain, request, people::Refusal::Limit);
+    };
     let new = tasks::New {
         number: task,
         project,
         executor: tasks::Executor::Agent { charter },
-        spec: tasks::Spec { words: spec, parameters: Box::new([]), inputs: Box::new([]) },
+        spec,
         contract: tasks::Contract::Report { words: env.limits.tasks.result_bytes },
         authority: super::task_authority(&given),
         numbers: tasks::Numbers { budget, spent: 0, spent_below: 0, reserved: 0 },
         funder: source,
         dependencies: Box::new([]),
-        holdings: Box::new([]),
+        holdings,
         wake: tasks::WakePolicy::DEFAULT,
         recurring: None,
         tracked: Some(priority),

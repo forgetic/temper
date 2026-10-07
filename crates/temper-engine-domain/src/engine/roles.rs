@@ -86,6 +86,7 @@ fn inspected(
             | tasks::Request::Notify { .. }
             | tasks::Request::Timer { .. }
             | tasks::Request::RecurringDue { .. }
+            | tasks::Request::WriterWaiting { .. }
             | tasks::Request::PersonProposed { .. }
             | tasks::Request::PersonProposalDecided { .. } => unreachable!("inspection is read-only"),
         }
@@ -273,7 +274,8 @@ fn recheck(domain: &mut Domain, env: &Env<Limits>, request: Token, project: u32)
             | tasks::Request::PersonProposalDecided { .. }
             | tasks::Request::Notify { .. }
             | tasks::Request::Timer { .. }
-            | tasks::Request::RecurringDue { .. } => {
+            | tasks::Request::RecurringDue { .. }
+            | tasks::Request::WriterWaiting { .. } => {
                 unreachable!("recheck emits waiting contexts and terminal")
             }
         }

@@ -313,6 +313,7 @@ impl Range {
                     jig_core_tasks::Key::Live(_)
                     | jig_core_tasks::Key::Ledger(_)
                     | jig_core_tasks::Key::Stub(_)
+                    | jig_core_tasks::Key::Writer(_)
                     | jig_core_tasks::Key::PersonProposal(_) => true,
                     jig_core_tasks::Key::Ended(_) | jig_core_tasks::Key::History { .. } => false,
                 },

@@ -90,7 +90,7 @@ impl Store {
                 Range::EscalationDecision { task, revision } => matches!(key, Key::EscalationDecision { task: found, revision: current } if *found == task && *current == revision),
                 Range::Deployment => **key == Key::Deployment,
                 Range::Tasks => match key {
-                    Key::Tasks(jig_core_tasks::Key::Live(_) | jig_core_tasks::Key::Stub(_) | jig_core_tasks::Key::Ledger(_) | jig_core_tasks::Key::PersonProposal(_)) => true,
+                    Key::Tasks(jig_core_tasks::Key::Live(_) | jig_core_tasks::Key::Stub(_) | jig_core_tasks::Key::Ledger(_) | jig_core_tasks::Key::Writer(_) | jig_core_tasks::Key::PersonProposal(_)) => true,
                     Key::Tasks(jig_core_tasks::Key::Ended(_) | jig_core_tasks::Key::History { .. })
                         | Key::Call(_) | Key::EscalationDecision { .. } | Key::ProposalDecision(_) | Key::Deployment | Key::Turn { .. } | Key::RunProof { .. } | Key::Terminal { .. } | Key::People(_) | Key::Forge(_) => false,
                 },

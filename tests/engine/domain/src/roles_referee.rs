@@ -177,7 +177,8 @@ impl Referee {
                             | tasks::Stored::Stub(_)
                             | tasks::Stored::Ledger(_)
                             | tasks::Stored::History(_)
-                            | tasks::Stored::PersonProposal(_),
+                            | tasks::Stored::PersonProposal(_)
+                            | tasks::Stored::Writer(_),
                         )
                         | Record::People(_)
                         | Record::Call(_)

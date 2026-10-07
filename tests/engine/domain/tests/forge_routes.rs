@@ -905,9 +905,13 @@ fn a_pushed_change_is_recovered_before_its_worker_reports_the_head() {
         .expect("worker push reached the forge");
     assert!(world.store.pending.is_empty(), "push precedes the worker's answer decision");
     world.restart(true, true);
-    for _ in 0..30 {
+    for _ in 0..200 {
         world.tick();
+        if world.root.ready() {
+            break;
+        }
     }
+    assert!(world.root.ready(), "restored root did not become ready");
     world.send(engine::Event::Answer {
         channel: Token::new(7),
         task: producer.task,

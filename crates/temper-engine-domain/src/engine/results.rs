@@ -114,7 +114,8 @@ pub(super) fn page(
                 | tasks::Stored::History(_)
                 | tasks::Stored::Live(_)
                 | tasks::Stored::Ledger(_)
-                | tasks::Stored::Stub(_),
+                | tasks::Stored::Stub(_)
+                | tasks::Stored::Writer(_),
             )
             | Record::ProposalDecision(_)
             | Record::Call(_)

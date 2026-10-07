@@ -4,7 +4,8 @@
 //! copied into the task child.
 use super::{
     CallKey, Decision, Dependency, Domain, Env, Family, Limits, PersonProposalRoute, ProposalChoice, ProposedAction,
-    ReplyTo, RoutedCall, Token, Work, authority, authority_numbers, authority_value, current_proof, people, tasks,
+    ReplyTo, RoutedCall, Token, Work, authority, authority_numbers, authority_value, current_proof, forge_route,
+    people, tasks,
 };
 use crate::{CallAnswer, ProposalDecisionRecord};
 use alloc::boxed::Box;
@@ -163,7 +164,11 @@ pub(super) fn decision_record(row: &tasks::Stored) -> Option<ProposalDecisionRec
                 choice,
             })
         }
-        tasks::Stored::Live(_) | tasks::Stored::Ended(_) | tasks::Stored::Ledger(_) | tasks::Stored::Stub(_) => None,
+        tasks::Stored::Live(_)
+        | tasks::Stored::Ended(_)
+        | tasks::Stored::Ledger(_)
+        | tasks::Stored::Writer(_)
+        | tasks::Stored::Stub(_) => None,
     }
 }
 
@@ -329,6 +334,7 @@ pub(super) fn holder(
 
 fn materialize(
     domain: &mut Domain,
+    env: &Env<Limits>,
     context: &tasks::DelegationContext,
     proposer: u64,
     batch: Box<[super::Delegate]>,
@@ -354,9 +360,22 @@ fn materialize(
                 return Err(tasks::Refusal::Dependencies);
             }
         }
+        let number = *ids.get(u32::try_from(index).expect("batch index")).expect("one ID per member");
+        let root = domain.tasks.root(proposer).ok_or(tasks::Refusal::Unknown)?;
+        let holdings = forge_route::task_holdings(
+            domain,
+            env,
+            context.project,
+            root,
+            number,
+            member.executor,
+            &member.spec,
+            Some(proposer),
+        )
+        .ok_or(tasks::Refusal::Holds)?;
         created
             .push(tasks::New {
-                number: *ids.get(u32::try_from(index).expect("batch index")).expect("one ID per member"),
+                number,
                 project: context.project,
                 executor: member.executor,
                 spec: member.spec,
@@ -370,7 +389,7 @@ fn materialize(
                 authority: member.authority,
                 funder: tasks::Funder::Task(proposer),
                 dependencies: dependencies.into_boxed(),
-                holdings: Box::new([]),
+                holdings,
                 wake: member.wake,
                 recurring: None,
                 tracked: None,
@@ -400,7 +419,7 @@ pub(super) fn propose_call(
         return refused(domain, env, decision, to, key, tasks::Refusal::Unknown);
     };
     let action = match action {
-        ProposedAction::Batch(batch) => match materialize(domain, &context, key.task, batch, &env.limits.tasks) {
+        ProposedAction::Batch(batch) => match materialize(domain, env, &context, key.task, batch, &env.limits.tasks) {
             Ok(batch) => tasks::ProposalAction::Batch(batch),
             Err(why) => return refused(domain, env, decision, to, key, why),
         },

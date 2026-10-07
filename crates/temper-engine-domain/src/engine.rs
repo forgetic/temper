@@ -734,8 +734,7 @@ enum Work {
     Brief(brief::GatherEvent),
     StartBrief { task: u64 },
     Forge(forge::Event),
-    ForgeClaim { task: u64, attempt: u64, writes: Box<[forge::Name]>, holders: Box<[u64]> },
-    TasksClaim { task: u64, attempt: u64 },
+    TasksClaim { task: u64, attempt: u64, writes: Box<[tasks::Name]> },
     ProjectGoal(Box<tasks::TaskRecord>),
     GoalSubscribe(forge::Subscriber),
     Activate(Box<tasks::RunContext>),
@@ -2444,13 +2443,7 @@ fn route_into(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision) {
                 forge::step(&mut domain.forge, &environment_forge(env), event, &mut out);
                 forge_route::outputs(domain, env, decision, &mut out);
             }
-            Work::ForgeClaim { task, attempt, writes, holders } => {
-                if domain.claiming.get(&task) == Some(&attempt) {
-                    domain.work.push(Work::Forge(forge::Event::Claim { task, attempt, writes, holders }));
-                    domain.work.push(Work::TasksClaim { task, attempt });
-                }
-            }
-            Work::TasksClaim { task, attempt } => {
+            Work::TasksClaim { task, attempt, writes } => {
                 if domain.claiming.get(&task) == Some(&attempt) {
                     let budget = domain.assignments.get(&task).expect("claim has assignment").run.budget;
                     domain.work.push(Work::Tasks(tasks::Event::Claim {
@@ -2458,6 +2451,7 @@ fn route_into(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision) {
                         task,
                         attempt,
                         budget,
+                        writes,
                     }));
                 }
             }
@@ -3255,6 +3249,24 @@ fn make_chat(
             unreachable!("other asks routed separately")
         }
     };
+    let spec = tasks::Spec { words, parameters: Box::new([]), inputs: Box::new([]) };
+    let Some(holdings) = forge_route::task_holdings(
+        domain,
+        env,
+        project,
+        number,
+        number,
+        tasks::Executor::Agent { charter: domain.config.charter },
+        &spec,
+        None,
+    ) else {
+        let _: Option<(u64, bool)> = domain.made.remove(&request);
+        domain.work.push(Work::People(people::Event::Decided {
+            request,
+            outcome: people::Outcome::Refused(people::Refusal::Limit),
+        }));
+        return;
+    };
     domain.work.push(Work::Tasks(tasks::Event::Make {
         reply_to: ReplyTo::new(request),
         creator: tasks::Party::Person(person),
@@ -3262,7 +3274,7 @@ fn make_chat(
             number,
             project,
             executor: tasks::Executor::Agent { charter: domain.config.charter },
-            spec: tasks::Spec { words, parameters: Box::new([]), inputs: Box::new([]) },
+            spec,
             contract: tasks::Contract::Report { words: env.limits.tasks.result_bytes },
             authority: task_authority(&domain.config.chat_authority),
             numbers: tasks::Numbers {
@@ -3273,7 +3285,7 @@ fn make_chat(
             },
             funder: pool,
             dependencies: Box::new([]),
-            holdings: Box::new([]),
+            holdings,
             wake: tasks::WakePolicy::DEFAULT,
             recurring: None,
             tracked: None,
@@ -4148,6 +4160,31 @@ fn delegate_call(
             );
             return;
         };
+        let root = domain.tasks.root(key.task).expect("delegator live");
+        let Some(holdings) = forge_route::task_holdings(
+            domain,
+            env,
+            context.project,
+            root,
+            number,
+            member.executor,
+            &member.spec,
+            Some(key.task),
+        ) else {
+            decide_call(
+                domain,
+                &env.limits,
+                decision,
+                to,
+                key,
+                CallAnswer::DelegationRefused(tasks::Problem {
+                    task: Some(number),
+                    why: tasks::Refusal::Holds,
+                    blocked_by: None,
+                }),
+            );
+            return;
+        };
         created
             .push(tasks::New {
                 number,
@@ -4164,7 +4201,7 @@ fn delegate_call(
                 },
                 funder: tasks::Funder::Task(key.task),
                 dependencies: dependencies.into_boxed(),
-                holdings: Box::new([]),
+                holdings,
                 wake: member.wake,
                 recurring: None,
                 tracked: None,
@@ -4185,6 +4222,7 @@ fn delegate_call(
 
 /// Route a connector-owned step through current task authority and the tasks hub in one root
 /// decision. Invalid or stale owner inputs make no change; the owner retries from current facts.
+#[expect(clippy::too_many_lines, reason = "procedure admission checks and routing form one bounded decision")]
 fn procedure_step(
     domain: &mut Domain,
     env: &Env<Limits>,
@@ -4257,6 +4295,17 @@ fn procedure_step(
                 let number = *numbers.get(at).expect("one ID per member");
                 let authority =
                     resolved_delegate_authority(&member.authority, &member.symbolic_grants, number, &env.limits)?;
+                let root = domain.tasks.root(task)?;
+                let holdings = forge_route::task_holdings(
+                    domain,
+                    env,
+                    context.project,
+                    root,
+                    number,
+                    member.executor,
+                    &member.spec,
+                    Some(task),
+                )?;
                 created
                     .push(tasks::New {
                         number,
@@ -4268,7 +4317,7 @@ fn procedure_step(
                         numbers: tasks::Numbers { budget, spent: 0, spent_below: 0, reserved: 0 },
                         funder: tasks::Funder::Task(task),
                         dependencies: dependencies.into_boxed(),
-                        holdings: Box::new([]),
+                        holdings,
                         wake: member.wake,
                         recurring: None,
                         tracked: None,
@@ -4711,7 +4760,10 @@ fn tasks_outputs(
                             entries: inbox::person_proposal_entries(domain, row),
                         }));
                     }
-                    tasks::Stored::Ledger(_) | tasks::Stored::History(_) | tasks::Stored::Stub(_) => {}
+                    tasks::Stored::Ledger(_)
+                    | tasks::Stored::Writer(_)
+                    | tasks::Stored::History(_)
+                    | tasks::Stored::Stub(_) => {}
                 }
                 let record = match record {
                     tasks::Stored::Ended(mut task) => {
@@ -4735,6 +4787,7 @@ fn tasks_outputs(
                         tasks::Stored::Ended(task)
                     }
                     tasks::Stored::Live(_)
+                    | tasks::Stored::Writer(_)
                     | tasks::Stored::Ledger(_)
                     | tasks::Stored::History(_)
                     | tasks::Stored::Stub(_)
@@ -5337,6 +5390,11 @@ fn tasks_outputs(
                     };
                     decide_call(domain, &env.limits, decision, ReplyTo::new(Token::new(task)), key, answer);
                 } else if let Some(attempt) = domain.claiming.remove(&task) {
+                    let (writes, holders) = forge_route::claimed_writes(domain, env, task)
+                        .expect("the admitted assignment retains its bounded held forge writes");
+                    if !writes.is_empty() {
+                        domain.work.push(Work::Forge(forge::Event::Claim { task, attempt, writes, holders }));
+                    }
                     let proof = domain.proofs.get(&task).expect("claim proof pre-reserved");
                     save(decision, &env.limits, Write::Save(Record::RunProof(proof.clone())));
                     let key = &domain.assignments.get(&task).expect("claimed assignment").workspace.key;
@@ -5354,7 +5412,31 @@ fn tasks_outputs(
                     );
                 }
             }
-            tasks::Request::Taken { .. } | tasks::Request::Waiting { .. } => {}
+            tasks::Request::WriterWaiting { task: Some(task), .. } => {
+                if domain.claiming.remove(&task).is_some() {
+                    drop(domain.assignments.remove(&task));
+                    drop(domain.proofs.remove(&task));
+                    domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
+                }
+            }
+            tasks::Request::WriterWaiting { task: None, .. } | tasks::Request::Waiting { .. } => {}
+            tasks::Request::Taken { task, holdings } => {
+                for holding in holdings {
+                    if let tasks::Holding::Write { resource, .. } = holding
+                        && let Some(name) = forge_route::forge_name(
+                            domain.config.forge_connector,
+                            &resource,
+                            env.limits.forge.name_bytes,
+                        )
+                    {
+                        let from = match domain.forge.hold(&name) {
+                            Some(row) if row.task != task => Some(row.task),
+                            Some(_) | None => None,
+                        };
+                        domain.work.push(Work::Forge(forge::Event::Hold { task, resource: name, from }));
+                    }
+                }
+            }
             tasks::Request::RestoreRefused { .. } => domain.startup = Startup::Failed,
         }
     }
@@ -5558,18 +5640,19 @@ fn brief_outputs(
                 assert!(domain.assignments.insert(task, assignment).is_ok(), "assignment fits live task room");
                 assert!(domain.claiming.insert(task, attempt) == Ok(None), "one pending claim per task");
                 if workspace.names.is_empty() {
-                    domain.work.push(Work::TasksClaim { task, attempt });
+                    domain.work.push(Work::TasksClaim { task, attempt, writes: Box::new([]) });
                 } else {
+                    let mut hub_writes = List::with_capacity(env.limits.tasks.holdings);
+                    for name in &workspace.names {
+                        let resource = forge_route::hub_name(domain.config.forge_connector, name, &env.limits.tasks)
+                            .expect("admitted forge branch name fits the hub's bound");
+                        hub_writes.push(resource).expect("workspace write bound fits hub");
+                    }
                     domain.work.push(Work::Forge(forge::Event::Names { task, resources: claim_names }));
                     for name in workspace.own_holds {
                         domain.work.push(Work::Forge(forge::Event::Hold { task, resource: name, from: None }));
                     }
-                    domain.work.push(Work::ForgeClaim {
-                        task,
-                        attempt,
-                        writes: workspace.names,
-                        holders: workspace.holders,
-                    });
+                    domain.work.push(Work::TasksClaim { task, attempt, writes: hub_writes.into_boxed() });
                 }
             }
             brief::GatherRequest::Failed { brief, .. } | brief::GatherRequest::Refused { brief } => {
@@ -8266,7 +8349,9 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
                 }));
                 domain.work.push(Work::Tasks(tasks::Event::Restore { record }));
             }
-            tasks::Stored::Ledger(_) => domain.work.push(Work::Tasks(tasks::Event::Restore { record })),
+            tasks::Stored::Ledger(_) | tasks::Stored::Writer(_) => {
+                domain.work.push(Work::Tasks(tasks::Event::Restore { record }));
+            }
         },
         Record::RunProof(proof) => {
             let valid = match domain.restoring_proofs.remove(&proof.task) {

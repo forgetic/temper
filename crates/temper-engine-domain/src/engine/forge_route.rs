@@ -787,12 +787,143 @@ fn tree_branch(
     Some(branch)
 }
 
+/// The hub sees an opaque, bounded name for a forge branch. Forge path syntax
+/// stays here; the task child only compares these literal bytes.
+pub(super) fn hub_name(connector: u16, name: &forge::Name, limits: &tasks::Limits) -> Option<tasks::Name> {
+    let forge::What::Branch(parts) = &name.what else { return None };
+    if limits.hold_segments < 3 {
+        return None;
+    }
+    let mut branch = List::with_capacity(limits.hold_bytes);
+    for (at, part) in parts.iter().enumerate() {
+        if at != 0 {
+            branch.push(b'/').ok()?;
+        }
+        for byte in part.iter().copied() {
+            branch.push(byte).ok()?;
+        }
+    }
+    if branch.len().checked_add(6)? > limits.hold_bytes {
+        return None;
+    }
+    Some(tasks::Name {
+        connector,
+        path: Box::new([
+            Box::from(name.forge.to_be_bytes()),
+            Box::from(name.repository.to_be_bytes()),
+            branch.into_boxed(),
+        ]),
+    })
+}
+
+/// Decode only this connector's branch names when projecting a hub hold.
+pub(super) fn forge_name(connector: u16, resource: &tasks::Name, limit: u32) -> Option<forge::Name> {
+    if resource.connector != connector {
+        return None;
+    }
+    let [forge, repository, branch] = resource.path.as_ref() else { return None };
+    let [one, two] = forge.as_ref() else { return None };
+    let [three, four, five, six] = repository.as_ref() else { return None };
+    Some(forge::Name {
+        forge: u16::from_be_bytes([*one, *two]),
+        repository: u32::from_be_bytes([*three, *four, *five, *six]),
+        what: branch_what(branch, limit)?,
+    })
+}
+
+fn write_holding(connector: u16, name: &forge::Name, limits: &tasks::Limits) -> Option<tasks::Holding> {
+    Some(tasks::Holding::Write { resource: hub_name(connector, name, limits)?, kind: 1 })
+}
+
+/// Name the forge branches a new task will own before the hub admits its batch.
+#[expect(clippy::too_many_arguments, reason = "task identity and specification arrive from separate admitted carriers")]
+pub(super) fn task_holdings(
+    domain: &Domain,
+    env: &Env<Limits>,
+    project: u32,
+    root: u64,
+    number: u64,
+    executor: tasks::Executor,
+    spec: &tasks::Spec,
+    parent: Option<u64>,
+) -> Option<Box<[tasks::Holding]>> {
+    let child_of_change = match parent {
+        Some(task) => domain.forge.change(task).is_some(),
+        None => false,
+    };
+    let eligible = match executor {
+        tasks::Executor::Person(_) => false,
+        tasks::Executor::Procedure { connector, code } => {
+            connector == domain.config.forge_connector && (code == 1 || code == 2)
+        }
+        tasks::Executor::Agent { .. } => !child_of_change,
+    };
+    if !eligible {
+        return Some(Box::new([]));
+    }
+    let mut selected = List::with_capacity(env.limits.forge.resources_per_task);
+    if let tasks::Executor::Procedure { connector, code: 1 | 2 } = executor
+        && connector == domain.config.forge_connector
+    {
+        let mut repository = None;
+        let mut chosen = None;
+        for parameter in &spec.parameters {
+            match parameter {
+                tasks::Parameter::Resource { name: 1, connector, resource }
+                    if *connector == domain.config.forge_connector =>
+                {
+                    repository = domain.forge.repository_tag(project, u32::try_from(*resource).ok()?);
+                }
+                tasks::Parameter::Bytes { name: 3, value } => chosen = Some(value.clone()),
+                tasks::Parameter::Number { .. }
+                | tasks::Parameter::Bytes { .. }
+                | tasks::Parameter::Resource { .. } => {}
+            }
+        }
+        let repository = repository?;
+        let branch = match chosen {
+            Some(branch) => branch,
+            None => tree_branch(repository, root, b'c', number, None, env.limits.forge.name_bytes)?,
+        };
+        let name = forge::Name {
+            forge: repository.provider.forge,
+            repository: repository.provider.repository,
+            what: branch_what(&branch, env.limits.forge.name_bytes)?,
+        };
+        return Some(Box::new([write_holding(domain.config.forge_connector, &name, &env.limits.tasks)?]));
+    }
+    if let Some(home) = domain.forge.home(project) {
+        include_repository(&mut selected, home)?;
+    }
+    for parameter in &spec.parameters {
+        if let tasks::Parameter::Resource { connector, resource, .. } = parameter
+            && *connector == domain.config.forge_connector
+        {
+            let repository = domain.forge.repository_tag(project, u32::try_from(*resource).ok()?)?;
+            include_repository(&mut selected, repository)?;
+        }
+    }
+    let mut holdings = List::with_capacity(env.limits.tasks.holdings);
+    for repository in &selected {
+        if repository.role == forge::Role::Context || !repository.kinds.push {
+            continue;
+        }
+        let branch = tree_branch(repository, root, b'r', number, None, env.limits.forge.name_bytes)?;
+        let name = forge::Name {
+            forge: repository.provider.forge,
+            repository: repository.provider.repository,
+            what: branch_what(&branch, env.limits.forge.name_bytes)?,
+        };
+        holdings.push(write_holding(domain.config.forge_connector, &name, &env.limits.tasks)?).ok()?;
+    }
+    Some(holdings.into_boxed())
+}
+
 pub(super) struct RunWorkspace {
     pub workspace: ForgeWorkspace,
     pub writes: Box<[authority::Write]>,
     pub names: Box<[forge::Name]>,
     pub own_holds: Box<[forge::Name]>,
-    pub holders: Box<[u64]>,
 }
 
 /// Translate committed tracked-task facts into one bounded issue projection.
@@ -1019,7 +1150,7 @@ pub(super) fn run_workspace(
     domain: &Domain,
     env: &Env<Limits>,
     context: &tasks::RunContext,
-    attempt: u64,
+    _attempt: u64,
 ) -> Option<RunWorkspace> {
     let root = domain.tasks.root(context.task)?;
     let parent = match context.requester {
@@ -1077,7 +1208,6 @@ pub(super) fn run_workspace(
     let mut writes = List::with_capacity(env.limits.authority.writes);
     let mut names = List::with_capacity(env.limits.forge.resources_per_task);
     let mut own_holds = List::with_capacity(env.limits.forge.resources_per_task);
-    let mut holders = List::with_capacity(env.limits.forge.resources_per_task);
     let mut key = context.task;
     for repository in &selected {
         let saved = context.saved.contains(&tasks::SavedResource {
@@ -1109,7 +1239,7 @@ pub(super) fn run_workspace(
                 forge_change::Delegate::Gate { .. } => (ForgeStart::Branch(row.branch.clone()), None, None),
             }
         } else {
-            let branch = tree_branch(repository, root, b'r', context.task, Some(attempt), env.limits.forge.name_bytes)?;
+            let branch = tree_branch(repository, root, b'r', context.task, None, env.limits.forge.name_bytes)?;
             let start = if saved {
                 ForgeStart::Saved(tree_branch(repository, root, b's', context.task, None, env.limits.forge.name_bytes)?)
             } else {
@@ -1134,13 +1264,19 @@ pub(super) fn run_workspace(
             };
             let held = match holder {
                 Some(owner) => {
-                    if domain.forge.hold(&name)?.task != owner {
+                    if domain.tasks.holder(&hub_name(domain.config.forge_connector, &name, &env.limits.tasks)?)
+                        != Some(owner)
+                    {
                         return None;
                     }
-                    holders.push(owner).ok()?;
                     authority::Writer::Ancestor
                 }
                 None => {
+                    if domain.tasks.holder(&hub_name(domain.config.forge_connector, &name, &env.limits.tasks)?)
+                        != Some(context.task)
+                    {
+                        return None;
+                    }
                     if let Some(existing) = domain.forge.hold(&name) {
                         if existing.task != context.task {
                             return None;
@@ -1187,8 +1323,34 @@ pub(super) fn run_workspace(
         writes: writes.into_boxed(),
         names: names.into_boxed(),
         own_holds: own_holds.into_boxed(),
-        holders: holders.into_boxed(),
     })
+}
+
+/// Reconstruct the connector's provisional writer projection from the
+/// assignment only after the hub has durably admitted its writer slots.
+#[expect(clippy::type_complexity, reason = "the connector claim carries paired bounded names and ancestor holders")]
+pub(super) fn claimed_writes(
+    domain: &Domain,
+    env: &Env<Limits>,
+    task: u64,
+) -> Option<(Box<[forge::Name]>, Box<[u64]>)> {
+    let assignment = domain.assignments.get(&task)?;
+    let mut writes = List::with_capacity(env.limits.forge.resources_per_task);
+    let mut holders = List::with_capacity(env.limits.forge.resources_per_task);
+    for repository in &assignment.workspace.repositories {
+        let Some(push) = &repository.push else { continue };
+        let name = forge::Name {
+            forge: repository.provider.forge,
+            repository: repository.provider.repository,
+            what: branch_what(push, env.limits.forge.name_bytes)?,
+        };
+        let holder = domain.tasks.holder(&hub_name(domain.config.forge_connector, &name, &env.limits.tasks)?)?;
+        if holder != task {
+            holders.push(holder).ok()?;
+        }
+        writes.push(name).ok()?;
+    }
+    Some((writes.into_boxed(), holders.into_boxed()))
 }
 
 #[expect(clippy::manual_map, reason = "the strict subset uses an explicit option match")]
@@ -1791,6 +1953,24 @@ fn start_queue_repair(domain: &mut Domain, env: &Env<Limits>, task: u64) -> bool
             budget: domain.config.period_budget,
         }));
     }
+    let spec = tasks::Spec {
+        words: Box::from(&b"Repair landing branch CI"[..]),
+        parameters: Box::new([
+            tasks::Parameter::Resource {
+                name: 1,
+                connector: domain.config.forge_connector,
+                resource: u64::from(provider.repository),
+            },
+            tasks::Parameter::Bytes { name: 2, value: base },
+            tasks::Parameter::Number { name: 5, value: u64::try_from(i32::MAX).expect("positive priority") },
+            tasks::Parameter::Number { name: 9, value: 1 },
+        ]),
+        inputs: Box::new([]),
+    };
+    let executor = tasks::Executor::Procedure { connector: domain.config.forge_connector, code: 2 };
+    let Some(holdings) = task_holdings(domain, env, project, repair, repair, executor, &spec, None) else {
+        return false;
+    };
     domain.work.push(Work::Forge(forge::Event::QueueRepairStarted { owner: task, repair }));
     domain.work.push(Work::Tasks(tasks::Event::Make {
         reply_to: super::internal(u64::MAX - 3),
@@ -1798,21 +1978,8 @@ fn start_queue_repair(domain: &mut Domain, env: &Env<Limits>, task: u64) -> bool
         batch: Box::new([tasks::New {
             number: repair,
             project,
-            executor: tasks::Executor::Procedure { connector: domain.config.forge_connector, code: 2 },
-            spec: tasks::Spec {
-                words: Box::from(&b"Repair landing branch CI"[..]),
-                parameters: Box::new([
-                    tasks::Parameter::Resource {
-                        name: 1,
-                        connector: domain.config.forge_connector,
-                        resource: u64::from(provider.repository),
-                    },
-                    tasks::Parameter::Bytes { name: 2, value: base },
-                    tasks::Parameter::Number { name: 5, value: u64::try_from(i32::MAX).expect("positive priority") },
-                    tasks::Parameter::Number { name: 9, value: 1 },
-                ]),
-                inputs: Box::new([]),
-            },
+            executor,
+            spec,
             contract: tasks::Contract::Change {
                 connector: domain.config.forge_connector,
                 kind: 1,
@@ -1822,7 +1989,7 @@ fn start_queue_repair(domain: &mut Domain, env: &Env<Limits>, task: u64) -> bool
             authority: super::task_authority(&authority),
             funder: tasks::Funder::Period { project, period },
             dependencies: Box::new([]),
-            holdings: Box::new([]),
+            holdings,
             wake: tasks::WakePolicy::DEFAULT,
             recurring: None,
             tracked: None,
@@ -1966,6 +2133,12 @@ pub(super) fn outputs(
             }
             forge::Request::BriefTaken { .. } => unreachable!("the root takes completed sections directly"),
             forge::Request::Save { record } => {
+                if let forge::Stored::Hold(row) = &record
+                    && row.writer.is_none()
+                    && let Some(resource) = hub_name(domain.config.forge_connector, &row.name, &env.limits.tasks)
+                {
+                    domain.work.push(Work::Tasks(tasks::Event::ReadAfresh { resource }));
+                }
                 let key = forge::stored_key(&record);
                 let first = !domain.forge_keys.contains_key(&key);
                 let number = match domain.forge_keys.get(&key) {
