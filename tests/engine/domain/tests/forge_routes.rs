@@ -260,6 +260,40 @@ impl World {
         self.root.reclaim();
     }
 
+    /// Lose the process while retaining only the store, external forge and
+    /// worker's hosted attempt. Outstanding API terminals belong to the old
+    /// process; startup has to rediscover the outbox by its durable key.
+    fn restart(&mut self, with_read: bool, with_change: bool) {
+        assert!(self.store.pending.is_empty(), "the chosen cut resolves store uncertainty first");
+        assert!(self.pending.is_empty(), "old API terminals are drained at this cut");
+        let mut fresh = Self::configured(with_read, with_change);
+        std::mem::swap(&mut self.root, &mut fresh.root);
+        std::mem::swap(&mut self.out, &mut fresh.out);
+        self.events.clear();
+        self.answers.clear();
+        self.adopted.clear();
+        self.events.push_back(engine::Event::Start);
+        if !self.assigned.is_empty() {
+            self.events.push_back(engine::Event::Hello {
+                channel: Token::new(7),
+                hello: fleet::Hello {
+                    graces: Some(Duration::from_secs(1)),
+                    slots: if with_change { 2 } else { 1 },
+                    workstreams: Box::new([]),
+                    hosting: self
+                        .assigned
+                        .iter()
+                        .map(|assignment| fleet::Hosted {
+                            run: Token::new(assignment.task),
+                            attempt: Token::new(assignment.attempt),
+                            phase: fleet::Phase::Active,
+                        })
+                        .collect(),
+                },
+            });
+        }
+    }
+
     fn external(&mut self, user: u64, op: raw::Op) -> raw::Answer {
         let mut config = self.fake_env.limits;
         config.latency_min = Duration::ZERO;
@@ -663,6 +697,67 @@ fn a_small_fix_made_in_a_chat_lands() {
                 && matches!(row.phase, tasks::Phase::Ended(tasks::Ending::Done(tasks::TaskResult::Change { .. })))
         )),
         "change task did not report its landing"
+    );
+}
+
+#[test]
+fn a_pushed_change_is_recovered_before_its_worker_reports_the_head() {
+    let (mut world, chat, producer, branch) = change_world(false, 1000, None);
+    assert!(matches!(
+        world.external(2, raw::Op::Git(raw::Git::Create { branch: branch.clone(), commit: 1 })),
+        raw::Answer::Branch(raw::Created::Created)
+    ));
+    let pushed = fake::advance(&mut world.fake, &world.fake_env, b"org/repo", &branch, b"file", b"fixed", 1)
+        .expect("worker push reached the forge");
+    assert!(world.store.pending.is_empty(), "push precedes the worker's answer decision");
+    world.restart(true, true);
+    for _ in 0..30 {
+        world.tick();
+    }
+    world.send(engine::Event::Answer {
+        channel: Token::new(7),
+        task: producer.task,
+        attempt: producer.attempt,
+        cumulative: 5,
+        end: tasks::End::Finished {
+            result: tasks::TaskResult::Change {
+                connector: 1,
+                kind: 2,
+                resource: u64::from(forge_world::REPO.repository),
+                words: Box::from(&b"pushed"[..]),
+            },
+            cancel_delegates: false,
+        },
+        saved: None,
+    });
+    for _ in 0..200 {
+        world.tick();
+        if world.store.rows.values().any(|stored| {
+            matches!(stored,
+                Record::Forge { row, .. } if matches!(row.as_ref(), forge_top::Stored::Change(change)
+                    if matches!(change.change.state, temper_engine_domain_forge_change::State::Landed { .. }))
+            )
+        }) {
+            break;
+        }
+    }
+    assert!(
+        world.store.rows.values().any(|stored| matches!(stored,
+            Record::Forge { row, .. } if matches!(row.as_ref(), forge_top::Stored::Change(change)
+                if matches!(change.change.state, temper_engine_domain_forge_change::State::Landed { .. }))
+        )),
+        "recovered push did not land"
+    );
+    let raw::Answer::Commit(found) = world.external(1, raw::Op::Read(raw::Read::Branch { branch: branch.clone() }))
+    else {
+        panic!("pushed branch remains readable")
+    };
+    assert_eq!(found, pushed, "the recovered procedure used the pushed head");
+    assert!(
+        world.store.rows.values().any(|stored| matches!(stored,
+            Record::Tasks(tasks::Stored::Live(task)) if task.number == chat.task
+        )),
+        "the chat still owns the change result"
     );
 }
 
@@ -1768,8 +1863,7 @@ fn a_pull_subscription_receives_the_connectors_state_news() {
     await_new_forge_news(&mut world, task, before);
 }
 
-#[test]
-fn a_ci_subscription_receives_the_connectors_verdict_news() {
+fn ci_subscription_story(restart: bool) {
     let mut world = World::new();
     world.adopt();
     assert!(matches!(
@@ -1797,6 +1891,12 @@ fn a_ci_subscription_receives_the_connectors_verdict_news() {
     for _ in 0..10 {
         world.tick();
     }
+    if restart {
+        world.restart(false, false);
+        for _ in 0..20 {
+            world.tick();
+        }
+    }
     let before = news_count(&world, task);
     assert!(matches!(
         world.external(
@@ -1817,6 +1917,16 @@ fn a_ci_subscription_receives_the_connectors_verdict_news() {
         },
     });
     await_new_forge_news(&mut world, task, before);
+}
+
+#[test]
+fn a_ci_subscription_receives_the_connectors_verdict_news() {
+    ci_subscription_story(false);
+}
+
+#[test]
+fn a_durable_ci_subscription_receives_verdict_news_after_a_cold_restart() {
+    ci_subscription_story(true);
 }
 
 #[test]
@@ -1976,4 +2086,145 @@ fn a_named_forge_effect_is_committed_before_its_write_and_made_once() {
     assert!(
         matches!(world.answers.last(), Some(temper_engine_domain::CallAnswer::ForgeEffect { entry: observed, outcome: Some(client::Outcome::Made { .. }) }) if *observed == entry)
     );
+}
+
+fn issue_effect_call(assignment: &engine::Assignment) -> engine::Event {
+    engine::Event::Call {
+        channel: Token::new(7),
+        task: assignment.task,
+        attempt: assignment.attempt,
+        call: Token::new(93),
+        body: engine::Call {
+            completion: 1,
+            position: 1,
+            tool: engine::Tool::EffectForge {
+                repository: forge_world::REPO,
+                resource: forge_top::What::Repository,
+                write: Box::new(client::api::Write::CreateIssue {
+                    key: Box::new([]),
+                    title: Box::from(&b"Small finding"[..]),
+                    body: Box::from(&b"Fix this"[..]),
+                }),
+            },
+        },
+    }
+}
+
+fn pending_issue_effect() -> (World, engine::Assignment) {
+    let mut world = World::configured(true, false);
+    world.adopt();
+    world.send(engine::Event::Hello {
+        channel: Token::new(7),
+        hello: fleet::Hello {
+            graces: Some(Duration::from_secs(1)),
+            slots: 1,
+            workstreams: Box::new([]),
+            hosting: Box::new([]),
+        },
+    });
+    world.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(92)),
+        sign_in: world.signed_in.expect("owner session"),
+        key: [92; 16],
+        ask: people::Ask::StartChat { project: 1, words: Box::from(&b"create an issue"[..]) },
+    });
+    world.until(Until::Assigned);
+    let assignment = world.assigned[0].clone();
+    world.send(issue_effect_call(&assignment));
+    assert!(!world.store.pending.is_empty(), "effect decision awaits durability");
+    (world, assignment)
+}
+
+fn issue_count(world: &mut World) -> usize {
+    let raw::Answer::Items { items, more: false, .. } = world.external(
+        1,
+        raw::Op::Read(raw::Read::Items {
+            state: None,
+            kind: Some(raw::Kind::Issue),
+            labels: Box::new([]),
+            author: None,
+            since: Time::ZERO,
+            page: 1,
+            limit: 10,
+        }),
+    ) else {
+        panic!("one bounded issue page")
+    };
+    items.len()
+}
+
+#[test]
+fn effect_survives_each_commit_and_outbox_cut_without_a_second_issue() {
+    for cut in 0..4 {
+        let (mut world, assignment) = pending_issue_effect();
+        if cut == 0 {
+            // The decision was sent, but no record became durable.
+            world.store.pending.clear();
+        } else {
+            let number = world.store.apply();
+            if cut >= 2 {
+                world.send(engine::Event::Committed { number });
+                for _ in 0..60 {
+                    if world.events.iter().any(|event| {
+                        matches!(
+                            event,
+                            engine::Event::ForgeAnswered { result: Ok(client::api::Answer::Created(_)), .. }
+                        )
+                    }) {
+                        break;
+                    }
+                    world.tick();
+                }
+                assert_eq!(
+                    issue_count(&mut world),
+                    1,
+                    "the external write completed before the process cut: cut={cut} pending={:?} events={:?} answers={:?}",
+                    world.pending,
+                    world.events,
+                    world.answers
+                );
+                if cut == 3 {
+                    let index = world
+                        .events
+                        .iter()
+                        .position(|event| {
+                            matches!(
+                                event,
+                                engine::Event::ForgeAnswered { result: Ok(client::api::Answer::Created(_)), .. }
+                            )
+                        })
+                        .expect("external outcome queued for the old process");
+                    let event = world.events.remove(index).expect("queued outcome");
+                    world.send(event);
+                    assert!(!world.store.pending.is_empty(), "outcome waits for its commit");
+                    world.store.pending.clear();
+                }
+            }
+        }
+        world.restart(true, false);
+        for _ in 0..40 {
+            world.tick();
+        }
+        world.send(issue_effect_call(&assignment));
+        for _ in 0..40 {
+            world.tick();
+        }
+        assert_eq!(issue_count(&mut world), 1, "cut {cut} created one keyed issue");
+        let key = temper_engine_domain::CallKey {
+            task: assignment.task,
+            attempt: assignment.attempt,
+            completion: 1,
+            position: 1,
+        };
+        assert!(
+            matches!(
+                world.store.rows.get(&Key::Call(key)),
+                Some(Record::Call(row))
+                    if matches!(row.answer, temper_engine_domain::CallAnswer::ForgeEffect {
+                        outcome: Some(client::Outcome::Made { .. }), ..
+                    })
+            ),
+            "cut {cut} committed the settled named answer"
+        );
+    }
 }

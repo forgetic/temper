@@ -14,6 +14,7 @@ protocol drafts and lower-layer integration are parked for later work.
 
 | Increment | State | Commit | Evidence |
 |---|---|---|---|
+| Completion 08.1: every restart cut | merged | this commit | Root world covers lost commit, durable commit before release, an outbox write before its outcome, outcome before commit, existing turn/answer ACK cuts, and push before worker report. Cold restore admits a procedure attempt without requiring an agent run proof; durable CI subscriptions survive restart. Gate: fmt, clippy, 2,589 focused / 11.844 s, 44 fuzzy / 26.276 s. |
 | Completion 08.0: Skein repin | merged | this commit | All nine locked Skein packages use main `4e78d26fc247bf5e7c18300ff8ffc4bd3b06819c`, aligned with Smith. Gate: fmt, clippy, 2,586 focused / 12.112 s, 44 fuzzy / 26.832 s. |
 | Completion 00: temporary test budgets | merged | this commit | Focused cap 15→30 s and slow period 3→6 s; fuzzy cap 60→120 s and slow period 20→40 s until legacy deletion. Baseline: 2,365 focused / 12.644 s; 42 fuzzy / 30.381 s. Four-check gate passed: fmt, clippy, 2,365 focused / 10.875 s, 42 fuzzy / 32.725 s. |
 | Completion 06: forge client | merged | this commit | Rebased parked `04b2` client and world; top-owned entries and client progress, bounded Forgejo v16.0.5 job-log read. Gate passed: fmt, clippy, 2,445 focused / 7.806 s; 43 fuzzy / 31.597 s. |

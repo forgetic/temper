@@ -6719,11 +6719,15 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
             }
             tasks::Stored::History(_) => unreachable!("history rows excluded from startup"),
             tasks::Stored::Live(ref task) => {
+                let agent_attempt = match task.executor {
+                    tasks::Executor::Agent { .. } => task.attempt != 0,
+                    tasks::Executor::Procedure { .. } | tasks::Executor::Person(_) => false,
+                };
                 if !supported_task(task, domain.config.charter)
                     || !supported_proposal(task, &domain.journal.deployment())
                     || !escalation::supported(domain, task)
                     || task.number > domain.journal.deployment().tasks
-                    || task.attempt > domain.journal.deployment().runs
+                    || (agent_attempt && task.attempt > domain.journal.deployment().runs)
                     || !supported_requester(
                         task.requester,
                         domain.journal.deployment().people,
@@ -6733,7 +6737,7 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
                     domain.startup = Startup::Failed;
                     return;
                 }
-                if task.attempt != 0
+                if agent_attempt
                     && domain
                         .restoring_proofs
                         .insert(
