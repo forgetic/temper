@@ -101,6 +101,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "jig-core-notes"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+]
+
+[[package]]
 name = "jig-core-views"
 version = "0.0.0"
 dependencies = [
@@ -112,6 +119,15 @@ name = "jig-fleet-world"
 version = "0.0.0"
 dependencies = [
  "jig-core-fleet",
+ "skein-lib",
+ "skein-world",
+]
+
+[[package]]
+name = "jig-notes-world"
+version = "0.0.0"
+dependencies = [
+ "jig-core-notes",
  "skein-lib",
  "skein-world",
 ]
@@ -408,13 +424,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "temper-engine-domain-notes"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
-]
-
-[[package]]
 name = "temper-engine-domain-people"
 version = "0.0.0"
 dependencies = [
@@ -476,15 +485,6 @@ dependencies = [
  "temper-engine-domain-forge-issues",
  "temper-fake-forge-domain",
  "temper-world",
-]
-
-[[package]]
-name = "temper-engine-notes-world"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "skein-world",
- "temper-engine-domain-notes",
 ]
 
 [[package]]

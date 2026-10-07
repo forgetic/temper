@@ -1,5 +1,5 @@
 [package]
-name = "temper-engine-notes-world"
+name = "jig-notes-world"
 description = "The notes child domain's store world"
 version.workspace = true
 edition.workspace = true
@@ -8,7 +8,7 @@ publish.workspace = true
 
 [dependencies]
 skein-lib.workspace = true
-temper-engine-domain-notes.workspace = true
+jig-core-notes.workspace = true
 skein-world.workspace = true
 
 # Ordinary Rust (programming-model.md, 10.2), so not the step crates' lints.

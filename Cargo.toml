@@ -17,7 +17,7 @@ members = [
     "crates/temper-engine-domain-forge-change",
     "crates/temper-engine-domain-forge-issues",
     "crates/temper-engine-domain-forge",
-    "crates/temper-engine-domain-notes",
+    "jig/crates/jig-core-notes",
     "crates/temper-engine-domain-people",
     "crates/temper-engine-domain-tasks",
     "jig/crates/jig-core-views",
@@ -36,7 +36,7 @@ members = [
     "jig/tests/fleet",
     "tests/engine/forge/client",
     "tests/engine/forge",
-    "tests/engine/notes",
+    "jig/tests/notes",
     "tests/engine/people",
     "tests/engine/tasks",
     "jig/tests/views",
@@ -77,7 +77,7 @@ jig-test-system = { path = "jig/testing/jig-test-system" }
 temper-engine-domain = { path = "crates/temper-engine-domain" }
 temper-engine-smith = { path = "crates/temper-engine-smith" }
 temper-engine-domain-authority = { path = "crates/temper-engine-domain-authority" }
-temper-engine-domain-notes = { path = "crates/temper-engine-domain-notes" }
+jig-core-notes = { path = "jig/crates/jig-core-notes" }
 temper-engine-domain-people = { path = "crates/temper-engine-domain-people" }
 temper-engine-domain-tasks = { path = "crates/temper-engine-domain-tasks" }
 temper-engine-domain-brief = { path = "crates/temper-engine-domain-brief" }
