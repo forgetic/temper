@@ -2462,7 +2462,11 @@ fn route_into(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision) {
                 decision,
                 ReplyTo::new(to),
                 key,
-                CallAnswer::DelegationRefused(tasks::Problem { task: Some(key.task), why: tasks::Refusal::Inputs }),
+                CallAnswer::DelegationRefused(tasks::Problem {
+                    task: Some(key.task),
+                    why: tasks::Refusal::Inputs,
+                    blocked_by: None,
+                }),
             ),
         }
     }
@@ -3631,7 +3635,11 @@ fn message_call(
             decision,
             to,
             key,
-            CallAnswer::MessageRefused(tasks::Problem { task: Some(key.task), why: tasks::Refusal::Unknown }),
+            CallAnswer::MessageRefused(tasks::Problem {
+                task: Some(key.task),
+                why: tasks::Refusal::Unknown,
+                blocked_by: None,
+            }),
         );
         return;
     };
@@ -3642,7 +3650,11 @@ fn message_call(
             decision,
             to,
             key,
-            CallAnswer::MessageRefused(tasks::Problem { task: Some(target), why: tasks::Refusal::Busy }),
+            CallAnswer::MessageRefused(tasks::Problem {
+                task: Some(target),
+                why: tasks::Refusal::Busy,
+                blocked_by: None,
+            }),
         );
         return;
     };
@@ -3691,7 +3703,11 @@ fn subscribe_call(
             decision,
             to,
             key,
-            CallAnswer::SubscriptionRefused(tasks::Problem { task: Some(key.task), why: tasks::Refusal::Busy }),
+            CallAnswer::SubscriptionRefused(tasks::Problem {
+                task: Some(key.task),
+                why: tasks::Refusal::Busy,
+                blocked_by: None,
+            }),
         );
         return;
     };
@@ -3750,7 +3766,11 @@ fn amend_call(
             decision,
             to,
             key,
-            CallAnswer::ControlRefused(tasks::Problem { task: Some(key.task), why: tasks::Refusal::Unknown }),
+            CallAnswer::ControlRefused(tasks::Problem {
+                task: Some(key.task),
+                why: tasks::Refusal::Unknown,
+                blocked_by: None,
+            }),
         );
     };
     let Some(current) = domain.tasks.delegation(target) else {
@@ -3760,7 +3780,11 @@ fn amend_call(
             decision,
             to,
             key,
-            CallAnswer::ControlRefused(tasks::Problem { task: Some(target), why: tasks::Refusal::Unknown }),
+            CallAnswer::ControlRefused(tasks::Problem {
+                task: Some(target),
+                why: tasks::Refusal::Unknown,
+                blocked_by: None,
+            }),
         );
     };
     if current.requester != tasks::Party::Task(key.task) || current.project != holder.project {
@@ -3770,7 +3794,11 @@ fn amend_call(
             decision,
             to,
             key,
-            CallAnswer::ControlRefused(tasks::Problem { task: Some(target), why: tasks::Refusal::Reference }),
+            CallAnswer::ControlRefused(tasks::Problem {
+                task: Some(target),
+                why: tasks::Refusal::Reference,
+                blocked_by: None,
+            }),
         );
     }
     let mut stop_run = false;
@@ -3809,7 +3837,11 @@ fn amend_call(
             decision,
             to,
             key,
-            CallAnswer::ControlRefused(tasks::Problem { task: Some(target), why: tasks::Refusal::Busy }),
+            CallAnswer::ControlRefused(tasks::Problem {
+                task: Some(target),
+                why: tasks::Refusal::Busy,
+                blocked_by: None,
+            }),
         );
     };
     let token = to.into_token();
@@ -3865,7 +3897,11 @@ fn delegate_call(
             decision,
             to,
             key,
-            CallAnswer::DelegationRefused(tasks::Problem { task: Some(key.task), why: tasks::Refusal::State }),
+            CallAnswer::DelegationRefused(tasks::Problem {
+                task: Some(key.task),
+                why: tasks::Refusal::State,
+                blocked_by: None,
+            }),
         );
         return;
     }
@@ -3876,7 +3912,11 @@ fn delegate_call(
             decision,
             to,
             key,
-            CallAnswer::DelegationRefused(tasks::Problem { task: Some(key.task), why: tasks::Refusal::Unknown }),
+            CallAnswer::DelegationRefused(tasks::Problem {
+                task: Some(key.task),
+                why: tasks::Refusal::Unknown,
+                blocked_by: None,
+            }),
         );
         return;
     };
@@ -3887,7 +3927,7 @@ fn delegate_call(
             decision,
             to,
             key,
-            CallAnswer::DelegationRefused(tasks::Problem { task: None, why: tasks::Refusal::Batch }),
+            CallAnswer::DelegationRefused(tasks::Problem { task: None, why: tasks::Refusal::Batch, blocked_by: None }),
         );
         return;
     }
@@ -3900,7 +3940,11 @@ fn delegate_call(
                 decision,
                 to,
                 key,
-                CallAnswer::DelegationRefused(tasks::Problem { task: None, why: tasks::Refusal::Executor }),
+                CallAnswer::DelegationRefused(tasks::Problem {
+                    task: None,
+                    why: tasks::Refusal::Executor,
+                    blocked_by: None,
+                }),
             );
             return;
         };
@@ -3911,7 +3955,11 @@ fn delegate_call(
                 decision,
                 to,
                 key,
-                CallAnswer::DelegationRefused(tasks::Problem { task: None, why: tasks::Refusal::AuthorityShape }),
+                CallAnswer::DelegationRefused(tasks::Problem {
+                    task: None,
+                    why: tasks::Refusal::AuthorityShape,
+                    blocked_by: None,
+                }),
             );
             return;
         };
@@ -3962,7 +4010,11 @@ fn delegate_call(
                     decision,
                     to,
                     key,
-                    CallAnswer::DelegationRefused(tasks::Problem { task: None, why: tasks::Refusal::Inputs }),
+                    CallAnswer::DelegationRefused(tasks::Problem {
+                        task: None,
+                        why: tasks::Refusal::Inputs,
+                        blocked_by: None,
+                    }),
                 );
                 return;
             }
@@ -4010,7 +4062,11 @@ fn delegate_call(
                 decision,
                 to,
                 key,
-                CallAnswer::DelegationRefused(tasks::Problem { task: None, why: tasks::Refusal::Live }),
+                CallAnswer::DelegationRefused(tasks::Problem {
+                    task: None,
+                    why: tasks::Refusal::Live,
+                    blocked_by: None,
+                }),
             );
             return;
         };
@@ -4034,6 +4090,7 @@ fn delegate_call(
                             CallAnswer::DelegationRefused(tasks::Problem {
                                 task: numbers.get(index).copied(),
                                 why: tasks::Refusal::Dependencies,
+                                blocked_by: None,
                             }),
                         );
                         return;
@@ -4051,6 +4108,7 @@ fn delegate_call(
                     CallAnswer::DelegationRefused(tasks::Problem {
                         task: numbers.get(index).copied(),
                         why: tasks::Refusal::Dependencies,
+                        blocked_by: None,
                     }),
                 );
                 return;
@@ -4069,6 +4127,7 @@ fn delegate_call(
                 CallAnswer::DelegationRefused(tasks::Problem {
                     task: Some(number),
                     why: tasks::Refusal::AuthorityShape,
+                    blocked_by: None,
                 }),
             );
             return;
@@ -5683,7 +5742,7 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                             decision,
                             reply_to,
                             key,
-                            CallAnswer::DelegationRefused(tasks::Problem { task: None, why }),
+                            CallAnswer::DelegationRefused(tasks::Problem { task: None, why, blocked_by: None }),
                         ),
                         Tool::RejectedMessage(why) => decide_call(
                             domain,
@@ -5691,7 +5750,7 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                             decision,
                             reply_to,
                             key,
-                            CallAnswer::MessageRefused(tasks::Problem { task: None, why }),
+                            CallAnswer::MessageRefused(tasks::Problem { task: None, why, blocked_by: None }),
                         ),
                         Tool::RejectedControl(why) => decide_call(
                             domain,
@@ -5699,7 +5758,7 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                             decision,
                             reply_to,
                             key,
-                            CallAnswer::ControlRefused(tasks::Problem { task: None, why }),
+                            CallAnswer::ControlRefused(tasks::Problem { task: None, why, blocked_by: None }),
                         ),
                         Tool::RejectedProposal(why) => decide_call(
                             domain,
@@ -5707,7 +5766,7 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                             decision,
                             reply_to,
                             key,
-                            CallAnswer::ProposalRefused(tasks::Problem { task: None, why }),
+                            CallAnswer::ProposalRefused(tasks::Problem { task: None, why, blocked_by: None }),
                         ),
                         Tool::Delegate { batch } => {
                             delegate_call(domain, env, decision, reply_to, key, batch, false, Box::new([]));
@@ -6757,15 +6816,7 @@ fn tasks_saved_within(saved: Option<&[u32]>, most: u32) -> bool {
 }
 
 fn end_bytes(end: &tasks::End) -> u64 {
-    match end {
-        tasks::End::Finished { result, .. } => match result {
-            tasks::TaskResult::Report { words }
-            | tasks::TaskResult::Verdict { words, .. }
-            | tasks::TaskResult::Change { words, .. } => u64::try_from(words.len()).expect("usize fits u64"),
-            tasks::TaskResult::Failure { reason } => u64::try_from(reason.len()).expect("usize fits u64"),
-        },
-        tasks::End::Parked | tasks::End::Failed(_) | tasks::End::Refused => 0,
-    }
+    tasks::terminal_bytes(end).expect("bounded terminal bytes")
 }
 
 fn authority_numbers(numbers: tasks::Numbers) -> authority::Numbers {
@@ -7491,7 +7542,7 @@ fn task_section(domain: &Domain, task: u64, part: TaskBriefPart, parts: u32, byt
             None => TaskBriefRead::Failed,
         },
         TaskBriefPart::Attempts => match domain.contexts.get(&task) {
-            Some(context) => attempt_read(context.tries, bytes),
+            Some(context) => attempt_read(context.tries, context.invalid_result, bytes),
             None => TaskBriefRead::Failed,
         },
         TaskBriefPart::TranscriptTail => match domain.transcripts.get(&task) {
@@ -7501,7 +7552,7 @@ fn task_section(domain: &Domain, task: u64, part: TaskBriefPart, parts: u32, byt
     }
 }
 
-fn attempt_read(tries: tasks::Tries, bytes: u32) -> TaskBriefRead {
+fn attempt_read(tries: tasks::Tries, invalid: Option<tasks::InvalidResult>, bytes: u32) -> TaskBriefRead {
     let classes: [(&[u8], u32); 6] = [
         (b"transient: ", tries.transient),
         (b"permanent: ", tries.permanent),
@@ -7522,6 +7573,15 @@ fn attempt_read(tries: tasks::Tries, bytes: u32) -> TaskBriefRead {
                 .expect("newline");
         }
     }
+    let reason = match invalid {
+        Some(tasks::InvalidResult::Form) => b"last invalid result: contract form\n".as_slice(),
+        Some(tasks::InvalidResult::Verdict) => b"last invalid result: verdict code\n",
+        Some(tasks::InvalidResult::Words) => b"last invalid result: word limit\n",
+        Some(tasks::InvalidResult::Change) => b"last invalid result: change identity\n",
+        Some(tasks::InvalidResult::Followups) => b"last invalid result: follow-up limit\n",
+        None => b"",
+    };
+    total = total.checked_add(reason.len()).expect("bounded invalid reason");
     let mut writer = Writer::new(total.min(usize::try_from(bytes).expect("u32 fits usize")));
     for (name, count) in classes {
         if count > 0 {
@@ -7531,6 +7591,8 @@ fn attempt_read(tries: tasks::Tries, bytes: u32) -> TaskBriefRead {
             }
         }
     }
+    let kept = prefix(reason, writer.room());
+    writer.put(kept).expect("invalid reason prefix fits");
     let text = writer.finish();
     TaskBriefRead::Got(Box::new([TaskBriefFragment {
         left: u64::try_from(total.checked_sub(text.len()).expect("written prefix")).expect("usize fits u64"),

@@ -686,7 +686,11 @@ pub(super) fn subscribe_call(
             decision,
             to,
             key,
-            CallAnswer::SubscriptionRefused(tasks::Problem { task: Some(key.task), why: tasks::Refusal::Busy }),
+            CallAnswer::SubscriptionRefused(tasks::Problem {
+                task: Some(key.task),
+                why: tasks::Refusal::Busy,
+                blocked_by: None,
+            }),
         );
         return;
     };
@@ -700,7 +704,11 @@ pub(super) fn subscribe_call(
             decision,
             to,
             key,
-            CallAnswer::SubscriptionRefused(tasks::Problem { task: Some(key.task), why: tasks::Refusal::Subscription }),
+            CallAnswer::SubscriptionRefused(tasks::Problem {
+                task: Some(key.task),
+                why: tasks::Refusal::Subscription,
+                blocked_by: None,
+            }),
         );
         return;
     }
@@ -1723,8 +1731,8 @@ fn change_delegate(
                 Box::from(&b"Review this change at the named head"[..]),
                 tasks::Contract::Verdict {
                     choices: Box::new([
-                        tasks::Verdict { code: 1, words: env.limits.tasks.result_bytes },
-                        tasks::Verdict { code: 2, words: env.limits.tasks.result_bytes },
+                        tasks::Verdict { code: 1, words: env.limits.tasks.result_bytes, followups: 0 },
+                        tasks::Verdict { code: 2, words: env.limits.tasks.result_bytes, followups: 0 },
                     ]),
                 },
             )

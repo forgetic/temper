@@ -165,7 +165,7 @@ fn rendered(answer: &CallAnswer) -> Result<HostAnswer, Problem> {
         | CallAnswer::SubscriptionRefused(problem)
         | CallAnswer::DelegationRefused(problem) => {
             text.add(b"Refused: ")?;
-            task_problem(&mut text, *problem)?;
+            task_problem(&mut text, problem)?;
             true
         }
         CallAnswer::Proposed { proposal } => {
@@ -299,7 +299,7 @@ fn finding_text(text: &mut Text, finding: jig_core_authority::Finding) -> Result
     }
 }
 
-fn task_problem(text: &mut Text, problem: jig_core_tasks::Problem) -> Result<(), Problem> {
+fn task_problem(text: &mut Text, problem: &jig_core_tasks::Problem) -> Result<(), Problem> {
     use jig_core_tasks::Refusal;
     if let Some(task) = problem.task {
         text.add(b"task ")?;
@@ -334,7 +334,14 @@ fn task_problem(text: &mut Text, problem: jig_core_tasks::Problem) -> Result<(),
         Refusal::Read => text.add(b"read fence"),
         Refusal::Turn => text.add(b"turn order"),
         Refusal::Funding => text.add(b"funding"),
+    }?;
+    if let Some(blocked_by) = &problem.blocked_by {
+        for task in blocked_by {
+            text.add(b" ")?;
+            text.number(*task)?;
+        }
     }
+    Ok(())
 }
 
 fn forge_error(text: &mut Text, error: api::Error) -> Result<(), Problem> {

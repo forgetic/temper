@@ -181,7 +181,7 @@ fn refused(
         decision,
         to,
         key,
-        CallAnswer::ProposalRefused(tasks::Problem { task: Some(key.task), why }),
+        CallAnswer::ProposalRefused(tasks::Problem { task: Some(key.task), why, blocked_by: None }),
     );
 }
 
@@ -537,6 +537,7 @@ fn accept(
     key: CallKey,
     proposal: tasks::Proposal,
 ) {
+    let result_followups = domain.tasks.result_proposal(proposal.proposer, proposal.number);
     let Some(action) = action_for_check(&proposal.action) else {
         return refused(domain, env, decision, to, key, tasks::Refusal::Executor);
     };
@@ -560,7 +561,16 @@ fn accept(
             for member in &mut batch {
                 member.funder = tasks::Funder::Task(key.task);
             }
-            tasks::Event::Make { reply_to: ReplyTo::new(token), creator, batch }
+            if result_followups {
+                tasks::Event::MakeResultFollowups {
+                    reply_to: ReplyTo::new(token),
+                    proposer: proposal.proposer,
+                    proposal: proposal.number,
+                    batch,
+                }
+            } else {
+                tasks::Event::Make { reply_to: ReplyTo::new(token), creator, batch }
+            }
         }
         tasks::ProposalAction::Amend { task, amendment } => {
             let Some(message) = crate::fresh(&mut domain.counters, Family::Message) else {
@@ -719,6 +729,7 @@ pub(super) fn person_decide(
 }
 
 fn person_accept(domain: &mut Domain, _env: &Env<Limits>, request: Token, person: u64, proposal: tasks::Proposal) {
+    let result_followups = domain.tasks.result_proposal(proposal.proposer, proposal.number);
     let event = match proposal.action {
         tasks::ProposalAction::Batch(mut batch) => {
             let creator =
@@ -727,7 +738,16 @@ fn person_accept(domain: &mut Domain, _env: &Env<Limits>, request: Token, person
             for member in &mut batch {
                 member.funder = tasks::Funder::Pool { project: proposal.project, person, period: domain.config.period };
             }
-            tasks::Event::Make { reply_to: ReplyTo::new(request), creator, batch }
+            if result_followups {
+                tasks::Event::MakeResultFollowups {
+                    reply_to: ReplyTo::new(request),
+                    proposer: proposal.proposer,
+                    proposal: proposal.number,
+                    batch,
+                }
+            } else {
+                tasks::Event::Make { reply_to: ReplyTo::new(request), creator, batch }
+            }
         }
         tasks::ProposalAction::Amend { task, amendment } => {
             let Some(current) = domain.tasks.delegation(task) else {

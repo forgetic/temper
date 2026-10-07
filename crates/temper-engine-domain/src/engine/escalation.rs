@@ -280,7 +280,7 @@ fn refuse_task(
         barrier,
         to,
         key,
-        CallAnswer::EscalationRefused(tasks::Problem { task: Some(task), why }),
+        CallAnswer::EscalationRefused(tasks::Problem { task: Some(task), why, blocked_by: None }),
     );
 }
 

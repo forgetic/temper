@@ -750,15 +750,7 @@ pub(crate) fn owned_bytes(write: &Write) -> Option<u64> {
 }
 
 fn terminal_bytes(row: &TerminalRecord) -> Option<u64> {
-    match &row.end {
-        jig_core_tasks::End::Finished { result, .. } => match result {
-            jig_core_tasks::TaskResult::Report { words }
-            | jig_core_tasks::TaskResult::Verdict { words, .. }
-            | jig_core_tasks::TaskResult::Change { words, .. } => u64::try_from(words.len()).ok(),
-            jig_core_tasks::TaskResult::Failure { reason } => u64::try_from(reason.len()).ok(),
-        },
-        jig_core_tasks::End::Parked | jig_core_tasks::End::Failed(_) | jig_core_tasks::End::Refused => Some(0),
-    }
+    jig_core_tasks::terminal_bytes(&row.end)
 }
 
 fn decision_bytes(decision: &jig_core_people::EscalationDecision) -> Option<u64> {

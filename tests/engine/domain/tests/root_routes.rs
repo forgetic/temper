@@ -1086,7 +1086,10 @@ fn a_person_task_addressed_to_a_role_taken_by_one_handed_back_answered_by_anothe
     let mut delegate = report_delegate(b"Choose between the reports", Box::new([]));
     delegate.executor = tasks::Executor::Person(tasks::PersonAddress::Role(0));
     delegate.contract = tasks::Contract::Verdict {
-        choices: Box::new([tasks::Verdict { code: 1, words: 16 }, tasks::Verdict { code: 2, words: 16 }]),
+        choices: Box::new([
+            tasks::Verdict { code: 1, words: 16, followups: 0 },
+            tasks::Verdict { code: 2, words: 16, followups: 0 },
+        ]),
     };
     let task = call_batch(&mut driver, &root, 971, Box::new([delegate]))[0];
     for (at, session) in [first, second].into_iter().enumerate() {
@@ -2738,7 +2741,8 @@ fn a_plan_of_spikes_a_choice_and_changes_runs_in_dependency_order() {
     let (mut driver, parent) = batch_fixture();
     let spike = report_delegate(b"spike", Box::new([]));
     let mut choice = report_delegate(b"choose", Box::new([engine::Dependency::Batch(0)]));
-    choice.contract = tasks::Contract::Verdict { choices: Box::new([tasks::Verdict { code: 7, words: 128 }]) };
+    choice.contract =
+        tasks::Contract::Verdict { choices: Box::new([tasks::Verdict { code: 7, words: 128, followups: 0 }]) };
     let mut change = report_delegate(b"change", Box::new([engine::Dependency::Batch(1)]));
     change.contract = tasks::Contract::Change { connector: 1, kind: 2, words: 128 };
     let numbers = call_batch(&mut driver, &parent, 110, Box::new([spike, choice, change]));
@@ -2801,7 +2805,8 @@ fn a_batch_beyond_authority_is_refused_whole() {
 fn a_negative_verdict_starts_dependents_and_a_failure_holds_them() {
     let (mut driver, parent) = batch_fixture();
     let mut verdict = report_delegate(b"check", Box::new([]));
-    verdict.contract = tasks::Contract::Verdict { choices: Box::new([tasks::Verdict { code: 0, words: 128 }]) };
+    verdict.contract =
+        tasks::Contract::Verdict { choices: Box::new([tasks::Verdict { code: 0, words: 128, followups: 0 }]) };
     let next = report_delegate(b"respond", Box::new([engine::Dependency::Batch(0)]));
     let held = report_delegate(b"finish", Box::new([engine::Dependency::Batch(1)]));
     let numbers = call_batch(&mut driver, &parent, 112, Box::new([verdict, next, held]));

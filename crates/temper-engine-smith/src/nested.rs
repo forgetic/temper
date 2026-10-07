@@ -136,6 +136,7 @@ fn contract(value: &Value) -> Result<tasks::Contract, Problem> {
                 let Ok(()) = out.push(tasks::Verdict {
                     code: choice.required(b"code")?.small()?,
                     words: choice.required(b"words")?.small()?,
+                    followups: 0,
                 }) else {
                     return Err(Problem::TooLarge);
                 };
