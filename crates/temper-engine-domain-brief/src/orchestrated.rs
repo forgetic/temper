@@ -542,7 +542,7 @@ fn cut_core(kind: Core, text: Box<[u8]>, size: u32) -> Box<[u8]> {
         let mid = low.saturating_add(high.saturating_sub(low).div_ceil(2));
         let keep = edge(&text, mid, tail);
         let lost = text.len().saturating_sub(keep.len());
-        let marker = usize::from(!keep.is_empty())
+        let marker = usize::from(!tail && !keep.is_empty())
             .saturating_add(b"[".len())
             .saturating_add(Decimal::of(u64::try_from(lost).expect("bounded text")).as_bytes().len())
             .saturating_add(b" bytes cut]\n".len());
@@ -555,18 +555,25 @@ fn cut_core(kind: Core, text: Box<[u8]>, size: u32) -> Box<[u8]> {
     let keep = edge(&text, low, tail);
     let lost = text.len().saturating_sub(keep.len());
     let digits = Decimal::of(u64::try_from(lost).expect("bounded text"));
-    let marker = usize::from(!keep.is_empty())
+    let marker = usize::from(!tail && !keep.is_empty())
         .saturating_add(b"[".len())
         .saturating_add(digits.as_bytes().len())
         .saturating_add(b" bytes cut]\n".len());
     let mut writer = Writer::new(keep.len().saturating_add(marker));
-    writer.put(keep).expect("measured retained text");
-    if !keep.is_empty() {
-        writer.put(b"\n").expect("measured break");
+    if tail {
+        writer.put(b"[").expect("measured marker");
+        writer.put(digits.as_bytes()).expect("measured count");
+        writer.put(b" bytes cut]\n").expect("measured marker");
+        writer.put(keep).expect("measured retained text");
+    } else {
+        writer.put(keep).expect("measured retained text");
+        if !keep.is_empty() {
+            writer.put(b"\n").expect("measured break");
+        }
+        writer.put(b"[").expect("measured marker");
+        writer.put(digits.as_bytes()).expect("measured count");
+        writer.put(b" bytes cut]\n").expect("measured marker");
     }
-    writer.put(b"[").expect("measured marker");
-    writer.put(digits.as_bytes()).expect("measured count");
-    writer.put(b" bytes cut]\n").expect("measured marker");
     writer.finish()
 }
 
@@ -634,12 +641,19 @@ mod tests {
                     budget: 20,
                     deadline: Time::ZERO.saturating_add(Duration::from_secs(1)),
                     sections: Box::new([
-                        Planned::Core { kind: Core::Task, text: Box::from(&b"task"[..]), priority: 0, required: true },
+                        Planned::Core {
+                            kind: Core::Task,
+                            text: Box::from(&b"task"[..]),
+                            limit: 20,
+                            priority: 0,
+                            required: true
+                        },
                         Planned::Connector {
                             connector: 2,
                             kind: 7,
                             token: section,
                             size: 0,
+                            limit: 20,
                             priority: 1,
                             required: false
                         },
@@ -669,8 +683,24 @@ mod tests {
         let first = Token::new(1);
         let second = Token::new(2);
         let sections = Box::new([
-            Planned::Connector { connector: 3, kind: 1, token: first, size: 0, priority: 0, required: true },
-            Planned::Connector { connector: 3, kind: 2, token: second, size: 0, priority: 1, required: false },
+            Planned::Connector {
+                connector: 3,
+                kind: 1,
+                token: first,
+                size: 0,
+                limit: 100,
+                priority: 0,
+                required: true,
+            },
+            Planned::Connector {
+                connector: 3,
+                kind: 2,
+                token: second,
+                size: 0,
+                limit: 100,
+                priority: 1,
+                required: false,
+            },
         ]);
         assert_eq!(
             outputs(
@@ -717,6 +747,7 @@ mod tests {
                     kind: 5,
                     token: section,
                     size: 0,
+                    limit: 100,
                     priority: 0,
                     required: false,
                 }]),
@@ -752,6 +783,7 @@ mod tests {
                     kind: 5,
                     token: section,
                     size: 0,
+                    limit: 40,
                     priority: 0,
                     required: true,
                 }]),
@@ -786,6 +818,7 @@ mod tests {
                     kind: 5,
                     token: section,
                     size: 0,
+                    limit: 40,
                     priority: 0,
                     required: true,
                 }]),
@@ -801,5 +834,14 @@ mod tests {
         let cut = cut_core(Core::Task, text, 18);
         assert!(cut.len() <= 18);
         assert_eq!(cut.as_ref(), b"a\n[27 bytes cut]\n");
+    }
+
+    #[test]
+    fn a_transcript_cut_keeps_its_end_after_the_cut_marker() {
+        let text = Box::from(&b"abcdefghijklmnopqrstuvwxyyz"[..]);
+        let cut = cut_core(Core::TranscriptTail, text, 18);
+        assert!(cut.len() <= 18);
+        assert!(cut.starts_with(b"["));
+        assert!(cut.ends_with(b"yz"));
     }
 }

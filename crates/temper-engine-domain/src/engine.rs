@@ -632,7 +632,8 @@ enum Work {
     TaskEscalation(tasks::Event),
     People(people::Event),
     Fleet(fleet::Event),
-    Brief(brief::Event),
+    Brief(brief::GatherEvent),
+    StartBrief { task: u64 },
     Forge(forge::Event),
     ForgeClaim { task: u64, attempt: u64, writes: Box<[forge::Name]>, holders: Box<[u64]> },
     TasksClaim { task: u64, attempt: u64 },
@@ -645,6 +646,14 @@ enum Work {
     ProposalFailed { waiter: Token },
     DelegateValidated { to: Token, key: CallKey, batch: Box<[Delegate]> },
     DelegateInputRefused { to: Token, key: CallKey },
+}
+
+#[derive(Debug)]
+struct BriefConnector {
+    task: u64,
+    source: forge::BriefSource,
+    kind: brief::Kind,
+    cutting: bool,
 }
 
 #[derive(Debug)]
@@ -784,7 +793,8 @@ pub struct Domain {
     tasks: tasks::Domain,
     people: people::Domain,
     fleet: fleet::Domain,
-    brief: brief::Domain,
+    brief: brief::GatherDomain,
+    brief_connectors: Slab<BriefConnector>,
     accounts: accounts::Domain,
     views: views::Domain,
     forge: forge::Domain,
@@ -836,6 +846,7 @@ impl Domain {
     /// cross-child limits. Checks bounded authority/bootstrap configuration; issues no request.
     /// Startup pages/account setup begin only on `Event::Start`.
     #[must_use]
+    #[expect(clippy::too_many_lines, reason = "the root allocates every child and bounded handoff table together")]
     pub fn new(mut config: Config, limits: &Limits) -> Domain {
         assert!(worst_case(limits).is_some(), "root limits are valid");
         assert!(
@@ -880,7 +891,16 @@ impl Domain {
             tasks,
             people,
             fleet: fleet::Domain::new(&limits.fleet),
-            brief: brief::Domain::new(&limits.brief),
+            brief: brief::GatherDomain::new(&limits.brief),
+            brief_connectors: Slab::with_capacity(
+                limits
+                    .brief
+                    .briefs
+                    .checked_mul(limits.brief.sections)
+                    .expect("validated brief count")
+                    .checked_mul(2)
+                    .expect("validated brief connector room"),
+            ),
             accounts: accounts::Domain::new(&limits.accounts),
             views: views::Domain::new(&limits.views),
             forge: forge::Domain::new(
@@ -989,8 +1009,8 @@ impl Domain {
             && self.transcripts.is_empty()
             && self.restoring_proofs.is_empty()
             && self.signing_in.is_none()
-            && self.brief.briefs() == 0
-            && self.brief.reads() == 0
+            && self.brief.is_idle()
+            && self.brief_connectors.is_empty()
             && !self.fleet.is_ready()
             && !self.forge.is_ready()
             && self.fleet.turns() == 0
@@ -1013,7 +1033,7 @@ impl Domain {
         self.tasks.reclaim();
         self.people.reclaim();
         self.fleet.reclaim();
-        self.brief.reclaim();
+        self.brief_connectors.reclaim();
         self.views.reclaim();
         self.forge.reclaim();
         self.payloads.reclaim();
@@ -1032,9 +1052,6 @@ impl Domain {
         }
         for _ in 0..self.limits.fleet.facts {
             let _fact = self.fleet.pop_fact();
-        }
-        for _ in 0..self.limits.brief.facts {
-            let _fact = self.brief.pop_fact();
         }
         for _ in 0..self.limits.accounts.facts {
             let _fact = self.accounts.pop_fact();
@@ -1854,8 +1871,8 @@ pub fn fire(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
     let mut fleet_out = Queue::with_capacity(fleet::max_out(&env.limits.fleet));
     fleet::fire(&mut domain.fleet, &environment_fleet(env), &mut fleet_out);
     fleet_outputs(domain, env, &mut decision, &mut fleet_out);
-    let mut brief_out = Queue::with_capacity(brief::max_out(&env.limits.brief));
-    brief::fire(&mut domain.brief, &environment_brief(env), &mut brief_out);
+    let mut brief_out = Queue::with_capacity(brief::gather_max_out(&env.limits.brief));
+    brief::gather_fire(&mut domain.brief, &environment_brief(env), &mut brief_out);
     brief_outputs(domain, env, &mut decision, &mut brief_out);
     route_into(domain, env, &mut decision);
     close(domain, env, decision, out);
@@ -1899,10 +1916,11 @@ fn route_into(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision) {
                 fleet_outputs(domain, env, decision, &mut out);
             }
             Work::Brief(event) => {
-                let mut out = Queue::with_capacity(brief::max_out(&env.limits.brief));
-                brief::step(&mut domain.brief, &environment_brief(env), event, &mut out);
+                let mut out = Queue::with_capacity(brief::gather_max_out(&env.limits.brief));
+                brief::gather_step(&mut domain.brief, &environment_brief(env), event, &mut out);
                 brief_outputs(domain, env, decision, &mut out);
             }
+            Work::StartBrief { task } => start_brief(domain, env, task),
             Work::Forge(event) => {
                 let mut out = Queue::with_capacity(forge::max_out(&env.limits.forge));
                 forge::step(&mut domain.forge, &environment_forge(env), event, &mut out);
@@ -4598,71 +4616,93 @@ fn tasks_outputs(
 }
 
 #[expect(clippy::too_many_lines, reason = "the brief route consumes every child request and prepares the claimed run")]
-fn brief_outputs(domain: &mut Domain, env: &Env<Limits>, _decision: &mut Decision, out: &mut Queue<brief::Request>) {
+fn brief_outputs(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    _decision: &mut Decision,
+    out: &mut Queue<brief::GatherRequest>,
+) {
     for _ in 0..out.len() {
         match out.pop().expect("brief output count") {
-            brief::Request::Read { owner, source, parts, bytes, .. } => {
-                let read = match source {
-                    brief::Source::Task { task, part } => Some(task_section(domain, task, part, parts, bytes)),
-                    brief::Source::Pull { item, head } => {
-                        domain.work.push(Work::Forge(forge::Event::GatherBrief {
-                            owner,
-                            source: forge::BriefSource::Pull {
-                                item: forge::BriefItem { repository: item.repository, number: item.number },
-                                head: forge::BriefCommit(head.0),
-                            },
-                            parts,
-                            bytes,
-                            max_job_bytes: 0,
-                        }));
-                        None
+            brief::GatherRequest::Gather { connector: 0, section, budget } => {
+                let Some(row) = domain.brief_connectors.get(Id::from_token(section)) else { continue };
+                let max_job_bytes = match row.source {
+                    forge::BriefSource::Ci { .. } => {
+                        env.limits.forge.client.answer_bytes.min(env.limits.brief.budgets.ci / 5).max(1)
                     }
-                    brief::Source::Ci { item, head } => {
-                        domain.work.push(Work::Forge(forge::Event::GatherBrief {
-                            owner,
-                            source: forge::BriefSource::Ci {
-                                item: forge::BriefItem { repository: item.repository, number: item.number },
-                                head: forge::BriefCommit(head.0),
-                            },
-                            parts,
-                            bytes,
-                            max_job_bytes: env
-                                .limits
-                                .forge
-                                .client
-                                .answer_bytes
-                                .min(env.limits.brief.budgets.ci / 5)
-                                .max(1),
-                        }));
-                        None
-                    }
-                    brief::Source::Reviews { item, head } => {
-                        domain.work.push(Work::Forge(forge::Event::GatherBrief {
-                            owner,
-                            source: forge::BriefSource::Reviews {
-                                item: forge::BriefItem { repository: item.repository, number: item.number },
-                                head: forge::BriefCommit(head.0),
-                            },
-                            parts,
-                            bytes,
-                            max_job_bytes: 0,
-                        }));
-                        None
-                    }
-                    brief::Source::Item(_)
-                    | brief::Source::Comments { .. }
-                    | brief::Source::Dependencies(_)
-                    | brief::Source::Attempts(_)
-                    | brief::Source::Plan { .. }
-                    | brief::Source::Notes { .. }
-                    | brief::Source::Template(_) => unreachable!("06a only asks the task section"),
+                    forge::BriefSource::Reviews { .. } | forge::BriefSource::Pull { .. } => 0,
                 };
-                if let Some(read) = read {
-                    domain.work.push(Work::Brief(brief::Event::Read { owner, read }));
+                domain.work.push(Work::Forge(forge::Event::GatherBriefHeld {
+                    section,
+                    source: row.source,
+                    parts: env.limits.brief.parts,
+                    bytes: budget,
+                    max_job_bytes,
+                }));
+            }
+            brief::GatherRequest::CutTo { connector: 0, section, size } => {
+                if let Some(row) = domain.brief_connectors.get_mut(Id::from_token(section)) {
+                    row.cutting = true;
+                    domain.work.push(Work::Forge(forge::Event::CutBrief { section, bytes: size }));
                 }
             }
-            brief::Request::Rendered { reply_to, sections } => {
-                let task = reply_to.into_token().raw();
+            brief::GatherRequest::Drop { connector: 0, section } => {
+                let id = Id::from_token(section);
+                if domain.brief_connectors.get(id).is_some() {
+                    domain.brief_connectors.retire(id);
+                    domain.work.push(Work::Forge(forge::Event::DropBrief { section }));
+                }
+            }
+            brief::GatherRequest::Gather { .. }
+            | brief::GatherRequest::CutTo { .. }
+            | brief::GatherRequest::Drop { .. } => unreachable!("temper's sole connector is numbered zero"),
+            brief::GatherRequest::Complete { brief, order } => {
+                let task = brief.raw();
+                let mut sections = List::with_capacity(u32::try_from(order.len()).expect("bounded section count"));
+                let mut missing_owner = false;
+                for placed in order {
+                    let section = match placed {
+                        brief::GatherPlaced::Core { kind, text } => {
+                            brief::Section { kind: core_brief_kind(kind), body: brief::Body::Text(text) }
+                        }
+                        brief::GatherPlaced::CoreMissing { kind, why } => brief::Section {
+                            kind: core_brief_kind(kind),
+                            body: brief::Body::Missing(gather_unread(why)),
+                        },
+                        brief::GatherPlaced::Connector { token, size, .. } => {
+                            let id = Id::from_token(token);
+                            let Some(row) = domain.brief_connectors.get(id) else {
+                                missing_owner = true;
+                                continue;
+                            };
+                            let kind = row.kind;
+                            domain.brief_connectors.retire(id);
+                            let bytes = domain.forge.take_brief(token);
+                            match bytes {
+                                Some(bytes) if bytes.len() == usize::try_from(size).expect("bounded section") => {
+                                    brief::Section { kind, body: brief::Body::Text(bytes) }
+                                }
+                                Some(_) | None => {
+                                    missing_owner = true;
+                                    continue;
+                                }
+                            }
+                        }
+                        brief::GatherPlaced::Missing { kind, why, .. } => brief::Section {
+                            kind: numbered_brief_kind(kind),
+                            body: brief::Body::Missing(gather_unread(why)),
+                        },
+                    };
+                    sections.push(section).expect("bounded brief sections");
+                }
+                if missing_owner {
+                    drop(domain.contexts.remove(&task));
+                    drop(domain.dependency_results.remove(&task));
+                    drop(domain.transcripts.remove(&task));
+                    domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
+                    continue;
+                }
+                let sections = sections.into_boxed();
                 let context = domain.contexts.remove(&task).expect("rendered task owns context");
                 drop(domain.dependency_results.remove(&task));
                 let transcript = domain.transcripts.remove(&task).expect("rendered task owns loaded transcript");
@@ -4764,15 +4804,43 @@ fn brief_outputs(domain: &mut Domain, env: &Env<Limits>, _decision: &mut Decisio
                     });
                 }
             }
-            brief::Request::Failed { reply_to, .. } | brief::Request::Refused { reply_to, .. } => {
-                let task = reply_to.into_token().raw();
+            brief::GatherRequest::Failed { brief, .. } | brief::GatherRequest::Refused { brief } => {
+                let task = brief.raw();
                 drop(domain.contexts.remove(&task));
                 drop(domain.dependency_results.remove(&task));
                 drop(domain.transcripts.remove(&task));
                 domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
             }
-            brief::Request::Room => {}
         }
+    }
+}
+
+fn core_brief_kind(kind: brief::Core) -> brief::Kind {
+    match kind {
+        brief::Core::Task | brief::Core::Lineage | brief::Core::Inbox => brief::Kind::Task,
+        brief::Core::Results => brief::Kind::Dependencies,
+        brief::Core::Plan => brief::Kind::Plan,
+        brief::Core::Attempts => brief::Kind::Attempts,
+        brief::Core::Calls | brief::Core::Waiting => brief::Kind::Comments,
+        brief::Core::NotesIndex => brief::Kind::Notes,
+        brief::Core::TranscriptTail => brief::Kind::Transcript,
+    }
+}
+
+fn numbered_brief_kind(kind: u16) -> brief::Kind {
+    match kind {
+        1 => brief::Kind::Ci,
+        2 => brief::Kind::Reviews,
+        3 => brief::Kind::Pull,
+        _ => unreachable!("temper's forge connector uses three section kinds"),
+    }
+}
+
+fn gather_unread(why: brief::GatherMissing) -> brief::Unread {
+    match why {
+        brief::GatherMissing::Failed => brief::Unread::Failed,
+        brief::GatherMissing::Late => brief::Unread::Late,
+        brief::GatherMissing::Budget => brief::Unread::Oversized,
     }
 }
 
@@ -5399,7 +5467,7 @@ fn begin_dependency_read(domain: &mut Domain, task: u64) -> Option<(Token, u64)>
     let context = domain.contexts.get(&task).expect("preparing task context");
     let count = context.dependencies.len().checked_add(context.spec.inputs.len()).expect("bounded input count");
     if count == 0 {
-        start_brief(domain, task);
+        domain.work.push(Work::StartBrief { task });
         return None;
     }
     let mut ids = List::with_capacity(u32::try_from(count).expect("bounded dependency count"));
@@ -5490,7 +5558,7 @@ fn dependency_loaded(
         domain.dependency_results.insert(read.task, read.results.into_boxed()).is_ok(),
         "one preparation result set"
     );
-    start_brief(domain, read.task);
+    domain.work.push(Work::StartBrief { task: read.task });
 }
 
 fn transcript_loaded(
@@ -5573,42 +5641,79 @@ fn transcript_loaded(
     }
 }
 
-fn start_brief(domain: &mut Domain, task: u64) {
+#[expect(clippy::too_many_lines, reason = "one preparation gathers typed core sections and pinned forge sources")]
+fn start_brief(domain: &mut Domain, env: &Env<Limits>, task: u64) {
     let context = domain.contexts.get(&task).expect("loaded task context");
     let transcript = domain.transcripts.get(&task).expect("prepared transcript state");
     let oversized = transcript.bytes > u64::from(domain.config.resume_bytes);
     let mut wanted = List::with_capacity(domain.limits.brief.sections);
+    let Some(task_text) = read_core(domain, task, brief::TaskPart::Spec) else {
+        domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
+        return;
+    };
     wanted
-        .push(brief::Wanted { source: brief::Source::Task { task, part: brief::TaskPart::Spec }, required: true })
+        .push(brief::Planned::Core {
+            kind: brief::Core::Task,
+            text: task_text,
+            limit: domain.limits.brief.budgets.task,
+            priority: 0,
+            required: true,
+        })
         .expect("task brief room");
     if !context.dependencies.is_empty() || !context.spec.inputs.is_empty() {
+        let Some(text) = read_core(domain, task, brief::TaskPart::Dependencies) else {
+            domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
+            return;
+        };
         wanted
-            .push(brief::Wanted {
-                source: brief::Source::Task { task, part: brief::TaskPart::Dependencies },
+            .push(brief::Planned::Core {
+                kind: brief::Core::Results,
+                text,
+                limit: domain.limits.brief.budgets.dependencies,
+                priority: 1,
                 required: true,
             })
             .expect("dependency result section room");
     }
     if oversized {
+        let Some(text) = read_core(domain, task, brief::TaskPart::TranscriptTail) else {
+            domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
+            return;
+        };
         wanted
-            .push(brief::Wanted {
-                source: brief::Source::Task { task, part: brief::TaskPart::TranscriptTail },
+            .push(brief::Planned::Core {
+                kind: brief::Core::TranscriptTail,
+                text,
+                limit: domain.limits.brief.budgets.task,
+                priority: 2,
                 required: true,
             })
             .expect("tail brief room");
     }
-    if !context.delegates.is_empty() && wanted.room() > 0 {
+    if !context.delegates.is_empty()
+        && wanted.room() > 0
+        && let Some(text) = read_core(domain, task, brief::TaskPart::Delegates)
+    {
         wanted
-            .push(brief::Wanted {
-                source: brief::Source::Task { task, part: brief::TaskPart::Delegates },
+            .push(brief::Planned::Core {
+                kind: brief::Core::Plan,
+                text,
+                limit: domain.limits.brief.budgets.plan,
+                priority: 3,
                 required: false,
             })
             .expect("delegate section room");
     }
-    if context.tries != tasks::Tries::NONE && wanted.room() > 0 {
+    if context.tries != tasks::Tries::NONE
+        && wanted.room() > 0
+        && let Some(text) = read_core(domain, task, brief::TaskPart::Attempts)
+    {
         wanted
-            .push(brief::Wanted {
-                source: brief::Source::Task { task, part: brief::TaskPart::Attempts },
+            .push(brief::Planned::Core {
+                kind: brief::Core::Attempts,
+                text,
+                limit: domain.limits.brief.budgets.attempts,
+                priority: 4,
                 required: false,
             })
             .expect("attempt brief room");
@@ -5625,20 +5730,36 @@ fn start_brief(domain: &mut Domain, task: u64) {
         && let Some(head) = row.change.last_head
         && wanted.room() > 0
     {
-        let item = brief::Item { repository: row.repository.repository, number };
+        let item = forge::BriefItem { repository: row.repository.repository, number };
         let source = match row.delegate.expect("matched delegate").1 {
             forge_change::Delegate::Repair(forge_change::Repair::Gate(_)) => {
-                brief::Source::Reviews { item, head: brief::Commit(head) }
+                forge::BriefSource::Reviews { item, head: forge::BriefCommit(head) }
             }
             forge_change::Delegate::Repair(forge_change::Repair::Ci | forge_change::Repair::Semantic) => {
-                brief::Source::Ci { item, head: brief::Commit(head) }
+                forge::BriefSource::Ci { item, head: forge::BriefCommit(head) }
             }
-            forge_change::Delegate::Resolve { .. } => brief::Source::Pull { item, head: brief::Commit(head) },
+            forge_change::Delegate::Resolve { .. } => forge::BriefSource::Pull { item, head: forge::BriefCommit(head) },
             forge_change::Delegate::Produce | forge_change::Delegate::Gate { .. } => {
-                brief::Source::Pull { item, head: brief::Commit(head) }
+                forge::BriefSource::Pull { item, head: forge::BriefCommit(head) }
             }
         };
-        wanted.push(brief::Wanted { source, required: true }).expect("connector section room");
+        let kind = forge_brief_kind(source);
+        let token = domain
+            .brief_connectors
+            .insert(BriefConnector { task, source, kind, cutting: false })
+            .expect("reserved connector section room")
+            .token();
+        wanted
+            .push(brief::Planned::Connector {
+                connector: 0,
+                kind: forge_kind_number(kind),
+                token,
+                size: 0,
+                limit: forge_brief_budget(kind, &domain.limits.brief.budgets),
+                priority: 5,
+                required: true,
+            })
+            .expect("connector section room");
         let semantic = match row.delegate {
             Some((_, forge_change::Delegate::Repair(forge_change::Repair::Semantic))) => true,
             Some((
@@ -5651,12 +5772,131 @@ fn start_brief(domain: &mut Domain, task: u64) {
             | None => false,
         };
         if semantic && wanted.room() > 0 {
+            let source = forge::BriefSource::Pull { item, head: forge::BriefCommit(head) };
+            let kind = forge_brief_kind(source);
+            let token = domain
+                .brief_connectors
+                .insert(BriefConnector { task, source, kind, cutting: false })
+                .expect("reserved connector section room")
+                .token();
             wanted
-                .push(brief::Wanted { source: brief::Source::Pull { item, head: brief::Commit(head) }, required: true })
+                .push(brief::Planned::Connector {
+                    connector: 0,
+                    kind: forge_kind_number(kind),
+                    token,
+                    size: 0,
+                    limit: forge_brief_budget(kind, &domain.limits.brief.budgets),
+                    priority: 6,
+                    required: true,
+                })
                 .expect("semantic update section room");
         }
     }
-    domain.work.push(Work::Brief(brief::Event::Render { reply_to: internal(task), sections: wanted.into_boxed() }));
+    domain.work.push(Work::Brief(brief::GatherEvent::Plan {
+        brief: Token::new(task),
+        budget: domain.limits.brief.brief_bytes,
+        deadline: env.now.saturating_add(domain.limits.brief.gather),
+        sections: wanted.into_boxed(),
+    }));
+}
+
+fn forge_brief_kind(source: forge::BriefSource) -> brief::Kind {
+    match source {
+        forge::BriefSource::Ci { .. } => brief::Kind::Ci,
+        forge::BriefSource::Reviews { .. } => brief::Kind::Reviews,
+        forge::BriefSource::Pull { .. } => brief::Kind::Pull,
+    }
+}
+
+fn forge_kind_number(kind: brief::Kind) -> u16 {
+    match kind {
+        brief::Kind::Ci => 1,
+        brief::Kind::Reviews => 2,
+        brief::Kind::Pull => 3,
+        brief::Kind::Task
+        | brief::Kind::Transcript
+        | brief::Kind::Item
+        | brief::Kind::Comments
+        | brief::Kind::Dependencies
+        | brief::Kind::Attempts
+        | brief::Kind::Plan
+        | brief::Kind::Notes
+        | brief::Kind::Template => unreachable!("forge section kind"),
+    }
+}
+
+fn forge_brief_budget(kind: brief::Kind, budgets: &brief::Budgets) -> u32 {
+    match kind {
+        brief::Kind::Ci => budgets.ci,
+        brief::Kind::Reviews => budgets.reviews,
+        brief::Kind::Pull => budgets.pull,
+        brief::Kind::Task
+        | brief::Kind::Transcript
+        | brief::Kind::Item
+        | brief::Kind::Comments
+        | brief::Kind::Dependencies
+        | brief::Kind::Attempts
+        | brief::Kind::Plan
+        | brief::Kind::Notes
+        | brief::Kind::Template => unreachable!("forge section kind"),
+    }
+}
+
+fn read_core(domain: &Domain, task: u64, part: brief::TaskPart) -> Option<Box<[u8]>> {
+    let tail = match part {
+        brief::TaskPart::TranscriptTail => true,
+        brief::TaskPart::Spec
+        | brief::TaskPart::Dependencies
+        | brief::TaskPart::Delegates
+        | brief::TaskPart::Attempts => false,
+    };
+    let read = task_section(domain, task, part, domain.limits.brief.parts, domain.limits.brief.read_bytes);
+    let parts = match read {
+        brief::Read::Got(parts) => parts,
+        brief::Read::Failed => return None,
+    };
+    let mut length = 0_usize;
+    let mut ended_line = true;
+    for part in &parts {
+        length = length.checked_add(part.bytes.len())?;
+        if let Some(last) = part.bytes.last() {
+            ended_line = *last == b'\n';
+        }
+        if part.left > 0 {
+            length = length
+                .checked_add(usize::from(!tail && !ended_line))?
+                .checked_add(1)?
+                .checked_add(Decimal::of(part.left).as_bytes().len())?
+                .checked_add(b" bytes cut]\n".len())?;
+            ended_line = true;
+        }
+    }
+    if length > usize::try_from(domain.limits.brief.brief_bytes).ok()? {
+        return None;
+    }
+    let mut writer = Writer::new(length);
+    let mut ended_line = true;
+    for part in parts {
+        if tail && part.left > 0 {
+            writer.put(b"[").expect("measured cut marker");
+            writer.put(Decimal::of(part.left).as_bytes()).expect("measured lost count");
+            writer.put(b" bytes cut]\n").expect("measured cut marker");
+        }
+        writer.put(&part.bytes).expect("measured part");
+        if let Some(last) = part.bytes.last() {
+            ended_line = *last == b'\n';
+        }
+        if !tail && part.left > 0 {
+            if !ended_line {
+                writer.put(b"\n").expect("measured break");
+            }
+            writer.put(b"[").expect("measured cut marker");
+            writer.put(Decimal::of(part.left).as_bytes()).expect("measured lost count");
+            writer.put(b" bytes cut]\n").expect("measured cut marker");
+            ended_line = true;
+        }
+    }
+    Some(writer.finish())
 }
 
 fn startup_page(
@@ -5964,7 +6204,9 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     let fleet_bytes = fleet::worst_case(&limits.fleet)?;
     let people_bytes = people::worst_case(&limits.people)?;
     let authority_bytes = authority::worst_case(&limits.authority)?;
-    let brief_bytes = brief::worst_case(&limits.brief)?;
+    let brief_bytes = brief::gather_worst_case(&limits.brief)?.checked_add(Slab::<BriefConnector>::worst_case(
+        limits.brief.briefs.checked_mul(limits.brief.sections)?.checked_mul(2)?,
+    )?)?;
     let brief_fetches = limits.brief.briefs.checked_mul(limits.brief.sections)?.checked_mul(2)?;
     if limits.forge.brief_sections < brief_fetches || limits.forge.brief_bytes < limits.brief.read_bytes {
         return None;
@@ -6181,7 +6423,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         // application owns its separate bounded people terminal/save queue.
         .checked_add(Queue::<people::Request>::worst_case(people::max_out(&limits.people))?.checked_mul(2)?)?
         .checked_add(Queue::<fleet::Request>::worst_case(fleet::max_out(&limits.fleet))?)?
-        .checked_add(Queue::<brief::Request>::worst_case(brief::max_out(&limits.brief))?)?
+        .checked_add(Queue::<brief::GatherRequest>::worst_case(brief::gather_max_out(&limits.brief))?)?
         .checked_add(Queue::<Request>::worst_case(max_out(limits))?)?
         .checked_add(Queue::<Output>::worst_case(1)?)?
         .checked_add(Queue::<loads::Request>::worst_case(1)?)?

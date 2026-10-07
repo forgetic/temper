@@ -1,7 +1,7 @@
 //! Root translation for the forge connector. Its store rows and released API
 //! calls cross one root decision; the connector never owns the store.
 use super::{
-    CallAnswer, CallKey, Decision, Delivery, Domain, Env, Family, ForgeRepository, ForgeStart, ForgeWorkspace, Key,
+    CallAnswer, CallKey, Decision, Delivery, Domain, Env, Family, ForgeRepository, ForgeStart, ForgeWorkspace, Id, Key,
     Limits, List, ProcedureAction, Queue, Record, ReplyTo, RoutedCall, Token, Work, Write, authority,
     authority_numbers, authority_value, decide_call, emit, escalation, forge, forge_change, forge_client, forge_issues,
     people, procedure_step, save, tasks,
@@ -1686,16 +1686,18 @@ pub(super) fn outputs(
         let request = out.pop().expect("connector output count");
         match request {
             forge::Request::BriefClient { event } => domain.work.push(Work::Forge(forge::Event::Client(event))),
-            forge::Request::BriefReady { owner, read } => {
-                let read = match read {
-                    forge::BriefRead::Got { bytes, left } => brief::Read::Got(Box::new([brief::Part { bytes, left }])),
-                    forge::BriefRead::Failed => brief::Read::Failed,
+            forge::Request::BriefReady { .. } => unreachable!("the root uses held forge sections"),
+            forge::Request::BriefSized { section, size } => {
+                let Some(row) = domain.brief_connectors.get(Id::from_token(section)) else { continue };
+                let brief = Token::new(row.task);
+                let event = match size {
+                    Some(size) if row.cutting => brief::GatherEvent::Cut { brief, section, size },
+                    Some(size) => brief::GatherEvent::Ready { brief, section, size },
+                    None => brief::GatherEvent::Missing { brief, section },
                 };
-                domain.work.push(Work::Brief(brief::Event::Read { owner, read }));
+                domain.work.push(Work::Brief(event));
             }
-            forge::Request::BriefSized { .. } | forge::Request::BriefTaken { .. } => {
-                unreachable!("held brief routing begins with the typed root cutover");
-            }
+            forge::Request::BriefTaken { .. } => unreachable!("the root takes completed sections directly"),
             forge::Request::Save { record } => {
                 let key = forge::stored_key(&record);
                 let first = !domain.forge_keys.contains_key(&key);

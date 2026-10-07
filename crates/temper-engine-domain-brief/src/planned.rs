@@ -38,9 +38,9 @@ pub enum Core {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Planned {
     /// Text the core owns and may cut by this kind's rules.
-    Core { kind: Core, text: Box<[u8]>, priority: u16, required: bool },
+    Core { kind: Core, text: Box<[u8]>, limit: u32, priority: u16, required: bool },
     /// Opaque content retained by a numbered connector.
-    Connector { connector: u16, kind: u16, token: Token, size: u32, priority: u16, required: bool },
+    Connector { connector: u16, kind: u16, token: Token, size: u32, limit: u32, priority: u16, required: bool },
 }
 
 impl Planned {
@@ -50,6 +50,14 @@ impl Planned {
         match self {
             Planned::Core { text, .. } => u32::try_from(text.len()).unwrap_or(u32::MAX),
             Planned::Connector { size, .. } => *size,
+        }
+    }
+
+    /// The largest rendered section this owner may deliver.
+    #[must_use]
+    pub fn limit(&self) -> u32 {
+        match self {
+            Planned::Core { limit, .. } | Planned::Connector { limit, .. } => *limit,
         }
     }
 
@@ -136,7 +144,7 @@ pub fn plan(sections: &[Planned], budget: u32) -> Option<Plan> {
         *seen.get_mut(index)? = true;
         let section = sections.get(usize::try_from(index).ok()?)?;
         let wanted = section.size();
-        let allotted = wanted.min(left);
+        let allotted = wanted.min(section.limit()).min(left);
         let whole = match section {
             Planned::Core { kind: Core::Inbox, required: true, .. } => true,
             Planned::Core {
@@ -194,9 +202,25 @@ mod tests {
     #[test]
     fn required_sections_claim_budget_before_optional_sections() {
         let sections = [
-            Planned::Connector { connector: 3, kind: 7, token: Token::new(1), size: 80, priority: 0, required: false },
-            Planned::Core { kind: Core::Task, text: Box::from(&b"task"[..]), priority: 9, required: true },
-            Planned::Connector { connector: 4, kind: 2, token: Token::new(2), size: 20, priority: 1, required: true },
+            Planned::Connector {
+                connector: 3,
+                kind: 7,
+                token: Token::new(1),
+                size: 80,
+                limit: 80,
+                priority: 0,
+                required: false,
+            },
+            Planned::Core { kind: Core::Task, text: Box::from(&b"task"[..]), limit: 30, priority: 9, required: true },
+            Planned::Connector {
+                connector: 4,
+                kind: 2,
+                token: Token::new(2),
+                size: 20,
+                limit: 20,
+                priority: 1,
+                required: true,
+            },
         ];
         let planned = plan(&sections, 30).unwrap();
         assert_eq!(planned.size, 30);
@@ -213,8 +237,16 @@ mod tests {
     #[test]
     fn an_optional_connector_without_room_is_dropped_by_token() {
         let sections = [
-            Planned::Core { kind: Core::Task, text: Box::from(&b"task"[..]), priority: 0, required: true },
-            Planned::Connector { connector: 2, kind: 9, token: Token::new(5), size: 100, priority: 0, required: false },
+            Planned::Core { kind: Core::Task, text: Box::from(&b"task"[..]), limit: 4, priority: 0, required: true },
+            Planned::Connector {
+                connector: 2,
+                kind: 9,
+                token: Token::new(5),
+                size: 100,
+                limit: 100,
+                priority: 0,
+                required: false,
+            },
         ];
         let planned = plan(&sections, 4).unwrap();
         assert_eq!(planned.order.len(), 1);
@@ -223,9 +255,25 @@ mod tests {
 
     #[test]
     fn a_required_inbox_is_kept_whole() {
-        let sections =
-            [Planned::Core { kind: Core::Inbox, text: Box::from(&b"human words"[..]), priority: 0, required: true }];
+        let sections = [Planned::Core {
+            kind: Core::Inbox,
+            text: Box::from(&b"human words"[..]),
+            limit: 11,
+            priority: 0,
+            required: true,
+        }];
         assert_eq!(plan(&sections, 10), None);
         assert_eq!(plan(&sections, 11).unwrap().order[0].size, 11);
+    }
+
+    #[test]
+    fn a_kind_limit_cuts_a_connector_with_room_left_in_the_brief() {
+        let token = Token::new(6);
+        let sections =
+            [Planned::Connector { connector: 2, kind: 4, token, size: 80, limit: 40, priority: 0, required: true }];
+        let planned = plan(&sections, 200).expect("one bounded section");
+        assert_eq!(planned.size, 40);
+        assert_eq!(planned.order.as_ref(), [Placement { index: 0, size: 40 }]);
+        assert_eq!(planned.connectors.as_ref(), [ConnectorAction::CutTo { connector: 2, token, size: 40 }]);
     }
 }

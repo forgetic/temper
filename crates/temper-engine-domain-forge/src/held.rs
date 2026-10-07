@@ -18,7 +18,7 @@ pub(crate) struct Pending {
 #[derive(Debug)]
 pub(crate) struct Held {
     source: BriefSource,
-    words: Box<[u8]>,
+    pub(crate) words: Box<[u8]>,
 }
 
 #[expect(clippy::too_many_arguments, reason = "one bounded section handoff names its source and read limits")]

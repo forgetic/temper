@@ -180,6 +180,14 @@ impl Domain {
         self.brief_fetches.is_empty() && self.brief_pending.is_empty() && self.brief_held.is_empty()
     }
 
+    /// Transfer one completed section to the parent assembling an assignment.
+    pub fn take_brief(&mut self, section: Token) -> Option<Box<[u8]>> {
+        match self.brief_held.remove(&section) {
+            Some(held) => Some(held.words),
+            None => None,
+        }
+    }
+
     /// Reclaim transient child buffers after the current decision.
     pub fn reclaim(&mut self) {
         self.client.reclaim();
