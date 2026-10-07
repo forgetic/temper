@@ -124,6 +124,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "jig-test-connector-world"
+version = "0.0.0"
+dependencies = [
+ "jig-test-connector",
+ "jig-test-system",
+ "skein-lib",
+]
+
+[[package]]
 name = "jig-test-system"
 version = "0.0.0"
 dependencies = [

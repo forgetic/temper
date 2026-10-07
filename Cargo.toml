@@ -9,6 +9,7 @@ members = [
     "jig/crates/jig-core-accounts",
     "jig/testing/jig-test-connector",
     "jig/testing/jig-test-system",
+    "jig/tests/test-connector",
     "crates/temper-engine-domain-authority",
     "crates/temper-engine-domain-brief",
     "jig/crates/jig-core-fleet",
