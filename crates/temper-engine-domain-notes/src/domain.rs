@@ -1,11 +1,21 @@
-//! Notes' write machine (jig's domain/engine.md, sections 5.3, 5.6 and 10).
-//! One store load is in flight at a time; the parent echoes its token. The
-//! parent commits each emitted `Save` and `Erase` with that decision.
+//! Notes' machine (jig's domain/engine.md, sections 5.3, 5.6 and 10).
+//! It holds one pending operation and the recently used scope indexes, never
+//! entry bodies beyond the pending operation. [`step`] is its entry point;
+//! the parent echoes each store load token and commits emitted writes.
+//!
+//! | State | Event | Next | Emits |
+//! |---|---|---|---|
+//! | idle | write or edit | waiting for entry | load |
+//! | waiting for entry | loaded | waiting for scope or idle | load, writes, or refusal |
+//! | waiting for scope | loaded | waiting or idle | load, writes, or refusal |
+//! | idle | index or recall | waiting for store or idle | load or answer |
+//! | waiting for read | loaded | waiting or idle | load or answer |
 
-use skein_lib::{Env, Queue, Token};
+use skein_lib::{Env, Map, Queue, Token};
 
 use crate::boundary::{Author, Change, Entry, Event, Key, Line, New, Range, Record, Refusal, Request, Rows, Scope};
 use crate::limits::Limits;
+use crate::read::{self, Cached, ReadPending};
 
 /// The largest number of requests one step emits.
 pub const MAX_OUT: u32 = 3;
@@ -31,24 +41,49 @@ enum Phase {
     Count { scope: Scope, count: u32, after: Option<u64> },
 }
 
-/// The notes child keeps only a pending write; entries live in the store.
+/// The notes child keeps pending work and scope indexes; entries live in the store.
 #[derive(Debug)]
 pub struct Domain {
     pending: Option<Pending>,
+    pub(crate) read: Option<ReadPending>,
+    pub(crate) indexes: Map<Scope, Cached>,
+    pub(crate) clock: u64,
     next_load: u64,
 }
 
 impl Domain {
     /// Create an empty notes child.
     #[must_use]
-    pub const fn new(_limits: &Limits) -> Domain {
-        Domain { pending: None, next_load: 1 }
+    pub fn new(limits: &Limits) -> Domain {
+        Domain { pending: None, read: None, indexes: Map::with_capacity(limits.scopes), clock: 0, next_load: 1 }
     }
 
     /// Whether a call is waiting for a store page.
     #[must_use]
-    pub const fn busy(&self) -> bool {
-        self.pending.is_some()
+    pub fn busy(&self) -> bool {
+        self.pending.is_some() || self.read.is_some()
+    }
+
+    /// The number of scope indexes held in memory.
+    #[must_use]
+    pub fn cached_scopes(&self) -> u32 {
+        self.indexes.len()
+    }
+
+    /// Whether a scope's index is currently held.
+    #[must_use]
+    pub fn holds(&self, scope: &Scope) -> bool {
+        self.indexes.contains_key(scope)
+    }
+
+    pub(crate) fn next_load_token(&mut self) -> Token {
+        let token = Token::new(self.next_load);
+        self.next_load = self.next_load.checked_add(1).expect("store load token space is sufficient");
+        token
+    }
+
+    pub(crate) fn invalidate(&mut self, scope: &Scope) {
+        drop(self.indexes.remove(scope));
     }
 }
 
@@ -61,6 +96,8 @@ pub const fn max_out(_limits: &Limits) -> u32 {
 /// Decide one event and emit writes or a store load.
 pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     match event {
+        Event::Index { owner, scopes, most } => read::index(domain, &env.limits, owner, scopes, most, out),
+        Event::Recall { owner, by, page } => read::recall(domain, &env.limits, owner, by, page, out),
         Event::Write { owner, entry, recalled } => {
             if domain.busy() {
                 push(out, Request::Refused { owner, why: Refusal::Busy });
@@ -79,7 +116,13 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
                 begin(domain, owner, Action::Edit { party, name, change }, out);
             }
         }
-        Event::Loaded { owner, rows, more } => loaded(domain, env, owner, rows, more, out),
+        Event::Loaded { owner, rows, more } => {
+            if domain.pending.is_some() {
+                loaded(domain, env, owner, rows, more, out);
+            } else {
+                read::loaded(domain, &env.limits, owner, rows, more, out);
+            }
+        }
         Event::Restore { record } => match record {
             Record::Entry(_) | Record::Line(_) => {}
         },
@@ -92,8 +135,7 @@ fn begin(domain: &mut Domain, owner: Token, action: Action, out: &mut Queue<Requ
         Action::Write { entry, recalled: _ } => entry.name,
         Action::Edit { party: _, name, change: _ } => *name,
     };
-    let load_owner = Token::new(domain.next_load);
-    domain.next_load = domain.next_load.checked_add(1).expect("store load token space is sufficient");
+    let load_owner = domain.next_load_token();
     domain.pending = Some(Pending { owner, load_owner, action, phase: Phase::Entry });
     push(out, Request::Load { owner: load_owner, range: Range::Entry { name } });
 }
@@ -135,13 +177,17 @@ fn loaded(domain: &mut Domain, env: &Env<Limits>, owner: Token, rows: Rows, more
             }
             if more {
                 pending.phase = Phase::Count { scope: scope.clone(), count, after };
-                push(out, Request::Load { owner, range: Range::Lines { scope, after } });
+                pending.load_owner = domain.next_load_token();
+                push(out, Request::Load { owner: pending.load_owner, range: Range::Lines { scope, after } });
                 domain.pending = Some(pending);
             } else if count >= env.limits.entries_per_scope {
                 push(out, Request::Refused { owner: pending.owner, why: Refusal::Full });
             } else {
                 match pending.action {
-                    Action::Write { entry, recalled: None } => save_new(pending.owner, entry, 1, out),
+                    Action::Write { entry, recalled: None } => {
+                        domain.invalidate(&entry.scope);
+                        save_new(pending.owner, entry, 1, out);
+                    }
                     Action::Write { entry: _, recalled: Some(_) } | Action::Edit { .. } => {
                         unreachable!("only a new entry counts a scope")
                     }
@@ -159,6 +205,7 @@ fn entry_loaded(domain: &mut Domain, mut pending: Pending, found: Option<Entry>,
                     let scope = entry.scope.clone();
                     pending.action = Action::Write { entry, recalled: None };
                     pending.phase = Phase::Count { scope: scope.clone(), count: 0, after: None };
+                    pending.load_owner = domain.next_load_token();
                     push(out, Request::Load { owner: pending.load_owner, range: Range::Lines { scope, after: None } });
                     domain.pending = Some(pending);
                 }
@@ -171,6 +218,7 @@ fn entry_loaded(domain: &mut Domain, mut pending: Pending, found: Option<Entry>,
                     if old.revision != recalled || old.scope != entry.scope {
                         push(out, Request::Refused { owner: pending.owner, why: Refusal::Moved });
                     } else if let Some(revision) = old.revision.checked_add(1) {
+                        domain.invalidate(&entry.scope);
                         save_new(pending.owner, entry, revision, out);
                     } else {
                         push(out, Request::Refused { owner: pending.owner, why: Refusal::RevisionExhausted });
@@ -191,6 +239,7 @@ fn entry_loaded(domain: &mut Domain, mut pending: Pending, found: Option<Entry>,
                         old.references = references;
                         old.author = Author::Party { party };
                         old.revision = revision;
+                        domain.invalidate(&old.scope);
                         save_entry(pending.owner, old, out);
                     } else {
                         push(out, Request::Refused { owner: pending.owner, why: Refusal::RevisionExhausted });
@@ -199,6 +248,7 @@ fn entry_loaded(domain: &mut Domain, mut pending: Pending, found: Option<Entry>,
                 Change::Delete { recalled } => {
                     assert!(old.name == name, "entry lookup returns the named entry");
                     if old.revision == recalled {
+                        domain.invalidate(&old.scope);
                         push(out, Request::Erase { key: Key::Entry { name } });
                         push(out, Request::Erase { key: Key::Line { scope: old.scope, name } });
                         push(out, Request::Deleted { owner: pending.owner, name });
@@ -259,7 +309,7 @@ fn valid_change(change: &Change, limits: &Limits) -> bool {
     }
 }
 
-fn valid_scope(scope: &Scope, limits: &Limits) -> bool {
+pub(crate) fn valid_scope(scope: &Scope, limits: &Limits) -> bool {
     match scope {
         Scope::Deployment | Scope::Project { .. } | Scope::Goal { .. } => true,
         Scope::Resources { project: _, connector: _, pattern } => match u32::try_from(pattern.0.len()) {
@@ -277,6 +327,6 @@ fn valid_text(bytes: &[u8], bound: u32, one_line: bool) -> bool {
     fits && (!one_line || (!bytes.contains(&b'\n') && !bytes.contains(&b'\r')))
 }
 
-fn push(out: &mut Queue<Request>, request: Request) {
+pub(crate) fn push(out: &mut Queue<Request>, request: Request) {
     out.try_push(request).expect("parent reserved max_out before stepping notes");
 }

@@ -96,6 +96,15 @@ pub struct Rows {
     pub records: List<Record>,
 }
 
+/// How entries are recalled from the store.
+#[derive(PartialEq, Eq, Debug)]
+pub enum Recall {
+    /// A globally named entry.
+    Name { name: u64 },
+    /// Entries whose descriptions contain `query`, in scope order.
+    Search { scopes: List<Scope>, query: Box<[u8]> },
+}
+
 /// A party's change to an existing note.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Change {
@@ -127,6 +136,10 @@ pub enum Refusal {
 /// Events from the parent and the store.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Event {
+    /// Lines in the requested scopes, capped to `most`, with a remainder count.
+    Index { owner: Token, scopes: List<Scope>, most: u32 },
+    /// One zero-based page of entries by name or description search.
+    Recall { owner: Token, by: Recall, page: u32 },
     /// Write an entry, naming the revision this writer recalled, if any.
     Write { owner: Token, entry: New, recalled: Option<u32> },
     /// Correct or delete an entry on a party's request.
@@ -142,6 +155,10 @@ pub enum Event {
 /// Requests to the parent, including writes in the current decision.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Request {
+    /// The requested index and the number of lines beyond it.
+    Indexed { owner: Token, lines: List<Line>, more: u32 },
+    /// One page of recalled entries; `more` says another page exists.
+    Recalled { owner: Token, entries: List<Entry>, more: bool },
     /// Save a record under its own key in this decision.
     Save { record: Record },
     /// Erase a record under its own key in this decision.
