@@ -83,12 +83,6 @@ impl Driver {
                 }
                 engine::Request::Deliver(delivery) => self.delivered.push(delivery),
                 engine::Request::View(request) => match request {
-                    views::Request::Append { owner, .. } => {
-                        self.events.push_back(engine::Event::ViewAppended { owner, done: true });
-                    }
-                    views::Request::Expire { owner, .. } => {
-                        self.events.push_back(engine::Event::ViewExpired { owner, done: true });
-                    }
                     views::Request::Watching { .. }
                     | views::Request::Refused { .. }
                     | views::Request::Deliver { .. }

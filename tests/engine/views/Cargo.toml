@@ -1,6 +1,6 @@
 [package]
 name = "temper-engine-views-world"
-description = "The views child domain's world: a simulation with a scripted parent, people watching and a store"
+description = "The views child domain's world: a parent and scripted watchers"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,7 +9,7 @@ publish.workspace = true
 [dependencies]
 skein-lib.workspace = true
 temper-engine-domain-views.workspace = true
-temper-world.workspace = true
+skein-world.workspace = true
 
 # Ordinary Rust (programming-model.md, 10.2), so not the step crates' lints.
 # tests/clippy.toml bans what would make a run unrepeatable.

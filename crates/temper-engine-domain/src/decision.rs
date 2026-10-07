@@ -402,13 +402,11 @@ impl Decision {
                 temper_engine_domain_views::Event::Started { .. }
                 | temper_engine_domain_views::Event::Turn { .. }
                 | temper_engine_domain_views::Event::Finished { .. }
-                | temper_engine_domain_views::Event::Phase { .. } => true,
+                | temper_engine_domain_views::Event::Inbox { .. } => true,
                 temper_engine_domain_views::Event::Reported { .. }
                 | temper_engine_domain_views::Event::Watch { .. }
                 | temper_engine_domain_views::Event::Unwatch { .. }
-                | temper_engine_domain_views::Event::Delivered { .. }
-                | temper_engine_domain_views::Event::Appended { .. }
-                | temper_engine_domain_views::Event::Expired { .. } => false,
+                | temper_engine_domain_views::Event::Delivered { .. } => false,
             },
             Delivery::Result { words, .. } | Delivery::ResultReply { words, .. } => {
                 words.len() <= usize::try_from(limits.result_bytes).expect("u32 fits usize")

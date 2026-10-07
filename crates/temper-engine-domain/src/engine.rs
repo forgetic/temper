@@ -384,10 +384,6 @@ pub enum Event {
     Unwatch { watcher: Token },
     /// One watcher delivery was consumed or dropped by its stream.
     ViewDelivered { watcher: Token, done: bool },
-    /// Expendable trace append terminal.
-    ViewAppended { owner: Token, done: bool },
-    /// Expendable trace expiry terminal.
-    ViewExpired { owner: Token, done: bool },
     /// Deployment configuration starts one durable core recurring procedure.
     StartRecurring { project: u32, authority: tasks::Authority, template: tasks::RecurringTemplate },
     /// Deployment configuration opens a newer period and wakes its recurring procedures.
@@ -557,7 +553,7 @@ pub enum Event {
 pub enum Request {
     /// One bounded forge API call after the decision it follows.
     Forge { call: Token, repository: forge_client::api::Repository, op: forge_client::api::Op },
-    /// Live view/watch or expendable trace request routed to the shell.
+    /// Live view/watch request routed to the shell.
     View(views::Request),
     /// A watch failed authentication or project standing before views admission.
     WatchRefused { watcher: Token, refusal: people::Refusal },
@@ -888,7 +884,7 @@ impl Domain {
             fleet: fleet::Domain::new(&limits.fleet),
             brief: brief::Domain::new(&limits.brief),
             accounts: accounts::Domain::new(&limits.accounts),
-            views: views::Domain::new(&limits.views, skein_lib::Time::ZERO),
+            views: views::Domain::new(&limits.views),
             forge: forge::Domain::new(
                 &limits.forge,
                 config.seed,
@@ -1067,16 +1063,6 @@ fn environment_views(env: &Env<Limits>) -> Env<views::Limits> {
     Env { now: env.now, wall: env.wall, limits: env.limits.views }
 }
 
-fn view_policy() -> views::Policy {
-    views::Policy {
-        text: views::Capture::Nothing,
-        progress: views::Capture::Nothing,
-        calls: views::Capture::Nothing,
-        tools: views::Capture::Nothing,
-        usage: views::Capture::Nothing,
-    }
-}
-
 fn view_outputs(domain: &mut Domain, output: &mut Queue<views::Request>, out: &mut Queue<Request>) {
     for _ in 0..output.len() {
         let request = output.pop().expect("view output count");
@@ -1084,10 +1070,7 @@ fn view_outputs(domain: &mut Domain, output: &mut Queue<views::Request>, out: &m
             views::Request::Ended { watcher, .. } | views::Request::Refused { watcher, .. } => {
                 domain.watching.remove(&watcher);
             }
-            views::Request::Watching { .. }
-            | views::Request::Deliver { .. }
-            | views::Request::Append { .. }
-            | views::Request::Expire { .. } => {}
+            views::Request::Watching { .. } | views::Request::Deliver { .. } => {}
         }
         out.push(Request::View(request));
     }
@@ -1133,8 +1116,11 @@ fn in_tree(rows: &[tasks::ViewTask], number: u64, ancestor: u64, depth: u32) -> 
 fn view_snapshot(domain: &Domain, subject: views::Subject, bound: u32) -> Option<Box<[u8]>> {
     let mut bytes = List::with_capacity(bound);
     match subject {
-        views::Subject::Run(run) => {
-            let proof = domain.proofs.get(&run.raw())?;
+        views::Subject::Run { task, attempt } => {
+            let proof = domain.proofs.get(&task.raw())?;
+            if proof.attempt != attempt.raw() {
+                return None;
+            }
             view_byte(&mut bytes, &proof.attempt.to_be_bytes())?;
             let turn = match proof.turn {
                 Some(turn) => turn.turn,
@@ -1142,7 +1128,7 @@ fn view_snapshot(domain: &Domain, subject: views::Subject, bound: u32) -> Option
             };
             view_byte(&mut bytes, &turn.to_be_bytes())?;
         }
-        views::Subject::Item(ancestor) => {
+        views::Subject::Tree { task: ancestor } => {
             let rows = domain.tasks.view_tasks();
             for row in &rows {
                 if in_tree(&rows, row.number, ancestor.raw(), domain.limits.tasks.depth) {
@@ -1152,7 +1138,7 @@ fn view_snapshot(domain: &Domain, subject: views::Subject, bound: u32) -> Option
                 }
             }
         }
-        views::Subject::Board(project) => {
+        views::Subject::Goals { project } => {
             let rows = domain.tasks.view_tasks();
             for row in &rows {
                 if row.project == project && row.tracked.is_some() {
@@ -1162,6 +1148,7 @@ fn view_snapshot(domain: &Domain, subject: views::Subject, bound: u32) -> Option
                 }
             }
         }
+        views::Subject::Inbox { .. } => {}
     }
     Some(bytes.into_boxed())
 }
@@ -1200,7 +1187,7 @@ fn view_task_saved(domain: &mut Domain, limits: &Limits, decision: &mut Decision
         decision,
         limits,
         Delivery::View(Box::new(views::Event::TaskPhase {
-            item: Token::new(task.number),
+            task: Token::new(task.number),
             trees: trees.into_boxed(),
             project: task.project,
             phase,
@@ -1281,19 +1268,36 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
             }
             let person = domain.people.person(sign_in, env.now, env.wall);
             let project = match subject {
-                views::Subject::Run(task) | views::Subject::Item(task) => match domain.tasks.delegation(task.raw()) {
-                    Some(context) => Some(context.project),
-                    None => None,
-                },
-                views::Subject::Board(project) => Some(project),
+                views::Subject::Run { task, .. } | views::Subject::Tree { task } => {
+                    match domain.tasks.delegation(task.raw()) {
+                        Some(context) => Some(context.project),
+                        None => None,
+                    }
+                }
+                views::Subject::Goals { project } => Some(project),
+                views::Subject::Inbox { .. } => None,
             };
-            let (Some(person), Some(project)) = (person, project) else {
+            let Some(person) = person else {
                 out.push(Request::WatchRefused { watcher, refusal: people::Refusal::Unknown });
                 return;
             };
-            if domain.people.role(person, project).is_none() {
-                out.push(Request::WatchRefused { watcher, refusal: people::Refusal::Standing });
-                return;
+            match subject {
+                views::Subject::Inbox { party } => {
+                    if party != person {
+                        out.push(Request::WatchRefused { watcher, refusal: people::Refusal::Standing });
+                        return;
+                    }
+                }
+                views::Subject::Run { .. } | views::Subject::Tree { .. } | views::Subject::Goals { .. } => {
+                    let Some(project) = project else {
+                        out.push(Request::WatchRefused { watcher, refusal: people::Refusal::Unknown });
+                        return;
+                    };
+                    if domain.people.role(person, project).is_none() {
+                        out.push(Request::WatchRefused { watcher, refusal: people::Refusal::Standing });
+                        return;
+                    }
+                }
             }
             if domain.watching.contains_key(&watcher) || domain.watching.len() >= env.limits.views.watchers {
                 out.push(Request::View(views::Request::Refused { watcher, refusal: views::Refusal::Busy }));
@@ -1316,14 +1320,6 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
         }
         Event::ViewDelivered { watcher, done } => {
             view_step(domain, env, views::Event::Delivered { watcher, done }, out);
-            return;
-        }
-        Event::ViewAppended { owner, done } => {
-            view_step(domain, env, views::Event::Appended { owner, done }, out);
-            return;
-        }
-        Event::ViewExpired { owner, done } => {
-            view_step(domain, env, views::Event::Expired { owner, done }, out);
             return;
         }
         Event::StartRecurring { project, authority, template } => {
@@ -4399,7 +4395,7 @@ fn tasks_outputs(
                         decision,
                         &env.limits,
                         Delivery::View(Box::new(views::Event::Turn {
-                            run: Token::new(task),
+                            task: Token::new(task),
                             attempt: Token::new(attempt),
                             number: turn,
                         })),
@@ -4439,12 +4435,7 @@ fn tasks_outputs(
                 views::step(
                     &mut domain.views,
                     &environment_views(env),
-                    views::Event::Started {
-                        run: Token::new(task),
-                        attempt: Token::new(attempt),
-                        item: Token::new(task),
-                        policy: view_policy(),
-                    },
+                    views::Event::Started { task: Token::new(task), attempt: Token::new(attempt) },
                     &mut view_out,
                 );
                 assert!(view_out.is_empty(), "restored run following has no external effect");
@@ -4475,7 +4466,11 @@ fn tasks_outputs(
             }
             tasks::Request::Ended { task, requester, ending } => {
                 let position = domain.ending_positions.remove(&task).expect("ended row assigned its result position");
-                emit(decision, &env.limits, Delivery::View(Box::new(views::Event::Finished { run: Token::new(task) })));
+                emit(
+                    decision,
+                    &env.limits,
+                    Delivery::View(Box::new(views::Event::Finished { task: Token::new(task) })),
+                );
                 retire_calls(domain, &env.limits, decision, task, u64::MAX, u32::MAX);
                 drop(domain.proofs.remove(&task));
                 save(decision, &env.limits, Write::Erase(Key::RunProof { task }));
@@ -4769,11 +4764,7 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
             fleet::Request::Assign { channel, run, attempt } => {
                 let assignment = domain.assignments.remove(&run.raw()).expect("durable claim has prepared assignment");
                 assert!(assignment.attempt == attempt.raw(), "assignment names current attempt");
-                emit(
-                    decision,
-                    &env.limits,
-                    Delivery::View(Box::new(views::Event::Started { run, attempt, item: run, policy: view_policy() })),
-                );
+                emit(decision, &env.limits, Delivery::View(Box::new(views::Event::Started { task: run, attempt })));
                 emit(decision, &env.limits, Delivery::Assigned { channel, assignment });
             }
             fleet::Request::Placed { run, attempt } => {
@@ -6770,8 +6761,6 @@ fn discard_after_stop(domain: &mut Domain, event: Event) {
         | Event::Watch { .. }
         | Event::Unwatch { .. }
         | Event::ViewDelivered { .. }
-        | Event::ViewAppended { .. }
-        | Event::ViewExpired { .. }
         | Event::Refreshed { .. }
         | Event::RefreshFailed { .. } => {}
     }

@@ -502,8 +502,8 @@ name = "temper-engine-views-world"
 version = "0.0.0"
 dependencies = [
  "skein-lib",
+ "skein-world",
  "temper-engine-domain-views",
- "temper-world",
 ]
 
 [[package]]

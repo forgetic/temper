@@ -1,6 +1,6 @@
 [package]
 name = "temper-engine-domain-views"
-description = "What runs report, streamed live and kept as traces: the engine domain's views child domain, sans-io"
+description = "Live streams of runs, task trees, goals and inboxes"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

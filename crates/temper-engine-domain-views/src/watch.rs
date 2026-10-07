@@ -1,5 +1,5 @@
-//! Watchers: a person's live stream of a run, an item or a board, from its
-//! watch to its end (engine-domain.md, sections 2 and 11).
+//! Watchers: a party's live stream of a run, tree, goals, or inbox
+//! (domain/engine.md, section 11).
 //!
 //! A watch begins with the snapshot the parent gave with it, delivered at
 //! once. A watcher has at most one delivery in flight. A chunk for a watcher
@@ -99,8 +99,9 @@ pub(crate) struct Flight {
 /// A chunk less its content: what each watcher's copy is made from.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum Head {
-    Report { run: Token, attempt: Token, kind: Kind, at: Time },
-    Phase { item: Token, phase: u32, at: Time },
+    Report { task: Token, attempt: Token, kind: Kind, at: Time },
+    Phase { task: Token, phase: u32, at: Time },
+    Inbox { party: u64, at: Time },
 }
 
 /// A watch: refused at the entrance, or taken, and delivered its snapshot.
@@ -135,15 +136,15 @@ pub(crate) fn watch(
 /// open or ended in this iteration.
 fn refusal(domain: &Domain, limits: &Limits, subject: Subject, snapshot: &[u8]) -> Option<Refusal> {
     match subject {
-        Subject::Run(run) => {
-            if domain.unfollowed.contains_key(&run) {
+        Subject::Run { task, attempt } => {
+            if domain.unfollowed.get(&task) == Some(&attempt) {
                 return Some(Refusal::Unfollowed);
             }
-            if !domain.runs.contains_key(&run) {
+            if domain.runs.get(&task) != Some(&attempt) {
                 return Some(Refusal::Unknown);
             }
         }
-        Subject::Item(_) | Subject::Board(_) => {}
+        Subject::Tree { .. } | Subject::Goals { .. } | Subject::Inbox { .. } => {}
     }
     let within = match u32::try_from(snapshot.len()) {
         Ok(len) => len <= limits.snapshot_bytes,
@@ -252,12 +253,12 @@ pub(crate) fn miss(domain: &mut Domain, first: Subject, second: Subject) {
 
 /// The run `run` has finished: its watchers end, once they have had what
 /// waits for them.
-pub(crate) fn finish(domain: &mut Domain, run: Token, out: &mut Queue<Request>) {
+pub(crate) fn finish(domain: &mut Domain, subject: Subject, out: &mut Queue<Request>) {
     // Ending a watcher unnames it, so the watchers are found first.
     let mut found = List::with_capacity(domain.names.len());
     for (_, &id) in &domain.names {
         let watcher = domain.watchers.get(id).expect("a named watcher is live");
-        if watcher.subject == Subject::Run(run) {
+        if watcher.subject == subject {
             found.push(id).expect("room for every watcher");
         }
     }
@@ -280,8 +281,11 @@ pub(crate) fn finish(domain: &mut Domain, run: Token, out: &mut Queue<Request>) 
 /// A copy of the chunk `head` and `content` make, for one watcher.
 fn make(head: Head, content: &[u8]) -> Chunk {
     match head {
-        Head::Report { run, attempt, kind, at } => Chunk::Report { run, attempt, kind, at, content: copy_of(content) },
-        Head::Phase { item, phase, at } => Chunk::Phase { item, phase, at },
+        Head::Report { task, attempt, kind, at } => {
+            Chunk::Report { task, attempt, kind, at, content: copy_of(content) }
+        }
+        Head::Phase { task, phase, at } => Chunk::Phase { task, phase, at },
+        Head::Inbox { party, at } => Chunk::Inbox { party, at, content: copy_of(content) },
     }
 }
 

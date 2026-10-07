@@ -29,7 +29,7 @@ fn a_watched_run_shows_each_turn_as_it_commits() {
     driver.send(engine::Event::Watch {
         watcher: Token::new(770),
         sign_in: driver.session(),
-        subject: views::Subject::Run(Token::new(assignment.task)),
+        subject: views::Subject::Run { task: Token::new(assignment.task), attempt: Token::new(assignment.attempt) },
     });
     assert!(driver.viewed.iter().any(|request| matches!(request,
         views::Request::Watching { watcher } if *watcher == Token::new(770)
@@ -50,8 +50,8 @@ fn a_watched_run_shows_each_turn_as_it_commits() {
     assert!(driver.viewed.iter().any(|request| matches!(request,
         views::Request::Deliver { watcher, chunks, missed: 0 }
             if *watcher == Token::new(770) && matches!(&**chunks,
-                [views::Chunk::Report { run, attempt, kind: views::Kind::Progress, content, .. }]
-                    if *run == Token::new(assignment.task)
+                [views::Chunk::Report { task, attempt, kind: views::Kind::Progress, content, .. }]
+                    if *task == Token::new(assignment.task)
                         && *attempt == Token::new(assignment.attempt)
                         && content.as_ref() == 1_u32.to_be_bytes())
     )));
@@ -74,7 +74,7 @@ fn a_task_tree_watch_carries_a_child_phase_after_its_commit() {
     driver.send(engine::Event::Watch {
         watcher: Token::new(771),
         sign_in: driver.session(),
-        subject: views::Subject::Item(Token::new(assignment.task)),
+        subject: views::Subject::Tree { task: Token::new(assignment.task) },
     });
     let snapshot = driver
         .viewed
@@ -94,7 +94,7 @@ fn a_task_tree_watch_carries_a_child_phase_after_its_commit() {
     assert!(driver.viewed.iter().any(|request| matches!(request,
         views::Request::Deliver { watcher, chunks, .. } if *watcher == Token::new(771)
             && chunks.iter().any(|chunk| matches!(chunk,
-                views::Chunk::Phase { item, .. } if *item == Token::new(child)
+                views::Chunk::Phase { task, .. } if *task == Token::new(child)
             ))
     )));
 }
@@ -133,7 +133,7 @@ fn a_project_goals_watch_shows_a_later_priority_change() {
     driver.send(engine::Event::Watch {
         watcher: Token::new(774),
         sign_in: maintainer_session,
-        subject: views::Subject::Board(1),
+        subject: views::Subject::Goals { project: 1 },
     });
     let snapshot = driver
         .viewed
@@ -159,8 +159,8 @@ fn a_project_goals_watch_shows_a_later_priority_change() {
     assert!(driver.viewed.iter().any(|request| matches!(request,
         views::Request::Deliver { watcher, chunks, .. } if *watcher == Token::new(774)
             && chunks.iter().any(|chunk| matches!(chunk,
-                views::Chunk::Report { run, kind: views::Kind::Progress, content, .. }
-                    if *run == Token::new(task) && content[4..] == 7_u32.to_be_bytes()
+                views::Chunk::Report { task: report_task, kind: views::Kind::Progress, content, .. }
+                    if *report_task == Token::new(task) && content[4..] == 7_u32.to_be_bytes()
             ))
     )));
 }

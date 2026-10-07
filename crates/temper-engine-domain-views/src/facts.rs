@@ -1,4 +1,4 @@
-//! What the views tell whoever watches the engine (engine-domain.md, section
+//! What the views tell whoever watches the engine (domain/engine.md, section
 //! 11): a fact for each thing that happened, content-free (kinds and counts,
 //! never a token or a report's bytes), in a bounded queue the parent drains
 //! at its own pace.
@@ -18,11 +18,9 @@ pub enum Fact {
     /// A run is followed from now on, or is not, for want of room.
     Followed,
     Unfollowed,
-    /// A report was streamed to `watchers` watchers, and its trace kept so
-    /// much of it.
+    /// A report was streamed to this many watchers.
     Reported {
         watchers: u32,
-        kept: Kept,
     },
     /// One committed turn reached this many run and item watchers.
     Turn {
@@ -32,7 +30,7 @@ pub enum Fact {
     Dropped {
         dropped: Dropped,
     },
-    /// An item's phase change was streamed to `watchers` watchers.
+    /// A task or inbox change was streamed to this many watchers.
     Changed {
         watchers: u32,
     },
@@ -58,31 +56,6 @@ pub enum Fact {
     Undelivered {
         chunks: u64,
     },
-    /// A batch of `records` records went to the store, which kept them, or
-    /// failed to.
-    Appending {
-        records: u32,
-    },
-    Appended {
-        done: bool,
-    },
-    /// A sweep asked the store to expire what is past its retention, which
-    /// it did, or failed to.
-    Expiring,
-    Expired {
-        done: bool,
-    },
-}
-
-/// What a report's trace kept.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum Kept {
-    /// What the run's policy said: nothing, its shape, or its content too.
-    Nothing,
-    Shape,
-    Content,
-    /// Nothing, for want of room in the batch while the store is behind.
-    Lost,
 }
 
 /// Why a report was dropped.
@@ -104,14 +77,11 @@ pub struct Lost {
     /// Chunks a watcher missed: dropped from its full backlog, in a delivery
     /// its stream did not take, or of a report dropped.
     pub chunks: u64,
-    /// Records a trace did not keep: for want of room in the batch, or in an
-    /// append that failed.
-    pub records: u64,
     pub facts: u64,
 }
 
 impl Lost {
-    pub(crate) const NONE: Lost = Lost { runs: 0, reports: 0, chunks: 0, records: 0, facts: 0 };
+    pub(crate) const NONE: Lost = Lost { runs: 0, reports: 0, chunks: 0, facts: 0 };
 }
 
 /// What was lost, as [`Facts::lose`] counts it.
@@ -120,7 +90,6 @@ pub(crate) enum Loss {
     Runs,
     Reports,
     Chunks,
-    Records,
 }
 
 /// The facts not yet drained, and what was lost, facts that did not fit
@@ -153,7 +122,6 @@ impl Facts {
             Loss::Runs => &mut self.lost.runs,
             Loss::Reports => &mut self.lost.reports,
             Loss::Chunks => &mut self.lost.chunks,
-            Loss::Records => &mut self.lost.records,
         };
         *counter = counter.saturating_add(count);
     }
