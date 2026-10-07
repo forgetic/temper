@@ -7,8 +7,9 @@ use temper_engine_domain_forge_client as client;
 use temper_engine_domain_forge_issues as issues;
 
 use crate::{
-    Adopted, Adoption, BranchHead, ChangeRow, Class, Event, Hold, IssueRow, Key, Kinds, Limits, Name, News, Protection,
-    PullState, ReleaseEnding, ReleaseRow, Repository, Request, Role, Stored, Subscriber, Topic, What, Writer,
+    Adopted, Adoption, BranchHead, ChangeRow, CiState, Class, Event, Hold, IssueRow, Key, Kinds, Limits, Name, News,
+    Protection, PullState, ReleaseEnding, ReleaseRow, Repository, Request, Role, Stored, Subscriber, Topic, What,
+    Writer,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -44,6 +45,12 @@ pub(crate) struct PendingLost {
     task: u64,
     attempt: u64,
     name: Name,
+}
+/// One fresh verdict read for a commit with live CI subscribers.
+#[derive(Debug)]
+pub(crate) struct PendingCi {
+    repository: client::api::Repository,
+    head: client::api::Commit,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum StepStage {
@@ -91,10 +98,12 @@ pub struct Domain {
     subscriptions: Map<(u64, Topic), Subscriber>,
     heads: Map<Name, BranchHead>,
     pulls: Map<Name, PullState>,
+    ci: Map<(client::api::Repository, client::api::Commit), CiState>,
     entries: Map<u64, client::Entry>,
     landed: Map<client::api::Commit, u64>,
     landings: Map<Token, PendingLanding>,
     lost: Map<Token, PendingLost>,
+    pending_ci: Map<Token, PendingCi>,
     sequence: u64,
     changes: Map<u64, ChangeRow>,
     steps: Map<Token, PendingStep>,
@@ -127,10 +136,12 @@ impl Domain {
             subscriptions: Map::with_capacity(l.subscriptions),
             heads: Map::with_capacity(l.client.resources),
             pulls: Map::with_capacity(l.client.resources),
+            ci: Map::with_capacity(l.subscriptions),
             entries: Map::with_capacity(l.entries),
             landed: Map::with_capacity(l.landings),
             landings: Map::with_capacity(l.landings),
             lost: Map::with_capacity(l.holds),
+            pending_ci: Map::with_capacity(l.subscriptions),
             sequence: 0,
             changes: Map::with_capacity(l.changes),
             steps: Map::with_capacity(l.changes),
@@ -400,7 +411,10 @@ pub fn step(d: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Req
         Event::VetoChange { task, entry, prior } => veto_change(d, task, entry, prior, out),
         Event::Subscribe { subscription } => subscribe(d, env, subscription, out),
         Event::Unsubscribe { task, topic } => unsubscribe(d, task, topic, out),
-        Event::Hint { hint } => child(d, env, client::Event::Hint { hint }, out),
+        Event::Hint { hint } => {
+            ci_hint(d, env, &hint, out);
+            child(d, env, client::Event::Hint { hint }, out);
+        }
         Event::Client(event) => child(d, env, event, out),
         Event::Restore { record } => restore(d, env, record),
         Event::Restored { clock } => restored(d, env, clock, out),
@@ -485,6 +499,8 @@ fn drain(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
                     landing_read(d, owner, result, out);
                 } else if d.steps.contains_key(&owner) {
                     step_read(d, env, owner, result, out);
+                } else if d.pending_ci.contains_key(&owner) {
+                    ci_read(d, owner, result, out);
                 } else if owner.raw() & (1_u64 << 61_u32) != 0 && owner.raw() & (1_u64 << 62_u32) == 0 {
                     emit(out, Request::Read { owner, result });
                 } else {
@@ -2113,6 +2129,10 @@ fn veto_change(d: &mut Domain, task: u64, entry: u64, prior: change::Change, out
 
 fn subscribe(d: &mut Domain, env: &Env<Limits>, subscription: Subscriber, out: &mut Queue<Request>) {
     let task = subscription.task;
+    let ci = match &subscription.topic {
+        Topic::Ci { repository, head } => Some((*repository, *head)),
+        Topic::Landings { .. } | Topic::Pull { .. } | Topic::Participation { .. } => None,
+    };
     if !d.can_subscribe(&env.limits, &subscription) {
         emit(out, Request::Refused { task });
         return;
@@ -2120,12 +2140,118 @@ fn subscribe(d: &mut Domain, env: &Env<Limits>, subscription: Subscriber, out: &
     let key = (task, subscription.topic.clone());
     d.subscriptions.insert(key, subscription.clone()).expect("preflighted subscription capacity");
     emit(out, Request::Save { record: Stored::Subscription(subscription) });
+    if let Some((repository, head)) = ci {
+        ci_refresh(d, env, repository, head, out);
+    }
 }
 
 fn unsubscribe(d: &mut Domain, task: u64, topic: Topic, out: &mut Queue<Request>) {
     if d.subscriptions.remove(&(task, topic.clone())).is_some() {
-        emit(out, Request::Erase { key: Key::Subscription { task, topic } });
+        emit(out, Request::Erase { key: Key::Subscription { task, topic: topic.clone() } });
+        match topic {
+            Topic::Ci { repository, head } => {
+                let mut named = false;
+                for (_, subscriber) in &d.subscriptions {
+                    if subscriber.topic == (Topic::Ci { repository, head }) {
+                        named = true;
+                    }
+                }
+                if !named && d.ci.remove(&(repository, head)).is_some() {
+                    emit(out, Request::Erase { key: Key::Ci { repository, head } });
+                }
+            }
+            Topic::Landings { .. } | Topic::Pull { .. } | Topic::Participation { .. } => {}
+        }
     }
+}
+
+fn ci_refresh(
+    d: &mut Domain,
+    env: &Env<Limits>,
+    repository: client::api::Repository,
+    head: client::api::Commit,
+    out: &mut Queue<Request>,
+) {
+    for (_, pending) in &d.pending_ci {
+        if pending.repository == repository && pending.head == head {
+            return;
+        }
+    }
+    if d.pending_ci.len() == env.limits.subscriptions {
+        return;
+    }
+    let Some(sequence) = d.sequence.checked_add(1) else { return };
+    d.sequence = sequence;
+    let owner = Token::new(sequence | (1_u64 << 60));
+    d.pending_ci.insert(owner, PendingCi { repository, head }).expect("CI read capacity checked");
+    child(
+        d,
+        env,
+        client::Event::Read { owner, repository, read: client::api::Read::Statuses { commit: head, page: 1 } },
+        out,
+    );
+}
+
+fn ci_hint(d: &mut Domain, env: &Env<Limits>, hint: &client::api::Hint, out: &mut Queue<Request>) {
+    let head = match &hint.change {
+        client::api::Change::Commit(head) => *head,
+        client::api::Change::Item(_) | client::api::Change::Branch(_) => return,
+    };
+    let mut subscribed = false;
+    for (_, subscriber) in &d.subscriptions {
+        match &subscriber.topic {
+            Topic::Ci { repository, head: watched } if *repository == hint.repository && *watched == head => {
+                subscribed = true;
+                break;
+            }
+            Topic::Ci { .. } | Topic::Landings { .. } | Topic::Pull { .. } | Topic::Participation { .. } => {}
+        }
+    }
+    if subscribed {
+        ci_refresh(d, env, hint.repository, head, out);
+    }
+}
+
+fn ci_read(
+    d: &mut Domain,
+    owner: Token,
+    result: Result<client::api::Answer, client::api::Error>,
+    out: &mut Queue<Request>,
+) {
+    let Some(pending) = d.pending_ci.remove(&owner) else { return };
+    if let Ok(client::api::Answer::Statuses { ci, .. }) = result {
+        ci_observed(d, pending.repository, pending.head, ci, out);
+    }
+}
+
+fn ci_observed(
+    d: &mut Domain,
+    repository: client::api::Repository,
+    head: client::api::Commit,
+    status: client::api::Ci,
+    out: &mut Queue<Request>,
+) {
+    let topic = Topic::Ci { repository, head };
+    let mut named = false;
+    for (_, subscriber) in &d.subscriptions {
+        if subscriber.topic == topic {
+            named = true;
+        }
+    }
+    let same = match d.ci.get(&(repository, head)) {
+        Some(prior) => prior.status == status,
+        None => false,
+    };
+    if !named || same {
+        return;
+    }
+    if d.ci.len() == d.ci.capacity() && !d.ci.contains_key(&(repository, head)) {
+        return;
+    }
+    let row = CiState { repository, head, status };
+    d.ci.insert((repository, head), row.clone()).expect("CI subscription capacity");
+    emit(out, Request::Save { record: Stored::Ci(row) });
+    publish(d, topic, News::Ci { head, status }, out);
 }
 
 fn changed(
@@ -2307,8 +2433,7 @@ fn pull_changed(
         None => true,
     };
     if changed_ci {
-        let topic = Topic::Ci { repository: resource.repository, head: pull.commit };
-        publish(d, topic, News::Ci { head: pull.commit, status: pull.ci }, out);
+        ci_observed(d, resource.repository, pull.commit, pull.ci, out);
     }
 }
 
@@ -2422,6 +2547,9 @@ fn restore(d: &mut Domain, env: &Env<Limits>, record: Stored) {
         Stored::PullState(row) => {
             d.pulls.insert(row.name.clone(), row).expect("restored pull within limits");
         }
+        Stored::Ci(row) => {
+            d.ci.insert((row.repository, row.head), row).expect("restored CI within limits");
+        }
         Stored::Landed { commit, task } => {
             d.landed.insert(commit, task).expect("restored landing within limits");
         }
@@ -2453,5 +2581,17 @@ fn restored(d: &mut Domain, env: &Env<Limits>, clock: client::RecoveryClock, out
     }
     for entry in &entries {
         child(d, env, client::Event::Make { entry: entry.clone() }, out);
+    }
+    let mut ci = List::with_capacity(env.limits.subscriptions);
+    for (_, subscriber) in &d.subscriptions {
+        match &subscriber.topic {
+            Topic::Ci { repository, head } if !ci.as_slice().contains(&(*repository, *head)) => {
+                ci.push((*repository, *head)).expect("subscription capacity");
+            }
+            Topic::Ci { .. } | Topic::Landings { .. } | Topic::Pull { .. } | Topic::Participation { .. } => {}
+        }
+    }
+    for (repository, head) in &ci {
+        ci_refresh(d, env, *repository, *head, out);
     }
 }

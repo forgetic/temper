@@ -167,6 +167,7 @@ pub(super) fn rows(limits: &Limits) -> Option<u32> {
         .checked_add(forge.tasks)?
         .checked_add(forge.subscriptions)?
         .checked_add(forge.client.resources.checked_mul(3)?)?
+        .checked_add(forge.subscriptions)?
         .checked_add(forge.landings)?
         .checked_add(forge.entries)?
         .checked_add(forge.client.repositories)?
@@ -1641,6 +1642,7 @@ pub(super) fn outputs(
                     | forge::Stored::Subscription(_)
                     | forge::Stored::BranchHead(_)
                     | forge::Stored::PullState(_)
+                    | forge::Stored::Ci(_)
                     | forge::Stored::Landed { .. }
                     | forge::Stored::Client(_)
                     | forge::Stored::Change(_)

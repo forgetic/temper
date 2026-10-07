@@ -31,6 +31,7 @@ pub fn stored_key(row: &Stored) -> Key {
         Stored::Subscription(row) => Key::Subscription { task: row.task, topic: row.topic.clone() },
         Stored::BranchHead(row) => Key::BranchHead(row.name.clone()),
         Stored::PullState(row) => Key::PullState(row.name.clone()),
+        Stored::Ci(row) => Key::Ci { repository: row.repository, head: row.head },
         Stored::Landed { commit, .. } => Key::Landed(*commit),
         Stored::Entry(row) => Key::Entry(row.number),
         Stored::Client(row) => Key::Client(match row {
@@ -138,7 +139,7 @@ pub fn stored_bytes(record: &Stored) -> Option<u64> {
         }
         Stored::BranchHead(row) => name(&row.name),
         Stored::PullState(row) => name(&row.name),
-        Stored::Landed { .. } => Some(0),
+        Stored::Ci(_) | Stored::Landed { .. } => Some(0),
         Stored::Entry(row) => client::effect_bytes(&row.effect),
         Stored::Client(row) => client::stored_bytes(row),
         Stored::Change(row) => bytes(&row.branch)?

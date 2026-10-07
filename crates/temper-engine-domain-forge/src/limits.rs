@@ -65,6 +65,10 @@ pub fn worst_case(l: &Limits) -> Option<u64> {
         .checked_add(Map::<(u64, Topic), Subscriber>::worst_case(l.subscriptions)?)?
         .checked_add(Map::<Name, BranchHead>::worst_case(l.client.resources)?)?
         .checked_add(Map::<Name, PullState>::worst_case(l.client.resources)?)?
+        .checked_add(Map::<(client::api::Repository, client::api::Commit), crate::CiState>::worst_case(
+            l.subscriptions,
+        )?)?
+        .checked_add(Map::<skein_lib::Token, crate::domain::PendingCi>::worst_case(l.subscriptions)?)?
         .checked_add(Map::<u64, client::Entry>::worst_case(l.entries)?)?
         .checked_add(Map::<client::api::Commit, u64>::worst_case(l.landings)?)?
         .checked_add(Map::<skein_lib::Token, crate::domain::PendingLanding>::worst_case(l.landings)?)?

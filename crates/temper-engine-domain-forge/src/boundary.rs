@@ -189,6 +189,13 @@ pub struct PullState {
     pub ci: client::api::Ci,
     pub state: client::api::State,
 }
+/// Last CI verdict published to subscribers of one commit.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct CiState {
+    pub repository: client::api::Repository,
+    pub head: client::api::Commit,
+    pub status: client::api::Ci,
+}
 /// A goal's issue projection, including an in-flight write and created issue.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct IssueRow {
@@ -261,6 +268,7 @@ pub enum Stored {
     BranchHead(BranchHead),
     /// One pull's last published state.
     PullState(PullState),
+    Ci(CiState),
     /// A merge made by this deployment, for own-change news classification.
     Landed {
         commit: client::api::Commit,
@@ -285,6 +293,7 @@ pub enum Key {
     Subscription { task: u64, topic: Topic },
     BranchHead(Name),
     PullState(Name),
+    Ci { repository: client::api::Repository, head: client::api::Commit },
     Landed(client::api::Commit),
     Entry(u64),
     Client(client::Key),

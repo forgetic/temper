@@ -810,6 +810,43 @@ fn closing_a_landed_change_deletes_its_branch_before_releasing_the_task() {
 }
 
 #[test]
+fn a_ci_subscription_reads_its_head_and_restarts_without_repeating_old_news() {
+    let mut world = World::new(94);
+    world.adopt();
+    world.produce(b"temper/51");
+    world.status(b"temper/51", temper_fake_forge_domain::api::Check::Passed);
+    let head = temper_engine_forge_world::translate::commit(world.branch(b"temper/51"));
+    let topic = top::Topic::Ci { repository: REPO, head };
+    world.event(top::Event::Subscribe {
+        subscription: top::Subscriber { task: 51, number: 1, topic, own_change: None, paths: Box::new([]) },
+    });
+    world.run_for(2);
+    assert!(world.seen().iter().any(|request| matches!(request, top::Request::News { task: 51, news: top::News::Ci { head: seen, .. }, .. } if *seen == head)));
+    world.take_seen();
+    world.restart();
+    world.run_for(2);
+    assert!(
+        !world
+            .seen()
+            .iter()
+            .any(|request| matches!(request, top::Request::News { task: 51, news: top::News::Ci { .. }, .. }))
+    );
+    world.status(b"temper/51", temper_fake_forge_domain::api::Check::Failed);
+    world.event(top::Event::Hint {
+        hint: client::api::Hint { repository: REPO, change: client::api::Change::Commit(head), key: None },
+    });
+    world.run_for(2);
+    assert!(world.seen().iter().any(|request| matches!(
+        request,
+        top::Request::News { task: 51, news: top::News::Ci { status: client::api::Ci::Failed, .. }, .. }
+    )));
+    assert!(matches!(
+        world.stored().get(&top::Key::Ci { repository: REPO, head }),
+        Some(top::Stored::Ci(top::CiState { status: client::api::Ci::Failed, .. }))
+    ));
+}
+
+#[test]
 fn cancelling_a_change_closes_its_pull_before_deleting_its_branch() {
     let mut world = World::new(93);
     world.adopt();

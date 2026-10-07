@@ -1678,6 +1678,183 @@ fn a_goal_subscription_receives_the_connectors_landing_news() {
     );
 }
 
+fn subscribe_chat(world: &mut World, topic: forge_top::Topic, key: u8) -> u64 {
+    world.send(engine::Event::Hello {
+        channel: Token::new(7),
+        hello: fleet::Hello {
+            graces: Some(Duration::from_secs(1)),
+            slots: 1,
+            workstreams: Box::new([]),
+            hosting: Box::new([]),
+        },
+    });
+    world.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(u64::from(key))),
+        sign_in: world.signed_in.expect("owner session"),
+        key: [key; 16],
+        ask: people::Ask::StartChat { project: 1, words: Box::from(&b"watch the forge"[..]) },
+    });
+    world.until(Until::Assigned);
+    let assignment = world.assigned[0].clone();
+    world.send(engine::Event::Call {
+        channel: Token::new(7),
+        task: assignment.task,
+        attempt: assignment.attempt,
+        call: Token::new(u64::from(key) + 1),
+        body: engine::Call {
+            completion: 1,
+            position: 1,
+            tool: engine::Tool::SubscribeForge { topic, own_change: None, paths: Box::new([]) },
+        },
+    });
+    world.until(Until::Subscribed);
+    assignment.task
+}
+
+fn news_count(world: &World, task: u64) -> usize {
+    match world.store.rows.get(&Key::Tasks(tasks::Key::Live(task))) {
+        Some(Record::Tasks(tasks::Stored::Live(row))) => {
+            let mut hits = 0;
+            for word in &row.inbox {
+                if matches!(word.kind, tasks::MessageKind::News { .. }) {
+                    hits += usize::try_from(word.hits).expect("bounded news hits");
+                }
+            }
+            hits
+        }
+        Some(_) | None => 0,
+    }
+}
+
+fn await_new_forge_news(world: &mut World, task: u64, before: usize) {
+    for _ in 0..120 {
+        world.tick();
+        if news_count(world, task) > before {
+            return;
+        }
+    }
+    panic!("connector news did not reach the subscribed root task");
+}
+
+#[test]
+fn a_pull_subscription_receives_the_connectors_state_news() {
+    let mut world = World::new();
+    world.adopt();
+    assert!(matches!(
+        world.external(2, raw::Op::Git(raw::Git::Create { branch: Box::from(&b"work"[..]), commit: 1 })),
+        raw::Answer::Branch(_)
+    ));
+    fake::advance(&mut world.fake, &world.fake_env, b"org/repo", b"work", b"file", b"change", 1).expect("head");
+    let raw::Answer::Created(pull) = world.external(
+        2,
+        raw::Op::Write(raw::Write::OpenPull {
+            title: Box::from(&b"change"[..]),
+            body: Box::new([]),
+            head: Box::from(&b"work"[..]),
+            base: Box::from(&b"main"[..]),
+        }),
+    ) else {
+        panic!("pull opened")
+    };
+    let task = subscribe_chat(&mut world, forge_top::Topic::Pull { repository: forge_world::REPO, number: pull }, 94);
+    for _ in 0..10 {
+        world.tick();
+    }
+    let before = news_count(&world, task);
+    assert!(matches!(world.external(2, raw::Op::Write(raw::Write::Close { number: pull })), raw::Answer::Done));
+    world.send(engine::Event::ForgeHint {
+        hint: client::api::Hint { repository: forge_world::REPO, change: client::api::Change::Item(pull), key: None },
+    });
+    await_new_forge_news(&mut world, task, before);
+}
+
+#[test]
+fn a_ci_subscription_receives_the_connectors_verdict_news() {
+    let mut world = World::new();
+    world.adopt();
+    assert!(matches!(
+        world.external(2, raw::Op::Git(raw::Git::Create { branch: Box::from(&b"work"[..]), commit: 1 })),
+        raw::Answer::Branch(_)
+    ));
+    let head =
+        fake::advance(&mut world.fake, &world.fake_env, b"org/repo", b"work", b"file", b"change", 1).expect("head");
+    let raw::Answer::Created(_pull) = world.external(
+        2,
+        raw::Op::Write(raw::Write::OpenPull {
+            title: Box::from(&b"change"[..]),
+            body: Box::new([]),
+            head: Box::from(&b"work"[..]),
+            base: Box::from(&b"main"[..]),
+        }),
+    ) else {
+        panic!("pull opened")
+    };
+    let task = subscribe_chat(
+        &mut world,
+        forge_top::Topic::Ci { repository: forge_world::REPO, head: translate::commit(head) },
+        96,
+    );
+    for _ in 0..10 {
+        world.tick();
+    }
+    let before = news_count(&world, task);
+    assert!(matches!(
+        world.external(
+            1,
+            raw::Op::Write(raw::Write::Status {
+                commit: head,
+                context: Box::from(&b"build"[..]),
+                state: raw::Check::Failed
+            })
+        ),
+        raw::Answer::Done
+    ));
+    world.send(engine::Event::ForgeHint {
+        hint: client::api::Hint {
+            repository: forge_world::REPO,
+            change: client::api::Change::Commit(translate::commit(head)),
+            key: None,
+        },
+    });
+    await_new_forge_news(&mut world, task, before);
+}
+
+#[test]
+fn a_participation_subscription_receives_the_connectors_comment_news() {
+    let mut world = World::new();
+    world.adopt();
+    assert!(matches!(
+        world.external(2, raw::Op::Git(raw::Git::Create { branch: Box::from(&b"work"[..]), commit: 1 })),
+        raw::Answer::Branch(_)
+    ));
+    fake::advance(&mut world.fake, &world.fake_env, b"org/repo", b"work", b"file", b"change", 1).expect("head");
+    let raw::Answer::Created(pull) = world.external(
+        2,
+        raw::Op::Write(raw::Write::OpenPull {
+            title: Box::from(&b"change"[..]),
+            body: Box::new([]),
+            head: Box::from(&b"work"[..]),
+            base: Box::from(&b"main"[..]),
+        }),
+    ) else {
+        panic!("pull opened")
+    };
+    let task =
+        subscribe_chat(&mut world, forge_top::Topic::Participation { repository: forge_world::REPO, number: pull }, 98);
+    for _ in 0..10 {
+        world.tick();
+    }
+    let before = news_count(&world, task);
+    assert!(matches!(
+        world.external(2, raw::Op::Write(raw::Write::Comment { number: pull, body: Box::from(&b"please check"[..]) })),
+        raw::Answer::Commented(_)
+    ));
+    world.send(engine::Event::ForgeHint {
+        hint: client::api::Hint { repository: forge_world::REPO, change: client::api::Change::Item(pull), key: None },
+    });
+    await_new_forge_news(&mut world, task, before);
+}
+
 #[test]
 fn an_authorized_forge_read_returns_a_bounded_typed_answer() {
     let mut world = World::configured(true, false);
