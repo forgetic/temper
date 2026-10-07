@@ -3,9 +3,9 @@
 
 use std::collections::BTreeSet;
 
-use temper_worker_domain_host::Limits;
-use temper_worker_host_world::engine::ENDINGS;
-use temper_worker_host_world::{Settings, Span, World};
+use jig_worker_host::Limits;
+use jig_worker_host_world::engine::ENDINGS;
+use jig_worker_host_world::{Settings, Span, World};
 
 const ITERATIONS: u32 = 200_000;
 

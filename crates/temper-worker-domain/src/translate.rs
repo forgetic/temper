@@ -10,7 +10,7 @@ use skein_lib::{List, Token};
 use skein_lib::bytes::copy_of;
 use temper_worker_domain_agent::{self as agent, channel};
 use temper_worker_domain_checkout::{self as checkout, git};
-use temper_worker_domain_host as host;
+use jig_worker_host as host;
 use crate::wire;
 
 use crate::boundary::Phase;

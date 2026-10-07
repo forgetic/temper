@@ -210,6 +210,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "jig-worker-host"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+]
+
+[[package]]
+name = "jig-worker-host-world"
+version = "0.0.0"
+dependencies = [
+ "jig-worker-host",
+ "skein-lib",
+ "skein-world",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.190"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -658,10 +674,10 @@ dependencies = [
 name = "temper-worker-domain"
 version = "0.0.0"
 dependencies = [
+ "jig-worker-host",
  "skein-lib",
  "temper-worker-domain-agent",
  "temper-worker-domain-checkout",
- "temper-worker-domain-host",
 ]
 
 [[package]]
@@ -679,28 +695,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "temper-worker-domain-host"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
-]
-
-[[package]]
 name = "temper-worker-domain-world"
 version = "0.0.0"
 dependencies = [
  "skein-lib",
  "temper-worker-domain",
  "temper-world",
-]
-
-[[package]]
-name = "temper-worker-host-world"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "skein-world",
- "temper-worker-domain-host",
 ]
 
 [[package]]

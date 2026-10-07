@@ -3,7 +3,7 @@
 //! exactly its limits, then every run ending with as much as it may hold.
 
 use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
-use temper_worker_domain_host::{
+use jig_worker_host::{
     AgentFailure, Answer, Ask, Assignment, Bounce, Delivery, DeliveryOutcome, Domain, Event, Finish, Grant, Invalid, Limits,
     Preparation, Reason, Refusal, Request, Workspace, max_out, resume, step, worst_case,
 };
@@ -40,7 +40,7 @@ enum Asked {
     Relay { call: Token },
     Save { owner: Token },
     Answer { answer: Answer },
-    AnswerV2 { answer: temper_worker_domain_host::AnswerV2 },
+    AnswerV2 { answer: jig_worker_host::AnswerV2 },
     Turn,
     Bounced { bounce: Bounce },
     Hosting { runs: usize },
@@ -335,7 +335,7 @@ fn every_entry_point_stays_within_the_worst_case() {
 
 #[test]
 fn v2_full_transcripts_and_delivery_feedback_fit_the_hosts_bound() {
-    use temper_worker_domain_host::{AssignmentV2, EndingV2, FinishV2, Turn};
+    use jig_worker_host::{AssignmentV2, EndingV2, FinishV2, Turn};
     let limits = Limits { transcript_bytes: 2048, turn_bytes: 128, ..LIMITS };
     let mut owners = Vec::with_capacity(usize::try_from(limits.slots).expect("bounded"));
     let mut host = Measured::new(limits);

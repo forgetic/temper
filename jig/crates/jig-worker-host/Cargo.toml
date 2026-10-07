@@ -1,5 +1,5 @@
 [package]
-name = "temper-worker-domain-host"
+name = "jig-worker-host"
 description = "Hosted runs: the worker domain's host child domain, sans-io"
 version.workspace = true
 edition.workspace = true

@@ -19,7 +19,7 @@ use alloc::boxed::Box;
 use skein_lib::{Env, Id, Map, Queue, Slab, Time, Token};
 use temper_worker_domain_agent as agent;
 use temper_worker_domain_checkout as checkout;
-use temper_worker_domain_host as host;
+use jig_worker_host as host;
 
 use crate::boundary::{Event, Request, Told};
 use crate::facts::Fact;

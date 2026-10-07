@@ -12,7 +12,7 @@
 //!
 //! ```text
 //! temper-worker-domain                 faces the protocol; the engine link; routes; translates
-//! ├── temper-worker-domain-host        hosted runs: admit, prepare, start, relay, park or end
+//! ├── jig-worker-host        hosted runs: admit, prepare, start, relay, park or end
 //! ├── temper-worker-domain-checkout    workspaces: prepare, commit, push, save; the cache
 //! └── temper-worker-domain-agent       agent processes: spawn, channel, watchdog, cancel then kill
 //! ```
@@ -77,4 +77,4 @@ pub use limits::{Limits, declared_graces, push_deadline, worst_case};
 // The payloads are the children's: a parent may use its children's types.
 pub use temper_worker_domain_agent as agent;
 pub use temper_worker_domain_checkout as checkout;
-pub use temper_worker_domain_host as host;
+pub use jig_worker_host as host;
