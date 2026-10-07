@@ -122,8 +122,11 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     let answers = Map::<Named, wire::Answer>::worst_case(slots)?.checked_add(u64::from(slots).checked_mul(answer)?)?;
     let next_answers = Map::<crate::turns::Name, crate::turns::Answer>::worst_case(slots)?
         .checked_add(u64::from(slots).checked_mul(answer)?)?;
-    let relays = Queue::<Relay>::worst_case(limits.stalled)?
-        .checked_add(u64::from(limits.stalled).checked_mul(agent_limits.call_bytes)?)?;
+    // A typed relay retains its opaque name alongside tool and input while
+    // contact is down; each group is bounded by the host's event byte limit.
+    let relay_bytes = agent_limits.call_bytes.max(host_limits.event_bytes.checked_mul(2)?);
+    let relays =
+        Queue::<Relay>::worst_case(limits.stalled)?.checked_add(u64::from(limits.stalled).checked_mul(relay_bytes)?)?;
     let bounces = Queue::<Bounced>::worst_case(bounces(limits)?)?;
     let host_out = Queue::<host::Request>::worst_case(host_out(limits))?;
     let checkout_out = Queue::<checkout::Request>::worst_case(checkout_out(limits))?;

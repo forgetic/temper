@@ -244,6 +244,7 @@ fn sort(requests: Box<[Request]>, changed: bool, pending: &mut Queue<(Token, git
             | Request::Turn { .. }
             | Request::AnswerV2 { .. }
             | Request::RelayV2 { .. }
+            | Request::RelayTyped { .. }
             | Request::Dial
             | Request::Hello { .. }
             | Request::Answer { .. }
@@ -987,6 +988,7 @@ fn out_of_reach_until(h: &mut Harness, secs: u64) {
                 | Request::Turn { .. }
                 | Request::AnswerV2 { .. }
                 | Request::RelayV2 { .. }
+                | Request::RelayTyped { .. }
                 | Request::Hello { .. }
                 | Request::Answer { .. }
                 | Request::Relay { .. }

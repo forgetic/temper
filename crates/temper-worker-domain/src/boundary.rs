@@ -48,7 +48,7 @@
 use alloc::boxed::Box;
 
 use crate::wire;
-use skein_lib::{Time, Token};
+use skein_lib::{Duration, Time, Token};
 use temper_worker_domain_agent::{self as agent, channel};
 use temper_worker_domain_checkout::git;
 
@@ -59,6 +59,26 @@ use temper_worker_domain_checkout::git;
     reason = "fixed diagnostic tails keep boundary records bounded without allocation"
 )]
 pub enum Event {
+    /// The engine's typed conversation state for an attempt.
+    AssignTyped {
+        assignment: wire::AssignmentTyped,
+    },
+    /// A named message with its sender label and words.
+    InboundTyped {
+        run: Token,
+        attempt: Token,
+        name: Token,
+        sender: Box<[u8]>,
+        words: Box<[u8]>,
+    },
+    /// A typed call's answer, under its opaque name and local delivery token.
+    RelayedTyped {
+        run: Token,
+        attempt: Token,
+        call: Box<[u8]>,
+        delivery: Token,
+        answer: Box<[u8]>,
+    },
     ConnectedV2,
     /// Stable wire call name and the exact local delivery it answers.
     RelayedV2 {
@@ -188,10 +208,21 @@ pub enum Event {
     reason = "fixed diagnostic tails keep boundary records bounded without allocation"
 )]
 pub enum Request {
+    /// A named host call with the tool, write flag, input and time left.
+    RelayTyped {
+        run: Token,
+        attempt: Token,
+        call: Box<[u8]>,
+        delivery: Token,
+        tool: Box<[u8]>,
+        writes: bool,
+        input: Box<[u8]>,
+        deadline: Duration,
+    },
     HelloV2 {
         hello: Hello,
-        graces: skein_lib::Duration,
-        push_deadline: skein_lib::Duration,
+        graces: Duration,
+        push_deadline: Duration,
     },
     Turn {
         run: Token,
@@ -246,7 +277,7 @@ pub enum Request {
         run: Token,
         attempt: Token,
         account: u32,
-        retry_after: skein_lib::Duration,
+        retry_after: Duration,
     },
     /// To the engine: an inbound event for the run `run`'s attempt `attempt`
     /// was not passed on, for `bounce`.

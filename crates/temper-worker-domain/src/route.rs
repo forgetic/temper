@@ -17,7 +17,7 @@ use crate::boundary::{Event, Request};
 use crate::domain::{self, Domain};
 use crate::facts::Fact;
 use crate::limits::{self, Limits};
-use crate::link::{Bounced, Relay};
+use crate::link::{Bounced, Relay, RelayBody};
 use crate::translate;
 use crate::workspace::{self, Write};
 
@@ -41,6 +41,37 @@ pub(crate) const fn agent_env(env: &Env<Limits>) -> Env<agent::Limits> {
 #[expect(clippy::too_many_lines, reason = "one exhaustive boundary routing table")]
 pub(crate) fn event(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     let event = match event {
+        Event::RelayedTyped { run, attempt, call, delivery, answer } => {
+            domain.link.heard();
+            if domain.host.is_relayed_typed_for(run, attempt, delivery, &call) {
+                host_step(domain, env, host::Event::Relayed { run, attempt, call: delivery, answer });
+            }
+            return;
+        }
+        Event::AssignTyped { assignment } => {
+            domain.link.heard();
+            let run = assignment.assignment.run;
+            let attempt = assignment.assignment.attempt;
+            if domain.link.holds(run, attempt) || domain.host.is_hosting(run, attempt) {
+                return;
+            }
+            if !domain.link.is_v2() || env.limits.host.turns == 0 {
+                return domain.link.refuse_version(run, attempt, out);
+            }
+            let answers = domain.link.held();
+            host_step(domain, env, host::Event::Unacknowledged { answers });
+            let wire::AssignmentTyped { assignment, turns, answered } = assignment;
+            let assignment = match workspace::stage(domain, env, assignment, true) {
+                Ok(assignment) => assignment,
+                Err(refusal) => return domain.link.refuse(run, attempt, refusal, true, out),
+            };
+            let assignment = host::AssignmentTyped { assignment, turns, answered };
+            return host_step(domain, env, host::Event::AssignTyped { reply_to: ReplyTo::new(run), assignment });
+        }
+        Event::InboundTyped { run, attempt, name, sender, words } => {
+            domain.link.heard();
+            return host_step(domain, env, host::Event::InboundTyped { run, attempt, name, sender, words });
+        }
         Event::RelayedV2 { run, attempt, call, delivery, answer } => {
             domain.link.heard();
             if domain.host.is_relayed_named_for(run, attempt, delivery, call) {
@@ -208,6 +239,18 @@ fn from_host(domain: &mut Domain, env: &Env<Limits>, request: host::Request, out
         Err(request) => request,
     };
     match request {
+        host::Request::RelayTyped { run, attempt, call, delivery, tool, writes, input, deadline } => {
+            domain.link.relay(
+                Relay {
+                    run,
+                    attempt,
+                    call: delivery,
+                    body: RelayBody::Typed { name: call, tool, writes, input, deadline },
+                },
+                &domain.host,
+                out,
+            );
+        }
         host::Request::AnswerV2 { to, run, attempt, answer } => {
             assert!(to.into_token() == run, "an answer is its assignment's");
             let preparation = workspace::preparation(domain, run);
@@ -216,7 +259,11 @@ fn from_host(domain: &mut Domain, env: &Env<Limits>, request: host::Request, out
             domain.link.answer_v2(run, attempt, answer, out);
         }
         host::Request::RelayV2 { run, attempt, call, delivery, body } => {
-            domain.link.relay(Relay { run, attempt, call: delivery, stable: Some(call), body }, &domain.host, out);
+            domain.link.relay(
+                Relay { run, attempt, call: delivery, body: RelayBody::Legacy { stable: Some(call), body } },
+                &domain.host,
+                out,
+            );
         }
         host::Request::Turn { agent: _, run, attempt, turn } => {
             domain.link.turn(run, attempt, turn, out);
@@ -232,7 +279,11 @@ fn from_host(domain: &mut Domain, env: &Env<Limits>, request: host::Request, out
             domain.link.answer(run, attempt, answer, out);
         }
         host::Request::Relay { run, attempt, call, body } => {
-            domain.link.relay(Relay { run, attempt, call, stable: None, body }, &domain.host, out);
+            domain.link.relay(
+                Relay { run, attempt, call, body: RelayBody::Legacy { stable: None, body } },
+                &domain.host,
+                out,
+            );
         }
         host::Request::CancelRelay { call } => {
             if domain.link.cancel_relay(call) {
@@ -256,7 +307,6 @@ fn from_host(domain: &mut Domain, env: &Env<Limits>, request: host::Request, out
             workspace::save(domain, env, owner, workspace);
         }
         host::Request::Release { workspace } => workspace::release(domain, env, workspace),
-        host::Request::RelayTyped { .. } => unreachable!("typed calls await the agent capability translation"),
         host::Request::DeliverTyped { .. }
         | host::Request::ReplyTyped { .. }
         | host::Request::StartTyped { .. }

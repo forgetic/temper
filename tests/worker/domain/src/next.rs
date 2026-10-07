@@ -359,6 +359,7 @@ impl World {
             | Request::Answer { .. }
             | Request::Relay { .. }
             | Request::RelayV2 { .. }
+            | Request::RelayTyped { .. }
             | Request::Bounced { .. }
             | Request::Rejected { .. }
             | Request::Exhausted { .. }

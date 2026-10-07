@@ -125,8 +125,22 @@ pub(crate) struct Relay {
     pub(crate) run: Token,
     pub(crate) attempt: Token,
     pub(crate) call: Token,
-    pub(crate) stable: Option<Token>,
-    pub(crate) body: Box<[u8]>,
+    pub(crate) body: RelayBody,
+}
+
+#[derive(PartialEq, Eq, Hash, Debug)]
+pub(crate) enum RelayBody {
+    Legacy { stable: Option<Token>, body: Box<[u8]> },
+    Typed { name: Box<[u8]>, tool: Box<[u8]>, writes: bool, input: Box<[u8]>, deadline: Duration },
+}
+
+impl RelayBody {
+    fn requires_v2(&self) -> bool {
+        match self {
+            Self::Legacy { stable: None, .. } => false,
+            Self::Legacy { stable: Some(_), .. } | Self::Typed { .. } => true,
+        }
+    }
 }
 
 /// A bounce for the engine, held while the channel is down.
@@ -353,7 +367,7 @@ impl Link {
     /// A relay for the engine: now if the channel is open, kept until it is
     /// otherwise.
     pub(crate) fn relay(&mut self, relay: Relay, host: &host::Domain, out: &mut Queue<Request>) {
-        if self.is_up() && (relay.stable.is_none() || self.v2) {
+        if self.is_up() && (!relay.body.requires_v2() || self.v2) {
             return out.push(request(relay));
         }
         // Room is made by dropping the relays their calls no longer wait for:
@@ -452,7 +466,7 @@ impl Link {
                 break;
             };
             if host.is_relayed(relay.call) {
-                if relay.stable.is_none() || self.v2 {
+                if !relay.body.requires_v2() || self.v2 {
                     out.push(request(relay));
                 } else {
                     self.relays.push(relay);
@@ -521,10 +535,15 @@ impl Link {
 pub(crate) const ALARMS: u32 = 2;
 
 fn request(relay: Relay) -> Request {
-    let Relay { run, attempt, call, stable, body } = relay;
-    match stable {
-        Some(name) => Request::RelayV2 { run, attempt, call: name, delivery: call, body },
-        None => Request::Relay { run, attempt, call, body },
+    let Relay { run, attempt, call, body } = relay;
+    match body {
+        RelayBody::Legacy { stable: Some(name), body } => {
+            Request::RelayV2 { run, attempt, call: name, delivery: call, body }
+        }
+        RelayBody::Legacy { stable: None, body } => Request::Relay { run, attempt, call, body },
+        RelayBody::Typed { name, tool, writes, input, deadline } => {
+            Request::RelayTyped { run, attempt, call: name, delivery: call, tool, writes, input, deadline }
+        }
     }
 }
 
