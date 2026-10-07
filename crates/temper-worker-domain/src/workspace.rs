@@ -492,6 +492,7 @@ fn written(hold: Token, directory: Token, owner: Token, event: host::Event, then
         host::Event::Saved { owner: _, at } => host::Event::Saved { owner, at },
         host::Event::AssignV2 { .. }
         | host::Event::Turn { .. }
+        | host::Event::AcknowledgeTurn { .. }
         | host::Event::Facts { .. }
         | host::Event::FinishedV2 { .. }
         | host::Event::Assign { .. }

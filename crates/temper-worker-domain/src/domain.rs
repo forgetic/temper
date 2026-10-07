@@ -39,7 +39,7 @@ pub const fn max_out(limits: &Limits) -> u32 {
         .saturating_add(limits.host.slots)
         .saturating_add(limits.stalled)
         .saturating_add(bounces)
-        .saturating_add(limits.host.slots.saturating_mul(limits.turns))
+        .saturating_add(limits.host.slots.saturating_mul(limits.host.turns))
 }
 
 /// The worker domain's state: its child domains', the engine link, what it
@@ -135,7 +135,7 @@ impl Domain {
     /// Turns retained until commitment acknowledgement.
     #[must_use]
     pub fn retained_turns(&self) -> u32 {
-        self.link.retained_turns()
+        self.host.retained_turns()
     }
 
     /// Relays and bounces waiting for a channel to the engine.
@@ -148,7 +148,7 @@ impl Domain {
     /// out of reach past the grace, since the domain was made.
     #[must_use]
     pub const fn abandoned(&self) -> u64 {
-        self.link.abandoned()
+        self.link.abandoned().saturating_add(self.host.turns_abandoned())
     }
 
     /// Whether the worker has shut down: told to, every run has answered, and
@@ -259,7 +259,7 @@ pub fn fire(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
     };
     let agent_due = domain.agent.is_due(env.now);
     if link_due && (!agent_due || domain.link.next_deadline() <= domain.agent.next_deadline()) {
-        match domain.link.fire(env, out) {
+        match domain.link.fire(env, &domain.host, out) {
             Some(Fired::Dialled | Fired::Turn) | None => {}
             Some(Fired::Grace) => {
                 keep(domain, Fact::Grace);
@@ -290,8 +290,8 @@ pub fn resume(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) 
 /// out of reach past the grace.
 fn settle(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
     route::hand_off(domain, env, out);
-    if domain.host.unanswered() == 0 {
-        domain.link.give_up();
+    if domain.host.unanswered() == 0 && domain.link.give_up(&domain.host) {
+        domain.host.give_up_turns();
     }
     gather(domain, &env.limits);
 }

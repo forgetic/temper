@@ -32,9 +32,6 @@ pub struct Limits {
     /// as may wait for the engine at once (the host's slots times the calls a
     /// run may have in flight), so that none is dropped.
     pub stalled: u32,
-    /// Retained turns per attempt, and their total body bytes per attempt.
-    pub turns: u32,
-    pub turn_queue_bytes: u64,
     pub turn_backoff: Duration,
 }
 
@@ -61,8 +58,8 @@ pub struct Limits {
 /// each slot at most, and the relays and bounces it keeps while the engine
 /// is out of reach, the run's facts for the engine, the queues
 /// that hold what each child domain emits in a step until it is routed, and the
-/// facts. Version-two retained turns add a bounded map, its body byte budget
-/// and one retry deadline per entry; retained answers still hold slots.
+/// facts. Version-two retained turns add one link retry deadline per entry;
+/// the host counts their bodies and map. Retained answers still hold slots.
 /// Owned preparation conflicts belong to the workspace until moved into the
 /// agent start. What the queued requests own is counted where they end up,
 /// and what the hello holds goes out in the step that makes it.
@@ -74,9 +71,9 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         && host_limits.transcript_bytes <= agent_limits.transcript_bytes
         && host_limits.turn_bytes <= agent_limits.turn_bytes
         && host_limits.fact_bytes <= agent_limits.fact_bytes
-        && (limits.turns == 0
+        && (host_limits.turns == 0
             || (host_limits.turn_bytes > 0
-                && host_limits.turn_bytes <= limits.turn_queue_bytes
+                && host_limits.turn_bytes <= host_limits.turn_queue_bytes
                 && limits.turn_backoff > Duration::ZERO));
     let fits = next_fits
         && checkout_limits.repositories <= agent_limits.repositories
@@ -103,15 +100,13 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_add(agent::worst_case(agent_limits)?)?;
     let slots = host_limits.slots;
     let workspaces = workspace_memory(limits)?;
-    let capacity = host_limits.slots.checked_mul(limits.turns)?;
+    let capacity = host_limits.slots.checked_mul(host_limits.turns)?;
     routed(limits)
         .checked_add(host_limits.slots)?
         .checked_add(limits.stalled)?
         .checked_add(bounces(limits)?)?
         .checked_add(capacity)?;
-    let retained = Map::<crate::turns::TurnName, crate::turns::Pending>::worst_case(capacity)?
-        .checked_add(u64::from(host_limits.slots).checked_mul(limits.turn_queue_bytes)?)?
-        .checked_add(Deadlines::<crate::turns::TurnName>::worst_case(capacity)?)?;
+    let retained = Deadlines::<crate::turns::TurnName>::worst_case(capacity)?;
     let alarms = Deadlines::<Alarm>::worst_case(ALARMS)?;
     // An answer holds the outcome, the snapshot or the detail of a failure,
     // and the run's work: the repositories it landed in, and its save.

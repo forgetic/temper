@@ -58,7 +58,7 @@ pub(crate) fn event(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &
             if domain.link.holds(run, attempt) || domain.host.is_hosting(run, attempt) {
                 return;
             }
-            if !domain.link.is_v2() || env.limits.turns == 0 {
+            if !domain.link.is_v2() || env.limits.host.turns == 0 {
                 return domain.link.refuse_version(run, attempt, out);
             }
             let answers = domain.link.held();
@@ -73,14 +73,13 @@ pub(crate) fn event(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &
         }
         Event::AcknowledgeTurn { run, attempt, turn } => {
             domain.link.heard();
-            if let Some(agent) = domain.link.turn_acknowledged(run, attempt, turn, &env.limits) {
-                agent_step(domain, env, agent::Event::TurnCredit { agent, read: true });
-            }
+            host_step(domain, env, host::Event::AcknowledgeTurn { run, attempt, turn });
+            domain.link.turn_acknowledged(run, attempt, turn, &domain.host);
             return;
         }
         Event::TurnBusy { run, attempt, turn } => {
             domain.link.heard();
-            return domain.link.turn_busy(run, attempt, turn, env);
+            return domain.link.turn_busy(run, attempt, turn, env, &domain.host);
         }
         Event::Connected => {
             domain.link.connected();
@@ -121,7 +120,7 @@ pub(crate) fn event(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &
         }
         Event::Acknowledged { run, attempt } => {
             domain.link.heard();
-            return domain.link.acknowledged(run, attempt);
+            return domain.link.acknowledged(run, attempt, &domain.host);
         }
         Event::Inbound { run, attempt, name, event } => {
             domain.link.heard();
@@ -217,9 +216,8 @@ fn from_host(domain: &mut Domain, env: &Env<Limits>, request: host::Request, out
         host::Request::RelayV2 { run, attempt, call, delivery, body } => {
             domain.link.relay(Relay { run, attempt, call: delivery, stable: Some(call), body }, &domain.host, out);
         }
-        host::Request::Turn { agent, run, attempt, turn } => {
-            let read = domain.link.turn(agent, run, attempt, turn, &env.limits, out);
-            agent_step(domain, env, agent::Event::TurnCredit { agent, read });
+        host::Request::Turn { agent: _, run, attempt, turn } => {
+            domain.link.turn(run, attempt, turn, out);
         }
         host::Request::DeliverV2 { owner, workspace, title, body } => {
             workspace::write(domain, env, owner, workspace, Write::PushV2 { title, body });
@@ -261,6 +259,7 @@ fn from_host(domain: &mut Domain, env: &Env<Limits>, request: host::Request, out
         | host::Request::Deliver { .. }
         | host::Request::Reply { .. }
         | host::Request::Grant { .. }
+        | host::Request::TurnCredit { .. }
         | host::Request::Stop { .. } => unreachable!("agent capability was taken above"),
     }
 }
@@ -295,6 +294,7 @@ fn from_host_agent(domain: &mut Domain, env: &Env<Limits>, request: host::ToAgen
         }
         host::ToAgent::Grant { agent, grant } => agent::Event::Grant { agent, grant: channel_grant(grant) },
         host::ToAgent::Cancel { agent } => agent::Event::Stop { agent },
+        host::ToAgent::ReadCredit { agent, read } => agent::Event::TurnCredit { agent, read },
     };
     agent_step(domain, env, event);
 }

@@ -122,8 +122,8 @@ impl World {
         limits.agent.turn_bytes = TURN_BYTES;
         limits.agent.conflicts = limits.checkout.conflicts;
         limits.agent.path_bytes = limits.checkout.path_bytes;
-        limits.turns = settings.turns;
-        limits.turn_queue_bytes = u64::from(settings.byte_slots) * TURN_BYTES;
+        limits.host.turns = settings.turns;
+        limits.host.turn_queue_bytes = u64::from(settings.byte_slots) * TURN_BYTES;
         limits.turn_backoff = Duration::from_millis(10);
         if !keep {
             limits.host.facts = 0;

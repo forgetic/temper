@@ -29,6 +29,8 @@ const LIMITS: Limits = Limits {
         facts: 64,
         told: 2,
         fact_bytes: 16,
+        turns: 0,
+        turn_queue_bytes: 0,
     },
     checkout: checkout::Limits {
         workspaces: 2,
@@ -72,8 +74,6 @@ const LIMITS: Limits = Limits {
     redial: Duration::from_secs(1),
     redial_max: Duration::from_secs(8),
     stalled: 4,
-    turns: 0,
-    turn_queue_bytes: 0,
     turn_backoff: Duration::from_secs(1),
 };
 
@@ -1129,8 +1129,8 @@ fn next_limits() -> Limits {
     limits.host.turn_bytes = 16;
     limits.agent.transcript_bytes = 64;
     limits.agent.turn_bytes = 16;
-    limits.turns = 2;
-    limits.turn_queue_bytes = 32;
+    limits.host.turns = 2;
+    limits.host.turn_queue_bytes = 32;
     limits
 }
 
@@ -1183,8 +1183,8 @@ fn next_turn(h: &mut Harness, r: Names, turn: u32, spent: u64) -> Box<[Request]>
 #[test]
 fn v2_turn_capacity_busy_retry_and_exact_commit_ack_resume_the_reader() {
     let mut limits = next_limits();
-    limits.turns = 1;
-    limits.turn_queue_bytes = 16;
+    limits.host.turns = 1;
+    limits.host.turn_queue_bytes = 16;
     let mut h = Harness::new(&limits);
     let r = next_live(&mut h, 31);
     let emitted = next_turn(&mut h, r, 1, 17);
@@ -1258,7 +1258,7 @@ fn v2_deadlines_and_cross_child_limits_are_checked_before_startup() {
     bad.checkout.remote_timeout = Duration::from_nanos(u64::MAX);
     assert!(worst_case(&bad).is_none(), "deadline arithmetic cannot wrap");
     let mut bad = limits;
-    bad.turn_queue_bytes = 15;
+    bad.host.turn_queue_bytes = 15;
     assert!(worst_case(&bad).is_none(), "a credit needs space for a maximum turn");
     let mut bad = limits;
     bad.checkout.conflicts = 1;

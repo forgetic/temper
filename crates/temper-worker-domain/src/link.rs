@@ -211,7 +211,7 @@ impl Link {
     }
 
     /// Fires the link's alarm due at `env.now`, if there is one.
-    pub(crate) fn fire(&mut self, env: &Env<Limits>, out: &mut Queue<Request>) -> Option<Fired> {
+    pub(crate) fn fire(&mut self, env: &Env<Limits>, host: &host::Domain, out: &mut Queue<Request>) -> Option<Fired> {
         let turn_due = match self.turns.next_deadline() {
             Some(at) => {
                 at <= env.now
@@ -223,7 +223,7 @@ impl Link {
             None => false,
         };
         if turn_due {
-            self.turns.fire(env.now, self.v2 && self.is_up(), out);
+            self.turns.fire(env.now, self.v2 && self.is_up(), host, out);
             return Some(Fired::Turn);
         }
         let alarm = self.alarms.expire(env.now)?;
@@ -345,9 +345,9 @@ impl Link {
 
     /// The engine has the answer for the run `run`'s attempt `attempt`. One
     /// the link does not keep was acknowledged already, or was a refusal.
-    pub(crate) fn acknowledged(&mut self, run: Token, attempt: Token) {
+    pub(crate) fn acknowledged(&mut self, run: Token, attempt: Token, host: &host::Domain) {
         self.answers.remove(&Named { run, attempt });
-        self.turns.answer_acknowledged(run, attempt);
+        self.turns.answer_acknowledged(run, attempt, host);
     }
 
     /// A relay for the engine: now if the channel is open, kept until it is
@@ -439,7 +439,7 @@ impl Link {
                 graces: limits::declared_graces(limits).expect("startup checked the stop bound"),
                 push_deadline: limits::push_deadline(limits).expect("startup checked push bound"),
             });
-            self.turns.hello(out);
+            self.turns.hello(host, out);
         } else {
             out.push(Request::Hello { hello });
         }
@@ -470,11 +470,11 @@ impl Link {
     /// A worker shutting down, out of reach past the grace, gives up the
     /// answers it keeps. Its parent calls this once no run is left: no answer
     /// is to come that a channel opening could deliver with the rest.
-    pub(crate) fn give_up(&mut self) {
+    pub(crate) fn give_up(&mut self, host: &host::Domain) -> bool {
         if !(self.shut && self.past) {
-            return;
+            return false;
         }
-        self.turns.give_up();
+        self.turns.give_up(host);
         for _ in 0..self.answers.capacity() {
             let Some((named, _)) = self.answers.first() else {
                 break;
@@ -483,6 +483,7 @@ impl Link {
             self.answers.remove(&named);
             self.abandoned = self.abandoned.saturating_add(1);
         }
+        true
     }
 
     pub(crate) fn connected_v2(&mut self) {
@@ -492,35 +493,19 @@ impl Link {
     pub(crate) fn is_v2(&self) -> bool {
         self.v2
     }
-    pub(crate) fn retained_turns(&self) -> u32 {
-        self.turns.pending()
-    }
     pub(crate) fn answer_v2(&mut self, run: Token, attempt: Token, answer: wire::AnswerV2, out: &mut Queue<Request>) {
         self.turns.answer(run, attempt, answer, self.v2 && self.is_up(), out);
     }
-    pub(crate) fn turn(
-        &mut self,
-        agent: Token,
-        run: Token,
-        attempt: Token,
-        turn: wire::Turn,
-        limits: &Limits,
-        out: &mut Queue<Request>,
-    ) -> bool {
-        self.turns.retain(agent, run, attempt, turn, limits, self.v2 && self.is_up(), out)
+    pub(crate) fn turn(&mut self, run: Token, attempt: Token, turn: wire::Turn, out: &mut Queue<Request>) {
+        if self.v2 && self.is_up() {
+            out.push(Request::Turn { run, attempt, turn });
+        }
     }
-    pub(crate) fn turn_acknowledged(
-        &mut self,
-        run: Token,
-        attempt: Token,
-        turn: u32,
-        limits: &Limits,
-    ) -> Option<Token> {
-        let agent = self.turns.acknowledge(run, attempt, turn)?;
-        if self.turns.credit(run, attempt, limits) { Some(agent) } else { None }
+    pub(crate) fn turn_acknowledged(&mut self, run: Token, attempt: Token, turn: u32, host: &host::Domain) {
+        self.turns.acknowledge_turn(run, attempt, turn, host);
     }
-    pub(crate) fn turn_busy(&mut self, run: Token, attempt: Token, turn: u32, env: &Env<Limits>) {
-        self.turns.busy(run, attempt, turn, env);
+    pub(crate) fn turn_busy(&mut self, run: Token, attempt: Token, turn: u32, env: &Env<Limits>, host: &host::Domain) {
+        self.turns.busy(run, attempt, turn, env, host);
     }
 
     /// How long to wait before the next dial: the backoff for the dials failed

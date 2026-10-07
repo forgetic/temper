@@ -28,6 +28,8 @@ pub const LIMITS: Limits = Limits {
         facts: 256,
         told: 16,
         fact_bytes: 32,
+        turns: 0,
+        turn_queue_bytes: 0,
     },
     checkout: checkout::Limits {
         workspaces: 4,
@@ -71,7 +73,5 @@ pub const LIMITS: Limits = Limits {
     redial: Duration::from_secs(1),
     redial_max: Duration::from_secs(8),
     stalled: 8,
-    turns: 0,
-    turn_queue_bytes: 0,
     turn_backoff: Duration::from_secs(1),
 };
