@@ -192,6 +192,7 @@ remain on `checkpoint/migration/transcript-codec`, outside main.
 | 05s8 agent-world parent host-call bridge | merged locally | smith 520ccae | Caller-supplied complete Start and pending host calls receive caller replies while default fixtures remain scripted; fmt/clippy pass; 593 focused / 3.593 s; 12 fuzzy / 4.490 s. |
 | 05s8 agent-world host feedback for caller names | merged locally | smith 80c9e20 | The wire world observes any decoded host call, including `message`; fmt/clippy pass; 594 focused / 3.624 s; 12 fuzzy / 4.506 s. |
 | 05s8 typed agent-world host feedback for caller names | merged locally | smith 1697a6d | The typed bridge observes the caller-declared `message` host call and its continuation feedback; fmt/clippy pass; 595 focused / 3.770 s; 12 fuzzy / 4.493 s. |
+| 05s8 local host 6.1: named answers on agent start | merged locally | smith 5685caf | fmt/clippy pass; 596 focused / 6.661 s; 12 fuzzy / 6.954 s. |
 
 ## Completion 08.4 measured suite shares
 
