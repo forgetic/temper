@@ -321,6 +321,9 @@ simulation; no legacy fuzzy seed trim is needed for the suite caps.
 | 04.0 skein file deadline and cancellation repin | merged locally | smith 88586bb | fmt/clippy pass; 1,200 focused / 6.706 s; 13 fuzzy / 6.197 s. |
 | 04.1 machine files | merged locally | smith 0278313 | fmt/clippy pass; 1,204 focused / 4.006 s; 13 fuzzy / 5.547 s. |
 | 04.2 machine processes and guides | merged locally | smith 1d335dc | fmt/clippy pass; 1,208 focused / 5.581 s; 13 fuzzy / 6.338 s. |
+| 04.0 skein simulator pipe-wake repin | merged locally | smith a33c261 | fmt/clippy pass; 1,208 focused / 5.850 s; 13 fuzzy / 6.113 s. |
+| 04.3 simulated machine world | merged locally | smith 0107a9c | fmt/clippy pass; 1,214 focused / 3.894 s; 13 fuzzy / 4.873 s; world 6 / 0.025 s serial. |
+| 04.4 machine fuzzing and memory | merged locally | smith 3febb04 | fmt/clippy pass; 1,215 focused / 4.081 s; 14 fuzzy / 4.701 s; world 7 / 0.029 s focused and 1 / 0.037 s fuzzy serial. |
 | 01.0 skein generator repin | merged locally | smith 2603960 | fmt/clippy pass; 695 focused / 6.196 s; 12 fuzzy / 6.747 s. |
 | 01.2 transcript codec | merged locally | smith 8cd34ba | fmt/clippy pass; 883 focused / 6.399 s; 12 fuzzy / 6.701 s. |
 | 01.3 channel codec | merged locally | smith 9798fbf | fmt/clippy pass; 1,191 focused / 8.954 s; 12 fuzzy / 9.765 s. |
