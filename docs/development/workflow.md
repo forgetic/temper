@@ -38,15 +38,11 @@ The suites are those of skein's `docs/foundation/testing-strategy.md`
   expected behaviour (scenarios, referee tests, replay, facts changing
   nothing, memory against the worst case), and a cheap random world as a
   smoke test where one helps. It is what `cargo nextest run --workspace`
-  runs, and it takes at most **30 seconds**.
+  runs, and it takes at most **15 seconds**.
 - **The fuzzy suite** is the worlds' `tests/fuzzy_*.rs`: randomized tests,
   such as sweeps of random worlds and domains driven at random, over many
   seeds. It is not run by default, only with `--profile fuzzy`, as the
-  gate before merging to main, and it takes at most **2 minutes**.
-
-These allowances are doubled while the legacy engine and its worlds run
-beside the new domains. They return to 15 seconds and 1 minute when legacy
-is deleted at plan step 07d.
+  gate before merging to main, and it takes at most **1 minute**.
 
 The budgets are enforced, not advisory: `.config/nextest.toml` gives each
 profile a `global-timeout`, so a suite that runs past its budget fails,

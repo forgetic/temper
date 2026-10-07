@@ -14,6 +14,7 @@ protocol drafts and lower-layer integration are parked for later work.
 
 | Increment | State | Commit | Evidence |
 |---|---|---|---|
+| Completion 14.2: original test budgets | merged | this commit | With legacy and protocol gone, the focused cap returns to 15 s and the fuzzy cap to 60 s; slow periods return to 3 s and 20 s. Gate and serial world measurements are in this commit message. |
 | Completion 14.1: legacy and protocol deletion | merged | this commit | The user’s 2026-10-07 decision brings 07d forward and voids 07a–07c. The last main commit with the deleted code is `655776de7478dea4719e8b3691173c30a6a08861`; step 07’s protocol and legacy instructions no longer apply. Removed their crates and worlds, plus orphaned notes code; retained the typed worker runtime and system worlds. Gate: fmt, clippy, 1,092 focused / 5.232 s, 24 fuzzy / 3.409 s; before deletion 2,621 focused / 20.123 s, 45 fuzzy / 57.075 s. |
 | Completion 13: root strict subset | merged | this commit | Replaced 23 own-enum or tuple conditional forms with exhaustive matches, including the added proposal and forge routes; root 23→0. Gate: fmt, clippy, 2,621 focused / 13.867 s, 45 fuzzy / 38.339 s. |
 | Completion 13: forge let-chain follow-up | merged | this commit | Replaced the overlooked branch-resource `let` chain with an exhaustive match; forge 1→0 remaining forms. Gate: fmt, clippy, 2,621 focused / 12.529 s, 45 fuzzy / 40.396 s. |
