@@ -314,3 +314,5 @@ simulation; no legacy fuzzy seed trim is needed for the suite caps.
 | 00.4 message label and text | merged locally | smith 704f2f6 | fmt/clippy pass; 613 focused / 5.254 s; 12 fuzzy / 6.032 s. |
 | 00.5 unsupported charter version | merged locally | smith 46e7eac | fmt/clippy pass; 615 focused / 8.997 s; 12 fuzzy / 6.021 s. |
 | 01.0 skein codec repin | merged locally | smith 3c6c1fc | fmt/clippy pass; 615 focused / 7.568 s; 12 fuzzy / 6.565 s. |
+| 01.0 corrective skein codec repin | merged locally | smith 1148f16 | fmt/clippy pass; 615 focused / 6.230 s; 12 fuzzy / 6.921 s. |
+| 01.1 charter codec | merged locally | smith 30f5c7b | fmt/clippy pass; 695 focused / 6.550 s; 12 fuzzy / 8.359 s. |
