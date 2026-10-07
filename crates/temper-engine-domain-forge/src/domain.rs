@@ -460,11 +460,27 @@ fn drain(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
                 projection_outcome(d, entry, outcome, out);
                 change_outcome(d, env, entry, outcome, out);
                 release_outcome(d, entry, outcome, out);
-                if let client::Outcome::Made { made: client::Made::Merged(commit), .. } = outcome
-                    && (d.landed.len() < env.limits.landings || d.landed.contains_key(&commit))
-                {
-                    d.landed.insert(commit, task).expect("preflighted landed capacity");
-                    emit(out, Request::Save { record: Stored::Landed { commit, task } });
+                match outcome {
+                    client::Outcome::Made { made: client::Made::Merged(commit), .. } => {
+                        if d.landed.len() < env.limits.landings || d.landed.contains_key(&commit) {
+                            d.landed.insert(commit, task).expect("preflighted landed capacity");
+                            emit(out, Request::Save { record: Stored::Landed { commit, task } });
+                        }
+                    }
+                    client::Outcome::Made {
+                        made:
+                            client::Made::Created(_)
+                            | client::Made::Commented(_)
+                            | client::Made::Reviewed(_)
+                            | client::Made::Updated(_)
+                            | client::Made::Branch(_)
+                            | client::Made::Set,
+                        ..
+                    }
+                    | client::Outcome::Failed(_)
+                    | client::Outcome::Raced { .. }
+                    | client::Outcome::Uncertain
+                    | client::Outcome::Withdrawn => {}
                 }
                 match outcome {
                     client::Outcome::Uncertain => {}
@@ -919,8 +935,16 @@ fn unnamed(d: &mut Domain, env: &Env<Limits>, task: u64, out: &mut Queue<Request
 
 fn kept(out: &Queue<client::Request>) -> bool {
     for request in out {
-        if let client::Request::Kept { result, .. } = request {
-            return result.is_ok();
+        match request {
+            client::Request::Kept { result, .. } => return result.is_ok(),
+            client::Request::Changed { .. }
+            | client::Request::Drift { .. }
+            | client::Request::Save { .. }
+            | client::Request::Progress { .. }
+            | client::Request::Erase { .. }
+            | client::Request::Outcome { .. }
+            | client::Request::Call { .. }
+            | client::Request::Read { .. } => {}
         }
     }
     false
@@ -1213,30 +1237,37 @@ fn delegate_result(
     }
     row.delegate = None;
     row.delegate_status = status;
-    if let change::Delegate::Gate { number, head } = kind {
-        let report = change::GateReport { number, head, status };
-        let mut verdicts = List::with_capacity(env.limits.change_policy.gates);
-        for old in &row.verdicts {
-            if old.number != number {
-                verdicts.push(*old).expect("bounded prior gate reports");
+    match kind {
+        change::Delegate::Gate { number, head } => {
+            let report = change::GateReport { number, head, status };
+            let mut verdicts = List::with_capacity(env.limits.change_policy.gates);
+            for old in &row.verdicts {
+                if old.number != number {
+                    verdicts.push(*old).expect("bounded prior gate reports");
+                }
             }
-        }
-        if verdicts.push(report).is_err() {
-            emit(out, Request::Refused { task });
-            return;
-        }
-        row.verdicts = verdicts.into_boxed();
-        let mut remarks = List::with_capacity(env.limits.change_policy.gates);
-        for old in &row.gate_remarks {
-            if old.number != number {
-                remarks.push(old.clone()).expect("bounded prior gate remarks");
+            if verdicts.push(report).is_err() {
+                emit(out, Request::Refused { task });
+                return;
             }
+            row.verdicts = verdicts.into_boxed();
+            let mut remarks = List::with_capacity(env.limits.change_policy.gates);
+            for old in &row.gate_remarks {
+                if old.number != number {
+                    remarks.push(old.clone()).expect("bounded prior gate remarks");
+                }
+            }
+            let kept = words.len().min(usize::try_from(env.limits.client.answer_bytes).expect("u32 fits usize"));
+            remarks
+                .push(crate::GateRemark {
+                    number,
+                    head,
+                    words: Box::from(words.get(..kept).expect("kept is in bounds")),
+                })
+                .expect("gate room checked");
+            row.gate_remarks = remarks.into_boxed();
         }
-        let kept = words.len().min(usize::try_from(env.limits.client.answer_bytes).expect("u32 fits usize"));
-        remarks
-            .push(crate::GateRemark { number, head, words: Box::from(words.get(..kept).expect("kept is in bounds")) })
-            .expect("gate room checked");
-        row.gate_remarks = remarks.into_boxed();
+        change::Delegate::Produce | change::Delegate::Repair(_) | change::Delegate::Resolve { .. } => {}
     }
     emit(out, Request::Save { record: Stored::Change(row.clone()) });
 }
@@ -1728,16 +1759,35 @@ fn change_outcome(d: &mut Domain, env: &Env<Limits>, entry: u64, outcome: client
     row.pending = None;
     let saved = row.clone();
     emit(out, Request::Save { record: Stored::Change(saved.clone()) });
-    if let client::Outcome::Made { made: client::Made::Updated(commit), .. } = outcome {
-        child(
-            d,
-            env,
-            client::Event::Pushed {
-                resource: client::Resource { repository: saved.repository, what: client::What::Branch(saved.branch) },
-                commit,
-            },
-            out,
-        );
+    match outcome {
+        client::Outcome::Made { made: client::Made::Updated(commit), .. } => {
+            child(
+                d,
+                env,
+                client::Event::Pushed {
+                    resource: client::Resource {
+                        repository: saved.repository,
+                        what: client::What::Branch(saved.branch),
+                    },
+                    commit,
+                },
+                out,
+            );
+        }
+        client::Outcome::Made {
+            made:
+                client::Made::Created(_)
+                | client::Made::Commented(_)
+                | client::Made::Reviewed(_)
+                | client::Made::Merged(_)
+                | client::Made::Branch(_)
+                | client::Made::Set,
+            ..
+        }
+        | client::Outcome::Failed(_)
+        | client::Outcome::Raced { .. }
+        | client::Outcome::Uncertain
+        | client::Outcome::Withdrawn => {}
     }
     emit(out, Request::ChangeDecision { task, decision: change::Decision::None, entry: None, evidence: None });
 }
@@ -1993,8 +2043,10 @@ fn project(
                 d.issues.insert(goal, row.clone()).expect("replaces issue");
                 emit(out, Request::Save { record: Stored::Issue(row) });
             }
-            if let issues::Decision::Wait(when) = projected.decision {
-                emit(out, Request::ProjectAfter { goal, when: Some(when) });
+            match projected.decision {
+                issues::Decision::Wait(when) => emit(out, Request::ProjectAfter { goal, when: Some(when) }),
+                issues::Decision::None => {}
+                issues::Decision::Hold | issues::Decision::Effect(_) => unreachable!("matched above"),
             }
         }
         issues::Decision::Hold => emit(out, Request::ProjectionFailed { goal }),
@@ -2316,14 +2368,13 @@ fn changed(
                 publish(d, topic, News::Changed { number: item.number }, out);
             }
         }
-        Ok(client::api::Answer::Reviews { reviews, more: _ }) => {
-            if let client::What::Pull(number) = resource.what
-                && !reviews.is_empty()
-            {
+        Ok(client::api::Answer::Reviews { reviews, more: _ }) => match resource.what {
+            client::What::Pull(number) if !reviews.is_empty() => {
                 let topic = Topic::Participation { repository: resource.repository, number };
                 publish(d, topic, News::Changed { number }, out);
             }
-        }
+            client::What::Pull(_) | client::What::Repository | client::What::Branch(_) | client::What::Issue(_) => {}
+        },
         Ok(
             client::api::Answer::Items { .. }
             | client::api::Answer::Branches(_)
