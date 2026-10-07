@@ -21,8 +21,11 @@ pub fn stored_bytes(record: &Stored) -> Option<u64> {
                 .checked_add(authority_bytes(&row.goal.authority)?)?
                 .checked_add(contract_bytes(&row.goal.contract)?)?
                 .checked_add(bytes(size_of_val(&*row.goal.dependencies))?)?;
-            if let PersonProposalState::Rejected { reason, .. } = &row.state {
-                total = total.checked_add(bytes(reason.len())?)?;
+            match &row.state {
+                PersonProposalState::Rejected { reason, .. } => {
+                    total = total.checked_add(bytes(reason.len())?)?;
+                }
+                PersonProposalState::Pending { .. } | PersonProposalState::Accepted { .. } => {}
             }
             Some(total)
         }
@@ -114,8 +117,11 @@ fn phase_bytes(phase: &Phase) -> Option<u64> {
 
 fn proposal_bytes(proposal: &Proposal) -> Option<u64> {
     let mut total = bytes(size_of::<Proposal>())?.checked_add(bytes(proposal.reason.len())?)?;
-    if let ProposalState::Rejected { reason, .. } = &proposal.state {
-        total = total.checked_add(bytes(reason.len())?)?;
+    match &proposal.state {
+        ProposalState::Rejected { reason, .. } => {
+            total = total.checked_add(bytes(reason.len())?)?;
+        }
+        ProposalState::Pending { .. } | ProposalState::Accepted { .. } | ProposalState::Withdrawn => {}
     }
     match &proposal.action {
         ProposalAction::Batch(batch) => {

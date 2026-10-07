@@ -14,6 +14,7 @@ protocol drafts and lower-layer integration are parked for later work.
 
 | Increment | State | Commit | Evidence |
 |---|---|---|---|
+| Completion 13: tasks strict subset | merged | this commit | Replaced 18 own-enum conditional forms with exhaustive matches and bounded requester ancestry by the task depth; tasks 18→0 forms and one loop→0. Gate: fmt, clippy, 2,621 focused / 15.631 s, 45 fuzzy / 46.118 s. |
 | Completion 13: forge strict subset | merged | this commit | Replaced six own-enum `if let` forms with exhaustive matches; forge 6→0. Gate: fmt, clippy, 2,621 focused / 13.634 s, 45 fuzzy / 36.775 s. |
 | Completion 13: authority strict subset | merged | this commit | Replaced the own-enum `if let` with an exhaustive match; authority 1→0 forms. Gate: fmt, clippy, 2,621 focused / 11.189 s, 45 fuzzy / 30.697 s. |
 | Completion 12.2: owners amend the full mutable policy | merged | this commit | Keyed owner edits change project period spend, an existing role's authority/allotment/decisions, or branch landing rules. Authority validates each candidate under deployment rules; the root commits one full mutable policy value and restores it after restart without changing the repository-derived ceiling. Stories cover an owner-added review gate, forbidden spend, restart, and future-only effects. Gate: fmt, clippy, 2,621 focused / 11.525 s, 45 fuzzy / 29.267 s. Root serial: 169 / 1.718 s (prior 166 / 1.756 s); people serial: 14 / 0.062 s. |

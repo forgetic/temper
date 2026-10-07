@@ -39,18 +39,29 @@ pub(crate) fn waiting_for(domain: &Domain, holder: u64) -> Box<[crate::Word]> {
     let mut waiting = skein_lib::List::with_capacity(domain.names.len());
     for (number, _) in &domain.names {
         let task = record(domain, *number).expect("indexed proposal owner");
-        if let Some(proposal) = &task.proposal
-            && let ProposalState::Pending { holder: ProposalHolder::Task(target), since } = proposal.state
-            && target == holder
-        {
-            waiting.push(word(proposal, since)).expect("one proposal per live task");
+        if let Some(proposal) = &task.proposal {
+            match proposal.state {
+                ProposalState::Pending { holder: ProposalHolder::Task(target), since } if target == holder => {
+                    waiting.push(word(proposal, since)).expect("one proposal per live task");
+                }
+                ProposalState::Pending { .. }
+                | ProposalState::Accepted { .. }
+                | ProposalState::Rejected { .. }
+                | ProposalState::Withdrawn => {}
+            }
         }
     }
     waiting.into_boxed()
 }
 
 fn wake_holder(domain: &mut Domain, env: &Env<Limits>, proposal: &Proposal, out: &mut Queue<Request>) {
-    let ProposalState::Pending { holder: ProposalHolder::Task(task), since } = proposal.state else { return };
+    let (task, since) = match proposal.state {
+        ProposalState::Pending { holder: ProposalHolder::Task(task), since } => (task, since),
+        ProposalState::Pending { .. }
+        | ProposalState::Accepted { .. }
+        | ProposalState::Rejected { .. }
+        | ProposalState::Withdrawn => return,
+    };
     if record(domain, task).is_none() {
         out.push(Request::ProposalStalled {
             proposer: proposal.proposer,
@@ -347,14 +358,15 @@ pub(crate) fn rearm_all(domain: &mut Domain, env: &Env<Limits>) {
     let mut pending = skein_lib::List::with_capacity(env.limits.tasks);
     for (number, _) in &domain.names {
         let task = record(domain, *number).expect("live proposal owner");
-        if let Some(proposal) = &task.proposal
-            && let ProposalState::Pending { holder, since } = proposal.state
-        {
-            match holder {
-                ProposalHolder::Task(_) | ProposalHolder::Person(_) => {
+        if let Some(proposal) = &task.proposal {
+            match proposal.state {
+                ProposalState::Pending { holder: ProposalHolder::Task(_) | ProposalHolder::Person(_), since } => {
                     pending.push((*number, since)).expect("pending tasks bounded");
                 }
-                ProposalHolder::Policy { .. } => {}
+                ProposalState::Pending { holder: ProposalHolder::Policy { .. }, .. }
+                | ProposalState::Accepted { .. }
+                | ProposalState::Rejected { .. }
+                | ProposalState::Withdrawn => {}
             }
         }
     }
@@ -369,10 +381,16 @@ pub(crate) fn wake_restored(domain: &mut Domain, env: &Env<Limits>, out: &mut Qu
     let mut waiting = skein_lib::List::with_capacity(env.limits.tasks);
     for (number, _) in &domain.names {
         let task = record(domain, *number).expect("restored name live");
-        if let Some(proposal) = &task.proposal
-            && let ProposalState::Pending { holder: ProposalHolder::Task(_), .. } = proposal.state
-        {
-            waiting.push((*number, proposal.number)).expect("one pending proposal per task");
+        if let Some(proposal) = &task.proposal {
+            match proposal.state {
+                ProposalState::Pending { holder: ProposalHolder::Task(_), .. } => {
+                    waiting.push((*number, proposal.number)).expect("one pending proposal per task");
+                }
+                ProposalState::Pending { .. }
+                | ProposalState::Accepted { .. }
+                | ProposalState::Rejected { .. }
+                | ProposalState::Withdrawn => {}
+            }
         }
     }
     for &(proposer, number) in &waiting {
@@ -385,15 +403,20 @@ pub(crate) fn wake_restored(domain: &mut Domain, env: &Env<Limits>, out: &mut Qu
 pub(crate) fn holder_unavailable(domain: &Domain, holder: u64, out: &mut Queue<Request>) {
     for (proposer, _) in &domain.names {
         let task = record(domain, *proposer).expect("indexed proposal owner");
-        if let Some(proposal) = &task.proposal
-            && let ProposalState::Pending { holder: ProposalHolder::Task(target), .. } = proposal.state
-            && target == holder
-        {
-            out.push(Request::ProposalStalled {
-                proposer: *proposer,
-                proposal: proposal.number,
-                holder: ProposalHolder::Task(holder),
-            });
+        if let Some(proposal) = &task.proposal {
+            match proposal.state {
+                ProposalState::Pending { holder: ProposalHolder::Task(target), .. } if target == holder => {
+                    out.push(Request::ProposalStalled {
+                        proposer: *proposer,
+                        proposal: proposal.number,
+                        holder: ProposalHolder::Task(holder),
+                    });
+                }
+                ProposalState::Pending { .. }
+                | ProposalState::Accepted { .. }
+                | ProposalState::Rejected { .. }
+                | ProposalState::Withdrawn => {}
+            }
         }
     }
 }
@@ -404,13 +427,14 @@ pub(crate) fn fire(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Reque
     let Some(proposer) = domain.proposal_alarms.expire(env.now) else { return };
     let Some(task) = record(domain, proposer) else { return };
     let Some(proposal) = &task.proposal else { return };
-    if let ProposalState::Pending { holder, .. } = proposal.state {
-        match holder {
-            ProposalHolder::Task(_) | ProposalHolder::Person(_) => {
-                out.push(Request::ProposalStalled { proposer, proposal: proposal.number, holder });
-            }
-            ProposalHolder::Policy { .. } => {}
+    match proposal.state {
+        ProposalState::Pending { holder: holder @ (ProposalHolder::Task(_) | ProposalHolder::Person(_)), .. } => {
+            out.push(Request::ProposalStalled { proposer, proposal: proposal.number, holder });
         }
+        ProposalState::Pending { holder: ProposalHolder::Policy { .. }, .. }
+        | ProposalState::Accepted { .. }
+        | ProposalState::Rejected { .. }
+        | ProposalState::Withdrawn => {}
     }
 }
 

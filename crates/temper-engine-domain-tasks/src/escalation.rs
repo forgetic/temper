@@ -35,13 +35,14 @@ pub(crate) fn rearm_all(domain: &mut Domain, env: &Env<Limits>) {
 pub(crate) fn fire(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
     let Some(number) = domain.escalation_alarms.expire(env.now) else { return };
     let Some(task) = record(domain, number) else { return };
-    if let Escalation::Waiting { revision, holder, .. } = task.escalation {
-        match holder {
+    match task.escalation {
+        Escalation::Waiting { revision, holder, .. } => match holder {
             EscalationHolder::Task(_) | EscalationHolder::Person(_) => {
                 out.push(Request::EscalationStalled { task: number, revision, holder });
             }
             EscalationHolder::Role { .. } => {}
-        }
+        },
+        Escalation::Unheld { .. } | Escalation::Routing { .. } | Escalation::Rejected { .. } => {}
     }
 }
 
@@ -61,10 +62,16 @@ pub(crate) fn waiting_for(domain: &Domain, holder: u64) -> Box<[crate::Word]> {
     let mut entries = skein_lib::List::with_capacity(domain.names.len());
     for (number, _) in &domain.names {
         let task = record(domain, *number).expect("held name live");
-        if let Escalation::Waiting { revision, holder: EscalationHolder::Task(target), entry, since } = task.escalation
-            && target == holder
-        {
-            entries.push(word(*number, revision, entry, since)).expect("one escalation per held task");
+        match task.escalation {
+            Escalation::Waiting { revision, holder: EscalationHolder::Task(target), entry, since }
+                if target == holder =>
+            {
+                entries.push(word(*number, revision, entry, since)).expect("one escalation per held task");
+            }
+            Escalation::Waiting { .. }
+            | Escalation::Unheld { .. }
+            | Escalation::Routing { .. }
+            | Escalation::Rejected { .. } => {}
         }
     }
     entries.into_boxed()
@@ -72,8 +79,14 @@ pub(crate) fn waiting_for(domain: &Domain, holder: u64) -> Box<[crate::Word]> {
 
 fn wake_holder(domain: &mut Domain, env: &Env<Limits>, number: u64, out: &mut Queue<Request>) {
     let Some(task) = record(domain, number) else { return };
-    let Escalation::Waiting { revision, holder: EscalationHolder::Task(holder), entry, since } = task.escalation else {
-        return;
+    let (revision, holder, entry, since) = match task.escalation {
+        Escalation::Waiting { revision, holder: EscalationHolder::Task(holder), entry, since } => {
+            (revision, holder, entry, since)
+        }
+        Escalation::Waiting { holder: EscalationHolder::Person(_) | EscalationHolder::Role { .. }, .. }
+        | Escalation::Unheld { .. }
+        | Escalation::Routing { .. }
+        | Escalation::Rejected { .. } => return,
     };
     if record(domain, holder).is_none() {
         out.push(Request::EscalationStalled { task: number, revision, holder: EscalationHolder::Task(holder) });
@@ -85,10 +98,18 @@ fn wake_holder(domain: &mut Domain, env: &Env<Limits>, number: u64, out: &mut Qu
 pub(crate) fn holder_unavailable(domain: &Domain, holder: u64, out: &mut Queue<Request>) {
     for (number, _) in &domain.names {
         let task = record(domain, *number).expect("held name live");
-        if let Escalation::Waiting { revision, holder: EscalationHolder::Task(target), .. } = task.escalation
-            && target == holder
-        {
-            out.push(Request::EscalationStalled { task: *number, revision, holder: EscalationHolder::Task(holder) });
+        match task.escalation {
+            Escalation::Waiting { revision, holder: EscalationHolder::Task(target), .. } if target == holder => {
+                out.push(Request::EscalationStalled {
+                    task: *number,
+                    revision,
+                    holder: EscalationHolder::Task(holder),
+                });
+            }
+            Escalation::Waiting { .. }
+            | Escalation::Unheld { .. }
+            | Escalation::Routing { .. }
+            | Escalation::Rejected { .. } => {}
         }
     }
 }
@@ -236,13 +257,21 @@ pub(crate) fn context(domain: &Domain, number: u64) -> Option<Box<EscalationCont
     let task = record(domain, number)?;
     let immediate = task.requester;
     let mut above = immediate;
-    let requester = loop {
+    let mut requester = None;
+    for _ in 0..=task.depth {
         match above {
-            Party::Person(person) => break person,
-            Party::Deployment { .. } => break 0,
+            Party::Person(person) => {
+                requester = Some(person);
+                break;
+            }
+            Party::Deployment { .. } => {
+                requester = Some(0);
+                break;
+            }
             Party::Task(parent) => above = record(domain, parent)?.requester,
         }
-    };
+    }
+    let requester = requester?;
     let why = match &task.phase {
         Phase::Held { why, .. } => *why,
         Phase::Waiting | Phase::Active(_) | Phase::Closing(_) | Phase::Ended(_) => return None,
@@ -372,8 +401,11 @@ pub(crate) fn decide(
                 task.record.escalation = Escalation::Unheld { revision };
                 task.record.tries = Tries::NONE;
                 task.record.refusals = 0;
-                let Phase::Held { was, .. } = core::mem::replace(&mut task.record.phase, Phase::Waiting) else {
-                    unreachable!("release validated a held task")
+                let was = match core::mem::replace(&mut task.record.phase, Phase::Waiting) {
+                    Phase::Held { was, .. } => was,
+                    Phase::Waiting | Phase::Active(_) | Phase::Closing(_) | Phase::Ended(_) => {
+                        unreachable!("release validated a held task")
+                    }
                 };
                 task.record.phase = match was {
                     Was::Waiting if task.record.waiting_on.is_empty() => Phase::Active(Active::Due),
@@ -403,8 +435,13 @@ pub(crate) fn decide(
         if outcome == EscalationOutcome::Released && due {
             activate(domain, number, out);
         }
-        if let EscalationOutcome::Passed { .. } = outcome {
-            wake_holder(domain, env, number, out);
+        match outcome {
+            EscalationOutcome::Passed { .. } => wake_holder(domain, env, number, out),
+            EscalationOutcome::Released
+            | EscalationOutcome::Rejected
+            | EscalationOutcome::Stale
+            | EscalationOutcome::NoFurther
+            | EscalationOutcome::Limit => {}
         }
     }
     out.push(Request::EscalationDecided { reply_to: to, task: number, revision, outcome });

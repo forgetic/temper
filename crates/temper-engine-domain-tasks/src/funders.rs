@@ -71,10 +71,9 @@ pub(crate) fn can_reserve(domain: &Domain, creator: crate::Party, batch: &[crate
                 }
             }
             Funder::Pool { project, .. } | Funder::Period { project, .. } | Funder::Recurring { project, .. } => {
-                if let Funder::Recurring { task, .. } = new.funder
-                    && creator != crate::Party::Task(task)
-                {
-                    return false;
+                match new.funder {
+                    Funder::Recurring { task, .. } if creator != crate::Party::Task(task) => return false,
+                    Funder::Recurring { .. } | Funder::Task(_) | Funder::Pool { .. } | Funder::Period { .. } => {}
                 }
                 let Some(ledger) = domain.funding.get(&new.funder) else {
                     return false;
@@ -553,14 +552,17 @@ pub(crate) fn retire(domain: &mut Domain, out: &mut Queue<Request>) {
     for _ in 0..count {
         let mut ready = None;
         for (funder, row) in &domain.funding {
-            if let Funder::Period { project, period } = *funder
-                && !row.closed
-                && row.numbers.reserved == 0
-                && newer_period(domain, project, period)
-                && !source_live(domain, *funder)
-            {
-                ready = Some(*funder);
-                break;
+            match *funder {
+                Funder::Period { project, period }
+                    if !row.closed
+                        && row.numbers.reserved == 0
+                        && newer_period(domain, project, period)
+                        && !source_live(domain, *funder) =>
+                {
+                    ready = Some(*funder);
+                    break;
+                }
+                Funder::Period { .. } | Funder::Task(_) | Funder::Pool { .. } | Funder::Recurring { .. } => {}
             }
         }
         let Some(period) = ready else { break };

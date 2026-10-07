@@ -42,10 +42,9 @@ fn valid_stage(task: &TaskRecord, closing: &Closing, limits: &Limits) -> bool {
 }
 
 fn valid_phase(task: &TaskRecord, limits: &Limits) -> bool {
-    if let Executor::Person(_) = task.executor
-        && !person_phase(&task.phase)
-    {
-        return false;
+    match task.executor {
+        Executor::Person(_) if !person_phase(&task.phase) => return false,
+        Executor::Person(_) | Executor::Agent { .. } | Executor::Procedure { .. } => {}
     }
     match &task.phase {
         Phase::Active(Active::Claimed { attempt } | Active::Running { attempt })
@@ -264,15 +263,27 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
     let mut amendments = 0_usize;
     let mut amendment_bytes = 0_usize;
     for word in &task.inbox {
-        if let crate::MessageKind::Amendment { revision } = word.kind {
-            if amendments != 0 {
-                return false;
+        match word.kind {
+            crate::MessageKind::Amendment { revision } => {
+                if amendments != 0 {
+                    return false;
+                }
+                amendments = 1;
+                amendment_bytes = word.words.len();
+                if revision == 0 || revision > task.revision || amendments > 1 {
+                    return false;
+                }
             }
-            amendments = 1;
-            amendment_bytes = word.words.len();
-            if revision == 0 || revision > task.revision || amendments > 1 {
-                return false;
-            }
+            crate::MessageKind::Escalation { .. }
+            | crate::MessageKind::Proposal { .. }
+            | crate::MessageKind::ProposalDecision { .. }
+            | crate::MessageKind::Words
+            | crate::MessageKind::Question
+            | crate::MessageKind::Answer { .. }
+            | crate::MessageKind::Notice { .. }
+            | crate::MessageKind::Timer { .. }
+            | crate::MessageKind::News { .. }
+            | crate::MessageKind::Result(_) => {}
         }
     }
     if task
