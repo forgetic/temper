@@ -334,6 +334,9 @@ fn task_problem(text: &mut Text, problem: &jig_core_tasks::Problem) -> Result<()
         Refusal::Read => text.add(b"read fence"),
         Refusal::Turn => text.add(b"turn order"),
         Refusal::Funding => text.add(b"funding"),
+        Refusal::HoldKind => text.add(b"resource hold kind"),
+        Refusal::HoldTaken => text.add(b"resource held by"),
+        Refusal::Holds => text.add(b"resource hold limit"),
     }?;
     if let Some(blocked_by) = &problem.blocked_by {
         for task in blocked_by {

@@ -1020,7 +1020,22 @@ impl Domain {
             }
         }
         let owners = core::mem::replace(&mut config.owners, Box::new([]));
-        let tasks = tasks::Domain::new(&limits.tasks, config.seed, Box::new([config.charter]));
+        let mut tasks = tasks::Domain::new(&limits.tasks, config.seed, Box::new([config.charter]));
+        let task_env = Env { now: skein_lib::Time::ZERO, wall: skein_lib::Wall::EPOCH, limits: limits.tasks };
+        let mut config_out = Queue::with_capacity(tasks::max_out(&limits.tasks));
+        tasks::step(
+            &mut tasks,
+            &task_env,
+            tasks::Event::Kinds {
+                connector: config.forge_connector,
+                kinds: Box::new([tasks::Kind {
+                    connector: config.forge_connector,
+                    kind: 1,
+                    hold: tasks::HoldKind::Exclusive { taken: tasks::Taken::Waits },
+                }]),
+            },
+            &mut config_out,
+        );
         let people = people::Domain::new(&limits.people, owners, config.deployment_provider);
         let mut forge = forge::Domain::new(
             &limits.forge,
@@ -3258,6 +3273,7 @@ fn make_chat(
             },
             funder: pool,
             dependencies: Box::new([]),
+            holdings: Box::new([]),
             wake: tasks::WakePolicy::DEFAULT,
             recurring: None,
             tracked: None,
@@ -4148,6 +4164,7 @@ fn delegate_call(
                 },
                 funder: tasks::Funder::Task(key.task),
                 dependencies: dependencies.into_boxed(),
+                holdings: Box::new([]),
                 wake: member.wake,
                 recurring: None,
                 tracked: None,
@@ -4251,6 +4268,7 @@ fn procedure_step(
                         numbers: tasks::Numbers { budget, spent: 0, spent_below: 0, reserved: 0 },
                         funder: tasks::Funder::Task(task),
                         dependencies: dependencies.into_boxed(),
+                        holdings: Box::new([]),
                         wake: member.wake,
                         recurring: None,
                         tracked: None,
@@ -4316,6 +4334,7 @@ fn start_recurring(
             authority,
             funder: tasks::Funder::Period { project, period },
             dependencies: Box::new([]),
+            holdings: Box::new([]),
             wake: tasks::WakePolicy::DEFAULT,
             recurring: Some(Box::new(template)),
             tracked: None,
@@ -4856,7 +4875,10 @@ fn tasks_outputs(
                             | tasks::Refusal::Restore
                             | tasks::Refusal::Read
                             | tasks::Refusal::Turn
-                            | tasks::Refusal::Reference => people::Refusal::Limit,
+                            | tasks::Refusal::Reference
+                            | tasks::Refusal::HoldKind
+                            | tasks::Refusal::HoldTaken
+                            | tasks::Refusal::Holds => people::Refusal::Limit,
                         }),
                     }));
                     continue;
@@ -4887,7 +4909,10 @@ fn tasks_outputs(
                         | tasks::Refusal::LiveDelegates
                         | tasks::Refusal::Restore
                         | tasks::Refusal::Read
-                        | tasks::Refusal::Turn => people::Refusal::Limit,
+                        | tasks::Refusal::Turn
+                        | tasks::Refusal::HoldKind
+                        | tasks::Refusal::HoldTaken
+                        | tasks::Refusal::Holds => people::Refusal::Limit,
                     };
                     domain.work.push(Work::People(people::Event::Decided {
                         request: token,
@@ -4923,7 +4948,10 @@ fn tasks_outputs(
                             | tasks::Refusal::LiveDelegates
                             | tasks::Refusal::Restore
                             | tasks::Refusal::Read
-                            | tasks::Refusal::Turn => people::Refusal::Limit,
+                            | tasks::Refusal::Turn
+                            | tasks::Refusal::HoldKind
+                            | tasks::Refusal::HoldTaken
+                            | tasks::Refusal::Holds => people::Refusal::Limit,
                         }),
                     }));
                     continue;
@@ -4961,7 +4989,10 @@ fn tasks_outputs(
                             | tasks::Refusal::LiveDelegates
                             | tasks::Refusal::Restore
                             | tasks::Refusal::Read
-                            | tasks::Refusal::Turn => people::Refusal::Limit,
+                            | tasks::Refusal::Turn
+                            | tasks::Refusal::HoldKind
+                            | tasks::Refusal::HoldTaken
+                            | tasks::Refusal::Holds => people::Refusal::Limit,
                         }),
                     }));
                     continue;
@@ -5027,7 +5058,10 @@ fn tasks_outputs(
                             | tasks::Refusal::Restore
                             | tasks::Refusal::Read
                             | tasks::Refusal::Turn
-                            | tasks::Refusal::Funding => people::Refusal::Limit,
+                            | tasks::Refusal::Funding
+                            | tasks::Refusal::HoldKind
+                            | tasks::Refusal::HoldTaken
+                            | tasks::Refusal::Holds => people::Refusal::Limit,
                         }),
                     }));
                 } else if domain.claiming.remove(&token.raw()).is_some() {
@@ -5320,6 +5354,7 @@ fn tasks_outputs(
                     );
                 }
             }
+            tasks::Request::Taken { .. } | tasks::Request::Waiting { .. } => {}
             tasks::Request::RestoreRefused { .. } => domain.startup = Startup::Failed,
         }
     }

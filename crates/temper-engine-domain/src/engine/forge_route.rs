@@ -1822,6 +1822,7 @@ fn start_queue_repair(domain: &mut Domain, env: &Env<Limits>, task: u64) -> bool
             authority: super::task_authority(&authority),
             funder: tasks::Funder::Period { project, period },
             dependencies: Box::new([]),
+            holdings: Box::new([]),
             wake: tasks::WakePolicy::DEFAULT,
             recurring: None,
             tracked: None,

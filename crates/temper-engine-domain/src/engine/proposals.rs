@@ -370,6 +370,7 @@ fn materialize(
                 authority: member.authority,
                 funder: tasks::Funder::Task(proposer),
                 dependencies: dependencies.into_boxed(),
+                holdings: Box::new([]),
                 wake: member.wake,
                 recurring: None,
                 tracked: None,

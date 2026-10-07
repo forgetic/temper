@@ -114,6 +114,7 @@ pub(super) fn start(
         numbers: tasks::Numbers { budget, spent: 0, spent_below: 0, reserved: 0 },
         funder: source,
         dependencies: Box::new([]),
+        holdings: Box::new([]),
         wake: tasks::WakePolicy::DEFAULT,
         recurring: None,
         tracked: Some(priority),

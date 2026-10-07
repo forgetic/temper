@@ -2071,6 +2071,7 @@ fn a_recurring_procedure_uses_the_root_period_route() {
         numbers: tasks::Numbers { budget: 10, spent: 0, spent_below: 0, reserved: 0 },
         funder: tasks::Funder::Period { project: 1, period: 0 },
         dependencies: Box::new([]),
+        holdings: Box::new([]),
         wake: tasks::WakePolicy::DEFAULT,
         recurring: None,
         tracked: None,
@@ -4206,7 +4207,9 @@ fn read_only_role_stages_have_one_not_ready_terminal_and_empty_projects_need_no_
             | tasks::Request::Notify { .. }
             | tasks::Request::Timer { .. }
             | tasks::Request::RecurringDue { .. }
-            | tasks::Request::RestoreRefused { .. } => panic!("no mutation or lost startup terminal"),
+            | tasks::Request::RestoreRefused { .. }
+            | tasks::Request::Taken { .. }
+            | tasks::Request::Waiting { .. } => panic!("no mutation or lost startup terminal"),
         }
     }
     tasks::step(&mut child, &environment, tasks::Event::Restored, &mut out);
@@ -4250,7 +4253,9 @@ fn read_only_role_stages_have_one_not_ready_terminal_and_empty_projects_need_no_
         | tasks::Request::Notify { .. }
         | tasks::Request::Timer { .. }
         | tasks::Request::RecurringDue { .. }
-        | tasks::Request::RestoreRefused { .. } => panic!("one named snapshot"),
+        | tasks::Request::RestoreRefused { .. }
+        | tasks::Request::Taken { .. }
+        | tasks::Request::Waiting { .. } => panic!("one named snapshot"),
     }
 }
 

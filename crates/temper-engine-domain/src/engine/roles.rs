@@ -57,7 +57,9 @@ fn inspected(
                 assert!(reply_to.into_token() == request && terminal.is_none(), "one correlated inspection");
                 terminal = Some(result);
             }
-            tasks::Request::EscalationsRechecked { .. }
+            tasks::Request::Taken { .. }
+            | tasks::Request::Waiting { .. }
+            | tasks::Request::EscalationsRechecked { .. }
             | tasks::Request::EscalationNeeded { .. }
             | tasks::Request::EscalationInspected { .. }
             | tasks::Request::EscalationDecided { .. }
@@ -242,7 +244,9 @@ fn recheck(domain: &mut Domain, env: &Env<Limits>, request: Token, project: u32)
                 );
                 completed = true;
             }
-            tasks::Request::EscalationsInspected { .. }
+            tasks::Request::Taken { .. }
+            | tasks::Request::Waiting { .. }
+            | tasks::Request::EscalationsInspected { .. }
             | tasks::Request::EscalationInspected { .. }
             | tasks::Request::EscalationDecided { .. }
             | tasks::Request::ProposalDecided { .. }
