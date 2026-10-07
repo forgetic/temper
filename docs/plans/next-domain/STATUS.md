@@ -184,6 +184,7 @@ remain on `checkpoint/migration/transcript-codec`, outside main.
 | 05s8 local host 05: waking notice read fence | merged locally | smith c3ff7a6 | fmt/clippy pass; 592 focused / 3.630 s; 12 fuzzy / 4.408 s. |
 | 05s8 shared Skein OAuth revision | merged locally | smith bf3609f | All 13 Skein packages pinned to 4e78d26; fmt/clippy pass; 592 focused / 3.871 s; 12 fuzzy / 4.457 s. |
 | 05s8 agent-world parent host-call bridge | merged locally | smith 520ccae | Caller-supplied complete Start and pending host calls receive caller replies while default fixtures remain scripted; fmt/clippy pass; 593 focused / 3.593 s; 12 fuzzy / 4.490 s. |
+| 05s8 agent-world host feedback for caller names | merged locally | smith 80c9e20 | The wire world observes any decoded host call, including `message`; fmt/clippy pass; 594 focused / 3.624 s; 12 fuzzy / 4.506 s. |
 
 ## Completion 08.4 measured suite shares
 
