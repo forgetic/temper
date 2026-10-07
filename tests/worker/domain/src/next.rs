@@ -129,7 +129,7 @@ impl World {
             limits.host.facts = 0;
             limits.checkout.facts = 0;
             limits.agent.facts = 0;
-            limits.told = 0;
+            limits.host.told = 0;
         }
         let bound = worst_case(&limits).expect("world limits fit");
         let out = Queue::with_capacity(max_out(&limits));

@@ -27,6 +27,8 @@ const LIMITS: Limits = Limits {
         event_bytes: 16,
         run_calls: 2,
         facts: 64,
+        told: 2,
+        fact_bytes: 16,
     },
     checkout: checkout::Limits {
         workspaces: 2,
@@ -69,7 +71,6 @@ const LIMITS: Limits = Limits {
     grace: Duration::from_secs(30),
     redial: Duration::from_secs(1),
     redial_max: Duration::from_secs(8),
-    told: 2,
     stalled: 4,
     turns: 0,
     turn_queue_bytes: 0,
@@ -1036,7 +1037,11 @@ fn the_worst_case_is_bounded_or_refused() {
         Limits { redial: Duration::ZERO, ..LIMITS },
         Limits { redial: Duration::from_secs(9), ..LIMITS },
         Limits { checkout: checkout::Limits { workspaces: 0, ..LIMITS.checkout }, ..LIMITS },
-        Limits { told: u32::MAX, agent: agent::Limits { fact_bytes: u64::MAX, ..LIMITS.agent }, ..LIMITS },
+        Limits {
+            host: host::Limits { told: u32::MAX, fact_bytes: u64::MAX, ..LIMITS.host },
+            agent: agent::Limits { fact_bytes: u64::MAX, ..LIMITS.agent },
+            ..LIMITS
+        },
     ];
     for limits in disagree {
         assert_eq!(worst_case(&limits), None, "{limits:?}");

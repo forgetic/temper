@@ -7,7 +7,6 @@ use skein_lib::{Deadlines, Duration, Id, Map, Queue, Slab, Token};
 use temper_worker_domain_agent as agent;
 use temper_worker_domain_checkout as checkout;
 
-use crate::boundary::Told;
 use crate::facts::Fact;
 use crate::link::{ALARMS, Alarm, Bounced, Named, Relay};
 use crate::translate::SAVED;
@@ -29,9 +28,6 @@ pub struct Limits {
     /// each drawn between half of it and all of it.
     pub redial: Duration,
     pub redial_max: Duration,
-    /// The run's facts kept for the engine until the protocol layer takes
-    /// them. Beyond them, facts are dropped and counted.
-    pub told: u32,
     /// Relays kept while the channel to the engine is down: at least as many
     /// as may wait for the engine at once (the host's slots times the calls a
     /// run may have in flight), so that none is dropped.
@@ -77,6 +73,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         && checkout_limits.path_bytes <= agent_limits.path_bytes
         && host_limits.transcript_bytes <= agent_limits.transcript_bytes
         && host_limits.turn_bytes <= agent_limits.turn_bytes
+        && host_limits.fact_bytes <= agent_limits.fact_bytes
         && (limits.turns == 0
             || (host_limits.turn_bytes > 0
                 && host_limits.turn_bytes <= limits.turn_queue_bytes
@@ -133,8 +130,6 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     let relays = Queue::<Relay>::worst_case(limits.stalled)?
         .checked_add(u64::from(limits.stalled).checked_mul(agent_limits.call_bytes)?)?;
     let bounces = Queue::<Bounced>::worst_case(bounces(limits)?)?;
-    let told = Queue::<Told>::worst_case(limits.told)?
-        .checked_add(u64::from(limits.told).checked_mul(agent_limits.fact_bytes)?)?;
     let host_out = Queue::<host::Request>::worst_case(host_out(limits))?;
     let checkout_out = Queue::<checkout::Request>::worst_case(checkout_out(limits))?;
     let agent_out = Queue::<agent::Request>::worst_case(agent_out(limits))?;
@@ -147,7 +142,6 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_add(retained)?
         .checked_add(relays)?
         .checked_add(bounces)?
-        .checked_add(told)?
         .checked_add(host_out)?
         .checked_add(checkout_out)?
         .checked_add(agent_out)?

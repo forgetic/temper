@@ -345,7 +345,7 @@ fn from_agent(domain: &mut Domain, env: &Env<Limits>, request: agent::Request, o
             }
             return;
         }
-        agent::Request::Told { client, fact } => return domain::tell(domain, client, fact),
+        agent::Request::Told { client, fact } => host::FromAgent::Facts { owner: client, fact },
         agent::Request::Started { client, agent } => host::FromAgent::Started { owner: client, agent },
         agent::Request::Called { client, call, ask } => {
             host::FromAgent::Called { owner: client, call, ask: translate::ask(ask) }

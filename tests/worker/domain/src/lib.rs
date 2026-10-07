@@ -26,6 +26,8 @@ pub const LIMITS: Limits = Limits {
         event_bytes: 96,
         run_calls: 2,
         facts: 256,
+        told: 16,
+        fact_bytes: 32,
     },
     checkout: checkout::Limits {
         workspaces: 4,
@@ -68,7 +70,6 @@ pub const LIMITS: Limits = Limits {
     grace: Duration::from_secs(60),
     redial: Duration::from_secs(1),
     redial_max: Duration::from_secs(8),
-    told: 16,
     stalled: 8,
     turns: 0,
     turn_queue_bytes: 0,
