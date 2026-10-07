@@ -259,17 +259,17 @@ fn made_text(text: &mut Text, made: temper_engine_domain_forge_client::Made) -> 
     }
 }
 
-fn authority(text: &mut Text, answer: temper_engine_domain_authority::Answer) -> Result<(), Problem> {
+fn authority(text: &mut Text, answer: jig_core_authority::Answer) -> Result<(), Problem> {
     match answer {
-        temper_engine_domain_authority::Answer::Allow => text.add(b"allowed"),
-        temper_engine_domain_authority::Answer::Wait => text.add(b"waiting"),
-        temper_engine_domain_authority::Answer::Propose => text.add(b"needs proposal"),
-        temper_engine_domain_authority::Answer::Refuse => text.add(b"refused"),
+        jig_core_authority::Answer::Allow => text.add(b"allowed"),
+        jig_core_authority::Answer::Wait => text.add(b"waiting"),
+        jig_core_authority::Answer::Propose => text.add(b"needs proposal"),
+        jig_core_authority::Answer::Refuse => text.add(b"refused"),
     }
 }
 
-fn finding_text(text: &mut Text, finding: temper_engine_domain_authority::Finding) -> Result<(), Problem> {
-    use temper_engine_domain_authority::Finding;
+fn finding_text(text: &mut Text, finding: jig_core_authority::Finding) -> Result<(), Problem> {
+    use jig_core_authority::Finding;
     match finding {
         Finding::Oversized => text.add(b"too large"),
         Finding::UnknownProject => text.add(b"unknown project"),
@@ -278,6 +278,7 @@ fn finding_text(text: &mut Text, finding: temper_engine_domain_authority::Findin
         Finding::Executor { .. } => text.add(b"executor permission"),
         Finding::Tasks { .. } => text.add(b"task allowance"),
         Finding::Spend { .. } => text.add(b"spend allowance"),
+        Finding::Price { .. } => text.add(b"effect price"),
         Finding::Arithmetic => text.add(b"arithmetic limit"),
         Finding::RunBudget => text.add(b"run budget"),
         Finding::RunCap => text.add(b"run cap"),
@@ -286,6 +287,7 @@ fn finding_text(text: &mut Text, finding: temper_engine_domain_authority::Findin
         Finding::Writer => text.add(b"writer held"),
         Finding::Tool => text.add(b"tool family"),
         Finding::Grant { .. } => text.add(b"resource grant"),
+        Finding::ResourceAccess => text.add(b"resource write unavailable"),
         Finding::Reference => text.add(b"task reference"),
         Finding::Scope { .. } => text.add(b"note scope"),
         Finding::Required { .. } => text.add(b"required fact"),

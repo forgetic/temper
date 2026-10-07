@@ -381,6 +381,56 @@ fn a_run_goes_from_its_assignment_to_its_answer_through_all_three_child_domains(
 }
 
 #[test]
+fn a_run_without_items_starts_without_preparing_or_saving_a_workspace() {
+    let mut h = Harness::new(&LIMITS);
+    h.connect();
+    let mut assignment = assignment(1);
+    assignment.workspace.repositories = Box::new([]);
+    assignment.workspace.key = Box::new([]);
+    let emitted = h.step(Event::Assign { assignment });
+    let [Request::Spawn { owner, workspace: None, .. }] = &*emitted else {
+        panic!("an itemless run spawns directly: {emitted:?}");
+    };
+    let r = Names { run: Token::new(1), attempt: attempt(1), agent: *owner, process: Token::new(501) };
+    let emitted = h.step(Event::Spawned { owner: r.agent, process: r.process });
+    assert_eq!(
+        &*emitted,
+        [
+            Request::Wait { owner: r.agent, process: r.process },
+            Request::Reap { owner: r.agent, process: r.process },
+            send(
+                r,
+                Down::Start {
+                    repositories: Box::new([]),
+                    grants: Box::new([]),
+                    charter: bytes(b"charter"),
+                    snapshot: None,
+                },
+            ),
+            read(r),
+        ]
+    );
+    assert!(h.step(Event::Sent { owner: r.agent }).is_empty());
+    assert_eq!(&*h.say(r, Up::Finish { finish: channel::Finish::Ended { outcome: bytes(b"done") } }), [read(r)]);
+    assert_eq!(&*h.goes(r), [answer(r, wire::Answer::Ended { outcome: bytes(b"done"), work: work(&[], None) })]);
+    assert_eq!(h.domain.checkout().workspaces(), 0);
+}
+
+#[test]
+fn another_attempt_for_a_hosted_run_is_refused_before_staging_its_items() {
+    let mut h = Harness::new(&LIMITS);
+    h.connect();
+    let r = h.live(1);
+    let mut assigned = assignment(1);
+    assigned.attempt = Token::new(2001);
+    assert_eq!(
+        &*h.step(Event::Assign { assignment: assigned }),
+        [Request::Answer { run: r.run, attempt: Token::new(2001), answer: wire::Answer::Refused(wire::Refusal::Busy) }]
+    );
+    assert_eq!(h.domain.workspaces(), 1);
+}
+
+#[test]
 fn a_run_cancelled_as_its_workspace_is_prepared_aborts_the_prepare() {
     let mut h = Harness::new(&LIMITS);
     h.connect();

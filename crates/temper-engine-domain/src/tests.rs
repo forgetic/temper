@@ -343,12 +343,12 @@ fn deep_child_rows_and_arbitrary_internal_payloads_are_refused_before_retention(
     let row = Record::People(people::Stored::Person {
         number: 1,
         identity: people::Identity {
-            key: people::IdentityKey { forge: 1, user: 1 },
+            key: people::IdentityKey { provider: 0, subject: 1_u64.to_be_bytes().into() },
             login: b"abc".as_slice().into(),
             name: b"de".as_slice().into(),
         },
     });
-    assert_eq!(crate::record_bytes(&row), Some(5));
+    assert_eq!(crate::record_bytes(&row), Some(13));
     assert!(decision.write(&limits, Write::Save(row)).is_err());
     let roster_answer = Record::People(people::Stored::Answer {
         key: people::RequestKey { person: 1, key: [1; 16] },

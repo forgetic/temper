@@ -103,6 +103,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "jig-core-authority"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+]
+
+[[package]]
 name = "jig-core-brief"
 version = "0.0.0"
 dependencies = [
@@ -435,24 +442,17 @@ name = "temper-engine-domain"
 version = "0.0.0"
 dependencies = [
  "jig-core-accounts",
+ "jig-core-authority",
  "jig-core-brief",
  "jig-core-fleet",
  "jig-core-views",
  "skein-lib",
- "temper-engine-domain-authority",
  "temper-engine-domain-forge",
  "temper-engine-domain-forge-change",
  "temper-engine-domain-forge-client",
  "temper-engine-domain-forge-issues",
  "temper-engine-domain-people",
  "temper-engine-domain-tasks",
-]
-
-[[package]]
-name = "temper-engine-domain-authority"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
 ]
 
 [[package]]
@@ -506,6 +506,7 @@ name = "temper-engine-domain-world"
 version = "0.0.0"
 dependencies = [
  "jig-core-accounts",
+ "jig-core-authority",
  "jig-core-brief",
  "jig-core-fleet",
  "jig-core-views",
@@ -515,7 +516,6 @@ dependencies = [
  "smith-domain-session",
  "smith-domain-tools",
  "temper-engine-domain",
- "temper-engine-domain-authority",
  "temper-engine-domain-forge",
  "temper-engine-domain-forge-change",
  "temper-engine-domain-forge-client",
@@ -565,6 +565,7 @@ name = "temper-engine-smith"
 version = "0.0.0"
 dependencies = [
  "jig-core-accounts",
+ "jig-core-authority",
  "jig-core-brief",
  "skein-json",
  "skein-lib",
@@ -572,7 +573,6 @@ dependencies = [
  "smith-domain-run",
  "smith-domain-session",
  "temper-engine-domain",
- "temper-engine-domain-authority",
  "temper-engine-domain-forge",
  "temper-engine-domain-forge-client",
  "temper-engine-domain-tasks",
@@ -623,6 +623,7 @@ dependencies = [
 name = "temper-system-world"
 version = "0.0.0"
 dependencies = [
+ "jig-core-authority",
  "jig-core-brief",
  "jig-core-fleet",
  "skein-fake-checkout",
@@ -632,7 +633,6 @@ dependencies = [
  "smith-domain",
  "smith-domain-run",
  "temper-engine-domain",
- "temper-engine-domain-authority",
  "temper-engine-domain-forge",
  "temper-engine-domain-forge-change",
  "temper-engine-domain-forge-client",

@@ -408,7 +408,7 @@ pub enum Hold {
     Drift,
     /// Root reports a permanently failed effect requiring a decision.
     Effects,
-    /// Actual spending exhausted available `funding`; a representable charge is still retained.
+    /// Available funding is too small for another run or effect.
     Budget,
     /// Root reports that the permitted deadline prevents another activation.
     Deadline,
@@ -562,6 +562,8 @@ pub struct TaskRecord {
     /// Committed cumulative expense of the current attempt; a `new` `Claim` resets only this
     /// attempt baseline, not total direct spend.
     pub run_spent: u64,
+    /// Unspent part of this attempt's reserved run allowance, included in `numbers.reserved`.
+    pub run_reserved: u64,
     /// Requester-tree root identity, equal to number for a top-level task.
     pub root: u64,
     /// Structural depth below that root, bounded by `Limits::depth`.
@@ -937,8 +939,8 @@ pub enum Event {
         read: Option<u64>,
         /// Highest message this exact run was offered by its assignment or committed relay.
         offered: Option<u64>,
-        /// Whole priced attempt expense; tasks posts only the checked delta above `run_spent`,
-        /// including representable overruns.
+        /// Whole priced attempt expense; tasks posts only the checked delta above `run_spent`
+        /// from this attempt's reserved run allowance.
         cumulative: u64,
     },
     /// Create an authorized whole batch and actual reservations atomically, producing `Made` or
@@ -970,6 +972,8 @@ pub enum Event {
         /// Root-issued nonzero identity strictly greater than the latest claim; success resets
         /// attempt turn/expense baselines.
         attempt: u64,
+        /// Root-checked allowance reserved from the task at this claim.
+        budget: u64,
     },
     /// Notification changing only the matching `Claimed` attempt to `Running`; absent/stale inputs
     /// are ignored and no reply is owed.

@@ -151,7 +151,7 @@ impl Measured {
                     valid: Duration::from_secs(100),
                 })
                 .collect(),
-            workspace: Token::new(client),
+            workspace: Some(Token::new(client)),
             charter: bytes(limits.charter_bytes),
             snapshot: Some(bytes(limits.snapshot_bytes)),
         };
@@ -182,7 +182,7 @@ fn fill(limits: Limits) {
     let busy = Spawn {
         repositories: Box::new([]),
         grants: Box::new([]),
-        workspace: Token::new(99),
+        workspace: Some(Token::new(99)),
         charter: bytes(1),
         snapshot: None,
     };
@@ -247,7 +247,7 @@ fn fill(limits: Limits) {
     let beyond = Spawn {
         repositories: Box::new([]),
         grants: Box::new([]),
-        workspace: Token::new(0),
+        workspace: Some(Token::new(0)),
         charter: bytes(limits.charter_bytes + 1),
         snapshot: None,
     };
@@ -351,7 +351,7 @@ fn v2_full_transcripts_start_paths_and_queued_conflict_replies_fit_the_child_bou
     let mut agent = Measured::new(limits);
     for client in 0..u64::from(limits.agents) {
         let spawn = SpawnV2 {
-            workspace: Token::new(client),
+            workspace: Some(Token::new(client)),
             charter: bytes(limits.charter_bytes),
             transcript: Some(bytes(limits.transcript_bytes)),
             repositories: (0..limits.repositories)

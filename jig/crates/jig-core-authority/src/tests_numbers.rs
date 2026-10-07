@@ -21,17 +21,17 @@ fn fresh(budget: u64) -> Numbers {
 }
 
 #[test]
-fn accounting_refusals_and_overruns_leave_exact_values() {
+fn accounting_refuses_unreserved_spend_and_invalid_numbers() {
     let start = fresh(10);
     assert_eq!(carve(start, &[6, 5]), None, "a batch cannot exceed what is available");
     assert_eq!(carve(start, &[u64::MAX, 1]), None, "the sum of reservations must be representable");
     let reserved = carve(start, &[6, 4]).unwrap();
     assert_eq!(left(reserved), 0);
-    let charged = charge(reserved, 3).unwrap();
-    assert_eq!(charged.overrun, 3);
-    assert_eq!(charged.numbers.spent, 3);
-    assert_eq!(charged.numbers.reserved, 10);
-    assert_eq!(left(charged.numbers), 0);
+    assert_eq!(charge(reserved, 3), None, "reserved funding cannot also be charged");
+    let charged = charge(carve(start, &[6]).unwrap(), 4).unwrap();
+    assert_eq!(charged.spent, 4);
+    assert_eq!(charged.reserved, 6);
+    assert_eq!(left(charged), 0);
     assert_eq!(settle(start, fresh(1)), None);
     assert_eq!(settle(reserved, reserved), None);
     let huge = Numbers { spent: u64::MAX, reserved: u64::MAX, ..fresh(u64::MAX) };
@@ -42,14 +42,12 @@ fn accounting_refusals_and_overruns_leave_exact_values() {
     assert_eq!(charge(impossible, 0), None);
     assert_eq!(settle(fresh(0), impossible), None);
     let parent = Numbers { spent: u64::MAX, reserved: 1, ..fresh(u64::MAX) };
-    assert_eq!(settle(parent, charge(fresh(1), 1).unwrap().numbers), None);
+    assert_eq!(settle(parent, charge(fresh(1), 1).unwrap()), None);
     assert_eq!(start, fresh(10));
 }
 
 #[test]
 fn every_expense_is_counted_once_up_generated_funding_trees() {
-    let mut leaf_overruns = 0_u64;
-    let mut subtree_overruns = 0_u64;
     for seed in 0..64_u64 {
         let mut root = fresh(10_000);
         let mut expenses = List::with_capacity(17);
@@ -66,28 +64,22 @@ fn every_expense_is_counted_once_up_generated_funding_trees() {
             for (leaf, amount) in budgets.iter().enumerate() {
                 let actual = remainder(
                     add(add(multiply(seed, 7), multiply(child, 3)), multiply(u64::try_from(leaf).unwrap(), 17)),
-                    add(multiply(*amount, 2), 1),
+                    add(*amount, 1),
                 );
                 expenses.push(actual).unwrap();
                 let charged = charge(fresh(*amount), actual).unwrap();
-                if charged.overrun > 0 {
-                    leaf_overruns = add(leaf_overruns, 1);
-                }
-                node = settle(node, charged.numbers).unwrap();
+                node = settle(node, charged).unwrap();
             }
-            let actual = remainder(add(multiply(seed, 11), child), add(budget, 1));
+            let actual = remainder(add(multiply(seed, 11), child), add(left(node), 1));
             expenses.push(actual).unwrap();
             let charged = charge(node, actual).unwrap();
-            if charged.overrun > 0 {
-                subtree_overruns = add(subtree_overruns, 1);
-            }
-            node = charged.numbers;
+            node = charged;
             funded.push(node).unwrap();
         }
         for ended in &funded {
             root = settle(root, *ended).unwrap();
         }
-        root = charge(root, 17).unwrap().numbers;
+        root = charge(root, 17).unwrap();
         expenses.push(17).unwrap();
         let mut expected = 0_u64;
         for expense in &expenses {
@@ -97,7 +89,6 @@ fn every_expense_is_counted_once_up_generated_funding_trees() {
         assert_eq!(root.reserved, 0, "seed {seed}");
         assert_eq!(left(root), 10_000_u64.saturating_sub(expected), "seed {seed}");
     }
-    assert!(leaf_overruns > 0 && subtree_overruns > 0, "the generated trees exercise overruns at both levels");
 }
 
 #[test]
@@ -106,14 +97,65 @@ fn a_new_period_does_not_clear_the_reservations_of_its_predecessor() {
     let current = fresh(100);
     assert_eq!(left(old), 20);
     assert_eq!(left(current), 100);
-    let ended = charge(fresh(80), 35).unwrap().numbers;
+    let ended = charge(fresh(80), 35).unwrap();
     let settled = settle(old, ended).unwrap();
     assert_eq!(settled.spent_below, 35);
     assert_eq!(left(settled), 65);
     assert_eq!(current, fresh(100));
-    let overrunning = charge(fresh(80), 110).unwrap().numbers;
-    let settled = settle(old, overrunning).unwrap();
-    assert_eq!(settled.spent_below, 110);
-    assert_eq!(left(settled), 0);
+    assert_eq!(charge(fresh(80), 110), None);
     assert_eq!(current.reserved, 0);
+}
+
+#[test]
+fn generated_open_maxima_settle_without_losing_or_reusing_spend() {
+    for seed in 0..64_u64 {
+        let mut maxima = [0_u64; 5];
+        for (index, maximum) in maxima.iter_mut().enumerate() {
+            *maximum = 12 + remainder(seed * 7 + u64::try_from(index).unwrap() * 13, 23);
+        }
+        let mut funder = carve(fresh(200), &maxima).unwrap();
+        let mut expected = 0_u64;
+        let mut open = 0_u64;
+        for maximum in maxima {
+            open = add(open, maximum);
+        }
+        for index in [3, 0, 4, 1, 2] {
+            let maximum = maxima[index];
+            let actual = remainder(seed * 11 + u64::try_from(index).unwrap() * 17, maximum + 1);
+            let completion = charge(fresh(maximum), actual).unwrap();
+            funder = settle(funder, completion).unwrap();
+            expected += actual;
+            open -= maximum;
+            assert_eq!(funder.spent_below, expected, "seed {seed}, completion {index}");
+            assert_eq!(funder.reserved, open, "seed {seed}, completion {index}");
+            assert_eq!(left(funder), 200 - expected - open, "seed {seed}, completion {index}");
+            assert_eq!(charge(funder, left(funder) + 1), None, "an open maximum cannot fund another charge");
+        }
+    }
+}
+
+#[test]
+fn generated_standing_periods_keep_live_delegates_with_their_original_funder() {
+    for seed in 0..64_u64 {
+        let old_actual = remainder(seed * 7, 21);
+        let new_actual = remainder(seed * 13, 21);
+        let mut old_period = carve(fresh(100), &[60]).unwrap();
+        let mut old_standing = carve(fresh(60), &[20]).unwrap();
+        let old_delegate = charge(fresh(20), old_actual).unwrap();
+
+        // A renewed allotment is funded by the new period while the old delegate stays open.
+        let mut new_period = carve(fresh(100), &[60]).unwrap();
+        let new_standing = settle(carve(fresh(60), &[20]).unwrap(), charge(fresh(20), new_actual).unwrap()).unwrap();
+        new_period = settle(new_period, new_standing).unwrap();
+        assert_eq!(old_period.reserved, 60, "new settlement cannot release the old period");
+        assert_eq!(old_standing.reserved, 20, "old delegate remains live");
+        assert_eq!(new_period.spent_below, new_actual);
+        assert_eq!(new_period.reserved, 0);
+
+        old_standing = settle(old_standing, old_delegate).unwrap();
+        old_period = settle(old_period, old_standing).unwrap();
+        assert_eq!(old_period.spent_below, old_actual);
+        assert_eq!(old_period.reserved, 0);
+        assert_eq!(new_period.spent_below, new_actual, "late old settlement cannot debit the new period");
+    }
 }

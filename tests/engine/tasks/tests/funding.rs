@@ -186,28 +186,46 @@ fn priced_invalid_terminals_charge_but_live_delegate_refusals_do_not() {
 }
 
 #[test]
-fn priced_overrun_holds_and_accounting_overflow_refuses_before_acceptance() {
+fn priced_turns_cannot_spend_beyond_the_claimed_allowance() {
     let mut w = World::new(75, LIMITS);
     w.make(Party::Person(9), vec![task(1, &[])]);
     w.claim(1, 1);
-    assert_eq!(turn(&mut w, 1, 1, 1, None, 101), Reply::Turn(Accepted::New));
-    assert!(matches!(w.record(1).phase, tasks::Phase::Held { why: tasks::Hold::Budget, .. }));
-    assert_eq!(w.record(1).numbers.spent, 101);
-    let mut w = World::new(76, LIMITS);
-    w.open_period(1, u64::MAX);
-    let mut first = task(1, &[]);
-    first.funder = Funder::Period { project: 1, period: 1 };
-    first.authority.budget.spend = 0;
-    first.numbers.budget = 0;
-    let mut second = first.clone();
-    second.number = 2;
-    w.make(Party::Person(9), vec![first, second]);
-    w.claim(1, 1);
-    w.claim(2, 2);
-    assert_eq!(turn(&mut w, 1, 1, 1, None, u64::MAX - 5), Reply::Turn(Accepted::New));
+    assert_eq!(w.record(1).run_reserved, 100);
     let before = w.records.clone();
-    assert!(matches!(turn(&mut w,2,2,1,None,6),Reply::Refused(problem) if problem.why==Refusal::Funding));
+    assert!(matches!(turn(&mut w,1,1,1,None,101),Reply::Refused(problem) if problem.why==Refusal::Funding));
     assert_eq!(w.records, before);
+    assert_eq!(turn(&mut w, 1, 1, 1, None, 100), Reply::Turn(Accepted::New));
+    assert_eq!(w.record(1).numbers.spent, 100);
+    assert_eq!(w.record(1).run_reserved, 0);
+    let before = w.records.clone();
+    assert!(matches!(turn(&mut w,1,1,2,None,101),Reply::Refused(problem) if problem.why==Refusal::Funding));
+    assert_eq!(w.records, before);
+}
+
+#[test]
+fn a_claim_holds_only_its_capped_allowance_and_returns_the_unused_part() {
+    let mut w = World::new(76, LIMITS);
+    w.make(Party::Person(9), vec![task(1, &[])]);
+    w.claim_budget(1, 1, 40);
+    assert_eq!(w.record(1).numbers, Numbers { budget: 100, spent: 0, spent_below: 0, reserved: 40 });
+    assert_eq!(turn(&mut w, 1, 1, 1, None, 10), Reply::Turn(Accepted::New));
+    assert_eq!(w.record(1).run_reserved, 30);
+    assert_eq!(w.record(1).numbers.reserved, 30);
+    assert!(matches!(turn(&mut w,1,1,2,None,41),Reply::Refused(problem) if problem.why==Refusal::Funding));
+    assert_eq!(
+        end(
+            &mut w,
+            1,
+            1,
+            End::Finished { result: TaskResult::Report { words: Box::new([1]) }, cancel_delegates: false },
+            15
+        ),
+        Reply::Acknowledged(Accepted::New)
+    );
+    assert_eq!(w.record(1).run_reserved, 0);
+    assert_eq!(w.record(1).numbers, Numbers { budget: 100, spent: 15, spent_below: 0, reserved: 0 });
+    w.restart();
+    assert_eq!(w.record(1).numbers.reserved, 0);
 }
 
 #[test]
@@ -265,13 +283,14 @@ fn independent_referee_detects_omitted_ledger_save_and_actual_posting() {
 fn delegate_expense_follows_actual_task_funding_chain_once() {
     let mut w = World::new(81, LIMITS);
     w.make(Party::Person(1), vec![task(1, &[])]);
-    w.claim(1, 1);
     let mut child = task(2, &[]);
     child.funder = Funder::Task(1);
     child.numbers.budget = 40;
     child.authority.budget.spend = 40;
     w.make(Party::Task(1), vec![child]);
     assert_eq!(w.record(1).numbers.reserved, 40);
+    w.claim(1, 1);
+    assert_eq!(w.record(1).numbers.reserved, 100, "parent's run reserves its remaining 60");
     w.claim(2, 2);
     assert_eq!(turn(&mut w, 2, 2, 1, None, 8), Reply::Turn(Accepted::New));
     w.terminal_cause(
@@ -280,7 +299,7 @@ fn delegate_expense_follows_actual_task_funding_chain_once() {
         Cause::Priced { cumulative: 12 },
     );
     w.settle(2);
-    assert_eq!(w.record(1).numbers, Numbers { budget: 100, spent: 0, spent_below: 12, reserved: 0 });
+    assert_eq!(w.record(1).numbers, Numbers { budget: 100, spent: 0, spent_below: 12, reserved: 60 });
     w.restart();
     w.terminal_cause(
         1,

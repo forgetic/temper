@@ -109,7 +109,7 @@ impl Harness {
         let spawn = Spawn {
             repositories: Box::new([]),
             grants: Box::new([]),
-            workspace: token(client, 100),
+            workspace: Some(token(client, 100)),
             charter: bytes(charter),
             snapshot,
         };
@@ -122,7 +122,7 @@ impl Harness {
         let [Request::Spawn { owner, workspace, deadline }] = &*emitted else {
             panic!("expected a spawn, got {emitted:?}");
         };
-        assert_eq!(*workspace, token(client, 100));
+        assert_eq!(*workspace, Some(token(client, 100)));
         assert_eq!(*deadline, self.env.now.saturating_add(LIMITS.spawn_timeout), "io has a deadline to spawn it");
         *owner
     }
@@ -1046,7 +1046,7 @@ fn grant_refreshes_coalesce_without_displacing_inbound_or_answers() {
     let mut h = Harness::new(LIMITS);
     let initial = crate::channel::Grant { account: 7, generation: 1, valid: Duration::from_secs(60) };
     let spawn = Spawn {
-        workspace: Token::new(100),
+        workspace: Some(Token::new(100)),
         charter: bytes(b"charter"),
         snapshot: None,
         repositories: Box::new([]),
@@ -1108,7 +1108,7 @@ fn live_v2(h: &mut Harness) -> Names {
     let emitted = h.step(Event::SpawnV2 {
         client,
         spawn: crate::SpawnV2 {
-            workspace: Token::new(201),
+            workspace: Some(Token::new(201)),
             charter: bytes(b"v2 charter"),
             transcript: Some(bytes(b"turns+tail")),
             repositories: Box::new([crate::channel::RepositoryV2 {

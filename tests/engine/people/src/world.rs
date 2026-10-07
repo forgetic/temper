@@ -129,7 +129,7 @@ pub struct World {
 #[must_use]
 pub fn identity(user: u64) -> Identity {
     Identity {
-        key: IdentityKey { forge: 0, user },
+        key: IdentityKey { provider: 0, subject: (user).to_be_bytes().into() },
         login: b"login".to_vec().into_boxed_slice(),
         name: b"name".to_vec().into_boxed_slice(),
     }
@@ -143,7 +143,7 @@ impl World {
 
     #[must_use]
     pub fn with_owners(settings: Settings, owners: Box<[InitialOwner]>) -> World {
-        let domain = Domain::new(&settings.limits, owners.clone());
+        let domain = Domain::new(&settings.limits, owners.clone(), 1);
         let mut world = World {
             settings,
             domain,
@@ -215,7 +215,7 @@ impl World {
     pub fn signin(&mut self, sign_in: u64, user: u64) -> u64 {
         let (call, reply_to) = self.call();
         let person = self.name();
-        self.send(Event::SignedIn { reply_to, person, sign_in, identity: identity(user) });
+        self.send(Event::SignedIn { reply_to, person, sign_in, identity: identity(user), kind: people::Kind::Person });
         call
     }
 
@@ -325,6 +325,7 @@ impl World {
                 Request::RolesApplied { .. } | Request::RolesRefused { .. } => {
                     self.ending("busy");
                 }
+                Request::ServiceMade { .. } => unreachable!("the scripted parent routes chats only"),
                 Request::RestoreRefused { .. } => panic!("valid world records must restore"),
             }
         }
@@ -398,7 +399,7 @@ impl World {
         self.held.clear();
         self.deferred.clear();
         self.issued = self.durable;
-        self.domain = Domain::new(&self.env.limits, self.owners.clone());
+        self.domain = Domain::new(&self.env.limits, self.owners.clone(), 1);
         for record in self.records.values().cloned().collect::<Vec<_>>() {
             self.send(Event::Restore { record });
         }

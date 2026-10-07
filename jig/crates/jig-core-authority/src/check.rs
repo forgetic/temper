@@ -8,9 +8,9 @@ use crate::limits::{authority_within, name_within, pattern_within, within};
 use crate::order::{differences, fit_lacks};
 use crate::{
     Action, Answer, Authority, BatchAsk, Budget, Call, CallAsk, Checked, Delegate, Delegation, Domain, Effect,
-    EffectAsk, Finding, Given, Grant, Guard, Holder, Judge, Last, Limits, NoteScope, PersonAsk, PersonRequest, Policy,
-    ProposalKind, RequestKind, Requirement, Role, RunAsk, Scopes, Source, Tools, Verdict, Writer, at_most, carve,
-    grant_at_most, grant_covers, left, max_out, pattern_at_most, pattern_covers,
+    EffectAccess, EffectAsk, Finding, Given, Grant, Guard, Holder, Judge, Last, Limits, NoteScope, PersonAsk,
+    PersonRequest, Policy, ProposalKind, RequestKind, Requirement, Role, RunAsk, Scopes, Source, Tools, Verdict,
+    Writer, at_most, carve, charge, grant_at_most, grant_covers, left, max_out, pattern_at_most, pattern_covers,
 };
 
 fn room(domain: &Domain, why: &Queue<Finding>) {
@@ -79,7 +79,30 @@ fn delegates_within(tasks: &[Delegate], limits: &Limits) -> bool {
 }
 
 fn effect_within(effect: &Effect, limits: &Limits) -> bool {
-    name_within(&effect.name, limits)
+    if !name_within(&effect.name, limits)
+        || !within(effect.additional.len(), limits.writes)
+        || !within(effect.guards.len(), limits.facts)
+    {
+        return false;
+    }
+    for resource in &effect.additional {
+        if !name_within(&resource.name, limits) {
+            return false;
+        }
+    }
+    true
+}
+
+fn matches_resource(effect: &Effect, pattern: &crate::Pattern) -> bool {
+    if pattern_covers(pattern, &effect.name) {
+        return true;
+    }
+    for resource in &effect.additional {
+        if pattern_covers(pattern, &resource.name) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Batch reservations are all-or-nothing. Every direct child consumes one lifetime task slot in
@@ -212,8 +235,20 @@ fn batch(
 }
 
 fn has_grant(authority: &Authority, effect: &Effect, domain: &Domain) -> bool {
+    if !has_grant_on(authority, effect, &effect.name, domain) {
+        return false;
+    }
+    for resource in &effect.additional {
+        if !has_grant_on(authority, effect, &resource.name, domain) {
+            return false;
+        }
+    }
+    true
+}
+
+fn has_grant_on(authority: &Authority, effect: &Effect, name: &crate::Name, domain: &Domain) -> bool {
     for grant in &authority.grants {
-        if grant_covers(grant, effect.connector, effect.kind, &effect.name, &domain.rules().implies) {
+        if grant_covers(grant, effect.connector, effect.kind, name, &domain.rules().implies) {
             return true;
         }
     }
@@ -242,6 +277,49 @@ fn grants(
     }
 }
 
+fn writable(effect: &Effect, answer: &mut Answer, why: &mut Queue<Finding>) {
+    let mut denied = match effect.access {
+        EffectAccess::Owned | EffectAccess::Participant => false,
+        EffectAccess::Context | EffectAccess::Unavailable => true,
+    };
+    for resource in &effect.additional {
+        denied |= match resource.access {
+            EffectAccess::Owned | EffectAccess::Participant => false,
+            EffectAccess::Context | EffectAccess::Unavailable => true,
+        };
+    }
+    if denied {
+        find(answer, why, Answer::Refuse, Finding::ResourceAccess);
+    }
+}
+
+#[expect(clippy::too_many_arguments, reason = "the price check borrows one action and its current funding snapshot")]
+fn price(
+    domain: &Domain,
+    policy: &Policy,
+    authority: &Authority,
+    numbers: crate::Numbers,
+    funder: Source,
+    effect: &Effect,
+    answer: &mut Answer,
+    why: &mut Queue<Finding>,
+) {
+    let Some(maximum) = effect.price else { return };
+    if numbers.spent.checked_add(numbers.spent_below).is_none() {
+        find(answer, why, Answer::Refuse, Finding::Arithmetic);
+    }
+    for (source, available) in [
+        (funder, left(numbers).min(authority.budget.spend)),
+        (Source::Project, policy.ceiling.budget.spend),
+        (Source::Deployment, domain.rules().ceiling.budget.spend),
+    ] {
+        if maximum > available {
+            let strict = if source == Source::Task { Answer::Propose } else { Answer::Refuse };
+            find(answer, why, strict, Finding::Price { source });
+        }
+    }
+}
+
 fn requirements(
     requirements: &[Requirement],
     effect: &Effect,
@@ -253,7 +331,7 @@ fn requirements(
     for requirement in requirements {
         if requirement.connector != effect.connector
             || requirement.kind != effect.kind
-            || !pattern_covers(&requirement.pattern, &effect.name)
+            || !matches_resource(effect, &requirement.pattern)
         {
             continue;
         }
@@ -308,7 +386,7 @@ pub fn needed_judges(domain: &Domain, project: u32, effect: &Effect) -> Option<L
         for requirement in requirements {
             if requirement.connector == effect.connector
                 && requirement.kind == effect.kind
-                && pattern_covers(&requirement.pattern, &effect.name)
+                && matches_resource(effect, &requirement.pattern)
                 && !judges.as_slice().contains(&requirement.judge)
             {
                 judges.push(requirement.judge).ok()?;
@@ -337,6 +415,8 @@ pub fn check_effect(domain: &Domain, ask: &EffectAsk, given: &[Given], why: &mut
     };
     let mut answer = Answer::Allow;
     grants(domain, policy, &ask.authority, &ask.effect, &mut answer, why);
+    writable(&ask.effect, &mut answer, why);
+    price(domain, policy, &ask.authority, ask.numbers, Source::Task, &ask.effect, &mut answer, why);
     requirements(&domain.rules().requirements, &ask.effect, given, ask.now, &mut answer, why);
     requirements(&policy.requirements, &ask.effect, given, ask.now, &mut answer, why);
     answer
@@ -363,7 +443,6 @@ pub fn check_run(domain: &Domain, ask: &RunAsk, why: &mut Queue<Finding>) -> Ans
         return refuse(why, Finding::UnknownProject);
     };
     let mut answer = Answer::Allow;
-    ceilings(domain, policy, &ask.authority, &mut answer, why);
     if ask.numbers.spent.checked_add(ask.numbers.spent_below).is_none() {
         find(&mut answer, why, Answer::Refuse, Finding::Arithmetic);
     }
@@ -373,10 +452,20 @@ pub fn check_run(domain: &Domain, ask: &RunAsk, why: &mut Queue<Finding>) -> Ans
     if ask.budget > domain.rules().maximum_run_spend || ask.budget > ask.authority.budget.spend {
         find(&mut answer, why, Answer::Refuse, Finding::RunCap);
     }
+    if ask.budget > policy.ceiling.budget.spend {
+        find(&mut answer, why, Answer::Refuse, Finding::RunCap);
+    }
     if let Some(deadline) = ask.authority.budget.deadline
         && ask.wall > deadline
     {
         find(&mut answer, why, Answer::Wait, Finding::Deadline);
+    }
+    for ceiling in [&policy.ceiling, &domain.rules().ceiling] {
+        if let Some(deadline) = ceiling.budget.deadline
+            && ask.wall > deadline
+        {
+            find(&mut answer, why, Answer::Refuse, Finding::Deadline);
+        }
     }
     for usable in &ask.accounts {
         if !usable {
@@ -385,6 +474,7 @@ pub fn check_run(domain: &Domain, ask: &RunAsk, why: &mut Queue<Finding>) -> Ans
     }
     for write in &ask.writes {
         grants(domain, policy, &ask.authority, &write.effect, &mut answer, why);
+        writable(&write.effect, &mut answer, why);
         match write.held {
             Writer::Task | Writer::Ancestor => {}
             Writer::Pending | Writer::Other => find(&mut answer, why, Answer::Wait, Finding::Writer),
@@ -606,7 +696,20 @@ pub fn check_request(domain: &Domain, ask: &PersonAsk, why: &mut Queue<Finding>)
                     if !has_grant(&domain.rules().ceiling, effect, domain) {
                         find(&mut answer, why, Answer::Refuse, Finding::Grant { source: Source::Deployment });
                     }
-                    checked(answer, Some(ask.pool))
+                    writable(effect, &mut answer, why);
+                    price(domain, policy, &role.authority, ask.pool, Source::Role, effect, &mut answer, why);
+                    let numbers = if answer == Answer::Allow {
+                        match effect.price {
+                            Some(amount) => charge(ask.pool, amount),
+                            None => Some(ask.pool),
+                        }
+                    } else {
+                        None
+                    };
+                    if numbers.is_none() && answer == Answer::Allow {
+                        find(&mut answer, why, Answer::Refuse, Finding::Arithmetic);
+                    }
+                    checked(answer, numbers)
                 }
                 Action::Widen(authority) | Action::Amend(authority) => give(domain, policy, role, ask, authority, why),
                 Action::Escalate { release } => match release {
@@ -639,7 +742,7 @@ fn needs_funding(request: &PersonRequest) -> bool {
         PersonRequest::Accept(action) => match action {
             Action::Batch(tasks) => batch_has_spend(tasks),
             Action::Widen(authority) | Action::Amend(authority) => authority.budget.spend != 0,
-            Action::Effect(_) => false,
+            Action::Effect(effect) => effect.price.unwrap_or(0) != 0,
             Action::Escalate { release } => match release {
                 Some(authority) => authority.budget.spend != 0,
                 None => false,
@@ -660,6 +763,17 @@ fn empty() -> Authority {
     }
 }
 
+fn exact_effect_grant(effect: &Effect, name: &crate::Name) -> Option<Grant> {
+    Some(Grant {
+        connector: effect.connector,
+        kind: effect.kind,
+        pattern: crate::Pattern {
+            segments: name.segments.get(..name.segments.len().checked_sub(1)?)?.into(),
+            last: Last::Exact(name.segments.last()?.clone()),
+        },
+    })
+}
+
 /// Construct an owned least value, bounded by the caller-admitted action. Unlike the borrowed
 /// checks, constructing this result copies owned bytes. Pure constructor over a caller-admitted
 /// action; copies bounded grants/segments/executors into the least authority needed. Returns `None`
@@ -671,14 +785,14 @@ pub fn needs(action: &Action) -> Option<Authority> {
         Action::Batch(tasks) => batch_needs(tasks),
         Action::Effect(effect) => {
             let mut authority = empty();
-            authority.grants = Box::new([Grant {
-                connector: effect.connector,
-                kind: effect.kind,
-                pattern: crate::Pattern {
-                    segments: effect.name.segments.get(..effect.name.segments.len().checked_sub(1)?)?.into(),
-                    last: Last::Exact(effect.name.segments.last()?.clone()),
-                },
-            }]);
+            authority.budget.spend = effect.price.unwrap_or(0);
+            let count = u32::try_from(effect.additional.len()).ok()?.checked_add(1)?;
+            let mut grants = List::with_capacity(count);
+            grants.push(exact_effect_grant(effect, &effect.name)?).ok()?;
+            for resource in &effect.additional {
+                grants.push(exact_effect_grant(effect, &resource.name)?).ok()?;
+            }
+            authority.grants = grants.into_boxed();
             Some(authority)
         }
         Action::Widen(authority) | Action::Amend(authority) => Some(authority.clone()),
@@ -742,7 +856,7 @@ fn batch_needs(tasks: &[Delegate]) -> Option<Authority> {
 
 fn needed_within(authority: &Authority, limits: &Limits) -> bool {
     let mut aggregate = *limits;
-    let count = limits.batch.max(1);
+    let count = limits.batch.max(limits.writes.saturating_add(1));
     let Some(grants) = limits.grants.checked_mul(count) else {
         return false;
     };

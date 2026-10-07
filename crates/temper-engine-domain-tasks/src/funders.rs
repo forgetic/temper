@@ -249,7 +249,7 @@ pub(crate) fn links(domain: &Domain, bound: u32) -> bool {
     }
     for (number, _) in &domain.names {
         let task = record(domain, *number).expect("live name");
-        let mut reserved = 0_u64;
+        let mut reserved = task.run_reserved;
         for (child, _) in &domain.names {
             let child = record(domain, *child).expect("live name");
             if child.funder == Funder::Task(*number) {
@@ -259,7 +259,7 @@ pub(crate) fn links(domain: &Domain, bound: u32) -> bool {
                 reserved = total;
             }
         }
-        if reserved != task.numbers.reserved {
+        if reserved != task.numbers.reserved || available(task.numbers).is_none() {
             return false;
         }
         let mut at = Some(*number);
@@ -485,6 +485,7 @@ pub(crate) fn restore_funding(domain: &mut Domain, ledger: FundingRecord) -> boo
     if domain.funding.contains_key(&ledger.funder)
         || domain.funding.len() == domain.funding.capacity()
         || total(ledger.numbers).is_none()
+        || available(ledger.numbers).is_none()
         || (ledger.closed && ledger.numbers.reserved != 0)
         || ledger.numbers.spent != 0
     {
@@ -573,7 +574,7 @@ pub(crate) fn retire(domain: &mut Domain, out: &mut Queue<Request>) {
 
 // The final period will eventually receive every still-open aggregate under
 // it. Counting each live node's own/closed spend once bounds every intermediate
-// task and pool posting as well. No accepted overrun can overflow settlement.
+// task and pool posting as well. No accepted charge can overflow settlement.
 fn original_period(domain: &Domain, number: u64) -> Option<Funder> {
     let mut funder = record(domain, number)?.funder;
     for _ in 0..domain.names.len().checked_add(2)? {

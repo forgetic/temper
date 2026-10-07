@@ -1,10 +1,10 @@
 //! Bounded root sweep across durable task endings and the held route.
 
+use jig_core_authority as authority;
 use jig_core_fleet as fleet;
 use skein_lib::{Duration, Queue, ReplyTo, Rng, Token};
 use std::collections::BTreeSet;
 use temper_engine_domain::{Delivery, Key, Record, engine};
-use temper_engine_domain_authority as authority;
 use temper_engine_domain_people as people;
 use temper_engine_domain_tasks as tasks;
 use temper_engine_domain_world::commits::Store;
@@ -24,6 +24,7 @@ fn chat(seed: u64, child: bool) -> (Driver, engine::Assignment) {
         bounds.tasks.batch = 2;
         bounds.authority.batch = 2;
         let mut rules = configuration.authority.rules().clone();
+        rules.maximum_run_spend = 60;
         rules.ceiling.delegation.tasks = 4;
         rules.ceiling.delegation.depth = 2;
         let mut policy = configuration.authority.policy(1).expect("project policy").clone();

@@ -5,11 +5,11 @@
 use crate::commits::Store;
 use crate::walking_referee::{FINAL_SPEND, QUESTION, REPORT, TURNS, WalkingReferee};
 use jig_core_accounts as accounts;
+use jig_core_authority as authority;
 use jig_core_fleet as fleet;
 use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
 use std::collections::{BTreeMap, VecDeque};
 use temper_engine_domain::{Delivery, JournalLimits, Record, engine, loads};
-use temper_engine_domain_authority as authority;
 use temper_engine_domain_people as people;
 use temper_engine_domain_tasks as tasks;
 
@@ -80,6 +80,7 @@ pub fn limits() -> engine::Limits {
         workstreams: 1,
         attempts: 2,
         calls: 1,
+        call_name_bytes: 64,
         turns: 2,
         grace: Duration::from_secs(5),
         facts: 2,
@@ -208,7 +209,11 @@ pub fn config(seed: u64) -> engine::Config {
     engine::Config {
         deployment: [31; 16],
         seed,
-        owners: Box::new([people::InitialOwner { project: 1, identity: people::IdentityKey { forge: 1, user: 7 } }]),
+        owners: Box::new([people::InitialOwner {
+            project: 1,
+            identity: people::IdentityKey { provider: 0, subject: 7_u64.to_be_bytes().into() },
+        }]),
+        deployment_provider: 1,
         authority: domain,
         landing: engine::LandingPolicy { deployment: Box::new([]), projects: skein_lib::Map::with_capacity(1) },
         forge_connector: 0,
@@ -491,7 +496,7 @@ impl World {
                 engine::Event::SignedIn {
                     reply_to: ReplyTo::new(Token::new(101)),
                     identity: people::Identity {
-                        key: people::IdentityKey { forge: 1, user: 7 },
+                        key: people::IdentityKey { provider: 0, subject: 7_u64.to_be_bytes().into() },
                         login: b"person".as_slice().into(),
                         name: b"Person".as_slice().into(),
                     },

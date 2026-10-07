@@ -1,11 +1,11 @@
 use jig_core_accounts as accounts;
+use jig_core_authority as authority;
 use jig_core_brief as brief;
 use jig_core_fleet as fleet;
 use jig_core_views as views;
 use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
 use std::collections::VecDeque;
 use temper_engine_domain::{Delivery, Key, Record, Write, engine};
-use temper_engine_domain_authority as authority;
 use temper_engine_domain_people as people;
 use temper_engine_domain_tasks as tasks;
 use temper_engine_domain_world::commits::Store;
@@ -205,7 +205,7 @@ fn sign_in_person(driver: &mut Driver, user: u64, reply: u64) -> (u64, u64) {
     driver.send(engine::Event::SignedIn {
         reply_to: ReplyTo::new(Token::new(reply)),
         identity: people::Identity {
-            key: people::IdentityKey { forge: 1, user },
+            key: people::IdentityKey { provider: 0, subject: (user).to_be_bytes().into() },
             login: b"person".as_slice().into(),
             name: b"Person".as_slice().into(),
         },
@@ -576,6 +576,8 @@ fn a_members_wider_amendment_waits_for_a_maintainer_to_accept() {
 #[expect(clippy::wildcard_enum_match_arm, reason = "select one web outcome among unrelated deliveries")]
 fn a_members_goal_past_their_allotment_becomes_a_proposal_a_maintainer_accepts() {
     let (mut driver, _, maintainer, maintainer_session, member, member_session) = people_roles_driver();
+    hello(&mut driver);
+    driver.settle();
     driver.send(engine::Event::Ask {
         reply_to: ReplyTo::new(Token::new(2010)),
         sign_in: member_session,
@@ -631,6 +633,8 @@ fn a_members_goal_past_their_allotment_becomes_a_proposal_a_maintainer_accepts()
 #[expect(clippy::wildcard_enum_match_arm, reason = "select one web outcome among unrelated deliveries")]
 fn two_maintainers_decide_one_proposal_and_the_second_is_told_by_whom_and_how() {
     let (mut driver, owner_session, first, first_session, member, member_session) = people_roles_driver();
+    hello(&mut driver);
+    driver.settle();
     let (second, second_session) = sign_in_person(&mut driver, 10, 2020);
     driver.send(engine::Event::Ask {
         reply_to: ReplyTo::new(Token::new(2021)),
@@ -1043,7 +1047,7 @@ fn a_person_task_addressed_to_a_role_taken_by_one_handed_back_answered_by_anothe
     driver.send(engine::Event::SignedIn {
         reply_to: ReplyTo::new(Token::new(970)),
         identity: people::Identity {
-            key: people::IdentityKey { forge: 1, user: 8 },
+            key: people::IdentityKey { provider: 0, subject: 8_u64.to_be_bytes().into() },
             login: b"second".as_slice().into(),
             name: b"Second".as_slice().into(),
         },
@@ -1387,7 +1391,7 @@ fn invalid_nonfinal_people_restore_page_stops_before_issuing_its_continuation() 
         let record = Record::People(people::Stored::Person {
             number,
             identity: people::Identity {
-                key: people::IdentityKey { forge: 1, user: 7 },
+                key: people::IdentityKey { provider: 0, subject: 7_u64.to_be_bytes().into() },
                 login: b"same".as_slice().into(),
                 name: b"Same".as_slice().into(),
             },
@@ -1560,21 +1564,18 @@ fn unavailable_call(driver: &mut Driver, assignment: &engine::Assignment, call: 
 fn delegate_fixture() -> (Driver, engine::Assignment) {
     let mut configuration = config(91);
     let mut rules = configuration.authority.rules().clone();
+    rules.maximum_run_spend = 60;
     rules.ceiling.delegation.depth = 2;
     let mut policy = configuration.authority.policy(1).expect("fixture project").clone();
     policy.ceiling.delegation.depth = 2;
     policy.roles[0].authority.delegation.depth = 2;
-    let mut authority = temper_engine_domain_authority::Domain::new(rules, *configuration.authority.limits())
-        .expect("expanded fixture authority");
-    let mut policy_out = Queue::with_capacity(temper_engine_domain_authority::POLICY_MAX_OUT);
-    temper_engine_domain_authority::step(
-        &mut authority,
-        temper_engine_domain_authority::Event::Policy { project: 1, policy },
-        &mut policy_out,
-    );
-    assert_eq!(policy_out.pop(), Some(temper_engine_domain_authority::PolicyFact::Added { project: 1 }));
+    let mut authority =
+        jig_core_authority::Domain::new(rules, *configuration.authority.limits()).expect("expanded fixture authority");
+    let mut policy_out = Queue::with_capacity(jig_core_authority::POLICY_MAX_OUT);
+    jig_core_authority::step(&mut authority, jig_core_authority::Event::Policy { project: 1, policy }, &mut policy_out);
+    assert_eq!(policy_out.pop(), Some(jig_core_authority::PolicyFact::Added { project: 1 }));
     configuration.authority = authority;
-    configuration.chat_authority.delegation.kinds = Box::new([temper_engine_domain_authority::Executor::Charter(1)]);
+    configuration.chat_authority.delegation.kinds = Box::new([jig_core_authority::Executor::Charter(1)]);
     configuration.chat_authority.delegation.tasks = 1;
     configuration.chat_authority.delegation.depth = 1;
     let mut driver = Driver::configured(Store::new(), configuration, &limits());
@@ -1646,19 +1647,23 @@ fn batch_fixture_custom(
     configuration.person_budget = pool_budget;
     if second_owner {
         configuration.owners = Box::new([
-            people::InitialOwner { project: 1, identity: people::IdentityKey { forge: 1, user: 7 } },
-            people::InitialOwner { project: 1, identity: people::IdentityKey { forge: 1, user: 8 } },
+            people::InitialOwner {
+                project: 1,
+                identity: people::IdentityKey { provider: 0, subject: 7_u64.to_be_bytes().into() },
+            },
+            people::InitialOwner {
+                project: 1,
+                identity: people::IdentityKey { provider: 0, subject: 8_u64.to_be_bytes().into() },
+            },
         ]);
     }
     let mut rules = configuration.authority.rules().clone();
+    // Each claimed run leaves room in its task allotment for delegates made during the run.
+    rules.maximum_run_spend = 5;
     if procedure || person {
         rules.ceiling.delegation.kinds = Box::new([
-            temper_engine_domain_authority::Executor::Charter(1),
-            if procedure {
-                temper_engine_domain_authority::Executor::Procedure(1)
-            } else {
-                temper_engine_domain_authority::Executor::Role(0)
-            },
+            jig_core_authority::Executor::Charter(1),
+            if procedure { jig_core_authority::Executor::Procedure(1) } else { jig_core_authority::Executor::Role(0) },
         ]);
     }
     rules.ceiling.delegation.tasks = 4;
@@ -1672,27 +1677,18 @@ fn batch_fixture_custom(
     policy.ceiling.delegation.depth = depth + 1;
     policy.roles[0].authority.delegation.tasks = 4;
     policy.roles[0].authority.delegation.depth = depth + 1;
-    let mut authority =
-        temper_engine_domain_authority::Domain::new(rules, bounds.authority).expect("larger fixture authority");
-    let mut policy_out = Queue::with_capacity(temper_engine_domain_authority::POLICY_MAX_OUT);
-    temper_engine_domain_authority::step(
-        &mut authority,
-        temper_engine_domain_authority::Event::Policy { project: 1, policy },
-        &mut policy_out,
-    );
-    assert_eq!(policy_out.pop(), Some(temper_engine_domain_authority::PolicyFact::Added { project: 1 }));
+    let mut authority = jig_core_authority::Domain::new(rules, bounds.authority).expect("larger fixture authority");
+    let mut policy_out = Queue::with_capacity(jig_core_authority::POLICY_MAX_OUT);
+    jig_core_authority::step(&mut authority, jig_core_authority::Event::Policy { project: 1, policy }, &mut policy_out);
+    assert_eq!(policy_out.pop(), Some(jig_core_authority::PolicyFact::Added { project: 1 }));
     configuration.authority = authority;
     configuration.chat_authority.delegation.kinds = if procedure || person {
         Box::new([
-            temper_engine_domain_authority::Executor::Charter(1),
-            if procedure {
-                temper_engine_domain_authority::Executor::Procedure(1)
-            } else {
-                temper_engine_domain_authority::Executor::Role(0)
-            },
+            jig_core_authority::Executor::Charter(1),
+            if procedure { jig_core_authority::Executor::Procedure(1) } else { jig_core_authority::Executor::Role(0) },
         ])
     } else {
-        Box::new([temper_engine_domain_authority::Executor::Charter(1)])
+        Box::new([jig_core_authority::Executor::Charter(1)])
     };
     configuration.chat_authority.delegation.tasks = 3;
     configuration.chat_authority.delegation.depth = depth;
@@ -2266,7 +2262,7 @@ fn an_amendment_reaches_a_live_run() {
     else {
         panic!("parent funder")
     };
-    assert_eq!(parent_row.numbers.reserved, 20);
+    assert_eq!(parent_row.numbers.reserved, 25);
 }
 
 #[test]
@@ -2322,6 +2318,7 @@ fn a_narrowing_stops_the_old_run_and_offers_the_amendment_to_the_next() {
 fn a_cancel_closes_three_levels_with_runs_live_deepest_first() {
     let (mut driver, parent) = batch_fixture_with(3, 2);
     let mut child_spec = report_delegate(b"child", Box::new([]));
+    child_spec.authority.budget.spend = 20;
     child_spec.authority.delegation =
         tasks::Delegation { kinds: Box::new([tasks::AuthorityExecutor::Charter(1)]), tasks: 1, depth: 1 };
     let child = call_batch(&mut driver, &parent, 90, Box::new([child_spec]))[0];
@@ -3375,7 +3372,7 @@ fn rejected_restore_stays_rejected_and_current_read_checks_privacy_and_both_expi
     driver.send(engine::Event::SignedIn {
         reply_to: ReplyTo::new(Token::new(911)),
         identity: people::Identity {
-            key: people::IdentityKey { forge: 1, user: 9 },
+            key: people::IdentityKey { provider: 0, subject: 9_u64.to_be_bytes().into() },
             login: b"outsider".as_slice().into(),
             name: b"Outsider".as_slice().into(),
         },
@@ -3607,7 +3604,7 @@ fn restored_loss_spends_a_try_with_or_without_a_durable_turn() {
 }
 
 fn administration_config(seed: u64) -> engine::Config {
-    use temper_engine_domain_authority as authority;
+    use jig_core_authority as authority;
     let mut config = config(seed);
     let mut policy = config.authority.policy(1).expect("actual project").clone();
     policy.roles[0].requests = authority::Requests(1 | 4 | 256);
@@ -3615,6 +3612,90 @@ fn administration_config(seed: u64) -> engine::Config {
     authority::step(&mut config.authority, authority::Event::Policy { project: 1, policy }, &mut findings);
     assert_eq!(findings.pop(), Some(authority::PolicyFact::Changed { project: 1 }));
     config
+}
+
+#[test]
+fn an_owner_makes_a_service_once_and_the_service_cannot_start_a_chat() {
+    let mut driver = Driver::configured(Store::new(), administration_config(9501), &limits());
+    driver.settle();
+    driver.sign_in();
+    driver.settle();
+    let owner_session = driver.session();
+    let ask = people::Ask::MakeService { project: 1, name: b"builder".as_slice().into(), role: people::Role::Owner };
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(9502)),
+        sign_in: owner_session,
+        key: [95; 16],
+        ask: ask.clone(),
+    });
+    driver.settle();
+    let service = driver
+        .delivered
+        .iter()
+        .find_map(|delivery| {
+            if let Delivery::WebReply {
+                reply: people::Reply::Outcome(people::Outcome::ServiceMade { person }), ..
+            } = delivery
+            {
+                Some(*person)
+            } else {
+                None
+            }
+        })
+        .expect("service creation answered after commit");
+    assert!(driver.store.rows.values().any(|row| matches!(row,
+        Record::People(people::Stored::Person { number, identity })
+            if *number == service && identity.key.provider == 1 && identity.key.subject.as_ref() == service.to_be_bytes()
+    )));
+    let created = driver.store.header().people;
+    let mut restarted = Driver::configured(driver.store, administration_config(9501), &limits());
+    restarted.settle();
+    restarted.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(9503)),
+        sign_in: owner_session,
+        key: [95; 16],
+        ask,
+    });
+    restarted.settle();
+    assert_eq!(restarted.store.header().people, created);
+    assert!(restarted.delivered.iter().any(|delivery| matches!(delivery,
+        Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::ServiceMade { person }), .. }
+            if *person == service
+    )));
+    restarted.send(engine::Event::SignedIn {
+        reply_to: ReplyTo::new(Token::new(9504)),
+        identity: people::Identity {
+            key: people::IdentityKey { provider: 1, subject: service.to_be_bytes().into() },
+            login: Box::new([]),
+            name: b"builder".as_slice().into(),
+        },
+    });
+    restarted.settle();
+    let service_session = restarted
+        .delivered
+        .iter()
+        .find_map(|delivery| {
+            if let Delivery::WebReply { sign_in: Some(session), reply: people::Reply::SignedIn { person, .. }, .. } =
+                delivery
+                && *person == service
+            {
+                Some(*session)
+            } else {
+                None
+            }
+        })
+        .expect("service sign-in uses its existing party");
+    restarted.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(9505)),
+        sign_in: service_session,
+        key: [96; 16],
+        ask: people::Ask::StartChat { project: 1, words: Box::new([]) },
+    });
+    restarted.settle();
+    assert!(restarted.delivered.iter().any(|delivery| matches!(
+        delivery,
+        Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::Refused(people::Refusal::Role)), .. }
+    )));
 }
 
 #[test]
@@ -4605,7 +4686,7 @@ fn a_moved_task_is_funded_anew_by_its_new_requester() {
     };
     assert!(!old.delegates.contains(&child));
     assert!(old.references.contains(&child));
-    assert_eq!((old.numbers.reserved, old.numbers.spent_below), (0, 5));
+    assert_eq!((old.numbers.reserved, old.numbers.spent_below), (5, 5));
     driver.send(engine::Event::Answer {
         channel: Token::new(7),
         task: root.task,
@@ -4653,7 +4734,7 @@ fn a_move_carves_the_new_persons_pool_in_the_same_commit() {
     driver.send(engine::Event::SignedIn {
         reply_to: ReplyTo::new(Token::new(641)),
         identity: people::Identity {
-            key: people::IdentityKey { forge: 1, user: 8 },
+            key: people::IdentityKey { provider: 0, subject: 8_u64.to_be_bytes().into() },
             login: b"second".as_slice().into(),
             name: b"Second".as_slice().into(),
         },

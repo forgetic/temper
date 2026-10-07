@@ -1,6 +1,7 @@
 //! A proposed person goal crosses its approval, task, and Smith planning cuts.
 
 use crate::world;
+use jig_core_authority as authority;
 use jig_core_fleet as fleet;
 use skein_fake_llm_domain::api::{Finish, Line, Script, Turn};
 use skein_lib::{Duration, Queue, ReplyTo, Token};
@@ -8,7 +9,6 @@ use smith_agent_world::Job;
 use smith_domain as smith;
 use smith_domain_run as run;
 use temper_engine_domain::{Delivery, Key, Record, engine};
-use temper_engine_domain_authority as authority;
 use temper_engine_domain_people as people;
 use temper_engine_domain_tasks as tasks;
 use temper_engine_domain_world::{commits::Store, direct::Driver, walking};
@@ -85,7 +85,8 @@ fn configured() -> Driver {
     config.chat_authority.delegation.tasks = 3;
     config.chat_authority.delegation.depth = 1;
     let mut rules = config.authority.rules().clone();
-    rules.maximum_run_spend = 200;
+    // Leave the standing goal and chat room to fund their planned delegates.
+    rules.maximum_run_spend = 10;
     rules.ceiling.tools = authority::Tools(1);
     rules.ceiling.delegation.depth = 2;
     rules.ceiling.delegation.tasks = 4;
@@ -117,7 +118,7 @@ fn sign_in(driver: &mut Driver, user: u64, reply: u64) -> u64 {
     driver.send(engine::Event::SignedIn {
         reply_to: ReplyTo::new(Token::new(reply)),
         identity: people::Identity {
-            key: people::IdentityKey { forge: 1, user },
+            key: people::IdentityKey { provider: 0, subject: (user).to_be_bytes().into() },
             login: b"person".as_slice().into(),
             name: b"Person".as_slice().into(),
         },

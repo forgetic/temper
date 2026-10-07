@@ -1,8 +1,60 @@
 //! Version-two worker host peers: engine commits, a lossy link, and an
 //! agent and workspace that settle through the host's requests.
 
-use jig_worker_host::{EndingV2, Failure, Reason};
+use jig_worker_host::{AnsweredCall, DeliveryOutcome, EndingV2, Failure, Reason, SettledAnswer};
 use jig_worker_host_world::turn_world::World;
+use skein_lib::{Duration, Token};
+
+#[test]
+fn a_host_call_reaches_the_engine_with_its_tool_write_flag_and_input() {
+    let mut world = World::new();
+    world.assign_typed(Box::new([]), Box::new([]));
+    world.relay_typed(true);
+    let Some(call) = world.typed_relay() else { panic!("the engine received the call") };
+    assert_eq!(&*call.name, b"call-one");
+    assert_eq!(&*call.tool, b"inspect");
+    assert!(call.writes);
+    assert_eq!(&*call.input, b"input words");
+    assert_eq!(call.deadline, Duration::from_nanos(37));
+    assert_eq!(world.typed_reply(), Some(&b"call-one"[..]));
+}
+
+#[test]
+fn a_message_reaches_the_agent_with_its_label_and_words() {
+    let mut world = World::new();
+    world.assign_typed(Box::new([]), Box::new([]));
+    world.message_typed();
+    let Some(message) = world.typed_message() else { panic!("the agent received the message") };
+    assert_eq!(message.name, Token::new(17));
+    assert_eq!(&*message.sender, b"requester");
+    assert_eq!(&*message.words, b"please check");
+}
+
+#[test]
+fn a_resumed_run_starts_with_its_turn_bodies_and_answered_calls() {
+    let mut world = World::new();
+    let turns: Box<[Box<[u8]>]> = vec![Box::from(&b"first"[..]), Box::from(&b"second"[..])].into_boxed_slice();
+    let answered = vec![
+        AnsweredCall {
+            name: Box::from(&b"call one"[..]),
+            tool: Box::from(&b"inspect"[..]),
+            answer: SettledAnswer::Host { error: false, body: Box::from(&b"found"[..]) },
+        },
+        AnsweredCall {
+            name: Box::from(&b"call two"[..]),
+            tool: Box::from(&b"deliver"[..]),
+            answer: SettledAnswer::Delivery { outcome: DeliveryOutcome::Delivered },
+        },
+    ];
+    world.assign_typed(turns, answered.into_boxed_slice());
+    let Some(start) = world.typed_start() else { panic!("the agent started") };
+    assert_eq!(start.activation, 932);
+    assert_eq!(&*start.turns, &[Box::from(&b"first"[..]), Box::from(&b"second"[..])]);
+    assert_eq!(&start.answered[0].name[..], b"call one");
+    assert_eq!(&start.answered[0].tool[..], b"inspect");
+    assert_eq!(start.answered[0].answer, SettledAnswer::Host { error: false, body: Box::from(&b"found"[..]) });
+    assert_eq!(start.answered[1].answer, SettledAnswer::Delivery { outcome: DeliveryOutcome::Delivered });
+}
 
 #[test]
 fn committed_turns_replay_after_busy_and_reconnect_then_restore_credit() {

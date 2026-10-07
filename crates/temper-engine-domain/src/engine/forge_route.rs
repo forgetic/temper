@@ -225,6 +225,33 @@ fn resource_name(repository: &forge::Repository, what: &forge::What, limit: u32)
     Some(authority::Name { segments: segments.into_boxed() })
 }
 
+fn effect_access(repository: &forge::Repository, what: &forge::What, kind: u16) -> authority::EffectAccess {
+    let permitted = match kind {
+        1 => repository.kinds.read,
+        2 => repository.kinds.push,
+        3 => repository.kinds.open,
+        4 => repository.kinds.land,
+        5 => repository.kinds.review,
+        6 => repository.kinds.status,
+        7 => repository.kinds.comment,
+        8 => repository.kinds.issue,
+        9 => repository.kinds.branch,
+        _ => false,
+    };
+    let shared = match what {
+        forge::What::Issue(_) | forge::What::Pull(_) => true,
+        forge::What::Repository | forge::What::Branch(_) => false,
+    };
+    match repository.role {
+        forge::Role::Context => authority::EffectAccess::Context,
+        _ if !permitted => authority::EffectAccess::Unavailable,
+        _ if shared => authority::EffectAccess::Participant,
+        forge::Role::Adopted => authority::EffectAccess::Participant,
+        forge::Role::Fork if kind == 4 => authority::EffectAccess::Participant,
+        forge::Role::Owned | forge::Role::Fork => authority::EffectAccess::Owned,
+    }
+}
+
 fn effect_key(domain: &Domain, key: CallKey) -> Box<[u8]> {
     let mut result = List::with_capacity(80);
     append_hex(&mut result, &domain.counters.deployment().id);
@@ -346,11 +373,15 @@ pub(super) fn effect_call(
         &authority::EffectAsk {
             project: context.project,
             authority: authority_value(&context.authority),
+            numbers: authority_numbers(context.numbers),
             effect: authority::Effect {
                 connector: domain.config.forge_connector,
                 kind,
                 name,
                 state,
+                price: None,
+                access: effect_access(adopted, &resource, kind),
+                additional: Box::new([]),
                 guards: Box::new([]),
             },
             now: env.wall,
@@ -456,6 +487,9 @@ pub(super) fn read_call(
                         kind: 1,
                         name,
                         state: [0; 32],
+                        price: None,
+                        access: effect_access(adopted, &forge::What::Repository, 1),
+                        additional: Box::new([]),
                         guards: Box::new([]),
                     }),
                 },
@@ -623,6 +657,7 @@ pub(super) struct RunWorkspace {
 #[expect(
     clippy::disallowed_methods,
     clippy::wildcard_enum_match_arm,
+    clippy::too_many_lines,
     reason = "projection converts already validated task text and selects current milestone kinds"
 )]
 pub(super) fn project_goal(domain: &mut Domain, env: &Env<Limits>, goal: &tasks::TaskRecord) {
@@ -642,11 +677,15 @@ pub(super) fn project_goal(domain: &mut Domain, env: &Env<Limits>, goal: &tasks:
         &authority::EffectAsk {
             project: goal.project,
             authority: authority_value(&goal.authority),
+            numbers: authority_numbers(goal.numbers),
             effect: authority::Effect {
                 connector: domain.config.forge_connector,
                 kind: 8,
                 name,
                 state: [0; 32],
+                price: None,
+                access: effect_access(repository, &forge::What::Repository, 8),
+                additional: Box::new([]),
                 guards: Box::new([]),
             },
             now: env.wall,
@@ -784,7 +823,8 @@ fn may_push(
             project: context.project,
             authority: authority_value(&context.authority),
             numbers: authority_numbers(context.numbers),
-            budget: authority::left(authority_numbers(context.numbers)),
+            budget: authority::left(authority_numbers(context.numbers))
+                .min(domain.config.authority.rules().maximum_run_spend),
             wall: env.wall,
             accounts: Box::new([domain.accounts.usable(domain.config.account)]),
             writes: Box::new([authority::Write {
@@ -793,6 +833,9 @@ fn may_push(
                     kind: 2,
                     name,
                     state: [0; 32],
+                    price: None,
+                    access: effect_access(repository, &what, 2),
+                    additional: Box::new([]),
                     guards: Box::new([]),
                 },
                 held: authority::Writer::Task,
@@ -969,6 +1012,9 @@ pub(super) fn run_workspace(
                         kind: 2,
                         name: resource_name(repository, &name.what, env.limits.authority.segments)?,
                         state: [0; 32],
+                        price: None,
+                        access: effect_access(repository, &name.what, 2),
+                        additional: Box::new([]),
                         guards: Box::new([]),
                     },
                     held,
@@ -1105,7 +1151,7 @@ fn landing_reviewers(
             continue;
         }
         let Some((person, role)) = domain.people.role_for_identity(
-            people::IdentityKey { forge: u32::from(row.repository.forge), user: review.author },
+            people::IdentityKey { provider: 0, subject: review.author.to_be_bytes().into() },
             domain.forge.repository(row.repository)?.project,
         ) else {
             continue;
@@ -1151,8 +1197,16 @@ fn check_change_effect(
     let Some(name) = resource_name(repository, &what, env.limits.authority.segments) else {
         return authority::Answer::Refuse;
     };
-    let mut effect =
-        authority::Effect { connector: domain.config.forge_connector, kind, name, state, guards: Box::new([]) };
+    let mut effect = authority::Effect {
+        connector: domain.config.forge_connector,
+        kind,
+        name,
+        state,
+        price: None,
+        access: effect_access(repository, &what, kind),
+        additional: Box::new([]),
+        guards: Box::new([]),
+    };
     let Some(judges) = authority::needed_judges(&domain.config.authority, context.project, &effect) else {
         return authority::Answer::Refuse;
     };
@@ -1203,6 +1257,7 @@ fn check_change_effect(
         &authority::EffectAsk {
             project: context.project,
             authority: authority_value(&context.authority),
+            numbers: authority_numbers(context.numbers),
             effect,
             now: env.wall,
         },
@@ -1804,8 +1859,8 @@ pub(super) fn outputs(
                                         seeds
                                             .push(people::Seed {
                                                 identity: people::IdentityKey {
-                                                    forge: u32::from(adopted.repository.provider.forge),
-                                                    user: collaborator.user,
+                                                    provider: 0,
+                                                    subject: collaborator.user.to_be_bytes().into(),
                                                 },
                                                 candidate,
                                                 role,

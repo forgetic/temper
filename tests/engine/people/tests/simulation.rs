@@ -110,7 +110,10 @@ fn pending_authorisation_can_be_lost_and_retried_without_repeating_durable_work(
 
 #[test]
 fn an_expired_sign_in_is_refused() {
-    let owners = Box::new([InitialOwner { project: 1, identity: IdentityKey { forge: 0, user: 1 } }]);
+    let owners = Box::new([InitialOwner {
+        project: 1,
+        identity: IdentityKey { provider: 0, subject: 1_u64.to_be_bytes().into() },
+    }]);
     let mut world = World::with_owners(Settings::calm(9), owners);
     world.roles(1, Box::new([]));
     world.commit_all();

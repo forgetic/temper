@@ -43,11 +43,11 @@ use crate::{
 };
 use alloc::boxed::Box;
 use jig_core_accounts as accounts;
+use jig_core_authority as authority;
 use jig_core_brief as brief;
 use jig_core_fleet as fleet;
 use jig_core_views as views;
 use skein_lib::{Decimal, Env, Id, List, Map, Queue, ReplyTo, Slab, Token, Writer};
-use temper_engine_domain_authority as authority;
 use temper_engine_domain_forge as forge;
 use temper_engine_domain_forge_change as forge_change;
 use temper_engine_domain_forge_client as forge_client;
@@ -120,6 +120,8 @@ pub struct Config {
     /// `initial_owners`; sign-in authentication matches their identity keys rather than trusting a
     /// request's role.
     pub owners: Box<[people::InitialOwner]>,
+    /// Provider number reserved for services made by this deployment; forge sign-in uses 0.
+    pub deployment_provider: u16,
     /// Validated deployment and project policy; no duplicated policy values.
     pub authority: authority::Domain,
     /// Forge landing requirements and their connector-owned judge parameters.
@@ -945,6 +947,7 @@ impl Domain {
     #[expect(clippy::too_many_lines, reason = "the root allocates every child and bounded handoff table together")]
     pub fn new(mut config: Config, limits: &Limits) -> Domain {
         assert!(worst_case(limits).is_some(), "root limits are valid");
+        assert!(config.deployment_provider != 0, "deployment service provider differs from forge sign-in provider 0");
         assert!(
             match run_policy_bound(&config.run, limits) {
                 Some(bytes) => bytes <= u64::from(limits.journal.run_bytes),
@@ -997,7 +1000,7 @@ impl Domain {
         }
         let owners = core::mem::replace(&mut config.owners, Box::new([]));
         let tasks = tasks::Domain::new(&limits.tasks, config.seed, Box::new([config.charter]));
-        let people = people::Domain::new(&limits.people, owners);
+        let people = people::Domain::new(&limits.people, owners, config.deployment_provider);
         let mut forge = forge::Domain::new(
             &limits.forge,
             config.seed,
@@ -1655,7 +1658,12 @@ fn step_routed(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Q
             let person = crate::fresh(&mut domain.counters, Family::Person).expect("person counter available");
             let sign_in = crate::fresh(&mut domain.counters, Family::SignIn).expect("sign-in counter available");
             domain.signing_in = Some(sign_in);
-            domain.work.push(Work::People(people::Event::SignedIn { reply_to, person, sign_in, identity }));
+            let kind = if identity.key.provider == domain.config.deployment_provider {
+                people::Kind::Service
+            } else {
+                people::Kind::Person
+            };
+            domain.work.push(Work::People(people::Event::SignedIn { reply_to, person, sign_in, identity, kind }));
         }
         Event::Ask { reply_to, sign_in, key, ask } => {
             if !domain.ready() || !admits(domain, &env.limits) {
@@ -2240,7 +2248,13 @@ fn route_into(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision) {
             }
             Work::TasksClaim { task, attempt } => {
                 if domain.claiming.get(&task) == Some(&attempt) {
-                    domain.work.push(Work::Tasks(tasks::Event::Claim { reply_to: internal(task), task, attempt }));
+                    let budget = domain.assignments.get(&task).expect("claim has assignment").run.budget;
+                    domain.work.push(Work::Tasks(tasks::Event::Claim {
+                        reply_to: internal(task),
+                        task,
+                        attempt,
+                        budget,
+                    }));
                 }
             }
             Work::ProjectGoal(goal) => forge_route::project_goal(domain, env, &goal),
@@ -2353,12 +2367,41 @@ fn route_person_priorities(
 fn people_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, out: &mut Queue<people::Request>) {
     for _ in 0..out.len() {
         match out.pop().expect("people output count") {
+            people::Request::ServiceMade { request, outcome } => {
+                domain.work.push(Work::People(people::Event::Decided { request, outcome }));
+            }
             people::Request::Save { record } => save(decision, &env.limits, Write::Save(Record::People(record))),
             people::Request::Erase { key } => save(decision, &env.limits, Write::Erase(Key::People(key))),
             people::Request::Reply { to, reply } => {
                 emit(decision, &env.limits, Delivery::WebReply { to, sign_in: domain.signing_in, reply });
             }
             people::Request::Route { request, person, project, role, ask } => match ask {
+                people::Ask::MakeService { role: service_role, .. } => {
+                    let outcome = match roles::allowed(domain, person, project) {
+                        Ok(())
+                            if domain
+                                .config
+                                .authority
+                                .role(project, escalation::role_number(service_role))
+                                .is_some() =>
+                        {
+                            match crate::fresh(&mut domain.counters, Family::Person) {
+                                Some(candidate) => {
+                                    domain
+                                        .work
+                                        .push(Work::People(people::Event::MakeService { request, person: candidate }));
+                                    None
+                                }
+                                None => Some(people::Outcome::Refused(people::Refusal::Limit)),
+                            }
+                        }
+                        Ok(()) => Some(people::Outcome::Refused(people::Refusal::Unknown)),
+                        Err(refusal) => Some(people::Outcome::Refused(refusal)),
+                    };
+                    if let Some(outcome) = outcome {
+                        domain.work.push(Work::People(people::Event::Decided { request, outcome }));
+                    }
+                }
                 people::Ask::AdoptRepository { adoption, .. } => {
                     let provider =
                         forge_client::api::Repository { forge: adoption.forge, repository: adoption.repository };
@@ -2500,6 +2543,7 @@ fn route_person_task(
         | people::Ask::AnswerQuestion { .. }
         | people::Ask::Prioritise { .. }
         | people::Ask::Amend { .. }
+        | people::Ask::MakeService { .. }
         | people::Ask::SetRoles { .. }
         | people::Ask::AdoptRepository { .. }
         | people::Ask::ChangePolicy { .. }
@@ -2531,6 +2575,7 @@ fn route_person_task(
                         | people::Ask::AnswerQuestion { .. }
                         | people::Ask::Prioritise { .. }
                         | people::Ask::Amend { .. }
+                        | people::Ask::MakeService { .. }
                         | people::Ask::SetRoles { .. }
                         | people::Ask::AdoptRepository { .. }
                         | people::Ask::ChangePolicy { .. }
@@ -2553,6 +2598,7 @@ fn route_person_task(
                     | people::Ask::AnswerQuestion { .. }
                     | people::Ask::Prioritise { .. }
                     | people::Ask::Amend { .. }
+                    | people::Ask::MakeService { .. }
                     | people::Ask::SetRoles { .. }
                     | people::Ask::AdoptRepository { .. }
                     | people::Ask::ChangePolicy { .. }
@@ -2597,6 +2643,7 @@ fn route_person_task(
         | people::Ask::AnswerQuestion { .. }
         | people::Ask::Prioritise { .. }
         | people::Ask::Amend { .. }
+        | people::Ask::MakeService { .. }
         | people::Ask::SetRoles { .. }
         | people::Ask::AdoptRepository { .. }
         | people::Ask::ChangePolicy { .. }
@@ -2652,6 +2699,7 @@ fn route_person_control(
         | people::Ask::AnswerQuestion { .. }
         | people::Ask::Prioritise { .. }
         | people::Ask::Amend { .. }
+        | people::Ask::MakeService { .. }
         | people::Ask::SetRoles { .. }
         | people::Ask::AdoptRepository { .. }
         | people::Ask::ChangePolicy { .. }
@@ -2692,6 +2740,7 @@ fn route_person_control(
         | people::Ask::AnswerQuestion { .. }
         | people::Ask::Prioritise { .. }
         | people::Ask::Amend { .. }
+        | people::Ask::MakeService { .. }
         | people::Ask::SetRoles { .. }
         | people::Ask::AdoptRepository { .. }
         | people::Ask::ChangePolicy { .. }
@@ -2758,6 +2807,7 @@ fn route_person_control(
         | people::Ask::AnswerQuestion { .. }
         | people::Ask::Prioritise { .. }
         | people::Ask::Amend { .. }
+        | people::Ask::MakeService { .. }
         | people::Ask::SetRoles { .. }
         | people::Ask::AdoptRepository { .. }
         | people::Ask::ChangePolicy { .. }
@@ -2953,6 +3003,7 @@ fn make_chat(
         people::Ask::StartChat { words, .. } => words,
         people::Ask::DecideEscalation { .. }
         | people::Ask::DecideProposal { .. }
+        | people::Ask::MakeService { .. }
         | people::Ask::SetRoles { .. }
         | people::Ask::AdoptRepository { .. }
         | people::Ask::ChangePolicy { .. }
@@ -3035,7 +3086,8 @@ fn activate(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, tas
             project: task.project,
             authority: authority_value(&task.authority),
             numbers: authority_numbers(task.numbers),
-            budget: authority::left(authority_numbers(task.numbers)),
+            budget: authority::left(authority_numbers(task.numbers))
+                .min(domain.config.authority.rules().maximum_run_spend),
             wall: env.wall,
             accounts: Box::new([domain.accounts.usable(domain.config.account)]),
             writes: Box::new([]),
@@ -3054,7 +3106,8 @@ fn activate(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, tas
                     authority::Finding::RunBudget
                     | authority::Finding::RunCap
                     | authority::Finding::Arithmetic
-                    | authority::Finding::Spend { .. } => {
+                    | authority::Finding::Spend { .. }
+                    | authority::Finding::Price { .. } => {
                         if hold != Some(tasks::Hold::Deadline) {
                             hold = Some(tasks::Hold::Budget);
                         }
@@ -3068,6 +3121,7 @@ fn activate(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, tas
                     | authority::Finding::Writer
                     | authority::Finding::Tool
                     | authority::Finding::Grant { .. }
+                    | authority::Finding::ResourceAccess
                     | authority::Finding::Reference
                     | authority::Finding::Scope { .. }
                     | authority::Finding::Required { .. }
@@ -5106,7 +5160,8 @@ fn brief_outputs(
                         project: context.project,
                         authority: authority_value(&context.authority),
                         numbers: authority_numbers(context.numbers),
-                        budget: authority::left(authority_numbers(context.numbers)),
+                        budget: authority::left(authority_numbers(context.numbers))
+                            .min(domain.config.authority.rules().maximum_run_spend),
                         wall: env.wall,
                         accounts: Box::new([domain.accounts.usable(domain.config.account)]),
                         writes: workspace.writes.clone(),
@@ -5444,7 +5499,13 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                     Delivery::CallAnswer { channel, task: run.raw(), attempt: attempt.raw(), call, answer },
                 );
             }
-            fleet::Request::Grant { .. }
+            fleet::Request::AssignTyped { .. }
+            | fleet::Request::InboundTyped { .. }
+            | fleet::Request::RelayTyped { .. }
+            | fleet::Request::RelayedTyped { .. }
+            | fleet::Request::DropTyped { .. }
+            | fleet::Request::UndeliveredTyped { .. }
+            | fleet::Request::Grant { .. }
             | fleet::Request::Rejected { .. }
             | fleet::Request::Exhausted { .. }
             | fleet::Request::Bounced { .. }

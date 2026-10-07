@@ -9,10 +9,10 @@ use crate::escalation_referee::Story;
 use crate::roles_referee::{Referee, Replacement};
 use crate::walking;
 use jig_core_accounts as accounts;
+use jig_core_authority as authority;
 use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
 use std::collections::{BTreeMap, VecDeque};
 use temper_engine_domain::{Delivery, Key, Record, Write, engine};
-use temper_engine_domain_authority as authority;
 use temper_engine_domain_people as people;
 use temper_engine_domain_tasks as tasks;
 
@@ -144,8 +144,14 @@ pub struct World {
 fn config(settings: Settings) -> engine::Config {
     let mut config = walking::config(settings.seed);
     config.owners = Box::new([
-        people::InitialOwner { project: 1, identity: people::IdentityKey { forge: 1, user: 7 } },
-        people::InitialOwner { project: 1, identity: people::IdentityKey { forge: 1, user: 8 } },
+        people::InitialOwner {
+            project: 1,
+            identity: people::IdentityKey { provider: 0, subject: 7_u64.to_be_bytes().into() },
+        },
+        people::InitialOwner {
+            project: 1,
+            identity: people::IdentityKey { provider: 0, subject: 8_u64.to_be_bytes().into() },
+        },
     ]);
     let mut policy = config.authority.policy(1).expect("configured project").clone();
     policy.roles[0].requests = authority::Requests(1 | 4 | if settings.policy { 256 } else { 0 });
@@ -200,8 +206,10 @@ impl World {
         for row in store.rows.values() {
             match row {
                 Record::People(people::Stored::Person { number, identity }) => {
-                    if identity.key.forge == 1 && (7..=8).contains(&identity.key.user) {
-                        people[usize::try_from(identity.key.user - 7).expect("two actual identities")] = *number;
+                    if identity.key.provider == 0 && identity.key.subject.as_ref() == 7_u64.to_be_bytes() {
+                        people[0] = *number;
+                    } else if identity.key.provider == 0 && identity.key.subject.as_ref() == 8_u64.to_be_bytes() {
+                        people[1] = *number;
                     }
                 }
                 Record::Tasks(tasks::Stored::Live(record)) => task = record.number,

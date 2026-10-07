@@ -131,7 +131,7 @@ impl Driver {
         self.send(engine::Event::SignedIn {
             reply_to: ReplyTo::new(Token::new(self.serial)),
             identity: people::Identity {
-                key: people::IdentityKey { forge: 1, user: 7 },
+                key: people::IdentityKey { provider: 0, subject: 7_u64.to_be_bytes().into() },
                 login: b"person".as_slice().into(),
                 name: b"Person".as_slice().into(),
             },

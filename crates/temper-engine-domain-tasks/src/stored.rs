@@ -231,8 +231,11 @@ fn valid_escalation(task: &TaskRecord, limits: &Limits) -> bool {
 #[expect(clippy::too_many_lines, reason = "one complete restored task shape is checked before retention")]
 fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
     if task.run_spent > task.numbers.spent
+        || task.run_reserved > task.numbers.reserved
+        || (task.run_reserved != 0 && crate::run::run_attempt(&task.phase).is_none())
         || task.ended_at.is_some()
         || crate::funders::total(task.numbers).is_none()
+        || crate::funders::available(task.numbers).is_none()
         || task.depth > limits.depth
         || task.made == 0
         || task.made > limits.tree_tasks
@@ -493,6 +496,7 @@ fn valid_record(domain: &Domain, limits: &Limits, task: &TaskRecord) -> bool {
 fn person_counters(task: &TaskRecord) -> bool {
     task.attempt == 0
         && task.run_spent == 0
+        && task.run_reserved == 0
         && task.turn == 0
         && task.last_answer.is_none()
         && !task.ever_turned

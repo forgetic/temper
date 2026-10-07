@@ -43,7 +43,8 @@ pub enum EndingV2 {
     Failed { failure: Failure, detail: Box<[u8]>, work: Work },
 }
 
-/// The checkout a run works in. The host checks its bounds and passes it on.
+/// The checkout a run works in. An empty repository list means the run has no
+/// workspace items, so no checkout is prepared or held.
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub struct Workspace {
     /// Names the checkout, so later runs of the same work find it cached.
@@ -246,7 +247,7 @@ pub enum Refusal {
 /// What about an assignment does not fit the limits.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Invalid {
-    /// The workspace lists no repository, or more than a run may hold.
+    /// The workspace lists more repositories than a run may hold.
     Repositories,
     /// The workspace lists one repository name twice.
     Duplicate,

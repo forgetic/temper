@@ -1,10 +1,10 @@
 //! Root forge stories with its durable store and the independent fake Forgejo.
 #![expect(clippy::wildcard_enum_match_arm, reason = "the fixture selects only the forge rows relevant to each story")]
+use jig_core_authority as authority;
 use jig_core_fleet as fleet;
 use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
 use std::collections::{BTreeMap, VecDeque};
 use temper_engine_domain::{Delivery, Key, Record, engine};
-use temper_engine_domain_authority as authority;
 use temper_engine_domain_forge as forge_top;
 use temper_engine_domain_forge_client as client;
 use temper_engine_domain_people as people;
@@ -150,6 +150,11 @@ impl World {
             };
             let effect_grant = authority::Grant { kind: 8, ..grant.clone() };
             let mut rules = config.authority.rules().clone();
+            if with_change {
+                // The chat's 100-unit allotment must retain room for its 20-unit delegate
+                // after the run reserves its capped allowance at claim.
+                rules.maximum_run_spend = 60;
+            }
             rules.ceiling.tools = authority::Tools(1);
             let grants: Box<[authority::Grant]> = if with_change {
                 Box::new([
@@ -514,7 +519,7 @@ impl World {
         self.send(engine::Event::SignedIn {
             reply_to: ReplyTo::new(Token::new(90)),
             identity: people::Identity {
-                key: people::IdentityKey { forge: 1, user: 7 },
+                key: people::IdentityKey { provider: 0, subject: 7_u64.to_be_bytes().into() },
                 login: Box::from(&b"owner"[..]),
                 name: Box::from(&b"Owner"[..]),
             },
@@ -2068,7 +2073,9 @@ fn a_repository_adopted_seeds_its_collaborators_into_roles() {
     for row in world.store.rows.values() {
         match row {
             Record::People(temper_engine_domain_people::Stored::Person { number, identity }) => {
-                people.insert(identity.key.user, *number);
+                let subject: [u8; 8] =
+                    identity.key.subject.as_ref().try_into().expect("forge subject is a user number");
+                people.insert(u64::from_be_bytes(subject), *number);
             }
             Record::People(temper_engine_domain_people::Stored::Roles { project: 1, holdings }) => {
                 roles = Some(holdings.clone());
@@ -2094,7 +2101,7 @@ fn an_adoption_sent_twice_across_a_restart_is_made_once() {
     world.send(engine::Event::SignedIn {
         reply_to: ReplyTo::new(Token::new(92)),
         identity: people::Identity {
-            key: people::IdentityKey { forge: 1, user: 7 },
+            key: people::IdentityKey { provider: 0, subject: 7_u64.to_be_bytes().into() },
             login: Box::from(&b"owner"[..]),
             name: Box::from(&b"Owner"[..]),
         },

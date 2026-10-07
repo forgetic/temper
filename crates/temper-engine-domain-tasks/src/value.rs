@@ -135,7 +135,7 @@ pub struct Budget {
 pub struct Numbers {
     /// Full amount of this allotment reserved against its actual funder.
     pub budget: u64,
-    /// Actual direct expense posted here, including representable overruns.
+    /// Actual direct expense posted here, within this allotment's budget.
     pub spent: u64,
     /// Expense of funded allotments already settled here, posted once when each task ends.
     pub spent_below: u64,

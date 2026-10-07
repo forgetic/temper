@@ -199,6 +199,7 @@ pub(super) fn begin(
             | people::Request::Route { .. }
             | people::Request::Reply { .. }
             | people::Request::RolesRefused { .. }
+            | people::Request::ServiceMade { .. }
             | people::Request::RestoreRefused { .. } => unreachable!("role application has one save and terminal"),
         }
     }

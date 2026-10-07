@@ -389,7 +389,9 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
             crate::recurring::after_delegate(domain, env, task, out);
         }
         Event::Prepare { reply_to, task } => crate::run::prepare(domain, env, reply_to, task, out),
-        Event::Claim { reply_to, task, attempt } => crate::run::claim(domain, env, reply_to, task, attempt, out),
+        Event::Claim { reply_to, task, attempt, budget } => {
+            crate::run::claim(domain, env, reply_to, task, attempt, budget, out);
+        }
         Event::Turn { reply_to, task, attempt, turn, read, offered, cumulative } => {
             crate::admission::turn(domain, env, reply_to, task, attempt, turn, read, offered, cumulative, out);
         }
@@ -685,6 +687,7 @@ pub(crate) fn make(
                 project: new.project,
                 requester: creator,
                 run_spent: 0,
+                run_reserved: 0,
                 root: root.unwrap_or(number),
                 depth,
                 executor: new.executor,

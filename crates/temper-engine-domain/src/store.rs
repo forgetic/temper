@@ -83,10 +83,7 @@ pub enum CallAnswer {
     /// A forge write was refused before an outbox entry existed.
     ForgeEffectRefused(temper_engine_domain_forge_client::api::Error),
     /// The pure policy check declined a forge write, retaining its bounded reasons.
-    ForgeEffectDenied {
-        answer: temper_engine_domain_authority::Answer,
-        findings: Box<[temper_engine_domain_authority::Finding]>,
-    },
+    ForgeEffectDenied { answer: jig_core_authority::Answer, findings: Box<[jig_core_authority::Finding]> },
     /// One fresh bounded forge read, retained for named-call replay.
     ForgeRead(
         Box<Result<temper_engine_domain_forge_client::api::Answer, temper_engine_domain_forge_client::api::Error>>,
@@ -106,7 +103,7 @@ pub enum CallAnswer {
     /// A named task control change was refused without mutation.
     ControlRefused(temper_engine_domain_tasks::Problem),
     /// A requested widening needs a holder or violates a hard ceiling.
-    ControlDenied { answer: temper_engine_domain_authority::Answer },
+    ControlDenied { answer: jig_core_authority::Answer },
     /// Message entered its target's inbox at this commit position.
     Sent { message: u64 },
     /// Reciprocal task references were installed.
@@ -122,10 +119,7 @@ pub enum CallAnswer {
     /// All members of an authorized batch, in call order.
     Delegated(Box<[u64]>),
     /// A whole batch declined by authority, with its independent findings.
-    DelegationDenied {
-        answer: temper_engine_domain_authority::Answer,
-        findings: Box<[temper_engine_domain_authority::Finding]>,
-    },
+    DelegationDenied { answer: jig_core_authority::Answer, findings: Box<[jig_core_authority::Finding]> },
     /// A whole batch refused by structural or finite-funding admission.
     DelegationRefused(temper_engine_domain_tasks::Problem),
     /// The named tool is deferred to a later engine route.
@@ -646,7 +640,7 @@ pub fn record_bytes(record: &Record) -> Option<u64> {
             CallAnswer::DelegationDenied { findings, .. } | CallAnswer::ForgeEffectDenied { findings, .. } => {
                 u64::try_from(findings.len())
                     .ok()?
-                    .checked_mul(u64::try_from(size_of::<temper_engine_domain_authority::Finding>()).ok()?)
+                    .checked_mul(u64::try_from(size_of::<jig_core_authority::Finding>()).ok()?)
             }
         },
         Record::ProposalDecision(_) | Record::Deployment(_) => Some(0),
@@ -659,13 +653,15 @@ pub fn record_bytes(record: &Record) -> Option<u64> {
         Record::Tasks(row) => temper_engine_domain_tasks::stored_bytes(row),
         Record::Forge { row, .. } => temper_engine_domain_forge::stored_bytes(row),
         Record::People(row) => match row {
-            temper_engine_domain_people::Stored::Person { identity, .. } => {
-                u64::try_from(identity.login.len()).ok()?.checked_add(u64::try_from(identity.name.len()).ok()?)
-            }
+            temper_engine_domain_people::Stored::Person { identity, .. } => u64::try_from(identity.key.subject.len())
+                .ok()?
+                .checked_add(u64::try_from(identity.login.len()).ok()?)?
+                .checked_add(u64::try_from(identity.name.len()).ok()?),
             temper_engine_domain_people::Stored::Roles { holdings, .. } => u64::try_from(holdings.len())
                 .ok()?
                 .checked_mul(u64::try_from(size_of::<temper_engine_domain_people::Holding>()).ok()?),
             temper_engine_domain_people::Stored::Answer { ask, .. } => match ask.as_ref() {
+                temper_engine_domain_people::Ask::MakeService { name, .. } => u64::try_from(name.len()).ok(),
                 temper_engine_domain_people::Ask::AdoptRepository { adoption, .. } => {
                     let names = adoption
                         .host

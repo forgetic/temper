@@ -92,9 +92,11 @@ impl Measured {
             asked.push(match request {
                 Request::Turn { .. } => Asked::Turn,
                 Request::DeliverV2 { owner, .. } | Request::DeliverWorkspace { owner, .. } => Asked::Delivery { owner },
-                Request::RelayV2 { delivery, .. } => Asked::Relay { call: delivery },
+                Request::RelayTyped { delivery, .. } | Request::RelayV2 { delivery, .. } => {
+                    Asked::Relay { call: delivery }
+                }
                 Request::AnswerV2 { answer, .. } => Asked::AnswerV2 { answer },
-                Request::StartV2 { .. } | Request::Start { .. } => Asked::Start,
+                Request::StartTyped { .. } | Request::StartV2 { .. } | Request::Start { .. } => Asked::Start,
 
                 Request::Prepare { owner, .. } => Asked::Prepare { owner },
                 Request::Relay { call, .. } => Asked::Relay { call },
@@ -107,6 +109,8 @@ impl Measured {
                     continue;
                 }
                 Request::Abort { .. }
+                | Request::DeliverTyped { .. }
+                | Request::ReplyTyped { .. }
                 | Request::Deliver { .. }
                 | Request::Reply { .. }
                 | Request::Stop { .. }

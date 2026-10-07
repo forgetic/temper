@@ -174,14 +174,14 @@ fn saturated_facts_change_no_decision_or_durable_result() {
 
 fn before_decision(world: &World, archive: &EscalationDecisionRecord) -> Referee {
     let mut referee = Referee::new(Story::Release);
-    for (index, user) in [7, 8].into_iter().enumerate() {
+    for (index, user) in [7_u64, 8_u64].into_iter().enumerate() {
         let person = world
             .store
             .rows
             .values()
             .find_map(|row| {
                 if let Record::People(people::Stored::Person { number, identity }) = row
-                    && identity.key == (people::IdentityKey { forge: 1, user })
+                    && identity.key == (people::IdentityKey { provider: 0, subject: (user).to_be_bytes().into() })
                 {
                     Some(*number)
                 } else {
