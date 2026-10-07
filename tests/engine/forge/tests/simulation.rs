@@ -711,6 +711,7 @@ fn a_change_produced_opened_checked_queued_and_landed() {
                 | top::Request::ContinueRelease { .. }
                 | top::Request::EffectsSettled { .. }
                 | top::Request::Released { .. }
+                | top::Request::Retained { .. }
                 | top::Request::ReleaseFailed { .. }
                 | top::Request::ProjectAfter { .. }
                 | top::Request::ProjectionFailed { .. }
@@ -952,6 +953,37 @@ fn closing_a_landed_change_deletes_its_branch_before_releasing_the_task() {
     assert!(world.seen().iter().any(|request| matches!(request, top::Request::Released { task: 51 })));
     assert!(!world.stored().contains_key(&top::Key::Hold(name)));
     assert!(!world.stored().contains_key(&top::Key::Release(51)));
+    assert_eq!(world.writes(), 1);
+}
+
+#[test]
+fn a_failed_childs_branch_is_kept_for_its_root_then_deleted_when_the_root_closes() {
+    let mut world = World::new(124);
+    world.adopt();
+    world.produce(b"temper/51");
+    let name = top::Name {
+        forge: REPO.forge,
+        repository: REPO.repository,
+        what: top::What::Branch(Box::new([Box::from(&b"temper"[..]), Box::from(&b"51"[..])])),
+    };
+    world.event(top::Event::Hold { task: 51, resource: name.clone(), from: None });
+    world.take_seen();
+    world.event(top::Event::SettleEffects { task: 51, root: 50, ending: top::ReleaseEnding::Failed });
+    world.event(top::Event::Release { task: 51, root: 50, ending: top::ReleaseEnding::Failed, entry: 10 });
+    assert!(world.seen().iter().any(|request| matches!(request,
+        top::Request::Retained { task: 51, root: 50, resource } if *resource == name
+    )));
+    assert!(matches!(world.stored().get(&top::Key::Hold(name.clone())),
+        Some(top::Stored::Hold(hold)) if hold.task == 50
+    ));
+    assert_eq!(world.writes(), 0);
+    world.event(top::Event::SettleEffects { task: 50, root: 50, ending: top::ReleaseEnding::Done });
+    world.event(top::Event::Release { task: 50, root: 50, ending: top::ReleaseEnding::Done, entry: 11 });
+    assert!(world.stored().contains_key(&top::Key::Entry(11)));
+    world.event(top::Event::Committed { entry: 11 });
+    world.run_for(5);
+    world.event(top::Event::ContinueRelease { task: 50, entry: 12 });
+    assert!(!world.stored().contains_key(&top::Key::Hold(name)));
     assert_eq!(world.writes(), 1);
 }
 

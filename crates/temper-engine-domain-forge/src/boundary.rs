@@ -464,6 +464,8 @@ pub enum Request {
     EffectsSettled { task: u64 },
     /// All connector resources of a closing task are released.
     Released { task: u64 },
+    /// A failed task's resource remains held by its tree root until that root closes.
+    Retained { task: u64, root: u64, resource: Name },
     /// A cleanup effect failed and the closing task needs a person's decision.
     ReleaseFailed { task: u64 },
     /// A projection has to wait until its interval or prior effect settles.

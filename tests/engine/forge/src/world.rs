@@ -413,6 +413,7 @@ impl World {
                 | top::Request::ContinueRelease { .. }
                 | top::Request::EffectsSettled { .. }
                 | top::Request::Released { .. }
+                | top::Request::Retained { .. }
                 | top::Request::ReleaseFailed { .. }
                 | top::Request::ProjectAfter { .. }
                 | top::Request::ProjectionFailed { .. }

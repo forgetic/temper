@@ -2404,6 +2404,13 @@ pub(super) fn outputs(
             forge::Request::Released { task } => {
                 domain.work.push(Work::Tasks(tasks::Event::Settled { task }));
             }
+            forge::Request::Retained { task, root, resource } => {
+                if let Some(holding) = write_holding(domain.config.forge_connector, &resource, &env.limits.tasks) {
+                    domain.work.push(Work::Tasks(tasks::Event::Retained { task, root, holding }));
+                } else {
+                    domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::Effects }));
+                }
+            }
             forge::Request::EffectsSettled { task } => {
                 domain.work.push(Work::Tasks(tasks::Event::EffectsSettled { task }));
             }

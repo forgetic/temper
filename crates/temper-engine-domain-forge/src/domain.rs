@@ -2086,6 +2086,7 @@ fn continue_release(d: &mut Domain, env: &Env<Limits>, task: u64, entry: u64, ou
                 let hold = d.holds.get_mut(&name).expect("selected hold");
                 hold.task = row.root;
                 emit(out, Request::Save { record: Stored::Hold(hold.clone()) });
+                emit(out, Request::Retained { task, root: row.root, resource: name });
                 continue;
             }
             if let Some(resource) = to_client(&name, &env.limits) {
