@@ -4,18 +4,21 @@
 
 use alloc::boxed::Box;
 use core::mem::size_of;
+use skein_lib::Duration;
 
-use crate::{Authority, Pattern};
+use crate::{Authority, Last, Pattern};
 
 /// A keyed edit to one mutable part of a project's policy.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum PolicyChange {
     /// Replace project spend for future periods and decisions.
     ProjectSpend { period_spend: u64 },
-    /// Replace one existing role's authority, allotment and proposal decisions.
+    /// Replace one role's authority, allotment and proposal decisions.
     Role(PolicyRole),
-    /// Replace all project landing rules, one per branch pattern.
-    Landing { rules: Box<[LandingRule]> },
+    /// Replace the project's system-neutral effect requirements.
+    Requirements { requirements: Box<[Requirement]> },
+    /// Replace the map from a connector's permission number to a project role.
+    Permissions { mappings: Box<[PermissionRole]> },
 }
 
 /// Mutable project policy saved as one full committed value.
@@ -23,7 +26,8 @@ pub enum PolicyChange {
 pub struct PolicyValue {
     pub period_spend: u64,
     pub roles: Box<[PolicyRole]>,
-    pub landing: Box<[LandingRule]>,
+    pub requirements: Box<[Requirement]>,
+    pub permissions: Box<[PermissionRole]>,
 }
 
 /// One role's grant, funding and request decision authority.
@@ -36,39 +40,38 @@ pub struct PolicyRole {
     pub decides: u8,
 }
 
-/// Validity of a gate or review verdict at a later landing head.
+/// A connector's permission mapped to an existing project role at adoption.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum Freshness {
-    Exact,
-    Clean,
-}
-
-/// One numbered required or advisory gate in a landing rule.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct Gate {
-    pub number: u32,
-    pub blocking: bool,
-    pub freshness: Freshness,
-}
-
-/// Required count of distinct reviewers with a project role.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct Approval {
+pub struct PermissionRole {
+    pub connector: u16,
+    pub permission: u16,
     pub role: u32,
-    pub people: u32,
-    pub freshness: Freshness,
 }
 
-/// Branch-scoped checks a project requires before landing.
+/// A connector-owned judge selected by project policy.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Judge {
+    pub connector: u16,
+    pub requirement: u16,
+    pub parameters: u32,
+}
+
+/// Whether the connector checks a verdict at application or it was observed earlier.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Guard {
+    Guarded,
+    Observed { freshness: Duration },
+}
+
+/// One authority requirement on an effect kind and resource pattern.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct LandingRule {
+pub struct Requirement {
     pub connector: u16,
     pub kind: u16,
     pub pattern: Pattern,
-    pub ci: bool,
-    pub up_to_date: bool,
-    pub gates: Box<[Gate]>,
-    pub approvals: Box<[Approval]>,
+    pub judge: Judge,
+    pub guard: Guard,
+    pub must_be_guarded: bool,
 }
 
 /// Checked deep-byte size of one owner policy payload.
@@ -79,20 +82,28 @@ pub fn policy_bytes(policy: &PolicyValue) -> Option<u64> {
     for role in &policy.roles {
         total = total.checked_add(crate::authority_bytes(&role.authority)?)?;
     }
-    total.checked_add(landing_rules_bytes(&policy.landing)?)
+    total = total.checked_add(requirements_bytes(&policy.requirements)?)?;
+    total.checked_add(
+        u64::try_from(policy.permissions.len()).ok()?.checked_mul(u64::try_from(size_of::<PermissionRole>()).ok()?)?,
+    )
 }
 
-/// Checked deep-byte size of typed landing rules retained by the application.
+/// Checked deep-byte size of system-neutral requirements.
 #[must_use]
-pub fn landing_rules_bytes(rules: &[LandingRule]) -> Option<u64> {
-    let mut total = u64::try_from(rules.len()).ok()?.checked_mul(u64::try_from(size_of::<LandingRule>()).ok()?)?;
-    for rule in rules {
-        total = total.checked_add(pattern_bytes(&rule.pattern)?)?;
-        total = total
-            .checked_add(u64::try_from(rule.gates.len()).ok()?.checked_mul(u64::try_from(size_of::<Gate>()).ok()?)?)?;
+pub fn requirements_bytes(requirements: &[Requirement]) -> Option<u64> {
+    let mut total =
+        u64::try_from(requirements.len()).ok()?.checked_mul(u64::try_from(size_of::<Requirement>()).ok()?)?;
+    for requirement in requirements {
+        let pattern = &requirement.pattern;
         total = total.checked_add(
-            u64::try_from(rule.approvals.len()).ok()?.checked_mul(u64::try_from(size_of::<Approval>()).ok()?)?,
+            u64::try_from(pattern.segments.len()).ok()?.checked_mul(u64::try_from(size_of::<Box<[u8]>>()).ok()?)?,
         )?;
+        for segment in &pattern.segments {
+            total = total.checked_add(u64::try_from(segment.len()).ok()?)?;
+        }
+        total = total.checked_add(match &pattern.last {
+            Last::Exact(word) | Last::Open(word) => u64::try_from(word.len()).ok()?,
+        })?;
     }
     Some(total)
 }
@@ -103,17 +114,9 @@ pub fn policy_change_bytes(change: &PolicyChange) -> Option<u64> {
     match change {
         PolicyChange::ProjectSpend { .. } => Some(0),
         PolicyChange::Role(role) => crate::authority_bytes(&role.authority),
-        PolicyChange::Landing { rules } => landing_rules_bytes(rules),
+        PolicyChange::Requirements { requirements } => requirements_bytes(requirements),
+        PolicyChange::Permissions { mappings } => {
+            u64::try_from(mappings.len()).ok()?.checked_mul(u64::try_from(size_of::<PermissionRole>()).ok()?)
+        }
     }
-}
-
-fn pattern_bytes(pattern: &Pattern) -> Option<u64> {
-    let mut bytes =
-        u64::try_from(pattern.segments.len()).ok()?.checked_mul(u64::try_from(size_of::<Box<[u8]>>()).ok()?)?;
-    for segment in &pattern.segments {
-        bytes = bytes.checked_add(u64::try_from(segment.len()).ok()?)?;
-    }
-    bytes.checked_add(match &pattern.last {
-        crate::Last::Exact(word) | crate::Last::Open(word) => u64::try_from(word.len()).ok()?,
-    })
 }

@@ -50,13 +50,13 @@ pub use amendment::{
 };
 pub use boundary::{
     Adoption, Ask, Entry, EntryKind, EscalationChoice, EscalationDecision, Event, Holding, Identity, IdentityKey,
-    InitialOwner, Key, Kind, Outcome, PersonResult, ProposalChoice, ProposalDecision, Refusal, Reply, RepositoryRole,
-    Request, RequestKey, ResultRef, Role, Seed, Stored, Whom,
+    InitialOwner, Key, Kind, Outcome, PersonResult, ProposalChoice, ProposalDecision, Refusal, Reply, Request,
+    RequestKey, ResourceName, ResourceRole, ResultRef, Role, Seed, Stored, Whom,
 };
 pub use domain::{Domain, fire, max_out, step};
 pub use facts::Fact;
 pub use limits::{Limits, worst_case};
 pub use policy_value::{
-    Approval, Freshness, Gate, LandingRule, PolicyChange, PolicyRole, PolicyValue, landing_rules_bytes, policy_bytes,
-    policy_change_bytes,
+    Guard, Judge, PermissionRole, PolicyChange, PolicyRole, PolicyValue, Requirement, policy_bytes,
+    policy_change_bytes, requirements_bytes,
 };

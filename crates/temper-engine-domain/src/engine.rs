@@ -30,6 +30,7 @@ mod escalation;
 mod forge_route;
 mod goals;
 mod inbox;
+mod landing;
 mod policy;
 mod policy_translate;
 mod proposals;
@@ -54,6 +55,9 @@ use temper_engine_domain_forge_client as forge_client;
 use temper_engine_domain_forge_issues as forge_issues;
 use temper_engine_domain_people as people;
 use temper_engine_domain_tasks as tasks;
+
+pub use forge_route::adopt_repository_ask;
+pub use landing::{Approval, Freshness, Gate, LandingRule};
 
 /// Root startup bounds, supplied by configuration and immutable at every step
 /// (domain/engine.md, 4–5). `worst_case` checks the cross-child route, page,
@@ -126,6 +130,8 @@ pub struct Config {
     pub authority: authority::Domain,
     /// Forge landing requirements and their connector-owned judge parameters.
     pub landing: LandingPolicy,
+    /// Project policy mappings from connector permissions to roles at adoption.
+    pub permission_roles: Map<u32, Box<[people::PermissionRole]>>,
     /// Connector number assigned to this application's forge adapter.
     pub forge_connector: u16,
     /// Procedure namespace assigned to the root's recurring goal executor.
@@ -162,8 +168,8 @@ pub struct Config {
 /// Typed forge landing policy retained by the application for policy snapshots.
 #[derive(Debug)]
 pub struct LandingPolicy {
-    pub deployment: Box<[people::LandingRule]>,
-    pub projects: Map<u32, Box<[people::LandingRule]>>,
+    pub deployment: Box<[LandingRule]>,
+    pub projects: Map<u32, Box<[LandingRule]>>,
 }
 
 /// One configured model and its deployment-unit prices (domain/agent.md, 4.6).
@@ -969,13 +975,25 @@ impl Domain {
             config.landing.projects.capacity() <= limits.authority.projects,
             "typed landing project table fits the policy bound"
         );
-        let landing_bytes = |rules: &[people::LandingRule]| match people::landing_rules_bytes(rules) {
+        let landing_bytes = |rules: &[LandingRule]| match landing::landing_rules_bytes(rules) {
             Some(bytes) => bytes <= u64::from(limits.journal.transcript_bytes),
             None => false,
         };
         assert!(landing_bytes(&config.landing.deployment), "deployment landing policy fits owned-byte bound");
         for (_, rules) in &config.landing.projects {
             assert!(landing_bytes(rules), "project landing policy fits owned-byte bound");
+        }
+        assert!(config.permission_roles.capacity() == limits.authority.projects, "permission policy project bound");
+        for (_, mappings) in &config.permission_roles {
+            let count = u64::try_from(mappings.len()).expect("usize fits u64");
+            let unit = u64::try_from(size_of::<people::PermissionRole>()).expect("type size fits u64");
+            assert!(
+                match count.checked_mul(unit) {
+                    Some(bytes) => bytes <= u64::from(limits.journal.transcript_bytes),
+                    None => false,
+                },
+                "permission policy bound"
+            );
         }
         assert!(authority_within(&config.chat_authority, limits), "chat authority shape bounded before copying");
         let mut projects = List::with_capacity(limits.people.projects);
@@ -2402,41 +2420,32 @@ fn people_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decisio
                         domain.work.push(Work::People(people::Event::Decided { request, outcome }));
                     }
                 }
-                people::Ask::AdoptRepository { adoption, .. } => {
-                    let provider =
-                        forge_client::api::Repository { forge: adoption.forge, repository: adoption.repository };
-                    if domain.adoption_restore.len() == env.limits.forge.adoptions {
-                        domain.work.push(Work::People(people::Event::Decided {
+                people::Ask::Adopt { adoption, .. } => {
+                    let parsed = match roles::allowed(domain, person, project) {
+                        Ok(()) => Ok(forge_route::parse_adoption(project, adoption, domain.config.forge_connector)),
+                        Err(refusal) => Err(refusal),
+                    };
+                    match parsed {
+                        Ok(Some(adoption)) if domain.adoption_restore.len() < env.limits.forge.adoptions => {
+                            let previous = domain.forge.repository(adoption.provider).cloned();
+                            assert!(
+                                domain.adoption_restore.insert(request, previous) == Ok(None),
+                                "one keyed adoption flight"
+                            );
+                            domain.work.push(Work::Forge(forge::Event::Adopt { reply_to: request, adoption }));
+                        }
+                        Ok(Some(_)) => domain.work.push(Work::People(people::Event::Decided {
                             request,
                             outcome: people::Outcome::Refused(people::Refusal::Busy),
-                        }));
-                    } else {
-                        let previous = domain.forge.repository(provider).cloned();
-                        assert!(
-                            domain.adoption_restore.insert(request, previous) == Ok(None),
-                            "one keyed adoption flight"
-                        );
-                        let role = match adoption.role {
-                            people::RepositoryRole::Owned => forge::Role::Owned,
-                            people::RepositoryRole::Fork => forge::Role::Fork,
-                            people::RepositoryRole::Context => forge::Role::Context,
-                        };
-                        domain.work.push(Work::Forge(forge::Event::Adopt {
-                            reply_to: request,
-                            adoption: forge::Adoption {
-                                project,
-                                home: adoption.home,
-                                provider,
-                                host: adoption.host,
-                                owner: adoption.owner,
-                                name: adoption.name,
-                                prefix: adoption.prefix,
-                                role,
-                                landing: adoption.landing,
-                                ci: adoption.ci,
-                                checks: adoption.checks,
-                            },
-                        }));
+                        })),
+                        Ok(None) => domain.work.push(Work::People(people::Event::Decided {
+                            request,
+                            outcome: people::Outcome::Refused(people::Refusal::Unknown),
+                        })),
+                        Err(refusal) => domain.work.push(Work::People(people::Event::Decided {
+                            request,
+                            outcome: people::Outcome::Refused(refusal),
+                        })),
                     }
                 }
                 people::Ask::SetGoal { spec, charter, budget, priority, .. } => {
@@ -2545,7 +2554,7 @@ fn route_person_task(
         | people::Ask::Amend { .. }
         | people::Ask::MakeService { .. }
         | people::Ask::SetRoles { .. }
-        | people::Ask::AdoptRepository { .. }
+        | people::Ask::Adopt { .. }
         | people::Ask::ChangePolicy { .. }
         | people::Ask::SetPool { .. }
         | people::Ask::DecideEscalation { .. }
@@ -2577,7 +2586,7 @@ fn route_person_task(
                         | people::Ask::Amend { .. }
                         | people::Ask::MakeService { .. }
                         | people::Ask::SetRoles { .. }
-                        | people::Ask::AdoptRepository { .. }
+                        | people::Ask::Adopt { .. }
                         | people::Ask::ChangePolicy { .. }
                         | people::Ask::SetPool { .. }
                         | people::Ask::DecideEscalation { .. }
@@ -2600,7 +2609,7 @@ fn route_person_task(
                     | people::Ask::Amend { .. }
                     | people::Ask::MakeService { .. }
                     | people::Ask::SetRoles { .. }
-                    | people::Ask::AdoptRepository { .. }
+                    | people::Ask::Adopt { .. }
                     | people::Ask::ChangePolicy { .. }
                     | people::Ask::SetPool { .. }
                     | people::Ask::DecideEscalation { .. }
@@ -2645,7 +2654,7 @@ fn route_person_task(
         | people::Ask::Amend { .. }
         | people::Ask::MakeService { .. }
         | people::Ask::SetRoles { .. }
-        | people::Ask::AdoptRepository { .. }
+        | people::Ask::Adopt { .. }
         | people::Ask::ChangePolicy { .. }
         | people::Ask::SetPool { .. }
         | people::Ask::DecideEscalation { .. }
@@ -2701,7 +2710,7 @@ fn route_person_control(
         | people::Ask::Amend { .. }
         | people::Ask::MakeService { .. }
         | people::Ask::SetRoles { .. }
-        | people::Ask::AdoptRepository { .. }
+        | people::Ask::Adopt { .. }
         | people::Ask::ChangePolicy { .. }
         | people::Ask::SetPool { .. }
         | people::Ask::DecideEscalation { .. }
@@ -2742,7 +2751,7 @@ fn route_person_control(
         | people::Ask::Amend { .. }
         | people::Ask::MakeService { .. }
         | people::Ask::SetRoles { .. }
-        | people::Ask::AdoptRepository { .. }
+        | people::Ask::Adopt { .. }
         | people::Ask::ChangePolicy { .. }
         | people::Ask::SetPool { .. }
         | people::Ask::DecideEscalation { .. }
@@ -2809,7 +2818,7 @@ fn route_person_control(
         | people::Ask::Amend { .. }
         | people::Ask::MakeService { .. }
         | people::Ask::SetRoles { .. }
-        | people::Ask::AdoptRepository { .. }
+        | people::Ask::Adopt { .. }
         | people::Ask::ChangePolicy { .. }
         | people::Ask::SetPool { .. }
         | people::Ask::DecideEscalation { .. }
@@ -3005,7 +3014,7 @@ fn make_chat(
         | people::Ask::DecideProposal { .. }
         | people::Ask::MakeService { .. }
         | people::Ask::SetRoles { .. }
-        | people::Ask::AdoptRepository { .. }
+        | people::Ask::Adopt { .. }
         | people::Ask::ChangePolicy { .. }
         | people::Ask::SetPool { .. }
         | people::Ask::Say { .. }
@@ -6714,9 +6723,11 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     let account_bytes = accounts::worst_case(&limits.accounts)?;
     let view_bytes = views::worst_case(&limits.views)?;
     let forge_bytes = forge::worst_case(&limits.forge)?;
-    let landing_bytes = Map::<u32, Box<[people::LandingRule]>>::worst_case(limits.authority.projects)?.checked_add(
+    let landing_bytes = Map::<u32, Box<[LandingRule]>>::worst_case(limits.authority.projects)?.checked_add(
         u64::from(limits.authority.projects).checked_add(1)?.checked_mul(u64::from(limits.journal.transcript_bytes))?,
     )?;
+    let permission_bytes = Map::<u32, Box<[people::PermissionRole]>>::worst_case(limits.authority.projects)?
+        .checked_add(u64::from(limits.authority.projects).checked_mul(u64::from(limits.journal.transcript_bytes))?)?;
     let load_bytes = loads::worst_case(&limits.loads)?;
     let routes = route_bound(limits)?;
     let tool_bytes = u64::from(limits.tasks.batch).checked_mul(row_bound(limits)?)?;
@@ -6780,6 +6791,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         view_bytes,
         forge_bytes,
         landing_bytes,
+        permission_bytes,
     ] {
         bytes = bytes.checked_add(child)?;
     }

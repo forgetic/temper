@@ -33,30 +33,14 @@ pub(super) fn change(
     let Some(mut policy) = domain.config.authority.policy(project).cloned() else {
         return refused(domain, request, people::Refusal::Unknown);
     };
-    let mut landing = match domain.config.landing.projects.get(&project) {
-        Some(rules) => rules.clone(),
+    let mut permissions = match domain.config.permission_roles.get(&project) {
+        Some(mappings) => mappings.clone(),
         None => Box::new([]),
     };
-    if policy_translate::apply(
-        &mut policy,
-        &mut landing,
-        change,
-        env.limits.authority.requirements,
-        domain.config.forge_connector,
-    )
-    .is_none()
-    {
+    if policy_translate::apply(&mut policy, &mut permissions, change, env.limits.authority.requirements).is_none() {
         return refused(domain, request, people::Refusal::Unknown);
     }
-    let Some(built) = policy_translate::build_landing(
-        &landing,
-        true,
-        env.limits.authority.requirements,
-        domain.config.forge_connector,
-    ) else {
-        return refused(domain, request, people::Refusal::Limit);
-    };
-    let Some(snapshot) = policy_translate::snapshot(&policy, &landing) else {
+    let Some(snapshot) = policy_translate::snapshot(&policy, &permissions) else {
         return refused(domain, request, people::Refusal::Limit);
     };
     if match people::policy_bytes(&snapshot) {
@@ -72,8 +56,7 @@ pub(super) fn change(
     authority::step(&mut domain.config.authority, authority::Event::Policy { project, policy }, &mut facts);
     match facts.pop().expect("policy update terminal") {
         authority::PolicyFact::Changed { .. } => {
-            assert!(domain.config.landing.projects.insert(project, landing).is_ok(), "admitted project landing policy");
-            assert!(domain.forge.project_judges(project, built.criteria), "admitted forge judges");
+            assert!(domain.config.permission_roles.insert(project, permissions).is_ok(), "admitted permission policy");
             save(
                 decision,
                 &env.limits,
@@ -92,40 +75,30 @@ pub(super) fn change(
 }
 
 pub(super) fn restore(domain: &mut Domain, project: u32, value: people::PolicyValue) {
+    let row_bound = super::row_bound(&domain.limits).expect("validated row bound");
+    match people::policy_bytes(&value) {
+        Some(bytes) if bytes <= u64::from(domain.limits.journal.transcript_bytes) && bytes <= row_bound => {}
+        Some(_) | None => {
+            domain.startup = super::Startup::Failed;
+            return;
+        }
+    }
     let Some(mut policy) = domain.config.authority.policy(project).cloned() else {
         domain.startup = super::Startup::Failed;
         return;
     };
-    let mut landing = match domain.config.landing.projects.get(&project) {
-        Some(rules) => rules.clone(),
+    let mut permissions = match domain.config.permission_roles.get(&project) {
+        Some(mappings) => mappings.clone(),
         None => Box::new([]),
     };
-    if policy_translate::restore(
-        &mut policy,
-        &mut landing,
-        value,
-        domain.limits.authority.requirements,
-        domain.config.forge_connector,
-    )
-    .is_none()
-    {
+    if policy_translate::restore(&mut policy, &mut permissions, value, domain.limits.authority.requirements).is_none() {
         domain.startup = super::Startup::Failed;
         return;
     }
-    let Some(built) = policy_translate::build_landing(
-        &landing,
-        true,
-        domain.limits.authority.requirements,
-        domain.config.forge_connector,
-    ) else {
-        domain.startup = super::Startup::Failed;
-        return;
-    };
     let mut facts = Queue::with_capacity(authority::POLICY_MAX_OUT);
     authority::step(&mut domain.config.authority, authority::Event::Policy { project, policy }, &mut facts);
     if facts.pop() != Some(authority::PolicyFact::Changed { project })
-        || domain.config.landing.projects.insert(project, landing).is_err()
-        || !domain.forge.project_judges(project, built.criteria)
+        || domain.config.permission_roles.insert(project, permissions).is_err()
     {
         domain.startup = super::Startup::Failed;
     }

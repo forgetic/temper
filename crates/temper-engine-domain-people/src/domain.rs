@@ -560,7 +560,7 @@ fn apply_roles(
     let project = match &flight.ask {
         Ask::SetRoles { project, .. } => *project,
         Ask::MakeService { .. }
-        | Ask::AdoptRepository { .. }
+        | Ask::Adopt { .. }
         | Ask::ChangePolicy { .. }
         | Ask::SetPool { .. }
         | Ask::StartChat { .. }
@@ -601,7 +601,7 @@ fn apply_roles(
             holdings.clone()
         }
         Ask::MakeService { .. }
-        | Ask::AdoptRepository { .. }
+        | Ask::Adopt { .. }
         | Ask::ChangePolicy { .. }
         | Ask::SetPool { .. }
         | Ask::StartChat { .. }
@@ -694,7 +694,7 @@ fn make_service(domain: &mut Domain, env: &Env<Limits>, request: Token, person: 
     let flight = domain.pending.get(Id::from_token(request)).expect("service creation names a live keyed flight");
     let (project, name, service_role) = match &flight.ask {
         Ask::MakeService { project, name, role } => (*project, name.clone(), *role),
-        Ask::AdoptRepository { .. }
+        Ask::Adopt { .. }
         | Ask::SetGoal { .. }
         | Ask::Stop { .. }
         | Ask::Cancel { .. }
@@ -884,7 +884,7 @@ fn end_signin(domain: &mut Domain, number: u64, out: &mut Queue<Request>) {
 fn project(ask: &Ask) -> u32 {
     match ask {
         Ask::MakeService { project, .. }
-        | Ask::AdoptRepository { project, .. }
+        | Ask::Adopt { project, .. }
         | Ask::SetRoles { project, .. }
         | Ask::ChangePolicy { project, .. }
         | Ask::SetPool { project, .. }
@@ -904,6 +904,20 @@ fn project(ask: &Ask) -> u32 {
         | Ask::Release { project, .. }
         | Ask::SetGoal { project, .. } => *project,
     }
+}
+
+fn valid_adoption(limits: &Limits, adoption: &crate::Adoption) -> bool {
+    let Some(items) = adoption.resource.path.len().checked_add(adoption.options.len()) else { return false };
+    let Some(mut bytes) = items.checked_mul(size_of::<Box<[u8]>>()) else { return false };
+    for segment in &adoption.resource.path {
+        let Some(next) = bytes.checked_add(segment.len()) else { return false };
+        bytes = next;
+    }
+    for option in &adoption.options {
+        let Some(next) = bytes.checked_add(option.len()) else { return false };
+        bytes = next;
+    }
+    !adoption.resource.path.is_empty() && bytes <= usize::try_from(limits.amendment_bytes).expect("u32 fits usize")
 }
 
 fn valid_ask(limits: &Limits, ask: &Ask) -> bool {
@@ -934,19 +948,7 @@ fn valid_ask(limits: &Limits, ask: &Ask) -> bool {
                     }
                 }
         }
-        Ask::AdoptRepository { adoption, .. } => {
-            adoption.forge != 0
-                && adoption.repository != 0
-                && adoption
-                    .host
-                    .len()
-                    .saturating_add(adoption.owner.len())
-                    .saturating_add(adoption.name.len())
-                    .saturating_add(adoption.prefix.len())
-                    .saturating_add(adoption.landing.len())
-                    .saturating_add(adoption.checks.len().saturating_mul(size_of::<u32>()))
-                    <= usize::try_from(limits.words).expect("u32 fits usize")
-        }
+        Ask::Adopt { adoption, .. } => valid_adoption(limits, adoption),
         Ask::SetRoles { holdings, .. } => holdings.len() <= usize::try_from(limits.holdings).expect("u32 fits usize"),
         Ask::ChangePolicy { change, .. } => match crate::policy_change_bytes(change) {
             Some(bytes) => bytes <= u64::from(limits.amendment_bytes),
@@ -1028,14 +1030,14 @@ fn valid_answer_shape(ask: &Ask, outcome: Outcome) -> bool {
         Roles(u32, bool),
         Policy(u32),
         Pool(u32, u64),
-        Adoption(u32, u16, u32),
+        Adoption(u32),
         Escalation,
         Chat,
     }
 
     let expected = match ask {
         Ask::MakeService { .. } => Expected::Service,
-        Ask::AdoptRepository { project, adoption } => Expected::Adoption(*project, adoption.forge, adoption.repository),
+        Ask::Adopt { project, .. } => Expected::Adoption(*project),
         Ask::SetGoal { .. } => Expected::Goal,
         Ask::Stop { task, .. } => Expected::Stop(*task),
         Ask::Cancel { task, .. } => Expected::Cancel(*task),
@@ -1071,9 +1073,7 @@ fn valid_answer_shape(ask: &Ask, outcome: Outcome) -> bool {
 
     match outcome {
         Outcome::ServiceMade { person } => expected == Expected::Service && person != 0,
-        Outcome::RepositoryAdopted { project, forge, repository } => {
-            expected == Expected::Adoption(project, forge, repository)
-        }
+        Outcome::Adopted { project } => expected == Expected::Adoption(project),
         Outcome::GoalStarted { task } => expected == Expected::Goal && task != 0,
         Outcome::GoalProposed { proposal } => expected == Expected::Goal && proposal != 0,
         Outcome::Stopped { task } => expected == Expected::Stop(task),
@@ -1165,7 +1165,7 @@ fn admit_ask(
     let role = role(domain, key.person, project);
     let refusal = match &ask {
         Ask::MakeService { .. }
-        | Ask::AdoptRepository { .. }
+        | Ask::Adopt { .. }
         | Ask::SetRoles { .. }
         | Ask::ChangePolicy { .. }
         | Ask::SetPool { .. } => {
@@ -1265,7 +1265,7 @@ fn decided(domain: &mut Domain, env: &Env<Limits>, id: Id<Pending>, outcome: Out
         // pressure reported by tasks or another child through the root.
         Outcome::Refused(Refusal::Busy | Refusal::NotReady) => {}
         Outcome::ServiceMade { .. }
-        | Outcome::RepositoryAdopted { .. }
+        | Outcome::Adopted { .. }
         | Outcome::RolesSet { .. }
         | Outcome::PolicyChanged { .. }
         | Outcome::PoolSet { .. }
@@ -1424,7 +1424,7 @@ fn restored(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
                 }
                 Ask::MakeService { .. }
                 | Ask::StartChat { .. }
-                | Ask::AdoptRepository { .. }
+                | Ask::Adopt { .. }
                 | Ask::ChangePolicy { .. }
                 | Ask::SetPool { .. }
                 | Ask::DecideEscalation { .. }
@@ -1444,7 +1444,7 @@ fn restored(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
                     unreachable!("restored role success has a matching roster ask");
                 }
             },
-            Outcome::RepositoryAdopted { .. }
+            Outcome::Adopted { .. }
             | Outcome::Started { .. }
             | Outcome::PolicyChanged { .. }
             | Outcome::PoolSet { .. }

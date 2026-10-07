@@ -662,19 +662,17 @@ pub fn record_bytes(record: &Record) -> Option<u64> {
                 .checked_mul(u64::try_from(size_of::<temper_engine_domain_people::Holding>()).ok()?),
             temper_engine_domain_people::Stored::Answer { ask, .. } => match ask.as_ref() {
                 temper_engine_domain_people::Ask::MakeService { name, .. } => u64::try_from(name.len()).ok(),
-                temper_engine_domain_people::Ask::AdoptRepository { adoption, .. } => {
-                    let names = adoption
-                        .host
-                        .len()
-                        .checked_add(adoption.owner.len())?
-                        .checked_add(adoption.name.len())?
-                        .checked_add(adoption.prefix.len())?
-                        .checked_add(adoption.landing.len())?;
-                    u64::try_from(names).ok()?.checked_add(
-                        u64::try_from(adoption.checks.len())
-                            .ok()?
-                            .checked_mul(u64::try_from(size_of::<u32>()).ok()?)?,
-                    )
+                temper_engine_domain_people::Ask::Adopt { adoption, .. } => {
+                    let mut bytes = u64::try_from(adoption.resource.path.len().checked_add(adoption.options.len())?)
+                        .ok()?
+                        .checked_mul(u64::try_from(size_of::<Box<[u8]>>()).ok()?)?;
+                    for segment in &adoption.resource.path {
+                        bytes = bytes.checked_add(u64::try_from(segment.len()).ok()?)?;
+                    }
+                    for option in &adoption.options {
+                        bytes = bytes.checked_add(u64::try_from(option.len()).ok()?)?;
+                    }
+                    Some(bytes)
                 }
                 temper_engine_domain_people::Ask::SetGoal { spec, .. } => u64::try_from(spec.len()).ok(),
                 temper_engine_domain_people::Ask::SetRoles { holdings, .. } => u64::try_from(holdings.len())

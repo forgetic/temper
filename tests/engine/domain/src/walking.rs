@@ -216,6 +216,20 @@ pub fn config(seed: u64) -> engine::Config {
         deployment_provider: 1,
         authority: domain,
         landing: engine::LandingPolicy { deployment: Box::new([]), projects: skein_lib::Map::with_capacity(1) },
+        permission_roles: {
+            let mut projects: skein_lib::Map<u32, Box<[people::PermissionRole]>> = skein_lib::Map::with_capacity(1);
+            projects
+                .insert(
+                    1,
+                    Box::new([
+                        people::PermissionRole { connector: 0, permission: 3, role: 1 },
+                        people::PermissionRole { connector: 0, permission: 2, role: 2 },
+                        people::PermissionRole { connector: 0, permission: 1, role: 3 },
+                    ]),
+                )
+                .expect("one configured permission policy");
+            projects
+        },
         forge_connector: 0,
         recurring_connector: 1,
         charter: 1,

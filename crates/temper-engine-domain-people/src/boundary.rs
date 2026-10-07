@@ -119,25 +119,26 @@ pub struct ResultRef {
     pub position: u64,
 }
 
-/// Repository settings an owner asks the forge connector to adopt.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct Adoption {
-    pub home: bool,
-    pub forge: u16,
-    pub repository: u32,
-    pub host: Box<[u8]>,
-    pub owner: Box<[u8]>,
-    pub name: Box<[u8]>,
-    pub prefix: Box<[u8]>,
-    pub role: RepositoryRole,
-    pub landing: Box<[u8]>,
-    pub ci: bool,
-    pub checks: Box<[u32]>,
+/// A connector's resource path, opaque to people (domain/connectors.md, section 12).
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct ResourceName {
+    pub connector: u16,
+    pub path: Box<[Box<[u8]>]>,
 }
 
-/// How an adopted repository participates in the project.
+/// A resource and its connector-specific options, opaque to people. The whole
+/// path and options payload fits `Limits::amendment_bytes` at admission.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct Adoption {
+    pub resource: ResourceName,
+    pub role: ResourceRole,
+    /// Bounded connector-specific fields, interpreted by the application's root.
+    pub options: Box<[Box<[u8]>]>,
+}
+
+/// How an adopted resource participates in the project.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum RepositoryRole {
+pub enum ResourceRole {
     Owned,
     Fork,
     Context,
@@ -149,8 +150,8 @@ pub enum RepositoryRole {
 pub enum Ask {
     /// Make a deployment service in a project with a role and display name.
     MakeService { project: u32, name: Box<[u8]>, role: Role },
-    /// Adopt a repository as a durable keyed owner request.
-    AdoptRepository { project: u32, adoption: Adoption },
+    /// Adopt a connector resource as a durable keyed owner request.
+    Adopt { project: u32, adoption: Adoption },
     /// Start a tracked goal at the requested charter, budget and priority.
     SetGoal { project: u32, spec: Box<[u8]>, charter: u32, budget: u64, priority: u32 },
     /// Hold a live run for this person's decision, cancelling its current claim.
@@ -304,8 +305,8 @@ pub enum Refusal {
 pub enum Outcome {
     /// A service party and its project role were committed together.
     ServiceMade { person: u64 },
-    /// Repository adoption and its collaborator seed committed together.
-    RepositoryAdopted { project: u32, forge: u16, repository: u32 },
+    /// Resource adoption and its connector-known party seed committed together.
+    Adopted { project: u32 },
     /// One tracked goal was durably created within the caller's allotment.
     GoalStarted { task: u64 },
     /// A tracked goal awaits the policy role's budget decision.

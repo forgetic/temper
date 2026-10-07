@@ -1,13 +1,130 @@
 //! Root translation for the forge connector. Its store rows and released API
 //! calls cross one root decision; the connector never owns the store.
 use super::{
-    CallAnswer, CallKey, Decision, Delivery, Domain, Env, Family, ForgeRepository, ForgeStart, ForgeWorkspace, Id, Key,
-    Limits, List, ProcedureAction, Queue, Record, ReplyTo, RoutedCall, Token, Work, Write, authority,
-    authority_numbers, authority_value, decide_call, emit, escalation, forge, forge_change, forge_client, forge_issues,
-    people, policy_translate, procedure_step, save, tasks,
+    CallAnswer, CallKey, Decision, Delivery, Domain, Env, Family, ForgeRepository, ForgeStart, ForgeWorkspace,
+    Freshness, Id, Key, LandingRule, Limits, List, ProcedureAction, Queue, Record, ReplyTo, RoutedCall, Token, Work,
+    Write, authority, authority_numbers, authority_value, decide_call, emit, escalation, forge, forge_change,
+    forge_client, forge_issues, people, procedure_step, save, tasks,
 };
 use alloc::boxed::Box;
 use jig_core_brief as brief;
+
+/// Build a generic people request from temper's forge repository options.
+/// The people child retains only the resource name, role and opaque options.
+#[must_use]
+pub fn adopt_repository_ask(adoption: forge::Adoption, connector: u16) -> Option<people::Ask> {
+    let role = match adoption.role {
+        forge::Role::Owned => people::ResourceRole::Owned,
+        forge::Role::Fork => people::ResourceRole::Fork,
+        forge::Role::Context => people::ResourceRole::Context,
+        forge::Role::Adopted => return None,
+    };
+    let count = u32::try_from(adoption.checks.len()).ok()?.checked_add(7)?;
+    let mut options = List::with_capacity(count);
+    options.push(Box::from([u8::from(adoption.home)])).ok()?;
+    options.push(adoption.host).ok()?;
+    options.push(adoption.owner).ok()?;
+    options.push(adoption.name).ok()?;
+    options.push(adoption.prefix).ok()?;
+    options.push(adoption.landing).ok()?;
+    options.push(Box::from([u8::from(adoption.ci)])).ok()?;
+    for check in adoption.checks {
+        options.push(Box::from(check.to_be_bytes())).ok()?;
+    }
+    Some(people::Ask::Adopt {
+        project: adoption.project,
+        adoption: people::Adoption {
+            resource: people::ResourceName {
+                connector,
+                path: Box::new([
+                    Box::from(adoption.provider.forge.to_be_bytes()),
+                    Box::from(adoption.provider.repository.to_be_bytes()),
+                ]),
+            },
+            role,
+            options: options.into_boxed(),
+        },
+    })
+}
+
+fn adoption_flag(value: &[u8]) -> Option<bool> {
+    match value {
+        [0] => Some(false),
+        [1] => Some(true),
+        _ => None,
+    }
+}
+
+fn permission_number(permission: forge_client::api::Permission) -> u16 {
+    match permission {
+        forge_client::api::Permission::None => 0,
+        forge_client::api::Permission::Read => 1,
+        forge_client::api::Permission::Write => 2,
+        forge_client::api::Permission::Admin => 3,
+    }
+}
+
+fn seeded_role(domain: &Domain, project: u32, permission: forge_client::api::Permission) -> Option<people::Role> {
+    let number = permission_number(permission);
+    let mappings = domain.config.permission_roles.get(&project)?;
+    for mapping in mappings.as_ref() {
+        if mapping.connector == domain.config.forge_connector && mapping.permission == number {
+            return match mapping.role {
+                0 => Some(people::Role::Owner),
+                1 => Some(people::Role::Maintainer),
+                2 => Some(people::Role::Member),
+                3 => Some(people::Role::Observer),
+                _ => None,
+            };
+        }
+    }
+    None
+}
+
+/// Decode the forge's own options after the people child has authorized the
+/// resource adoption. Malformed connector data refuses without a forge call.
+pub(super) fn parse_adoption(project: u32, adoption: people::Adoption, connector: u16) -> Option<forge::Adoption> {
+    if adoption.resource.connector != connector || adoption.resource.path.len() != 2 || adoption.options.len() < 7 {
+        return None;
+    }
+    let forge_id = adoption.resource.path.first()?;
+    let repo_id = adoption.resource.path.get(1)?;
+    if forge_id.len() != 2 || repo_id.len() != 4 {
+        return None;
+    }
+    let forge = u16::from_be_bytes([*forge_id.first()?, *forge_id.get(1)?]);
+    let repository = u32::from_be_bytes([*repo_id.first()?, *repo_id.get(1)?, *repo_id.get(2)?, *repo_id.get(3)?]);
+    if forge == 0 || repository == 0 {
+        return None;
+    }
+    let home = adoption_flag(adoption.options.first()?)?;
+    let ci = adoption_flag(adoption.options.get(6)?)?;
+    let mut checks = List::with_capacity(u32::try_from(adoption.options.len().checked_sub(7)?).ok()?);
+    for option in adoption.options.get(7..)? {
+        if option.len() != 4 {
+            return None;
+        }
+        checks.push(u32::from_be_bytes([*option.first()?, *option.get(1)?, *option.get(2)?, *option.get(3)?])).ok()?;
+    }
+    let role = match adoption.role {
+        people::ResourceRole::Owned => forge::Role::Owned,
+        people::ResourceRole::Fork => forge::Role::Fork,
+        people::ResourceRole::Context => forge::Role::Context,
+    };
+    Some(forge::Adoption {
+        project,
+        home,
+        provider: forge_client::api::Repository { forge, repository },
+        host: adoption.options.get(1)?.clone(),
+        owner: adoption.options.get(2)?.clone(),
+        name: adoption.options.get(3)?.clone(),
+        prefix: adoption.options.get(4)?.clone(),
+        role,
+        landing: adoption.options.get(5)?.clone(),
+        ci,
+        checks: checks.into_boxed(),
+    })
+}
 
 fn append(out: &mut List<u8>, bytes: &[u8]) {
     for byte in bytes {
@@ -1054,6 +1171,29 @@ fn pull_what(number: Option<u64>) -> Option<forge::What> {
 }
 
 /// Project landing gates are procedure gates before they become effect requirements.
+fn gate_required(domain: &Domain, project: u32, name: &authority::Name, parameters: u32, project_scope: bool) -> bool {
+    let requirements = if project_scope {
+        match domain.config.authority.policy(project) {
+            Some(policy) => &policy.requirements,
+            None => return false,
+        }
+    } else {
+        &domain.config.authority.rules().requirements
+    };
+    for requirement in requirements.as_ref() {
+        if requirement.connector == domain.config.forge_connector
+            && requirement.kind == 4
+            && requirement.judge.connector == domain.config.forge_connector
+            && requirement.judge.requirement == 3
+            && requirement.judge.parameters == parameters
+            && authority::pattern_covers(&requirement.pattern, name)
+        {
+            return true;
+        }
+    }
+    false
+}
+
 fn configured_gates(
     domain: &Domain,
     env: &Env<Limits>,
@@ -1064,48 +1204,64 @@ fn configured_gates(
     let name = resource_name(repository, &what, env.limits.authority.segments)?;
     let mut gates: List<forge_change::Gate> = List::with_capacity(env.limits.forge.change_policy.gates);
     let project = domain.config.landing.projects.get(&repository.project);
-    let empty: &[people::LandingRule] = &[];
+    let empty: &[LandingRule] = &[];
     let project_rules = match project {
         Some(rules) => rules.as_ref(),
         None => empty,
     };
+    let mut project_scope = false;
     for rules in [&domain.config.landing.deployment[..], project_rules] {
+        let mut criterion = 0_u32;
         for rule in rules {
-            if rule.connector != domain.config.forge_connector
-                || rule.kind != 4
-                || !authority::pattern_covers(&policy_translate::pattern_to_authority(rule.pattern.clone()), &name)
-            {
-                continue;
+            if rule.ci {
+                criterion = criterion.checked_add(1)?;
             }
+            if rule.up_to_date {
+                criterion = criterion.checked_add(1)?;
+            }
+            let applies = rule.connector == domain.config.forge_connector
+                && rule.kind == 4
+                && authority::pattern_covers(&rule.pattern, &name);
             for gate in &rule.gates {
+                let parameters = criterion | if project_scope { 0x8000_0000 } else { 0 };
+                if gate.blocking {
+                    criterion = criterion.checked_add(1)?;
+                }
+                if !applies {
+                    continue;
+                }
                 let mut present = false;
                 for prior in gates.as_slice() {
                     if prior.number == u64::from(gate.number) {
                         present = true;
                     }
                 }
-                if present {
+                let is_check = !repository.ci && repository.checks.contains(&gate.number);
+                let required =
+                    gate.blocking && gate_required(domain, repository.project, &name, parameters, project_scope);
+                if present || (!is_check && gate.blocking && !required) {
                     continue;
                 }
-                let is_check = !repository.ci && repository.checks.contains(&gate.number);
                 gates
                     .push(forge_change::Gate {
                         number: u64::from(gate.number),
                         kind: if is_check { forge_change::GateKind::Check } else { forge_change::GateKind::Agent },
-                        blocking: is_check || gate.blocking,
+                        blocking: is_check || required,
                         freshness: if is_check {
                             forge_change::Freshness::Exact
                         } else {
                             match gate.freshness {
-                                people::Freshness::Exact => forge_change::Freshness::Exact,
-                                people::Freshness::Clean => forge_change::Freshness::Clean,
+                                Freshness::Exact => forge_change::Freshness::Exact,
+                                Freshness::Clean => forge_change::Freshness::Clean,
                             }
                         },
                         eager: false,
                     })
                     .ok()?;
             }
+            criterion = criterion.checked_add(u32::try_from(rule.approvals.len()).ok()?)?;
         }
+        project_scope = true;
     }
     if !repository.ci {
         for number in &repository.checks {
@@ -1847,12 +2003,7 @@ pub(super) fn outputs(
                         let mut seeds = List::with_capacity(env.limits.forge.collaborators);
                         let mut exhausted = false;
                         for collaborator in &adopted.collaborators {
-                            let role = match collaborator.permission {
-                                forge_client::api::Permission::Admin => Some(people::Role::Maintainer),
-                                forge_client::api::Permission::Write => Some(people::Role::Member),
-                                forge_client::api::Permission::Read => Some(people::Role::Observer),
-                                forge_client::api::Permission::None => None,
-                            };
+                            let role = seeded_role(domain, adopted.repository.project, collaborator.permission);
                             if let Some(role) = role {
                                 match crate::fresh(&mut domain.counters, Family::Person) {
                                     Some(candidate) => {
@@ -1889,11 +2040,7 @@ pub(super) fn outputs(
                             }));
                             domain.work.push(Work::People(people::Event::Decided {
                                 request: reply_to,
-                                outcome: people::Outcome::RepositoryAdopted {
-                                    project: adopted.repository.project,
-                                    forge: adopted.repository.provider.forge,
-                                    repository: adopted.repository.provider.repository,
-                                },
+                                outcome: people::Outcome::Adopted { project: adopted.repository.project },
                             }));
                         }
                     }

@@ -30,6 +30,7 @@ struct World {
     answers: Vec<temper_engine_domain::CallAnswer>,
     fail_job_reads: bool,
     slow_brief_reads: bool,
+    owner_gate: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -60,7 +61,7 @@ impl World {
     }
 
     fn configured_checks(with_read: bool, with_change: bool, silent_ci: bool, passes: u32) -> Self {
-        Self::configured_policy(with_read, with_change, silent_ci, passes, None, false)
+        Self::configured_policy(with_read, with_change, silent_ci, passes, None, false, false)
     }
 
     #[expect(
@@ -73,15 +74,19 @@ impl World {
         with_change: bool,
         silent_ci: bool,
         passes: u32,
-        approval: Option<people::Freshness>,
+        approval: Option<engine::Freshness>,
         agent_gate: bool,
+        owner_gate: bool,
     ) -> Self {
         let mut limits = walking::limits();
         limits.people.people = 4;
         limits.people.holdings = 4;
+        if owner_gate {
+            limits.people.amendment_bytes = 2048;
+        }
         limits.journal.writes += (people::max_out(&limits.people) - people::max_out(&walking::limits().people)) * 4;
         let mut config = walking::config(71);
-        if approval.is_some() || agent_gate {
+        if approval.is_some() || agent_gate || owner_gate {
             limits.authority.roles = 3;
         }
         if with_change {
@@ -168,11 +173,12 @@ impl World {
                 Box::new([grant.clone(), effect_grant.clone()])
             };
             rules.ceiling.grants.clone_from(&grants);
-            if approval.is_some() || agent_gate {
-                let landing: Box<[people::LandingRule]> = Box::new([people::LandingRule {
+            if approval.is_some() || agent_gate || owner_gate {
+                let landing: Box<[engine::LandingRule]> = Box::new([engine::LandingRule {
                     connector: 0,
                     kind: 4,
-                    pattern: people::Pattern {
+                    enforce: !owner_gate,
+                    pattern: authority::Pattern {
                         segments: Box::new([
                             Box::from(&b"forge"[..]),
                             Box::from(&b"forge.example"[..]),
@@ -180,21 +186,23 @@ impl World {
                             Box::from(&b"repo"[..]),
                             Box::from(&b"branch"[..]),
                         ]),
-                        last: people::Last::Exact(Box::from(&b"main"[..])),
+                        last: authority::Last::Exact(Box::from(&b"main"[..])),
                     },
                     ci: true,
                     up_to_date: true,
-                    gates: if agent_gate {
-                        Box::new([people::Gate { number: 1, blocking: true, freshness: people::Freshness::Exact }])
+                    gates: if agent_gate || owner_gate {
+                        Box::new([engine::Gate { number: 1, blocking: true, freshness: engine::Freshness::Exact }])
                     } else {
                         Box::new([])
                     },
                     approvals: match approval {
-                        Some(freshness) => Box::new([people::Approval { role: 2, people: 1, freshness }]),
+                        Some(freshness) => Box::new([engine::Approval { role: 2, people: 1, freshness }]),
                         None => Box::new([]),
                     },
                 }]);
-                config.landing.deployment.clone_from(&landing);
+                if !owner_gate {
+                    config.landing.deployment.clone_from(&landing);
+                }
                 assert!(config.landing.projects.insert(1, landing).is_ok());
             }
             if with_change {
@@ -206,7 +214,7 @@ impl World {
             let mut policy = config.authority.policy(1).expect("walk policy").clone();
             policy.ceiling.tools = authority::Tools(1);
             policy.ceiling.grants.clone_from(&grants);
-            if approval.is_some() || agent_gate {
+            if approval.is_some() || agent_gate || owner_gate {
                 let mut maintainer = policy.roles[0].clone();
                 maintainer.number = 1;
                 let mut member = maintainer.clone();
@@ -278,6 +286,7 @@ impl World {
             answers: Vec::new(),
             fail_job_reads: false,
             slow_brief_reads: false,
+            owner_gate,
         }
     }
 
@@ -294,7 +303,11 @@ impl World {
     fn restart(&mut self, with_read: bool, with_change: bool) {
         assert!(self.store.pending.is_empty(), "the chosen cut resolves store uncertainty first");
         assert!(self.pending.is_empty(), "old API terminals are drained at this cut");
-        let mut fresh = Self::configured(with_read, with_change);
+        let mut fresh = if self.owner_gate {
+            Self::configured_policy(with_read, with_change, false, 0, None, false, true)
+        } else {
+            Self::configured(with_read, with_change)
+        };
         std::mem::swap(&mut self.root, &mut fresh.root);
         std::mem::swap(&mut self.out, &mut fresh.out);
         self.events.clear();
@@ -406,7 +419,7 @@ impl World {
                     Delivery::Assigned { assignment, .. } => self.assigned.push(assignment),
                     Delivery::CallAnswer { answer, .. } => self.answers.push(answer),
                     Delivery::WebReply { reply: people::Reply::Outcome(outcome), .. }
-                        if matches!(outcome, people::Outcome::RepositoryAdopted { .. }) =>
+                        if matches!(outcome, people::Outcome::Adopted { .. }) =>
                     {
                         self.adopted.push(outcome);
                     }
@@ -529,32 +542,36 @@ impl World {
             reply_to: ReplyTo::new(Token::new(91)),
             sign_in: self.signed_in.expect("signed in"),
             key: [91; 16],
-            ask: people::Ask::AdoptRepository {
-                project: 1,
-                adoption: people::Adoption {
+            ask: engine::adopt_repository_ask(
+                forge_top::Adoption {
+                    project: 1,
                     home: true,
-                    forge: forge_world::REPO.forge,
-                    repository: forge_world::REPO.repository,
+                    provider: client::api::Repository {
+                        forge: forge_world::REPO.forge,
+                        repository: forge_world::REPO.repository,
+                    },
                     host: Box::from(&b"forge.example"[..]),
                     owner: Box::from(&b"org"[..]),
                     name: Box::from(&b"repo"[..]),
                     prefix: Box::from(&b"temper/"[..]),
-                    role: people::RepositoryRole::Owned,
+                    role: forge_top::Role::Owned,
                     landing: Box::from(&b"main"[..]),
                     ci,
                     checks,
                 },
-            },
+                0,
+            )
+            .expect("forge adoption shape"),
         });
         self.until(Until::Adopted);
-        assert!(matches!(self.adopted.as_slice(), [people::Outcome::RepositoryAdopted { .. }]));
+        assert!(matches!(self.adopted.as_slice(), [people::Outcome::Adopted { .. }]));
     }
 }
 
 fn change_world(
     silent_ci: bool,
     passes: u32,
-    approval: Option<people::Freshness>,
+    approval: Option<engine::Freshness>,
 ) -> (World, engine::Assignment, engine::Assignment, Box<[u8]>) {
     change_world_with_gate(silent_ci, passes, approval, false)
 }
@@ -562,7 +579,7 @@ fn change_world(
 fn change_world_with_gate(
     silent_ci: bool,
     passes: u32,
-    approval: Option<people::Freshness>,
+    approval: Option<engine::Freshness>,
     agent_gate: bool,
 ) -> (World, engine::Assignment, engine::Assignment, Box<[u8]>) {
     change_world_with_policy(silent_ci, passes, approval, agent_gate, false, false)
@@ -573,47 +590,61 @@ fn change_world_with_gate(
 fn change_world_with_policy(
     silent_ci: bool,
     passes: u32,
-    approval: Option<people::Freshness>,
+    approval: Option<engine::Freshness>,
     agent_gate: bool,
     no_ci: bool,
     owner_gate: bool,
 ) -> (World, engine::Assignment, engine::Assignment, Box<[u8]>) {
-    let mut world = World::configured_policy(true, true, silent_ci, passes, approval, agent_gate);
+    let mut world = World::configured_policy(true, true, silent_ci, passes, approval, agent_gate, owner_gate);
     if no_ci {
         world.adopt_with_checks(false, Box::new([1]));
     } else {
         world.adopt();
     }
     if owner_gate {
+        let branch = people::Pattern {
+            segments: Box::new([
+                Box::from(&b"forge"[..]),
+                Box::from(&b"forge.example"[..]),
+                Box::from(&b"org"[..]),
+                Box::from(&b"repo"[..]),
+                Box::from(&b"branch"[..]),
+            ]),
+            last: people::Last::Exact(Box::from(&b"main"[..])),
+        };
         world.send(engine::Event::Ask {
             reply_to: ReplyTo::new(Token::new(900)),
             sign_in: world.signed_in.expect("owner session"),
             key: [90; 16],
             ask: people::Ask::ChangePolicy {
                 project: 1,
-                change: people::PolicyChange::Landing {
-                    rules: Box::new([people::LandingRule {
-                        connector: 0,
-                        kind: 4,
-                        pattern: people::Pattern {
-                            segments: Box::new([
-                                Box::from(&b"forge"[..]),
-                                Box::from(&b"forge.example"[..]),
-                                Box::from(&b"org"[..]),
-                                Box::from(&b"repo"[..]),
-                                Box::from(&b"branch"[..]),
-                            ]),
-                            last: people::Last::Exact(Box::from(&b"main"[..])),
+                change: people::PolicyChange::Requirements {
+                    requirements: Box::new([
+                        people::Requirement {
+                            connector: 0,
+                            kind: 4,
+                            pattern: branch.clone(),
+                            judge: people::Judge { connector: 0, requirement: 1, parameters: 0x8000_0000 },
+                            guard: people::Guard::Guarded,
+                            must_be_guarded: true,
                         },
-                        ci: true,
-                        up_to_date: true,
-                        gates: Box::new([people::Gate {
-                            number: 1,
-                            blocking: true,
-                            freshness: people::Freshness::Exact,
-                        }]),
-                        approvals: Box::new([]),
-                    }]),
+                        people::Requirement {
+                            connector: 0,
+                            kind: 4,
+                            pattern: branch.clone(),
+                            judge: people::Judge { connector: 0, requirement: 2, parameters: 0x8000_0001 },
+                            guard: people::Guard::Observed { freshness: Duration::ZERO },
+                            must_be_guarded: false,
+                        },
+                        people::Requirement {
+                            connector: 0,
+                            kind: 4,
+                            pattern: branch,
+                            judge: people::Judge { connector: 0, requirement: 3, parameters: 0x8000_0002 },
+                            guard: people::Guard::Guarded,
+                            must_be_guarded: true,
+                        },
+                    ]),
                 },
             },
         });
@@ -980,7 +1011,7 @@ fn a_change_to_a_repository_without_ci_lands_on_its_checks() {
 }
 
 #[test]
-fn an_owner_adds_a_review_to_a_branchs_landing_rule_and_later_changes_wait_for_it() {
+fn an_owner_adds_a_branch_requirement_and_later_changes_wait_for_it() {
     check_gate_landing(false, true);
 }
 
@@ -1636,7 +1667,7 @@ fn a_conflicting_update_is_resolved_from_a_merge_in_progress() {
 #[test]
 #[expect(clippy::too_many_lines, reason = "the story checks both clean-update carryover and a new review after repair")]
 fn an_approval_carries_over_a_clean_update_and_is_asked_again_after_a_repair() {
-    let (mut world, _chat, producer, branch) = change_world(false, 1000, Some(people::Freshness::Clean));
+    let (mut world, _chat, producer, branch) = change_world(false, 1000, Some(engine::Freshness::Clean));
     assert!(matches!(
         world.external(2, raw::Op::Git(raw::Git::Create { branch: branch.clone(), commit: 1 })),
         raw::Answer::Branch(raw::Created::Created)
@@ -1725,7 +1756,7 @@ fn an_approval_carries_over_a_clean_update_and_is_asked_again_after_a_repair() {
         world.store.rows.values().filter(|row| matches!(row, Record::Forge { .. })).collect::<Vec<_>>()
     );
 
-    let (mut world, _chat, producer, branch) = change_world(false, 0, Some(people::Freshness::Clean));
+    let (mut world, _chat, producer, branch) = change_world(false, 0, Some(engine::Freshness::Clean));
     world.external(
         1,
         raw::Op::Write(raw::Write::Status { commit: 1, context: Box::from(&b"build"[..]), state: raw::Check::Passed }),
@@ -2090,6 +2121,58 @@ fn a_repository_adopted_seeds_its_collaborators_into_roles() {
 }
 
 #[test]
+#[expect(clippy::wildcard_enum_match_arm, reason = "the story selects persisted people rows")]
+fn policy_maps_connector_permissions_to_seeded_roles_after_restart() {
+    let mut world = World::new();
+    world.until(Until::Ready);
+    world.send(engine::Event::SignedIn {
+        reply_to: ReplyTo::new(Token::new(90)),
+        identity: people::Identity {
+            key: people::IdentityKey { provider: 0, subject: 7_u64.to_be_bytes().into() },
+            login: Box::from(&b"owner"[..]),
+            name: Box::from(&b"Owner"[..]),
+        },
+    });
+    world.until(Until::SignedIn);
+    world.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(94)),
+        sign_in: world.signed_in.expect("owner signed in"),
+        key: [94; 16],
+        ask: people::Ask::ChangePolicy {
+            project: 1,
+            change: people::PolicyChange::Permissions {
+                mappings: Box::new([
+                    people::PermissionRole { connector: 0, permission: 3, role: 3 },
+                    people::PermissionRole { connector: 0, permission: 2, role: 1 },
+                ]),
+            },
+        },
+    });
+    world.until(Until::Ready);
+    assert!(world.store.rows.contains_key(&Key::People(people::Key::Policy(1))), "permission policy committed");
+    world.restart(false, false);
+    world.signed_in = None;
+    world.adopt();
+    let mut roles = None;
+    let mut people = BTreeMap::new();
+    for row in world.store.rows.values() {
+        match row {
+            Record::People(people::Stored::Person { number, identity }) => {
+                let subject: [u8; 8] =
+                    identity.key.subject.as_ref().try_into().expect("forge subject is a user number");
+                people.insert(u64::from_be_bytes(subject), *number);
+            }
+            Record::People(people::Stored::Roles { project: 1, holdings }) => roles = Some(holdings.clone()),
+            _ => {}
+        }
+    }
+    let roles = roles.expect("durable project roles");
+    assert!(roles.contains(&people::Holding { person: people[&7], role: people::Role::Owner }));
+    assert!(roles.contains(&people::Holding { person: people[&1], role: people::Role::Observer }));
+    assert!(roles.contains(&people::Holding { person: people[&2], role: people::Role::Maintainer }));
+}
+
+#[test]
 fn an_adoption_sent_twice_across_a_restart_is_made_once() {
     let mut world = World::new();
     world.adopt();
@@ -2111,22 +2194,26 @@ fn an_adoption_sent_twice_across_a_restart_is_made_once() {
         reply_to: ReplyTo::new(Token::new(93)),
         sign_in: world.signed_in.expect("owner signed in again"),
         key: [91; 16],
-        ask: people::Ask::AdoptRepository {
-            project: 1,
-            adoption: people::Adoption {
+        ask: engine::adopt_repository_ask(
+            forge_top::Adoption {
+                project: 1,
                 home: true,
-                forge: forge_world::REPO.forge,
-                repository: forge_world::REPO.repository,
+                provider: client::api::Repository {
+                    forge: forge_world::REPO.forge,
+                    repository: forge_world::REPO.repository,
+                },
                 host: Box::from(&b"forge.example"[..]),
                 owner: Box::from(&b"org"[..]),
                 name: Box::from(&b"repo"[..]),
                 prefix: Box::from(&b"temper/"[..]),
-                role: people::RepositoryRole::Owned,
+                role: forge_top::Role::Owned,
                 landing: Box::from(&b"main"[..]),
                 ci: true,
                 checks: Box::new([]),
             },
-        },
+            0,
+        )
+        .expect("forge adoption shape"),
     });
     world.until(Until::Adopted);
     assert_eq!(world.adopted, [first], "the committed answer replays after restart");
@@ -2164,22 +2251,23 @@ fn a_saved_repository_tag_becomes_a_concrete_checkout_in_the_next_attempt() {
         reply_to: ReplyTo::new(Token::new(98)),
         sign_in: world.signed_in.expect("owner session"),
         key: [98; 16],
-        ask: people::Ask::AdoptRepository {
-            project: 1,
-            adoption: people::Adoption {
+        ask: engine::adopt_repository_ask(
+            forge_top::Adoption {
+                project: 1,
                 home: false,
-                forge: 1,
-                repository: 3,
+                provider: client::api::Repository { forge: 1, repository: 3 },
                 host: Box::from(&b"forge.example"[..]),
                 owner: Box::from(&b"org"[..]),
                 name: Box::from(&b"extra"[..]),
                 prefix: Box::from(&b"temper/"[..]),
-                role: people::RepositoryRole::Owned,
+                role: forge_top::Role::Owned,
                 landing: Box::from(&b"main"[..]),
                 ci: true,
                 checks: Box::new([]),
             },
-        },
+            0,
+        )
+        .expect("forge adoption shape"),
     });
     for _ in 0..100 {
         world.tick();
@@ -2188,7 +2276,7 @@ fn a_saved_repository_tag_becomes_a_concrete_checkout_in_the_next_attempt() {
         }
     }
     assert!(
-        matches!(world.adopted.get(1), Some(people::Outcome::RepositoryAdopted { .. })),
+        matches!(world.adopted.get(1), Some(people::Outcome::Adopted { .. })),
         "second repository adopted: {:?}",
         world.adopted
     );

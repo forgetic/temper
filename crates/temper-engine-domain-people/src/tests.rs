@@ -93,6 +93,27 @@ fn identity(provider: u16, subject: u64) -> Identity {
 }
 
 #[test]
+fn an_owner_routes_a_connector_resource_adoption_once_by_its_key() {
+    let mut test = Test::new(LIMITS);
+    test.signin(1, 10, identity(0, 1));
+    test.send(Event::Roles { project: 1, holdings: Box::new([Holding { person: 1, role: Role::Owner }]) });
+    let ask = Ask::Adopt {
+        project: 1,
+        adoption: Adoption {
+            resource: ResourceName { connector: 7, path: Box::new([b"resource".as_slice().into()]) },
+            role: ResourceRole::Context,
+            options: Box::new([b"read".as_slice().into()]),
+        },
+    };
+    let request = route(&test.request(10, 1, ask.clone()));
+    assert_eq!(
+        reply(&test.send(Event::Decided { request, outcome: Outcome::Adopted { project: 1 } })),
+        Reply::Outcome(Outcome::Adopted { project: 1 })
+    );
+    assert_eq!(reply(&test.request(10, 1, ask)), Reply::Outcome(Outcome::Adopted { project: 1 }));
+}
+
+#[test]
 fn owner_makes_a_service_which_can_request_work_but_cannot_start_a_chat() {
     let mut test = Test::new(LIMITS);
     test.signin(1, 10, identity(0, 1));

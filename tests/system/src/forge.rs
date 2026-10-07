@@ -49,7 +49,7 @@ impl World {
         with_change: bool,
         silent_ci: bool,
         passes: u32,
-        approval: Option<people::Freshness>,
+        approval: Option<engine::Freshness>,
     ) -> Self {
         let mut limits = walking::limits();
         limits.people.people = 4;
@@ -146,10 +146,11 @@ impl World {
             };
             rules.ceiling.grants.clone_from(&grants);
             if let Some(freshness) = approval {
-                let landing = Box::new([people::LandingRule {
+                let landing = Box::new([engine::LandingRule {
                     connector: 0,
                     kind: 4,
-                    pattern: people::Pattern {
+                    enforce: true,
+                    pattern: authority::Pattern {
                         segments: Box::new([
                             Box::from(&b"forge"[..]),
                             Box::from(&b"forge.example"[..]),
@@ -157,12 +158,12 @@ impl World {
                             Box::from(&b"repo"[..]),
                             Box::from(&b"branch"[..]),
                         ]),
-                        last: people::Last::Exact(Box::from(&b"main"[..])),
+                        last: authority::Last::Exact(Box::from(&b"main"[..])),
                     },
                     ci: true,
                     up_to_date: true,
                     gates: Box::new([]),
-                    approvals: Box::new([people::Approval { role: 2, people: 1, freshness }]),
+                    approvals: Box::new([engine::Approval { role: 2, people: 1, freshness }]),
                 }]);
                 config.landing.deployment = landing.clone();
                 assert!(config.landing.projects.insert(1, landing).is_ok());
@@ -322,7 +323,7 @@ impl World {
                     Delivery::Assigned { assignment, .. } => self.assigned.push(assignment),
                     Delivery::CallAnswer { answer, .. } => self.answers.push(answer),
                     Delivery::WebReply { reply: people::Reply::Outcome(outcome), .. }
-                        if matches!(outcome, people::Outcome::RepositoryAdopted { .. }) =>
+                        if matches!(outcome, people::Outcome::Adopted { .. }) =>
                     {
                         self.adopted.push(outcome);
                     }
@@ -421,25 +422,29 @@ impl World {
             reply_to: ReplyTo::new(Token::new(91)),
             sign_in: self.signed_in.expect("signed in"),
             key: [91; 16],
-            ask: people::Ask::AdoptRepository {
-                project: 1,
-                adoption: people::Adoption {
+            ask: engine::adopt_repository_ask(
+                forge_top::Adoption {
+                    project: 1,
                     home: true,
-                    forge: forge_world::REPO.forge,
-                    repository: forge_world::REPO.repository,
+                    provider: client::api::Repository {
+                        forge: forge_world::REPO.forge,
+                        repository: forge_world::REPO.repository,
+                    },
                     host: Box::from(&b"forge.example"[..]),
                     owner: Box::from(&b"org"[..]),
                     name: Box::from(&b"repo"[..]),
                     prefix: Box::from(&b"temper/"[..]),
-                    role: people::RepositoryRole::Owned,
+                    role: forge_top::Role::Owned,
                     landing: Box::from(&b"main"[..]),
                     ci: true,
                     checks: Box::new([]),
                 },
-            },
+                0,
+            )
+            .expect("forge adoption shape"),
         });
         self.until(Until::Adopted);
-        assert!(matches!(self.adopted.as_slice(), [people::Outcome::RepositoryAdopted { .. }]));
+        assert!(matches!(self.adopted.as_slice(), [people::Outcome::Adopted { .. }]));
     }
 }
 
