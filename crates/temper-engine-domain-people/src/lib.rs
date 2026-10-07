@@ -57,5 +57,6 @@ pub use domain::{Domain, fire, max_out, step};
 pub use facts::Fact;
 pub use limits::{Limits, worst_case};
 pub use policy_value::{
-    Approval, Freshness, Gate, LandingRule, PolicyChange, PolicyRole, PolicyValue, policy_bytes, policy_change_bytes,
+    Approval, Freshness, Gate, LandingRule, PolicyChange, PolicyRole, PolicyValue, landing_rules_bytes, policy_bytes,
+    policy_change_bytes,
 };

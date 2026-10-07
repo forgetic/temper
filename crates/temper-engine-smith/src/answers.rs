@@ -293,13 +293,7 @@ fn finding_text(text: &mut Text, finding: temper_engine_domain_authority::Findin
         Finding::Unpermitted => text.add(b"request not permitted"),
         Finding::Undecidable => text.add(b"proposal decision not permitted"),
         Finding::PeriodSpend => text.add(b"period spend ceiling"),
-        Finding::LandingMissing => text.add(b"landing facts missing"),
-        Finding::LandingPin => text.add(b"landing head changed"),
-        Finding::Ci { .. } => text.add(b"CI not passed"),
-        Finding::Behind { .. } => text.add(b"branch behind base"),
-        Finding::Gate { .. } => text.add(b"landing gate"),
-        Finding::Approval { .. } => text.add(b"approval"),
-        Finding::ReviewFailed { .. } => text.add(b"review requested changes"),
+        Finding::Unguarded { .. } => text.add(b"required guard unavailable"),
     }
 }
 

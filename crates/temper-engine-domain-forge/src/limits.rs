@@ -1,5 +1,5 @@
 //! Bounded connector top state (domain/engine.md, section 13).
-use crate::{BranchHead, Hold, Key, Name, PullState, Repository, Stored, Subscriber, Topic};
+use crate::{BranchHead, Criterion, Hold, Key, Name, PullState, Repository, Stored, Subscriber, Topic};
 use core::mem::size_of;
 use skein_lib::{Map, Queue};
 use temper_engine_domain_forge_client as client;
@@ -22,6 +22,10 @@ pub struct Limits {
     pub adoptions: u32,
     pub collaborators: u32,
     pub landings: u32,
+    /// Project judge tables retained beside committed policy.
+    pub judge_projects: u32,
+    /// Criteria in each deployment or project judge table.
+    pub judge_criteria: u32,
     /// Connector brief sections gathering concurrently.
     pub brief_sections: u32,
     /// Maximum bytes retained for one gathered brief section.
@@ -64,6 +68,9 @@ pub fn worst_case(l: &Limits) -> Option<u64> {
     let subscribers = u64::from(l.subscriptions)
         .checked_mul(u64::from(l.paths_per_subscription))?
         .checked_mul(u64::from(l.name_bytes))?;
+    let criteria = u64::from(l.judge_criteria).checked_mul(u64::try_from(size_of::<Criterion>()).ok()?)?;
+    let judges = Map::<u32, Box<[Criterion]>>::worst_case(l.judge_projects)?
+        .checked_add(criteria.checked_mul(u64::from(l.judge_projects).checked_add(1)?)?)?;
     client::worst_case(&l.client)?
         .checked_add(Map::<client::api::Repository, Repository>::worst_case(l.repositories)?)?
         .checked_add(
@@ -121,7 +128,8 @@ pub fn worst_case(l: &Limits) -> Option<u64> {
         .checked_add(Queue::<Key>::worst_case(l.output)?)?
         .checked_add(Queue::<client::Fact>::worst_case(l.facts)?)?
         .checked_add(names)?
-        .checked_add(subscribers)
+        .checked_add(subscribers)?
+        .checked_add(judges)
 }
 
 use alloc::boxed::Box;

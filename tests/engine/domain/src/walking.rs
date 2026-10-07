@@ -159,12 +159,6 @@ fn authority_limits() -> authority::Limits {
         batch: 1,
         accounts: 1,
         writes: 1,
-        landing_rules: 1,
-        gates: 1,
-        approvals: 1,
-        heads: 1,
-        verdicts: 1,
-        reviews: 1,
     }
 }
 
@@ -189,7 +183,6 @@ pub fn config(seed: u64) -> engine::Config {
         maximum_run_spend: 100,
         implies: authority::Implies::new(Box::new([]), 0).expect("empty implication configuration"),
         requirements: Box::new([]),
-        landing: Box::new([]),
     };
     let mut domain = authority::Domain::new(rules, authority_limits()).expect("valid authority configuration");
     let policy = authority::Policy {
@@ -204,7 +197,6 @@ pub fn config(seed: u64) -> engine::Config {
             decides: authority::Proposals::ALL,
         }]),
         requirements: Box::new([]),
-        landing: Box::new([]),
     };
     let mut out = Queue::with_capacity(authority::POLICY_MAX_OUT);
     authority::step(&mut domain, authority::Event::Policy { project: 1, policy }, &mut out);
@@ -217,6 +209,7 @@ pub fn config(seed: u64) -> engine::Config {
         seed,
         owners: Box::new([people::InitialOwner { project: 1, identity: people::IdentityKey { forge: 1, user: 7 } }]),
         authority: domain,
+        landing: engine::LandingPolicy { deployment: Box::new([]), projects: skein_lib::Map::with_capacity(1) },
         charter: 1,
         run: engine::RunPolicy {
             instructions: b"Complete the task within its authority.".as_slice().into(),

@@ -4,7 +4,7 @@ use super::{
     CallAnswer, CallKey, Decision, Delivery, Domain, Env, Family, ForgeRepository, ForgeStart, ForgeWorkspace, Id, Key,
     Limits, List, ProcedureAction, Queue, Record, ReplyTo, RoutedCall, Token, Work, Write, authority,
     authority_numbers, authority_value, decide_call, emit, escalation, forge, forge_change, forge_client, forge_issues,
-    people, procedure_step, save, tasks,
+    people, policy_translate, procedure_step, save, tasks,
 };
 use alloc::boxed::Box;
 use jig_core_brief as brief;
@@ -346,8 +346,8 @@ pub(super) fn effect_call(
         &authority::EffectAsk {
             project: context.project,
             authority: authority_value(&context.authority),
-            effect: authority::Effect { connector: 1, kind, name, state },
-            landing: None,
+            effect: authority::Effect { connector: 1, kind, name, state, guards: Box::new([]) },
+            now: env.wall,
         },
         &[],
         &mut findings,
@@ -445,7 +445,13 @@ pub(super) fn read_call(
                     project: context.project,
                     authority: authority_value(&context.authority),
                     family: authority::Tools(1),
-                    call: authority::Call::Read(authority::Effect { connector: 1, kind: 1, name, state: [0; 32] }),
+                    call: authority::Call::Read(authority::Effect {
+                        connector: 1,
+                        kind: 1,
+                        name,
+                        state: [0; 32],
+                        guards: Box::new([]),
+                    }),
                 },
                 &mut findings,
             ) == authority::Answer::Allow
@@ -630,8 +636,8 @@ pub(super) fn project_goal(domain: &mut Domain, env: &Env<Limits>, goal: &tasks:
         &authority::EffectAsk {
             project: goal.project,
             authority: authority_value(&goal.authority),
-            effect: authority::Effect { connector: 1, kind: 8, name, state: [0; 32] },
-            landing: None,
+            effect: authority::Effect { connector: 1, kind: 8, name, state: [0; 32], guards: Box::new([]) },
+            now: env.wall,
         },
         &[],
         &mut findings,
@@ -770,7 +776,7 @@ fn may_push(
             wall: env.wall,
             accounts: Box::new([domain.accounts.usable(domain.config.account)]),
             writes: Box::new([authority::Write {
-                effect: authority::Effect { connector: 1, kind: 2, name, state: [0; 32] },
+                effect: authority::Effect { connector: 1, kind: 2, name, state: [0; 32], guards: Box::new([]) },
                 held: authority::Writer::Task,
             }]),
         },
@@ -945,6 +951,7 @@ pub(super) fn run_workspace(
                         kind: 2,
                         name: resource_name(repository, &name.what, env.limits.authority.segments)?,
                         state: [0; 32],
+                        guards: Box::new([]),
                     },
                     held,
                 })
@@ -992,12 +999,17 @@ fn configured_gates(
     let what = branch_what(base, env.limits.forge.name_bytes)?;
     let name = resource_name(repository, &what, env.limits.authority.segments)?;
     let mut gates: List<forge_change::Gate> = List::with_capacity(env.limits.forge.change_policy.gates);
-    let policy = domain.config.authority.policy(repository.project)?;
-    for rules in [&domain.config.authority.rules().landing, &policy.landing] {
-        for rule in rules.as_ref() {
+    let project = domain.config.landing.projects.get(&repository.project);
+    let empty: &[people::LandingRule] = &[];
+    let project_rules = match project {
+        Some(rules) => rules.as_ref(),
+        None => empty,
+    };
+    for rules in [&domain.config.landing.deployment[..], project_rules] {
+        for rule in rules {
             if rule.connector != repository.provider.forge
                 || rule.kind != 4
-                || !authority::pattern_covers(&rule.pattern, &name)
+                || !authority::pattern_covers(&policy_translate::pattern_to_authority(rule.pattern.clone()), &name)
             {
                 continue;
             }
@@ -1021,8 +1033,8 @@ fn configured_gates(
                             forge_change::Freshness::Exact
                         } else {
                             match gate.freshness {
-                                authority::Freshness::Exact => forge_change::Freshness::Exact,
-                                authority::Freshness::Clean => forge_change::Freshness::Clean,
+                                people::Freshness::Exact => forge_change::Freshness::Exact,
+                                people::Freshness::Clean => forge_change::Freshness::Clean,
                             }
                         },
                         eager: false,
@@ -1055,62 +1067,13 @@ fn configured_gates(
     Some(gates.into_boxed())
 }
 
-fn landing_status(value: forge_change::Status) -> authority::Status {
-    match value {
-        forge_change::Status::Unknown => authority::Status::Unknown,
-        forge_change::Status::Pending => authority::Status::Pending,
-        forge_change::Status::Passed => authority::Status::Passed,
-        forge_change::Status::Failed => authority::Status::Failed,
-    }
-}
-
-fn landing_freshness(value: forge_change::Freshness) -> authority::Freshness {
-    match value {
-        forge_change::Freshness::Exact => authority::Freshness::Exact,
-        forge_change::Freshness::Clean => authority::Freshness::Clean,
-    }
-}
-
-fn landing_snapshot(
+fn landing_reviewers(
     domain: &Domain,
     env: &Env<Limits>,
     row: &forge::ChangeRow,
     evidence: &forge::ChangeEvidence,
-) -> Option<authority::Landing> {
-    if !evidence.reviews_complete {
-        return None;
-    }
-    let head = evidence.head?;
-    let repository = domain.forge.repository(row.repository)?;
-    let mut checks = List::with_capacity(env.limits.authority.gates);
-    if !repository.ci {
-        for number in &repository.checks {
-            checks
-                .push(authority::Gate { number: *number, blocking: true, freshness: authority::Freshness::Exact })
-                .ok()?;
-        }
-    }
-    let mut gates = List::with_capacity(env.limits.authority.gates);
-    for gate in &row.change.gates {
-        gates
-            .push(authority::Gate {
-                number: u32::try_from(gate.number).ok()?,
-                blocking: gate.blocking,
-                freshness: landing_freshness(gate.freshness),
-            })
-            .ok()?;
-    }
-    let mut verdicts = List::with_capacity(env.limits.authority.verdicts);
-    for report in &evidence.gates {
-        verdicts
-            .push(authority::Verdict {
-                gate: u32::try_from(report.number).ok()?,
-                head: report.head,
-                status: landing_status(report.status),
-            })
-            .ok()?;
-    }
-    let mut reviews = List::with_capacity(env.limits.authority.reviews);
+) -> Option<Box<[forge::Reviewer]>> {
+    let mut reviews = List::with_capacity(env.limits.forge.client.inbox);
     for review in &evidence.reviews {
         let mut superseded = false;
         for other in &evidence.reviews {
@@ -1129,27 +1092,16 @@ fn landing_snapshot(
         ) else {
             continue;
         };
-        let status = match review.verdict {
-            forge_client::api::Verdict::Approve => authority::Status::Passed,
-            forge_client::api::Verdict::RequestChanges => authority::Status::Failed,
-            forge_client::api::Verdict::Comment => authority::Status::Unknown,
-        };
         reviews
-            .push(authority::Review { person, role: escalation::role_number(role), head: review.commit, status })
+            .push(forge::Reviewer {
+                person,
+                role: escalation::role_number(role),
+                head: review.commit,
+                verdict: review.verdict,
+            })
             .ok()?;
     }
-    Some(authority::Landing {
-        head,
-        tip: evidence.base_tip,
-        contains_tip: landing_status(evidence.contains_base),
-        ci: authority::Ci { head, status: landing_status(evidence.ci) },
-        has_ci: repository.ci,
-        checks: checks.into_boxed(),
-        clean: row.change.clean.clone(),
-        gates: gates.into_boxed(),
-        verdicts: verdicts.into_boxed(),
-        reviews: reviews.into_boxed(),
-    })
+    Some(reviews.into_boxed())
 }
 
 fn check_change_effect(
@@ -1166,29 +1118,65 @@ fn check_change_effect(
         return authority::Answer::Refuse;
     }
     let pull_what = pull_what(row.pull);
-    let (kind, what, state, landing) = match effect {
+    let (kind, what, state) = match effect {
         forge_change::Effect::Open => {
-            (3, branch_what(&row.branch, env.limits.forge.name_bytes), evidence.head.unwrap_or([0; 32]), None)
+            (3, branch_what(&row.branch, env.limits.forge.name_bytes), evidence.head.unwrap_or([0; 32]))
         }
-        forge_change::Effect::CreateBranch { head } => {
-            (9, branch_what(&row.branch, env.limits.forge.name_bytes), head, None)
-        }
+        forge_change::Effect::CreateBranch { head } => (9, branch_what(&row.branch, env.limits.forge.name_bytes), head),
         forge_change::Effect::Reopen | forge_change::Effect::Retarget => {
-            (3, pull_what, evidence.head.unwrap_or([0; 32]), None)
+            (3, pull_what, evidence.head.unwrap_or([0; 32]))
         }
-        forge_change::Effect::Update { head, .. } => {
-            (2, branch_what(&row.branch, env.limits.forge.name_bytes), head, None)
-        }
-        forge_change::Effect::Merge { head, .. } => {
-            (4, branch_what(&row.base, env.limits.forge.name_bytes), head, landing_snapshot(domain, env, row, evidence))
-        }
+        forge_change::Effect::Update { head, .. } => (2, branch_what(&row.branch, env.limits.forge.name_bytes), head),
+        forge_change::Effect::Merge { head, .. } => (4, branch_what(&row.base, env.limits.forge.name_bytes), head),
     };
     let Some(what) = what else { return authority::Answer::Refuse };
     let Some(name) = resource_name(repository, &what, env.limits.authority.segments) else {
         return authority::Answer::Refuse;
     };
-    if kind == 4 && landing.is_none() {
-        return authority::Answer::Wait;
+    let mut effect =
+        authority::Effect { connector: repository.provider.forge, kind, name, state, guards: Box::new([]) };
+    let Some(judges) = authority::needed_judges(&domain.config.authority, context.project, &effect) else {
+        return authority::Answer::Refuse;
+    };
+    let mut guards = List::with_capacity(env.limits.authority.facts);
+    if kind == 4 {
+        for judge in &judges {
+            if judge.connector == repository.provider.forge
+                && domain.forge.guards_landing(context.project, judge.requirement, judge.parameters)
+                && guards.push(*judge).is_err()
+            {
+                return authority::Answer::Refuse;
+            }
+        }
+    }
+    effect.guards = guards.into_boxed();
+    let Some(reviewers) = landing_reviewers(domain, env, row, evidence) else {
+        return authority::Answer::Refuse;
+    };
+    let mut given = List::with_capacity(env.limits.authority.facts);
+    for judge in &judges {
+        if judge.connector != repository.provider.forge {
+            continue;
+        }
+        let Some(verdict) = domain.forge.judge_landing(
+            context.project,
+            judge.requirement,
+            judge.parameters,
+            task,
+            state,
+            evidence,
+            &reviewers,
+        ) else {
+            continue;
+        };
+        let verdict = match verdict {
+            forge::JudgeVerdict::Met => authority::Verdict::Met,
+            forge::JudgeVerdict::Wait => authority::Verdict::Wait,
+            forge::JudgeVerdict::Refuse => authority::Verdict::Refuse,
+        };
+        if given.push(authority::Given { judge: *judge, verdict, at: env.wall, state }).is_err() {
+            return authority::Answer::Refuse;
+        }
     }
     let mut findings =
         Queue::with_capacity(authority::max_out(domain.config.authority.limits()).expect("authority findings"));
@@ -1197,10 +1185,10 @@ fn check_change_effect(
         &authority::EffectAsk {
             project: context.project,
             authority: authority_value(&context.authority),
-            effect: authority::Effect { connector: 1, kind, name, state },
-            landing,
+            effect,
+            now: env.wall,
         },
-        &[],
+        given.as_slice(),
         &mut findings,
     )
 }

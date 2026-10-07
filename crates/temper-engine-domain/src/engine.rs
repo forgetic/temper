@@ -122,6 +122,8 @@ pub struct Config {
     pub owners: Box<[people::InitialOwner]>,
     /// Validated deployment and project policy; no duplicated policy values.
     pub authority: authority::Domain,
+    /// Forge landing requirements and their connector-owned judge parameters.
+    pub landing: LandingPolicy,
     /// Charter selected for chats; admitted by tasks as the configured executor.
     pub charter: u32,
     /// Smith-neutral run policy selected for this charter. The root owns the
@@ -149,6 +151,13 @@ pub struct Config {
     pub account_valid: Option<skein_lib::Duration>,
     /// Forge writer identities and this deployment's branch namespace.
     pub forge: forge_client::Config,
+}
+
+/// Typed forge landing policy retained by the application for policy snapshots.
+#[derive(Debug)]
+pub struct LandingPolicy {
+    pub deployment: Box<[people::LandingRule]>,
+    pub projects: Map<u32, Box<[people::LandingRule]>>,
 }
 
 /// One configured model and its deployment-unit prices (domain/agent.md, 4.6).
@@ -941,6 +950,23 @@ impl Domain {
             "configured task transcript bound fits the root's owned-byte limit"
         );
         assert!(*config.authority.limits() == limits.authority, "root prices its exact authority limits");
+        assert!(
+            limits.forge.judge_projects >= limits.authority.projects
+                && limits.forge.judge_criteria >= limits.authority.requirements,
+            "forge judge table covers authority policy bounds"
+        );
+        assert!(
+            config.landing.projects.capacity() <= limits.authority.projects,
+            "typed landing project table fits the policy bound"
+        );
+        let landing_bytes = |rules: &[people::LandingRule]| match people::landing_rules_bytes(rules) {
+            Some(bytes) => bytes <= u64::from(limits.journal.transcript_bytes),
+            None => false,
+        };
+        assert!(landing_bytes(&config.landing.deployment), "deployment landing policy fits owned-byte bound");
+        for (_, rules) in &config.landing.projects {
+            assert!(landing_bytes(rules), "project landing policy fits owned-byte bound");
+        }
         assert!(authority_within(&config.chat_authority, limits), "chat authority shape bounded before copying");
         let mut projects = List::with_capacity(limits.people.projects);
         for owner in &config.owners {
@@ -965,6 +991,43 @@ impl Domain {
         let owners = core::mem::replace(&mut config.owners, Box::new([]));
         let tasks = tasks::Domain::new(&limits.tasks, config.seed, Box::new([config.charter]));
         let people = people::Domain::new(&limits.people, owners);
+        let mut forge = forge::Domain::new(
+            &limits.forge,
+            config.seed,
+            core::mem::replace(
+                &mut config.forge,
+                forge_client::Config { namespace: Box::new([]), writers: Box::new([]) },
+            ),
+        )
+        .expect("valid forge configuration");
+        let built = policy_translate::build_landing(&config.landing.deployment, false, limits.authority.requirements)
+            .expect("deployment landing requirements bounded");
+        assert!(
+            config.authority.add_configured_requirements(&built.requirements),
+            "deployment landing requirements fit authority configuration"
+        );
+        assert!(forge.deployment_judges(built.criteria), "deployment judge table bounded");
+        for (&project, rules) in &config.landing.projects {
+            let built = policy_translate::build_landing(rules, true, limits.authority.requirements)
+                .expect("project landing requirements bounded");
+            let mut policy = config.authority.policy(project).expect("landing project has a policy").clone();
+            assert!(
+                policy_translate::landing_roles(&policy, &config.landing.deployment),
+                "deployment landing roles configured"
+            );
+            assert!(policy_translate::landing_roles(&policy, rules), "project landing roles configured");
+            let combined = policy_translate::combine_requirements(
+                &policy.requirements,
+                &built.requirements,
+                limits.authority.requirements,
+            )
+            .expect("project landing requirements fit authority policy");
+            policy.requirements = combined;
+            let mut facts = Queue::with_capacity(authority::POLICY_MAX_OUT);
+            authority::step(&mut config.authority, authority::Event::Policy { project, policy }, &mut facts);
+            assert_eq!(facts.pop(), Some(authority::PolicyFact::Changed { project }), "landing policy configured");
+            assert!(forge.project_judges(project, built.criteria), "project judge table bounded");
+        }
         Domain {
             journal: Journal::new(&root_journal_limits(limits)),
             counters: Counters::bootstrap(config.deployment),
@@ -987,15 +1050,7 @@ impl Domain {
             ),
             accounts: accounts::Domain::new(&limits.accounts),
             views: views::Domain::new(&limits.views),
-            forge: forge::Domain::new(
-                &limits.forge,
-                config.seed,
-                core::mem::replace(
-                    &mut config.forge,
-                    forge_client::Config { namespace: Box::new([]), writers: Box::new([]) },
-                ),
-            )
-            .expect("valid forge configuration"),
+            forge,
             forge_keys: Map::with_capacity(forge_route::rows(limits).expect("forge row capacity")),
             adoption_restore: Map::with_capacity(limits.forge.adoptions),
             forge_subscribing: Map::with_capacity(limits.fleet.calls),
@@ -3000,16 +3055,10 @@ fn activate(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, tas
                     | authority::Finding::Scope { .. }
                     | authority::Finding::Required { .. }
                     | authority::Finding::Failed { .. }
+                    | authority::Finding::Unguarded { .. }
                     | authority::Finding::Unpermitted
                     | authority::Finding::Undecidable
-                    | authority::Finding::PeriodSpend
-                    | authority::Finding::LandingMissing
-                    | authority::Finding::LandingPin
-                    | authority::Finding::Ci { .. }
-                    | authority::Finding::Behind { .. }
-                    | authority::Finding::Gate { .. }
-                    | authority::Finding::Approval { .. }
-                    | authority::Finding::ReviewFailed { .. } => {
+                    | authority::Finding::PeriodSpend => {
                         if hold.is_none() {
                             hold = Some(tasks::Hold::Effects);
                         }
@@ -6479,6 +6528,9 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     let account_bytes = accounts::worst_case(&limits.accounts)?;
     let view_bytes = views::worst_case(&limits.views)?;
     let forge_bytes = forge::worst_case(&limits.forge)?;
+    let landing_bytes = Map::<u32, Box<[people::LandingRule]>>::worst_case(limits.authority.projects)?.checked_add(
+        u64::from(limits.authority.projects).checked_add(1)?.checked_mul(u64::from(limits.journal.transcript_bytes))?,
+    )?;
     let load_bytes = loads::worst_case(&limits.loads)?;
     let routes = route_bound(limits)?;
     let tool_bytes = u64::from(limits.tasks.batch).checked_mul(row_bound(limits)?)?;
@@ -6541,6 +6593,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         load_bytes,
         view_bytes,
         forge_bytes,
+        landing_bytes,
     ] {
         bytes = bytes.checked_add(child)?;
     }

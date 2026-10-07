@@ -73,7 +73,7 @@ impl World {
         with_change: bool,
         silent_ci: bool,
         passes: u32,
-        approval: Option<authority::Freshness>,
+        approval: Option<people::Freshness>,
         agent_gate: bool,
     ) -> Self {
         let mut limits = walking::limits();
@@ -83,8 +83,10 @@ impl World {
         let mut config = walking::config(71);
         if approval.is_some() || agent_gate {
             limits.authority.roles = 3;
-            limits.authority.reviews = 4;
-            limits.authority.heads = 4;
+        }
+        if with_change {
+            limits.authority.requirements = 8;
+            limits.authority.facts = 8;
         }
         if with_change {
             limits.brief.gather = Duration::from_secs(5);
@@ -162,10 +164,10 @@ impl World {
             };
             rules.ceiling.grants.clone_from(&grants);
             if approval.is_some() || agent_gate {
-                rules.landing = Box::new([authority::LandingRule {
+                let landing: Box<[people::LandingRule]> = Box::new([people::LandingRule {
                     connector: 1,
                     kind: 4,
-                    pattern: authority::Pattern {
+                    pattern: people::Pattern {
                         segments: Box::new([
                             Box::from(&b"forge"[..]),
                             Box::from(&b"forge.example"[..]),
@@ -173,24 +175,22 @@ impl World {
                             Box::from(&b"repo"[..]),
                             Box::from(&b"branch"[..]),
                         ]),
-                        last: authority::Last::Exact(Box::from(&b"main"[..])),
+                        last: people::Last::Exact(Box::from(&b"main"[..])),
                     },
                     ci: true,
                     up_to_date: true,
                     gates: if agent_gate {
-                        Box::new([authority::Gate {
-                            number: 1,
-                            blocking: true,
-                            freshness: authority::Freshness::Exact,
-                        }])
+                        Box::new([people::Gate { number: 1, blocking: true, freshness: people::Freshness::Exact }])
                     } else {
                         Box::new([])
                     },
                     approvals: match approval {
-                        Some(freshness) => Box::new([authority::Approval { role: 2, people: 1, freshness }]),
+                        Some(freshness) => Box::new([people::Approval { role: 2, people: 1, freshness }]),
                         None => Box::new([]),
                     },
                 }]);
+                config.landing.deployment.clone_from(&landing);
+                assert!(config.landing.projects.insert(1, landing).is_ok());
             }
             if with_change {
                 rules.ceiling.delegation.kinds =
@@ -207,7 +207,6 @@ impl World {
                 let mut member = maintainer.clone();
                 member.number = 2;
                 policy.roles = Box::new([policy.roles[0].clone(), maintainer, member]);
-                policy.landing.clone_from(&rules.landing);
             }
             policy.roles[0].authority.tools = authority::Tools(1);
             policy.roles[0].authority.grants.clone_from(&grants);
@@ -550,7 +549,7 @@ impl World {
 fn change_world(
     silent_ci: bool,
     passes: u32,
-    approval: Option<authority::Freshness>,
+    approval: Option<people::Freshness>,
 ) -> (World, engine::Assignment, engine::Assignment, Box<[u8]>) {
     change_world_with_gate(silent_ci, passes, approval, false)
 }
@@ -558,7 +557,7 @@ fn change_world(
 fn change_world_with_gate(
     silent_ci: bool,
     passes: u32,
-    approval: Option<authority::Freshness>,
+    approval: Option<people::Freshness>,
     agent_gate: bool,
 ) -> (World, engine::Assignment, engine::Assignment, Box<[u8]>) {
     change_world_with_policy(silent_ci, passes, approval, agent_gate, false, false)
@@ -569,7 +568,7 @@ fn change_world_with_gate(
 fn change_world_with_policy(
     silent_ci: bool,
     passes: u32,
-    approval: Option<authority::Freshness>,
+    approval: Option<people::Freshness>,
     agent_gate: bool,
     no_ci: bool,
     owner_gate: bool,
@@ -1593,7 +1592,7 @@ fn a_conflicting_update_is_resolved_from_a_merge_in_progress() {
 #[test]
 #[expect(clippy::too_many_lines, reason = "the story checks both clean-update carryover and a new review after repair")]
 fn an_approval_carries_over_a_clean_update_and_is_asked_again_after_a_repair() {
-    let (mut world, _chat, producer, branch) = change_world(false, 1000, Some(authority::Freshness::Clean));
+    let (mut world, _chat, producer, branch) = change_world(false, 1000, Some(people::Freshness::Clean));
     assert!(matches!(
         world.external(2, raw::Op::Git(raw::Git::Create { branch: branch.clone(), commit: 1 })),
         raw::Answer::Branch(raw::Created::Created)
@@ -1682,7 +1681,7 @@ fn an_approval_carries_over_a_clean_update_and_is_asked_again_after_a_repair() {
         world.store.rows.values().filter(|row| matches!(row, Record::Forge { .. })).collect::<Vec<_>>()
     );
 
-    let (mut world, _chat, producer, branch) = change_world(false, 0, Some(authority::Freshness::Clean));
+    let (mut world, _chat, producer, branch) = change_world(false, 0, Some(people::Freshness::Clean));
     world.external(
         1,
         raw::Op::Write(raw::Write::Status { commit: 1, context: Box::from(&b"build"[..]), state: raw::Check::Passed }),

@@ -118,6 +118,8 @@ pub struct Domain {
     pub(crate) brief_fetches: Map<Token, brief::BriefFetch>,
     pub(crate) brief_pending: Map<Token, held::Pending>,
     pub(crate) brief_held: Map<Token, held::Held>,
+    judges: crate::Judges,
+    judge_criteria: u32,
 }
 
 impl Domain {
@@ -159,7 +161,73 @@ impl Domain {
             brief_fetches: Map::with_capacity(l.brief_sections),
             brief_pending: Map::with_capacity(l.brief_sections),
             brief_held: Map::with_capacity(l.brief_sections),
+            judges: crate::Judges::empty(l.judge_projects),
+            judge_criteria: l.judge_criteria,
         })
+    }
+
+    /// Install deployment criteria before decisions begin.
+    pub fn deployment_judges(&mut self, criteria: Box<[crate::Criterion]>) -> bool {
+        if !self.judge_count_fits(criteria.len()) {
+            return false;
+        }
+        self.judges.deployment = criteria;
+        true
+    }
+
+    /// Replace one project's judge parameters with its committed policy.
+    pub fn project_judges(&mut self, project: u32, criteria: Box<[crate::Criterion]>) -> bool {
+        self.judge_count_fits(criteria.len()) && self.judges.projects.insert(project, criteria).is_ok()
+    }
+
+    fn judge_count_fits(&self, count: usize) -> bool {
+        match u32::try_from(count) {
+            Ok(count) => count <= self.judge_criteria,
+            Err(_) => false,
+        }
+    }
+
+    /// Whether the landing effect's exact-head condition guards this judge.
+    #[must_use]
+    #[expect(clippy::match_like_matches_macro, reason = "the foundation forbids matches in domain steps")]
+    pub fn guards_landing(&self, project: u32, requirement: u16, parameters: u32) -> bool {
+        match (requirement, crate::judge::criterion(&self.judges, project, parameters)) {
+            (1, Some(crate::Criterion::Ci))
+            | (3, Some(crate::Criterion::Gate { .. }))
+            | (4, Some(crate::Criterion::Approval { .. })) => true,
+            _ => false,
+        }
+    }
+
+    /// Judge one forge requirement for the exact head of a change effect.
+    #[must_use]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a judgement names its project, criterion and coherent change evidence"
+    )]
+    pub fn judge_landing(
+        &self,
+        project: u32,
+        requirement: u16,
+        parameters: u32,
+        task: u64,
+        head: client::api::Commit,
+        evidence: &crate::ChangeEvidence,
+        reviewers: &[crate::Reviewer],
+    ) -> Option<crate::JudgeVerdict> {
+        let criterion = crate::judge::criterion(&self.judges, project, parameters)?;
+        let matching = match criterion {
+            crate::Criterion::Ci => requirement == 1,
+            crate::Criterion::UpToDate => requirement == 2,
+            crate::Criterion::Gate { .. } => requirement == 3,
+            crate::Criterion::Approval { .. } => requirement == 4,
+        };
+        if !matching {
+            return None;
+        }
+        let row = self.changes.get(&task)?;
+        let repository = self.repositories.get(&row.repository)?;
+        Some(crate::judge::judge(criterion, repository, head, &row.change.clean, evidence, reviewers))
     }
 
     /// The next child timer, if one is armed.

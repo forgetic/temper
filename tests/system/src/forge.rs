@@ -49,7 +49,7 @@ impl World {
         with_change: bool,
         silent_ci: bool,
         passes: u32,
-        approval: Option<authority::Freshness>,
+        approval: Option<people::Freshness>,
     ) -> Self {
         let mut limits = walking::limits();
         limits.people.people = 4;
@@ -69,8 +69,8 @@ impl World {
         config.resume_bytes = 8192;
         if approval.is_some() {
             limits.authority.roles = 3;
-            limits.authority.reviews = 4;
-            limits.authority.heads = 4;
+            limits.authority.requirements = 8;
+            limits.authority.facts = 8;
         }
         if with_change {
             limits.tasks.tasks = 12;
@@ -143,10 +143,10 @@ impl World {
             };
             rules.ceiling.grants.clone_from(&grants);
             if let Some(freshness) = approval {
-                rules.landing = Box::new([authority::LandingRule {
+                let landing = Box::new([people::LandingRule {
                     connector: 1,
                     kind: 4,
-                    pattern: authority::Pattern {
+                    pattern: people::Pattern {
                         segments: Box::new([
                             Box::from(&b"forge"[..]),
                             Box::from(&b"forge.example"[..]),
@@ -154,13 +154,15 @@ impl World {
                             Box::from(&b"repo"[..]),
                             Box::from(&b"branch"[..]),
                         ]),
-                        last: authority::Last::Exact(Box::from(&b"main"[..])),
+                        last: people::Last::Exact(Box::from(&b"main"[..])),
                     },
                     ci: true,
                     up_to_date: true,
                     gates: Box::new([]),
-                    approvals: Box::new([authority::Approval { role: 2, people: 1, freshness }]),
+                    approvals: Box::new([people::Approval { role: 2, people: 1, freshness }]),
                 }]);
+                config.landing.deployment = landing.clone();
+                assert!(config.landing.projects.insert(1, landing).is_ok());
             }
             if with_change {
                 rules.ceiling.delegation.kinds =
@@ -177,7 +179,6 @@ impl World {
                 let mut member = maintainer.clone();
                 member.number = 2;
                 policy.roles = Box::new([policy.roles[0].clone(), maintainer, member]);
-                policy.landing.clone_from(&rules.landing);
             }
             policy.roles[0].authority.tools = authority::Tools(1);
             policy.roles[0].authority.grants.clone_from(&grants);
