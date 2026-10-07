@@ -1,6 +1,7 @@
 //! A proposed person goal crosses its approval, task, and Smith planning cuts.
 
 use crate::world;
+use jig_core_fleet as fleet;
 use skein_fake_llm_domain::api::{Finish, Line, Script, Turn};
 use skein_lib::{Duration, Queue, ReplyTo, Token};
 use smith_agent_world::Job;
@@ -8,7 +9,6 @@ use smith_domain as smith;
 use smith_domain_run as run;
 use temper_engine_domain::{Delivery, Key, Record, engine};
 use temper_engine_domain_authority as authority;
-use jig_core_fleet as fleet;
 use temper_engine_domain_people as people;
 use temper_engine_domain_tasks as tasks;
 use temper_engine_domain_world::{commits::Store, direct::Driver, walking};
