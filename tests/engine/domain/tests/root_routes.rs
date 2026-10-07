@@ -5,7 +5,7 @@ use std::collections::VecDeque;
 use temper_engine_domain::{Delivery, Key, Record, Write, engine};
 use temper_engine_domain_authority as authority;
 use temper_engine_domain_brief as brief;
-use temper_engine_domain_fleet as fleet;
+use jig_core_fleet as fleet;
 use temper_engine_domain_people as people;
 use temper_engine_domain_tasks as tasks;
 use temper_engine_domain_world::commits::Store;

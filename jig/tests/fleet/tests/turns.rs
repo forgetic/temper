@@ -1,6 +1,6 @@
 use skein_lib::{Duration, Time};
-use temper_engine_fleet_world::turns::{self, Seen, Settings, Turns};
-use temper_world::{Referee, Verdict, assert_replays};
+use jig_fleet_world::turns::{self, Seen, Settings, Turns};
+use skein_world::domain::{Referee, Verdict, assert_replays};
 
 #[test]
 fn turns_survive_reconnect_and_restart_under_commit_pressure() {

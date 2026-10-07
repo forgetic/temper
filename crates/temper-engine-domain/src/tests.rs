@@ -260,7 +260,7 @@ fn counter_and_commit_overflow_cannot_reuse_names() {
 
 #[test]
 fn deep_child_rows_and_arbitrary_internal_payloads_are_refused_before_retention() {
-    use temper_engine_domain_fleet as fleet;
+    use jig_core_fleet as fleet;
     use temper_engine_domain_people as people;
     let limits = crate::JournalLimits {
         commits: 1,

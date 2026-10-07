@@ -4,9 +4,9 @@
 use std::collections::BTreeMap;
 
 use skein_lib::Duration;
-use temper_engine_domain_fleet::Limits;
-use temper_engine_fleet_world::{LIMITS, Settings, Span, Stats, World};
-use temper_world::assert_replays;
+use jig_core_fleet::Limits;
+use jig_fleet_world::{LIMITS, Settings, Span, Stats, World};
+use skein_world::domain::assert_replays;
 
 const ITERATIONS: u32 = 400_000;
 

@@ -1,4 +1,4 @@
-use temper_engine_fleet_world::turns::{self, Settings};
+use jig_fleet_world::turns::{self, Settings};
 
 #[test]
 fn turn_world_sweeps_replay_backpressure_and_fencing() {

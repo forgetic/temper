@@ -28,7 +28,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use skein_lib::Duration;
-use temper_world::{Expectations, Judge};
+use skein_world::domain::{Expectations, Judge};
 
 /// How a worker's run answered, as the referee compares it: its kind and the
 /// nonce that tells one answer from another.

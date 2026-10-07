@@ -4,7 +4,7 @@ use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
 use std::collections::{BTreeMap, VecDeque};
 use temper_engine_domain::{Delivery, Key, Record, engine};
 use temper_engine_domain_authority as authority;
-use temper_engine_domain_fleet as fleet;
+use jig_core_fleet as fleet;
 use temper_engine_domain_forge as forge_top;
 use temper_engine_domain_forge_client as client;
 use temper_engine_domain_people as people;

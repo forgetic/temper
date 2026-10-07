@@ -3,8 +3,8 @@
 //! passes one that keeps them.
 
 use skein_lib::{Duration, Time};
-use temper_engine_fleet_world::referee::{Down, End, Fleet, Kind, Said, Seen};
-use temper_world::{Referee, Verdict};
+use jig_fleet_world::referee::{Down, End, Fleet, Kind, Said, Seen};
+use skein_world::domain::{Referee, Verdict};
 
 fn at(secs: u64) -> Time {
     Time::ZERO.saturating_add(Duration::from_secs(secs))

@@ -94,10 +94,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "jig-core-fleet"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+]
+
+[[package]]
 name = "jig-core-views"
 version = "0.0.0"
 dependencies = [
  "skein-lib",
+]
+
+[[package]]
+name = "jig-fleet-world"
+version = "0.0.0"
+dependencies = [
+ "jig-core-fleet",
+ "skein-lib",
+ "skein-world",
 ]
 
 [[package]]
@@ -314,11 +330,11 @@ name = "temper-engine-domain"
 version = "0.0.0"
 dependencies = [
  "jig-core-accounts",
+ "jig-core-fleet",
  "jig-core-views",
  "skein-lib",
  "temper-engine-domain-authority",
  "temper-engine-domain-brief",
- "temper-engine-domain-fleet",
  "temper-engine-domain-forge",
  "temper-engine-domain-forge-change",
  "temper-engine-domain-forge-client",
@@ -336,13 +352,6 @@ dependencies = [
 
 [[package]]
 name = "temper-engine-domain-brief"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
-]
-
-[[package]]
-name = "temper-engine-domain-fleet"
 version = "0.0.0"
 dependencies = [
  "skein-lib",
@@ -407,6 +416,7 @@ name = "temper-engine-domain-world"
 version = "0.0.0"
 dependencies = [
  "jig-core-accounts",
+ "jig-core-fleet",
  "jig-core-views",
  "skein-lib",
  "smith-domain",
@@ -416,7 +426,6 @@ dependencies = [
  "temper-engine-domain",
  "temper-engine-domain-authority",
  "temper-engine-domain-brief",
- "temper-engine-domain-fleet",
  "temper-engine-domain-forge",
  "temper-engine-domain-forge-change",
  "temper-engine-domain-forge-client",
@@ -426,15 +435,6 @@ dependencies = [
  "temper-engine-people-world",
  "temper-engine-tasks-world",
  "temper-fake-forge-domain",
- "temper-world",
-]
-
-[[package]]
-name = "temper-engine-fleet-world"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-engine-domain-fleet",
  "temper-world",
 ]
 
@@ -542,6 +542,7 @@ dependencies = [
 name = "temper-system-world"
 version = "0.0.0"
 dependencies = [
+ "jig-core-fleet",
  "skein-fake-checkout",
  "skein-fake-llm-domain",
  "skein-lib",
@@ -551,7 +552,6 @@ dependencies = [
  "temper-engine-domain",
  "temper-engine-domain-authority",
  "temper-engine-domain-brief",
- "temper-engine-domain-fleet",
  "temper-engine-domain-forge",
  "temper-engine-domain-forge-change",
  "temper-engine-domain-forge-client",

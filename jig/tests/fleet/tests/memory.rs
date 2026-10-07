@@ -4,10 +4,10 @@
 //! entry point on the way.
 
 use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
-use temper_engine_domain_fleet::{
+use jig_core_fleet::{
     Answer, Bounce, Domain, Event, Hello, Hosted, Limits, Phase, Request, fire, max_out, resume, step, worst_case,
 };
-use temper_world::heap::{self, Meter};
+use skein_world::domain::heap::{self, Meter};
 
 #[global_allocator]
 static HEAP: heap::Counting = heap::Counting;

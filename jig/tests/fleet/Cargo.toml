@@ -1,5 +1,5 @@
 [package]
-name = "temper-engine-fleet-world"
+name = "jig-fleet-world"
 description = "The fleet child domain's world: a simulation with scripted workers, a scripted parent, channels that drop and engine restarts"
 version.workspace = true
 edition.workspace = true
@@ -8,8 +8,8 @@ publish.workspace = true
 
 [dependencies]
 skein-lib.workspace = true
-temper-engine-domain-fleet.workspace = true
-temper-world.workspace = true
+jig-core-fleet.workspace = true
+skein-world.workspace = true
 
 # Ordinary Rust (programming-model.md, 10.2), so not the step crates' lints.
 # tests/clippy.toml bans what would make a run unrepeatable.

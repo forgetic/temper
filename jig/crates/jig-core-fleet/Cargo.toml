@@ -1,5 +1,5 @@
 [package]
-name = "temper-engine-domain-fleet"
+name = "jig-core-fleet"
 description = "Workers and the runs they host: the engine domain's fleet child domain, sans-io"
 version.workspace = true
 edition.workspace = true

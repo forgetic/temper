@@ -9,7 +9,7 @@ use smith_agent_world::{Job, Settings, World as Agent};
 use smith_domain as smith;
 use smith_domain_run as run;
 use temper_engine_domain::{Delivery, engine};
-use temper_engine_domain_fleet as fleet;
+use jig_core_fleet as fleet;
 use temper_engine_domain_people as people;
 use temper_engine_domain_world::{commits::Store, direct::Driver, walking};
 

@@ -36,7 +36,7 @@ pub mod referee;
 mod workers;
 mod world;
 
-pub use temper_world::Span;
+pub use skein_world::domain::Span;
 pub use world::{ENDINGS, LIMITS, Settings, Stats, World};
 
 pub mod turns;

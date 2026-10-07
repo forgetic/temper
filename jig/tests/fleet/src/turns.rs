@@ -6,8 +6,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use skein_lib::{Duration, Env, Queue, ReplyTo, Rng, Time, Token, Wall};
-use temper_engine_domain_fleet::{self as fleet, Answer, Domain, Event, Hello, Hosted, Limits, Phase, Request};
-use temper_world::{Expectations, Judge, Referee};
+use jig_core_fleet::{self as fleet, Answer, Domain, Event, Hello, Hosted, Limits, Phase, Request};
+use skein_world::domain::{Expectations, Judge, Referee};
 
 #[derive(Clone, Copy, Debug)]
 pub enum Seen {

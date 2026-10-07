@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use temper_engine_fleet_world::{ENDINGS, Settings, World};
+use jig_fleet_world::{ENDINGS, Settings, World};
 
 const ITERATIONS: u32 = 400_000;
 

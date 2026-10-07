@@ -129,7 +129,7 @@ pub enum Delivery {
         /// Root-issued `Start`, `TurnKept`, `Acknowledge` or `Cancel` callback. `Start` workstream
         /// bytes are at most journal `transcript_bytes`; other payloads are fixed-size. Fleet
         /// start/cancel consequences route back inside the root.
-        temper_engine_domain_fleet::Event,
+        jig_core_fleet::Event,
     ),
     /// Root to worker: complete bounded assignment after its claim commit.
     Assigned {
@@ -742,8 +742,8 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         )
 }
 
-fn fleet_delivery_within(event: &temper_engine_domain_fleet::Event) -> bool {
-    use temper_engine_domain_fleet::Event;
+fn fleet_delivery_within(event: &jig_core_fleet::Event) -> bool {
+    use jig_core_fleet::Event;
     match event {
         Event::Start { .. } => true,
         Event::TurnKept { .. } | Event::Acknowledge { .. } | Event::Cancel { .. } | Event::Relayed { .. } => true,
