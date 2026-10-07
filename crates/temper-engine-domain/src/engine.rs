@@ -373,8 +373,6 @@ pub struct Call {
 /// be dropped by fleet. Store and refresh variants are terminals, not new calls.
 #[derive(Debug)]
 pub enum Event {
-    /// Owner asks the connector to adopt one existing repository.
-    AdoptForge { reply_to: ReplyTo, sign_in: u64, adoption: forge::Adoption },
     /// One bounded provider call terminal routed to its connector.
     ForgeAnswered { call: Token, cost: u32, result: Result<forge_client::api::Answer, forge_client::api::Error> },
     /// An untrusted provider hint; the connector reads current facts.
@@ -558,8 +556,6 @@ pub enum Event {
 pub enum Request {
     /// One bounded forge API call after the decision it follows.
     Forge { call: Token, repository: forge_client::api::Repository, op: forge_client::api::Op },
-    /// One authenticated adoption terminal after its durable seed.
-    ForgeAdopted { to: ReplyTo, result: Result<forge::Adopted, forge_client::api::Error> },
     /// Live view/watch or expendable trace request routed to the shell.
     View(views::Request),
     /// A watch failed authentication or project standing before views admission.
@@ -796,7 +792,7 @@ pub struct Domain {
     views: views::Domain,
     forge: forge::Domain,
     forge_keys: Map<forge::Key, u64>,
-    forge_adopting: Map<Token, Option<forge::Repository>>,
+    adoption_restore: Map<Token, Option<forge::Repository>>,
     forge_subscribing: Map<Token, forge::Subscriber>,
     forge_unsubscribing: Map<Token, (u64, forge::Topic)>,
     forge_reading: Map<Token, (ReplyTo, CallKey)>,
@@ -902,7 +898,7 @@ impl Domain {
             )
             .expect("valid forge configuration"),
             forge_keys: Map::with_capacity(forge_route::rows(limits).expect("forge row capacity")),
-            forge_adopting: Map::with_capacity(limits.forge.adoptions),
+            adoption_restore: Map::with_capacity(limits.forge.adoptions),
             forge_subscribing: Map::with_capacity(limits.fleet.calls),
             forge_unsubscribing: Map::with_capacity(limits.fleet.calls),
             forge_reading: Map::with_capacity(limits.fleet.calls),
@@ -980,7 +976,7 @@ impl Domain {
             && self.result_pages.is_empty()
             && self.dependency_results.is_empty()
             && self.pending_calls.is_empty()
-            && self.forge_adopting.is_empty()
+            && self.adoption_restore.is_empty()
             && self.forge_subscribing.is_empty()
             && self.forge_unsubscribing.is_empty()
             && self.forge_reading.is_empty()
@@ -1265,31 +1261,6 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
         return;
     }
     match event {
-        Event::AdoptForge { reply_to, sign_in, adoption } => {
-            if !domain.ready() || !admits(domain, &env.limits) {
-                out.push(Request::ForgeAdopted { to: reply_to, result: Err(forge_client::api::Error::Busy) });
-                return;
-            }
-            let allowed = match domain.people.person(sign_in, env.now, env.wall) {
-                Some(person) => domain.people.role(person, adoption.project) == Some(people::Role::Owner),
-                None => false,
-            };
-            if !allowed {
-                out.push(Request::ForgeAdopted { to: reply_to, result: Err(forge_client::api::Error::Forbidden) });
-                return;
-            }
-            let token = reply_to.into_token();
-            if domain.forge_adopting.contains_key(&token) || domain.forge_adopting.len() == env.limits.forge.adoptions {
-                out.push(Request::ForgeAdopted {
-                    to: ReplyTo::new(token),
-                    result: Err(forge_client::api::Error::Busy),
-                });
-                return;
-            }
-            let previous = domain.forge.repository(adoption.provider).cloned();
-            domain.forge_adopting.insert(token, previous).expect("adoption room checked");
-            domain.work.push(Work::Forge(forge::Event::Adopt { reply_to: token, adoption }));
-        }
         Event::ForgeAnswered { call, cost, result } => {
             domain.work.push(Work::Forge(forge::Event::Client(forge_client::Event::Answered { call, cost, result })));
         }
@@ -1717,10 +1688,6 @@ pub fn resume(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) 
                 out.push(Request::Forge { call, repository, op });
                 return;
             }
-            Output::Deliver(Delivery::ForgeAdopted { to, result }) => {
-                out.push(Request::ForgeAdopted { to, result });
-                return;
-            }
             Output::Deliver(Delivery::Fleet(event)) => domain.work.push(Work::Fleet(event)),
             Output::Deliver(Delivery::View(event)) => {
                 view_step(domain, env, *event, out);
@@ -2066,6 +2033,7 @@ fn route_person_priorities(
     }));
 }
 
+#[expect(clippy::too_many_lines, reason = "the keyed people routes each retain an exhaustive typed branch")]
 fn people_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, out: &mut Queue<people::Request>) {
     for _ in 0..out.len() {
         match out.pop().expect("people output count") {
@@ -2075,6 +2043,43 @@ fn people_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decisio
                 emit(decision, &env.limits, Delivery::WebReply { to, sign_in: domain.signing_in, reply });
             }
             people::Request::Route { request, person, project, role, ask } => match ask {
+                people::Ask::AdoptRepository { adoption, .. } => {
+                    let provider =
+                        forge_client::api::Repository { forge: adoption.forge, repository: adoption.repository };
+                    if domain.adoption_restore.len() == env.limits.forge.adoptions {
+                        domain.work.push(Work::People(people::Event::Decided {
+                            request,
+                            outcome: people::Outcome::Refused(people::Refusal::Busy),
+                        }));
+                    } else {
+                        let previous = domain.forge.repository(provider).cloned();
+                        assert!(
+                            domain.adoption_restore.insert(request, previous) == Ok(None),
+                            "one keyed adoption flight"
+                        );
+                        let role = match adoption.role {
+                            people::RepositoryRole::Owned => forge::Role::Owned,
+                            people::RepositoryRole::Fork => forge::Role::Fork,
+                            people::RepositoryRole::Context => forge::Role::Context,
+                        };
+                        domain.work.push(Work::Forge(forge::Event::Adopt {
+                            reply_to: request,
+                            adoption: forge::Adoption {
+                                project,
+                                home: adoption.home,
+                                provider,
+                                host: adoption.host,
+                                owner: adoption.owner,
+                                name: adoption.name,
+                                prefix: adoption.prefix,
+                                role,
+                                landing: adoption.landing,
+                                ci: adoption.ci,
+                                checks: adoption.checks,
+                            },
+                        }));
+                    }
+                }
                 people::Ask::SetGoal { spec, charter, budget, priority, .. } => {
                     goals::start(
                         domain,
@@ -2180,6 +2185,7 @@ fn route_person_task(
         | people::Ask::Prioritise { .. }
         | people::Ask::Amend { .. }
         | people::Ask::SetRoles { .. }
+        | people::Ask::AdoptRepository { .. }
         | people::Ask::ChangePolicy { .. }
         | people::Ask::SetPool { .. }
         | people::Ask::DecideEscalation { .. }
@@ -2210,6 +2216,7 @@ fn route_person_task(
                         | people::Ask::Prioritise { .. }
                         | people::Ask::Amend { .. }
                         | people::Ask::SetRoles { .. }
+                        | people::Ask::AdoptRepository { .. }
                         | people::Ask::ChangePolicy { .. }
                         | people::Ask::SetPool { .. }
                         | people::Ask::DecideEscalation { .. }
@@ -2231,6 +2238,7 @@ fn route_person_task(
                     | people::Ask::Prioritise { .. }
                     | people::Ask::Amend { .. }
                     | people::Ask::SetRoles { .. }
+                    | people::Ask::AdoptRepository { .. }
                     | people::Ask::ChangePolicy { .. }
                     | people::Ask::SetPool { .. }
                     | people::Ask::DecideEscalation { .. }
@@ -2274,6 +2282,7 @@ fn route_person_task(
         | people::Ask::Prioritise { .. }
         | people::Ask::Amend { .. }
         | people::Ask::SetRoles { .. }
+        | people::Ask::AdoptRepository { .. }
         | people::Ask::ChangePolicy { .. }
         | people::Ask::SetPool { .. }
         | people::Ask::DecideEscalation { .. }
@@ -2328,6 +2337,7 @@ fn route_person_control(
         | people::Ask::Prioritise { .. }
         | people::Ask::Amend { .. }
         | people::Ask::SetRoles { .. }
+        | people::Ask::AdoptRepository { .. }
         | people::Ask::ChangePolicy { .. }
         | people::Ask::SetPool { .. }
         | people::Ask::DecideEscalation { .. }
@@ -2367,6 +2377,7 @@ fn route_person_control(
         | people::Ask::Prioritise { .. }
         | people::Ask::Amend { .. }
         | people::Ask::SetRoles { .. }
+        | people::Ask::AdoptRepository { .. }
         | people::Ask::ChangePolicy { .. }
         | people::Ask::SetPool { .. }
         | people::Ask::DecideEscalation { .. }
@@ -2432,6 +2443,7 @@ fn route_person_control(
         | people::Ask::Prioritise { .. }
         | people::Ask::Amend { .. }
         | people::Ask::SetRoles { .. }
+        | people::Ask::AdoptRepository { .. }
         | people::Ask::ChangePolicy { .. }
         | people::Ask::SetPool { .. }
         | people::Ask::DecideEscalation { .. }
@@ -2625,6 +2637,7 @@ fn make_chat(
         people::Ask::DecideEscalation { .. }
         | people::Ask::DecideProposal { .. }
         | people::Ask::SetRoles { .. }
+        | people::Ask::AdoptRepository { .. }
         | people::Ask::ChangePolicy { .. }
         | people::Ask::SetPool { .. }
         | people::Ask::Say { .. }
@@ -6655,7 +6668,6 @@ fn discard_after_stop(domain: &mut Domain, event: Event) {
             assert!(out.is_empty(), "halted waiter emits no delivery");
         }
         Event::StartRecurring { .. }
-        | Event::AdoptForge { .. }
         | Event::ForgeAnswered { .. }
         | Event::ForgeHint { .. }
         | Event::Period { .. }

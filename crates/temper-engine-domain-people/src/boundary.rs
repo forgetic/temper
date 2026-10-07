@@ -111,12 +111,36 @@ pub struct ResultRef {
     pub position: u64,
 }
 
-/// Supported requests grow with the increments that implement them; typed
-/// variants for goals, tasks, inboxes, notes and watches will be added there.
-/// Current typed keyed requests are chat creation, held-chat decisions and
-/// narrow role administration (domain/people.md, section 5.1).
+/// Repository settings an owner asks the forge connector to adopt.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct Adoption {
+    pub home: bool,
+    pub forge: u16,
+    pub repository: u32,
+    pub host: Box<[u8]>,
+    pub owner: Box<[u8]>,
+    pub name: Box<[u8]>,
+    pub prefix: Box<[u8]>,
+    pub role: RepositoryRole,
+    pub landing: Box<[u8]>,
+    pub ci: bool,
+    pub checks: Box<[u32]>,
+}
+
+/// How an adopted repository participates in the project.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum RepositoryRole {
+    Owned,
+    Fork,
+    Context,
+}
+
+/// Authenticated keyed requests admitted by the people child and routed by
+/// the root after role checks (domain/people.md, section 5.1).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Ask {
+    /// Adopt a repository as a durable keyed owner request.
+    AdoptRepository { project: u32, adoption: Adoption },
     /// Start a tracked goal at the requested charter, budget and priority.
     SetGoal { project: u32, spec: Box<[u8]>, charter: u32, budget: u64, priority: u32 },
     /// Hold a live run for this person's decision, cancelling its current claim.
@@ -268,6 +292,8 @@ pub enum Refusal {
 /// nontransient outcomes with the parent's task decision. (domain/people.md, section 5.1).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Outcome {
+    /// Repository adoption and its collaborator seed committed together.
+    RepositoryAdopted { project: u32, forge: u16, repository: u32 },
     /// One tracked goal was durably created within the caller's allotment.
     GoalStarted { task: u64 },
     /// A tracked goal awaits the policy role's budget decision.

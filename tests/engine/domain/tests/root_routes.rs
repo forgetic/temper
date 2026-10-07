@@ -752,7 +752,6 @@ fn durable_start_turn_and_answer_callbacks_survive_full_journal_pressure() {
             | Delivery::InboxView { .. }
             | Delivery::BeginInboxView { .. }
             | Delivery::CallAnswer { .. }
-            | Delivery::ForgeAdopted { .. }
             | Delivery::ForgeCommitted { .. }
             | Delivery::ForgeCall { .. }
             | Delivery::Procedure { .. } => None,
@@ -1224,7 +1223,6 @@ fn assigned(driver: &Driver) -> engine::Assignment {
             | Delivery::InboxView { .. }
             | Delivery::BeginInboxView { .. }
             | Delivery::CallAnswer { .. }
-            | Delivery::ForgeAdopted { .. }
             | Delivery::ForgeCommitted { .. }
             | Delivery::ForgeCall { .. }
             | Delivery::Procedure { .. } => None,
@@ -3492,7 +3490,6 @@ fn coalesced_history_waiters_survive_simultaneous_io_completion_under_full_journ
             | Delivery::InboxView { .. }
             | Delivery::BeginInboxView { .. }
             | Delivery::CallAnswer { .. }
-            | Delivery::ForgeAdopted { .. }
             | Delivery::ForgeCommitted { .. }
             | Delivery::ForgeCall { .. }
             | Delivery::Procedure { .. } => None,
@@ -4080,7 +4077,6 @@ fn assigned_from_last(delivered: &[Delivery]) -> engine::Assignment {
             | Delivery::InboxView { .. }
             | Delivery::BeginInboxView { .. }
             | Delivery::CallAnswer { .. }
-            | Delivery::ForgeAdopted { .. }
             | Delivery::ForgeCommitted { .. }
             | Delivery::ForgeCall { .. }
             | Delivery::Procedure { .. }
@@ -4126,7 +4122,6 @@ fn say(driver: &mut Driver, task: u64, key: u8) -> u64 {
             | Delivery::InboxView { .. }
             | Delivery::BeginInboxView { .. }
             | Delivery::CallAnswer { .. }
-            | Delivery::ForgeAdopted { .. }
             | Delivery::ForgeCommitted { .. }
             | Delivery::ForgeCall { .. }
             | Delivery::Procedure { .. }

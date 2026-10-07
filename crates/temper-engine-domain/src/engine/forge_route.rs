@@ -2207,7 +2207,7 @@ pub(super) fn outputs(
                 }
             }
             forge::Request::Adopted { reply_to, result } => {
-                let previous = domain.forge_adopting.remove(&reply_to).expect("one admitted adoption result");
+                let previous = domain.adoption_restore.remove(&reply_to).expect("one admitted adoption result");
                 match result {
                     Ok(adopted) => {
                         let mut seeds = List::with_capacity(env.limits.forge.collaborators);
@@ -2244,32 +2244,51 @@ pub(super) fn outputs(
                                 repository: adopted.repository.provider,
                                 restore: previous,
                             }));
-                            emit(
-                                decision,
-                                &env.limits,
-                                Delivery::ForgeAdopted {
-                                    to: ReplyTo::new(reply_to),
-                                    result: Err(forge_client::api::Error::Busy),
-                                },
-                            );
+                            domain.work.push(Work::People(people::Event::Decided {
+                                request: reply_to,
+                                outcome: people::Outcome::Refused(people::Refusal::Busy),
+                            }));
                         } else {
                             domain.work.push(Work::People(people::Event::Seed {
                                 project: adopted.repository.project,
                                 collaborators: seeds.into_boxed(),
                             }));
-                            emit(
-                                decision,
-                                &env.limits,
-                                Delivery::ForgeAdopted { to: ReplyTo::new(reply_to), result: Ok(adopted) },
-                            );
+                            domain.work.push(Work::People(people::Event::Decided {
+                                request: reply_to,
+                                outcome: people::Outcome::RepositoryAdopted {
+                                    project: adopted.repository.project,
+                                    forge: adopted.repository.provider.forge,
+                                    repository: adopted.repository.provider.repository,
+                                },
+                            }));
                         }
                     }
                     Err(error) => {
-                        emit(
-                            decision,
-                            &env.limits,
-                            Delivery::ForgeAdopted { to: ReplyTo::new(reply_to), result: Err(error) },
-                        );
+                        let refusal = match error {
+                            forge_client::api::Error::Busy
+                            | forge_client::api::Error::Unavailable
+                            | forge_client::api::Error::Timeout
+                            | forge_client::api::Error::RateLimited { .. } => people::Refusal::Busy,
+                            forge_client::api::Error::TooLarge | forge_client::api::Error::Full => {
+                                people::Refusal::Limit
+                            }
+                            forge_client::api::Error::Forbidden
+                            | forge_client::api::Error::Protected
+                            | forge_client::api::Error::Refused => people::Refusal::Authority,
+                            forge_client::api::Error::Missing
+                            | forge_client::api::Error::MissingJob
+                            | forge_client::api::Error::Empty
+                            | forge_client::api::Error::Exists
+                            | forge_client::api::Error::NothingToMerge
+                            | forge_client::api::Error::Closed
+                            | forge_client::api::Error::Stale
+                            | forge_client::api::Error::Conflict
+                            | forge_client::api::Error::InvalidAnswer => people::Refusal::Unknown,
+                        };
+                        domain.work.push(Work::People(people::Event::Decided {
+                            request: reply_to,
+                            outcome: people::Outcome::Refused(refusal),
+                        }));
                     }
                 }
             }

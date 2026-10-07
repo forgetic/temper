@@ -607,7 +607,7 @@ impl World {
                 engine::Request::CallBusy { .. } => panic!("escalation world sent no calls"),
                 engine::Request::View(_) | engine::Request::WatchRefused { .. } => panic!("unrequested view output"),
                 engine::Request::Stop => panic!("escalation root stopped: {:?}", self.trace),
-                engine::Request::Forge { .. } | engine::Request::ForgeAdopted { .. } => {
+                engine::Request::Forge { .. } => {
                     panic!("escalation story did not adopt forge")
                 }
             }
@@ -729,7 +729,6 @@ impl World {
                 .result(&self.store.rows, person, task, &words)
                 .expect("independent exact final report and funding"),
             Delivery::WebReply { .. }
-            | Delivery::ForgeAdopted { .. }
             | Delivery::ForgeCall { .. }
             | Delivery::InboxPage { .. }
             | Delivery::InboxView { .. }

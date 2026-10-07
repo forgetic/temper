@@ -492,7 +492,7 @@ impl World {
                 }
                 engine::Request::View(_) | engine::Request::WatchRefused { .. } => panic!("unrequested view output"),
                 engine::Request::Stop => panic!("role root stopped: {:?}", self.trace),
-                engine::Request::Forge { .. } | engine::Request::ForgeAdopted { .. } => {
+                engine::Request::Forge { .. } => {
                     panic!("role story did not adopt forge")
                 }
             }

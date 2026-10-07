@@ -623,7 +623,7 @@ impl World {
                 engine::Request::CallBusy { .. } => panic!("walking story sent no calls"),
                 engine::Request::View(_) | engine::Request::WatchRefused { .. } => panic!("unrequested view output"),
                 engine::Request::Stop => panic!("walking story stopped: {:?}", self.trace),
-                engine::Request::Forge { .. } | engine::Request::ForgeAdopted { .. } => {
+                engine::Request::Forge { .. } => {
                     panic!("walking story did not adopt forge")
                 }
             }
@@ -707,7 +707,6 @@ impl World {
                     .expect("committed result reaches person once");
             }
             Delivery::CallAnswer { .. }
-            | Delivery::ForgeAdopted { .. }
             | Delivery::ForgeCall { .. }
             | Delivery::Procedure { .. }
             | Delivery::Reply { .. }

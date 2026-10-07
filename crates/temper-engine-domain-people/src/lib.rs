@@ -3,10 +3,10 @@
 //! task-derived bounded inbox references and each person's result and reply read position.
 //! Knows tasks only by number; the parent checks authority and makes tasks.
 //! `Save`/`Erase` join the parent's decision; the parent holds replies until
-//! durable (domain/engine.md, 5.6). Adoption follows later.
+//! durable (domain/engine.md, 5.6).
 //!
-//! The current boundary supports typed `StartChat`, authenticated escalation decisions, derived inbox references and narrow keyed `SetRoles` administration; adoption,
-//! timed key retention remains a later increment
+//! The boundary admits adoption and other owner requests by key, checks their
+//! project role and retains committed answers for replay after a restart
 //! (domain/people.md, section 5.1). This child never sees forge
 //! credentials, protocol bytes, task internals or authority policy state.
 //! The root supplies authenticated identities and authoritative role changes.
@@ -48,9 +48,9 @@ pub use amendment::{
     WakeRule, amendment_bytes,
 };
 pub use boundary::{
-    Ask, Entry, EntryKind, EscalationChoice, EscalationDecision, Event, Holding, Identity, IdentityKey, InitialOwner,
-    Key, Outcome, PersonResult, ProposalChoice, ProposalDecision, Refusal, Reply, Request, RequestKey, ResultRef, Role,
-    Seed, Stored, Whom,
+    Adoption, Ask, Entry, EntryKind, EscalationChoice, EscalationDecision, Event, Holding, Identity, IdentityKey,
+    InitialOwner, Key, Outcome, PersonResult, ProposalChoice, ProposalDecision, Refusal, Reply, RepositoryRole,
+    Request, RequestKey, ResultRef, Role, Seed, Stored, Whom,
 };
 pub use domain::{Domain, fire, max_out, step};
 pub use facts::Fact;

@@ -46,11 +46,6 @@ pub struct Limits {
 /// resumed by the root and never passed to the protocol as child events.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Delivery {
-    /// Authenticated adoption result after connector and seeded roles commit.
-    ForgeAdopted {
-        to: ReplyTo,
-        result: Result<temper_engine_domain_forge::Adopted, temper_engine_domain_forge_client::api::Error>,
-    },
     /// Release a committed connector entry to its client.
     ForgeCommitted { entry: u64 },
     /// One bounded connector call after all preceding progress commits.
@@ -500,7 +495,6 @@ impl Decision {
             Delivery::CallAnswer { .. }
             | Delivery::ForgeCommitted { .. }
             | Delivery::ForgeCall { .. }
-            | Delivery::ForgeAdopted { .. }
             | Delivery::Procedure { .. }
             | Delivery::Reply { .. }
             | Delivery::AcknowledgeTurn { .. }

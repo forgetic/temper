@@ -23,7 +23,7 @@ struct World {
     fake_env: Env<fake::Config>,
     fake_out: Queue<fake::Request>,
     pending: BTreeMap<Token, client::api::Op>,
-    adopted: Vec<Result<forge_top::Adopted, client::api::Error>>,
+    adopted: Vec<people::Outcome>,
     signed_in: Option<u64>,
     assigned: Vec<engine::Assignment>,
     answers: Vec<temper_engine_domain::CallAnswer>,
@@ -310,13 +310,17 @@ impl World {
                         &mut self.fake_out,
                     );
                 }
-                engine::Request::ForgeAdopted { result, .. } => self.adopted.push(result),
                 engine::Request::Deliver(delivery) => match delivery {
                     Delivery::WebReply { sign_in, reply: people::Reply::SignedIn { .. }, .. } => {
                         self.signed_in = sign_in;
                     }
                     Delivery::Assigned { assignment, .. } => self.assigned.push(assignment),
                     Delivery::CallAnswer { answer, .. } => self.answers.push(answer),
+                    Delivery::WebReply { reply: people::Reply::Outcome(outcome), .. }
+                        if matches!(outcome, people::Outcome::RepositoryAdopted { .. }) =>
+                    {
+                        self.adopted.push(outcome);
+                    }
                     _ => {}
                 },
                 engine::Request::Account(_)
@@ -407,25 +411,29 @@ impl World {
             },
         });
         self.until(Until::SignedIn);
-        self.send(engine::Event::AdoptForge {
+        self.send(engine::Event::Ask {
             reply_to: ReplyTo::new(Token::new(91)),
             sign_in: self.signed_in.expect("signed in"),
-            adoption: forge_top::Adoption {
+            key: [91; 16],
+            ask: people::Ask::AdoptRepository {
                 project: 1,
-                home: true,
-                provider: forge_world::REPO,
-                host: Box::from(&b"forge.example"[..]),
-                owner: Box::from(&b"org"[..]),
-                name: Box::from(&b"repo"[..]),
-                prefix: Box::from(&b"temper/"[..]),
-                role: forge_top::Role::Owned,
-                landing: Box::from(&b"main"[..]),
-                ci: true,
-                checks: Box::new([]),
+                adoption: people::Adoption {
+                    home: true,
+                    forge: forge_world::REPO.forge,
+                    repository: forge_world::REPO.repository,
+                    host: Box::from(&b"forge.example"[..]),
+                    owner: Box::from(&b"org"[..]),
+                    name: Box::from(&b"repo"[..]),
+                    prefix: Box::from(&b"temper/"[..]),
+                    role: people::RepositoryRole::Owned,
+                    landing: Box::from(&b"main"[..]),
+                    ci: true,
+                    checks: Box::new([]),
+                },
             },
         });
         self.until(Until::Adopted);
-        assert!(matches!(self.adopted.as_slice(), [Ok(_)]));
+        assert!(matches!(self.adopted.as_slice(), [people::Outcome::RepositoryAdopted { .. }]));
     }
 }
 

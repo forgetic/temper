@@ -24,7 +24,8 @@ struct World {
     fake_env: Env<fake::Config>,
     fake_out: Queue<fake::Request>,
     pending: BTreeMap<Token, client::api::Op>,
-    adopted: Vec<Result<forge_top::Adopted, client::api::Error>>,
+    forge_calls: u32,
+    adopted: Vec<people::Outcome>,
     signed_in: Option<u64>,
     assigned: Vec<engine::Assignment>,
     answers: Vec<temper_engine_domain::CallAnswer>,
@@ -266,6 +267,7 @@ impl World {
             fake_env,
             fake_out: Queue::with_capacity(fake::MAX_OUT),
             pending: BTreeMap::new(),
+            forge_calls: 0,
             adopted: Vec::new(),
             signed_in: None,
             assigned: Vec::new(),
@@ -353,6 +355,7 @@ impl World {
                     self.events.push_back(engine::Event::Loaded { owner, rows, next });
                 }
                 engine::Request::Forge { call, repository, op } => {
+                    self.forge_calls += 1;
                     if self.fail_job_reads && matches!(op, client::api::Op::Read(client::api::Read::Job { .. })) {
                         self.events.push_back(engine::Event::ForgeAnswered {
                             call,
@@ -382,13 +385,17 @@ impl World {
                         &mut self.fake_out,
                     );
                 }
-                engine::Request::ForgeAdopted { result, .. } => self.adopted.push(result),
                 engine::Request::Deliver(delivery) => match delivery {
                     Delivery::WebReply { sign_in, reply: people::Reply::SignedIn { .. }, .. } => {
                         self.signed_in = sign_in;
                     }
                     Delivery::Assigned { assignment, .. } => self.assigned.push(assignment),
                     Delivery::CallAnswer { answer, .. } => self.answers.push(answer),
+                    Delivery::WebReply { reply: people::Reply::Outcome(outcome), .. }
+                        if matches!(outcome, people::Outcome::RepositoryAdopted { .. }) =>
+                    {
+                        self.adopted.push(outcome);
+                    }
                     _ => {}
                 },
                 engine::Request::Account(_)
@@ -503,25 +510,29 @@ impl World {
             },
         });
         self.until(Until::SignedIn);
-        self.send(engine::Event::AdoptForge {
+        self.send(engine::Event::Ask {
             reply_to: ReplyTo::new(Token::new(91)),
             sign_in: self.signed_in.expect("signed in"),
-            adoption: forge_top::Adoption {
+            key: [91; 16],
+            ask: people::Ask::AdoptRepository {
                 project: 1,
-                home: true,
-                provider: forge_world::REPO,
-                host: Box::from(&b"forge.example"[..]),
-                owner: Box::from(&b"org"[..]),
-                name: Box::from(&b"repo"[..]),
-                prefix: Box::from(&b"temper/"[..]),
-                role: forge_top::Role::Owned,
-                landing: Box::from(&b"main"[..]),
-                ci,
-                checks,
+                adoption: people::Adoption {
+                    home: true,
+                    forge: forge_world::REPO.forge,
+                    repository: forge_world::REPO.repository,
+                    host: Box::from(&b"forge.example"[..]),
+                    owner: Box::from(&b"org"[..]),
+                    name: Box::from(&b"repo"[..]),
+                    prefix: Box::from(&b"temper/"[..]),
+                    role: people::RepositoryRole::Owned,
+                    landing: Box::from(&b"main"[..]),
+                    ci,
+                    checks,
+                },
             },
         });
         self.until(Until::Adopted);
-        assert!(matches!(self.adopted.as_slice(), [Ok(_)]));
+        assert!(matches!(self.adopted.as_slice(), [people::Outcome::RepositoryAdopted { .. }]));
     }
 }
 
@@ -1811,6 +1822,51 @@ fn a_repository_adopted_seeds_its_collaborators_into_roles() {
 }
 
 #[test]
+fn an_adoption_sent_twice_across_a_restart_is_made_once() {
+    let mut world = World::new();
+    world.adopt();
+    let first = world.adopted[0];
+    let calls = world.forge_calls;
+    world.restart(false, false);
+    world.until(Until::Ready);
+    world.signed_in = None;
+    world.send(engine::Event::SignedIn {
+        reply_to: ReplyTo::new(Token::new(92)),
+        identity: people::Identity {
+            key: people::IdentityKey { forge: 1, user: 7 },
+            login: Box::from(&b"owner"[..]),
+            name: Box::from(&b"Owner"[..]),
+        },
+    });
+    world.until(Until::SignedIn);
+    world.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(93)),
+        sign_in: world.signed_in.expect("owner signed in again"),
+        key: [91; 16],
+        ask: people::Ask::AdoptRepository {
+            project: 1,
+            adoption: people::Adoption {
+                home: true,
+                forge: forge_world::REPO.forge,
+                repository: forge_world::REPO.repository,
+                host: Box::from(&b"forge.example"[..]),
+                owner: Box::from(&b"org"[..]),
+                name: Box::from(&b"repo"[..]),
+                prefix: Box::from(&b"temper/"[..]),
+                role: people::RepositoryRole::Owned,
+                landing: Box::from(&b"main"[..]),
+                ci: true,
+                checks: Box::new([]),
+            },
+        },
+    });
+    world.until(Until::Adopted);
+    assert_eq!(world.adopted, [first], "the committed answer replays after restart");
+    assert_eq!(world.forge_calls, calls, "a replay never asks the forge to adopt again");
+}
+
+#[test]
+#[expect(clippy::too_many_lines, reason = "saved-work checkout story includes a second adopted repository")]
 fn a_saved_repository_tag_becomes_a_concrete_checkout_in_the_next_attempt() {
     let mut world = World::configured(true, false);
     world.adopt();
@@ -1836,21 +1892,25 @@ fn a_saved_repository_tag_becomes_a_concrete_checkout_in_the_next_attempt() {
         },
     );
     fake::grant(&mut world.fake, b"org/extra", 1, raw::Permission::Admin);
-    world.send(engine::Event::AdoptForge {
+    world.send(engine::Event::Ask {
         reply_to: ReplyTo::new(Token::new(98)),
         sign_in: world.signed_in.expect("owner session"),
-        adoption: forge_top::Adoption {
+        key: [98; 16],
+        ask: people::Ask::AdoptRepository {
             project: 1,
-            home: false,
-            provider: client::api::Repository { forge: 1, repository: 3 },
-            host: Box::from(&b"forge.example"[..]),
-            owner: Box::from(&b"org"[..]),
-            name: Box::from(&b"extra"[..]),
-            prefix: Box::from(&b"temper/"[..]),
-            role: forge_top::Role::Owned,
-            landing: Box::from(&b"main"[..]),
-            ci: true,
-            checks: Box::new([]),
+            adoption: people::Adoption {
+                home: false,
+                forge: 1,
+                repository: 3,
+                host: Box::from(&b"forge.example"[..]),
+                owner: Box::from(&b"org"[..]),
+                name: Box::from(&b"extra"[..]),
+                prefix: Box::from(&b"temper/"[..]),
+                role: people::RepositoryRole::Owned,
+                landing: Box::from(&b"main"[..]),
+                ci: true,
+                checks: Box::new([]),
+            },
         },
     });
     for _ in 0..100 {
@@ -1859,7 +1919,11 @@ fn a_saved_repository_tag_becomes_a_concrete_checkout_in_the_next_attempt() {
             break;
         }
     }
-    assert!(matches!(world.adopted.get(1), Some(Ok(_))), "second repository adopted: {:?}", world.adopted);
+    assert!(
+        matches!(world.adopted.get(1), Some(people::Outcome::RepositoryAdopted { .. })),
+        "second repository adopted: {:?}",
+        world.adopted
+    );
     world.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {

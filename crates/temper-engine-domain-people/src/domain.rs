@@ -540,7 +540,8 @@ fn apply_roles(
     let flight = domain.pending.get(Id::from_token(request)).ok_or(Refusal::Unknown)?;
     let project = match &flight.ask {
         Ask::SetRoles { project, .. } => *project,
-        Ask::ChangePolicy { .. }
+        Ask::AdoptRepository { .. }
+        | Ask::ChangePolicy { .. }
         | Ask::SetPool { .. }
         | Ask::StartChat { .. }
         | Ask::DecideEscalation { .. }
@@ -579,8 +580,10 @@ fn apply_roles(
             }
             holdings.clone()
         }
-        Ask::ChangePolicy { .. } | Ask::SetPool { .. } => unreachable!("validated roster flight"),
-        Ask::StartChat { .. }
+        Ask::AdoptRepository { .. }
+        | Ask::ChangePolicy { .. }
+        | Ask::SetPool { .. }
+        | Ask::StartChat { .. }
         | Ask::DecideEscalation { .. }
         | Ask::DecideProposal { .. }
         | Ask::Say { .. }
@@ -773,7 +776,8 @@ fn end_signin(domain: &mut Domain, number: u64, out: &mut Queue<Request>) {
 
 fn project(ask: &Ask) -> u32 {
     match ask {
-        Ask::SetRoles { project, .. }
+        Ask::AdoptRepository { project, .. }
+        | Ask::SetRoles { project, .. }
         | Ask::ChangePolicy { project, .. }
         | Ask::SetPool { project, .. }
         | Ask::StartChat { project, .. }
@@ -813,6 +817,19 @@ fn valid_ask(limits: &Limits, ask: &Ask) -> bool {
                         reason.len() <= usize::try_from(limits.words).expect("u32 fits usize")
                     }
                 }
+        }
+        Ask::AdoptRepository { adoption, .. } => {
+            adoption.forge != 0
+                && adoption.repository != 0
+                && adoption
+                    .host
+                    .len()
+                    .saturating_add(adoption.owner.len())
+                    .saturating_add(adoption.name.len())
+                    .saturating_add(adoption.prefix.len())
+                    .saturating_add(adoption.landing.len())
+                    .saturating_add(adoption.checks.len().saturating_mul(size_of::<u32>()))
+                    <= usize::try_from(limits.words).expect("u32 fits usize")
         }
         Ask::SetRoles { holdings, .. } => holdings.len() <= usize::try_from(limits.holdings).expect("u32 fits usize"),
         Ask::ChangePolicy { .. } => true,
@@ -891,11 +908,13 @@ fn valid_answer_shape(ask: &Ask, outcome: Outcome) -> bool {
         Roles(u32, bool),
         Policy(u32, u32),
         Pool(u32, u64),
+        Adoption(u32, u16, u32),
         Escalation,
         Chat,
     }
 
     let expected = match ask {
+        Ask::AdoptRepository { project, adoption } => Expected::Adoption(*project, adoption.forge, adoption.repository),
         Ask::SetGoal { .. } => Expected::Goal,
         Ask::Stop { task, .. } => Expected::Stop(*task),
         Ask::Cancel { task, .. } => Expected::Cancel(*task),
@@ -930,6 +949,9 @@ fn valid_answer_shape(ask: &Ask, outcome: Outcome) -> bool {
     };
 
     match outcome {
+        Outcome::RepositoryAdopted { project, forge, repository } => {
+            expected == Expected::Adoption(project, forge, repository)
+        }
         Outcome::GoalStarted { task } => expected == Expected::Goal && task != 0,
         Outcome::GoalProposed { proposal } => expected == Expected::Goal && proposal != 0,
         Outcome::Stopped { task } => expected == Expected::Stop(task),
@@ -1019,7 +1041,7 @@ fn admit_ask(
     let project = project(&ask);
     let role = role(domain, key.person, project);
     let refusal = match &ask {
-        Ask::SetRoles { .. } | Ask::ChangePolicy { .. } | Ask::SetPool { .. } => {
+        Ask::AdoptRepository { .. } | Ask::SetRoles { .. } | Ask::ChangePolicy { .. } | Ask::SetPool { .. } => {
             if !domain.roles.contains_key(&project) {
                 Some(Refusal::Unknown)
             } else if role == Some(Role::Owner) {
@@ -1105,7 +1127,8 @@ fn decided(domain: &mut Domain, env: &Env<Limits>, id: Id<Pending>, outcome: Out
         // A refused admission is retryable with the same key, including
         // pressure reported by tasks or another child through the root.
         Outcome::Refused(Refusal::Busy | Refusal::NotReady) => {}
-        Outcome::RolesSet { .. }
+        Outcome::RepositoryAdopted { .. }
+        | Outcome::RolesSet { .. }
         | Outcome::PolicyChanged { .. }
         | Outcome::PoolSet { .. }
         | Outcome::Started { .. }
@@ -1253,6 +1276,7 @@ fn restored(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
                     }
                 }
                 Ask::StartChat { .. }
+                | Ask::AdoptRepository { .. }
                 | Ask::ChangePolicy { .. }
                 | Ask::SetPool { .. }
                 | Ask::DecideEscalation { .. }
@@ -1272,7 +1296,8 @@ fn restored(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
                     unreachable!("restored role success has a matching roster ask");
                 }
             },
-            Outcome::Started { .. }
+            Outcome::RepositoryAdopted { .. }
+            | Outcome::Started { .. }
             | Outcome::PolicyChanged { .. }
             | Outcome::PoolSet { .. }
             | Outcome::Said { .. }

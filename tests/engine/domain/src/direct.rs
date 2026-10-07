@@ -96,7 +96,7 @@ impl Driver {
                 },
                 engine::Request::WatchRefused { .. } => panic!("root route test did not request an invalid watch"),
                 engine::Request::Account(request) => self.accounts.push(request),
-                engine::Request::Forge { .. } | engine::Request::ForgeAdopted { .. } => {
+                engine::Request::Forge { .. } => {
                     panic!("root route fixture did not adopt forge")
                 }
                 engine::Request::Stop => self.stopped = true,
@@ -171,7 +171,6 @@ impl Driver {
                 | Delivery::InboxView { .. }
                 | Delivery::BeginInboxView { .. }
                 | Delivery::CallAnswer { .. }
-                | Delivery::ForgeAdopted { .. }
                 | Delivery::ForgeCommitted { .. }
                 | Delivery::ForgeCall { .. }
                 | Delivery::Procedure { .. } => None,

@@ -615,6 +615,7 @@ impl Write {
 /// The root validates the whole decoded page before restoring or cloning. Payload shape admission
 /// remains the child's responsibility.
 #[must_use]
+#[expect(clippy::too_many_lines, reason = "the record byte projection covers each stored variant")]
 pub fn record_bytes(record: &Record) -> Option<u64> {
     match record {
         Record::EscalationDecision(row) => decision_bytes(&row.decision),
@@ -665,6 +666,20 @@ pub fn record_bytes(record: &Record) -> Option<u64> {
                 .ok()?
                 .checked_mul(u64::try_from(size_of::<temper_engine_domain_people::Holding>()).ok()?),
             temper_engine_domain_people::Stored::Answer { ask, .. } => match ask.as_ref() {
+                temper_engine_domain_people::Ask::AdoptRepository { adoption, .. } => {
+                    let names = adoption
+                        .host
+                        .len()
+                        .checked_add(adoption.owner.len())?
+                        .checked_add(adoption.name.len())?
+                        .checked_add(adoption.prefix.len())?
+                        .checked_add(adoption.landing.len())?;
+                    u64::try_from(names).ok()?.checked_add(
+                        u64::try_from(adoption.checks.len())
+                            .ok()?
+                            .checked_mul(u64::try_from(size_of::<u32>()).ok()?)?,
+                    )
+                }
                 temper_engine_domain_people::Ask::SetGoal { spec, .. } => u64::try_from(spec.len()).ok(),
                 temper_engine_domain_people::Ask::SetRoles { holdings, .. } => u64::try_from(holdings.len())
                     .ok()?
