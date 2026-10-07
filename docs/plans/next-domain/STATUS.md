@@ -183,6 +183,7 @@ remain on `checkpoint/migration/transcript-codec`, outside main.
 | 05s8 local host 05: delivery intent and restart reconciliation | merged locally | smith 5164339 | fmt/clippy pass; 591 focused / 3.366 s; 12 fuzzy / 4.301 s; local serial 41 / 0.185 s focused and 1 / 0.035 s fuzzy. |
 | 05s8 local host 05: waking notice read fence | merged locally | smith c3ff7a6 | fmt/clippy pass; 592 focused / 3.630 s; 12 fuzzy / 4.408 s. |
 | 05s8 shared Skein OAuth revision | merged locally | smith bf3609f | All 13 Skein packages pinned to 4e78d26; fmt/clippy pass; 592 focused / 3.871 s; 12 fuzzy / 4.457 s. |
+| 05s8 agent-world parent host-call bridge | merged locally | smith 520ccae | Caller-supplied complete Start and pending host calls receive caller replies while default fixtures remain scripted; fmt/clippy pass; 593 focused / 3.593 s; 12 fuzzy / 4.490 s. |
 
 ## Completion 08.4 measured suite shares
 
