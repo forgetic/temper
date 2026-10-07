@@ -85,7 +85,8 @@ fn configured() -> Driver {
     config.chat_authority.delegation.tasks = 3;
     config.chat_authority.delegation.depth = 1;
     let mut rules = config.authority.rules().clone();
-    rules.maximum_run_spend = 200;
+    // Leave the standing goal and chat room to fund their planned delegates.
+    rules.maximum_run_spend = 10;
     rules.ceiling.tools = authority::Tools(1);
     rules.ceiling.delegation.depth = 2;
     rules.ceiling.delegation.tasks = 4;

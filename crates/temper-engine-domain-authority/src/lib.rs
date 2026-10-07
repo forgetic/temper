@@ -52,7 +52,7 @@ pub use boundary::{
 pub use check::{check_batch, check_call, check_effect, check_request, check_run, covers, needed_judges, needs};
 pub use domain::{Domain, Event, POLICY_MAX_OUT, PolicyFact, PolicyRefusal, step};
 pub use limits::{Limits, max_out, worst_case};
-pub use numbers::{Charged, Numbers, carve, charge, left, settle};
+pub use numbers::{Numbers, carve, charge, left, settle};
 pub use order::{FITS_MAX_OUT, Lack, Lacks, fits};
 pub use order::{
     Implication, Implies, at_most, grant_at_most, grant_covers, pattern_at_most, pattern_covers, resolve_task_grants,

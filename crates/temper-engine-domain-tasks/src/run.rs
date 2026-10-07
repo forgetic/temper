@@ -51,6 +51,7 @@ pub(crate) fn claim(
     to: ReplyTo,
     number: u64,
     attempt: u64,
+    budget: u64,
     out: &mut Queue<Request>,
 ) {
     let to = match entrance(domain, to, number) {
@@ -64,6 +65,15 @@ pub(crate) fn claim(
     if task.record.phase != Phase::Active(Active::Preparing) {
         return refused(to, Some(number), Refusal::State, out);
     }
+    let fits = match crate::funders::available(task.record.numbers) {
+        Some(left) => budget != 0 && budget <= left,
+        None => false,
+    };
+    if !fits {
+        return refused(to, Some(number), Refusal::Funding, out);
+    }
+    task.record.numbers.reserved = task.record.numbers.reserved.checked_add(budget).expect("available budget");
+    task.record.run_reserved = budget;
     task.record.attempt = attempt;
     task.record.run_spent = 0;
     task.record.turn = 0;
@@ -243,6 +253,9 @@ pub(crate) fn activation(
         }
     };
     let task = task_mut(domain, number).expect("terminal names live task");
+    task.record.numbers.reserved =
+        task.record.numbers.reserved.checked_sub(task.record.run_reserved).expect("run held");
+    task.record.run_reserved = 0;
     task.record.last_answer = Some(attempt);
     task.record.narrowing = false;
     if let Some(tags) = saved {

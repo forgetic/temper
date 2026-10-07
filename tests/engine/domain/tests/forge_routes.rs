@@ -150,6 +150,11 @@ impl World {
             };
             let effect_grant = authority::Grant { kind: 8, ..grant.clone() };
             let mut rules = config.authority.rules().clone();
+            if with_change {
+                // The chat's 100-unit allotment must retain room for its 20-unit delegate
+                // after the run reserves its capped allowance at claim.
+                rules.maximum_run_spend = 60;
+            }
             rules.ceiling.tools = authority::Tools(1);
             let grants: Box<[authority::Grant]> = if with_change {
                 Box::new([

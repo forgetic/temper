@@ -129,6 +129,9 @@ impl World {
             };
             let effect_grant = authority::Grant { kind: 8, ..grant.clone() };
             let mut rules = config.authority.rules().clone();
+            if with_change {
+                rules.maximum_run_spend = 60;
+            }
             rules.ceiling.tools = authority::Tools(1);
             let grants: Box<[authority::Grant]> = if with_change {
                 Box::new([

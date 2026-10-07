@@ -24,6 +24,7 @@ fn chat(seed: u64, child: bool) -> (Driver, engine::Assignment) {
         bounds.tasks.batch = 2;
         bounds.authority.batch = 2;
         let mut rules = configuration.authority.rules().clone();
+        rules.maximum_run_spend = 60;
         rules.ceiling.delegation.tasks = 4;
         rules.ceiling.delegation.depth = 2;
         let mut policy = configuration.authority.policy(1).expect("project policy").clone();

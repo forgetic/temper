@@ -122,8 +122,17 @@ impl Accounting {
                             | Stored::PersonProposal(_) => None,
                         })
                         .sum();
-                    if reserved != task.numbers.reserved {
+                    if reserved.checked_add(task.run_reserved) != Some(task.numbers.reserved) {
                         return Err("task reservation differs from actual funding links");
+                    }
+                    if task
+                        .numbers
+                        .spent
+                        .checked_add(task.numbers.spent_below)
+                        .and_then(|spent| spent.checked_add(task.numbers.reserved))
+                        .is_none_or(|used| used > task.numbers.budget)
+                    {
+                        return Err("recorded expense exceeds allotment");
                     }
                     if !self.before.contains_key(key)
                         && (task.numbers.spent != 0 || task.numbers.spent_below != 0 || task.run_spent != 0)

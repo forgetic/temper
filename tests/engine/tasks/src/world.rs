@@ -679,6 +679,12 @@ impl World {
     }
 
     pub fn claim(&mut self, task: u64, attempt: u64) {
+        let numbers = self.record(task).numbers;
+        let budget = numbers.budget - numbers.spent - numbers.spent_below - numbers.reserved;
+        self.claim_budget(task, attempt, budget);
+    }
+
+    pub fn claim_budget(&mut self, task: u64, attempt: u64, budget: u64) {
         assert!(self.activations.remove(&task), "activated before preparation");
         let context = &self.contexts[&task];
         let record = self.record(task);
@@ -689,7 +695,7 @@ impl World {
         self.send(Event::Prepare { reply_to, task });
         let reply_to = self.to();
         let call = self.call;
-        self.send(Event::Claim { reply_to, task, attempt });
+        self.send(Event::Claim { reply_to, task, attempt, budget });
         assert_eq!(self.replies[&call], Reply::Done);
         assert!(self.runs.insert(task, attempt).is_none());
         self.observe(Seen::Assigned { task, attempt, after: self.commit, adopted: false });

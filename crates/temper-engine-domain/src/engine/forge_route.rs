@@ -823,7 +823,8 @@ fn may_push(
             project: context.project,
             authority: authority_value(&context.authority),
             numbers: authority_numbers(context.numbers),
-            budget: authority::left(authority_numbers(context.numbers)),
+            budget: authority::left(authority_numbers(context.numbers))
+                .min(domain.config.authority.rules().maximum_run_spend),
             wall: env.wall,
             accounts: Box::new([domain.accounts.usable(domain.config.account)]),
             writes: Box::new([authority::Write {

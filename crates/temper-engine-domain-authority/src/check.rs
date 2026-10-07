@@ -624,7 +624,6 @@ fn give(
 /// returning a strict answer and replacement numbers only when allowed. Reserve
 /// `max_out(domain.limits())` free finding slots; caller verifies person membership, checks
 /// accepted effect facts and commits the decision atomically.
-#[expect(clippy::manual_map, reason = "the foundation's step subset uses exhaustive matching without closures")]
 #[must_use]
 pub fn check_request(domain: &Domain, ask: &PersonAsk, why: &mut Queue<Finding>) -> Checked {
     room(domain, why);
@@ -701,10 +700,7 @@ pub fn check_request(domain: &Domain, ask: &PersonAsk, why: &mut Queue<Finding>)
                     price(domain, policy, &role.authority, ask.pool, Source::Role, effect, &mut answer, why);
                     let numbers = if answer == Answer::Allow {
                         match effect.price {
-                            Some(amount) => match charge(ask.pool, amount) {
-                                Some(charged) => Some(charged.numbers),
-                                None => None,
-                            },
+                            Some(amount) => charge(ask.pool, amount),
                             None => Some(ask.pool),
                         }
                     } else {

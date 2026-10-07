@@ -576,6 +576,8 @@ fn a_members_wider_amendment_waits_for_a_maintainer_to_accept() {
 #[expect(clippy::wildcard_enum_match_arm, reason = "select one web outcome among unrelated deliveries")]
 fn a_members_goal_past_their_allotment_becomes_a_proposal_a_maintainer_accepts() {
     let (mut driver, _, maintainer, maintainer_session, member, member_session) = people_roles_driver();
+    hello(&mut driver);
+    driver.settle();
     driver.send(engine::Event::Ask {
         reply_to: ReplyTo::new(Token::new(2010)),
         sign_in: member_session,
@@ -631,6 +633,8 @@ fn a_members_goal_past_their_allotment_becomes_a_proposal_a_maintainer_accepts()
 #[expect(clippy::wildcard_enum_match_arm, reason = "select one web outcome among unrelated deliveries")]
 fn two_maintainers_decide_one_proposal_and_the_second_is_told_by_whom_and_how() {
     let (mut driver, owner_session, first, first_session, member, member_session) = people_roles_driver();
+    hello(&mut driver);
+    driver.settle();
     let (second, second_session) = sign_in_person(&mut driver, 10, 2020);
     driver.send(engine::Event::Ask {
         reply_to: ReplyTo::new(Token::new(2021)),
@@ -1560,6 +1564,7 @@ fn unavailable_call(driver: &mut Driver, assignment: &engine::Assignment, call: 
 fn delegate_fixture() -> (Driver, engine::Assignment) {
     let mut configuration = config(91);
     let mut rules = configuration.authority.rules().clone();
+    rules.maximum_run_spend = 60;
     rules.ceiling.delegation.depth = 2;
     let mut policy = configuration.authority.policy(1).expect("fixture project").clone();
     policy.ceiling.delegation.depth = 2;
@@ -1605,6 +1610,7 @@ fn batch_fixture_with_pool(slots: u32, depth: u32, pool_budget: u64) -> (Driver,
     batch_fixture_custom(slots, depth, pool_budget, false, false, false)
 }
 
+#[expect(clippy::too_many_lines, reason = "one fixture configures the bounds and policy for batch stories")]
 fn batch_fixture_custom(
     slots: u32,
     depth: u32,
@@ -1651,6 +1657,8 @@ fn batch_fixture_custom(
         ]);
     }
     let mut rules = configuration.authority.rules().clone();
+    // Each claimed run leaves room in its task allotment for delegates made during the run.
+    rules.maximum_run_spend = 5;
     if procedure || person {
         rules.ceiling.delegation.kinds = Box::new([
             temper_engine_domain_authority::Executor::Charter(1),
@@ -2266,7 +2274,7 @@ fn an_amendment_reaches_a_live_run() {
     else {
         panic!("parent funder")
     };
-    assert_eq!(parent_row.numbers.reserved, 20);
+    assert_eq!(parent_row.numbers.reserved, 25);
 }
 
 #[test]
@@ -2322,6 +2330,7 @@ fn a_narrowing_stops_the_old_run_and_offers_the_amendment_to_the_next() {
 fn a_cancel_closes_three_levels_with_runs_live_deepest_first() {
     let (mut driver, parent) = batch_fixture_with(3, 2);
     let mut child_spec = report_delegate(b"child", Box::new([]));
+    child_spec.authority.budget.spend = 20;
     child_spec.authority.delegation =
         tasks::Delegation { kinds: Box::new([tasks::AuthorityExecutor::Charter(1)]), tasks: 1, depth: 1 };
     let child = call_batch(&mut driver, &parent, 90, Box::new([child_spec]))[0];
@@ -4605,7 +4614,7 @@ fn a_moved_task_is_funded_anew_by_its_new_requester() {
     };
     assert!(!old.delegates.contains(&child));
     assert!(old.references.contains(&child));
-    assert_eq!((old.numbers.reserved, old.numbers.spent_below), (0, 5));
+    assert_eq!((old.numbers.reserved, old.numbers.spent_below), (5, 5));
     driver.send(engine::Event::Answer {
         channel: Token::new(7),
         task: root.task,

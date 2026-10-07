@@ -3,13 +3,16 @@
 //! Preflights lifecycle and eventual financial representability before mutation.
 //! Keeps no receipt table; root owns exact transport payload replay proofs.
 use crate::domain::{Domain, entrance, publish, record, refused, task_mut};
-use crate::{Accepted, End, Hold, Limits, Refusal, Request};
+use crate::{Accepted, End, Limits, Refusal, Request};
 use alloc::boxed::Box;
 use skein_lib::{Env, Queue, ReplyTo};
 
 fn check_charge(domain: &Domain, number: u64, cumulative: u64) -> Result<u64, Refusal> {
     let old = record(domain, number).expect("admission recipient live");
     let delta = cumulative.checked_sub(old.run_spent).ok_or(Refusal::Turn)?;
+    if delta > old.run_reserved {
+        return Err(Refusal::Funding);
+    }
     let spent = old.numbers.spent.checked_add(delta).ok_or(Refusal::Funding)?;
     let _total = spent.checked_add(old.numbers.spent_below).ok_or(Refusal::Funding)?;
     if !crate::funders::representable(domain, number, delta) {
@@ -27,13 +30,12 @@ fn post(
     out: &mut Queue<Request>,
 ) {
     let task = task_mut(domain, number).expect("admitted recipient live");
+    let delta = cumulative.checked_sub(task.record.run_spent).expect("monotonic checked");
     task.record.run_spent = cumulative;
     task.record.numbers.spent = spent;
-    let overrun = crate::funders::available(task.record.numbers).is_none();
+    task.record.run_reserved = task.record.run_reserved.checked_sub(delta).expect("run allowance checked");
+    task.record.numbers.reserved = task.record.numbers.reserved.checked_sub(delta).expect("run reservation checked");
     publish(domain, environment, number, out);
-    if overrun {
-        crate::run::hold(domain, environment, number, Hold::Budget, out);
-    }
 }
 
 #[expect(clippy::too_many_arguments, reason = "one complete admission event")]
@@ -139,6 +141,6 @@ pub(crate) fn activation(
         Ok(spent) => spent,
         Err(why) => return refused(to, Some(number), why, out),
     };
-    crate::run::activation(domain, environment, to, number, attempt, end, saved, out);
     post(domain, environment, number, cumulative, spent, out);
+    crate::run::activation(domain, environment, to, number, attempt, end, saved, out);
 }

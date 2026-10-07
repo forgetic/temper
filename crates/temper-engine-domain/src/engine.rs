@@ -2240,7 +2240,13 @@ fn route_into(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision) {
             }
             Work::TasksClaim { task, attempt } => {
                 if domain.claiming.get(&task) == Some(&attempt) {
-                    domain.work.push(Work::Tasks(tasks::Event::Claim { reply_to: internal(task), task, attempt }));
+                    let budget = domain.assignments.get(&task).expect("claim has assignment").run.budget;
+                    domain.work.push(Work::Tasks(tasks::Event::Claim {
+                        reply_to: internal(task),
+                        task,
+                        attempt,
+                        budget,
+                    }));
                 }
             }
             Work::ProjectGoal(goal) => forge_route::project_goal(domain, env, &goal),
@@ -3035,7 +3041,8 @@ fn activate(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, tas
             project: task.project,
             authority: authority_value(&task.authority),
             numbers: authority_numbers(task.numbers),
-            budget: authority::left(authority_numbers(task.numbers)),
+            budget: authority::left(authority_numbers(task.numbers))
+                .min(domain.config.authority.rules().maximum_run_spend),
             wall: env.wall,
             accounts: Box::new([domain.accounts.usable(domain.config.account)]),
             writes: Box::new([]),
@@ -5108,7 +5115,8 @@ fn brief_outputs(
                         project: context.project,
                         authority: authority_value(&context.authority),
                         numbers: authority_numbers(context.numbers),
-                        budget: authority::left(authority_numbers(context.numbers)),
+                        budget: authority::left(authority_numbers(context.numbers))
+                            .min(domain.config.authority.rules().maximum_run_spend),
                         wall: env.wall,
                         accounts: Box::new([domain.accounts.usable(domain.config.account)]),
                         writes: workspace.writes.clone(),
