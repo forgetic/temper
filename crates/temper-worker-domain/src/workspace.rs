@@ -494,7 +494,10 @@ fn written(hold: Token, directory: Token, owner: Token, event: host::Event, then
     then.host = Some(match event {
         host::Event::Delivered { owner: _, delivery } => host::Event::Delivered { owner, delivery },
         host::Event::Saved { owner: _, at } => host::Event::Saved { owner, at },
-        host::Event::AssignTyped { .. }
+        host::Event::InboundTyped { .. }
+        | host::Event::CalledTyped { .. }
+        | host::Event::WithdrawnTyped { .. }
+        | host::Event::AssignTyped { .. }
         | host::Event::AssignV2 { .. }
         | host::Event::Turn { .. }
         | host::Event::AcknowledgeTurn { .. }
