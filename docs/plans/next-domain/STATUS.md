@@ -303,3 +303,13 @@ simulation; no legacy fuzzy seed trim is needed for the suite caps.
 - Existing IO/TLS/channel checkpoints are merged; protocol adoption and codec implementation remain deferred.
 - Kernel gates pass after restart; browser repair remains deferred in its separate profile.
 - Keep parked 02e/04b2/05f branches, exact-tip gates and Forgejo v16.0.5 API job-log assumption.
+
+## smith protocol layer
+
+| Increment | State | Commit | Evidence |
+|---|---|---|---|
+| 00.1 activation and conversation turn numbers | merged locally | smith b08b00e | fmt/clippy pass; 608 focused / 8.768 s; 12 fuzzy / 9.624 s. |
+| 00.2 acknowledgement window | merged locally | smith 49f6609 | fmt/clippy pass; 611 focused / 6.679 s; 12 fuzzy / 5.857 s. |
+| 00.3 checks-ended notice | merged locally | smith 87ff00c | fmt/clippy pass; 612 focused / 6.341 s; 12 fuzzy / 6.111 s. |
+| 00.4 message label and text | merged locally | smith 704f2f6 | fmt/clippy pass; 613 focused / 5.254 s; 12 fuzzy / 6.032 s. |
+| 00.5 unsupported charter version | merged locally | smith 46e7eac | fmt/clippy pass; 615 focused / 8.997 s; 12 fuzzy / 6.021 s. |
