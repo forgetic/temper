@@ -1,6 +1,6 @@
 [package]
 name = "temper-engine-notes-world"
-description = "The notes child domain's world: a simulation with a scripted parent playing the wiki, people and the runs that ask"
+description = "The notes child domain's store world"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
