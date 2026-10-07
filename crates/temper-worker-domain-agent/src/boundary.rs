@@ -232,12 +232,11 @@ pub enum Request {
         end: End,
         detail: Box<[u8]>,
     },
-    /// Spawn the agent in a contained process tree, in the workspace
-    /// `workspace`, where the client's repositories sit, giving up at
-    /// `deadline`.
+    /// Spawn the agent in a contained process tree, in `workspace` when it has
+    /// items, giving up at `deadline`.
     Spawn {
         owner: Token,
-        workspace: Token,
+        workspace: Option<Token>,
         deadline: Time,
     },
     /// Send `message` down the channel of `process`.
@@ -272,9 +271,8 @@ pub enum Request {
 /// What a client asks an agent to be spawned for.
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub struct Spawn {
-    /// Where the repositories sit: the client's name for the prepared
-    /// workspace, which the layers below resolve. Passed through.
-    pub workspace: Token,
+    /// Where the repositories sit, when the run has workspace items.
+    pub workspace: Option<Token>,
     /// What the run is given, passed through.
     pub charter: Box<[u8]>,
     /// The state of a parked run to resume from, passed through.
@@ -345,7 +343,7 @@ pub enum Signal {
 
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub struct SpawnV2 {
-    pub workspace: Token,
+    pub workspace: Option<Token>,
     pub charter: Box<[u8]>,
     pub transcript: Option<Box<[u8]>>,
     pub repositories: Box<[crate::channel::RepositoryV2]>,

@@ -31,10 +31,12 @@ pub(crate) fn check(assignment: &Assignment, limits: &Limits, next: bool) -> Res
         }
     }
     let workspace = &assignment.workspace;
-    name(&workspace.key, limits)?;
     let count = u64::try_from(workspace.repositories.len()).expect("a length fits in a u64");
-    if count == 0 || count > u64::from(limits.checkout.repositories) {
+    if count > u64::from(limits.checkout.repositories) {
         return Err(Invalid::Repositories);
+    }
+    if count != 0 {
+        name(&workspace.key, limits)?;
     }
     for repository in &workspace.repositories {
         self::repository(repository, limits, next)?;

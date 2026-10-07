@@ -256,11 +256,11 @@ pub enum Request {
         name: Token,
         bounce: wire::Bounce,
     },
-    /// Spawn an agent in a contained process tree, in the workspace io names
-    /// `workspace`, giving up at `deadline`.
+    /// Spawn an agent in a contained process tree, in `workspace` when it has
+    /// items, giving up at `deadline`.
     Spawn {
         owner: Token,
-        workspace: Token,
+        workspace: Option<Token>,
         deadline: Time,
     },
     /// Send `message` down the channel of `process`.

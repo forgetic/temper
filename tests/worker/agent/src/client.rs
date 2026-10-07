@@ -235,7 +235,7 @@ impl Client {
         let spawn = Spawn {
             repositories: Box::new([]),
             grants: Box::new([]),
-            workspace: Token::new(1000 + client.raw()),
+            workspace: Some(Token::new(1000 + client.raw())),
             charter,
             snapshot,
         };

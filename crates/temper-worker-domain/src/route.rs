@@ -5,6 +5,8 @@
 //! Every match is exhaustive, so a variant added to either side's vocabulary
 //! breaks the build here.
 
+use alloc::boxed::Box;
+
 use crate::wire;
 use jig_worker_host as host;
 use skein_lib::{Env, Queue, ReplyTo};
@@ -267,26 +269,42 @@ fn from_host(domain: &mut Domain, env: &Env<Limits>, request: host::Request, out
 fn from_host_agent(domain: &mut Domain, env: &Env<Limits>, request: host::ToAgent) {
     let event = match request {
         host::ToAgent::StartV2 { owner, workspace, charter, transcript, grants } => {
-            return workspace::start_v2(
-                domain,
-                env,
-                owner,
-                workspace.expect("temper assignments always have workspace items"),
-                charter,
-                transcript,
-                grants,
-            );
+            return match workspace {
+                Some(workspace) => workspace::start_v2(domain, env, owner, workspace, charter, transcript, grants),
+                None => agent_step(
+                    domain,
+                    env,
+                    agent::Event::SpawnV2 {
+                        client: owner,
+                        spawn: agent::SpawnV2 {
+                            workspace: None,
+                            charter,
+                            transcript,
+                            repositories: Box::new([]),
+                            grants: grants_to_agent(grants),
+                        },
+                    },
+                ),
+            };
         }
         host::ToAgent::Start { owner, workspace, charter, snapshot, grants } => {
-            return workspace::start(
-                domain,
-                env,
-                owner,
-                workspace.expect("temper assignments always have workspace items"),
-                charter,
-                snapshot,
-                grants,
-            );
+            return match workspace {
+                Some(workspace) => workspace::start(domain, env, owner, workspace, charter, snapshot, grants),
+                None => agent_step(
+                    domain,
+                    env,
+                    agent::Event::Spawn {
+                        client: owner,
+                        spawn: agent::Spawn {
+                            workspace: None,
+                            charter,
+                            snapshot,
+                            repositories: Box::new([]),
+                            grants: grants_to_agent(grants),
+                        },
+                    },
+                ),
+            };
         }
         host::ToAgent::Message { agent, name, event } => agent::Event::Deliver { agent, name, event },
         host::ToAgent::Answer { agent, call, reply } => {
@@ -370,4 +388,12 @@ fn from_agent(domain: &mut Domain, env: &Env<Limits>, request: agent::Request, o
 
 pub(crate) const fn channel_grant(grant: wire::Grant) -> agent::channel::Grant {
     agent::channel::Grant { account: grant.account, generation: grant.generation, valid: grant.valid }
+}
+
+fn grants_to_agent(grants: Box<[wire::Grant]>) -> Box<[agent::channel::Grant]> {
+    let mut names = skein_lib::List::with_capacity(u32::try_from(grants.len()).expect("validated grants"));
+    for grant in grants {
+        names.push(channel_grant(grant)).expect("room for every grant");
+    }
+    names.into_boxed()
 }

@@ -79,7 +79,11 @@ pub(crate) fn stage(
         Ok(()) => {}
         Err(invalid) => return Err(wire::Refusal::Invalid(invalid)),
     }
+    if domain.items_by_run.contains_key(&assignment.run) {
+        return Err(wire::Refusal::Busy);
+    }
     let wire::Assignment { run, attempt, workspace, save, charter, snapshot, grants } = assignment;
+    let has_items = !workspace.repositories.is_empty();
     let mut merging = false;
     for repository in &workspace.repositories {
         match repository.start {
@@ -90,7 +94,7 @@ pub(crate) fn stage(
             | wire::Start::Saved { .. } => {}
         }
     }
-    let save = if next && merging { None } else { save };
+    let save = if !has_items || (next && merging) { None } else { save };
     let mut tags = List::with_capacity(u32::try_from(workspace.repositories.len()).expect("checked item count"));
     for repository in &workspace.repositories {
         tags.push(repository.tag).expect("room for each item tag");
@@ -113,7 +117,7 @@ pub(crate) fn stage(
     Ok(host::Assignment {
         run,
         attempt,
-        workspace: Some(host::Workspace { workstream: run.raw(), items: id.token() }),
+        workspace: if has_items { Some(host::Workspace { workstream: run.raw(), items: id.token() }) } else { None },
         save: domain.items.get(id).expect("inserted above").save.is_some(),
         charter,
         snapshot,
@@ -273,7 +277,7 @@ pub(crate) fn start(
         }
     }
     let spawn = agent::Spawn {
-        workspace: directory,
+        workspace: Some(directory),
         charter,
         snapshot,
         repositories: repositories.into_boxed(),
@@ -601,7 +605,7 @@ pub(crate) fn start_v2(
         root.conflicts = conflicts.files;
     }
     let spawn = agent::SpawnV2 {
-        workspace: directory,
+        workspace: Some(directory),
         charter,
         transcript,
         repositories: repositories.into_boxed(),
