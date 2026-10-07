@@ -1,5 +1,5 @@
 use skein_lib::{Queue, Token, Wall};
-use temper_engine_domain::{self as root, Decision, Delivery, Journal, Output, Record, TurnRecord, Write};
+use temper_engine_domain::{self as root, Counters, Decision, Delivery, Journal, Output, Record, TurnRecord, Write};
 use temper_engine_domain_world::commits::{HEADER, LIMITS};
 use temper_world::heap::{self, Meter};
 
@@ -81,7 +81,8 @@ fn partial_delivery_transfer_never_allocates_a_second_shrinking_container() {
     };
     let mut out = Queue::<Output>::with_capacity(1);
     let meter = Meter::new();
-    let mut journal = Journal::new(HEADER, &limits);
+    let mut journal = Journal::from_durable(&root::journal_limits(&limits), HEADER.commits);
+    let mut counters = Counters::new(HEADER);
     let mut decision = Decision::new(&limits);
     for task in 1_u64..1000 {
         decision
@@ -89,11 +90,11 @@ fn partial_delivery_transfer_never_allocates_a_second_shrinking_container() {
             .expect("partial delivery bound");
     }
     meter.start();
-    root::accept(&mut journal, &limits, decision, &mut out).expect("reserved whole decision");
+    root::accept(&mut journal, &mut counters, &limits, decision, &mut out).expect("reserved whole decision");
     let measured = meter.end();
     assert!(out.is_empty(), "clean header and no writes");
     meter.check(measured, root::worst_case(&limits).expect("valid bounds"), limits);
-    assert!(journal.ready());
+    assert!(!journal.idle());
 }
 
 #[test]
@@ -109,7 +110,8 @@ fn partial_write_transfer_moves_values_without_shrinking_the_source() {
     };
     let mut out = Queue::<Output>::with_capacity(1);
     let meter = Meter::new();
-    let mut journal = Journal::new(HEADER, &limits);
+    let mut journal = Journal::from_durable(&root::journal_limits(&limits), HEADER.commits);
+    let mut counters = Counters::new(HEADER);
     let mut decision = Decision::new(&limits);
     for turn in 1_u32..127 {
         decision
@@ -128,7 +130,7 @@ fn partial_write_transfer_moves_values_without_shrinking_the_source() {
             .expect("partial write bound");
     }
     meter.start();
-    root::accept(&mut journal, &limits, decision, &mut out).expect("reserved whole decision");
+    root::accept(&mut journal, &mut counters, &limits, decision, &mut out).expect("reserved whole decision");
     let measured = meter.end();
     let Output::Commit { writes, .. } = out.pop().expect("one commit") else {
         panic!("commit");
@@ -142,7 +144,8 @@ fn partial_write_transfer_moves_values_without_shrinking_the_source() {
 fn full_decisions_and_maximum_held_results_fit_the_declared_root_journal_bound() {
     let mut out = Queue::<Output>::with_capacity(1);
     let meter = Meter::new();
-    let mut journal = Journal::new(HEADER, &LIMITS);
+    let mut journal = Journal::from_durable(&root::journal_limits(&LIMITS), HEADER.commits);
+    let mut counters = Counters::new(HEADER);
     let bound = root::worst_case(&LIMITS).expect("valid journal limits");
     for commit in 1_u64..=u64::from(LIMITS.commits) {
         meter.start();
@@ -194,7 +197,7 @@ fn full_decisions_and_maximum_held_results_fit_the_declared_root_journal_bound()
                 )
                 .expect("maximum admitted result");
         }
-        root::accept(&mut journal, &LIMITS, decision, &mut out).expect("whole decision reserved");
+        root::accept(&mut journal, &mut counters, &LIMITS, decision, &mut out).expect("whole decision reserved");
         let measured = meter.end();
         drop(out.pop().expect("one commit"));
         meter.check(measured, bound, LIMITS);
@@ -208,7 +211,7 @@ fn full_decisions_and_maximum_held_results_fit_the_declared_root_journal_bound()
         drop(out.pop().expect("one bounded ready result"));
         meter.check(measured, bound, LIMITS);
     }
-    assert!(!journal.ready());
+    assert!(journal.idle());
     assert!(root::takes(&journal, &LIMITS));
 }
 

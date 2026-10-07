@@ -429,19 +429,22 @@ impl World {
     }
 
     /// Drive one up/ready/timer/reclaim iteration and independent fake effects.
+    #[expect(clippy::too_many_lines, reason = "one scripted iteration includes each journal release pass")]
     pub fn iterate(&mut self) {
         self.iteration += 1;
         self.environment.now = Time::from_nanos(u64::from(self.iteration) * 1_000_000 + self.recovery_clock_offset);
         self.environment.wall = Wall::from_nanos(u64::from(self.iteration) * 1_000_000 + self.recovery_clock_offset);
-        engine::resume(&mut self.domain, &self.environment, &mut self.out);
+        engine::release(&mut self.domain, &self.environment, &mut self.out);
         self.observe();
         if self.events.front().is_some_and(|(due, _)| *due <= self.iteration) {
             let (_, event) = self.events.pop_front().expect("due input");
             self.trace.push(format!("input {event:?}"));
-            engine::step(&mut self.domain, &self.environment, event, &mut self.out);
+            engine::step(&mut self.domain, &self.environment, event);
+            engine::release(&mut self.domain, &self.environment, &mut self.out);
             self.observe();
         }
-        engine::fire(&mut self.domain, &self.environment, &mut self.out);
+        engine::fire(&mut self.domain, &self.environment);
+        engine::release(&mut self.domain, &self.environment, &mut self.out);
         self.observe();
         if self.settings.facts {
             self.domain.drain_facts();

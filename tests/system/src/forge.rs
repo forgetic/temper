@@ -245,7 +245,8 @@ impl World {
     }
 
     fn send(&mut self, event: engine::Event) {
-        engine::step(&mut self.root, &self.env, event, &mut self.out);
+        engine::step(&mut self.root, &self.env, event);
+        engine::release(&mut self.root, &self.env, &mut self.out);
         self.collect();
         self.root.reclaim();
     }
@@ -365,9 +366,10 @@ impl World {
                 fake::Request::Hook { .. } => {}
             }
         }
-        engine::resume(&mut self.root, &self.env, &mut self.out);
+        engine::release(&mut self.root, &self.env, &mut self.out);
         self.collect();
-        engine::fire(&mut self.root, &self.env, &mut self.out);
+        engine::fire(&mut self.root, &self.env);
+        engine::release(&mut self.root, &self.env, &mut self.out);
         self.collect();
         self.root.reclaim();
         self.fake.reclaim();

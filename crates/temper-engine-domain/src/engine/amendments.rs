@@ -186,7 +186,7 @@ pub(super) fn begin(
             match answer {
                 authority::Answer::Allow => {}
                 authority::Answer::Propose => {
-                    let Some(proposal) = crate::fresh(&mut domain.journal, super::Family::Message) else {
+                    let Some(proposal) = crate::fresh(&mut domain.counters, super::Family::Message) else {
                         return person_control_refused(domain, request, people::Refusal::Limit);
                     };
                     assert!(
@@ -217,7 +217,7 @@ pub(super) fn begin(
             }
         }
     }
-    let Some(message) = crate::fresh(&mut domain.journal, super::Family::Message) else {
+    let Some(message) = crate::fresh(&mut domain.counters, super::Family::Message) else {
         return person_control_refused(domain, request, people::Refusal::Limit);
     };
     assert!(domain.person_tasks.insert(request, PersonTaskRoute::Amended(task)) == Ok(None), "one person amendment");

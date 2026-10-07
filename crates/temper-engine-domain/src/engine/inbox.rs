@@ -83,7 +83,7 @@ pub(super) fn begin(
     if most == 0
         || env.limits.people.inbox_entries == 0
         || match before {
-            Some(cursor) => cursor.read_high > domain.journal.deployment().messages,
+            Some(cursor) => cursor.read_high > domain.counters.deployment().messages,
             None => false,
         }
     {
@@ -227,7 +227,7 @@ pub(super) fn page(
                         }
                         match entry.kind {
                             people::EntryKind::Reply { message } => {
-                                if message == 0 || message > domain.journal.deployment().messages {
+                                if message == 0 || message > domain.counters.deployment().messages {
                                     return failed_owned(domain, waiter, read, people::Refusal::Limit, out);
                                 }
                                 if message > read.position && (!read.frozen_high || message <= read.high) {
@@ -251,7 +251,7 @@ pub(super) fn page(
                         if visible(domain, read.person, entry) {
                             match entry.kind {
                                 people::EntryKind::Reply { message } => {
-                                    if message == 0 || message > domain.journal.deployment().messages {
+                                    if message == 0 || message > domain.counters.deployment().messages {
                                         return failed_owned(domain, waiter, read, people::Refusal::Limit, out);
                                     }
                                     if message > read.position && (!read.frozen_high || message <= read.high) {
@@ -292,7 +292,7 @@ pub(super) fn page(
                         && task.result_position > read.position
                         && (!read.frozen_high || task.result_position <= read.high)
                     {
-                        if task.result_position > domain.journal.deployment().messages {
+                        if task.result_position > domain.counters.deployment().messages {
                             return failed_owned(domain, waiter, read, people::Refusal::Limit, out);
                         }
                         if !read.frozen_high {

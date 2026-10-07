@@ -54,7 +54,8 @@ impl Driver {
     }
 
     pub fn send(&mut self, event: engine::Event) {
-        engine::step(&mut self.root, &self.env, event, &mut self.out);
+        engine::step(&mut self.root, &self.env, event);
+        engine::release(&mut self.root, &self.env, &mut self.out);
         self.collect();
         self.root.reclaim();
     }
@@ -110,7 +111,7 @@ impl Driver {
             let number = self.store.apply();
             self.send(engine::Event::Committed { number });
         }
-        engine::resume(&mut self.root, &self.env, &mut self.out);
+        engine::release(&mut self.root, &self.env, &mut self.out);
         self.collect();
         self.root.reclaim();
     }

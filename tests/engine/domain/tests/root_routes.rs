@@ -2156,7 +2156,8 @@ fn a_stalled_proposal_passes_up() {
     );
     driver.env.wall = Wall::from_nanos(Duration::from_millis(11).as_nanos());
     driver.env.now = Time::from_nanos(Duration::from_millis(11).as_nanos());
-    engine::fire(&mut driver.root, &driver.env, &mut driver.out);
+    engine::fire(&mut driver.root, &driver.env);
+    engine::release(&mut driver.root, &driver.env, &mut driver.out);
     driver.collect();
     driver.settle();
     let second = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(leaf))).expect("leaf live");
@@ -2385,7 +2386,8 @@ fn release_tool_resets_a_delegates_exhausted_tries() {
     driver.settle();
     driver.env.now = Time::from_nanos(Duration::from_secs(2).as_nanos());
     driver.env.wall = Wall::from_nanos(Duration::from_secs(2).as_nanos());
-    engine::fire(&mut driver.root, &driver.env, &mut driver.out);
+    engine::fire(&mut driver.root, &driver.env);
+    engine::release(&mut driver.root, &driver.env, &mut driver.out);
     driver.collect();
     driver.settle();
     let second = assigned_from_last(&driver.delivered);
@@ -2900,12 +2902,14 @@ fn a_lost_attempt_is_told_of_the_calls_committed_after_its_last_turn() {
     driver.send(engine::Event::Lost { channel: Token::new(7) });
     driver.env.now = Time::from_nanos(Duration::from_secs(6).as_nanos());
     driver.env.wall = Wall::from_nanos(Duration::from_secs(6).as_nanos());
-    engine::fire(&mut driver.root, &driver.env, &mut driver.out);
+    engine::fire(&mut driver.root, &driver.env);
+    engine::release(&mut driver.root, &driver.env, &mut driver.out);
     driver.collect();
     driver.settle();
     driver.env.now = Time::from_nanos(Duration::from_secs(7).as_nanos());
     driver.env.wall = Wall::from_nanos(Duration::from_secs(7).as_nanos());
-    engine::fire(&mut driver.root, &driver.env, &mut driver.out);
+    engine::fire(&mut driver.root, &driver.env);
+    engine::release(&mut driver.root, &driver.env, &mut driver.out);
     driver.collect();
     driver.send(engine::Event::Hello {
         channel: Token::new(8),
@@ -3444,7 +3448,7 @@ fn coalesced_history_waiters_survive_simultaneous_io_completion_under_full_journ
         if driver.events.len() == 2 {
             break;
         }
-        engine::resume(&mut driver.root, &driver.env, &mut driver.out);
+        engine::release(&mut driver.root, &driver.env, &mut driver.out);
         driver.collect();
         driver.root.reclaim();
     }
@@ -3562,7 +3566,8 @@ fn restored_loss_spends_a_try_with_or_without_a_durable_turn() {
         // A restored claim waits for fleet grace; it cannot be quiescent yet.
         restored.env.now = Time::from_nanos(6_000_000_000);
         restored.env.wall = Wall::from_nanos(6_000_000_000);
-        engine::fire(&mut restored.root, &restored.env, &mut restored.out);
+        engine::fire(&mut restored.root, &restored.env);
+        engine::release(&mut restored.root, &restored.env, &mut restored.out);
         restored.collect();
         let end = tasks::End::Failed(tasks::Class::Lost);
         let cumulative = if kept_turn { 3 } else { 0 };
@@ -4384,7 +4389,8 @@ fn a_run_failing_transiently_is_retried_then_held_past_its_tries() {
     assert!(matches!(task.phase, tasks::Phase::Active(tasks::Active::BackingOff { .. })));
     driver.env.now = Time::from_nanos(Duration::from_secs(2).as_nanos());
     driver.env.wall = Wall::from_nanos(Duration::from_secs(2).as_nanos());
-    engine::fire(&mut driver.root, &driver.env, &mut driver.out);
+    engine::fire(&mut driver.root, &driver.env);
+    engine::release(&mut driver.root, &driver.env, &mut driver.out);
     driver.collect();
     driver.settle();
     let second = assigned_from_last(&driver.delivered);
@@ -4435,7 +4441,8 @@ fn a_delegate_held_past_its_tries_is_escalated_two_levels_to_a_person_released_a
     driver.settle();
     driver.env.now = Time::from_nanos(Duration::from_secs(2).as_nanos());
     driver.env.wall = Wall::from_nanos(Duration::from_secs(2).as_nanos());
-    engine::fire(&mut driver.root, &driver.env, &mut driver.out);
+    engine::fire(&mut driver.root, &driver.env);
+    engine::release(&mut driver.root, &driver.env, &mut driver.out);
     driver.collect();
     driver.settle();
     let second = assigned_from_last(&driver.delivered);
@@ -4683,7 +4690,8 @@ fn moving_a_held_delegate_rechecks_its_escalation_recipient() {
     driver.settle();
     driver.env.now = Time::from_nanos(Duration::from_secs(2).as_nanos());
     driver.env.wall = Wall::from_nanos(Duration::from_secs(2).as_nanos());
-    engine::fire(&mut driver.root, &driver.env, &mut driver.out);
+    engine::fire(&mut driver.root, &driver.env);
+    engine::release(&mut driver.root, &driver.env, &mut driver.out);
     driver.collect();
     driver.settle();
     let second = assigned_from_last(&driver.delivered);
@@ -4778,7 +4786,8 @@ fn a_worker_lost_mid_run_resumes_at_the_last_committed_turn() {
     driver.send(engine::Event::Lost { channel: Token::new(7) });
     driver.env.now = Time::from_nanos(Duration::from_secs(6).as_nanos());
     driver.env.wall = Wall::from_nanos(Duration::from_secs(6).as_nanos());
-    engine::fire(&mut driver.root, &driver.env, &mut driver.out);
+    engine::fire(&mut driver.root, &driver.env);
+    engine::release(&mut driver.root, &driver.env, &mut driver.out);
     driver.collect();
     driver.settle();
     let Some(Record::Tasks(tasks::Stored::Live(task))) =
@@ -4789,7 +4798,8 @@ fn a_worker_lost_mid_run_resumes_at_the_last_committed_turn() {
     assert_eq!(task.tries.lost, 1);
     driver.env.now = Time::from_nanos(Duration::from_secs(7).as_nanos());
     driver.env.wall = Wall::from_nanos(Duration::from_secs(7).as_nanos());
-    engine::fire(&mut driver.root, &driver.env, &mut driver.out);
+    engine::fire(&mut driver.root, &driver.env);
+    engine::release(&mut driver.root, &driver.env, &mut driver.out);
     driver.collect();
     driver.send(engine::Event::Hello {
         channel: Token::new(8),
@@ -4827,7 +4837,8 @@ fn a_worker_frozen_past_its_grace_gets_no_next_attempt_until_its_sum_has_passed(
     driver.send(engine::Event::Lost { channel: Token::new(7) });
     driver.env.now = Time::from_nanos(Duration::from_secs(4).as_nanos());
     driver.env.wall = Wall::from_nanos(Duration::from_secs(4).as_nanos());
-    engine::fire(&mut driver.root, &driver.env, &mut driver.out);
+    engine::fire(&mut driver.root, &driver.env);
+    engine::release(&mut driver.root, &driver.env, &mut driver.out);
     driver.collect();
     for _ in 0..10 {
         driver.advance(true);
@@ -4841,7 +4852,8 @@ fn a_worker_frozen_past_its_grace_gets_no_next_attempt_until_its_sum_has_passed(
     assert_eq!(driver.delivered.iter().filter(|delivery| matches!(delivery, Delivery::Assigned { .. })).count(), 1);
     driver.env.now = Time::from_nanos(Duration::from_secs(6).as_nanos());
     driver.env.wall = Wall::from_nanos(Duration::from_secs(6).as_nanos());
-    engine::fire(&mut driver.root, &driver.env, &mut driver.out);
+    engine::fire(&mut driver.root, &driver.env);
+    engine::release(&mut driver.root, &driver.env, &mut driver.out);
     driver.collect();
     driver.settle();
     let Some(Record::Tasks(tasks::Stored::Live(task))) =

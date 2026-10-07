@@ -54,9 +54,9 @@ pub(super) fn historical_loaded(domain: &mut Domain, waiter: Token, rows: Box<[s
                 super::Record::ProposalDecision(row)
                     if row.proposal == query.proposal
                         && row.project == query.project
-                        && row.proposal <= domain.journal.deployment().messages
+                        && row.proposal <= domain.counters.deployment().messages
                         && row.by != 0
-                        && row.by <= domain.journal.deployment().people
+                        && row.by <= domain.counters.deployment().people
                         && match row.proposer {
                             tasks::Party::Person(number) | tasks::Party::Task(number) => number == query.proposer,
                             tasks::Party::Deployment { .. } => false,
@@ -335,7 +335,7 @@ fn materialize(
     }
     let mut ids = List::with_capacity(limits.batch);
     for _ in &batch {
-        let Some(number) = crate::fresh(&mut domain.journal, Family::Task) else { return Err(tasks::Refusal::Live) };
+        let Some(number) = crate::fresh(&mut domain.counters, Family::Task) else { return Err(tasks::Refusal::Live) };
         ids.push(number).expect("bounded batch IDs");
     }
     let mut created = List::with_capacity(limits.batch);
@@ -426,7 +426,7 @@ pub(super) fn propose_call(
     let Some(holder) = holder(domain, key.task, &action, None) else {
         return refused(domain, env, decision, to, key, tasks::Refusal::Reference);
     };
-    let Some(number) = crate::fresh(&mut domain.journal, Family::Message) else {
+    let Some(number) = crate::fresh(&mut domain.counters, Family::Message) else {
         return refused(domain, env, decision, to, key, tasks::Refusal::Busy);
     };
     let token = to.into_token();
@@ -505,7 +505,7 @@ pub(super) fn decide_call(
         }
     };
     let message = match next {
-        tasks::ProposalDecision::Reject { .. } => match crate::fresh(&mut domain.journal, Family::Message) {
+        tasks::ProposalDecision::Reject { .. } => match crate::fresh(&mut domain.counters, Family::Message) {
             Some(message) => Some(message),
             None => return refused(domain, env, decision, to, key, tasks::Refusal::Busy),
         },
@@ -545,7 +545,7 @@ fn accept(
     if !covers_task(domain, &needed, key.task, depth, proposal.project) {
         return refused(domain, env, decision, to, key, tasks::Refusal::Funding);
     }
-    let Some(message) = crate::fresh(&mut domain.journal, Family::Message) else {
+    let Some(message) = crate::fresh(&mut domain.counters, Family::Message) else {
         return refused(domain, env, decision, to, key, tasks::Refusal::Busy);
     };
     let token = to.into_token();
@@ -559,7 +559,7 @@ fn accept(
             tasks::Event::Make { reply_to: ReplyTo::new(token), creator, batch }
         }
         tasks::ProposalAction::Amend { task, amendment } => {
-            let Some(message) = crate::fresh(&mut domain.journal, Family::Message) else {
+            let Some(message) = crate::fresh(&mut domain.counters, Family::Message) else {
                 return refused(domain, env, decision, ReplyTo::new(token), key, tasks::Refusal::Busy);
             };
             let Some(current) = domain.tasks.delegation(task) else {
@@ -578,7 +578,7 @@ fn accept(
             }
         }
         tasks::ProposalAction::Widen { task, authority } => {
-            let Some(message) = crate::fresh(&mut domain.journal, Family::Message) else {
+            let Some(message) = crate::fresh(&mut domain.counters, Family::Message) else {
                 return refused(domain, env, decision, ReplyTo::new(token), key, tasks::Refusal::Busy);
             };
             tasks::Event::Amend {
@@ -690,7 +690,7 @@ pub(super) fn person_decide(
         },
     };
     let message = match next {
-        tasks::ProposalDecision::Reject { .. } => match crate::fresh(&mut domain.journal, Family::Message) {
+        tasks::ProposalDecision::Reject { .. } => match crate::fresh(&mut domain.counters, Family::Message) {
             Some(message) => Some(message),
             None => return person_refused(domain, request, people::Refusal::Limit),
         },
@@ -729,7 +729,7 @@ fn person_accept(domain: &mut Domain, _env: &Env<Limits>, request: Token, person
             let Some(current) = domain.tasks.delegation(task) else {
                 return person_refused(domain, request, people::Refusal::Ended);
             };
-            let Some(amend_message) = crate::fresh(&mut domain.journal, Family::Message) else {
+            let Some(amend_message) = crate::fresh(&mut domain.counters, Family::Message) else {
                 return person_refused(domain, request, people::Refusal::Limit);
             };
             let after = authority_value(amendment.authority.as_ref().expect("admitted amendment authority"));
@@ -745,7 +745,7 @@ fn person_accept(domain: &mut Domain, _env: &Env<Limits>, request: Token, person
             }
         }
         tasks::ProposalAction::Widen { task, authority } => {
-            let Some(amend_message) = crate::fresh(&mut domain.journal, Family::Message) else {
+            let Some(amend_message) = crate::fresh(&mut domain.counters, Family::Message) else {
                 return person_refused(domain, request, people::Refusal::Limit);
             };
             tasks::Event::Amend {
@@ -771,7 +771,7 @@ fn person_accept(domain: &mut Domain, _env: &Env<Limits>, request: Token, person
         },
     };
     // The final decision follows the accepted amendment's own message in the same task inbox.
-    let Some(message) = crate::fresh(&mut domain.journal, Family::Message) else {
+    let Some(message) = crate::fresh(&mut domain.counters, Family::Message) else {
         return person_refused(domain, request, people::Refusal::Limit);
     };
     assert!(

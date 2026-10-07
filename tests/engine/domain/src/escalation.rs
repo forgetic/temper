@@ -486,7 +486,7 @@ impl World {
             self.apply_store();
             return;
         }
-        engine::resume(&mut self.domain, &self.environment, &mut self.out);
+        engine::release(&mut self.domain, &self.environment, &mut self.out);
         self.observe();
         if self.frozen_cut.is_some() {
             self.apply_store();
@@ -495,14 +495,16 @@ impl World {
         if self.events.front().is_some_and(|(due, _)| *due <= self.iteration) {
             let (_, event) = self.events.pop_front().expect("one due scripted event");
             self.trace.push(format!("input {event:?}"));
-            engine::step(&mut self.domain, &self.environment, event, &mut self.out);
+            engine::step(&mut self.domain, &self.environment, event);
+            engine::release(&mut self.domain, &self.environment, &mut self.out);
             self.observe();
             if self.frozen_cut.is_some() {
                 self.apply_store();
                 return;
             }
         }
-        engine::fire(&mut self.domain, &self.environment, &mut self.out);
+        engine::fire(&mut self.domain, &self.environment);
+        engine::release(&mut self.domain, &self.environment, &mut self.out);
         self.observe();
         if self.frozen_cut.is_some() {
             self.apply_store();
