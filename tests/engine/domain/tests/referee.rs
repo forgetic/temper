@@ -2,7 +2,7 @@
 //! domain/core.md, section 10. The same referees observe the passing worlds.
 
 use jig_core_people::Role;
-use jig_people_world::referee::{People, Seen as PersonSeen};
+use jig_people_world::referee::{People, RouteKind, Seen as PersonSeen};
 use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
 use temper_engine_domain::{Key, Record};
 use temper_engine_domain_tasks::Party;
@@ -31,7 +31,11 @@ fn settled_chat() -> World {
 #[test]
 fn authority_referee_rejects_a_person_without_a_grant() {
     let mut referee = Referee::new(People::default());
-    referee.observe(Time::ZERO, PersonSeen::Routed { role: Role::Observer }, &mut Vec::new());
+    referee.observe(
+        Time::ZERO,
+        PersonSeen::Routed { role: Role::Observer, kind: RouteKind::Goal, service: false },
+        &mut Vec::new(),
+    );
     assert!(matches!(referee.verdict(), Verdict::Failed(_)));
 }
 
