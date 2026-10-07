@@ -318,6 +318,9 @@ simulation; no legacy fuzzy seed trim is needed for the suite caps.
 | 01.1 charter codec | merged locally | smith 30f5c7b | fmt/clippy pass; 695 focused / 6.550 s; 12 fuzzy / 8.359 s. |
 | 04.0 skein machine IO repin | merged locally | smith 3d14b55 | fmt/clippy pass; 695 focused / 6.842 s; 12 fuzzy / 7.150 s. |
 | 04.0 skein machine IO results repin | merged locally | smith 9bf0e74 | fmt/clippy pass; 1,193 focused / 12.363 s; 13 fuzzy / 9.370 s. |
+| 04.0 skein file deadline and cancellation repin | merged locally | smith 88586bb | fmt/clippy pass; 1,200 focused / 6.706 s; 13 fuzzy / 6.197 s. |
+| 04.1 machine files | merged locally | smith 0278313 | fmt/clippy pass; 1,204 focused / 4.006 s; 13 fuzzy / 5.547 s. |
+| 04.2 machine processes and guides | merged locally | smith 1d335dc | fmt/clippy pass; 1,208 focused / 5.581 s; 13 fuzzy / 6.338 s. |
 | 01.0 skein generator repin | merged locally | smith 2603960 | fmt/clippy pass; 695 focused / 6.196 s; 12 fuzzy / 6.747 s. |
 | 01.2 transcript codec | merged locally | smith 8cd34ba | fmt/clippy pass; 883 focused / 6.399 s; 12 fuzzy / 6.701 s. |
 | 01.3 channel codec | merged locally | smith 9798fbf | fmt/clippy pass; 1,191 focused / 8.954 s; 12 fuzzy / 9.765 s. |
