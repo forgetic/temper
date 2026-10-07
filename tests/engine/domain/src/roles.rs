@@ -225,6 +225,7 @@ impl World {
                     | tasks::Stored::Stub(_)
                     | tasks::Stored::Ledger(_)
                     | tasks::Stored::Writer(_)
+                    | tasks::Stored::Pool(_)
                     | tasks::Stored::History(_)
                     | tasks::Stored::PersonProposal(_),
                 )

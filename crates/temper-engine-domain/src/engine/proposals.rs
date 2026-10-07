@@ -168,6 +168,7 @@ pub(super) fn decision_record(row: &tasks::Stored) -> Option<ProposalDecisionRec
         | tasks::Stored::Ended(_)
         | tasks::Stored::Ledger(_)
         | tasks::Stored::Writer(_)
+        | tasks::Stored::Pool(_)
         | tasks::Stored::Stub(_) => None,
     }
 }

@@ -31,6 +31,7 @@ pub fn limits() -> engine::Limits {
         dependencies: 1,
         holdings: 2,
         hold_kinds: 2,
+        pools: 2,
         hold_segments: 4,
         hold_bytes: 128,
         hold_waiters: 2,

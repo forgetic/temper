@@ -4762,6 +4762,7 @@ fn tasks_outputs(
                     }
                     tasks::Stored::Ledger(_)
                     | tasks::Stored::Writer(_)
+                    | tasks::Stored::Pool(_)
                     | tasks::Stored::History(_)
                     | tasks::Stored::Stub(_) => {}
                 }
@@ -4788,6 +4789,7 @@ fn tasks_outputs(
                     }
                     tasks::Stored::Live(_)
                     | tasks::Stored::Writer(_)
+                    | tasks::Stored::Pool(_)
                     | tasks::Stored::Ledger(_)
                     | tasks::Stored::History(_)
                     | tasks::Stored::Stub(_)
@@ -8349,7 +8351,7 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
                 }));
                 domain.work.push(Work::Tasks(tasks::Event::Restore { record }));
             }
-            tasks::Stored::Ledger(_) | tasks::Stored::Writer(_) => {
+            tasks::Stored::Ledger(_) | tasks::Stored::Writer(_) | tasks::Stored::Pool(_) => {
                 domain.work.push(Work::Tasks(tasks::Event::Restore { record }));
             }
         },

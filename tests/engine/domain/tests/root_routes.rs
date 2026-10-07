@@ -412,6 +412,7 @@ fn a_maintainer_prioritises_project_goals_and_a_member_cannot() {
                 | tasks::Stored::History(_)
                 | tasks::Stored::Ledger(_)
                 | tasks::Stored::Writer(_)
+                | tasks::Stored::Pool(_)
                 | tasks::Stored::PersonProposal(_),
             )
             | Record::People(_)
@@ -3983,6 +3984,7 @@ fn multiple_waiting_recipients_preflight_together_and_full_journal_refuses_witho
                 | tasks::Stored::Stub(_)
                 | tasks::Stored::Ledger(_)
                 | tasks::Stored::Writer(_)
+                | tasks::Stored::Pool(_)
                 | tasks::Stored::History(_)
                 | tasks::Stored::PersonProposal(_),
             )
