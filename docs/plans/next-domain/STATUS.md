@@ -313,3 +313,4 @@ simulation; no legacy fuzzy seed trim is needed for the suite caps.
 | 00.3 checks-ended notice | merged locally | smith 87ff00c | fmt/clippy pass; 612 focused / 6.341 s; 12 fuzzy / 6.111 s. |
 | 00.4 message label and text | merged locally | smith 704f2f6 | fmt/clippy pass; 613 focused / 5.254 s; 12 fuzzy / 6.032 s. |
 | 00.5 unsupported charter version | merged locally | smith 46e7eac | fmt/clippy pass; 615 focused / 8.997 s; 12 fuzzy / 6.021 s. |
+| 01.0 skein codec repin | merged locally | smith 3c6c1fc | fmt/clippy pass; 615 focused / 7.568 s; 12 fuzzy / 6.565 s. |
