@@ -3,8 +3,9 @@
 //! (domain/engine.md, section 15).
 
 use std::collections::{BTreeMap, BTreeSet};
+use temper_engine_domain::engine::{BriefBody as Body, BriefKind as Kind};
 use temper_engine_domain::{Key, Record, Write, engine::Assignment};
-use temper_engine_domain_brief::{Body, Kind};
+use temper_engine_domain_brief as brief;
 use temper_engine_domain_people as people;
 use temper_engine_domain_tasks as tasks;
 
@@ -201,7 +202,7 @@ impl WalkingReferee {
         let Some(section) = assignment.sections.first() else {
             return Err("missing required task section");
         };
-        if section.kind != Kind::Task {
+        if section.kind != Kind::Core(brief::Core::Task) {
             return Err("task section is not first");
         }
         let Body::Text(bytes) = &section.body else {

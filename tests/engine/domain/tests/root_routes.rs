@@ -2716,14 +2716,14 @@ fn a_plan_of_spikes_a_choice_and_changes_runs_in_dependency_order() {
         if assignment.task == numbers[1] || assignment.task == numbers[2])));
     finish_task(&mut driver, &first, tasks::TaskResult::Report { words: b"spike says yes".as_slice().into() });
     let second = assigned_task(&driver, numbers[1]);
-    assert!(second.sections.iter().any(|section| section.kind == brief::Kind::Dependencies
-        && matches!(&section.body, brief::Body::Text(text) if text.windows(b"spike says yes".len()).any(|part| part == b"spike says yes"))));
+    assert!(second.sections.iter().any(|section| section.kind == engine::BriefKind::Core(brief::Core::Results)
+        && matches!(&section.body, engine::BriefBody::Text(text) if text.windows(b"spike says yes".len()).any(|part| part == b"spike says yes"))));
     assert!(!driver.delivered.iter().any(|item| matches!(item, Delivery::Assigned { assignment, .. }
         if assignment.task == numbers[2])));
     finish_task(&mut driver, &second, tasks::TaskResult::Verdict { code: 7, words: b"choose path".as_slice().into() });
     let third = assigned_task(&driver, numbers[2]);
-    assert!(third.sections.iter().any(|section| section.kind == brief::Kind::Dependencies
-        && matches!(&section.body, brief::Body::Text(text) if text.windows(b"verdict 7".len()).any(|part| part == b"verdict 7"))));
+    assert!(third.sections.iter().any(|section| section.kind == engine::BriefKind::Core(brief::Core::Results)
+        && matches!(&section.body, engine::BriefBody::Text(text) if text.windows(b"verdict 7".len()).any(|part| part == b"verdict 7"))));
     finish_task(
         &mut driver,
         &third,
@@ -2774,8 +2774,8 @@ fn a_negative_verdict_starts_dependents_and_a_failure_holds_them() {
     let first = assigned_task(&driver, numbers[0]);
     finish_task(&mut driver, &first, tasks::TaskResult::Verdict { code: 0, words: b"no".as_slice().into() });
     let second = assigned_task(&driver, numbers[1]);
-    assert!(second.sections.iter().any(|section| section.kind == brief::Kind::Dependencies
-        && matches!(&section.body, brief::Body::Text(text) if text.windows(b"verdict 0".len()).any(|part| part == b"verdict 0"))));
+    assert!(second.sections.iter().any(|section| section.kind == engine::BriefKind::Core(brief::Core::Results)
+        && matches!(&section.body, engine::BriefBody::Text(text) if text.windows(b"verdict 0".len()).any(|part| part == b"verdict 0"))));
     finish_task(&mut driver, &second, tasks::TaskResult::Failure { reason: b"blocked".as_slice().into() });
     let row = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(numbers[2]))).expect("dependent held live");
     let Record::Tasks(tasks::Stored::Live(task)) = row else { panic!("dependent row") };
@@ -2810,8 +2810,8 @@ fn an_ended_delegate_can_be_named_as_a_later_tasks_input() {
     let second = call_batch(&mut driver, &parent_again, 114, Box::new([second]));
     park_task(&mut driver, &parent_again);
     let assigned = assigned_task(&driver, second[0]);
-    assert!(assigned.sections.iter().any(|section| section.kind == brief::Kind::Dependencies
-        && matches!(&section.body, brief::Body::Text(text) if text.windows(b"found it".len()).any(|part| part == b"found it"))));
+    assert!(assigned.sections.iter().any(|section| section.kind == engine::BriefKind::Core(brief::Core::Results)
+        && matches!(&section.body, engine::BriefBody::Text(text) if text.windows(b"found it".len()).any(|part| part == b"found it"))));
 }
 
 #[test]
@@ -4353,8 +4353,10 @@ fn a_chat_past_the_resume_limit_starts_fresh_with_the_tail_in_its_brief() {
         .sections
         .iter()
         .find_map(|section| match &section.body {
-            brief::Body::Text(bytes) if section.kind == brief::Kind::Transcript => Some(bytes),
-            brief::Body::Text(_) | brief::Body::Missing(_) => None,
+            engine::BriefBody::Text(bytes) if section.kind == engine::BriefKind::Core(brief::Core::TranscriptTail) => {
+                Some(bytes)
+            }
+            engine::BriefBody::Text(_) | engine::BriefBody::Missing(_) => None,
         })
         .expect("bounded transcript tail section");
     assert!(tail.ends_with(b"yz"), "the newest conversation bytes survive the cut");

@@ -735,7 +735,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
                     .max(u64::from(limits.transcript_bytes))
                     .checked_add(u64::from(limits.run_bytes))?
                     .checked_add(
-                        List::<temper_engine_domain_brief::Section>::worst_case(limits.deliveries)?
+                        List::<crate::engine::BriefSection>::worst_case(limits.deliveries)?
                             .max(u64::try_from(size_of::<temper_engine_domain_tasks::EscalationContext>()).ok()?),
                     )?,
             )?,
@@ -808,8 +808,8 @@ fn assignment_within(assignment: &crate::engine::Assignment, limits: &Limits) ->
     owned = 0;
     for section in &assignment.sections {
         let bytes = match &section.body {
-            temper_engine_domain_brief::Body::Text(bytes) => u64::try_from(bytes.len()).expect("usize fits u64"),
-            temper_engine_domain_brief::Body::Missing(_) => 0,
+            crate::engine::BriefBody::Text(bytes) => u64::try_from(bytes.len()).expect("usize fits u64"),
+            crate::engine::BriefBody::Missing(_) => 0,
         };
         let Some(total) = owned.checked_add(bytes) else {
             return false;

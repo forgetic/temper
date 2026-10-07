@@ -29,27 +29,28 @@ pub fn model(model: &engine::Model) -> run::charter::Llm {
 
 /// Render one already bounded root brief section with its kind as a title.
 #[must_use]
-pub fn section(section: &brief::Section) -> run::Section {
+pub fn section(section: &engine::BriefSection) -> run::Section {
     let title: &[u8] = match section.kind {
-        brief::Kind::Task => b"Task",
-        brief::Kind::Transcript => b"Transcript tail",
-        brief::Kind::Item => b"Item",
-        brief::Kind::Comments => b"Comments",
-        brief::Kind::Dependencies => b"Dependencies",
-        brief::Kind::Ci => b"CI",
-        brief::Kind::Reviews => b"Reviews",
-        brief::Kind::Pull => b"Pull request",
-        brief::Kind::Attempts => b"Earlier attempts",
-        brief::Kind::Plan => b"Plan",
-        brief::Kind::Notes => b"Notes",
-        brief::Kind::Template => b"Template",
+        engine::BriefKind::Core(brief::Core::Task) => b"Task",
+        engine::BriefKind::Core(brief::Core::Lineage) => b"Lineage",
+        engine::BriefKind::Core(brief::Core::Inbox) => b"Inbox",
+        engine::BriefKind::Core(brief::Core::Results) => b"Dependencies",
+        engine::BriefKind::Core(brief::Core::Plan) => b"Plan",
+        engine::BriefKind::Core(brief::Core::Attempts) => b"Earlier attempts",
+        engine::BriefKind::Core(brief::Core::Calls) => b"Calls",
+        engine::BriefKind::Core(brief::Core::Waiting) => b"Waiting",
+        engine::BriefKind::Core(brief::Core::NotesIndex) => b"Notes",
+        engine::BriefKind::Core(brief::Core::TranscriptTail) => b"Transcript tail",
+        engine::BriefKind::Forge(engine::ForgeBriefKind::Ci) => b"CI",
+        engine::BriefKind::Forge(engine::ForgeBriefKind::Reviews) => b"Reviews",
+        engine::BriefKind::Forge(engine::ForgeBriefKind::Pull) => b"Pull request",
     };
     let text = match &section.body {
-        brief::Body::Text(text) => text.clone(),
-        brief::Body::Missing(reason) => match reason {
-            brief::Unread::Failed => bytes::copy_of(b"[read failed]"),
-            brief::Unread::Late => bytes::copy_of(b"[read timed out]"),
-            brief::Unread::Oversized => bytes::copy_of(b"[read exceeded limit]"),
+        engine::BriefBody::Text(text) => text.clone(),
+        engine::BriefBody::Missing(reason) => match reason {
+            brief::GatherMissing::Failed => bytes::copy_of(b"[read failed]"),
+            brief::GatherMissing::Late => bytes::copy_of(b"[read timed out]"),
+            brief::GatherMissing::Budget => bytes::copy_of(b"[read exceeded limit]"),
         },
     };
     run::Section { title: bytes::copy_of(title), text }

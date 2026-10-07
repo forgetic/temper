@@ -367,9 +367,9 @@ fn held_assignment_checks_owned_bytes_and_section_backing_before_acceptance() {
             },
             budget: 1,
         }),
-        sections: Box::new([brief::Section {
-            kind: brief::Kind::Task,
-            body: brief::Body::Text(b"12345".as_slice().into()),
+        sections: Box::new([crate::engine::BriefSection {
+            kind: crate::engine::BriefKind::Core(brief::Core::Task),
+            body: crate::engine::BriefBody::Text(b"12345".as_slice().into()),
         }]),
         inbox: Box::new([]),
         saved: Box::new([]),

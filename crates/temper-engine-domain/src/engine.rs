@@ -184,7 +184,7 @@ pub struct Assignment {
     pub run: Box<RunCharter>,
     /// Owned task, attempt and transcript-tail sections, at most brief `sections` and
     /// `brief_bytes`. Task/deployment lineage awaits its root route.
-    pub sections: Box<[brief::Section]>,
+    pub sections: Box<[BriefSection]>,
     /// Whole unread words offered to this attempt, oldest first.
     pub inbox: Box<[tasks::Word]>,
     /// Writable repository tags whose workspace starts at the task's saved-work branch.
@@ -198,6 +198,35 @@ pub struct Assignment {
     pub answered: Box<[crate::CallRecord]>,
     /// Secret-free account grant; token bytes stay in the protocol.
     pub grant: accounts::Grant,
+}
+
+/// One root-owned section in a worker assignment (jig's domain/engine.md, section 9).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct BriefSection {
+    pub kind: BriefKind,
+    pub body: BriefBody,
+}
+
+/// The core's typed section or a section owned by temper's forge connector.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BriefKind {
+    Core(brief::Core),
+    Forge(ForgeBriefKind),
+}
+
+/// The forge connector's three brief section kinds.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ForgeBriefKind {
+    Ci,
+    Reviews,
+    Pull,
+}
+
+/// Bytes handed to the worker, or why a section was unavailable.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum BriefBody {
+    Text(Box<[u8]>),
+    Missing(brief::GatherMissing),
 }
 
 /// A checkout's authoritative forge start, prepared afresh by the worker.
@@ -652,7 +681,7 @@ enum Work {
 struct BriefConnector {
     task: u64,
     source: forge::BriefSource,
-    kind: brief::Kind,
+    kind: ForgeBriefKind,
     cutting: bool,
 }
 
@@ -4663,12 +4692,11 @@ fn brief_outputs(
                 for placed in order {
                     let section = match placed {
                         brief::GatherPlaced::Core { kind, text } => {
-                            brief::Section { kind: core_brief_kind(kind), body: brief::Body::Text(text) }
+                            BriefSection { kind: BriefKind::Core(kind), body: BriefBody::Text(text) }
                         }
-                        brief::GatherPlaced::CoreMissing { kind, why } => brief::Section {
-                            kind: core_brief_kind(kind),
-                            body: brief::Body::Missing(gather_unread(why)),
-                        },
+                        brief::GatherPlaced::CoreMissing { kind, why } => {
+                            BriefSection { kind: BriefKind::Core(kind), body: BriefBody::Missing(why) }
+                        }
                         brief::GatherPlaced::Connector { token, size, .. } => {
                             let id = Id::from_token(token);
                             let Some(row) = domain.brief_connectors.get(id) else {
@@ -4680,7 +4708,7 @@ fn brief_outputs(
                             let bytes = domain.forge.take_brief(token);
                             match bytes {
                                 Some(bytes) if bytes.len() == usize::try_from(size).expect("bounded section") => {
-                                    brief::Section { kind, body: brief::Body::Text(bytes) }
+                                    BriefSection { kind: BriefKind::Forge(kind), body: BriefBody::Text(bytes) }
                                 }
                                 Some(_) | None => {
                                     missing_owner = true;
@@ -4688,9 +4716,9 @@ fn brief_outputs(
                                 }
                             }
                         }
-                        brief::GatherPlaced::Missing { kind, why, .. } => brief::Section {
-                            kind: numbered_brief_kind(kind),
-                            body: brief::Body::Missing(gather_unread(why)),
+                        brief::GatherPlaced::Missing { kind, why, .. } => BriefSection {
+                            kind: BriefKind::Forge(numbered_brief_kind(kind)),
+                            body: BriefBody::Missing(why),
                         },
                     };
                     sections.push(section).expect("bounded brief sections");
@@ -4815,32 +4843,12 @@ fn brief_outputs(
     }
 }
 
-fn core_brief_kind(kind: brief::Core) -> brief::Kind {
+fn numbered_brief_kind(kind: u16) -> ForgeBriefKind {
     match kind {
-        brief::Core::Task | brief::Core::Lineage | brief::Core::Inbox => brief::Kind::Task,
-        brief::Core::Results => brief::Kind::Dependencies,
-        brief::Core::Plan => brief::Kind::Plan,
-        brief::Core::Attempts => brief::Kind::Attempts,
-        brief::Core::Calls | brief::Core::Waiting => brief::Kind::Comments,
-        brief::Core::NotesIndex => brief::Kind::Notes,
-        brief::Core::TranscriptTail => brief::Kind::Transcript,
-    }
-}
-
-fn numbered_brief_kind(kind: u16) -> brief::Kind {
-    match kind {
-        1 => brief::Kind::Ci,
-        2 => brief::Kind::Reviews,
-        3 => brief::Kind::Pull,
+        1 => ForgeBriefKind::Ci,
+        2 => ForgeBriefKind::Reviews,
+        3 => ForgeBriefKind::Pull,
         _ => unreachable!("temper's forge connector uses three section kinds"),
-    }
-}
-
-fn gather_unread(why: brief::GatherMissing) -> brief::Unread {
-    match why {
-        brief::GatherMissing::Failed => brief::Unread::Failed,
-        brief::GatherMissing::Late => brief::Unread::Late,
-        brief::GatherMissing::Budget => brief::Unread::Oversized,
     }
 }
 
@@ -5800,45 +5808,27 @@ fn start_brief(domain: &mut Domain, env: &Env<Limits>, task: u64) {
     }));
 }
 
-fn forge_brief_kind(source: forge::BriefSource) -> brief::Kind {
+fn forge_brief_kind(source: forge::BriefSource) -> ForgeBriefKind {
     match source {
-        forge::BriefSource::Ci { .. } => brief::Kind::Ci,
-        forge::BriefSource::Reviews { .. } => brief::Kind::Reviews,
-        forge::BriefSource::Pull { .. } => brief::Kind::Pull,
+        forge::BriefSource::Ci { .. } => ForgeBriefKind::Ci,
+        forge::BriefSource::Reviews { .. } => ForgeBriefKind::Reviews,
+        forge::BriefSource::Pull { .. } => ForgeBriefKind::Pull,
     }
 }
 
-fn forge_kind_number(kind: brief::Kind) -> u16 {
+fn forge_kind_number(kind: ForgeBriefKind) -> u16 {
     match kind {
-        brief::Kind::Ci => 1,
-        brief::Kind::Reviews => 2,
-        brief::Kind::Pull => 3,
-        brief::Kind::Task
-        | brief::Kind::Transcript
-        | brief::Kind::Item
-        | brief::Kind::Comments
-        | brief::Kind::Dependencies
-        | brief::Kind::Attempts
-        | brief::Kind::Plan
-        | brief::Kind::Notes
-        | brief::Kind::Template => unreachable!("forge section kind"),
+        ForgeBriefKind::Ci => 1,
+        ForgeBriefKind::Reviews => 2,
+        ForgeBriefKind::Pull => 3,
     }
 }
 
-fn forge_brief_budget(kind: brief::Kind, budgets: &brief::Budgets) -> u32 {
+fn forge_brief_budget(kind: ForgeBriefKind, budgets: &brief::Budgets) -> u32 {
     match kind {
-        brief::Kind::Ci => budgets.ci,
-        brief::Kind::Reviews => budgets.reviews,
-        brief::Kind::Pull => budgets.pull,
-        brief::Kind::Task
-        | brief::Kind::Transcript
-        | brief::Kind::Item
-        | brief::Kind::Comments
-        | brief::Kind::Dependencies
-        | brief::Kind::Attempts
-        | brief::Kind::Plan
-        | brief::Kind::Notes
-        | brief::Kind::Template => unreachable!("forge section kind"),
+        ForgeBriefKind::Ci => budgets.ci,
+        ForgeBriefKind::Reviews => budgets.reviews,
+        ForgeBriefKind::Pull => budgets.pull,
     }
 }
 
@@ -6399,7 +6389,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     bytes = bytes.checked_add(Map::<u64, Assignment>::worst_case(limits.tasks.tasks)?)?.checked_add(
         u64::from(limits.tasks.tasks).checked_add(u64::from(limits.journal.held))?.checked_mul(
             u64::from(limits.brief.brief_bytes)
-                .checked_add(List::<brief::Section>::worst_case(limits.brief.sections)?)?
+                .checked_add(List::<BriefSection>::worst_case(limits.brief.sections)?)?
                 .checked_add(u64::from(limits.tasks.inbox_bytes))?
                 .checked_add(
                     u64::from(limits.tasks.tasks)

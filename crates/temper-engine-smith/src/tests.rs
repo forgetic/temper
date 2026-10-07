@@ -55,9 +55,9 @@ fn assignment() -> engine::Assignment {
             },
             budget: 40,
         }),
-        sections: Box::new([brief::Section {
-            kind: brief::Kind::Task,
-            body: brief::Body::Text(b"Say hello".as_slice().into()),
+        sections: Box::new([engine::BriefSection {
+            kind: engine::BriefKind::Core(brief::Core::Task),
+            body: engine::BriefBody::Text(b"Say hello".as_slice().into()),
         }]),
         inbox: Box::new([]),
         saved: Box::new([]),
