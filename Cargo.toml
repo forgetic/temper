@@ -7,6 +7,7 @@ members = [
     "crates/temper-engine-domain",
     "crates/temper-engine-smith",
     "jig/crates/jig-core-accounts",
+    "jig/testing/jig-test-connector",
     "crates/temper-engine-domain-authority",
     "crates/temper-engine-domain-brief",
     "crates/temper-engine-domain-fleet",
@@ -69,6 +70,7 @@ sha2 = { version = "=0.10.9", default-features = false }
 temper-web-view = { path = "crates/temper-web-view" }
 temper-fake-person = { path = "testing/temper-fake-person" }
 jig-core-accounts = { path = "jig/crates/jig-core-accounts" }
+jig-test-connector = { path = "jig/testing/jig-test-connector" }
 temper-engine-domain = { path = "crates/temper-engine-domain" }
 temper-engine-smith = { path = "crates/temper-engine-smith" }
 temper-engine-domain-authority = { path = "crates/temper-engine-domain-authority" }
