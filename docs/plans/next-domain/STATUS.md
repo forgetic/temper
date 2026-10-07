@@ -314,3 +314,11 @@ simulation; no legacy fuzzy seed trim is needed for the suite caps.
 | 00.4 message label and text | merged locally | smith 704f2f6 | fmt/clippy pass; 613 focused / 5.254 s; 12 fuzzy / 6.032 s. |
 | 00.5 unsupported charter version | merged locally | smith 46e7eac | fmt/clippy pass; 615 focused / 8.997 s; 12 fuzzy / 6.021 s. |
 | 01.0 skein codec repin | merged locally | smith 3c6c1fc | fmt/clippy pass; 615 focused / 7.568 s; 12 fuzzy / 6.565 s. |
+
+## jig extraction
+
+| Increment | State | Commit | Evidence |
+|---|---|---|---|
+| jig 00.1 boundary check | merged and pushed | fcad6a05 | Checks future jig manifests and source vocabulary, with breach fixtures. Gate: fmt/clippy; 1,138 focused / 2.343 s; 25 fuzzy / 2.750 s. |
+| jig 00.2 world helpers | already satisfied | — | `temper-world` reexports the generic schedule, stage, ledger, trace, referee and heap machinery from `skein-world`; jig's worlds can use it directly. |
+| jig 00.3 accounts | merged and pushed | c4999d26, 6dca842e, b2a4da03 | Carved the accounts child and its world, with history; the world uses `skein-world` for heap measurement. Gate: fmt/clippy; 1,138 focused / 3.170 s; 25 fuzzy / 4.001 s. |
