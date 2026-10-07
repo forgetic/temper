@@ -29,3 +29,23 @@ pub use domain::{Domain, fire, max_out, resume, step};
 pub use facts::{Fact, Priority};
 pub use identity::{Config, Writer};
 pub use limits::{Limits, worst_case};
+/// Checked deep payload bytes of one durable client row.
+#[must_use]
+pub fn stored_bytes(row: &Stored) -> Option<u64> {
+    bounds::stored_bytes(row)
+}
+/// Checked deep payload bytes of one outbox effect.
+#[must_use]
+pub fn effect_bytes(effect: &Effect) -> Option<u64> {
+    bounds::effect_bytes(effect)
+}
+/// Checked deep payload bytes of one typed provider answer.
+#[must_use]
+pub fn answer_bytes(answer: &api::Answer, limits: &Limits) -> Option<u64> {
+    bounds::answer_bytes(answer, limits)
+}
+/// Checked deep answer payload bytes before caller-specific admission limits.
+#[must_use]
+pub fn answer_bytes_unbounded(answer: &api::Answer) -> Option<u64> {
+    bounds::answer_bytes_unbounded(answer)
+}

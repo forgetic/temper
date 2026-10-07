@@ -99,6 +99,7 @@ fn ready(d: &mut Domain) -> Box<[Request]> {
 fn adopted() -> Repository {
     Repository {
         project: 5,
+        home: true,
         provider: REPO,
         host: Box::from(&b"forge.example"[..]),
         owner: Box::from(&b"org"[..]),
@@ -198,6 +199,7 @@ fn adoption_reads_permission_before_committing_its_role() {
     let mut d = domain();
     let request = Adoption {
         project: 5,
+        home: true,
         provider: REPO,
         host: Box::from(&b"forge.example"[..]),
         owner: Box::from(&b"org"[..]),
@@ -216,11 +218,15 @@ fn adoption_reads_permission_before_committing_its_role() {
         | Request::Taken { .. }
         | Request::Refused { .. }
         | Request::Outcome { .. }
+        | Request::ContinueRelease { .. }
+        | Request::Released { .. }
+        | Request::ReleaseFailed { .. }
         | Request::News { .. }
         | Request::Drift { .. }
         | Request::ProjectAfter { .. }
         | Request::ProjectionFailed { .. }
-        | Request::ChangeDecision { .. } => panic!("permission call"),
+        | Request::ChangeDecision { .. }
+        | Request::Read { .. } => panic!("permission call"),
     };
     assert_eq!(op, client::api::Op::Read(client::api::Read::Permission { user: 7 }));
     let result = outputs(
@@ -243,11 +249,15 @@ fn adoption_reads_permission_before_committing_its_role() {
         | Request::Taken { .. }
         | Request::Refused { .. }
         | Request::Outcome { .. }
+        | Request::ContinueRelease { .. }
+        | Request::Released { .. }
+        | Request::ReleaseFailed { .. }
         | Request::News { .. }
         | Request::Drift { .. }
         | Request::ProjectAfter { .. }
         | Request::ProjectionFailed { .. }
-        | Request::ChangeDecision { .. } => panic!("branches call"),
+        | Request::ChangeDecision { .. }
+        | Request::Read { .. } => panic!("branches call"),
     };
     assert!(
         outputs(
@@ -270,10 +280,14 @@ fn adoption_reads_permission_before_committing_its_role() {
         | Request::Taken { .. }
         | Request::Refused { .. }
         | Request::Outcome { .. }
+        | Request::ContinueRelease { .. }
+        | Request::Released { .. }
+        | Request::ReleaseFailed { .. }
         | Request::News { .. }
         | Request::Drift { .. }
         | Request::ProjectAfter { .. }
         | Request::ProjectionFailed { .. }
-        | Request::ChangeDecision { .. } => panic!("settings follows collision read"),
+        | Request::ChangeDecision { .. }
+        | Request::Read { .. } => panic!("settings follows collision read"),
     }
 }

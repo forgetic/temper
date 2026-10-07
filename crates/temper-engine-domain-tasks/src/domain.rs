@@ -138,6 +138,18 @@ impl Domain {
         Some(record(self, task)?.executor)
     }
 
+    /// Stable tree root for connector branch naming.
+    #[must_use]
+    pub fn root(&self, task: u64) -> Option<u64> {
+        Some(record(self, task)?.root)
+    }
+
+    /// Borrowed current task facts for a connector projection in the same root decision.
+    #[must_use]
+    pub fn task(&self, number: u64) -> Option<&TaskRecord> {
+        record(self, number)
+    }
+
     /// Current deployment-owned core recurring task identities for one project.
     #[must_use]
     pub fn recurring_tasks(&self, project: u32) -> Box<[u64]> {
@@ -258,6 +270,20 @@ pub fn max_out(limits: &Limits) -> u32 {
 #[expect(clippy::too_many_lines, reason = "the closed task event vocabulary dispatches to focused handlers")]
 pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     match event {
+        Event::WakeProcedure { task } => {
+            let wake = match record(domain, task) {
+                Some(row) => match row.executor {
+                    crate::Executor::Procedure { .. } => row.phase == Phase::Active(Active::Idle),
+                    crate::Executor::Agent { .. } | crate::Executor::Person(_) => false,
+                },
+                None => false,
+            };
+            if wake {
+                task_mut(domain, task).expect("live procedure").record.phase = Phase::Active(Active::Due);
+                publish(domain, env, task, out);
+                activate(domain, task, out);
+            }
+        }
         Event::ProposePerson { reply_to, proposal } => {
             crate::proposals::propose_person(domain, env, reply_to, proposal, out);
         }
@@ -305,7 +331,10 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
             crate::moving::apply(domain, env, reply_to, task, person, period, pool_budget, period_budget, &reason, out);
         }
         Event::Subscribe { reply_to, task, subscription } => {
-            crate::subscriptions::subscribe(domain, env, reply_to, task, subscription, out);
+            crate::subscriptions::subscribe(domain, env, reply_to, task, subscription, false, out);
+        }
+        Event::SubscribeTopic { reply_to, task, subscription } => {
+            crate::subscriptions::subscribe(domain, env, reply_to, task, subscription, true, out);
         }
         Event::Unsubscribe { reply_to, task, subscription } => {
             crate::subscriptions::unsubscribe(domain, env, reply_to, task, subscription, out);

@@ -96,6 +96,9 @@ impl Driver {
                 },
                 engine::Request::WatchRefused { .. } => panic!("root route test did not request an invalid watch"),
                 engine::Request::Account(request) => self.accounts.push(request),
+                engine::Request::Forge { .. } | engine::Request::ForgeAdopted { .. } => {
+                    panic!("root route fixture did not adopt forge")
+                }
                 engine::Request::Stop => self.stopped = true,
                 engine::Request::CallBusy { call, .. } => self.call_busy.push(call),
                 engine::Request::TurnBusy { .. } | engine::Request::AnswerBusy { .. } => {
@@ -167,6 +170,9 @@ impl Driver {
                 | Delivery::InboxView { .. }
                 | Delivery::BeginInboxView { .. }
                 | Delivery::CallAnswer { .. }
+                | Delivery::ForgeAdopted { .. }
+                | Delivery::ForgeCommitted { .. }
+                | Delivery::ForgeCall { .. }
                 | Delivery::Procedure { .. } => None,
             })
             .expect("durable sign-in reply")
@@ -567,6 +573,7 @@ fn a_maintainer_prioritises_project_goals_and_a_member_cannot() {
             | Record::RunProof(_)
             | Record::Terminal(_)
             | Record::EscalationDecision(_)
+            | Record::Forge { .. }
             | Record::ProposalDecision(_) => None,
         })
         .collect();
@@ -927,6 +934,9 @@ fn durable_start_turn_and_answer_callbacks_survive_full_journal_pressure() {
             | Delivery::InboxView { .. }
             | Delivery::BeginInboxView { .. }
             | Delivery::CallAnswer { .. }
+            | Delivery::ForgeAdopted { .. }
+            | Delivery::ForgeCommitted { .. }
+            | Delivery::ForgeCall { .. }
             | Delivery::Procedure { .. } => None,
         })
         .collect();
@@ -977,6 +987,7 @@ fn restart_recovers_named_ended_result_without_replaying_a_raw_notice() {
             | Record::People(_)
             | Record::RunProof(_)
             | Record::EscalationDecision(_)
+            | Record::Forge { .. }
             | Record::ProposalDecision(_)
             | Record::Terminal(_)
             | Record::Call(_) => None,
@@ -1096,6 +1107,7 @@ fn a_full_inbox_pages_the_rest_from_the_store() {
             Record::Tasks(tasks::Stored::Ended(task)) => Some(task.as_ref().clone()),
             Record::Call(_)
             | Record::EscalationDecision(_)
+            | Record::Forge { .. }
             | Record::ProposalDecision(_)
             | Record::Deployment(_)
             | Record::Turn(_)
@@ -1394,6 +1406,9 @@ fn assigned(driver: &Driver) -> engine::Assignment {
             | Delivery::InboxView { .. }
             | Delivery::BeginInboxView { .. }
             | Delivery::CallAnswer { .. }
+            | Delivery::ForgeAdopted { .. }
+            | Delivery::ForgeCommitted { .. }
+            | Delivery::ForgeCall { .. }
             | Delivery::Procedure { .. } => None,
         })
         .expect("assigned chat")
@@ -1588,6 +1603,7 @@ fn invalid_nonfinal_task_restore_page_stops_before_issuing_its_continuation() {
             | Record::People(_)
             | Record::RunProof(_)
             | Record::EscalationDecision(_)
+            | Record::Forge { .. }
             | Record::ProposalDecision(_)
             | Record::Terminal(_)
             | Record::Call(_) => None,
@@ -1671,6 +1687,7 @@ fn authenticated_result_query_refuses_monotonic_expiry_after_backward_wall_jump_
             | Record::People(_)
             | Record::RunProof(_)
             | Record::EscalationDecision(_)
+            | Record::Forge { .. }
             | Record::ProposalDecision(_)
             | Record::Terminal(_)
             | Record::Call(_) => None,
@@ -3575,6 +3592,7 @@ fn coalesced_history_waiters_survive_simultaneous_io_completion_under_full_journ
         + people::max_out(&configured.people) * 4
         + configured.people.pending * 2
         + fleet::max_out(&configured.fleet) * 4
+        + temper_engine_domain_forge::max_out(&configured.forge)
         + configured.tasks.tasks
         + 6;
     configured.journal.deliveries =
@@ -3656,6 +3674,9 @@ fn coalesced_history_waiters_survive_simultaneous_io_completion_under_full_journ
             | Delivery::InboxView { .. }
             | Delivery::BeginInboxView { .. }
             | Delivery::CallAnswer { .. }
+            | Delivery::ForgeAdopted { .. }
+            | Delivery::ForgeCommitted { .. }
+            | Delivery::ForgeCall { .. }
             | Delivery::Procedure { .. } => None,
         })
         .collect();
@@ -3795,7 +3816,8 @@ fn a_policy_change_applies_to_later_decisions_only() {
             | Record::RunProof(_)
             | Record::Terminal(_)
             | Record::Tasks(_)
-            | Record::People(_) => None,
+            | Record::People(_)
+            | Record::Forge { .. } => None,
         })
         .expect("first chat is durable");
     driver.send(engine::Event::Ask {
@@ -3896,6 +3918,7 @@ fn multiple_waiting_recipients_preflight_together_and_full_journal_refuses_witho
         + people::max_out(&configured.people) * 4
         + configured.people.pending * 2
         + fleet::max_out(&configured.fleet) * 4
+        + temper_engine_domain_forge::max_out(&configured.forge)
         + configured.tasks.tasks
         + 6;
     let mut driver = Driver::configured(prior.store, administration_config(9310), &configured);
@@ -3937,6 +3960,7 @@ fn multiple_waiting_recipients_preflight_together_and_full_journal_refuses_witho
             | Record::RunProof(_)
             | Record::Terminal(_)
             | Record::EscalationDecision(_)
+            | Record::Forge { .. }
             | Record::ProposalDecision(_)
             | Record::Call(_) => None,
         })
@@ -4024,6 +4048,7 @@ fn multiple_waiting_recipients_preflight_together_and_full_journal_refuses_witho
                     | Record::Terminal(_)
                     | Record::Turn(_)
                     | Record::EscalationDecision(_)
+                    | Record::Forge { .. }
                     | Record::ProposalDecision(_)
             )
         )),
@@ -4237,6 +4262,9 @@ fn assigned_from_last(delivered: &[Delivery]) -> engine::Assignment {
             | Delivery::InboxView { .. }
             | Delivery::BeginInboxView { .. }
             | Delivery::CallAnswer { .. }
+            | Delivery::ForgeAdopted { .. }
+            | Delivery::ForgeCommitted { .. }
+            | Delivery::ForgeCall { .. }
             | Delivery::Procedure { .. }
             | Delivery::EscalationReply { .. }
             | Delivery::ReadEscalationDecision { .. }
@@ -4280,6 +4308,9 @@ fn say(driver: &mut Driver, task: u64, key: u8) -> u64 {
             | Delivery::InboxView { .. }
             | Delivery::BeginInboxView { .. }
             | Delivery::CallAnswer { .. }
+            | Delivery::ForgeAdopted { .. }
+            | Delivery::ForgeCommitted { .. }
+            | Delivery::ForgeCall { .. }
             | Delivery::Procedure { .. }
             | Delivery::EscalationReply { .. }
             | Delivery::ReadEscalationDecision { .. }

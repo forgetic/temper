@@ -50,7 +50,7 @@ pub use amendment::{
 pub use boundary::{
     Ask, Entry, EntryKind, EscalationChoice, EscalationDecision, Event, Holding, Identity, IdentityKey, InitialOwner,
     Key, Outcome, PersonResult, ProposalChoice, ProposalDecision, Refusal, Reply, Request, RequestKey, ResultRef, Role,
-    Stored, Whom,
+    Seed, Stored, Whom,
 };
 pub use domain::{Domain, fire, max_out, step};
 pub use facts::Fact;

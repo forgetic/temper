@@ -681,6 +681,7 @@ pub(super) fn loaded(domain: &mut Domain, env: &Env<Limits>, waiter: Token, rows
                 | Record::Terminal(_)
                 | Record::Tasks(_)
                 | Record::People(_)
+                | Record::Forge { .. }
                 | Record::EscalationDecision(_)
                 | Record::ProposalDecision(_) => {}
             }

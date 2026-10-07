@@ -8,8 +8,17 @@ use temper_engine_domain::{
 pub const LIMITS: JournalLimits =
     JournalLimits { commits: 3, held: 12, writes: 4, deliveries: 4, transcript_bytes: 128, result_bytes: 128 };
 
-pub const HEADER: Deployment =
-    Deployment { id: [31; 16], tasks: 0, people: 0, sign_ins: 0, messages: 0, runs: 0, calls: 0, commits: 0 };
+pub const HEADER: Deployment = Deployment {
+    id: [31; 16],
+    tasks: 0,
+    people: 0,
+    sign_ins: 0,
+    messages: 0,
+    runs: 0,
+    calls: 0,
+    forge_rows: 0,
+    commits: 0,
+};
 
 /// Only the domain's storage contract: numbered transactions apply whole in
 /// order. A completion can be lost after applying; a fresh process sees it.
@@ -74,11 +83,12 @@ impl Store {
                 Range::Tasks => match key {
                     Key::Tasks(temper_engine_domain_tasks::Key::Live(_) | temper_engine_domain_tasks::Key::Ledger(_) | temper_engine_domain_tasks::Key::PersonProposal(_)) => true,
                     Key::Tasks(temper_engine_domain_tasks::Key::Ended(_) | temper_engine_domain_tasks::Key::History { .. })
-                        | Key::Call(_) | Key::EscalationDecision { .. } | Key::ProposalDecision(_) | Key::Deployment | Key::Turn { .. } | Key::RunProof { .. } | Key::Terminal { .. } | Key::People(_) => false,
+                        | Key::Call(_) | Key::EscalationDecision { .. } | Key::ProposalDecision(_) | Key::Deployment | Key::Turn { .. } | Key::RunProof { .. } | Key::Terminal { .. } | Key::People(_) | Key::Forge(_) => false,
                 },
                 Range::EndedResults => matches!(key, Key::Tasks(temper_engine_domain_tasks::Key::Ended(number)) if *number != 0),
                 Range::RunProofs => matches!(key, Key::RunProof { task } if *task != 0),
                 Range::People => matches!(key, Key::People(_)),
+                Range::Forge => matches!(key, Key::Forge(_)),
                 Range::TaskResult { task } => matches!(key, Key::Tasks(temper_engine_domain_tasks::Key::Ended(number)) if *number == task),
                 Range::Turns { task, attempt } => matches!(key, Key::Turn { task: found, attempt: run, turn } if *found == task && *run == attempt && *turn != 0),
                 Range::TaskTranscript { task } => matches!(key, Key::Turn { task: found, attempt, turn } if *found == task && *attempt != 0 && *turn != 0),

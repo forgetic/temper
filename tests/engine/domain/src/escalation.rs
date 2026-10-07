@@ -182,6 +182,7 @@ pub fn limits() -> engine::Limits {
         + people::max_out(&limits.people) * 4
         + limits.people.pending * 2
         + fleet::max_out(&limits.fleet) * 4
+        + temper_engine_domain_forge::max_out(&limits.forge)
         + limits.tasks.tasks
         + 6;
     limits
@@ -606,6 +607,9 @@ impl World {
                 engine::Request::CallBusy { .. } => panic!("escalation world sent no calls"),
                 engine::Request::View(_) | engine::Request::WatchRefused { .. } => panic!("unrequested view output"),
                 engine::Request::Stop => panic!("escalation root stopped: {:?}", self.trace),
+                engine::Request::Forge { .. } | engine::Request::ForgeAdopted { .. } => {
+                    panic!("escalation story did not adopt forge")
+                }
             }
         }
     }
@@ -725,6 +729,8 @@ impl World {
                 .result(&self.store.rows, person, task, &words)
                 .expect("independent exact final report and funding"),
             Delivery::WebReply { .. }
+            | Delivery::ForgeAdopted { .. }
+            | Delivery::ForgeCall { .. }
             | Delivery::InboxPage { .. }
             | Delivery::InboxView { .. }
             | Delivery::Reply { .. }
@@ -734,6 +740,7 @@ impl World {
             | Delivery::TurnBusy { .. }
             | Delivery::ResultReply { .. } => panic!("unexpected escalation delivery {delivery:?}"),
             Delivery::Fleet(_)
+            | Delivery::ForgeCommitted { .. }
             | Delivery::ReadResult { .. }
             | Delivery::BeginInboxView { .. }
             | Delivery::ReadEscalationDecision { .. }

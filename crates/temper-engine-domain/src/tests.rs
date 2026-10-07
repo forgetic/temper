@@ -7,8 +7,17 @@ use skein_lib::{List, Queue, Token, Wall};
 
 const LIMITS: Limits = Limits { commits: 2, held: 8, writes: 4, deliveries: 4, transcript_bytes: 64, result_bytes: 32 };
 
-const DEPLOYMENT: Deployment =
-    Deployment { id: [19; 16], tasks: 0, people: 0, sign_ins: 0, messages: 0, runs: 0, calls: 0, commits: 0 };
+const DEPLOYMENT: Deployment = Deployment {
+    id: [19; 16],
+    tasks: 0,
+    people: 0,
+    sign_ins: 0,
+    messages: 0,
+    runs: 0,
+    calls: 0,
+    forge_rows: 0,
+    commits: 0,
+};
 
 fn bytes(len: u32) -> Box<[u8]> {
     let mut bytes = List::with_capacity(len);
@@ -309,6 +318,7 @@ fn held_assignment_checks_owned_bytes_and_section_backing_before_acceptance() {
         }]),
         inbox: Box::new([]),
         saved: Box::new([]),
+        workspace: crate::engine::ForgeWorkspace { key: Box::new([]), repositories: Box::new([]) },
         transcript: Box::new([]),
         answered: Box::new([]),
         grant: accounts::Grant { account: 1, generation: 1, valid: skein_lib::Duration::from_secs(1) },

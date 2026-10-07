@@ -772,6 +772,8 @@ pub enum Accepted {
 /// notifications have no reply destination and may be ignored if stale. (domain/tasks.md, sections 4–5).
 #[derive(PartialEq, Eq, Debug)]
 pub enum Event {
+    /// Connector facts changed for one idle procedure; a due step is offered once.
+    WakeProcedure { task: u64 },
     /// Root admits a person's goal proposal after validating policy and shape.
     ProposePerson { reply_to: ReplyTo, proposal: crate::PersonProposal },
     /// Root commits a policy holder's decision on a person-origin goal proposal.
@@ -829,6 +831,8 @@ pub enum Event {
     },
     /// Install one root-numbered standing interest for a current task.
     Subscribe { reply_to: ReplyTo, task: u64, subscription: Subscription },
+    /// Root-authorized connector topic interest with the same durable task subscription.
+    SubscribeTopic { reply_to: ReplyTo, task: u64, subscription: Subscription },
     /// Remove one interest owned by a current task.
     Unsubscribe { reply_to: ReplyTo, task: u64, subscription: u64 },
     /// Root places a merged state/timer/connector hint in a subscribed inbox.

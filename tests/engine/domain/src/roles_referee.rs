@@ -106,7 +106,8 @@ impl Referee {
                     | Record::RunProof(_)
                     | Record::Terminal(_)
                     | Record::EscalationDecision(_)
-                    | Record::ProposalDecision(_),
+                    | Record::ProposalDecision(_)
+                    | Record::Forge { .. },
                 )
                 | Write::Erase(_) => None,
             })
@@ -136,7 +137,8 @@ impl Referee {
                     | Record::RunProof(_)
                     | Record::Terminal(_)
                     | Record::EscalationDecision(_)
-                    | Record::ProposalDecision(_),
+                    | Record::ProposalDecision(_)
+                    | Record::Forge { .. },
                 )
                 | Write::Erase(_) => None,
             })
@@ -183,7 +185,8 @@ impl Referee {
                         | Record::RunProof(_)
                         | Record::Terminal(_)
                         | Record::EscalationDecision(_)
-                        | Record::ProposalDecision(_),
+                        | Record::ProposalDecision(_)
+                        | Record::Forge { .. },
                     )
                     | Write::Erase(_) => None,
                 });
@@ -246,6 +249,9 @@ impl Referee {
                     | Key::Turn { .. },
                 ) => return Err("role administration changed funding or accepted work"),
                 Write::Save(Record::People(_) | Record::Deployment(_)) | Write::Erase(Key::People(_)) => {}
+                Write::Save(Record::Forge { .. }) | Write::Erase(Key::Forge(_)) => {
+                    return Err("role administration changed forge state");
+                }
                 Write::Erase(Key::Deployment) => return Err("role administration erased deployment"),
             }
         }

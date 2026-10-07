@@ -93,6 +93,7 @@ pub(super) fn historical_loaded(domain: &mut Domain, waiter: Token, rows: Box<[s
                 | super::Record::Terminal(_)
                 | super::Record::Tasks(_)
                 | super::Record::People(_)
+                | super::Record::Forge { .. }
                 | super::Record::EscalationDecision(_) => {}
             }
         }

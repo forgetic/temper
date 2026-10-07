@@ -57,6 +57,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     limits.initial_owners.checked_add(3)?;
     limits.waiters.checked_add(1)?;
     limits.sign_ins.checked_add(1)?;
+    limits.holdings.checked_add(1)?;
     if limits.waiters == 0 || limits.sign_in_lifetime == Duration::ZERO || limits.request_retention == Duration::ZERO {
         return None;
     }

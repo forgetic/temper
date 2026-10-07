@@ -4,4 +4,4 @@
 #[path = "../client/src/translate.rs"]
 pub mod translate;
 mod world;
-pub use world::{LIMITS, REPO, World};
+pub use world::{LIMITS, REPO, World, fake_config};

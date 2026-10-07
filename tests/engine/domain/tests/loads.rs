@@ -4,7 +4,7 @@ use skein_lib::{Queue, Token, Wall};
 use temper_engine_domain::{self as root, Key, Range, Record, TurnRecord};
 use temper_engine_domain_world::commits::World;
 
-const LIMITS: Limits = Limits { loads: 2, rows: 4, bytes: 1024, reply_bytes: 1024, transcript_bytes: 128 };
+const LIMITS: Limits = Limits { loads: 2, rows: 4, bytes: 1024, reply_bytes: 2048, transcript_bytes: 128 };
 
 fn row(turn: u32, bytes: usize) -> Record {
     Record::Turn(TurnRecord {

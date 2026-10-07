@@ -5,7 +5,7 @@
 
 use crate::{
     Ask, Entry, Event, Fact, Holding, Identity, IdentityKey, InitialOwner, Key, Limits, Outcome, Refusal, Reply,
-    Request, RequestKey, ResultRef, Role, Stored, Whom,
+    Request, RequestKey, ResultRef, Role, Seed, Stored, Whom,
 };
 use alloc::boxed::Box;
 use skein_lib::{Deadlines, Env, Id, List, Map, Queue, ReplyTo, Slab, Time, Token, Wall};
@@ -154,6 +154,54 @@ impl Domain {
     #[must_use]
     pub fn role(&self, person: u64, project: u32) -> Option<Role> {
         role(self, person, project)
+    }
+
+    /// Resolve a provider-authenticated collaborator to this project's role.
+    #[must_use]
+    pub fn role_for_identity(&self, key: IdentityKey, project: u32) -> Option<(u64, Role)> {
+        let person = *self.identities.get(&key)?;
+        Some((person, role(self, person, project)?))
+    }
+
+    /// Check that one whole adoption seed can commit without displacing current roles.
+    #[must_use]
+    pub fn can_seed(&self, limits: &Limits, project: u32, collaborators: &[Seed]) -> bool {
+        if !self.ready() || collaborators.len() > usize::try_from(limits.holdings).expect("u32 fits usize") {
+            return false;
+        }
+        let Some(holdings) = self.roles.get(&project) else { return false };
+        let mut new_people = 0_usize;
+        let mut new_roles = 0_usize;
+        for (at, seed) in collaborators.iter().enumerate() {
+            if seed.identity.user == 0 || seed.candidate == 0 || self.people.contains_key(&seed.candidate) {
+                return false;
+            }
+            for earlier in collaborators.iter().take(at) {
+                if earlier.identity == seed.identity || earlier.candidate == seed.candidate {
+                    return false;
+                }
+            }
+            match self.identities.get(&seed.identity) {
+                Some(person) => {
+                    if !has_person(holdings, *person) {
+                        new_roles = new_roles.saturating_add(1);
+                    }
+                }
+                None => {
+                    new_people = new_people.saturating_add(1);
+                    new_roles = new_roles.saturating_add(1);
+                }
+            }
+        }
+        match (
+            self.people.len().checked_add(u32::try_from(new_people).ok().unwrap_or(u32::MAX)),
+            holdings.len().checked_add(new_roles),
+        ) {
+            (Some(people), Some(roles)) => {
+                people <= limits.people && roles <= usize::try_from(limits.holdings).expect("u32 fits usize")
+            }
+            (None, _) | (_, None) => false,
+        }
     }
 
     /// Pure lookup of whether the bounded role table contains `project`, including an empty
@@ -313,7 +361,12 @@ impl Domain {
 /// output payload bytes separately.
 #[must_use]
 pub fn max_out(limits: &Limits) -> u32 {
-    limits.initial_owners.saturating_add(3).max(limits.waiters.saturating_add(1)).max(limits.sign_ins.saturating_add(1))
+    limits
+        .initial_owners
+        .saturating_add(3)
+        .max(limits.waiters.saturating_add(1))
+        .max(limits.sign_ins.saturating_add(1))
+        .max(limits.holdings.saturating_add(1))
 }
 
 /// Apply one root-issued `event` with iteration clocks and immutable configured bounds in `env`;
@@ -325,6 +378,7 @@ pub fn max_out(limits: &Limits) -> u32 {
 /// targets for keyed replay.
 pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     match event {
+        Event::Seed { project, collaborators } => seed(domain, &env.limits, project, &collaborators, out),
         Event::Waiting { task, entries } => replace_waiting(domain, &env.limits, task, &entries),
         Event::ApplyRoles { reply_to, request } => {
             let result = apply_roles(domain, env, request, out);
@@ -565,6 +619,38 @@ fn valid_roles(domain: &Domain, limits: &Limits, project: u32, holdings: &[Holdi
         }
     }
     Ok(())
+}
+
+fn seed(domain: &mut Domain, limits: &Limits, project: u32, collaborators: &[Seed], out: &mut Queue<Request>) {
+    assert!(domain.can_seed(limits, project, collaborators), "root preflights an adoption seed");
+    let old = domain.roles.get(&project).expect("preflighted project");
+    let mut holdings = List::with_capacity(limits.holdings);
+    for holding in &**old {
+        holdings.push(*holding).expect("preflighted roster room");
+    }
+    let mut changed = false;
+    for collaborator in collaborators {
+        let person = match domain.identities.get(&collaborator.identity) {
+            Some(person) => *person,
+            None => {
+                let person = collaborator.candidate;
+                let identity = Identity { key: collaborator.identity, login: Box::new([]), name: Box::new([]) };
+                domain.identities.insert(collaborator.identity, person).expect("preflighted identity room");
+                domain.people.insert(person, identity.clone()).expect("preflighted person room");
+                out.push(Request::Save { record: Stored::Person { number: person, identity } });
+                person
+            }
+        };
+        if !has_person(holdings.as_slice(), person) {
+            holdings.push(Holding { person, role: collaborator.role }).expect("preflighted roster room");
+            changed = true;
+        }
+    }
+    if changed {
+        let holdings = holdings.into_boxed();
+        domain.roles.insert(project, holdings.clone()).expect("preflighted project");
+        out.push(Request::Save { record: Stored::Roles { project, holdings } });
+    }
 }
 
 fn has_person(holdings: &[Holding], person: u64) -> bool {

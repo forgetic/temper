@@ -35,6 +35,8 @@ pub struct Deployment {
     pub runs: u64,
     /// Last root-allocated call number; current 06a routes no tool calls.
     pub calls: u64,
+    /// Last allocated stable store identity for a forge connector row.
+    pub forge_rows: u64,
     /// Last issued ordered commit. A restored header is already durable; a live journal may await
     /// this number's store terminal.
     pub commits: u64,
@@ -57,6 +59,8 @@ pub enum Family {
     Run,
     /// Count of distinct named calls newly decided by the engine.
     Call,
+    /// Stable connector row identity, allocated once per live connector key.
+    ForgeRow,
 }
 
 /// Stable call identity supplied by a run and scoped by the root's task and
@@ -74,6 +78,19 @@ pub struct CallKey {
 /// Exact typed answer kept for replay across a lost channel or root restart.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum CallAnswer {
+    /// A forge write joined the named call's decision; later attempts can reask for its settled result.
+    ForgeEffect { entry: u64, outcome: Option<temper_engine_domain_forge_client::Outcome> },
+    /// A forge write was refused before an outbox entry existed.
+    ForgeEffectRefused(temper_engine_domain_forge_client::api::Error),
+    /// The pure policy check declined a forge write, retaining its bounded reasons.
+    ForgeEffectDenied {
+        answer: temper_engine_domain_authority::Answer,
+        findings: Box<[temper_engine_domain_authority::Finding]>,
+    },
+    /// One fresh bounded forge read, retained for named-call replay.
+    ForgeRead(
+        Box<Result<temper_engine_domain_forge_client::api::Answer, temper_engine_domain_forge_client::api::Error>>,
+    ),
     /// One held descendant decision reached its semantic terminal.
     EscalationDecided { task: u64, revision: u64, outcome: temper_engine_domain_tasks::EscalationOutcome },
     /// A task holder's held-decision call was refused before mutation.
@@ -174,6 +191,8 @@ pub enum Key {
         /// People-issued key for its durable secret-free records.
         temper_engine_domain_people::Key,
     ),
+    /// Stable root store address for a connector row.
+    Forge(u64),
 }
 
 /// Root-owned page ranges (domain/engine.md, section 5.3).
@@ -207,6 +226,8 @@ pub enum Range {
     RunProofs,
     /// Root startup reads every people child row before accepting people.
     People,
+    /// Root startup pages the forge connector's durable working set.
+    Forge,
     /// Root reads one historical ended task for an authenticated result page.
     TaskResult {
         /// Positive root-issued ended task key; terminal page has at most one row.
@@ -231,6 +252,18 @@ impl Range {
     #[expect(clippy::too_many_lines, reason = "all store families are checked exhaustively in one range matcher")]
     pub const fn contains(self, key: Key) -> bool {
         match self {
+            Range::Forge => match key {
+                Key::Forge(id) => id != 0,
+                Key::Call(_)
+                | Key::EscalationDecision { .. }
+                | Key::ProposalDecision(_)
+                | Key::Deployment
+                | Key::Turn { .. }
+                | Key::RunProof { .. }
+                | Key::Terminal { .. }
+                | Key::Tasks(_)
+                | Key::People(_) => false,
+            },
             Range::ProposalDecision { proposal } => match key {
                 Key::ProposalDecision(number) => proposal != 0 && number == proposal,
                 Key::Call(_)
@@ -240,7 +273,8 @@ impl Range {
                 | Key::RunProof { .. }
                 | Key::Terminal { .. }
                 | Key::Tasks(_)
-                | Key::People(_) => false,
+                | Key::People(_)
+                | Key::Forge(_) => false,
             },
             Range::Calls => match key {
                 Key::Call(call) => call.task != 0 && call.attempt != 0 && call.completion != 0,
@@ -251,7 +285,8 @@ impl Range {
                 | Key::RunProof { .. }
                 | Key::Terminal { .. }
                 | Key::Tasks(_)
-                | Key::People(_) => false,
+                | Key::People(_)
+                | Key::Forge(_) => false,
             },
             Range::EscalationDecision { task, revision } => match key {
                 Key::EscalationDecision { task: found, revision: current } => {
@@ -264,7 +299,8 @@ impl Range {
                 | Key::RunProof { .. }
                 | Key::Terminal { .. }
                 | Key::Tasks(_)
-                | Key::People(_) => false,
+                | Key::People(_)
+                | Key::Forge(_) => false,
             },
             Range::Deployment => match key {
                 Key::Deployment => true,
@@ -275,7 +311,8 @@ impl Range {
                 | Key::RunProof { .. }
                 | Key::Terminal { .. }
                 | Key::Tasks(_)
-                | Key::People(_) => false,
+                | Key::People(_)
+                | Key::Forge(_) => false,
             },
             Range::Tasks => match key {
                 Key::Tasks(child) => match child {
@@ -293,7 +330,8 @@ impl Range {
                 | Key::Turn { .. }
                 | Key::RunProof { .. }
                 | Key::Terminal { .. }
-                | Key::People(_) => false,
+                | Key::People(_)
+                | Key::Forge(_) => false,
             },
             Range::EndedResults => match key {
                 Key::Tasks(temper_engine_domain_tasks::Key::Ended(number)) => number != 0,
@@ -305,7 +343,8 @@ impl Range {
                 | Key::RunProof { .. }
                 | Key::Terminal { .. }
                 | Key::Tasks(_)
-                | Key::People(_) => false,
+                | Key::People(_)
+                | Key::Forge(_) => false,
             },
             Range::People => match key {
                 Key::People(_) => true,
@@ -316,7 +355,8 @@ impl Range {
                 | Key::Turn { .. }
                 | Key::RunProof { .. }
                 | Key::Terminal { .. }
-                | Key::Tasks(_) => false,
+                | Key::Tasks(_)
+                | Key::Forge(_) => false,
             },
             Range::RunProofs => match key {
                 Key::RunProof { task } => task != 0,
@@ -327,7 +367,8 @@ impl Range {
                 | Key::Turn { .. }
                 | Key::Terminal { .. }
                 | Key::Tasks(_)
-                | Key::People(_) => false,
+                | Key::People(_)
+                | Key::Forge(_) => false,
             },
             Range::TaskResult { task } => match key {
                 Key::Tasks(temper_engine_domain_tasks::Key::Ended(number)) => task == number,
@@ -339,7 +380,8 @@ impl Range {
                 | Key::Turn { .. }
                 | Key::RunProof { .. }
                 | Key::Terminal { .. }
-                | Key::People(_) => false,
+                | Key::People(_)
+                | Key::Forge(_) => false,
             },
             Range::Turns { task, attempt } => match key {
                 Key::Turn { task: found, attempt: run, turn } => found == task && run == attempt && turn != 0,
@@ -350,7 +392,8 @@ impl Range {
                 | Key::RunProof { .. }
                 | Key::Terminal { .. }
                 | Key::Tasks(_)
-                | Key::People(_) => false,
+                | Key::People(_)
+                | Key::Forge(_) => false,
             },
             Range::TaskTranscript { task } => match key {
                 Key::Turn { task: found, attempt, turn } => task != 0 && found == task && attempt != 0 && turn != 0,
@@ -361,7 +404,8 @@ impl Range {
                 | Key::RunProof { .. }
                 | Key::Terminal { .. }
                 | Key::Tasks(_)
-                | Key::People(_) => false,
+                | Key::People(_)
+                | Key::Forge(_) => false,
             },
         }
     }
@@ -480,7 +524,7 @@ pub struct ProposalDecisionRecord {
 /// Owned typed row sent root to store in a commit or returned store to root in
 /// a bounded page. The transaction/page, not each row, has the store terminal
 /// (domain/engine.md, 5.1, 5.3 and 5.6).
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Record {
     /// The first committed final proposal decision, read by later callers.
     ProposalDecision(ProposalDecisionRecord),
@@ -518,6 +562,8 @@ pub enum Record {
         /// Owned secret-free child row, deep bytes checked before retention.
         temper_engine_domain_people::Stored,
     ),
+    /// One connector row with its root allocated store identity.
+    Forge { id: u64, row: Box<temper_engine_domain_forge::Stored> },
 }
 
 impl Record {
@@ -535,6 +581,7 @@ impl Record {
             Record::Terminal(row) => Key::Terminal { task: row.task, attempt: row.attempt },
             Record::Tasks(row) => Key::Tasks(row.key()),
             Record::People(row) => Key::People(row.key()),
+            Record::Forge { id, .. } => Key::Forge(*id),
         }
     }
 }
@@ -542,7 +589,7 @@ impl Record {
 /// Root to store: one unique-key operation within an atomic commit. Child
 /// saves/erases acquire no separate terminal; the ordered commit answers once
 /// (domain/engine.md, 5.1 and 5.6).
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Write {
     /// Replace the row at its own key.
     Save(/** Owned typed row, byte-bounded by journal admission. */ Record),
@@ -572,7 +619,13 @@ pub fn record_bytes(record: &Record) -> Option<u64> {
     match record {
         Record::EscalationDecision(row) => decision_bytes(&row.decision),
         Record::Call(row) => match &row.answer {
-            CallAnswer::Unavailable
+            CallAnswer::ForgeRead(result) => match result.as_ref() {
+                Ok(answer) => temper_engine_domain_forge_client::answer_bytes_unbounded(answer),
+                Err(_) => Some(0),
+            },
+            CallAnswer::ForgeEffect { .. }
+            | CallAnswer::ForgeEffectRefused(_)
+            | CallAnswer::Unavailable
             | CallAnswer::Proposed { .. }
             | CallAnswer::ProposalDecided { .. }
             | CallAnswer::ProposalRefused(_)
@@ -589,9 +642,11 @@ pub fn record_bytes(record: &Record) -> Option<u64> {
             | CallAnswer::SubscriptionRefused(_)
             | CallAnswer::DelegationRefused(_) => Some(0),
             CallAnswer::Delegated(numbers) => u64::try_from(numbers.len()).ok()?.checked_mul(8),
-            CallAnswer::DelegationDenied { findings, .. } => u64::try_from(findings.len())
-                .ok()?
-                .checked_mul(u64::try_from(size_of::<temper_engine_domain_authority::Finding>()).ok()?),
+            CallAnswer::DelegationDenied { findings, .. } | CallAnswer::ForgeEffectDenied { findings, .. } => {
+                u64::try_from(findings.len())
+                    .ok()?
+                    .checked_mul(u64::try_from(size_of::<temper_engine_domain_authority::Finding>()).ok()?)
+            }
         },
         Record::ProposalDecision(_) | Record::Deployment(_) => Some(0),
         Record::Turn(turn) => u64::try_from(turn.transcript.len()).ok(),
@@ -601,6 +656,7 @@ pub fn record_bytes(record: &Record) -> Option<u64> {
         },
         Record::Terminal(row) => terminal_bytes(row),
         Record::Tasks(row) => temper_engine_domain_tasks::stored_bytes(row),
+        Record::Forge { row, .. } => temper_engine_domain_forge::stored_bytes(row),
         Record::People(row) => match row {
             temper_engine_domain_people::Stored::Person { identity, .. } => {
                 u64::try_from(identity.login.len()).ok()?.checked_add(u64::try_from(identity.name.len()).ok()?)

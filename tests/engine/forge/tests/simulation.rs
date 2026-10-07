@@ -90,7 +90,13 @@ fn change_row() -> top::ChangeRow {
         pull: None,
         pending: None,
         effect: change::EffectResult::None,
+        delegate: None,
+        delegate_status: change::Status::Unknown,
+        verdicts: Box::new([]),
         drift: None,
+        base_repair: false,
+        queue_repair: None,
+        queue_repairs: 0,
     }
 }
 
@@ -133,7 +139,7 @@ fn change_step_task(
     let mut decision = None;
     let mut committed = None;
     for event in world.take_seen() {
-        if let top::Request::ChangeDecision { task: decided, decision: current, entry } = event
+        if let top::Request::ChangeDecision { task: decided, decision: current, entry, .. } = event
             && decided == task
         {
             decision = Some(current);
@@ -519,7 +525,8 @@ fn a_change_produced_opened_checked_queued_and_landed() {
         top::Request::ChangeDecision {
             task: 51,
             decision: change::Decision::Effect(change::Effect::Open),
-            entry: Some(3)
+            entry: Some(3),
+            ..
         }
     )));
     assert_eq!(world.writes(), 0);
@@ -560,10 +567,14 @@ fn a_change_produced_opened_checked_queued_and_landed() {
                 | top::Request::Taken { .. }
                 | top::Request::Refused { .. }
                 | top::Request::Outcome { .. }
+                | top::Request::ContinueRelease { .. }
+                | top::Request::Released { .. }
+                | top::Request::ReleaseFailed { .. }
                 | top::Request::ProjectAfter { .. }
                 | top::Request::ProjectionFailed { .. }
                 | top::Request::News { .. }
                 | top::Request::Drift { .. }
+                | top::Request::Read { .. }
                 | top::Request::Call { .. } => {}
             }
         }
@@ -773,6 +784,69 @@ fn a_reported_worker_push_is_not_taken_for_outside_drift() {
 }
 
 #[test]
+fn closing_a_landed_change_deletes_its_branch_before_releasing_the_task() {
+    let mut world = World::new(92);
+    world.adopt();
+    world.produce(b"temper/51");
+    let name = top::Name {
+        forge: REPO.forge,
+        repository: REPO.repository,
+        what: top::What::Branch(Box::new([Box::from(&b"temper"[..]), Box::from(&b"51"[..])])),
+    };
+    world.event(top::Event::Hold { task: 51, resource: name.clone(), from: None });
+    world.take_seen();
+    world.event(top::Event::Release { task: 51, root: 51, ending: top::ReleaseEnding::Done, entry: 10 });
+    assert!(world.stored().contains_key(&top::Key::Release(51)));
+    assert!(world.stored().contains_key(&top::Key::Entry(10)));
+    assert!(!world.seen().iter().any(|request| matches!(request, top::Request::Released { task: 51 })));
+    world.event(top::Event::Committed { entry: 10 });
+    world.run_for(5);
+    assert!(world.seen().iter().any(|request| matches!(request, top::Request::ContinueRelease { task: 51 })));
+    world.event(top::Event::ContinueRelease { task: 51, entry: 11 });
+    assert!(world.seen().iter().any(|request| matches!(request, top::Request::Released { task: 51 })));
+    assert!(!world.stored().contains_key(&top::Key::Hold(name)));
+    assert!(!world.stored().contains_key(&top::Key::Release(51)));
+    assert_eq!(world.writes(), 1);
+}
+
+#[test]
+fn cancelling_a_change_closes_its_pull_before_deleting_its_branch() {
+    let mut world = World::new(93);
+    world.adopt();
+    world.produce(b"temper/51");
+    let pull = world.open_pull(b"temper/51", b"main");
+    let mut row = change_row();
+    row.pull = Some(pull);
+    world.event(top::Event::Change { row });
+    let name = top::Name {
+        forge: REPO.forge,
+        repository: REPO.repository,
+        what: top::What::Branch(Box::new([Box::from(&b"temper"[..]), Box::from(&b"51"[..])])),
+    };
+    world.event(top::Event::Hold { task: 51, resource: name, from: None });
+    world.take_seen();
+    world.event(top::Event::Release { task: 51, root: 51, ending: top::ReleaseEnding::Cancelled, entry: 10 });
+    assert!(
+        matches!(world.stored().get(&top::Key::Entry(10)), Some(top::Stored::Entry(client::Entry { effect: client::Effect { write: client::api::Write::Close { number }, .. }, .. })) if *number == pull)
+    );
+    world.event(top::Event::Committed { entry: 10 });
+    world.run_for(5);
+    world.event(top::Event::ContinueRelease { task: 51, entry: 11 });
+    assert!(matches!(
+        world.stored().get(&top::Key::Entry(11)),
+        Some(top::Stored::Entry(client::Entry {
+            effect: client::Effect { write: client::api::Write::DeleteBranch { .. }, .. },
+            ..
+        }))
+    ));
+    world.event(top::Event::Committed { entry: 11 });
+    world.run_for(5);
+    world.event(top::Event::ContinueRelease { task: 51, entry: 12 });
+    assert!(world.seen().iter().any(|request| matches!(request, top::Request::Released { task: 51 })));
+    assert_eq!(world.writes(), 2);
+}
+
+#[test]
 fn an_external_move_of_a_held_branch_is_reported_as_drift() {
     let mut world = World::new(31);
     world.adopt();
@@ -890,6 +964,7 @@ fn a_landing_wakes_overlapping_work_and_keeps_unrelated_news() {
     world.event(top::Event::Subscribe {
         subscription: top::Subscriber {
             task: 1,
+            number: 1,
             topic: topic.clone(),
             own_change: None,
             paths: Box::new([Box::from(&b"file"[..])]),
@@ -898,6 +973,7 @@ fn a_landing_wakes_overlapping_work_and_keeps_unrelated_news() {
     world.event(top::Event::Subscribe {
         subscription: top::Subscriber {
             task: 2,
+            number: 2,
             topic,
             own_change: None,
             paths: Box::new([Box::from(&b"elsewhere"[..])]),

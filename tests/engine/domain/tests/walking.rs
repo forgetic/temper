@@ -1,4 +1,4 @@
-use temper_engine_domain::{Key, Record, Write};
+use temper_engine_domain::{Key, Record, Write, engine};
 use temper_engine_domain_people as people;
 use temper_engine_domain_tasks as tasks;
 use temper_engine_domain_world::walking::{Settings, World, run_replayed};
@@ -22,6 +22,7 @@ fn ended(world: &World) -> &tasks::TaskRecord {
             | Record::People(_)
             | Record::RunProof(_)
             | Record::EscalationDecision(_)
+            | Record::Forge { .. }
             | Record::ProposalDecision(_)
             | Record::Terminal(_)
             | Record::Tasks(
@@ -186,6 +187,7 @@ fn walking_referee_rejects_wrong_task_or_uncommitted_or_duplicate_assignment() {
         }]),
         inbox: Box::new([]),
         saved: Box::new([]),
+        workspace: engine::ForgeWorkspace { key: Box::from(task.number.to_be_bytes()), repositories: Box::new([]) },
         transcript: Box::new([]),
         answered: Box::new([]),
         grant: Grant { account: 1, generation: 1, valid: Duration::from_secs(60) },

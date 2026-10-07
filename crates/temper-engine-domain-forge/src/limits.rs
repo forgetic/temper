@@ -1,5 +1,6 @@
 //! Bounded connector top state (domain/engine.md, section 13).
 use crate::{BranchHead, Hold, Key, Name, PullState, Repository, Stored, Subscriber, Topic};
+use core::mem::size_of;
 use skein_lib::{Map, Queue};
 use temper_engine_domain_forge_client as client;
 
@@ -69,8 +70,27 @@ pub fn worst_case(l: &Limits) -> Option<u64> {
         .checked_add(Map::<skein_lib::Token, crate::domain::PendingLanding>::worst_case(l.landings)?)?
         .checked_add(Map::<skein_lib::Token, crate::domain::PendingLost>::worst_case(l.holds)?)?
         .checked_add(Map::<u64, crate::ChangeRow>::worst_case(l.changes)?)?
+        .checked_add(
+            u64::from(l.changes)
+                .checked_mul(u64::from(l.change_policy.gates))?
+                .checked_mul(u64::try_from(size_of::<temper_engine_domain_forge_change::GateReport>()).ok()?)?,
+        )?
         .checked_add(Map::<skein_lib::Token, crate::domain::PendingStep>::worst_case(l.changes)?)?
         .checked_add(Map::<u64, crate::IssueRow>::worst_case(l.issues)?)?
+        .checked_add(Map::<u64, crate::ReleaseRow>::worst_case(l.tasks)?)?
+        .checked_add(u64::from(l.tasks).checked_mul(u64::from(l.name_bytes))?)?
+        .checked_add(
+            u64::from(l.issues).checked_mul(
+                u64::from(l.issue_policy.title_bytes)
+                    .checked_add(u64::from(l.issue_policy.body_bytes))?
+                    .checked_add(
+                        u64::from(l.issue_policy.plan_items).checked_mul(u64::from(l.issue_policy.body_bytes))?,
+                    )?
+                    .checked_add(
+                        u64::from(l.issue_policy.milestones).checked_mul(u64::from(l.issue_policy.comment_bytes))?,
+                    )?,
+            )?,
+        )?
         .checked_add(Map::<skein_lib::Token, crate::domain::PendingAdoption>::worst_case(l.adoptions)?)?
         .checked_add(Queue::<Stored>::worst_case(l.output)?)?
         .checked_add(Queue::<Key>::worst_case(l.output)?)?

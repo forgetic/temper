@@ -68,6 +68,7 @@ pub(crate) fn subscribe(
     to: ReplyTo,
     number: u64,
     subscription: Subscription,
+    connector_topic: bool,
     out: &mut Queue<Request>,
 ) {
     let to = match entrance(domain, to, number) {
@@ -98,7 +99,10 @@ pub(crate) fn subscribe(
                 return refused(to, Some(number), Refusal::Subscription, out);
             }
         }
-        SubscriptionKind::Topic { .. } => return refused(to, Some(number), Refusal::Subscription, out),
+        SubscriptionKind::Topic { .. } if !connector_topic => {
+            return refused(to, Some(number), Refusal::Subscription, out);
+        }
+        SubscriptionKind::Topic { .. } => {}
     }
     let reserve = usize::try_from(env.limits.result_bytes.max(env.limits.message_bytes)).expect("u32 fits usize");
     if !crate::inbox::room(domain, &env.limits, number, 1, reserve) {

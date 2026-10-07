@@ -89,6 +89,7 @@ pub fn limits() -> engine::Limits {
         + people::max_out(&people) * 4
         + people.pending * 2
         + fleet::max_out(&fleet) * 4
+        + temper_engine_domain_forge::max_out(&temper_engine_forge_world::LIMITS)
         + tasks.tasks
         + 6;
     engine::Limits {
@@ -152,6 +153,7 @@ pub fn limits() -> engine::Limits {
             sweep: Duration::from_secs(10),
             facts: 8,
         },
+        forge: temper_engine_forge_world::LIMITS,
     }
 }
 
@@ -236,6 +238,10 @@ pub fn config(seed: u64) -> engine::Config {
         account: 1,
         account_generation: 1,
         account_valid: Some(Duration::from_secs(60)),
+        forge: temper_engine_domain_forge_client::Config {
+            namespace: Box::from(&b"root"[..]),
+            writers: Box::new([temper_engine_domain_forge_client::Writer { forge: 1, author: 1 }]),
+        },
     }
 }
 
@@ -592,6 +598,9 @@ impl World {
                 engine::Request::CallBusy { .. } => panic!("walking story sent no calls"),
                 engine::Request::View(_) | engine::Request::WatchRefused { .. } => panic!("unrequested view output"),
                 engine::Request::Stop => panic!("walking story stopped: {:?}", self.trace),
+                engine::Request::Forge { .. } | engine::Request::ForgeAdopted { .. } => {
+                    panic!("walking story did not adopt forge")
+                }
             }
         }
     }
@@ -673,6 +682,8 @@ impl World {
                     .expect("committed result reaches person once");
             }
             Delivery::CallAnswer { .. }
+            | Delivery::ForgeAdopted { .. }
+            | Delivery::ForgeCall { .. }
             | Delivery::Procedure { .. }
             | Delivery::Reply { .. }
             | Delivery::InboxPage { .. }
@@ -684,6 +695,7 @@ impl World {
                 panic!("unexpected walking delivery {delivery:?}")
             }
             Delivery::Fleet(_)
+            | Delivery::ForgeCommitted { .. }
             | Delivery::ReadEscalationDecision { .. }
             | Delivery::ReadResult { .. }
             | Delivery::BeginInboxView { .. }

@@ -274,6 +274,7 @@ pub(super) fn page(
                 Record::Tasks(tasks::Stored::Ledger(_)) => {}
                 Record::Tasks(tasks::Stored::Ended(_) | tasks::Stored::History(_))
                 | Record::People(_)
+                | Record::Forge { .. }
                 | Record::Deployment(_)
                 | Record::Call(_)
                 | Record::Turn(_)
@@ -319,6 +320,7 @@ pub(super) fn page(
                 }
                 Record::Tasks(tasks::Stored::Live(_) | tasks::Stored::Ledger(_) | tasks::Stored::History(_))
                 | Record::People(_)
+                | Record::Forge { .. }
                 | Record::Deployment(_)
                 | Record::Call(_)
                 | Record::Turn(_)

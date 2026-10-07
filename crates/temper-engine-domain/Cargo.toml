@@ -15,6 +15,10 @@ temper-engine-domain-brief.workspace = true
 temper-engine-domain-accounts.workspace = true
 temper-engine-domain-authority.workspace = true
 temper-engine-domain-views.workspace = true
+temper-engine-domain-forge.workspace = true
+temper-engine-domain-forge-client.workspace = true
+temper-engine-domain-forge-change.workspace = true
+temper-engine-domain-forge-issues.workspace = true
 
 [lints]
 workspace = true

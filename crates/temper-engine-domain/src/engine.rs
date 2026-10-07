@@ -27,6 +27,7 @@
 //! internal idleness, while an external referee establishes final story results.
 mod amendments;
 mod escalation;
+mod forge_route;
 mod goals;
 mod inbox;
 mod policy;
@@ -45,6 +46,10 @@ use temper_engine_domain_accounts as accounts;
 use temper_engine_domain_authority as authority;
 use temper_engine_domain_brief as brief;
 use temper_engine_domain_fleet as fleet;
+use temper_engine_domain_forge as forge;
+use temper_engine_domain_forge_change as forge_change;
+use temper_engine_domain_forge_client as forge_client;
+use temper_engine_domain_forge_issues as forge_issues;
 use temper_engine_domain_people as people;
 use temper_engine_domain_tasks as tasks;
 use temper_engine_domain_views as views;
@@ -75,6 +80,8 @@ pub struct Limits {
     pub accounts: accounts::Limits,
     /// Live watches, backlogs and expendable trace room.
     pub views: views::Limits,
+    /// Forge connector subtree and its bounded outbox.
+    pub forge: forge::Limits,
 }
 
 /// Startup configuration owned by the root, bounded by the corresponding
@@ -112,6 +119,8 @@ pub struct Config {
     pub account_generation: u64,
     /// Startup credential lifetime; a refresh is required when absent.
     pub account_valid: Option<skein_lib::Duration>,
+    /// Forge writer identities and this deployment's branch namespace.
+    pub forge: forge_client::Config,
 }
 
 /// A complete claim's assignment, root to worker after durability; its
@@ -132,6 +141,8 @@ pub struct Assignment {
     pub inbox: Box<[tasks::Word]>,
     /// Writable repository tags whose workspace starts at the task's saved-work branch.
     pub saved: Box<[u32]>,
+    /// Concrete forge checkouts and their claimed writer branches.
+    pub workspace: ForgeWorkspace,
     /// Ordered opaque committed turn bodies of this task, empty for a fresh run.
     pub transcript: Box<[Box<[u8]>]>,
     /// Named answers committed after the task's last accepted turn. The
@@ -139,6 +150,35 @@ pub struct Assignment {
     pub answered: Box<[crate::CallRecord]>,
     /// Secret-free account grant; token bytes stay in the protocol.
     pub grant: accounts::Grant,
+}
+
+/// A checkout's authoritative forge start, prepared afresh by the worker.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum ForgeStart {
+    Base(Box<[u8]>),
+    Branch(Box<[u8]>),
+    Saved(Box<[u8]>),
+    Merge { branch: Box<[u8]>, base: forge_client::api::Commit },
+}
+
+/// One adopted repository translated for the worker's workspace.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ForgeRepository {
+    pub tag: u32,
+    pub provider: forge_client::api::Repository,
+    pub name: Box<[u8]>,
+    pub host: Box<[u8]>,
+    pub owner: Box<[u8]>,
+    pub start: ForgeStart,
+    pub push: Option<Box<[u8]>>,
+    pub identity: u32,
+}
+
+/// Concrete checkout roots and cache ownership for one assignment.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ForgeWorkspace {
+    pub key: Box<[u8]>,
+    pub repositories: Box<[ForgeRepository]>,
 }
 
 /// Worker to root: one numbered transcript and cumulative spend, retained
@@ -161,6 +201,14 @@ pub struct Turn {
 /// (domain/engine.md, section 7.3). Later routes extend this vocabulary.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Tool {
+    /// Queue one checked forge write with a root-derived idempotency key.
+    EffectForge {
+        repository: forge_client::api::Repository,
+        resource: forge::What,
+        write: Box<forge_client::api::Write>,
+    },
+    /// Read one adopted forge resource through the connector's bounded fresh lane.
+    ReadForge { repository: forge_client::api::Repository, read: forge_client::api::Read },
     /// Ask a covering ancestor or person to carry one action the caller cannot take alone.
     Propose { action: ProposedAction, reason: Box<[u8]>, as_holder: bool },
     /// Decide one pending proposal currently addressed to this task.
@@ -183,6 +231,8 @@ pub enum Tool {
     Introduce { left: u64, right: u64 },
     /// Add one bounded task-state or timer interest.
     Subscribe { kind: tasks::SubscriptionKind },
+    /// Subscribe this task to typed connector news, with overlap paths for landings.
+    SubscribeForge { topic: forge::Topic, own_change: Option<u64>, paths: Box<[Box<[u8]>]> },
     /// Remove one current interest by its root-issued number.
     Unsubscribe { subscription: u64 },
     /// Root-normalized whole-batch shape refusal after bounded ingress.
@@ -276,6 +326,12 @@ pub struct Call {
 /// be dropped by fleet. Store and refresh variants are terminals, not new calls.
 #[derive(Debug)]
 pub enum Event {
+    /// Owner asks the connector to adopt one existing repository.
+    AdoptForge { reply_to: ReplyTo, sign_in: u64, adoption: forge::Adoption },
+    /// One bounded provider call terminal routed to its connector.
+    ForgeAnswered { call: Token, cost: u32, result: Result<forge_client::api::Answer, forge_client::api::Error> },
+    /// An untrusted provider hint; the connector reads current facts.
+    ForgeHint { hint: forge_client::api::Hint },
     /// An authenticated person opens one live run, task-tree or project-goal watch.
     Watch { watcher: Token, sign_in: u64, subject: views::Subject },
     /// A person or stream stops one watch.
@@ -453,6 +509,10 @@ pub enum Event {
 /// terminal; deliveries are notices or consume a `ReplyTo` (domain/engine.md, 5).
 #[derive(PartialEq, Eq, Debug)]
 pub enum Request {
+    /// One bounded forge API call after the decision it follows.
+    Forge { call: Token, repository: forge_client::api::Repository, op: forge_client::api::Op },
+    /// One authenticated adoption terminal after its durable seed.
+    ForgeAdopted { to: ReplyTo, result: Result<forge::Adopted, forge_client::api::Error> },
     /// Live view/watch or expendable trace request routed to the shell.
     View(views::Request),
     /// A watch failed authentication or project standing before views admission.
@@ -533,6 +593,11 @@ enum Work {
     People(people::Event),
     Fleet(fleet::Event),
     Brief(brief::Event),
+    Forge(forge::Event),
+    ForgeClaim { task: u64, attempt: u64, writes: Box<[forge::Name]>, holders: Box<[u64]> },
+    TasksClaim { task: u64, attempt: u64 },
+    ProjectGoal(Box<tasks::TaskRecord>),
+    GoalSubscribe(forge::Subscriber),
     Activate(Box<tasks::RunContext>),
     EscalationLoaded { waiter: Token, rows: Box<[Record]> },
     EscalationFailed { waiter: Token },
@@ -682,6 +747,15 @@ pub struct Domain {
     brief: brief::Domain,
     accounts: accounts::Domain,
     views: views::Domain,
+    forge: forge::Domain,
+    forge_keys: Map<forge::Key, u64>,
+    forge_adopting: Map<Token, Option<forge::Repository>>,
+    forge_subscribing: Map<Token, forge::Subscriber>,
+    forge_unsubscribing: Map<Token, (u64, forge::Topic)>,
+    forge_reading: Map<Token, (ReplyTo, CallKey)>,
+    forge_effecting: Map<u64, (ReplyTo, CallKey)>,
+    forge_projection_due: Map<u64, skein_lib::Wall>,
+    forge_change_due: Map<u64, skein_lib::Wall>,
     watching: Map<Token, u64>,
     view_phases: Map<u64, (u32, Option<u32>)>,
     loads: loads::Loads,
@@ -762,6 +836,23 @@ impl Domain {
             brief: brief::Domain::new(&limits.brief),
             accounts: accounts::Domain::new(&limits.accounts),
             views: views::Domain::new(&limits.views, skein_lib::Time::ZERO),
+            forge: forge::Domain::new(
+                &limits.forge,
+                config.seed,
+                core::mem::replace(
+                    &mut config.forge,
+                    forge_client::Config { namespace: Box::new([]), writers: Box::new([]) },
+                ),
+            )
+            .expect("valid forge configuration"),
+            forge_keys: Map::with_capacity(forge_route::rows(limits).expect("forge row capacity")),
+            forge_adopting: Map::with_capacity(limits.forge.adoptions),
+            forge_subscribing: Map::with_capacity(limits.fleet.calls),
+            forge_unsubscribing: Map::with_capacity(limits.fleet.calls),
+            forge_reading: Map::with_capacity(limits.fleet.calls),
+            forge_effecting: Map::with_capacity(limits.fleet.calls),
+            forge_projection_due: Map::with_capacity(limits.forge.issues),
+            forge_change_due: Map::with_capacity(limits.forge.changes),
             watching: Map::with_capacity(limits.views.watchers),
             view_phases: Map::with_capacity(limits.tasks.tasks),
             loads: loads::Loads::new(&limits.loads),
@@ -830,6 +921,11 @@ impl Domain {
             && self.result_pages.is_empty()
             && self.dependency_results.is_empty()
             && self.pending_calls.is_empty()
+            && self.forge_adopting.is_empty()
+            && self.forge_subscribing.is_empty()
+            && self.forge_unsubscribing.is_empty()
+            && self.forge_reading.is_empty()
+            && self.forge_effecting.is_empty()
             && self.routing_calls.is_empty()
             && self.routing_people_proposals.is_empty()
             && self.made.is_empty()
@@ -848,6 +944,7 @@ impl Domain {
             && self.brief.briefs() == 0
             && self.brief.reads() == 0
             && !self.fleet.is_ready()
+            && !self.forge.is_ready()
             && self.fleet.turns() == 0
             && self.fleet.calls() == 0
             && self.fleet.next_deadline().is_none()
@@ -870,6 +967,7 @@ impl Domain {
         self.fleet.reclaim();
         self.brief.reclaim();
         self.views.reclaim();
+        self.forge.reclaim();
         self.payloads.reclaim();
         self.result_reads.reclaim();
         loads::reclaim(&mut self.loads);
@@ -1074,6 +1172,10 @@ fn environment_accounts(env: &Env<Limits>) -> Env<accounts::Limits> {
     Env { now: env.now, wall: env.wall, limits: env.limits.accounts }
 }
 
+fn environment_forge(env: &Env<Limits>) -> Env<forge::Limits> {
+    Env { now: env.now, wall: env.wall, limits: env.limits.forge }
+}
+
 fn internal(number: u64) -> ReplyTo {
     ReplyTo::new(Token::new(number))
 }
@@ -1103,6 +1205,43 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
         return;
     }
     match event {
+        Event::AdoptForge { reply_to, sign_in, adoption } => {
+            if !domain.ready() || !admits(domain, &env.limits) {
+                out.push(Request::ForgeAdopted { to: reply_to, result: Err(forge_client::api::Error::Busy) });
+                return;
+            }
+            let allowed = match domain.people.person(sign_in, env.now, env.wall) {
+                Some(person) => domain.people.role(person, adoption.project) == Some(people::Role::Owner),
+                None => false,
+            };
+            if !allowed {
+                out.push(Request::ForgeAdopted { to: reply_to, result: Err(forge_client::api::Error::Forbidden) });
+                return;
+            }
+            let token = reply_to.into_token();
+            if domain.forge_adopting.contains_key(&token) || domain.forge_adopting.len() == env.limits.forge.adoptions {
+                out.push(Request::ForgeAdopted {
+                    to: ReplyTo::new(token),
+                    result: Err(forge_client::api::Error::Busy),
+                });
+                return;
+            }
+            let previous = domain.forge.repository(adoption.provider).cloned();
+            domain.forge_adopting.insert(token, previous).expect("adoption room checked");
+            domain.work.push(Work::Forge(forge::Event::Adopt { reply_to: token, adoption }));
+        }
+        Event::ForgeAnswered { call, cost, result } => {
+            domain.work.push(Work::Forge(forge::Event::Client(forge_client::Event::Answered { call, cost, result })));
+        }
+        Event::ForgeHint { hint } => {
+            if domain.ready() {
+                let changes = domain.forge.changes_for(hint.repository, env.limits.forge.changes);
+                domain.work.push(Work::Forge(forge::Event::Hint { hint }));
+                for task in changes {
+                    domain.work.push(Work::Tasks(tasks::Event::WakeProcedure { task }));
+                }
+            }
+        }
         Event::Watch { watcher, sign_in, subject } => {
             if !domain.ready() || !domain.journal.quiescent() || !domain.work.is_empty() {
                 out.push(Request::View(views::Request::Refused { watcher, refusal: views::Refusal::Busy }));
@@ -1186,7 +1325,7 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
             if !domain.ready() || !admits(domain, &env.limits) {
                 return;
             }
-            procedure_step(domain, env, task, step, connector, code, action);
+            drop(procedure_step(domain, env, task, step, connector, code, action));
         }
         Event::Committed { number } => {
             crate::committed(&mut domain.journal, number);
@@ -1342,6 +1481,9 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
                     Tool::Delegate { .. }
                     | Tool::Introduce { .. }
                     | Tool::Subscribe { .. }
+                    | Tool::SubscribeForge { .. }
+                    | Tool::ReadForge { .. }
+                    | Tool::EffectForge { .. }
                     | Tool::Unsubscribe { .. }
                     | Tool::Rejected(_)
                     | Tool::RejectedMessage(_)
@@ -1508,6 +1650,17 @@ pub fn resume(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) 
     crate::resume(&mut domain.journal, &mut journal_out);
     if let Some(output) = journal_out.pop() {
         match output {
+            Output::Deliver(Delivery::ForgeCommitted { entry }) => {
+                domain.work.push(Work::Forge(forge::Event::Committed { entry }));
+            }
+            Output::Deliver(Delivery::ForgeCall { call, repository, op }) => {
+                out.push(Request::Forge { call, repository, op });
+                return;
+            }
+            Output::Deliver(Delivery::ForgeAdopted { to, result }) => {
+                out.push(Request::ForgeAdopted { to, result });
+                return;
+            }
             Output::Deliver(Delivery::Fleet(event)) => domain.work.push(Work::Fleet(event)),
             Output::Deliver(Delivery::View(event)) => {
                 view_step(domain, env, *event, out);
@@ -1605,6 +1758,15 @@ pub fn resume(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) 
         return;
     }
     if domain.ready() {
+        if domain.forge.is_ready() {
+            let mut child = Queue::with_capacity(forge::max_out(&env.limits.forge));
+            forge::resume(&mut domain.forge, &environment_forge(env), &mut child);
+            let mut decision = Decision::new(&env.limits.journal);
+            forge_route::outputs(domain, env, &mut decision, &mut child);
+            route_into(domain, env, &mut decision);
+            close(domain, env, decision, out);
+            return;
+        }
         if domain.accounts.usable(domain.config.account) && !domain.due.is_empty() {
             for _ in 0..domain.due.len() {
                 domain.work.push(Work::Activate(domain.due.pop().expect("waiting activation")));
@@ -1640,6 +1802,33 @@ pub fn fire(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
         return;
     }
     let mut decision = Decision::new(&env.limits.journal);
+    let mut due = List::with_capacity(env.limits.forge.issues);
+    for (goal, when) in &domain.forge_projection_due {
+        if *when <= env.wall {
+            due.push(*goal).expect("projection due room");
+        }
+    }
+    for goal in &due {
+        domain.forge_projection_due.remove(goal);
+        if domain.forge.issue(*goal).is_some()
+            && let Some(entry) = crate::fresh(&mut domain.journal, Family::ForgeRow)
+        {
+            domain.work.push(Work::Forge(forge::Event::ProjectDesired { entry, goal: *goal }));
+        }
+    }
+    let mut due_changes = List::with_capacity(env.limits.forge.changes);
+    for (task, when) in &domain.forge_change_due {
+        if *when <= env.wall {
+            due_changes.push(*task).expect("change due room");
+        }
+    }
+    for task in &due_changes {
+        domain.forge_change_due.remove(task);
+        domain.work.push(Work::Tasks(tasks::Event::WakeProcedure { task: *task }));
+    }
+    let mut forge_out = Queue::with_capacity(forge::max_out(&env.limits.forge));
+    forge::fire(&mut domain.forge, &environment_forge(env), &mut forge_out);
+    forge_route::outputs(domain, env, &mut decision, &mut forge_out);
     let mut tasks_out = Queue::with_capacity(tasks::max_out(&env.limits.tasks));
     tasks::fire(&mut domain.tasks, &environment_tasks(env), &mut tasks_out);
     tasks_outputs(domain, env, &mut decision, &mut tasks_out, false, false);
@@ -1695,6 +1884,24 @@ fn route_into(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision) {
                 brief::step(&mut domain.brief, &environment_brief(env), event, &mut out);
                 brief_outputs(domain, env, decision, &mut out);
             }
+            Work::Forge(event) => {
+                let mut out = Queue::with_capacity(forge::max_out(&env.limits.forge));
+                forge::step(&mut domain.forge, &environment_forge(env), event, &mut out);
+                forge_route::outputs(domain, env, decision, &mut out);
+            }
+            Work::ForgeClaim { task, attempt, writes, holders } => {
+                if domain.claiming.get(&task) == Some(&attempt) {
+                    domain.work.push(Work::Forge(forge::Event::Claim { task, attempt, writes, holders }));
+                    domain.work.push(Work::TasksClaim { task, attempt });
+                }
+            }
+            Work::TasksClaim { task, attempt } => {
+                if domain.claiming.get(&task) == Some(&attempt) {
+                    domain.work.push(Work::Tasks(tasks::Event::Claim { reply_to: internal(task), task, attempt }));
+                }
+            }
+            Work::ProjectGoal(goal) => forge_route::project_goal(domain, env, &goal),
+            Work::GoalSubscribe(subscriber) => forge_route::goal_subscribed(domain, env, subscriber),
             Work::Activate(task) => activate(domain, env, decision, task),
             Work::EscalationLoaded { waiter, rows } => escalation::loaded(domain, env, waiter, rows),
             Work::EscalationFailed { waiter } => escalation::failed(domain, waiter),
@@ -2411,6 +2618,12 @@ fn activate(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, tas
     }
     match task.executor {
         tasks::Executor::Procedure { connector: 0, code: 1 } | tasks::Executor::Person(_) => return,
+        tasks::Executor::Procedure { connector: 1, code: 2 } => {
+            if !forge_route::start_change(domain, env, &task) {
+                domain.work.push(Work::Tasks(tasks::Event::Hold { task: number, why: tasks::Hold::Effects }));
+            }
+            return;
+        }
         tasks::Executor::Procedure { connector, code } => {
             let Some(step) = task.previous_attempt.checked_add(1) else {
                 domain.work.push(Work::Tasks(tasks::Event::Hold { task: number, why: tasks::Hold::Effects }));
@@ -2568,6 +2781,9 @@ fn call_needs_input(tool: &Tool) -> bool {
         | Tool::Message { .. }
         | Tool::Introduce { .. }
         | Tool::Subscribe { .. }
+        | Tool::SubscribeForge { .. }
+        | Tool::ReadForge { .. }
+        | Tool::EffectForge { .. }
         | Tool::Unsubscribe { .. }
         | Tool::Cancel { .. }
         | Tool::Release { .. }
@@ -2658,6 +2874,9 @@ fn call_shape(tool: &Tool, limits: &tasks::Limits) -> Option<tasks::Refusal> {
         | Tool::RejectedProposal(_)
         | Tool::Introduce { .. }
         | Tool::Subscribe { .. }
+        | Tool::SubscribeForge { .. }
+        | Tool::ReadForge { .. }
+        | Tool::EffectForge { .. }
         | Tool::Unsubscribe { .. }
         | Tool::Release { .. } => None,
         Tool::Cancel { reason, .. } => {
@@ -2839,6 +3058,9 @@ fn unsubscribe_call(domain: &mut Domain, to: ReplyTo, key: CallKey, subscription
     let token = to.into_token();
     assert!(domain.pending_calls.insert(key, true).is_ok(), "call record room reserved");
     assert!(domain.routing_calls.insert(token, RoutedCall::Unsubscribe(key)) == Ok(None), "one live routed call");
+    if let Some(topic) = domain.forge.subscription(key.task, subscription) {
+        assert!(domain.forge_unsubscribing.insert(token, (key.task, topic)) == Ok(None), "one connector unsubscribe");
+    }
     domain.work.push(Work::Tasks(tasks::Event::Unsubscribe {
         reply_to: ReplyTo::new(token),
         task: key.task,
@@ -3203,22 +3425,23 @@ fn procedure_step(
     connector: u16,
     code: u32,
     action: ProcedureAction,
-) {
+) -> Option<Box<[u64]>> {
     if domain.tasks.procedure_due(task) != Some((connector, code, step)) {
-        return;
+        return None;
     }
+    let mut delegated = None;
     let decision = match action {
         ProcedureAction::Delegate(batch) => {
-            let Some(context) = domain.tasks.delegation(task) else { return };
+            let context = domain.tasks.delegation(task)?;
             if batch.is_empty() || batch.len() > usize::try_from(env.limits.tasks.batch).expect("bounded batch") {
-                return;
+                return None;
             }
             let mut asked = List::with_capacity(env.limits.tasks.batch);
             for member in &batch {
                 if !member.spec.inputs.is_empty() {
-                    return;
+                    return None;
                 }
-                let Some(executor) = delegation_executor(domain, context.project, member.executor) else { return };
+                let executor = delegation_executor(domain, context.project, member.executor)?;
                 asked
                     .push(authority::Delegate { executor, authority: authority_value(&member.authority) })
                     .expect("bounded procedure batch");
@@ -3238,11 +3461,11 @@ fn procedure_step(
                 &mut findings,
             );
             if checked.answer != authority::Answer::Allow {
-                return;
+                return None;
             }
             let mut numbers = List::with_capacity(env.limits.tasks.batch);
             for _ in &batch {
-                let Some(number) = crate::fresh(&mut domain.journal, Family::Task) else { return };
+                let number = crate::fresh(&mut domain.journal, Family::Task)?;
                 numbers.push(number).expect("bounded procedure task IDs");
             }
             let mut created = List::with_capacity(env.limits.tasks.batch);
@@ -3253,12 +3476,12 @@ fn procedure_step(
                     let number = match dependency {
                         Dependency::Batch(index) => match numbers.get(index) {
                             Some(number) => *number,
-                            None => return,
+                            None => return None,
                         },
                         Dependency::Existing(number) => number,
                     };
                     if dependencies.push(number).is_err() {
-                        return;
+                        return None;
                     }
                 }
                 let budget = member.authority.budget.spend;
@@ -3279,6 +3502,7 @@ fn procedure_step(
                     })
                     .expect("bounded procedure batch");
             }
+            delegated = Some(numbers.into_boxed());
             tasks::ProcedureDecision::Delegate(created.into_boxed())
         }
         ProcedureAction::Result(result) => tasks::ProcedureDecision::Result(result),
@@ -3286,6 +3510,7 @@ fn procedure_step(
         ProcedureAction::Wait => tasks::ProcedureDecision::Wait,
     };
     domain.work.push(Work::Tasks(tasks::Event::Procedure { reply_to: internal(u64::MAX), task, step, decision }));
+    delegated
 }
 
 /// Admit a configured core procedure through the same durable task creation route as other roots.
@@ -3643,6 +3868,9 @@ fn tasks_outputs(
                 match &record {
                     tasks::Stored::Live(task) | tasks::Stored::Ended(task) => {
                         view_task_saved(domain, &env.limits, decision, task);
+                        if task.tracked.is_some() && domain.forge.home(task.project).is_some() {
+                            domain.work.push(Work::ProjectGoal(task.clone()));
+                        }
                         domain.work.push(Work::People(people::Event::Waiting {
                             task: task.number,
                             entries: inbox::entries(domain, task),
@@ -3684,7 +3912,7 @@ fn tasks_outputs(
             tasks::Request::Erase { key } => save(decision, &env.limits, Write::Erase(Key::Tasks(key))),
             tasks::Request::Made { reply_to, tasks } => {
                 let request = reply_to.into_token();
-                if request.raw() >= u64::MAX - 2 {
+                if request.raw() >= u64::MAX - 3 {
                     continue;
                 }
                 if let Some(GoalRoute::Accepting { proposer, proposal, by, task }) =
@@ -3765,6 +3993,23 @@ fn tasks_outputs(
             }
             tasks::Request::Refused { reply_to, problem } => {
                 let token = reply_to.into_token();
+                if token.raw() == u64::MAX - 3 {
+                    if let Some(repair) = problem.task
+                        && let Some(owner) = domain.forge.queue_repair_owner(repair)
+                    {
+                        domain.work.push(Work::Tasks(tasks::Event::Hold { task: owner, why: tasks::Hold::Effects }));
+                    }
+                    continue;
+                }
+                if token.raw() == u64::MAX
+                    && let Some(task) = problem.task
+                    && let Some(row) = domain.forge.change(task)
+                    && let Some((child, _)) = row.delegate
+                {
+                    domain.work.push(Work::Forge(forge::Event::DelegateRefused { task, child }));
+                    domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::Effects }));
+                    continue;
+                }
                 if domain.goal_routes.remove(&token).is_some() {
                     domain.work.push(Work::People(people::Event::Decided {
                         request: token,
@@ -3903,6 +4148,8 @@ fn tasks_outputs(
                     continue;
                 }
                 if let Some(route) = domain.routing_calls.remove(&token) {
+                    drop(domain.forge_subscribing.remove(&token));
+                    drop(domain.forge_unsubscribing.remove(&token));
                     let (key, answer) = match route {
                         RoutedCall::Message(key) | RoutedCall::Introduce(key) => {
                             (key, CallAnswer::MessageRefused(problem))
@@ -4074,6 +4321,7 @@ fn tasks_outputs(
                     &env.limits,
                     Delivery::Fleet(fleet::Event::Acknowledge { run: Token::new(task), attempt: Token::new(attempt) }),
                 );
+                domain.work.push(Work::Forge(forge::Event::Lost { task, attempt }));
             }
             tasks::Request::Activate { context } => domain.work.push(Work::Activate(context)),
             tasks::Request::Adopt { task, attempt, kept } => {
@@ -4102,7 +4350,19 @@ fn tasks_outputs(
                 &env.limits,
                 Delivery::Fleet(fleet::Event::Cancel { run: Token::new(task), attempt: Token::new(attempt) }),
             ),
-            tasks::Request::Close { task, .. } => domain.work.push(Work::Tasks(tasks::Event::Settled { task })),
+            tasks::Request::Close { task, ending } => {
+                let root = domain.tasks.root(task).unwrap_or(task);
+                let ending = match ending {
+                    tasks::Ending::Done(_) => forge::ReleaseEnding::Done,
+                    tasks::Ending::Failed { .. } => forge::ReleaseEnding::Failed,
+                    tasks::Ending::Cancelled { .. } => forge::ReleaseEnding::Cancelled,
+                };
+                if let Some(entry) = crate::fresh(&mut domain.journal, Family::ForgeRow) {
+                    domain.work.push(Work::Forge(forge::Event::Release { task, root, ending, entry }));
+                } else {
+                    domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::Effects }));
+                }
+            }
             tasks::Request::Ended { task, requester, ending } => {
                 let position = domain.ending_positions.remove(&task).expect("ended row assigned its result position");
                 emit(decision, &env.limits, Delivery::View(Box::new(views::Event::Finished { run: Token::new(task) })));
@@ -4175,6 +4435,16 @@ fn tasks_outputs(
                     continue;
                 }
                 if let Some(route) = domain.routing_calls.remove(&Token::new(task)) {
+                    if let Some(subscription) = domain.forge_subscribing.remove(&Token::new(task)) {
+                        let names = forge_route::watch_names(domain, &env.limits, &subscription)
+                            .expect("connector names preflighted at subscription");
+                        let owner = subscription.task;
+                        domain.work.push(Work::Forge(forge::Event::Subscribe { subscription }));
+                        domain.work.push(Work::Forge(forge::Event::Names { task: owner, resources: names }));
+                    }
+                    if let Some((owner, topic)) = domain.forge_unsubscribing.remove(&Token::new(task)) {
+                        domain.work.push(Work::Forge(forge::Event::Unsubscribe { task: owner, topic }));
+                    }
                     let (key, answer) = match route {
                         RoutedCall::Propose { key, proposal } => (key, CallAnswer::Proposed { proposal }),
                         RoutedCall::Accepting { key, proposer, proposal, message } => {
@@ -4205,6 +4475,7 @@ fn tasks_outputs(
                 } else if let Some(attempt) = domain.claiming.remove(&task) {
                     let proof = domain.proofs.get(&task).expect("claim proof pre-reserved");
                     save(decision, &env.limits, Write::Save(Record::RunProof(proof.clone())));
+                    let workstream = domain.assignments.get(&task).expect("claimed assignment").workspace.key.clone();
                     emit(
                         decision,
                         &env.limits,
@@ -4212,7 +4483,7 @@ fn tasks_outputs(
                             reply_to: internal(task),
                             run: Token::new(task),
                             attempt: Token::new(attempt),
-                            workstream: Box::new(task.to_be_bytes()),
+                            workstream,
                         }),
                     );
                 }
@@ -4222,18 +4493,19 @@ fn tasks_outputs(
     }
 }
 
+#[expect(clippy::too_many_lines, reason = "the brief route consumes every child request and prepares the claimed run")]
 fn brief_outputs(domain: &mut Domain, env: &Env<Limits>, _decision: &mut Decision, out: &mut Queue<brief::Request>) {
     for _ in 0..out.len() {
         match out.pop().expect("brief output count") {
             brief::Request::Read { owner, source, parts, bytes, .. } => {
                 let read = match source {
                     brief::Source::Task { task, part } => task_section(domain, task, part, parts, bytes),
+                    brief::Source::Pull { item, head } => forge_route::brief_pull(domain, item, head, parts, bytes),
+                    brief::Source::Ci { item, head } => forge_route::brief_ci(domain, item, head, parts, bytes),
                     brief::Source::Item(_)
                     | brief::Source::Comments { .. }
                     | brief::Source::Dependencies(_)
-                    | brief::Source::Ci { .. }
                     | brief::Source::Reviews { .. }
-                    | brief::Source::Pull { .. }
                     | brief::Source::Attempts(_)
                     | brief::Source::Plan { .. }
                     | brief::Source::Notes { .. }
@@ -4250,6 +4522,34 @@ fn brief_outputs(domain: &mut Domain, env: &Env<Limits>, _decision: &mut Decisio
                     domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
                     continue;
                 };
+                let Some(workspace) = forge_route::run_workspace(domain, env, &context, attempt) else {
+                    domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::Effects }));
+                    continue;
+                };
+                let Some(claim_names) = forge_route::claim_names(domain, &env.limits, task, &workspace.names) else {
+                    domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::Effects }));
+                    continue;
+                };
+                let mut findings = Queue::with_capacity(
+                    authority::max_out(domain.config.authority.limits()).expect("authority check bound"),
+                );
+                if authority::check_run(
+                    &domain.config.authority,
+                    &authority::RunAsk {
+                        project: context.project,
+                        authority: authority_value(&context.authority),
+                        numbers: authority_numbers(context.numbers),
+                        budget: authority::left(authority_numbers(context.numbers)),
+                        wall: env.wall,
+                        accounts: Box::new([domain.accounts.usable(domain.config.account)]),
+                        writes: workspace.writes.clone(),
+                    },
+                    &mut findings,
+                ) != authority::Answer::Allow
+                {
+                    domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::Effects }));
+                    continue;
+                }
                 let Some(grant) = domain.accounts.grant(domain.config.account, env.now) else {
                     domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
                     continue;
@@ -4277,6 +4577,7 @@ fn brief_outputs(domain: &mut Domain, env: &Env<Limits>, _decision: &mut Decisio
                     sections,
                     inbox: context.inbox,
                     saved: context.saved,
+                    workspace: workspace.workspace.clone(),
                     transcript: turns.into_boxed(),
                     answered: {
                         let mut answered = List::with_capacity(domain.limits.call_records);
@@ -4293,7 +4594,20 @@ fn brief_outputs(domain: &mut Domain, env: &Env<Limits>, _decision: &mut Decisio
                 };
                 assert!(domain.assignments.insert(task, assignment).is_ok(), "assignment fits live task room");
                 assert!(domain.claiming.insert(task, attempt) == Ok(None), "one pending claim per task");
-                domain.work.push(Work::Tasks(tasks::Event::Claim { reply_to: internal(task), task, attempt }));
+                if workspace.names.is_empty() {
+                    domain.work.push(Work::TasksClaim { task, attempt });
+                } else {
+                    domain.work.push(Work::Forge(forge::Event::Names { task, resources: claim_names }));
+                    for name in workspace.own_holds {
+                        domain.work.push(Work::Forge(forge::Event::Hold { task, resource: name, from: None }));
+                    }
+                    domain.work.push(Work::ForgeClaim {
+                        task,
+                        attempt,
+                        writes: workspace.names,
+                        holders: workspace.holders,
+                    });
+                }
             }
             brief::Request::Failed { reply_to, .. } | brief::Request::Refused { reply_to, .. } => {
                 let task = reply_to.into_token().raw();
@@ -4415,6 +4729,7 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                     saved: None,
                     cause: tasks::Cause::Unpriced,
                 }));
+                domain.work.push(Work::Forge(forge::Event::Lost { task: run.raw(), attempt: attempt.raw() }));
             }
             fleet::Request::Withdrawn { to, run, attempt, .. } | fleet::Request::Refused { to, run, attempt, .. } => {
                 let _answered = to.into_token();
@@ -4524,6 +4839,17 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                             introduce_call(domain, reply_to, key, left, right);
                         }
                         Tool::Subscribe { kind } => subscribe_call(domain, env, decision, reply_to, key, kind),
+                        Tool::SubscribeForge { topic, own_change, paths } => {
+                            forge_route::subscribe_call(domain, env, decision, reply_to, key, topic, own_change, paths);
+                        }
+                        Tool::ReadForge { repository, read } => {
+                            forge_route::read_call(domain, env, decision, reply_to, key, repository, read);
+                        }
+                        Tool::EffectForge { repository, resource, write } => {
+                            forge_route::effect_call(
+                                domain, env, decision, reply_to, key, repository, resource, *write,
+                            );
+                        }
                         Tool::Unsubscribe { subscription } => unsubscribe_call(domain, reply_to, key, subscription),
                     },
                 }
@@ -4558,6 +4884,7 @@ fn request_load(domain: &mut Domain, waiter: Token, range: Range, after: Option<
         | Range::Tasks
         | Range::EndedResults
         | Range::People
+        | Range::Forge
         | Range::RunProofs
         | Range::Turns { .. }
         | Range::TaskTranscript { .. } => domain.limits.loads.rows,
@@ -4581,6 +4908,7 @@ fn request_load(domain: &mut Domain, waiter: Token, range: Range, after: Option<
             | Range::Tasks
             | Range::EndedResults
             | Range::People
+            | Range::Forge
             | Range::RunProofs
             | Range::Turns { .. }
             | Range::TaskTranscript { .. }
@@ -4712,7 +5040,8 @@ fn input_loaded(domain: &mut Domain, waiter: Token, rows: Box<[Record]>, next: O
         | Record::RunProof(_)
         | Record::Terminal(_)
         | Record::Tasks(_)
-        | Record::People(_) => {
+        | Record::People(_)
+        | Record::Forge { .. } => {
             input_failed(domain, waiter);
             return;
         }
@@ -4962,7 +5291,8 @@ fn dependency_loaded(
         | Record::RunProof(_)
         | Record::Terminal(_)
         | Record::Tasks(_)
-        | Record::People(_) => {
+        | Record::People(_)
+        | Record::Forge { .. } => {
             dependency_failed(domain, waiter);
             return;
         }
@@ -5103,6 +5433,23 @@ fn start_brief(domain: &mut Domain, task: u64) {
             })
             .expect("attempt brief room");
     }
+    if let tasks::Party::Task(parent) = context.requester
+        && let Some(row) = domain.forge.change(parent)
+        && let Some((child, _)) = row.delegate
+        && child == task
+        && let (Some(number), Some(head)) = (row.pull, row.change.last_head)
+        && wanted.room() > 0
+    {
+        let item = brief::Item { repository: row.repository.repository, number };
+        let source = match row.delegate.expect("matched delegate").1 {
+            forge_change::Delegate::Repair(_) => brief::Source::Ci { item, head: brief::Commit(head) },
+            forge_change::Delegate::Resolve { .. } => brief::Source::Pull { item, head: brief::Commit(head) },
+            forge_change::Delegate::Produce | forge_change::Delegate::Gate { .. } => {
+                brief::Source::Pull { item, head: brief::Commit(head) }
+            }
+        };
+        wanted.push(brief::Wanted { source, required: true }).expect("connector section room");
+    }
     domain.work.push(Work::Brief(brief::Event::Render { reply_to: internal(task), sections: wanted.into_boxed() }));
 }
 
@@ -5150,7 +5497,8 @@ fn startup_page(
     let following = match range {
         Range::Deployment => Some(Range::People),
         Range::People => Some(Range::Tasks),
-        Range::Tasks => Some(Range::RunProofs),
+        Range::Tasks => Some(Range::Forge),
+        Range::Forge => Some(Range::RunProofs),
         Range::RunProofs => Some(Range::Calls),
         Range::Calls => None,
         Range::EscalationDecision { .. }
@@ -5187,6 +5535,7 @@ fn startup_page(
         return;
     }
     domain.startup = Startup::Adopting;
+    domain.work.push(Work::Forge(forge::Event::Restored { clock: forge_client::RecoveryClock::Wall }));
     domain.work.push(Work::Tasks(tasks::Event::Restored));
     route_into(domain, env, &mut decision);
     if domain.startup == Startup::Failed {
@@ -5390,6 +5739,7 @@ fn route_bound(limits: &Limits) -> Option<u32> {
         // one retained IO terminal and one people Decided callback per flight.
         .checked_add(limits.people.pending.checked_mul(2)?)?
         .checked_add(fleet::max_out(&limits.fleet).checked_mul(4)?)?
+        .checked_add(forge::max_out(&limits.forge))?
         // One serialized role cohort revisits each Waiting task, then answers.
         .checked_add(limits.tasks.tasks.checked_add(4)?)
 }
@@ -5411,6 +5761,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     let brief_bytes = brief::worst_case(&limits.brief)?;
     let account_bytes = accounts::worst_case(&limits.accounts)?;
     let view_bytes = views::worst_case(&limits.views)?;
+    let forge_bytes = forge::worst_case(&limits.forge)?;
     let load_bytes = loads::worst_case(&limits.loads)?;
     let routes = route_bound(limits)?;
     let tool_bytes = u64::from(limits.tasks.batch).checked_mul(row_bound(limits)?)?;
@@ -5468,10 +5819,27 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         account_bytes,
         load_bytes,
         view_bytes,
+        forge_bytes,
     ] {
         bytes = bytes.checked_add(child)?;
     }
     bytes = bytes
+        .checked_add(Map::<forge::Key, u64>::worst_case(forge_route::rows(limits)?)?)?
+        .checked_add(Map::<Token, Option<forge::Repository>>::worst_case(limits.forge.adoptions)?)?
+        .checked_add(
+            u64::from(limits.forge.adoptions).checked_mul(u64::from(limits.forge.name_bytes).checked_mul(4)?)?,
+        )?
+        .checked_add(Map::<Token, forge::Subscriber>::worst_case(limits.fleet.calls)?)?
+        .checked_add(Map::<Token, (u64, forge::Topic)>::worst_case(limits.fleet.calls)?)?
+        .checked_add(Map::<Token, (ReplyTo, CallKey)>::worst_case(limits.fleet.calls)?)?
+        .checked_add(Map::<u64, (ReplyTo, CallKey)>::worst_case(limits.fleet.calls)?)?
+        .checked_add(Map::<u64, skein_lib::Wall>::worst_case(limits.forge.issues)?)?
+        .checked_add(Map::<u64, skein_lib::Wall>::worst_case(limits.forge.changes)?)?
+        .checked_add(
+            u64::from(limits.fleet.calls)
+                .checked_mul(u64::from(limits.forge.paths_per_subscription))?
+                .checked_mul(u64::from(limits.forge.name_bytes))?,
+        )?
         .checked_add(Map::<Token, u64>::worst_case(limits.views.watchers)?)?
         .checked_add(Map::<u64, (u32, Option<u32>)>::worst_case(limits.tasks.tasks)?)?
         .checked_add(u64::from(limits.views.snapshot_bytes))?
@@ -5479,6 +5847,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
             u64::from(limits.tasks.depth.saturating_add(1)).checked_mul(u64::try_from(size_of::<Token>()).ok()?)?,
         )?
         .checked_add(Queue::<Work>::worst_case(routes)?)?
+        .checked_add(u64::from(routes).checked_mul(row_bound(limits)?)?)?
         .checked_add(Queue::<fleet::Event>::worst_case(limits.tasks.tasks.checked_mul(2)?)?)?
         .checked_add(Queue::<Box<tasks::RunContext>>::worst_case(limits.tasks.tasks)?)?;
     bytes = bytes.checked_add(
@@ -6012,6 +6381,7 @@ fn header_loaded(startup: Startup) -> bool {
             | Range::Tasks
             | Range::EndedResults
             | Range::People
+            | Range::Forge
             | Range::RunProofs
             | Range::EscalationDecision { .. }
             | Range::ProposalDecision { .. }
@@ -6071,6 +6441,7 @@ fn row_bound(limits: &Limits) -> Option<u64> {
         bytes
             .max(u64::from(people.identity_bytes))
             .max(u64::from(people.words))
+            .max(u64::from(limits.forge.client.answer_bytes))
             .max(u64::from(people.holdings).checked_mul(u64::try_from(size_of::<people::Holding>()).ok()?)?),
     )
 }
@@ -6090,6 +6461,9 @@ fn discard_after_stop(domain: &mut Domain, event: Event) {
             assert!(out.is_empty(), "halted waiter emits no delivery");
         }
         Event::StartRecurring { .. }
+        | Event::AdoptForge { .. }
+        | Event::ForgeAnswered { .. }
+        | Event::ForgeHint { .. }
         | Event::Period { .. }
         | Event::Start
         | Event::ProcedureStep { .. }
@@ -6234,7 +6608,8 @@ fn valid_call_answer(answer: &CallAnswer, deployment: &crate::Deployment, limits
         | CallAnswer::Introduced
         | CallAnswer::Unsubscribed
         | CallAnswer::Controlled
-        | CallAnswer::ControlDenied { .. } => true,
+        | CallAnswer::ControlDenied { .. }
+        | CallAnswer::ForgeEffectRefused(_) => true,
         CallAnswer::Proposed { proposal } | CallAnswer::ProposalDecided { proposal, .. } => {
             *proposal != 0 && *proposal <= deployment.messages
         }
@@ -6242,6 +6617,17 @@ fn valid_call_answer(answer: &CallAnswer, deployment: &crate::Deployment, limits
             *task != 0 && *task <= deployment.tasks && *revision != 0
         }
         CallAnswer::Sent { message } => *message != 0 && *message <= deployment.messages,
+        CallAnswer::ForgeEffect { entry, .. } => *entry != 0 && *entry <= deployment.forge_rows,
+        CallAnswer::ForgeRead(result) => match result.as_ref() {
+            Ok(answer) => match forge_client::answer_bytes(answer, &limits.forge.client) {
+                Some(bytes) => {
+                    bytes <= u64::from(limits.forge.client.answer_bytes)
+                        && bytes <= u64::from(limits.journal.transcript_bytes)
+                }
+                None => false,
+            },
+            Err(_) => true,
+        },
         CallAnswer::Subscribed { subscription } => *subscription != 0 && *subscription <= deployment.messages,
         CallAnswer::Delegated(numbers) => {
             if numbers.is_empty() || numbers.len() > usize::try_from(limits.tasks.batch).expect("u32 fits usize") {
@@ -6259,7 +6645,7 @@ fn valid_call_answer(answer: &CallAnswer, deployment: &crate::Deployment, limits
             }
             true
         }
-        CallAnswer::DelegationDenied { answer, findings } => {
+        CallAnswer::DelegationDenied { answer, findings } | CallAnswer::ForgeEffectDenied { answer, findings } => {
             *answer != authority::Answer::Allow
                 && findings.len()
                     <= usize::try_from(authority::max_out(&limits.authority).expect("valid authority bound"))
@@ -6304,6 +6690,14 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
             policy::restore(domain, project, role, period_spend);
         }
         Record::People(record) => domain.work.push(Work::People(people::Event::Restore { record })),
+        Record::Forge { id, row } => {
+            let key = forge::stored_key(&row);
+            if id == 0 || id > domain.journal.deployment().forge_rows || domain.forge_keys.insert(key, id) != Ok(None) {
+                domain.startup = Startup::Failed;
+                return;
+            }
+            domain.work.push(Work::Forge(forge::Event::Restore { record: *row }));
+        }
         Record::Tasks(record) => match record {
             tasks::Stored::PersonProposal(ref row) => {
                 if row.number > domain.journal.deployment().messages

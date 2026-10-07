@@ -95,6 +95,13 @@ pub struct Holding {
     pub person: u64,
     pub role: Role,
 }
+/// One forge collaborator mapped to a project role at adoption.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Seed {
+    pub identity: IdentityKey,
+    pub candidate: u64,
+    pub role: Role,
+}
 
 /// One derived unread result reference; its words remain in the ended task.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -432,6 +439,8 @@ impl Stored {
 /// cross this boundary without protocol secrets. (domain/people.md, sections 3–5).
 #[derive(PartialEq, Eq, Debug)]
 pub enum Event {
+    /// Add previously unknown collaborators and their first project role in one decision.
+    Seed { project: u32, collaborators: Box<[Seed]> },
     /// Replace the volatile inbox projection of one durable task after its row changes.
     Waiting { task: u64, entries: Box<[Entry]> },
     /// Root's synchronous application after authority/revision/capacity preflight. Reads the

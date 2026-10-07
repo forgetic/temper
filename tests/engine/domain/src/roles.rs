@@ -224,7 +224,8 @@ impl World {
                 | Record::RunProof(_)
                 | Record::Terminal(_)
                 | Record::EscalationDecision(_)
-                | Record::ProposalDecision(_) => {}
+                | Record::ProposalDecision(_)
+                | Record::Forge { .. } => {}
             }
         }
         for row in store.rows.values() {
@@ -491,6 +492,9 @@ impl World {
                 }
                 engine::Request::View(_) | engine::Request::WatchRefused { .. } => panic!("unrequested view output"),
                 engine::Request::Stop => panic!("role root stopped: {:?}", self.trace),
+                engine::Request::Forge { .. } | engine::Request::ForgeAdopted { .. } => {
+                    panic!("role story did not adopt forge")
+                }
             }
         }
     }

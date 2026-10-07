@@ -311,6 +311,7 @@ fn check(entry: &Entry, limits: &Limits, rows: &[Record], next: Option<Key>) -> 
             | Range::Tasks
             | Range::EndedResults
             | Range::People
+            | Range::Forge
             | Range::RunProofs
             | Range::Calls => {}
         }
@@ -328,9 +329,13 @@ fn check(entry: &Entry, limits: &Limits, rows: &[Record], next: Option<Key>) -> 
 
 fn valid_range(range: Range) -> bool {
     match range {
-        Range::Deployment | Range::Tasks | Range::EndedResults | Range::People | Range::RunProofs | Range::Calls => {
-            true
-        }
+        Range::Deployment
+        | Range::Tasks
+        | Range::EndedResults
+        | Range::People
+        | Range::Forge
+        | Range::RunProofs
+        | Range::Calls => true,
         Range::TaskResult { task } | Range::TaskTranscript { task } => task != 0,
         Range::EscalationDecision { task, revision } => task != 0 && revision != 0,
         Range::ProposalDecision { proposal } => proposal != 0,

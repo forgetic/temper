@@ -44,6 +44,19 @@ pub struct Limits {
 /// resumed by the root and never passed to the protocol as child events.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Delivery {
+    /// Authenticated adoption result after connector and seeded roles commit.
+    ForgeAdopted {
+        to: ReplyTo,
+        result: Result<temper_engine_domain_forge::Adopted, temper_engine_domain_forge_client::api::Error>,
+    },
+    /// Release a committed connector entry to its client.
+    ForgeCommitted { entry: u64 },
+    /// One bounded connector call after all preceding progress commits.
+    ForgeCall {
+        call: Token,
+        repository: temper_engine_domain_forge_client::api::Repository,
+        op: temper_engine_domain_forge_client::api::Op,
+    },
     /// Internal committed notice to the expendable live views child.
     View(Box<temper_engine_domain_views::Event>),
     /// Committed request to the connector that owns a procedure task. The owner steps against
@@ -337,7 +350,8 @@ impl Decision {
                 | Key::RunProof { .. }
                 | Key::Terminal { .. }
                 | Key::Tasks(_)
-                | Key::People(_),
+                | Key::People(_)
+                | Key::Forge(_),
             ) => true,
             Write::Save(Record::EscalationDecision(row)) => {
                 row.task != 0
@@ -355,12 +369,12 @@ impl Decision {
                     }
             }
             Write::Save(Record::ProposalDecision(row)) => row.project != 0 && row.proposal != 0 && row.by != 0,
-            Write::Save(Record::Tasks(_) | Record::People(_) | Record::RunProof(_) | Record::Terminal(_)) => {
-                match crate::store::owned_bytes(&write) {
-                    Some(bytes) => bytes <= u64::from(limits.transcript_bytes),
-                    None => false,
-                }
-            }
+            Write::Save(
+                Record::Tasks(_) | Record::People(_) | Record::Forge { .. } | Record::RunProof(_) | Record::Terminal(_),
+            ) => match crate::store::owned_bytes(&write) {
+                Some(bytes) => bytes <= u64::from(limits.transcript_bytes),
+                None => false,
+            },
         };
         if !within {
             return Err(write);
@@ -482,6 +496,9 @@ impl Decision {
             }
             Delivery::Assigned { assignment, .. } => assignment_within(assignment, limits),
             Delivery::CallAnswer { .. }
+            | Delivery::ForgeCommitted { .. }
+            | Delivery::ForgeCall { .. }
+            | Delivery::ForgeAdopted { .. }
             | Delivery::Procedure { .. }
             | Delivery::Reply { .. }
             | Delivery::AcknowledgeTurn { .. }
@@ -508,8 +525,17 @@ impl Journal {
     /// queue; the next accepted decision emits the dirty header's commit.
     #[must_use]
     pub fn bootstrap(id: [u8; 16], limits: &Limits) -> Journal {
-        let deployment =
-            Deployment { id, tasks: 0, people: 0, sign_ins: 0, messages: 0, runs: 0, calls: 0, commits: 0 };
+        let deployment = Deployment {
+            id,
+            tasks: 0,
+            people: 0,
+            sign_ins: 0,
+            messages: 0,
+            runs: 0,
+            calls: 0,
+            forge_rows: 0,
+            commits: 0,
+        };
         let mut journal = Journal::new(deployment, limits);
         journal.dirty = true;
         journal
@@ -606,6 +632,7 @@ pub fn fresh(journal: &mut Journal, family: Family) -> Option<u64> {
         Family::Message => &mut journal.deployment.messages,
         Family::Run => &mut journal.deployment.runs,
         Family::Call => &mut journal.deployment.calls,
+        Family::ForgeRow => &mut journal.deployment.forge_rows,
     };
     let next = counter.checked_add(1)?;
     *counter = next;

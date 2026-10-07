@@ -130,6 +130,8 @@ temper-engine-domain-brief = { path = "crates/temper-engine-domain-brief" }
 temper-engine-domain-fleet = { path = "crates/temper-engine-domain-fleet" }
 temper-legacy-engine-domain-forge = { path = "crates/temper-legacy-engine-domain-forge" }
 temper-engine-domain-forge-client = { path = "crates/temper-engine-domain-forge-client" }
+temper-engine-domain-forge-change = { path = "crates/temper-engine-domain-forge-change" }
+temper-engine-domain-forge-issues = { path = "crates/temper-engine-domain-forge-issues" }
 temper-engine-domain-forge = { path = "crates/temper-engine-domain-forge" }
 temper-engine-forge-client-world = { path = "tests/engine/forge/client" }
 temper-engine-domain-notes = { path = "crates/temper-engine-domain-notes" }

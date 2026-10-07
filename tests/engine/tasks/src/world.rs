@@ -321,6 +321,7 @@ impl World {
             | Event::TickRecurring { .. }
             | Event::RecurringBatch { .. }
             | Event::Procedure { .. }
+            | Event::WakeProcedure { .. }
             | Event::TakePerson { .. }
             | Event::HandBackPerson { .. }
             | Event::AnswerPerson { .. }
@@ -355,6 +356,7 @@ impl World {
             | Event::Introduce { .. }
             | Event::DelegateResult { .. }
             | Event::Subscribe { .. }
+            | Event::SubscribeTopic { .. }
             | Event::Unsubscribe { .. }
             | Event::Notice { .. } => None,
         };
@@ -369,6 +371,7 @@ impl World {
             | Event::TickRecurring { .. }
             | Event::RecurringBatch { .. }
             | Event::Procedure { .. }
+            | Event::WakeProcedure { .. }
             | Event::TakePerson { .. }
             | Event::HandBackPerson { .. }
             | Event::AnswerPerson { .. }
@@ -400,6 +403,7 @@ impl World {
             | Event::DecideEscalation { .. }
             | Event::Introduce { .. }
             | Event::Subscribe { .. }
+            | Event::SubscribeTopic { .. }
             | Event::Unsubscribe { .. }
             | Event::Turn { .. } => {}
         }

@@ -8,7 +8,7 @@ use temper_engine_domain_forge_issues as issues;
 
 use crate::{
     Adopted, Adoption, BranchHead, ChangeRow, Class, Event, Hold, IssueRow, Key, Kinds, Limits, Name, News, Protection,
-    PullState, Repository, Request, Role, Stored, Subscriber, Topic, What, Writer,
+    PullState, ReleaseEnding, ReleaseRow, Repository, Request, Role, Stored, Subscriber, Topic, What, Writer,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -53,6 +53,7 @@ enum StepStage {
     Ci,
     BaseCi,
     Compare,
+    Reviews(u32),
 }
 
 /// One sequence of fresh reads before a level-triggered change step.
@@ -70,6 +71,8 @@ pub(crate) struct PendingStep {
     ci: change::Status,
     base_ci: change::Status,
     contains_base: change::Status,
+    reviews: Box<[client::api::Review]>,
+    reviews_complete: bool,
 }
 struct StepInput {
     task: u64,
@@ -96,6 +99,7 @@ pub struct Domain {
     changes: Map<u64, ChangeRow>,
     steps: Map<Token, PendingStep>,
     issues: Map<u64, IssueRow>,
+    releases: Map<u64, ReleaseRow>,
     namespace: Box<[u8]>,
     adoptions: Map<Token, PendingAdoption>,
     writers: Map<u16, u64>,
@@ -131,6 +135,7 @@ impl Domain {
             changes: Map::with_capacity(l.changes),
             steps: Map::with_capacity(l.changes),
             issues: Map::with_capacity(l.issues),
+            releases: Map::with_capacity(l.tasks),
             namespace: config.namespace.clone(),
             adoptions: Map::with_capacity(l.adoptions),
             writers,
@@ -155,6 +160,183 @@ impl Domain {
     pub fn reclaim(&mut self) {
         self.client.reclaim();
     }
+
+    /// Check one typed task interest before the root adds its matching durable task row.
+    #[must_use]
+    pub fn can_subscribe(&self, limits: &Limits, subscription: &Subscriber) -> bool {
+        if subscription.number == 0
+            || subscription.paths.len() > usize::try_from(limits.paths_per_subscription).expect("u32 fits usize")
+        {
+            return false;
+        }
+        match self.subscriptions.get(&(subscription.task, subscription.topic.clone())) {
+            Some(existing) if existing.number != subscription.number => return false,
+            None if self.subscriptions.len() == limits.subscriptions => return false,
+            Some(_) | None => {}
+        }
+        for path in &subscription.paths {
+            if path.len() > usize::try_from(limits.name_bytes).expect("u32 fits usize") {
+                return false;
+            }
+        }
+        let repository = match &subscription.topic {
+            Topic::Landings { repository, branch } => {
+                if branch.len() > usize::try_from(limits.name_bytes).expect("u32 fits usize") {
+                    return false;
+                }
+                *repository
+            }
+            Topic::Ci { repository, .. } | Topic::Pull { repository, .. } | Topic::Participation { repository, .. } => {
+                *repository
+            }
+        };
+        self.repositories.contains_key(&repository)
+    }
+
+    /// Find the connector half of one durable task subscription.
+    #[must_use]
+    pub fn subscription(&self, task: u64, number: u64) -> Option<Topic> {
+        for (_, row) in &self.subscriptions {
+            if row.task == task && row.number == number {
+                return Some(row.topic.clone());
+            }
+        }
+        None
+    }
+
+    /// Current live resource names of one task, for root-side name additions.
+    #[must_use]
+    pub fn names(&self, task: u64) -> Option<&[Name]> {
+        match self.names.get(&task) {
+            Some(names) => Some(names),
+            None => None,
+        }
+    }
+
+    /// Current holder and writer of one named resource for root claim checks.
+    #[must_use]
+    pub fn hold(&self, name: &Name) -> Option<&Hold> {
+        self.holds.get(name)
+    }
+
+    /// The last durable head observed for a named branch.
+    #[must_use]
+    #[expect(clippy::manual_map, reason = "the strict subset uses a match without a closure")]
+    pub fn branch_head(&self, name: &Name) -> Option<client::api::Commit> {
+        match self.heads.get(name) {
+            Some(row) => Some(row.commit),
+            None => None,
+        }
+    }
+
+    /// Adopted repository facts used by root authority and workspace translation.
+    #[must_use]
+    pub fn repository(&self, provider: client::api::Repository) -> Option<&Repository> {
+        self.repositories.get(&provider)
+    }
+
+    /// Resolve a deployment-wide saved repository tag within its project.
+    #[must_use]
+    pub fn repository_tag(&self, project: u32, tag: u32) -> Option<&Repository> {
+        let mut found = None;
+        for (_, repository) in &self.repositories {
+            if repository.project == project && repository.provider.repository == tag {
+                if found.is_some() {
+                    return None;
+                }
+                found = Some(repository);
+            }
+        }
+        found
+    }
+
+    /// This project's explicitly selected home repository, when adopted.
+    #[must_use]
+    #[expect(clippy::manual_find, reason = "the strict subset uses explicit iteration instead of iterator closures")]
+    pub fn home(&self, project: u32) -> Option<&Repository> {
+        for (_, repository) in &self.repositories {
+            if repository.project == project && repository.home {
+                return Some(repository);
+            }
+        }
+        None
+    }
+
+    /// Current durable change state used by the root's procedure route.
+    #[must_use]
+    pub fn change(&self, task: u64) -> Option<&ChangeRow> {
+        self.changes.get(&task)
+    }
+
+    /// A change's committed pull identity for bounded root brief sections.
+    #[must_use]
+    #[expect(clippy::manual_find, reason = "the strict subset uses explicit iteration instead of iterator closures")]
+    pub fn change_for_pull(&self, repository: u32, number: u64) -> Option<&ChangeRow> {
+        for (_, row) in &self.changes {
+            if row.repository.repository == repository && row.pull == Some(number) {
+                return Some(row);
+            }
+        }
+        None
+    }
+
+    /// Repair owner and task for one landing queue, retained through restart.
+    #[must_use]
+    pub fn queue_repair(&self, repository: client::api::Repository, base: &[u8]) -> Option<(u64, u64)> {
+        let mut newest = None;
+        for (_, row) in &self.changes {
+            if row.repository == repository
+                && row.base.as_ref() == base
+                && let Some(repair) = row.queue_repair
+                && match newest {
+                    Some((_, prior)) => repair > prior,
+                    None => true,
+                }
+            {
+                newest = Some((row.task, repair));
+            }
+        }
+        newest
+    }
+
+    #[must_use]
+    pub fn queue_repairs(&self, repository: client::api::Repository, base: &[u8]) -> u32 {
+        let mut count = 0_u32;
+        for (_, row) in &self.changes {
+            if row.repository == repository && row.base.as_ref() == base {
+                count = count.saturating_add(row.queue_repairs);
+            }
+        }
+        count
+    }
+
+    #[must_use]
+    pub fn queue_repair_owner(&self, repair: u64) -> Option<u64> {
+        for (_, row) in &self.changes {
+            if row.queue_repair == Some(repair) {
+                return Some(row.task);
+            }
+        }
+        None
+    }
+
+    /// Committed goal projection for root subscription and retry routing.
+    #[must_use]
+    pub fn issue(&self, goal: u64) -> Option<&IssueRow> {
+        self.issues.get(&goal)
+    }
+
+    /// Live change procedures in one repository, bounded by the connector's change table.
+    #[must_use]
+    pub fn changes_for(&self, repository: client::api::Repository, limit: u32) -> Box<[u64]> {
+        let mut tasks = List::with_capacity(limit);
+        for (task, row) in &self.changes {
+            if row.repository == repository {
+                tasks.push(*task).expect("change table bounds this list");
+            }
+        }
+        tasks.into_boxed()
+    }
 }
 
 /// Maximum requests from one top step, including one child burst.
@@ -167,6 +349,17 @@ pub const fn max_out(l: &Limits) -> u32 {
 pub fn step(d: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     match event {
         Event::Adopt { reply_to, adoption } => adopt(d, env, reply_to, adoption, out),
+        Event::ForgetAdoption { repository, restore } => match restore {
+            Some(previous) => {
+                d.repositories.insert(repository, previous.clone()).expect("restores an admitted repository");
+                emit(out, Request::Save { record: Stored::Repository(previous) });
+            }
+            None => {
+                if d.repositories.remove(&repository).is_some() {
+                    emit(out, Request::Erase { key: Key::Repository(repository) });
+                }
+            }
+        },
         Event::Names { task, resources } => names(d, env, task, resources, out),
         Event::Unnamed { task } => unnamed(d, env, task, out),
         Event::Hold { task, resource, from } => hold(d, env, task, resource, from, out),
@@ -175,14 +368,36 @@ pub fn step(d: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Req
         Event::Lost { task, attempt } => lost(d, env, task, attempt, out),
         Event::Enqueue { entry } => enqueue(d, env, entry, out),
         Event::Project { entry, repository, view } => project(d, env, entry, repository, view, out),
+        Event::ProjectDesired { entry, goal } => {
+            if let Some(row) = d.issues.get(&goal)
+                && let Some(view) = &row.desired
+            {
+                project(d, env, entry, row.repository, view.clone(), out);
+            }
+        }
         Event::Change { row } => register_change(d, env, row, out),
+        Event::QueueRepairStarted { owner, repair } => {
+            if let Some(row) = d.changes.get_mut(&owner)
+                && !row.base_repair
+            {
+                row.queue_repair = Some(repair);
+                row.queue_repairs = row.queue_repairs.saturating_add(1);
+                emit(out, Request::Save { record: Stored::Change(row.clone()) });
+            }
+        }
+        Event::Delegated { task, child, kind } => delegated(d, task, child, kind, out),
+        Event::DelegateRefused { task, child } => delegate_refused(d, task, child, out),
+        Event::DelegateResult { task, child, status } => delegate_result(d, env, task, child, status, out),
         Event::StepChange { task, entry, heard, gates, queue_repair_active } => {
             step_change(d, env, StepInput { task, entry, heard, gates, queue_repair_active }, out);
         }
         Event::ReleaseChange { task } => release_change(d, task, out),
+        Event::Release { task, root, ending, entry } => release(d, env, task, root, ending, entry, out),
+        Event::ContinueRelease { task, entry } => continue_release(d, env, task, entry, out),
         Event::ReleaseProjection { goal } => release_projection(d, goal, out),
         Event::Committed { entry } => committed(d, env, entry, out),
         Event::Withdraw { entry } => withdraw(d, env, entry, out),
+        Event::VetoChange { task, entry, prior } => veto_change(d, task, entry, prior, out),
         Event::Subscribe { subscription } => subscribe(d, env, subscription, out),
         Event::Unsubscribe { task, topic } => unsubscribe(d, task, topic, out),
         Event::Hint { hint } => child(d, env, client::Event::Hint { hint }, out),
@@ -227,7 +442,8 @@ fn drain(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
             }
             client::Request::Outcome { entry, task, outcome } => {
                 projection_outcome(d, entry, outcome, out);
-                change_outcome(d, entry, outcome, out);
+                change_outcome(d, env, entry, outcome, out);
+                release_outcome(d, entry, outcome, out);
                 if let client::Outcome::Made { made: client::Made::Merged(commit), .. } = outcome
                     && (d.landed.len() < env.limits.landings || d.landed.contains_key(&commit))
                 {
@@ -245,6 +461,14 @@ fn drain(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
                     }
                 }
                 emit(out, Request::Outcome { entry, task, outcome });
+                if outcome != client::Outcome::Uncertain
+                    && match d.releases.get(&task) {
+                        Some(row) => !row.failed,
+                        None => false,
+                    }
+                {
+                    emit(out, Request::ContinueRelease { task });
+                }
             }
             client::Request::Changed { resource, result } => changed(d, env, resource, result, out),
             client::Request::Drift { resource, expected: _, observed: _ } => drift(d, env, resource, out),
@@ -261,6 +485,8 @@ fn drain(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
                     landing_read(d, owner, result, out);
                 } else if d.steps.contains_key(&owner) {
                     step_read(d, env, owner, result, out);
+                } else if owner.raw() & (1_u64 << 61_u32) != 0 && owner.raw() & (1_u64 << 62_u32) == 0 {
+                    emit(out, Request::Read { owner, result });
                 } else {
                     lost_read(d, env, owner, result, out);
                 }
@@ -323,6 +549,24 @@ fn adopt(d: &mut Domain, env: &Env<Limits>, reply_to: Token, request: Adoption, 
     {
         emit(out, Request::Adopted { reply_to, result: Err(client::api::Error::Refused) });
         return;
+    }
+    if request.home && request.role == Role::Context {
+        emit(out, Request::Adopted { reply_to, result: Err(client::api::Error::Refused) });
+        return;
+    }
+    if request.home {
+        for (_, existing) in &d.repositories {
+            if existing.project == request.project && existing.home && existing.provider != request.provider {
+                emit(out, Request::Adopted { reply_to, result: Err(client::api::Error::Refused) });
+                return;
+            }
+        }
+    }
+    for (_, pending) in &d.adoptions {
+        if pending.request.provider == request.provider {
+            emit(out, Request::Adopted { reply_to, result: Err(client::api::Error::Busy) });
+            return;
+        }
     }
     let Some(author) = d.writers.get(&request.provider.forge) else {
         emit(out, Request::Adopted { reply_to, result: Err(client::api::Error::Forbidden) });
@@ -493,6 +737,7 @@ fn finish_adoption(d: &mut Domain, owner: Token, pending: PendingAdoption, out: 
     let request = pending.request;
     let row = Repository {
         project: request.project,
+        home: request.home,
         provider: request.provider,
         host: request.host,
         owner: request.owner,
@@ -538,6 +783,16 @@ fn to_client(name: &Name, l: &Limits) -> Option<client::Resource> {
     Some(client::Resource { repository, what })
 }
 
+fn participating(d: &Domain, resource: &client::Resource) -> bool {
+    let (client::What::Issue(number) | client::What::Pull(number)) = &resource.what else { return false };
+    for (_, subscriber) in &d.subscriptions {
+        if subscriber.topic == (Topic::Participation { repository: resource.repository, number: *number }) {
+            return true;
+        }
+    }
+    false
+}
+
 fn names(d: &mut Domain, env: &Env<Limits>, task: u64, resources: Box<[Name]>, out: &mut Queue<Request>) {
     if resources.len() > usize::try_from(env.limits.resources_per_task).expect("u32 fits usize")
         || (!d.names.contains_key(&task) && d.names.len() == env.limits.tasks)
@@ -553,7 +808,8 @@ fn names(d: &mut Domain, env: &Env<Limits>, task: u64, resources: Box<[Name]>, o
                     emit(out, Request::Refused { task });
                     return;
                 };
-                if watches.insert(resource.clone(), client::Watch { resource, participating: false }).is_err() {
+                let participating = participating(d, &resource);
+                if watches.insert(resource.clone(), client::Watch { resource, participating }).is_err() {
                     emit(out, Request::Refused { task });
                     return;
                 }
@@ -569,7 +825,8 @@ fn names(d: &mut Domain, env: &Env<Limits>, task: u64, resources: Box<[Name]>, o
             emit(out, Request::Refused { task });
             return;
         };
-        if watches.insert(resource.clone(), client::Watch { resource, participating: false }).is_err() {
+        let participating = participating(d, &resource);
+        if watches.insert(resource.clone(), client::Watch { resource, participating }).is_err() {
             emit(out, Request::Refused { task });
             return;
         }
@@ -605,7 +862,8 @@ fn unnamed(d: &mut Domain, env: &Env<Limits>, task: u64, out: &mut Queue<Request
                     present = true;
                 }
             }
-            if !present && list.push(client::Watch { resource, participating: false }).is_err() {
+            let participating = participating(d, &resource);
+            if !present && list.push(client::Watch { resource, participating }).is_err() {
                 emit(out, Request::Refused { task });
                 return;
             }
@@ -785,6 +1043,14 @@ fn lost_read(
     row.writer = None;
     let saved = row.clone();
     emit(out, Request::Save { record: Stored::Hold(saved) });
+    if let Some(commit) = observed {
+        let head = BranchHead { name: pending.name.clone(), commit };
+        if d.heads.insert(pending.name.clone(), head.clone()).is_err() {
+            emit(out, Request::Refused { task: pending.task });
+            return;
+        }
+        emit(out, Request::Save { record: Stored::BranchHead(head) });
+    }
     if let Some(resource) = to_client(&pending.name, &env.limits) {
         match observed {
             Some(commit) => child(d, env, client::Event::Pushed { resource: resource.clone(), commit }, out),
@@ -852,23 +1118,99 @@ fn register_change(d: &mut Domain, env: &Env<Limits>, row: ChangeRow, out: &mut 
     emit(out, Request::Save { record: Stored::Change(row) });
 }
 
+fn delegated(d: &mut Domain, task: u64, child: u64, kind: change::Delegate, out: &mut Queue<Request>) {
+    let Some(row) = d.changes.get_mut(&task) else {
+        emit(out, Request::Refused { task });
+        return;
+    };
+    row.delegate = Some((child, kind));
+    row.delegate_status = change::Status::Unknown;
+    emit(out, Request::Save { record: Stored::Change(row.clone()) });
+}
+
+fn delegate_refused(d: &mut Domain, task: u64, child: u64, out: &mut Queue<Request>) {
+    let Some(row) = d.changes.get_mut(&task) else { return };
+    let Some((expected, kind)) = row.delegate else { return };
+    if expected != child {
+        return;
+    }
+    row.delegate = None;
+    row.delegate_status = change::Status::Unknown;
+    let state = match (kind, &row.change.state) {
+        (change::Delegate::Produce, change::State::Producing { .. }) => change::State::Producing { requested: false },
+        (change::Delegate::Repair(why), change::State::Repairing { .. }) => {
+            row.change.repairs = row.change.repairs.saturating_sub(1);
+            change::State::Repairing { requested: false, why }
+        }
+        (change::Delegate::Resolve { base }, change::State::Resolving { .. }) => {
+            row.change.resolutions = row.change.resolutions.saturating_sub(1);
+            change::State::Resolving { requested: false, base }
+        }
+        (change::Delegate::Gate { number, .. }, change::State::Gating { head, asked }) => {
+            let mut remaining = List::with_capacity(u32::try_from(asked.len()).expect("bounded gate list"));
+            for prior in asked {
+                if *prior != number {
+                    remaining.push(*prior).expect("same gate room");
+                }
+            }
+            change::State::Gating { head: *head, asked: remaining.into_boxed() }
+        }
+        _ => row.change.state.clone(),
+    };
+    row.change.state = change::State::Held { was: Box::new(state), why: change::Hold::Failed };
+    emit(out, Request::Save { record: Stored::Change(row.clone()) });
+}
+
+fn delegate_result(
+    d: &mut Domain,
+    env: &Env<Limits>,
+    task: u64,
+    child: u64,
+    status: change::Status,
+    out: &mut Queue<Request>,
+) {
+    let Some(row) = d.changes.get_mut(&task) else { return };
+    let Some((expected, kind)) = row.delegate else { return };
+    if expected != child {
+        return;
+    }
+    row.delegate = None;
+    row.delegate_status = status;
+    if let change::Delegate::Gate { number, head } = kind {
+        let report = change::GateReport { number, head, status };
+        let mut verdicts = List::with_capacity(env.limits.change_policy.gates);
+        for old in &row.verdicts {
+            if old.number != number {
+                verdicts.push(*old).expect("bounded prior gate reports");
+            }
+        }
+        if verdicts.push(report).is_err() {
+            emit(out, Request::Refused { task });
+            return;
+        }
+        row.verdicts = verdicts.into_boxed();
+    }
+    emit(out, Request::Save { record: Stored::Change(row.clone()) });
+}
+
 fn step_change(d: &mut Domain, env: &Env<Limits>, input: StepInput, out: &mut Queue<Request>) {
     let StepInput { task, entry, heard, gates, queue_repair_active } = input;
     let Some(row) = d.changes.get(&task) else {
         emit(out, Request::Refused { task });
         return;
     };
+    for (_, pending) in &d.steps {
+        if pending.task == task {
+            // A timer or a delegate result can wake this procedure while its
+            // prior fresh-read chain is still in flight.
+            return;
+        }
+    }
     if gates.len() > usize::try_from(env.limits.change_policy.gates).expect("u32 fits usize")
         || d.steps.len() == env.limits.changes
     {
         emit(out, Request::Refused { task });
         return;
-    }
-    for (_, pending) in &d.steps {
-        if pending.task == task {
-            emit(out, Request::Refused { task });
-            return;
-        }
     }
     let repository = row.repository;
     let branch = row.branch.clone();
@@ -882,8 +1224,11 @@ fn step_change(d: &mut Domain, env: &Env<Limits>, input: StepInput, out: &mut Qu
         task,
         entry,
         stage: StepStage::Branch,
-        heard,
-        gates,
+        heard: change::Heard {
+            delegate: if row.delegate_status == change::Status::Unknown { heard.delegate } else { row.delegate_status },
+            ..heard
+        },
+        gates: if gates.is_empty() { row.verdicts.clone() } else { gates },
         queue_repair_active,
         branch: None,
         base_tip: None,
@@ -891,6 +1236,8 @@ fn step_change(d: &mut Domain, env: &Env<Limits>, input: StepInput, out: &mut Qu
         ci: change::Status::Unknown,
         base_ci: change::Status::Unknown,
         contains_base: change::Status::Unknown,
+        reviews: Box::new([]),
+        reviews_complete: true,
     };
     d.steps.insert(owner, pending).expect("step capacity checked");
     child(d, env, client::Event::Read { owner, repository, read: client::api::Read::Branch { branch } }, out);
@@ -905,6 +1252,7 @@ fn status(ci: client::api::Ci) -> change::Status {
     }
 }
 
+#[expect(clippy::too_many_lines, reason = "one bounded fresh-read chain preserves its stage and facts")]
 fn step_read(
     d: &mut Domain,
     env: &Env<Limits>,
@@ -913,6 +1261,20 @@ fn step_read(
     out: &mut Queue<Request>,
 ) {
     let Some(mut pending) = d.steps.remove(&owner) else { return };
+    if result == Err(client::api::Error::Busy) {
+        emit(
+            out,
+            Request::ChangeDecision {
+                task: pending.task,
+                decision: change::Decision::Wait {
+                    until: Some(skein_lib::Wall::from_nanos(env.wall.as_nanos().saturating_add(1_000_000_000))),
+                },
+                entry: None,
+                evidence: None,
+            },
+        );
+        return;
+    }
     let Some(row) = d.changes.get(&pending.task) else { return };
     let repository = row.repository;
     let branch = row.branch.clone();
@@ -1001,15 +1363,76 @@ fn step_read(
                 }
                 Ok(_) | Err(_) => pending.contains_base = change::Status::Unknown,
             }
-            finish_step(d, env, pending, out);
-            return;
+            if let Some(pull) = &pending.pull {
+                pending.stage = StepStage::Reviews(1);
+                client::api::Read::Reviews { number: pull.number, page: 1 }
+            } else {
+                finish_step(d, env, pending, out);
+                return;
+            }
         }
+        StepStage::Reviews(page) => match result {
+            Ok(client::api::Answer::Reviews { reviews, more }) => {
+                let Some(total) = pending.reviews.len().checked_add(reviews.len()) else {
+                    emit(out, Request::Refused { task: pending.task });
+                    return;
+                };
+                if total > usize::try_from(env.limits.client.inbox).expect("u32 fits usize") {
+                    pending.reviews_complete = false;
+                    finish_step(d, env, pending, out);
+                    return;
+                }
+                let mut gathered = List::with_capacity(env.limits.client.inbox);
+                for review in &pending.reviews {
+                    gathered.push(review.clone()).expect("review bound preflighted");
+                }
+                for review in reviews {
+                    gathered.push(review).expect("review bound preflighted");
+                }
+                pending.reviews = gathered.into_boxed();
+                if more {
+                    let Some(next) = page.checked_add(1) else {
+                        pending.reviews_complete = false;
+                        finish_step(d, env, pending, out);
+                        return;
+                    };
+                    pending.stage = StepStage::Reviews(next);
+                    let Some(pull) = &pending.pull else { unreachable!("review read has a pull") };
+                    client::api::Read::Reviews { number: pull.number, page: next }
+                } else {
+                    finish_step(d, env, pending, out);
+                    return;
+                }
+            }
+            Ok(_) | Err(_) => {
+                pending.reviews_complete = false;
+                finish_step(d, env, pending, out);
+                return;
+            }
+        },
     };
     d.steps.insert(owner, pending).expect("replaces step");
     child(d, env, client::Event::Read { owner, repository, read: next }, out);
 }
 
+#[expect(
+    clippy::match_like_matches_macro,
+    clippy::wildcard_enum_match_arm,
+    reason = "the queue tests its currently known ready states without the disallowed matches macro"
+)]
 fn queue_first(d: &Domain, row: &ChangeRow, now: skein_lib::Wall, l: &Limits) -> bool {
+    for (_, repair) in &d.changes {
+        if repair.repository == row.repository
+            && repair.base == row.base
+            && repair.base_repair
+            && match repair.change.state {
+                change::State::Queued { .. } | change::State::First { .. } => true,
+                _ => false,
+            }
+        {
+            return row.task == repair.task;
+        }
+    }
     let mut ready = List::with_capacity(l.changes);
     for (_, other) in &d.changes {
         if other.repository != row.repository || other.base != row.base {
@@ -1041,6 +1464,7 @@ fn queue_first(d: &Domain, row: &ChangeRow, now: skein_lib::Wall, l: &Limits) ->
 
 fn finish_step(d: &mut Domain, env: &Env<Limits>, pending: PendingStep, out: &mut Queue<Request>) {
     let Some(mut row) = d.changes.get(&pending.task).cloned() else { return };
+    let prior = row.change.clone();
     let Some(base_tip) = pending.base_tip else {
         emit(out, Request::Refused { task: pending.task });
         return;
@@ -1061,7 +1485,7 @@ fn finish_step(d: &mut Domain, env: &Env<Limits>, pending: PendingStep, out: &mu
         match stepped.decision {
             change::Decision::None if advanced => {}
             change::Decision::Effect(effect) => {
-                emit_change_effect(d, env, &mut row, pending.entry, effect, out);
+                emit_change_effect(d, env, &mut row, &pending, prior, effect, out);
                 return;
             }
             decision @ (change::Decision::None
@@ -1074,7 +1498,7 @@ fn finish_step(d: &mut Domain, env: &Env<Limits>, pending: PendingStep, out: &mu
             | change::Decision::Hold(_)) => {
                 d.changes.insert(row.task, row.clone()).expect("replaces change");
                 emit(out, Request::Save { record: Stored::Change(row.clone()) });
-                emit(out, Request::ChangeDecision { task: row.task, decision, entry: None });
+                emit(out, Request::ChangeDecision { task: row.task, decision, entry: None, evidence: None });
                 return;
             }
         }
@@ -1116,7 +1540,10 @@ fn change_facts(
         expected_base: base_tip,
         pull,
         ci: change::Ci { head: pending.branch.unwrap_or([0; 32]), status: pending.ci },
-        base_ci: change::Ci { head: base_tip, status: pending.base_ci },
+        base_ci: change::Ci {
+            head: base_tip,
+            status: if row.base_repair { change::Status::Passed } else { pending.base_ci },
+        },
         base_tip,
         contains_base: pending.contains_base,
         mergeable: match &pending.pull {
@@ -1137,7 +1564,8 @@ fn emit_change_effect(
     d: &mut Domain,
     env: &Env<Limits>,
     row: &mut ChangeRow,
-    entry_number: u64,
+    pending: &PendingStep,
+    prior: change::Change,
     effect: change::Effect,
     out: &mut Queue<Request>,
 ) {
@@ -1148,11 +1576,12 @@ fn emit_change_effect(
                 task: row.task,
                 decision: change::Decision::Hold(change::Hold::Failed),
                 entry: None,
+                evidence: None,
             },
         );
         return;
     };
-    if d.entries.contains_key(&entry_number) || d.entries.len() == env.limits.entries {
+    if d.entries.contains_key(&pending.entry) || d.entries.len() == env.limits.entries {
         emit(out, Request::Refused { task: row.task });
         return;
     }
@@ -1165,7 +1594,7 @@ fn emit_change_effect(
         | change::Effect::Retarget => client::Condition::None,
     };
     let entry = client::Entry {
-        number: entry_number,
+        number: pending.entry,
         task: row.task,
         repository: row.repository,
         effect: client::Effect { write, condition },
@@ -1173,7 +1602,7 @@ fn emit_change_effect(
         attempt: None,
         failures: 0,
     };
-    row.pending = Some(entry_number);
+    row.pending = Some(pending.entry);
     row.effect = change::EffectResult::Pending;
     d.changes.insert(row.task, row.clone()).expect("replaces change");
     emit(out, Request::Save { record: Stored::Change(row.clone()) });
@@ -1184,7 +1613,17 @@ fn emit_change_effect(
         Request::ChangeDecision {
             task: row.task,
             decision: change::Decision::Effect(effect),
-            entry: Some(entry_number),
+            entry: Some(pending.entry),
+            evidence: Some(crate::ChangeEvidence {
+                prior,
+                head: pending.branch,
+                base_tip: pending.base_tip.expect("step read base tip"),
+                contains_base: pending.contains_base,
+                ci: pending.ci,
+                gates: pending.gates.clone(),
+                reviews: pending.reviews.clone(),
+                reviews_complete: pending.reviews_complete,
+            }),
         },
     );
 }
@@ -1207,7 +1646,7 @@ fn change_write(row: &ChangeRow, effect: change::Effect) -> Option<client::api::
     }
 }
 
-fn change_outcome(d: &mut Domain, entry: u64, outcome: client::Outcome, out: &mut Queue<Request>) {
+fn change_outcome(d: &mut Domain, env: &Env<Limits>, entry: u64, outcome: client::Outcome, out: &mut Queue<Request>) {
     let mut task = None;
     for (number, row) in &d.changes {
         if row.pending == Some(entry) {
@@ -1226,8 +1665,19 @@ fn change_outcome(d: &mut Domain, entry: u64, outcome: client::Outcome, out: &mu
     };
     row.pending = None;
     let saved = row.clone();
-    emit(out, Request::Save { record: Stored::Change(saved) });
-    emit(out, Request::ChangeDecision { task, decision: change::Decision::None, entry: None });
+    emit(out, Request::Save { record: Stored::Change(saved.clone()) });
+    if let client::Outcome::Made { made: client::Made::Updated(commit), .. } = outcome {
+        child(
+            d,
+            env,
+            client::Event::Pushed {
+                resource: client::Resource { repository: saved.repository, what: client::What::Branch(saved.branch) },
+                commit,
+            },
+            out,
+        );
+    }
+    emit(out, Request::ChangeDecision { task, decision: change::Decision::None, entry: None, evidence: None });
 }
 
 fn release_change(d: &mut Domain, task: u64, out: &mut Queue<Request>) {
@@ -1238,6 +1688,192 @@ fn release_change(d: &mut Domain, task: u64, out: &mut Queue<Request>) {
     row.drift = None;
     let saved = row.clone();
     emit(out, Request::Save { record: Stored::Change(saved) });
+}
+
+fn release(
+    d: &mut Domain,
+    env: &Env<Limits>,
+    task: u64,
+    root: u64,
+    ending: ReleaseEnding,
+    entry: u64,
+    out: &mut Queue<Request>,
+) {
+    if let Some(row) = d.releases.get_mut(&task) {
+        if row.root != root || row.ending != ending {
+            emit(out, Request::ReleaseFailed { task });
+            return;
+        }
+        if row.failed {
+            row.failed = false;
+            emit(out, Request::Save { record: Stored::Release(row.clone()) });
+        }
+    } else {
+        if d.releases.len() == env.limits.tasks {
+            emit(out, Request::ReleaseFailed { task });
+            return;
+        }
+        let row = ReleaseRow {
+            task,
+            root,
+            ending,
+            close_pull: if ending == ReleaseEnding::Cancelled {
+                match d.changes.get(&task) {
+                    Some(change) => change.pull,
+                    None => None,
+                }
+            } else {
+                None
+            },
+            pending: None,
+            failed: false,
+        };
+        d.releases.insert(task, row.clone()).expect("release capacity checked");
+        emit(out, Request::Save { record: Stored::Release(row) });
+    }
+    continue_release(d, env, task, entry, out);
+}
+
+fn continue_release(d: &mut Domain, env: &Env<Limits>, task: u64, entry: u64, out: &mut Queue<Request>) {
+    for _ in 0..=env.limits.holds {
+        let Some(mut row) = d.releases.get(&task).cloned() else { return };
+        if row.failed || row.pending.is_some() {
+            return;
+        }
+        for (_, pending) in &d.entries {
+            if pending.task == task {
+                return;
+            }
+        }
+        if let Some(number) = row.close_pull {
+            let Some(change) = d.changes.get(&task) else {
+                emit(out, Request::ReleaseFailed { task });
+                return;
+            };
+            let repository = change.repository;
+            let write = client::api::Write::Close { number };
+            enqueue_release(d, env, &mut row, entry, repository, write, None, out);
+            return;
+        }
+        let mut selected = None;
+        for (name, hold) in &d.holds {
+            if hold.task == task {
+                selected = Some((name.clone(), hold.writer));
+                break;
+            }
+        }
+        if let Some((name, writer)) = selected {
+            if writer.is_some() {
+                emit(out, Request::ReleaseFailed { task });
+                return;
+            }
+            if row.ending == ReleaseEnding::Failed && row.root != task {
+                let hold = d.holds.get_mut(&name).expect("selected hold");
+                hold.task = row.root;
+                emit(out, Request::Save { record: Stored::Hold(hold.clone()) });
+                continue;
+            }
+            if let Some(resource) = to_client(&name, &env.limits)
+                && let client::What::Branch(branch) = resource.what
+            {
+                enqueue_release(
+                    d,
+                    env,
+                    &mut row,
+                    entry,
+                    resource.repository,
+                    client::api::Write::DeleteBranch { branch },
+                    Some(name),
+                    out,
+                );
+                return;
+            }
+            d.holds.remove(&name);
+            emit(out, Request::Erase { key: Key::Hold(name) });
+            continue;
+        }
+        let mut topics = List::with_capacity(env.limits.subscriptions);
+        for ((owner, topic), _) in &d.subscriptions {
+            if *owner == task {
+                topics.push(topic.clone()).expect("subscription capacity");
+            }
+        }
+        for topic in &topics {
+            unsubscribe(d, task, topic.clone(), out);
+        }
+        unnamed(d, env, task, out);
+        d.releases.remove(&task);
+        emit(out, Request::Erase { key: Key::Release(task) });
+        emit(out, Request::Released { task });
+        return;
+    }
+    unreachable!("every release pass removes a hold or completes");
+}
+
+#[expect(clippy::too_many_arguments, reason = "one cleanup effect carries its durable entry and held resource")]
+fn enqueue_release(
+    d: &mut Domain,
+    env: &Env<Limits>,
+    row: &mut ReleaseRow,
+    number: u64,
+    repository: client::api::Repository,
+    write: client::api::Write,
+    resource: Option<Name>,
+    out: &mut Queue<Request>,
+) {
+    if d.entries.len() == env.limits.entries || d.entries.contains_key(&number) {
+        emit(out, Request::ReleaseFailed { task: row.task });
+        return;
+    }
+    let entry = client::Entry {
+        number,
+        task: row.task,
+        repository,
+        effect: client::Effect { write, condition: client::Condition::None },
+        start: None,
+        attempt: None,
+        failures: 0,
+    };
+    row.pending = Some((number, resource));
+    d.releases.insert(row.task, row.clone()).expect("replaces release");
+    emit(out, Request::Save { record: Stored::Release(row.clone()) });
+    d.entries.insert(number, entry.clone()).expect("entry capacity checked");
+    emit(out, Request::Save { record: Stored::Entry(entry) });
+}
+
+fn release_outcome(d: &mut Domain, entry: u64, outcome: client::Outcome, out: &mut Queue<Request>) {
+    if outcome == client::Outcome::Uncertain {
+        return;
+    }
+    let mut owner = None;
+    for (task, row) in &d.releases {
+        if match &row.pending {
+            Some((number, _)) => *number == entry,
+            None => false,
+        } {
+            owner = Some(*task);
+            break;
+        }
+    }
+    let Some(task) = owner else { return };
+    let mut row = d.releases.get(&task).expect("selected release").clone();
+    let (_, resource) = row.pending.take().expect("selected pending release");
+    match outcome {
+        client::Outcome::Made { .. } => match resource {
+            Some(name) => {
+                d.holds.remove(&name);
+                emit(out, Request::Erase { key: Key::Hold(name) });
+            }
+            None => row.close_pull = None,
+        },
+        client::Outcome::Failed(_) | client::Outcome::Raced { .. } | client::Outcome::Withdrawn => {
+            row.failed = true;
+            emit(out, Request::ReleaseFailed { task });
+        }
+        client::Outcome::Uncertain => unreachable!("uncertain returned above"),
+    }
+    d.releases.insert(task, row.clone()).expect("replaces release");
+    emit(out, Request::Save { record: Stored::Release(row) });
 }
 
 fn project(
@@ -1267,6 +1903,10 @@ fn project(
             return;
         }
         Some(row) if row.pending.is_some() => {
+            let mut row = row.clone();
+            row.desired = Some(view);
+            d.issues.insert(goal, row.clone()).expect("replaces issue");
+            emit(out, Request::Save { record: Stored::Issue(row) });
             emit(out, Request::ProjectAfter { goal, when: None });
             return;
         }
@@ -1279,12 +1919,22 @@ fn project(
             pending: None,
             before: None,
             failed: false,
+            desired: None,
         },
     };
     let projected = issues::project(&view, &prior.state, env.wall, &env.limits.issue_policy);
     match projected.decision {
-        issues::Decision::None => {}
-        issues::Decision::Wait(when) => emit(out, Request::ProjectAfter { goal, when: Some(when) }),
+        issues::Decision::None | issues::Decision::Wait(_) => {
+            if prior.desired.as_ref() != Some(&view) {
+                let mut row = prior;
+                row.desired = Some(view);
+                d.issues.insert(goal, row.clone()).expect("replaces issue");
+                emit(out, Request::Save { record: Stored::Issue(row) });
+            }
+            if let issues::Decision::Wait(when) = projected.decision {
+                emit(out, Request::ProjectAfter { goal, when: Some(when) });
+            }
+        }
         issues::Decision::Hold => emit(out, Request::ProjectionFailed { goal }),
         issues::Decision::Effect(effect) => {
             if d.entries.len() == env.limits.entries || d.entries.contains_key(&number) {
@@ -1312,6 +1962,7 @@ fn project(
                 pending: Some(number),
                 before: Some(prior.state),
                 failed: false,
+                desired: Some(view),
             };
             d.issues.insert(goal, row.clone()).expect("projection capacity checked");
             emit(out, Request::Save { record: Stored::Issue(row) });
@@ -1447,12 +2098,22 @@ fn withdraw(d: &mut Domain, env: &Env<Limits>, number: u64, out: &mut Queue<Requ
     }
 }
 
+fn veto_change(d: &mut Domain, task: u64, entry: u64, prior: change::Change, out: &mut Queue<Request>) {
+    let Some(row) = d.changes.get_mut(&task) else { return };
+    if row.pending != Some(entry) || !d.entries.contains_key(&entry) {
+        return;
+    }
+    row.change = prior;
+    row.pending = None;
+    row.effect = change::EffectResult::None;
+    emit(out, Request::Save { record: Stored::Change(row.clone()) });
+    d.entries.remove(&entry);
+    emit(out, Request::Erase { key: Key::Entry(entry) });
+}
+
 fn subscribe(d: &mut Domain, env: &Env<Limits>, subscription: Subscriber, out: &mut Queue<Request>) {
     let task = subscription.task;
-    if subscription.paths.len() > usize::try_from(env.limits.paths_per_subscription).expect("u32 fits usize")
-        || (!d.subscriptions.contains_key(&(task, subscription.topic.clone()))
-            && d.subscriptions.len() == env.limits.subscriptions)
-    {
+    if !d.can_subscribe(&env.limits, &subscription) {
         emit(out, Request::Refused { task });
         return;
     }
@@ -1687,8 +2348,38 @@ fn publish(d: &Domain, topic: Topic, news: News, out: &mut Queue<Request>) {
     for (_, subscriber) in &d.subscriptions {
         if subscriber.topic == topic {
             let class = classify(d, subscriber, &news);
-            emit(out, Request::News { task: subscriber.task, topic: topic.clone(), news: news.clone(), class });
+            emit(
+                out,
+                Request::News {
+                    task: subscriber.task,
+                    subscription: subscriber.number,
+                    topic: topic.clone(),
+                    news: news.clone(),
+                    class,
+                },
+            );
         }
+    }
+}
+
+#[expect(
+    clippy::match_like_matches_macro,
+    clippy::wildcard_enum_match_arm,
+    reason = "the outbox test uses explicit matches in this strict subset"
+)]
+fn updating_entry(d: &Domain, task: u64) -> bool {
+    let Some(change) = d.changes.get(&task) else { return false };
+    if !match change.change.state {
+        change::State::Updating { .. } => true,
+        _ => false,
+    } {
+        return false;
+    }
+    let Some(number) = change.pending else { return false };
+    let Some(entry) = d.entries.get(&number) else { return false };
+    match entry.effect.write {
+        client::api::Write::Update { .. } => true,
+        _ => false,
     }
 }
 
@@ -1696,6 +2387,9 @@ fn drift(d: &mut Domain, env: &Env<Limits>, resource: client::Resource, out: &mu
     let mut affected = List::with_capacity(env.limits.holds);
     for (name, row) in &d.holds {
         if to_client(name, &env.limits) == Some(resource.clone()) {
+            if updating_entry(d, row.task) {
+                continue;
+            }
             emit(out, Request::Drift { task: row.task, resource: name.clone() });
             affected.push(row.task).expect("one affected task per hold");
         }
@@ -1744,6 +2438,9 @@ fn restore(d: &mut Domain, env: &Env<Limits>, record: Stored) {
         }
         Stored::Issue(row) => {
             d.issues.insert(row.goal, row).expect("restored issue within limits");
+        }
+        Stored::Release(row) => {
+            d.releases.insert(row.task, row).expect("restored release within limits");
         }
     }
 }

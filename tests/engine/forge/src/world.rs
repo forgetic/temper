@@ -173,6 +173,7 @@ impl World {
             reply_to: Token::new(100),
             adoption: top::Adoption {
                 project: 5,
+                home: role != top::Role::Context,
                 provider: REPO,
                 host: Box::from(&b"forge.example"[..]),
                 owner: Box::from(&b"org"[..]),
@@ -400,10 +401,14 @@ impl World {
                 | top::Request::Taken { .. }
                 | top::Request::Refused { .. }
                 | top::Request::Outcome { .. }
+                | top::Request::ContinueRelease { .. }
+                | top::Request::Released { .. }
+                | top::Request::ReleaseFailed { .. }
                 | top::Request::ProjectAfter { .. }
                 | top::Request::ProjectionFailed { .. }
                 | top::Request::ChangeDecision { .. }
                 | top::Request::News { .. }
+                | top::Request::Read { .. }
                 | top::Request::Drift { .. }) => {
                     self.seen.push(other).expect("world output capacity");
                 }
@@ -472,10 +477,13 @@ fn key(row: &top::Stored) -> top::Key {
         }),
         top::Stored::Change(row) => top::Key::Change(row.task),
         top::Stored::Issue(row) => top::Key::Issue(row.goal),
+        top::Stored::Release(row) => top::Key::Release(row.task),
     }
 }
 
-fn fake_config() -> forge::Config {
+/// Bounded Forgejo fixture shared by the connector and root worlds.
+#[must_use]
+pub fn fake_config() -> forge::Config {
     forge::Config {
         limits: forge::Limits {
             repositories: 1,
