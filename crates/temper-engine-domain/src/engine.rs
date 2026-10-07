@@ -43,11 +43,11 @@ use crate::{
 };
 use alloc::boxed::Box;
 use jig_core_accounts as accounts;
+use jig_core_brief as brief;
 use jig_core_fleet as fleet;
 use jig_core_views as views;
 use skein_lib::{Decimal, Env, Id, List, Map, Queue, ReplyTo, Slab, Token, Writer};
 use temper_engine_domain_authority as authority;
-use temper_engine_domain_brief as brief;
 use temper_engine_domain_forge as forge;
 use temper_engine_domain_forge_change as forge_change;
 use temper_engine_domain_forge_client as forge_client;

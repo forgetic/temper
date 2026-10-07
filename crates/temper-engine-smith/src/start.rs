@@ -2,11 +2,11 @@
 //! already decoded history and mounts; no encoding or file access occurs here.
 
 use alloc::boxed::Box;
+use jig_core_brief as brief;
 use skein_lib::{Decimal, List, ReplyTo, Token, bytes};
 use smith_domain as smith;
 use smith_domain_run as run;
 use temper_engine_domain::engine;
-use temper_engine_domain_brief as brief;
 use temper_engine_domain_tasks as tasks;
 
 /// Turn one root-owned model policy into Smith's model data.

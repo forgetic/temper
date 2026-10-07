@@ -2,10 +2,10 @@
 //! checked against durable fake-store rows, never the root's private state
 //! (domain/engine.md, section 15).
 
+use jig_core_brief as brief;
 use std::collections::{BTreeMap, BTreeSet};
 use temper_engine_domain::engine::{BriefBody as Body, BriefKind as Kind};
 use temper_engine_domain::{Key, Record, Write, engine::Assignment};
-use temper_engine_domain_brief as brief;
 use temper_engine_domain_people as people;
 use temper_engine_domain_tasks as tasks;
 

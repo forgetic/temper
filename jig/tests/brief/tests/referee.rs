@@ -1,6 +1,6 @@
+use jig_brief_world::referee;
+use jig_core_brief::{Core, GatherPlaced, GatherRequest};
 use skein_lib::Token;
-use temper_engine_brief_world::referee;
-use temper_engine_domain_brief::{Core, GatherPlaced, GatherRequest};
 
 #[test]
 fn a_completed_brief_over_its_budget_fails_the_referee() {

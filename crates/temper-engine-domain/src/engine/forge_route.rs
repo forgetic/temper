@@ -7,7 +7,7 @@ use super::{
     people, procedure_step, save, tasks,
 };
 use alloc::boxed::Box;
-use temper_engine_domain_brief as brief;
+use jig_core_brief as brief;
 
 fn append(out: &mut List<u8>, bytes: &[u8]) {
     for byte in bytes {

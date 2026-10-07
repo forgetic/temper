@@ -1,11 +1,9 @@
 //! A full typed inventory fits the child's declared worst case.
 
+use jig_brief_world::LIMITS;
+use jig_core_brief::{Core, GatherDomain, GatherEvent, Planned, gather_max_out, gather_step, gather_worst_case};
 use skein_lib::{Env, Queue, Time, Token, Wall};
 use skein_world::domain::heap::{self, Meter};
-use temper_engine_brief_world::LIMITS;
-use temper_engine_domain_brief::{
-    Core, GatherDomain, GatherEvent, Planned, gather_max_out, gather_step, gather_worst_case,
-};
 
 #[global_allocator]
 static HEAP: heap::Counting = heap::Counting;

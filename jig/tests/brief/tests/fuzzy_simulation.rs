@@ -1,8 +1,8 @@
 //! Small deterministic inventories sweep sizes, priorities and budgets.
 
+use jig_brief_world::{LIMITS, World, referee};
+use jig_core_brief::{Core, GatherEvent, GatherRequest, Planned};
 use skein_lib::{Duration, Time, Token};
-use temper_engine_brief_world::{LIMITS, World, referee};
-use temper_engine_domain_brief::{Core, GatherEvent, GatherRequest, Planned};
 
 #[test]
 fn seeded_connector_sizes_and_priorities_never_exceed_the_budget_or_leak_a_token() {

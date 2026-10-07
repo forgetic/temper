@@ -1,5 +1,5 @@
 [package]
-name = "temper-engine-brief-world"
+name = "jig-brief-world"
 description = "The brief child domain's world: a simulation with a scripted parent serving its reads"
 version.workspace = true
 edition.workspace = true
@@ -8,7 +8,7 @@ publish.workspace = true
 
 [dependencies]
 skein-lib.workspace = true
-temper-engine-domain-brief.workspace = true
+jig-core-brief.workspace = true
 skein-world.workspace = true
 
 # Ordinary Rust (programming-model.md, 10.2), so not the step crates' lints.
