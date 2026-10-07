@@ -133,8 +133,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "jig-ops-domain-observability"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+]
+
+[[package]]
 name = "jig-ops-fake-production"
 version = "0.0.0"
+
+[[package]]
+name = "jig-ops-world"
+version = "0.0.0"
+dependencies = [
+ "jig-ops-domain-observability",
+ "jig-ops-fake-production",
+ "skein-lib",
+]
 
 [[package]]
 name = "jig-test-connector"
