@@ -716,6 +716,63 @@ fn a_merge_with_its_answer_lost_is_found_after_restart_without_merging_twice() {
 }
 
 #[test]
+fn a_merge_decided_for_an_old_head_cannot_land_the_new_head() {
+    let mut world = World::new(90);
+    world.adopt();
+    world.produce(b"temper/51");
+    let pull = world.open_pull(b"temper/51", b"main");
+    let old_head = temper_engine_forge_world::translate::commit(world.branch(b"temper/51"));
+    let landing = world.branch(b"main");
+    world.push(b"temper/51", b"later work");
+    world.event(top::Event::Enqueue {
+        entry: client::Entry {
+            number: 1,
+            task: 51,
+            repository: REPO,
+            effect: client::Effect {
+                write: client::api::Write::Merge { number: pull, head: old_head },
+                condition: client::Condition::Merge { base: Box::from(&b"main"[..]) },
+            },
+            start: None,
+            attempt: None,
+            failures: 0,
+        },
+    });
+    world.event(top::Event::Committed { entry: 1 });
+    world.run_for(10);
+    assert_eq!(world.branch(b"main"), landing);
+    assert_eq!(world.writes(), 0);
+}
+
+#[test]
+fn a_reported_worker_push_is_not_taken_for_outside_drift() {
+    let mut world = World::new(91);
+    world.adopt();
+    let name = top::Name {
+        forge: REPO.forge,
+        repository: REPO.repository,
+        what: top::What::Branch(Box::new([Box::from(&b"temper"[..]), Box::from(&b"51"[..])])),
+    };
+    world.event(top::Event::Names { task: 51, resources: Box::new([name.clone()]) });
+    world.event(top::Event::Hold { task: 51, resource: name.clone(), from: None });
+    world.event(top::Event::Claim { task: 51, attempt: 1, writes: Box::new([name.clone()]), holders: Box::new([]) });
+    world.produce(b"temper/51");
+    let pushed = temper_engine_forge_world::translate::commit(world.branch(b"temper/51"));
+    world.event(top::Event::Answered { task: 51, attempt: 1, pushed: Box::new([(name, pushed)]) });
+    world.run_for(1);
+    world.take_seen();
+    world.event(top::Event::Hint {
+        hint: client::api::Hint {
+            repository: REPO,
+            change: client::api::Change::Branch(Box::from(&b"temper/51"[..])),
+            key: None,
+        },
+    });
+    world.run_for(5);
+    assert!(!world.seen().iter().any(|event| matches!(event, top::Request::Drift { task: 51, .. })));
+}
+
+#[test]
 fn an_external_move_of_a_held_branch_is_reported_as_drift() {
     let mut world = World::new(31);
     world.adopt();

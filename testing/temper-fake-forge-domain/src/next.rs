@@ -2,7 +2,7 @@
 //! Comparisons deliberately do not page; excessive data is an explicit
 //! refusal, never a short answer claiming to be complete.
 
-use crate::api::{Answer, ChangedFile, Check, CheckSummary, Collaborator, Error, Settings, State, What};
+use crate::api::{Answer, ChangedFile, Check, CheckSummary, Collaborator, Error, JobRef, Settings, State, What};
 use crate::domain::Domain;
 use crate::git;
 use crate::limits::Limits;
@@ -118,7 +118,7 @@ pub(crate) fn compare(
     })
 }
 
-pub(crate) fn checks(repository: &Repository, limits: &Limits, commit: u64) -> Result<Answer, Error> {
+pub(crate) fn checks(repository: &Repository, limits: &Limits, commit: u64, ci_user: u64) -> Result<Answer, Error> {
     if !repository.has.contains(&commit) {
         return Err(Error::Missing(What::Commit));
     }
@@ -157,11 +157,71 @@ pub(crate) fn checks(repository: &Repository, limits: &Limits, commit: u64) -> R
                 return Err(Error::TooLarge);
             }
         }
+        let job =
+            if status.state == Check::Failed { job_ref(repository, commit, &status.context, ci_user) } else { None };
         summaries
-            .push(CheckSummary { status, description: copy_of(description), link: link.into_boxed() })
+            .push(CheckSummary { status, description: copy_of(description), link: link.into_boxed(), job })
             .expect("one summary per admitted context");
     }
     Ok(Answer::Checks(summaries.into_boxed()))
+}
+
+fn job_ref(repository: &Repository, commit: u64, context: &[u8], ci_user: u64) -> Option<JobRef> {
+    let source = repository.statuses.get(&commit)?.get(context)?;
+    if source.author != ci_user || source.state != Check::Failed {
+        return None;
+    }
+    let mut job = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in context {
+        job = (job ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3);
+    }
+    Some(JobRef { run: commit, job, attempt: if source.rerun { 2 } else { 1 } })
+}
+
+pub(crate) fn job(
+    repository: &Repository,
+    commit: u64,
+    run: u64,
+    job: u64,
+    attempt: u32,
+    max_bytes: u32,
+    ci_user: u64,
+) -> Result<Answer, Error> {
+    if !repository.has.contains(&commit) {
+        return Err(Error::Missing(What::Commit));
+    }
+    let statuses = repository.statuses.get(&commit).ok_or(Error::Missing(What::Job))?;
+    let mut found = None;
+    for (context, _) in statuses {
+        if job_ref(repository, commit, context, ci_user) == Some(JobRef { run, job, attempt }) {
+            found = Some(context.as_ref());
+        }
+    }
+    let context: &[u8] = found.ok_or(Error::Missing(What::Job))?;
+    if max_bytes == 0 {
+        return Err(Error::TooLarge);
+    }
+    let Some(line_bytes) = b"failing check ".len().checked_add(context.len()) else { return Err(Error::TooLarge) };
+    let Some(line_bytes) = line_bytes.checked_add(3) else { return Err(Error::TooLarge) };
+    let Some(log_bytes) = line_bytes.checked_mul(4) else { return Err(Error::TooLarge) };
+    let Ok(capacity) = u32::try_from(log_bytes) else { return Err(Error::TooLarge) };
+    let mut log = List::with_capacity(capacity);
+    for line in 0_u8..4 {
+        for byte in b"failing check " {
+            log.push(*byte).expect("fixed fake log capacity");
+        }
+        for byte in context {
+            if log.push(*byte).is_err() {
+                return Err(Error::TooLarge);
+            }
+        }
+        log.push(b' ').expect("fixed fake log capacity");
+        log.push(b'0'.checked_add(line).expect("four fake lines have one-digit numbers"))
+            .expect("fixed fake log capacity");
+        log.push(b'\n').expect("fixed fake log capacity");
+    }
+    let length = usize::try_from(max_bytes).expect("u32 fits usize").saturating_add(1).min(log.as_slice().len());
+    Ok(Answer::File(Box::from(log.as_slice().get(..length).expect("length capped at log"))))
 }
 
 pub(crate) fn settings(repository: &Repository) -> Answer {

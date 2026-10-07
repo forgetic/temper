@@ -61,8 +61,10 @@ pub(crate) fn read(domain: &Domain, config: &Config, id: Id<Repository>, read: &
         Read::Compare { base, head, page: _, limit: _ } => {
             crate::next::compare(domain, limits, repository, *base, *head)
         }
-        Read::Checks { commit } => crate::next::checks(repository, limits, *commit),
-        Read::Job { commit: _, context: _ } => Err(Error::Missing(What::Job)),
+        Read::Checks { commit } => crate::next::checks(repository, limits, *commit, config.ci),
+        Read::Job { commit, run, job, attempt, max_bytes } => {
+            crate::next::job(repository, *commit, *run, *job, *attempt, *max_bytes, config.ci)
+        }
         Read::Protection { branch } => {
             let protection = match &repository.protection {
                 Some(protection) if protection.branch == *branch => Some(protection.clone()),

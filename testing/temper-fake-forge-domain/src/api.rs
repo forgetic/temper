@@ -98,11 +98,14 @@ pub enum Read {
     Checks {
         commit: u64,
     },
-    /// A job's output. The probed Forgejo has no supported REST log route:
-    /// this returns `Missing(Job)`, so a repair uses its status and link.
+    /// Bounded plaintext output of one Forgejo v16.0.5 job attempt. The
+    /// existing byte answer carries one extra byte when truncated.
     Job {
         commit: u64,
-        context: Box<[u8]>,
+        run: u64,
+        job: u64,
+        attempt: u32,
+        max_bytes: u32,
     },
     /// Requires admin permission, including when no protection exists.
     Protection {
@@ -586,6 +589,14 @@ pub struct CheckSummary {
     pub status: Status,
     pub description: Box<[u8]>,
     pub link: Box<[u8]>,
+    pub job: Option<JobRef>,
+}
+/// Forgejo Actions identity for one check's job attempt.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct JobRef {
+    pub run: u64,
+    pub job: u64,
+    pub attempt: u32,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]

@@ -40,7 +40,6 @@ pub fn worst_case(l: &Limits) -> Option<u64> {
         || l.name_bytes == 0
         || l.queue_window == skein_lib::Duration::ZERO
         || l.output == 0
-        || l.facts == 0
         || l.adoptions == 0
         || l.collaborators == 0
         || l.landings == 0

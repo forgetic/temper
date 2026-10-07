@@ -388,6 +388,7 @@ dependencies = [
  "temper-engine-domain-forge-client",
  "temper-engine-domain-forge-issues",
  "temper-fake-forge-domain",
+ "temper-world",
 ]
 
 [[package]]

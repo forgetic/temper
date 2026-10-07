@@ -29,7 +29,7 @@ const CLIENT: client::Limits = client::Limits {
     slow: Duration::from_secs(40),
     facts: 16,
 };
-const LIMITS: top::Limits = top::Limits {
+pub const LIMITS: top::Limits = top::Limits {
     repositories: 2,
     tasks: 8,
     holds: 8,
@@ -95,6 +95,12 @@ pub struct World {
 impl World {
     #[must_use]
     pub fn new(seed: u64) -> World {
+        Self::with_facts(seed, LIMITS.facts)
+    }
+
+    #[must_use]
+    pub fn with_facts(seed: u64, facts: u32) -> World {
+        let limits = top::Limits { facts, client: client::Limits { facts, ..CLIENT }, ..LIMITS };
         let config = fake_config();
         let mut fake = forge::Domain::new(&config, seed);
         forge::repository(
@@ -121,7 +127,7 @@ impl World {
         forge::grant(&mut fake, b"org/repo", 1, raw::Permission::Admin);
         forge::grant(&mut fake, b"org/repo", 2, raw::Permission::Write);
         let top = top::Domain::new(
-            &LIMITS,
+            &limits,
             seed,
             client::Config {
                 namespace: Box::from(&b"world"[..]),
@@ -132,13 +138,13 @@ impl World {
         let now = Time::from_nanos(100_000_000_000);
         let mut world = World {
             top,
-            env: Env { now, wall: Wall::from_nanos(now.as_nanos()), limits: LIMITS },
+            env: Env { now, wall: Wall::from_nanos(now.as_nanos()), limits },
             forge: fake,
             forge_env: Env { now, wall: Wall::EPOCH, limits: config },
             to_forge: Queue::with_capacity(32),
             forge_out: Queue::with_capacity(forge::MAX_OUT),
             to_top: Queue::with_capacity(32),
-            top_out: Queue::with_capacity(top::max_out(&LIMITS)),
+            top_out: Queue::with_capacity(top::max_out(&limits)),
             pending: Map::with_capacity(32),
             stored: Map::with_capacity(128),
             seen: List::with_capacity(256),
@@ -206,7 +212,7 @@ impl World {
     pub fn restart(&mut self) {
         self.generation += 1;
         self.top = top::Domain::new(
-            &LIMITS,
+            &self.env.limits,
             self.seed,
             client::Config {
                 namespace: Box::from(&b"world"[..]),

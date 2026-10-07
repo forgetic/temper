@@ -144,6 +144,19 @@ fn the_groundwork_reads_keep_the_fake_api_facts_in_the_client_projection() {
     }
     world.finish();
 }
+
+#[test]
+fn bounded_job_bytes_translate_to_a_truncated_attempt_log() {
+    let attempt =
+        api::JobAttempt { head: temper_engine_forge_client_world::translate::commit(3), run: 3, job: 7, attempt: 2 };
+    let asked = api::Op::Read(api::Read::Job { attempt, max_bytes: 4 });
+    let result = temper_engine_forge_client_world::translate::answer(
+        &asked,
+        temper_fake_forge_domain::api::Answer::File(Box::from(&b"error"[..])),
+        &temper_engine_forge_client_world::LIMITS,
+    );
+    assert_eq!(result, api::Answer::Job { attempt, log: Box::from(&b"erro"[..]), truncated: true });
+}
 #[test]
 fn adoption_reads_history_and_preserves_foreign_or_copied_marker_news() {
     let mut world = World::new(Settings::calm(17));

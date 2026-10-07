@@ -105,7 +105,13 @@ fn read_op(read: &client::Read, l: &Limits) -> forge::Read {
             forge::Read::Compare { base: number(*before), head: number(*after), page: 1, limit: l.rows }
         }
         client::Read::Checks { commit } => forge::Read::Checks { commit: number(*commit) },
-        client::Read::Job { attempt, .. } => forge::Read::Job { commit: number(attempt.head), context: Box::new([]) },
+        client::Read::Job { attempt, max_bytes } => forge::Read::Job {
+            commit: number(attempt.head),
+            run: attempt.run,
+            job: attempt.job,
+            attempt: attempt.attempt,
+            max_bytes: *max_bytes,
+        },
         client::Read::Protection { branch } => forge::Read::Protection { branch: branch.clone() },
         client::Read::Settings => forge::Read::Settings,
         client::Read::Collaborators { .. } => forge::Read::Collaborators,
@@ -226,15 +232,20 @@ pub fn answer(asked: &client::Op, answer: forge::Answer, l: &Limits) -> client::
                 commits: ids.into_boxed(),
             }
         }
-        forge::Answer::Checks(checks) => {
-            let mut rows = List::with_capacity(u32::try_from(checks.len()).expect("bounded fake statuses"));
-            for check in checks {
-                let mut status = status(&check.status);
-                status.description = check.description;
-                status.url = check.link;
-                rows.push(status).expect("checks capacity");
-            }
-            client::Answer::Checks(rows.into_boxed())
+        forge::Answer::Checks(checks) => checks_answer(asked, checks),
+        forge::Answer::File(log) => {
+            let attempt = match asked {
+                client::Op::Read(client::Read::Job { attempt, .. }) => *attempt,
+                client::Op::Read(_) | client::Op::Write(_) => panic!("job answer belongs to a job read"),
+            };
+            let max_bytes = match asked {
+                client::Op::Read(client::Read::Job { max_bytes, .. }) => *max_bytes,
+                client::Op::Read(_) | client::Op::Write(_) => panic!("job answer belongs to a job read"),
+            };
+            let cap = usize::try_from(max_bytes).expect("world maximum fits usize");
+            let truncated = log.len() > cap;
+            let end = log.len().min(cap);
+            client::Answer::Job { attempt, log: Box::from(log.get(..end).expect("bounded log")), truncated }
         }
         forge::Answer::Protection(protection) => client::Answer::Protection(match protection {
             Some(p) => Some(client::Protection {
@@ -266,12 +277,30 @@ pub fn answer(asked: &client::Op, answer: forge::Answer, l: &Limits) -> client::
         | forge::Answer::Dependencies(_)
         | forge::Answer::Labels(_)
         | forge::Answer::Tree(_)
-        | forge::Answer::File(_)
         | forge::Answer::Pages { .. }
         | forge::Answer::Page(_)
         | forge::Answer::Revision(_)
         | forge::Answer::Pushed(_) => panic!("new client does not ask these fake routes"),
     }
+}
+#[expect(clippy::manual_map, reason = "the bounded world translates without callbacks")]
+fn checks_answer(asked: &client::Op, checks: Box<[forge::CheckSummary]>) -> client::Answer {
+    let head = match asked {
+        client::Op::Read(client::Read::Checks { commit }) => *commit,
+        client::Op::Read(_) | client::Op::Write(_) => panic!("checks answer belongs to a checks read"),
+    };
+    let mut rows = List::with_capacity(u32::try_from(checks.len()).expect("bounded fake statuses"));
+    for check in checks {
+        let mut status = status(&check.status);
+        status.description = check.description;
+        status.url = check.link;
+        status.job = match check.job {
+            Some(job) => Some(client::JobAttempt { head, run: job.run, job: job.job, attempt: job.attempt }),
+            None => None,
+        };
+        rows.push(status).expect("checks capacity");
+    }
+    client::Answer::Checks(rows.into_boxed())
 }
 fn branches_answer(branches: Box<[forge::Head]>) -> client::Answer {
     let mut names = List::with_capacity(u32::try_from(branches.len()).expect("bounded fake branches"));
