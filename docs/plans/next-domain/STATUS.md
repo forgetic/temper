@@ -328,6 +328,10 @@ simulation; no legacy fuzzy seed trim is needed for the suite caps.
 | 01.2 transcript codec | merged locally | smith 8cd34ba | fmt/clippy pass; 883 focused / 6.399 s; 12 fuzzy / 6.701 s. |
 | 01.3 channel codec | merged locally | smith 9798fbf | fmt/clippy pass; 1,191 focused / 8.954 s; 12 fuzzy / 9.765 s. |
 | 01.4 codec fuzz and memory | merged locally | smith 9501f31 | fmt/clippy pass; 1,193 focused / 3.822 s; 13 fuzzy / 5.209 s; codec world serial 11 focused / 0.112 s and one fuzzy / 0.061 s. |
+| 02.0 channel answer extensions | merged locally | smith 58148d8 | fmt/clippy pass; 1,220 focused / 5.096 s; 14 fuzzy / 5.593 s. |
+| 02.1 both halves open | merged locally | smith c0b6a2e | fmt/clippy pass; 1,225 focused / 4.031 s; 14 fuzzy / 4.752 s; channel world 3 / 0.012 s serial. |
+| 02.2 host Start domain shape | merged locally | smith 91059cd | fmt/clippy pass; 1,225 focused / 7.570 s; 14 fuzzy / 6.157 s. |
+| 02.2 host Start encoding | merged locally | smith bb31060 | fmt/clippy pass; 1,226 focused / 4.194 s; 14 fuzzy / 4.941 s. |
 
 ## jig extraction
 
