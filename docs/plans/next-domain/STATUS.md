@@ -337,6 +337,7 @@ simulation; no legacy fuzzy seed trim is needed for the suite caps.
 | 02.2 charter translation | merged locally | smith 5ff2533 | fmt/clippy pass; 1,234 focused / 4.144 s; 14 fuzzy / 4.891 s; channel world 9 / 0.039 s serial. |
 | 02.2 admission and answer | merged locally | smith 2b7e1e8 | fmt/clippy pass; 1,238 focused / 4.376 s; 14 fuzzy / 5.091 s; channel world 13 / 0.055 s serial. |
 | 02.2 Start context | merged locally | smith 204697f | fmt/clippy pass; 1,239 focused / 4.395 s; 14 fuzzy / 4.905 s; channel world 14 / 0.086 s serial. |
+| 02.2 saved answer contract | merged locally | smith 9c9e8ef | fmt/clippy pass; 1,248 focused / 6.884 s; 14 fuzzy / 6.861 s. |
 
 ## jig extraction
 
