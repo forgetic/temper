@@ -1185,7 +1185,7 @@ fn a_person_stops_a_run_and_releases_it() {
     else {
         panic!("stopped task")
     };
-    assert!(matches!(row.phase, tasks::Phase::Held { why: tasks::Hold::Stopped, .. }));
+    assert!(matches!(row.phase, tasks::Phase::Held { why: tasks::Hold::StoppedBy { party: 1 }, .. }));
     driver.send(engine::Event::Answer {
         channel: Token::new(7),
         task: assignment.task,
@@ -3552,7 +3552,7 @@ fn coalesced_history_waiters_survive_simultaneous_io_completion_under_full_journ
 }
 
 #[test]
-fn restored_loss_spends_a_try_with_or_without_a_durable_turn() {
+fn restored_unreported_claim_spends_no_try_without_committed_work() {
     for kept_turn in [false, true] {
         let mut original = Driver::new(Store::new());
         original.send(engine::Event::Hello {
@@ -3606,7 +3606,7 @@ fn restored_loss_spends_a_try_with_or_without_a_durable_turn() {
         engine::fire(&mut restored.root, &restored.env);
         engine::release(&mut restored.root, &restored.env, &mut restored.out);
         restored.collect();
-        let end = tasks::End::Failed(tasks::Class::Lost);
+        let end = if kept_turn { tasks::End::Failed(tasks::Class::Lost) } else { tasks::End::Refused };
         let cumulative = if kept_turn { 3 } else { 0 };
         assert_eq!(restored.store.pending.len(), 1, "one canonical loss transaction");
         let writes = &restored.store.pending.front().expect("loss transaction").1;
@@ -3620,7 +3620,7 @@ fn restored_loss_spends_a_try_with_or_without_a_durable_turn() {
         );
         assert_eq!(canonical.end, end);
         assert!(writes.iter().any(|write| matches!(write, Write::Save(Record::RunProof(proof)) if proof.task == assignment.task && proof.attempt == assignment.attempt && proof.terminal.as_ref() == Some(canonical))), "canonical terminal and proof share one commit");
-        assert!(writes.iter().any(|write| matches!(write, Write::Save(Record::Tasks(tasks::Stored::Live(task))) if task.number == assignment.task && task.numbers.spent == cumulative && task.run_spent == cumulative && task.last_answer == Some(assignment.attempt) && task.tries.lost == 1)), "canonical terminal and lost try share one commit");
+        assert!(writes.iter().any(|write| matches!(write, Write::Save(Record::Tasks(tasks::Stored::Live(task))) if task.number == assignment.task && task.numbers.spent == cumulative && task.run_spent == cumulative && task.last_answer == Some(assignment.attempt) && task.tries.lost == u32::from(kept_turn))), "canonical terminal and classified try share one commit");
         restored.settle();
         let after: Vec<_> = restored
             .store

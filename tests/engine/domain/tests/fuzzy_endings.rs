@@ -203,7 +203,7 @@ fn drawn_root_stories_reach_every_durable_ending_and_held_route() {
                 assert!(
                     matches!(driver.store.rows.get(&Key::Tasks(tasks::Key::Live(assignment.task))),
                         Some(Record::Tasks(tasks::Stored::Live(row)))
-                        if matches!(row.phase, tasks::Phase::Held { why: tasks::Hold::Stopped, .. })
+                        if matches!(row.phase, tasks::Phase::Held { why: tasks::Hold::StoppedBy { party: 1 }, .. })
                     ),
                     "stopped chat held durably, seed {seed}"
                 );

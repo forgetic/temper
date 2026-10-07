@@ -120,22 +120,22 @@ fn held_and_decision_commit_cuts_restore_paged_real_children_and_exact_scripts()
     });
     assert_eq!(world.restarts, 1);
     assert_eq!(world.referee.unplaced_claims(), 1, "claim committed with release before assignment reached worker");
-    world.referee.final_state(&world.store.rows).expect("unassigned claim spent one try and no extra expense");
+    world.referee.final_state(&world.store.rows).expect("unassigned claim spent no try and no extra expense");
     let writes = world
         .transactions
         .iter()
         .find(|writes| {
             writes.iter().any(
-                |write| matches!(write, Write::Save(Record::Terminal(terminal)) if terminal.end == tasks::End::Failed(tasks::Class::Lost)),
+                |write| matches!(write, Write::Save(Record::Terminal(terminal)) if terminal.end == tasks::End::Refused),
             )
         })
-        .expect("actual unassigned-claim loss transaction");
+        .expect("actual unassigned-claim refusal transaction");
     let before = world.unplaced_referee.as_ref().expect("actual pre-transaction outside observer");
     assert_eq!(before.clone().commit(writes), Ok(()), "unaltered transaction passes the identical observer");
     for (corruption, expected) in [
-        (0, "unassigned loss and canonical proof are not atomic"),
-        (1, "unassigned loss did not spend one try or changed accepted expense"),
-        (2, "unassigned claim did not retire as an unpriced loss"),
+        (0, "unassigned refusal and canonical proof are not atomic"),
+        (1, "unassigned refusal spent a try or changed accepted expense"),
+        (2, "unassigned claim did not retire as an unpriced refusal"),
     ] {
         let mut altered = writes.clone();
         match corruption {
@@ -143,14 +143,14 @@ fn held_and_decision_commit_cuts_restore_paged_real_children_and_exact_scripts()
             1 => {
                 for write in &mut altered {
                     if let Write::Save(Record::Tasks(tasks::Stored::Live(task))) = write {
-                        task.tries.lost = 0;
+                        task.tries.lost = 1;
                     }
                 }
             }
             2 => {
                 for write in &mut altered {
                     if let Write::Save(Record::Terminal(terminal)) = write {
-                        terminal.end = tasks::End::Refused;
+                        terminal.end = tasks::End::Failed(tasks::Class::Lost);
                     }
                 }
             }

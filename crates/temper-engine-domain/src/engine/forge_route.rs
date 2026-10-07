@@ -1861,12 +1861,11 @@ fn change_decision(domain: &mut Domain, env: &Env<Limits>, task: u64, choice: fo
                 | forge_change::Hold::BranchMissing
                 | forge_change::Hold::Retargeted
                 | forge_change::Hold::PullClosed => tasks::Hold::Drift,
-                forge_change::Hold::Stalled
-                | forge_change::Hold::Repairs
-                | forge_change::Hold::Resolutions
-                | forge_change::Hold::Updates
-                | forge_change::Hold::Failed
-                | forge_change::Hold::Rejected => tasks::Hold::Effects,
+                forge_change::Hold::Stalled => tasks::Hold::Stalled,
+                forge_change::Hold::Repairs | forge_change::Hold::Resolutions | forge_change::Hold::Updates => {
+                    tasks::Hold::Procedure
+                }
+                forge_change::Hold::Failed | forge_change::Hold::Rejected => tasks::Hold::EffectFailed,
             };
             ProcedureAction::Hold(why)
         }
@@ -2198,10 +2197,10 @@ pub(super) fn outputs(
                     forge_client::Outcome::Failed(_) | forge_client::Outcome::Raced { .. }
                         if domain.forge.change(task).is_none() =>
                     {
-                        domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::Effects }));
+                        domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::EffectFailed }));
                     }
                     forge_client::Outcome::Withdrawn if !cancelling && domain.forge.change(task).is_none() => {
-                        domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::Effects }));
+                        domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::EffectFailed }));
                     }
                     forge_client::Outcome::Failed(_)
                     | forge_client::Outcome::Raced { .. }
@@ -2227,7 +2226,7 @@ pub(super) fn outputs(
                 domain.work.push(Work::Tasks(tasks::Event::EffectsSettled { task }));
             }
             forge::Request::ReleaseFailed { task } => {
-                domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::Effects }));
+                domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::EffectFailed }));
             }
             forge::Request::ProjectionFailed { goal } => {
                 domain.work.push(Work::Tasks(tasks::Event::Hold { task: goal, why: tasks::Hold::Effects }));

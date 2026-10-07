@@ -937,6 +937,8 @@ pub struct Domain {
     calls: Map<CallKey, CallAnswer>,
     pending_calls: Map<CallKey, bool>,
     restoring_proofs: Map<u64, RestoringProof>,
+    /// Restored claims that no host has reported since startup.
+    unreported_restored: Map<u64, u64>,
     work: Queue<Work>,
     before_header: Queue<Work>,
     cold_channels: Map<Token, bool>,
@@ -1120,6 +1122,7 @@ impl Domain {
             calls: Map::with_capacity(limits.call_records),
             pending_calls: Map::with_capacity(limits.call_records),
             restoring_proofs: Map::with_capacity(limits.tasks.tasks),
+            unreported_restored: Map::with_capacity(limits.tasks.tasks),
             work: Queue::with_capacity(route_bound(limits).expect("valid routes")),
             before_header: Queue::with_capacity(limits.fleet.workers),
             cold_channels: Map::with_capacity(limits.fleet.workers),
@@ -1182,6 +1185,7 @@ impl Domain {
             && self.contexts.is_empty()
             && self.transcripts.is_empty()
             && self.restoring_proofs.is_empty()
+            && self.unreported_restored.is_empty()
             && self.signing_in.is_none()
             && self.brief.is_idle()
             && self.brief_connectors.is_empty()
@@ -2974,7 +2978,7 @@ fn route_person_control(
     }
     match ask {
         people::Ask::Stop { .. } => {
-            domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::Stopped }));
+            domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::StoppedBy { party: person } }));
             domain
                 .work
                 .push(Work::People(people::Event::Decided { request, outcome: people::Outcome::Stopped { task } }));
@@ -4763,7 +4767,7 @@ fn tasks_outputs(
                     && let Some((child, _)) = row.delegate
                 {
                     domain.work.push(Work::Forge(forge::Event::DelegateRefused { task, child }));
-                    domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::Effects }));
+                    domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::Procedure }));
                     continue;
                 }
                 if domain.goal_routes.remove(&token).is_some() {
@@ -5081,6 +5085,7 @@ fn tasks_outputs(
             }
             tasks::Request::Activate { context } => domain.work.push(Work::Activate(context)),
             tasks::Request::Adopt { task, attempt, kept } => {
+                assert!(domain.unreported_restored.insert(task, attempt) == Ok(None), "one restored claim per task");
                 let mut view_out = Queue::with_capacity(views::max_out(&env.limits.views));
                 views::step(
                     &mut domain.views,
@@ -5122,7 +5127,7 @@ fn tasks_outputs(
                 if let Some(entry) = crate::fresh(&mut domain.counters, Family::ForgeRow) {
                     domain.work.push(Work::Forge(forge::Event::Release { task, root, ending, entry }));
                 } else {
-                    domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::Effects }));
+                    domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::Budget }));
                 }
             }
             tasks::Request::Ended { task, requester, ending } => {
@@ -5514,6 +5519,9 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                 emit(decision, &env.limits, Delivery::Assigned { channel, assignment });
             }
             fleet::Request::Placed { run, attempt } => {
+                if domain.unreported_restored.get(&run.raw()) == Some(&attempt.raw()) {
+                    let _: Option<u64> = domain.unreported_restored.remove(&run.raw());
+                }
                 domain.work.push(Work::Tasks(tasks::Event::Started { task: run.raw(), attempt: attempt.raw() }));
             }
             fleet::Request::Turned { run, attempt, turn, body } => {
@@ -5539,6 +5547,7 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                 }));
             }
             fleet::Request::Answered { run, attempt, payload, to, .. } => {
+                let _: Option<u64> = domain.unreported_restored.remove(&run.raw());
                 assert!(
                     current_proof(domain, run.raw(), attempt.raw()),
                     "actual current answer has reserved root proof before child mutation"
@@ -5594,7 +5603,19 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                 let _answered = to.into_token();
                 let proof = domain.proofs.get(&run.raw()).expect("lost claim has reserved durable evidence");
                 assert!(proof.attempt == attempt.raw(), "lost callback belongs to current proof");
-                let end = tasks::End::Failed(tasks::Class::Lost);
+                let never_reported = domain.unreported_restored.remove(&run.raw()) == Some(attempt.raw());
+                let mut committed_call = false;
+                for (key, _) in &domain.calls {
+                    if key.task == run.raw() && key.attempt == attempt.raw() {
+                        committed_call = true;
+                        break;
+                    }
+                }
+                let end = if never_reported && proof.turn.is_none() && !committed_call {
+                    tasks::End::Refused
+                } else {
+                    tasks::End::Failed(tasks::Class::Lost)
+                };
                 remember_unpriced_terminal(domain, run, attempt, end.clone());
                 domain.work.push(Work::Tasks(tasks::Event::Activation {
                     reply_to: internal(u64::MAX),
@@ -5610,6 +5631,7 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
             | fleet::Request::Withdrawn { to, run, attempt, .. }
             | fleet::Request::Refused { to, run, attempt, .. } => {
                 let _answered = to.into_token();
+                let _: Option<u64> = domain.unreported_restored.remove(&run.raw());
                 drop(domain.assignments.remove(&run.raw()));
                 remember_unpriced_terminal(domain, run, attempt, tasks::End::Refused);
                 domain.work.push(Work::Tasks(tasks::Event::Activation {
@@ -7154,6 +7176,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
                 .checked_mul(u64::try_from(size_of::<crate::CallRecord>()).ok()?)?,
         )?
         .checked_add(Map::<u64, RestoringProof>::worst_case(limits.tasks.tasks)?)?
+        .checked_add(Map::<u64, u64>::worst_case(limits.tasks.tasks)?)?
         .checked_add(Map::<u64, Box<tasks::RunContext>>::worst_case(limits.tasks.tasks)?)?
         .checked_add(
             u64::from(limits.tasks.tasks).checked_mul(u64::from(limits.tasks.saved_resources).checked_mul(4)?)?,

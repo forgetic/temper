@@ -276,10 +276,7 @@ impl Referee {
         {
             return Err("assignment before exact durable claim");
         }
-        let expected_tries = tasks::Tries {
-            lost: u32::try_from(self.unplaced_claims.len()).expect("bounded claims"),
-            ..tasks::Tries::NONE
-        };
+        let expected_tries = tasks::Tries::NONE;
         if record.numbers.spent != if count == 0 { 0 } else { 3 }
             || record.run_spent != 0
             || record.turn != 0
@@ -476,26 +473,26 @@ impl Referee {
         if Some(terminal.task) != self.task
             || !self.claims.contains(&terminal.attempt)
             || terminal.cumulative != 0
-            || terminal.end != tasks::End::Failed(tasks::Class::Lost)
+            || terminal.end != tasks::End::Refused
         {
-            return Err("unassigned claim did not retire as an unpriced loss");
+            return Err("unassigned claim did not retire as an unpriced refusal");
         }
-        let record = saved_task(writes, terminal.task).ok_or("unassigned loss without atomic task state")?;
+        let record = saved_task(writes, terminal.task).ok_or("unassigned refusal without atomic task state")?;
         if record.attempt != terminal.attempt
             || record.numbers.spent != 3
             || record.run_spent != 0
             || record.turn != 0
-            || record.tries != (tasks::Tries { lost: 1, ..tasks::Tries::NONE })
+            || record.tries != tasks::Tries::NONE
             || record.last_answer != Some(terminal.attempt)
             || !matches!(record.phase, tasks::Phase::Active(tasks::Active::BackingOff { .. }))
         {
-            return Err("unassigned loss did not spend one try or changed accepted expense");
+            return Err("unassigned refusal spent a try or changed accepted expense");
         }
         if !writes.iter().any(|write| matches!(write, Write::Save(Record::RunProof(proof)) if proof.task == terminal.task && proof.attempt == terminal.attempt && proof.turn.is_none() && proof.terminal.as_ref() == Some(terminal))) {
-            return Err("unassigned loss and canonical proof are not atomic");
+            return Err("unassigned refusal and canonical proof are not atomic");
         }
         if writes.iter().any(|write| matches!(write, Write::Save(Record::Tasks(tasks::Stored::Ledger(_))))) {
-            return Err("unassigned loss changed the authentic funding ledger");
+            return Err("unassigned refusal changed the authentic funding ledger");
         }
         if !self.unplaced_claims.insert(terminal.attempt) {
             return Err("unassigned claim retired twice");
@@ -504,8 +501,8 @@ impl Referee {
     }
 
     /// Count durable claims whose assignment never escaped and whose canonical
-    /// loss preserved expense and spent one try (domain/engine.md, section 7.4;
-    /// domain/tasks.md, section 5.2).
+    /// refusal preserved expense without spending a try (domain/engine.md, section 7.4;
+    /// domain/tasks.md, section 5.5).
     #[must_use]
     pub fn unplaced_claims(&self) -> usize {
         self.unplaced_claims.len()

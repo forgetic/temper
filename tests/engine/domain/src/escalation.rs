@@ -132,7 +132,7 @@ pub struct World {
     /// Outside obligations and independent committed evidence checks
     pub referee: Referee,
 
-    /// Outside observer immediately before the one unassigned-claim terminal
+    /// Outside observer immediately before the one unassigned-claim refusal
     /// cohort, retained for positive-control and corruption checks; never a
     /// root-state oracle.
     pub unplaced_referee: Option<Referee>,
@@ -578,7 +578,7 @@ impl World {
             self.trace.push(format!("output {request:?}"));
             match request {
                 engine::Request::Commit { number, writes } => {
-                    if writes.iter().any(|write| matches!(write, Write::Save(Record::Terminal(terminal)) if terminal.end == tasks::End::Failed(tasks::Class::Lost))) {
+                    if writes.iter().any(|write| matches!(write, Write::Save(Record::Terminal(terminal)) if terminal.end == tasks::End::Refused)) {
                         assert!(self.unplaced_referee.is_none(), "one unassigned-claim terminal in this script");
                         self.unplaced_referee = Some(self.referee.clone());
                     }
