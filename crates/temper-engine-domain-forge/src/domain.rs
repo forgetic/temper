@@ -6,6 +6,7 @@ use temper_engine_domain_forge_change as change;
 use temper_engine_domain_forge_client as client;
 use temper_engine_domain_forge_issues as issues;
 
+use crate::brief;
 use crate::{
     Adopted, Adoption, BranchHead, ChangeRow, CiState, Class, Event, Hold, IssueRow, Key, Kinds, Limits, Name, News,
     Protection, PullState, ReleaseEnding, ReleaseRow, Repository, Request, Role, Stored, Subscriber, Topic, What,
@@ -114,6 +115,7 @@ pub struct Domain {
     writers: Map<u16, u64>,
     client: client::Domain,
     client_out: Queue<client::Request>,
+    pub(crate) brief_fetches: Map<Token, brief::BriefFetch>,
 }
 
 impl Domain {
@@ -152,6 +154,7 @@ impl Domain {
             writers,
             client: client::Domain::configured(&l.client, seed, config)?,
             client_out: Queue::with_capacity(client::max_out(&l.client)),
+            brief_fetches: Map::with_capacity(l.brief_sections),
         })
     }
 
@@ -165,6 +168,12 @@ impl Domain {
     #[must_use]
     pub fn is_ready(&self) -> bool {
         self.client.is_ready()
+    }
+
+    /// Whether no brief section is being gathered by the connector.
+    #[must_use]
+    pub fn briefs_idle(&self) -> bool {
+        self.brief_fetches.is_empty()
     }
 
     /// Reclaim transient child buffers after the current decision.
@@ -359,6 +368,9 @@ pub const fn max_out(l: &Limits) -> u32 {
 /// Decide one parent event and collect its durable records and outputs.
 pub fn step(d: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     match event {
+        Event::GatherBrief { owner, source, parts, bytes, max_job_bytes } => {
+            brief::gather(d, owner, source, parts, bytes, max_job_bytes, env.limits.brief_bytes, out);
+        }
         Event::Adopt { reply_to, adoption } => adopt(d, env, reply_to, adoption, out),
         Event::ForgetAdoption { repository, restore } => match restore {
             Some(previous) => {
@@ -511,7 +523,9 @@ fn drain(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
                 }
             }
             client::Request::Read { owner, result } => {
-                if d.adoptions.contains_key(&owner) {
+                if d.brief_fetches.contains_key(&owner) {
+                    brief::brief_answer(d, owner, result, out);
+                } else if d.adoptions.contains_key(&owner) {
                     adoption_read(d, env, owner, result, out);
                 } else if d.landings.contains_key(&owner) {
                     landing_read(d, owner, result, out);

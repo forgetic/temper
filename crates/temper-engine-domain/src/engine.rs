@@ -793,7 +793,6 @@ pub struct Domain {
     forge_subscribing: Map<Token, forge::Subscriber>,
     forge_unsubscribing: Map<Token, (u64, forge::Topic)>,
     forge_reading: Map<Token, (ReplyTo, CallKey)>,
-    brief_fetches: Map<Token, forge_route::BriefFetch>,
     forge_effecting: Map<u64, (ReplyTo, CallKey)>,
     forge_projection_due: Map<u64, skein_lib::Wall>,
     forge_change_due: Map<u64, skein_lib::Wall>,
@@ -837,7 +836,6 @@ impl Domain {
     /// cross-child limits. Checks bounded authority/bootstrap configuration; issues no request.
     /// Startup pages/account setup begin only on `Event::Start`.
     #[must_use]
-    #[expect(clippy::too_many_lines, reason = "one root initialization keeps each child and bounded route visible")]
     pub fn new(mut config: Config, limits: &Limits) -> Domain {
         assert!(worst_case(limits).is_some(), "root limits are valid");
         assert!(
@@ -899,9 +897,6 @@ impl Domain {
             forge_subscribing: Map::with_capacity(limits.fleet.calls),
             forge_unsubscribing: Map::with_capacity(limits.fleet.calls),
             forge_reading: Map::with_capacity(limits.fleet.calls),
-            brief_fetches: Map::with_capacity(
-                limits.brief.briefs.saturating_mul(limits.brief.sections).saturating_mul(2),
-            ),
             forge_effecting: Map::with_capacity(limits.fleet.calls),
             forge_projection_due: Map::with_capacity(limits.forge.issues),
             forge_change_due: Map::with_capacity(limits.forge.changes),
@@ -977,7 +972,7 @@ impl Domain {
             && self.forge_subscribing.is_empty()
             && self.forge_unsubscribing.is_empty()
             && self.forge_reading.is_empty()
-            && self.brief_fetches.is_empty()
+            && self.forge.briefs_idle()
             && self.forge_effecting.is_empty()
             && self.routing_calls.is_empty()
             && self.routing_people_proposals.is_empty()
@@ -4610,19 +4605,49 @@ fn brief_outputs(domain: &mut Domain, env: &Env<Limits>, _decision: &mut Decisio
                 let read = match source {
                     brief::Source::Task { task, part } => Some(task_section(domain, task, part, parts, bytes)),
                     brief::Source::Pull { item, head } => {
-                        forge_route::brief_pull(domain, owner, item, head, parts, bytes)
+                        domain.work.push(Work::Forge(forge::Event::GatherBrief {
+                            owner,
+                            source: forge::BriefSource::Pull {
+                                item: forge::BriefItem { repository: item.repository, number: item.number },
+                                head: forge::BriefCommit(head.0),
+                            },
+                            parts,
+                            bytes,
+                            max_job_bytes: 0,
+                        }));
+                        None
                     }
-                    brief::Source::Ci { item, head } => forge_route::brief_ci(
-                        domain,
-                        owner,
-                        item,
-                        head,
-                        parts,
-                        bytes,
-                        env.limits.forge.client.answer_bytes.min(env.limits.brief.budgets.ci / 5).max(1),
-                    ),
+                    brief::Source::Ci { item, head } => {
+                        domain.work.push(Work::Forge(forge::Event::GatherBrief {
+                            owner,
+                            source: forge::BriefSource::Ci {
+                                item: forge::BriefItem { repository: item.repository, number: item.number },
+                                head: forge::BriefCommit(head.0),
+                            },
+                            parts,
+                            bytes,
+                            max_job_bytes: env
+                                .limits
+                                .forge
+                                .client
+                                .answer_bytes
+                                .min(env.limits.brief.budgets.ci / 5)
+                                .max(1),
+                        }));
+                        None
+                    }
                     brief::Source::Reviews { item, head } => {
-                        forge_route::brief_reviews(domain, owner, item, head, parts, bytes)
+                        domain.work.push(Work::Forge(forge::Event::GatherBrief {
+                            owner,
+                            source: forge::BriefSource::Reviews {
+                                item: forge::BriefItem { repository: item.repository, number: item.number },
+                                head: forge::BriefCommit(head.0),
+                            },
+                            parts,
+                            bytes,
+                            max_job_bytes: 0,
+                        }));
+                        None
                     }
                     brief::Source::Item(_)
                     | brief::Source::Comments { .. }
@@ -5941,6 +5966,9 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     let authority_bytes = authority::worst_case(&limits.authority)?;
     let brief_bytes = brief::worst_case(&limits.brief)?;
     let brief_fetches = limits.brief.briefs.checked_mul(limits.brief.sections)?.checked_mul(2)?;
+    if limits.forge.brief_sections < brief_fetches || limits.forge.brief_bytes < limits.brief.read_bytes {
+        return None;
+    }
     let account_bytes = accounts::worst_case(&limits.accounts)?;
     let view_bytes = views::worst_case(&limits.views)?;
     let forge_bytes = forge::worst_case(&limits.forge)?;
@@ -6146,9 +6174,6 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         )?,
     )?;
     bytes
-        .checked_add(Map::<Token, forge_route::BriefFetch>::worst_case(brief_fetches)?)?
-        .checked_add(u64::from(brief_fetches).checked_mul(u64::from(limits.brief.read_bytes))?)?
-        .checked_add(u64::from(brief_fetches).checked_mul(u64::from(limits.forge.client.answer_bytes))?)?
         .checked_add(Queue::<authority::Finding>::worst_case(authority::max_out(&limits.authority)?)?)?
         .checked_add(Queue::<tasks::Request>::worst_case(tasks::max_out(&limits.tasks))?)?
         .checked_add(u64::from(limits.tasks.message_bytes).checked_mul(3)?)?

@@ -1,4 +1,4 @@
-use skein_lib::Wall;
+use skein_lib::{Token, Wall};
 use temper_engine_domain_forge as top;
 use temper_engine_domain_forge_change as change;
 use temper_engine_domain_forge_client as client;
@@ -99,6 +99,31 @@ fn change_row() -> top::ChangeRow {
         queue_repair: None,
         queue_repairs: 0,
     }
+}
+
+#[test]
+fn a_brief_section_refuses_a_head_that_moved_before_its_gather() {
+    let mut world = World::new(84);
+    world.adopt();
+    let mut row = change_row();
+    row.pull = Some(17);
+    row.change.last_head = Some([1; 32]);
+    world.event(top::Event::Change { row });
+    world.take_seen();
+    let before = world.calls();
+    let owner = Token::new(93);
+    world.event(top::Event::GatherBrief {
+        owner,
+        source: top::BriefSource::Reviews {
+            item: top::BriefItem { repository: REPO.repository, number: 17 },
+            head: top::BriefCommit([2; 32]),
+        },
+        parts: 1,
+        bytes: 128,
+        max_job_bytes: 0,
+    });
+    assert!(world.seen().contains(&top::Request::BriefReady { owner, read: top::BriefRead::Failed }));
+    assert_eq!(world.calls(), before, "a stale pinned section does not read the provider");
 }
 
 fn change_step(
@@ -484,6 +509,7 @@ fn a_failed_ci_head_is_repaired_then_checked_again() {
 }
 
 #[test]
+#[expect(clippy::too_many_lines, reason = "the full change story names each connector output explicitly")]
 fn a_change_produced_opened_checked_queued_and_landed() {
     let mut world = World::new(11);
     world.adopt();
@@ -576,6 +602,8 @@ fn a_change_produced_opened_checked_queued_and_landed() {
                 | top::Request::News { .. }
                 | top::Request::Drift { .. }
                 | top::Request::Read { .. }
+                | top::Request::BriefClient { .. }
+                | top::Request::BriefReady { .. }
                 | top::Request::Call { .. } => {}
             }
         }
