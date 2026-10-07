@@ -133,6 +133,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "jig-ops-domain-infrastructure"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+]
+
+[[package]]
 name = "jig-ops-domain-observability"
 version = "0.0.0"
 dependencies = [
@@ -147,6 +154,7 @@ version = "0.0.0"
 name = "jig-ops-world"
 version = "0.0.0"
 dependencies = [
+ "jig-ops-domain-infrastructure",
  "jig-ops-domain-observability",
  "jig-ops-fake-production",
  "skein-lib",
