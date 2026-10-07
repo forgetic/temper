@@ -3,10 +3,10 @@
 //! it never reads root or child state (domain/people.md, section 5.1).
 
 use jig_core_people as people;
+use jig_core_tasks as tasks;
 use skein_lib::Token;
 use std::collections::{BTreeMap, BTreeSet};
 use temper_engine_domain::{Key, Record, Write};
-use jig_core_tasks as tasks;
 
 /// One independently expected successful roster replacement, including the
 /// exact task rows permitted to change (domain/engine.md, section 5.1).

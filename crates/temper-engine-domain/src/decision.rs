@@ -509,8 +509,7 @@ impl Decision {
                                     }
                                 }
                         }
-                        jig_core_tasks::Escalation::Unheld { .. }
-                        | jig_core_tasks::Escalation::Routing { .. } => false,
+                        jig_core_tasks::Escalation::Unheld { .. } | jig_core_tasks::Escalation::Routing { .. } => false,
                     }
             }
             Delivery::Fleet(event) => fleet_delivery_within(event),

@@ -3,11 +3,11 @@ use jig_core_authority as authority;
 use jig_core_brief as brief;
 use jig_core_fleet as fleet;
 use jig_core_people as people;
+use jig_core_tasks as tasks;
 use jig_core_views as views;
 use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
 use std::collections::VecDeque;
 use temper_engine_domain::{Delivery, Key, Record, Write, engine};
-use jig_core_tasks as tasks;
 use temper_engine_domain_world::commits::Store;
 use temper_engine_domain_world::walking::{Settings, World, config, limits};
 use temper_engine_domain_world::walking_referee::{FINAL_SPEND, QUESTION, REPORT};
@@ -4887,10 +4887,10 @@ fn saved_work_reaches_the_next_attempt() {
     else {
         panic!("parked task")
     };
-    assert_eq!(task.saved.as_ref(), [tasks::SavedResource {
-        connector: 0,
-        path: Box::new([Box::from(3u32.to_be_bytes())]),
-    }]);
+    assert_eq!(
+        task.saved.as_ref(),
+        [tasks::SavedResource { connector: 0, path: Box::new([Box::from(3u32.to_be_bytes())]) }]
+    );
     say(&mut driver, first.task, 49);
     let second = assigned_from_last(&driver.delivered);
     assert_eq!(second.saved.as_ref(), [3]);

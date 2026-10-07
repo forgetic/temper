@@ -13,10 +13,7 @@ use jig_core_brief as brief;
 pub(super) fn saved_resources(connector: u16, tags: &[u32]) -> Option<Box<[tasks::SavedResource]>> {
     let mut resources = List::with_capacity(u32::try_from(tags.len()).ok()?);
     for tag in tags {
-        resources.push(tasks::SavedResource {
-            connector,
-            path: Box::new([Box::from(tag.to_be_bytes())]),
-        }).ok()?;
+        resources.push(tasks::SavedResource { connector, path: Box::new([Box::from(tag.to_be_bytes())]) }).ok()?;
     }
     let mut sorted = resources.into_boxed().into_vec();
     sorted.sort();

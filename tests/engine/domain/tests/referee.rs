@@ -2,14 +2,14 @@
 //! domain/core.md, section 10. The same referees observe the passing worlds.
 
 use jig_core_people::Role;
+use jig_core_tasks::Party;
 use jig_people_world::referee::{People, RouteKind, Seen as PersonSeen};
+use jig_tasks_world::referee::{Seen as TaskSeen, Tasks};
 use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
 use temper_engine_domain::{Key, Record};
-use jig_core_tasks::Party;
 use temper_engine_domain_world::walking::{Settings, World};
 use temper_engine_domain_world::walking_referee::REPORT;
 use temper_engine_forge_world::fake_config;
-use jig_tasks_world::referee::{Seen as TaskSeen, Tasks};
 use temper_fake_forge_domain::{self as fake, Observation, api as raw};
 use temper_world::{Referee, Verdict};
 

@@ -48,13 +48,13 @@ use jig_core_authority as authority;
 use jig_core_brief as brief;
 use jig_core_fleet as fleet;
 use jig_core_people as people;
+use jig_core_tasks as tasks;
 use jig_core_views as views;
 use skein_lib::{Decimal, Env, Id, List, Map, Queue, ReplyTo, Slab, Token, Writer};
 use temper_engine_domain_forge as forge;
 use temper_engine_domain_forge_change as forge_change;
 use temper_engine_domain_forge_client as forge_client;
 use temper_engine_domain_forge_issues as forge_issues;
-use jig_core_tasks as tasks;
 
 pub use forge_route::adopt_repository_ask;
 pub use landing::{Approval, Freshness, Gate, LandingRule};

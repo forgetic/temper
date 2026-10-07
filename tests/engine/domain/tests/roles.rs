@@ -3,8 +3,8 @@
 //! (domain/people.md, section 5.1).
 
 use jig_core_people as people;
-use temper_engine_domain::{Key, Record, Write, engine};
 use jig_core_tasks as tasks;
+use temper_engine_domain::{Key, Record, Write, engine};
 use temper_engine_domain_world::roles::{Base, Settings, World, limits, reroute_replayed};
 
 fn successful() -> people::Reply {

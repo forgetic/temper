@@ -313,9 +313,7 @@ impl Range {
                     jig_core_tasks::Key::Live(_)
                     | jig_core_tasks::Key::Ledger(_)
                     | jig_core_tasks::Key::PersonProposal(_) => true,
-                    jig_core_tasks::Key::Ended(_) | jig_core_tasks::Key::History { .. } => {
-                        false
-                    }
+                    jig_core_tasks::Key::Ended(_) | jig_core_tasks::Key::History { .. } => false,
                 },
                 Key::Call(_)
                 | Key::EscalationDecision { .. }
@@ -758,9 +756,7 @@ fn terminal_bytes(row: &TerminalRecord) -> Option<u64> {
             | jig_core_tasks::TaskResult::Change { words, .. } => u64::try_from(words.len()).ok(),
             jig_core_tasks::TaskResult::Failure { reason } => u64::try_from(reason.len()).ok(),
         },
-        jig_core_tasks::End::Parked
-        | jig_core_tasks::End::Failed(_)
-        | jig_core_tasks::End::Refused => Some(0),
+        jig_core_tasks::End::Parked | jig_core_tasks::End::Failed(_) | jig_core_tasks::End::Refused => Some(0),
     }
 }
 
