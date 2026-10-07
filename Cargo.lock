@@ -364,6 +364,8 @@ dependencies = [
  "temper-engine-domain-tasks",
  "temper-engine-domain-views",
  "temper-engine-forge-world",
+ "temper-engine-people-world",
+ "temper-engine-tasks-world",
  "temper-fake-forge-domain",
  "temper-world",
 ]

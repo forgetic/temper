@@ -14,6 +14,7 @@ protocol drafts and lower-layer integration are parked for later work.
 
 | Increment | State | Commit | Evidence |
 |---|---|---|---|
+| Completion 08.2: referee test lockfile | merged | this commit | Lock the two new world test dependencies from 08.2. Gate: fmt, clippy, 2,596 focused / 11.913 s, 44 fuzzy / 26.674 s. |
 | Completion 08.2: whole referee sensitivity | merged | this commit | Seven negative boundary tests cover authority, once, commit fencing, order, no loss, no overwrite and bounds; the good control runs the real root, while the forge fake observes and refuses a divergent push. Gate: fmt, clippy, 2,596 focused / 12.075 s, 44 fuzzy / 26.795 s. |
 | Completion 08.1: every restart cut | merged | this commit | Root world covers lost commit, durable commit before release, an outbox write before its outcome, outcome before commit, existing turn/answer ACK cuts, and push before worker report. Cold restore admits a procedure attempt without requiring an agent run proof; durable CI subscriptions survive restart. Gate: fmt, clippy, 2,589 focused / 11.844 s, 44 fuzzy / 26.276 s. |
 | Completion 08.0: Skein repin | merged | this commit | All nine locked Skein packages use main `4e78d26fc247bf5e7c18300ff8ffc4bd3b06819c`, aligned with Smith. Gate: fmt, clippy, 2,586 focused / 12.112 s, 44 fuzzy / 26.832 s. |
