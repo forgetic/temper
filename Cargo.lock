@@ -112,6 +112,14 @@ version = "0.0.0"
 source = "git+https://git.ekanayaka.io/ai/skein.git#4e78d26fc247bf5e7c18300ff8ffc4bd3b06819c"
 
 [[package]]
+name = "skein-fake-llm-domain"
+version = "0.0.0"
+source = "git+https://git.ekanayaka.io/ai/skein.git#9c219151c67c772c07d6ebe885179d31333b7745"
+dependencies = [
+ "skein-lib",
+]
+
+[[package]]
 name = "skein-heap"
 version = "0.0.0"
 source = "git+https://git.ekanayaka.io/ai/skein.git#4e78d26fc247bf5e7c18300ff8ffc4bd3b06819c"
@@ -143,7 +151,7 @@ dependencies = [
 [[package]]
 name = "skein-lib"
 version = "0.0.0"
-source = "git+https://git.ekanayaka.io/ai/skein.git#4e78d26fc247bf5e7c18300ff8ffc4bd3b06819c"
+source = "git+https://git.ekanayaka.io/ai/skein.git#9c219151c67c772c07d6ebe885179d31333b7745"
 
 [[package]]
 name = "skein-shell"
@@ -175,6 +183,23 @@ dependencies = [
  "skein-lib",
  "skein-shell",
  "skein-sim",
+]
+
+[[package]]
+name = "smith-agent-world"
+version = "0.0.0"
+source = "git+https://git.ekanayaka.io/ai/smith.git#bf3609f640f05e47e886192b9ff85183a3d12ba1"
+dependencies = [
+ "skein-fake-checkout",
+ "skein-fake-llm-domain",
+ "skein-lib",
+ "skein-world",
+ "smith-domain",
+ "smith-domain-tools",
+ "smith-host-domain",
+ "smith-host-world",
+ "smith-session-world",
+ "smith-tools-world",
 ]
 
 [[package]]
@@ -211,6 +236,49 @@ version = "0.0.0"
 source = "git+https://git.ekanayaka.io/ai/smith.git#1697a6d1fe289e5862747a5fdd21f45f2c109794"
 dependencies = [
  "skein-lib",
+]
+
+[[package]]
+name = "smith-host-domain"
+version = "0.0.0"
+source = "git+https://git.ekanayaka.io/ai/smith.git#bf3609f640f05e47e886192b9ff85183a3d12ba1"
+dependencies = [
+ "skein-lib",
+]
+
+[[package]]
+name = "smith-host-world"
+version = "0.0.0"
+source = "git+https://git.ekanayaka.io/ai/smith.git#bf3609f640f05e47e886192b9ff85183a3d12ba1"
+dependencies = [
+ "skein-lib",
+ "skein-world",
+ "smith-host-domain",
+]
+
+[[package]]
+name = "smith-session-world"
+version = "0.0.0"
+source = "git+https://git.ekanayaka.io/ai/smith.git#bf3609f640f05e47e886192b9ff85183a3d12ba1"
+dependencies = [
+ "skein-fake-checkout",
+ "skein-fake-llm-domain",
+ "skein-lib",
+ "skein-world",
+ "smith-domain-session",
+ "smith-domain-tools",
+ "smith-tools-world",
+]
+
+[[package]]
+name = "smith-tools-world"
+version = "0.0.0"
+source = "git+https://git.ekanayaka.io/ai/smith.git#bf3609f640f05e47e886192b9ff85183a3d12ba1"
+dependencies = [
+ "skein-fake-checkout",
+ "skein-lib",
+ "skein-world",
+ "smith-domain-tools",
 ]
 
 [[package]]
@@ -844,6 +912,24 @@ version = "0.0.0"
 dependencies = [
  "skein-json",
  "skein-lib",
+]
+
+[[package]]
+name = "temper-system-world"
+version = "0.0.0"
+dependencies = [
+ "skein-fake-checkout",
+ "skein-lib",
+ "smith-agent-world",
+ "smith-domain",
+ "smith-domain-run",
+ "temper-engine-domain",
+ "temper-engine-domain-fleet",
+ "temper-engine-domain-people",
+ "temper-engine-domain-tasks",
+ "temper-engine-domain-world",
+ "temper-engine-forge-world",
+ "temper-engine-smith",
 ]
 
 [[package]]

@@ -1,0 +1,37 @@
+[package]
+name = "temper-system-world"
+description = "Typed Temper and Smith domain system world"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+skein-lib.workspace = true
+skein-fake-checkout.workspace = true
+smith-domain.workspace = true
+smith-domain-run.workspace = true
+smith-agent-world.workspace = true
+temper-engine-domain.workspace = true
+temper-engine-domain-world = { path = "../engine/domain" }
+temper-engine-domain-people.workspace = true
+temper-engine-domain-fleet.workspace = true
+temper-engine-domain-tasks.workspace = true
+temper-engine-smith.workspace = true
+temper-engine-forge-world = { path = "../engine/forge" }
+
+[lints.rust]
+unsafe_code = "forbid"
+elided_lifetimes_in_paths = "deny"
+unused_must_use = "deny"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+missing_panics_doc = "allow"
+wildcard_enum_match_arm = "deny"
+match_wildcard_for_single_variants = "deny"
+unwrap_used = "deny"
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+disallowed_types = "deny"
+disallowed_methods = "deny"

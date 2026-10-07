@@ -55,6 +55,7 @@ members = [
     "tests/engine/accounts",
     "tests/engine/brief",
     "tests/engine/domain",
+    "tests/system",
     "tests/engine/fleet",
     "tests/engine/forge/client",
     "tests/engine/forge",
@@ -95,6 +96,7 @@ skein-json = { git = "https://git.ekanayaka.io/ai/skein.git" }
 skein-sim = { git = "https://git.ekanayaka.io/ai/skein.git" }
 skein-world = { git = "https://git.ekanayaka.io/ai/skein.git" }
 skein-fake-checkout = { git = "https://git.ekanayaka.io/ai/skein.git" }
+smith-agent-world = { git = "https://git.ekanayaka.io/ai/smith.git" }
 smith-domain = { git = "https://git.ekanayaka.io/ai/smith.git" }
 smith-domain-run = { git = "https://git.ekanayaka.io/ai/smith.git" }
 smith-domain-session = { git = "https://git.ekanayaka.io/ai/smith.git" }
