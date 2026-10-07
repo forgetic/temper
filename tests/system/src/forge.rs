@@ -457,6 +457,39 @@ mod system_stories {
         }
     }
 
+    fn repair_script() -> Script {
+        Script {
+            cue: b"Repair the failed check".as_slice().into(),
+            turns: Box::new([
+                Turn {
+                    lines: Box::new([Line::Call {
+                        name: b"read".as_slice().into(),
+                        arguments: br#"{"path":"src/lib.rs"}"#.as_slice().into(),
+                    }]),
+                    finish: Finish::ToolCalls,
+                    tokens: 20,
+                },
+                Turn {
+                    lines: Box::new([Line::Call {
+                        name: b"edit".as_slice().into(),
+                        arguments: br#"{"path":"src/lib.rs","old":"42","new":"43"}"#.as_slice().into(),
+                    }]),
+                    finish: Finish::ToolCalls,
+                    tokens: 20,
+                },
+                Turn {
+                    lines: Box::new([Line::Call {
+                        name: b"finish".as_slice().into(),
+                        arguments:
+                            br#"{"title":"Repair the failed check","body":"The answer is 43 now."}"#.as_slice().into(),
+                    }]),
+                    finish: Finish::ToolCalls,
+                    tokens: 20,
+                },
+            ]),
+        }
+    }
+
     fn start_change_world(passes: u32) -> (World, engine::Assignment) {
         let mut world = World::configured_policy(true, true, false, passes, None);
         world.adopt();
@@ -480,45 +513,82 @@ mod system_stories {
         (world, chat)
     }
 
-    fn run_smith(world: &mut World, assignment: &engine::Assignment, mut agent: Agent, change: Option<ChangeResource>) -> Agent {
+    fn run_smith(
+        world: &mut World,
+        assignment: &engine::Assignment,
+        mut agent: Agent,
+        change: Option<ChangeResource>,
+    ) -> Agent {
         agent.enable_parent_host_calls();
         loop {
-            if agent.drive(1000) { break; }
+            if agent.drive(1000) {
+                break;
+            }
             let pending: Vec<_> = agent.pending_host_calls().into_iter().cloned().collect();
             assert!(!pending.is_empty(), "Smith either settles or yields a host call");
             for submission in pending {
                 let body = temper_engine_smith::call(submission.name, &submission.tool, &submission.input)
-                    .expect("declared Smith tool input");
+                    .unwrap_or_else(|problem| {
+                        panic!(
+                            "declared Smith tool input: {problem:?} tool={} input={}",
+                            String::from_utf8_lossy(&submission.tool),
+                            String::from_utf8_lossy(submission.input.bytes())
+                        )
+                    });
                 let before = world.answers.len();
                 world.send(engine::Event::Call {
-                    channel: Token::new(7), task: assignment.task, attempt: assignment.attempt,
-                    call: submission.relay.owner, body,
+                    channel: Token::new(7),
+                    task: assignment.task,
+                    attempt: assignment.attempt,
+                    call: submission.relay.owner,
+                    body,
                 });
                 for _ in 0..200 {
                     world.tick();
-                    if world.answers.len() > before { break; }
+                    if world.answers.len() > before {
+                        break;
+                    }
                 }
                 let answer = world.answers.get(before).expect("root committed host answer");
-                agent.return_host_reply(submission.relay, run::HostReply::Answered(temper_engine_smith::answer(answer)))
+                agent
+                    .return_host_reply(submission.relay, run::HostReply::Answered(temper_engine_smith::answer(answer)))
                     .expect("one pending Smith relay");
             }
         }
         for (number, read, spent) in agent.turn_metadata() {
             let record = agent.turns()[usize::try_from(*number - 1).expect("positive turn")].clone();
             let request = smith::Request::Turn {
-                host_run: Token::new(assignment.task), number: *number, read: *read, spent: *spent, turn: record.clone(),
+                host_run: Token::new(assignment.task),
+                number: *number,
+                read: *read,
+                spent: *spent,
+                turn: record.clone(),
             };
             let turn = temper_engine_smith::turn(request, format!("{record:?}").into_bytes().into_boxed_slice())
                 .expect("typed Smith turn");
-            world.send(engine::Event::Turn { channel: Token::new(7), task: assignment.task, attempt: assignment.attempt, turn });
-            for _ in 0..8 { world.tick(); }
+            world.send(engine::Event::Turn {
+                channel: Token::new(7),
+                task: assignment.task,
+                attempt: assignment.attempt,
+                turn,
+            });
+            for _ in 0..8 {
+                world.tick();
+            }
         }
-        let terminal = temper_engine_smith::result(smith_world::copy_answer(agent.answer()), change).expect("typed Smith result");
+        let terminal =
+            temper_engine_smith::result(smith_world::copy_answer(agent.answer()), change).expect("typed Smith result");
         world.send(engine::Event::Answer {
-            saved: None, channel: Token::new(7), task: assignment.task, attempt: assignment.attempt,
-            cumulative: terminal.cumulative, end: terminal.end,
+            saved: None,
+            channel: Token::new(7),
+            task: assignment.task,
+            attempt: assignment.attempt,
+            cumulative: terminal.cumulative,
+            end: terminal.end,
         });
-        for _ in 0..30 { world.tick(); }
+        for _ in 0..30 {
+            world.tick();
+        }
         agent
     }
 
@@ -528,17 +598,27 @@ mod system_stories {
         let input = run::HostInput::attested(DELEGATE.into()).expect("bounded Smith host input");
         let body = temper_engine_smith::call(
             run::CallName { activation: chat.attempt, completion: 1, position: 1 },
-            b"delegate", &input,
-        ).expect("declared delegate shape");
+            b"delegate",
+            &input,
+        )
+        .expect("declared delegate shape");
         world.send(engine::Event::Call {
-            channel: Token::new(7), task: chat.task, attempt: chat.attempt, call: Token::new(93), body,
+            channel: Token::new(7),
+            task: chat.task,
+            attempt: chat.attempt,
+            call: Token::new(93),
+            body,
         });
         world.until(Until::Delegated);
         world.until(Until::SecondAssignment);
         let producer = world.assigned[1].clone();
         let mut agent = smith_world::agent_for(&producer, None, Job::Coding);
         agent.run(1000);
-        assert!(matches!(agent.answer(), run::Answer::Accepted { outcome: run::outcome::Declared::Change(_), .. }), "{:?}", agent.answer());
+        assert!(
+            matches!(agent.answer(), run::Answer::Accepted { outcome: run::outcome::Declared::Change(_), .. }),
+            "{:?}",
+            agent.answer()
+        );
     }
 
     #[test]
@@ -550,14 +630,23 @@ mod system_stories {
         world.until(Until::SecondAssignment);
         let producer = world.assigned[1].clone();
         let branch = producer.workspace.repositories[0].push.clone().expect("writable change branch");
-        assert!(matches!(world.external(2, raw::Op::Git(raw::Git::Create { branch: branch.clone(), commit: 1 })), raw::Answer::Branch(raw::Created::Created)));
+        assert!(matches!(
+            world.external(2, raw::Op::Git(raw::Git::Create { branch: branch.clone(), commit: 1 })),
+            raw::Answer::Branch(raw::Created::Created)
+        ));
         let agent = smith_world::agent_for(&producer, None, Job::Coding);
         let pushed = fake::advance(&mut world.fake, &world.fake_env, b"org/repo", &branch, b"file", b"fixed", 1)
             .expect("worker pushed its branch");
         assert!(pushed > 1);
-        let producer_agent = run_smith(&mut world, &producer, agent, Some(ChangeResource { connector: 1, kind: 2, resource: 2 }));
-        assert!(matches!(producer_agent.answer(), run::Answer::Accepted { outcome: run::outcome::Declared::Change(_), .. }));
-        for _ in 0..200 { world.tick(); }
+        let producer_agent =
+            run_smith(&mut world, &producer, agent, Some(ChangeResource { connector: 1, kind: 2, resource: 2 }));
+        assert!(matches!(
+            producer_agent.answer(),
+            run::Answer::Accepted { outcome: run::outcome::Declared::Change(_), .. }
+        ));
+        for _ in 0..200 {
+            world.tick();
+        }
         assert!(world.store.rows.values().any(|stored| matches!(stored,
             Record::Forge { row, .. } if matches!(row.as_ref(), forge_top::Stored::Change(change)
                 if matches!(change.change.state, temper_engine_domain_forge_change::State::Landed { .. }))
@@ -565,6 +654,7 @@ mod system_stories {
     }
 
     #[test]
+    #[expect(clippy::too_many_lines, reason = "the scenario follows the Smith repair and forge landing sequence")]
     fn a_smith_change_with_failed_ci_is_repaired_reviewed_and_landed() {
         let (mut world, chat) = start_change_world(0);
         let agent = smith_world::scripted_agent_for(&chat, chat_script());
@@ -573,51 +663,105 @@ mod system_stories {
         world.until(Until::SecondAssignment);
         let producer = world.assigned[1].clone();
         let branch = producer.workspace.repositories[0].push.clone().expect("writable change branch");
-        world.external(1, raw::Op::Write(raw::Write::Status {
-            commit: 1, context: b"build".as_slice().into(), state: raw::Check::Passed,
-        }));
-        assert!(matches!(world.external(2, raw::Op::Git(raw::Git::Create { branch: branch.clone(), commit: 1 })),
-            raw::Answer::Branch(raw::Created::Created)));
+        world.external(
+            1,
+            raw::Op::Write(raw::Write::Status {
+                commit: 1,
+                context: b"build".as_slice().into(),
+                state: raw::Check::Passed,
+            }),
+        );
+        assert!(matches!(
+            world.external(2, raw::Op::Git(raw::Git::Create { branch: branch.clone(), commit: 1 })),
+            raw::Answer::Branch(raw::Created::Created)
+        ));
         let failed_head = fake::advance(&mut world.fake, &world.fake_env, b"org/repo", &branch, b"file", b"first", 1)
             .expect("producer pushed first head");
-        world.external(1, raw::Op::Write(raw::Write::Status {
-            commit: failed_head, context: b"build".as_slice().into(), state: raw::Check::Failed,
-        }));
-        let producer_agent = run_smith(&mut world, &producer, smith_world::agent_for(&producer, None, Job::Coding),
-            Some(ChangeResource { connector: 1, kind: 2, resource: 2 }));
-        assert!(matches!(producer_agent.answer(), run::Answer::Accepted { outcome: run::outcome::Declared::Change(_), .. }));
+        world.external(
+            1,
+            raw::Op::Write(raw::Write::Status {
+                commit: failed_head,
+                context: b"build".as_slice().into(),
+                state: raw::Check::Failed,
+            }),
+        );
+        let producer_agent = run_smith(
+            &mut world,
+            &producer,
+            smith_world::agent_for(&producer, None, Job::Coding),
+            Some(ChangeResource { connector: 1, kind: 2, resource: 2 }),
+        );
+        assert!(matches!(
+            producer_agent.answer(),
+            run::Answer::Accepted { outcome: run::outcome::Declared::Change(_), .. }
+        ));
         for _ in 0..200 {
             world.tick();
-            if world.assigned.len() >= 3 { break; }
+            if world.assigned.len() >= 3 {
+                break;
+            }
         }
         let repair = world.assigned.get(2).expect("failed CI assigned a repair").clone();
         assert!(repair.sections.iter().any(|section| section.kind == brief::Kind::Ci
             && matches!(&section.body, brief::Body::Text(words) if words.starts_with(b"Repair the failed check"))));
-        let repaired_head = fake::advance(&mut world.fake, &world.fake_env, b"org/repo", &branch, b"file", b"repaired", 1)
-            .expect("repair pushed a new head");
-        for _ in 0..5 { world.tick(); }
-        world.external(1, raw::Op::Write(raw::Write::Status {
-            commit: repaired_head, context: b"build".as_slice().into(), state: raw::Check::Passed,
-        }));
-        let pull = world.store.rows.values().find_map(|stored| match stored {
-            Record::Forge { row, .. } => match row.as_ref() {
-                forge_top::Stored::Change(change) => change.pull,
+        let repaired_head =
+            fake::advance(&mut world.fake, &world.fake_env, b"org/repo", &branch, b"file", b"repaired", 1)
+                .expect("repair pushed a new head");
+        for _ in 0..5 {
+            world.tick();
+        }
+        world.external(
+            1,
+            raw::Op::Write(raw::Write::Status {
+                commit: repaired_head,
+                context: b"build".as_slice().into(),
+                state: raw::Check::Passed,
+            }),
+        );
+        let pull = world
+            .store
+            .rows
+            .values()
+            .find_map(|stored| match stored {
+                Record::Forge { row, .. } => match row.as_ref() {
+                    forge_top::Stored::Change(change) => change.pull,
+                    _ => None,
+                },
                 _ => None,
-            },
-            _ => None,
-        }).expect("opened pull request");
-        assert!(matches!(world.external(2, raw::Op::Write(raw::Write::Review {
-            number: pull, verdict: Some(raw::Verdict::Approve), body: b"Reviewed repaired head".as_slice().into(),
-        })), raw::Answer::Reviewed(_)));
-        let repair_agent = run_smith(&mut world, &repair, smith_world::agent_for(&repair, None, Job::Coding),
-            Some(ChangeResource { connector: 1, kind: 2, resource: 2 }));
-        assert!(matches!(repair_agent.answer(), run::Answer::Accepted { outcome: run::outcome::Declared::Change(_), .. }));
+            })
+            .expect("opened pull request");
+        assert!(matches!(
+            world.external(
+                2,
+                raw::Op::Write(raw::Write::Review {
+                    number: pull,
+                    verdict: Some(raw::Verdict::Approve),
+                    body: b"Reviewed repaired head".as_slice().into(),
+                })
+            ),
+            raw::Answer::Reviewed(_)
+        ));
+        let repair_agent = run_smith(
+            &mut world,
+            &repair,
+            smith_world::scripted_coding_agent_for(&repair, repair_script()),
+            Some(ChangeResource { connector: 1, kind: 2, resource: 2 }),
+        );
+        assert!(
+            matches!(repair_agent.answer(), run::Answer::Accepted { outcome: run::outcome::Declared::Change(_), .. }),
+            "{:?}",
+            repair_agent.answer()
+        );
         for _ in 0..200 {
             world.tick();
-            if world.store.rows.values().any(|stored| matches!(stored,
-                Record::Forge { row, .. } if matches!(row.as_ref(), forge_top::Stored::Change(change)
-                    if matches!(change.change.state, temper_engine_domain_forge_change::State::Landed { .. }))
-            )) { break; }
+            if world.store.rows.values().any(|stored| {
+                matches!(stored,
+                    Record::Forge { row, .. } if matches!(row.as_ref(), forge_top::Stored::Change(change)
+                        if matches!(change.change.state, temper_engine_domain_forge_change::State::Landed { .. }))
+                )
+            }) {
+                break;
+            }
         }
         assert!(world.store.rows.values().any(|stored| matches!(stored,
             Record::Forge { row, .. } if matches!(row.as_ref(), forge_top::Stored::Change(change)

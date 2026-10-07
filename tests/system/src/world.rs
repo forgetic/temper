@@ -4,7 +4,7 @@
 
 use skein_fake_checkout::{Checkout, Exit, Program};
 use skein_fake_llm_domain::api::Script;
-use skein_lib::{Duration, ReplyTo, Token};
+use skein_lib::{Duration, ReplyTo, Time, Token};
 use smith_agent_world::{Job, Settings, World as Agent};
 use smith_domain as smith;
 use smith_domain_run as run;
@@ -89,9 +89,29 @@ pub fn scripted_agent_for(assignment: &engine::Assignment, script: Script) -> Ag
     agent_for_with_options(assignment, None, Job::Reporting, None, Some(script))
 }
 
+/// A caller-supplied fake LLM script for a Smith coding assignment.
+#[must_use]
+pub fn scripted_coding_agent_for(assignment: &engine::Assignment, script: Script) -> Agent {
+    agent_for_with_options(assignment, None, Job::Coding, None, Some(script))
+}
+
+/// A caller-supplied script for a Smith run that can park on `wait`.
+#[must_use]
+pub fn scripted_waiting_agent_for(
+    assignment: &engine::Assignment,
+    transcript: Option<smith::Transcript>,
+    script: Script,
+) -> Agent {
+    agent_for_with_options(assignment, transcript, Job::Waiting, None, Some(script))
+}
+
 /// Resume a caller script with the actual prior Smith turns.
 #[must_use]
-pub fn scripted_agent_for_resume(assignment: &engine::Assignment, transcript: smith::Transcript, script: Script) -> Agent {
+pub fn scripted_agent_for_resume(
+    assignment: &engine::Assignment,
+    transcript: smith::Transcript,
+    script: Script,
+) -> Agent {
     agent_for_with_options(assignment, Some(transcript), Job::Reporting, None, Some(script))
 }
 
@@ -108,12 +128,15 @@ fn agent_for_with_options(
     disk.write(b"work/AGENTS.md", b"Report what you found.\n");
     disk.write(b"work/src/lib.rs", b"pub fn answer() -> u32 { 42 }\n");
     disk.write(b"work/.temper/pre-pr", b"#!checks\nsrc/lib.rs 43\n");
-    disk.program(b"cargo test", Program {
-        duration: std::time::Duration::from_millis(200),
-        output: b"test result: ok. 1 passed\n".to_vec(),
-        exit: Exit::Code(0),
-        changes: Vec::new(),
-    });
+    disk.program(
+        b"cargo test",
+        Program {
+            duration: std::time::Duration::from_millis(200),
+            output: b"test result: ok. 1 passed\n".to_vec(),
+            exit: Exit::Code(0),
+            changes: Vec::new(),
+        },
+    );
     let workspace = Some(run::Workspace {
         directories: Box::new([run::Directory {
             name: b"work".as_slice().into(),
@@ -145,7 +168,12 @@ fn agent_for_with_options(
         Some(script) => Box::new([script]),
         None => smith_agent_world::script::all(),
     };
-    Agent::with_workspace_scripts_start(settings, disk, scripts, start)
+    let mut agent = Agent::with_workspace_scripts_start(settings, disk, scripts, start);
+    for word in &assignment.inbox {
+        let text = format!("{:?}: {}", word.from, String::from_utf8_lossy(&word.words)).into_bytes().into_boxed_slice();
+        agent.message_at(Time::from_nanos(1), Token::new(word.number), text);
+    }
+    agent
 }
 
 impl World {
@@ -187,68 +215,74 @@ impl World {
     /// Give each live Smith host call to the root, return its committed answer,
     /// then commit Smith's concrete turns and terminal.
     pub fn run(&mut self) {
-        self.agent.enable_parent_host_calls();
-        loop {
-            if self.agent.drive(1000) {
-                break;
-            }
-            let pending: Vec<_> = self.agent.pending_host_calls().into_iter().cloned().collect();
-            assert!(!pending.is_empty(), "Smith must either settle or yield a host call");
-            for submission in pending {
-                let body = temper_engine_smith::call(submission.name, &submission.tool, &submission.input)
-                    .expect("script uses the declared host schema");
-                let before = self.root.delivered.len();
-                self.root.send(engine::Event::Call {
-                    channel: Token::new(7),
-                    task: self.assignment.task,
-                    attempt: self.assignment.attempt,
-                    call: submission.relay.owner,
-                    body,
-                });
-                self.root.settle();
-                let answer = self.root.delivered[before..]
-                    .iter()
-                    .find_map(|delivery| match delivery {
-                        Delivery::CallAnswer { call, answer, .. } if *call == submission.relay.owner => Some(answer),
-                        _ => None,
-                    })
-                    .expect("committed root call answer");
-                self.agent
-                    .return_host_reply(submission.relay, run::HostReply::Answered(temper_engine_smith::answer(answer)))
-                    .expect("one pending Smith host relay");
-            }
-        }
-        for (number, read, spent) in self.agent.turn_metadata() {
-            let index = usize::try_from(*number - 1).expect("positive turn");
-            let record = self.agent.turns()[index].clone();
-            let request = smith::Request::Turn {
-                host_run: Token::new(self.assignment.task),
-                number: *number,
-                read: *read,
-                spent: *spent,
-                turn: record.clone(),
-            };
-            let bytes = format!("{record:?}").into_bytes().into_boxed_slice();
-            let turn = temper_engine_smith::turn(request, bytes).expect("typed turn");
-            self.root.send(engine::Event::Turn {
-                channel: Token::new(7),
-                task: self.assignment.task,
-                attempt: self.assignment.attempt,
-                turn,
-            });
-            self.root.settle();
-        }
-        let terminal = temper_engine_smith::result(copy_answer(self.agent.answer()), None).expect("typed terminal");
-        self.root.send(engine::Event::Answer {
-            saved: None,
-            channel: Token::new(7),
-            task: self.assignment.task,
-            attempt: self.assignment.attempt,
-            cumulative: terminal.cumulative,
-            end: terminal.end,
-        });
-        self.root.settle();
+        run_assignment(&mut self.root, &self.assignment, &mut self.agent);
     }
+}
+
+/// Execute one root assignment in the Smith world and commit its typed output.
+#[expect(clippy::wildcard_enum_match_arm, reason = "the world selects only the matching committed call answer")]
+pub fn run_assignment(root: &mut Driver, assignment: &engine::Assignment, agent: &mut Agent) {
+    agent.enable_parent_host_calls();
+    loop {
+        if agent.drive(1000) {
+            break;
+        }
+        let pending: Vec<_> = agent.pending_host_calls().into_iter().cloned().collect();
+        assert!(!pending.is_empty(), "Smith must either settle or yield a host call");
+        for submission in pending {
+            let body = temper_engine_smith::call(submission.name, &submission.tool, &submission.input)
+                .expect("script uses the declared host schema");
+            let before = root.delivered.len();
+            root.send(engine::Event::Call {
+                channel: Token::new(7),
+                task: assignment.task,
+                attempt: assignment.attempt,
+                call: submission.relay.owner,
+                body,
+            });
+            root.settle();
+            let answer = root.delivered[before..]
+                .iter()
+                .find_map(|delivery| match delivery {
+                    Delivery::CallAnswer { call, answer, .. } if *call == submission.relay.owner => Some(answer),
+                    _ => None,
+                })
+                .expect("committed root call answer");
+            agent
+                .return_host_reply(submission.relay, run::HostReply::Answered(temper_engine_smith::answer(answer)))
+                .expect("one pending Smith host relay");
+        }
+    }
+    for (number, read, spent) in agent.turn_metadata() {
+        let index = usize::try_from(*number - 1).expect("positive turn");
+        let record = agent.turns()[index].clone();
+        let request = smith::Request::Turn {
+            host_run: Token::new(assignment.task),
+            number: *number,
+            read: *read,
+            spent: *spent,
+            turn: record.clone(),
+        };
+        let bytes = format!("{record:?}").into_bytes().into_boxed_slice();
+        let turn = temper_engine_smith::turn(request, bytes).expect("typed turn");
+        root.send(engine::Event::Turn {
+            channel: Token::new(7),
+            task: assignment.task,
+            attempt: assignment.attempt,
+            turn,
+        });
+        root.settle();
+    }
+    let terminal = temper_engine_smith::result(copy_answer(agent.answer()), None).expect("typed terminal");
+    root.send(engine::Event::Answer {
+        saved: None,
+        channel: Token::new(7),
+        task: assignment.task,
+        attempt: assignment.attempt,
+        cumulative: terminal.cumulative,
+        end: terminal.end,
+    });
+    root.settle();
 }
 
 /// Copy a settled Smith terminal into the typed Temper result translator.

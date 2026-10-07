@@ -1,5 +1,5 @@
-use skein_lib::{ReplyTo, Token};
 use skein_fake_llm_domain::api::{Finish, Line, Script, Turn};
+use skein_lib::{ReplyTo, Token};
 use smith_agent_world::Job;
 use smith_domain_run as run;
 use temper_engine_domain::{Delivery, engine};
@@ -13,7 +13,11 @@ fn a_chat_answers_through_a_smith_run_and_a_committed_root_result() {
     let mut world = world::chat(b"@report", Job::Reporting);
     world.run();
     let result = world.root.store.rows.get(&Key::Tasks(tasks::Key::Ended(world.assignment.task)));
-    assert!(matches!(world.agent.answer(), run::Answer::Accepted { outcome: run::outcome::Declared::Report(_), .. }), "{:?}", world.agent.answer());
+    assert!(
+        matches!(world.agent.answer(), run::Answer::Accepted { outcome: run::outcome::Declared::Report(_), .. }),
+        "{:?}",
+        world.agent.answer()
+    );
     assert!(matches!(result, Some(Record::Tasks(tasks::Stored::Ended(row)))
         if matches!(row.phase, tasks::Phase::Ended(tasks::Ending::Done(tasks::TaskResult::Report { .. })))));
 }
