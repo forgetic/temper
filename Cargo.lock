@@ -180,9 +180,18 @@ dependencies = [
 name = "jig-host-world"
 version = "0.0.0"
 dependencies = [
+ "jig-charter",
  "jig-host",
+ "jig-inline-agent",
+ "skein-fake-llm-domain",
  "skein-lib",
  "skein-world",
+ "smith-agent-world",
+ "smith-charter",
+ "smith-domain",
+ "smith-host-domain",
+ "smith-protocol-channel",
+ "smith-transcript",
 ]
 
 [[package]]
