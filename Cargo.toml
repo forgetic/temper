@@ -44,6 +44,7 @@ members = [
     "tests/worker/domain",
     "tests/web/domain",
     "tests/world",
+    "jig/tests/boundary",
 ]
 
 [workspace.package]

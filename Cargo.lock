@@ -74,6 +74,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "jig-boundary"
+version = "0.0.0"
+
+[[package]]
 name = "libc"
 version = "0.2.190"
 source = "registry+https://github.com/rust-lang/crates.io-index"
