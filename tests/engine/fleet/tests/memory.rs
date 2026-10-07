@@ -16,7 +16,6 @@ const LIMITS: Limits = Limits {
     workers: 3,
     slots: 3,
     workstreams: 3,
-    workstream_bytes: 32,
     attempts: 12,
     calls: 4,
     turns: 0,
@@ -96,8 +95,7 @@ impl Measured {
     /// most bytes, and hosting `hosting`.
     fn hello(&mut self, channel: Token, hosting: Vec<Hosted>) -> Vec<Request> {
         let limits = self.env.limits;
-        let workstreams =
-            (0..limits.workstreams).map(|nth| key(&limits, channel.raw() * 100 + u64::from(nth))).collect();
+        let workstreams = (0..limits.workstreams).map(|nth| channel.raw() * 100 + u64::from(nth)).collect();
         self.step(Event::Hello {
             channel,
             hello: Hello { graces: None, slots: limits.slots, workstreams, hosting: hosting.into() },
@@ -107,18 +105,11 @@ impl Measured {
     /// Starts an attempt of a run of its own, with a key of the most bytes.
     fn start(&mut self) -> (Token, Token) {
         let (run, attempt) = (self.name(), self.name());
-        let workstream = key(&self.env.limits, run.raw());
+        let workstream = run.raw();
         let asked = self.step(Event::Start { reply_to: ReplyTo::new(attempt), run, attempt, workstream });
         assert!(asked.is_empty(), "a start waits for placement: {asked:?}");
         (run, attempt)
     }
-}
-
-/// A key of the most bytes a key may have, telling `nth` from the others.
-fn key(limits: &Limits, nth: u64) -> Box<[u8]> {
-    let mut key = vec![b'k'; limits.workstream_bytes as usize];
-    key[..8].copy_from_slice(&nth.to_be_bytes());
-    key.into()
 }
 
 /// The channels of the workers, `C1` and on.
@@ -173,7 +164,7 @@ fn a_fleet_full_to_its_limits_stays_within_its_worst_case() {
     assert!(fullest.saturating_mul(3) > fleet.bound, "{fullest} held of a worst case of {}", fleet.bound);
     // One more is refused, at the entrance.
     let (run, attempt) = (fleet.name(), fleet.name());
-    let workstream = key(&LIMITS, run.raw());
+    let workstream = run.raw();
     let refused = fleet.step(Event::Start { reply_to: ReplyTo::new(attempt), run, attempt, workstream });
     assert!(matches!(refused[..], [Request::Refused { .. }]), "{refused:?}");
     let up = fleet.step(Event::Relay {

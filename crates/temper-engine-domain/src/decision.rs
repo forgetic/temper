@@ -484,7 +484,7 @@ impl Decision {
                         | temper_engine_domain_tasks::Escalation::Routing { .. } => false,
                     }
             }
-            Delivery::Fleet(event) => fleet_delivery_within(event, limits),
+            Delivery::Fleet(event) => fleet_delivery_within(event),
             Delivery::Relay { word, .. } | Delivery::Inbound { word, .. } => {
                 word.number != 0
                     && word.words.len() <= usize::try_from(limits.transcript_bytes).expect("u32 fits usize")
@@ -742,12 +742,10 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         )
 }
 
-fn fleet_delivery_within(event: &temper_engine_domain_fleet::Event, limits: &Limits) -> bool {
+fn fleet_delivery_within(event: &temper_engine_domain_fleet::Event) -> bool {
     use temper_engine_domain_fleet::Event;
     match event {
-        Event::Start { workstream, .. } => {
-            workstream.len() <= usize::try_from(limits.transcript_bytes).expect("u32 fits usize")
-        }
+        Event::Start { .. } => true,
         Event::TurnKept { .. } | Event::Acknowledge { .. } | Event::Cancel { .. } | Event::Relayed { .. } => true,
         Event::Adopt { .. }
         | Event::Inbound { .. }

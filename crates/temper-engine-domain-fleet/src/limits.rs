@@ -1,5 +1,3 @@
-use alloc::boxed::Box;
-
 use skein_lib::{Deadlines, Duration, Id, Map, Queue, Set, Slab, Token};
 
 use crate::attempt::{Attempt, Run};
@@ -20,9 +18,6 @@ pub struct Limits {
     pub slots: u32,
     /// The workstreams kept per worker, for placement to prefer.
     pub workstreams: u32,
-    /// The most bytes of a workstream key. A key longer is not kept from a
-    /// hello, and a start naming one is refused.
-    pub workstream_bytes: u32,
     /// The parent's attempts tracked at once: waiting to be placed, out on
     /// workers, or their answers not yet acknowledged; and those it replaced
     /// while a worker may still host them. A start or an adoption beyond them
@@ -55,10 +50,9 @@ pub(crate) fn tracked(limits: &Limits) -> Option<u32> {
 /// The most memory the domain holds under `limits`, in bytes
 /// (programming-model.md, 6.3), or `None` if it does not fit a `u64`.
 ///
-/// It counts the containers, their bookkeeping included, and the workstream
-/// keys, not allocator overhead. What the fleet passes on (a hello's lists,
+/// It counts the containers, their bookkeeping included, not allocator overhead. What the fleet passes on (a hello's lists,
 /// the parent's payloads, which it names by token) is moved into its state or
-/// dropped in the step it arrives in: the keys it keeps are counted here, the
+/// dropped in the step it arrives in: the workstreams it keeps are counted here, the
 /// rest is its sender's to count.
 #[must_use]
 pub fn worst_case(limits: &Limits) -> Option<u64> {
@@ -66,8 +60,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_add(Map::<Token, Id<Channel>>::worst_case(limits.workers)?)?;
     // Each worker: the attempts it hosts, and the workstream keys it holds.
     let hosts = Set::<Id<Attempt>>::worst_case(limits.slots)?;
-    let keys = Map::<u64, Box<[u8]>>::worst_case(limits.workstreams)?
-        .checked_add(u64::from(limits.workstreams).checked_mul(u64::from(limits.workstream_bytes))?)?;
+    let keys = Map::<u64, u64>::worst_case(limits.workstreams)?;
     let workers = u64::from(limits.workers).checked_mul(hosts.checked_add(keys)?)?;
     let tracked = tracked(limits)?;
     let attempts = Slab::<Attempt>::worst_case(tracked)?
@@ -75,18 +68,8 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_add(Map::<Token, Run>::worst_case(tracked)?)?
         .checked_add(Map::<u64, Id<Attempt>>::worst_case(tracked)?)?
         .checked_add(Deadlines::<Id<Attempt>>::worst_case(tracked)?)?;
-    // A claim holds its workstream key while it may be placed again; its
-    // worker holds a copy. Placing one beyond a worker's room evicts a key
-    // first, so a step holds no more than these.
-    let waiting = u64::from(limits.attempts).checked_mul(u64::from(limits.workstream_bytes))?;
     let calls = Slab::<Call>::worst_case(limits.calls)?;
     let turns = Map::<(Id<Attempt>, u32), Pending>::worst_case(limits.turns)?;
     let facts = Queue::<Fact>::worst_case(limits.facts)?;
-    channels
-        .checked_add(workers)?
-        .checked_add(attempts)?
-        .checked_add(waiting)?
-        .checked_add(calls)?
-        .checked_add(turns)?
-        .checked_add(facts)
+    channels.checked_add(workers)?.checked_add(attempts)?.checked_add(calls)?.checked_add(turns)?.checked_add(facts)
 }

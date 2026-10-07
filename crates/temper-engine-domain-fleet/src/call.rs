@@ -1,5 +1,5 @@
-//! What the fleet relays between the parent and the runs (engine-domain.md,
-//! section 8; worker-domain.md, 4.2): inbound events down, a run's host calls
+//! What the fleet relays between the parent and the runs (domain/engine.md,
+//! section 8; domain/hosts.md, 4.2): inbound events down, a run's host calls
 //! up and their answers back, its bounces and its facts up. Each goes through
 //! only while its attempt is the parent's live claim; what comes for an
 //! attempt cancelled, replaced, lost or answered is dropped (attempts are

@@ -5,7 +5,7 @@
 //! The fleet has two faces, both through its parent:
 //!
 //! - The workers', which the parent routes to and from their channels
-//!   (worker-domain.md, sections 2 and 4). A worker's channel is named by the
+//!   (domain/hosts.md, sections 2 and 4). A worker's channel is named by the
 //!   protocol's token for it, `channel`, and is in contact from its
 //!   [`Event::Hello`], the first thing said on it, until its
 //!   [`Event::Lost`]. [`Request::Assign`] is a call to the worker, answered
@@ -72,7 +72,7 @@ pub enum Event {
         reply_to: ReplyTo,
         run: Token,
         attempt: Token,
-        workstream: Box<[u8]>,
+        workstream: u64,
     },
     /// From the parent, a call: the attempt `attempt` of the run `run` was
     /// claimed before the engine restarted. A worker is to say it hosts it
@@ -134,7 +134,7 @@ pub enum Event {
         retry_after: Duration,
     },
     /// From a worker, first on its channel: its slots, the workstreams it
-    /// holds checkouts for, and the runs it hosts or holds answers of.
+    /// holds workspaces for, and the runs it hosts or holds answers of.
     Hello {
         channel: Token,
         hello: Hello,
@@ -375,7 +375,7 @@ pub enum Request {
     },
 }
 
-/// What a worker says first on every channel (engine-domain.md, section 8).
+/// What a worker says first on every channel (domain/engine.md, section 8).
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub struct Hello {
     /// Declared stop bound: contact grace, then max(cancel grace, push
@@ -384,7 +384,7 @@ pub struct Hello {
     pub graces: Option<Duration>,
     /// How many runs it hosts at once: none once it is shutting down.
     pub slots: u32,
-    pub workstreams: Box<[Box<[u8]>]>,
+    pub workstreams: Box<[u64]>,
     /// The runs it hosts, and those whose answers it holds.
     pub hosting: Box<[Hosted]>,
 }
@@ -397,7 +397,7 @@ pub struct Hosted {
     pub phase: Phase,
 }
 
-/// Where a hosted run is in its lifecycle (worker-domain.md, 4.2), as a hello
+/// Where a hosted run is in its lifecycle (domain/hosts.md, 4.2), as a hello
 /// says.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Phase {
@@ -413,7 +413,7 @@ pub enum Phase {
     Answered,
 }
 
-/// How a run's attempt was answered (worker-domain.md, 4.3): what the fleet
+/// How a run's attempt was answered (domain/hosts.md, 4.3): what the fleet
 /// acts on. The rest is the payload's.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Answer {
@@ -432,7 +432,7 @@ pub enum Answer {
     Invalid,
 }
 
-/// Why a worker did not pass an inbound event on (worker-domain.md, 4.2).
+/// Why a worker did not pass an inbound event on (domain/hosts.md, 4.2).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Bounce {
     /// It holds more bytes than the worker's limits allow.
@@ -470,7 +470,7 @@ pub enum Withdrawal {
 pub enum Refusal {
     /// The fleet tracks as many of the parent's attempts as it may.
     Busy,
-    /// The workstream key is empty, or longer than a key may be.
+    /// The workstream task number is zero.
     Workstream,
     /// The fleet knows the attempt already.
     Duplicate,

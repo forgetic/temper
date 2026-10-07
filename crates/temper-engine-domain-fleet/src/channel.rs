@@ -1,4 +1,4 @@
-//! The workers in contact (engine-domain.md, sections 2 and 8): each known by
+//! The workers in contact (domain/engine.md, sections 2 and 8): each known by
 //! its channel, from the hello it says first on it until the channel is lost.
 //! A worker that comes back dials a new channel, and is known again by what
 //! its hello lists: the fleet needs no other name for it.
@@ -7,7 +7,7 @@
 //! closed, if the fleet has no room for another worker or its declared stop
 //! bound is not strictly below the engine's grace. Its slots are
 //! used up to the limit, and the workstreams it lists up to the limit, each
-//! within the bytes of a key. Each run it lists, up to the slots a worker
+//! a task number. Each run it lists, up to the slots a worker
 //! may have, is kept, cancelled again, acknowledged or found (see the
 //! attempts' table); one beyond them, or beyond the room the fleet keeps for
 //! listings, is cancelled and not tracked; and past twice the slots, a
@@ -21,15 +21,13 @@
 //! it frees a slot.
 //!
 //! Placement takes a worker in contact with a free slot that holds the
-//! workstream's checkout, the first in the order of the protocol's names for
+//! workstream's workspace, the first in the order of the protocol's names for
 //! the channels; or, with none, the one with the most free slots. A worker
 //! holds the workstreams its hello listed and those of the runs placed on it
 //! since: placing one beyond the room evicts the one used longest ago.
 
-use alloc::boxed::Box;
 use core::mem;
 
-use skein_lib::bytes::copy_of;
 use skein_lib::{Env, Id, Map, Queue, Set, Slab, Token};
 
 use crate::attempt::{self, Attempt};
@@ -50,15 +48,10 @@ pub(crate) struct Channel {
     pub(crate) draining: bool,
     /// The attempts it hosts or holds the answers of, each taking a slot.
     pub(crate) hosts: Set<Id<Attempt>>,
-    /// The workstreams it holds checkouts for, by when each was last used,
+    /// The workstreams it holds workspaces for, by when each was last used,
     /// and the count that orders them.
-    pub(crate) workstreams: Map<u64, Box<[u8]>>,
+    pub(crate) workstreams: Map<u64, u64>,
     pub(crate) uses: u64,
-}
-
-/// The most bytes of a key, as a slice's length.
-pub(crate) fn bytes(limit: u32) -> usize {
-    usize::try_from(limit).unwrap_or(usize::MAX)
 }
 
 /// The protocol's name for the channel `channel`, which is in contact.
@@ -66,21 +59,20 @@ pub(crate) fn token(channels: &Slab<Channel>, channel: Id<Channel>) -> Token {
     channels.get(channel).expect("an attempt is on a worker in contact").token
 }
 
-/// Whether `channel` holds `workstream`'s checkout, and when it last used it.
-fn holds(channel: &Channel, workstream: &[u8]) -> Option<u64> {
+/// Whether `channel` holds `workstream`, and when it last used it.
+fn holds(channel: &Channel, workstream: u64) -> Option<u64> {
     for (&used, key) in &channel.workstreams {
-        if **key == *workstream {
+        if *key == workstream {
             return Some(used);
         }
     }
     None
 }
 
-/// `channel` holds `workstream`'s checkout from now on, its latest used: in
-/// place of the one used longest ago if it holds as many as it may. A key
-/// empty or longer than a key may be is not kept.
-pub(crate) fn cache(channel: &mut Channel, limits: &Limits, workstream: &[u8]) {
-    if workstream.is_empty() || workstream.len() > bytes(limits.workstream_bytes) || limits.workstreams == 0 {
+/// `channel` holds `workstream` from now on, its latest used: in
+/// place of the one used longest ago if it holds as many as it may. Task number zero is not kept.
+pub(crate) fn cache(channel: &mut Channel, limits: &Limits, workstream: u64) {
+    if workstream == 0 || limits.workstreams == 0 {
         return;
     }
     let key = match holds(channel, workstream) {
@@ -91,7 +83,7 @@ pub(crate) fn cache(channel: &mut Channel, limits: &Limits, workstream: &[u8]) {
             {
                 channel.workstreams.remove(&oldest);
             }
-            copy_of(workstream)
+            workstream
         }
     };
     let used = channel.uses;
@@ -126,7 +118,7 @@ pub(crate) fn hello(domain: &mut Domain, env: &Env<Limits>, channel: Token, hell
         uses: 0,
     };
     for workstream in &workstreams {
-        cache(&mut worker, limits, workstream);
+        cache(&mut worker, limits, *workstream);
     }
     let Ok(id) = domain.channels.insert(worker) else {
         unreachable!("checked for room above");
@@ -182,8 +174,8 @@ pub(crate) fn drain(domain: &mut Domain, channel: Id<Channel>) {
 }
 
 /// The worker to place an attempt of `workstream` on: one with a free slot
-/// that holds its checkout, or else the one with the most free slots.
-pub(crate) fn choose(domain: &Domain, workstream: &[u8]) -> Option<Id<Channel>> {
+/// that holds its workspace, or else the one with the most free slots.
+pub(crate) fn choose(domain: &Domain, workstream: u64) -> Option<Id<Channel>> {
     let mut best: Option<(Id<Channel>, u32)> = None;
     for (_, &id) in &domain.tokens {
         let channel = domain.channels.get(id).expect("a named channel is in contact");

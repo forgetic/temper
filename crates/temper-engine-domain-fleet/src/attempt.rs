@@ -1,9 +1,9 @@
-//! The attempts the fleet tracks (engine-domain.md, 4.2 and section 8): each
+//! The attempts the fleet tracks (domain/engine.md, 4.2 and section 8): each
 //! the parent's claim on a run, from its start or its adoption to the
 //! parent's acknowledgement of its answer; or one a worker hosts or holds the
 //! answer of that the parent has not claimed.
 //!
-//! A run's attempts share its workstream (the workstream is the item, and a
+//! A run's attempts share its workstream (the workstream is the task number, and a
 //! run is named by its item), so no attempt of a run is placed while a worker
 //! may host another: an attempt replaced, cancelled or found unclaimed holds
 //! its run's next one back until its worker answers it, or past the grace
@@ -98,7 +98,6 @@
 //! claim, and its alarm) is derived from it in one place after every
 //! transition ([`follow`]).
 
-use alloc::boxed::Box;
 use core::mem;
 
 use skein_lib::{Env, Id, Queue, ReplyTo, Slab, Time, Token};
@@ -138,14 +137,14 @@ pub(crate) struct Run {
 pub(crate) enum State {
     /// Started, or refused as busy: waits for a slot, and for no worker to
     /// host another attempt of its run. `serial` is its place in the queue.
-    Waiting { to: ReplyTo, workstream: Box<[u8]>, serial: u64 },
+    Waiting { to: ReplyTo, workstream: u64, serial: u64 },
     /// Adopted after a restart, no worker having listed it yet: until the
     /// grace passes.
     Adopted { to: ReplyTo, until: Time },
     /// The parent's live claim, on a worker or adrift, with its workstream to
     /// be placed again if its worker refuses it as busy (empty when
     /// adopted).
-    Claimed { to: ReplyTo, at: Where, workstream: Box<[u8]> },
+    Claimed { to: ReplyTo, at: Where, workstream: u64 },
     /// Cancelled by the parent: its answer still ends the call.
     Cancelled { to: ReplyTo, at: Where },
     /// Its answer handed to the parent, which has yet to acknowledge it: its
@@ -245,10 +244,10 @@ pub(crate) fn start(
     to: ReplyTo,
     run: Token,
     attempt: Token,
-    workstream: Box<[u8]>,
+    workstream: u64,
     out: &mut Queue<Request>,
 ) {
-    let refusal = if workstream.is_empty() || workstream.len() > channel::bytes(env.limits.workstream_bytes) {
+    let refusal = if workstream == 0 {
         Some(Refusal::Workstream)
     } else if domain.names.contains_key(&(run, attempt)) {
         Some(Refusal::Duplicate)
@@ -317,7 +316,7 @@ pub(crate) fn adopt(
     let before = implied(&entry.state);
     let state = mem::replace(&mut entry.state, State::Closed);
     entry.state = match state {
-        State::Stray { at, until: _ } => located(to, at, Box::default(), names, &mut domain.facts, out),
+        State::Stray { at, until: _ } => located(to, at, 0, names, &mut domain.facts, out),
         State::Kept { answer, payload, at, until: _ } => handed(to, answer, payload, at, names, &mut domain.facts, out),
         State::Waiting { .. }
         | State::Adopted { .. }
@@ -442,7 +441,7 @@ pub(crate) fn listed(
         State::Waiting { to, workstream, serial: _ } => {
             hosted(to, workstream, channel, names, env, &mut domain.channels, &mut domain.facts, out)
         }
-        State::Adopted { to, until: _ } => located(to, on, Box::default(), names, &mut domain.facts, out),
+        State::Adopted { to, until: _ } => located(to, on, 0, names, &mut domain.facts, out),
         State::Claimed { to, at, workstream } => moved(to, at, workstream, channel, &mut domain.facts),
         State::Cancelled { to, at: _ } => {
             again(on, answered, names, &domain.channels, out);
@@ -668,7 +667,7 @@ pub(crate) fn resume(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Req
             | State::Fenced { .. }
             | State::Closed => unreachable!("only a waiting attempt is queued for a slot"),
         };
-        if let Some(channel) = channel::choose(domain, workstream) {
+        if let Some(channel) = channel::choose(domain, *workstream) {
             chosen = Some((id, channel));
             break;
         }
@@ -844,7 +843,7 @@ fn presumed(to: ReplyTo, names: Names, facts: &mut Facts, out: &mut Queue<Reques
 fn located(
     to: ReplyTo,
     at: Where,
-    workstream: Box<[u8]>,
+    workstream: u64,
     names: Names,
     facts: &mut Facts,
     out: &mut Queue<Request>,
@@ -855,7 +854,7 @@ fn located(
 }
 
 /// A claim listed again: on its worker's channel from now on.
-fn moved(to: ReplyTo, at: Where, workstream: Box<[u8]>, channel: Id<Channel>, facts: &mut Facts) -> State {
+fn moved(to: ReplyTo, at: Where, workstream: u64, channel: Id<Channel>, facts: &mut Facts) -> State {
     match at {
         Where::On(_) => {}
         Where::Adrift { .. } => facts.push(Fact::Found),
@@ -868,7 +867,7 @@ fn moved(to: ReplyTo, at: Where, workstream: Box<[u8]>, channel: Id<Channel>, fa
 #[expect(clippy::too_many_arguments, reason = "a cell handler takes the fields it touches")]
 fn assigned(
     to: ReplyTo,
-    workstream: Box<[u8]>,
+    workstream: u64,
     channel: Id<Channel>,
     names: Names,
     env: &Env<Limits>,
@@ -877,7 +876,7 @@ fn assigned(
     out: &mut Queue<Request>,
 ) -> State {
     let entry = channels.get_mut(channel).expect("a worker chosen is in contact");
-    channel::cache(entry, &env.limits, &workstream);
+    channel::cache(entry, &env.limits, workstream);
     out.push(Request::Assign { channel: entry.token, run: names.run, attempt: names.attempt });
     out.push(Request::Placed { run: names.run, attempt: names.attempt });
     facts.push(Fact::Placed);
@@ -888,7 +887,7 @@ fn assigned(
 #[expect(clippy::too_many_arguments, reason = "a cell handler takes the fields it touches")]
 fn hosted(
     to: ReplyTo,
-    workstream: Box<[u8]>,
+    workstream: u64,
     channel: Id<Channel>,
     names: Names,
     env: &Env<Limits>,
@@ -897,7 +896,7 @@ fn hosted(
     out: &mut Queue<Request>,
 ) -> State {
     let entry = channels.get_mut(channel).expect("a worker saying hello is in contact");
-    channel::cache(entry, &env.limits, &workstream);
+    channel::cache(entry, &env.limits, workstream);
     located(to, Where::On(channel), workstream, names, facts, out)
 }
 

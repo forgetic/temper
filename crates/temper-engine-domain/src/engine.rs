@@ -4580,7 +4580,8 @@ fn tasks_outputs(
                 } else if let Some(attempt) = domain.claiming.remove(&task) {
                     let proof = domain.proofs.get(&task).expect("claim proof pre-reserved");
                     save(decision, &env.limits, Write::Save(Record::RunProof(proof.clone())));
-                    let workstream = domain.assignments.get(&task).expect("claimed assignment").workspace.key.clone();
+                    let key = &domain.assignments.get(&task).expect("claimed assignment").workspace.key;
+                    let workstream = u64::from_be_bytes(key.as_ref().try_into().expect("task-number workstream"));
                     emit(
                         decision,
                         &env.limits,
@@ -5965,7 +5966,6 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         || limits.journal.deliveries < limits.tasks.saved_repositories
         || limits.journal.result_bytes < limits.tasks.result_bytes
         || limits.journal.result_bytes < limits.people.words
-        || limits.fleet.workstream_bytes < 8
         || limits.people.inbox_entries == 0
         || inbox_bytes > u64::from(limits.journal.transcript_bytes)
         || u64::from(limits.journal.transcript_bytes) < row_bound(limits)?
@@ -5977,9 +5977,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     let cold = limits.fleet.workers;
     let hello = u64::from(limits.fleet.slots)
         .checked_mul(u64::try_from(size_of::<fleet::Hosted>()).ok()?)?
-        .checked_add(u64::from(limits.fleet.workstreams).checked_mul(
-            u64::try_from(size_of::<Box<[u8]>>()).ok()?.checked_add(u64::from(limits.fleet.workstream_bytes))?,
-        )?)?;
+        .checked_add(u64::from(limits.fleet.workstreams).checked_mul(u64::try_from(size_of::<u64>()).ok()?)?)?;
     bytes = bytes
         .checked_add(Queue::<Work>::worst_case(cold)?)?
         .checked_add(Map::<Token, bool>::worst_case(cold)?)?
@@ -6683,11 +6681,6 @@ fn hello_within(hello: &fleet::Hello, limits: &fleet::Limits) -> bool {
         || !stop_before_grace
     {
         return false;
-    }
-    for key in &hello.workstreams {
-        if key.len() > usize::try_from(limits.workstream_bytes).expect("u32 fits usize") {
-            return false;
-        }
     }
     true
 }

@@ -1,5 +1,5 @@
 //! A domain world for the engine's fleet child domain (programming-model.md,
-//! 4.5; testing-strategy.md, 2.2; engine-domain.md, section 8): the fleet,
+//! 4.5; testing-strategy.md, 2.2; domain/engine.md, section 8): the fleet,
 //! with the world as its parent, driven by one loop, deterministically from a
 //! seed.
 //!

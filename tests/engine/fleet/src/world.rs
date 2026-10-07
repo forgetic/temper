@@ -22,7 +22,6 @@ pub const LIMITS: Limits = Limits {
     workers: 4,
     slots: 3,
     workstreams: 3,
-    workstream_bytes: 8,
     attempts: 16,
     calls: 8,
     turns: 0,
@@ -408,7 +407,7 @@ pub(crate) struct Channel {
 #[derive(Debug)]
 pub(crate) struct Worker {
     pub(crate) slots: u32,
-    /// The workstreams its checkouts hold, the latest last.
+    /// The workstreams its workspaces hold, the latest last.
     pub(crate) cache: VecDeque<u64>,
     /// The runs it hosts: live, or winding down.
     pub(crate) runs: BTreeMap<(u64, u64), Hosting>,
@@ -865,7 +864,7 @@ impl World {
         let token = Token::new(channel);
         let event = match up {
             Up::Hello { slots, workstreams, hosting } => {
-                let workstreams = workstreams.into_iter().map(|run| Box::from(key(run))).collect();
+                let workstreams = workstreams.into();
                 let hosting = hosting
                     .into_iter()
                     .map(|(run, attempt, phase)| Hosted { run: Token::new(run), attempt: Token::new(attempt), phase })
@@ -1066,7 +1065,7 @@ impl World {
             reply_to: ReplyTo::new(Token::new(attempt)),
             run: Token::new(run),
             attempt: Token::new(attempt),
-            workstream: Box::from(key(run)),
+            workstream: run,
         });
         let at = self.now.saturating_add(self.settings.timeout);
         self.send(at, Delivery::Timeout { item, attempt });
@@ -1247,11 +1246,6 @@ impl World {
         self.stage.push(Event::Loaded);
         self.loaded = true;
     }
-}
-
-/// A run's workstream key: the run's name, big-endian.
-pub(crate) fn key(run: u64) -> [u8; 8] {
-    run.to_be_bytes()
 }
 
 /// An event, for the trace, without its payload's bytes.

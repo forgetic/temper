@@ -13,7 +13,6 @@ const LIMITS: Limits = Limits {
     workers: 3,
     slots: 2,
     workstreams: 2,
-    workstream_bytes: 8,
     attempts: 6,
     calls: 2,
     turns: 0,
@@ -114,17 +113,17 @@ impl Harness {
 
     /// A worker says hello on `channel`, with `slots`, holding `workstreams`
     /// and hosting `hosting`.
-    fn hello(&mut self, channel: Token, slots: u32, workstreams: &[&[u8]], hosting: &[Hosted]) -> Box<[Request]> {
+    fn hello(&mut self, channel: Token, slots: u32, workstreams: &[u64], hosting: &[Hosted]) -> Box<[Request]> {
         let mut keys = List::with_capacity(u32::try_from(workstreams.len()).unwrap());
         for key in workstreams {
-            keys.push(Box::from(*key)).unwrap();
+            keys.push(*key).unwrap();
         }
         let hello = Hello { graces: None, slots, workstreams: keys.into_boxed(), hosting: Box::from(hosting) };
         self.step(Event::Hello { channel, hello })
     }
 
-    fn start(&mut self, run: Token, attempt: Token, workstream: &[u8]) -> Box<[Request]> {
-        self.step(Event::Start { reply_to: to(attempt), run, attempt, workstream: Box::from(workstream) })
+    fn start(&mut self, run: Token, attempt: Token, workstream: u64) -> Box<[Request]> {
+        self.step(Event::Start { reply_to: to(attempt), run, attempt, workstream })
     }
 
     fn adopt(&mut self, run: Token, attempt: Token) -> Box<[Request]> {
@@ -133,7 +132,7 @@ impl Harness {
 
     /// Starts `run`'s `attempt` and has it placed, on the worker the fleet
     /// chooses; returns that worker's channel.
-    fn place(&mut self, run: Token, attempt: Token, workstream: &[u8]) -> Token {
+    fn place(&mut self, run: Token, attempt: Token, workstream: u64) -> Token {
         assert!(self.start(run, attempt, workstream).is_empty(), "a start waits for placement");
         let placed = self.settle();
         let [Request::Assign { channel, run: assigned, attempt: of }, Request::Placed { run: told, attempt: told_of }] =
@@ -226,7 +225,7 @@ fn drop(raw: u64) -> Request {
 fn a_start_is_placed_on_a_worker_with_a_free_slot() {
     let mut h = Harness::new(LIMITS);
     assert!(h.hello(C1, 2, &[], &[]).is_empty());
-    assert!(h.start(R1, A1, b"w1").is_empty());
+    assert!(h.start(R1, A1, 1).is_empty());
     assert_eq!(&*h.resume(), &[assign(C1, R1, A1), placed(R1, A1)]);
     // Ready until a resume finds nothing more to place.
     assert!(h.resume().is_empty());
@@ -237,35 +236,35 @@ fn a_start_is_placed_on_a_worker_with_a_free_slot() {
 fn placement_prefers_a_worker_holding_the_workstream_then_the_freest() {
     let mut h = Harness::new(LIMITS);
     h.hello(C1, 1, &[], &[]);
-    h.hello(C2, 1, &[b"w1"], &[]);
+    h.hello(C2, 1, &[1], &[]);
     h.hello(C3, 2, &[], &[]);
-    assert_eq!(h.place(R1, A1, b"w1"), C2);
+    assert_eq!(h.place(R1, A1, 1), C2);
     // None holds w2: the one with the most free slots.
-    assert_eq!(h.place(R2, A2, b"w2"), C3);
+    assert_eq!(h.place(R2, A2, 2), C3);
     // C3 holds w2 from now on, and still has a slot.
-    assert_eq!(h.place(R3, A3, b"w2"), C3);
+    assert_eq!(h.place(R3, A3, 2), C3);
 }
 
 #[test]
 fn a_worker_s_workstreams_evict_the_one_used_longest_ago() {
     let mut h = Harness::new(LIMITS);
     // Two keys a worker may hold: w1 and w2, w1 used longest ago.
-    h.hello(C1, 2, &[b"w1", b"w2"], &[]);
+    h.hello(C1, 2, &[1, 2], &[]);
     h.hello(C2, 2, &[], &[]);
     // w3 goes to the freest, C1 (the first of two equal); it evicts w1.
-    assert_eq!(h.place(R1, A1, b"w3"), C1);
+    assert_eq!(h.place(R1, A1, 3), C1);
     // C1 no longer holds w1, so w1 goes to the freest, C2.
-    assert_eq!(h.place(R2, A2, b"w1"), C2);
+    assert_eq!(h.place(R2, A2, 1), C2);
     // C1 holds w2 still.
-    assert_eq!(h.place(R3, A3, b"w2"), C1);
+    assert_eq!(h.place(R3, A3, 2), C1);
 }
 
 #[test]
 fn a_start_waits_for_a_worker_then_for_a_slot() {
     let mut h = Harness::new(LIMITS);
-    assert!(h.start(R1, A1, b"w1").is_empty());
+    assert!(h.start(R1, A1, 1).is_empty());
     assert!(h.settle().is_empty());
-    assert!(h.start(R2, A2, b"w2").is_empty());
+    assert!(h.start(R2, A2, 2).is_empty());
     assert_eq!(&*h.hello(C1, 1, &[], &[]), &[]);
     assert_eq!(&*h.settle(), &[assign(C1, R1, A1), placed(R1, A1)]);
     assert_eq!(h.domain.waiting(), 1);
@@ -327,7 +326,7 @@ fn listings_beyond_the_room_kept_for_them_are_cancelled() {
     // Room for one claim and two workers of one slot.
     let limits = Limits { attempts: 1, workers: 2, slots: 1, ..LIMITS };
     let mut h = Harness::new(limits);
-    h.start(R1, A1, b"w1");
+    h.start(R1, A1, 1);
     h.hello(C1, 1, &[], &[hosted(R2, A2, Phase::Active)]);
     h.hello(C2, 1, &[], &[hosted(R3, A3, Phase::Active)]);
     assert_eq!(h.domain.attempts(), 3);
@@ -343,7 +342,7 @@ fn listings_beyond_the_room_kept_for_them_are_cancelled() {
 fn a_busy_refusal_places_the_attempt_again_elsewhere() {
     let mut h = Harness::new(LIMITS);
     h.hello(C1, 2, &[], &[]);
-    h.place(R1, A1, b"w1");
+    h.place(R1, A1, 1);
     // Nothing for the parent but the payload to forget.
     assert_eq!(&*h.answer(C1, R1, A1, Answer::Busy, 1), &[drop(1)]);
     assert!(h.settle().is_empty());
@@ -356,8 +355,8 @@ fn a_busy_refusal_places_the_attempt_again_elsewhere() {
 fn a_busy_worker_takes_work_again_once_it_frees_a_slot() {
     let mut h = Harness::new(LIMITS);
     h.hello(C1, 2, &[], &[]);
-    h.place(R1, A1, b"w1");
-    h.place(R2, A2, b"w2");
+    h.place(R1, A1, 1);
+    h.place(R2, A2, 2);
     h.answer(C1, R2, A2, Answer::Busy, 1);
     // A2 waits: C1 takes nothing while draining.
     assert!(h.settle().is_empty());
@@ -371,7 +370,7 @@ fn a_busy_worker_takes_work_again_once_it_frees_a_slot() {
 fn a_cancelled_attempt_refused_as_busy_is_withdrawn() {
     let mut h = Harness::new(LIMITS);
     h.hello(C1, 2, &[], &[]);
-    h.place(R1, A1, b"w1");
+    h.place(R1, A1, 1);
     h.step(Event::Cancel { run: R1, attempt: A1 });
     assert_eq!(&*h.answer(C1, R1, A1, Answer::Busy, 1), &[drop(1), withdrawn(R1, A1, Withdrawal::Cancelled)]);
 }
@@ -380,9 +379,9 @@ fn a_cancelled_attempt_refused_as_busy_is_withdrawn() {
 fn an_invalid_refusal_is_handed_on_and_keeps_no_slot() {
     let mut h = Harness::new(LIMITS);
     h.hello(C1, 1, &[], &[]);
-    h.place(R1, A1, b"w1");
+    h.place(R1, A1, 1);
     assert_eq!(&*h.answer(C1, R1, A1, Answer::Invalid, 1), &[answered(A1, R1, Answer::Invalid, 1)]);
-    h.start(R2, A2, b"w2");
+    h.start(R2, A2, 2);
     assert_eq!(&*h.settle(), &[assign(C1, R2, A2), placed(R2, A2)]);
     // The parent's acknowledgement changes nothing.
     assert!(h.acknowledge(R1, A1).is_empty());
@@ -393,11 +392,10 @@ fn starts_are_refused_at_the_entrance() {
     let limits = Limits { attempts: 1, ..LIMITS };
     let mut h = Harness::new(limits);
     let refused = |run, attempt, refusal| Request::Refused { to: to(attempt), run, attempt, refusal };
-    assert_eq!(&*h.start(R1, A1, b""), &[refused(R1, A1, Refusal::Workstream)]);
-    assert_eq!(&*h.start(R1, A1, b"too long a key"), &[refused(R1, A1, Refusal::Workstream)]);
-    assert!(h.start(R1, A1, b"w1").is_empty());
-    assert_eq!(&*h.start(R1, A1, b"w1"), &[refused(R1, A1, Refusal::Duplicate)]);
-    assert_eq!(&*h.start(R2, A2, b"w2"), &[refused(R2, A2, Refusal::Busy)]);
+    assert_eq!(&*h.start(R1, A1, 0), &[refused(R1, A1, Refusal::Workstream)]);
+    assert!(h.start(R1, A1, 1).is_empty());
+    assert_eq!(&*h.start(R1, A1, 1), &[refused(R1, A1, Refusal::Duplicate)]);
+    assert_eq!(&*h.start(R2, A2, 2), &[refused(R2, A2, Refusal::Busy)]);
     assert_eq!(&*h.adopt(R2, A2), &[refused(R2, A2, Refusal::Busy)]);
     assert_eq!(&*h.adopt(R1, A1), &[refused(R1, A1, Refusal::Duplicate)]);
     // A worker's listings take the room kept for them, not the parent's.
@@ -410,7 +408,7 @@ fn starts_are_refused_at_the_entrance() {
 fn an_answer_is_handed_on_once_and_acknowledged_once_the_parent_has_it() {
     let mut h = Harness::new(LIMITS);
     h.hello(C1, 2, &[], &[]);
-    h.place(R1, A1, b"w1");
+    h.place(R1, A1, 1);
     assert_eq!(&*h.answer(C1, R1, A1, Answer::Parked, 1), &[answered(A1, R1, Answer::Parked, 1)]);
     // Sent again after a hello, before the parent has it durably: dropped,
     // not acknowledged.
@@ -425,7 +423,7 @@ fn an_answer_is_handed_on_once_and_acknowledged_once_the_parent_has_it() {
 fn an_answer_from_a_channel_not_in_contact_is_dropped_unacknowledged() {
     let mut h = Harness::new(LIMITS);
     h.hello(C1, 2, &[], &[]);
-    h.place(R1, A1, b"w1");
+    h.place(R1, A1, 1);
     assert_eq!(&*h.answer(C2, R1, A1, Answer::Ended, 1), &[drop(1)]);
     h.step(Event::Lost { channel: C1 });
     assert_eq!(&*h.answer(C1, R1, A1, Answer::Ended, 2), &[drop(2)]);
@@ -438,7 +436,7 @@ fn an_answer_from_a_channel_not_in_contact_is_dropped_unacknowledged() {
 fn an_answer_acknowledged_while_its_worker_is_away_is_acknowledged_once_it_is_back() {
     let mut h = Harness::new(LIMITS);
     h.hello(C1, 2, &[], &[]);
-    h.place(R1, A1, b"w1");
+    h.place(R1, A1, 1);
     h.answer(C1, R1, A1, Answer::Ended, 1);
     h.step(Event::Lost { channel: C1 });
     assert!(h.acknowledge(R1, A1).is_empty());
@@ -452,7 +450,7 @@ fn an_answer_acknowledged_while_its_worker_is_away_is_acknowledged_once_it_is_ba
 fn an_answer_acknowledged_while_its_worker_is_away_is_forgotten_past_the_grace() {
     let mut h = Harness::new(LIMITS);
     h.hello(C1, 2, &[], &[]);
-    h.place(R1, A1, b"w1");
+    h.place(R1, A1, 1);
     h.answer(C1, R1, A1, Answer::Ended, 1);
     h.step(Event::Lost { channel: C1 });
     h.acknowledge(R1, A1);
@@ -464,7 +462,7 @@ fn an_answer_acknowledged_while_its_worker_is_away_is_forgotten_past_the_grace()
 fn a_cancelled_attempt_is_fenced_but_its_answer_ends_its_call() {
     let mut h = Harness::new(LIMITS);
     h.hello(C1, 2, &[], &[]);
-    h.place(R1, A1, b"w1");
+    h.place(R1, A1, 1);
     assert_eq!(&*h.step(Event::Cancel { run: R1, attempt: A1 }), &[cancel(C1, R1, A1)]);
     assert!(h.step(Event::Cancel { run: R1, attempt: A1 }).is_empty());
     let event = payload(5);
@@ -490,7 +488,7 @@ fn a_cancelled_attempt_is_fenced_but_its_answer_ends_its_call() {
 #[test]
 fn a_cancel_before_placement_withdraws_the_attempt() {
     let mut h = Harness::new(LIMITS);
-    h.start(R1, A1, b"w1");
+    h.start(R1, A1, 1);
     assert_eq!(&*h.step(Event::Cancel { run: R1, attempt: A1 }), &[withdrawn(R1, A1, Withdrawal::Cancelled)]);
     // Its run is gone too.
     assert!(h.step(Event::Cancel { run: R1, attempt: A1 }).is_empty());
@@ -503,8 +501,8 @@ fn a_cancel_before_placement_withdraws_the_attempt() {
 fn a_newer_attempt_replaces_the_claim_and_waits_for_it_to_be_gone() {
     let mut h = Harness::new(LIMITS);
     h.hello(C1, 2, &[], &[]);
-    h.place(R1, A1, b"w1");
-    assert_eq!(&*h.start(R1, A2, b"w1"), &[cancel(C1, R1, A1), withdrawn(R1, A1, Withdrawal::Replaced)]);
+    h.place(R1, A1, 1);
+    assert_eq!(&*h.start(R1, A2, 1), &[cancel(C1, R1, A1), withdrawn(R1, A1, Withdrawal::Replaced)]);
     // Never two attempts of a run on the workers: A2 waits for A1.
     assert!(h.settle().is_empty());
     assert_eq!(
@@ -518,8 +516,8 @@ fn a_newer_attempt_replaces_the_claim_and_waits_for_it_to_be_gone() {
 #[test]
 fn a_newer_attempt_replaces_a_waiting_one_at_once() {
     let mut h = Harness::new(LIMITS);
-    h.start(R1, A1, b"w1");
-    assert_eq!(&*h.start(R1, A2, b"w1"), &[withdrawn(R1, A1, Withdrawal::Replaced)]);
+    h.start(R1, A1, 1);
+    assert_eq!(&*h.start(R1, A2, 1), &[withdrawn(R1, A1, Withdrawal::Replaced)]);
     h.hello(C1, 2, &[], &[]);
     assert_eq!(&*h.settle(), &[assign(C1, R1, A2), placed(R1, A2)]);
 }
@@ -527,7 +525,7 @@ fn a_newer_attempt_replaces_a_waiting_one_at_once() {
 #[test]
 fn a_waiting_attempt_a_worker_lists_is_not_assigned_again() {
     let mut h = Harness::new(LIMITS);
-    h.start(R1, A1, b"w1");
+    h.start(R1, A1, 1);
     assert_eq!(&*h.hello(C1, 2, &[], &[hosted(R1, A1, Phase::Active)]), &[placed(R1, A1)]);
     assert!(h.settle().is_empty());
     assert_eq!(&*h.answer(C1, R1, A1, Answer::Ended, 1), &[answered(A1, R1, Answer::Ended, 1)]);
@@ -539,7 +537,7 @@ fn a_waiting_attempt_a_worker_lists_is_not_assigned_again() {
 fn a_relayed_call_goes_up_once_and_its_answer_down_once() {
     let mut h = Harness::new(LIMITS);
     h.hello(C1, 2, &[], &[]);
-    h.place(R1, A1, b"w1");
+    h.place(R1, A1, 1);
     let call = Token::new(7);
     let reply_to = h.relay(R1, A1, call, 1);
     assert_eq!(
@@ -553,7 +551,7 @@ fn a_relayed_call_goes_up_once_and_its_answer_down_once() {
 fn a_relayed_answer_for_an_attempt_gone_is_dropped() {
     let mut h = Harness::new(LIMITS);
     h.hello(C1, 2, &[], &[]);
-    h.place(R1, A1, b"w1");
+    h.place(R1, A1, 1);
     let reply_to = h.relay(R1, A1, Token::new(7), 1);
     h.answer(C1, R1, A1, Answer::Ended, 2);
     assert_eq!(&*h.step(Event::Relayed { to: reply_to, answer: payload(3) }), &[drop(3)]);
@@ -563,7 +561,7 @@ fn a_relayed_answer_for_an_attempt_gone_is_dropped() {
 fn a_relayed_call_beyond_the_room_is_dropped() {
     let mut h = Harness::new(LIMITS);
     h.hello(C1, 2, &[], &[]);
-    h.place(R1, A1, b"w1");
+    h.place(R1, A1, 1);
     for raw in 0..2 {
         let _call: ReplyTo = h.relay(R1, A1, Token::new(raw), raw);
     }
@@ -612,7 +610,7 @@ fn owned_worker_notices(h: &mut Harness, channel: Token) {
 fn worker_inputs_require_the_current_host_but_accepted_calls_survive_its_channel() {
     let mut h = Harness::new(LIMITS);
     h.hello(C1, 2, &[], &[]);
-    assert_eq!(h.place(R1, A1, b"w1"), C1);
+    assert_eq!(h.place(R1, A1, 1), C1);
     h.hello(C2, 2, &[], &[]);
     unowned_worker_inputs(&mut h, C2);
     owned_worker_notices(&mut h, C1);
@@ -638,7 +636,7 @@ fn worker_inputs_require_the_current_host_but_accepted_calls_survive_its_channel
 fn inbound_events_bounces_and_facts_pass_while_the_claim_is_live() {
     let mut h = Harness::new(LIMITS);
     let event = payload(1);
-    h.start(R1, A1, b"w1");
+    h.start(R1, A1, 1);
     assert_eq!(
         &*h.step(Event::Inbound { run: R1, attempt: A1, event }),
         &[Request::Undelivered { run: R1, attempt: A1, event, undelivered: Undelivered::Unplaced }]
@@ -675,8 +673,8 @@ fn a_lost_worker_s_runs_are_kept_for_the_grace_then_presumed_lost() {
     let mut h = Harness::new(LIMITS);
     h.loaded();
     h.hello(C1, 2, &[], &[]);
-    h.place(R1, A1, b"w1");
-    h.place(R2, A2, b"w2");
+    h.place(R1, A1, 1);
+    h.place(R2, A2, 2);
     h.step(Event::Cancel { run: R2, attempt: A2 });
     h.at(5);
     assert!(h.step(Event::Lost { channel: C1 }).is_empty());
@@ -691,8 +689,8 @@ fn a_lost_worker_s_runs_are_kept_for_the_grace_then_presumed_lost() {
 fn a_worker_back_within_the_grace_keeps_what_is_claimed_and_cancels_the_rest() {
     let mut h = Harness::new(LIMITS);
     h.hello(C1, 2, &[], &[]);
-    h.place(R1, A1, b"w1");
-    h.place(R2, A2, b"w2");
+    h.place(R1, A1, 1);
+    h.place(R2, A2, 2);
     h.step(Event::Lost { channel: C1 });
     // Cancelled while adrift: the cancel goes once a hello lists it.
     assert!(h.step(Event::Cancel { run: R2, attempt: A2 }).is_empty());
@@ -711,12 +709,12 @@ fn a_worker_back_within_the_grace_keeps_what_is_claimed_and_cancels_the_rest() {
 fn an_answer_held_while_the_channel_was_down_follows_the_hello() {
     let mut h = Harness::new(LIMITS);
     h.hello(C1, 1, &[], &[]);
-    h.place(R1, A1, b"w1");
+    h.place(R1, A1, 1);
     h.step(Event::Cancel { run: R1, attempt: A1 });
     h.step(Event::Lost { channel: C1 });
     // Answered: no cancel again.
     assert!(h.hello(C2, 1, &[], &[hosted(R1, A1, Phase::Answered)]).is_empty());
-    h.start(R2, A2, b"w2");
+    h.start(R2, A2, 2);
     // Its answer keeps the slot until the parent has it durably.
     assert!(h.settle().is_empty());
     assert_eq!(&*h.answer(C2, R1, A1, Answer::Failed, 1), &[answered(A1, R1, Answer::Failed, 1)]);
@@ -729,12 +727,12 @@ fn an_answer_held_while_the_channel_was_down_follows_the_hello() {
 fn a_handed_answer_listed_again_keeps_its_slot_on_the_new_channel() {
     let mut h = Harness::new(LIMITS);
     h.hello(C1, 1, &[], &[]);
-    h.place(R1, A1, b"w1");
+    h.place(R1, A1, 1);
     h.answer(C1, R1, A1, Answer::Ended, 1);
     h.step(Event::Lost { channel: C1 });
     assert!(h.hello(C2, 1, &[], &[hosted(R1, A1, Phase::Answered)]).is_empty());
     assert_eq!(&*h.answer(C2, R1, A1, Answer::Ended, 2), &[drop(2)]);
-    h.start(R2, A2, b"w2");
+    h.start(R2, A2, 2);
     assert!(h.settle().is_empty());
     assert_eq!(&*h.acknowledge(R1, A1), &[ack(C2, R1, A1)]);
     assert_eq!(&*h.settle(), &[assign(C2, R2, A2), placed(R2, A2)]);
@@ -744,9 +742,9 @@ fn a_handed_answer_listed_again_keeps_its_slot_on_the_new_channel() {
 fn a_fenced_attempt_listed_again_is_cancelled_again() {
     let mut h = Harness::new(LIMITS);
     h.hello(C1, 2, &[], &[]);
-    h.place(R1, A1, b"w1");
+    h.place(R1, A1, 1);
     h.step(Event::Lost { channel: C1 });
-    assert_eq!(&*h.start(R1, A2, b"w1"), &[withdrawn(R1, A1, Withdrawal::Replaced)]);
+    assert_eq!(&*h.start(R1, A2, 1), &[withdrawn(R1, A1, Withdrawal::Replaced)]);
     assert_eq!(&*h.hello(C2, 2, &[], &[hosted(R1, A1, Phase::Active)]), &[cancel(C2, R1, A1)]);
     // A2 waits for A1, wherever it is.
     assert!(h.settle().is_empty());
@@ -758,9 +756,9 @@ fn a_fenced_attempt_listed_again_is_cancelled_again() {
 fn a_fenced_attempt_adrift_holds_its_run_back_until_the_grace_passes() {
     let mut h = Harness::new(LIMITS);
     h.hello(C1, 1, &[], &[]);
-    h.place(R1, A1, b"w1");
+    h.place(R1, A1, 1);
     h.step(Event::Lost { channel: C1 });
-    h.start(R1, A2, b"w1");
+    h.start(R1, A2, 1);
     h.hello(C2, 1, &[], &[]);
     assert!(h.settle().is_empty());
     assert!(h.at(10).is_empty());
@@ -770,7 +768,7 @@ fn a_fenced_attempt_adrift_holds_its_run_back_until_the_grace_passes() {
 #[test]
 fn an_attempt_listed_for_a_run_claimed_otherwise_is_fenced_at_once() {
     let mut h = Harness::new(LIMITS);
-    h.start(R1, A2, b"w1");
+    h.start(R1, A2, 1);
     assert_eq!(&*h.hello(C1, 2, &[], &[hosted(R1, A1, Phase::Active)]), &[cancel(C1, R1, A1)]);
     assert!(h.settle().is_empty());
     assert_eq!(&*h.answer(C1, R1, A1, Answer::Failed, 1), &[ack(C1, R1, A1), drop(1)]);
@@ -850,7 +848,7 @@ fn a_kept_answer_listed_again_keeps_its_slot() {
     assert!(h.hello(C2, 1, &[], &[hosted(R1, A1, Phase::Answered)]).is_empty());
     assert_eq!(&*h.answer(C2, R1, A1, Answer::Ended, 2), &[drop(2)]);
     // The worker keeps the answer, so its one slot is taken.
-    h.start(R2, A2, b"w2");
+    h.start(R2, A2, 2);
     assert!(h.settle().is_empty());
     assert_eq!(&*h.adopt(R1, A1), &[answered(A1, R1, Answer::Ended, 1)]);
     assert_eq!(&*h.acknowledge(R1, A1), &[ack(C2, R1, A1)]);
@@ -878,7 +876,7 @@ fn a_stray_not_adopted_in_time_is_cancelled() {
     assert_eq!(&*h.at(10), &[cancel(C1, R1, A1)]);
     // Adopted too late: lost, as far as the parent can tell.
     assert_eq!(&*h.adopt(R1, A1), &[lost(R1, A1)]);
-    h.start(R1, A2, b"w1");
+    h.start(R1, A2, 1);
     assert!(h.settle().is_empty());
     assert_eq!(&*h.answer(C1, R1, A1, Answer::Failed, 1), &[ack(C1, R1, A1), drop(1)]);
     assert_eq!(&*h.settle(), &[assign(C1, R1, A2), placed(R1, A2)]);
@@ -893,7 +891,7 @@ fn a_stray_whose_channel_is_lost_is_fenced_at_its_deadline_and_gone_past_the_gra
     h.step(Event::Lost { channel: C1 });
     assert!(h.at(10).is_empty());
     assert!(h.facts().contains(&Fact::Fenced));
-    h.start(R1, A2, b"w1");
+    h.start(R1, A2, 1);
     h.hello(C2, 2, &[], &[]);
     assert!(h.settle().is_empty());
     assert!(h.at(14).is_empty());
@@ -913,7 +911,7 @@ fn a_stray_or_a_kept_answer_can_be_cancelled() {
 fn an_adoption_replaces_the_parent_s_own_claim() {
     let mut h = Harness::new(LIMITS);
     h.hello(C1, 2, &[], &[]);
-    h.place(R1, A1, b"w1");
+    h.place(R1, A1, 1);
     assert_eq!(&*h.adopt(R1, A2), &[cancel(C1, R1, A1), withdrawn(R1, A1, Withdrawal::Replaced)]);
     assert_eq!(&*h.at(10), &[lost(R1, A2)]);
 }
@@ -934,7 +932,7 @@ fn facts_beyond_the_room_are_dropped_and_counted() {
     let limits = Limits { facts: 1, ..LIMITS };
     let mut h = Harness::new(limits);
     h.hello(C1, 2, &[], &[]);
-    h.place(R1, A1, b"w1");
+    h.place(R1, A1, 1);
     assert_eq!(h.domain.facts_lost(), 1);
     assert_eq!(&*h.facts(), &[Fact::Hello { listed: 0 }]);
 }
@@ -942,7 +940,7 @@ fn facts_beyond_the_room_are_dropped_and_counted() {
 #[test]
 fn the_worst_case_is_bounded_or_refused() {
     assert!(worst_case(&LIMITS).is_some());
-    let huge = Limits { workers: u32::MAX, slots: u32::MAX, workstream_bytes: u32::MAX, ..LIMITS };
+    let huge = Limits { workers: u32::MAX, slots: u32::MAX, ..LIMITS };
     assert_eq!(worst_case(&huge), None);
     assert_eq!(max_out(&LIMITS), 4);
     assert_eq!(max_out(&Limits { slots: 1, ..LIMITS }), 3);
@@ -952,7 +950,7 @@ fn the_worst_case_is_bounded_or_refused() {
 fn turns() -> Harness {
     let mut h = Harness::new(Limits { turns: 2, ..LIMITS });
     h.hello(C1, 2, &[], &[]);
-    h.place(R1, A1, b"one");
+    h.place(R1, A1, 1);
     h
 }
 

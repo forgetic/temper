@@ -1,9 +1,9 @@
-//! The fleet child domain of the temper engine's domain layer
-//! (programming-model.md, 4.5; engine-domain.md, sections 3 and 8): the
+//! The fleet child domain of the core
+//! (programming-model.md, 4.5; domain/engine.md, sections 3 and 8): the
 //! engine's knowledge of the workers and the runs they host. Workers dial in,
 //! and each says hello first on its channel: its slots, the workstreams it
-//! holds checkouts for, and the runs it hosts with where each is
-//! (worker-domain.md, section 2). The fleet places each run the parent starts
+//! holds workspaces for, and the runs it hosts with where each is
+//! (domain/hosts.md, section 2). The fleet places each run the parent starts
 //! on a worker with a free slot, preferring one that holds its workstream,
 //! and the run waits, bounded, while none has one; never two attempts of a
 //! run's workstream at once. It fences attempts: once an attempt is
@@ -30,7 +30,7 @@
 //! Sans-io: [`step`], [`fire`] and [`resume`] turn events into requests and
 //! change nothing but the [`Domain`] they are given. Every effect is a
 //! [`Request`] that its parent, the engine's root domain
-//! (`temper-legacy-engine-domain`), routes on: to a worker's channel through the
+//! , routes on: to a worker's channel through the
 //! protocol layer, or to the parent's own state. Their outcomes come back
 //! later through the parent as an [`Event`]. The fleet owns its timers: the
 //! grace of a lost channel, and that of an adoption.
@@ -38,8 +38,8 @@
 //! The fleet knows workers, slots, workstreams, runs, attempts and phases,
 //! and how an answer ends; charters, snapshots, outcomes, inbound events,
 //! relayed calls and facts are the parent's, named by tokens the fleet passes
-//! on or hands back. It knows nothing of items, plans or the forge: a run
-//! and an attempt are tokens to it, as the protocol packs them.
+//! on or hands back. It knows only task numbers and workstreams: a run and an attempt are
+//! tokens to it, as the host protocol packs them.
 //!
 //! What happens is also told as content-free [`Fact`]s, kept in a bounded
 //! queue the parent drains ([`Domain::pop_fact`]); what does not fit is dropped

@@ -1,6 +1,6 @@
-//! The scripted workers (worker-domain.md, sections 2 and 4, as the fleet
+//! The scripted workers (domain/hosts.md, sections 2 and 4, as the fleet
 //! meets them): each dials in, says hello with its slots, the workstreams its
-//! checkouts hold, the runs it hosts and the answers it keeps, then sends
+//! workspaces hold, the runs it hosts and the answers it keeps, then sends
 //! those answers again; hosts what it is assigned, refusing as busy beyond its
 //! slots or for a run it hosts another attempt of, and as invalid by chance;
 //! runs each to its planned end, or winds it down once cancelled; relays host
@@ -13,7 +13,7 @@ use temper_engine_domain_fleet::Phase;
 use crate::referee::{Kind, Said, Seen};
 use crate::world::{Back, Channel, Delivery, Hosting, Message, Up, World};
 
-/// The workstreams a worker's checkouts hold at most.
+/// The workstreams a worker's workspaces hold at most.
 const CACHE: usize = 3;
 
 impl World {

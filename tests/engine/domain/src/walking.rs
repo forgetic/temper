@@ -78,7 +78,6 @@ pub fn limits() -> engine::Limits {
         workers: 1,
         slots: 1,
         workstreams: 1,
-        workstream_bytes: 32,
         attempts: 2,
         calls: 1,
         turns: 2,
