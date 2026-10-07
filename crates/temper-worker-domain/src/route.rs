@@ -256,7 +256,8 @@ fn from_host(domain: &mut Domain, env: &Env<Limits>, request: host::Request, out
             workspace::save(domain, env, owner, workspace);
         }
         host::Request::Release { workspace } => workspace::release(domain, env, workspace),
-        host::Request::StartV2 { .. }
+        host::Request::StartTyped { .. }
+        | host::Request::StartV2 { .. }
         | host::Request::Start { .. }
         | host::Request::Deliver { .. }
         | host::Request::Reply { .. }
@@ -268,6 +269,7 @@ fn from_host(domain: &mut Domain, env: &Env<Limits>, request: host::Request, out
 
 fn from_host_agent(domain: &mut Domain, env: &Env<Limits>, request: host::ToAgent) {
     let event = match request {
+        host::ToAgent::StartTyped { .. } => unreachable!("the current agent child uses the earlier wire vocabulary"),
         host::ToAgent::StartV2 { owner, workspace, charter, transcript, grants } => {
             return match workspace {
                 Some(workspace) => workspace::start_v2(domain, env, owner, workspace, charter, transcript, grants),
