@@ -1,10 +1,12 @@
 # One host for jig's runs
 
-Draft, 2026-10-07. A proposal from a design discussion on 2026-10-07:
-jig keeps one state machine for hosting runs, wherever their agents run,
-instead of two. Nothing here is adopted: jig's `hosts.md` describes what
-is designed. Section 6 lists what this would change in jig's documents
-and plan; section 7 lists what is open.
+Draft, 2026-10-07, adopted the same day. A proposal from a design
+discussion on 2026-10-07: jig keeps one state machine for hosting runs,
+wherever their agents run, instead of two. jig's `hosts.md` and the
+documents of section 6 now describe it, with the twin named the inline
+agent, `jig-inline-agent`, and jig's for now (section 7's first
+question). This draft keeps the reasoning; smith's side is smith's draft
+`one-host.md`.
 
 ## 1. In one page
 
