@@ -5,7 +5,7 @@ use crate::boundary::{Hosted, Phase, Request};
 use crate::limits::Limits;
 use skein_lib::bytes::copy_of;
 use skein_lib::{Deadlines, Env, Map, Queue, Time, Token};
-use temper_worker_domain_host as host;
+use crate::wire;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub(crate) struct Name {
@@ -21,11 +21,11 @@ pub(crate) struct TurnName {
 #[derive(Debug)]
 pub(crate) struct Pending {
     agent: Token,
-    turn: host::Turn,
+    turn: wire::Turn,
 }
 #[derive(Debug)]
 pub(crate) struct Answer {
-    answer: host::AnswerV2,
+    answer: wire::AnswerV2,
     acknowledged: bool,
 }
 #[derive(Debug)]
@@ -89,7 +89,7 @@ impl Turns {
         agent: Token,
         run: Token,
         attempt: Token,
-        turn: host::Turn,
+        turn: wire::Turn,
         limits: &Limits,
         up: bool,
         out: &mut Queue<Request>,
@@ -128,13 +128,13 @@ impl Turns {
         &mut self,
         run: Token,
         attempt: Token,
-        answer: host::AnswerV2,
+        answer: wire::AnswerV2,
         up: bool,
         out: &mut Queue<Request>,
     ) {
         let refused = match answer.ending {
-            host::EndingV2::Refused(_) => true,
-            host::EndingV2::Ended { .. } | host::EndingV2::Parked { .. } | host::EndingV2::Failed { .. } => false,
+            wire::EndingV2::Refused(_) => true,
+            wire::EndingV2::Ended { .. } | wire::EndingV2::Parked { .. } | wire::EndingV2::Failed { .. } => false,
         };
         if refused {
             if up {
@@ -207,29 +207,29 @@ impl Turns {
         }
     }
 }
-fn emit(name: TurnName, turn: &host::Turn, out: &mut Queue<Request>) {
+fn emit(name: TurnName, turn: &wire::Turn, out: &mut Queue<Request>) {
     out.push(Request::Turn {
         run: name.run,
         attempt: name.attempt,
-        turn: host::Turn { turn: turn.turn, spent: turn.spent, read: turn.read, body: copy_of(&turn.body) },
+        turn: wire::Turn { turn: turn.turn, spent: turn.spent, read: turn.read, body: copy_of(&turn.body) },
     });
 }
 fn len(bytes: &[u8]) -> u64 {
     u64::try_from(bytes.len()).expect("a length fits in u64")
 }
-fn copy_answer(answer: &host::AnswerV2) -> host::AnswerV2 {
+fn copy_answer(answer: &wire::AnswerV2) -> wire::AnswerV2 {
     let ending = match &answer.ending {
-        host::EndingV2::Refused(refusal) => host::EndingV2::Refused(*refusal),
-        host::EndingV2::Ended { outcome, work } => {
-            host::EndingV2::Ended { outcome: copy_of(outcome), work: copy_work(work) }
+        wire::EndingV2::Refused(refusal) => wire::EndingV2::Refused(*refusal),
+        wire::EndingV2::Ended { outcome, work } => {
+            wire::EndingV2::Ended { outcome: copy_of(outcome), work: copy_work(work) }
         }
-        host::EndingV2::Parked { work } => host::EndingV2::Parked { work: copy_work(work) },
-        host::EndingV2::Failed { failure, detail, work } => {
-            host::EndingV2::Failed { failure: *failure, detail: copy_of(detail), work: copy_work(work) }
+        wire::EndingV2::Parked { work } => wire::EndingV2::Parked { work: copy_work(work) },
+        wire::EndingV2::Failed { failure, detail, work } => {
+            wire::EndingV2::Failed { failure: *failure, detail: copy_of(detail), work: copy_work(work) }
         }
     };
-    host::AnswerV2 { turns: answer.turns, spent: answer.spent, ending }
+    wire::AnswerV2 { turns: answer.turns, spent: answer.spent, ending }
 }
-fn copy_work(work: &host::Work) -> host::Work {
-    host::Work { landed: work.landed.clone(), saved: work.saved.clone() }
+fn copy_work(work: &wire::Work) -> wire::Work {
+    wire::Work { landed: work.landed.clone(), saved: work.saved.clone() }
 }

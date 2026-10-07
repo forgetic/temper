@@ -9,6 +9,7 @@ use skein_lib::{Env, Queue, ReplyTo};
 use temper_worker_domain_agent as agent;
 use temper_worker_domain_checkout as checkout;
 use temper_worker_domain_host as host;
+use crate::wire;
 
 use crate::boundary::{Event, Request};
 use crate::domain::{self, Domain};
@@ -62,6 +63,12 @@ pub(crate) fn event(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &
             }
             let answers = domain.link.held();
             host_step(domain, env, host::Event::Unacknowledged { answers });
+            let wire::AssignmentV2 { assignment, transcript } = assignment;
+            let assignment = match workspace::stage(domain, env, assignment, true) {
+                Ok(assignment) => assignment,
+                Err(refusal) => return domain.link.refuse(run, attempt, refusal, true, out),
+            };
+            let assignment = host::AssignmentV2 { assignment, transcript };
             return host_step(domain, env, host::Event::AssignV2 { reply_to: ReplyTo::new(run), assignment });
         }
         Event::AcknowledgeTurn { run, attempt, turn } => {
@@ -91,7 +98,7 @@ pub(crate) fn event(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &
         }
         Event::Shutdown => {
             domain.link.shut();
-            return host_step(domain, env, host::Event::CancelAll { reason: host::Reason::Shutdown });
+            return host_step(domain, env, host::Event::CancelAll { reason: wire::Reason::Shutdown });
         }
         Event::Assign { assignment } => {
             domain.link.heard();
@@ -105,6 +112,11 @@ pub(crate) fn event(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &
             let answers = domain.link.held();
             host_step(domain, env, host::Event::Unacknowledged { answers });
             let reply_to = ReplyTo::new(assignment.run);
+            let attempt = assignment.attempt;
+            let assignment = match workspace::stage(domain, env, assignment, false) {
+                Ok(assignment) => assignment,
+                Err(refusal) => return domain.link.refuse(reply_to.into_token(), attempt, refusal, false, out),
+            };
             return host_step(domain, env, host::Event::Assign { reply_to, assignment });
         }
         Event::Acknowledged { run, attempt } => {
@@ -193,6 +205,9 @@ fn from_host(domain: &mut Domain, env: &Env<Limits>, request: host::Request, out
     let event = match request {
         host::Request::AnswerV2 { to, run, attempt, answer } => {
             assert!(to.into_token() == run, "an answer is its assignment's");
+            let preparation = workspace::preparation(domain, run);
+            let work = workspace::finish(domain, run);
+            let answer = translate::answer_v2(answer, work, preparation);
             return domain.link.answer_v2(run, attempt, answer, out);
         }
         host::Request::RelayV2 { run, attempt, call, delivery, body } => {
@@ -209,11 +224,14 @@ fn from_host(domain: &mut Domain, env: &Env<Limits>, request: host::Request, out
         host::Request::StartV2 { owner, workspace, charter, transcript, grants } => {
             return workspace::start_v2(domain, env, owner, workspace, charter, transcript, grants);
         }
-        host::Request::PushV2 { owner, workspace, title, body } => {
+        host::Request::DeliverV2 { owner, workspace, title, body } => {
             return workspace::write(domain, env, owner, workspace, Write::PushV2 { title, body });
         }
         host::Request::Answer { to, run, attempt, answer } => {
             assert!(to.into_token() == run, "an answer is its assignment's");
+            let preparation = workspace::preparation(domain, run);
+            let work = workspace::finish(domain, run);
+            let answer = translate::answer(answer, work, preparation);
             return domain.link.answer(run, attempt, answer, out);
         }
         host::Request::Relay { run, attempt, call, body } => {
@@ -236,16 +254,16 @@ fn from_host(domain: &mut Domain, env: &Env<Limits>, request: host::Request, out
         host::Request::Start { owner, workspace, charter, snapshot, grants } => {
             return workspace::start(domain, env, owner, workspace, charter, snapshot, grants);
         }
-        host::Request::Push { owner, workspace, message } => {
+        host::Request::DeliverWorkspace { owner, workspace, message } => {
             return workspace::write(domain, env, owner, workspace, Write::Push { message });
         }
-        host::Request::Save { owner, workspace, branch } => {
-            return workspace::write(domain, env, owner, workspace, Write::Save { branch });
+        host::Request::Save { owner, workspace } => {
+            return workspace::save(domain, env, owner, workspace);
         }
         host::Request::Release { workspace } => return workspace::release(domain, env, workspace),
         host::Request::Deliver { agent, name, event } => agent::Event::Deliver { agent, name, event },
         host::Request::Reply { agent, call, reply } => {
-            agent::Event::Answer { agent, call, reply: translate::reply(reply) }
+            agent::Event::Answer { agent, call, reply: translate::reply(domain, reply) }
         }
         host::Request::Grant { agent, grant } => agent::Event::Grant { agent, grant: channel_grant(grant) },
         host::Request::Stop { agent } => agent::Event::Stop { agent },
@@ -272,7 +290,7 @@ fn from_agent(domain: &mut Domain, env: &Env<Limits>, request: agent::Request, o
     let event = match request {
         agent::Request::Turn { client, turn } => host::Event::Turn {
             owner: client,
-            turn: host::Turn { turn: turn.turn, spent: turn.spent, read: turn.read, body: turn.body },
+            turn: wire::Turn { turn: turn.turn, spent: turn.spent, read: turn.read, body: turn.body },
         },
         agent::Request::FinishedV2 { client, turns, spent, finish } => {
             host::Event::FinishedV2 { owner: client, turns, spent, finish: translate::finish_v2(finish) }
@@ -322,6 +340,6 @@ fn from_agent(domain: &mut Domain, env: &Env<Limits>, request: agent::Request, o
     host_step(domain, env, event);
 }
 
-pub(crate) const fn channel_grant(grant: host::Grant) -> agent::channel::Grant {
+pub(crate) const fn channel_grant(grant: wire::Grant) -> agent::channel::Grant {
     agent::channel::Grant { account: grant.account, generation: grant.generation, valid: grant.valid }
 }

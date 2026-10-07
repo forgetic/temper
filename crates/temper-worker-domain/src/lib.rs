@@ -56,16 +56,19 @@
 extern crate alloc;
 
 mod boundary;
+mod assignment;
 mod domain;
 mod facts;
 mod limits;
 mod link;
+mod push;
 mod route;
 #[cfg(test)]
 mod tests;
 mod translate;
 mod turns;
 mod workspace;
+pub mod wire;
 
 pub use boundary::{Event, Hello, Hosted, Phase, Request, Told};
 pub use domain::{Domain, fire, max_out, resume, step};

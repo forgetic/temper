@@ -5,7 +5,7 @@
 //! - It sends assignments, spaced out: within the limits, beyond them (the
 //!   kind of refusal it expects noted), or naming a run it has in flight
 //!   under a new attempt; also to a worker shutting down, which refuses
-//!   them. Repositories, writability, saving and snapshots are drawn.
+//!   them. Workspace items, saving and snapshots are drawn.
 //! - For each assignment it sends inbound events while the run is in flight,
 //!   each carrying its place in the run's sequence, some too large; may
 //!   cancel it; and may send messages for an attempt it never assigned,
@@ -17,16 +17,16 @@
 //!
 //! It checks as it goes that every assignment is answered exactly once, with
 //! the refusal it expects for one beyond the limits and none other, and that
-//! what an answer says landed or saved names the workspace's repositories.
+//! what an answer says landed or saved names the workspace's items.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use skein_lib::{Duration, ReplyTo, Rng, Token};
 use temper_worker_domain_host::{
-    Access, AgentFailure, Answer, Assignment, Bounce, Event, Failure, Hosting, Invalid, Limits, Preparation, Reason,
-    Refusal, Repository, Request, RunFailure, Start, Workspace,
+    AgentFailure, Answer, Assignment, Bounce, Event, Failure, Hosting, Invalid, Limits, Preparation, Reason,
+    Refusal, Request, RunFailure, Workspace,
 };
-use temper_world::Span;
+use skein_world::domain::Span;
 
 /// How the engine behaves.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -38,10 +38,6 @@ pub struct Script {
     /// that it names a run in flight under a new attempt.
     pub invalid: u32,
     pub repeats: u32,
-    /// The most repositories a workspace lists, and the chance, per mille,
-    /// that each is writable.
-    pub repositories: u32,
-    pub writable: u32,
     /// The chance, per mille, that an assignment saves unfinished work, and
     /// that it has a snapshot.
     pub saves: u32,
@@ -106,7 +102,6 @@ pub struct Tally {
 struct Assigned {
     /// The refusal it expects, for an assignment beyond the limits.
     invalid: Option<Invalid>,
-    repositories: usize,
     /// Its next inbound event's place in the sequence.
     next: u64,
     cancelled: bool,
@@ -193,7 +188,7 @@ impl Engine {
     pub fn take(&mut self, request: Request) -> Vec<Act> {
         match request {
             temper_worker_domain_host::Request::Turn { .. }
-            | temper_worker_domain_host::Request::PushV2 { .. }
+            | temper_worker_domain_host::Request::DeliverV2 { .. }
             | temper_worker_domain_host::Request::RelayV2 { .. }
             | temper_worker_domain_host::Request::AnswerV2 { .. }
             | temper_worker_domain_host::Request::StartV2 { .. } => unreachable!("this script runs version one"),
@@ -220,7 +215,7 @@ impl Engine {
             | Request::Deliver { .. }
             | Request::Reply { .. }
             | Request::Stop { .. }
-            | Request::Push { .. }
+            | Request::DeliverWorkspace { .. }
             | Request::Save { .. }
             | Request::Release { .. }
             | Request::Grant { .. } => unreachable!("for the top level or the parent"),
@@ -259,8 +254,7 @@ impl Engine {
         };
         let attempt = self.name();
         let (assignment, invalid) = self.draw(run, attempt);
-        let repositories = assignment.workspace.repositories.len();
-        let assigned = Assigned { invalid, repositories, next: 0, cancelled: false };
+        let assigned = Assigned { invalid, next: 0, cancelled: false };
         assert!(self.open.insert((run, attempt), assigned).is_none(), "an attempt is assigned once");
         acts.push(Self::host(Event::Assign { reply_to: ReplyTo::new(run), assignment }, false));
         // What it sends the run while it is in flight.
@@ -284,82 +278,32 @@ impl Engine {
     /// An assignment for `run`'s attempt `attempt`, and the refusal it
     /// expects if it is beyond the limits.
     fn draw(&mut self, run: Token, attempt: Token) -> (Assignment, Option<Invalid>) {
-        let count = self.rng.between(1, u64::from(self.script.repositories.max(1)));
-        let mut repositories = Vec::new();
-        for index in 0..count {
-            repositories.push(self.repository(index));
-        }
         let charter = bytes(self.rng.between(1, self.limits.charter_bytes));
         let snapshot = if self.rng.chance(self.script.snapshots) {
             Some(bytes(self.rng.between(1, self.limits.snapshot_bytes)))
         } else {
             None
         };
-        let save = if self.rng.chance(self.script.saves) { Some(Box::from(&b"saved/work"[..])) } else { None };
         let mut assignment = Assignment {
             grants: Box::new([]),
             run,
             attempt,
-            workspace: Workspace { key: Box::from(&b"issue-1"[..]), repositories: repositories.into_boxed_slice() },
-            save,
+            workspace: Workspace { workstream: run.raw(), items: Token::new(run.raw().saturating_add(1000)) },
+            save: self.rng.chance(self.script.saves),
             charter,
             snapshot,
         };
         if !self.rng.chance(self.script.invalid) {
             return (assignment, None);
         }
-        let invalid = match self.rng.below(5) {
-            0 => {
-                assignment.charter = bytes(self.limits.charter_bytes + 1);
-                Invalid::Charter
-            }
-            1 => {
-                assignment.snapshot = Some(bytes(self.limits.snapshot_bytes + 1));
-                Invalid::Snapshot
-            }
-            2 => {
-                let mut repositories = Vec::new();
-                for index in 0..=u64::from(self.limits.repositories) {
-                    repositories.push(self.repository(index));
-                }
-                assignment.workspace.repositories = repositories.into_boxed_slice();
-                Invalid::Repositories
-            }
-            3 => {
-                assignment.workspace.repositories = vec![self.repository(0), self.repository(0)].into_boxed_slice();
-                Invalid::Duplicate
-            }
-            _ => {
-                assignment.workspace.key = Box::from(&b""[..]);
-                Invalid::Name
-            }
+        let invalid = if self.rng.chance(500) {
+            assignment.charter = bytes(self.limits.charter_bytes.saturating_add(1));
+            Invalid::Charter
+        } else {
+            assignment.snapshot = Some(bytes(self.limits.snapshot_bytes.saturating_add(1)));
+            Invalid::Snapshot
         };
         (assignment, Some(invalid))
-    }
-
-    fn repository(&mut self, index: u64) -> Repository {
-        let name = format!("repo-{index}").into_bytes().into_boxed_slice();
-        let branch = Box::from(&b"main"[..]);
-        let start = match self.rng.below(4) {
-            0 => Start::Base { branch },
-            1 => Start::Branch { branch },
-            2 => Start::Commit { commit: [0x5e; 32] },
-            _ => Start::Saved { branch: Box::from(&b"saved/work"[..]) },
-        };
-        let access = if self.rng.chance(self.script.writable) {
-            Access::Writable { push: Box::from(&b"temper/fix"[..]) }
-        } else {
-            Access::ReadOnly
-        };
-        let remote = format!("org/repo-{index}").into_bytes().into_boxed_slice();
-        Repository {
-            tag: u32::try_from(index).expect("a repository index fits"),
-            name,
-            remote,
-            start,
-            access,
-            identity: 0,
-        }
     }
 
     fn inbound(&mut self, run: Token, attempt: Token) -> Vec<Act> {
@@ -428,22 +372,11 @@ impl Engine {
             Answer::Ended { work, .. } | Answer::Parked { work, .. } | Answer::Failed { work, .. } => Some(work),
         };
         if let Some(work) = work {
-            let mut last = None;
-            for landed in &work.landed {
-                let place = usize::try_from(landed.tag).expect("fits");
-                assert!(place < assigned.repositories, "a landing names a repository of the workspace");
-                assert!(last < Some(landed.tag), "landings are ascending");
-                last = Some(landed.tag);
+            if let Some(left) = work.left {
+                assert!(left.raw() > 0, "the workspace names what it left");
             }
-            if let Some(saved) = &work.saved {
-                assert_eq!(saved.len(), assigned.repositories, "a save says what became of each repository");
-            }
-            let ended = match answer {
-                Answer::Ended { .. } => true,
-                Answer::Refused(_) | Answer::Parked { .. } | Answer::Failed { .. } => false,
-            };
-            if ended && !work.landed.is_empty() {
-                assert!(work.saved.is_none(), "a run that ended with a landed change has nothing to save");
+            if let Some(saved) = work.saved {
+                assert!(saved.raw() > 0, "the workspace names what it saved");
             }
         }
         *self.endings.entry(ending(answer)).or_default() += 1;
@@ -476,8 +409,7 @@ pub fn ending(answer: &Answer) -> &'static str {
 pub fn failure_kind(failure: Failure) -> &'static str {
     match failure {
         Failure::Unprepared(Preparation::Transient) => "failed: unprepared, transient",
-        Failure::Unprepared(Preparation::Missing { .. }) => "failed: unprepared, missing",
-        Failure::Unprepared(Preparation::Refused { .. }) => "failed: unprepared, refused",
+        Failure::Unprepared(Preparation::Permanent { .. }) => "failed: unprepared, permanent",
         Failure::Run(RunFailure::Model) => "failed: run, model",
         Failure::Run(RunFailure::Budget) => "failed: run, budget",
         Failure::Run(RunFailure::Policy) => "failed: run, policy",

@@ -26,7 +26,7 @@ use crate::facts::Fact;
 use crate::limits::{self, Limits};
 use crate::link::{Fired, Link};
 use crate::route;
-use crate::workspace::Workspace;
+use crate::workspace::{Items, Workspace};
 
 /// The most requests an entry point emits per call under `limits`: what the
 /// child domains emit in the most steps it takes of each (see the module), as
@@ -56,6 +56,9 @@ pub struct Domain {
     /// The workspaces the host asked for, until the checkout has released
     /// them.
     pub(crate) workspaces: Slab<Workspace>,
+    /// Application workspace items retained while the host owns each run.
+    pub(crate) items: Slab<Items>,
+    pub(crate) items_by_run: Map<Token, Id<Items>>,
     /// Workspaces being prepared, by the host's token for their run.
     pub(crate) preparing: Map<Token, Id<Workspace>>,
     /// What each child domain emits in a step, until it is routed. Empty
@@ -84,6 +87,8 @@ impl Domain {
             agent: agent::Domain::new(&limits.agent),
             link: Link::new(limits, seed),
             workspaces: Slab::with_capacity(slots),
+            items: Slab::with_capacity(slots.saturating_add(1)),
+            items_by_run: Map::with_capacity(slots.saturating_add(1)),
             preparing: Map::with_capacity(slots),
             host_out: Queue::with_capacity(limits::host_out(limits)),
             checkout_out: Queue::with_capacity(limits::checkout_out(limits)),
@@ -228,6 +233,7 @@ impl Domain {
         self.checkout.reclaim();
         self.agent.reclaim();
         self.workspaces.reclaim();
+        self.items.reclaim();
     }
 }
 

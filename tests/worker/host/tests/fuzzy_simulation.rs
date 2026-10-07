@@ -47,8 +47,8 @@ fn random_worlds_settle_and_reach_every_ending() {
             ("cancels of every run", stats.cancel_alls),
             ("runs forgotten on reconnecting", stats.engine.forgotten),
             ("requests to agents gone", stats.parent.dropped),
-            ("saves with a branch moved", stats.parent.saves_moved),
-            ("saves with a push failed", stats.parent.saves_failed),
+            ("saves with a workspace changed", stats.parent.saves_stale),
+            ("saves with a delivery failed", stats.parent.saves_failed),
             ("prepares aborted", stats.parent.aborts),
         ];
         for (path, count) in paths {
@@ -66,7 +66,7 @@ fn random_worlds_settle_and_reach_every_ending() {
         "duplicate assignments",
         "oversized snapshots",
         "endings said during a stop",
-        "pushes settled during a stop",
+        "deliveries settled during a stop",
         "cancels as a workspace was prepared",
         "cancels as a workspace failed to prepare",
         "cancels as an agent failed to start",

@@ -5,12 +5,13 @@ use skein_lib::{Deadlines, Duration, Id, Map, Queue, Slab, Token};
 use temper_worker_domain_agent as agent;
 use temper_worker_domain_checkout as checkout;
 use temper_worker_domain_host as host;
+use crate::wire;
 
 use crate::boundary::Told;
 use crate::facts::Fact;
 use crate::link::{ALARMS, Alarm, Bounced, Named, Relay};
 use crate::translate::SAVED;
-use crate::workspace::Workspace;
+use crate::workspace::{Items, Workspace};
 
 /// The worker domain's limits (section 7), handed to every step read-only: its
 /// child domains', each handed down to the one it bounds, and the engine
@@ -72,10 +73,8 @@ pub struct Limits {
 #[must_use]
 pub fn worst_case(limits: &Limits) -> Option<u64> {
     let Limits { host: host_limits, checkout: checkout_limits, agent: agent_limits, .. } = limits;
-    let next_fits = checkout_limits.conflicts <= host_limits.conflicts
-        && checkout_limits.path_bytes <= host_limits.path_bytes
-        && host_limits.conflicts <= agent_limits.conflicts
-        && host_limits.path_bytes <= agent_limits.path_bytes
+    let next_fits = checkout_limits.conflicts <= agent_limits.conflicts
+        && checkout_limits.path_bytes <= agent_limits.path_bytes
         && host_limits.transcript_bytes <= agent_limits.transcript_bytes
         && host_limits.turn_bytes <= agent_limits.turn_bytes
         && (limits.turns == 0
@@ -83,11 +82,9 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
                 && host_limits.turn_bytes <= limits.turn_queue_bytes
                 && limits.turn_backoff > Duration::ZERO));
     let fits = next_fits
-        && host_limits.repositories <= checkout_limits.repositories
-        && host_limits.repositories <= agent_limits.repositories
-        && host_limits.name_bytes <= agent_limits.name_bytes
+        && checkout_limits.repositories <= agent_limits.repositories
+        && checkout_limits.name_bytes <= agent_limits.name_bytes
         && host_limits.accounts <= agent_limits.accounts
-        && host_limits.name_bytes <= checkout_limits.name_bytes
         && host_limits.slots <= checkout_limits.workspaces
         && host_limits.slots <= agent_limits.agents
         && host_limits.charter_bytes <= agent_limits.charter_bytes
@@ -125,12 +122,12 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .outcome_bytes
         .max(host_limits.snapshot_bytes)
         .max(u64::from(host_limits.detail_bytes))
-        .checked_add(u64::from(host_limits.repositories).checked_mul(work()?.checked_add(
-            u64::from(host_limits.conflicts).checked_mul(
-                u64::try_from(size_of::<Box<[u8]>>()).ok()?.checked_add(u64::from(host_limits.path_bytes))?,
+        .checked_add(u64::from(checkout_limits.repositories).checked_mul(work()?.checked_add(
+            u64::from(checkout_limits.conflicts).checked_mul(
+                u64::try_from(size_of::<Box<[u8]>>()).ok()?.checked_add(u64::from(checkout_limits.path_bytes))?,
             )?,
         )?)?)?;
-    let answers = Map::<Named, host::Answer>::worst_case(slots)?.checked_add(u64::from(slots).checked_mul(answer)?)?;
+    let answers = Map::<Named, wire::Answer>::worst_case(slots)?.checked_add(u64::from(slots).checked_mul(answer)?)?;
     let next_answers = Map::<crate::turns::Name, crate::turns::Answer>::worst_case(slots)?
         .checked_add(u64::from(slots).checked_mul(answer)?)?;
     let relays = Queue::<Relay>::worst_case(limits.stalled)?
@@ -165,11 +162,11 @@ fn workspace_memory(limits: &Limits) -> Option<u64> {
         .checked_add(Map::<Token, Id<Workspace>>::worst_case(slots)?)?
         .checked_add(
             u64::from(slots).checked_mul(
-                u64::from(host_limits.repositories).checked_mul(
+                u64::from(checkout_limits.repositories).checked_mul(
                     u64::try_from(size_of::<agent::channel::Repository>())
                         .ok()?
                         .checked_add(4)?
-                        .checked_add(u64::from(host_limits.name_bytes))?
+                        .checked_add(u64::from(checkout_limits.name_bytes))?
                         .checked_add(u64::try_from(size_of::<checkout::Conflicts>()).ok()?)?
                         .checked_add(
                             u64::from(checkout_limits.conflicts).checked_mul(
@@ -181,13 +178,29 @@ fn workspace_memory(limits: &Limits) -> Option<u64> {
                 )?,
             )?,
         )?;
-    Some(workspaces)
+    let staged = slots.checked_add(1)?;
+    let bytes = u64::from(checkout_limits.name_bytes);
+    let item = u64::try_from(size_of::<wire::Repository>()).ok()?.checked_add(bytes.checked_mul(4)?)?;
+    let feedback = u64::try_from(size_of::<wire::Landing>()).ok()?.checked_add(
+        u64::from(checkout_limits.conflicts).checked_mul(
+            u64::try_from(size_of::<Box<[u8]>>()).ok()?.checked_add(u64::from(checkout_limits.path_bytes))?,
+        )?,
+    )?;
+    let per = u64::from(checkout_limits.repositories)
+        .checked_mul(item.checked_add(feedback)?.checked_add(4)?)?
+        .checked_add(Map::<u32, [u8; 32]>::worst_case(checkout_limits.repositories)?)?
+        .checked_add(bytes.checked_mul(2)?)?
+        .checked_add(feedback)?;
+    let items = Slab::<Items>::worst_case(staged)?
+        .checked_add(Map::<Token, Id<Items>>::worst_case(staged)?)?
+        .checked_add(u64::from(staged).checked_mul(per)?)?;
+    workspaces.checked_add(items)
 }
 
 /// What an answer's work holds for each repository: its place among those
 /// landed in, with the last commit landed there, and its landing in the save.
 fn work() -> Option<u64> {
-    u64::try_from(size_of::<host::Landed>().checked_add(size_of::<host::Landing>())?).ok()
+    u64::try_from(size_of::<wire::Landed>().checked_add(size_of::<wire::Landing>())?).ok()
 }
 
 fn len(bytes: &[u8]) -> u64 {

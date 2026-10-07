@@ -4,7 +4,7 @@ use skein_lib::{Duration, ReplyTo, Rng, Time, Token};
 use temper_worker_domain_host::{
     self as host, AgentFailure, Event, Fact, Failure, Finish, Limits, Reason, Reply, Request, RunFailure,
 };
-use temper_world::{Ledger, Schedule, Span, Stage, Trace};
+use skein_world::domain::{Ledger, Schedule, Span, Stage, Trace};
 
 use crate::engine::{self, Act, Engine, Plan};
 use crate::parent::{self, Out, Parent};
@@ -58,14 +58,10 @@ impl Settings {
             host: Limits {
                 accounts: 4,
                 slots: 4,
-                repositories: 3,
-                name_bytes: 64,
                 charter_bytes: 4096,
                 snapshot_bytes: 1024,
                 transcript_bytes: 0,
                 turn_bytes: 0,
-                conflicts: 0,
-                path_bytes: 0,
                 outcome_bytes: 512,
                 detail_bytes: 64,
                 held: 2,
@@ -78,8 +74,6 @@ impl Settings {
                 spacing: Span::millis(1_000, 20_000),
                 invalid: 0,
                 repeats: 0,
-                repositories: 3,
-                writable: 500,
                 saves: 500,
                 snapshots: 200,
                 events: 3,
@@ -100,7 +94,7 @@ impl Settings {
                 steps: 6,
                 step: Span::millis(100, 5_000),
                 relays: 300,
-                pushes: 200,
+                deliveries: 200,
                 yields: 200,
                 idle: Span::millis(5_000, 60_000),
                 fates: parent::Fates {
@@ -119,7 +113,7 @@ impl Settings {
                 watchdog: Span::millis(10_000, 60_000),
                 late: 0,
                 words: 0,
-                push: Span::millis(100, 3_000),
+                delivery: Span::millis(100, 3_000),
                 changes: 600,
                 moved: 0,
                 failed: 0,
@@ -156,7 +150,7 @@ impl Settings {
                 permanent: 60,
                 unstarted: 60,
                 relays: 350,
-                pushes: 250,
+                deliveries: 250,
                 fates: parent::Fates {
                     ended: 4,
                     parked: 3,
@@ -261,9 +255,9 @@ enum Taken {
     Finished { owner: Token, word: Word },
     Shutdown,
     Started { owner: Token, agent: Token },
-    Called { owner: Token, call: Token, push: bool },
+    Called { owner: Token, call: Token, delivery: bool },
     Gone { owner: Token },
-    Pushed { call: Token },
+    Delivered { call: Token },
     Saved { owner: Token },
     Other,
 }
@@ -273,7 +267,7 @@ enum Taken {
 struct Open {
     agent: Token,
     call: Token,
-    push: bool,
+    delivery: bool,
 }
 
 /// A hosted run as the world sees it.
@@ -479,7 +473,7 @@ impl World {
                 Taken::Started { .. }
                 | Taken::Called { .. }
                 | Taken::Gone { .. }
-                | Taken::Pushed { .. }
+                | Taken::Delivered { .. }
                 | Taken::Saved { .. }
                 | Taken::Prepared { .. }
                 | Taken::Finished { .. }
@@ -537,8 +531,8 @@ impl World {
                     grants: Box::new([]),
                     run,
                     attempt,
-                    workspace: host::Workspace { key: Box::from(&b"again"[..]), repositories: Box::new([]) },
-                    save: None,
+                    workspace: host::Workspace { workstream: run.raw(), items: Token::new(0) },
+                    save: false,
                     charter: Box::from(&b"again"[..]),
                     snapshot: None,
                 };
@@ -575,17 +569,17 @@ impl World {
             }
             Event::Started { owner, agent } => Taken::Started { owner: *owner, agent: *agent },
             Event::Called { owner, call, ask } => {
-                let push = match ask {
-                    temper_worker_domain_host::Ask::PushV2 { .. } => unreachable!("this script runs version one"),
+                let delivery = match ask {
+                    temper_worker_domain_host::Ask::DeliverV2 { .. } => unreachable!("this script runs version one"),
 
-                    host::Ask::Push { .. } => true,
+                    host::Ask::Deliver { .. } => true,
                     host::Ask::Relay { .. } => false,
                 };
-                Taken::Called { owner: *owner, call: *call, push }
+                Taken::Called { owner: *owner, call: *call, delivery }
             }
             Event::Gone { owner, detail: _ } => Taken::Gone { owner: *owner },
-            Event::Pushed { owner, push: _ } => Taken::Pushed { call: *owner },
-            Event::Saved { owner, save: _ } => Taken::Saved { owner: *owner },
+            Event::Delivered { owner, delivery: _ } => Taken::Delivered { call: *owner },
+            Event::Saved { owner, at: _ } => Taken::Saved { owner: *owner },
             Event::Prepared { owner, workspace: _ } => Taken::Prepared { owner: *owner, prepared: true },
             Event::Unprepared { owner, .. } => Taken::Prepared { owner: *owner, prepared: false },
             Event::Finished { owner, finish } => {
@@ -626,14 +620,14 @@ impl World {
         }
     }
 
-    /// The agent `agent`'s run leaves live: its push in flight, if it has
+    /// The agent `agent`'s run leaves live: its delivery in flight, if it has
     /// one, is kept through the stop.
     fn leave(&mut self, agent: Token) {
         if !self.left.insert(agent) {
             return;
         }
         for open in self.calls.values() {
-            if open.agent == agent && open.push {
+            if open.agent == agent && open.delivery {
                 self.kept.insert((open.agent, open.call));
             }
         }
@@ -647,10 +641,10 @@ impl World {
                 self.hosted.get_mut(&owner).expect("a start is of a hosted run").agent = Some(agent);
                 self.agents.insert(agent, owner);
             }
-            Taken::Called { owner, call, push } => {
+            Taken::Called { owner, call, delivery } => {
                 let agent = self.hosted.get(&owner).expect("a call is of a hosted run").agent;
                 let agent = agent.expect("a call is made by a started agent");
-                self.calls.open((agent, call), Open { agent, call, push });
+                self.calls.open((agent, call), Open { agent, call, delivery });
             }
             // Its run leaves live, if it was: what it had in flight is
             // answered now.
@@ -663,7 +657,7 @@ impl World {
                 }
                 return agent;
             }
-            Taken::Pushed { call } => self.parent.pushed(call),
+            Taken::Delivered { call } => self.parent.delivered(call),
             Taken::Saved { owner } => self.parent.saved(owner),
             Taken::Prepared { owner, prepared } => {
                 self.hosted.get_mut(&owner).expect("a prepare is of a hosted run").prepared = Some(prepared);
@@ -692,7 +686,7 @@ impl World {
     fn assigned(&mut self, run: Token, attempt: Token, request: &Request) {
         match request {
             temper_worker_domain_host::Request::Turn { .. }
-            | temper_worker_domain_host::Request::PushV2 { .. }
+            | temper_worker_domain_host::Request::DeliverV2 { .. }
             | temper_worker_domain_host::Request::RelayV2 { .. }
             | temper_worker_domain_host::Request::AnswerV2 { .. }
             | temper_worker_domain_host::Request::StartV2 { .. } => unreachable!("this script runs version one"),
@@ -728,7 +722,7 @@ impl World {
             | Request::Deliver { .. }
             | Request::Reply { .. }
             | Request::Stop { .. }
-            | Request::Push { .. }
+            | Request::DeliverWorkspace { .. }
             | Request::Save { .. }
             | Request::Release { .. } => panic!("an assignment is refused or prepared: {request:?}"),
         }
@@ -739,7 +733,7 @@ impl World {
         self.trace.log(self.now, format!("host -> {request:?}"));
         match request {
             temper_worker_domain_host::Request::Turn { .. }
-            | temper_worker_domain_host::Request::PushV2 { .. }
+            | temper_worker_domain_host::Request::DeliverV2 { .. }
             | temper_worker_domain_host::Request::RelayV2 { .. }
             | temper_worker_domain_host::Request::AnswerV2 { .. }
             | temper_worker_domain_host::Request::StartV2 { .. } => unreachable!("this script runs version one"),
@@ -793,11 +787,11 @@ impl World {
             Request::Reply { agent, call, reply } => {
                 self.calls.end((agent, call));
                 if self.kept.remove(&(agent, call)) {
-                    self.path("pushes settled during a stop");
+                    self.path("deliveries settled during a stop");
                     match reply {
-                        Reply::Pushed(_) => {}
+                        Reply::Delivered(_) => {}
                         Reply::Relayed { .. } | Reply::Unavailable | Reply::Busy | Reply::Withdrawn => {
-                            panic!("a push kept through the stop says how it went: {reply:?}")
+                            panic!("a delivery kept through the stop says how it went: {reply:?}")
                         }
                     }
                 } else if self.left.contains(&agent) {
@@ -806,7 +800,7 @@ impl World {
                 match reply {
                     Reply::Unavailable => self.stats.unavailable += 1,
                     Reply::Busy => self.stats.busy += 1,
-                    Reply::Relayed { .. } | Reply::Pushed(_) | Reply::Withdrawn => {}
+                    Reply::Relayed { .. } | Reply::Delivered(_) | Reply::Withdrawn => {}
                 }
                 self.parcel(Request::Reply { agent, call, reply });
             }
@@ -827,7 +821,7 @@ impl World {
                 self.hosted.get_mut(&owner).expect("a start is of a hosted run").launch = Launch::Asked;
                 self.parcel(request);
             }
-            Request::Push { .. } | Request::Save { .. } | Request::Release { .. } | Request::Grant { .. } => {
+            Request::DeliverWorkspace { .. } | Request::Save { .. } | Request::Release { .. } | Request::Grant { .. } => {
                 self.parcel(request);
             }
         }

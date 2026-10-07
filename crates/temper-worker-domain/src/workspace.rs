@@ -45,20 +45,110 @@ use alloc::boxed::Box;
 use core::mem;
 
 use skein_lib::bytes::copy_of;
-use skein_lib::{Env, Id, List, Token};
+use skein_lib::{Env, Id, List, Map, Token};
 use temper_worker_domain_agent as agent;
 use temper_worker_domain_checkout as checkout;
 use temper_worker_domain_host as host;
+use crate::wire;
 
 use crate::domain::Domain;
 use crate::limits::Limits;
 use crate::route;
 use crate::translate;
 
+/// Application items and outcomes named by a token across the host boundary.
+#[derive(Debug)]
+pub(crate) struct Items {
+    spec: Option<wire::Workspace>,
+    save: Option<Box<[u8]>>,
+    tags: Box<[u32]>,
+    landed: Map<u32, [u8; 32]>,
+    saved: Option<Box<[wire::Landing]>>,
+    last: Option<wire::Push>,
+    preparation: Option<wire::Preparation>,
+}
+
+/// Translate an engine assignment, retaining its workspace items at the root.
+pub(crate) fn stage(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    assignment: wire::Assignment,
+    next: bool,
+) -> Result<host::Assignment, wire::Refusal> {
+    crate::assignment::check(&assignment, &env.limits, next).map_err(wire::Refusal::Invalid)?;
+    let wire::Assignment { run, attempt, workspace, save, charter, snapshot, grants } = assignment;
+    let mut merging = false;
+    for repository in &workspace.repositories {
+        match repository.start {
+            wire::Start::Merge { .. } => merging = true,
+            wire::Start::Base { .. }
+            | wire::Start::Branch { .. }
+            | wire::Start::Commit { .. }
+            | wire::Start::Saved { .. } => {}
+        }
+    }
+    let save = if next && merging { None } else { save };
+    let mut tags = List::with_capacity(u32::try_from(workspace.repositories.len()).expect("checked item count"));
+    for repository in &workspace.repositories {
+        tags.push(repository.tag).expect("room for each item tag");
+    }
+    let count = u32::try_from(workspace.repositories.len()).expect("checked item count");
+    let entry = Items {
+        spec: Some(workspace),
+        save,
+        tags: tags.into_boxed(),
+        landed: Map::with_capacity(count),
+        saved: None,
+        last: None,
+        preparation: None,
+    };
+    let Ok(id) = domain.items.insert(entry) else {
+        return Err(wire::Refusal::Busy);
+    };
+    let old = domain.items_by_run.insert(run, id).expect("room for each staged run");
+    assert!(old.is_none(), "the link and host fenced an existing run");
+    Ok(host::Assignment {
+        run,
+        attempt,
+        workspace: host::Workspace { workstream: run.raw(), items: id.token() },
+        save: domain.items.get(id).expect("inserted above").save.is_some(),
+        charter,
+        snapshot,
+        grants,
+    })
+}
+
+/// Finish the application's side of a hosted assignment.
+pub(crate) fn finish(domain: &mut Domain, run: Token) -> wire::Work {
+    let id = domain.items_by_run.remove(&run).expect("one staged assignment for each answer");
+    let entry = domain.items.get_mut(id).expect("staged items live through the answer");
+    let mut landed = List::with_capacity(entry.landed.len());
+    for (tag, commit) in &entry.landed {
+        landed.push(wire::Landed { tag: *tag, commit: *commit }).expect("room for each landed item");
+    }
+    let saved = entry.saved.take();
+    domain.items.retire(id);
+    wire::Work { landed: landed.into_boxed(), saved }
+}
+
+/// The detailed result the application's workspace supplied for a delivery.
+pub(crate) fn delivery_reply(domain: &Domain, left: Token) -> wire::Push {
+    let id = Id::<Items>::from_token(left);
+    let entry = domain.items.get(id).expect("a delivery belongs to live staged items");
+    entry.last.clone().expect("a delivery has a recorded result")
+}
+
+/// The application's detailed preparation failure, if there was one.
+pub(crate) fn preparation(domain: &Domain, run: Token) -> Option<wire::Preparation> {
+    let id = *domain.items_by_run.get(&run).expect("one staged assignment for each answer");
+    domain.items.get(id).expect("staged items live through the answer").preparation
+}
+
 #[derive(Debug)]
 pub(crate) struct Workspace {
     /// The hosted run it is for: the host's token for the run.
     run: Token,
+    items: Id<Items>,
     repositories: u32,
     roots: Box<[agent::channel::Repository]>,
     identities: Box<[u32]>,
@@ -98,13 +188,15 @@ impl Then {
 
 /// The host asks for `workspace` to be prepared for its run `owner`.
 pub(crate) fn prepare(domain: &mut Domain, env: &Env<Limits>, owner: Token, workspace: host::Workspace) {
-    let repositories = u32::try_from(workspace.repositories.len()).expect("the host checked the repositories");
+    let items = Id::<Items>::from_token(workspace.items);
+    let spec = domain.items.get_mut(items).expect("the root staged the workspace items").spec.take().expect("prepared once");
+    let repositories = u32::try_from(spec.repositories.len()).expect("the root checked the repositories");
     let mut roots = List::with_capacity(repositories);
     let mut identities = List::with_capacity(repositories);
-    for repository in &workspace.repositories {
+    for repository in &spec.repositories {
         let writable = match repository.access {
-            host::Access::ReadOnly => false,
-            host::Access::Writable { .. } | host::Access::WritableV2 { .. } => true,
+            wire::Access::ReadOnly => false,
+            wire::Access::Writable { .. } | wire::Access::WritableV2 { .. } => true,
         };
         identities.push(repository.identity).expect("room for every repository identity");
         roots
@@ -114,6 +206,7 @@ pub(crate) fn prepare(domain: &mut Domain, env: &Env<Limits>, owner: Token, work
     let preparing = State::Preparing { hold: None, abandoned: false };
     let record = Workspace {
         run: owner,
+        items,
         repositories,
         roots: roots.into_boxed(),
         identities: identities.into_boxed(),
@@ -123,7 +216,7 @@ pub(crate) fn prepare(domain: &mut Domain, env: &Env<Limits>, owner: Token, work
     let id = domain.workspaces.insert(record).expect("a workspace for every slot");
     let fresh = domain.preparing.insert(owner, id).expect("a prepare for every slot");
     assert!(fresh.is_none(), "a run's workspace is prepared once");
-    let spec = translate::spec(workspace);
+    let spec = translate::spec(spec);
     let then = Then { checkout: Some(checkout::Event::Prepare { client: id.token(), spec }), host: None };
     follow(domain, env, id, then);
 }
@@ -154,7 +247,7 @@ pub(crate) fn start(
     workspace: Token,
     charter: Box<[u8]>,
     snapshot: Option<Box<[u8]>>,
-    grants: Box<[host::Grant]>,
+    grants: Box<[wire::Grant]>,
 ) {
     let record = domain.workspaces.get(Id::from_token(workspace)).expect("a workspace lives until it is released");
     let directory = match record.state {
@@ -201,6 +294,14 @@ pub(crate) fn write(domain: &mut Domain, env: &Env<Limits>, owner: Token, worksp
     follow(domain, env, id, then);
 }
 
+/// Save through the application's checkout using the branch kept with its items.
+pub(crate) fn save(domain: &mut Domain, env: &Env<Limits>, owner: Token, workspace: Token) {
+    let record = domain.workspaces.get(Id::<Workspace>::from_token(workspace)).expect("a prepared workspace is live");
+    let items = domain.items.get_mut(record.items).expect("its items remain staged");
+    let branch = items.save.take().expect("the host saves only when requested");
+    write(domain, env, owner, workspace, Write::Save { branch });
+}
+
 /// A push or a save, as the host asks it.
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub(crate) enum Write {
@@ -243,6 +344,15 @@ pub(crate) fn held(domain: &mut Domain, env: &Env<Limits>, client: Token, hold: 
 pub(crate) fn prepared(domain: &mut Domain, env: &Env<Limits>, client: Token, prepared: checkout::Prepared) {
     let id = Id::<Workspace>::from_token(client);
     let record = domain.workspaces.get_mut(id).expect("a workspace lives until it is released");
+    let items = record.items;
+    let failure = match &prepared {
+        checkout::Prepared::Refused { refusal } => Some(translate::refusal(*refusal)),
+        checkout::Prepared::Failed { failure } => Some(translate::failure(*failure)),
+        checkout::Prepared::Ready { .. } | checkout::Prepared::Aborted => None,
+    };
+    if let Some(failure) = failure {
+        domain.items.get_mut(items).expect("the assignment lives through prepare").preparation = Some(failure);
+    }
     let owner = record.run;
     let mut then = Then::NOTHING;
     let state = mem::replace(&mut record.state, State::Closed);
@@ -253,6 +363,7 @@ pub(crate) fn prepared(domain: &mut Domain, env: &Env<Limits>, client: Token, pr
                 ended(
                     owner,
                     client,
+                    items.token(),
                     hold,
                     abandoned,
                     checkout::Prepared::Ready { workspace, conflicts: Box::new([]) },
@@ -260,7 +371,7 @@ pub(crate) fn prepared(domain: &mut Domain, env: &Env<Limits>, client: Token, pr
                 )
             }
             checkout::Prepared::Refused { .. } | checkout::Prepared::Failed { .. } | checkout::Prepared::Aborted => {
-                ended(owner, client, hold, abandoned, prepared, &mut then)
+                ended(owner, client, items.token(), hold, abandoned, prepared, &mut then)
             }
         },
         State::Ready { .. } | State::Releasing | State::Closed => unreachable!("a prepare ends once"),
@@ -274,11 +385,39 @@ pub(crate) fn wrote(domain: &mut Domain, env: &Env<Limits>, client: Token, outco
     let id = Id::<Workspace>::from_token(client);
     let record = domain.workspaces.get_mut(id).expect("a workspace lives until it is released");
     let repositories = record.repositories;
+    let items = record.items;
+    let landings = translate::landings(outcome, repositories);
+    let next = domain.items.get_mut(items).expect("workspace items live until the answer");
+    let event = if push {
+        let mut changed = false;
+        for (index, landing) in landings.iter().enumerate() {
+            match landing {
+                wire::Landing::Landed { commit } => {
+                    changed = true;
+                    let tag = *next.tags.get(index).expect("every item has a tag");
+                    next.landed.insert(tag, *commit).expect("room for every item");
+                }
+                wire::Landing::Conflicted { .. }
+                | wire::Landing::Explained { .. }
+                | wire::Landing::Moved
+                | wire::Landing::Failed
+                | wire::Landing::Refused
+                | wire::Landing::Unchanged => {}
+            }
+        }
+        let result = translate::summarize(landings);
+        let outcome = translate::delivery_outcome(&result);
+        next.last = Some(result);
+        host::Event::Delivered { owner: Token::new(0), delivery: host::Delivery { outcome, left: items.token(), changed } }
+    } else {
+        next.saved = Some(landings);
+        host::Event::Saved { owner: Token::new(0), at: Some(items.token()) }
+    };
     let mut then = Then::NOTHING;
     let state = mem::replace(&mut record.state, State::Closed);
     record.state = match state {
         State::Ready { hold, directory, asked: Some(owner) } => {
-            written(hold, directory, owner, translate::landings(outcome, repositories), push, &mut then)
+            written(hold, directory, owner, event, &mut then)
         }
         State::Ready { asked: None, .. } | State::Preparing { .. } | State::Releasing | State::Closed => {
             unreachable!("a push or a save ends once, as the workspace stays held")
@@ -346,14 +485,34 @@ fn written(
     hold: Token,
     directory: Token,
     owner: Token,
-    landings: Box<[host::Landing]>,
-    push: bool,
+    event: host::Event,
     then: &mut Then,
 ) -> State {
-    then.host = Some(if push {
-        host::Event::Pushed { owner, push: landings }
-    } else {
-        host::Event::Saved { owner, save: landings }
+    then.host = Some(match event {
+        host::Event::Delivered { owner: _, delivery } => host::Event::Delivered { owner, delivery },
+        host::Event::Saved { owner: _, at } => host::Event::Saved { owner, at },
+        host::Event::AssignV2 { .. }
+        | host::Event::Turn { .. }
+        | host::Event::FinishedV2 { .. }
+        | host::Event::Assign { .. }
+        | host::Event::Inbound { .. }
+        | host::Event::Cancel { .. }
+        | host::Event::Grant { .. }
+        | host::Event::Relayed { .. }
+        | host::Event::RelayCancelled { .. }
+        | host::Event::CancelAll { .. }
+        | host::Event::Report
+        | host::Event::Unacknowledged { .. }
+        | host::Event::Prepared { .. }
+        | host::Event::Unprepared { .. }
+        | host::Event::Started { .. }
+        | host::Event::Called { .. }
+        | host::Event::Withdrawn { .. }
+        | host::Event::Bounced { .. }
+        | host::Event::Yielded { .. }
+        | host::Event::Finished { .. }
+        | host::Event::Faulted { .. }
+        | host::Event::Gone { .. } => unreachable!("a workspace write ends as delivery or save"),
     });
     State::Ready { hold, directory, asked: None }
 }
@@ -370,6 +529,7 @@ fn releasing(hold: Token, then: &mut Then) -> State {
 fn ended(
     owner: Token,
     client: Token,
+    items: Token,
     hold: Option<Token>,
     abandoned: bool,
     prepared: checkout::Prepared,
@@ -383,14 +543,14 @@ fn ended(
             State::Ready { hold: hold.expect("a prepare that ran was held"), directory, asked: None }
         }
         checkout::Prepared::Refused { refusal } => {
-            then.host = Some(unprepared(owner, translate::refusal(refusal)));
+            then.host = Some(unprepared(owner, translate::preparation(translate::refusal(refusal), items)));
             State::Closed
         }
         checkout::Prepared::Failed { failure } => {
             assert!(!abandoned, "a released hold's prepare ends aborted");
             let hold = hold.expect("a prepare that ran was held");
             then.checkout = Some(checkout::Event::Release { hold });
-            then.host = Some(unprepared(owner, translate::failure(failure)));
+            then.host = Some(unprepared(owner, translate::preparation(translate::failure(failure), items)));
             State::Releasing
         }
         checkout::Prepared::Aborted => {
@@ -412,7 +572,7 @@ pub(crate) fn start_v2(
     workspace: Token,
     charter: Box<[u8]>,
     transcript: Option<Box<[u8]>>,
-    grants: Box<[host::Grant]>,
+    grants: Box<[wire::Grant]>,
 ) {
     let record = domain.workspaces.get_mut(Id::from_token(workspace)).expect("a workspace lives until released");
     let directory = match record.state {

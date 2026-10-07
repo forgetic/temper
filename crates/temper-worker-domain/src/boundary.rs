@@ -50,7 +50,7 @@ use alloc::boxed::Box;
 use skein_lib::{Time, Token};
 use temper_worker_domain_agent::{self as agent, channel};
 use temper_worker_domain_checkout::git;
-use temper_worker_domain_host as host;
+use crate::wire;
 
 /// protocol -> domain
 #[derive(PartialEq, Eq, Debug)]
@@ -69,7 +69,7 @@ pub enum Event {
         answer: Box<[u8]>,
     },
     AssignV2 {
-        assignment: host::AssignmentV2,
+        assignment: wire::AssignmentV2,
     },
     AcknowledgeTurn {
         run: Token,
@@ -88,7 +88,7 @@ pub enum Event {
     /// From the engine, a call: host the run of `assignment`, and answer once
     /// it has ended.
     Assign {
-        assignment: host::Assignment,
+        assignment: wire::Assignment,
     },
     /// From the engine: an inbound event for the run `run`'s attempt
     /// `attempt`.
@@ -106,7 +106,7 @@ pub enum Event {
     Grant {
         run: Token,
         attempt: Token,
-        grant: host::Grant,
+        grant: wire::Grant,
     },
     /// From the engine: the answer to the relayed call `call` of the run
     /// `run`'s attempt `attempt`.
@@ -196,12 +196,12 @@ pub enum Request {
     Turn {
         run: Token,
         attempt: Token,
-        turn: host::Turn,
+        turn: wire::Turn,
     },
     AnswerV2 {
         run: Token,
         attempt: Token,
-        answer: host::AnswerV2,
+        answer: wire::AnswerV2,
     },
     RelayV2 {
         run: Token,
@@ -221,7 +221,7 @@ pub enum Request {
     Answer {
         run: Token,
         attempt: Token,
-        answer: host::Answer,
+        answer: wire::Answer,
     },
     /// To the engine: a host call of the run `run`'s attempt `attempt`, which
     /// the worker names `call`, relayed as it is.
@@ -254,7 +254,7 @@ pub enum Request {
         run: Token,
         attempt: Token,
         name: Token,
-        bounce: host::Bounce,
+        bounce: wire::Bounce,
     },
     /// Spawn an agent in a contained process tree, in the workspace io names
     /// `workspace`, giving up at `deadline`.

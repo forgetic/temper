@@ -108,7 +108,7 @@ impl Domain {
         };
         match entry.state {
             call::State::Relayed { call: name, .. } | call::State::Settling { call: name } => name == call,
-            call::State::Pushing { .. } | call::State::Closed => false,
+            call::State::Delivering { .. } | call::State::Closed => false,
         }
     }
 
@@ -120,7 +120,7 @@ impl Domain {
         match self.calls.get(Id::from_token(call)) {
             Some(entry) => match entry.state {
                 call::State::Relayed { .. } => true,
-                call::State::Pushing { .. } | call::State::Settling { .. } | call::State::Closed => false,
+                call::State::Delivering { .. } | call::State::Settling { .. } | call::State::Closed => false,
             },
             None => false,
         }
@@ -181,8 +181,8 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
         Event::Finished { owner, finish } => hosted::finished(domain, env, owner, finish, out),
         Event::Faulted { owner, fault } => hosted::faulted(domain, env, owner, fault, out),
         Event::Gone { owner, detail } => hosted::gone(domain, env, owner, detail, out),
-        Event::Pushed { owner, push } => hosted::pushed(domain, owner, push, out),
-        Event::Saved { owner, save } => hosted::saved(domain, owner, save, out),
+        Event::Delivered { owner, delivery } => hosted::delivered(domain, owner, delivery, out),
+        Event::Saved { owner, at } => hosted::saved(domain, owner, at, out),
     }
 }
 

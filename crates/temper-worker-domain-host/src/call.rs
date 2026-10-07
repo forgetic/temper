@@ -1,29 +1,7 @@
-//! Host calls in flight: a run's push, served through its workspace, or a
-//! forge read or outlet, relayed to the engine (worker-domain.md, 4.2, step 4).
-//!
-//! A call's transition table, as the host keeps it:
-//!
-//! ```text
-//! state     event                  next      emits
-//! -         called: push           Pushing   push
-//!           called: relay          Relayed   relay
-//! Pushing   pushed                 Closed    reply: how it went
-//!           withdrawn              Pushing
-//! Relayed   relayed                Closed    reply: the engine's answer
-//!           withdrawn              Settling  reply: withdrawn, cancel relay
-//!           its run leaves live    Settling  reply: unavailable, cancel relay
-//! Settling  relayed, cancelled     Closed    (the agent already has its answer)
-//! ```
-//!
-//! A push cannot be abandoned half way, and it touches the workspace, so it
-//! is waited for even once its run has left live: it keeps its run stopping
-//! until it settles, its reply says how it went (an agent that has gone by
-//! then drops it), and what it landed counts. A relayed call is the engine's
-//! to answer, which a cancelled attempt never is: once its run leaves live, or
-//! withdraws it, the host answers it, and drops whatever the engine sends for
-//! it after the local delivery has terminated. The relay is retained in
-//! Settling until that terminal arrives, then retired. Cancelling delivery
-//! does not roll back anything the engine already did.
+//! Host calls in flight (hosts.md, section 6): a delivery served by the
+//! workspace, or a call relayed to the engine. A delivery stays in flight
+//! after withdrawal or stop until the workspace reports its terminal. A
+//! relay settles after its local cancellation terminal arrives.
 
 use skein_lib::{Id, Token};
 
@@ -38,8 +16,8 @@ pub(crate) struct Call {
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum State {
-    /// A push in flight, for the call `call` of the agent `agent`.
-    Pushing { agent: Token, call: Token },
+    /// A delivery in flight, for the call `call` of the agent `agent`.
+    Delivering { agent: Token, call: Token },
     /// Relayed to the engine, for the call `call` of the agent `agent`.
     Relayed { agent: Token, call: Token },
     /// The agent has its answer; local delivery is being cancelled.

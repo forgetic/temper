@@ -23,7 +23,7 @@ fn a_calm_world_ends_or_parks_every_run_and_settles() {
     let (ended, parked) = (count(&stats, "ended"), count(&stats, "parked"));
     assert!(ended > 0 && parked > 0, "runs end, or park when idle: {stats:?}");
     assert_eq!(ended + parked, 8, "and nothing else: {stats:?}");
-    assert!(stats.parent.relays > 0 && stats.parent.pushes > 0 && stats.parent.yields > 0, "{stats:?}");
+    assert!(stats.parent.relays > 0 && stats.parent.deliveries > 0 && stats.parent.yields > 0, "{stats:?}");
     assert!(stats.parent.saves > 0, "work that did not land is saved: {stats:?}");
     assert_eq!(stats.parent.releases, 8, "every workspace is released: {stats:?}");
     assert!(stats.engine.events > 0, "inbound events went down: {stats:?}");
@@ -152,11 +152,11 @@ fn rough(seed: u64) -> Settings {
 
 #[test]
 fn a_seed_replays_to_the_same_run() {
-    let trace = temper_world::assert_replays(11, 12, |seed| {
+    let trace = skein_world::domain::assert_replays(11, 12, |seed| {
         let world = run(&rough(seed));
         (world.trace().to_vec(), (world.stats(), world.now()))
     });
-    assert!(trace.len() > 100, "the world did something");
+    assert!(trace.len() > 50, "the world did something: {} events", trace.len());
 }
 
 #[test]

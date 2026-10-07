@@ -61,6 +61,7 @@ use skein_lib::bytes::copy_of;
 use skein_lib::{Deadlines, Duration, Env, List, Map, Queue, Rng, Time, Token};
 use temper_worker_domain_checkout as checkout;
 use temper_worker_domain_host as host;
+use crate::wire;
 
 use crate::boundary::{Hello, Hosted, Phase, Request};
 use crate::limits::{self, Limits};
@@ -83,7 +84,7 @@ pub(crate) struct Link {
     shut: bool,
     /// The answers the engine has yet to acknowledge, by the names of their
     /// runs and attempts: sent, or waiting for a channel.
-    answers: Map<Named, host::Answer>,
+    answers: Map<Named, wire::Answer>,
     /// Relays and bounces made while the channel was down, oldest first.
     relays: Queue<Relay>,
     bounces: Queue<Bounced>,
@@ -134,7 +135,7 @@ pub(crate) struct Bounced {
     pub(crate) run: Token,
     pub(crate) attempt: Token,
     pub(crate) name: Token,
-    pub(crate) bounce: host::Bounce,
+    pub(crate) bounce: wire::Bounce,
 }
 
 /// What the link's alarm, fired, asks of its parent.
@@ -244,13 +245,24 @@ impl Link {
     pub(crate) fn refuse_version(&self, run: Token, attempt: Token, out: &mut Queue<Request>) {
         assert!(self.is_up(), "an assignment arrives on an open channel");
         if self.v2 {
-            let ending = host::EndingV2::Refused(host::Refusal::Invalid(host::Invalid::Version));
-            out.push(Request::AnswerV2 { run, attempt, answer: host::AnswerV2 { turns: 0, spent: 0, ending } });
+            let ending = wire::EndingV2::Refused(wire::Refusal::Invalid(wire::Invalid::Version));
+            out.push(Request::AnswerV2 { run, attempt, answer: wire::AnswerV2 { turns: 0, spent: 0, ending } });
         } else {
             // Charter is the v1 unsupported-lifecycle refusal; its frozen
             // schema has no version-specific invalid code.
-            let answer = host::Answer::Refused(host::Refusal::Invalid(host::Invalid::Charter));
+            let answer = wire::Answer::Refused(wire::Refusal::Invalid(wire::Invalid::Charter));
             out.push(Request::Answer { run, attempt, answer });
+        }
+    }
+
+    /// Refuse an assignment whose application workspace cannot be admitted.
+    pub(crate) fn refuse(&self, run: Token, attempt: Token, refusal: wire::Refusal, next: bool, out: &mut Queue<Request>) {
+        assert!(self.is_up(), "an assignment arrives on an open channel");
+        if next {
+            let ending = wire::EndingV2::Refused(refusal);
+            out.push(Request::AnswerV2 { run, attempt, answer: wire::AnswerV2 { turns: 0, spent: 0, ending } });
+        } else {
+            out.push(Request::Answer { run, attempt, answer: wire::Answer::Refused(refusal) });
         }
     }
 
@@ -303,10 +315,10 @@ impl Link {
     /// The answer for the run `run`'s attempt `attempt`: kept until the engine
     /// acknowledges it, or the worker gives it up, and sent now if there is a
     /// channel. A refusal goes once, now.
-    pub(crate) fn answer(&mut self, run: Token, attempt: Token, answer: host::Answer, out: &mut Queue<Request>) {
+    pub(crate) fn answer(&mut self, run: Token, attempt: Token, answer: wire::Answer, out: &mut Queue<Request>) {
         let refused = match answer {
-            host::Answer::Refused(_) => true,
-            host::Answer::Ended { .. } | host::Answer::Parked { .. } | host::Answer::Failed { .. } => false,
+            wire::Answer::Refused(_) => true,
+            wire::Answer::Ended { .. } | wire::Answer::Parked { .. } | wire::Answer::Failed { .. } => false,
         };
         if refused {
             // An assignment comes on an open channel, and is refused in the
@@ -386,7 +398,7 @@ impl Link {
     /// relays their calls still wait for and the bounces after them.
     pub(crate) fn hello(
         &mut self,
-        runs: &[host::Hosting],
+        runs: &[wire::Hosting],
         host: &host::Domain,
         checkout: &checkout::Domain,
         limits: &Limits,
@@ -476,7 +488,7 @@ impl Link {
     pub(crate) fn retained_turns(&self) -> u32 {
         self.turns.pending()
     }
-    pub(crate) fn answer_v2(&mut self, run: Token, attempt: Token, answer: host::AnswerV2, out: &mut Queue<Request>) {
+    pub(crate) fn answer_v2(&mut self, run: Token, attempt: Token, answer: wire::AnswerV2, out: &mut Queue<Request>) {
         self.turns.answer(run, attempt, answer, self.v2 && self.is_up(), out);
     }
     pub(crate) fn turn(
@@ -484,7 +496,7 @@ impl Link {
         agent: Token,
         run: Token,
         attempt: Token,
-        turn: host::Turn,
+        turn: wire::Turn,
         limits: &Limits,
         out: &mut Queue<Request>,
     ) -> bool {
@@ -525,21 +537,21 @@ fn request(relay: Relay) -> Request {
 }
 
 /// A copy of `answer`, to send while the link keeps it.
-fn copy(answer: &host::Answer) -> host::Answer {
+fn copy(answer: &wire::Answer) -> wire::Answer {
     match answer {
-        host::Answer::Refused(refusal) => host::Answer::Refused(*refusal),
-        host::Answer::Ended { outcome, work } => {
-            host::Answer::Ended { outcome: copy_of(outcome), work: copy_work(work) }
+        wire::Answer::Refused(refusal) => wire::Answer::Refused(*refusal),
+        wire::Answer::Ended { outcome, work } => {
+            wire::Answer::Ended { outcome: copy_of(outcome), work: copy_work(work) }
         }
-        host::Answer::Parked { snapshot, work } => {
-            host::Answer::Parked { snapshot: snapshot.clone(), work: copy_work(work) }
+        wire::Answer::Parked { snapshot, work } => {
+            wire::Answer::Parked { snapshot: snapshot.clone(), work: copy_work(work) }
         }
-        host::Answer::Failed { failure, detail, work } => {
-            host::Answer::Failed { failure: *failure, detail: copy_of(detail), work: copy_work(work) }
+        wire::Answer::Failed { failure, detail, work } => {
+            wire::Answer::Failed { failure: *failure, detail: copy_of(detail), work: copy_work(work) }
         }
     }
 }
 
-fn copy_work(work: &host::Work) -> host::Work {
-    host::Work { landed: work.landed.clone(), saved: work.saved.clone() }
+fn copy_work(work: &wire::Work) -> wire::Work {
+    wire::Work { landed: work.landed.clone(), saved: work.saved.clone() }
 }

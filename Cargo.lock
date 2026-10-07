@@ -699,8 +699,8 @@ name = "temper-worker-host-world"
 version = "0.0.0"
 dependencies = [
  "skein-lib",
+ "skein-world",
  "temper-worker-domain-host",
- "temper-world",
 ]
 
 [[package]]
